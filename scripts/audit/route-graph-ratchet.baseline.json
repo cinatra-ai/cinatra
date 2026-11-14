@@ -2,35 +2,35 @@
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. The counts exclude modules under the extension tree (extensions/**): they are walked and reported per route as the excluded count, and each changed pack is read by the pin-advance host-tool check. A core module a route reaches only through a pack's modules is that pack's cost: it is reported per pack ('reached through <pack>') and excluded as well; a core module the route also reaches through core modules counts. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate and its tests validate the committed records strictly against the base (malformed/stale/orphan records fail closed, naming the route and the field; a carried-forward record may not be deleted while its raised ceiling is kept) and the gate prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
     "/sign-in": 165,
-    "/api/mcp": 1321,
-    "/chat": 1426,
-    "/api/a2a": 1329,
-    "/api/llm-bridge": 1339
+    "/api/mcp": 1322,
+    "/chat": 1427,
+    "/api/a2a": 1330,
+    "/api/llm-bridge": 1340
   },
   "absorbs": {
     "/api/a2a": {
-      "from": 1328,
-      "to": 1329,
-      "reason": "Pull request 4616 (issue 3487) adds exactly one core module to this route, src/lib/assistant-runtime/turn-tool-assembly.ts: the tool assembly of the assistant turn moves out of src/lib/assistant-runtime/runtime.ts into its own read-only module, which runtime.ts imports. The new module imports only modules the route already reaches (the llm and skills packages, skill-delivery-record.ts, ports.ts, model-routing.ts). Measured by the ratchet gate of the pull request at 603d47dc2e26d9f03b6b232480ba8834ff4d1fdf: main at 9d8ebf110 reads 1328 and the merged tree reads 1329, the one added module being that file; the growth is additive and no module leaves the route. Carried by the forward onto main ff16665cc1dc, whose ceiling for this route is 1328: the same one module raises it to 1329; the ratchet gate of this pull request at the forwarded head checks that count.",
-      "pr": 4616
+      "from": 1329,
+      "to": 1330,
+      "reason": "Issue 4264 slice B1a adds exactly one core module to this route, packages/agents/src/step-snapshots.ts: the step snapshots a Regenerate reruns from (the node list on the run's messages, and the verify-and-store of the runtime's signed snapshot claims), imported by packages/agents/src/execution.ts and packages/agents/src/wayflow-run-token-carrier.ts. Measured, not argued: with the merged scripts/route-graph.mjs, main at f547bc6af reads 1328 and the branch reads 1329, the one added module being that file; the growth is additive and no module leaves the route. Carried by the forward onto main 12f80ccb3d60, whose ceiling for this route is 1329 (pull request 4616 added src/lib/assistant-runtime/turn-tool-assembly.ts): the same one module raises it to 1330; measured on the merged tree, and the ratchet gate of this pull request at the forwarded head checks that count.",
+      "pr": 4634
     },
     "/api/llm-bridge": {
-      "from": 1338,
-      "to": 1339,
-      "reason": "Pull request 4616 (issue 3487) adds exactly one core module to this route, src/lib/assistant-runtime/turn-tool-assembly.ts: the tool assembly of the assistant turn moves out of src/lib/assistant-runtime/runtime.ts into its own read-only module, which runtime.ts imports. The new module imports only modules the route already reaches (the llm and skills packages, skill-delivery-record.ts, ports.ts, model-routing.ts). Measured by the ratchet gate of the pull request at 603d47dc2e26d9f03b6b232480ba8834ff4d1fdf: main at 9d8ebf110 reads 1338 and the merged tree reads 1339, the one added module being that file; the growth is additive and no module leaves the route. Carried by the forward onto main ff16665cc1dc, whose ceiling for this route is 1338: the same one module raises it to 1339; the ratchet gate of this pull request at the forwarded head checks that count.",
-      "pr": 4616
+      "from": 1339,
+      "to": 1340,
+      "reason": "Issue 4264 slice B1a adds exactly one core module to this route, packages/agents/src/step-snapshots.ts: the step snapshots a Regenerate reruns from (the node list on the run's messages, and the verify-and-store of the runtime's signed snapshot claims), imported by packages/agents/src/execution.ts and packages/agents/src/wayflow-run-token-carrier.ts. Measured, not argued: with the merged scripts/route-graph.mjs, main at f547bc6af reads 1338 and the branch reads 1339, the one added module being that file; the growth is additive and no module leaves the route. Carried by the forward onto main 12f80ccb3d60, whose ceiling for this route is 1339 (pull request 4616 added src/lib/assistant-runtime/turn-tool-assembly.ts): the same one module raises it to 1340; measured on the merged tree, and the ratchet gate of this pull request at the forwarded head checks that count.",
+      "pr": 4634
     },
     "/api/mcp": {
-      "from": 1320,
-      "to": 1321,
-      "reason": "Pull request 4616 (issue 3487) adds exactly one core module to this route, src/lib/assistant-runtime/turn-tool-assembly.ts: the tool assembly of the assistant turn moves out of src/lib/assistant-runtime/runtime.ts into its own read-only module, which runtime.ts imports. The new module imports only modules the route already reaches (the llm and skills packages, skill-delivery-record.ts, ports.ts, model-routing.ts). Measured by the ratchet gate of the pull request at 603d47dc2e26d9f03b6b232480ba8834ff4d1fdf: main at 9d8ebf110 reads 1320 and the merged tree reads 1321, the one added module being that file; the growth is additive and no module leaves the route. Carried by the forward onto main ff16665cc1dc, whose ceiling for this route is 1320: the same one module raises it to 1321; the ratchet gate of this pull request at the forwarded head checks that count.",
-      "pr": 4616
+      "from": 1321,
+      "to": 1322,
+      "reason": "Issue 4264 slice B1a adds exactly one core module to this route, packages/agents/src/step-snapshots.ts: the step snapshots a Regenerate reruns from (the node list on the run's messages, and the verify-and-store of the runtime's signed snapshot claims), imported by packages/agents/src/execution.ts and packages/agents/src/wayflow-run-token-carrier.ts. Measured, not argued: with the merged scripts/route-graph.mjs, main at f547bc6af reads 1320 and the branch reads 1321, the one added module being that file; the growth is additive and no module leaves the route. Carried by the forward onto main 12f80ccb3d60, whose ceiling for this route is 1321 (pull request 4616 added src/lib/assistant-runtime/turn-tool-assembly.ts): the same one module raises it to 1322; measured on the merged tree, and the ratchet gate of this pull request at the forwarded head checks that count.",
+      "pr": 4634
     },
     "/chat": {
-      "from": 1425,
-      "to": 1426,
-      "reason": "Pull request 4616 (issue 3487) adds exactly one core module to this route, src/lib/assistant-runtime/turn-tool-assembly.ts: the tool assembly of the assistant turn moves out of src/lib/assistant-runtime/runtime.ts into its own read-only module, which runtime.ts imports. The new module imports only modules the route already reaches (the llm and skills packages, skill-delivery-record.ts, ports.ts, model-routing.ts). Measured by the ratchet gate of the pull request at 603d47dc2e26d9f03b6b232480ba8834ff4d1fdf: main at 9d8ebf110 reads 1424 and the merged tree reads 1425, the one added module being that file; the growth is additive and no module leaves the route. Carried by the forward onto main ff16665cc1dc, whose ceiling for this route is 1425: the same one module raises it to 1426; the ratchet gate of this pull request at the forwarded head checks that count.",
-      "pr": 4616
+      "from": 1426,
+      "to": 1427,
+      "reason": "Issue 4264 slice B1a adds exactly one core module to this route, packages/agents/src/step-snapshots.ts: the step snapshots a Regenerate reruns from (the node list on the run's messages, and the verify-and-store of the runtime's signed snapshot claims), imported by packages/agents/src/execution.ts and packages/agents/src/wayflow-run-token-carrier.ts. Measured, not argued: with the merged scripts/route-graph.mjs, main at f547bc6af reads 1425 and the branch reads 1426, the one added module being that file; the growth is additive and no module leaves the route. Carried by the forward onto main 12f80ccb3d60, whose ceiling for this route is 1426 (pull request 4616 added src/lib/assistant-runtime/turn-tool-assembly.ts): the same one module raises it to 1427; measured on the merged tree, and the ratchet gate of this pull request at the forwarded head checks that count.",
+      "pr": 4634
     },
     "/sign-in": {
       "from": 164,

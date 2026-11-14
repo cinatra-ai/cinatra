@@ -96,6 +96,22 @@ function schema(): string {
 }
 
 /**
+ * cinatra#4264: the value of `verified_step_id` for a claim — the verified step
+ * when it is the claim's own node, else null. A request's `node_id` alone never
+ * names the filing step; only the runtime's signature over it does.
+ */
+export function verifiedFilingStep(
+  nodeId: string | null,
+  verifiedStepId: string | null | undefined,
+): string | null {
+  return typeof verifiedStepId === "string" &&
+    verifiedStepId.length > 0 &&
+    verifiedStepId === nodeId
+    ? verifiedStepId
+    : null;
+}
+
+/**
  * Claim a materialization identity. Exactly one of:
  *   - fresh INSERT (phase `claimed`) → `{kind:"claimed", ledgerId}`;
  *   - existing FINALIZED row → `{kind:"finalized", ...refs}` (idempotent hit);
@@ -116,6 +132,11 @@ export async function claimMaterialization(input: {
   contentHash: string;
   /** The detection ladder's verdict (the `default_road` path only). */
   detection?: MaterializationDetection | null;
+  /** cinatra#4264: the runtime's signed step of the call, when it verified.
+   *  Stored as `verified_step_id` only when it equals `nodeId` (the request's
+   *  node, never a composite `outputId`); otherwise NULL. The first claim's
+   *  value stays: a re-drive hits the key and writes nothing. */
+  verifiedStepId?: string | null;
 }): Promise<MaterializationClaim> {
   ensurePostgresSchema();
   const s = schema();
@@ -123,8 +144,8 @@ export async function claimMaterialization(input: {
   const inserted = await pool().query(
     `INSERT INTO "${s}"."artifact_materializations"
    (id, org_id, run_id, output_id, node_id, path, extension, content_hash, phase,
-    detection_rung, detection_reason, detection_confidence, detection_model)
- VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'claimed', $9, $10, $11, $12)
+    detection_rung, detection_reason, detection_confidence, detection_model, verified_step_id)
+ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'claimed', $9, $10, $11, $12, $13)
  ON CONFLICT (run_id, output_id, extension, content_hash) DO NOTHING
  RETURNING id`,
     [
@@ -140,6 +161,7 @@ export async function claimMaterialization(input: {
       input.detection?.reason ?? null,
       input.detection?.confidence ?? null,
       input.detection?.model ?? null,
+      verifiedFilingStep(input.nodeId, input.verifiedStepId),
     ],
   );
   if (inserted.rows.length > 0) {

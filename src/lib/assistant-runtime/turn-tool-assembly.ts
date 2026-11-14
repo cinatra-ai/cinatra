@@ -112,6 +112,30 @@ export type AssistantTurnToolAssemblyInput = {
   sessionId: string;
   /** The injection resolver's ports. They only read. */
   injectionPorts: InjectionResolverPorts;
+  /**
+   * The assembly's reads of the LLM layer. Absent = the real functions, which
+   * is what the turn uses. The tool-manifest route passes request-scoped
+   * memoized readers, so that its two roads share one read for each distinct
+   * input (CONTRACT.md section 5.2, "One snapshot"). Each reader only reads.
+   */
+  reads?: AssistantTurnToolAssemblyReads;
+};
+
+/** The LLM-layer reads of the assembly; see `reads` above. */
+export type AssistantTurnToolAssemblyReads = {
+  selectSkillDeliveryAdapter: typeof selectSkillDeliveryAdapter;
+  deliverInjectedSkillsInline: typeof deliverInjectedSkillsInline;
+  resolveChatExternalMcpTools: typeof resolveChatExternalMcpTools;
+};
+
+// The real reads, each looked up at CALL time. Loading this module reads none
+// of the imported functions: a suite that mocks "@cinatra-ai/llm" without one
+// of them can still import the turn, and a turn reads each function only where
+// it calls it, exactly as before the `reads` seam existed.
+const DEFAULT_ASSEMBLY_READS: AssistantTurnToolAssemblyReads = {
+  selectSkillDeliveryAdapter: (...args) => selectSkillDeliveryAdapter(...args),
+  deliverInjectedSkillsInline: (...args) => deliverInjectedSkillsInline(...args),
+  resolveChatExternalMcpTools: (...args) => resolveChatExternalMcpTools(...args),
 };
 
 /** A point of the assembly where the caller runs its own write step. */
@@ -206,6 +230,7 @@ export async function* assembleAssistantTurnTools(
   AssistantTurnToolAssemblyResume | undefined
 > {
   const { provider } = input;
+  const reads = input.reads ?? DEFAULT_ASSEMBLY_READS;
   const conversationOnly = isConversationOnlyProvider(provider);
 
   // cinatra#2091 S4 — the assistant declares its INTENT; the resolver derives
@@ -269,7 +294,7 @@ export async function* assembleAssistantTurnTools(
     // The caller registers the assistant's skills here, right before the
     // delivery reads them.
     skillsRegistered(yield { kind: "register_skills" });
-    const inline = await deliverInjectedSkillsInline({ set: injectedSkills });
+    const inline = await reads.deliverInjectedSkillsInline({ set: injectedSkills });
     skillSystemContext = inline.systemContext;
     if (inline.dropped.length > 0) {
       console.warn(
@@ -333,7 +358,7 @@ export async function* assembleAssistantTurnTools(
       ...nonCatalogDrops,
     ];
     if (catalogSkillIds.length > 0) {
-      const delivery = await selectSkillDeliveryAdapter(provider).deliver({
+      const delivery = await reads.selectSkillDeliveryAdapter(provider).deliver({
         skillIds: catalogSkillIds,
         // The authoritative cap already ran in the contract; the adapter's own
         // cap is a defence-in-depth invariant.
@@ -450,7 +475,7 @@ export async function* assembleAssistantTurnTools(
     // surface-gating toolboxes (trusted-site native read-injection) emit only
     // for "chat" and refuse widget builds fail-closed instead of leaking
     // chat-scoped injections onto public-site widget turns.
-    const externalMcpTools = await resolveChatExternalMcpTools(
+    const externalMcpTools = await reads.resolveChatExternalMcpTools(
       provider,
       admission.kind === "widget" ? { surface: "public_site_widget" } : { surface: "chat" },
     );
