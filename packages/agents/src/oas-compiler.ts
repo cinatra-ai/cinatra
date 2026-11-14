@@ -1643,11 +1643,13 @@ export function collectPublishRows(
       if (out.some((r) => r.input === input)) {
         return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where}.input repeats an input another row shows` };
       }
-      out.push({ label, input });
+      out.push(Object.freeze({ label, input }));
     }
     // A defined own property, so a node id such as "__proto__" stays a plain key.
-    Object.defineProperty(rows, step, { value: out, enumerable: true, writable: true, configurable: true });
+    Object.defineProperty(rows, step, { value: Object.freeze(out), enumerable: true });
   }
+  // Frozen through, so no caller can change a map, a list or a row after the reader checked it.
+  Object.freeze(rows);
   COMPILED_PUBLISH_ROWS.add(rows);
   return { ok: true, rows };
 }
