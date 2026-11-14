@@ -169,7 +169,6 @@ const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required"
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/binary-artifact::detail", resolution: "required" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/binary-artifact::listRow", resolution: "required" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/cms-snapshot-artifact::detail", resolution: "guardedOptional" },
-  { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/cms-snapshot-artifact::listRow", resolution: "guardedOptional" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/cms-snapshot-artifact::preview", resolution: "guardedOptional" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/document-artifact::detail", resolution: "required" },
   { map: "GENERATED_ARTIFACT_RENDERERS", key: "@cinatra-ai/document-artifact::listRow", resolution: "required" },

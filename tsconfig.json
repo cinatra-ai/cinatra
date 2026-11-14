@@ -519,7 +519,6 @@
       "@cinatra-ai/blog-idea-artifact/src/renderers/preview": ["./extensions/cinatra-ai/blog-idea-artifact/src/renderers/preview.tsx"],
       "@cinatra-ai/chart-artifact/src/views/chart": ["./extensions/cinatra-ai/chart-artifact/src/views/chart.tsx"],
       "@cinatra-ai/cms-snapshot-artifact/src/renderers/detail": ["./extensions/cinatra-ai/cms-snapshot-artifact/src/renderers/detail.tsx"],
-      "@cinatra-ai/cms-snapshot-artifact/src/renderers/list-row": ["./extensions/cinatra-ai/cms-snapshot-artifact/src/renderers/list-row.tsx"],
       "@cinatra-ai/cms-snapshot-artifact/src/renderers/preview": ["./extensions/cinatra-ai/cms-snapshot-artifact/src/renderers/preview.tsx"],
       "@cinatra-ai/email-artifacts/src/renderers/campaign-recipients-review": ["./extensions/cinatra-ai/email-artifacts/src/renderers/campaign-recipients-review.tsx"],
       "@cinatra-ai/email-artifacts/src/renderers/detail": ["./extensions/cinatra-ai/email-artifacts/src/renderers/detail.tsx"],
