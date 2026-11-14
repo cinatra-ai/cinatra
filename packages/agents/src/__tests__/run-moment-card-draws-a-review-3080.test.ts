@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   parseRunMomentCard,
+  parseRunReviewSlot,
   RUN_MOMENT_UNREAD,
   runMomentCardDrawsAReview,
 } from "../lifecycle-card-runtime";
@@ -60,6 +61,28 @@ describe("runMomentCardDrawsAReview", () => {
       reviewGate: { ref: null, awaiting: true },
     })!;
     expect(runMomentCardDrawsAReview(stillOwed, "site_widget")).toBe(true);
+  });
+
+  // ONE ROW, ONE ANSWER. The panel's slot reader reads `awaiting` as truthy
+  // (`parseRunReviewSlot`), so a container that read only a literal `true`
+  // would stand the panel down on a finished run whose panel is still holding
+  // its placeholder for the review. The route sends a boolean; a row that does
+  // not must still give both readers the same answer.
+  it.each([
+    ["the number 1", 1],
+    ["the string true", "true"],
+  ])("reads a still-owed review flag given as %s as the panel does", (_label, awaiting) => {
+    const row = {
+      id: "run-1",
+      status: "completed",
+      lifecycleMoment: null,
+      lifecycleCard: null,
+      reviewGate: { ref: null, awaiting },
+    };
+    const card = parseRunMomentCard(row)!;
+    expect(parseRunReviewSlot(row)?.awaiting).toBe(true);
+    expect(card.reviewAwaiting).toBe(parseRunReviewSlot(row)?.awaiting);
+    expect(runMomentCardDrawsAReview(card, "chat_thread")).toBe(true);
   });
 
   it("fails closed on an unread run, and on one that is still working", () => {
