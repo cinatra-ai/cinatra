@@ -77,7 +77,7 @@ import {
   type AgentHitlScreenCarry,
 } from "@cinatra-ai/agents/agent-hitl-screen-card";
 // The ONE renderer of `publish_decision` (cinatra#4150), by its own subpath for the same reason.
-import { PublishDecisionCard } from "@cinatra-ai/agents/publish-decision-card-view";
+import { PublishDecisionCard, usePublishDecisionDoor } from "@cinatra-ai/agents/publish-decision-card-view";
 // The turn's own register for the settled schedule card (cinatra#3174), reached
 // by the same subpath the host declaration is.
 import { SettledScheduleRegisterProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
@@ -774,8 +774,10 @@ function AgentRunTurnSlot({
     <AgentHitlScreenCard runId={runId} wireRef={gateSignal} carrier={screenCarrier} />
   );
   // THE PUBLISH CARD (cinatra#4150), an INTERRUPT like the screen above and mounted beside it, in the same placement:
-  // keyed by the run alone, it self-gates, so a run with no open publish decision draws nothing here.
-  const publishCard = <PublishDecisionCard runId={runId} />;
+  // keyed by the run alone, it self-gates, so a run with no open publish decision draws nothing here. Its door is the
+  // host's own: the session door on /chat, none yet on the widget (part 7a-3a).
+  const publishDoor = usePublishDecisionDoor();
+  const publishCard = <PublishDecisionCard runId={runId} decide={publishDoor} />;
 
   // THE RUN-PROGRESS PANEL, written once for the same reason.
   const runPanel = (

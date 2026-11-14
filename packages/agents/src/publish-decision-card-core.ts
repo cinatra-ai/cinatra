@@ -10,7 +10,9 @@ import "server-only";
 // disagree. Every refusal and every unreadable record collapses to "none": a caller holding a run id learns nothing
 // about which runs exist, and a card that cannot be read draws nothing rather than half a card.
 //
-// Nothing mounts the card yet and no run states the publish moment yet (later parts), so this read is inert.
+// Part 7a-3a: decidePublishDecisionForActor, the ONE answer of the card's decide doors (the session action, and the
+// widget broker route of a later part): it hands Publish and Do not publish the verified actor and reads their answer as
+// the card's three outcomes. It decides nothing itself.
 // ---------------------------------------------------------------------------
 
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
@@ -23,7 +25,11 @@ import {
   publishDecisionCardRows,
   type PublishDecisionCardState,
 } from "./publish-decision-card";
-import { enforcePublishDecisionAccess } from "./publish-decision-actions";
+import {
+  approvePublishDecision,
+  declinePublishDecision,
+  enforcePublishDecisionAccess,
+} from "./publish-decision-actions";
 import { readLatestDecisionForRun } from "./publish-decision-store";
 import { readAgentRunById, readAgentTemplateById, type AgentRunRecord } from "./store";
 
@@ -92,4 +98,34 @@ export async function resolvePublishDecisionCardStateForActor(input: {
   const run = await readAgentRunById(input.runId, input.who.actor, input.who.roleHints).catch(() => null);
   if (!run) return PUBLISH_DECISION_CARD_NONE;
   return publishDecisionCardStateForRun(run, input.who);
+}
+
+/** What a decide door answers the card: the decision landed, the request was no longer open, or nothing was decided. */
+export type PublishDecisionDoorAnswer = "decided" | "not_open" | "failed";
+
+/**
+ * Publish ("approve") or Do not publish ("decline", with the optional note), for one verified actor. Every check is the
+ * decision road's own (enforcePublishDecisionAccess first). A late answer is "not_open"; a refusal, a fault and an input
+ * the card never sends are "failed", logged by a fixed text only (no run id, note or error text).
+ */
+export async function decidePublishDecisionForActor(input: {
+  runId: string;
+  answer: "approve" | "decline";
+  note: string;
+  who: PublishDecisionCardActor;
+}): Promise<PublishDecisionDoorAnswer> {
+  const { runId, answer, who } = input;
+  if (typeof runId !== "string" || runId.length === 0 || runId.length > 256) return "failed";
+  if (answer !== "approve" && answer !== "decline") return "failed";
+  const base = { runId, actorContext: who.actor, roleHints: who.roleHints };
+  try {
+    const result =
+      answer === "approve"
+        ? await approvePublishDecision(base)
+        : await declinePublishDecision({ ...base, note: typeof input.note === "string" ? input.note : null });
+    return result.ok ? "decided" : "not_open";
+  } catch {
+    console.warn("[publish-decision] a decide door could not record the answer");
+    return "failed";
+  }
 }
