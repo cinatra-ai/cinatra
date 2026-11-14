@@ -36,6 +36,7 @@ import {
 } from "@/lib/lifecycle/lifecycle-policy";
 import { readZipFiles } from "./zip-helpers";
 import { compileOasAgentJson } from "./oas-compiler";
+import { assertStoredRegenerateHonoured } from "./retained-regenerate";
 import { scanOasForVisibleInputContractFindings } from "./validate-oas-runtime-invariants";
 import { serializeArtifactBindingDeclaration } from "./artifact-binding";
 import {
@@ -362,6 +363,9 @@ export async function importAgentTemplateCore(
   const requireRuntimeMount = options?.requireRuntimeMount === true;
   let materializeResult: MaterializeResult | null = null;
   let materializeCommitted = false;
+  // cinatra#4264 A1b: the lifecycle column a row write of this import changed,
+  // with the value to restore when the runtime files are rolled back.
+  let lifecycleWritten: { templateId: string; prior: string | null } | null = null;
 
   /** cinatra#3493 — the LAST durable step of a supplied install: finalize the
    *  materialize (drop the prior-version backup) and tell the runtime to mount
@@ -468,6 +472,20 @@ export async function importAgentTemplateCore(
         claim,
       });
       const existing = resolved.outcome === "owned" ? resolved.row : null;
+      // cinatra#4264 A1b — `none` (no authoritative manifest: the column is
+      // kept) must not keep a `regenerate` list the NEW flow no longer
+      // honours. Checked against this archive's flow before the runtime
+      // materialize and before any row write; a failure refuses the import.
+      // `write` and `clear` need no check here: the manifest decides, and the
+      // compile above has already checked a declared list. Stored text that
+      // cannot be read refuses too (review 1).
+      if (existing && manifestLifecycleConfig === undefined) {
+        assertStoredRegenerateHonoured(
+          existing.lifecycleConfig,
+          agent,
+          `[importAgentTemplateCore] '${effectivePackageName}' (the archive carries no authoritative manifest)`,
+        );
+      }
       if (existing) {
         // The claim rides the WRITE — the authoritative guard, as on the
         // install path.
@@ -541,6 +559,12 @@ export async function importAgentTemplateCore(
             `[importAgentTemplateCore] the identity claim on '${effectivePackageName}' could not ` +
               "be applied — the template row moved or was removed mid-import. Retry the import.",
           );
+        }
+        // cinatra#4264 A1b: the column this write changed, with its prior
+        // value, for the catch below (a rollback of the runtime files must not
+        // leave a list written for the NEW flow beside the OLD flow's files).
+        if (manifestLifecycleConfig !== undefined && existing.lifecycleConfig !== undefined) {
+          lifecycleWritten = { templateId: existing.id, prior: existing.lifecycleConfig ?? null };
         }
 
         const snapshotObj = {
@@ -650,6 +674,10 @@ export async function importAgentTemplateCore(
         ? serializeArtifactBindingDeclaration(compiled.artifactBindings)
         : null,
     });
+    // cinatra#4264 A1b: a fresh row has no prior declaration to restore.
+    if (manifestLifecycleConfig !== undefined && manifestLifecycleConfig !== null) {
+      lifecycleWritten = { templateId: newId, prior: null };
+    }
 
     const snapshotObj = {
       compiledPlan: [],
@@ -707,6 +735,26 @@ export async function importAgentTemplateCore(
     if (materializeResult && !materializeCommitted) {
       const { rollbackMaterialize } = await import("./materialize-agent-package");
       await rollbackMaterialize(materializeResult);
+      // cinatra#4264 A1b (review 1): the files are back on the previous flow,
+      // so the lifecycle column this import wrote goes back with them; a
+      // stored regenerate list must never outlive the flow it was checked
+      // against. Only the column this import changed, under the same claim.
+      // Best-effort like the rollback itself: the original error is rethrown.
+      if (lifecycleWritten) {
+        try {
+          await updateAgentTemplate(
+            lifecycleWritten.templateId,
+            { lifecycleConfig: lifecycleWritten.prior },
+            claim,
+          );
+        } catch (restoreErr) {
+          console.warn(
+            `[importAgentTemplateCore] could not restore the lifecycle declaration of ` +
+              `'${effectivePackageName}' after the rollback:`,
+            restoreErr,
+          );
+        }
+      }
     }
     if (
       err instanceof Error &&

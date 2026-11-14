@@ -26,6 +26,9 @@ import { identityClaimMockFrom } from "./helpers/identity-claim-mock";
  *
  * Run: cd packages/agents && pnpm exec vitest run src/__tests__/import-agent-core-lifecycle-config.test.ts
  */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const PKG = "@cinatra-ai/wordpress-agent";
@@ -48,15 +51,18 @@ vi.mock("@cinatra-ai/extensions/license-detection", () => ({
   LicenseAcknowledgementRequiredError: class extends Error {},
 }));
 
+// Review 2 note: the real compiler returns a package identity ONLY from a
+// readable sibling manifest. The mock reads the staged package.json the same
+// way, so a manifest-less or unparseable archive gets no invented name.
 vi.mock("../oas-compiler", () => ({
-  compileOasAgentJson: async () => ({
+  compileOasAgentJson: async (opts: { oasSourcePath?: string }) => ({
     ok: true,
     value: {
       approvalPolicy: { steps: [] },
       inputSchema: { type: "object", properties: {} },
       outputSchema: null,
       prompt: null,
-      packageName: PKG,
+      packageName: await stagedManifestName(opts.oasSourcePath),
       packageVersion: "0.1.6",
       agentDependencies: {},
       type: "leaf",
@@ -72,6 +78,21 @@ vi.mock("../oas-compiler", () => ({
   }),
 }));
 
+async function stagedManifestName(oasSourcePath?: string): Promise<string | null> {
+  if (!oasSourcePath) return null;
+  const { readFile } = await import("node:fs/promises");
+  const { dirname, join } = await import("node:path");
+  for (const candidate of [join(dirname(oasSourcePath), "..", "package.json"), join(dirname(oasSourcePath), "package.json")]) {
+    try {
+      const parsed = JSON.parse(await readFile(candidate, "utf8")) as { name?: unknown };
+      return typeof parsed.name === "string" ? parsed.name : null;
+    } catch {
+      // try the next candidate, as the real sibling read does
+    }
+  }
+  return null;
+}
+
 const readTemplate = vi.fn(async (): Promise<{ id: string } | null> => null);
 const createTemplate = vi.fn(async (..._a: unknown[]) => {});
 const updateTemplate = vi.fn(async (..._a: unknown[]) => {});
@@ -82,8 +103,28 @@ vi.mock("../store", () => ({
   // REFUSAL, so the stub must return the row it "updated".
   updateAgentTemplate: async (...a: unknown[]) =>
     (await updateTemplate(...(a as []))) ?? { id: (a as [string])[0] },
-  createAgentVersion: vi.fn(async () => {}),
+  createAgentVersion: (...a: unknown[]) => createVersion(...(a as [])),
   updateAgentTemplateOrigin: vi.fn(async () => {}),
+}));
+// cinatra#4264 A1b review 1 finding 5: the supplied-install road's runtime
+// mount, observed so a failure after the row write can be seen to roll the
+// files back (and, with them, the lifecycle column).
+const createVersion = vi.fn(async (..._a: unknown[]) => {});
+const rollbackMaterialize = vi.fn(async (..._a: unknown[]) => {});
+vi.mock("../materialize-agent-package", () => ({
+  materializeAgentPackageToDisk: async () => ({
+    materialized: true,
+    targetDir: "/tmp/agents-fixture/pkg",
+    wasReinstall: true,
+  }),
+  commitMaterialize: async () => {},
+  rollbackMaterialize: (...a: unknown[]) => rollbackMaterialize(...(a as [])),
+}));
+vi.mock("../agent-runtime-mount", () => ({
+  resolveAgentRuntimeMountDir: () => "/tmp/agents-fixture",
+}));
+vi.mock("../wayflow-reload-client", () => ({
+  triggerWayflowReload: async () => ({ ok: false, reason: "no_base_url" }),
 }));
 vi.mock("../agent-template-identity", async () => identityClaimMockFrom((n: string) => (readTemplate as (p?: string) => unknown)(n) as never));
 
@@ -99,9 +140,9 @@ const OAS = JSON.stringify({
 
 /** Build the import ZIP the loader hands this function. `lifecycle: undefined`
  * declares no block; omitting `pkg` entirely models a manifest-less ZIP. */
-function zip(opts: { pkg?: boolean; lifecycle?: unknown } = {}): string {
+function zip(opts: { pkg?: boolean; lifecycle?: unknown; oas?: string } = {}): string {
   const files = [
-    { name: "agent.json", content: OAS },
+    { name: "agent.json", content: opts.oas ?? OAS },
     { name: "manifest.json", content: JSON.stringify({ version: 1 }) },
   ];
   if (opts.pkg !== false) {
@@ -121,7 +162,7 @@ function zip(opts: { pkg?: boolean; lifecycle?: unknown } = {}): string {
   return createZipBuffer(files).toString("base64");
 }
 
-const importZip = (opts?: { pkg?: boolean; lifecycle?: unknown }) =>
+const importZip = (opts?: { pkg?: boolean; lifecycle?: unknown; oas?: string }) =>
   importAgentTemplateCore(zip(opts), undefined, { redirect: false, status: "published" });
 
 const createInput = () => createTemplate.mock.calls[0]?.[0] as Record<string, unknown>;
@@ -129,6 +170,8 @@ const upsertPatch = () => updateTemplate.mock.calls[0]?.[1] as Record<string, un
 
 beforeEach(() => {
   vi.clearAllMocks();
+  createVersion.mockReset();
+  createVersion.mockImplementation(async () => {});
   readTemplate.mockReset();
   readTemplate.mockResolvedValue(null);
 });
@@ -178,15 +221,30 @@ describe("cinatra#2044 GAP 2 — importAgentTemplateCore compiles cinatra.lifecy
     expect(upsertPatch()).toHaveProperty("lifecycleConfig", null);
   });
 
-  it("UPSERT: a MANIFEST-LESS ZIP leaves the column UNCHANGED (omitted, never cleared)", async () => {
+  it("UPSERT: a NON-AUTHORITATIVE manifest leaves the column UNCHANGED (omitted, never cleared)", async () => {
+    // A manifest-less ZIP carries no package identity (the honest compile mock
+    // reads none), so it never reaches an existing row; the road that keeps an
+    // identified row without a declaration is the loader's synthesis.
     readTemplate.mockResolvedValue({ id: "tpl-existing" });
-    await importZip({ pkg: false });
+    await importAgentTemplateCore(zip(), undefined, {
+      redirect: false,
+      status: "published",
+      lifecycleDeclarationAuthoritative: false,
+    });
     // package.json is an OPTIONAL member of the agent-ZIP shape. With no
     // manifest there is no declaration to project, so the patch omits the field
     // and updateAgentTemplate's `!== undefined` guard leaves the column alone —
     // a manifest-less archive must never silently wipe a real declaration.
     expect(upsertPatch().lifecycleConfig).toBeUndefined();
     expect(Object.prototype.hasOwnProperty.call(upsertPatch(), "lifecycleConfig")).toBe(true);
+  });
+
+  it("cinatra#4264 A1b: a declared regenerate list is stored on lifecycleConfig (write)", async () => {
+    const regenerate = [{ artifactNode: "file_image", step: "image_flow", noteInput: "prompt" }];
+    await importZip({ lifecycle: { regenerate } });
+    expect(createInput().lifecycleConfig).toBe(
+      '{"regenerate":[{"artifactNode":"file_image","step":"image_flow","noteInput":"prompt"}]}',
+    );
   });
 
   it("a MALFORMED block does not crash the import (fail-soft ⇒ no declaration)", async () => {
@@ -301,5 +359,149 @@ describe("cinatra#2616 — the ZIP import records its identity claim", () => {
       status: "published",
     });
     expect(createInput().orgId).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4264 A1b — the tri-state projection of the import road.
+//
+// `write` (a manifest with a block) and `clear` (a manifest without one) are
+// decided by the manifest, whose list the compile has already checked. `none`
+// (no manifest, an unparseable one, or a non-authoritative synthesis) keeps the
+// stored column; when that column carries a `regenerate` list, the list is
+// checked against the NEW flow first and the whole import refuses before any
+// write when the flow no longer honours it.
+// ---------------------------------------------------------------------------
+describe("cinatra#4264 A1b — the import revalidates a retained regenerate list", () => {
+  const gemini = JSON.parse(
+    readFileSync(join(__dirname, "fixtures", "synthetic-gemini-agent.json"), "utf8"),
+  ) as { metadata: { cinatra: Record<string, unknown> } };
+  gemini.metadata.cinatra = { ...gemini.metadata.cinatra, packageName: PKG };
+  const GEMINI = JSON.stringify(gemini);
+  // The fixture's ApiNode files its own output from the start's `user` input.
+  const KEPT = [{ artifactNode: "call_llm_bridge", step: "call_llm_bridge", noteInput: "user" }];
+  const STALE = [{ artifactNode: "file_image", step: "image_flow", noteInput: "prompt" }];
+  // The none road that keeps an IDENTIFIED row: the loader's synthesized
+  // manifest (it names the package) marked non-authoritative for lifecycle.
+  const importNonAuthoritative = () =>
+    importAgentTemplateCore(zip({ oas: GEMINI }), undefined, {
+      redirect: false,
+      status: "published",
+      lifecycleDeclarationAuthoritative: false,
+    });
+  const row = (regenerate: unknown) => ({
+    id: "tpl-existing",
+    lifecycleConfig: JSON.stringify({ repairCapable: true, regenerate }),
+  });
+
+  it("manifest-less ZIP: no package identity, so the stored row is never matched or written (a fresh row)", async () => {
+    // Review 2 note: the archive carries no name and the compile reads none,
+    // so no existing row is kept; the stored list cannot outlive anything.
+    readTemplate.mockResolvedValue(row(STALE) as never);
+    await importZip({ pkg: false, oas: GEMINI });
+    expect(updateTemplate).not.toHaveBeenCalled();
+    expect(createTemplate).toHaveBeenCalledTimes(1);
+  });
+
+  it("none (non-authoritative synthesis, the ensure/version-bump road): the same stale list REFUSES", async () => {
+    readTemplate.mockResolvedValue(row(STALE) as never);
+    await expect(
+      importAgentTemplateCore(zip({ oas: GEMINI }), undefined, {
+        redirect: false,
+        status: "published",
+        lifecycleDeclarationAuthoritative: false,
+      }),
+    ).rejects.toThrow(/REGENERATE_DECLARATION_INVALID/);
+    expect(updateTemplate).not.toHaveBeenCalled();
+  });
+
+  it("unparseable manifest: no package identity either, so the stored row is never written", async () => {
+    readTemplate.mockResolvedValue(row(STALE) as never);
+    const files = [
+      { name: "agent.json", content: GEMINI },
+      { name: "manifest.json", content: JSON.stringify({ version: 1 }) },
+      { name: "package.json", content: "{ not json" },
+    ];
+    await importAgentTemplateCore(createZipBuffer(files).toString("base64"), undefined, {
+      redirect: false,
+      status: "published",
+    });
+    expect(updateTemplate).not.toHaveBeenCalled();
+    expect(createTemplate).toHaveBeenCalledTimes(1);
+  });
+
+  it("none: a stored list the new flow still honours is KEPT (the column is left unchanged)", async () => {
+    readTemplate.mockResolvedValue(row(KEPT) as never);
+    await importNonAuthoritative();
+    expect(upsertPatch().lifecycleConfig).toBeUndefined();
+  });
+
+  it("none: stored lifecycle text that cannot be read REFUSES the import before any write (review 1 finding 6)", async () => {
+    readTemplate.mockResolvedValue({
+      id: "tpl-existing",
+      lifecycleConfig: '{"regenerate":[{"artifactNode":"file_ima',
+    } as never);
+    await expect(importNonAuthoritative()).rejects.toThrow(/stored lifecycle declaration cannot be read/);
+    expect(updateTemplate).not.toHaveBeenCalled();
+    expect(createTemplate).not.toHaveBeenCalled();
+  });
+
+  it("clear: a manifest without a block clears the column; the stale stored list is not checked", async () => {
+    readTemplate.mockResolvedValue(row(STALE) as never);
+    await importZip({ oas: GEMINI });
+    expect(upsertPatch()).toHaveProperty("lifecycleConfig", null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4264 A1b review 1 finding 5 — a failure after the row write rolls the
+// runtime files back to the previous flow, so the lifecycle column the same
+// import wrote is restored too: a list written for the new flow must not stay
+// beside the old flow's files.
+// ---------------------------------------------------------------------------
+describe("cinatra#4264 A1b — a rolled-back import restores the lifecycle column", () => {
+  const PRIOR = JSON.stringify({ regenerate: [{ artifactNode: "file_image", step: "image_flow", noteInput: "prompt" }] });
+  const supplied = () =>
+    importAgentTemplateCore(zip({ lifecycle: { repairCapable: true } }), undefined, {
+      redirect: false,
+      status: "published",
+      requireRuntimeMount: true,
+    });
+
+  beforeEach(() => {
+    createVersion.mockReset();
+    createVersion.mockRejectedValue(new Error("version insert failed"));
+    rollbackMaterialize.mockClear();
+  });
+
+  it("UPSERT: version creation fails after the row write -> the files roll back AND the prior column is written back", async () => {
+    readTemplate.mockResolvedValue({ id: "tpl-existing", lifecycleConfig: PRIOR } as never);
+    await expect(supplied()).rejects.toThrow(/version insert failed/);
+    expect(rollbackMaterialize).toHaveBeenCalledTimes(1);
+    expect(updateTemplate).toHaveBeenCalledTimes(2);
+    expect(updateTemplate.mock.calls[0]?.[1]).toHaveProperty("lifecycleConfig", '{"repairCapable":true}');
+    expect(updateTemplate.mock.calls[1]?.[0]).toBe("tpl-existing");
+    expect(updateTemplate.mock.calls[1]?.[1]).toEqual({ lifecycleConfig: PRIOR });
+  });
+
+  it("CREATE: version creation fails after the fresh row -> the files roll back AND the column is cleared", async () => {
+    await expect(supplied()).rejects.toThrow(/version insert failed/);
+    expect(rollbackMaterialize).toHaveBeenCalledTimes(1);
+    const newId = createInput().id;
+    expect(updateTemplate).toHaveBeenCalledTimes(1);
+    expect(updateTemplate.mock.calls[0]?.[0]).toBe(newId);
+    expect(updateTemplate.mock.calls[0]?.[1]).toEqual({ lifecycleConfig: null });
+  });
+
+  it("control: with no runtime mount (nothing rolled back) the column the import wrote is left as written", async () => {
+    readTemplate.mockResolvedValue({ id: "tpl-existing", lifecycleConfig: PRIOR } as never);
+    await expect(
+      importAgentTemplateCore(zip({ lifecycle: { repairCapable: true } }), undefined, {
+        redirect: false,
+        status: "published",
+      }),
+    ).rejects.toThrow(/version insert failed/);
+    expect(rollbackMaterialize).not.toHaveBeenCalled();
+    expect(updateTemplate).toHaveBeenCalledTimes(1);
   });
 });

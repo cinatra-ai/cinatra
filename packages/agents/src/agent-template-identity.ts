@@ -271,6 +271,10 @@ export type ClaimedAgentTemplateRow = {
   ownerId: string | null;
   status: string;
   packageVersion: string | null;
+  /** The stored lifecycle declaration (cinatra#4264 A1b): the import road
+   *  revalidates a retained `regenerate` list against the new flow before it
+   *  writes. Optional so fixture rows without it stay valid. */
+  lifecycleConfig?: string | null;
 };
 
 const CLAIM_PROJECTION = {
@@ -280,6 +284,7 @@ const CLAIM_PROJECTION = {
   ownerId: agentTemplates.ownerId,
   status: agentTemplates.status,
   packageVersion: agentTemplates.packageVersion,
+  lifecycleConfig: agentTemplates.lifecycleConfig,
 } as const;
 
 export type AgentTemplateIdentityResolution =

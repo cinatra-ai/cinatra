@@ -17,6 +17,7 @@ import {
 import { isReservedWorkspaceSlug } from "./reserved-workspace-slugs";
 import { readZipFiles, createZipBuffer } from "./zip-helpers";
 import { importAgentTemplateCore } from "./import-agent-core";
+import { assertStoredRegenerateHonoured, packageNameFromAgentLayout } from "./retained-regenerate";
 
 // ---------------------------------------------------------------------------
 // "already up to date" REQUIRES a live install record (cinatra#2536).
@@ -566,6 +567,24 @@ export async function ensureAgentPackageFromGitFile(opts: {
   // again. (Matches this function's existing graceful skip contract — boot and
   // watcher callers already handle `skipped`.)
   if (siblingRead.status === "unreadable") {
+    // cinatra#4264 A1b (review 1): this skip runs no compile, but a watcher
+    // event still reloads the runtime from the flow on disk afterwards. A
+    // stored `regenerate` list on the row the OAS names is checked against
+    // that flow first; a list it no longer honours (or stored text that
+    // cannot be read) THROWS, so the watcher does not reload it.
+    // An OAS without `metadata.cinatra.packageName` (a supported shape) is
+    // looked up by the row its layout names (review 2), as the runtime mounts it.
+    const namedPackage = cinatraPackageName ?? packageNameFromAgentLayout(opts.oasSourcePath);
+    if (namedPackage) {
+      const named = await readAgentTemplateByPackageName(namedPackage);
+      if (named) {
+        assertStoredRegenerateHonoured(
+          named.lifecycleConfig,
+          content,
+          `[cinatra:extensions:agent] ${namedPackage} (sibling package.json unreadable)`,
+        );
+      }
+    }
     console.warn(
       `[cinatra:extensions:agent] skipped: sibling package.json beside ${opts.oasSourcePath} is unreadable (${siblingRead.reason}) — refusing to import a synthesized manifest over the installed row`,
     );
@@ -670,6 +689,17 @@ export async function ensureAgentPackageFromGitFile(opts: {
         ? serializeLifecycleConfig(normalizeLifecycle(sibling?.lifecycle))
         : (existing.lifecycleConfig ?? null);
     if ((existing.lifecycleConfig ?? null) === declaredLifecycleConfig) {
+      // cinatra#4264 A1b (review 1): this skip runs no compile, but the OAS on
+      // disk may have changed at the same version, and a watcher event reloads
+      // the runtime from it. The stored `regenerate` list (equal to the
+      // manifest's when a manifest was read) is checked against that flow
+      // first; a list it no longer honours, or stored text that cannot be
+      // read, THROWS, so no caller reloads a flow the stored list contradicts.
+      assertStoredRegenerateHonoured(
+        existing.lifecycleConfig,
+        content,
+        `[cinatra:extensions:agent] ${packageName} v${packageVersion ?? "unknown"}`,
+      );
       // …and NEITHER is a version+projection match "already up to date" while
       // the CANONICAL INSTALL RECORD is absent (cinatra#2536 — see the module
       // note above the gate). The package dir is the agent's own manifest dir

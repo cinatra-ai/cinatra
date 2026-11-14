@@ -121,8 +121,9 @@ vi.mock("../store", () => ({
   updateAgentTemplate: async (...a: unknown[]) =>
     (await updateTemplate(...(a as []))) ?? { id: (a as [string])[0] },
   updateAgentTemplatePackageVersion: vi.fn(async () => {}),
-  createAgentVersion: vi.fn(async () => {}),
+  createAgentVersion: (...a: unknown[]) => createVersion(...(a as [])),
 }));
+const createVersion = vi.fn(async (..._a: unknown[]) => {});
 vi.mock("../agent-template-identity", async () => identityClaimMockFrom((n: string) => (readTemplate as (p?: string) => unknown)(n) as never));
 
 vi.mock("../oas-compiler", () => ({
@@ -166,7 +167,8 @@ vi.mock("../materialize-agent-package", () => ({
 }));
 vi.mock("../wayflow-reload-client", () => ({ triggerWayflowReload: async () => ({ ok: true }) }));
 
-import { installAgentFromPackage } from "../install-from-package";
+import { installAgentFromPackage, syncCompiledTemplateToDb } from "../install-from-package";
+import { writeDependencyEdgesToCanonicalRows } from "@cinatra-ai/extensions/manifest-dependencies";
 
 const install = () => installAgentFromPackage({ packageName: PKG, orgId: "org-1" });
 
@@ -182,6 +184,8 @@ beforeEach(() => {
   createLocal.mockImplementation(async () => ({ templateId: "tpl-fresh", versionId: "ver-fresh" }));
   readTemplate.mockReset();
   readTemplate.mockResolvedValue(null);
+  createVersion.mockReset();
+  createVersion.mockImplementation(async () => {});
   LIFECYCLE = undefined;
 });
 
@@ -226,9 +230,137 @@ describe("cinatra#2047 D-1 — installAgentFromPackage compiles cinatra.lifecycl
     );
   });
 
+  it("cinatra#4264 A1b review 1: UPSERT whose version creation fails writes the PRIOR column back (the files roll back too)", async () => {
+    // The materialize is rolled back to the previous version's files, so the
+    // lifecycle column this install wrote must follow it back: a regenerate
+    // list written for the new flow must not stay beside the old flow.
+    const prior = JSON.stringify({
+      regenerate: [{ artifactNode: "file_image", step: "image_flow", noteInput: "prompt" }],
+    });
+    LIFECYCLE = { repairCapable: true };
+    readTemplate.mockResolvedValue({ id: "tpl-existing", status: "active", lifecycleConfig: prior } as never);
+    createVersion.mockRejectedValue(new Error("version insert failed"));
+    await expect(install()).rejects.toThrow(/version insert failed/);
+    expect(updateTemplate).toHaveBeenCalledTimes(2);
+    expect(upsertPatch().lifecycleConfig).toBe('{"repairCapable":true}');
+    expect(updateTemplate.mock.calls[1]?.[0]).toBe("tpl-existing");
+    expect(updateTemplate.mock.calls[1]?.[1]).toEqual({ lifecycleConfig: prior });
+  });
+
+  it("cinatra#4264 A1b review 2: a FRESH install that fails after the row is created clears the column (the files roll back)", async () => {
+    // The fresh branch writes the row and its version in one call; a later
+    // step (the dependency-edge write) rejecting rolls the runtime files back,
+    // so the list this install wrote must not stay on the fresh row.
+    LIFECYCLE = { repairCapable: true };
+    vi.mocked(writeDependencyEdgesToCanonicalRows).mockRejectedValueOnce(new Error("edge write failed"));
+    await expect(install()).rejects.toThrow(/edge write failed/);
+    expect(updateTemplate).toHaveBeenCalledTimes(1);
+    expect(updateTemplate.mock.calls[0]?.[0]).toBe("tpl-fresh");
+    expect(updateTemplate.mock.calls[0]?.[1]).toEqual({ lifecycleConfig: null });
+  });
+
   it("a MALFORMED block does not crash the install (fail-soft ⇒ no declaration)", async () => {
     LIFECYCLE = { repairCapable: "yes", producedTypes: "not-an-array" };
     await install();
     expect(freshSeed().lifecycleConfig).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4264 A1b — the MCP recompile writes lifecycle_config per the
+// tri-state projection of the compile's OWN sibling read: `write` (readable
+// manifest with a block), `clear` (readable manifest without one), `none`
+// (no readable manifest: the column is left as it is; the compile has already
+// checked any retained regenerate list against the new flow).
+// ---------------------------------------------------------------------------
+describe("cinatra#4264 A1b — syncCompiledTemplateToDb projects the lifecycle declaration", () => {
+  const image = { artifactNode: "file_image", step: "image_flow", noteInput: "prompt" };
+  const draft = { artifactNode: "write_draft", step: "draft_flow", noteInput: "note" };
+  const compiled = {
+    approvalPolicy: { steps: [] },
+    inputSchema: { type: "object", properties: {} },
+    outputSchema: null,
+    prompt: null,
+    packageName: PKG,
+    packageVersion: "1.0.1",
+    agentDependencies: {},
+    type: "leaf",
+    compiledPlan: [],
+    hitlScreens: [],
+    llmConfig: null,
+    toolboxes: [],
+    agentSpecVersion: "26.1.0",
+    triggerMode: "full",
+    gatedSteps: [],
+    hasArtifactBindings: false,
+    artifactBindings: null,
+    publishingSteps: [],
+    cinatraConfig: null,
+  } as unknown as Parameters<typeof syncCompiledTemplateToDb>[2];
+  type Reading = { readable: false } | { readable: true; lifecycle: unknown };
+  const sync = (reading?: Reading) =>
+    (syncCompiledTemplateToDb as unknown as (...a: unknown[]) => Promise<void>)(
+      PKG,
+      "1.0.1",
+      compiled,
+      ...(reading === undefined ? [] : [reading]),
+    );
+
+  beforeEach(() => {
+    readTemplate.mockResolvedValue({ id: "tpl-existing", status: "active" });
+  });
+
+  it("write: a readable manifest that ADDS a list stores it", async () => {
+    await sync({ readable: true, lifecycle: { repairCapable: true, regenerate: [image] } });
+    expect(upsertPatch().lifecycleConfig).toBe(
+      '{"repairCapable":true,"regenerate":[{"artifactNode":"file_image","step":"image_flow","noteInput":"prompt"}]}',
+    );
+  });
+
+  it("write: a CHANGED list replaces the stored one (sorted by artifactNode)", async () => {
+    await sync({ readable: true, lifecycle: { regenerate: [draft, image] } });
+    expect(upsertPatch().lifecycleConfig).toBe(
+      '{"regenerate":[{"artifactNode":"file_image","step":"image_flow","noteInput":"prompt"},' +
+        '{"artifactNode":"write_draft","step":"draft_flow","noteInput":"note"}]}',
+    );
+  });
+
+  it("write: a block that REMOVES the list stores the rest without it", async () => {
+    await sync({ readable: true, lifecycle: { repairCapable: true } });
+    expect(upsertPatch().lifecycleConfig).toBe('{"repairCapable":true}');
+  });
+
+  it("clear: a readable manifest without a block clears the column (explicit null)", async () => {
+    await sync({ readable: true, lifecycle: undefined });
+    expect(upsertPatch()).toHaveProperty("lifecycleConfig", null);
+  });
+
+  it("none: no readable manifest leaves the column unchanged (the key is omitted)", async () => {
+    await sync({ readable: false });
+    expect(Object.prototype.hasOwnProperty.call(upsertPatch(), "lifecycleConfig")).toBe(false);
+  });
+
+  it("a caller that passes no reading writes no lifecycle column (unchanged behaviour)", async () => {
+    await sync();
+    expect(Object.prototype.hasOwnProperty.call(upsertPatch(), "lifecycleConfig")).toBe(false);
+  });
+
+  // Review 1 finding 4: the lifecycle column carries the regenerate guarantee,
+  // so a caller that asks for it (passes a reading) gets a DB failure as a
+  // rejection; the recompile then refuses instead of reporting success over a
+  // stale row. Without a reading the sync stays best-effort.
+  it("a DB failure REJECTS when a reading was passed (the lifecycle write is not best-effort)", async () => {
+    updateTemplate.mockRejectedValueOnce(new Error("update failed"));
+    await expect(sync({ readable: true, lifecycle: undefined })).rejects.toThrow(/update failed/);
+  });
+
+  it("a failed row read REJECTS when a reading was passed", async () => {
+    readTemplate.mockRejectedValueOnce(new Error("read failed"));
+    await expect(sync({ readable: false })).rejects.toThrow(/read failed/);
+  });
+
+  it("control: without a reading a DB failure is still warned and swallowed", async () => {
+    updateTemplate.mockRejectedValueOnce(new Error("update failed"));
+    await expect(sync()).resolves.toBeUndefined();
   });
 });
