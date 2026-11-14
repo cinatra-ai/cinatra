@@ -27,8 +27,9 @@ const REFUSAL_CLASSES = new Map<string, () => Promise<unknown>>([
 
 /** The code of a refused run tool call, or null for every other error and for every error with the zod marker. */
 export async function runActionRefusalCode(err: unknown): Promise<string | null> {
-  if (!(err instanceof Error)) return null;
   if (carriesZodMarker(err)) return null;
+  // A class question that throws there answers true (no refusal); the roads catch any later throw.
+  if (!(err instanceof Error)) return null;
   const readClass = REFUSAL_CLASSES.get(err.name);
   if (!readClass) return null;
   let refusalClass: unknown;

@@ -95,7 +95,7 @@ vi.mock("@/lib/primitive-handlers", () => {
 
 import { POST } from "@/app/api/agents/passthrough/route";
 import { ArtifactActionCheckRefusal, OutwardActionRefusal } from "@/lib/extension-host-context";
-import { PASSTHROUGH_SCHEMA_ERROR, PASSTHROUGH_UNEXPECTED_ERROR } from "@/lib/passthrough-refusal";
+import { PASSTHROUGH_SCHEMA_ERROR, PASSTHROUGH_UNEXPECTED_ERROR, carriesZodMarker } from "@/lib/passthrough-refusal";
 
 const ATTEST_KEY = "step-attest-key-under-test";
 const CTX = "ctx-run-1";
@@ -252,6 +252,57 @@ describe("every other error keeps the generic answer", () => {
     const res = await POST(makeReq(FRAMELESS_TOOL, sourceHeaders()));
     expect(res.status).toBe(500);
     expect(await res.json()).toEqual({ error: PASSTHROUGH_UNEXPECTED_ERROR });
+  });
+
+  // (m9)
+  it("M3 a callable refusal that carries the zod marker is answered from its issues, as any marked error", async () => {
+    // A function whose prototype is the refusal's: an Error by instanceof, of type "function".
+    const callable = Object.setPrototypeOf(function refused() {}, OutwardActionRefusal.prototype) as unknown as Error;
+    Object.defineProperty(callable, "name", { value: "OutwardActionRefusal" });
+    Object.assign(callable, {
+      code: "outward_effect_requires_recorded_decision",
+      _zod: { traits: new Set(["$ZodError"]) },
+      issues: [{ path: ["name"], code: "invalid_type", expected: "string" }],
+    });
+    expect(callable instanceof OutwardActionRefusal).toBe(true);
+    h.toolError = callable;
+    const res = await POST(makeReq(FRAMELESS_TOOL, sourceHeaders()));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: `${PASSTHROUGH_SCHEMA_ERROR}: name: invalid_type, expected string` });
+  });
+
+  // (m10)
+  it("M3 a refusal whose marker read throws is answered 500 with the fixed failure sentence", async () => {
+    const throwing = new OutwardActionRefusal("outward_effect_requires_recorded_decision");
+    Object.defineProperty(throwing, "_zod", { get() { throw new Error("marker read failed: detail"); } });
+    h.toolError = throwing;
+    const res = await POST(makeReq(FRAMELESS_TOOL, sourceHeaders()));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: PASSTHROUGH_UNEXPECTED_ERROR });
+  });
+});
+
+describe("the zod marker is read for every value the caller-facing answer reads it for", () => {
+  const marked = <T extends object>(value: T): T =>
+    Object.assign(value, { _zod: { traits: new Set(["ZodError"]) }, issues: [] });
+
+  it("M3 a callable Error with the marker carries it; a marked value that is no Error does not", () => {
+    const callable = Object.setPrototypeOf(function refused() {}, Error.prototype) as object;
+    expect(carriesZodMarker(marked(callable))).toBe(true);
+    expect(carriesZodMarker(marked(new Error("x")))).toBe(true);
+    expect(carriesZodMarker(marked({}))).toBe(false);
+    expect(carriesZodMarker(marked(function plain() {}))).toBe(false);
+    expect(carriesZodMarker(new Error("x"))).toBe(false);
+    expect(carriesZodMarker(null)).toBe(false);
+  });
+
+  it("M3 a read that throws, a revoked Proxy included, answers true (the fixed sentence answers it)", () => {
+    const { proxy, revoke } = Proxy.revocable(new Error("x"), {});
+    revoke();
+    expect(carriesZodMarker(proxy)).toBe(true);
+    const throwing = new Error("x");
+    Object.defineProperty(throwing, "_zod", { get() { throw new Error("read failed"); } });
+    expect(carriesZodMarker(throwing)).toBe(true);
   });
 });
 

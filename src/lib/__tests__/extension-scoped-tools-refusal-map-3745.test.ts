@@ -127,6 +127,19 @@ describe("every other error keeps its answer", () => {
     expect(await call()).toEqual({ ok: false, status: 500, error: PASSTHROUGH_UNEXPECTED_ERROR });
   });
 
+  it("M3 a callable refusal that carries the zod marker is a 500 with the fixed failure sentence", async () => {
+    // A function whose prototype is the refusal's: an Error by instanceof, of type "function".
+    const callable = Object.setPrototypeOf(function refused() {}, h.RunStepToolPolicyRefusal.prototype) as unknown as Error;
+    Object.defineProperty(callable, "name", { value: "RunStepToolPolicyRefusal" });
+    Object.assign(callable, {
+      code: "step_tool_not_declared",
+      _zod: { traits: new Set(["$ZodError"]) },
+      issues: [{ path: ["table"], code: "invalid_type", expected: "string" }],
+    });
+    h.runOperation.mockRejectedValue(callable);
+    expect(await call()).toEqual({ ok: false, status: 500, error: PASSTHROUGH_UNEXPECTED_ERROR });
+  });
+
   it("the scope's own refusal keeps its 403 and its message", async () => {
     expect(await call({ operation: "select" })).toEqual({
       ok: false,

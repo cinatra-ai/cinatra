@@ -127,17 +127,19 @@ export function isCallerFacingError(err: unknown): err is Error {
 
 /**
  * True when the error carries the zod marker or a traits value the native Set
- * membership cannot read (zodMarker), or when that read throws. Such an error
- * is answered by passthroughFailureText, from its issues or with the fixed
- * sentence, before any other class of the error is asked about: a road that
- * maps a class of its own (cinatra#3745, a refused run tool call) asks only
- * when this is false, so the marker keeps its precedence (cinatra#4465).
- * Never a throw.
+ * membership cannot read (zodMarker), or when a read of the error throws. Such
+ * an error is answered by passthroughFailureText, from its issues or with the
+ * fixed sentence, before any other class of the error is asked about: a road
+ * that maps a class of its own (cinatra#3745, a refused run tool call) asks
+ * only when this is false, so the marker keeps its precedence (cinatra#4465).
+ * The class questions are callerFacingText's, asked in its order: every value
+ * that is a PrimitiveInvocationError or an Error is read for the marker, a
+ * callable one included. Never a throw.
  */
 export function carriesZodMarker(err: unknown): boolean {
   try {
-    if (typeof err !== "object" || err === null) return false;
-    return zodMarker(err) !== "none";
+    if (!(err instanceof PrimitiveInvocationError) && !(err instanceof Error)) return false;
+    return zodMarker(err as object) !== "none";
   } catch {
     return true; // a read that throws is answered by passthroughFailureText
   }
