@@ -1,6 +1,6 @@
 // cinatra#4150 part 7a-1a: the publish card's state shape and its transport parse.
 // A parse that returns null is a FAILURE, never a state: the card keeps its last authorized answer rather than settling
-// on a shape it did not understand. Every state the card draws (design 635da007, XV and IV.1) round-trips.
+// on a shape it did not understand. Every state the card draws round-trips.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";

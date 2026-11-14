@@ -7,7 +7,8 @@
 //   - the rows are the pack's declared rows (7-0) over the values the stop surfaced, label over value, in the
 //     declared order; a row whose value is missing or not a plain value is dropped, never shown as an identifier;
 //   - "may decide" is the SAME access check Publish and Do not publish run, asked without deciding;
-//   - a settled card names the person who decided (approved, declined) and an expired one names no one.
+//   - a settled card names the person who decided (approved, declined) and an expired one names no one; a settled row
+//     with no recorded decider, or a decider name that cannot be read, draws nothing rather than an anonymous card.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const storeMock = vi.hoisted(() => ({
@@ -113,6 +114,24 @@ describe("which card a run shows", () => {
     expect(await read()).toMatchObject({ state: "declined", deciderName: null, reason: null });
   });
 
+  it("a settled decision with no recorded decider draws nothing, never an anonymous card", async () => {
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released", decidedBy: null }));
+    expect(await read()).toEqual({ state: "none" });
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "declined", decidedBy: "", decisionNote: "No." }));
+    expect(await read()).toEqual({ state: "none" });
+    expect(names.readDeciderName).not.toHaveBeenCalled();
+  });
+
+  it("a decider name that cannot be read draws nothing, not a card with its reason", async () => {
+    names.readDeciderName.mockRejectedValue(new Error("db down"));
+    decisions.readLatestDecisionForRun.mockResolvedValue(
+      decision({ status: "declined", decidedBy: "user-b", decisionNote: "Not ready yet." }),
+    );
+    expect(await read()).toEqual({ state: "none" });
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released", decidedBy: "user-b" }));
+    expect(await read()).toEqual({ state: "none" });
+  });
+
   it("an expired decision names no one", async () => {
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "expired" }));
     const state = await read();
@@ -125,6 +144,8 @@ describe("which card a run shows", () => {
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "run_ended" }));
     expect(await read()).toEqual({ state: "none" });
     decisions.readLatestDecisionForRun.mockResolvedValue(null);
+    expect(await read()).toEqual({ state: "none" });
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "some_future_status" }));
     expect(await read()).toEqual({ state: "none" });
   });
 
@@ -173,6 +194,17 @@ describe("the rows are the pack's words over the surfaced values", () => {
     });
   });
 
+  it("a number that is not finite is dropped", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      ...TEMPLATE,
+      publishRows: { post: [{ label: "A", input: "a" }, { label: "B", input: "b" }, { label: "C", input: "c" }] },
+    });
+    decisions.readLatestDecisionForRun.mockResolvedValue(
+      decision({ surfacedValues: { a: Number.NaN, b: Number.POSITIVE_INFINITY, c: 0 } }),
+    );
+    expect(await read()).toMatchObject({ rows: [{ label: "C", value: "0" }] });
+  });
+
   it("a step that declares no rows, or a template with no declaration, shows the card with no rows", async () => {
     storeMock.readAgentTemplateById.mockResolvedValue({ ...TEMPLATE, publishRows: null });
     expect(await read()).toMatchObject({ state: "pending", rows: [] });
@@ -200,5 +232,17 @@ describe("the access door runs first", () => {
     expect(await resolvePublishDecisionCardStateForActor({ runId: "run-1", who: WHO })).toEqual({ state: "none" });
     expect(await resolvePublishDecisionCardStateForActor({ runId: "", who: WHO })).toEqual({ state: "none" });
     expect(decisions.readLatestDecisionForRun).not.toHaveBeenCalled();
+    expect(storeMock.readAgentTemplateById).not.toHaveBeenCalled();
+    expect(names.readDeciderName).not.toHaveBeenCalled();
+    expect(access.enforcePublishDecisionAccess).not.toHaveBeenCalled();
+  });
+
+  it("the run read comes before every other read", async () => {
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released", decidedBy: "user-b" }));
+    await resolvePublishDecisionCardStateForActor({ runId: "run-1", who: WHO });
+    const door = storeMock.readAgentRunById.mock.invocationCallOrder[0];
+    for (const later of [decisions.readLatestDecisionForRun, storeMock.readAgentTemplateById, names.readDeciderName]) {
+      expect(later.mock.invocationCallOrder[0]).toBeGreaterThan(door);
+    }
   });
 });
