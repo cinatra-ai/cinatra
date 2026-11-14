@@ -157,6 +157,15 @@ export const WIDGET_LIFECYCLE_HITL_SCREEN_ROUTE_PATH =
   "/api/lifecycle-views/hitl-screen";
 
 /**
+ * The audience a widget PUBLISH-CARD read is served at (cinatra#4150). A fourth audience under the same
+ * `lifecycle.read` grant, for the hitl screen's reason: `publish_decision` is carried as a typed INTERRUPT, and a run
+ * stopped in front of its publishing step until you answer is work waiting on you. A token minted before this
+ * audience existed is refused here, fail-closed, until the next sign-in.
+ */
+export const WIDGET_LIFECYCLE_PUBLISH_DECISION_ROUTE_PATH =
+  "/api/lifecycle-views/publish-decision";
+
+/**
  * Where a widget ANSWER to that question is submitted (cinatra#2930,
  * lifecycle-b W3) — the broker branch of the run's own HITL gate.
  *
@@ -658,6 +667,8 @@ export const WIDGET_EXTENSION_SCOPES = {
       // added under the same rule: the audience joins the grant WITH the
       // sentence below that admits to it, in the same edit.
       WIDGET_LIFECYCLE_HITL_SCREEN_ROUTE_PATH,
+      // cinatra#4150 -- the publish card's own read surface, under the same rule, with its sentence below.
+      WIDGET_LIFECYCLE_PUBLISH_DECISION_ROUTE_PATH,
     ] as readonly string[],
     /**
      * The sentence the hosted SIGN-IN screen shows for this grant. It states
@@ -670,7 +681,7 @@ export const WIDGET_EXTENSION_SCOPES = {
      * grant cannot join the set without gaining a sentence at the same time.
      */
     consentCopy:
-      "Show you work items that are waiting on you — reviews and their outcomes, the skills an agent wants to use before a run you started begins, and a question an agent has paused to ask you — using the same permissions you have in Cinatra.",
+      "Show you work items that are waiting on you — reviews and their outcomes, the skills an agent wants to use before a run you started begins, a question an agent has paused to ask you, and whether an agent may publish what it made — using the same permissions you have in Cinatra.",
   },
   [WIDGET_LIFECYCLE_DECIDE_SCOPE]: {
     audiences: [
