@@ -17,6 +17,12 @@
 // hosted /agents smoke build, which already runs 1 worker next to the same
 // services, did not hang in the same window.
 //
+// The same holds for every hosted job that builds the repository-root
+// Dockerfile with docker/build-push-action (services or not): its `pnpm build`
+// RUN reads the knob from `ARG CINATRA_BUILD_CPUS`, so such a step must pass
+// `CINATRA_BUILD_CPUS=1` in its `build-args`. The build-image.yml `image` job
+// lost its runner in that build the same way, with no services at all.
+//
 // The jobs are DISCOVERED from the real workflow files, not listed by hand, so
 // a new hosted build next to services is covered the day it is added.
 //
@@ -150,12 +156,41 @@ function parseSteps(stepLines) {
         if (m && !isSkippable(line)) vars[m[1]] = unquote(m[2]);
       }
     }
+    const uses = readKey(item, keyIndent, "uses");
     return {
       name: name ? unquote(name.inline) : `(unnamed step ${n + 1})`,
       env: vars,
       run: run ? [run.inline, ...run.body].join("\n") : "",
+      uses: uses ? unquote(uses.inline) : "",
+      with: readWith(readKey(item, keyIndent, "with")),
     };
   });
+}
+
+/**
+ * A step's `with:` block: { context, file, buildArgs } where buildArgs maps
+ * each `KEY=VALUE` line of a `build-args: |` block scalar (comment lines
+ * skipped). Absent keys read as null / {}.
+ */
+function readWith(withBlock) {
+  const out = { context: null, file: null, buildArgs: {} };
+  if (!withBlock) return out;
+  const first = withBlock.body.find((l) => !isSkippable(l));
+  if (!first) return out;
+  const ind = indentOf(first);
+  const context = readKey(withBlock.body, ind, "context");
+  const file = readKey(withBlock.body, ind, "file");
+  const args = readKey(withBlock.body, ind, "build-args");
+  if (context) out.context = unquote(context.inline);
+  if (file) out.file = unquote(file.inline);
+  if (args) {
+    for (const line of args.body) {
+      if (isSkippable(line)) continue;
+      const m = /^\s*([A-Za-z_]\w*)=(.*)$/.exec(line);
+      if (m) out.buildArgs[m[1]] = m[2].trim();
+    }
+  }
+  return out;
 }
 
 // ---- the three conditions ----
@@ -195,6 +230,34 @@ function discover(files) {
       if (!job.hasServices || !isHosted(job.runsOn)) continue;
       for (const step of job.steps) {
         if (runsProductionBuild(step.run)) found.push({ file: file.name, job: job.key, step });
+      }
+    }
+  }
+  return found;
+}
+
+/** True when a step builds the repository-root Dockerfile with docker/build-push-action. */
+function buildsRootDockerfile(step) {
+  if (!/^docker\/build-push-action@/.test(step.uses)) return false;
+  const context = step.with.context;
+  const file = step.with.file;
+  const rootContext = context === "." || context === "./";
+  const rootFile = file === null || file === "Dockerfile" || file === "./Dockerfile";
+  return rootContext && rootFile;
+}
+
+/**
+ * Every hosted job step that builds the root Dockerfile (whose `pnpm build`
+ * RUN reads CINATRA_BUILD_CPUS from a build-arg), as { file, job, step }. No
+ * services condition: the image job has none and still lost its runner.
+ */
+function discoverImageBuilds(files) {
+  const found = [];
+  for (const file of files) {
+    for (const job of parseJobs(file.text)) {
+      if (!isHosted(job.runsOn)) continue;
+      for (const step of job.steps) {
+        if (buildsRootDockerfile(step)) found.push({ file: file.name, job: job.key, step });
       }
     }
   }
@@ -243,6 +306,69 @@ describe("hosted e2e builds next to service containers run one page-data worker"
   }
 });
 
+// The image builds. The root Dockerfile's `pnpm build` RUN takes the knob as
+// `ARG CINATRA_BUILD_CPUS`, so a docker build sets it through `build-args`, not
+// through the step's env. Inside buildkit Next sizes its fan-out from
+// os.cpus().length, so on the 4-vCPU hosted runner the uncapped image build
+// runs the same 3 page-data workers. The build-image.yml `image` job lost its
+// runner in "Build image (load for prod-boot e2e)" the same way the e2e builds
+// did: the step never completed, the 45-minute job cap fired late and the job
+// log was never uploaded.
+const KNOWN_IMAGE_FLOOR = [
+  "build-image.yml / image / Build image (load for prod-boot e2e)",
+  "build-image.yml / publish-nonrelease-image / Push image",
+  "build-image.yml / upgrade-proof / Load candidate image from the build cache",
+  "build-image.yml / publish-release-image / Push image",
+];
+
+// Left uncapped on purpose. Each entry must still be discovered, so an
+// exemption that no longer matches a step fails instead of going stale.
+const IMAGE_EXEMPT = {
+  // Dispatch-only measurement workflow: it measures the image build as the
+  // runner shape gives it, including the 8-core cohort.
+  "hosted-build-size-trial.yml / image / Build image (load for prod-boot e2e)":
+    "dispatch-only build-size measurement",
+};
+
+describe("hosted root-Dockerfile image builds run one page-data worker", () => {
+  const discovered = discoverImageBuilds(workflowFiles());
+  const names = discovered.map(label);
+
+  it("discovers every known root-Dockerfile image build (the floor)", () => {
+    for (const known of KNOWN_IMAGE_FLOOR) {
+      expect(names, `discovery lost "${known}"`).toContain(known);
+    }
+  });
+
+  it("every exemption still names a discovered build", () => {
+    for (const exempt of Object.keys(IMAGE_EXEMPT)) {
+      expect(names, `stale exemption "${exempt}"`).toContain(exempt);
+    }
+  });
+
+  it("passes CINATRA_BUILD_CPUS=1 as a build-arg on every non-exempt image build", () => {
+    const uncapped = discovered
+      .filter((hit) => !(label(hit) in IMAGE_EXEMPT))
+      .filter(({ step }) => step.with.buildArgs.CINATRA_BUILD_CPUS !== "1")
+      .map(label);
+    expect(uncapped, "hosted root-Dockerfile builds without the cap").toEqual([]);
+  });
+
+  it("keeps the build-image.yml build-args identical so the publish jobs hit the image job's cache", () => {
+    const sets = discovered
+      .filter(({ file }) => file === "build-image.yml")
+      .map(({ step }) => JSON.stringify(Object.entries(step.with.buildArgs).sort()));
+    expect(sets.length).toBeGreaterThanOrEqual(KNOWN_IMAGE_FLOOR.length);
+    expect(new Set(sets).size, sets.join(" | ")).toBe(1);
+  });
+
+  for (const hit of discovered.filter((h) => !(label(h) in IMAGE_EXEMPT))) {
+    it(`caps ${label(hit)}`, () => {
+      expect(hit.step.with.buildArgs.CINATRA_BUILD_CPUS).toBe("1");
+    });
+  }
+});
+
 describe("the workflow reader the cap test relies on", () => {
   const wrap = (runsOn, steps) =>
     `name: t\njobs:\n  a:\n    runs-on: ${runsOn}\n    services:\n      db:\n        image: x\n${steps}\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - name: other\n        run: pnpm build\n`;
@@ -284,6 +410,65 @@ describe("the workflow reader the cap test relies on", () => {
     expect(isHosted(null)).toBe(true);
     expect(isHosted("${{ inputs.runner }}")).toBe(true);
     expect(isHosted("[self-hosted, linux]")).toBe(false);
+  });
+
+  it("finds a root-Dockerfile build-push-action step, with or without services, and reads its build-args", () => {
+    const image = [
+      "name: t",
+      "jobs:",
+      "  img:",
+      "    runs-on: ubuntu-latest",
+      "    steps:",
+      "      - name: Build image",
+      "        uses: docker/build-push-action@abc # v7",
+      "        with:",
+      "          context: .",
+      "          load: true",
+      "          # a comment inside with",
+      "          build-args: |",
+      "            CI=true",
+      "            CINATRA_BUILD_CPUS=1",
+      "          cache-from: type=gha",
+      "      - name: Sandbox image",
+      "        uses: docker/build-push-action@abc # v7",
+      "        with:",
+      "          context: docker/sandbox",
+      "      - name: Worker image",
+      "        uses: docker/build-push-action@abc # v7",
+      "        with:",
+      "          context: .",
+      "          file: docker/exec-worker/Dockerfile",
+      "  self:",
+      "    runs-on: [self-hosted, linux]",
+      "    steps:",
+      "      - name: Build image",
+      "        uses: docker/build-push-action@abc # v7",
+      "        with:",
+      "          context: .",
+    ].join("\n");
+    const hits = discoverImageBuilds([{ name: "t.yml", text: image }]);
+    expect(hits.map(label)).toEqual(["t.yml / img / Build image"]);
+    expect(hits[0].step.with.buildArgs).toEqual({ CI: "true", CINATRA_BUILD_CPUS: "1" });
+  });
+
+  it("reads an uncapped image build as uncapped", () => {
+    const image = [
+      "jobs:",
+      "  img:",
+      "    runs-on: ubuntu-latest",
+      "    steps:",
+      "      - name: Build image",
+      "        uses: docker/build-push-action@abc",
+      "        with:",
+      "          context: .",
+      "          build-args: |",
+      "            CI=true",
+      "        env:",
+      "          CINATRA_BUILD_CPUS: \"1\"",
+    ].join("\n");
+    const [hit] = discoverImageBuilds([{ name: "t.yml", text: image }]);
+    // a step env does not reach the docker build: only a build-arg counts
+    expect(hit.step.with.buildArgs.CINATRA_BUILD_CPUS).toBeUndefined();
   });
 
   it("finds the build in the forms the workflows use and ignores comments", () => {
