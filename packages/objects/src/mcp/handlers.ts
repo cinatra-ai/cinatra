@@ -2040,6 +2040,27 @@ const OBJECTS_COLLISION_SCOPE_CHANGE_REJECTED =
   "OBJECTS_COLLISION_SCOPE_CHANGE_REJECTED" as const;
 const OBJECTS_COLLISION_ROW_DELETED = "OBJECTS_COLLISION_ROW_DELETED" as const;
 
+/** Stable code for an `objects_update` of a stored row whose type is RETIRED
+ *  (cinatra#4366; documented in packages/objects/AGENTS.md). */
+const OBJECTS_TYPE_RETIRED = "OBJECTS_TYPE_RETIRED" as const;
+
+/**
+ * Refuse any `objects_update` of a row whose type is retired
+ * (`objectTypeRegistry.registerRetired`): such a type has no definer, and its
+ * rows are kept read-only so they fail closed. Called after the authorization
+ * gate and the not-found check, so it reveals nothing about a row the caller
+ * cannot see, and before any write (content or project move).
+ */
+function refuseRetiredTypeUpdate(type: string): void {
+  if (!objectTypeRegistry.isRetired(type)) return;
+  throw new PrimitiveInvocationError({
+    code: OBJECTS_TYPE_RETIRED,
+    message: `object type "${type}" is retired; its stored rows are read-only`,
+    retryable: false,
+    details: { type },
+  });
+}
+
 /**
  * Refuse a save whose type has no installed definer (fail-closed write
  * boundary). Throws a structured PrimitiveInvocationError carrying the stable
@@ -2336,6 +2357,9 @@ export function createObjectsPrimitiveHandlers() {
         classification.isNewType ||
         isDynamicObjectTypeId(classification.type) ||
         isTombstonedObjectTypeId(classification.type) ||
+        // A retired host type (cinatra#4366) stays registered only so its
+        // stored rows fail closed; nothing new is written under it.
+        objectTypeRegistry.isRetired(classification.type) ||
         classification.type === GENERIC_OBJECT_TYPE_ID ||
         classification.confidence < 0.4 ||
         // Fail-closed registry check: even a "confident" match must resolve to a
@@ -3358,6 +3382,9 @@ export function createObjectsPrimitiveHandlers() {
       if (!existing) {
         throw new Error(`Object not found: ${input.objectId}`);
       }
+      // A row of a retired type is read-only (cinatra#4366): refuse before any
+      // write, content or project move.
+      refuseRetiredTypeUpdate(existing.type);
 
       // Project-move branch. Detect a change in `project_id`:
       //   - `input.projectId === undefined` → caller is not requesting
@@ -3570,12 +3597,17 @@ export function createObjectsPrimitiveHandlers() {
     },
 
     "objects_types_list": async (_request: PrimitiveInvocationRequest<unknown>) => {
-      const staticTypes = objectTypeRegistry.list().map((t) => ({
-        type: t.type,
-        category: t.category,
-        description: `Registered type with identityKey=${t.identityKey ? "yes" : "no"}`,
-        identityKey: t.identityKey ? "fn" : undefined,
-      }));
+      // A retired host type (cinatra#4366) is not offered: nothing can be
+      // written under it.
+      const staticTypes = objectTypeRegistry
+        .list()
+        .filter((t) => !objectTypeRegistry.isRetired(t.type))
+        .map((t) => ({
+          type: t.type,
+          category: t.category,
+          description: `Registered type with identityKey=${t.identityKey ? "yes" : "no"}`,
+          identityKey: t.identityKey ? "fn" : undefined,
+        }));
 
       // Edge-bound object-type serve (cinatra#1392) — type DISCOVERY. When the
       // caller is edge-bound to a NON-DEFAULT version of an object-type-

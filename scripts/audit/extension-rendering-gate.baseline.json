@@ -4,7 +4,7 @@
     {
       "package": "@cinatra-ai/drupal-artifacts",
       "types": [
-        "@cinatra-ai/drupal:node"
+        "@cinatra-ai/drupal-artifacts:node-pointer"
       ]
     }
   ]
