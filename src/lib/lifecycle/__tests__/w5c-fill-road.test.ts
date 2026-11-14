@@ -279,7 +279,7 @@ describe("the fill places values in the screen's own fields and submits nothing"
 
   it("a screen lends BOTH roads; a review lends its own three buttons", () => {
     expect(controlsLentBy(screenResolution as never)).toEqual(["fill", "submit"]);
-    expect(controlsLentBy(reviewResolution as never)).toEqual(["comment", "approve", "reject"]);
+    expect(controlsLentBy(reviewResolution as never)).toEqual(["comment", "regenerate", "approve"]);
     // `fill` is never a GRANT control: filling presses nothing, so it is not an
     // authority a grant can spend.
     expect(LENT_ACTION_CONTROLS).not.toContain("fill");

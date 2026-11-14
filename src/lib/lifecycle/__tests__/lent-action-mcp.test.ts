@@ -311,11 +311,14 @@ describe("GATE 6 — consumed by its first use, and at most once per message", (
 });
 
 describe("using the action IS pressing the button", () => {
+  // AMENDED for cinatra#3080: the three buttons are Comment, Continue (control
+  // id `approve`) and Regenerate, which took Reject's place. A press carries no
+  // regenerate prompt of its own, so the entry's last argument is null.
   it("the review card's three buttons run the card's OWN decision path", async () => {
     for (const [control, disposition] of [
       ["comment", "comment"],
       ["approve", "approve"],
-      ["reject", "reject"],
+      ["regenerate", "regenerate"],
     ] as const) {
       submitReviewDecision = vi.fn(async () => ({ kind: "decided", disposition, idempotent: false }));
       spent = new Set();
@@ -327,6 +330,7 @@ describe("using the action IS pressing the button", () => {
         disposition,
         PERSON_WORDS,
         OWN_CREDENTIAL,
+        null,
         null,
       );
     }
@@ -404,13 +408,15 @@ describe("using the action IS pressing the button", () => {
         { kind: "decided", disposition: "comment", idempotent: false },
         "Your comment was recorded with the decision.",
       ],
+      // AMENDED for cinatra#3080: Approve is Continue, and there is no Reject
+      // decision left to report, so the already-recorded suffix rides a Continue.
       [
         { kind: "decided", disposition: "approve", idempotent: false },
-        "Approved. The gate is resolved and the run has been released to continue.",
+        "Continued. The gate is resolved and the run has been released to continue.",
       ],
       [
-        { kind: "decided", disposition: "reject", idempotent: true },
-        "Rejected. The gate is resolved and the reviewed work has been turned back. (This decision had already been recorded.)",
+        { kind: "decided", disposition: "approve", idempotent: true },
+        "Continued. The gate is resolved and the run has been released to continue. (This decision had already been recorded.)",
       ],
       [
         { kind: "blocked", reason: "no-longer-pending" },

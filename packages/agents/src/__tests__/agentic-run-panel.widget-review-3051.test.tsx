@@ -104,10 +104,10 @@ beforeEach(() => { ensureDefaultFieldRenderersRegistered(); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.clearAllMocks(); vi.useRealTimers(); });
 
 describe("#3051 — the widget run-card owns one broker-authorised review", () => {
-  it("completed output draws one site_widget review; actual Approve resolves and decides with the same broker", async () => {
+  it("completed output draws one site_widget review; actual Continue resolves and decides with the same broker", async () => {
     const port = service(); const refreshReviewRail = vi.fn();
     const { container } = render(widget(<AgenticRunPanel {...props()} refreshReviewRail={refreshReviewRail} />));
-    const approve = await screen.findByRole("button", { name: "Approve" });
+    const approve = await screen.findByRole("button", { name: "Continue" });
     expect(container.querySelectorAll(CARD)).toHaveLength(1);
     expect(container.querySelector(CARD)?.getAttribute("data-lifecycle-card-host")).toBe("site_widget");
     expect(container.querySelector(PLACEHOLDER)).toBeNull();
@@ -116,7 +116,7 @@ describe("#3051 — the widget run-card owns one broker-authorised review", () =
     await waitFor(() => expect(container.querySelector('[data-conformance-id="review-gate-settled"]')).not.toBeNull());
     const decision = lifecycleCalls(port).find(([url]) => String(url).endsWith("/decide"));
     expect(decision).toBeDefined();
-    expect(JSON.parse(String(decision![1]?.body))).toEqual({ ref: REF, disposition: "approve", comment: null });
+    expect(JSON.parse(String(decision![1]?.body))).toEqual({ ref: REF, disposition: "continue", comment: null });
     assertBrokerCalls(port); expect(refreshReviewRail).not.toHaveBeenCalled();
   });
 
@@ -131,13 +131,13 @@ describe("#3051 — the widget run-card owns one broker-authorised review", () =
     await waitFor(() => expect(lifecycleCalls(port).length).toBeGreaterThan(0));
     expect(container.querySelectorAll(PLACEHOLDER)).toHaveLength(1);
     await act(async () => answer.resolve(response({ kind: "artifact_review_gate", state: pending, body: null, targetHeaders: [HEADER] })));
-    await screen.findByRole("button", { name: "Approve" });
+    await screen.findByRole("button", { name: "Continue" });
     expect(container.querySelectorAll(CARD)).toHaveLength(1); expect(container.querySelector(PLACEHOLDER)).toBeNull(); assertBrokerCalls(port);
   });
 
   it("the marked review uses its own ref under the same widget host and broker decision", async () => {
     const port = service(); const { container } = render(widget(<AgenticRunPanel {...props()} initialStatus="pending_approval" initialHitlContext={{ xRenderer: ARTIFACT_REVIEW_REDIRECT_RENDERER_ID, childRunId: null, reviewTaskId: "review-task-3051", inputSchema: { type: "object" }, currentValues: { lifecycleCardRef: "marked-ref-3051" } }} />));
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     await waitFor(() => expect(lifecycleCalls(port).some(([url]) => String(url).endsWith("/decide"))).toBe(true));
     const calls = lifecycleCalls(port); expect(calls.every(([, init]) => JSON.parse(String(init?.body)).ref === "marked-ref-3051")).toBe(true);
     expect(container.querySelector(CARD)?.getAttribute("data-lifecycle-card-host")).toBe("site_widget"); assertBrokerCalls(port);
@@ -196,7 +196,7 @@ describe("#3051 — the widget run-card owns one broker-authorised review", () =
     const port = service({ run: () => ({ status, error: null, messages: [], hitlContext: null,
       reviewGate: { ref: REF, awaiting: false, producedReviewPark: status === "pending_approval" } }) });
     const { container } = render(widget(<AgenticRunPanel {...props()} initialStatus={status} initialReviewGate={{ ref: null, awaiting: true }} />));
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     await waitFor(() => expect(lifecycleCalls(port).some(([url]) => String(url).endsWith("/decide"))).toBe(true));
     const slots = port.mock.calls.filter(([url]) => String(url).includes(`/runs/${RUN}`));
     expect(slots.length).toBeGreaterThan(0);
@@ -225,7 +225,7 @@ describe("#3051 — the widget run-card owns one broker-authorised review", () =
 
   it("a standalone panel still declares its ordinary cookie run_card", async () => {
     const port = service(); const { container } = render(<AgenticRunPanel {...props()} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     await waitFor(() => expect(lifecycleCalls(port).some(([url]) => String(url).endsWith("/decide"))).toBe(true));
     expect(container.querySelector(CARD)?.getAttribute("data-lifecycle-card-host")).toBe("run_card");
     for (const [, init] of lifecycleCalls(port)) expect(init?.credentials).toBe("same-origin");
@@ -247,7 +247,7 @@ describe("#3051 — the widget run-card owns one broker-authorised review", () =
     render(widget(<AgenticRunPanel {...props()} taskId={taskId} initialStatus="running"
       initialReviewGate={{ ref: null, awaiting: false }}
       readReviewSlot={async () => ({ ref: REF, awaiting: false, producedReviewPark: false })} />));
-    await screen.findByRole("button", { name: "Approve" }, { timeout: 12000 });
+    await screen.findByRole("button", { name: "Continue" }, { timeout: 12000 });
     const polls = port.mock.calls.filter(([url]) => String(url).includes(`/runs/${RUN}`));
     expect(polls.length).toBeGreaterThan(0);
     for (const [, init] of polls) {
@@ -276,7 +276,7 @@ describe("#3051 — the widget run-card owns one broker-authorised review", () =
     await waitFor(() => expect(lifecycleCalls(port).length).toBeGreaterThan(0), { timeout: 6000 });
     expect(container.querySelectorAll(PLACEHOLDER)).toHaveLength(1);
     await act(async () => answer.resolve(response({ kind: "artifact_review_gate", state: pending, body: null, targetHeaders: [HEADER] })));
-    await screen.findByRole("button", { name: "Approve" });
+    await screen.findByRole("button", { name: "Continue" });
     expect(container.querySelectorAll(CARD)).toHaveLength(1); expect(container.querySelector(PLACEHOLDER)).toBeNull();
     expect(container.querySelector(CARD)?.getAttribute("data-lifecycle-card-host")).toBe("site_widget");
     assertBrokerCalls(port);
@@ -296,7 +296,7 @@ describe("#3051 — the widget run-card owns one broker-authorised review", () =
     ] }];
     const stored = JSON.stringify(messages);
     const first = render(transcript(messages));
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     await waitFor(() => expect(first.container.querySelector('[data-conformance-id="review-gate-settled"]')).not.toBeNull());
     expect(first.container.querySelectorAll(CARD)).toHaveLength(1);
     expect(first.container.querySelector('[data-run-review-slot="review"]')).not.toBeNull();
@@ -313,7 +313,7 @@ describe("#3051 — the widget run-card owns one broker-authorised review", () =
 
   it.each(["chat_thread", "run_card"] as const)("%s retains its original cookie host and transport", async (host) => {
     const port = service(); const { container } = render(<LifecycleCardSurfaceProvider host={host}><AgenticRunPanel {...props()} /></LifecycleCardSurfaceProvider>);
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     await waitFor(() => expect(lifecycleCalls(port).some(([url]) => String(url).endsWith("/decide"))).toBe(true));
     expect(container.querySelector(CARD)?.getAttribute("data-lifecycle-card-host")).toBe(host);
     for (const [, init] of lifecycleCalls(port)) { expect(init?.credentials).toBe("same-origin"); expect(init?.headers).not.toHaveProperty("X-Cinatra-Widget-User-Token"); }
@@ -343,7 +343,7 @@ describe("#3051 — a broker host mounts no cookie-bound run window", () => {
   it("a widget pending review draws no prompt window and reads no run-window history", async () => {
     const port = service();
     const { container } = render(widget(<AgenticRunPanel {...props()} />));
-    await screen.findByRole("button", { name: "Approve" }); await settle();
+    await screen.findByRole("button", { name: "Continue" }); await settle();
     expect(container.querySelector(CARD)?.getAttribute("data-lifecycle-card-host")).toBe("site_widget");
     expect(container.querySelector(WINDOW)).toBeNull();
     expectNoRunWindowAction(); assertBrokerCalls(port);
@@ -360,7 +360,7 @@ describe("#3051 — a broker host mounts no cookie-bound run window", () => {
   it("the marked widget review draws no prompt window either", async () => {
     const port = service();
     const { container } = render(widget(<AgenticRunPanel {...props()} initialStatus="pending_approval" initialHitlContext={{ xRenderer: ARTIFACT_REVIEW_REDIRECT_RENDERER_ID, childRunId: null, reviewTaskId: "review-task-3051", inputSchema: { type: "object" }, currentValues: { lifecycleCardRef: "marked-ref-3051" } }} />));
-    await screen.findByRole("button", { name: "Approve" }); await settle();
+    await screen.findByRole("button", { name: "Continue" }); await settle();
     expect(container.querySelector(CARD)?.getAttribute("data-lifecycle-card-host")).toBe("site_widget");
     expect(container.querySelector(WINDOW)).toBeNull();
     expectNoRunWindowAction(); assertBrokerCalls(port);
@@ -369,7 +369,7 @@ describe("#3051 — a broker host mounts no cookie-bound run window", () => {
   it("a standalone run_card review keeps its prompt window on the run's exchange", async () => {
     service();
     const { container } = render(<AgenticRunPanel {...props()} />);
-    await screen.findByRole("button", { name: "Approve" });
+    await screen.findByRole("button", { name: "Continue" });
     await waitFor(() => expect(container.querySelector(WINDOW)).not.toBeNull());
     expect(loadRunWindowConversation).toHaveBeenCalledWith(RUN);
   });
@@ -384,7 +384,7 @@ describe("#3051 — a broker host mounts no cookie-bound run window", () => {
   it("a chat_thread review still draws no prompt window inside the conversation", async () => {
     service();
     const { container } = render(<LifecycleCardSurfaceProvider host="chat_thread"><AgenticRunPanel {...props()} /></LifecycleCardSurfaceProvider>);
-    await screen.findByRole("button", { name: "Approve" }); await settle();
+    await screen.findByRole("button", { name: "Continue" }); await settle();
     expect(container.querySelector(WINDOW)).toBeNull();
     expect(container.querySelector(CARD)?.getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
   });
@@ -429,7 +429,7 @@ describe("#3051 — a broker declaration without a widget user token sends nothi
     const port = service();
     const live: LifecycleCardAuth = { headers: (): Record<string, string> => (token ? { "X-Cinatra-Widget-User-Token": token } : {}), credentials: "omit" };
     const { container } = render(widget(<AgenticRunPanel {...props()} />, live));
-    const approve = await screen.findByRole("button", { name: "Approve" });
+    const approve = await screen.findByRole("button", { name: "Continue" });
     token = "";
     fireEvent.click(approve);
     await waitFor(() => expect(container.querySelector('[data-review-outcome="not-permitted"]')).not.toBeNull());

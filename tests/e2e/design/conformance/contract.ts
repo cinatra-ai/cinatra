@@ -689,10 +689,9 @@ export function suggestionChipDriver(fixture: LifecycleSuggestionChipFixture): S
 //     this wave's readiness list, not approximated through the header.
 //
 //   • It declares NO action driver. Six of these surfaces declare
-//     `continue-review -> resolved` as their only action and no shipped control
-//     carries it (open pull request #3100 is the one that lands it, and it lands
-//     the name `regenerate-review -> changes-requested`, which has to be
-//     reconciled with the manifest before either can be driven at all). The CMS
+//     `continue-review -> resolved` as their only action; the floor's Continue
+//     ships it (cinatra#3080), but only inside the review card, which the
+//     one-card gate keeps a harness from composing. The CMS
 //     page declares `open-in-cms -> cms-opened` instead, which the drawing puts
 //     UNDER the representation rather than in the header, and which no shipped
 //     control carries anywhere.
@@ -5993,10 +5992,9 @@ for (const surface of Object.keys(COMPOSER_FAMILY_DRIVERS)) {
 // keeps the decision floor to the card and to the bar's own module (the
 // foundational wave of this epic moved its own proof off the floor for exactly
 // that reason), and the target panel is server-only and mounts a real type
-// renderer, which a core fixture may not name. Two of the bar's three
-// affordances are not on the default branch at all — the branch draws
-// reject-review and approve-review where the drawing draws Regenerate and
-// Continue — and land with open pull request 3100. The conversation panel ships
+// renderer, which a core fixture may not name. The bar draws the drawing's
+// three affordances under their own names (cinatra#3080), and the one-card gate
+// still keeps it to the card. The conversation panel ships
 // and draws the exchange, but carries no anchor for any of its three surfaces
 // and is filled by a request its parent owns. Nothing in the tree promotes a
 // row. So each of those thirteen is guarded by `awaitingMount` — the same guard,
@@ -6734,8 +6732,8 @@ function reviewCardStateDriver(fixture: LifecycleResolveFixture): SurfaceDriver 
         // dropped: a withheld card must never be drawn as a disabled one, and a
         // disabled one must never be silently dropped.
         for (const terminal of [
-          '[data-action="approve-review -> resolved"]',
-          '[data-action="reject-review -> resolved"]',
+          '[data-action="regenerate-review -> successor-gate-opened"]',
+          '[data-action="continue-review -> resolved"]',
         ]) {
           const control = bar.locator(terminal);
           await expect(control).toBeVisible();
@@ -6809,8 +6807,10 @@ function reviewCardStateDriver(fixture: LifecycleResolveFixture): SurfaceDriver 
         await expect(count).toContainText(`${suggestions.length} of ${suggestions.length}`);
         await expect(count).toContainText("ride this decision");
         // The gate is decidable for this reader, so the terminal controls are live.
-        await expect(bar.locator('[data-action="approve-review -> resolved"]')).toBeEnabled();
-        await expect(bar.locator('[data-action="reject-review -> resolved"]')).toBeEnabled();
+        await expect(
+          bar.locator('[data-action="regenerate-review -> successor-gate-opened"]'),
+        ).toBeEnabled();
+        await expect(bar.locator('[data-action="continue-review -> resolved"]')).toBeEnabled();
         await expect(
           bar.locator('[data-conformance-id="review-decision-disabled"]'),
         ).toHaveCount(0);
@@ -7123,8 +7123,9 @@ const RUN_PROGRESS_PLACEHOLDER_IN_THREAD_DRIVER: SurfaceDriver = {
  *
  * The section's claim is that nothing moves but the frame, so this driver holds
  * the same assertions as the in-thread target above, on a mount whose only
- * difference is the host declaration. Its `continue-review` action is on the
- * readiness list: the ratified terminal control arrives with cinatra#3100.
+ * difference is the host declaration. Its `continue-review` action is not
+ * driven: the ratified terminal control ships, but the floor may be composed
+ * only by the review card itself.
  */
 const REVIEW_STATES_OUTSIDE_CHAT_DRIVER: SurfaceDriver = {
   path: HARNESS_PATH,
@@ -7138,8 +7139,7 @@ const REVIEW_STATES_OUTSIDE_CHAT_DRIVER: SurfaceDriver = {
   // The manifest declares `continue-review -> resolved` for this surface, and an
   // aspect a driver does not name at all is dropped SILENTLY by the acceptance
   // generator while the drawing is unpinned — no test, no skip, no record. So the
-  // action is declared here and skips with its own readiness reason: the ratified
-  // terminal control arrives with open pull request cinatra#3100, and the floor
+  // action is declared here and skips with its own readiness reason: the floor
   // may be composed only by the review card itself.
   actions: {
     "continue-review": {
@@ -7294,12 +7294,10 @@ const READER_STATE_MATRIX_DRIVER: SurfaceDriver = {
 // branch today, with what makes it so and what will land it. Each reason is the
 // text a skipped test prints, so the list and the skip cannot drift apart.
 
-/** Awaiting the ratified review floor — open pull request cinatra#3100. */
+/** The ratified review floor ships (cinatra#3080); what keeps these surfaces
+ *  unmounted is the one-card gate, which keeps the floor to the review card. */
 const AWAITING_RATIFIED_REVIEW_FLOOR =
-  "the ratified Comment / Regenerate / Continue floor is not on the default " +
-  "branch yet — it arrives with open pull request cinatra#3100, which also has " +
-  "to reconcile the manifest's `regenerate-review -> successor-gate-opened` " +
-  "with the control that pull request ships — and the floor may be composed " +
+  "the ratified Comment / Regenerate / Continue floor may be composed " +
   "only by the review card itself (the repository's one-card gate forbids a " +
   "page-direct decision composition, and a conformance harness is such a page), " +
   "so the harness mounts no such surface. Every assertion in this driver is " +

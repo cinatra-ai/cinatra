@@ -78,11 +78,28 @@ import {
  * — a spend consumes the grant, and the plan requires both halves of that
  * sentence to work in one message. The fill road reads the turn's grant to know
  * the screen was bound (`matchLentActionGrantCard` below) and never spends it.
+ *
+ * THE REVIEW CARD'S THREE (cinatra#3080). The review card draws Comment ·
+ * Regenerate · Continue, so those are the three a review lends:
+ *
+ *   · `comment` is Comment. It records the note and decides nothing.
+ *   · `approve` is the control id behind Continue. The label changed and the
+ *     stored disposition did not, so the id stays `approve`: one word for one
+ *     act, from the button to the decision row.
+ *   · `regenerate` is Regenerate. It sends the person's words back to the step
+ *     that produced the work, through the review's own change road. It is added
+ *     together with the arm that presses it (`reviewDisposition` in
+ *     `lent-action-mcp.ts`), by the same rule as every other entry here.
+ *
+ * `reject` IS GONE because no card draws it any more, and a control that no card
+ * draws is not in this union. The WORDS are kept apart from the control: a
+ * person who types "reject" is answered at the send, with the platform's own
+ * sentence and no grant (`issueTurnLentActionGrant`).
  */
 export const LENT_ACTION_CONTROLS = [
   "comment",
   "approve",
-  "reject",
+  "regenerate",
   "submit",
   // The SKILLS card's own two buttons and the SCHEDULE card's (cinatra#2853).
   // Each is a button the card already draws — "no card gains an action its
