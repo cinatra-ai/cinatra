@@ -79,14 +79,18 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
     expect(llm.capabilityRequired).toBeUndefined();
   });
 
-  it("Pin 4: no screen of its own (hitlScreens OMITTED) + toolboxes OMITTED (cinatra#4150)", () => {
+  it("Pin 4: no screen of its own (hitlScreens OMITTED, the former id kept without a component) + toolboxes OMITTED (cinatra#4150)", () => {
     const meta = (oas.metadata as Record<string, unknown>).cinatra as Record<string, unknown>;
     expect(meta.hitlScreens).toBeUndefined();
     expect(meta.toolboxes).toBeUndefined();
-    // The package ships no field renderer either: the application's publish
-    // card replaces the pack's own confirmation screen.
+    // The package ships no screen component either: the application's publish
+    // card replaces the pack's own confirmation screen. It keeps declaring the former
+    // screen's id, without a component, so a run that paused there before the
+    // upgrade still resolves to the host's schema floor and shows Continue.
     const cinatra = pkg.cinatra as Record<string, unknown>;
-    expect(cinatra.fieldRenderers).toBeUndefined();
+    expect(cinatra.fieldRenderers).toEqual([
+      { id: "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm", kind: "wordpress-draft-confirm", priority: 90, midRunHitl: true },
+    ]);
   });
 
   it("Pin 5: single ApiNode targeting templated /api/llm-bridge, agent_id, no skill_source_path", () => {

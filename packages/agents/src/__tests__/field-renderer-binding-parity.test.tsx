@@ -34,6 +34,7 @@ import { CtaRenderer } from "../cta-renderer";
 import { SchemaOnlyFloorRenderer } from "../schema-field-renderer";
 import { GroupedSetupFormRenderer } from "../grouped-setup-form-renderer";
 import { classifyMidRunHitl, hasMidRunHitlBinding } from "../orchestrator-mid-run-hitl";
+import { hasFieldRendererComponent } from "../field-renderer-components";
 
 // Gmail context: the gmail-sender condition is context-gated (gmail
 // connected + aliases present) — the gating itself is pinned separately
@@ -74,8 +75,9 @@ const PARITY_TABLE: ReadonlyArray<
   // MIGRATED field-renderer COMPONENTS (cinatra#1625 S8/M3): list-curator's
   // scrape-schema-review + final-list-review (→ @cinatra-ai/list-curator-agent).
   // (blog-linkedin's draft-review and blog-wordpress's draft-confirm migrated the
-  // same way and were then RETIRED with the packs' own confirmation screens,
-  // cinatra#4150 — asserted in the retired-screen case below.)
+  // same way; their components left with the packs' own confirmation screens,
+  // cinatra#4150. Each pack keeps its former id without a component, so it
+  // resolves to the schema floor — asserted in the former-screen case below.)
   // Their ids now resolve to the ExtensionFieldRenderer wrapper (still priority
   // 90, same strict-id condition) — asserted in the dedicated migrated-binding
   // block below, not in this frozen host-component table.
@@ -317,22 +319,29 @@ describe("resolution parity with the retired hand map", () => {
   });
 
 
-  it("cinatra#4150: the two publish packs' own confirmation screens left the build", () => {
+  it("cinatra#4150: a run paused at a publish pack's former screen still resolves to the schema floor with Continue", () => {
     // The packs now declare their publishing step and the application asks on
-    // its own publish card, so neither pack declares a field renderer any more:
-    // no generated binding names either pack, and the two ids resolve to no
-    // custom entry and no mid-run classification.
-    const RETIRED_SCREEN_IDS = [
-      "@cinatra-ai/blog-linkedin-publish-agent:draft-review",
-      "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm",
+    // its own publish card, so neither pack ships a screen component. Each
+    // keeps declaring its former screen id, midRunHitl and without a component,
+    // so a run that paused there before the upgrade (its stored question keeps
+    // that id) resolves to the host's schema floor, which draws its own
+    // Continue, and is read as a mid-run step (the stepper's outer Continue).
+    const FORMER_SCREENS = [
+      { id: "@cinatra-ai/blog-linkedin-publish-agent:draft-review", kind: "linkedin-draft-review", declaredBy: "@cinatra-ai/blog-linkedin-publish-agent" },
+      { id: "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm", kind: "wordpress-draft-confirm", declaredBy: "@cinatra-ai/blog-wordpress-publish-agent" },
     ];
-    const declarers = GENERATED_FIELD_RENDERER_BINDINGS.map((b) => b.declaredBy);
-    expect(declarers).not.toContain("@cinatra-ai/blog-linkedin-publish-agent");
-    expect(declarers).not.toContain("@cinatra-ai/blog-wordpress-publish-agent");
-    for (const id of RETIRED_SCREEN_IDS) {
-      expect(GENERATED_FIELD_RENDERER_BINDINGS.map((b) => b.id), id).not.toContain(id);
-      expect(resolveWith(id), id).toBeNull();
-      expect(hasMidRunHitlBinding(id), id).toBe(false);
+    for (const s of FORMER_SCREENS) {
+      expect(
+        GENERATED_FIELD_RENDERER_BINDINGS.filter((b) => b.id === s.id),
+        s.id,
+      ).toEqual([{ id: s.id, kind: s.kind, priority: 90, midRunHitl: true, declaredBy: s.declaredBy }]);
+      expect(hasFieldRendererComponent(s.id), `${s.id} ships no component`).toBe(false);
+      const entry = resolveWith(s.id);
+      expect(entry?.id, s.id).toBe(s.id);
+      expect(entry?.renderer, s.id).toBe(SchemaOnlyFloorRenderer);
+      expect(entry?.drawsOwnSubmit, `${s.id} draws its own Continue`).toBe(true);
+      expect(hasMidRunHitlBinding(s.id), s.id).toBe(true);
+      expect(classifyMidRunHitl(s.id), s.id).toBe(true);
     }
   });
 
