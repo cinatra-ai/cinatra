@@ -749,8 +749,8 @@ export async function importAgentTemplateCore(
           );
         } catch (restoreErr) {
           console.warn(
-            `[importAgentTemplateCore] could not restore the lifecycle declaration of ` +
-              `'${effectivePackageName}' after the rollback:`,
+            "[importAgentTemplateCore] could not restore the lifecycle declaration after the rollback",
+            { packageName: effectivePackageName },
             restoreErr,
           );
         }
