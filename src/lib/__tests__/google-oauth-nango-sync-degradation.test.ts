@@ -18,6 +18,8 @@
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
+const localPreflightRead = vi.fn();
+vi.mock("@/lib/database-metadata",()=>({readStoredNangoPlatformSettingsForPreflight: async()=>({secretKey:"SYNTHETIC_PLATFORM_KEY"}),readConnectorConfigurationForPreflight:(...a:unknown[])=>localPreflightRead(...a)}));
 const { configRows } = vi.hoisted(() => ({ configRows: new Map<string, unknown>() }));
 
 vi.mock("server-only", () => ({}));
@@ -41,6 +43,7 @@ import {
   classifyNangoSyncFailure,
   describeNangoSyncFailure,
   getGoogleOAuthSettings,
+  readGoogleOAuthConfigurationPresenceForPreflight,
   getGoogleOAuthStatus,
   saveGoogleOAuthSettings,
   type GoogleOAuthStoredSettings,
@@ -73,6 +76,7 @@ type NangoStubOptions = {
   integrationCredentials?: { clientId?: string; clientSecret?: string } | null | "mirror";
   /** A pre-existing connected Google account. */
   savedConnection?: { email: string; displayName?: string } | null;
+  preflightState?: "present"|"absent"|"unknown";
   /** Full control over the mirror leg (concurrency tests). */
   ensureImpl?: (input: {
     credentials?: { client_id?: string; client_secret?: string };
@@ -89,6 +93,7 @@ function installNangoStub(options: NangoStubOptions = {}) {
       getNangoStatus: () => ({ status: "connected", detail: "" }),
       getNangoSettings: () => ({ secretKey: "not-a-real-key" }),
       providerConfigKeys: { googleOAuth: "cinatra-google-oauth" },
+      readNangoOAuthClientConfigurationPresence: async () => ({state:options.preflightState ?? "unknown"}),
       getNangoOAuthCallbackUrl: () => "https://api.nango.dev/oauth/callback",
       getNangoOAuth2IntegrationCredentials: async () =>
         options.integrationCredentials === "mirror"
@@ -457,4 +462,11 @@ describe("getGoogleOAuthStatus degraded reporting", () => {
     expect(status.status).toBe("connected");
     expect(status.accountEmail).toBe("ops@example.com");
   });
+});
+
+describe("Google configuration-only required-start evidence",()=>{
+ it("accepts provider-only configured client without saved account or local credential read",async()=>{installNangoStub({preflightState:"present"});expect(await readGoogleOAuthConfigurationPresenceForPreflight()).toEqual({state:"present"});expect(localPreflightRead).not.toHaveBeenCalled();});
+ it("retains valid local fallback across unknown provider state without trusting sync hints",async()=>{installNangoStub({preflightState:"unknown"});localPreflightRead.mockResolvedValue({clientId:"LOCAL_ID_SENTINEL",clientSecret:"LOCAL_SECRET_SENTINEL"});configRows.set("google_oauth_nango_sync",{status:"failed"});const r=await readGoogleOAuthConfigurationPresenceForPreflight();expect(r).toEqual({state:"present"});expect(JSON.stringify(r)).not.toMatch(/SENTINEL/);});
+ it("does not fabricate presence or absence when both sources are unavailable",async()=>{installNangoStub({preflightState:"unknown"});localPreflightRead.mockRejectedValue(new Error("ROW_SECRET_SENTINEL"));expect(await readGoogleOAuthConfigurationPresenceForPreflight()).toEqual({state:"unknown"});});
+ it("confirms absent only when provider absence and local absence are known",async()=>{installNangoStub({preflightState:"absent"});localPreflightRead.mockResolvedValue(null);expect(await readGoogleOAuthConfigurationPresenceForPreflight()).toEqual({state:"absent"});});
 });

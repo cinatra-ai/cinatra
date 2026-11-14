@@ -422,3 +422,110 @@ ORDER BY selected_at ASC, id ASC`,
     };
   });
 }
+
+/** One ref of a recorded answer, in the order the finalize wrote it. */
+export type RunContextAnswerRef = {
+  artifactId: string;
+  representationRevisionId: string;
+  semanticAssertionId: string;
+  extension: string;
+  sourceScope: RunContextSelectionRow["sourceScope"];
+};
+
+/** A slot's WHOLE answer as one finalize recorded it (cinatra#3080). */
+export type RunContextAnswer = {
+  parentPackageName: string;
+  slotId: string;
+  /** The answer's place among the slot's answers: 1 for the first finalize,
+   *  one more for each later one, in commit order. */
+  answerSeq: number;
+  /** The complete ordered ref set; `[]` for an answer of nothing; `null` when
+   *  the stored value is not a list of refs (never inherited from). */
+  refs: RunContextAnswerRef[] | null;
+  selectedBy: RunContextSelectionRow["selectedBy"];
+  selectionMode: RunContextSelectionRow["selectionMode"];
+};
+
+/** jsonb arrives parsed; a text form is parsed here, and an unparsable one
+ *  reads as no list at all. */
+function parseStoredRefs(raw: unknown): unknown {
+  if (typeof raw !== "string") return raw;
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+function readAnswerRefs(raw: unknown): RunContextAnswerRef[] | null {
+  if (!Array.isArray(raw)) return null;
+  const refs: RunContextAnswerRef[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") return null;
+    const r = item as Record<string, unknown>;
+    if (
+      typeof r.artifactId !== "string" ||
+      typeof r.representationRevisionId !== "string" ||
+      typeof r.semanticAssertionId !== "string" ||
+      typeof r.extension !== "string" ||
+      typeof r.sourceScope !== "string"
+    ) {
+      return null;
+    }
+    refs.push({
+      artifactId: r.artifactId,
+      representationRevisionId: r.representationRevisionId,
+      semanticAssertionId: r.semanticAssertionId,
+      extension: r.extension,
+      sourceScope: r.sourceScope as RunContextAnswerRef["sourceScope"],
+    });
+  }
+  return refs;
+}
+
+/**
+ * The LATEST whole answer a run recorded for a slot, under whatever package it
+ * was recorded, or null when the run recorded none (a run finalized before the
+ * answer table existed records none). "Latest" is the greatest `answer_seq` —
+ * the commit order finalize assigns under its answer lock — and never a clock.
+ */
+export function readLatestRunContextAnswer(input: {
+  orgId: string;
+  parentRunId: string;
+  slotId: string;
+}): RunContextAnswer | null {
+  ensurePostgresSchema();
+  const schema = q();
+  const [res] = runPostgresQueriesSync({
+    connectionString: conn(),
+    queries: [
+      {
+        text: `SELECT parent_package_name, slot_id, answer_seq, refs, selected_by, selection_mode
+FROM "${schema}"."run_context_answers"
+WHERE org_id = $1 AND parent_run_id = $2 AND slot_id = $3
+ORDER BY answer_seq DESC
+LIMIT 1`,
+        values: [input.orgId, input.parentRunId, input.slotId],
+      },
+    ],
+  });
+  const row = res?.rows?.[0] as
+    | {
+        parent_package_name: string;
+        slot_id: string;
+        answer_seq: number | string;
+        refs: unknown;
+        selected_by: RunContextSelectionRow["selectedBy"];
+        selection_mode: RunContextSelectionRow["selectionMode"];
+      }
+    | undefined;
+  if (!row) return null;
+  return {
+    parentPackageName: row.parent_package_name,
+    slotId: row.slot_id,
+    answerSeq: Number(row.answer_seq),
+    refs: readAnswerRefs(parseStoredRefs(row.refs)),
+    selectedBy: row.selected_by,
+    selectionMode: row.selection_mode,
+  };
+}

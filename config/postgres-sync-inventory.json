@@ -1,7 +1,7 @@
 {
   "generatedBy": "scripts/build-postgres-sync-inventory.mjs",
   "note": "DO NOT EDIT BY HAND. Re-run `pnpm sync:inventory`. Per-file classification + justification lives in src/lib/postgres-sync-inventory.ts.",
-  "totalCallSites": 401,
+  "totalCallSites": 407,
   "callers": [
     {
       "file": "packages/extensions/src/permissions-store.ts",
@@ -84,12 +84,12 @@
       "calls": 4
     },
     {
-      "file": "src/lib/artifacts/authoring-recursion-ledger.ts",
-      "calls": 7
+      "file": "src/lib/artifacts/artifact-revision-append.ts",
+      "calls": 5
     },
     {
-      "file": "src/lib/artifacts/cms-content-snapshot-capture.ts",
-      "calls": 4
+      "file": "src/lib/artifacts/authoring-recursion-ledger.ts",
+      "calls": 7
     },
     {
       "file": "src/lib/artifacts/cms-preview-capture-store.ts",
@@ -124,6 +124,10 @@
       "calls": 6
     },
     {
+      "file": "src/lib/artifacts/page-capture-facts-record.ts",
+      "calls": 1
+    },
+    {
       "file": "src/lib/artifacts/producer-assertions.ts",
       "calls": 2
     },
@@ -141,7 +145,7 @@
     },
     {
       "file": "src/lib/artifacts/run-context-selections-store.ts",
-      "calls": 8
+      "calls": 9
     },
     {
       "file": "src/lib/artifacts/semantic-assertion-store.ts",
@@ -149,7 +153,7 @@
     },
     {
       "file": "src/lib/artifacts/typed-promotion-store.ts",
-      "calls": 3
+      "calls": 4
     },
     {
       "file": "src/lib/assistant-assigned-skills-delivery.ts",
@@ -209,7 +213,7 @@
     },
     {
       "file": "src/lib/dev-auto-setup.ts",
-      "calls": 9
+      "calls": 10
     },
     {
       "file": "src/lib/dev-fixture-seeder.ts",
@@ -369,7 +373,7 @@
     },
     {
       "file": "src/lib/widget-user-auth.ts",
-      "calls": 12
+      "calls": 13
     }
   ]
 }

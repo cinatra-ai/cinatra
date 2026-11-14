@@ -32,7 +32,7 @@ import {
 import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
 import { defaultAccessPolicyForKind } from "@cinatra-ai/extensions/install-access-contract";
 import { seedExtensionAccessPolicyIfAbsent } from "@cinatra-ai/extensions/permissions-store";
-import { getConnectorDescriptorBySlug } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
+import { getConnectorDescriptorBySlug, HOST_CONNECTOR_KEY_TO_CATALOG_SLUG } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
 import { EXTERNAL_MCP_CONNECTOR_PACKAGE_SENTINEL } from "@/lib/connection-use-gate";
 import {
   deleteNangoConnection,
@@ -50,24 +50,7 @@ import {
  * (external MCP servers are host rows, not marketplace packages) and maps to
  * the sentinel the use-gate special-cases, so it has no catalog slug.
  */
-const HOST_CONNECTOR_KEY_TO_CATALOG_SLUG: Readonly<Record<string, string>> = Object.freeze({
-  a2aServer: "a2a-server-connector",
-  apify: "apify-connector",
-  apollo: "apollo-connector",
-  claude: "anthropic-connector",
-  drupal: "drupal-mcp-connector",
-  gemini: "gemini-connector",
-  github: "github-connector",
-  gmail: "gmail-connector",
-  googleCalendar: "google-calendar-connector",
-  googleOAuth: "google-oauth-connector",
-  linkedin: "linkedin-connector",
-  openai: "openai-connector",
-  tailscale: "tailscale-connector",
-  tailscaleOauth: "tailscale-connector",
-  wordpress: "wordpress-mcp-connector",
-  youtube: "youtube-connector",
-});
+
 
 /**
  * connectorKey → owning connector package id, REGISTRY-DERIVED from the

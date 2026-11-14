@@ -70,6 +70,7 @@ vi.mock("@/lib/agents-store", () => ({
 vi.mock("@cinatra-ai/agents", async () => {
   const { z } = await import("zod");
   return {
+    publishCallAllowed: async () => true, // cinatra#4150: no publish decision holds this run
     readAgentRunByContextId: vi.fn(async () => null),
     // Capability-matrix helpers consumed by _llm-dispatch.ts (engineering#417).
     // Pure mirrors of llm-provider-policy.ts so the dispatch capability gate +
@@ -136,12 +137,7 @@ vi.mock("@cinatra-ai/agents", async () => {
         "claude-3-7-sonnet-latest",
         "claude-3-5-haiku-latest",
       ],
-      gemini: [
-        "gemini-2.5-flash",
-        "gemini-2.5-pro",
-        "gemini-2.5-flash-lite",
-        "gemini-1.5-pro",
-      ],
+      gemini: ["gemini-3.5-flash"],
     },
   };
 });

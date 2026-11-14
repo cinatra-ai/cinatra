@@ -30,6 +30,13 @@ const MIGRATED_ENTRIES = [
     propsApiVersion: 1,
   },
   {
+    bindingId: "@cinatra-ai/blog-pipeline-agent:idea-selection",
+    packageName: "@cinatra-ai/blog-pipeline-agent",
+    specifier: "@cinatra-ai/blog-pipeline-agent/src/renderers/idea-selection",
+    resolution: "guardedOptional",
+    propsApiVersion: 1,
+  },
+  {
     bindingId: "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm",
     packageName: "@cinatra-ai/blog-wordpress-publish-agent",
     specifier: "@cinatra-ai/blog-wordpress-publish-agent/src/renderers/draft-confirm",

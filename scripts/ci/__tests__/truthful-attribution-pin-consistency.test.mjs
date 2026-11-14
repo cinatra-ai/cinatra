@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-const EXPECTED_PIN = "534e1794bff9071fee584d5366962391de4e8ac2";
+const EXPECTED_PIN = "7c767fe7fabc5e4fb93e2142987a2b2dff502014";
 
 const CALLER_PATH = ".github/workflows/truthful-attribution-gate.yml";
 const REVERIFY_PATH = ".github/workflows/attribution-record-reverify.yml";

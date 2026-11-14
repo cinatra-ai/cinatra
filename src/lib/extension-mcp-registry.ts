@@ -274,6 +274,8 @@ export type ReplayedExtensionRegistration = {
   description?: string;
   inputSchema?: unknown;
   delegatedChat?: DelegatedChatToolClass;
+  /** The registration's outward declaration (cinatra#3745), as the registration wrote it. */
+  outward?: HostMcpToolRegistration["outward"];
 };
 
 /**
@@ -313,6 +315,12 @@ export function buildReplayedExtensionToolConfig(
     // Standard Schema (zod) — the MCP SDK validates against `~standard`.
     inputSchema: (registration.inputSchema as z.ZodTypeAny) ?? z.object({}).passthrough(),
     delegatedChat: registration.delegatedChat,
+    // The registration's outward declaration (cinatra#3745), written only when
+    // the registration states one and copied as it stands: the choke point's
+    // own reader decides what it means, so the replayed tool is held on an
+    // agent run's frame exactly as a `(name, config, handler)` registration
+    // that declares outward.
+    ...(registration.outward !== undefined ? { outward: registration.outward } : {}),
     // An UNVERSIONED registration is stamped with the sentinel below rather
     // than left unstamped. Leaving it unstamped would make it read as a
     // core/bundled host registration and inherit the HOST's identity — and with

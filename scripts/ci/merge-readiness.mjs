@@ -276,7 +276,7 @@ export function resolveBaseRef({ eventName, payload }) {
 }
 
 /* Queue authority comes only from the immutable, separately checked-out engine. */
-export const QUEUE_ENGINE_PIN = "534e1794bff9071fee584d5366962391de4e8ac2";
+export const QUEUE_ENGINE_PIN = "7c767fe7fabc5e4fb93e2142987a2b2dff502014";
 export const QUEUE_ENGINE_DIRECTORY = ".merge-readiness-engine";
 const FULL_SHA = /^[0-9a-f]{40}$/;
 const DIGEST = /^[0-9a-f]{64}$/;

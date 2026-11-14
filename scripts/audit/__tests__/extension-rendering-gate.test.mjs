@@ -395,6 +395,20 @@ describe("extension-rendering-gate — the real tree (test of record)", () => {
     },
     120_000,
   );
+
+  it.skipIf(REAL_TREE_EMPTY && !process.env.CI)(
+    "the checked-in floor holds no stale entry",
+    () => {
+      if (REAL_TREE_EMPTY) {
+        throw new Error("the extension tree holds no artifact extension on a CI run; materialize it before the root suite");
+      }
+      const res = spawnSync(process.execPath, [GATE_SCRIPT], { cwd: REPO_ROOT, encoding: "utf8", env: process.env });
+      expect(res.status, res.stderr).toBe(0);
+      const stale = res.stdout.split("\n").filter((line) => line.includes("no longer applies"));
+      expect(stale).toEqual([]);
+    },
+    120_000,
+  );
 });
 
 // R7 — checklist 2: an open pull request that gives a floor extension its

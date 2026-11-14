@@ -321,3 +321,175 @@ export function recognizeLifecycleViewEnvelope(params: {
     provenance,
   };
 }
+
+// ---------------------------------------------------------------------------
+// THE REPLACEMENT ANNOUNCEMENT (cinatra#2853, the second fix leg).
+//
+// THE DEFECT IT CLOSES. A typed schedule change — "make it 8 in the morning on
+// weekdays" at a live 09:00 card — routes through the bound-card grant to the
+// card's own `adjust`, which RE-PROPOSES: it mints a new proposal ref and
+// leaves the old one addressable, because a proposal ref IS the proposal and
+// there is no row to edit. The card the person is looking at is mounted on the
+// OLD ref, so it kept drawing 09:00 with its own Confirm live while the rows
+// they asked for existed only behind a ref nothing on the page knew. Plan (A)
+// §2.2 is explicit that a typed change re-draws the bound card IN PLACE, never
+// as a second card, with the stale Confirm gone.
+//
+// WHY IT IS NOT A VIEW ENVELOPE. A view envelope mints a card. Minting one here
+// would draw the SECOND card the plan forbids — the exact shape of the defect.
+// This announcement draws nothing: it names the ref the mounted card should now
+// be drawn from, and the card re-resolves it under the reader's own access, as
+// it does on mount. Its worst case is a wasted re-resolve.
+//
+// WHY IT RIDES ALONGSIDE THE RESULT RATHER THAN REPLACING IT. A producer tool
+// returns a card and nothing else, so its envelope is the WHOLE result. This
+// tool is not a producer: it presses a control, and the model is owed the
+// answer — `{ ok, outcome }` — which the bound-card contract tells it to report.
+// So the announcement is one RESERVED, NAMESPACED key beside that answer, and
+// the recognizer reads that key alone. Nothing else in the result is read, and
+// the key can collide with nothing.
+//
+// PRODUCER-BOUND, exactly as the view envelope is, and for the identical reason:
+// tool results are model-visible and model-influenced. Recognition demands the
+// first-party (server, tool) tuple, per viewType — so the ONE tool that can
+// re-propose a card is the only one that can say a card was replaced, and an
+// external MCP server echoing these bytes announces nothing.
+//
+// THE REFS ARE NOT SECRETS TO THIS CALLER. Both are already in the answer this
+// same result carries (`outcome.ref`) and both were minted FOR this reader —
+// each is bound to their (user, org) pair and resolves to `absent` for anyone
+// else. The announcement widens no access; it only says which of the reader's
+// own refs the card in front of them addresses.
+// ---------------------------------------------------------------------------
+
+/** The reserved key the announcement rides under. Namespaced like the envelope. */
+export const LIFECYCLE_REPLACEMENT_KEY = "$cinatraLifecycleReplacement";
+
+/** Announcement version — bumped only for a breaking shape change. */
+export const LIFECYCLE_REPLACEMENT_VERSION = 1;
+
+/**
+ * Maximum accepted length of a result carrying an announcement.
+ *
+ * TWO refs ride here where the view envelope carries one, so the bound is wider
+ * — and still strictly below the runtime's 2,000-character tool-result cap. The
+ * truncation invariant holds by a second route as well: the runtime clips with a
+ * `"..."` suffix, and a clipped result is not parseable JSON, so a truncated
+ * announcement degrades to "no announcement" rather than to a wrong ref.
+ */
+export const LIFECYCLE_REPLACEMENT_MAX_LENGTH = 1800;
+
+/**
+ * The self-MCP tools allowed to announce a replacement, per viewType.
+ *
+ * A SEPARATE allowlist from `LIFECYCLE_PRODUCER_TOOLS`, deliberately: producing
+ * a card and saying an existing one was replaced are different acts, and the
+ * tools that may do them are different tools. Only the schedule card can be
+ * re-proposed, so only its row is non-empty — a tool cannot announce that a
+ * review gate was replaced, because nothing about a review gate ever is.
+ */
+export const LIFECYCLE_REPLACEMENT_TOOLS: Record<
+  LifecycleViewType,
+  readonly string[]
+> = {
+  artifact_review_gate: [],
+  verification_summary: [],
+  trigger_schedule_proposal: ["lifecycle_bound_card_decide"],
+};
+
+/** What a recognized announcement says. Refs only, never content. */
+export type LifecycleCardReplacement = {
+  viewType: LifecycleViewType;
+  schemaVersion: number;
+  /** The ref the mounted card is drawn from now. */
+  supersededRef: string;
+  /** The ref that replaced it. */
+  ref: string;
+};
+
+/**
+ * Build the reserved announcement VALUE — the object a lifecycle primitive
+ * places under {@link LIFECYCLE_REPLACEMENT_KEY} beside its own answer.
+ *
+ * Returns `null` when the announcement would not be recognizable: an unknown
+ * viewType, a ref outside the bounds, or a "replacement" that is the same ref.
+ * A caller that cannot express one answers without it rather than emitting a
+ * shape the sink would (correctly) drop.
+ */
+export function buildLifecycleReplacementAnnouncement(params: {
+  viewType: LifecycleViewType;
+  supersededRef: string;
+  ref: string;
+}): Record<string, unknown> | null {
+  const { viewType, supersededRef, ref } = params;
+  if (!(LIFECYCLE_VIEW_TYPES as readonly string[]).includes(viewType)) return null;
+  for (const candidate of [supersededRef, ref]) {
+    if (typeof candidate !== "string") return null;
+    if (candidate.length === 0 || candidate.length > LIFECYCLE_REF_MAX_LENGTH) return null;
+  }
+  if (supersededRef === ref) return null;
+  return {
+    v: LIFECYCLE_REPLACEMENT_VERSION,
+    viewType,
+    supersededRef,
+    ref,
+  };
+}
+
+/**
+ * Recognize a replacement announcement on a tool result.
+ *
+ * Returns `null` for everything else — a result with no reserved key, a
+ * malformed or oversized one, an unknown viewType, a self-replacement, or a
+ * server/tool outside the announcement tuple. NEVER throws: an adversarial
+ * payload degrades to "no announcement", which degrades to the behaviour this
+ * road had before the announcement existed.
+ */
+export function recognizeLifecycleReplacementAnnouncement(params: {
+  serverLabel?: unknown;
+  toolName?: unknown;
+  result?: unknown;
+}): LifecycleCardReplacement | null {
+  const { serverLabel, toolName, result } = params;
+  if (typeof result !== "string") return null;
+  if (result.length === 0 || result.length > LIFECYCLE_REPLACEMENT_MAX_LENGTH) return null;
+  // A cheap reject before parsing: a result that does not even mention the
+  // reserved key cannot carry one, and the overwhelming majority do not.
+  if (!result.includes(LIFECYCLE_REPLACEMENT_KEY)) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+  const announced = (parsed as Record<string, unknown>)[LIFECYCLE_REPLACEMENT_KEY];
+  if (typeof announced !== "object" || announced === null || Array.isArray(announced)) {
+    return null;
+  }
+  const a = announced as Record<string, unknown>;
+  // Strict INNER shape — the version, the viewType and the two refs, nothing
+  // else. The outer result is the tool's own answer and is deliberately not
+  // constrained; only this key is read.
+  if (Object.keys(a).length !== 4) return null;
+  if (a.v !== LIFECYCLE_REPLACEMENT_VERSION) return null;
+  const { viewType, supersededRef, ref } = a;
+  if (typeof viewType !== "string") return null;
+  if (!(LIFECYCLE_VIEW_TYPES as readonly string[]).includes(viewType)) return null;
+  if (typeof supersededRef !== "string" || typeof ref !== "string") return null;
+  for (const candidate of [supersededRef, ref]) {
+    if (candidate.length === 0 || candidate.length > LIFECYCLE_REF_MAX_LENGTH) return null;
+  }
+  if (supersededRef === ref) return null;
+  const typed = viewType as LifecycleViewType;
+  if (typeof serverLabel !== "string" || typeof toolName !== "string") return null;
+  // EXACT match on the label, for the reason `isAllowedProducer` states.
+  if (serverLabel !== LIFECYCLE_PRODUCER_SERVER_LABEL) return null;
+  if (!LIFECYCLE_REPLACEMENT_TOOLS[typed].includes(toolName)) return null;
+  return {
+    viewType: typed,
+    schemaVersion: LIFECYCLE_REPLACEMENT_VERSION,
+    supersededRef,
+    ref,
+  };
+}

@@ -356,10 +356,10 @@ with the TypeScript compiler API and refuses a new occurrence of:
    class 2 floor. Each such module carries a ceiling: its count of top-level
    value declarations (the names of top-level functions, classes and
    variables, exported or not). A count above the ceiling is refused; a count
-   below it is a stale entry. A new top-level function that stores the
-   published words of a CMS page in `src/lib/artifacts/cms-content-snapshot-capture.ts`
-   is refused; a fix inside an existing declaration adds no name, so a listed
-   module stays maintainable while its surface cannot widen.
+   below it is a stale entry. A new top-level function in
+   `src/lib/artifacts/cms-preview-capture-policy.ts` is refused; a fix inside
+   an existing declaration adds no name, so a listed module stays maintainable
+   while its surface cannot widen.
 
 `connector-artifact-road-gate.mjs` refuses a new **class 6 road**: from a
 module that faces connectors to a module that creates an artifact.
@@ -393,11 +393,7 @@ module that faces connectors to a module that creates an artifact.
   reaches its work through a `globalThis` slot, `entries` (the modules that
   bind the slot). A published id missing from it, a declared id no longer
   published, a `createsArtifact` that disagrees with the reach, and an impl
-  that reads a `globalThis` property with no `entries` each fail. The review
-  seam for staged CMS writes (`@cinatra-ai/host:cms-review`) reaches its
-  capture only through such a slot, which
-  `src/lib/register-cms-review-host-seam-runtime.ts` binds; no import edge
-  leads there from the registration, so the declaration names it.
+  that reads a `globalThis` property with no `entries` each fail.
 - When `packages/sdk-extensions/src/artifact-contract.ts` exports
   `ARTIFACT_CREATING_ROADS`, its members under the application's provider
   identity must equal the ids declared `createsArtifact: true`; while it is
@@ -580,11 +576,10 @@ A base that holds the gate script but not its floor fails closed.
 was written by the gate's own `node scripts/audit/extension-rendering-gate.mjs
 --write-baseline` on the materialized tree. With a committed floor the writer
 removes the entries that no longer apply and never adds one; an extension that
-gains its own detail display is removed from the floor by the writer in a
-change of its own, and so is an extension the content-type rule resolves: the
-change that resolves it leaves the floor as it is (its entry reads as a stale
-warning in warn mode), and the writer's own change removes the entry
-afterwards. A new entry fails against the base branch.
+gains its own detail display, or that the content-type rule resolves, is
+removed from the floor by the writer in the same change: the gate itself only
+warns about a stale entry in warn mode, and the real-tree test of record fails
+while the checked-in floor holds one. A new entry fails against the base branch.
 
 ## Floors compared with the base branch (cinatra#3832)
 

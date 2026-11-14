@@ -18,6 +18,8 @@ const state = vi.hoisted(() => ({
   failLinkOnce: false,
   phase: [] as string[],
   policy: "silent" as "silent" | "forbidden",
+  /** The kind each artifact's objects row holds (cinatra#4117); an unnamed artifact keeps the post body kind. */
+  kinds: {} as Record<string, string>,
 }));
 
 function params(where: SQL | undefined): unknown[] {
@@ -30,6 +32,10 @@ const dbFake = {
     const rows = () => {
       const keys = Object.keys(columns);
       const values = params(where);
+      // cinatra#4245: the event's own row, read under its lock before a gate is emitted.
+      if (keys.includes("continuationAddress") && keys.includes("representationRevisionId") && !keys.includes("eventId")) {
+        return state.events.filter(e => values.includes(e.eventId));
+      }
       if (keys.includes("emitter")) return state.events.filter(e => e.status === "pending");
       if (keys.includes("destinationClass")) return state.events.filter(e => values.includes(e.eventId));
       if (keys.includes("eventId")) return state.events.filter(e => e.status === "pending" && values.includes(e.orgId) && values.includes(e.producerRunId));
@@ -41,14 +47,15 @@ const dbFake = {
       if (keys.includes("hasArtifactBindings")) return [{ lifecycleConfig: null, hasArtifactBindings: true, packageVersion: "1.0.0" }];
       if (keys.includes("path")) return [{ path: "end_node_binding" }];
       if (keys.includes("type")) return keys.includes("id")
-        ? state.events.map(e => ({ id: e.artifactId, type: "artifact-blog-post-body" }))
-        : [{ type: "artifact-blog-post-body", deletedAt: null }];
+        ? state.events.map(e => ({ id: e.artifactId, type: state.kinds[e.artifactId] ?? "artifact-blog-post-body" }))
+        : [{ type: state.kinds[state.events.find(e => values.includes(e.artifactId))?.artifactId ?? ""] ?? "artifact-blog-post-body", deletedAt: null }];
       return [];
     };
     const chain = {
       from: () => chain,
       where(condition: SQL) { where = condition; return chain; },
       orderBy: () => chain,
+      for: () => chain,
       async limit(cap: number) { return rows().slice(0, cap); },
       then(resolve: (value: unknown[]) => unknown, reject?: (error: unknown) => unknown) {
         return Promise.resolve(rows()).then(resolve, reject);
@@ -77,6 +84,11 @@ const dbFake = {
 vi.mock("../db", () => ({ db: {
   select: (columns: Record<string, unknown>) => dbFake.select(columns),
   update: () => dbFake.update(),
+  // cinatra#4245: the link decision runs in a transaction on the event row.
+  transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn({
+    select: (columns: Record<string, unknown>) => dbFake.select(columns),
+    update: () => dbFake.update(),
+  }),
 }, agentBuilderPool: {} }));
 
 const emit = vi.fn(async (input: GateInput) => {
@@ -147,7 +159,7 @@ const drain = () => drainProducedProductionForRun({ orgId: "org", runId: "run" }
 
 beforeEach(() => {
   vi.clearAllMocks(); state.events = []; state.gates.clear(); state.epoch = null;
-  state.failLinkOnce = false; state.phase = []; state.policy = "silent";
+  state.failLinkOnce = false; state.phase = []; state.policy = "silent"; state.kinds = {};
 });
 
 describe("a sealed production opens one gate per artifact revision", () => {
@@ -249,6 +261,34 @@ describe("a sealed production opens one gate per artifact revision", () => {
     expect(await resolveArtifactEffectDisposition(a)).toMatchObject({ disposition: "approved", gate: { gateId: gateA.gateId } });
     expect(await resolveArtifactEffectDisposition(b)).toMatchObject({ disposition: "held", gate: { gateId: gateB.gateId } });
     expect(gateA.targets).toEqual([{ artifactId: a.artifactId, representationRevisionId: a.representationRevisionId }]);
+  });
+
+  it("a run that continues across mixed artifact kinds opens one gate per artifact, each with its own kind (cinatra#4117)", async () => {
+    // Review I.3 draws this run: work that made a post and an image raises one
+    // review per artifact, in order, never one gate combining them. The run
+    // then continues and makes the post's next revision and a second image, a
+    // successor production that again opens one gate per artifact.
+    const DRAFT = "@cinatra-ai/fixture-draft-artifact:draft";
+    const IMAGE = "@cinatra-ai/fixture-image-artifact:image";
+    state.kinds = { post: DRAFT, image: IMAGE, "image-2": IMAGE };
+    const made = [event("post"), event("image")];
+    state.events = [...made];
+    expect((await drain()).gatesCreated).toBe(2);
+    const continued = [event("post", "r2"), event("image-2")];
+    state.events.push(...continued);
+    expect((await drain()).gatesCreated).toBe(2);
+    expect(state.gates.size).toBe(4);
+    expect(emit).toHaveBeenCalledTimes(4);
+    for (const [input] of emit.mock.calls) expect(input.targets).toHaveLength(1);
+    for (const e of [...made, ...continued]) {
+      const target = { artifactId: e.artifactId, representationRevisionId: e.representationRevisionId };
+      const gate = state.gates.get(`run/${autoReviewTaskId(e.eventId)}`);
+      expect(gate?.targets).toEqual([target]);
+      expect(e.continuationAddress).toBe(gate?.gateId);
+      expect(e.status).toBe("processed");
+      expect(suggest).toHaveBeenCalledWith({ gateId: gate!.gateId, orgId: "org", targets: [{ target, kind: state.kinds[e.artifactId] }] });
+    }
+    expect(closeEpoch).toHaveBeenCalledTimes(2);
   });
 
   it.each([

@@ -137,7 +137,10 @@ describe("cinatra#3814 — the edit channel lets a display change the title of i
   });
 
   it("T-b a display on the older channel version is handed no title road, and keeps its text road", () => {
-    expect(ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION).toBe(ARTIFACT_RENDERER_PROPS_API_VERSION);
+    // The title road arrived at 4 and stays at 4; the newest version moved to 5 for
+    // the review decision time (#3978), and a display at the newest version keeps the title road.
+    expect(ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION).toBe(4);
+    expect(ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION).toBeLessThan(ARTIFACT_RENDERER_PROPS_API_VERSION);
     expect(olderPropsVersions()).toEqual([1, 2, 3]);
 
     const ceiling = buildArtifactRendererProps({ ...BASE, edit: GRANTED });
@@ -163,6 +166,8 @@ describe("cinatra#3814 — the edit channel lets a display change the title of i
     expect(artifactRendererPropsAtVersion(ceiling, ARTIFACT_RENDERER_PROPS_TITLE_EDIT_VERSION).edit).toEqual(
       GRANTED,
     );
+    // The snapshot at the newest version carries the title road too.
+    expect(ceiling.edit).toEqual(GRANTED);
   });
 
   it("T-c the older contract on the wire: today's text body, no title road, and the host reads it as before", async () => {

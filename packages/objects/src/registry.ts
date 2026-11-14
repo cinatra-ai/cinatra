@@ -84,6 +84,10 @@ class ObjectTypeRegistryImpl {
   // The type ids registered through `registerGovernedByClaim`: a type no
   // definer registered, governed by a claimant's claim until a definer does.
   private governedByClaim: Set<string> = new Set();
+  // The host type ids registered through `registerRetired`: a type whose
+  // definer moved elsewhere, kept only so its stored rows resolve and fail
+  // closed (cinatra#4366).
+  private retired: Set<string> = new Set();
 
   /**
    * Register (or idempotently replace) an object type. `packageName` records
@@ -147,6 +151,8 @@ class ObjectTypeRegistryImpl {
     // storage — callers retrieve via resolve() which returns
     // ObjectTypeDefinition<unknown>.
     this.entries.set(def.type, def as ObjectTypeDefinition<unknown>);
+    // An ordinary registration is a live definition: it is never retired.
+    this.retired.delete(def.type);
     if (packageName) {
       this.packageByType.set(def.type, packageName);
     } else {
@@ -154,6 +160,39 @@ class ObjectTypeRegistryImpl {
       // conflict guard above already rejected a host takeover of a PACKAGE type).
       this.packageByType.delete(def.type);
     }
+  }
+
+  /**
+   * Register a RETIRED host type (cinatra#4366): an id the host no longer
+   * defines because its definer moved it (for example a pack that renamed its
+   * type into its own namespace), kept registered ONLY so stored rows of it
+   * still resolve and FAIL CLOSED on writes instead of falling to the
+   * ungoverned path. The definition must declare projection `none` (its rows
+   * are never projected) or `artifact-safe` (its rows stay in the artifact
+   * library, read-only, as they were before the move); anything else throws (a
+   * host programming error, never a runtime input). It is registered host-owned
+   * (no package), so a package cannot take the id over and `removeByPackage`
+   * never reaps it. `isRetired` marks it for the write paths, which refuse it,
+   * and for the discovery surfaces, which leave it out. A later ordinary
+   * `register` of the id by the host replaces it and clears the marker.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  registerRetired<T = any>(def: ObjectTypeDefinition<T>): void {
+    const projection = def.dispositions?.projection;
+    if (projection !== "none" && projection !== "artifact-safe") {
+      throw new Error(
+        `Retired object type '${def.type}' must declare projection "none" or "artifact-safe"; a retired type is never projected raw.`,
+      );
+    }
+    this.register(def);
+    if (this.entries.get(def.type) === (def as ObjectTypeDefinition<unknown>)) {
+      this.retired.add(def.type);
+    }
+  }
+
+  /** Whether `typeId` is a retired host type (see `registerRetired`). */
+  isRetired(typeId: string): boolean {
+    return this.retired.has(typeId);
   }
 
   /**
@@ -270,6 +309,7 @@ class ObjectTypeRegistryImpl {
     this.entries.clear();
     this.packageByType.clear();
     this.governedByClaim.clear();
+    this.retired.clear();
   }
 }
 
@@ -393,6 +433,120 @@ export const matcherManifestRegistry: MatcherManifestRegistryImpl =
   _matcherManifestRegistryHolder[MATCHER_MANIFEST_REGISTRY_KEY] ??
   (_matcherManifestRegistryHolder[MATCHER_MANIFEST_REGISTRY_KEY] =
     new MatcherManifestRegistryImpl());
+
+// ---------------------------------------------------------------------------
+// The ARTIFACT PACK SURFACE channel (cinatra#3319).
+//
+// A pack whose types the host registers (a claim-backed pack) leaves no trace
+// in the object-type registry, and, without matchers, none in the matcher
+// channel: its pack-level manifest fields lived only on disk. This channel is
+// their runtime home. The bridge writes one entry per pack and kind of record
+// it registers, on the SAME registration pass as the matcher channel, from the
+// manifest it validated: the manifest's version, its file accepts, its matcher
+// skill ids, and the record the bridge read it from (a store record at its
+// digest, or the image's development tree). A pack can have a store surface
+// and a development-tree surface at once: the registry warm runs the bundled
+// scan again after the store rescan, and the store rescan runs again on an
+// install, so neither kind of record replaces the other; a reader binds each
+// install to its own kind. The runtime-discovery dispatcher's artifact reader
+// facet is its one reader (`packages/extensions/src/artifact-handler.ts`), and
+// it keeps only lifecycle-live, scope-visible packages: an entry is reported
+// only while a live install of its package is visible to the reader. Each
+// store rescan pass removes the store surface of every package in its scope
+// whose store surface the pass did not write (`startArtifactPackStoreSurfacePass`):
+// a package it skips or refuses, or no longer finds on disk. No teardown reaps
+// a store surface between passes, and none reaps a development-tree
+// surface; the next registration of the pack from the development tree
+// replaces it, and until then its version must still match the install a
+// reader binds it to.
+// ---------------------------------------------------------------------------
+
+/** The record the bridge read a pack's manifest from: a store record at its
+ *  digest (`<root>/<kind>/<slug>/<digest>`), or the image's development tree.
+ *  The bundled scan also records the pack's folder in that tree (`dir`), so a
+ *  reader can bind a development checkout's install row to the folder it
+ *  names (cinatra#3319); a caller that names no folder leaves it out. */
+export type ArtifactPackRecord =
+  | { source: "store"; digest: string }
+  | { source: "bundled"; dir?: string };
+
+/** One registered artifact pack's manifest surface, keyed by package name and
+ *  the kind of its record (`record.source`, or none). */
+export interface ArtifactPackSurfaceEntry {
+  packageName: string;
+  /** The manifest's own `version`, or null when it is not a string. */
+  version: string | null;
+  /** `manifest.accepts.file.mimeTypes` (empty when the pack accepts no file). */
+  fileMimeTypes: readonly string[];
+  /** `manifest.skills.matchers` (empty when the pack declares none). */
+  matcherSkillIds: readonly string[];
+  /** Where the bridge read the manifest, or null when its caller named no
+   *  record (such an entry never binds to an install). */
+  record: ArtifactPackRecord | null;
+}
+
+/** The kind of record a surface was read from, or null for none. */
+export type ArtifactPackRecordSource = ArtifactPackRecord["source"] | null;
+
+/**
+ * Process-global registry of registered artifact packs' manifest surfaces,
+ * keyed by package name and kind of record: a registration replaces the
+ * surface of its pack and kind of record, and `remove` drops one. Zero
+ * React / DB / server-only imports (SSR-safe, as the registries above).
+ */
+class ArtifactPackSurfaceRegistryImpl {
+  private entries: Map<string, ArtifactPackSurfaceEntry> = new Map();
+
+  private static key(packageName: string, source: ArtifactPackRecordSource): string {
+    return `${packageName}\u0000${source ?? "none"}`;
+  }
+
+  /** Register (or replace) a pack's surface from one kind of record. */
+  register(entry: ArtifactPackSurfaceEntry): void {
+    this.entries.set(
+      ArtifactPackSurfaceRegistryImpl.key(entry.packageName, entry.record?.source ?? null),
+      entry,
+    );
+  }
+
+  /** The pack's surface from one kind of record, or null when none is registered. */
+  get(packageName: string, source: ArtifactPackRecordSource): ArtifactPackSurfaceEntry | null {
+    return this.entries.get(ArtifactPackSurfaceRegistryImpl.key(packageName, source)) ?? null;
+  }
+
+  /** Remove the pack's surface from one kind of record, if one is registered. */
+  remove(packageName: string, source: ArtifactPackRecordSource): void {
+    this.entries.delete(ArtifactPackSurfaceRegistryImpl.key(packageName, source));
+  }
+
+  /** Every registered surface of one pack. */
+  listForPackage(packageName: string): readonly ArtifactPackSurfaceEntry[] {
+    return this.list().filter((entry) => entry.packageName === packageName);
+  }
+
+  /** Every registered surface. */
+  list(): readonly ArtifactPackSurfaceEntry[] {
+    return Array.from(this.entries.values());
+  }
+
+  /** @internal Only call this from test `beforeEach` blocks — not in production code. */
+  _clearForTests(): void {
+    this.entries.clear();
+  }
+}
+
+const ARTIFACT_PACK_SURFACE_REGISTRY_KEY = Symbol.for(
+  "@cinatra-ai/objects:artifact-pack-surface-registry/v1",
+);
+type ArtifactPackSurfaceRegistryHolder = {
+  [k: symbol]: ArtifactPackSurfaceRegistryImpl | undefined;
+};
+const _artifactPackSurfaceRegistryHolder =
+  globalThis as unknown as ArtifactPackSurfaceRegistryHolder;
+export const artifactPackSurfaceRegistry: ArtifactPackSurfaceRegistryImpl =
+  _artifactPackSurfaceRegistryHolder[ARTIFACT_PACK_SURFACE_REGISTRY_KEY] ??
+  (_artifactPackSurfaceRegistryHolder[ARTIFACT_PACK_SURFACE_REGISTRY_KEY] =
+    new ArtifactPackSurfaceRegistryImpl());
 
 // ---------------------------------------------------------------------------
 // Type-driven projection-disposition seam (epic #1785)

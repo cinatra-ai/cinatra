@@ -37,15 +37,17 @@
 // harness passes {@link LIFECYCLE_REVIEW_TARGET_HEADER_NOW} and the driver reads
 // the line against the same one, so "updated N ago" is stable in a browser run.
 //
-// TWO DRAWN READINGS THIS WAVE REPORTS RATHER THAN ASSERTS, because the shipped
-// composer has no reading for them and a drivers wave does not change product
+// THE OWNER'S NAME IS THE HOST'S READING, AND A ROW CARRIES IT. The drawing
+// prints the owner's scope by its type and its name ("… · Team: Growth ·
+// Private · …", cinatra#3443); a stored row carries the owning team's id, and
+// the server-side composer resolves the name before it calls
+// `reviewTargetRowFacts`. So a row seeds the name the host would have resolved
+// (`ownerName`), never the worded fact: the type word, the colon and the
+// visibility are still worded by the product.
+//
+// ONE DRAWN READING THIS WAVE REPORTS RATHER THAN ASSERTS, because the shipped
+// composer has no reading for it and a drivers wave does not change product
 // code:
-//   • the scope pair's CASING. The drawing prints "… · Team · Private · …";
-//     `reviewTargetRowFacts` returns the row's stored values verbatim, which are
-//     lower case ("team", "private") — see
-//     src/lib/artifacts/__tests__/review-surface-model.test.ts. The driver
-//     asserts the product's own reading, so the departure is visible in the
-//     fixture rather than papered over by a capitalized fixture value.
 //   • the CMS page's PLATFORM and page ADDRESS. Its drawn identity line carries
 //     both; `reviewTargetRowFacts` composes owner level, visibility, MIME and
 //     updated time and nothing else, for every kind alike. There is no product
@@ -103,8 +105,9 @@ export type LifecycleReviewTargetHeaderSurface =
 export const LIFECYCLE_REVIEW_TARGET_HEADER_NOW = "2026-09-02T12:00:00.000Z";
 
 /**
- * The four authorized values the stored artifact row carries — exactly the
- * argument `reviewTargetRowFacts` reads, and never the facts it returns.
+ * The four authorized values the stored artifact row carries, plus the owner's
+ * name the host resolves — exactly the argument `reviewTargetRowFacts` reads,
+ * and never the facts it returns.
  */
 export type LifecycleReviewTargetHeaderRow = {
   ownerLevel: string;
@@ -112,6 +115,8 @@ export type LifecycleReviewTargetHeaderRow = {
   mime: string;
   /** The stored instant; the product words it relative to the fixed now. */
   updatedAt: string;
+  /** The owning team's name, as the host's owner-name resolver reads it. */
+  ownerName?: string;
 };
 
 /**
@@ -163,6 +168,7 @@ export const LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES: readonly LifecycleReviewTa
           revisionId: "rev_4c21",
           row: {
             ownerLevel: "team",
+            ownerName: "Growth",
             visibility: "private",
             mime: "text/markdown",
             updatedAt: "2026-09-02T11:52:00.000Z",
@@ -179,6 +185,7 @@ export const LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES: readonly LifecycleReviewTa
           revisionId: "rev_11b8",
           row: {
             ownerLevel: "team",
+            ownerName: "Growth",
             visibility: "private",
             mime: "text/markdown",
             updatedAt: "2026-09-02T11:52:00.000Z",
@@ -195,6 +202,7 @@ export const LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES: readonly LifecycleReviewTa
           revisionId: "rev_66d0",
           row: {
             ownerLevel: "team",
+            ownerName: "Growth",
             visibility: "private",
             mime: "image/png",
             updatedAt: "2026-09-02T11:52:00.000Z",
@@ -211,6 +219,7 @@ export const LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES: readonly LifecycleReviewTa
           revisionId: "rev_9ac3",
           row: {
             ownerLevel: "team",
+            ownerName: "Growth",
             visibility: "private",
             mime: "application/pdf",
             updatedAt: "2026-09-02T11:52:00.000Z",
@@ -227,6 +236,7 @@ export const LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES: readonly LifecycleReviewTa
           revisionId: "rev_2e77",
           row: {
             ownerLevel: "team",
+            ownerName: "Growth",
             visibility: "private",
             mime: "application/json",
             updatedAt: "2026-09-02T11:52:00.000Z",
@@ -243,6 +253,7 @@ export const LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES: readonly LifecycleReviewTa
           revisionId: "rev_5b02",
           row: {
             ownerLevel: "team",
+            ownerName: "Growth",
             visibility: "private",
             mime: "application/json",
             updatedAt: "2026-09-02T11:52:00.000Z",
@@ -271,6 +282,7 @@ export const LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES: readonly LifecycleReviewTa
           revisionId: "rev_c410",
           row: {
             ownerLevel: "team",
+            ownerName: "Growth",
             visibility: "private",
             mime: "text/html",
             updatedAt: "2026-09-02T11:52:00.000Z",

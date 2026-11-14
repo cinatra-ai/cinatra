@@ -47,6 +47,7 @@
 // ---------------------------------------------------------------------------
 
 import type { AgUiEvent } from "@cinatra-ai/agent-ui-protocol";
+import { isLifecycleCardReplacementDataPart } from "@cinatra-ai/agent-ui-protocol";
 import type {
   StreamClientHello,
   StreamNegotiation,
@@ -570,6 +571,26 @@ export type AssistantChatTurnUiPort = {
   isWidgetRefreshTool: (toolName: string) => boolean;
   onWidgetRefresh: () => void;
   /**
+   * A MOUNTED CARD WAS REPLACED IN PLACE (cinatra#2853, the second fix leg).
+   *
+   * A typed change to a schedule card presses that card's own `adjust`, which
+   * RE-PROPOSES: a new ref, the old one still addressable. The page holds a card
+   * mounted on the old ref, so the server says which ref it is now looking at
+   * and the surface hands that to its mounted cards. Without it the card kept
+   * drawing the schedule the person had just asked to change, Confirm and all.
+   *
+   * IT CARRIES NO DECISION AND NO CONTENT — two refs, both minted for this same
+   * reader, and the card re-resolves the new one under its own access exactly as
+   * it does on mount. So the worst an announcement can cost is a re-resolve.
+   *
+   * OPTIONAL: a surface that mounts no lifecycle cards has nothing to do with
+   * it and passes nothing.
+   */
+  onLifecycleCardReplaced?: (replacement: {
+    supersededRef: string;
+    replacementRef: string;
+  }) => void;
+  /**
    * THE SERVER'S OWN NAME FOR THIS TURN (cinatra#2823 S9j), reported as soon as
    * the wire carries it and on every fold after that — the port implementation
    * is expected to be idempotent about it.
@@ -738,6 +759,19 @@ export async function driveAssistantChatTurn(
           if (state.runId) ui.noteRunId?.(state.runId);
           // TOOL_CALL_END carries only the id; the name resolves from the
           // folded state (TOOL_CALL_START recorded it).
+          // THE CARD-REPLACEMENT ANNOUNCEMENT (cinatra#2853). Read off the
+          // EVENT rather than the folded state, for the reason the reducer
+          // states where it consumes it: it is not content, so it is not IN the
+          // folded state. Guarded and total — an announcement the port does not
+          // want, or a payload that is not one, is simply not delivered.
+          if (event.type === "DATA_PART" && ui.onLifecycleCardReplaced) {
+            if (isLifecycleCardReplacementDataPart(event.data)) {
+              ui.onLifecycleCardReplaced({
+                supersededRef: event.data.supersededRef,
+                replacementRef: event.data.ref,
+              });
+            }
+          }
           if (event.type === "TOOL_CALL_END" && !widgetRefreshFired.has(event.toolCallId)) {
             const name = state.message.thoughtGroups[0]?.toolCalls.find(
               (tc) => tc.id === event.toolCallId,

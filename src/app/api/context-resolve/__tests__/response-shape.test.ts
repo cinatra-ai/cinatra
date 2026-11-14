@@ -13,6 +13,11 @@ vi.mock("@/lib/artifacts/context-route-io", () => ({
     deriveContextRouteContext(...args),
   loadTrustedSlot: (...args: unknown[]) => loadTrustedSlot(...args),
   resolveCandidates: (...args: unknown[]) => resolveCandidates(...args),
+  // The manifest-wide planner reads the installed OAS through this module.
+  // No OAS reads as an empty manifest, which plans to an empty allocation
+  // with its own token; a planning failure is a refusal of its own
+  // (cinatra#4146), so the planner must be able to run here.
+  readInstalledOasForPackage: vi.fn(),
 }));
 
 // Importing AFTER vi.mock so the route picks up the mocked module.

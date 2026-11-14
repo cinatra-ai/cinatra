@@ -20,15 +20,13 @@
  * opens it on the right". So there is no drawn treatment to copy for this row,
  * and inventing a mark the drawing does not have would be a second departure.
  *
- * THE READING TAKEN, AND WHY IT IS THE SYSTEM'S OWN. This rail already draws
- * rows a reader cannot press — a step still ahead is rendered `disabled`, and
- * the vendored stepper's own row carries `cursor-pointer ...
- * disabled:pointer-events-none disabled:opacity-60`. A row that cannot be
- * pressed is therefore ALREADY a 60%-ink row with no pointer cursor on this
- * very surface. The step-result row takes that same reading rather than a new
- * one: the drawing's row anatomy (24px glyph, numeral, title, 28px box, the
- * marks between the rows) is untouched, and the only thing that changes is the
- * affordance — which is exactly the difference the row was lying about.
+ * THE READING TAKEN. The row's difference is that it is not a control: it is
+ * no button, carries no role and takes no pointer cursor. Its title reads the
+ * rail's muted ink, as the drawing gives every entry the reader is not on; the
+ * drawing dims no title and no whole step, so the row carries no opacity — one
+ * painted its muted title paler than the muted token (cinatra#3240). The
+ * drawing's row anatomy (24px glyph, numeral, title, 28px box, the marks
+ * between the rows) is untouched.
  *
  * WHICH STEP-RESULT ROW IS EVEN DRAWN (cinatra#3226, merged in on the leg-8
  * forward). The rail names every entry by the work it did and draws no entry at
@@ -72,9 +70,9 @@ afterEach(() => {
   document.documentElement.className = "";
 });
 
-/** The rail's own ink for a row a reader cannot press (the vendored stepper's
- *  `disabled:opacity-60`, which this rail already draws an upcoming step with). */
-const NOT_PRESSABLE_INK = "opacity-60";
+/** The row that opens nothing carries no opacity: the drawing dims no title, so
+ *  its title reads the rail's muted ink itself (cinatra#3240). */
+const ANY_OPACITY = /^opacity-/;
 /** The cursor a row that opens nothing takes — never the control's pointer. */
 const NOT_PRESSABLE_CURSOR = "cursor-default";
 /** The cursor the vendored stepper puts on a row that DOES open. */
@@ -130,7 +128,7 @@ function openableStepEntry(): RunStepRailEntry {
 describe("the treatment itself (cinatra#3002 acceptance 3)", () => {
   it("is one declaration, at the rail's own not-pressable ink, with no pointer", () => {
     const declared = tokens(RUN_PAGE_RAIL_INERT_ROW_CLASS);
-    expect(declared).toContain(NOT_PRESSABLE_INK);
+    expect(declared.filter((t) => ANY_OPACITY.test(t))).toEqual([]);
     expect(declared).toContain(NOT_PRESSABLE_CURSOR);
     expect(declared).not.toContain(PRESSABLE_CURSOR);
   });
@@ -180,11 +178,11 @@ for (const palette of ["light", "dark"] as const) {
       // … and it does not draw like one either.
       const inertTokens = tokens(inertRow.className);
       const openableTokens = tokens(openableRow!.className);
-      expect(inertTokens).toContain(NOT_PRESSABLE_INK);
+      expect(inertTokens.filter((t) => ANY_OPACITY.test(t))).toEqual([]);
       expect(inertTokens).toContain(NOT_PRESSABLE_CURSOR);
       expect(inertTokens).not.toContain(PRESSABLE_CURSOR);
       expect(openableTokens).toContain(PRESSABLE_CURSOR);
-      expect(openableTokens).not.toContain(NOT_PRESSABLE_INK);
+      expect(openableTokens.filter((t) => ANY_OPACITY.test(t))).toEqual([]);
       expect(inertRow.className).not.toBe(openableRow!.className);
     });
 
@@ -217,7 +215,7 @@ for (const palette of ["light", "dark"] as const) {
 
       const row = wrapper!.firstElementChild as HTMLElement;
       const rowTokens = tokens(row.className);
-      expect(rowTokens).toContain(NOT_PRESSABLE_INK);
+      expect(rowTokens.filter((t) => ANY_OPACITY.test(t))).toEqual([]);
       expect(rowTokens).toContain(NOT_PRESSABLE_CURSOR);
       expect(rowTokens).not.toContain(PRESSABLE_CURSOR);
     });
@@ -244,7 +242,7 @@ for (const palette of ["light", "dark"] as const) {
       expect(trigger).not.toBeNull();
       const triggerTokens = tokens(trigger!.className);
       expect(triggerTokens).toContain(PRESSABLE_CURSOR);
-      expect(triggerTokens).not.toContain(NOT_PRESSABLE_INK);
+      expect(triggerTokens.filter((t) => ANY_OPACITY.test(t))).toEqual([]);
     });
   });
 }

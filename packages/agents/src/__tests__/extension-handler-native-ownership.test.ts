@@ -198,13 +198,27 @@ describe("a SUPPLIED package is installed root-only — there is no registry clo
       expect.objectContaining({
         packageName: "@scope/ext",
         requireStorePayload: true,
-        // cinatra#3534: translated to the determinate organization anchor.
+        // cinatra#3534: translated template owner; #4002 keeps canonical scope.
         ownerLevel: "organization",
+        suppliedClaimContext: {
+          rootAnchor: { ownerLevel: "workspace", ownerId: "__platform__", organizationId: null },
+          provenance: { type: "local", path: "abc.tgz", contentDigest: "a".repeat(64) },
+        },
       }),
       expect.anything(),
     );
   });
 
+  it("a supplied GitHub ref preserves its exact canonical team anchor and provenance", async () => {
+    const provenance = { type: "github" as const, repo: "owner/package", ref: "main", resolvedSha: "a".repeat(40), contentDigest: "b".repeat(64) };
+    await createAgentExtensionHandler().install({ packageName: "@scope/ext", version: "1.2.3", provenance } as never, actor as never,
+      { rowOwnership: { ownerLevel: "team", ownerId: "team-1", organizationId: "org-1" } } as never);
+    expect(installAgentPackageWithDependencies).not.toHaveBeenCalled();
+    expect(installAgentFromPackage).toHaveBeenCalledWith(expect.objectContaining({
+      requireStorePayload: true, ownerLevel: "team", ownerId: "team-1",
+      suppliedClaimContext: { rootAnchor: { ownerLevel: "team", ownerId: "team-1", organizationId: "org-1" }, provenance },
+    }), expect.anything());
+  });
   it("a REGISTRY ref still plans its closure — the road is unchanged for it", async () => {
     const handler = createAgentExtensionHandler();
     await handler.install(

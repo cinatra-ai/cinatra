@@ -1,7 +1,7 @@
 import "server-only";
 import { NextResponse } from "next/server";
 
-import { readAgentRunById } from "@cinatra-ai/agents";
+import { publishCallAllowed, readAgentRunById } from "@cinatra-ai/agents";
 import { collectAllPrimitiveHandlers } from "@/lib/primitive-handlers";
 import { isAuthorizedBridgeRequest } from "@/lib/wayflow-bridge-auth";
 import { bindBridgeRunId } from "@/lib/authz/bridge-run-binding";
@@ -10,12 +10,14 @@ import {
   RUN_STEP_NODE_HEADER,
   RUN_STEP_ATTESTATION_HEADER,
 } from "@/lib/agent-run-token";
-import { buildActorContextFromRun } from "@/lib/authz/build-actor-context-from-run";
+import {
+  buildActorContextFromRun,
+  resolveRunOwnerMembershipOrgRole,
+} from "@/lib/authz/build-actor-context-from-run";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 import { withActorContext } from "@cinatra-ai/llm/actor-context";
 import type { ActorContext } from "@/lib/authz/actor-context";
-import { shapeBlogPipelineObjectsSave } from "./blog-pipeline-seam";
 import {
   shapeArtifactMaterializeInput,
   type ShapedArtifactMaterializeInput,
@@ -24,6 +26,10 @@ import {
   shapeArtifactImageInput,
   type ShapedArtifactImageInput,
 } from "./artifact-image-shaper";
+import {
+  shapeArtifactPageCaptureInput,
+  type ShapedArtifactPageCaptureInput,
+} from "@/lib/artifact-page-capture-shaper";
 import {
   shapeTestDeliverySendInput,
   shapeTestDeliverySendResult,
@@ -42,7 +48,14 @@ import {
 } from "./answered-gate-provenance";
 import { shapeObjectsUpdateInput } from "./objects-update-seam";
 import { EXTENSION_SCOPED_TOOLS } from "@/lib/extension-scoped-tools";
+import { EXTENSION_TOOL_REVIEW_TARGETS_KEY } from "@/lib/extension-tool-dispatch";
+import { EXTENSION_TOOL_STEP_UNPROVEN } from "@/lib/extension-scoped-tools-refusals";
 import { RUN_FOLDER_TOOLS } from "@/lib/run-folder-tools";
+import {
+  PASSTHROUGH_ACTOR_CONTEXT_ERROR,
+  passthroughFailureText,
+  passthroughFixedFailureText,
+} from "@/lib/passthrough-refusal";
 
 /**
  * Deterministic MCP-call passthrough for WayFlow.
@@ -92,6 +105,11 @@ const ALLOWED_TOOLS = new Set([
   // provider, sharing the #923 idempotency ledger (`path:'materialize_tool'`)
   // and, for a regeneration, the mid-run revision's one compare-and-set.
   "artifact_image_generate",
+  // THE PAGE CAPTURE TOOL (cinatra#4223): a page url on one of the org's active
+  // connect-registered sites in, a PNG of that page filed. Dispatched to
+  // `@/lib/artifact-page-capture-tool#captureArtifactPage` under the bound run's
+  // own authority, sharing the #923 idempotency ledger (`path:'materialize_tool'`).
+  "artifact_page_capture",
   // Run-scoped HITL prompt primitives (#1794) — the deterministic pre-interrupt
   // seam. An extension workflow's prep ApiNode calls these to assemble / shape
   // its own HITL payload before the interrupt; the primitive derives the run +
@@ -128,6 +146,11 @@ const ALLOWED_TOOLS = new Set([
   // and never a wildcard. The folder is host-side and is never mounted into a
   // sandbox, so these three are the only way an agent reaches it directly.
   ...RUN_FOLDER_TOOLS,
+  // THE RUN'S DASHBOARD WRITE (cinatra#3092). The one dashboards tool admitted
+  // here, dispatched by ./run-dashboard-create as the PROVEN run's owner, with
+  // that run's id and the run org-write authority the MCP transport mints for
+  // an agent-run frame. Update, publish and archive are not admitted.
+  "dashboards_create",
 ]);
 
 // Tools that must execute inside an mcpRequestContextStorage frame carrying the
@@ -230,8 +253,19 @@ const TOOL_INPUT_SHAPERS: Record<string, InputShaper> = {
   // the 30s+ LLM tax. Only fires when the ApiNode opts-in via the synthetic
   // input field `_shape: "email_outreach_context_setup"` so other objects_save
   // call sites are untouched.
+  //
+  // `_shape` is a CLOSED discriminator (cinatra#3035): a body without the
+  // field passes through unchanged, and a body that carries it with any other
+  // value is refused (the shaper-throw contract answers HTTP 400). A retired
+  // opt-in must not fall through with its caller-supplied `typeHint` and
+  // `rawData` into the save.
   objects_save(raw) {
-    if (raw._shape !== "email_outreach_context_setup") return raw;
+    if (!Object.prototype.hasOwnProperty.call(raw, "_shape")) return raw;
+    if (raw._shape !== "email_outreach_context_setup") {
+      throw new Error(
+        'objects_save: `_shape` names no passthrough shaper; the only accepted value is "email_outreach_context_setup".',
+      );
+    }
     const setupJson = typeof raw.setupJson === "string" ? raw.setupJson : "";
     const cinatra_agent_run_id =
       typeof raw.cinatra_agent_run_id === "string"
@@ -303,16 +337,9 @@ TOOL_INPUT_SHAPERS.artifact_materialize = (raw) =>
 // a JSON string, which is all a wayflowcore json_body template can carry).
 TOOL_INPUT_SHAPERS.artifact_image_generate = (raw) => shapeArtifactImageInput(raw);
 
-// blog-pipeline-agent deterministic seam dispatch.
-// The pure shaper lives in ./blog-pipeline-seam (zero-dep, unit-tested).
-// Chained AHEAD of the base objects_save shaper; the `_shape` opt-in
-// keeps every other objects_save call site untouched.
-const baseObjectsSaveShaper = TOOL_INPUT_SHAPERS.objects_save;
-TOOL_INPUT_SHAPERS.objects_save = (raw, agentRunId) => {
-  const blog = shapeBlogPipelineObjectsSave(raw, agentRunId);
-  if (blog) return blog;
-  return baseObjectsSaveShaper ? baseObjectsSaveShaper(raw, agentRunId) : raw;
-};
+// The page capture tool's seam shaper (cinatra#4223): pure module, flow
+// variables wire straight to {extension, title, url, node_id}.
+TOOL_INPUT_SHAPERS.artifact_page_capture = (raw) => shapeArtifactPageCaptureInput(raw);
 
 // email-test-delivery run_send input shaping (#1625) — the pure shaper
 // lives in ./test-delivery-seam (zero-dep, unit-tested). It JSON-parses the
@@ -401,9 +428,12 @@ export async function POST(req: Request): Promise<Response> {
   // signs the executing step's id over the run's context id; it is verified
   // here with the context id the run binding above proved, and stamped on the
   // run-scoped frame below. An absent or unverified pair gives no step.
+  // A blank key is no key (cinatra#4154): the runtime refuses to boot on one,
+  // and a pair signed under whitespace proves nothing.
+  const attestKey = process.env.CINATRA_CONTEXT_ATTEST_KEY;
   const verifiedStepId =
     verifyRunStepAttestation({
-      key: process.env.CINATRA_CONTEXT_ATTEST_KEY,
+      key: attestKey && attestKey.trim() !== "" ? attestKey : null,
       contextId: req.headers.get("x-cinatra-a2a-context-id"),
       node: req.headers.get(RUN_STEP_NODE_HEADER),
       attestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER),
@@ -414,9 +444,9 @@ export async function POST(req: Request): Promise<Response> {
   try {
     input = shaper ? shaper(rawInput, agentRunId) : rawInput;
   } catch (err) {
-    // A shaper that fails closed (e.g. blog-pipeline `selectedIdeaJson` that
-    // is not a parseable/matching BlogIdea) surfaces a clear 400 instead of
-    // continuing into a wrong/empty downstream artifact.
+    // A shaper that fails closed (it throws on an input it cannot shape)
+    // surfaces a clear 400 instead of continuing into a wrong/empty
+    // downstream artifact.
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 400 });
   }
@@ -431,6 +461,14 @@ export async function POST(req: Request): Promise<Response> {
       { status: 404 },
     );
   }
+  // cinatra#4150 — no publish without a released decision, enforced at the call,
+  // before any tool runs: the run the binding proved, the verified step or none.
+  if (!(await publishCallAllowed(run, verifiedStepId))) {
+    return NextResponse.json(
+      { error: "This call waits for a publish decision.", code: "publish_not_released" },
+      { status: 403 },
+    );
+  }
   let actor: PrimitiveActorContext;
   let alsActorContext: ActorContext;
   try {
@@ -440,6 +478,17 @@ export async function POST(req: Request): Promise<Response> {
       orgId: run.orgId,
     });
     alsActorContext = actorContext;
+    // cinatra#4313: the owner's role from a real membership row only; any
+    // fault of that read stamps no role and never fails the call.
+    let membershipOrgRole: Awaited<ReturnType<typeof resolveRunOwnerMembershipOrgRole>>;
+    try {
+      membershipOrgRole =
+        actorContext.principalType === "HumanUser"
+          ? await resolveRunOwnerMembershipOrgRole({ orgId: run.orgId, runBy: run.runBy })
+          : undefined;
+    } catch {
+      membershipOrgRole = undefined;
+    }
     // Build a proper PrimitiveActorContext for
     // the handler rather than blindly casting the ActorContext. The two
     // shapes have different field names:
@@ -454,11 +503,30 @@ export async function POST(req: Request): Promise<Response> {
       source: "a2a",
       orgId: actorContext.organizationId,
       platformRole: actorContext.platformRole,
+      // cinatra#4313: the run owner's org role for the run's own org, stamped
+      // only when it was read from a real membership row (a departed owner or
+      // a lookup error stamps none), together with the run's OBO ceiling, as
+      // the MCP transport stamps both. Without a role an org owner's run
+      // carries no org role, and the kernel refuses object.update on an
+      // organization-owned row (the publish write-back onto its post
+      // artifact through objects_update). The ceiling, when the run has one,
+      // confines that role to the agent's anchored scope.
+      ...(membershipOrgRole ? { orgRole: membershipOrgRole } : {}),
+      ...(run.oboCeiling ? { oboCeiling: run.oboCeiling } : {}),
     };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
+    // cinatra#4223: a fixed sentence for every error, never the exception's
+    // own text (it can name a table or a connection): building the actor
+    // context is never the caller's own refusal. The failure is logged
+    // without its text.
     return NextResponse.json(
-      { error: `failed to build actor context: ${message}` },
+      {
+        error: passthroughFixedFailureText(
+          err,
+          { tool, runId: agentRunId, stage: "actor context" },
+          PASSTHROUGH_ACTOR_CONTEXT_ERROR,
+        ),
+      },
       { status: 500 },
     );
   }
@@ -520,6 +588,8 @@ export async function POST(req: Request): Promise<Response> {
           orgId: run.orgId,
           runId: run.id,
           nodeId: shaped.nodeId,
+          // cinatra#4264: the signed step, compared with the request node_id.
+          ...(verifiedStepId ? { verifiedStepId } : {}),
           artifactId: shaped.artifactId,
           baseRepresentationRevisionId: shaped.baseRepresentationRevisionId,
           content: shaped.content,
@@ -551,6 +621,8 @@ export async function POST(req: Request): Promise<Response> {
           packageVersion: run.packageVersion,
           createdBy: run.runBy,
           nodeId: shaped.nodeId,
+          // cinatra#3035: the signed step, never a request field, decides review.
+          ...(verifiedStepId ? { verifiedStepId } : {}),
           extension: shaped.extension,
           objectTypeId: shaped.objectTypeId,
           title: shaped.title,
@@ -587,6 +659,8 @@ export async function POST(req: Request): Promise<Response> {
         packageVersion: run.packageVersion,
         createdBy: run.runBy,
         nodeId: shaped.nodeId,
+        // cinatra#3035: the signed step, never a request field, decides review.
+        ...(verifiedStepId ? { verifiedStepId } : {}),
         extension: shaped.extension,
         title: shaped.title,
         prompt: shaped.prompt,
@@ -613,6 +687,34 @@ export async function POST(req: Request): Promise<Response> {
         mime: outcome.mime,
         deduped: outcome.deduped,
       };
+    } else if (tool === "artifact_page_capture") {
+      // THE PAGE CAPTURE TOOL (cinatra#4223). Every identity comes from the run
+      // row bound above, never from the request body. Dynamic import keeps the
+      // capture + artifact stack out of this route's static module graph.
+      const { captureArtifactPage } = await import("@/lib/artifact-page-capture-tool");
+      const shaped = input as unknown as ShapedArtifactPageCaptureInput;
+      const outcome = await captureArtifactPage({
+        runId: run.id,
+        orgId: run.orgId,
+        templateId: run.templateId,
+        packageVersion: run.packageVersion,
+        createdBy: run.runBy,
+        nodeId: shaped.nodeId,
+        extension: shaped.extension,
+        title: shaped.title,
+        url: shaped.url,
+      });
+      if (!outcome.ok) {
+        return NextResponse.json({ error: outcome.error, reason: outcome.reason }, { status: 400 });
+      }
+      result = {
+        artifactId: outcome.artifactId,
+        representationRevisionId: outcome.representationRevisionId,
+        capturedUrl: outcome.capturedUrl,
+        viewport: outcome.viewport,
+        capturedAt: outcome.capturedAt,
+        deduped: outcome.deduped,
+      };
     } else if (RUN_FOLDER_TOOLS.has(tool)) {
       // The run folder's file tools (cinatra#3030, item 0.21). The scope is the
       // run PROVEN above — a bridge-token holder can only ever reach ITS OWN
@@ -632,6 +734,18 @@ export async function POST(req: Request): Promise<Response> {
         );
       }
       result = outcome.result;
+    } else if (tool === "dashboards_create") {
+      // cinatra#3092: written as the run PROVEN above (binding.runId), never a
+      // run the body names; refused unless the attempt the binding read is
+      // still the run's live attempt.
+      const { runDashboardCreate } = await import("./run-dashboard-create");
+      const outcome = await withActorContext(alsActorContext, () =>
+        runDashboardCreate({ binding, run, input }),
+      );
+      if (!outcome.ok) {
+        return NextResponse.json({ error: outcome.error }, { status: outcome.status });
+      }
+      result = outcome.result;
     } else if (EXTENSION_SCOPED_TOOLS.has(tool)) {
       // cinatra#3031 (epic #3023 W7). The scope comes from the run PROVEN by
       // bindBridgeRunId above — its template package and the version the run is
@@ -639,6 +753,15 @@ export async function POST(req: Request): Promise<Response> {
       // admission an extension's own and not a bridge-token holder's choice.
       // Dynamic import keeps the artifact + extension-table stack out of this
       // route's static module graph (same posture as artifact_materialize).
+      //
+      // cinatra#4154: an `extension_tool` call reaches a package's tool from
+      // the calling STEP, so it is refused before any dispatch when the
+      // runtime's signed step pair did not verify above. The verified step and
+      // the run's own install fields ride into the dispatch; no request field
+      // does.
+      if (tool === "extension_tool" && !verifiedStepId) {
+        return NextResponse.json({ error: EXTENSION_TOOL_STEP_UNPROVEN }, { status: 403 });
+      }
       const { dispatchExtensionScopedTool } = await import("@/lib/extension-scoped-tools");
       const outcome = await dispatchExtensionScopedTool({
         tool,
@@ -649,6 +772,9 @@ export async function POST(req: Request): Promise<Response> {
           runBy: run.runBy ?? null,
           templateId: run.templateId,
           packageVersion: run.packageVersion ?? null,
+          versionId: run.versionId ?? null,
+          dependentInstallId: run.dependentInstallId ?? null,
+          verifiedStepId: verifiedStepId ?? null,
         },
         actor: alsActorContext,
       });
@@ -775,10 +901,18 @@ export async function POST(req: Request): Promise<Response> {
               ? (input.rawData as Record<string, unknown>)
               : {})
           : input;
-      const shaped = {
+      const shaped: Record<string, unknown> = {
         ...echoFields,
         [idField]: resultObj.id ?? resultObj[idField] ?? null,
       };
+      // THE FILED REVIEW SET RIDES OUT ON THE ECHO, for every extension alike:
+      // a declared module that filed review targets gets them back at the top
+      // level under the dispatch's reserved key, as JSON TEXT, because a marked
+      // review gate's input is one string.
+      const filedTargets = resultObj[EXTENSION_TOOL_REVIEW_TARGETS_KEY];
+      if (tool === "extension_tool" && Array.isArray(filedTargets)) {
+        shaped[EXTENSION_TOOL_REVIEW_TARGETS_KEY] = JSON.stringify(filedTargets);
+      }
       return NextResponse.json(shaped);
     }
 
@@ -867,7 +1001,16 @@ export async function POST(req: Request): Promise<Response> {
 
     return NextResponse.json(result);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: message }, { status: 500 });
+    // cinatra#4223, cinatra#4465: an error with the zod marker answers its
+    // issues, and a primitive's stated refusal without it keeps its text when
+    // that text is a string. Every other throw, a marked error with no readable
+    // issue list (missing, not a list, empty or unreadable), an error whose
+    // traits value the native Set membership cannot read, and a refusal whose
+    // message is not a string answer one fixed sentence, with the failure logged
+    // without its text.
+    return NextResponse.json(
+      { error: passthroughFailureText(err, { tool, runId: agentRunId, stage: "tool call" }) },
+      { status: 500 },
+    );
   }
 }

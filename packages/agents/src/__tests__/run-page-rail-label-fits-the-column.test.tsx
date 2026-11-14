@@ -80,7 +80,8 @@ function tokens(el: HTMLElement): string[] {
 
 describe("every rail row's label stays inside the column", () => {
   it("draws the column at the rail's own width", () => {
-    expect(tokens(reading().rail)).toContain("w-52");
+    expect(tokens(reading().rail)).toContain("w-[196px]");
+    expect(tokens(reading().rail)).not.toContain("w-52");
   });
 
   it("lets every row shrink inside that column", () => {

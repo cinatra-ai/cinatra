@@ -35,6 +35,7 @@ import { extensionActivationPhases } from "@/lib/boot/phases/extension-activatio
 import { requiredExtensionMaterializePhases } from "@/lib/boot/phases/required-extension-materialize";
 import { agentMarkerBackfillPhases } from "@/lib/boot/phases/agent-marker-backfill";
 import { bundledSkillRegistrationPhases } from "@/lib/boot/phases/bundled-skill-registration";
+import { bundledArtifactClaimHealPhases } from "@/lib/boot/phases/bundled-artifact-claim-heal";
 import { skillsCatalogRebuildPhases } from "@/lib/boot/phases/skills-catalog-rebuild";
 import { agentRuntimeDepBackfillPhases } from "@/lib/boot/phases/agent-runtime-dep-backfill";
 import { agentTemplateOrgReconcilePhases } from "@/lib/boot/phases/agent-template-org-reconcile";
@@ -59,10 +60,13 @@ import {
   startDetachedDevAutoSetupPhase,
 } from "@/lib/boot/phases/dev-boot";
 import type { ActivationResult } from "@cinatra-ai/sdk-extensions";
+import { connectorAutoSetupAllowed } from "@/lib/install-profile";
 
 /** Injectable seams so the orchestrator sequence is unit-testable. */
 export type RunBootDeps = {
   isDevMode?: () => boolean;
+  /** cinatra#4098: may the detached connector auto-setup start outside development (a preview instance)? */
+  isConnectorAutoSetupMode?: () => boolean;
   runPhase?: typeof runBootPhase;
   startDetachedDevExtensions?: typeof startDetachedDevExtensionsPhase;
   startDetachedAutoSetup?: typeof startDetachedDevAutoSetupPhase;
@@ -72,6 +76,13 @@ export type RunBootDeps = {
 
 function inDevMode(): boolean {
   return process.env.CINATRA_RUNTIME_MODE === "development";
+}
+
+// cinatra#4098: a preview instance (the `preview` install profile on a
+// production runtime) also runs the connector auto-setup; a production
+// deployment never does. Every other dev-only step keeps reading `inDevMode`.
+function inConnectorAutoSetupMode(): boolean {
+  return connectorAutoSetupAllowed(process.env);
 }
 
 /**
@@ -102,6 +113,7 @@ export async function runBoot(deps: RunBootDeps = {}): Promise<void> {
 async function runBootSequence(deps: RunBootDeps, watchdog: BootStallWatchdog): Promise<void> {
   const {
     isDevMode = inDevMode,
+    isConnectorAutoSetupMode = inConnectorAutoSetupMode,
     runPhase = runBootPhase,
     startDetachedDevExtensions = startDetachedDevExtensionsPhase,
     startDetachedAutoSetup = startDetachedDevAutoSetupPhase,
@@ -141,6 +153,15 @@ async function runBootSequence(deps: RunBootDeps, watchdog: BootStallWatchdog): 
 
   // ── extension activation: dual loaders + required-set enforcement + cleanup ──
   await run(extensionActivationPhases(bootActivationResults));
+
+  // ── bundled artifact claim heal (cinatra#4158) ─────────────────────────────────
+  // ALWAYS-ON (dev AND prod), right after extension activation, whose static
+  // seeder wrote the image-bundled packages' platform rows. That seeder writes
+  // no artifact type claim, and the claim-activation backstop above only
+  // re-fires for runtime-store packages, so this phase runs the cinatra#2536
+  // repair for every image-bundled artifact package whose row is live.
+  // Idempotent; `retryable`: a failure logs and boot continues.
+  await run(bundledArtifactClaimHealPhases());
 
   // ── required-extension OAS materialize (cinatra-ai/ops#436) ───────────────────
   // PROD: fail-closed reconcile of the image-baked required-extension OAS seed
@@ -341,5 +362,7 @@ async function runBootSequence(deps: RunBootDeps, watchdog: BootStallWatchdog): 
   // Original interleave point: the VERY END of register(), after everything else.
   // Fire-and-forget; NOT awaited. Placed after markBootReady() to match the
   // original (it was the trailing statement and is not a readiness prerequisite).
-  if (dev) startDetachedAutoSetup();
+  // cinatra#4098: a preview instance starts it too; inside it, a non-development
+  // runtime runs the connector hooks only (no fixture account, no fixtures).
+  if (dev || isConnectorAutoSetupMode()) startDetachedAutoSetup();
 }

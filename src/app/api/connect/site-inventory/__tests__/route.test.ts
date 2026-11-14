@@ -69,7 +69,8 @@ vi.mock("@/lib/authz/audit", () => ({
   logAuditEvent: logAuditEventMock,
 }));
 
-vi.mock("@/lib/db/pooled", () => ({
+vi.mock("@/lib/db/pooled", async () => ({
+  ...await vi.importActual<typeof import("@/lib/db/pooled")>("@/lib/db/pooled"),
   getPooledDb: () => ({ connect: poolConnectMock }),
 }));
 

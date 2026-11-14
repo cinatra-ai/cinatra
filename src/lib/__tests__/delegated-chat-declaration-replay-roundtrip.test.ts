@@ -101,6 +101,7 @@ import {
 import { callHostPrimitive, __resetHostSelfPrimitiveHandlers } from "@/lib/extension-self-mcp";
 import type { DelegatedChatToolClass } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
 import { admissionRecordFor } from "@cinatra-ai/mcp-server/delegated-chat-admission";
+import type { HostMcpToolRegistration } from "@cinatra-ai/sdk-extensions";
 
 const PKG = "@cinatra-ai/acme";
 const PKG_VERSION = "2.4.0";
@@ -108,15 +109,21 @@ const handler = async () => ({ structuredContent: { ok: true } });
 
 /**
  * Drive one registration all the way to the captured entry the call-time lookup
- * reads, through the real replay and capture seams.
+ * reads, through the real replay and capture seams. An outward declaration is
+ * written into the registration only when one is given.
  */
-function roundTrip(name: string, declared?: DelegatedChatToolClass): CapturedHostPrimitive {
+function roundTrip(
+  name: string,
+  declared?: DelegatedChatToolClass,
+  outward?: HostMcpToolRegistration["outward"],
+): CapturedHostPrimitive {
   registerExtensionMcpTool(
     PKG,
     {
       name,
       handler,
       ...(declared === undefined ? {} : { delegatedChat: declared }),
+      ...(outward === undefined ? {} : { outward }),
     },
     { resolvedVersion: PKG_VERSION },
   );
@@ -182,6 +189,26 @@ describe("declaration round trip: register → replay → capture", () => {
     // must not for an explicit `none`. A hop that collapsed the two would make
     // a connector's deliberate opt-out indistinguishable from silence.
     expect(roundTrip("acme_thing_list").planned.declaredClass).toBeUndefined();
+  });
+
+  it("carries an outward declaration through both hops next to the declared class", () => {
+    const subject = { artifactId: "itemId", representationRevisionId: "revisionId" };
+
+    const declared = roundTrip("example_outward_tool", "read", {});
+    expect(declared.planned.declaredClass).toBe("read");
+    expect(declared.planned.declaredOutward).toEqual({ subject: null });
+
+    _resetExtensionMcpForTests();
+    const withSubject = roundTrip("example_outward_tool", "read", { subject: { ...subject } });
+    expect(withSubject.planned.declaredClass).toBe("read");
+    expect(withSubject.planned.declaredOutward).toEqual({ subject });
+  });
+
+  it("plans no outward declaration for a registration that states none, and its replayed config holds no outward key", () => {
+    expect(roundTrip("example_outward_tool", "read").planned.declaredOutward).toBeNull();
+    const registration = listExtensionMcpTools().find((t) => t.name === "example_outward_tool")!;
+    const config = buildReplayedExtensionToolConfig("example_outward_tool", registration);
+    expect(Object.prototype.hasOwnProperty.call(config, "outward")).toBe(false);
   });
 });
 

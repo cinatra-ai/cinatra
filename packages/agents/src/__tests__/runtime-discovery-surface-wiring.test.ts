@@ -14,6 +14,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { buildUnavailableAction } from "../agent-unavailable-action";
 
 const SRC = join(__dirname, "..");
 const read = (rel: string) => readFileSync(join(SRC, rel), "utf8");
@@ -106,8 +107,19 @@ describe("NewAgentPage (the /agents All-Agents picker) intersects against the ru
   // required DEPENDENCY is missing still stays, because that agent IS installed.
   it("an ARCHIVED or NOT-INSTALLED verdict removes a row; a missing-dependency one keeps the card (#2605, #2679)", () => {
     expect(pages).toMatch(/state !== "archived" && state !== "not-installed"/);
-    expect(pages).toMatch(/buildUnavailableAction\(/);
-    expect(pages).toMatch(/state !== "missing-required-dependency"/);
+    // The page delegates this verdict to the shared presentation helper. Guard
+    // the real call (including the gated details destination), then exercise
+    // the helper's actual predicate instead of requiring its code in the page.
+    expect(pages).toMatch(/unavailable:\s*buildUnavailableAction\(t\.name, availabilityOf\(t\), detailHref\)/);
+    expect(buildUnavailableAction("Writer", {
+      state: "missing-required-dependency",
+      missing: [{ packageName: "@example/site", displayName: "Site", kind: "connector", reason: "not-installed" }],
+    }, "/configuration/marketplace/example/writer")).toEqual({
+      reason: "This agent cannot run: Site is not installed.",
+      ctaLabel: "View requirements",
+      ctaHref: "/configuration/marketplace/example/writer",
+      ctaAriaLabel: "Writer cannot run — Site not installed. View requirements",
+    });
   });
 
   // The gate's fail-open floors must survive #2679: hiding a row requires PROOF
@@ -116,5 +128,27 @@ describe("NewAgentPage (the /agents All-Agents picker) intersects against the ru
     // The listing filter keys on the gate verdict, never on a raw install read.
     expect(pages).toMatch(/const state = availabilityOf\(t\)\.state;/);
     expect(pages).not.toMatch(/readEffectiveStatusByPackageNames/);
+  });
+});
+
+describe("the delegated unavailable action keeps the discovery verdict truthful", () => {
+  it("a missing dependency without an authorized details destination keeps the reason but offers no dead CTA", () => {
+    expect(buildUnavailableAction("Writer", {
+      state: "missing-required-dependency",
+      missing: [{ packageName: "@example/site", displayName: null, kind: "connector", reason: "not-installed" }],
+    }, null)).toEqual({
+      reason: "This agent cannot run: @example/site is not installed.",
+      ctaLabel: null,
+      ctaHref: null,
+      ctaAriaLabel: "Writer cannot run — @example/site not installed.",
+    });
+  });
+
+  it.each([
+    { state: "runnable" },
+    { state: "archived" },
+    { state: "not-installed", displayName: "Writer" },
+  ] as const)("does not invent a missing-dependency action for $state", (availability) => {
+    expect(buildUnavailableAction("Writer", availability, "/configuration/marketplace/example/writer")).toBeNull();
   });
 });

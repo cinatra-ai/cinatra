@@ -141,7 +141,7 @@ describe("registerAgentBuilderDiscovery", () => {
     expect(out.contents[0].mimeType).toBe("application/json");
     const parsed = JSON.parse(out.contents[0].text);
     expect(parsed.protocols.a2a.cardUrl).toBe("/api/a2a/agents/cinatra-agents/foo");
-    expect(parsed.protocols.agUi.eventStreamUrl).toContain("/api/a2a?taskId=");
+    expect(parsed.protocols.agUi.eventStreamUrl).toBe("/api/agents/runs/{runId}/stream");
     // Manifest MUST include AG-UI eventTypes array.
     expect(Array.isArray(parsed.protocols.agUi.eventTypes)).toBe(true);
     expect(parsed.protocols.agUi.eventTypes.length).toBeGreaterThan(0);

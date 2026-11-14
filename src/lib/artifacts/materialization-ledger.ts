@@ -96,6 +96,22 @@ function schema(): string {
 }
 
 /**
+ * cinatra#4264: the value of `verified_step_id` for a claim — the verified step
+ * when it is the claim's own node, else null. A request's `node_id` alone never
+ * names the filing step; only the runtime's signature over it does.
+ */
+export function verifiedFilingStep(
+  nodeId: string | null,
+  verifiedStepId: string | null | undefined,
+): string | null {
+  return typeof verifiedStepId === "string" &&
+    verifiedStepId.length > 0 &&
+    verifiedStepId === nodeId
+    ? verifiedStepId
+    : null;
+}
+
+/**
  * Claim a materialization identity. Exactly one of:
  *   - fresh INSERT (phase `claimed`) → `{kind:"claimed", ledgerId}`;
  *   - existing FINALIZED row → `{kind:"finalized", ...refs}` (idempotent hit);
@@ -116,6 +132,11 @@ export async function claimMaterialization(input: {
   contentHash: string;
   /** The detection ladder's verdict (the `default_road` path only). */
   detection?: MaterializationDetection | null;
+  /** cinatra#4264: the runtime's signed step of the call, when it verified.
+   *  Stored as `verified_step_id` only when it equals `nodeId` (the request's
+   *  node, never a composite `outputId`); otherwise NULL. The first claim's
+   *  value stays: a re-drive hits the key and writes nothing. */
+  verifiedStepId?: string | null;
 }): Promise<MaterializationClaim> {
   ensurePostgresSchema();
   const s = schema();
@@ -123,8 +144,8 @@ export async function claimMaterialization(input: {
   const inserted = await pool().query(
     `INSERT INTO "${s}"."artifact_materializations"
    (id, org_id, run_id, output_id, node_id, path, extension, content_hash, phase,
-    detection_rung, detection_reason, detection_confidence, detection_model)
- VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'claimed', $9, $10, $11, $12)
+    detection_rung, detection_reason, detection_confidence, detection_model, verified_step_id)
+ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'claimed', $9, $10, $11, $12, $13)
  ON CONFLICT (run_id, output_id, extension, content_hash) DO NOTHING
  RETURNING id`,
     [
@@ -140,6 +161,7 @@ export async function claimMaterialization(input: {
       input.detection?.reason ?? null,
       input.detection?.confidence ?? null,
       input.detection?.model ?? null,
+      verifiedFilingStep(input.nodeId, input.verifiedStepId),
     ],
   );
   if (inserted.rows.length > 0) {
@@ -282,6 +304,64 @@ export async function readFinalizedMaterialization(input: {
   return {
     artifactId: row.artifact_id,
     representationRevisionId: row.representation_revision_id,
+  };
+}
+
+/** Producer prompt on the exact FINALIZED revision the gate pinned (§VI).
+ * Authorization belongs to the caller's artifact/run read ladder. This query
+ * never substitutes the current revision, another org, or an unfinalized claim.
+ * Ambiguous provenance is absent rather than guessed. */
+export async function readRevisionImagePrompt(input: {
+  orgId: string;
+  artifactId: string;
+  representationRevisionId: string;
+}): Promise<string | null> {
+  ensurePostgresSchema();
+  const s = schema();
+  const res = await pool().query(
+    `SELECT image_prompt FROM "${s}"."artifact_materializations"
+     WHERE org_id = $1 AND artifact_id = $2 AND representation_revision_id = $3
+       AND phase = 'finalized' AND image_prompt IS NOT NULL
+     LIMIT 2`,
+    [input.orgId, input.artifactId, input.representationRevisionId],
+  );
+  if (res.rows.length !== 1) return null;
+  const prompt: unknown = res.rows[0]?.image_prompt;
+  return typeof prompt === "string" && prompt.trim().length > 0 ? prompt : null;
+}
+
+/**
+ * THE STORED FACTS OF A FILED PICTURE (cinatra#4223): the provider and model
+ * the finalized ledger row of exactly this revision recorded, read when a
+ * re-drive of the same node with the same bytes is answered with that
+ * revision. A re-drive is served by the first write, so it reports the facts
+ * stored with that write and never those of the attempt that found it.
+ *
+ * Scoped like `readRevisionImagePrompt`: organisation, artifact and revision,
+ * finalized, with an image provider recorded. Anything but exactly one such
+ * row is null: the caller refuses rather than guess.
+ */
+export async function readRevisionImageProvenance(input: {
+  orgId: string;
+  artifactId: string;
+  representationRevisionId: string;
+}): Promise<{ provider: string; model: string | null } | null> {
+  ensurePostgresSchema();
+  const s = schema();
+  const res = await pool().query(
+    `SELECT image_provider, image_model FROM "${s}"."artifact_materializations"
+     WHERE org_id = $1 AND artifact_id = $2 AND representation_revision_id = $3
+       AND phase = 'finalized' AND image_provider IS NOT NULL
+     LIMIT 2`,
+    [input.orgId, input.artifactId, input.representationRevisionId],
+  );
+  if (res.rows.length !== 1) return null;
+  const row = res.rows[0] as { image_provider: unknown; image_model: unknown };
+  if (typeof row.image_provider !== "string" || row.image_provider.length === 0) return null;
+  return {
+    provider: row.image_provider,
+    model:
+      typeof row.image_model === "string" && row.image_model.length > 0 ? row.image_model : null,
   };
 }
 

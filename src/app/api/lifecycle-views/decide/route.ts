@@ -105,7 +105,8 @@ const reviewRequestSchema = z
      *  not is the review shape, which is what it has always been. */
     kind: z.literal("artifact_review_gate").optional(),
     ref: z.string().min(1).max(LIFECYCLE_VIEW_REF_MAX_LENGTH),
-    disposition: z.enum(["approve", "reject", "comment"]),
+    // Continue keeps approve persistence; older callers retain the approve alias.
+    disposition: z.enum(["approve", "reject", "comment", "continue"]),
     // The rationale (§IV) — optional on approve, expected on reject, and the
     // substance of a comment. Bounded so a card cannot post an essay.
     comment: z.string().max(10_000).nullable().optional(),

@@ -1,4 +1,4 @@
-// What the control steps share (press, pressByTestId, selectFrom, dispatchRun,
+// What the control steps share (press, pressByTestId, pressKey, selectFrom, dispatchRun,
 // readControlNames, and the window steps typeInWindow, waitForTurn and
 // sendInComposer): the page's controls, read in the page by their role and
 // their browser-computed accessible name (and, for pressByTestId, the elements of a test id);
@@ -608,6 +608,29 @@ function readControls(query, accessibility) {
       .filter((element) => shown(element) && element.getAttribute("aria-live") !== "off")
       .map((element) => text(contentOf(element, null)))
       .filter(Boolean);
+
+  // pressKey: the element that has the focus, followed through open shadow
+  // roots, by its role, its name and its state. `same` says whether it already
+  // carries the query's mark, read before `set` puts that mark on it.
+  if (query.mode === "focus") {
+    let active = document.activeElement;
+    while (active && active.shadowRoot && active.shadowRoot.activeElement) active = active.shadowRoot.activeElement;
+    const nowhere = (on) => ({ path: location.pathname, on, role: "", name: "", state: null, same: false, shown: false });
+    if (!active || active === document.body || active === document.documentElement) return nowhere("none");
+    if (active.localName === "iframe" || active.localName === "frame") return nowhere("frame");
+    if (typeof document.hasFocus === "function" && !document.hasFocus()) return nowhere("outside");
+    const role = roleOf(active);
+    let state = null;
+    if (TOGGLES.includes(role)) {
+      const checked = checkedOf(active);
+      state = checked === "mixed" ? "mixed" : checked ? "checked" : "unchecked";
+    } else if (["tab", "option", "row", "gridcell", "treeitem"].includes(role) && active.hasAttribute("aria-selected")) {
+      state = text(active.getAttribute("aria-selected")).toLowerCase() === "true" ? "selected" : "unselected";
+    }
+    const same = active.getAttribute(query.attribute) === query.mark;
+    if (query.set) mark(active, query.mark);
+    return { path: location.pathname, on: "control", role, name: nameOf(active), state, same, shown: exposed(active) };
+  }
 
   if (query.mode === "press") {
     const { scope, controls, matches, unspaced } = pressable();

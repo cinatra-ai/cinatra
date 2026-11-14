@@ -1,12 +1,11 @@
 /**
- * Locked `/agents` (All Agents run-agent picker) inventory + per-agent fixture data for the
- * end-to-end harness.
+ * `/agents` (All Agents run-agent picker) inventory and per-agent execution fixtures.
  *
- * The canonical visible set is locked from the canonical `cinatra`
- * schema on 2026-05-13 — it mirrors `selectHitlRunVisibleTemplates`
- * behavior. If the live filter ever diverges, the `preflight.spec.ts`
- * test will catch the drift on the very first run and tell the operator
- * exactly which package(s) changed.
+ * EXPECTED_VISIBLE_PACKAGE_SET records the review-qualified agents in the pinned
+ * development fleet. The preflight reads exact equality and reports drift.
+ * Visibility is separate from the execution classifications of the samples below:
+ * a package can be listed because core reviews its output without being a live-run
+ * fixture. No inventory entry authorizes running an agent or an external effect.
  *
  * Classification:
  *  - LIVE-RUNNABLE       (9):  no external API key, no real outbound calls
@@ -59,7 +58,8 @@ export type AgentClassification =
   | "LIVE-WITH-OVERRIDE"
   | "DEFER-EXTERNAL";
 
-/** Locked from `cinatra.agent_templates` 2026-05-13. */
+/** Historical sample classifications from `cinatra.agent_templates` 2026-05-13.
+ *  Retained separately from the current visible inventory below. */
 export const CANONICAL_VISIBLE_PACKAGES: ReadonlyArray<{
   packageName: string;
   classification: AgentClassification;
@@ -501,6 +501,27 @@ export const DEFER_PREREQ_AGENTS: ReadonlyArray<{
 ];
 
 /** Convenience set for the preflight assertion. */
-export const EXPECTED_VISIBLE_PACKAGE_SET: ReadonlySet<string> = new Set(
-  CANONICAL_VISIBLE_PACKAGES.map((p) => p.packageName),
-);
+// cinatra#3756: pinned development inventory, grounded in each package's own
+// HITL screens or declared artifact output bindings. The exact-set preflight
+// keeps rejecting extra, missing and duplicate cards; agents without review
+// stay excluded. Execution classifications and AGENT_FIXTURES remain separate.
+export const EXPECTED_VISIBLE_PACKAGE_SET: ReadonlySet<string> = new Set([
+  "@cinatra-ai/blog-draft-writer-agent",
+  "@cinatra-ai/blog-idea-generator-agent",
+  "@cinatra-ai/blog-image-generator-agent",
+  "@cinatra-ai/blog-image-prompt-agent",
+  "@cinatra-ai/blog-linkedin-publish-agent",
+  "@cinatra-ai/blog-linkedin-writer-agent",
+  "@cinatra-ai/blog-pipeline-agent",
+  "@cinatra-ai/blog-wordpress-publish-agent",
+  "@cinatra-ai/context-selection-agent",
+  "@cinatra-ai/email-delivery-agent",
+  "@cinatra-ai/email-drafting-agent",
+  "@cinatra-ai/email-follow-up-agent",
+  "@cinatra-ai/email-outreach-agent",
+  "@cinatra-ai/email-recipient-selection-agent",
+  "@cinatra-ai/email-test-delivery-agent",
+  "@cinatra-ai/list-curator-agent",
+  "@cinatra-ai/media-feed-lister-agent",
+  "@cinatra-ai/media-transcript-agent",
+]);

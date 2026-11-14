@@ -175,16 +175,17 @@ export type LlmProviderDeclaration = z.infer<typeof LlmProviderDeclarationSchema
 // ---------------------------------------------------------------------------
 // Projection 1 — the pure BUILD-KNOWN declaration catalog.
 //
-// This reproduces the pre-S1 hardcoded matrix EXACTLY (media_input → gemini
+// This preserves the pre-S1 capability matrix (media_input → gemini
 // only; function_tools → all three; native_mcp → openai|anthropic; the
 // per-provider ALLOWED_MODEL_IDS with their defaults). It is the compile-time
 // truth used by OAS/authoring validation. Later slices REPLACE this literal
 // with a catalog GENERATED from the three connector manifest blocks; the shape
 // and the derivations below are unchanged by that swap.
 //
-// Do NOT edit these values to change behavior in S1 — S1 is behavior-identical
-// by contract, proven by `llm-provider-declaration.test.ts`. Catalog changes
-// (e.g. the Gemini 3.5-only train) ride S3 via the connector manifests.
+// The S3 Gemini train (#1714) advances the Gemini catalog with its connector
+// and media-transcript pins in one integration. `gemini-model-train.test.ts`
+// checks the declaration against the pinned connector manifest and validates
+// the pinned media OAS, so either half moving alone fails the gate.
 //
 // The catalog is DEEP-frozen (not just `Object.freeze`d at the top level): the
 // declared capability truth — including nested `capabilities.native_mcp.status`
@@ -274,8 +275,8 @@ export const BUILD_KNOWN_LLM_PROVIDER_DECLARATIONS: Readonly<
       native_mcp: { status: "unsupported" },
     },
     models: {
-      default: "gemini-2.5-flash",
-      allowed: ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite", "gemini-1.5-pro"],
+      default: "gemini-3.5-flash",
+      allowed: ["gemini-3.5-flash"],
     },
   },
 });
@@ -477,7 +478,7 @@ export function describeCapabilityRequirement(
 //      duplicates the literal because @cinatra-ai/llm cannot import this
 //      package without a circular dependency).
 //   packages/llm/src/providers/anthropic.ts (DEFAULT_MODEL) → "claude-sonnet-4-6"
-//   packages/llm/src/providers/gemini.ts (DEFAULT_MODEL)    → "gemini-2.5-flash"
+//   gemini-connector/src/adapter/gemini-adapter.ts (DEFAULT_GEMINI_MODEL)    → "gemini-3.5-flash"
 // ---------------------------------------------------------------------------
 
 // DERIVED from the declaration catalog's `models.allowed` per provider (S1,

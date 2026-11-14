@@ -48,6 +48,7 @@ import {
 // the pure resolver that says which gate (if any) the composer is bound to.
 import {
   createComposerFocusStore,
+  createLifecycleCardSettleBus,
   resolveComposerTarget,
 } from "@cinatra-ai/agents/lifecycle-card-runtime";
 // Chat persistence/replay must carry artifact refs alongside text. Adding to
@@ -74,7 +75,7 @@ import {
   collectNewlyTaggedIds,
   resolveDispatchPlan,
 } from "./chat-routing";
-import { useChatUrlSync } from "./chat-client-url"; // cinatra#1878 W3 /chat URL sync (push/restore/adopt/seed)
+import { useChatUrlSync, useHeldChatTranscript } from "./chat-client-url"; // cinatra#1878 W3 /chat URL sync (push/restore/adopt/seed)
 // The unified AG-UI wire (cinatra#1218, epic #1216 S2): the headless client
 // drives the full turn lifecycle over the S3 reducer behind a small UI port
 // (driveAssistantChatTurn); persistence fetch helpers are co-located there
@@ -93,7 +94,7 @@ import {
 import { SkillBadgeCloud } from "./skill-badge-cloud";
 import { selectChatBadges, chatEmptyStateCaption, isPinnedBadgePrefill, getGreeting, DEFAULT_GREETING } from "./chat-badges";
 import { fingerprintMessages, isRealActivity, recallThreadTranscript, recalledThreadFingerprint, rememberThreadTranscript } from "./thread-activity";
-import { publishChatThreadTitle } from "@/lib/chat-shell-bus";
+import { useThreadCrumbName } from "./thread-crumb-name";
 import { DancingRobot } from "./dancing-robot";
 
 // Extension-provided chat renderable-view components (viewType → component),
@@ -133,7 +134,7 @@ import { ConversationColumn, CHAT_THREAD_HOST } from "./conversation-column";
 // above.
 // ---------------------------------------------------------------------------
 
-export function ChatPage({ initialThreadId, initialAssistantPackage, initialInstanceId, remoteChat, userId, initialMention, initialMode, initialPrompt, widgets = EMPTY_WIDGETS, widgetManifests = EMPTY_WIDGET_MANIFESTS, chatViews = EMPTY_CHAT_VIEWS }: ChatPageProps = {}) {
+export function ChatPage({ initialThreadId, initialThreadName, initialAssistantPackage, initialInstanceId, remoteChat, userId, initialMention, initialMode, initialPrompt, widgets = EMPTY_WIDGETS, widgetManifests = EMPTY_WIDGET_MANIFESTS, chatViews = EMPTY_CHAT_VIEWS }: ChatPageProps = {}) {
   const { resolvedTheme } = useTheme();
   const theme: ThemeName = resolvedTheme === "dark" ? "github-dark" : "github-light";
   // Manifest-driven widget runtime — registries/detectors/wizard helpers
@@ -145,6 +146,9 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   const isCreateAgentMode = initialMode === "create-agent";
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(initialThreadId ?? null);
+  // Emit the active thread's name so AppShell can show it in the breadcrumb
+  // (cinatra#4453; the order of its sources is in ./thread-crumb-name).
+  const startThreadNameRead = useThreadCrumbName({ activeThreadId, threads, setThreads, initialThreadId, initialThreadName });
   const { pushChatUrl, pushNewChatUrl, restoreActiveThread, adoptThreadBinding, newThreadSummary, chatTurnContainer } =
     useChatUrlSync(threads, initialAssistantPackage, initialInstanceId);
   const [messages, setMessages] = useState<Message[]>(() => recallThreadTranscript(userId ?? null, initialThreadId) as Message[]);
@@ -239,7 +243,18 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   // useState initializer → ONE registry instance for the component lifetime,
   // so both function identities are stable across renders (the handler is
   // threaded to InlineAgentRunCard).
-  const [{ handleActiveGateChange, getLatestOpenGate }] = useState(createChatGateRegistry);
+  // THE SAME-SESSION SETTLE BUS (cinatra#2853, the picture leg). One instance
+  // for the page's lifetime, on the same useState-initializer shape and for the
+  // same reason as the two stores around it. Created BEFORE the gate registry
+  // because the registry is one of the two things that announce on it.
+  const [cardSettleBus] = useState(createLifecycleCardSettleBus);
+  const [{ handleActiveGateChange, getLatestOpenGate }] = useState(() =>
+    // "FROM THE GATE ROW" — the registry is told a gate closed before this page
+    // learns anything else about it, and the descriptor it was holding names the
+    // card. Announcing here settles the card the moment the row does, whichever
+    // of the two roads gets there first.
+    createChatGateRegistry((cardRef) => cardSettleBus.announceSettled(cardRef)),
+  );
   // COMPOSER FOCUS (cinatra#2566): which review card this page's composer is
   // bound to. One store for the page's lifetime, handed DOWN to the column (so
   // the cards register and draw the affordance) and read HERE at send time (so
@@ -251,8 +266,12 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   // rather than baked into the exported constant because the store is per-mount
   // — the constant stays the explicit statement of WHICH host this is.
   const chatHostAdapter = useMemo(
-    () => ({ ...CHAT_THREAD_HOST, composerFocus: composerFocusStore }),
-    [composerFocusStore],
+    () => ({
+      ...CHAT_THREAD_HOST,
+      composerFocus: composerFocusStore,
+      cardSettle: cardSettleBus,
+    }),
+    [composerFocusStore, cardSettleBus],
   );
   // Latest-value ref for the active thread id so in-flight streamResponse coroutines
   // can detect thread switches after an await and no-op their patches.
@@ -353,6 +372,8 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     messagesRef.current = messages;
     streams.noteCommittedTranscript(messages);
   }, [messages, streams]);
+  // cinatra#3062: a fresh mount of this page draws the transcript the page it replaces still holds until its own load answers.
+  const { shownMessages, releaseHeldTranscript } = useHeldChatTranscript(userId, activeThreadId, initialThreadId, messages, loadedThreadIdRef);
 
   // Keep activeThreadIdRef in sync so streamResponse can detect thread switches.
   // (The auto-scroll lock release that used to sit here moved into
@@ -396,7 +417,10 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
       prevIsSlackModeRef.current = false;
       return;
     }
+    const noteThreadName = startThreadNameRead(activeThreadId);
     void fetchThreadById(activeThreadId).then((thread) => {
+      releaseHeldTranscript(); // cinatra#3062: the page's own read has answered — its own list is drawn from here on.
+      noteThreadName(thread);
       if (thread) {
         // Backfill missing ids — threads stored before the id field was added won't have them,
         // causing key={undefined} in the messages list and React's missing-key warning.
@@ -433,7 +457,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
         loadedThreadIdRef.current = activeThreadId;
       }
     });
-  }, [activeThreadId]);
+  }, [activeThreadId, releaseHeldTranscript, startThreadNameRead]);
 
   // Poll the active thread for externally-written messages (e.g. from the
   // chat_thread_send MCP tool). Uses window.setInterval per codebase convention.
@@ -442,7 +466,9 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     if (hasActiveStream) return;
 
     const intervalId = window.setInterval(() => {
+      const noteThreadName = startThreadNameRead(activeThreadId);
       void fetchThreadById(activeThreadId).then((thread) => {
+        noteThreadName(thread); // a rename or a deletion by another writer reaches the crumb
         if (!thread) return;
         setMessages((prev) => {
           if (thread.messages.length <= prev.length) return prev;
@@ -463,7 +489,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [activeThreadId, hasActiveStream]);
+  }, [activeThreadId, hasActiveStream, startThreadNameRead]);
 
   // Clear the pending-external-reply state as soon as an assistant message arrives
   // (either from the external assistant via polling, or from the @cinatra fallback).
@@ -573,12 +599,6 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     rememberThreadTranscript(userId ?? null, activeThreadId, loadedThreadIdRef.current, messages);
   }, [activeThreadId, messages]);
 
-  // Emit active thread title so AppShell can show it in the breadcrumb.
-  useEffect(() => {
-    const title = threads.find((t) => t.id === activeThreadId)?.title ?? null;
-    publishChatThreadTitle(title);
-  }, [activeThreadId, threads]);
-
   // Acquired immediately before streamResponse's try, so the finally is sure.
   // `anchorMessageId` is the PROMPT this turn answers — how the intent tells a turn BELOW an edit point from one above it.
   function beginStream(assistantId: string, controller: AbortController, anchorMessageId: string | null) {
@@ -633,6 +653,14 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
           noteRunId: (runId) => { streams.noteRunId(token, runId); }, // the server's own name for THIS instance
           isWidgetRefreshTool: (name) => widgetRuntime.isWidgetRefreshTool(name),
           onWidgetRefresh: () => setWidgetRefreshKey((k) => k + 1),
+          // A TYPED CHANGE RE-DRAWS THE BOUND CARD IN PLACE (cinatra#2853,
+          // plan (A) §2.2). A schedule card cannot be edited — changing it
+          // RE-PROPOSES and mints a replacement ref — so the server names the
+          // ref the mounted card is now drawn from and the settle bus carries
+          // that word to it. The card re-resolves under the reader's own access,
+          // as it does on mount; the announcement itself decides nothing.
+          onLifecycleCardReplaced: ({ supersededRef, replacementRef }) =>
+            cardSettleBus.announceReplacement(supersededRef, replacementRef),
         },
       });
     } finally {
@@ -899,6 +927,25 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     // fields — and presses its button when asked in so many words — through the
     // card's own paths. One road, one model, the person's own permissions.
 
+    // "FROM THE DECIDE TOOL\'S RESULT" (cinatra#2853, the picture leg) — the
+    // second of the two roads a decided card settles on.
+    //
+    // WHAT IT ANNOUNCES, AND WHY THAT IS ENOUGH. The single thing that can have
+    // pressed a control on these cards during this turn is the ONE single-use
+    // grant this message minted for them; when the turn ends, whether it was
+    // spent is a question only the server can answer, and the card asks it the
+    // way it asks every other one — by re-resolving under the reader\'s own
+    // access. So the announcement carries no claim about what happened. Its
+    // whole cost is a re-read of a card the reader is already looking at, and a
+    // card that was NOT decided re-draws exactly as it was.
+    //
+    // BEFORE THIS, a typed approve resolved the gate and answered the person in
+    // the conversation while the card underneath kept drawing `pending` with its
+    // terminal Approve and Reject pressable, until the thread was re-opened.
+    const settleTheClaimedCards = (): void => {
+      for (const ref of boundCardClaim?.refs ?? []) cardSettleBus.announceSettled(ref);
+    };
+
     // Routing: broadcast to all non-paused participants when there is no @mention.
     const routing = await resolveMessageRouting(
       trimmed,
@@ -944,7 +991,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
         // Cinatra takeover — launch the stream FIRST so beginStream() registers the
         // abort controller in the same render batch that clears pendingExternalHandle
         // (removes the visible gap before the cinatra thinking indicator).
-        void streamResponse(currentMessages, "cinatra", undefined, undefined, undefined, undefined, boundCardClaim ?? undefined);
+        void streamResponse(currentMessages, "cinatra", undefined, undefined, undefined, undefined, boundCardClaim ?? undefined).finally(settleTheClaimedCards);
         setPendingExternalHandle(null);
       }, EXTERNAL_TAKEOVER_MS);
       return;
@@ -959,10 +1006,14 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
       // is non-throwing (internal try/catch writes errors into the assistant message),
       // so void dispatch cannot leak an unhandled rejection.
       const displayHandle = nextActiveHandle ?? activeAssistantHandle ?? "Assistant";
-      void streamResponse(currentMessages, displayHandle, plan.endpoint, plan.authorUserId, streamSelector, undefined, boundCardClaim ?? undefined);
+      void streamResponse(currentMessages, displayHandle, plan.endpoint, plan.authorUserId, streamSelector, undefined, boundCardClaim ?? undefined).finally(settleTheClaimedCards);
     } else {
       // ChatGPT mode: preserve the existing synchronous, blocking behavior.
-      await streamResponse(currentMessages, undefined, plan.endpoint, plan.authorUserId, streamSelector, undefined, boundCardClaim ?? undefined);
+      try {
+        await streamResponse(currentMessages, undefined, plan.endpoint, plan.authorUserId, streamSelector, undefined, boundCardClaim ?? undefined);
+      } finally {
+        settleTheClaimedCards();
+      }
     }
   }
 
@@ -1056,7 +1107,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
       <ConversationColumn
         // `/chat` states its host EXPLICITLY: the first-party cookie surface.
         host={chatHostAdapter}
-        messages={messages}
+        messages={shownMessages}
         isSlackMode={isSlackMode}
         animating={animating}
         theme={theme}

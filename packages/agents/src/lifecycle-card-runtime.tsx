@@ -166,6 +166,21 @@ export function useInsideConversation(): boolean {
 export type LifecycleCardAuth = {
   headers: () => Record<string, string>;
   credentials: RequestCredentials;
+  /** cinatra#4217: the host's credential RENEWAL, for a host that replaces its
+   *  pair while it stays open (the site widget's frame). The server commits a
+   *  renewed pair before its answer reaches the frame, so for that gap a
+   *  refusal of the pair the frame still holds is not final. Absent on every
+   *  other host, whose refusals stay final exactly as before. */
+  renewal?: LifecycleCardAuthRenewal;
+};
+
+export type LifecycleCardAuthRenewal = {
+  /** True while a renewal request is on its way. */
+  pending: () => boolean;
+  /** Settles when no renewal request is on its way. After a renewal that
+   *  succeeded, `headers()` already carries the renewed pair when this settles.
+   *  Bounded by the renewal request's own deadline. */
+  settled: () => Promise<void>;
 };
 
 /**
@@ -218,6 +233,172 @@ const LifecycleCardFrameContext = createContext<LifecycleCardFrame | null>(null)
  * affordance on it draws nothing and issues no request rather than guessing.
  */
 const LifecycleCardCookieSessionContext = createContext<boolean>(false);
+// A refused declaration is distinct from no provider: a nested cookie host
+// must not recover the identity that an enclosing broker declaration refused.
+const LifecycleCardDeclarationRefusedContext = createContext<boolean>(false);
+
+// ---------------------------------------------------------------------------
+// THE ANSWERED QUESTION, TOLD BY THE CARD THAT TOOK THE ANSWER (cinatra#4375).
+//
+// Inside a conversation (`chat_thread`, `site_widget`) the run's question and
+// its Continue belong to the conversation's own HITL screen card, a SIBLING of
+// the run panel (`runCardOwnsLifecycleCopy`). The panel holds its working slot
+// from an accepted Continue until the server resumes by matching the question
+// on file against the one the person answered (cinatra#3739, fix leg 19), but it
+// learned that only from its OWN submit. A Continue pressed on the sibling card
+// never reached it, so on the widget the panel drew its "pending approval"
+// progress plate over a run that was working.
+//
+// So the sibling card says it here, and only this: "on this run, the question
+// with this review task, renderer and field was answered". It says it AT THE
+// PRESS, before its request, exactly as the panel's own Continue arms its key
+// before its own request (cinatra#4011: on the widget the request stayed
+// in flight until the run had reached its next gate, 32 s later, so a record
+// written on the answer held the working slot only for that one moment). So
+// the record exists FROM THE PRESS, before any outcome, and a later press on
+// the same run for another question replaces it.
+//
+// EACH PRESS IS ONE ATTEMPT. The record keeps the attempts still in flight for
+// its question and whether any of them was accepted (`outcome.ok === true`).
+// An attempt that is not accepted takes back only ITSELF: the record goes only
+// when no attempt for it is still in flight and none was accepted. So two
+// overlapping submits of the same question (a double press, a card that moved
+// and was pressed again) cannot erase each other's answer, in either order, and
+// an attempt whose record was replaced by a newer press changes nothing.
+// Which outcome is "not accepted" is the card's: on the broker door the server
+// already answers "already resolved" as accepted; on the cookie door "already
+// resolved" and "no longer pending" are not this submit's accepted answer.
+// The panel only ever compares what is on file against it, so a question with
+// any other review task, renderer or field still counts as open. It carries no
+// credential and no answer, and it authorizes nothing.
+//
+// ONE REGISTER PER CONVERSATION. The provider below declares one, and a nested
+// declaration (the run panel's own `run_card`) inherits the enclosing one, so
+// the card and the panel that share a conversation share its register.
+// ---------------------------------------------------------------------------
+
+/** What the sibling card tells the panel: the pressed question's identity. */
+export type AnsweredHitlQuestion = {
+  reviewTaskId: string;
+  xRenderer: string;
+  fieldName: string | null;
+};
+
+/** One press of one card: the token its outcome is settled with. */
+export type AnsweredHitlAttempt = {
+  readonly runId: string;
+  readonly key: string;
+  readonly id: number;
+};
+
+/** One answered question per run, compared BY VALUE as a string key. */
+export type AnsweredHitlQuestionRegister = {
+  subscribe: (listener: () => void) => () => void;
+  /** The key of the question on record for this run, or `null`. */
+  answeredOn: (runId: string) => string | null;
+  /**
+   * Record that this run's question was answered, from the press on. Returns
+   * the attempt to settle, or `null` when nothing was recorded.
+   */
+  announceAnswered: (runId: string, question: AnsweredHitlQuestion) => AnsweredHitlAttempt | null;
+  /** This attempt was accepted: the record stands until another question replaces it. */
+  acceptAnswered: (attempt: AnsweredHitlAttempt | null) => void;
+  /** This attempt was not accepted: take back only this attempt. */
+  withdrawAnswered: (attempt: AnsweredHitlAttempt | null) => void;
+};
+
+/** The key a question is matched on: its review task, renderer and field. */
+export function answeredHitlQuestionKey(question: {
+  reviewTaskId: string;
+  xRenderer: string;
+  fieldName?: string | null;
+}): string {
+  return JSON.stringify([question.reviewTaskId, question.xRenderer, question.fieldName ?? ""]);
+}
+
+type AnsweredRecord = { key: string; inFlight: Set<number>; accepted: boolean };
+
+export function createAnsweredHitlQuestionRegister(): AnsweredHitlQuestionRegister {
+  const answered = new Map<string, AnsweredRecord>();
+  const listeners = new Set<() => void>();
+  let lastAttempt = 0;
+  const notify = () => {
+    for (const listener of listeners) listener();
+  };
+  /** The record this attempt belongs to, or `null` if a newer press replaced it. */
+  const recordOf = (attempt: AnsweredHitlAttempt | null): AnsweredRecord | null => {
+    if (!attempt) return null;
+    const record = answered.get(attempt.runId);
+    return record && record.key === attempt.key && record.inFlight.has(attempt.id) ? record : null;
+  };
+  return {
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    answeredOn(runId) {
+      return answered.get(runId)?.key ?? null;
+    },
+    announceAnswered(runId, question) {
+      // A run and a question with a review task and a renderer, or nothing.
+      if (typeof runId !== "string" || runId.length === 0) return null;
+      if (typeof question?.reviewTaskId !== "string" || question.reviewTaskId.length === 0) return null;
+      if (typeof question.xRenderer !== "string" || question.xRenderer.length === 0) return null;
+      const key = answeredHitlQuestionKey(question);
+      const id = (lastAttempt += 1);
+      const record = answered.get(runId);
+      if (record && record.key === key) {
+        // The same question pressed again: one more attempt on the same record.
+        record.inFlight.add(id);
+      } else {
+        // A first press, or a newer press for another question: it replaces.
+        answered.set(runId, { key, inFlight: new Set([id]), accepted: false });
+        notify();
+      }
+      return { runId, key, id };
+    },
+    acceptAnswered(attempt) {
+      const record = recordOf(attempt);
+      if (!record) return;
+      record.inFlight.delete(attempt!.id);
+      record.accepted = true;
+    },
+    withdrawAnswered(attempt) {
+      const record = recordOf(attempt);
+      if (!record) return;
+      record.inFlight.delete(attempt!.id);
+      // Only when no attempt for it is in flight and none was accepted.
+      if (record.inFlight.size > 0 || record.accepted) return;
+      answered.delete(attempt!.runId);
+      notify();
+    },
+  };
+}
+
+const AnsweredHitlQuestionContext = createContext<AnsweredHitlQuestionRegister | null>(null);
+
+/** The conversation's register, or `null` outside any host declaration. */
+export function useAnsweredHitlQuestionRegister(): AnsweredHitlQuestionRegister | null {
+  return useContext(AnsweredHitlQuestionContext);
+}
+
+const noAnsweredQuestion = (): string | null => null;
+
+/**
+ * The key of the question on record for this run through the conversation's
+ * card (pressed and in flight, or accepted), or `null`. Always `null` with no
+ * register.
+ */
+export function useAnsweredHitlQuestionKey(runId: string): string | null {
+  const register = useAnsweredHitlQuestionRegister();
+  const read = useCallback(
+    () => (register ? register.answeredOn(runId) : null),
+    [register, runId],
+  );
+  return useSyncExternalStore(register?.subscribe ?? noopSubscribe, read, noAnsweredQuestion);
+}
 
 /**
  * The hosts whose identity travels by COOKIE. Every other host must declare a
@@ -268,10 +449,19 @@ export function LifecycleCardSurfaceProvider({
   // declaration (the inline run panel's `run_card`) stays inside the thread it
   // is drawn in (cinatra#3481).
   const outerInsideConversation = useContext(InsideConversationContext);
+  const outerDeclarationRefused = useContext(LifecycleCardDeclarationRefusedContext);
+  // The conversation's answered-question register (cinatra#4375): inherited
+  // when an enclosing declaration made one, so the card and the panel share it.
+  const outerAnsweredRegister = useContext(AnsweredHitlQuestionContext);
+  const [ownAnsweredRegister] = useState(createAnsweredHitlQuestionRegister);
+  const answeredRegister = outerAnsweredRegister ?? ownAnsweredRegister;
   const cookieHost = COOKIE_SESSION_HOSTS.has(host);
-  const credentialOk = cookieHost
+  // A broker declaration is checked for its SHAPE here; whether it holds a
+  // widget user token is asked at each request (`lifecycleRequestCredential`),
+  // because the embed's tokens arrive and leave without a re-render (#3051).
+  const credentialOk = !outerDeclarationRefused && (cookieHost
     ? auth === undefined
-    : auth !== undefined && auth.credentials === "omit";
+    : auth !== undefined && auth.credentials === "omit");
   // Both fields must be present and non-empty; a half-declared frame is no
   // frame, so the island falls back to the first-party wall rather than being
   // asked to resolve half a binding.
@@ -296,7 +486,11 @@ export function LifecycleCardSurfaceProvider({
             <InsideConversationContext.Provider
               value={outerInsideConversation || (credentialOk && host === "chat_thread")}
             >
-              {children}
+              <LifecycleCardDeclarationRefusedContext.Provider value={!credentialOk}>
+                <AnsweredHitlQuestionContext.Provider value={answeredRegister}>
+                  {children}
+                </AnsweredHitlQuestionContext.Provider>
+              </LifecycleCardDeclarationRefusedContext.Provider>
             </InsideConversationContext.Provider>
           </LifecycleCardCookieSessionContext.Provider>
         </LifecycleCardFrameContext.Provider>
@@ -315,6 +509,11 @@ export function LifecycleCardSurfaceProvider({
  */
 export function useCookieSessionSurface(): boolean {
   return useContext(LifecycleCardCookieSessionContext);
+}
+
+/** A malformed enclosing declaration stays refused across nested providers. */
+export function useLifecycleCardDeclarationRefused(): boolean {
+  return useContext(LifecycleCardDeclarationRefusedContext);
 }
 
 export function useLifecycleCardHost(): LifecycleCardHost | null {
@@ -384,8 +583,9 @@ export function runCardOwnsLifecycleCopy(
 // register, the report is a no-op, and nothing about those surfaces changes.
 // ---------------------------------------------------------------------------
 
-/** Told by a card: this card, in this container, is (or is no longer) settled. */
-export type SettledScheduleRegister = (cardId: string, settled: boolean) => void;
+/** Told by a card: this mount is settled. A turn-level durable view may also
+ * identify its run through the admitted body; an opaque ref is never that ID. */
+export type SettledScheduleRegister = (cardId: string, settled: boolean, runId?: string | null) => void;
 
 const SettledScheduleRegisterContext = createContext<SettledScheduleRegister | null>(null);
 
@@ -421,15 +621,15 @@ export function SettledScheduleRegisterProvider({
  * unmounts, and one that leaves the settled reading, both have to give the
  * container its turn back.
  */
-export function useReportSettledSchedule(cardId: string, settled: boolean): void {
+export function useReportSettledSchedule(cardId: string, settled: boolean, runId?: string | null): void {
   const register = useContext(SettledScheduleRegisterContext);
   const mountId = useId();
   const key = `${cardId}#${mountId}`;
   useEffect(() => {
     if (register === null) return;
-    register(key, settled);
-    return () => register(key, false);
-  }, [register, key, settled]);
+    register(key, settled, runId);
+    return () => register(key, false, runId);
+  }, [register, key, settled, runId]);
 }
 
 // ---------------------------------------------------------------------------
@@ -576,8 +776,16 @@ export type ComposerFocusStore = {
    * LATEST registration owns the action, so a re-registering card replaces its
    * own closure rather than accumulating stale ones.
    */
-  registerEligible: (ref: string, comment: ComposerCommentAction) => () => void;
-  /** The comment path of an eligible gate, or `undefined` if it is not one. */
+  registerEligible: (ref: string, comment?: ComposerCommentAction) => () => void;
+  /**
+   * The comment path of an eligible gate, or `undefined` if it is not one.
+   *
+   * `undefined` is now TWO answers rather than one, and the difference does not
+   * matter to any caller: the ref is not eligible at all, or it is eligible and
+   * its card has no comment road. A schedule card is the second — its typed road
+   * is the server's grant, not a comment — and the one consumer of this lookup
+   * already refuses an absent action rather than inventing one.
+   */
   getCommentAction: (ref: string) => ComposerCommentAction | undefined;
   /** The reader chose this card. */
   focus: (ref: string) => void;
@@ -586,7 +794,7 @@ export type ComposerFocusStore = {
 };
 
 export function createComposerFocusStore(): ComposerFocusStore {
-  const entries = new Map<string, { count: number; comment: ComposerCommentAction }>();
+  const entries = new Map<string, { count: number; comment?: ComposerCommentAction }>();
   let focused: string | null = null;
   let released = false;
   // Cached because `useSyncExternalStore` compares snapshots by identity: a
@@ -676,6 +884,185 @@ export function useComposerFocusStore(): ComposerFocusStore | null {
   return useContext(ComposerFocusContext);
 }
 
+// ---------------------------------------------------------------------------
+// THE SETTLE BUS (cinatra#2853, the picture leg).
+//
+// THE DEFECT IT CLOSES. A card re-resolved on mount and on window focus, and on
+// nothing else. So a decision taken through the card's OWN button settled it —
+// the button calls `refresh()` — while a decision taken any other way in the
+// same page session did not: the gate was resolved, the person was answered in
+// the conversation, and the card underneath kept drawing `pending` with its
+// terminal Approve and Reject still pressable until the thread was re-opened.
+// Plan (A) §4.1 is explicit that the card "says in place what it did"; a card
+// still offering a decision over a resolved gate says the opposite.
+//
+// WHAT IT IS. One announcement — "this ref has been decided" — and a per-ref
+// counter every mounted card for that ref folds into its reload token. It
+// carries NO state about the decision: what settled the gate is the server's
+// answer, and the card re-reads it under the reader's own access exactly as it
+// does on mount. The bus can therefore only ever cost a re-resolve, which is
+// why nothing that publishes on it needs to be trusted.
+//
+// WHO ANNOUNCES. Two roads, and the card takes whichever arrives first:
+//   · THE DECIDE'S OWN RESULT — the conversation announces the refs a message
+//     carried a grant for once that turn has finished, because the one thing
+//     that could have pressed them is that message's own single-use grant;
+//   · THE GATE ROW — the conversation's registry of open gates announces a card
+//     whose gate has closed underneath it.
+// A card's own button announces too, so a gate drawn twice (a run card and a
+// thread card for one run) settles in both places rather than in the one that
+// was pressed.
+// ---------------------------------------------------------------------------
+
+/** Announce and observe "this card has been decided" within one page session. */
+export type LifecycleCardSettleBus = {
+  subscribe: (listener: () => void) => () => void;
+  /** How many times this ref has been announced. Compared BY VALUE. */
+  settledAt: (ref: string) => number;
+  /** Say that this ref has been decided. Costs the mounted cards a re-resolve. */
+  announceSettled: (ref: string) => void;
+  /**
+   * THE REF THAT REPLACED THIS ONE, or `null` (cinatra#2853, the second leg).
+   *
+   * A schedule proposal cannot be edited — a proposal ref IS the proposal — so
+   * changing one RE-PROPOSES and mints a replacement. A card mounted on the old
+   * ref has to be told, or it keeps drawing the schedule the person just asked
+   * to change with its own Confirm still live.
+   */
+  replacementFor: (ref: string) => string | null;
+  /**
+   * Say that `supersededRef`'s card is now drawn from `replacementRef`.
+   *
+   * IT IS STILL ONLY A RE-RESOLVE. Like `announceSettled`, this carries no claim
+   * the card acts on: the card swaps the ref it asks about and re-resolves under
+   * the READER'S OWN ACCESS, exactly as it does on mount, and a ref that is not
+   * theirs answers `absent`. It is the same swap the card's own Adjust button
+   * performs from the endpoint's answer, reached from the typed road.
+   *
+   * A CHAIN CONVERGES, AND IT CANNOT CLOSE. Two adjusts in one session announce
+   * a→b then b→c; a card on `a` follows to `b`, reads `b`'s own entry and
+   * follows to `c`. An announcement whose replacement already leads BACK to the
+   * ref being replaced is refused, so the walk a card performs is always finite
+   * — a cycle here would be a card re-pointing itself forever.
+   */
+  announceReplacement: (supersededRef: string, replacementRef: string) => void;
+};
+
+export function createLifecycleCardSettleBus(): LifecycleCardSettleBus {
+  const generations = new Map<string, number>();
+  const replacements = new Map<string, string>();
+  const listeners = new Set<() => void>();
+  const notify = (): void => {
+    for (const listener of listeners) listener();
+  };
+  return {
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    settledAt(ref) {
+      return generations.get(ref) ?? 0;
+    },
+    announceSettled(ref) {
+      // An empty ref is not an address. Announcing one would bump every card
+      // that asked about the empty string, which is none of them today and is
+      // not a behaviour worth leaving available.
+      if (typeof ref !== "string" || ref.length === 0) return;
+      generations.set(ref, (generations.get(ref) ?? 0) + 1);
+      notify();
+    },
+    replacementFor(ref) {
+      if (typeof ref !== "string" || ref.length === 0) return null;
+      return replacements.get(ref) ?? null;
+    },
+    announceReplacement(supersededRef, replacementRef) {
+      // Two real, different addresses or nothing happened. A self-replacement
+      // is the one input that could make a mounted card follow itself forever.
+      if (typeof supersededRef !== "string" || supersededRef.length === 0) return;
+      if (typeof replacementRef !== "string" || replacementRef.length === 0) return;
+      if (supersededRef === replacementRef) return;
+      // NO CYCLE, EVER. A card follows this map during render, so a chain that
+      // led back to where it started would re-point that card forever rather
+      // than settle. The walk is bounded by the number of entries: a longer one
+      // is impossible in a map this size, and refusing on the bound is the safe
+      // direction — an announcement dropped costs a re-draw, a cycle costs the
+      // page. Nothing legitimate builds one: every re-proposal mints a token
+      // that has never existed before.
+      let hop = replacementRef;
+      for (let step = 0; step <= replacements.size; step += 1) {
+        if (hop === supersededRef) return;
+        const next = replacements.get(hop);
+        if (next === undefined) break;
+        hop = next;
+      }
+      // FIRST ANNOUNCEMENT WINS. A ref is replaced once; a second word about the
+      // same one is a replay of the turn that said it (the driver replays a
+      // completed tool result on a durable-log resume) or a later message's
+      // announcement arriving about a ref no card is drawn from any more.
+      // Letting it overwrite would move a card that has already moved on.
+      if (replacements.has(supersededRef)) return;
+      replacements.set(supersededRef, replacementRef);
+      notify();
+    },
+  };
+}
+
+const LifecycleCardSettleContext = createContext<LifecycleCardSettleBus | null>(null);
+
+/**
+ * Declare that this subtree's cards may be told a decision landed. Mounted by
+ * the conversation around the transcript, for the same reason the composer
+ * binding is: the fact belongs to the pair, not to one card. A surface that
+ * declares none keeps the mount-and-focus behaviour it has always had.
+ */
+export function LifecycleCardSettleProvider({
+  bus,
+  children,
+}: {
+  bus: LifecycleCardSettleBus;
+  children: ReactNode;
+}): ReactElement {
+  return (
+    <LifecycleCardSettleContext.Provider value={bus}>{children}</LifecycleCardSettleContext.Provider>
+  );
+}
+
+export function useLifecycleCardSettleBus(): LifecycleCardSettleBus | null {
+  return useContext(LifecycleCardSettleContext);
+}
+
+const zeroGeneration = (): number => 0;
+
+/**
+ * The settle generation for one ref — a number to fold into a reload token.
+ *
+ * Zero, always, with no provider: a surface that declares no bus keeps exactly
+ * the resolve cadence it had before this existed.
+ */
+export function useLifecycleCardSettleSignal(ref: string): number {
+  const bus = useLifecycleCardSettleBus();
+  const read = useCallback(() => (bus ? bus.settledAt(ref) : 0), [bus, ref]);
+  return useSyncExternalStore(bus?.subscribe ?? noopSubscribe, read, zeroGeneration);
+}
+
+const noReplacement = (): string | null => null;
+
+/**
+ * The ref that replaced this one within this page session, or `null`.
+ *
+ * Null, always, with no provider — a surface that declares no bus keeps exactly
+ * the behaviour it had before this existed. The value is a STRING the card
+ * compares by value, so a re-render that reads the same answer is not a change
+ * and cannot loop.
+ */
+export function useLifecycleCardReplacement(ref: string): string | null {
+  const bus = useLifecycleCardSettleBus();
+  const read = useCallback(() => (bus ? bus.replacementFor(ref) : null), [bus, ref]);
+  return useSyncExternalStore(bus?.subscribe ?? noopSubscribe, read, noReplacement);
+}
+
 const NOOP_UNSUBSCRIBE = (): void => {};
 const noopSubscribe = (): (() => void) => NOOP_UNSUBSCRIBE;
 const emptySnapshot = (): ComposerFocusSnapshot => EMPTY_FOCUS_SNAPSHOT;
@@ -729,7 +1116,16 @@ export type ComposerFocusBinding = {
 export function useComposerFocusBinding(params: {
   ref: string;
   eligible: boolean;
-  comment: ComposerCommentAction;
+  /**
+   * This card's own comment path, where it HAS one.
+   *
+   * Omitted by every card whose typed road is not a comment (cinatra#2853, the
+   * picture leg). Binding is what puts a card's ref in the claim the send
+   * carries, and until this parameter was optional only the review card could
+   * ever be in it — which is why a typed change to a schedule reached the
+   * producer and drew a second card instead of acting on the bound one.
+   */
+  comment?: ComposerCommentAction;
 }): ComposerFocusBinding {
   const { ref, eligible, comment } = params;
   const store = useComposerFocusStore();
@@ -737,13 +1133,19 @@ export function useComposerFocusBinding(params: {
   const commentRef = useRef(comment);
   commentRef.current = comment;
   const stableComment = useCallback<ComposerCommentAction>(
-    (text) => commentRef.current(text),
+    (text) => commentRef.current!(text),
     [],
   );
+  // WHETHER there is a comment road, never WHICH one. A card that declares none
+  // registers `undefined`, so the lookup keeps answering "not a comment gate"
+  // for it rather than handing back a closure that would refuse on call; and
+  // depending on the BOOLEAN keeps the effect off the closure identity, which is
+  // the render loop the stable delegator above exists to prevent.
+  const hasComment = comment !== undefined;
   useEffect(() => {
     if (!store || !eligible) return;
-    return store.registerEligible(ref, stableComment);
-  }, [store, eligible, ref, stableComment]);
+    return store.registerEligible(ref, hasComment ? stableComment : undefined);
+  }, [store, eligible, ref, hasComment, stableComment]);
   const target = resolveComposerTarget(snapshot);
   const bound = target.kind === "target" && target.ref === ref;
   // The press is a TOGGLE on the binding as the reader sees it, not on the
@@ -777,6 +1179,164 @@ export function useComposerFocusBinding(params: {
  */
 export function useLifecycleCardAuth(): LifecycleCardAuth | null {
   return useContext(LifecycleCardAuthContext);
+}
+
+/** The header the lifecycle routes select their widget branch on. */
+const WIDGET_USER_TOKEN_HEADER = "x-cinatra-widget-user-token";
+
+/**
+ * The credential ONE lifecycle request is sent with, built when the request
+ * is — or `null`: send nothing (#3051). A cookie host declares no auth and keeps
+ * the same-origin request. A broker declaration must carry a non-empty widget
+ * user token in what its callback returns NOW. The embed reads its tokens from
+ * a closure and answers `{}` while it holds none, so this is a request-time
+ * check: the declaration itself stays valid while its tokens come and go.
+ */
+export function lifecycleRequestCredential(
+  auth: LifecycleCardAuth | null,
+): { headers: Record<string, string>; credentials: RequestCredentials } | null {
+  if (auth === null) return { headers: {}, credentials: "same-origin" };
+  const headers = auth.headers();
+  const token = Object.entries(headers).find(
+    ([name]) => name.toLowerCase() === WIDGET_USER_TOKEN_HEADER,
+  )?.[1];
+  return typeof token === "string" && token.trim() !== ""
+    ? { headers, credentials: auth.credentials }
+    : null;
+}
+
+// ---------------------------------------------------------------------------
+// A REFUSAL ACROSS THE HOST'S RENEWAL (cinatra#4217 fold 3).
+//
+// The site widget's frame renews its credential pair while it stays open. The
+// server commits the renewed pair, and keeps the pair it replaced for its grace
+// window only, before the renewal's answer reaches the frame. When that answer
+// is late, a request the frame sends with the pair it still holds is refused,
+// and the refusal says nothing about the reader: the renewed pair is on its way.
+// It can also come back in the other order, after the renewed pair was
+// installed while the request was out.
+//
+// So no reader on this surface takes such a refusal as final, and none charges
+// it to a budget. A ONE-SHOT read (a card's resolve, the run card's first read,
+// a HITL screen read) sends once more with the renewed pair: `sendAcrossRenewal`.
+// A WATCH that looks on a cadence (the run-moment watch, the review slot) does
+// not count a look that got no answer while it was caught in a renewal, and it
+// waits for the renewal to settle before its next look: `lookCaughtInRenewal`
+// and `LifecycleCardAuthRenewal.settled`.
+//
+// THE BOUND IS THE RENEWAL'S OWN. `settled` resolves once no renewal request is
+// on its way, and the frame gives a request up at its deadline (the later of
+// the held pair's upper end of life and the request's start plus 90 s), so
+// nothing here holds a fixed window that a valid renewal could outlast. A host
+// that declares no renewal keeps every refusal final, exactly as before.
+// ---------------------------------------------------------------------------
+
+/** How many times ONE read is sent again because the host's credential
+ *  changed after it was refused. Each needs a changed credential, so a read
+ *  cannot loop. */
+const RENEWED_SENDS = 2;
+
+/** The two headers that ARE the broker credential pair: the transport token
+ *  and the widget user token. Lower case; header names are case-insensitive. */
+const CREDENTIAL_KEY_HEADERS = ["authorization", WIDGET_USER_TOKEN_HEADER] as const;
+
+/**
+ * The credential a request carries, as one comparable value: the two headers
+ * of the credential pair the declaration answers NOW, read by name in any
+ * case. Every other header (the assistant and origin selectors) is left out,
+ * so a selector that changes, or a header whose name changes case, is not a
+ * moved credential. It lives only for one comparison (did the credential change
+ * between sending a request and reading its refusal) and is never stored in
+ * state, logged or sent. A cookie host has no declaration and one constant key,
+ * so its refusals never read as a renewal.
+ */
+export function lifecycleCredentialKey(auth: LifecycleCardAuth | null | undefined): string {
+  if (!auth) return "";
+  const pair: Record<string, string> = {};
+  for (const [name, value] of Object.entries(auth.headers())) {
+    const lower = name.toLowerCase();
+    if ((CREDENTIAL_KEY_HEADERS as readonly string[]).includes(lower)) pair[lower] = value;
+  }
+  return JSON.stringify(CREDENTIAL_KEY_HEADERS.map((name) => pair[name] ?? null));
+}
+
+/**
+ * Was a look that got NO ANSWER (a refusal, a timeout, a transport failure)
+ * caught in the host's renewal? `sentKey` is `lifecycleCredentialKey(auth)` read
+ * when the look was sent. True when a renewal request is on its way now, or the
+ * credential the host holds now is not the one the look carried. Always false
+ * on a cookie host, and on a broker host whose credential did not move.
+ */
+export function lookCaughtInRenewal(
+  auth: LifecycleCardAuth | null | undefined,
+  sentKey: string,
+): boolean {
+  if (!auth) return false;
+  if (auth.renewal?.pending() === true) return true;
+  return lifecycleCredentialKey(auth) !== sentKey;
+}
+
+/** Wait until no renewal is on its way, or until `signal` aborts. A rejected
+ *  wait counts as settled: the caller then compares credentials as usual. */
+async function renewalSettledOrAborted(
+  renewal: LifecycleCardAuthRenewal,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  if (!signal) {
+    await renewal.settled().catch(() => undefined);
+    return;
+  }
+  if (signal.aborted) return;
+  await new Promise<void>((resolve) => {
+    const done = () => {
+      signal.removeEventListener("abort", done);
+      resolve();
+    };
+    signal.addEventListener("abort", done, { once: true });
+    renewal.settled().then(done, done);
+  });
+}
+
+/**
+ * SEND ONE READ ACROSS THE HOST'S RENEWAL. `send` sends the request with the
+ * credential the host holds when it is called, or answers `null` to send
+ * nothing. A 401 or 403 is the answer as it stands unless the host's credential
+ * was renewed: on a host that declares a renewal this first waits until no
+ * renewal is on its way (so a refusal that came back BEFORE the renewed pair was
+ * installed is not compared too early), then, when the credential held now is
+ * not the one the refused request carried and it still holds a widget user
+ * token, it sends once more with it, at most `RENEWED_SENDS` times.
+ *
+ * Fail-closed: any other answer, a cookie host, an unchanged credential, a
+ * credential that holds no token any more (the renewal ended the chain) and an
+ * abort while waiting all return the refusal as it came, and nothing is sent
+ * without a token.
+ */
+export async function sendAcrossRenewal(
+  auth: LifecycleCardAuth | null | undefined,
+  send: () => Promise<Response> | null,
+  signal?: AbortSignal,
+): Promise<Response | null> {
+  let sentKey = lifecycleCredentialKey(auth);
+  const first = send();
+  if (first === null) return null;
+  let response = await first;
+  for (let resent = 0; resent < RENEWED_SENDS; resent += 1) {
+    if (response.status !== 401 && response.status !== 403) return response;
+    if (!auth) return response;
+    if (auth.renewal) {
+      await renewalSettledOrAborted(auth.renewal, signal);
+      if (signal?.aborted) return response;
+    }
+    const nowKey = lifecycleCredentialKey(auth);
+    if (nowKey === sentKey) return response;
+    if (lifecycleRequestCredential(auth) === null) return response;
+    sentKey = nowKey;
+    const again = send();
+    if (again === null) return response;
+    response = await again;
+  }
+  return response;
 }
 
 /**
@@ -959,13 +1519,31 @@ export function useLifecycleCardResolve<K extends LifecycleDataPartViewType>(par
       // under the new one during the window before the effect cleanup aborts it.
       const requestIdentity = identity;
       try {
-        const response = await fetch(LIFECYCLE_VIEW_RESOLVE_PATH, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...(auth?.headers() ?? {}) },
-          body: JSON.stringify({ viewType, ref }),
-          credentials: auth?.credentials ?? "same-origin",
+        // cinatra#4217 fold 3 (pre-3 MUST-FIX 2): a resolve refused while the
+        // host's renewal was on its way, or after it replaced the credential,
+        // is sent once more with the renewed credential instead of leaving the
+        // card unresolved until a focus or a reload. See `sendAcrossRenewal`.
+        const response = await sendAcrossRenewal(
+          auth,
+          () => {
+            // A resolve that a newer one superseded while it waited for the
+            // renewal sends nothing more: its answer would be dropped below.
+            if (signal.aborted || requestId !== latestRequestRef.current) return null;
+            // A broker declaration with no widget user token now sends nothing.
+            const credential = lifecycleRequestCredential(auth);
+            if (credential === null) return null;
+            return fetch(LIFECYCLE_VIEW_RESOLVE_PATH, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", ...credential.headers },
+              body: JSON.stringify({ viewType, ref }),
+              credentials: credential.credentials,
+              signal,
+            });
+          },
           signal,
-        });
+        );
+        if (response === null) return;
+        if (signal.aborted || requestId !== latestRequestRef.current) return;
         if (!response.ok) return;
         const payload: unknown = await response.json();
         // Parsed against the kind THIS request asked for. Anything else — an
@@ -1079,11 +1657,18 @@ export function useLifecycleCardResolve<K extends LifecycleDataPartViewType>(par
  * schedule was still reported as `fired-recurring`, because the firing that
  * elects that reading stays true after the stop, so the turn kept the
  * still-recurring claim standing over a card that had just gone read-only.
+ *
+ * AND A FIFTH (cinatra#2853 fix leg 2). The readings that have not fired —
+ * first shown, configured and expired — are named too: section VI gives them
+ * one sentence of their own, see `RUN_START_SCHEDULE_PROPOSAL_SENTENCE`, so a
+ * card with a body that is neither stopped nor fired reports `never-fired`, and
+ * `other` is left to a card with no reading at all.
  */
 export type ScheduleCardReading =
   | "spent-one-off"
   | "fired-recurring"
   | "stopped-recurring"
+  | "never-fired"
   | "other";
 
 const ScheduleReadingSinkContext = createContext<
@@ -1265,6 +1850,29 @@ function runMomentAwaitsAPerson(card: RunMomentCard): boolean {
 }
 
 /**
+ * Is this run DISPATCHED AND ABOUT TO START? (cinatra#3062, fix leg 5.)
+ *
+ * `queued` is the dispatch waiting for its worker, and the `queued->running`
+ * CAS that ends it is the run's start — the one change the skills card beside
+ * this watch turns read-only on (§V: "Once the run is running, the selection is
+ * fixed and the row is read-only"). A watch that has backed off to its long
+ * interval by then left that card editable, with a live Continue, for up to a
+ * whole interval after the start. So a queued run is read at the brisk cadence
+ * too: the status is transient, and the run panel polls the same route every
+ * two seconds for a queued run anyway.
+ *
+ * AND SO IS A RUN STILL AT ITS SKILLS STEP (`pending_input`, convergence
+ * finding). One Continue there can release the run and start it between two
+ * looks of a backed-off watch, so `queued` is never read and the card kept its
+ * boxes and its Continue for up to a whole long interval after the start. The
+ * Skills step is a control a person is about to press — the same reason an open
+ * moment is read briskly above.
+ */
+function runIsAboutToStart(card: RunMomentCard): boolean {
+  return card.status === "queued" || card.status === "pending_input";
+}
+
+/**
  * HOW FAR APART THE LOOKS ARE, AND WHAT ENDS THEM.
  *
  * THE CADENCE BACKS OFF but does NOT expire, and that is the whole point of
@@ -1289,6 +1897,25 @@ function runMomentAwaitsAPerson(card: RunMomentCard): boolean {
 const MOMENT_UNANSWERED_LIMIT = 20;
 const MOMENT_MISS_LIMIT = 10;
 const MOMENT_READ_TIMEOUT_MS = 8000;
+/**
+ * A LOOK CAUGHT IN THE HOST'S RENEWAL IS NOT A MISS (cinatra#4217 fold 3). A
+ * look that got no answer (a refusal, its read deadline, a transport failure)
+ * while the host's renewal was on its way, or after the renewal replaced the
+ * credential it carried, says nothing about the run: the watch does not count
+ * it, and its next look waits until no renewal is on its way. So the watch's
+ * wait is bounded by the renewal request's own deadline and by nothing shorter
+ * that a valid renewal could outlast (pre-3 MUST-FIX 1 replaced a fixed 180 s
+ * window).
+ *
+ * At most this many such looks IN A ROW are forgiven. A valid renewal costs
+ * one: the look after it carries the renewed pair. The belt is for a host whose
+ * `settled()` resolves while its `pending()` keeps reading true; past it, such
+ * looks count as misses again, so the watch still ends. It does NOT cover a
+ * `settled()` that never resolves: the next look waits for it, so such a host
+ * holds the watch for as long as it stays unresolved. The embed's resolves at
+ * the latest at the renewal request's own deadline.
+ */
+const MOMENT_RENEWAL_WAIT_LIMIT = 3;
 
 /**
  * AND IT IS BRISK WHILE THE RUN IS STANDING AT THE MOMENT. That is the one
@@ -1326,7 +1953,14 @@ export function useRunMomentCard({
     answered: boolean;
     reads: number;
     misses: number;
-  }>({ answered: false, reads: 0, misses: 0 });
+    /** Looks IN A ROW that were caught in the host's renewal (cinatra#4217
+     *  fold 3). They count toward neither belt; see MOMENT_RENEWAL_WAIT_LIMIT. */
+    renewalWaits: number;
+  }>({ answered: false, reads: 0, misses: 0, renewalWaits: 0 });
+  // The host's credential declaration, read only to ask whether a look that got
+  // no answer was caught in its renewal (cinatra#4217 fold 3). The reader
+  // carries the same declaration: both come from this subtree's surface.
+  const auth = useContext(LifecycleCardAuthContext);
   // A DIFFERENT READER IS A DIFFERENT SUBJECT — another run, or the same run
   // asked for with another credential — and the previous answer says nothing
   // about it. Adjusted during render (React's documented "adjust state when a
@@ -1342,7 +1976,7 @@ export function useRunMomentCard({
   if (seenRead.read !== read) {
     setSeenRead({ read });
     setCard(RUN_MOMENT_UNREAD);
-    setProbe({ answered: false, reads: 0, misses: 0 });
+    setProbe({ answered: false, reads: 0, misses: 0, renewalWaits: 0 });
   }
 
   const watchEnded =
@@ -1376,6 +2010,9 @@ export function useRunMomentCard({
           () => abort.abort(),
           MOMENT_READ_TIMEOUT_MS,
         );
+        // The credential this look leaves with, for one comparison only
+        // (cinatra#4217 fold 3); never stored.
+        const sentKey = lifecycleCredentialKey(auth);
         let landed = false;
         try {
           const next = await read(abort.signal);
@@ -1392,21 +2029,30 @@ export function useRunMomentCard({
           window.clearTimeout(deadline);
           inFlight = false;
           if (!cancelled) {
-            setProbe((prev) => ({
-              answered: prev.answered || landed,
-              reads: prev.reads + 1,
-              // CONSECUTIVE misses, reset by any answer: what this ends is a
-              // transport that has stopped answering, not one that hiccupped.
-              misses: landed ? 0 : prev.misses + 1,
-            }));
+            // A LOOK CAUGHT IN THE HOST'S RENEWAL (cinatra#4217 fold 3) is
+            // neither an answer nor a miss, up to MOMENT_RENEWAL_WAIT_LIMIT in
+            // a row; the next look waits for the renewal (below).
+            const caught = !landed && lookCaughtInRenewal(auth, sentKey);
+            setProbe((prev) => {
+              if (caught && prev.renewalWaits < MOMENT_RENEWAL_WAIT_LIMIT) {
+                return { ...prev, renewalWaits: prev.renewalWaits + 1 };
+              }
+              return {
+                answered: prev.answered || landed,
+                reads: prev.reads + 1,
+                // CONSECUTIVE misses, reset by any answer: what this ends is a
+                // transport that has stopped answering, not one that hiccupped.
+                misses: landed ? 0 : prev.misses + 1,
+                // Past the belt (LIMIT + 1) a caught look is charged and the
+                // next look does not wait; a look that was not caught ends the
+                // row.
+                renewalWaits: caught ? MOMENT_RENEWAL_WAIT_LIMIT + 1 : 0,
+              };
+            });
           }
         }
       })();
     };
-    const timer = window.setTimeout(
-      look,
-      probe.reads === 0 ? 0 : momentReadDelay(probe.reads, runMomentAwaitsAPerson(card)),
-    );
     // THE PERSON COMING BACK TO THE TAB is the cheap stand-in for "something
     // may have happened while nobody was looking" — the same signal the card
     // resolve beside this uses — and it costs one read rather than a faster
@@ -1414,14 +2060,43 @@ export function useRunMomentCard({
     const onFocus = () => {
       if (!cancelled) look();
     };
-    window.addEventListener("focus", onFocus);
+    let timer: number | undefined;
+    let listening = false;
+    const start = () => {
+      if (cancelled) return;
+      timer = window.setTimeout(
+        look,
+        // Only the very first look is immediate: the look after a renewal wait
+        // takes the ordinary cadence too, so a renewal reading that settles at
+        // once can never make the watch spin.
+        probe.reads === 0 && probe.renewalWaits === 0
+          ? 0
+          : momentReadDelay(probe.reads, runMomentAwaitsAPerson(card) || runIsAboutToStart(card)),
+      );
+      window.addEventListener("focus", onFocus);
+      listening = true;
+    };
+    // AFTER A LOOK CAUGHT IN THE RENEWAL, NOTHING LOOKS UNTIL IT SETTLES — not
+    // the cadence and not a focus: a look sent now would carry the pair the
+    // server has already renewed away from. `settled` is bounded by the renewal
+    // request's own deadline. Past the belt nothing waits.
+    const renewal = auth?.renewal;
+    if (
+      renewal &&
+      probe.renewalWaits > 0 &&
+      probe.renewalWaits <= MOMENT_RENEWAL_WAIT_LIMIT
+    ) {
+      void renewal.settled().then(start, start);
+    } else {
+      start();
+    }
     return () => {
       cancelled = true;
       abort.abort();
-      window.clearTimeout(timer);
-      window.removeEventListener("focus", onFocus);
+      if (timer !== undefined) window.clearTimeout(timer);
+      if (listening) window.removeEventListener("focus", onFocus);
     };
-  }, [read, probe.answered, probe.reads, probe.misses, watchEnded, card]);
+  }, [read, auth, probe.answered, probe.reads, probe.misses, probe.renewalWaits, watchEnded, card]);
 
   return {
     card,
@@ -1430,9 +2105,18 @@ export function useRunMomentCard({
     // who is asking, or a transport that never answered. A caller that is
     // WITHHOLDING something until this read lands has to be able to stop
     // withholding it, or a dead endpoint would empty a turn for ever.
+    //
+    // AND IT IS EVERY WAY THE WATCH STOPS UNANSWERED (cinatra#4217 fold 3,
+    // pre-3 MUST-FIX 4). The effect stops at MOMENT_MISS_LIMIT whether or not
+    // it was ever answered, and every look of a watch that was never answered
+    // is a miss, so that belt is the one such a watch reaches first. Without it
+    // here a first-ever watch stopped with `gaveUp` false, and a caller that
+    // withheld the run's own reading behind it withheld it for ever.
     gaveUp:
       !probe.answered &&
-      (read === null || probe.reads >= MOMENT_UNANSWERED_LIMIT),
+      (read === null ||
+        probe.reads >= MOMENT_UNANSWERED_LIMIT ||
+        probe.misses >= MOMENT_MISS_LIMIT),
   };
 }
 
@@ -1472,6 +2156,8 @@ export type RunReviewSlot = {
   reviewTaskId?: string | null;
   /** SSR-only identities actually composed into the run rail (#3942). */
   railReviewTaskIds?: readonly string[];
+  /** SSR-only current rail marking; separate from the live slot identity. */
+  railCurrentReviewTaskId?: string | null;
 };
 
 /**
@@ -1519,6 +2205,10 @@ const PARKED_RUN_STATUS = "pending_approval";
 const SLOT_READ_LIMIT = 30;
 const SLOT_HOLD_LIMIT = 5;
 const SLOT_READ_TIMEOUT_MS = 8000;
+/** How many looks in a row caught in the host's renewal are not charged
+ *  (cinatra#4217 fold 3); see `renewalWaits` on the probe. A valid renewal
+ *  costs one: the look after it carries the renewed pair. */
+const SLOT_RENEWAL_WAIT_LIMIT = 3;
 
 /**
  * THE PARK'S OWN BUDGETS (cinatra#3007). A park is not the completed settle
@@ -1696,16 +2386,32 @@ async function reviewTicketStillPending(
   signal: AbortSignal,
 ): Promise<"pending" | "withdrawn" | "indeterminate"> {
   try {
+    // A broker declaration with no widget user token now is an invalid
+    // credential: the answer a 401 gives below, without sending the request.
+    const credential = lifecycleRequestCredential(auth);
+    if (credential === null) return "withdrawn";
+    const sentKey = lifecycleCredentialKey(auth);
     const response = await fetch(LIFECYCLE_VIEW_RESOLVE_PATH, {
       method: "POST",
-      headers: { "Content-Type": "application/json", ...(auth?.headers() ?? {}) },
+      headers: { "Content-Type": "application/json", ...credential.headers },
       body: JSON.stringify({ viewType: "artifact_review_gate", ref }),
-      credentials: auth?.credentials ?? "same-origin",
+      credentials: credential.credentials,
       signal,
     });
     // Credential invalidation is authoritative even without a protocol body:
     // the resolve route answers 401 { error: "Unauthorized" } for that case.
-    if (response.status === 401 || response.status === 403) return "withdrawn";
+    // EXCEPT ACROSS THE HOST'S RENEWAL (cinatra#4217 fold 3): a refusal while a
+    // renewal is on its way, or after it replaced the credential, says nothing
+    // about the gate, so it is indeterminate and the authorized ticket stays on
+    // file. The next look asks again with the renewed credential.
+    // BUT NOT WHEN THE CHAIN ENDED WHILE THIS PROBE WAS OUT: the declaration
+    // then holds no widget user token, its key moved only because the pair was
+    // dropped, and no renewed credential will ever ask again. That refusal is
+    // read exactly as a probe with no token is read before sending: withdrawn.
+    if (response.status === 401 || response.status === 403) {
+      if (lifecycleRequestCredential(auth) === null) return "withdrawn";
+      return lookCaughtInRenewal(auth, sentKey) ? "indeterminate" : "withdrawn";
+    }
     const envelope = parseLifecycleResolveEnvelope(
       "artifact_review_gate",
       await response.json(),
@@ -1857,11 +2563,25 @@ export function useRunReviewSlot({
      * bounded, and a surface that is demonstrably alive keeps its reader.
      */
     parkLooks: number;
+    /**
+     * LOOKS IN A ROW CAUGHT IN THE HOST'S RENEWAL (cinatra#4217 fold 3, pre-3
+     * MUST-FIX 3). A look that got no answer while the host's renewal was on
+     * its way, or after the renewal replaced the credential it carried, says
+     * nothing about the slot, so it spends none of the three budgets above, and
+     * the next look waits until no renewal is on its way. At most
+     * SLOT_RENEWAL_WAIT_LIMIT in a row; past it (LIMIT + 1) such looks are
+     * charged again, so a host whose `settled()` resolves while its
+     * `pending()` keeps reading true still meets every belt. A `settled()`
+     * that never resolves holds the next look for as long as it stays
+     * unresolved (the embed's resolves at the renewal request's deadline).
+     */
+    renewalWaits: number;
   }>({
     answered: initial != null,
     reads: 0,
     failures: 0,
     parkLooks: 0,
+    renewalWaits: 0,
   });
   const [seenLiveSignal, setSeenLiveSignal] = useState(liveSignal);
   // THE LAST ANSWER THIS READER DELIVERED, held in a ref rather than read off
@@ -1885,6 +2605,16 @@ export function useRunReviewSlot({
   // budget (fix leg 8).
   const lastLookAtRef = useRef<number>(0);
   const lastLookSignalRef = useRef<number | undefined>(liveSignal);
+  // THE ONE WAIT FOR THE HOST'S RENEWAL (cinatra#4217). The schedule below is
+  // rebuilt whenever the caller's liveness signal moves, and a rebuilt schedule
+  // that waits for the renewal asks the SAME renewal reading for the same
+  // settlement. So the reading is asked once per renewal and the wait shared.
+  // A stopped schedule still waits on that one shared promise until it
+  // settles, and then returns without looking.
+  const renewalWaitRef = useRef<{
+    renewal: LifecycleCardAuthRenewal;
+    settled: Promise<void>;
+  } | null>(null);
   // AND WHICH LOOK OWNS THE ANSWER (cinatra#3007, fix leg 8, convergence).
   //
   // Leg 8 put the caller's liveness signal into the scheduling effect's
@@ -1930,7 +2660,7 @@ export function useRunReviewSlot({
     setSeenAuth(auth);
     lastAnswerRef.current = EMPTY_RUN_REVIEW_SLOT;
     setSlot(EMPTY_RUN_REVIEW_SLOT);
-    setProbe({ answered: false, reads: 0, failures: 0, parkLooks: 0 });
+    setProbe({ answered: false, reads: 0, failures: 0, parkLooks: 0, renewalWaits: 0 });
     parkFlagDropsRef.current = 0;
     // The look in flight was asking about the status this reader has just left,
     // so its answer is not about this wait. Releasing the guard here is what
@@ -1965,7 +2695,7 @@ export function useRunReviewSlot({
     ) {
       lastAnswerRef.current = EMPTY_RUN_REVIEW_SLOT;
       setSlot(EMPTY_RUN_REVIEW_SLOT);
-      setProbe({ answered: false, reads: 0, failures: 0, parkLooks: 0 });
+      setProbe({ answered: false, reads: 0, failures: 0, parkLooks: 0, renewalWaits: 0 });
       parkFlagDropsRef.current = 0;
       lookEpochRef.current += 1;
       inFlightRef.current = false;
@@ -2194,9 +2924,45 @@ export function useRunReviewSlot({
             SLOT_LIVE_LOOK_SPACING_MS,
           )
         : slotReadDelay(probe.reads, probe.failures));
+    let stopped = false;
+    const renewal = auth?.renewal;
+    const waitForRenewal =
+      renewal &&
+      probe.renewalWaits > 0 &&
+      probe.renewalWaits <= SLOT_RENEWAL_WAIT_LIMIT
+        ? renewal
+        : null;
     const timer = window.setTimeout(
       () => {
         void (async () => {
+          // AFTER A LOOK CAUGHT IN THE RENEWAL, THE NEXT ONE WAITS FOR IT TO
+          // SETTLE (cinatra#4217 fold 3): a look sent before would carry the
+          // pair the server has already renewed away from. The cadence above
+          // runs first, so a renewal reading that settles at once cannot make
+          // this reader spin. `settled` is bounded by the renewal request's own
+          // deadline; past the belt nothing waits. Only the newest schedule
+          // goes on after the wait: a rebuilt effect stops this one. The
+          // reading is asked once per renewal; a rebuilt schedule joins the
+          // wait already asked for (see renewalWaitRef).
+          if (waitForRenewal) {
+            let shared = renewalWaitRef.current;
+            if (shared === null || shared.renewal !== waitForRenewal) {
+              const entry = {
+                renewal: waitForRenewal,
+                settled: waitForRenewal.settled().then(
+                  () => undefined,
+                  () => undefined,
+                ),
+              };
+              renewalWaitRef.current = entry;
+              void entry.settled.then(() => {
+                if (renewalWaitRef.current === entry) renewalWaitRef.current = null;
+              });
+              shared = entry;
+            }
+            await shared.settled;
+            if (stopped) return;
+          }
           // The budget above is spent HERE, when the look actually starts, and
           // the signal it was taken against travels with it: a bump that has
           // already been answered by a look must not shorten the next one.
@@ -2205,6 +2971,9 @@ export function useRunReviewSlot({
           inFlightEpochRef.current = epoch;
           lastLookAtRef.current = Date.now();
           lastLookSignalRef.current = liveSignal;
+          // The credential this look leaves with, for one comparison only
+          // (cinatra#4217 fold 3); never stored.
+          const sentKey = lifecycleCredentialKey(auth);
           const abort = new AbortController();
           const deadline = window.setTimeout(() => abort.abort(), SLOT_READ_TIMEOUT_MS);
           let landed = false;
@@ -2387,27 +3156,40 @@ export function useRunReviewSlot({
             window.clearTimeout(deadline);
             if (lookEpochRef.current === epoch) {
               inFlightRef.current = false;
-              setProbe((prev) => ({
-                answered: prev.answered || landed,
-                reads: prev.reads + 1,
-                // CONSECUTIVE, not cumulative: one answer clears the count, so
-                // only a transport that has actually stopped answering reaches
-                // the park's failure belt.
-                failures: landed ? 0 : prev.failures + 1,
-                // AND CONSECUTIVE FOR THE CEILING TOO (fix leg 7): a look that
-                // said something new re-arms it, a look that repeated the last
-                // answer spends one. See the field's own note above.
-                parkLooks: changed ? 0 : prev.parkLooks + 1,
-              }));
+              // A LOOK CAUGHT IN THE HOST'S RENEWAL (cinatra#4217 fold 3, pre-3
+              // MUST-FIX 3) spends no budget, up to SLOT_RENEWAL_WAIT_LIMIT in a
+              // row; the next look waits for the renewal (below).
+              const caught = !landed && lookCaughtInRenewal(auth, sentKey);
+              setProbe((prev) => {
+                if (caught && prev.renewalWaits < SLOT_RENEWAL_WAIT_LIMIT) {
+                  return { ...prev, renewalWaits: prev.renewalWaits + 1 };
+                }
+                return {
+                  answered: prev.answered || landed,
+                  reads: prev.reads + 1,
+                  // CONSECUTIVE, not cumulative: one answer clears the count, so
+                  // only a transport that has actually stopped answering reaches
+                  // the park's failure belt.
+                  failures: landed ? 0 : prev.failures + 1,
+                  // AND CONSECUTIVE FOR THE CEILING TOO (fix leg 7): a look that
+                  // said something new re-arms it, a look that repeated the last
+                  // answer spends one. See the field's own note above.
+                  parkLooks: changed ? 0 : prev.parkLooks + 1,
+                  renewalWaits: caught ? SLOT_RENEWAL_WAIT_LIMIT + 1 : 0,
+                };
+              });
             }
           }
         })();
       },
       // The first look under a new status is immediate — the gate is usually
-      // already open by the time the run reports done.
-      probe.reads === 0 ? 0 : Math.max(0, dueAt - now),
+      // already open by the time the run reports done. The look after a
+      // renewal wait keeps the cadence (cinatra#4217 fold 3), so a renewal
+      // reading that settles at once cannot make this reader spin.
+      probe.reads === 0 && probe.renewalWaits === 0 ? 0 : Math.max(0, dueAt - now),
     );
     return () => {
+      stopped = true;
       window.clearTimeout(timer);
     };
   }, [
@@ -2417,6 +3199,7 @@ export function useRunReviewSlot({
     answered,
     probe.reads,
     probe.failures,
+    probe.renewalWaits,
     read,
     auth,
     isProducedReviewPark,
@@ -2539,19 +3322,21 @@ export function useRunReviewRailRefresh({
   runId,
   reviewTaskId,
   initialReviewTaskIds,
+  railCurrentReviewTaskId,
   refresh,
 }: {
   runId: string;
   reviewTaskId: string | null | undefined;
   initialReviewTaskIds: readonly string[] | undefined;
+  railCurrentReviewTaskId?: string | null;
   /** Supplied by the actual page owner; this hook needs no router context. */
   refresh: (() => void) | undefined;
 }): void {
-  const observed = useRef({ runId, tasks: new Set<string>() });
+  const observed = useRef({ runId, tasks: new Set<string>(), refreshed: new Set<string>() });
 
   useEffect(() => {
     if (observed.current.runId !== runId) {
-      observed.current = { runId, tasks: new Set<string>() };
+      observed.current = { runId, tasks: new Set<string>(), refreshed: new Set<string>() };
     }
     const tasks = observed.current.tasks;
     // Seed only gates actually included in the server's rail query. The later
@@ -2559,8 +3344,11 @@ export function useRunReviewRailRefresh({
     // that slot's identity as already painted would lose its rail refresh.
     // This also seeds refreshed/remounted trees without a refresh loop.
     for (const taskId of initialReviewTaskIds ?? []) tasks.add(taskId);
-    if (!refresh || !reviewTaskId || tasks.has(reviewTaskId)) return;
+    if (!refresh || !reviewTaskId || observed.current.refreshed.has(reviewTaskId)) return;
+    const markingIsStale = railCurrentReviewTaskId != null && railCurrentReviewTaskId !== reviewTaskId;
+    if (tasks.has(reviewTaskId) && !markingIsStale) return;
     tasks.add(reviewTaskId);
+    observed.current.refreshed.add(reviewTaskId);
     refresh();
-  }, [initialReviewTaskIds, refresh, reviewTaskId, runId]);
+  }, [initialReviewTaskIds, railCurrentReviewTaskId, refresh, reviewTaskId, runId]);
 }

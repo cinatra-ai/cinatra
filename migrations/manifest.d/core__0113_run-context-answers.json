@@ -1,0 +1,9 @@
+{
+  "seq": "0113",
+  "file": "core/core__0113_run-context-answers.mjs",
+  "summary": "The whole answer of a context-slot finalize (cinatra#3080). Adds the append-only run_context_answers table: finalize appends ONE row per finalize of a slot holding the complete ordered ref set it wrote, an empty set included, in the same transaction as the run_context_selections audit rows and the artifact_refs retention pins. WHY: the audit rows are content-addressed per ref and inserted ON CONFLICT DO NOTHING, so they are the set of refs a run ever picked; a removal or a cleared slot leaves no trace and an empty answer leaves no row, so no table said what a run's answer to a slot is. The latest answer is the greatest answer_seq for (org_id, parent_run_id, slot_id): a per-slot sequence assigned under a transaction-scoped advisory lock and UNIQUE per (org_id, parent_run_id, slot_id), never a clock (answered_at is recorded, never read for order). ADDITIVE ONLY: a new table, its unique index and its append-only trigger; no existing table is touched and nothing is backfilled (a run finalized before this table existed has no answer row and keeps its earlier reading). Mirrors the idempotent bootstrap DDL in runContextAnswersSchemaQueries (src/lib/artifact-claim-schema.ts), shipped in the SAME pull request (core__0095 / core__0104 precedent). down() drops the table only when it is empty, then its trigger function. SEQ 0113: 0111 is the highest sequence on main at authoring time and 0112 is claimed by another open change.",
+  "destructive": false,
+  "tables": [
+    "run_context_answers"
+  ]
+}

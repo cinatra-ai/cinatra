@@ -22,7 +22,23 @@ function createPool(): Pool {
   if (!connectionString) {
     throw new Error("SUPABASE_DB_URL is required for @cinatra-ai/dashboards");
   }
-  return new Pool({ connectionString });
+  const pool = new Pool({ connectionString });
+  // An idle connection the database drops makes the pool emit 'error'; with no
+  // listener that ends the process.
+  pool.on("error", (err) => {
+    console.error("[dashboards] pg pool idle client error:", err.message);
+  });
+  // pg-pool removes its own 'error' listener from a client while the client is
+  // checked out, so a connection cut during a transaction would end the process
+  // (cinatra#4151). One listener per client, added once when the pool creates the
+  // client; it logs the pool name and the message only, and the pool discards the
+  // dead client at release.
+  pool.on("connect", (client) => {
+    client.on("error", (err: Error) => {
+      console.error("[dashboards] pg pool client error:", err.message);
+    });
+  });
+  return pool;
 }
 
 export function getDashboardsPool(): Pool {

@@ -105,7 +105,16 @@ const NOT_THIS_PERSONS: TriggerScheduleProposalViewBody = {
   saveRefusal: SAVE_SCHEDULE_REFUSALS.notYours,
 };
 
-function mockResolve(body: TriggerScheduleProposalViewBody) {
+/**
+ * THE FIRED READING RIDES THE ANSWER'S OWN ASIDE (cinatra#3174 fix leg 1): the
+ * settled body is a `.strict()`, version-1 schema, so the durable firing signal
+ * travels beside it rather than in it. A fired reading is elected by
+ * `aside.firedOnce` and by nothing else, which is why the mock has to carry it.
+ */
+function mockResolve(
+  body: TriggerScheduleProposalViewBody,
+  aside: { firedOnce?: boolean; durationCopy?: string | null } = {},
+) {
   globalThis.fetch = vi.fn(
     async () =>
       new Response(
@@ -113,6 +122,8 @@ function mockResolve(body: TriggerScheduleProposalViewBody) {
           kind: "trigger_schedule_proposal",
           state: { state: "settled" },
           body,
+          // The aside travels BESIDE the body on the answer itself.
+          ...aside,
           // THE FIRING READING RIDES THE ANSWER, NOT THE BODY (cinatra#3174 fix
           // leg 1, carried in by the forward merge of origin/main): a one-off`s
           // gate stamp is no longer read as its firing on its own. These
@@ -149,7 +160,7 @@ const windowAnswer = (root: HTMLElement) =>
 
 describe("a fired one-off carries no floor at all", () => {
   it("draws the locked form and nothing else — no floor, no button, no status line", async () => {
-    mockResolve(FIRED_ONE_OFF);
+    mockResolve(FIRED_ONE_OFF, { firedOnce: true });
     const { container } = render(
       <RunScheduleTab cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />,
     );
@@ -162,7 +173,7 @@ describe("a fired one-off carries no floor at all", () => {
   });
 
   it("keeps the window, present and disabled, drawn as the window's own block", async () => {
-    mockResolve(FIRED_ONE_OFF);
+    mockResolve(FIRED_ONE_OFF, { firedOnce: true });
     const { container } = render(
       <RunScheduleTab cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />,
     );
@@ -181,7 +192,7 @@ describe("a fired one-off carries no floor at all", () => {
   });
 
   it("the run page's schedule step reads it exactly the same way", async () => {
-    mockResolve(FIRED_ONE_OFF);
+    mockResolve(FIRED_ONE_OFF, { firedOnce: true });
     const { container } = render(
       <ScheduleStepSurface host="run_card" cardRef="run-ref" promptWindowTemplateId={TEMPLATE} />,
     );

@@ -17,6 +17,13 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+// cinatra#4150: every resume road reads the run's newest publish decision before it
+// sends. This suite is about another question, so no publish decision holds its run.
+vi.mock("../publish-decision-store", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readLatestDecisionForRun: async () => null,
+}));
+
 type SendTaskInput = {
   message?: { parts?: Array<{ kind?: string; text?: string }> };
 };
@@ -78,6 +85,13 @@ const storeMock = vi.hoisted(() => ({
   transitionRunStatus: vi.fn(async () => undefined),
 }));
 vi.mock("../store", () => storeMock);
+vi.mock("../agent-run-hitl-prompts", () => ({
+  captureHitlPromptForContinue: async (input: never) => {
+    await storeMock.writeHitlPrompt(input); return "captured-prompt";
+  },
+  recordSuccessfulContinue: async () => {},
+  continueBindingDigest: () => "", continueGateDigest: () => "",
+}));
 
 vi.mock("../wayflow-url", () => ({
   resolveWayflowUrl: vi.fn(() => "http://wayflow.test"),

@@ -279,6 +279,23 @@ export type LlmTool =
   | LlmContainerSkillsTool
   | LlmSandboxExecutionTool;
 
+/**
+ * Caller-owned tool identities, without executable tools or transport data.
+ * Adapters report the caller's name/label before provider-specific translation;
+ * omitted function-tool types are represented explicitly as "function" here.
+ * Never include addresses, credentials, headers, or provider diagnostics.
+ */
+export type LlmToolReference =
+  | { type: "function"; name: string }
+  | { type: "mcp"; serverLabel: string }
+  | { type: "shell" | "web_search" | "container_skills" | "sandbox_execution" };
+
+/**
+ * Tools removed for a reduced attempt. Notify once per such attempt, before
+ * emitting its text; the notification does not imply the attempt succeeded.
+ */
+export type LlmToolReduction = { removed: readonly LlmToolReference[] };
+
 // ---------------------------------------------------------------------------
 // Messages
 // ---------------------------------------------------------------------------
@@ -456,6 +473,8 @@ export type LlmCitation = {
 };
 
 export type LlmStreamCallbacks = {
+  /** Optional report of tools removed for a reduced attempt; see LlmToolReduction. */
+  onToolsReduced?: (reduction: LlmToolReduction) => void;
   onTextDelta: (delta: string) => void;
   onToolCall: (call: LlmToolCall) => void;
   onToolResult: (result: LlmToolResult) => void;
@@ -471,6 +490,8 @@ export type LlmStreamCallbacks = {
 // ---------------------------------------------------------------------------
 
 export type GenerateInput = {
+  /** Optional report of tools removed for a reduced attempt; see LlmToolReduction. */
+  onToolsReduced?: (reduction: LlmToolReduction) => void;
   model?: string;
   system: string;
   prompt: string;

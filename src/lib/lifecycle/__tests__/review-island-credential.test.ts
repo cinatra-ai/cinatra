@@ -10,12 +10,18 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 
+import {
+  REVIEW_ISLAND_CREDENTIAL_QUERY_PARAM as PROJECTION_CREDENTIAL_QUERY_PARAM,
+  REVIEW_TARGET_ISLAND_PATH,
+} from "@cinatra-ai/agent-ui-protocol/renderable-views";
+
 process.env.BETTER_AUTH_SECRET ??= "test-secret-for-island-credential";
 
 import {
   REVIEW_ISLAND_CREDENTIAL_MAX_LENGTH,
   REVIEW_ISLAND_CREDENTIAL_QUERY_PARAM,
   REVIEW_ISLAND_CREDENTIAL_TTL_SECONDS,
+  REVIEW_ISLAND_ROUTE,
   mintReviewIslandCredential,
   reviewIslandUrl,
   verifyReviewIslandCredential,
@@ -168,5 +174,15 @@ describe("the island URL", () => {
     expect(url).toBe(
       `/lifecycle/review-island?ref=a%20ref%2Fwith%3Dchars&${REVIEW_ISLAND_CREDENTIAL_QUERY_PARAM}=cred-value`,
     );
+  });
+});
+
+// The island's base address is minted here and read by the review target
+// projection (cinatra#4129), which adds the target and bounds the final
+// address. The two must name the same island path and credential parameter.
+describe("the base address and the projection name one island", () => {
+  it("shares the island path and the credential parameter", () => {
+    expect(REVIEW_ISLAND_ROUTE).toBe(REVIEW_TARGET_ISLAND_PATH);
+    expect(REVIEW_ISLAND_CREDENTIAL_QUERY_PARAM).toBe(PROJECTION_CREDENTIAL_QUERY_PARAM);
   });
 });

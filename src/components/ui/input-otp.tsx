@@ -49,7 +49,7 @@ function InputOTPSlot({
       data-slot='input-otp-slot'
       data-active={isActive}
       className={cn(
-        'relative flex h-10 w-10 items-center justify-center border-y border-r border-input bg-surface-strong font-mono text-[18px] shadow-xs transition-all outline-none first:rounded-l-[7px] first:border-l last:rounded-r-[7px] aria-invalid:border-destructive data-[active=true]:z-10 data-[active=true]:border-ring data-[active=true]:ring-[3px] data-[active=true]:ring-ring/50 data-[active=true]:aria-invalid:border-destructive data-[active=true]:aria-invalid:ring-destructive/20 dark:bg-input-fill/30 dark:data-[active=true]:aria-invalid:ring-destructive/40',
+        'relative flex h-11 w-10 items-center justify-center border-y border-r border-input bg-surface-strong font-mono text-[18px] shadow-xs transition-all outline-none first:rounded-l-[7px] first:border-l last:rounded-r-[7px] aria-invalid:border-destructive data-[active=true]:z-10 data-[active=true]:border-ring data-[active=true]:ring-[3px] data-[active=true]:ring-ring/50 data-[active=true]:aria-invalid:border-destructive data-[active=true]:aria-invalid:ring-destructive/20 dark:bg-input-fill/30 dark:data-[active=true]:aria-invalid:ring-destructive/40',
         className
       )}
       {...props}
@@ -82,12 +82,12 @@ function InputOTPSeparator({
           clause's own "short ... never a vertical line" contrast had nothing to
           measure, and nothing set the navy either -- the icon inherited
           whatever colour the surrounding text happened to carry. The dash is
-          drawn here as its own element instead: 8px wide, 2px tall, in the ink
+          drawn here as its own element instead: 10px wide, 2px tall, in the ink
           token, so it is short and horizontal BY CONSTRUCTION and can never
           render as the vertical line the clause forbids. */}
       <div
         data-slot='input-otp-separator-dash'
-        className='h-0.5 w-2 rounded-full bg-foreground/40'
+        className='h-0.5 w-2.5 rounded-full bg-foreground/40'
       />
     </div>
   )

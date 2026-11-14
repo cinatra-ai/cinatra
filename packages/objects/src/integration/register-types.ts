@@ -471,65 +471,6 @@ function registerEmailObjectTypes(): void {
       return contactId ? `${runId}:${contactId}` : runId;
     },
   });
-
-  // 6. recipient — a run-scoped delivery-target SNAPSHOT (cinatra#1454). NEVER a
-  // person/contact: `contactKey`/`contactId` are connector-scoped soft
-  // provenance only, no CRM writeback. The @cinatra-ai/email-artifacts pack
-  // claims this type [record] with `projection: "none"` + `sensitivity:
-  // "sensitive"` (addresses are kept out of the derived index by the claim; the
-  // row still carries `email` for delivery + fallback identity). Mandatory
-  // retry-safe identity (cinatra#1454): (runId + provider-scoped contactKey),
-  // normalized-email fallback — a retry within the same run updates the snapshot
-  // in place; no run frame yields no identity (HITL rather than a global merge).
-  objectTypeRegistry.register({
-    type: "@cinatra-ai/email:recipient",
-    // Type-driven disposition (epic #1785) — SECURITY-CRITICAL. Relocated from
-    // the @cinatra-ai/email-artifacts pack claim: projection MUST stay 'none' so
-    // recipient email addresses (sensitivity: 'sensitive') are NEVER projected
-    // into the derived Graphiti index. The type-driven projector regression test
-    // pins recipient rows to a terminal skip; the inventory-parity test pins this
-    // payload equal to the pack manifest.
-    dispositions: {
-      projection: "none",
-      pinnable: false,
-      snapshotPolicy: "none",
-      sensitivity: "sensitive",
-      mutability: "record",
-    },
-    category: "report",
-    schema: z.object({
-      runId: z.string().min(1),
-      connectorId: z.string().optional(),
-      contactKey: z.string().optional(),
-      // `.trim().min(1)` normalizes and rejects a whitespace-only address — the
-      // normalized-email fallback identity below must never collapse to an empty
-      // contact key.
-      email: z.string().trim().min(1),
-      campaignId: z.string().optional(),
-      confirmed: z.boolean().optional(),
-    }),
-    lifecycle: {
-      sources: ["agent", "import"],
-      mutableBy: ["agent"],
-    },
-    renderers: {
-      listRow: GenericObjectListRow,
-      card: GenericObjectCard,
-      detail: GenericObjectDetail,
-    },
-    identityKey: (data) => {
-      const d = data as Record<string, unknown>;
-      const runId = typeof d.runId === "string" && d.runId.length > 0 ? d.runId : null;
-      if (!runId) return null;
-      const contactKey =
-        typeof d.contactKey === "string" && d.contactKey.length > 0 ? d.contactKey : null;
-      if (contactKey) return `${runId}:${contactKey}`;
-      // Normalize FIRST, then require a non-empty result — a whitespace-only
-      // email must yield no identity (HITL) rather than a bare `${runId}:`.
-      const email = typeof d.email === "string" ? d.email.trim().toLowerCase() : "";
-      return email.length > 0 ? `${runId}:${email}` : null;
-    },
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -631,64 +572,27 @@ function registerLinkedinObjectTypes(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Drupal external node-pointer work-product object type.
+// The Drupal external node pointer is not defined here. Its artifact pack
+// declares it in the pack's own namespace, so the artifact bridge registers it
+// from the pack claim under the pack (cinatra#4366).
 //
-// The @cinatra-ai/drupal-artifacts pack (cinatra#1465, epic #1448) CLAIMS
-// @cinatra-ai/drupal:node [external] — a connector-owned POINTER to a Drupal
-// node whose canonical content lives in Drupal, NOT a cinatra-authored blob.
-// The TYPE registrar stays host-side HERE (epic #1448 principle 5: exactly one
-// runtime registrar per type; the pack claim adds only disposition / the
-// `external` mutability class / arbitration, never a second registrar — mirrors
-// the @cinatra-ai/email:* work products above). The claim is cross-namespace:
-// its registering package `@cinatra-ai/drupal` is a virtual namespace with no
-// package (like `@cinatra-ai/email`), so the pack ships an inline JSON Schema as
-// its schema-source. In hybrid mode the artifact bridge (registerClaimValidators
-// in ./register-artifact-extensions) registers a validator-only shadow for this
-// cross-namespace claim WITH package provenance and a generic [report] /
-// agent+user lifecycle; this host registration carries NO provenance and wins by
-// the registry's replace-by-id ONLY when it runs after that pack rescan — so boot
-// must (re-)assert the host types after every artifact rescan (app boot,
-// hot-install, dev-watcher), else the shadow shadows this definition and an
-// uninstall's removeByPackage could reap the type. Until the pack is enrolled in
-// the dev-lock it is never scanned, so this registration is uncontested today;
-// the live-boot-order guarantee is the dev-stack E2E item that rides the pack's
-// dev-lock enrollment (cinatra#1465), mirroring the email:* / linkedin precedent.
-//
-// `external` mutability: the pointer row is written and its reference state is
-// moved (linked → stale → dangling) by connector sync ONLY — there is no
-// agent/user post-create content edit (the `external` class narrows the baseline
-// mutableBy to []), and it is never pinnable (you pin the immutable SNAPSHOT
-// record — a NEW, independent record-class artifact captured through the
-// connector facade — never the live pointer). There is NO matcher: an external
-// pointer is materialized by connector sync, never classified from an uploaded
-// file. The concrete drupal-mcp-connector ConnectorRefFacade + pointer-row sync
-// is a SEPARATE companion slice (cinatra#1465); this registrar only lands the
-// type so the pack's claim resolves against a single host registrar.
-//
-// The row is a `ConnectorRefArtifactData` (../connector-ref, cinatra#1451):
-// { artifactType:"connector-ref", originKind:"external_link", mime, title?,
-// excerpt?, connectorRef }. The `connectorRef` sub-object is a strict INLINE
-// mirror of the canonical `connectorRefPointerSchema` (../connector-ref) — the
-// same schema-source the pack's inline JSON Schema mirrors; kept inline (NOT an
-// import of connector-ref) so this route-graph-reachable module accretes no new
-// cross-module edge (the locked-route budget idiom this file already follows for
-// the email/memory schemas), and must stay in sync with connectorRefPointerSchema.
-// Top-level stays open (`.passthrough()`, mirroring the pack schema's
-// `additionalProperties:true`) so connector-provided/host-injected fields are
-// not silently dropped; the pointer sub-object is strict.
-//
-// Identity is (instance, node) — the pointer's `connectorRef.connectorId` +
-// `connectorRef.externalId` (colon-free connector idiom, as with email/threads)
-// — so a re-sync of the same node updates THAT pointer row in place; a row
-// missing either id keeps its random-UUID identity (identityKey → null) rather
-// than collapsing distinct pointers together.
+// The former host id stays registered as a RETIRED tombstone, because a
+// database that ran the connector's old pointer writer may still hold rows of
+// it. Without a definition those rows would leave the governed path: the
+// projector would emit their raw data, objects_update would write them with no
+// schema, and the artifact reads would lose them. The tombstone keeps them
+// resolvable under their former contract (content category, agent/import
+// sources, the strict inline pointer schema, the former dispositions with
+// projection `artifact-safe`), so they stay in the artifact library and their
+// artifact page opens as before the move. It is marked retired, so
+// objects_save and objects_update refuse it (the rows are read-only) and the
+// type discovery surfaces leave it out. Its identity key is not kept: nothing
+// writes the id any more.
 // ---------------------------------------------------------------------------
 
-function registerDrupalObjectTypes(): void {
-  objectTypeRegistry.register({
+function registerRetiredDrupalNodeType(): void {
+  objectTypeRegistry.registerRetired({
     type: "@cinatra-ai/drupal:node",
-    // Type-driven disposition (epic #1785): relocated from the
-    // @cinatra-ai/drupal-artifacts pack claim (parity pinned by test).
     dispositions: {
       projection: "artifact-safe",
       pinnable: false,
@@ -704,8 +608,6 @@ function registerDrupalObjectTypes(): void {
         mime: z.string().min(1),
         title: z.string().optional(),
         excerpt: z.string().optional(),
-        // Strict inline mirror of connectorRefPointerSchema (../connector-ref,
-        // cinatra#1451) — strictObject().strict(): unknown pointer keys rejected.
         connectorRef: z
           .object({
             url: z.string().min(1),
@@ -723,9 +625,6 @@ function registerDrupalObjectTypes(): void {
       })
       .passthrough(),
     lifecycle: {
-      // Written by connector sync only (agent/import); the `external` claim
-      // narrows post-create mutableBy to [] — the reference state moves via
-      // connector verification, not an agent/user mutate call.
       sources: ["agent", "import"],
       mutableBy: ["agent"],
     },
@@ -733,25 +632,6 @@ function registerDrupalObjectTypes(): void {
       listRow: GenericObjectListRow,
       card: GenericObjectCard,
       detail: GenericObjectDetail,
-    },
-    identityKey: (data) => {
-      const d = data as Record<string, unknown>;
-      const ref =
-        d.connectorRef && typeof d.connectorRef === "object"
-          ? (d.connectorRef as Record<string, unknown>)
-          : {};
-      const connectorId =
-        typeof ref.connectorId === "string" && ref.connectorId.length > 0
-          ? ref.connectorId
-          : null;
-      const externalId =
-        typeof ref.externalId === "string" && ref.externalId.length > 0
-          ? ref.externalId
-          : null;
-      // (instance, node) identity: a re-sync of the same node updates that
-      // pointer in place. Missing either id ⇒ no stable identity (random UUID,
-      // no auto-dedup) rather than collapsing distinct pointers together.
-      return connectorId && externalId ? `${connectorId}:${externalId}` : null;
     },
   });
 }
@@ -1158,7 +1038,7 @@ export function registerAllObjectTypes(): void {
   registerCampaignBundleTypes();
   registerEmailObjectTypes();
   registerLinkedinObjectTypes();
-  registerDrupalObjectTypes();
+  registerRetiredDrupalNodeType();
   registerMemoryConceptType();
   registerWordPressObjectTypes();
   // CRM types (account / contact / list) are registered by the crm-connector

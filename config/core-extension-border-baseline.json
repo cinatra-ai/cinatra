@@ -114,7 +114,7 @@
     {
       "rule": "pack-type-id-in-core",
       "key": "packages/objects/src/integration/register-types.ts::@cinatra-ai/drupal:node",
-      "reason": "standing debt: the host objects registry restates a type id the pack declares, so a pack that is not installed still has its representation known here."
+      "reason": "retired tombstone: the pack moved its pointer type into its own namespace, and the host keeps the former id registered and read-only, so stored rows of it stay listed and fail closed on writes."
     },
     {
       "rule": "pack-type-id-in-core",
@@ -124,11 +124,6 @@
     {
       "rule": "pack-type-id-in-core",
       "key": "packages/objects/src/integration/register-types.ts::@cinatra-ai/email:received-reply",
-      "reason": "standing debt: the host objects registry restates a type id the pack declares, so a pack that is not installed still has its representation known here."
-    },
-    {
-      "rule": "pack-type-id-in-core",
-      "key": "packages/objects/src/integration/register-types.ts::@cinatra-ai/email:recipient",
       "reason": "standing debt: the host objects registry restates a type id the pack declares, so a pack that is not installed still has its representation known here."
     },
     {
@@ -194,7 +189,7 @@
     {
       "rule": "pack-type-id-in-core",
       "key": "src/lib/object-history/retention-policy.ts::@cinatra-ai/drupal:node",
-      "reason": "standing debt: the retention policy names pack-declared type ids to set per-type history windows in the host."
+      "reason": "retired tombstone: the retention policy names the former Drupal pointer id, which the host keeps registered as a read-only tombstone for its stored rows."
     },
     {
       "rule": "pack-type-id-in-core",
@@ -254,11 +249,6 @@
     {
       "rule": "pack-type-id-in-core",
       "key": "src/lib/trigger-email-send-use-cases.ts::@cinatra-ai/email:body",
-      "reason": "standing debt: the send use cases name pack-declared type ids to read the objects they assemble."
-    },
-    {
-      "rule": "pack-type-id-in-core",
-      "key": "src/lib/trigger-email-send-use-cases.ts::@cinatra-ai/email:recipient",
       "reason": "standing debt: the send use cases name pack-declared type ids to read the objects they assemble."
     },
     {

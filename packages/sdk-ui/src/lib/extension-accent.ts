@@ -39,7 +39,7 @@ export const ACCENT_PALETTE: Record<ExtensionAccent, AccentTone> = {
   rust: { bg: "#b0613a", fg: "#f1f1ed" },
   olive: { bg: "#6c6a3a", fg: "#f1f1ed" },
   plum: { bg: "#574a68", fg: "#f1f1ed" },
-  clay: { bg: "#a86b72", fg: "#f1f1ed" },
+  clay: { bg: "#a2666d", fg: "#ffffff" },
 };
 
 /**

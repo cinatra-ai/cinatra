@@ -91,6 +91,9 @@ function getActor(actor: PrimitiveActorContext): McpDashboardActor | null {
   // authority", and the org-write seam then refuses the write. Exported-for-
   // tests via narrowOrgWriteAuthority.
   const authority = narrowOrgWriteAuthority(ext["orgWriteAuthority"]);
+  // The producing run (cinatra#3092), forwarded by the registry from the
+  // frame's verified run id. Only a non-empty string is a run.
+  const runId = narrowRunId(ext["runId"]);
   return {
     userId,
     organizationId: orgId,
@@ -99,7 +102,14 @@ function getActor(actor: PrimitiveActorContext): McpDashboardActor | null {
     teamRoles,
     ...(oboCeiling ? { oboCeiling } : {}),
     ...(authority ? { authority } : {}),
+    ...(runId ? { runId } : {}),
   };
+}
+
+/** The frame's run id as a run, or nothing: a non-empty string only
+ *  (cinatra#3092). Exported for unit tests only. */
+export function narrowRunId(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 /** Fail-closed structural narrow for the opaquely-forwarded org-write
@@ -404,6 +414,15 @@ export function createDashboardPrimitiveHandlers() {
       }
     },
   };
+}
+
+/**
+ * The one dashboards write the agent passthrough may make (cinatra#3092):
+ * `dashboards_create`, and nothing else of this factory. The create still goes
+ * through this module, so `createDashboard` keeps its one importer.
+ */
+export function createDashboardForRun(request: PrimitiveInvocationRequest<unknown>) {
+  return createDashboardPrimitiveHandlers().dashboards_create(request);
 }
 
 /** Convert a thrown mutation-service error into the MCP error envelope. */

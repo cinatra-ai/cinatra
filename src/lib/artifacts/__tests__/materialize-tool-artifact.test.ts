@@ -38,7 +38,8 @@ const {
   enqueueArtifactMatchRunMock: vi.fn(async (): Promise<void> => {}),
 }));
 
-vi.mock("@/lib/db/pooled", () => ({
+vi.mock("@/lib/db/pooled", async () => ({
+  ...await vi.importActual<typeof import("@/lib/db/pooled")>("@/lib/db/pooled"),
   getPooledDb: () => ({ query: poolQueryMock }),
 }));
 vi.mock("@/lib/postgres-config", () => ({
@@ -108,6 +109,8 @@ vi.mock("../artifact-authoring", () => ({
 }));
 
 import {
+  authorizeToolMaterializeWrite,
+  loadRunImageWriteFacts,
   materializeToolArtifact,
   __resetRunPackageBindingsCacheForTests,
 } from "../run-artifact-materializer";
@@ -349,5 +352,597 @@ describe("materializeToolArtifact", () => {
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
     expect(outcome.error).toContain("materialization failed: db down");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3035: the origin of a mid-run write follows a marked review gate THAT
+// EXECUTES after it — read with the compiler's topology, never from a
+// marker-shaped value anywhere in the document.
+// ---------------------------------------------------------------------------
+
+type Doc = Record<string, unknown>;
+const ref = (id: string) => ({ $component_ref: id });
+const control = (from: string, to: string) => ({
+  component_type: "ControlFlowEdge",
+  name: `${from}->${to}`,
+  from_node: ref(from),
+  to_node: ref(to),
+});
+const data = (from: string, output: string, to: string, input: string) => ({
+  component_type: "DataFlowEdge",
+  name: `${from}.${output}->${to}.${input}`,
+  source_node: ref(from),
+  source_output: output,
+  destination_node: ref(to),
+  destination_input: input,
+});
+const port = (title: string) => ({ title, type: "array" });
+const collector = (id: string) => ({
+  component_type: "ApiNode",
+  id,
+  name: id,
+  inputs: [port("items")],
+  outputs: [port("reviewTargets")],
+});
+const writeNode = (id: string) => ({
+  component_type: "ApiNode",
+  id,
+  name: id,
+  metadata: { cinatra: { extension: EXT } },
+  data: { tool: "artifact_materialize" },
+  outputs: [port("artifact")],
+});
+const gate = (targetsInput: unknown, inputs = [port("review_targets")]) => ({
+  component_type: "InputMessageNode",
+  id: "review_gate",
+  name: "review_gate",
+  metadata: { cinatra: { artifactReview: { targetsInput } } },
+  inputs,
+  outputs: [{ title: "userResponse", type: "string" }],
+});
+
+/** A flow: start -> each `order` node -> end, with the given data edges. */
+function flow(order: string[], components: Doc, dataEdges: unknown[], extra: Doc = {}): Doc {
+  const ids = ["start", ...order, "end"];
+  return {
+    agentspec_version: "26.1.0",
+    component_type: "Flow",
+    id: "flow",
+    name: "flow",
+    metadata: { cinatra: { type: "flow" } },
+    inputs: [],
+    outputs: [],
+    start_node: ref("start"),
+    nodes: ids.map(ref),
+    control_flow_connections: ids.slice(1).map((id, i) => control(ids[i]!, id)),
+    data_flow_connections: dataEdges,
+    $referenced_components: {
+      start: { component_type: "StartNode", id: "start", name: "start" },
+      end: { component_type: "EndNode", id: "end", name: "end" },
+      ...components,
+    },
+    ...extra,
+  };
+}
+
+/** The reviewed shape: write -> marked gate, the gate's targets fed by the write. */
+function reviewedFlow(): Doc {
+  return flow(
+    ["persist_draft", "review_gate"],
+    { persist_draft: writeNode("persist_draft"), review_gate: gate("review_targets") },
+    [data("persist_draft", "artifact", "review_gate", "review_targets")],
+  );
+}
+
+function withPayload(payload: Doc | null, manifestName = "@test/agent") {
+  return {
+    manifest: { name: manifestName, cinatra: { produces: [{ extension: EXT }] } },
+    payload,
+  };
+}
+
+/** The origin of a write by `nodeId`, called from the verified step `step`
+ *  (by default the same node, as the runtime signs it; null = no verified step). */
+async function originOf(
+  payload: Doc,
+  nodeId = "persist_draft",
+  step: string | null = nodeId,
+): Promise<unknown> {
+  getAgentPackageMock.mockResolvedValue(withPayload(payload));
+  const outcome = await materializeToolArtifact({
+    ...BASE_INPUT,
+    nodeId,
+    ...(step === null ? {} : { verifiedStepId: step }),
+  });
+  expect(outcome.ok).toBe(true);
+  return (createSemanticArtifactMock.mock.calls[0]?.[0] as { originKind?: unknown }).originKind;
+}
+
+describe("cinatra#3035 — a mid-run write under an executed marked review gate", () => {
+  it("writes with the intermediate origin when a reachable marked gate after the write takes its targets from it", async () => {
+    expect(await originOf(reviewedFlow())).toBe("live_generator");
+  });
+
+  // Pre-review 2, finding 3 (and NOTE 5: real inner edges and an export). The
+  // subflow runs writers A and B and exports only B's reference, which the
+  // outer marked gate takes. A is not under the gate; B's place is the
+  // FlowNode, which the reading does not trace into, so B keeps the default
+  // review too (fail-closed: a duplicate review, never a skipped one).
+  function subflowExportingOnlyB(): Doc {
+    return flow(
+      ["drafting", "review_gate"],
+      {
+        drafting: {
+          component_type: "FlowNode",
+          id: "drafting",
+          name: "drafting",
+          subflow: ref("drafting_flow"),
+          outputs: [port("reviewTargets")],
+        },
+        drafting_flow: {
+          component_type: "Flow",
+          id: "drafting_flow",
+          name: "drafting_flow",
+          start_node: ref("inner_start"),
+          nodes: [ref("inner_start"), ref("write_a"), ref("write_b"), ref("inner_end")],
+          outputs: [port("reviewTargets")],
+          control_flow_connections: [
+            control("inner_start", "write_a"),
+            control("write_a", "write_b"),
+            control("write_b", "inner_end"),
+          ],
+          data_flow_connections: [data("write_b", "artifact", "inner_end", "reviewTargets")],
+        },
+        inner_start: { component_type: "StartNode", id: "inner_start", name: "inner_start" },
+        write_a: writeNode("write_a"),
+        write_b: writeNode("write_b"),
+        inner_end: {
+          component_type: "EndNode",
+          id: "inner_end",
+          name: "inner_end",
+          inputs: [port("reviewTargets")],
+        },
+        review_gate: gate("review_targets"),
+      },
+      [data("drafting", "reviewTargets", "review_gate", "review_targets")],
+    );
+  }
+
+  it("keeps the durable origin for a subflow writer whose artifact the FlowNode does not export into the gate", async () => {
+    expect(await originOf(subflowExportingOnlyB(), "write_a")).toBe("agent_generated");
+  });
+
+  it("keeps the durable origin for a subflow writer even when the FlowNode exports its artifact into the gate", async () => {
+    expect(await originOf(subflowExportingOnlyB(), "write_b")).toBe("agent_generated");
+  });
+
+  it("keeps the durable origin when the flow marks no review gate", async () => {
+    const payload = flow(
+      ["persist_draft", "review_gate"],
+      {
+        persist_draft: writeNode("persist_draft"),
+        review_gate: { ...gate("review_targets"), metadata: { cinatra: {} } },
+      },
+      [data("persist_draft", "artifact", "review_gate", "review_targets")],
+    );
+    expect(await originOf(payload)).toBe("agent_generated");
+  });
+
+  it("keeps the durable origin for a decoy marked gate in the flow's own metadata", async () => {
+    const payload = flow(["persist_draft"], { persist_draft: writeNode("persist_draft") }, [], {
+      metadata: { cinatra: { type: "flow", decoy: gate("review_targets") } },
+    });
+    expect(await originOf(payload)).toBe("agent_generated");
+  });
+
+  it("keeps the durable origin for a marker-shaped value in another node's data", async () => {
+    const payload = flow(
+      ["persist_draft"],
+      {
+        persist_draft: {
+          ...writeNode("persist_draft"),
+          data: { example: gate("review_targets") },
+        },
+      },
+      [],
+    );
+    expect(await originOf(payload)).toBe("agent_generated");
+  });
+
+  it("keeps the durable origin for a marked gate that is an unused component", async () => {
+    const payload = flow(
+      ["persist_draft"],
+      { persist_draft: writeNode("persist_draft"), review_gate: gate("review_targets") },
+      [data("persist_draft", "artifact", "review_gate", "review_targets")],
+    );
+    expect(await originOf(payload)).toBe("agent_generated");
+  });
+
+  it("keeps the durable origin for a marked gate inside a subflow no reachable node calls", async () => {
+    const payload = flow(
+      ["persist_draft"],
+      {
+        persist_draft: writeNode("persist_draft"),
+        uncalled: { component_type: "FlowNode", id: "uncalled", name: "uncalled", subflow: ref("uncalled_flow") },
+        uncalled_flow: {
+          component_type: "Flow",
+          id: "uncalled_flow",
+          name: "uncalled_flow",
+          nodes: [ref("review_gate")],
+        },
+        review_gate: gate("review_targets"),
+      },
+      [data("persist_draft", "artifact", "review_gate", "review_targets")],
+    );
+    expect(await originOf(payload)).toBe("agent_generated");
+  });
+
+  it("keeps the durable origin for a marked gate nested in a called subflow (the compiler propagates no nested marker)", async () => {
+    const payload = flow(
+      ["persist_draft", "reviewing"],
+      {
+        persist_draft: writeNode("persist_draft"),
+        reviewing: {
+          component_type: "FlowNode",
+          id: "reviewing",
+          name: "reviewing",
+          subflow: ref("reviewing_flow"),
+          inputs: [port("review_targets")],
+        },
+        reviewing_flow: {
+          component_type: "Flow",
+          id: "reviewing_flow",
+          name: "reviewing_flow",
+          nodes: [ref("review_gate")],
+        },
+        review_gate: gate("review_targets"),
+      },
+      [data("persist_draft", "artifact", "reviewing", "review_targets")],
+    );
+    expect(await originOf(payload)).toBe("agent_generated");
+  });
+
+  it("keeps the durable origin for a marked gate that runs before the write", async () => {
+    const payload = flow(
+      ["review_gate", "persist_draft"],
+      { persist_draft: writeNode("persist_draft"), review_gate: gate("review_targets") },
+      [data("persist_draft", "artifact", "review_gate", "review_targets")],
+    );
+    expect(await originOf(payload)).toBe("agent_generated");
+  });
+
+  it("keeps the durable origin for a marker naming an input the gate does not declare", async () => {
+    const payload = flow(
+      ["persist_draft", "review_gate"],
+      { persist_draft: writeNode("persist_draft"), review_gate: gate("review_targets", []) },
+      [data("persist_draft", "artifact", "review_gate", "review_targets")],
+    );
+    expect(await originOf(payload)).toBe("agent_generated");
+  });
+
+  it("keeps the durable origin for a blank marker", async () => {
+    const payload = flow(
+      ["persist_draft", "review_gate"],
+      { persist_draft: writeNode("persist_draft"), review_gate: gate("   ", [port("   ")]) },
+      [data("persist_draft", "artifact", "review_gate", "   ")],
+    );
+    expect(await originOf(payload)).toBe("agent_generated");
+  });
+
+  it("keeps the durable origin for a write the gate's targets do not come from", async () => {
+    const payload = flow(
+      ["persist_draft", "persist_other", "review_gate"],
+      {
+        persist_draft: writeNode("persist_draft"),
+        persist_other: writeNode("persist_other"),
+        review_gate: gate("review_targets"),
+      },
+      [data("persist_other", "artifact", "review_gate", "review_targets")],
+    );
+    expect(await originOf(payload)).toBe("agent_generated");
+  });
+
+  it("writes with the intermediate origin when a collector between the write and the gate gathers the targets", async () => {
+    const payload = flow(
+      ["persist_draft", "gather", "review_gate"],
+      { persist_draft: writeNode("persist_draft"), gather: collector("gather"), review_gate: gate("review_targets") },
+      [
+        data("persist_draft", "artifact", "gather", "items"),
+        data("gather", "reviewTargets", "review_gate", "review_targets"),
+      ],
+    );
+    expect(await originOf(payload)).toBe("live_generator");
+  });
+
+  it("writes with the intermediate origin through two collectors", async () => {
+    const payload = flow(
+      ["persist_draft", "gather_one", "gather_two", "review_gate"],
+      {
+        persist_draft: writeNode("persist_draft"),
+        gather_one: collector("gather_one"),
+        gather_two: collector("gather_two"),
+        review_gate: gate("review_targets"),
+      },
+      [
+        data("persist_draft", "artifact", "gather_one", "items"),
+        data("gather_one", "reviewTargets", "gather_two", "items"),
+        data("gather_two", "reviewTargets", "review_gate", "review_targets"),
+      ],
+    );
+    expect(await originOf(payload)).toBe("live_generator");
+  });
+
+  it("keeps the durable origin when the collector feeding the gate does not take the write's output", async () => {
+    const payload = flow(
+      ["persist_draft", "persist_other", "gather", "review_gate"],
+      {
+        persist_draft: writeNode("persist_draft"),
+        persist_other: writeNode("persist_other"),
+        gather: collector("gather"),
+        review_gate: gate("review_targets"),
+      },
+      [
+        data("persist_other", "artifact", "gather", "items"),
+        data("gather", "reviewTargets", "review_gate", "review_targets"),
+      ],
+    );
+    expect(await originOf(payload)).toBe("agent_generated");
+  });
+
+  it("keeps the durable origin for a writer the start node never reaches", async () => {
+    const payload = flow(
+      ["review_gate"],
+      { persist_draft: writeNode("persist_draft"), review_gate: gate("review_targets") },
+      [data("persist_draft", "artifact", "review_gate", "review_targets")],
+    );
+    // The writer runs into the gate, but nothing runs into the writer.
+    (payload.control_flow_connections as unknown[]).push(control("persist_draft", "review_gate"));
+    expect(await originOf(payload)).toBe("agent_generated");
+  });
+
+  it("keeps the durable origin for a node id that also stands in a place no gate reviews", async () => {
+    const payload = flow(
+      ["persist_draft", "review_gate", "other_flow"],
+      {
+        persist_draft: writeNode("persist_draft"),
+        review_gate: gate("review_targets"),
+        other_flow: {
+          component_type: "FlowNode",
+          id: "other_flow",
+          name: "other_flow",
+          subflow: ref("other_subflow"),
+        },
+        other_subflow: {
+          component_type: "Flow",
+          id: "other_subflow",
+          name: "other_subflow",
+          nodes: [ref("persist_draft")],
+        },
+      },
+      [data("persist_draft", "artifact", "review_gate", "review_targets")],
+    );
+    expect(await originOf(payload)).toBe("agent_generated");
+  });
+
+  it("answers the append road (no writing node named) as unreviewed", async () => {
+    getAgentPackageMock.mockResolvedValue(withPayload(reviewedFlow()));
+    const authorized = await authorizeToolMaterializeWrite({
+      orgId: "org-a",
+      templateId: "tpl-1",
+      packageVersion: "1.2.3",
+      extension: EXT,
+      mime: "text/markdown",
+      content: "# Hello",
+    });
+    expect(authorized).toMatchObject({ ok: true, reviewed: false });
+  });
+});
+
+describe("cinatra#3035 pre-review 2 — the gate reviews only the write it in fact reviews", () => {
+  // Finding 1: draft_writer -> marked gate -> picture_writer. The picture step
+  // claims node_id "draft_writer" while its signed step is picture_writer.
+  function draftGatePicture(): Doc {
+    return flow(
+      ["draft_writer", "review_gate", "picture_writer"],
+      {
+        draft_writer: writeNode("draft_writer"),
+        review_gate: gate("review_targets"),
+        picture_writer: writeNode("picture_writer"),
+      },
+      [data("draft_writer", "artifact", "review_gate", "review_targets")],
+    );
+  }
+
+  it("keeps the durable origin when the request names a reviewed node but the signed step is another", async () => {
+    expect(await originOf(draftGatePicture(), "draft_writer", "picture_writer")).toBe(
+      "agent_generated",
+    );
+  });
+
+  it("keeps the durable origin when no signed step verified", async () => {
+    expect(await originOf(draftGatePicture(), "draft_writer", null)).toBe("agent_generated");
+  });
+
+  it("writes with the intermediate origin when the signed step is the reviewed node", async () => {
+    expect(await originOf(draftGatePicture(), "draft_writer")).toBe("live_generator");
+  });
+
+  // Finding 2: writer A's artifact id feeds writer B's parentArtifactId; B's
+  // reference feeds the gate. The gate pins only B.
+  function writerFeedsWriter(): Doc {
+    return flow(
+      ["write_a", "write_b", "review_gate"],
+      {
+        write_a: writeNode("write_a"),
+        write_b: { ...writeNode("write_b"), inputs: [port("parentArtifactId")] },
+        review_gate: gate("review_targets"),
+      },
+      [
+        data("write_a", "artifact", "write_b", "parentArtifactId"),
+        data("write_b", "artifact", "review_gate", "review_targets"),
+      ],
+    );
+  }
+
+  it("keeps the durable origin for a writer whose artifact only feeds another writer's input", async () => {
+    expect(await originOf(writerFeedsWriter(), "write_a")).toBe("agent_generated");
+  });
+
+  it("still writes with the intermediate origin for the writer whose artifact the gate takes", async () => {
+    expect(await originOf(writerFeedsWriter(), "write_b")).toBe("live_generator");
+  });
+
+  it("keeps the durable origin through a collector that never executes", async () => {
+    const payload = flow(
+      ["persist_draft", "review_gate"],
+      { persist_draft: writeNode("persist_draft"), gather: collector("gather"), review_gate: gate("review_targets") },
+      [
+        data("persist_draft", "artifact", "gather", "items"),
+        data("gather", "reviewTargets", "review_gate", "review_targets"),
+      ],
+    );
+    expect(await originOf(payload)).toBe("agent_generated");
+  });
+
+  // Finding 4: writer -> BranchingNode; branch "default" reaches the marked
+  // gate, branch "autonomous" reaches End directly.
+  function branching(bothBranchesReview: boolean): Doc {
+    const payload = flow(
+      ["persist_draft", "route"],
+      {
+        persist_draft: writeNode("persist_draft"),
+        route: { component_type: "BranchingNode", id: "route", name: "route", inputs: [port("mode")] },
+        review_gate: gate("review_targets"),
+      },
+      [data("persist_draft", "artifact", "review_gate", "review_targets")],
+    );
+    // Replace route -> end with the two branches.
+    payload.control_flow_connections = [
+      control("start", "persist_draft"),
+      control("persist_draft", "route"),
+      { ...control("route", "review_gate"), from_branch: "default" },
+      { ...control("route", bothBranchesReview ? "review_gate" : "end"), from_branch: "autonomous" },
+      control("review_gate", "end"),
+    ];
+    return payload;
+  }
+
+  it("keeps the durable origin when one branch after the write skips the gate", async () => {
+    expect(await originOf(branching(false))).toBe("agent_generated");
+  });
+
+  it("writes with the intermediate origin when every branch after the write passes the gate", async () => {
+    expect(await originOf(branching(true))).toBe("live_generator");
+  });
+});
+
+describe("cinatra#3035 — the image road's write facts come from one reading", () => {
+  it("takes the produces refs and the review answer from the same registry result while the tag moves", async () => {
+    // An unpinned run: the tag first resolves to a version whose flow marks no
+    // gate, then moves to one that does. Each reading is one registry read, and
+    // both answers of a reading come from that one result.
+    getAgentPackageMock
+      .mockResolvedValueOnce(withPayload(flow(["persist_draft"], { persist_draft: writeNode("persist_draft") }, [])))
+      .mockResolvedValueOnce(withPayload(reviewedFlow()));
+    const before = await loadRunImageWriteFacts({
+      templateId: "tpl-1",
+      packageVersion: null,
+      nodeId: "persist_draft",
+    });
+    expect(getAgentPackageMock).toHaveBeenCalledTimes(1);
+    expect(before).toEqual({ producesRefs: [{ extension: EXT }], reviewed: false });
+
+    const after = await loadRunImageWriteFacts({
+      templateId: "tpl-1",
+      packageVersion: null,
+      nodeId: "persist_draft",
+    });
+    expect(getAgentPackageMock).toHaveBeenCalledTimes(2);
+    expect(after).toEqual({ producesRefs: [{ extension: EXT }], reviewed: true });
+  });
+
+  it("reads nothing reviewed for a template with no package", async () => {
+    poolQueryMock.mockResolvedValue({ rows: [{ package_name: null }] });
+    const facts = await loadRunImageWriteFacts({
+      templateId: "tpl-1",
+      packageVersion: "1.2.3",
+      nodeId: "persist_draft",
+    });
+    expect(facts).toEqual({ producesRefs: [], reviewed: false });
+    expect(getAgentPackageMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("cinatra#3035 — the shipped blog pipeline's wiring (writes -> collector -> marked gate)", () => {
+  // The shape of the blog pipeline's own flow: the draft and its picture are
+  // written, a collector gathers their references into the draft gate's review
+  // targets; the LinkedIn post is written after that gate and its own collector
+  // feeds the LinkedIn gate.
+  function pipelineFlow(): Doc {
+    const linkedinGate = {
+      ...gate("reviewTargets", [port("linkedinPost"), port("linkedinTitle"), port("reviewTargets")]),
+      id: "linkedin_review_gate",
+      name: "linkedin_review_gate",
+    };
+    return flow(
+      [
+        "write_draft",
+        "file_image",
+        "complete_relation",
+        "draft_review_gate",
+        "write_linkedin",
+        "gather_linkedin_review",
+        "linkedin_review_gate",
+      ],
+      {
+        write_draft: writeNode("write_draft"),
+        file_image: { ...writeNode("file_image"), inputs: [port("postArtifactId")] },
+        complete_relation: {
+          ...collector("complete_relation"),
+          inputs: [port("draftArtifactId"), port("draftRevisionId"), port("imageArtifactId"), port("imageRevisionId")],
+        },
+        draft_review_gate: {
+          ...gate("reviewTargets", [port("reviewTargets")]),
+          id: "draft_review_gate",
+          name: "draft_review_gate",
+        },
+        write_linkedin: writeNode("write_linkedin"),
+        gather_linkedin_review: {
+          ...collector("gather_linkedin_review"),
+          inputs: [port("linkedinArtifactId"), port("linkedinRevisionId")],
+        },
+        linkedin_review_gate: linkedinGate,
+      },
+      [
+        data("write_draft", "artifactId", "file_image", "postArtifactId"),
+        data("write_draft", "artifactId", "complete_relation", "draftArtifactId"),
+        data("write_draft", "representationRevisionId", "complete_relation", "draftRevisionId"),
+        data("file_image", "artifactId", "complete_relation", "imageArtifactId"),
+        data("file_image", "representationRevisionId", "complete_relation", "imageRevisionId"),
+        data("complete_relation", "reviewTargets", "draft_review_gate", "reviewTargets"),
+        data("write_linkedin", "artifactId", "gather_linkedin_review", "linkedinArtifactId"),
+        data("write_linkedin", "representationRevisionId", "gather_linkedin_review", "linkedinRevisionId"),
+        data("gather_linkedin_review", "reviewTargets", "linkedin_review_gate", "reviewTargets"),
+      ],
+    );
+  }
+
+  it("writes the draft with the intermediate origin", async () => {
+    expect(await originOf(pipelineFlow(), "write_draft")).toBe("live_generator");
+  });
+
+  it("writes the LinkedIn post with the intermediate origin", async () => {
+    expect(await originOf(pipelineFlow(), "write_linkedin")).toBe("live_generator");
+  });
+
+  it("reads the picture's write as reviewed on the image road", async () => {
+    getAgentPackageMock.mockResolvedValue(withPayload(pipelineFlow()));
+    const facts = await loadRunImageWriteFacts({
+      templateId: "tpl-1",
+      packageVersion: "1.2.3",
+      nodeId: "file_image",
+    });
+    expect(facts).toEqual({ producesRefs: [{ extension: EXT }], reviewed: true });
   });
 });

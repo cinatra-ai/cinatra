@@ -36,7 +36,7 @@ import { resolveInstallEnvironment } from "@cinatra-ai/extensions/destination-re
 // cinatra#3204 criterion 16: the PLANNED canonical row anchor the dispatcher
 // threads, translated into this kind's own owner fields by the one shared rule
 // that lives beside the canonical anchor resolver itself.
-import { resolveNativeInstallOwnership } from "@cinatra-ai/extensions/canonical-types";
+import { resolveNativeInstallOwnership, resolveInstallRowAnchor } from "@cinatra-ai/extensions/canonical-types";
 import type { InstallRowOwnership } from "@cinatra-ai/extensions/canonical-types";
 
 // ---------------------------------------------------------------------------
@@ -216,9 +216,8 @@ async function installAndRegisterSkills(ref: PackageRef, actor: Actor, status?: 
   // installer consumes those bytes and needs no registry at all. A supplied
   // package that declares dependencies is out of scope for this road by
   // construction — its closure is whatever it shipped with.
-  const suppliedBytes = isSuppliedPackageProvenance(
-    (ref as { provenance?: unknown }).provenance,
-  );
+  const suppliedProvenance = isSuppliedPackageProvenance(ref.provenance) ? ref.provenance : null;
+  const suppliedBytes = suppliedProvenance !== null;
 
   // Auth gate runs in the caller (extensions_install MCP handler or installRegistryPackage).
   // resolveInstallEnvironment reads extension origin to determine registry + topology.
@@ -275,6 +274,10 @@ async function installAndRegisterSkills(ref: PackageRef, actor: Actor, status?: 
             ...(nativeOwnership.ownerLevel ? { ownerLevel: nativeOwnership.ownerLevel } : {}),
             ...(nativeOwnership.ownerId ? { ownerId: nativeOwnership.ownerId } : {}),
             requireStorePayload: true,
+            ...(suppliedProvenance ? { suppliedClaimContext: {
+              rootAnchor: resolveInstallRowAnchor(actor.orgId ?? null, rowOwnership ?? null),
+              provenance: suppliedProvenance,
+            } } : {}),
           },
           config,
         );

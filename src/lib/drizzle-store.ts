@@ -18,7 +18,7 @@ import { triggerSchemaQueries } from "@/lib/trigger-schema"; // cinatra#2569 —
 import { triggerScheduleProposalSchemaQueries } from "@/lib/trigger-schedule-proposal-schema"; // cinatra#2569 — the two NET-NEW proposal tables, born in their leaf
 import { assistantRegistrySchemaQueries, assistantPauseSchemaQueries } from "@/lib/assistant-registry-schema";
 import { orgWriteSchemaQueries } from "@/lib/org-write-schema";
-import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema"; import { connectorInstanceToolPolicySchemaQueries } from "@/lib/connector-instance-tool-policy-schema"; import { connectorInstanceServerSchemaQueries } from "@/lib/connector-instance-server-schema"; import { connectorInstancePendingCallSchemaQueries } from "@/lib/connector-instance-pending-call-schema"; import { connectorInstanceConfirmationPolicySchemaQueries } from "@/lib/connector-instance-confirmation-policy-schema"; import { connectorInstanceNativeInjectionSchemaQueries } from "@/lib/connector-instance-native-injection-schema"; import { reviewIslandGrantSchemaQueries } from "@/lib/review-island-grant-schema"; import { lentActionGrantSchemaQueries } from "@/lib/lent-action-grant-schema"; import { agentRunCreatedAtSchemaQueries } from "@/lib/agent-run-created-at-schema"; import { agentRunLifecycleMomentSchemaQueries } from "@/lib/agent-run-lifecycle-moment-schema"; import { memoryPromotionRequestSchemaQueries } from "@/lib/objects/memory-promotion-request-schema"; import { agentRunAssignmentScopeSchemaQueries } from "@/lib/assignment-scope"; import { agentAssignedContextSchemaQueries } from "@/lib/agent-assigned-context-schema"; import { agentTemplateRunGateSchemaQueries } from "@/lib/extension-grant-schema"; // cinatra#2754 — the island credential's NET-NEW single-use ledger, born in its leaf; the import RIDES this line because the file-size ratchet's ceiling may only shrink
+import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema"; import { connectorInstanceToolPolicySchemaQueries } from "@/lib/connector-instance-tool-policy-schema"; import { connectorInstanceServerSchemaQueries } from "@/lib/connector-instance-server-schema"; import { connectorInstancePendingCallSchemaQueries } from "@/lib/connector-instance-pending-call-schema"; import { connectorInstanceConfirmationPolicySchemaQueries } from "@/lib/connector-instance-confirmation-policy-schema"; import { connectorInstanceNativeInjectionSchemaQueries } from "@/lib/connector-instance-native-injection-schema"; import { reviewIslandGrantSchemaQueries } from "@/lib/review-island-grant-schema"; import { lentActionGrantSchemaQueries } from "@/lib/lent-action-grant-schema"; import { agentRunCreatedAtSchemaQueries, agentRunStartedBySchemaQueries, agentRunPauseClaimSchemaQueries, agentRunConnectorInstanceBindingSchemaQueries } from "@/lib/agent-run-created-at-schema"; import { agentRunLifecycleMomentSchemaQueries } from "@/lib/agent-run-lifecycle-moment-schema"; import { memoryPromotionRequestSchemaQueries } from "@/lib/objects/memory-promotion-request-schema"; import { agentRunAssignmentScopeSchemaQueries } from "@/lib/assignment-scope"; import { agentAssignedContextSchemaQueries } from "@/lib/agent-assigned-context-schema"; import { agentTemplateRunGateSchemaQueries } from "@/lib/extension-grant-schema"; // cinatra#2754 — the island credential's NET-NEW single-use ledger, born in its leaf; the import RIDES this line because the file-size ratchet's ceiling may only shrink
 import { skillLifecycleSchemaQueries, skillEfficacySchemaQueries, skillBundleSchemaQueries, skillUploadConsentSchemaQueries, agentAssignedSkillsSchemaQueries, skillMatchRunContextDdl } from "@/lib/skill-lifecycle-schema";
 import { chatCaptureSchemaQueries } from "@/lib/chat-capture-schema";
 import {
@@ -27,7 +27,7 @@ import {
   objectContentSnapshotSchemaQueries,
   runContextSelectionsSchemaQueries,
 } from "@/lib/artifact-claim-schema";
-import { publicationOperationLedgerSchemaQueries } from "@/lib/artifacts/publication-operation-schema";
+import { publicationOperationLedgerSchemaQueries, publishDecisionSchemaQueries, pageCaptureLeasesSchemaQueries } from "@/lib/artifacts/publication-operation-schema";
 import { environmentLayerStoreSchemaQueries, agentExecutionConfigSchemaQueries } from "@/lib/execution/environment-layer-schema";
 import { auditEventsSchemaQueries } from "@/lib/authz/audit-events-schema";
 import { auditorSnapshotSchemaQueries } from "@/lib/auditor-snapshot-schema";
@@ -1040,9 +1040,7 @@ END $$` },
       ('seed-openai-gpt4o', 'openai', 'gpt-4o', 2.50000000, 10.00000000, 1.25000000, 'litellm', now()),
       ('seed-openai-gpt4o-mini', 'openai', 'gpt-4o-mini', 0.15000000, 0.60000000, 0.07500000, 'litellm', now()),
       ('seed-anthropic-sonnet', 'anthropic', 'claude-sonnet-4-5-20250929', 3.00000000, 15.00000000, 0.30000000, 'litellm', now()),
-      ('seed-anthropic-opus', 'anthropic', 'claude-opus-4', 15.00000000, 75.00000000, 1.50000000, 'litellm', now()),
-      ('seed-gemini-flash', 'gemini', 'gemini-2.5-flash', 0.07500000, 0.30000000, NULL, 'litellm', now()),
-      ('seed-gemini-pro', 'gemini', 'gemini-2.5-pro', 1.25000000, 10.00000000, NULL, 'litellm', now())
+      ('seed-anthropic-opus', 'anthropic', 'claude-opus-4', 15.00000000, 75.00000000, 1.50000000, 'litellm', now())
     ON CONFLICT DO NOTHING` },
     // legacy_costs table for @cinatra-ai/metric-cost-api
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."legacy_costs" (
@@ -1338,6 +1336,7 @@ END $$`,
       agent_id text NOT NULL,
       step_key text NOT NULL,
       message text NOT NULL,
+      dispatch_receipt jsonb,
       captured_at timestamptz NOT NULL DEFAULT now(),
       excluded boolean NOT NULL DEFAULT false
     )` },
@@ -1345,6 +1344,8 @@ END $$`,
     // submitted_values jsonb: structured renderer payload for HITL submission trail
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_run_hitl_prompts" ADD COLUMN IF NOT EXISTS submitted_values jsonb` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_run_hitl_prompts" ADD COLUMN IF NOT EXISTS schema_snapshot jsonb` },
+    // Nullable server receipt: legacy captures remain unconfirmed, with no backfill.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_run_hitl_prompts" ADD COLUMN IF NOT EXISTS dispatch_receipt jsonb` },
     // agent_run_test_sends: per-action idempotency + crash ledger for the run-scoped
     // test-delivery send primitive (#1625, DESIGN-V3 contract (4)). TWIN of
     // migrations/core/core__0067 — the two DDLs MUST stay identical.
@@ -2026,6 +2027,8 @@ $body$` },
     // the pure-strings leaf src/lib/artifacts/publication-operation-schema.ts;
     // existing deployments also converge via migration core__0055.
     ...publicationOperationLedgerSchemaQueries(schemaName),
+    // ---- agent_run_publish_decisions (cinatra#4150): same leaf; also migration core__0119 ----
+    ...publishDecisionSchemaQueries(schemaName),
     // ---- environment_layers + environment_layer_references (cinatra#1708 S3 A2) ----
     // Durable L1 environment-layer store: content-addressed cache entries +
     // org-scoped recipe→layer references. Backs the exec-plane
@@ -2256,7 +2259,7 @@ $body$` },
     // agent_runs.org_id: org-scoping for run lists. Nullable; existing rows stay
     // NULL (platform-admin cross-org reads only, via skipOrgFilter). No backfill.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS org_id text` },
-    { text: `CREATE INDEX IF NOT EXISTS agent_runs_org_id_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (org_id)` },
+    { text: `CREATE INDEX IF NOT EXISTS agent_runs_org_id_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (org_id)` }, ...agentRunStartedBySchemaQueries(schemaName), ...agentRunPauseClaimSchemaQueries(schemaName), ...agentRunConnectorInstanceBindingSchemaQueries(schemaName),
     // agent_runs.project_id inheritance
     // carrier). Nullable refinement, never an ownership tier. agent_runs has
     // created_at (added earlier in this array) + status. Partial indexes:
@@ -3925,7 +3928,7 @@ END $$` },
       created_at timestamptz NOT NULL DEFAULT now()
     )` },
     { text: `CREATE INDEX IF NOT EXISTS widget_stream_tokens_expires_at_idx ON "${schemaName.replaceAll('"', '""')}"."widget_stream_tokens" (expires_at)` },
-    ...extensionUpdateReadModelSchemaQueries(schemaName), ...skillEfficacySchemaQueries(schemaName), ...connectorInstanceToolPolicySchemaQueries(schemaName), ...connectorInstanceServerSchemaQueries(schemaName), ...connectorInstancePendingCallSchemaQueries(schemaName), ...connectorInstanceConfirmationPolicySchemaQueries(schemaName), ...connectorInstanceNativeInjectionSchemaQueries(schemaName), // DDL in pure-strings leaves for file-size-ratchet headroom (#1041 outcome-3 / #1317 / #1405 pattern): extension update read-model + cinatra#1368 skill-efficacy exposure telemetry + cinatra#2017 S2 connector_instance_tool_policy + cinatra#2018 S3 connector_instance_server & site_inventory + cinatra#2020 S5 connector_instance_pending_call & confirmation_policy + cinatra#2019 S4 connector_instance_native_injection_policy opt-in (additive bootstrap DDL, no numbered migration; all run late)
+    ...extensionUpdateReadModelSchemaQueries(schemaName), ...skillEfficacySchemaQueries(schemaName), ...connectorInstanceToolPolicySchemaQueries(schemaName), ...connectorInstanceServerSchemaQueries(schemaName), ...connectorInstancePendingCallSchemaQueries(schemaName), ...pageCaptureLeasesSchemaQueries(schemaName), ...connectorInstanceConfirmationPolicySchemaQueries(schemaName), ...connectorInstanceNativeInjectionSchemaQueries(schemaName), // DDL in pure-strings leaves for file-size-ratchet headroom (#1041 outcome-3 / #1317 / #1405 pattern): extension update read-model + cinatra#1368 skill-efficacy exposure telemetry + cinatra#2017 S2 connector_instance_tool_policy + cinatra#2018 S3 connector_instance_server & site_inventory + cinatra#2020 S5 connector_instance_pending_call & confirmation_policy + cinatra#4223 page_capture_leases + cinatra#2019 S4 connector_instance_native_injection_policy opt-in (additive bootstrap DDL, no numbered migration; all run late)
     // -----------------------------------------------------------------------
     // cinatra#407 — hosted /widget-auth PKCE login + user-scoped widget token.
     //

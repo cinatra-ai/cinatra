@@ -52,6 +52,7 @@ import {
 } from "../run-surface-rail-step";
 import { electRunRailActiveStep } from "../run-step-rail-extra-entry";
 import {
+  orderRunRailSteps,
   railDrawsUpcomingRunSteps,
   railStepsWithoutAnUnreachedSkillsEntry,
   runDetailInitialStep,
@@ -171,7 +172,7 @@ function runRouteReading(): { steps: RunSurfaceRailStep[]; initial: RunStepSelec
   const railSteps: RunSurfaceRailStep[] = [...answered];
   if (parked) railSteps.push(parkedScheduleRailStep(railSteps));
   return {
-    steps: withUpcomingRows(railSteps),
+    steps: orderRunRailSteps(withUpcomingRows(railSteps)),
     initial: runDetailInitialStep({
       openInputStepKey: null,
       hasRecommendationStep: false,
@@ -191,13 +192,13 @@ function triggerRouteReading(): { steps: RunSurfaceRailStep[]; initial: RunStepS
   ];
   const answered = buildRunInputRailSteps([answeredInputStep()], null);
   return {
-    steps: [
+    steps: orderRunRailSteps([
       ...answered,
       ...buildSetupRailSteps(
         railStepsWithoutAnUnreachedSkillsEntry(setupSteps),
         answered.length,
       ),
-    ],
+    ]),
     initial: "schedule",
   };
 }
@@ -258,10 +259,12 @@ describe("the still-to-come rows sit BELOW the elected one (section II, item 3)"
       expect(rows.map((row) => row.key)).not.toContain("recommendation");
       // What stands above is the work the run passed; what stands below has not
       // been reached.
-      expect(rows[0]!.key).toBe("input:0");
-      expect(rows[0]!.settled).toBe(true);
+      // The parked Schedule heads the rows, §I: "Where the run carries a schedule, the rail's first entry is Schedule, above the run's work steps and above Review" (cinatra#3663).
+      expect(rows[0]!.key).toBe("schedule");
+      expect(rows[0]!.selected).toBe(true);
+      expect(rows.find((row) => row.key === "input:0")?.settled).toBe(true);
       for (const row of rows.slice(electedAt + 1)) {
-        expect(row.reached).toBe("false");
+        expect(row.settled || row.reached === "false").toBe(true);
         expect(row.selected).toBe(false);
       }
     });

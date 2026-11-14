@@ -28,7 +28,7 @@ export type GeneratedFieldRendererBinding = {
 
 export const GENERATED_FIELD_RENDERER_BINDINGS: ReadonlyArray<GeneratedFieldRendererBinding> = [
   { id: "@cinatra-ai/blog-linkedin-publish-agent:draft-review", kind: "linkedin-draft-review", priority: 90, midRunHitl: true, declaredBy: "@cinatra-ai/blog-linkedin-publish-agent" },
-  { id: "@cinatra-ai/blog-pipeline-agent:idea-selection", kind: "blog-idea-selection", priority: 80, midRunHitl: true, declaredBy: "@cinatra-ai/blog-pipeline-agent" },
+  { id: "@cinatra-ai/blog-pipeline-agent:idea-selection", kind: "blog-idea-selection", priority: 80, midRunHitl: true, params: {"question":"Which stored blog idea should this run draft?","emptyStateMessage":"There is no blog idea left to draft: every stored idea already has a draft or is reserved by another run. This list was read when the run reached this step, and it does not change while the run waits here. Generate new ideas; the next run of this pipeline offers them."}, declaredBy: "@cinatra-ai/blog-pipeline-agent" },
   { id: "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm", kind: "wordpress-draft-confirm", priority: 90, midRunHitl: true, declaredBy: "@cinatra-ai/blog-wordpress-publish-agent" },
   { id: "@cinatra-ai/context-selection-agent:context-selector", kind: "context-selector", priority: 90, midRunHitl: true, declaredBy: "@cinatra-ai/context-selection-agent" },
   { id: "@cinatra-ai/email-delivery-agent:output", kind: "send-confirmation", priority: 80, a2uiTranslator: "send-output", declaredBy: "@cinatra-ai/email-artifacts" },
@@ -39,7 +39,9 @@ export const GENERATED_FIELD_RENDERER_BINDINGS: ReadonlyArray<GeneratedFieldRend
   { id: "@cinatra-ai/email-follow-up-agent:email-drafts-review", kind: "email-drafts-review", priority: 80, midRunHitl: true, declaredBy: "@cinatra-ai/email-artifacts" },
   { id: "@cinatra-ai/email-follow-up-agent:follow-up-cadence", kind: "follow-up-cadence", priority: 90, declaredBy: "@cinatra-ai/email-artifacts" },
   { id: "@cinatra-ai/email-follow-up-agent:output", kind: "email-drafts-review", priority: 80, a2uiTranslator: "followups-output", declaredBy: "@cinatra-ai/email-follow-up-agent" },
+  { id: "@cinatra-ai/email-outreach-agent:campaign-recipients-review", kind: "campaign-recipients-review", priority: 70, midRunHitl: true, declaredBy: "@cinatra-ai/email-outreach-agent" },
   { id: "@cinatra-ai/email-outreach-agent:cta", kind: "cta", priority: 90, declaredBy: "@cinatra-ai/email-outreach-agent" },
+  { id: "@cinatra-ai/email-outreach-agent:email-drafts-review", kind: "email-drafts-review", priority: 70, midRunHitl: true, declaredBy: "@cinatra-ai/email-outreach-agent" },
   { id: "@cinatra-ai/email-outreach-agent:gmail-sender", kind: "gmail-sender", priority: 100, declaredBy: "@cinatra-ai/email-artifacts" },
   { id: "@cinatra-ai/email-outreach-agent:list-picker", kind: "list-picker", priority: 90, params: {"selection":"multiple","minSelected":1,"question":"Which views or lists in your CRM should this run take its recipients from?","emptyState":"There are no views or lists to pick from yet. Create one in your CRM, then open this step again."}, declaredBy: "@cinatra-ai/email-outreach-agent" },
   { id: "@cinatra-ai/email-outreach-agent:setup-form", kind: "wayflow-setup-form", priority: 60, declaredBy: "@cinatra-ai/email-outreach-agent" },

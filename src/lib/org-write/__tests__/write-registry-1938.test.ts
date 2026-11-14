@@ -311,6 +311,9 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
       // the unarchive half of the kernel lease bookkeeping it consumes
       // (registered with its first production caller)
       "archiveOrganization", "unarchiveOrganization", "invalidateLeasesBeforeEpochQuery",
+      // the pause claim writers of run-pause-claim.ts (cinatra#4245 A2 — banned
+      // from day one to the resume roads that take the claim)
+      "claimPause", "fencePauseInPlace", "releasePauseClaim", "settlePauseSend",
     ]) {
       expect(banned.has(w), `${w} must be import-banned`).toBe(true);
     }
@@ -327,8 +330,12 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
     // writer cannot gain a caller); cinatra#1942 V5 added 3 (the real
     // archive/unarchive transaction pair, banned from day one, plus the
     // kernel's invalidateLeasesBeforeEpochQuery registered with its first
-    // production caller). 20 + 8 + 2 + 3 + 3 + 3 = 39.
-    expect(banned.size).toBe(39);
+    // production caller); cinatra#4217 added 1 (renewUserWidgetToken, the
+    // frame's token renewal, banned from day one to its one route);
+    // cinatra#4245 A2 added 4 (the pause claim writers claimPause,
+    // fencePauseInPlace, releasePauseClaim and settlePauseSend, enumerated
+    // above). 20 + 8 + 2 + 3 + 3 + 3 + 1 + 4 = 44.
+    expect(banned.size).toBe(44);
   });
 });
 

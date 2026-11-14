@@ -153,6 +153,18 @@
   --text-reading: 12.5px;
   --text-fact-line: 10px;
   --text-fact-line--letter-spacing: 0.04em;
+  /* Two more ROLES, named at the ratified drawing's own sizes (cinatra#4123):
+     specs/app-connectors.html §II draws a confirmation dialog's title at 15px
+     and its text at 13px.
+       --text-confirm-title  the title of a confirmation (an AlertDialog): one
+                             step over the 14px body baseline. No line-height
+                             pairing: the title sets its own.
+       --text-confirm-body   the sentence a confirmation asks with, one step
+                             under the 14px body baseline. No line-height
+                             pairing: the drawing's 1.55 rides on the text.
+     Named by the ROLE, not by the connector page that first needed them. */
+  --text-confirm-title: 15px;
+  --text-confirm-body: 13px;
   --tracking-title-tight: var(--title-tracking-tight);
   --tracking-kicker: var(--kicker-tracking);
   --tracking-kicker-wide: var(--kicker-tracking-wide);

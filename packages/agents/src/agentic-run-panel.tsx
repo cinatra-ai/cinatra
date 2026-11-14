@@ -44,11 +44,17 @@ import { ArrowRight } from "lucide-react";
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
 import {
   LifecycleCardSurfaceProvider,
+  answeredHitlQuestionKey,
   runCardOwnsLifecycleCopy,
   defaultRunReviewSlotReader,
+  lifecycleRequestCredential,
+  parseRunReviewSlot,
   useComposerFocusStore,
   useComposerTarget,
+  useAnsweredHitlQuestionKey,
   useLifecycleCardHost,
+  useLifecycleCardAuth,
+  useLifecycleCardDeclarationRefused,
   useRunReviewSlot,
   useRunReviewRailRefresh,
   type RunReviewSlot,
@@ -75,6 +81,7 @@ import {
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
   isSetupGateTaskId,
+  midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
   wrapPrimitiveSetupPayload,
@@ -90,6 +97,15 @@ import {
   type HitlGateContext as HitlContext,
   type RunWaitInterruptDescriptor,
 } from "./run-surface-status";
+import {
+  armAnsweredGate,
+  clearAnsweredPair,
+  createAnsweredGateLedger,
+  isReviewTaskClaimed,
+  releaseAnsweredGate,
+  resetAnsweredGates,
+  type AnsweredGateLedger,
+} from "./answered-gate-ledger";
 // Pending-approval recovery book-keeping — pure classification
 // of each derived-context hydration attempt, plus the BOUNDED predicates that
 // gate the recovery state and its telemetry.
@@ -248,11 +264,13 @@ export type AgenticRunPanelProps = {
    * (cinatra#2790, epic #2784 S9f).
    *
    * The plan: "The agentic run progress card appears once the skills are
-   * decided; no skill inside it can be selected." So a run that came through the
-   * recommendation card draws NO skill picker inside this panel — the settled
-   * chips above it already say what was chosen, and a second, pressable list of
-   * every assigned skill reads as a live choice that disagrees with the one that
-   * was taken.
+   * decided; no skill inside it can be selected." (In a conversation turn the
+   * bound design's §V supersedes the first half: the turn stands this panel down
+   * beneath the settled row, cinatra#3062. The no-picker rule below stands.) So
+   * a run that came through the recommendation card draws NO skill picker inside
+   * this panel — the settled row already says what was chosen, and a second,
+   * pressable list of every assigned skill reads as a live choice that disagrees
+   * with the one that was taken.
    *
    * IT IS A PROP ON EVERY HOST, and it is the panel's ONLY reading of the
    * question (cinatra#3047). This panel used to mount the recommendation card
@@ -521,6 +539,8 @@ export function AgenticRunPanel({
   // this panel is being drawn INSIDE a conversation transcript that mounts the
   // HITL screen card itself — see that mount below for what it decides.
   const ambientLifecycleHost = useLifecycleCardHost();
+  const ambientLifecycleAuth = useLifecycleCardAuth();
+  const ambientDeclarationRefused = useLifecycleCardDeclarationRefused();
   // Poll-derived state — always maintained; source of truth for messages + HITL context.
   // When streamEnabled=true, pollStatus/pollError are NOT updated by the poll tick
   // (SSE owns status/error); they retain their initial values and serve as the
@@ -680,7 +700,13 @@ export function AgenticRunPanel({
   // fields; retiring it — and the second model with it — belongs to #2934,
   // which ships the fill mechanism that replaces it. Removing it here would
   // take the fill away before its replacement exists.
-  const runWindow = useRunWindowConversation({ runId, surface: "run-page" });
+  //
+  // THE RUN WINDOW IS COOKIE-BOUND (#3051): its history and its turns are server
+  // actions that answer for the first-party session. A broker host (the site
+  // widget) and a refused declaration therefore name no run to it, here or to
+  // the review card below, so no run-window read or turn leaves such a host.
+  const runWindowRunId = ambientLifecycleAuth === null && !ambientDeclarationRefused ? runId : null;
+  const runWindow = useRunWindowConversation({ runId: runWindowRunId, surface: "run-page" });
   const convIdRef = useRef(0);
   // Parent-side apply handler — merges suggestions into the buffer.
   // prev is spread first so unmentioned keys are preserved;
@@ -692,7 +718,20 @@ export function AgenticRunPanel({
   // After clicking Approve/Reject, suppress re-showing the same HITL screen while the
   // server processes the resume. Prevents "Loading recipients" loop caused by the poll
   // returning pending_approval with the old context before the server advances the graph.
-  const justSubmittedXRendererRef = useRef<string | null>(null);
+  // The suppression reads one answered-gate ledger (cinatra#3080,
+  // answered-gate-ledger.ts), kept in this ref, not in React state. Its
+  // `pair` is the gate of the last armed submit (renderer and review task,
+  // written in one assignment) with the tokens of the submits of that gate.
+  // Its `claims` are the questions (review task, renderer and field) answered
+  // on this mount whose review task names one gate, each with the tokens of
+  // the submits that answered it. Polls are not ordered, so a late one can
+  // still carry a gate answered earlier; a claimed question is not drawn while
+  // the claim stands, and another question under its review task is
+  // (cinatra#3739).
+  // A blocked or thrown submit releases only what its own token added, and
+  // Re-check releases everything. The shared `setup-<runId>` id is never
+  // claimed.
+  const answeredGateLedgerRef = useRef<AnsweredGateLedger>(createAnsweredGateLedger());
   // AND THE GATE THE PERSON ANSWERED, BY ITS OWN REVIEW TASK (cinatra#3739).
   // Armed and released exactly where the suppression above is, but keyed on
   // the review task rather than the renderer, because a later setup field may
@@ -715,11 +754,27 @@ export function AgenticRunPanel({
   // question, on the stream or the row, counts exactly as before. Armed beside
   // the key above; released with it, since nothing matches a released key.
   const [answeredQuestionShape, setAnsweredQuestionShape] = useState<string | null>(null);
+  // AND THE SIBLING CARD'S CONTINUE COUNTS TOO (cinatra#4375). Inside a
+  // conversation the question and its Continue are the conversation's own card
+  // (`runCardOwnsLifecycleCopy`), so this panel's own submit never runs there
+  // and the key above was never armed: on the widget the panel drew its
+  // "pending approval" plate over a run that was working. That card now records
+  // the question in the conversation's register at the press, and each press
+  // takes back only its own attempt unless its submit is accepted, as the key
+  // above is armed and released; it counts here exactly as the key above does: the same review task, renderer
+  // and field, or nothing. Only where the sibling owns the Continue; the run
+  // page keeps its own submit as the one source.
+  const siblingAnsweredKeyOnFile = useAnsweredHitlQuestionKey(runId);
+  const siblingAnsweredKey = runCardOwnsLifecycleCopy(ambientLifecycleHost)
+    ? null
+    : siblingAnsweredKeyOnFile;
+  const anyQuestionAnswered = answeredReviewTaskId !== null || siblingAnsweredKey !== null;
   const isAnsweredQuestion = (question: HitlContext | null): boolean =>
     question !== null &&
-    answeredReviewTaskId !== null &&
-    question.reviewTaskId === answeredReviewTaskId &&
-    `${question.xRenderer}::${question.fieldName ?? ""}` === answeredQuestionShape;
+    ((answeredReviewTaskId !== null &&
+      question.reviewTaskId === answeredReviewTaskId &&
+      `${question.xRenderer}::${question.fieldName ?? ""}` === answeredQuestionShape) ||
+      (siblingAnsweredKey !== null && answeredHitlQuestionKey(question) === siblingAnsweredKey));
 
   // Load connectedApps + gmailAliases once on mount so the HITL field renderer
   // registry can evaluate conditions like `context.connectedApps.includes("gmail")`.
@@ -839,8 +894,9 @@ export function AgenticRunPanel({
       Boolean(
         streamEnabled &&
           streamResult.interruptContext &&
-          (streamResult.interruptContext.reviewTaskId !== answeredReviewTaskId ||
-            !isAnsweredQuestion(streamQuestionOnFile)),
+          // The answered match already requires the review task (cinatra#4375:
+          // the sibling card's question on record is matched here too).
+          !isAnsweredQuestion(streamQuestionOnFile),
       ) ||
       (hitlContext !== null && !isAnsweredQuestion(hitlContext)),
   });
@@ -905,10 +961,10 @@ export function AgenticRunPanel({
   // drift into two answers about the same run.
   //
   // WHICH CREDENTIAL IT ASKS WITH is the caller's to say. The run page is
-  // first-party and same-origin, so it takes the default reader. A surface that
-  // asks with something else — the embedded widget, which holds a broker
-  // credential and must never send an ambient cookie — passes its own, exactly
-  // as it already does for the seed.
+  // first-party and same-origin, so it takes the default reader. The exported
+  // widget panel derives its default reader from its broker declaration. A
+  // caller may supply its own reader under a valid declaration; a refused
+  // declaration must never reach either reader.
   // -------------------------------------------------------------------------
   // Prefer SSE-delivered interruptContext when the stream is enabled;
   // fall back to polling-derived hitlContext otherwise (the poll endpoint
@@ -928,9 +984,30 @@ export function AgenticRunPanel({
       ? mapInterruptToHitlContext(streamResult.interruptContext)
       : hitlContext;
 
-  const fallbackSlotReader = useMemo(
-    () => defaultRunReviewSlotReader(runId),
-    [runId],
+  const reviewSlotReader = useCallback<RunReviewSlotReader>(
+    async (signal) => {
+      if (ambientDeclarationRefused) return null;
+      // A broker declaration with no widget user token now reads nothing,
+      // through a supplied reader or the default one.
+      const broker =
+        ambientLifecycleHost === "site_widget" && ambientLifecycleAuth
+          ? lifecycleRequestCredential(ambientLifecycleAuth)
+          : undefined;
+      if (broker === null) return null;
+      if (readReviewSlot) return readReviewSlot(signal);
+      if (broker) {
+        const response = await fetch(`/api/agents/runs/${encodeURIComponent(runId)}`, {
+          cache: "no-store",
+          headers: broker.headers,
+          credentials: broker.credentials,
+          signal,
+        });
+        if (!response.ok) return null;
+        return parseRunReviewSlot(await response.json());
+      }
+      return defaultRunReviewSlotReader(runId)(signal);
+    },
+    [runId, readReviewSlot, ambientDeclarationRefused, ambientLifecycleHost, ambientLifecycleAuth],
   );
   const {
     slot: reviewSlot,
@@ -941,7 +1018,7 @@ export function AgenticRunPanel({
     runId,
     status,
     initial: initialReviewGate,
-    read: readReviewSlot ?? fallbackSlotReader,
+    read: reviewSlotReader,
     // The panel's own tick, as the reader's liveness evidence (cinatra#3007,
     // fix leg 6). Two mounts of this panel on one run measured 962 s apart on
     // the same park because one of them had spent its five consecutive
@@ -1041,13 +1118,18 @@ export function AgenticRunPanel({
   // Suppress re-showing the same HITL screen after Approve/Reject while the server
   // processes the resume. Prevents "Loading recipients" flash caused by the poll
   // returning pending_approval with the stale context before the graph advances.
-  // Clear suppression when a different xRenderer arrives (next step's HITL).
+  // Clear the pair when a different xRenderer arrives (next step's HITL), or
+  // the same renderer with a review task that names one gate, is not claimed
+  // and differs from the armed one (cinatra#3080: two context gates in a
+  // row). Only the pair is cleared; the claims stay.
+  const answeredGateLedger = answeredGateLedgerRef.current;
   const suppression = applyJustSubmittedSuppression(
     rawEffectiveHitlContext,
-    justSubmittedXRendererRef.current,
+    answeredGateLedger.pair,
+    answeredGateLedger.claims,
   );
   if (suppression.clearSuppression) {
-    justSubmittedXRendererRef.current = null;
+    clearAnsweredPair(answeredGateLedger);
   }
   //
   // AND A PARKED RUN'S OLD INTERRUPT IS NOT A GATE (cinatra#3046). A run parked
@@ -1124,7 +1206,8 @@ export function AgenticRunPanel({
   // path (shared pure builders in ./hitl-gate-submit). The flags preserve each
   // path's historical behavior exactly:
   //   - trackApproving: drive the isApproving spinner state
-  //   - suppressGate: arm justSubmittedXRendererRef (stale-gate re-show guard)
+  //   - suppressGate: arm the answered-gate ledger for this submit (stale-gate
+  //     re-show guard); a blocked or thrown submit releases only its own token
   //   - clearAttachmentsOnSuccess: consume pendingAttachmentsRef ONLY on a
   //     true success (an "already resolved" race or a throw leaves them so
   //     the user can retry without re-attaching)
@@ -1146,8 +1229,25 @@ export function AgenticRunPanel({
       errorMode: "rethrow" | "toast";
     }) => {
       if (args.trackApproving) setIsApproving(true);
+      // This submit's own token: a failure below releases only what it added,
+      // never the pair or the claim of another submit (cinatra#3080).
+      let ownToken: number | null = null;
+      const releaseOwnSuppression = () => {
+        if (ownToken === null) return;
+        const ledger = answeredGateLedgerRef.current;
+        releaseAnsweredGate(ledger, ownToken);
+        ownToken = null;
+        const stillClaimed = isReviewTaskClaimed(ledger, args.reviewTaskId);
+        setAnsweredReviewTaskId((current) =>
+          current === args.reviewTaskId && !stillClaimed ? null : current,
+        );
+      };
       if (args.suppressGate) {
-        justSubmittedXRendererRef.current = args.xRenderer;
+        ownToken = armAnsweredGate(answeredGateLedgerRef.current, {
+          xRenderer: args.xRenderer,
+          reviewTaskId: args.reviewTaskId,
+          fieldName: latestHitlContextRef.current?.fieldName ?? null,
+        });
         setAnsweredReviewTaskId(args.reviewTaskId);
         setAnsweredQuestionShape(
           `${args.xRenderer}::${latestHitlContextRef.current?.fieldName ?? ""}`,
@@ -1164,12 +1264,10 @@ export function AgenticRunPanel({
           // RETURNED outcome, so it is handled here and never becomes a throw:
           // the `rethrow` caller is the setup-field submit, whose rethrow is
           // what put the masked framework string into SchemaFieldRenderer's
-          // submitError line. Nothing is submitted, so the suppression is
-          // released and the surface draws the blocked state instead.
-          if (args.suppressGate) {
-            justSubmittedXRendererRef.current = null;
-            setAnsweredReviewTaskId(null);
-          }
+          // submitError line. Nothing is submitted by THIS submit, so it
+          // releases what it armed and the surface draws the blocked state
+          // instead. Another submit's pair or claim stays (cinatra#3080).
+          releaseOwnSuppression();
           setGateBlocked(outcome.blocked);
           return;
         }
@@ -1177,10 +1275,7 @@ export function AgenticRunPanel({
       } catch (err) {
         const msg = err instanceof Error ? err.message : "unknown";
         if (!isAlreadyResolvedError(msg)) {
-          if (args.suppressGate) {
-            justSubmittedXRendererRef.current = null;
-            setAnsweredReviewTaskId(null);
-          }
+          releaseOwnSuppression();
           if (args.errorMode === "rethrow") throw err;
           toast.error("Could not continue this run.");
         }
@@ -1562,10 +1657,11 @@ export function AgenticRunPanel({
   // non-ok response, rejected fetch) still leave the run state untouched, but
   // they no longer leave the reader with nothing to act on.
   const refetchDerivedContext = useCallback(async () => {
+    if (ambientDeclarationRefused) return;
     let outcome: HitlDerivationOutcome;
     try {
-      if (taskId) {
-        // A2A transport path
+      if (taskId && ambientLifecycleHost !== "site_widget") {
+        // A2A transport path: only a first-party panel may use its cookie action.
         const snapshot = await getAgentBuilderTask(taskId);
         if (!snapshot || !("cinatraStatus" in snapshot)) {
           // The action answered with `{ error }` (unauthorized / not found —
@@ -1623,9 +1719,17 @@ export function AgenticRunPanel({
         }
       } else {
         // Fallback path for runs with no a2a_task_id.
+        const broker =
+          ambientLifecycleHost === "site_widget" && ambientLifecycleAuth
+            ? lifecycleRequestCredential(ambientLifecycleAuth)
+            : undefined;
+        // No widget user token now: no tokenless poll.
+        if (broker === null) return;
         const response = await fetch(
           `/api/agents/runs/${encodeURIComponent(runId)}`,
-          { cache: "no-store" },
+          broker
+            ? { cache: "no-store", headers: broker.headers, credentials: broker.credentials }
+            : { cache: "no-store" },
         );
         if (!response.ok) {
           outcome = {
@@ -1675,7 +1779,7 @@ export function AgenticRunPanel({
       };
     }
     setDerivation((prev) => reduceHitlDerivation(prev, outcome));
-  }, [runId, taskId, streamEnabled]);
+  }, [runId, taskId, streamEnabled, ambientLifecycleHost, ambientLifecycleAuth, ambientDeclarationRefused]);
 
   // AND THE TICK FIRES WHILE THE RUN HAS NOT FINISHED BY EITHER READING
   // (cinatra#3007, fix leg 9). See `runSurfaceKeepsPolling`: the two readings
@@ -1683,7 +1787,7 @@ export function AgenticRunPanel({
   // the only carrier of the row that the park's whole reading depends on.
   const keepPolling = runSurfaceKeepsPolling({ pollStatus, status });
   useEffect(() => {
-    if (!keepPolling) return;
+    if (!keepPolling || ambientDeclarationRefused) return;
     // The cadence is EXACTLY the one this tick shipped with. Only the firing
     // guard above is widened; a surface that was already ticking ticks no
     // faster, so nothing here is a new class of load.
@@ -1697,7 +1801,7 @@ export function AgenticRunPanel({
       void refetchDerivedContext();
     }, intervalMs);
     return () => window.clearInterval(interval);
-  }, [keepPolling, isPollLive, refetchDerivedContext]);
+  }, [keepPolling, isPollLive, refetchDerivedContext, ambientDeclarationRefused]);
 
   // The recovery state's explicit re-check. Runs the same refetch the tick
   // runs, and additionally DROPS the just-submitted suppression: that guard
@@ -1707,7 +1811,7 @@ export function AgenticRunPanel({
   // clear itself on the next gate in that flow.
   const handleRecheckDerivedContext = useCallback(async () => {
     setIsRechecking(true);
-    justSubmittedXRendererRef.current = null;
+    resetAnsweredGates(answeredGateLedgerRef.current);
     try {
       await refetchDerivedContext();
     } finally {
@@ -2228,11 +2332,14 @@ export function AgenticRunPanel({
   // `effectiveHitlContext` reaches null down two very different roads. One is
   // the road this placeholder is for: the row carries no interrupt at all,
   // because the person answered it and the run moved past it. The other is
-  // `applyJustSubmittedSuppression`, which nulls a NON-null interrupt for as
-  // long as the just-submitted renderer matches - and it matches on the
-  // renderer alone, never on the review task, while a run's sequential setup
-  // fields deliberately reuse one renderer. So the step AFTER a submitted one
-  // can be a real, live, unanswered question wearing a null context.
+  // `applyJustSubmittedSuppression`, which nulls a NON-null interrupt that is
+  // a question claimed on this mount, and otherwise for as long as the
+  // just-submitted renderer matches, unless the interrupt's review task names
+  // one gate and differs from a non-blank armed one (cinatra#3080) - and a
+  // run's sequential setup fields deliberately share one renderer and one
+  // review task (`setup-<runId>`), which names no single gate. So the step
+  // AFTER a submitted one can be a real, live, unanswered question wearing a
+  // null context.
   //
   // Drawing the quiet placeholder over that would hide a question the run is
   // waiting on, and hide with it the Re-check that is the one control which
@@ -2261,7 +2368,7 @@ export function AgenticRunPanel({
   // releases the key), a marked gate and a park all read exactly as before.
   const onlyTheAnsweredQuestionOnFile =
     isPendingApproval &&
-    answeredReviewTaskId !== null &&
+    anyQuestionAnswered &&
     (streamQuestionOnFile === null || isAnsweredQuestion(streamQuestionOnFile)) &&
     (hitlContext === null || isAnsweredQuestion(hitlContext));
   const blockedOnInputGate =
@@ -2281,16 +2388,10 @@ export function AgenticRunPanel({
   // is about ("once the agent is done and the output generated"); a parked
   // marked gate draws from its own ref, whatever the rest of the run is doing.
   //
-  // AND THE SLOT'S REVIEW IS WITHHELD ON THE SITE WIDGET, which is a containment
-  // rather than a rule about the widget. The card's host declaration here is
-  // `run_card`, a COOKIE-session host: the runtime refuses a broker credential
-  // on it, so a card mounted inside a widget frame resolves and decides with the
-  // frame's ambient cookie instead of the reader's own credential. That is a
-  // PRE-EXISTING property of the marked-gate mount at the base of this branch,
-  // and it is left exactly as it was; what this change must not do is carry the
-  // COMPLETED-run review down the same wrong wall for the first time. The widget
-  // keeps the terminal rendering it has today, and this branch's own evidence
-  // already records the widget's run panel as blocked pending that work.
+  // The widget's review stays in this run-card slot (#3051). Its nested card
+  // must inherit the ambient widget provider so resolve and decide retain the
+  // broker credential with cookies omitted. The widget flag remains necessary
+  // below for the existing rail-refresh exclusion.
   const widgetHostedPanel = ambientLifecycleHost === "site_widget";
   //
   // AND A RUN PARKED ON ITS PRODUCED OUTPUT'S REVIEW DRAWS IT HERE (cinatra#3046),
@@ -2316,7 +2417,7 @@ export function AgenticRunPanel({
     ? null
     : markedReviewGate
       ? reviewGateCardRef
-      : (status === "completed" || parkedOnProducedReview) && !widgetHostedPanel
+      : (status === "completed" || parkedOnProducedReview)
         ? reviewSlot.ref
         : null;
   // AND THE ROW'S OWN PARK HOLDS THE BOX UP, not only a guess with a budget on
@@ -2333,8 +2434,7 @@ export function AgenticRunPanel({
     (status === "queued" ||
       status === "running" ||
       onlyTheAnsweredQuestionOnFile ||
-      ((reviewMayStillOpen || pausePlaceholder || parkedOnProducedReview) &&
-        !widgetHostedPanel));
+      (reviewMayStillOpen || pausePlaceholder || parkedOnProducedReview));
   //
   // ONE HAND-OVER, KEYED ON THE GATE'S REFERENCE (cinatra#3007, fix leg 20).
   // "One run detail, twice, in the same column under the same rail: first the
@@ -2447,6 +2547,7 @@ export function AgenticRunPanel({
     runId,
     reviewTaskId,
     initialReviewTaskIds: initialReviewGate?.railReviewTaskIds,
+    railCurrentReviewTaskId: initialReviewGate?.railCurrentReviewTaskId,
     refresh: widgetHostedPanel ? undefined : refreshReviewRail,
   });
   const onReviewReadingChangeRef = useRef(onReviewReadingChange);
@@ -2516,27 +2617,17 @@ export function AgenticRunPanel({
   // open a match and pull the tags below into the run page's owner set. The
   // shape is therefore NAMED here and never quoted.
   //
-  // SITE_WIDGET IS NOT WIDENED HERE, and the honest reason is SCOPE rather than
-  // the credential wall. cinatra#3484 is about the card a reader meets in the
-  // chat thread, and the branch above is its whole answer; the widget arm is
-  // left exactly as it stands. The wall is recorded all the same, because it
-  // rules out the OTHER shape anyone reaching for the widget would try: a
-  // `site_widget` declaration MINTED here without an `auth` prop is refused by
-  // the runtime's fail-closed credential rule (`lifecycle-card-runtime.tsx`)
-  // and would draw no card DOM at all. INHERITING an embed's own well-formed
-  // widget declaration — the way the branch above inherits the transcript's —
-  // would carry that auth along and would draw, so the widget arm is an open
-  // question this change does not answer and NOT one the wall closes.
-  // `runCardOwnsLifecycleCopy` already treats both conversation hosts alike,
-  // which is where that question belongs; it is tracked apart from this fix.
-  //
+  // The site widget inherits its own declaration too (#3051). Re-declaring
+  // run_card here would shadow the broker with a cookie-session provider;
+  // re-declaring site_widget without its auth would instead refuse the card.
   // The review screen's ONE mount. cinatra#2566's account
   // of it is unchanged and still applies: the display-only REDIRECT card that
   // used to sit here is deleted, this is the SAME `ReviewGateCard` the chat
   // thread and the review page's gate region mount, and the reviewer decides in
   // place. The composer descriptor for a marked gate is still comment-only
   // (see the publish effect above), so this mount adds no second resume path.
-  const conversationHostedReview = ambientLifecycleHost === "chat_thread";
+  const conversationHostedReview =
+    ambientLifecycleHost === "chat_thread" || ambientLifecycleHost === "site_widget" || ambientDeclarationRefused;
   const reviewScreenNode: ReactNode = reviewRefInTheBox ? (
     conversationHostedReview ? (
       <ReviewGateCard
@@ -2546,8 +2637,10 @@ export function AgenticRunPanel({
           ref: reviewRefInTheBox,
         }}
         // §VI — the gate's conversational prompt window keeps its exchange with
-        // the RUN (cinatra#3141 item 1).
-        runId={runId}
+        // the RUN (cinatra#3141 item 1). On a broker host the run is not named
+        // (`runWindowRunId`), so the card mounts neither the prompt window nor
+        // the settled exchange there: both are cookie-bound (#3051).
+        runId={runWindowRunId}
       />
     ) : (
       <LifecycleCardSurfaceProvider host="run_card">
@@ -2609,31 +2702,16 @@ export function AgenticRunPanel({
     return (
       <>
         <section
-          // THE PLACEHOLDER'S GROUND IS THE DRAWN ONE (cinatra#3044, the
-          // eleventh set). The drawn card frame is
-          // `border:1px solid var(--line); border-radius:12px;
-          //  background:var(--surface-strong)`. `.soft-panel` grounds on
-          // `var(--surface)` — one token light of it — and the review card's
-          // `run_card` frame draws no background of its own, so this section is
-          // the ground a reader actually sees. Only the WORKING reading is
-          // redrawn here: the review reading is the graded cell it already was
-          // and keeps the class string it was measured on.
-          //
-          // AND THE FRAME'S OWNER OWNS THIS BOX'S CHROME TOO (fix leg 14).
-          // Section I of the review drawing rules the run detail as a whole:
-          // "two cards are never stacked in one detail". This box is drawn in
-          // that same detail, so when the rail already draws the frame beside
-          // it the box gives up its card chrome for exactly the reason the
-          // progress plate below does — the chrome belongs to whoever draws the
-          // frame, and a card of our own around the gate's card is the second
-          // card section I forbids. Off the frame BOTH readings keep the class
-          // string each was measured on, untouched.
+          // The rail owns the two-column layout; this slot owns the one
+          // .runcard frame and strong ground in both working and review readings
+          // (cinatra#3242, App262, approved drawing §I). The gate and placeholder
+          // inside it draw content only, so the swap cannot lose the ground or
+          // stack a second card inside it. Progress/input frame ownership below
+          // retains its existing railDrawsTheFrame contract.
           className={
             railDrawsTheFrame
-              ? "flex flex-col gap-4"
-              : reviewCardDrawn
-                ? "soft-panel rounded-card px-6 py-5 flex flex-col gap-4"
-                : "rounded-card border border-line bg-surface-strong px-6 py-5 flex flex-col gap-4"
+              ? "rounded-[12px] border border-line bg-surface-strong px-[20px] py-[18px] flex flex-col gap-4"
+              : "rounded-card border border-line bg-surface-strong px-6 py-5 flex flex-col gap-4"
           }
           // Which of the two readings this box is drawing. Passive — it draws
           // nothing and drives nothing — and it exists because the SWAP is the
@@ -2646,11 +2724,9 @@ export function AgenticRunPanel({
           {reviewCardDrawn ? null : (
             <ReviewGatePlaceholder
               runRef={shortRunReference(runId)}
-              // THE CARD FRAME IS THE PLACEHOLDER'S OWN where the rail draws the
-              // frame and this box gives its chrome up (fix leg 20): "the card
-              // frame, and a spinning icon". Off the frame the box above draws
-              // it, and a second one would be a card inside a card.
-              framed={railDrawsTheFrame}
+              // The slot owns the frame on every run host, including the rail.
+              // Its placeholder must not draw another border or ground.
+              framed={false}
               // THE WAIT IS OVER WHEN THE RUN HAS LEFT EVERY STATE THIS BOX
               // WAITS IN (fix leg 7). Measured on the sixth graded reading: the pair
               // shot for this card was taken with the run already completed and
@@ -3025,8 +3101,17 @@ export function AgenticRunPanel({
                       // (the shared props contract says a renderer that draws
                       // its own Continue must skip it), and the card's Continue
                       // asks the field for its value through the same flush the
-                      // renderer's own button would have used.
-                      hideSubmit={productOwnsSetupSend}
+                      // renderer's own button would have used. A boolean field
+                      // on a mid-run gate is told the same (cinatra#4310): the
+                      // outer Continue below is that gate's one control.
+                      hideSubmit={
+                        productOwnsSetupSend ||
+                        midRunBooleanFieldHidesSubmit({
+                          isMidRun: isMidRunHitl,
+                          isGroupedSetup,
+                          fieldSchema: hitlRendererEntry.fieldSchema,
+                        })
+                      }
                       registerFlush={
                         productOwnsSetupSend
                           ? (fn: () => Promise<void>) =>
@@ -3270,7 +3355,6 @@ export function AgenticRunPanel({
               example and had stopped being true). */}
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <Button
-              size="sm"
               variant="outline"
               disabled={isRetrying}
               onClick={handleRetryFailedRun}

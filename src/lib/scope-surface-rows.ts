@@ -7,11 +7,16 @@
  * composed with the scope the reader is on, so a launch made from a team lands
  * inside that team and the two slices cannot disagree about an address.
  *
- * NO `/configuration` HREF IS MINTED HERE. The scope tabs are member-facing, and
+ * The More-details control never mints a `/configuration` href. Scope tabs are
+ * member-facing, and
  * the marketplace detail route is admin-only; a member's "More details" opens
  * the ratified §II modal in place instead of carrying a link that would bounce.
- * That is why `detailHref` is `null` on every row this module builds.
+ * That is why `detailHref` is `null` on every row this module builds. An admin
+ * may separately receive the approved View-requirements action when a required
+ * runtime dependency is absent; the member receives only the unavailable reason.
  */
+import { buildUnavailableAction, type AgentUnavailableAction } from "@cinatra-ai/agents/agent-unavailable-action";
+import type { AgentRunAvailability } from "@cinatra-ai/agents/runtime-install-gate";
 import type { ScopeSurfaceEligibilityRow, ScopeSurfaceStatus } from "./scope-surface-eligibility";
 import {
   scopeSurfaceAgentLaunchHref,
@@ -46,6 +51,7 @@ export type ScopeAgentCardRow = {
   readonly settingsHref: string;
   readonly version: string | null;
   readonly status: ScopeSurfaceStatus;
+  readonly unavailable?: AgentUnavailableAction | null;
 };
 
 /** One row on a scope's Assistants tab. */
@@ -87,19 +93,34 @@ export function formatScopeSurfaceVersion(version: string | null | undefined): s
 export function buildScopeSurfaceAgentRows(
   scope: ScopeSurfaceRef,
   rows: readonly ScopeSurfaceEligibilityRow[],
+  options: {
+    availabilityByPackage?: ReadonlyMap<string, AgentRunAvailability>;
+    canViewRequirements?: boolean;
+  } = {},
 ): readonly ScopeAgentCardRow[] {
-  return rows.map((row) => ({
-    key: row.packageName,
-    name: row.displayName,
-    description: row.description ?? "",
-    host: "local" as const,
-    packageName: row.packageName,
-    detailHref: null,
-    runHref: scopeSurfaceAgentLaunchHref(scope, row.packageName),
-    settingsHref: scopeSurfaceAgentSettingsHref(scope, row.packageName),
-    version: formatScopeSurfaceVersion(row.version),
-    status: row.status,
-  }));
+  return rows.filter((row) => {
+    const state = options.availabilityByPackage?.get(row.packageName)?.state;
+    return state !== "archived" && state !== "not-installed";
+  }).map((row) => {
+    const availability = options.availabilityByPackage?.get(row.packageName) ?? { state: "runnable" };
+    const listing = /^@([^/]+)\/(.+)$/.exec(row.packageName);
+    const requirementsHref = options.canViewRequirements && listing
+      ? `/configuration/marketplace/${listing[1]}/${listing[2]}`
+      : null;
+    return {
+      key: row.packageName,
+      name: row.displayName,
+      description: row.description ?? "",
+      host: "local" as const,
+      packageName: row.packageName,
+      detailHref: null,
+      runHref: scopeSurfaceAgentLaunchHref(scope, row.packageName),
+      settingsHref: scopeSurfaceAgentSettingsHref(scope, row.packageName),
+      version: formatScopeSurfaceVersion(row.version),
+      status: row.status,
+      unavailable: buildUnavailableAction(row.displayName, availability, requirementsHref),
+    };
+  });
 }
 
 /** One directory row as the /assistants resolver returns it — the fields this

@@ -20,6 +20,14 @@
 //     files against the other (equal times: the lower number holds).
 //   - A push to a labelled pull request ends its hold: its verification was
 //     made at the head it had. The label comes off, with one comment.
+//   - A hold lasts at most HOLD_LASTS_HOURS (24) hours from the time its label
+//     was set (the maintainer's decision of 2026-10-08). After that the
+//     labelled pull request holds nothing: a pull request that shares its
+//     files succeeds, and its description names the expired hold and the
+//     shared paths; the holder's own status says that its hold expired, and a
+//     live holder holds against it as against any other pull request. The
+//     label stays on: the holder is brought up to date afterwards, and putting
+//     the label back starts a new 24 hours.
 //   - A closed or merged pull request holds nothing and gets no status.
 //   - FAIL CLOSED: a file list that cannot be read in full fails the status of
 //     the pull request it concerns and says why. A labelled pull request whose
@@ -29,7 +37,8 @@
 // HOW. Two pure functions and two commands.
 //   - `decide` maps the listings to the statuses; `scope` maps an event and the
 //     holders to the pull requests the event evaluates. Both are unit-tested
-//     without the network.
+//     without the network. Neither reads a clock: the time a hold is judged at
+//     is an input (`listing.now`), read once per evaluation.
 //   - `end-hold` runs first, on a push: when the pushed pull request carried
 //     the label from before the push, it takes the label off and writes the one
 //     comment. It makes no request for any other push or event.
@@ -39,7 +48,9 @@
 //     label) evaluates its own pull request alone, against the holders, and
 //     writes its status only. An event that changes the holders (the label set
 //     or taken off; a labelled pull request closed, merged, reopened or
-//     pushed) and a run by hand evaluate every open pull request.
+//     pushed) and a run by hand evaluate every open pull request. A run on the
+//     hourly schedule evaluates no pull request of its own: it renews what the
+//     time changed, so that an expiry takes effect without a new event.
 //   - Whatever the event, the evaluation also takes in each head whose status
 //     is missing or no longer fits the holders, so that an evaluation a newer
 //     event replaced before it ran leaves nothing behind: a head without a
@@ -47,7 +58,9 @@
 //     status's link names the holders it was set against, as a fingerprint);
 //     a status held by a pull request that holds nothing now; a status set
 //     while no pull request held files, when one does; a status that
-//     disagrees with the label on its pull request.
+//     disagrees with the label on its pull request; a status that says its
+//     pull request holds, when it holds nothing now; a status set while a pull
+//     request held files, when none does.
 //   - It reads the open pull requests; the record, the file list and the label
 //     time of each labelled one; the status each open head carries (one
 //     GraphQL query); the record and the file list of each pull request it
@@ -87,6 +100,10 @@ export const FILES_LISTED_AT_MOST = 3000;
 export const PATHS_NAMED = 3;
 /** The REST API version every request asks for. */
 export const API_VERSION = "2026-03-10";
+/** A hold lasts at most this many hours from the time its label was set. */
+export const HOLD_LASTS_HOURS = 24;
+/** The same, in milliseconds: a label set more than this before the evaluation holds nothing. */
+export const HOLD_LASTS_MS = HOLD_LASTS_HOURS * 60 * 60 * 1000;
 
 const PAGE = 100;
 const OPEN_PAGES_AT_MOST = 50;
@@ -99,6 +116,7 @@ export const NOTHING_HELD = "No labelled pull request holds files now.";
 export const SHARES_NOTHING = "Changes no file that a labelled pull request holds.";
 export const HOLDS = `Labelled ${LABEL}: holds its files against the other open pull requests.`;
 export const LABEL_TIME_UNREAD = `Holds nothing: the time its ${LABEL} label was set could not be read.`;
+export const EXPIRED = `Its ${LABEL} label is more than ${HOLD_LASTS_HOURS} hours old: the hold expired, it holds nothing now.`;
 const CUT_SHORT = "Its file list could not be read in full: ";
 const CUT_SHORT_LABELLED = "Holds nothing: its file list could not be read in full: ";
 
@@ -140,17 +158,15 @@ const fit = (text) =>
 
 const byCodeUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
+/** The shared paths as a description names them: each once, in order, made safe. */
+const sharedPathsOf = (sharedPaths) => [...new Set(sharedPaths)].sort(byCodeUnit).map(clean);
+
 /**
- * "Held by #N: a, b, c and K more": the holder always, then as many of the
- * first three shared paths (in order) as fit, then how many were left out. A
- * single path too long to fit keeps its end, where the file name is.
+ * `prefix`, then as many of the first three paths (in order) as fit, then how
+ * many were left out. A single path too long to fit keeps its end, where the
+ * file name is.
  */
-export function heldDescription(holder, sharedPaths) {
-  const paths = [...new Set(sharedPaths)].sort(byCodeUnit).map(clean);
-  if (!Number.isSafeInteger(holder) || paths.length === 0) {
-    throw new TypeError("files-hold: a held description needs the holder and at least one shared path");
-  }
-  const prefix = `Held by #${holder}: `;
+function namePaths(prefix, paths) {
   const more = (n) => (n > 0 ? ` and ${n} more` : "");
   for (let named = Math.min(PATHS_NAMED, paths.length); named >= 1; named--) {
     const text = prefix + paths.slice(0, named).join(", ") + more(paths.length - named);
@@ -160,10 +176,34 @@ export function heldDescription(holder, sharedPaths) {
   return `${prefix}…${keepEnd(paths[0], DESCRIPTION_LIMIT - prefix.length - 1 - tail.length)}${tail}`;
 }
 
+/** "Held by #N: a, b, c and K more": the holder always, then the shared paths as `namePaths` fits them. */
+export function heldDescription(holder, sharedPaths) {
+  const paths = sharedPathsOf(sharedPaths);
+  if (!Number.isSafeInteger(holder) || paths.length === 0) {
+    throw new TypeError("files-hold: a held description needs the holder and at least one shared path");
+  }
+  return namePaths(`Held by #${holder}: `, paths);
+}
+
+/**
+ * "Hold of #N expired after 24 hours: a, b, c and K more": the holder whose
+ * hold expired always, then the shared paths as `namePaths` fits them.
+ */
+export function expiredDescription(holder, sharedPaths) {
+  const paths = sharedPathsOf(sharedPaths);
+  if (!Number.isSafeInteger(holder) || paths.length === 0) {
+    throw new TypeError("files-hold: an expired description needs the holder and at least one shared path");
+  }
+  return namePaths(`Hold of #${holder} expired after ${HOLD_LASTS_HOURS} hours: `, paths);
+}
+
 /** Why a file list is not complete, for the pull request it concerns. */
 export function cutShortDescription(reason, { labelled = false } = {}) {
   return fit((labelled ? CUT_SHORT_LABELLED : CUT_SHORT) + clean(reason || "not read"));
 }
+
+/** How the description of a pull request that an expired hold held starts. */
+const EXPIRED_PREFIX = "Hold of #";
 
 /** The holder a description names, or null. */
 const heldByIn = (description) => {
@@ -173,8 +213,17 @@ const heldByIn = (description) => {
 
 /** Whether a description says its pull request carries the label: true, false, or null for neither. */
 function saysLabelled(description) {
-  if (description === HOLDS || description === LABEL_TIME_UNREAD || description.startsWith(CUT_SHORT_LABELLED)) return true;
-  if (description === NOTHING_HELD || description === SHARES_NOTHING || description.startsWith(CUT_SHORT)) return false;
+  if (description === HOLDS || description === LABEL_TIME_UNREAD || description === EXPIRED || description.startsWith(CUT_SHORT_LABELLED)) {
+    return true;
+  }
+  if (
+    description === NOTHING_HELD ||
+    description === SHARES_NOTHING ||
+    description.startsWith(CUT_SHORT) ||
+    description.startsWith(EXPIRED_PREFIX)
+  ) {
+    return false;
+  }
   return null;
 }
 
@@ -199,11 +248,18 @@ const failure = (description) => ({ state: "failure", description });
  * The open pull requests of a listing, whether each holds, and the holders in
  * the order they hold: the first labelled first, equal times by number. A
  * push ends the hold of the labelled pull request it moved, unless the label
- * was provably set after it.
+ * was provably set after it. With a clock (`listing.now`, milliseconds), a
+ * labelled pull request whose label was set more than HOLD_LASTS_MS before it
+ * has EXPIRED: it is no holder, and is listed in `expired`, in the same order.
+ * Without a clock no hold expires.
  */
 function classify(listing) {
   if (listing === null || typeof listing !== "object" || !Array.isArray(listing.pullRequests)) {
     throw new TypeError("files-hold: the listing carries no pull requests");
+  }
+  const now = listing.now;
+  if (now !== undefined && !Number.isFinite(now)) {
+    throw new TypeError("files-hold: the listing's clock is not a finite number of milliseconds");
   }
   const pushed = listing.pushed ?? null;
   const endHolds = [];
@@ -227,15 +283,18 @@ function classify(listing) {
     const files = pr.filesComplete === true && Array.isArray(pr.files) ? new Set(pr.files) : null;
     pulls.push({ pr, labelled, labelAt, files, problem: pr.filesProblem });
   }
-  const holders = pulls
+  const labelledInFull = pulls
     .filter((e) => e.labelled && e.labelAt !== null && e.files !== null)
     .sort((a, b) => a.labelAt - b.labelAt || a.pr.number - b.pr.number);
-  return { pulls, holders, endHolds };
+  const hasExpired = (e) => now !== undefined && now - e.labelAt > HOLD_LASTS_MS;
+  const holders = labelledInFull.filter((e) => !hasExpired(e));
+  const expired = labelledInFull.filter(hasExpired);
+  return { pulls, holders, expired, endHolds };
 }
 
 const holderRecord = (e) => ({ number: e.pr.number, at: new Date(e.labelAt).toISOString(), head: e.pr.head });
 
-/** The pull requests that hold their files, as { number, at, head }. */
+/** The pull requests that hold their files, as { number, at, head }; with `listing.now`, an expired one is none. */
 export function holdersOf(listing) {
   return classify(listing).holders.map(holderRecord);
 }
@@ -263,17 +322,22 @@ export function fingerprint(holders) {
  *     draft, so it holds and is held as any other open pull request.
  * `listing.pushed`: { number, at } when this event moved that pull request's
  *   head (a push), at the time of the push; `at` null when it is not known.
+ * `listing.now`: the time of the evaluation in milliseconds. A labelled pull
+ *   request whose label was set more than HOLD_LASTS_MS before it holds
+ *   nothing. Without it no hold expires; a value that is not a finite number
+ *   is refused.
  *
  * Returns { statuses: [{ number, head, state, description, holder? }],
  *           endHolds: [{ number, label }], skipped: [{ number, reason }],
- *           holders: [{ number, at, head }], fingerprint }: the statuses, one
- * per open head (two open pull requests on one head share it, and a failure
- * wins); the labelled pull requests whose hold a push ended, with the label's
- * name as it is on the pull request; the pull requests left to another run;
- * the holders and their fingerprint.
+ *           holders: [{ number, at, head }], fingerprint,
+ *           expired: [{ number, at, head }] }: the statuses, one per open head
+ * (two open pull requests on one head share it, and a failure wins); the
+ * labelled pull requests whose hold a push ended, with the label's name as it
+ * is on the pull request; the pull requests left to another run; the holders
+ * and their fingerprint; the labelled pull requests whose hold expired.
  */
 export function decide(listing) {
-  const { pulls, holders, endHolds } = classify(listing);
+  const { pulls, holders, expired, endHolds } = classify(listing);
 
   const sharedWith = (holder, e) => [...e.files].filter((file) => holder.files.has(file));
   const heldBy = (holder, e) => ({
@@ -284,14 +348,22 @@ export function decide(listing) {
     if (e.labelled) {
       if (e.labelAt === null) return failure(LABEL_TIME_UNREAD);
       if (e.files === null) return failure(cutShortDescription(e.problem, { labelled: true }));
+      if (expired.includes(e)) {
+        // An expired hold yields its files: any live holder holds against it.
+        const holder = holders.find((h) => sharedWith(h, e).length > 0);
+        return holder ? heldBy(holder, e) : success(EXPIRED);
+      }
       const earlier = holders.slice(0, holders.indexOf(e));
       const holder = earlier.find((h) => sharedWith(h, e).length > 0);
       return holder ? heldBy(holder, e) : success(HOLDS);
     }
-    if (holders.length === 0) return success(NOTHING_HELD);
-    if (e.files === null) return failure(cutShortDescription(e.problem));
+    if (holders.length === 0 && expired.length === 0) return success(NOTHING_HELD);
+    if (e.files === null) return holders.length > 0 ? failure(cutShortDescription(e.problem)) : success(NOTHING_HELD);
     const holder = holders.find((h) => sharedWith(h, e).length > 0);
-    return holder ? heldBy(holder, e) : success(SHARES_NOTHING);
+    if (holder) return heldBy(holder, e);
+    const gone = expired.find((h) => sharedWith(h, e).length > 0);
+    if (gone) return success(expiredDescription(gone.pr.number, sharedWith(gone, e)));
+    return success(holders.length > 0 ? SHARES_NOTHING : NOTHING_HELD);
   };
 
   const byHead = new Map();
@@ -315,6 +387,7 @@ export function decide(listing) {
     skipped,
     holders: records,
     fingerprint: fingerprint(records),
+    expired: expired.map(holderRecord),
   };
 }
 
@@ -334,7 +407,8 @@ const CHANGES_THE_HOLDERS = { opened: "opened", reopened: "reopened", synchroniz
  * alone; a pull request without the label that closes, none. Whatever the
  * event, a head whose status is missing or no longer fits the holders is
  * evaluated too, and a holder whose status was set against other holders
- * makes every open pull request evaluated.
+ * makes every open pull request evaluated. A scheduled run evaluates no pull
+ * request of its own: it renews what the time changed, through those rules.
  *
  * Returns { all, numbers, why, stale }.
  */
@@ -346,6 +420,8 @@ export function scope({ eventName, payload, open, holders, current }) {
   if (eventName === "workflow_dispatch") {
     all = true;
     why = "a run by hand renews every status";
+  } else if (eventName === "schedule") {
+    why = "a scheduled run renews what the time changed";
   } else {
     const pr = payload?.pull_request ?? {};
     const action = payload?.action;
@@ -381,6 +457,10 @@ export function scope({ eventName, payload, open, holders, current }) {
       reason = "was set while no pull request held files";
     } else if (saysLabelled(was.description) !== null && saysLabelled(was.description) !== p.labelled) {
       reason = p.labelled ? "was set before its label" : "says it carries the label, and it does not";
+    } else if (was.description === HOLDS && !holding.has(p.number)) {
+      reason = "says it holds, and it holds nothing now";
+    } else if (was.description === SHARES_NOTHING && holders.length === 0) {
+      reason = "was set while a pull request held files, and none does now";
     }
     if (reason) {
       numbers.add(p.number);
@@ -403,11 +483,13 @@ const labelNames = (labels) => (Array.isArray(labels) ? labels : []).map((l) => 
 
 /** The parts of the event the commands use, checked. */
 export function readEvent(eventName, payload) {
-  if (eventName === "workflow_dispatch") {
+  if (eventName === "workflow_dispatch" || eventName === "schedule") {
     return { name: eventName, action: null, number: null, pushedAt: null, carriesLabel: false };
   }
   if (eventName !== "pull_request_target") {
-    throw new Error(`files-hold: runs on pull_request_target and workflow_dispatch only, not on '${eventName}' (failing closed)`);
+    throw new Error(
+      `files-hold: runs on pull_request_target, schedule and workflow_dispatch only, not on '${eventName}' (failing closed)`,
+    );
   }
   const pr = payload?.pull_request;
   if (!object(payload) || typeof payload.action !== "string" || !object(pr) || !Number.isSafeInteger(pr.number)) {
@@ -641,8 +723,10 @@ export async function endHold({ request, repository, eventName, payload, dryRun 
 
 /**
  * The evaluation: read, scope, decide and write. `request(method, route, body)`
- * answers { status, body }. Returns { target, decision, failures, written,
- * unchanged }: a failure is a write that did not land, and fails the job.
+ * answers { status, body }; `now()` answers the time in milliseconds, read
+ * once: the holders and the decision are judged at that one time. Returns
+ * { target, decision, failures, written, unchanged }: a failure is a write
+ * that did not land, and fails the job.
  */
 export async function evaluate({
   request,
@@ -653,8 +737,10 @@ export async function evaluate({
   runUrl = null,
   log = console.log,
   pause = sleep,
+  now = Date.now,
 }) {
   const event = readEvent(eventName, payload);
+  const at = now();
   const base = `/repos/${repository}`;
   let open = await readOpenPulls(request, base);
   // The listing may still show a pull request this very event closed.
@@ -667,8 +753,12 @@ export async function evaluate({
     read.set(row.number, await readForDecision(request, base, row, pause, true));
   }
   const withFiles = read.size > 0;
-  const holders = holdersOf({ pullRequests: [...read.values()], pushed });
+  const labelledListing = { pullRequests: [...read.values()], pushed, now: at };
+  const holders = holdersOf(labelledListing);
   for (const h of holders) log(`files-hold: #${h.number} holds its files, labelled ${h.at}.`);
+  for (const h of classify(labelledListing).expired.map(holderRecord)) {
+    log(`files-hold: #${h.number}'s hold expired: labelled ${h.at}, more than ${HOLD_LASTS_HOURS} hours ago.`);
+  }
 
   const current = open.length > 0 ? await readCurrentStatuses(request, repository, open.map((p) => p.head), log) : new Map();
   const target = scope({
@@ -689,9 +779,13 @@ export async function evaluate({
     read.set(row.number, await readForDecision(request, base, row, pause, withFiles));
   }
   // The heads just before the write: a pull request pushed meanwhile is left to the run for its push.
-  const now = new Map((await readOpenPulls(request, base)).map((row) => [row.number, row.head]));
-  if (event.action === "closed") now.delete(event.number);
-  const decision = decide({ pullRequests: [...read.values()].map((p) => ({ ...p, headNow: now.get(p.number) ?? null })), pushed });
+  const headsNow = new Map((await readOpenPulls(request, base)).map((row) => [row.number, row.head]));
+  if (event.action === "closed") headsNow.delete(event.number);
+  const decision = decide({
+    pullRequests: [...read.values()].map((p) => ({ ...p, headNow: headsNow.get(p.number) ?? null })),
+    pushed,
+    now: at,
+  });
   for (const skip of decision.skipped) log(`files-hold: #${skip.number} is not written: ${skip.reason}.`);
 
   const holding = new Set(decision.holders.map((h) => h.number));

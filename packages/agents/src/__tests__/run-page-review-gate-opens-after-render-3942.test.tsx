@@ -232,6 +232,10 @@ vi.mock("@/lib/better-auth-db", () => ({
   readProjectsForUser: vi.fn(async () => []),
 }));
 
+vi.mock("../started-run-store", () => ({
+  readStartedRunsFor: vi.fn(async () => []),
+}));
+
 vi.mock("../store", () => ({
   readAgentTemplateBySlug: vi.fn(async () => makeTemplate()),
   readAgentRunById: vi.fn(async () => makeRun()),
@@ -559,11 +563,18 @@ for (const host of ["orchestrator", "agent"] as const) {
 }
 
 
+// The widget declares its broker credential (#3051): a site_widget declaration
+// without one is refused and reads no slot at all.
+const WIDGET_AUTH = {
+  headers: () => ({ "X-Cinatra-Widget-User-Token": "unit-broker-3942" }),
+  credentials: "omit" as const,
+};
+
 for (const host of ["chat_thread", "site_widget"] as const) {
   it(`does not refresh the containing page when a ${host} panel finds a gate`, async () => {
     const reader = vi.fn(async () => ({ ref: "reader-owned-opaque-ticket", awaiting: false, reviewTaskId: REVIEW_TASK_ID }));
     render(
-      <LifecycleCardSurfaceProvider host={host}>
+      <LifecycleCardSurfaceProvider host={host} auth={host === "site_widget" ? WIDGET_AUTH : undefined}>
         <AgenticRunPanel
           runId={RUN_ID}
           initialStatus="completed"

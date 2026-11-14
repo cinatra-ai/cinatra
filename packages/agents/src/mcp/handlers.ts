@@ -1097,10 +1097,11 @@ async function handleAgentBuilderRun(
     // consults the run-start recommendation hold, then dispatches; every other
     // frame creates and enqueues in one act, as before. The launch origin is
     // SERVER-DERIVED from this frame, never from the primitive's input.
+    const { runStartedByFromFrame } = await import("../agent-run-serde");
     const launched = await createAgentRunForLaunchFrame({
       frame: request.actor,
       create: {
-        id: runId,
+        id: runId, startedByRunId: runStartedByFromFrame(mcpRequestContextStorage.getStore()),
         templateId: resolvedTemplateId,
         versionId: latestVersionId,
         inputParams: inputParamsParsed,
@@ -2123,10 +2124,7 @@ async function handleAgentBuilderRunResume(
 
     // WayFlow resume path keyed by agent_runs.a2aTaskId.
     // WayFlow is the only execution path.
-    if (
-      run.a2aTaskId &&
-      template.sourceType === "internal"
-) {
+    if (run.a2aTaskId && template.sourceType === "internal") {
       const packageName = template.packageName;
       if (!packageName) {
         return { error: `template.packageName is null for templateId=${template.id}; cannot route WayFlow resume` };
@@ -2148,6 +2146,9 @@ async function handleAgentBuilderRunResume(
       if (!run.a2aContextId) {
         return { error: `Run ${runId} has no a2aContextId. Cannot resume WayFlow task without context ID.` };
       }
+      // cinatra#4150: a run held at a publish decision goes on only by that decision.
+      const publishHold = await import("../publish-decision-actions");
+      let decided: boolean; try { decided = await publishHold.assertNoOpenPublishDecision(run.id); } catch (e) { return publishHold.publishHoldAnswer(e); }
       const { createExternalA2AClient } = await import("@cinatra-ai/a2a");
       const client = await createExternalA2AClient({
         agentUrl: wayflowUrl,
@@ -2209,6 +2210,9 @@ async function handleAgentBuilderRunResume(
       // `resumeText` reaches the gate's InputMessageNode VERBATIM.
       const { mintResumeRunTokenMetadata } = await import("../wayflow-run-token-carrier");
       const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
+      // cinatra#4150 (A5): on a publishing template, or for a run with a decision (it met a publish gate, whatever the list says), the run is claimed and the hold read again before the send.
+      const sendFrom = await publishHold.claimRunBeforeSend(run.id, (template.publishingSteps?.length ?? 0) > 0 || decided, resumeAuthority).catch((e: unknown) => publishHold.publishHoldAnswer(e));
+      if (typeof sendFrom !== "string") return sendFrom ?? { error: "Run is not pending approval: another resume holds it." };
       // Send into the existing context so fasta2a routes to the paused conversation.
       const task = await client.sendTask({
         message: {
@@ -2222,13 +2226,10 @@ async function handleAgentBuilderRunResume(
         configuration: { acceptedOutputModes: ["text"] },
       });
 
-      // multi-gate handler. Lazy import (relative path
-      // is "../execution" because this file lives in packages/agents/src/mcp/).
-      // fromStatus is "pending_approval" — the resume handler reached this branch
-      // because run.a2aTaskId was set, which only happens when the run paused at
-      // an A2A gate (status === "pending_approval").
+      // multi-gate handler; lazy import (this file lives in packages/agents/src/mcp/). fromStatus: "pending_approval" (a2aTaskId
+      // is set only when the run paused at an A2A gate), or "running" after the cinatra#4150 claim above.
       const { handleWayflowTaskState } = await import("../execution");
-      await handleWayflowTaskState({ runId: run.id, run, fromStatus: "pending_approval", task, authority: resumeAuthority });
+      await handleWayflowTaskState({ runId: run.id, run, fromStatus: sendFrom, task, authority: resumeAuthority });
 
       const finalState = task.status?.state;
       return {
@@ -2629,7 +2630,7 @@ async function handleAgentBuilderExport(
       try {
         zipEntries.push({
           name: sidecar,
-          content: await readFile(join(resolved.rootDir, sidecar), "utf8"),
+          content: await readFile(join(/* turbopackIgnore: true */ resolved.rootDir, sidecar), "utf8"),
         });
       } catch {
         // Sidecar absent on disk — skip it.

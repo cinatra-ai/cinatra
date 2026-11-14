@@ -198,7 +198,7 @@ function selfMcpToolFixture(): Record<string, unknown> {
     serverLabel: "cinatra",
     serverUrl: PUBLIC_MCP_URL,
     headers: { Authorization: "Bearer delegated-actor-token" },
-    serverDescription: "Cinatra enterprise intelligence MCP",
+    serverDescription: "MCP server of Cinatra, The Open Source Agentic Teams Workspace",
     allowedTools: null,
     approval: "auto_execute",
     transport: "streamable-http",
@@ -812,7 +812,7 @@ describe("Anthropic function-tools mode is a HARD REFUSAL on chat + widget", () 
 describe("Gemini — conversation-only, with NO tools block on the wire", () => {
   beforeEach(() => {
     state.provider = "gemini";
-    state.defaultModel = "gemini-2.5-flash";
+    state.defaultModel = "gemini-3.5-flash";
     registerAdapterSurface("gemini", async () => createGeminiProviderAdapter("gemini-wire-gate"));
     responder = () => geminiSse();
   });

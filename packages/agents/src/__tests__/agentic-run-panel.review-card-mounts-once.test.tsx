@@ -27,7 +27,7 @@
  */
 import React from "react";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
@@ -153,6 +153,9 @@ const ANSWERED_CONTEXT_GATE = {
   currentValues: {},
 };
 
+// Resolve the fixture's delayed network replies before jsdom is torn down.
+const pendingResolveTimers = new Map<ReturnType<typeof setTimeout>, () => void>();
+
 let ticketSeq = 0;
 /** A fresh ticket per read, for the SAME gate, exactly as the route mints them. */
 function freshTicket(): string {
@@ -194,8 +197,18 @@ beforeEach(() => {
   cleanup();
 });
 
-afterEach(() => {
-  cleanup();
+afterEach(async () => {
+  await act(async () => {
+    // Unmount first so neither the panel nor its card can start another read.
+    cleanup();
+    // Finish the replies already in flight while window is still available for
+    // the production hook's finally block to clear its island deadline.
+    for (const [timer, resolve] of pendingResolveTimers) {
+      clearTimeout(timer);
+      resolve();
+    }
+    pendingResolveTimers.clear();
+  });
   vi.unstubAllGlobals();
   vi.clearAllMocks();
   vi.useRealTimers();
@@ -247,7 +260,13 @@ describe("the review gate card over a pending gate is mounted once (cinatra#3007
           });
         }
         // The card's own resolve, a network round trip away.
-        await new Promise((resolve) => setTimeout(resolve, 40));
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(() => {
+            pendingResolveTimers.delete(timer);
+            resolve();
+          }, 40);
+          pendingResolveTimers.set(timer, resolve);
+        });
         return new Response(JSON.stringify(RESOLVE_PENDING), {
           status: 200,
           headers: { "Content-Type": "application/json" },

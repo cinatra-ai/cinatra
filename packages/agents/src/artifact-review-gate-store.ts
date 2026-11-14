@@ -1,4 +1,5 @@
 import "server-only";
+import { electCurrentReviewGate } from "./run-step-rail";
 
 // ---------------------------------------------------------------------------
 // artifact-review-gate-store (cinatra#1796, epic #1620 S13)
@@ -47,10 +48,11 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import { createHash, randomUUID } from "node:crypto";
-import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 
 import { db } from "./db";
+import { createdAtMicrosSql } from "./declared-review-pause";
 import { dispatchAutoGateResolved } from "./run-wait-notifier";
 // THE PARK'S OWN READING (cinatra#3046), from the module that writes the marker.
 // Re-exported below for the seed route, which reads this module already and must
@@ -150,7 +152,7 @@ export class ArtifactReviewGateError extends Error {
 // successor-gate emit + finalize ATOMIC (cinatra#2065 Seam A): a rollback before
 // the caller's commit leaves NO gate row, so a fresh-target retry never strands a
 // gate or hits a pin conflict.
-type GateStoreExecutor =
+export type GateStoreExecutor =
   | typeof db
   | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -339,6 +341,9 @@ export interface ReviewGateRow {
   resolvedBy: string | null;
   resolvedAt: Date | null;
   createdAt: Date;
+  /** cinatra#4312 — `created_at` in microseconds since the epoch, as decimal text,
+   * signed before 1970 (`createdAtMicrosSql`); set by `listReviewGatesForRun`. */
+  createdAtMicros?: string;
 }
 
 export async function readReviewGate(
@@ -402,7 +407,7 @@ async function readReviewGateVia(
 // ---------------------------------------------------------------------------
 export async function listReviewGatesForRun(runId: string, executor: GateStoreExecutor = db): Promise<ReviewGateRow[]> {
   const rows = await executor
-    .select()
+    .select({ ...getTableColumns(artifactReviewGates), createdAtMicros: createdAtMicrosSql(artifactReviewGates.createdAt) })
     .from(artifactReviewGates)
     .where(eq(artifactReviewGates.runId, runId))
     .orderBy(artifactReviewGates.createdAt);
@@ -418,6 +423,7 @@ export async function listReviewGatesForRun(runId: string, executor: GateStoreEx
     resolvedBy: row.resolvedBy,
     resolvedAt: row.resolvedAt,
     createdAt: row.createdAt,
+    createdAtMicros: row.createdAtMicros,
   }));
 }
 
@@ -431,7 +437,8 @@ export async function listReviewGatesForRun(runId: string, executor: GateStoreEx
  * surface, so it is answered from the run's own rows rather than from a model
  * turn or a pull tool:
  *
- *   `reviewTaskId` — the run's most recent review gate, PENDING OR RESOLVED. The
+ *   `reviewTaskId` — the FIRST pending gate in raise order, or the most recent
+ *     resolved gate when no pending gate remains. The
  *     resolved one is deliberately included: a reader who approves in place must
  *     keep seeing what they decided, and the card's own state ladder draws that
  *     (§IV settled) from the same ref. Dropping it here would replace the
@@ -496,12 +503,17 @@ export async function readRunReviewSlot(
       ),
     )
     .limit(1);
-  const [gate] = await db
-    .select({ reviewTaskId: artifactReviewGates.reviewTaskId })
+  // Use the rail's actual comparator, including task-key ties. Database text
+  // collation need not equal JavaScript localeCompare, so SQL cannot elect that
+  // tie on the rail's behalf. Keep SQL's old DESC order for settled history.
+  // This reads each run-scoped gate's small metadata projection instead of one
+  // row; the common path still makes three queries, without loading targets.
+  const gates = await db
+    .select({ reviewTaskId: artifactReviewGates.reviewTaskId, status: artifactReviewGates.status, createdAt: artifactReviewGates.createdAt })
     .from(artifactReviewGates)
     .where(eq(artifactReviewGates.runId, runId))
-    .orderBy(desc(artifactReviewGates.createdAt), desc(artifactReviewGates.id))
-    .limit(1);
+    .orderBy(desc(artifactReviewGates.createdAt), desc(artifactReviewGates.id));
+  const gate = electCurrentReviewGate(gates) ?? gates[0];
   // AND IS THE RUN ITSELF WAITING ON THIS REVIEW? (cinatra#3046.)
   //
   // The two facts above describe the REVIEW. This one describes the RUN, and no
@@ -532,9 +544,9 @@ export async function readRunReviewSlot(
 
   // AND FOR A PARKED RUN THE GATE IS THE ONE ITS OWN PRODUCTION LINKED.
   //
-  // "The run's most recent review gate, pending or resolved" is the right answer
-  // for a run that has FINISHED: a decided review stays on file as read-only
-  // history and the surface draws it. For a run PARKED on its produced output's
+  // "The run's most recent resolved review gate" is the right answer
+  // for a run that has FINISHED with no pending gate: a decided review stays on file as
+  // read-only history and the surface draws it. For a run PARKED on its produced output's
   // review it can be the wrong gate entirely. A run that owes a SECOND review
   // carries both at once — the first gate decided, the next one not minted yet
   // (or its linkage failed closed) — and naming the decided one there draws a
@@ -553,9 +565,9 @@ export async function readRunReviewSlot(
   // AND AMONG THAT LINKAGE, THE ORDER IS THE HOLD'S OWN LADDER, because "the
   // newest linked gate" is still the wrong gate in two reachable states:
   //
-  //   • AN UNDECIDED GATE WINS over a decided one, however new the decided one
-  //     is. The undecided one is what the run is being held for and the only one
-  //     the reader can act on; a newer decided gate would hide it.
+  //   • THE FIRST UNDECIDED GATE in rail raise order wins over a decided one,
+  //     however new the decided one is. The undecided one is what the run is being
+  //     held for and the only one the reader can act on; a newer decided gate would hide it.
   //   • NOTHING UNDECIDED, AND ANOTHER PRODUCTION STILL PENDING ⇒ NO GATE YET.
   //     A run reviewed once and then producing again carries its first gate's
   //     linkage for ever, so this is the state that would draw the review the
@@ -593,6 +605,7 @@ export async function readRunReviewSlot(
           .select({
             reviewTaskId: artifactReviewGates.reviewTaskId,
             status: artifactReviewGates.status,
+            createdAt: artifactReviewGates.createdAt,
           })
           .from(artifactReviewGates)
           .where(
@@ -602,7 +615,7 @@ export async function readRunReviewSlot(
             ),
           )
           .orderBy(desc(artifactReviewGates.createdAt), desc(artifactReviewGates.id));
-  const undecided = linkedGates.find((g) => g.status !== "resolved");
+  const undecided = electCurrentReviewGate(linkedGates);
   const heldGate = undecided ?? (pendingProduced ? undefined : linkedGates[0]);
   return {
     reviewTaskId: heldGate?.reviewTaskId ?? null,
@@ -685,8 +698,9 @@ export async function readVerificationRecordsForGates(
 export async function readGatePinnedTargets(
   runId: string,
   reviewTaskId: string,
+  options?: { decisionFactsForOrgId?: string; executor?: GateStoreExecutor },
 ): Promise<GatePinnedOutcome> {
-  const gate = await readReviewGate(runId, reviewTaskId);
+  const gate = await readReviewGateVia(options?.executor ?? db, runId, reviewTaskId);
   if (!gate) return { status: "not-found" };
   // A DECIDED gate still names its frozen pinned set, because the reviewed work
   // stays on screen after the decision: "A resolved gate opens read-only: what
@@ -696,7 +710,17 @@ export async function readGatePinnedTargets(
   // artifact's latest. Preparing from it is OPT-IN at the core
   // (`acceptResolvedGate`), so every decision path still fails closed here.
   if (gate.status !== "pending") {
-    return { status: "resolved", targets: rowsToTargets(gate.pinnedTargets) };
+    const time = gate.resolvedAt;
+    const decision = gate.status === "resolved" &&
+      typeof options?.decisionFactsForOrgId === "string" && options.decisionFactsForOrgId.length > 0 &&
+      gate.orgId === options.decisionFactsForOrgId && gate.runId === runId && gate.reviewTaskId === reviewTaskId &&
+      typeof gate.id === "string" && gate.id.length > 0 && gate.disposition === "approve" &&
+      typeof gate.fingerprint === "string" && /^[a-f0-9]{64}$/.test(gate.fingerprint) &&
+      time instanceof Date && Number.isFinite(time.getTime())
+      ? { gateId: gate.id, orgId: gate.orgId, runId: gate.runId, reviewTaskId: gate.reviewTaskId,
+          fingerprint: gate.fingerprint, disposition: "approve" as const, decidedAt: time.toISOString() }
+      : undefined;
+    return { status: "resolved", targets: rowsToTargets(gate.pinnedTargets), ...(decision ? { decision } : {}) };
   }
   return { status: "pending", targets: rowsToTargets(gate.pinnedTargets) };
 }
@@ -1109,6 +1133,13 @@ export async function claimPendingResumeIntents(opts?: {
           // Gate-store extension (cinatra#2038 S0): a DEAD-LETTERED intent is
           // never re-claimed — its attempts were exhausted; it awaits ops.
           isNull(artifactReviewResumeOutbox.deadLetteredAt),
+          // cinatra#4312 — nor an intent that has used its attempts but is not
+          // dead-lettered yet: the sweep dead-letters it
+          // (deadLetterExhaustedResumeIntents) instead of a further attempt.
+          // Each claim uses an attempt (the update below), whatever the
+          // delivery then returns, a `retryable` outcome included
+          // (artifact-review-resume-delivery `sweepArtifactReviewResumeIntents`).
+          lt(artifactReviewResumeOutbox.attempts, artifactReviewResumeOutbox.maxAttempts),
           or(
             eq(artifactReviewResumeOutbox.status, "pending"),
             and(
@@ -1159,8 +1190,9 @@ export async function claimPendingResumeIntents(opts?: {
 export async function markResumeIntentDelivered(
   gateId: string,
   leaseToken: string,
+  executor: GateStoreExecutor = db,
 ): Promise<boolean> {
-  const done = await db
+  const done = await executor
     .update(artifactReviewResumeOutbox)
     .set({ status: "done", updatedAt: sql`now()` })
     .where(
@@ -1172,6 +1204,30 @@ export async function markResumeIntentDelivered(
     )
     .returning({ gateId: artifactReviewResumeOutbox.gateId });
   return done.length === 1;
+}
+
+/**
+ * cinatra#4312 — run `fn` in one transaction that holds a SHARE lock on the
+ * run's row. The resume worker writes the acknowledgement that keeps a run
+ * parked (another artifact of the pause, or a regenerated artifact's review, is
+ * open; no resume is sent) inside this lock, on a re-read of the family and of
+ * its repair lineages. A close of a lineage with no gate decision takes the
+ * same row with `FOR NO KEY UPDATE` before it reads the lineage and the family's
+ * decisions and inserts a resume intent that carries the latest one
+ * (lifecycle-repair-store `carryDeclaredReviewDecision`). So the two cannot
+ * interleave: either the acknowledgement commits first and the close then reads
+ * the lineage closed and inserts the carrier, or the close commits first and the
+ * re-read sees the lineage closed and the worker resumes the run itself. A run
+ * row that does not exist takes no lock; `fn` still runs.
+ */
+export async function withRunDecisionLock<T>(
+  runId: string,
+  fn: (tx: GateStoreExecutor) => Promise<T>,
+): Promise<T> {
+  return db.transaction(async (tx) => {
+    await tx.select({ id: agentRuns.id }).from(agentRuns).where(eq(agentRuns.id, runId)).for("share");
+    return fn(tx);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1242,6 +1298,64 @@ export async function deadLetterExhaustedResumeIntents(opts?: {
     .where(and(inArray(artifactReviewResumeOutbox.gateId, eligible), eligibleCond))
     .returning({ gateId: artifactReviewResumeOutbox.gateId });
   return dead.length;
+}
+
+/** cinatra#4476 — the attempts a re-armed intent gets on top of those it used. */
+export const RECOVERY_ATTEMPTS_BUDGET = 20;
+
+/**
+ * cinatra#4476 — RE-ARM one resume intent that used its attempts, ONCE, for the
+ * upgrade recovery (`declared-review-recovery.ts`, which holds the run row
+ * `FOR NO KEY UPDATE` and the pause's once marker in the same transaction).
+ *
+ * A compare-and-set on the whole state: the row is `pending` or `delivering` (the
+ * two states a writer leaves an open intent in; a `done` row and a row in any other
+ * status are never written), it is dead-lettered or has used its attempts, and no
+ * lease is live (`pending`, or a lease that is missing or expired). So an intent a
+ * worker holds, one the claim can still take, and a closed one are never written.
+ * The write:
+ *   - `status` 'pending', `lease_token` and `lease_expires_at` cleared: the next
+ *     claim takes it like a new intent, and no earlier holder's lease token can
+ *     mark it (the mark is lease-guarded);
+ *   - `dead_lettered_at` cleared: it leaves the ops list;
+ *   - `attempts` kept, `max_attempts` = attempts + RECOVERY_ATTEMPTS_BUDGET: the
+ *     count of claims stays the record, and the bound holds again after the new
+ *     budget;
+ *   - `last_error` keeps the earlier error behind a note of the re-arm.
+ * The kind and response text are not written. Returns true when it wrote the row.
+ */
+export async function rearmExhaustedResumeIntent(
+  executor: GateStoreExecutor,
+  gateId: string,
+): Promise<boolean> {
+  const rows = await executor
+    .update(artifactReviewResumeOutbox)
+    .set({
+      status: "pending",
+      leaseToken: null,
+      leaseExpiresAt: null,
+      deadLetteredAt: null,
+      maxAttempts: sql`${artifactReviewResumeOutbox.attempts} + ${RECOVERY_ATTEMPTS_BUDGET}`,
+      lastError: sql`'re-armed once by the upgrade recovery; before: ' || coalesce(${artifactReviewResumeOutbox.lastError}, 'no error recorded')`,
+      updatedAt: sql`now()`,
+    })
+    .where(
+      and(
+        eq(artifactReviewResumeOutbox.gateId, gateId),
+        inArray(artifactReviewResumeOutbox.status, ["pending", "delivering"]),
+        or(
+          isNotNull(artifactReviewResumeOutbox.deadLetteredAt),
+          gte(artifactReviewResumeOutbox.attempts, artifactReviewResumeOutbox.maxAttempts),
+        ),
+        or(
+          eq(artifactReviewResumeOutbox.status, "pending"),
+          isNull(artifactReviewResumeOutbox.leaseExpiresAt),
+          lte(artifactReviewResumeOutbox.leaseExpiresAt, sql`now()`),
+        ),
+      ),
+    )
+    .returning({ gateId: artifactReviewResumeOutbox.gateId });
+  return rows.length === 1;
 }
 
 export interface DeadLetteredResumeRow {
@@ -1389,6 +1503,7 @@ export async function enforceReviewRunAccess(
   actor: PrimitiveActorContext,
   op: "read" | ReviewRunAccessOp,
   roles?: ActorRoleHints,
+  options?: { includeOrgId: true },
 ): Promise<RunAccessOutcome> {
   // Plain fetch (no actor ⇒ no internal enforce) — this helper OWNS the gate.
   const run = await readAgentRunById(runId);
@@ -1414,7 +1529,7 @@ export async function enforceReviewRunAccess(
   }
   try {
     await enforceRunAccess(runForCheck, actor, op, roles);
-    return { ok: true };
+    return { ok: true, ...(options?.includeOrgId && run ? { orgId: run.orgId } : {}) };
   } catch (err) {
     if (err instanceof AuthzError) return { ok: false, status: err.statusCode };
     throw err;

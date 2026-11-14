@@ -9,7 +9,9 @@
  *   - Search input filters by name (case-insensitive substring).
  *   - Clicking a card calls onChange with the canonical
  *     { scope: "list", listId, listName, memberCount } shape.
- *   - Empty results render the EmptyState copy.
+ *   - Empty results render the EmptyState copy, with no load error.
+ *   - A rejected load shows the existing load-error toast exactly once and
+ *     ends the loading state.
  *   - mixed-memberType lists render with the SAME affordances as
  *     contact-typed lists and produce the same onChange payload shape
  *     so the picker accepts both `contact` and `mixed` rows.
@@ -31,6 +33,13 @@ import {
 // fetchAvailableLists is the one the renderer calls.
 vi.mock("../list-picker-actions", () => ({
   fetchAvailableLists: vi.fn(),
+}));
+
+// The picker's existing load error is a toast; record it so a rejected load
+// can be told from an empty one.
+const { toastErrorMock } = vi.hoisted(() => ({ toastErrorMock: vi.fn() }));
+vi.mock("@/lib/cinatra-toast", () => ({
+  toast: { error: toastErrorMock, success: vi.fn(), info: vi.fn() },
 }));
 
 import { ListPickerRenderer } from "../list-picker-renderer";
@@ -183,13 +192,30 @@ describe("ListPickerRenderer", () => {
     });
   });
 
-  it("renders empty state when no lists exist", async () => {
+  it("renders empty state when no lists exist, with no load error", async () => {
     vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
     render(<ListPickerRenderer {...makeProps()} />);
 
     await waitFor(() =>
       expect(screen.getByText(/no lists yet/i)).toBeTruthy(),
     );
+    expect(screen.queryByText(/loading lists/i)).toBeNull();
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("T8: shows the existing load error once when the loader rejects, then ends loading", async () => {
+    vi.mocked(actions.fetchAvailableLists).mockRejectedValueOnce(
+      new Error("the CRM list search failed"),
+    );
+    render(<ListPickerRenderer {...makeProps()} />);
+
+    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getByText(/no lists yet/i)).toBeTruthy(),
+    );
+    expect(toastErrorMock).toHaveBeenCalledTimes(1);
+    expect(toastErrorMock).toHaveBeenCalledWith("Could not load lists.");
+    expect(screen.queryByText(/loading lists/i)).toBeNull();
   });
 
   it("renders mixed-memberType lists with the same affordances and onChange payload shape as contact-typed lists", async () => {

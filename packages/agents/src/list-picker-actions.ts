@@ -92,6 +92,52 @@ async function requireRunReadAccess(runId: unknown): Promise<void> {
 }
 
 /**
+ * The only class words a failed CRM list search may write to the log. The
+ * thrown value's `name` is compared with these literals (never matched by a
+ * pattern), and the literal of this list is what is logged, so no text of the
+ * thrown value reaches the line. The connector classes are named here as
+ * strings only: the loader never imports a connector.
+ */
+const LOGGABLE_ERROR_CLASSES = Object.freeze([
+  "Error",
+  "SyntaxError",
+  "TwentyConfigError",
+  "TwentyMcpError",
+  "TwentyToolContractError",
+  "TypeError",
+] as const);
+
+/**
+ * `<Class>` or `<Class>, code <n>` for a failed search, built from constants
+ * and an in-range integer only. `<Class>` is a literal of
+ * LOGGABLE_ERROR_CLASSES when the value is an Error whose `name` is a string
+ * equal to one of them, else `UnknownError`. The code is written only for a
+ * listed class and only when it is an integer HTTP status (100-599) or
+ * JSON-RPC code (-32768 to -32000). A getter or a proxy that throws while
+ * either is read gives `UnknownError`; that second error is dropped.
+ */
+function describeSearchFailure(err: unknown): string {
+  try {
+    if (!(err instanceof Error)) return "UnknownError";
+    const name: unknown = err.name;
+    if (typeof name !== "string") return "UnknownError";
+    const loggedClass = LOGGABLE_ERROR_CLASSES.find((listed) => listed === name);
+    if (loggedClass === undefined) return "UnknownError";
+    const code: unknown = (err as { code?: unknown }).code;
+    if (
+      typeof code === "number" &&
+      Number.isInteger(code) &&
+      ((code >= 100 && code <= 599) || (code >= -32768 && code <= -32000))
+    ) {
+      return `${loggedClass}, code ${code}`;
+    }
+    return loggedClass;
+  } catch {
+    return "UnknownError";
+  }
+}
+
+/**
  * @param runId - the `agent_run` this step belongs to, threaded by the
  *   renderer from `context.runId` (the shared field-renderer contract).
  */
@@ -102,17 +148,23 @@ export async function fetchAvailableLists(
   await requireRunReadAccess(runId);
 
   // Capability absent (crm-connector not installed/active — it is
-  // acquirable-on-demand, not required) degrades to "no lists available",
-  // exactly like the error path below.
+  // acquirable-on-demand, not required) degrades to "no lists available".
+  // Unlike a failed search below, this is not an error: the picker offers no
+  // lists, and one fixed line in the server log says why.
   const reader = resolveCrmListReader();
-  if (!reader) return [];
+  if (!reader) {
+    console.warn(
+      "[list-picker] no crm-list-reader capability is registered; the picker offers no lists",
+    );
+    return [];
+  }
 
   let lists;
   try {
-    // Picker shows contact-eligible lists. Twenty's `get_views` is
-    // workspace-scoped; the crm-connector surface post-filters by objectType
-    // when the per-type object-metadata cache has resolved (lazy-loaded by
-    // the connector on first call).
+    // Picker shows contact-eligible lists. The provider reads the views of
+    // each object type it is asked for (here: contacts) and counts a view as a
+    // list only when the view carries the `inLists CONTAINS <slug>` filter;
+    // every other view of that object is left out.
     //
     // SCOPE IS UNCHANGED by the run-access gate (cinatra#3050): the call and
     // its arguments are byte-identical to what the administrator-gated loader
@@ -121,10 +173,24 @@ export async function fetchAvailableLists(
     // (packages/sdk-extensions/src/crm-list-reader-contract.ts), so it carries
     // no actor; per-actor list scoping is a separate change.
     lists = await reader.searchLists({ query: "", objectType: "contact" });
-  } catch {
-    // No CRM provider registered, no Twenty row yet, no bearer attached, or
-    // upstream unreachable — degrade to "no lists available" rather than
-    // 500-ing the picker UI.
+  } catch (err) {
+    // A failed search is NOT an empty CRM: reject, so the picker shows its
+    // existing load error instead of "No lists yet".
+    //
+    // What leaves this function is fixed words only. The log line names the
+    // error's class only as a literal of LOGGABLE_ERROR_CLASSES (anything
+    // else is `UnknownError`) and a code only when it is an in-range integer.
+    // The thrown value's message, `data`, `cause` and any body are never
+    // logged, never carried and never stringified, and the new error has no
+    // `cause` (the framework's server error log prints the cause chain).
+    console.warn(
+      `[list-picker] the CRM list search failed (${describeSearchFailure(err)}); the picker shows the load error`,
+    );
+    throw new Error("the CRM list search failed");
+  }
+
+  if (lists.length === 0) {
+    console.warn("[list-picker] the CRM list search answered no lists");
     return [];
   }
 

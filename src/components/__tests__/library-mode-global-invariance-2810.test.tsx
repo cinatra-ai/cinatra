@@ -95,6 +95,13 @@ vi.mock("@/lib/better-auth-db", () => ({
     { id: "org-a", name: "Org A", teams: [{ id: "team-a", name: "Team A" }] },
   ]),
   readProjectsForUser: vi.fn(async () => [{ id: "project-a", name: "Project A" }]),
+  // The library names a team-held row's team (cinatra#3475) through this one
+  // bounded read; it answers the fixture's one team inside its one org only.
+  readTeamsByIdsForOrg: vi.fn(async (teamIds: string[], organizationId: string) =>
+    organizationId === "org-a" && teamIds.includes("team-a")
+      ? [{ id: "team-a", name: "Team A" }]
+      : [],
+  ),
 }));
 
 vi.mock("@/lib/dashboards/dashboard-artifact-pointer-resolvers", () => ({
@@ -207,7 +214,13 @@ async function renderGlobalLibrary(props?: { query?: string; facet?: string; sco
     facet: props?.facet,
     scopeParam: props?.scopeParam,
   });
-  render(tree as ReactNode);
+  // Each library row awaits its own glyph (cinatra#3475), and a client render
+  // draws no async component, so the tree is rendered the way the page is,
+  // on the server, and its HTML is mounted for this file's own selectors.
+  const { prerender } = await import("react-dom/static");
+  const { prelude } = await prerender(tree as ReactNode);
+  const html = await new Response(prelude as unknown as ReadableStream).text();
+  render(createElement("div", { dangerouslySetInnerHTML: { __html: html } }));
 }
 
 beforeEach(() => {

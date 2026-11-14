@@ -6,6 +6,7 @@ import {
   parseUserResponseEnvelope,
   revalidateSelectedRefs,
   buildSelectionRows,
+  refTripleKey,
   ContextRouteError,
 } from "@/lib/artifacts/context-route-support";
 import {
@@ -21,11 +22,25 @@ import {
 import { planAllocationForGate } from "@/lib/artifacts/context-allocation-gate";
 import { allocationForSlot } from "@/lib/artifacts/context-allocation-planner";
 import {
+  effectiveSelectionMode,
+  resolveInheritedContextSelection,
+} from "@/lib/artifacts/context-repair-inheritance";
+import {
   finalizeContextSelectionPinsAtomic,
   MissingRepresentationError,
   SelectionCoherenceError,
 } from "@/lib/artifacts/context-selection-finalize";
 import { ensureArtifactTypesRegistered } from "@/lib/artifacts/ensure-artifact-registry";
+
+/** Who gave this finalize's answer — `buildSelectionRows`' own rule, so the
+ *  recorded answer and its audit rows never disagree, an empty answer
+ *  included: the inherited provenance for a repair, else the slot's mode. */
+function answerSelectedBy(
+  selectionMode: "interactive" | "autonomous",
+  inherited: { selectedBy: "user" | "agent" | "autonomous" } | null,
+): "user" | "agent" | "autonomous" {
+  return inherited?.selectedBy ?? (selectionMode === "autonomous" ? "autonomous" : "user");
+}
 
 // ---------------------------------------------------------------------------
 // POST /api/context-finalize
@@ -85,18 +100,6 @@ export async function POST(req: Request): Promise<Response> {
     // child that the run package's own OAS binds to this slotId), never the body.
     // Actor + audit-store scoping below stays on the run package (trustedPackageName).
     const slot = await loadTrustedSlot(ctx.trustedSlotPackageName, body.slotId);
-
-    // Trusted modes come from the SLOT, not the body/envelope. Validate the
-    // caller-supplied values match (defends against OAS/renderer drift), then
-    // use the slot's values for all provenance + the selection key.
-    if (body.selectionMode !== slot.selectionMode) {
-      throw new ContextRouteError(
-        422,
-        "selection_mode_mismatch",
-        `body selectionMode '${body.selectionMode}' != slot '${slot.selectionMode}'`,
-      );
-    }
-    const selectionMode = slot.selectionMode;
 
     // Parse the selection envelope; reject a slotId / resolutionMode that
     // disagrees with the trusted slot.
@@ -188,11 +191,70 @@ export async function POST(req: Request): Promise<Response> {
         `slot '${body.slotId}' received no allocation in the manifest this gate planned`,
       );
     }
+
+    // Trusted modes come from the SLOT, not the body/envelope — except that a
+    // repair inheriting its own producing run's answered screen runs the slot
+    // in the flow's no-person mode (cinatra#3080). `/api/context-resolve`
+    // derives that mode from the SAME server-read facts through the SAME
+    // helper, so the value the flow carried here is checked against it exactly
+    // as the declared mode always was: a body claiming `autonomous` for an
+    // ordinary interactive slot is still refused, because nothing a caller can
+    // say makes this run a repair with a stored answer. The check reads the
+    // ALLOCATION above (whether an inherited answer is still inside it), so it
+    // stands here, after the allocation, rather than first.
+    const inherited = resolveInheritedContextSelection({
+      run: ctx.run,
+      slotId: body.slotId,
+      // Same scoping as `/api/context-resolve`, and the same value the audit
+      // rows below are written under.
+      parentPackageName: ctx.trustedPackageName,
+      candidates: allocated.refs,
+      slotMinItems: typeof slot.minItems === "number" ? slot.minItems : 0,
+      // The slot's own declared mode, so an inherited EMPTY answer records the
+      // provenance it actually had rather than asserting a person.
+      declaredSelectionMode: slot.selectionMode,
+    });
+    const selectionMode = effectiveSelectionMode(slot.selectionMode, inherited);
+    if (body.selectionMode !== selectionMode) {
+      throw new ContextRouteError(
+        422,
+        "selection_mode_mismatch",
+        `body selectionMode '${body.selectionMode}' != slot '${selectionMode}'`,
+      );
+    }
+
     const trusted = revalidateSelectedRefs({
       submitted: envelope.selectedRefs,
       candidates: allocated.refs,
       slot,
     });
+
+    // AN INHERITED SELECTION IS THE INHERITED SELECTION. The child flow's
+    // autonomous node builds its envelope out of the very `plannedRefs` the
+    // resolve returned, so on the honest road these are equal by construction.
+    // Checking it is what stops the `autonomous` branch from being steerable:
+    // without this, anything able to reach the route with the repair run's
+    // binding could submit ANY other member of the allocation and have it
+    // written as the repair's context under the producing run's provenance.
+    // The inherited answer is its refs AND their order as the producing run
+    // recorded them, so the comparison is POSITION BY POSITION: the submitted
+    // triples in the order submitted (each one already validated above, none
+    // deduplicated) against the recorded refs in the recorded order. A
+    // reordered, shortened, lengthened or repeated list is not that answer.
+    if (inherited) {
+      const submittedKeys = envelope.selectedRefs.map((ref) => refTripleKey(ref));
+      const inheritedKeys = inherited.refs.map((ref) => refTripleKey(ref));
+      if (
+        submittedKeys.length !== inheritedKeys.length ||
+        submittedKeys.some((key, i) => key !== inheritedKeys[i])
+      ) {
+        throw new ContextRouteError(
+          422,
+          "inherited_selection_mismatch",
+          `the ${submittedKeys.length} submitted refs are not the ${inheritedKeys.length} the producing run answered, in its order`,
+        );
+      }
+    }
 
     // cinatra#1430 finalization: ONE ATOMIC GC-serialized transaction across
     // ALL selected refs = coherence re-validation + the append-only
@@ -200,7 +262,8 @@ export async function POST(req: Request): Promise<Response> {
     // (referrer = this agent run). All-or-nothing: the append-only audit
     // cannot be compensated after a partial commit, so any incoherent ref
     // aborts the whole selection. Idempotent: each ref's deterministic
-    // selection id and the pin's natural key make an exact replay a no-op.
+    // selection id and the pin's natural key make an exact replay a no-op;
+    // the replay's answer row records the same answer once more.
     const rows = buildSelectionRows({
       orgId: ctx.run.orgId!,
       parentRunId: ctx.run.id,
@@ -208,6 +271,11 @@ export async function POST(req: Request): Promise<Response> {
       slotId: body.slotId,
       selectionMode,
       trusted,
+      // An inherited pick ran with no person in THIS run, but SOMEONE made it
+      // on the producing run — so the audit row repeats VERBATIM what that
+      // run's own row said about who chose. A person's pick stays a person's;
+      // a resolver's pick is never promoted to a person's.
+      ...(inherited ? { selectedBy: inherited.selectedBy } : {}),
     });
     // epic #1785 wave A4: warm the object-type registry before finalize. The
     // finalizer is a sync store-leaf (it cannot import the heavy registrar), so
@@ -224,6 +292,19 @@ export async function POST(req: Request): Promise<Response> {
           referrerId: ctx!.run.id,
           createdBy: ctx!.run.runBy ?? null,
         })),
+        // THE WHOLE ANSWER (cinatra#3080): the same transaction appends ONE
+        // row holding exactly these refs, in order — none for an answer of
+        // nothing — so a later repair of this run reads what this run answered
+        // rather than the set of everything it ever picked. Who chose is the
+        // very value every audit row above carries.
+        {
+          orgId: ctx.run.orgId!,
+          parentRunId: ctx.run.id,
+          parentPackageName: ctx.trustedPackageName,
+          slotId: body.slotId,
+          selectionMode,
+          selectedBy: answerSelectedBy(selectionMode, inherited),
+        },
       );
       wroteAny = results.some((r) => r.selectionWritten);
     } catch (err) {

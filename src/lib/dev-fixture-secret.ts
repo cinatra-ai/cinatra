@@ -78,6 +78,20 @@ export function devFixturePasswordFilePath(cwd: string = process.cwd()): string 
 }
 
 /**
+ * Where a boot that wires the fixture account writes its IDENTITY (never its
+ * password) for the end-to-end UAT suite's Playwright setup, relative to the
+ * instance's working directory. The suite's own folder (gitignored `.uat/`)
+ * is the core-owned integration harness; its setup reads the file there.
+ */
+export const DEV_UAT_ACTOR_FILE_RELATIVE = path.join(
+  "tests",
+  "e2e",
+  "wp-drupal-uat",
+  ".uat",
+  "dev-actor.json",
+);
+
+/**
  * Write this boot's password where the operator, a harness or the command line
  * can read it. Returns the path written, or null when the instance could not
  * write it — a boot that cannot write the file still boots, and says so.
@@ -147,6 +161,11 @@ export function readDevFixturePasswordFile(cwd: string = process.cwd()): string 
  * belonged to. Best-effort and silent on absence.
  */
 export function removeDevFixturePasswordFile(cwd: string = process.cwd()): void {
+  // The handoff is gone, so the next boot in this process that wires the
+  // account must write it again (cinatra#4112): a boot that refuses the fixture
+  // after a private boot printed it would otherwise leave a later private boot
+  // with a password nobody can read.
+  alreadyPrinted = false;
   try {
     rmSync(devFixturePasswordFilePath(cwd), { force: true });
   } catch {
@@ -444,7 +463,8 @@ let alreadyPrinted = false;
 
 /**
  * Tell the operator where the fixture account's password is — once for the whole
- * boot — and put it there.
+ * boot, and again after `removeDevFixturePasswordFile` took the file away — and
+ * put it there.
  *
  * THE VALUE IS NEVER PRINTED. A boot log is read by whoever can read the log,
  * and this boot runs on continuous-integration runners whose logs are public, so

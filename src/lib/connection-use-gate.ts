@@ -50,6 +50,7 @@ import type {
   AgentAuthPolicyVisibility,
   AgentAuthPolicyVisibilitySelection,
 } from "@cinatra-ai/agents/auth-policy";
+import type { SavedNangoConnection } from "@/lib/nango-system";
 import type { NangoConnectionIdentity } from "@cinatra-ai/extensions/connection-identity-store";
 import {
   evaluateExtensionAccess,
@@ -517,4 +518,170 @@ export async function enforceConnectionUse(input: {
     reason: "forbidden",
     message: `You are not authorized to use this ${identity.connectorKey} connection.${clampNote}`,
   });
+}
+
+// Shared run-start presence and legacy-resolver identity/audit contracts.
+export class AmbiguousSharedConnectionError extends AuthzError {}
+
+export async function auditSentinelDeny(input: {
+  connectorKey: string;
+  actor: ActorContext;
+  subjectUserId: string | undefined;
+  runId?: string;
+  reason: "no_candidate" | "ambiguous_shared_candidates";
+  candidateCount?: number;
+}): Promise<void> {
+  const { connectorKey, actor, subjectUserId, runId, reason, candidateCount } = input;
+  await logDeniedAuditEventStrictWithCooldown({
+    organizationId: actor.organizationId,
+    actorPrincipalId: actor.principalId,
+    actorPrincipalType: actor.principalType === "HumanUser" ? "human" : "system",
+    authSource: actor.authSource,
+    impersonatedUserId:
+      subjectUserId != null && subjectUserId !== actor.principalId ? subjectUserId : undefined,
+    resourceType: "connection",
+    resourceId: `connector:${connectorKey}`,
+    operation: "use",
+    runId,
+    metadata: {
+      connectorKey,
+      reason,
+      ...(candidateCount != null ? { candidateCount } : {}),
+    },
+  });
+}
+
+/** Unavailable evidence is not a confirmed missing connector. It carries no
+ * upstream message, response, configuration value or connection id. */
+export class ConnectionAvailabilityUnknownError extends Error {
+  override readonly name = "ConnectionAvailabilityUnknownError";
+  constructor() { super("Connection availability could not be confirmed. Try again later."); }
+}
+
+/** Required start predicate, separate from token fetching. Caller has already
+ * authorized the connector PACKAGE. Discovery uses trusted human/runAs and the
+ * existing grant/ceiling predicate, before any provider metadata query. */
+export async function hasRequiredConnectorConnectionForUse(input: {packageId:string;actor:ActorContext}): Promise<boolean> {
+  const { actor } = input;
+  const subjectUserId = connectionSubjectUserId(actor);
+  const missing = async () => { await auditSentinelDeny({connectorKey:input.packageId,actor,subjectUserId,reason:"no_candidate"}); return false; };
+  try {
+    const catalog = await import("@cinatra-ai/connectors-catalog/descriptors.mjs");
+    let descriptor = catalog.getConnectorDescriptorByPackageId(input.packageId);
+    const visited = new Set<string>();
+    while (descriptor?.consumesConnectionFrom) {
+      if (visited.has(descriptor.slug)) throw new ConnectionAvailabilityUnknownError();
+      visited.add(descriptor.slug);
+      descriptor = catalog.getConnectorDescriptorBySlug(descriptor.consumesConnectionFrom);
+      if (!descriptor) throw new ConnectionAvailabilityUnknownError();
+    }
+    // A Google OAuth client configured for the application is the owner's
+    // configuration-only representation. It is NOT a Gmail/Calendar account.
+    if (descriptor?.connectionConfigurationOnly) {
+      const ownerPackageId = descriptor.packageId;
+      let state: "present" | "absent";
+      try {
+        const { resolveCapabilityProviders } = await import("@/lib/extension-capabilities-registry");
+        const owners = resolveCapabilityProviders("connection-configuration-presence")
+          .filter(provider => provider.packageName === ownerPackageId);
+        if (owners.length !== 1) throw new ConnectionAvailabilityUnknownError();
+        const impl = owners[0].impl;
+        if (!impl || typeof impl !== "object" ||
+            typeof (impl as { readPresence?: unknown }).readPresence !== "function") {
+          throw new ConnectionAvailabilityUnknownError();
+        }
+        // Resolve the live owning reader on each call. Never import its vendor
+        // implementation or treat an unwired/invalid provider as a known miss.
+        const result: unknown = await (impl as { readPresence(): Promise<unknown> }).readPresence();
+        if (!result || typeof result !== "object" || Array.isArray(result)) {
+          throw new ConnectionAvailabilityUnknownError();
+        }
+        const keys = Reflect.ownKeys(result);
+        if (keys.length !== 1 || keys[0] !== "state") {
+          throw new ConnectionAvailabilityUnknownError();
+        }
+        const observed = (result as { state: unknown }).state;
+        if (observed !== "present" && observed !== "absent") {
+          throw new ConnectionAvailabilityUnknownError();
+        }
+        state = observed;
+      } catch {
+        // A provider may throw credential-bearing or authorization errors. Its
+        // unavailable evidence is UNKNOWN, never an echoed error or absence.
+        throw new ConnectionAvailabilityUnknownError();
+      }
+      return state === "present" ? true : await missing();
+    }
+    const packageId = descriptor?.packageId ?? input.packageId;
+    const aliases = new Set(catalog.connectorKeysForPackageId(packageId));
+    const { listNangoConnectionsForScopeFilter } = await import("@cinatra-ai/extensions/connection-identity-store");
+    const discovered = await listNangoConnectionsForScopeFilter(actor.organizationId ?? null,subjectUserId ?? "");
+    const candidates = [...new Map(discovered.filter(row => !row.deletedAt && (row.connectorPackageId === packageId || aliases.has(row.connectorKey))).map(row => [row.id,row])).values()];
+    const authorized: NangoConnectionIdentity[] = [];
+    for (const row of candidates) {
+      // Row grants, org and only:user ceilings remain load-bearing for admins.
+      const decision = await decideConnectionUse({identity:row,actor,subjectUserId});
+      if (decision.allowed) authorized.push(row);
+    }
+    if (!authorized.length) return await missing();
+    const authorizedOwn = authorized.filter(row => subjectUserId && row.ownerUserId === subjectUserId);
+    const authorizedShared = authorized.filter(row => row.ownerUserId !== subjectUserId && row.organizationId != null && row.organizationId === actor.organizationId);
+    // Match canonical resolution BEFORE provider presence can prune an
+    // ambiguous grant set into an apparent single usable connection.
+    if (!authorizedOwn.length && authorizedShared.length > 1) {
+      await auditSentinelDeny({connectorKey:packageId,actor,subjectUserId,reason:"ambiguous_shared_candidates",candidateCount:authorizedShared.length});
+      throw new AmbiguousSharedConnectionError({statusCode:403,reason:"forbidden",message:"More than one shared connection is available. Ask its owners to narrow the grants."});
+    }
+    let ownPrimary = authorizedOwn[0];
+    const existing: NangoConnectionIdentity[] = [];
+    const external = authorized.filter(row => row.connectorKey === "externalMcp");
+    if (external.length) {
+      const { listExternalMcpServersForPreflight, externalMcpKeylessConnectionId } = await import("@/lib/external-mcp-registry");
+      const rows = await listExternalMcpServersForPreflight();
+      for (const identity of external) {
+        const row = rows.find(r => r.enabled && typeof r.serverUrl === "string" && r.serverUrl.trim() && (r.nangoConnectionId || externalMcpKeylessConnectionId(r.id)) === identity.connectionId);
+        if (!row || (row.orgId && row.orgId !== actor.organizationId) || (row.scope === "user" && row.userId !== subjectUserId)) continue;
+        // A keyless server has a real derived identity, not a fake vault entry.
+        // Keyed rows use their saved address; no account credential is fetched.
+        existing.push(identity);
+      }
+    }
+    const accountRows = authorized.filter(row => row.connectorKey !== "externalMcp");
+    if (accountRows.length) {
+      const { readConnectorConfigurationForPreflight } = await import("@/lib/database-metadata");
+      const { getNangoSystem,listNangoConnectionAddressesForPreflight } = await import("@/lib/nango-system");
+      const store = await readConnectorConfigurationForPreflight("nango_connections");
+      const records = store?.connections;
+      if (records !== undefined && (!records || typeof records !== "object" || Array.isArray(records))) throw new ConnectionAvailabilityUnknownError();
+      if (ownPrimary && authorizedOwn.length > 1) {
+        const primaryOrder = (records as Record<string,unknown> | undefined)?.[ownPrimary.connectorKey];
+        if (Array.isArray(primaryOrder)) {
+          const first = (primaryOrder as SavedNangoConnection[]).find(record => authorizedOwn.some(row => row.connectorKey === ownPrimary.connectorKey && row.connectionId === record.connectionId));
+          if (first) ownPrimary = authorizedOwn.find(row => row.connectorKey === ownPrimary.connectorKey && row.connectionId === first.connectionId) ?? ownPrimary;
+        }
+      }
+      const surface = getNangoSystem();
+      if (!surface) throw new ConnectionAvailabilityUnknownError();
+      const addresses = accountRows.flatMap(identity => {
+        const entries = (records as Record<string,unknown> | undefined)?.[identity.connectorKey];
+        if (entries !== undefined && !Array.isArray(entries)) throw new ConnectionAvailabilityUnknownError();
+        const record = (entries as SavedNangoConnection[] | undefined)?.find(r => r.connectionId === identity.connectionId);
+        const providerConfigKey = record?.providerConfigKey || surface.providerConfigKeys[identity.connectorKey];
+        return record && providerConfigKey ? [{identity,providerConfigKey,connectionId:identity.connectionId}] : [];
+      });
+      if (addresses.length) {
+        const presence = await listNangoConnectionAddressesForPreflight({providerConfigKeys:[...new Set(addresses.map(r=>r.providerConfigKey))],connectionIds:[...new Set(addresses.map(r=>r.connectionId))]});
+        if (presence.state === "unknown") throw new ConnectionAvailabilityUnknownError();
+        for (const address of addresses) if (presence.addresses.some(r=>r.providerConfigKey===address.providerConfigKey && r.connectionId===address.connectionId)) existing.push(address.identity);
+      }
+    }
+    const selected = ownPrimary ?? authorizedShared[0];
+    if (selected && !existing.some(row => row.id === selected.id)) return await missing();
+    if (!selected) return await missing();
+    await enforceConnectionUse({identity:selected,actor,subjectUserId,source:"required-run-start"});
+    return true;
+  } catch (error) {
+    if (error instanceof AuthzError || error instanceof ConnectionAvailabilityUnknownError) throw error;
+    throw new ConnectionAvailabilityUnknownError();
+  }
 }

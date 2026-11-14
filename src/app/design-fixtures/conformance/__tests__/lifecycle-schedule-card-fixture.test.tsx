@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 import { LifecycleScheduleCardFixtures } from "../lifecycle-schedule-card-fixtures";
 import {
@@ -70,7 +70,7 @@ describe("the conformance harness mounts for the schedule card", () => {
     for (const surfaceId of ["schedule-card-first-shown", "schedule-card-expired"]) {
       const drawn = card(mount(surfaceId));
       expect(drawn.querySelector('[data-conformance-id="schedule-proposal-floor"]')).not.toBeNull();
-      expect(drawn.querySelector('[data-action="confirm-schedule-proposal"]')).not.toBeNull();
+      expect(drawn.querySelector('[data-action="confirm-schedule -> scheduled"]')).not.toBeNull();
       expect(drawn.querySelector('[data-action="save-schedule-changes"]')).toBeNull();
       cleanup();
     }
@@ -79,7 +79,7 @@ describe("the conformance harness mounts for the schedule card", () => {
     for (const surfaceId of ["schedule-card-configured", "schedule-card-fired-recurring"]) {
       const drawn = card(mount(surfaceId));
       expect(drawn.querySelector('[data-action="save-schedule-changes"]')).not.toBeNull();
-      expect(drawn.querySelector('[data-action="confirm-schedule-proposal"]')).toBeNull();
+      expect(drawn.querySelector('[data-action="confirm-schedule -> scheduled"]')).toBeNull();
       cleanup();
     }
     // "Fired, one-off — the schedule was spent · read-only · none at all": the
@@ -105,7 +105,7 @@ describe("the conformance harness mounts for the schedule card", () => {
 
   it("presses the shipped Confirm and the PRODUCT composes the request and the in-flight floor", async () => {
     const root = mount("schedule-card-confirm-floor");
-    const confirm = card(root).querySelector('[data-action="confirm-schedule-proposal"]');
+    const confirm = card(root).querySelector('[data-action="confirm-schedule -> scheduled"]');
     fireEvent.click(confirm as HTMLElement);
     // The card's own in-flight presentation — the word and the dead control are
     // both the component's, computed while its answer is outstanding.
@@ -160,6 +160,36 @@ describe("the conformance harness mounts for the schedule card", () => {
     );
     // What was saved is what is armed, so the control goes quiet again.
     await waitFor(() => expect(save.disabled).toBe(true));
+  });
+
+  it("drives the native modal and the declared cancelled/stopped transport reading", async () => {
+    const root = mount("schedule-card-fired-recurring-floor");
+    const drawn = card(root);
+    const cancel = drawn.querySelector('[data-action="cancel-trigger-schedule"]') as HTMLElement;
+    fireEvent.click(cancel);
+    let dialog = screen.getByRole("alertdialog", { name: "Stop this recurring schedule?" });
+    expect(root.contains(dialog)).toBe(false);
+    expect(dialog.getAttribute("data-slot")).toBe("alert-dialog-content");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Keep schedule" }));
+    expect(roads(root)).toEqual([]);
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    fireEvent.click(cancel);
+    dialog = screen.getByRole("alertdialog", { name: "Stop this recurring schedule?" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel schedule" }));
+    await waitFor(() => expect(roads(root)).toEqual(["cancel"]));
+    await waitFor(() => expect(drawn.querySelector('[data-conformance-id="schedule-proposal-floor"]')).toBeNull());
+    const hour = drawn.querySelector('[data-readonly-field="recurring-hour"]');
+    const minute = drawn.querySelector('[data-readonly-field="recurring-minute"]');
+    expect(hour).not.toBeNull();
+    expect(minute).not.toBeNull();
+    expect(hour?.textContent?.replace(/\s+/g, " ").trim()).toBe("Hour: 09");
+    expect(minute?.textContent?.replace(/\s+/g, " ").trim()).toBe("00 Minute");
+    expect(drawn.textContent).toContain("Europe/Berlin");
+    expect(drawn.querySelectorAll("button, input, [role=combobox]")).toHaveLength(0);
+    expect(drawn.querySelector('[data-conformance-id="schedule-option-rows"]')).not.toBeNull();
+    for (const field of drawn.querySelectorAll("button, input, [role=combobox]")) {
+      expect(field.hasAttribute("disabled") || field.getAttribute("aria-disabled") === "true").toBe(true);
+    }
   });
 
   it("says the FIRING on the row, and only on the two fired readings", () => {

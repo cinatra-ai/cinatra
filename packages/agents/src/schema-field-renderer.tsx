@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowRight, LinkIcon, MailIcon } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
@@ -22,7 +22,26 @@ import {
   type FieldRendererProps,
   type RendererMode,
 } from "./field-renderer-registry";
-import { resolveFieldLabel } from "./humanize-field-name";
+import { isInternalPlaceholderFieldName, resolveFieldLabel } from "./humanize-field-name";
+
+/**
+ * THE DECLARED-VALUE HOLD OF A GATE'S CONTINUE (cinatra#4244, design
+ * app-lifecycle-cards.html section V.1, "A declared value holds the Continue").
+ *
+ * A host that mounts a mid-run gate whose fields the schema-field fallback
+ * draws, and lets the drawn field own the gate's one Continue, provides `true`.
+ * The structured object field then draws that Continue UNAVAILABLE until every
+ * declared-required value of a kind it reads as typed (text, number, list,
+ * choice) is written - text blank once trimmed and an empty list are not
+ * written - and adds no sentence of its own for the hold. Everywhere else (a
+ * setup field, a grouped setup form, any host that provides nothing) the
+ * default `false` keeps the field exactly as it was.
+ *
+ * It lives in this module, beside the field that reads it, and not in a module
+ * of its own: a new module would add a first-party module to every locked
+ * route of the route-graph ratchet.
+ */
+export const GateContinueHoldContext = createContext<boolean>(false);
 
 type Props = {
   fieldName: string;
@@ -40,6 +59,15 @@ type Props = {
   registerFlush?: (fn: () => Promise<void>) => void;
   /** When true, skip the internal Continue button. See FieldRendererProps. */
   hideSubmit?: boolean;
+  /**
+   * The value as typed, reported on every change (cinatra#4244). Passed only by
+   * `StructuredObjectField` to its sub-fields, so it can hold the gate's
+   * Continue while a declared-required value is unwritten (design V.1). The
+   * text, number and list kinds report what their flush would hand over (a
+   * number as its raw text); a choice and a box already write through
+   * `onChange`, and an object kind reports nothing.
+   */
+  onDraftChange?: (value: unknown) => void;
   /**
    * TRUE REGISTRY-BYPASS FLOOR (cinatra#1625, codex convergence 2026-07-20). When
    * set, this renderer does NOT re-enter `fieldRendererRegistry` — it renders the
@@ -278,6 +306,18 @@ export function parseJsonObjectInput(text: string): ParsedObject {
   return { ok: true, value: parsed };
 }
 
+/**
+ * Own-property read and write over agent-declared keys (cinatra#4244): a plain
+ * `obj[key]` reads, and `obj[key] = v` calls, the prototype accessor for a
+ * field named `__proto__`, which loses the field and its answer.
+ */
+function ownSubValue(obj: Record<string, unknown>, key: string): unknown {
+  return Object.prototype.hasOwnProperty.call(obj, key) ? obj[key] : undefined;
+}
+function setOwnSubValue(obj: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(obj, key, { value, enumerable: true, writable: true, configurable: true });
+}
+
 /** A sub-value that is absent, blank, or an empty list counts as "not given". */
 function isBlankSubValue(value: unknown): boolean {
   if (value === undefined || value === null) return true;
@@ -343,13 +383,13 @@ export function collectObjectSchemaErrors(
   const errors: ObjectSchemaError[] = [];
   const missing = new Set<string>();
   for (const key of required) {
-    if (isBlankSubValue(value[key])) {
+    if (isBlankSubValue(ownSubValue(value, key))) {
       missing.add(key);
       errors.push({ path: [...path, key].join("."), kind: "missing" });
     }
   }
   for (const [key, sub] of Object.entries(properties)) {
-    const child = value[key];
+    const child = ownSubValue(value, key);
     if (child === undefined) continue; // absence is the required check's business
     if (missing.has(key)) continue; // already reported as missing; don't double-report
     errors.push(...collectObjectSchemaErrors(sub, child, [...path, key]));
@@ -372,12 +412,49 @@ function isValidEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
+/**
+ * How a number field reads its typed text (cinatra#4244).
+ *
+ * ON A GATE - inside `GateContinueHoldContext`, which only the run page's
+ * schema-drawn gate provides - text that is no finite number (`1e309`, NaN)
+ * is no answer: JSON cannot carry it. Its flush hands over `undefined`, which
+ * also clears a value flushed on an earlier press, and the field shows the
+ * number error. EVERYWHERE ELSE (setup gates, grouped setup forms) the reading
+ * is main's, unchanged: only NaN is an error and is not handed over.
+ */
+export function numberFlushValue(
+  text: string,
+  kind: "number" | "integer",
+  onGate: boolean,
+): { emit: false } | { emit: true; value: number | undefined } {
+  if (text === "") return { emit: true, value: undefined };
+  const parsed = kind === "integer" ? parseInt(text, 10) : Number(text);
+  if (onGate) return { emit: true, value: Number.isFinite(parsed) ? parsed : undefined };
+  return Number.isNaN(parsed) ? { emit: false } : { emit: true, value: parsed };
+}
+
+export function numberFieldError(
+  text: string,
+  kind: "number" | "integer",
+  onGate: boolean,
+): string | null {
+  if (text.length === 0) return null;
+  const parsed = kind === "integer" ? parseInt(text, 10) : Number(text);
+  const invalid = onGate ? !Number.isFinite(parsed) : Number.isNaN(parsed);
+  return invalid ? "Enter a valid number." : null;
+}
+
 export function SchemaFieldRenderer(props: Props) {
-  const { fieldName, schema, value, onChange, disabled, required, error: callerError, context, onBusyChange, saveNow, assistResponseKey, mode, registerFlush, hideSubmit, bypassRegistry } = props;
+  const { fieldName, schema, value, onChange, disabled, required, error: callerError, context, onBusyChange, saveNow, assistResponseKey, mode, registerFlush, hideSubmit, bypassRegistry, onDraftChange } = props;
 
   const title = (schema as { title?: string }).title;
   const description = (schema as { description?: string }).description;
   const label = resolveFieldLabel(fieldName, title, description);
+  // cinatra#4244 - on the run page's schema-drawn gate a number that is not
+  // finite is no answer (`numberFlushValue`); elsewhere the reading is main's.
+  const onGate = useContext(GateContinueHoldContext);
+  const onGateRef = useRef(onGate);
+  useEffect(() => { onGateRef.current = onGate; }, [onGate]);
 
   // Local state for text-entry inputs (string, url, email, number, array).
   // onChange in HITL context calls approveReviewTask; these inputs need local
@@ -389,6 +466,17 @@ export function SchemaFieldRenderer(props: Props) {
     return "";
   });
 
+  // cinatra#4310 — THE BOOLEAN QUESTION'S STAGED ANSWER. Where this field draws
+  // its own Continue, the box only stages the answer and the Continue sends it,
+  // as the Continue of the number, array and string kinds does. On that road
+  // only a real boolean ticks the box: the per-field setup panels hand a
+  // non-object field the whole values envelope as `value`, and an object is not
+  // an answer. So an untouched box is `false`, and the Continue sends what it shows.
+  const [stagedChecked, setStagedChecked] = useState<boolean>(() => value === true);
+  // One send per press, held on a ref: `submitting` is React state, so a second
+  // press in the same tick would still find the control enabled.
+  const booleanSendRef = useRef(false);
+
   // Sync localValue when the parent externally changes value (e.g. AI suggestions via
   // form.setValue). Safe alongside user typing because this component never calls
   // field.onChange while typing — it uses registerFlush — so field.value only changes
@@ -397,6 +485,7 @@ export function SchemaFieldRenderer(props: Props) {
     if (typeof value === "string") setLocalValue(value);
     else if (typeof value === "number") setLocalValue(String(value));
     else if (Array.isArray(value)) setLocalValue(value.map((v) => String(v)).join("\n"));
+    else if (typeof value === "boolean") setStagedChecked(value);
   }, [value]);
 
   // THE WINDOW'S FILL REACHES THIS FIELD (cinatra#2934). The shared props
@@ -432,7 +521,9 @@ export function SchemaFieldRenderer(props: Props) {
   // When inside a grouped form, register a flush that pushes buffered localValue
   // into react-hook-form's internal store before Zod validation runs.
   // Registry-matched renderers register their own flush; boolean/enum call onChange
-  // directly and need no flush.
+  // directly and need no flush. (A boolean that draws its own Continue,
+  // cinatra#4310, is mounted without a flush registration: a host that asks for
+  // a flush also passes `hideSubmit`, and that box writes through at once.)
   useEffect(() => {
     if (!registerFlush) return;
     // Bypass floors own their flush directly — they never delegate to a
@@ -452,9 +543,11 @@ export function SchemaFieldRenderer(props: Props) {
     registerFlush(async () => {
       const v = localValueRef.current;
       if (t === "number" || t === "integer") {
-        if (v === "") { onChangeRef.current(undefined); return; }
-        const parsed = t === "integer" ? parseInt(v, 10) : Number(v);
-        if (!Number.isNaN(parsed)) onChangeRef.current(parsed);
+        // On a gate a box that holds no finite number hands over `undefined`,
+        // so a value flushed on an earlier press never stays behind and is sent
+        // again; elsewhere main's reading (cinatra#4244, `numberFlushValue`).
+        const read = numberFlushValue(v, t, onGateRef.current);
+        if (read.emit) onChangeRef.current(read.value);
       } else if (t === "array") {
         onChangeRef.current(v.split("\n").map((s) => s.trim()).filter(Boolean));
       } else {
@@ -463,6 +556,27 @@ export function SchemaFieldRenderer(props: Props) {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [registerFlush]); // stable — registerFlush is useCallback; refs always current
+
+  // cinatra#4244 — report the value as typed to a structured parent that holds
+  // its gate's Continue on it (see `onDraftChange`). Nothing is reported when
+  // no parent asked.
+  const onDraftChangeRef = useRef(onDraftChange);
+  useEffect(() => { onDraftChangeRef.current = onDraftChange; }, [onDraftChange]);
+  const draftKind = (() => {
+    const t = (schema as { type?: string }).type;
+    const enumVals = (schema as { enum?: unknown[] }).enum;
+    if (t === "object" || t === "boolean" || (Array.isArray(enumVals) && enumVals.length > 0)) return null;
+    if (t === "array") return "list";
+    if (t === "number" || t === "integer") return "number";
+    return "text";
+  })();
+  useEffect(() => {
+    const report = onDraftChangeRef.current;
+    if (!report || draftKind === null) return;
+    if (draftKind === "list") report(localValue.split("\n").map((s) => s.trim()).filter(Boolean));
+    else if (draftKind === "number") report(localValue === "" ? undefined : localValue);
+    else report(localValue);
+  }, [localValue, draftKind]);
 
   const handleSubmit = async (submitValue: unknown) => {
     setSubmitting(true);
@@ -516,13 +630,56 @@ export function SchemaFieldRenderer(props: Props) {
   const enumValues = (schema as { enum?: unknown[] }).enum;
   const placeholder = (schema as { ["x-placeholder"]?: string })["x-placeholder"];
 
+  // cinatra#3582 — THE DECLARATION, resolved ONCE for every kind below.
+  //
+  // `required` is the CALLER's declaration and `isDeclaredOptional` above is
+  // the three-state rule that reads it. The run's per-field Setup gate passes
+  // no such prop: it is minted only for a field the input schema declares
+  // required and says so on the field's own schema (`x-required`, written by
+  // execution.ts's `buildArtifact`). So the hint is read only where the caller
+  // declared nothing — it can never turn a declared-optional field into a
+  // required one, and an undeclared field still FAILS CLOSED.
+  const declaredRequired: boolean | undefined =
+    required !== undefined
+      ? required
+      : (schema as { ["x-required"]?: boolean })["x-required"] === true
+        ? true
+        : undefined;
+  // A field that is not declared optional and declares no `default` cannot be
+  // answered with nothing. The `default` clause is not decoration: cinatra#3452
+  // ruled that a required field which declares a default is ANSWERED by that
+  // default, so an empty box submits and the wizard moves on.
+  const blankIsNotAnAnswer =
+    !isDeclaredOptional(declaredRequired) &&
+    !Object.prototype.hasOwnProperty.call(schema, "default");
+  const blankBarsSubmit =
+    blankIsNotAnAnswer &&
+    isBlankSubValue(
+      type === "array"
+        ? localValue.split("\n").map((s) => s.trim()).filter(Boolean)
+        : localValue,
+    );
+  // A declared MINIMUM LENGTH speaks about an ANSWER, never about silence: a
+  // blank box is the blank bar's business, and a field declared optional and
+  // left blank is never barred by the minimum.
+  const declaredMinLength = (() => {
+    const raw = (schema as { minLength?: unknown }).minLength;
+    return typeof raw === "number" && Number.isInteger(raw) && raw > 0 ? raw : null;
+  })();
+  const minLengthError =
+    declaredMinLength !== null &&
+    localValue.trim().length > 0 &&
+    localValue.trim().length < declaredMinLength
+      ? `Enter at least ${declaredMinLength} characters.`
+      : null;
+
   // Enum -> Select
   if (Array.isArray(enumValues) && enumValues.length > 0) {
     const enumTitles = (schema as { "x-enum-titles"?: string[] })["x-enum-titles"];
     const stringValue = value == null ? "" : String(value);
     return (
       <div className="flex flex-col gap-2">
-        <Label htmlFor={`field-${fieldName}`} className="text-foreground">{label}{required ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</Label>
+        <Label htmlFor={`field-${fieldName}`} className="text-foreground">{label}{declaredRequired ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</Label>
         <Select value={stringValue} onValueChange={(next) => onChange(next)} disabled={disabled}>
           <SelectTrigger id={`field-${fieldName}`} className="border-line">
             <SelectValue placeholder={placeholder ?? label} />
@@ -542,20 +699,53 @@ export function SchemaFieldRenderer(props: Props) {
   }
 
   // Boolean -> Checkbox
+  //
+  // cinatra#4310 — where another owner draws the one control (`hideSubmit`: a
+  // grouped setup form, a structured object's sub-field, the HITL screen card
+  // on a conversation host, or the outer Continue of a mid-run gate, see
+  // `midRunBooleanFieldHidesSubmit`), the box hands each change to `onChange`
+  // at once, exactly as before (on a mid-run gate that `onChange` keeps only an
+  // object, so the answer is dropped there, as on main: cinatra#4506). On a
+  // per-field setup gate this field draws its own Continue (the fallback entry
+  // declares `drawsOwnSubmit`, so the surface draws none beside it): the box
+  // stages the answer, the Continue sends it once, and a box left clear is
+  // `false`.
   if (type === "boolean") {
-    const boolValue = Boolean(value);
-    return (
+    const ownsContinue = !hideSubmit;
+    const submitBoolean = async () => {
+      if (booleanSendRef.current) return;
+      booleanSendRef.current = true;
+      try {
+        await handleSubmit(stagedChecked);
+      } finally {
+        booleanSendRef.current = false;
+      }
+    };
+    const boxRow = (
       <div className="flex items-start gap-3">
         <Checkbox
           id={`field-${fieldName}`}
-          checked={boolValue}
-          onCheckedChange={(next) => onChange(Boolean(next))}
-          disabled={disabled}
+          checked={ownsContinue ? stagedChecked : Boolean(value)}
+          onCheckedChange={(next) => (ownsContinue ? setStagedChecked(next === true) : onChange(Boolean(next)))}
+          disabled={ownsContinue ? disabled || submitting : disabled}
         />
         <div className="flex flex-col">
-          <Label htmlFor={`field-${fieldName}`} className="text-foreground">{label}{required ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</Label>
+          <Label htmlFor={`field-${fieldName}`} className="text-foreground">{label}{declaredRequired ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</Label>
           {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
         </div>
+      </div>
+    );
+    if (!ownsContinue) return boxRow;
+    return (
+      <div className="flex flex-col gap-2">
+        {boxRow}
+        {submitError ? <p className="text-xs text-destructive">{submitError}</p> : null}
+        <GateControlFloor>
+          <Button className="gap-1.5" size="sm" disabled={disabled || submitting} onClick={() => void submitBoolean()}>
+            {submitting ? "Submitting…" : "Continue"}
+            <ArrowRight className="h-3.5 w-3.5" />
+          </Button>
+        </GateControlFloor>
       </div>
     );
   }
@@ -572,7 +762,7 @@ export function SchemaFieldRenderer(props: Props) {
       value,
       onChange,
       disabled,
-      required,
+      required: declaredRequired,
       error: callerError ?? null,
       label,
       description,
@@ -596,23 +786,25 @@ export function SchemaFieldRenderer(props: Props) {
 
   // Number / integer
   if (type === "number" || type === "integer") {
-    const numError = localValue.length > 0 && Number.isNaN(type === "integer" ? parseInt(localValue, 10) : Number(localValue)) ? "Enter a valid number." : null;
+    // On a gate a number that is not finite (`1e309`) is no answer either:
+    // JSON cannot carry it. Elsewhere main's reading (cinatra#4244).
+    const numError = numberFieldError(localValue, type, onGate);
     const displayError = callerError ?? numError;
     const submitNum = () => {
       const raw = localValue;
       if (raw === "") return handleSubmit(undefined);
       const parsed = type === "integer" ? parseInt(raw, 10) : Number(raw);
-      if (!Number.isNaN(parsed)) return handleSubmit(parsed);
+      if (numberFieldError(raw, type, onGate) === null) return handleSubmit(parsed);
     };
     return (
       <div className="flex flex-col gap-2">
-        <Label htmlFor={`field-${fieldName}`} className="text-foreground">{label}{required ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</Label>
+        <Label htmlFor={`field-${fieldName}`} className="text-foreground">{label}{declaredRequired ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</Label>
         <Input
           id={`field-${fieldName}`}
           type="number"
           value={localValue}
           onChange={(e) => setLocalValue(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && !displayError && !submitting) void submitNum(); }}
+          onKeyDown={(e) => { if (e.key === "Enter" && !displayError && !submitting && !blankBarsSubmit) void submitNum(); }}
           disabled={disabled || submitting}
           className="border-line"
           aria-invalid={displayError ? true : undefined}
@@ -622,7 +814,7 @@ export function SchemaFieldRenderer(props: Props) {
         {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
         {!hideSubmit && (
           <GateControlFloor>
-            <Button className="gap-1.5" size="sm" disabled={disabled || submitting || !!displayError} onClick={() => void submitNum()}>
+            <Button className="gap-1.5" size="sm" disabled={disabled || submitting || !!displayError || blankBarsSubmit} onClick={() => void submitNum()}>
               {submitting ? "Submitting…" : "Continue"}
               <ArrowRight className="h-3.5 w-3.5" />
             </Button>
@@ -638,7 +830,7 @@ export function SchemaFieldRenderer(props: Props) {
   if (type === "array") {
     return (
       <div className="flex flex-col gap-2">
-        <Label htmlFor={`field-${fieldName}`} className="text-foreground">{label}{required ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</Label>
+        <Label htmlFor={`field-${fieldName}`} className="text-foreground">{label}{declaredRequired ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</Label>
         <Textarea
           id={`field-${fieldName}`}
           value={localValue}
@@ -652,7 +844,7 @@ export function SchemaFieldRenderer(props: Props) {
         {submitError ? <p className="text-xs text-destructive">{submitError}</p> : null}
         {!hideSubmit && (
           <GateControlFloor>
-            <Button className="gap-1.5" size="sm" disabled={disabled || submitting} onClick={() => void handleSubmit(localValue.split("\n").map((s) => s.trim()).filter(Boolean))}>
+            <Button className="gap-1.5" size="sm" disabled={disabled || submitting || blankBarsSubmit} onClick={() => void handleSubmit(localValue.split("\n").map((s) => s.trim()).filter(Boolean))}>
               {submitting ? "Submitting…" : "Continue"}
               <ArrowRight className="h-3.5 w-3.5" />
             </Button>
@@ -665,10 +857,10 @@ export function SchemaFieldRenderer(props: Props) {
   // String with format=uri
   if (type === "string" && format === "uri") {
     const localError = localValue.length > 0 && !isValidUrl(localValue) ? "Enter a valid URL." : null;
-    const displayError = callerError ?? localError;
+    const displayError = callerError ?? localError ?? minLengthError;
     return (
       <Field>
-        <FieldLabel htmlFor={`field-${fieldName}`}>{label}{required ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</FieldLabel>
+        <FieldLabel htmlFor={`field-${fieldName}`}>{label}{declaredRequired ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</FieldLabel>
         <InputGroup>
           <InputGroupAddon>
             <LinkIcon aria-hidden="true" />
@@ -679,7 +871,7 @@ export function SchemaFieldRenderer(props: Props) {
             inputMode="url"
             value={localValue}
             onChange={(e) => setLocalValue(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && !displayError && !submitting) void handleSubmit(localValue); }}
+            onKeyDown={(e) => { if (e.key === "Enter" && !displayError && !submitting && !blankBarsSubmit) void handleSubmit(localValue); }}
             disabled={disabled || submitting}
             placeholder={placeholder ?? "https://example.com"}
             aria-invalid={displayError ? true : undefined}
@@ -690,7 +882,7 @@ export function SchemaFieldRenderer(props: Props) {
         {description ? <FieldDescription>{description}</FieldDescription> : null}
         {!hideSubmit && (
           <GateControlFloor>
-            <Button className="gap-1.5" size="sm" disabled={disabled || submitting || !!displayError} onClick={() => void handleSubmit(localValue)}>
+            <Button className="gap-1.5" size="sm" disabled={disabled || submitting || !!displayError || blankBarsSubmit} onClick={() => void handleSubmit(localValue)}>
               {submitting ? "Submitting…" : "Continue"}
               <ArrowRight className="h-3.5 w-3.5" />
             </Button>
@@ -703,10 +895,10 @@ export function SchemaFieldRenderer(props: Props) {
   // String with format=email
   if (type === "string" && format === "email") {
     const localError = localValue.length > 0 && !isValidEmail(localValue) ? "Enter a valid email address." : null;
-    const displayError = callerError ?? localError;
+    const displayError = callerError ?? localError ?? minLengthError;
     return (
       <Field>
-        <FieldLabel htmlFor={`field-${fieldName}`}>{label}{required ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</FieldLabel>
+        <FieldLabel htmlFor={`field-${fieldName}`}>{label}{declaredRequired ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</FieldLabel>
         <InputGroup>
           <InputGroupAddon>
             <MailIcon aria-hidden="true" />
@@ -717,7 +909,7 @@ export function SchemaFieldRenderer(props: Props) {
             inputMode="email"
             value={localValue}
             onChange={(e) => setLocalValue(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter" && !displayError && !submitting) void handleSubmit(localValue); }}
+            onKeyDown={(e) => { if (e.key === "Enter" && !displayError && !submitting && !blankBarsSubmit) void handleSubmit(localValue); }}
             disabled={disabled || submitting}
             placeholder={placeholder ?? "name@example.com"}
             aria-invalid={displayError ? true : undefined}
@@ -728,7 +920,7 @@ export function SchemaFieldRenderer(props: Props) {
         {description ? <FieldDescription>{description}</FieldDescription> : null}
         {!hideSubmit && (
           <GateControlFloor>
-            <Button className="gap-1.5" size="sm" disabled={disabled || submitting || !!displayError} onClick={() => void handleSubmit(localValue)}>
+            <Button className="gap-1.5" size="sm" disabled={disabled || submitting || !!displayError || blankBarsSubmit} onClick={() => void handleSubmit(localValue)}>
               {submitting ? "Submitting…" : "Continue"}
               <ArrowRight className="h-3.5 w-3.5" />
             </Button>
@@ -739,10 +931,13 @@ export function SchemaFieldRenderer(props: Props) {
   }
 
   // String fallback — textarea or single-line
+  // cinatra#3582 — a declared MINIMUM LENGTH reads in the line these two legs
+  // already draw for a caller's error; nothing new is drawn for it.
+  const stringDisplayError = callerError ?? minLengthError;
   if (isLikelyMultiline(schema)) {
     return (
       <div className="flex flex-col gap-2">
-        <Label htmlFor={`field-${fieldName}`} className="text-foreground">{label}{required ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</Label>
+        <Label htmlFor={`field-${fieldName}`} className="text-foreground">{label}{declaredRequired ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</Label>
         <Textarea
           id={`field-${fieldName}`}
           value={localValue}
@@ -753,11 +948,11 @@ export function SchemaFieldRenderer(props: Props) {
           placeholder={placeholder}
         />
         {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
-        {callerError ? <p className="text-xs text-destructive">{callerError}</p> : null}
+        {stringDisplayError ? <p className="text-xs text-destructive">{stringDisplayError}</p> : null}
         {submitError ? <p className="text-xs text-destructive">{submitError}</p> : null}
         {!hideSubmit && (
           <GateControlFloor>
-            <Button className="gap-1.5" size="sm" disabled={disabled || submitting} onClick={() => void handleSubmit(localValue)}>
+            <Button className="gap-1.5" size="sm" disabled={disabled || submitting || blankBarsSubmit || !!minLengthError} onClick={() => void handleSubmit(localValue)}>
               {submitting ? "Submitting…" : "Continue"}
               <ArrowRight className="h-3.5 w-3.5" />
             </Button>
@@ -768,23 +963,23 @@ export function SchemaFieldRenderer(props: Props) {
   }
   return (
     <div className="flex flex-col gap-2">
-      <Label htmlFor={`field-${fieldName}`} className="text-foreground">{label}{required ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</Label>
+      <Label htmlFor={`field-${fieldName}`} className="text-foreground">{label}{declaredRequired ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}</Label>
       <Input
         id={`field-${fieldName}`}
         type="text"
         value={localValue}
         onChange={(e) => setLocalValue(e.target.value)}
-        onKeyDown={(e) => { if (e.key === "Enter" && !submitting) void handleSubmit(localValue); }}
+        onKeyDown={(e) => { if (e.key === "Enter" && !submitting && !blankBarsSubmit && !minLengthError) void handleSubmit(localValue); }}
         disabled={disabled || submitting}
         className="border-line"
         placeholder={placeholder}
       />
       {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
-      {callerError ? <p className="text-xs text-destructive">{callerError}</p> : null}
+      {stringDisplayError ? <p className="text-xs text-destructive">{stringDisplayError}</p> : null}
       {submitError ? <p className="text-xs text-destructive">{submitError}</p> : null}
       {!hideSubmit && (
         <GateControlFloor>
-          <Button className="gap-1.5" size="sm" disabled={disabled || submitting} onClick={() => void handleSubmit(localValue)}>
+          <Button className="gap-1.5" size="sm" disabled={disabled || submitting || blankBarsSubmit || !!minLengthError} onClick={() => void handleSubmit(localValue)}>
             {submitting ? "Submitting…" : "Continue"}
             <ArrowRight className="h-3.5 w-3.5" />
           </Button>
@@ -1081,7 +1276,9 @@ function StructuredObjectField(props: ObjectFieldProps) {
   const deriveDraft = useCallback(
     (raw: unknown): Record<string, unknown> => {
       if (!isPlainObject(raw)) return {};
-      return Object.fromEntries(Object.entries(raw).filter(([k]) => k in properties));
+      return Object.fromEntries(
+        Object.entries(raw).filter(([k]) => Object.prototype.hasOwnProperty.call(properties, k)),
+      );
     },
     [properties],
   );
@@ -1112,6 +1309,67 @@ function StructuredObjectField(props: ObjectFieldProps) {
     },
     [],
   );
+
+  // cinatra#4244 — THE DECLARED-VALUE HOLD (design V.1). Where the host asks
+  // for it (`GateContinueHoldContext`) and this field draws the gate's own
+  // Continue, that Continue is UNAVAILABLE while a declared-required visible
+  // value with no default is unwritten: text blank once trimmed, an empty list,
+  // nothing chosen. The sub-fields report what is typed (`onDraftChange`), so
+  // the hold reads the live value, not the last flush; a choice writes through
+  // `setSub`. A box (a clear box is an answer, `false`) and a nested object
+  // (it reports nothing as typed) are not held here and keep the check on the
+  // press. The hold adds no message.
+  const holdOn = useContext(GateContinueHoldContext) && !hideSubmit;
+  const [typed, setTyped] = useState<Record<string, unknown>>({});
+  const reportTyped = useCallback(
+    (key: string) => (next: unknown) =>
+      setTyped((prev) =>
+        Object.prototype.hasOwnProperty.call(prev, key) && prev[key] === next
+          ? prev
+          : { ...prev, [key]: next },
+      ),
+    [],
+  );
+  const currentSub = (key: string): unknown =>
+    Object.prototype.hasOwnProperty.call(typed, key) ? typed[key] : ownSubValue(draft, key);
+  // A typed number that is not a finite number (`1e309`, `abc`) is no answer:
+  // its field shows "Enter a valid number." and the Continue is held, so it is
+  // never dropped or sent as `null` (cinatra#4244). This covers the number
+  // fields this object draws itself. A number inside a NESTED object is not
+  // held: on this gate path it shows the same message, its flush hands over
+  // `undefined` (also clearing a value flushed on an earlier press), and the
+  // nested value is sent without it (never as `null`). Off the gate path the
+  // number field keeps main's reading (`numberFlushValue`).
+  const typedNumberInvalid = visible.some((key) => {
+    const kind = ((ownSubValue(properties, key) ?? {}) as { type?: unknown }).type;
+    if (kind !== "number" && kind !== "integer") return false;
+    const current = currentSub(key);
+    if (typeof current !== "string" || current === "") return false;
+    return numberFieldError(current, kind as "number" | "integer", true) !== null;
+  });
+  // cinatra#4244 - THE GATE'S OWN FORM (design V.1). On the run page's
+  // schema-drawn gate this object is the host's wrapper of the fields the gate
+  // declares: it has only the internal placeholder for a name and it draws the
+  // gate's one Continue. The card carries the screen the agent declared, its
+  // labels and its validation, and the host draws only the frame and the
+  // control floor. So the wrapper draws no label the gate did not declare (the
+  // neutral "Your response"), no required or optional mark of its own
+  // (each declared field marks its own), and no second bordered box: the
+  // declared fields sit in the card's own detail region. A title or a
+  // description the gate declares stays the heading. A nested object (told
+  // `hideSubmit`) and every other surface keep their label and box.
+  const gateForm = holdOn && isInternalPlaceholderFieldName(fieldName);
+  const drawsHeading = !gateForm || label !== resolveFieldLabel(fieldName);
+  const held =
+    holdOn &&
+    (typedNumberInvalid ||
+      subRequired.some((key) => {
+        const sub = (ownSubValue(properties, key) ?? {}) as Record<string, unknown>;
+        const kind = (sub as { type?: unknown }).type;
+        if (kind === "object" || kind === "boolean") return false;
+        if (Object.prototype.hasOwnProperty.call(sub, "default")) return false;
+        return isBlankSubValue(currentSub(key));
+      }));
 
   const [missing, setMissing] = useState<string[]>([]);
   const [invalid, setInvalid] = useState<string[]>([]);
@@ -1148,10 +1406,10 @@ function StructuredObjectField(props: ObjectFieldProps) {
   const assemble = useCallback((raw: Record<string, unknown>) => {
     const out: Record<string, unknown> = {};
     for (const key of Object.keys(properties)) {
-      const v = raw[key];
+      const v = ownSubValue(raw, key);
       if (v === undefined) continue;
       if (!subRequired.includes(key) && isBlankSubValue(v)) continue;
-      out[key] = v;
+      setOwnSubValue(out, key, v);
     }
     return out;
   }, [properties, subRequired]);
@@ -1196,7 +1454,7 @@ function StructuredObjectField(props: ObjectFieldProps) {
       // first path segment so several errors inside one sub-object mark it once.
       const firstSegments = (kind: ObjectSchemaError["kind"]) =>
         [...new Set(errors.filter((e) => e.kind === kind).map((e) => e.path.split(".")[0]!))]
-          .filter((k) => k in properties);
+          .filter((k) => Object.prototype.hasOwnProperty.call(properties, k));
       const notObject = firstSegments("not-an-object");
       // A sub-object already flagged as "not an object" is not ALSO "incomplete".
       const incomplete = firstSegments("missing").filter((k) => !notObject.includes(k));
@@ -1213,7 +1471,7 @@ function StructuredObjectField(props: ObjectFieldProps) {
     (assembled: Record<string, unknown>) => {
       const { notObject, incomplete } = nestedErrors(assembled);
       return {
-        miss: subRequired.filter((k) => isBlankSubValue(assembled[k])),
+        miss: subRequired.filter((k) => isBlankSubValue(ownSubValue(assembled, k))),
         bad: notObject,
         incomplete,
       };
@@ -1316,6 +1574,9 @@ function StructuredObjectField(props: ObjectFieldProps) {
   }, [registerFlush]); // stable — refs always read the latest draft AND schema
 
   const handleContinue = async () => {
+    // The held Continue is drawn unavailable; a press that reaches here anyway
+    // sends nothing (cinatra#4244, design V.1).
+    if (held) return;
     const assembled = await flushRef.current();
     // A declared-optional field left entirely blank submits NOTHING for itself
     // rather than being validated — see `omittableEmpty`.
@@ -1344,20 +1605,22 @@ function StructuredObjectField(props: ObjectFieldProps) {
 
   return (
     <div className="flex flex-col gap-3" data-testid={`object-field-${fieldName}`}>
-      <div className="flex flex-col gap-1">
-        <Label className="text-foreground">
-          {label}
-          {required ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}
-        </Label>
-        {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
-      </div>
-      <div className="flex flex-col gap-4 rounded-control border border-line p-3">
+      {drawsHeading ? (
+        <div className="flex flex-col gap-1">
+          <Label className="text-foreground">
+            {label}
+            {gateForm ? null : required ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}
+          </Label>
+          {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
+        </div>
+      ) : null}
+      <div className={gateForm ? "flex flex-col gap-4" : "flex flex-col gap-4 rounded-control border border-line p-3"}>
         {ordered.map((key) => (
           <SchemaOnlyFloorRenderer
             key={key}
             fieldName={key}
             schema={properties[key] ?? {}}
-            value={draft[key]}
+            value={ownSubValue(draft, key)}
             onChange={(next: unknown) => setSub(key, next)}
             disabled={disabled || submitting}
             required={subRequired.includes(key)}
@@ -1374,6 +1637,7 @@ function StructuredObjectField(props: ObjectFieldProps) {
             mode="edit"
             hideSubmit
             registerFlush={registerSubFlush(key)}
+            onDraftChange={holdOn ? reportTyped(key) : undefined}
           />
         ))}
       </div>
@@ -1398,7 +1662,7 @@ function StructuredObjectField(props: ObjectFieldProps) {
       {submitError ? <p className="text-xs text-destructive">{submitError}</p> : null}
       {!hideSubmit && (
         <GateControlFloor>
-          <Button className="gap-1.5" size="sm" disabled={disabled || submitting} onClick={() => void handleContinue()}>
+          <Button className="gap-1.5" size="sm" disabled={disabled || submitting || held} onClick={() => void handleContinue()}>
             {submitting ? "Submitting…" : "Continue"}
             <ArrowRight className="h-3.5 w-3.5" />
           </Button>

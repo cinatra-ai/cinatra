@@ -18,11 +18,19 @@ import { describe, expect, it } from "vitest";
 
 import { REVIEW_TARGET_ISLAND_PATH, reviewTargetIslandSrc } from "../review-gate-card";
 
+/** The card's composed island address; this suite's addresses all fit the
+ *  bound, so a refusal (`null`) fails the case. */
+function islandSrcOf(...args: Parameters<typeof reviewTargetIslandSrc>): string {
+  const src = reviewTargetIslandSrc(...args);
+  if (src === null) throw new Error("the card refused an address this suite expects it to compose");
+  return src;
+}
+
 const REF = "ref/with+chars=&and space";
 
 describe("first party — the ref, and nothing else", () => {
   it("carries only the ref when the host declares no frame", () => {
-    const src = reviewTargetIslandSrc(REF, null);
+    const src = islandSrcOf(REF, null);
     const url = new URL(src, "https://app.example");
     expect(url.pathname).toBe(REVIEW_TARGET_ISLAND_PATH);
     expect([...url.searchParams.keys()]).toEqual(["ref"]);
@@ -34,7 +42,7 @@ describe("embedded — the ref plus the host's own frame selectors", () => {
   const FRAME = { assistant: "wordpress", instanceId: "inst-1" };
 
   it("names the SAME two disambiguators the embed page itself carries", () => {
-    const url = new URL(reviewTargetIslandSrc(REF, FRAME), "https://app.example");
+    const url = new URL(islandSrcOf(REF, FRAME), "https://app.example");
     expect(url.pathname).toBe(REVIEW_TARGET_ISLAND_PATH);
     expect(url.searchParams.get("ref")).toBe(REF);
     expect(url.searchParams.get("assistant")).toBe("wordpress");
@@ -42,17 +50,17 @@ describe("embedded — the ref plus the host's own frame selectors", () => {
   });
 
   it("stays a RELATIVE first-party path — the island is never fetched cross-origin", () => {
-    expect(reviewTargetIslandSrc(REF, FRAME).startsWith("/")).toBe(true);
+    expect(islandSrcOf(REF, FRAME).startsWith("/")).toBe(true);
   });
 
   it("adds NOTHING else — no origin, no token, no third key", () => {
-    const url = new URL(reviewTargetIslandSrc(REF, FRAME), "https://app.example");
+    const url = new URL(islandSrcOf(REF, FRAME), "https://app.example");
     expect([...url.searchParams.keys()].sort()).toEqual(["assistant", "instanceId", "ref"]);
   });
 
   it("escapes every value it carries", () => {
     const url = new URL(
-      reviewTargetIslandSrc(REF, { assistant: "a&b=c", instanceId: "i d" }),
+      islandSrcOf(REF, { assistant: "a&b=c", instanceId: "i d" }),
       "https://app.example",
     );
     expect(url.searchParams.get("ref")).toBe(REF);
@@ -79,7 +87,7 @@ describe("cross-site — the credential the server sealed", () => {
 
   it("carries it beside the ref and the frame selectors", () => {
     const url = new URL(
-      reviewTargetIslandSrc(REF, FRAME, served(REF, SEALED)),
+      islandSrcOf(REF, FRAME, served(REF, SEALED)),
       "https://app.example",
     );
     expect(url.pathname).toBe(REVIEW_TARGET_ISLAND_PATH);
@@ -89,19 +97,19 @@ describe("cross-site — the credential the server sealed", () => {
   });
 
   it("adds it to a FIRST-PARTY src too — the credential and the selectors are separate concerns", () => {
-    const url = new URL(reviewTargetIslandSrc(REF, null, served(REF, SEALED)), "https://app.example");
+    const url = new URL(islandSrcOf(REF, null, served(REF, SEALED)), "https://app.example");
     expect([...url.searchParams.keys()].sort()).toEqual(["ic", "ref"]);
   });
 
   it("composes exactly the pre-credential src when the answer carried none", () => {
     for (const none of [null, undefined, ""]) {
-      expect(reviewTargetIslandSrc(REF, FRAME, none)).toBe(reviewTargetIslandSrc(REF, FRAME));
+      expect(islandSrcOf(REF, FRAME, none)).toBe(islandSrcOf(REF, FRAME));
     }
   });
 
   it("DROPS a credential minted for another ref — an answer to another question", () => {
     const url = new URL(
-      reviewTargetIslandSrc(REF, FRAME, served("another-ref", SEALED)),
+      islandSrcOf(REF, FRAME, served("another-ref", SEALED)),
       "https://app.example",
     );
     expect(url.searchParams.get("ic")).toBeNull();
@@ -110,7 +118,7 @@ describe("cross-site — the credential the server sealed", () => {
 
   it("DROPS an answer that points at another path", () => {
     const url = new URL(
-      reviewTargetIslandSrc(REF, FRAME, served(REF, SEALED, "/somewhere/else")),
+      islandSrcOf(REF, FRAME, served(REF, SEALED, "/somewhere/else")),
       "https://app.example",
     );
     expect(url.pathname).toBe(REVIEW_TARGET_ISLAND_PATH);
@@ -119,7 +127,7 @@ describe("cross-site — the credential the server sealed", () => {
 
   it("never frames a foreign ORIGIN, even one wearing the island's own path", () => {
     const hostile = `https://evil.example${REVIEW_TARGET_ISLAND_PATH}?ref=${encodeURIComponent(REF)}&ic=${SEALED}`;
-    const src = reviewTargetIslandSrc(REF, FRAME, hostile);
+    const src = islandSrcOf(REF, FRAME, hostile);
     expect(src.startsWith("/")).toBe(true);
     expect(src).not.toContain("evil.example");
     expect(new URL(src, "https://app.example").pathname).toBe(REVIEW_TARGET_ISLAND_PATH);
@@ -127,7 +135,7 @@ describe("cross-site — the credential the server sealed", () => {
 
   it("takes nothing else out of the answer — an extra key is not a card input", () => {
     const url = new URL(
-      reviewTargetIslandSrc(
+      islandSrcOf(
         REF,
         FRAME,
         `${served(REF, SEALED)}&assistant=elsewhere&instanceId=other&extra=1`,
@@ -141,7 +149,7 @@ describe("cross-site — the credential the server sealed", () => {
 
   it("survives a malformed answer without composing a broken frame", () => {
     for (const junk of ["%%%", "javascript:alert(1)", "not a url at all"]) {
-      expect(reviewTargetIslandSrc(REF, FRAME, junk)).toBe(reviewTargetIslandSrc(REF, FRAME));
+      expect(islandSrcOf(REF, FRAME, junk)).toBe(islandSrcOf(REF, FRAME));
     }
   });
 });
@@ -159,7 +167,7 @@ describe("the host's colour scheme rides the same address", () => {
   const FRAME = { assistant: "wordpress", instanceId: "inst-1" };
 
   it("names the palette beside the ref, on a first-party address", () => {
-    const url = new URL(reviewTargetIslandSrc(REF, null, null, "dark"), "https://app.example");
+    const url = new URL(islandSrcOf(REF, null, null, "dark"), "https://app.example");
     expect(url.searchParams.get("scheme")).toBe("dark");
     expect(url.searchParams.get("ref")).toBe(REF);
     expect([...url.searchParams.keys()].sort()).toEqual(["ref", "scheme"]);
@@ -167,7 +175,7 @@ describe("the host's colour scheme rides the same address", () => {
 
   it("names it beside the credential and the frame selectors too", () => {
     const url = new URL(
-      reviewTargetIslandSrc(
+      islandSrcOf(
         REF,
         FRAME,
         `${REVIEW_TARGET_ISLAND_PATH}?ref=${encodeURIComponent(REF)}&ic=sealed-value`,
@@ -188,9 +196,37 @@ describe("the host's colour scheme rides the same address", () => {
 
   it("composes exactly the pre-scheme src when the host declares no palette", () => {
     for (const none of [null, undefined]) {
-      expect(reviewTargetIslandSrc(REF, FRAME, null, none)).toBe(
-        reviewTargetIslandSrc(REF, FRAME),
+      expect(islandSrcOf(REF, FRAME, null, none)).toBe(
+        islandSrcOf(REF, FRAME),
       );
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4129 — the FINAL address is bounded where the card composes it
+// ---------------------------------------------------------------------------
+//
+// The server proves only the address it mints. The card recomposes it with its
+// own frame selectors and palette, so the address the `<iframe src>` receives
+// is bounded by the projection module that composes it: at 2048 characters it
+// is framed, one past it is a refusal (`null`), never a longer frame address.
+
+describe("the composed address is bounded at 2048 characters", () => {
+  const FRAME = { assistant: "wordpress", instanceId: "inst-1" };
+  const served = (credential: string) =>
+    `${REVIEW_TARGET_ISLAND_PATH}?ref=${encodeURIComponent(REF)}&ic=${credential}`;
+  const composedLength = (credential: string) => islandSrcOf(REF, FRAME, served(credential), "dark").length;
+  const fits = "c".repeat(2048 - (composedLength("c") - 1));
+
+  it("an answer whose recomposed address is exactly 2048 characters is framed", () => {
+    expect(reviewTargetIslandSrc(REF, FRAME, served(fits), "dark")).toHaveLength(2048);
+  });
+
+  it("an answer that FIT the server's bound but not once recomposed is refused", () => {
+    // The served address itself fits 2048; the card's frame selectors and
+    // palette push the address it would frame past the bound.
+    expect(served(`${fits}c`).length).toBeLessThanOrEqual(2048);
+    expect(reviewTargetIslandSrc(REF, FRAME, served(`${fits}c`), "dark")).toBeNull();
   });
 });

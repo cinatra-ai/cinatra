@@ -42,6 +42,7 @@ import {
   listExternalMcpServers,
   resolveExternalMcpServerBearer,
   devAttachTwentyBearerFromMintedKey,
+  getDevInstallConnectionOwner,
   EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY,
 } from "@/lib/external-mcp-registry";
 // Connector setup-page server actions for @cinatra-ai/mcp-server-connector
@@ -95,13 +96,6 @@ import {
   resolveTrustedSessionBinding,
 } from "@/lib/instance-connection-actor";
 import { registerCapabilityProvider } from "@/lib/extension-capabilities-registry";
-// TYPE-ONLY (erased at compile; NOT a route-graph edge) — the concrete seam is
-// built at boot by register-cms-review-host-seam-runtime and read off globalThis
-// below, so this route-reachable binder pulls no cms-review module onto a route.
-import type { CmsReviewHostSeam } from "@/lib/cms-review-host-seam";
-// The review fence is a PURE env leaf (no import cost; already reachable from
-// every route) — read directly so `isReviewActive` needs no runtime slot.
-import { isLifecycleReviewOrchestrationActive } from "@/lib/lifecycle/lifecycle-activation";
 import {
   type NangoConnectionMaterializer,
   type NangoConnectionMaterializerInput,
@@ -270,9 +264,10 @@ import {
   type WordPressNativeReadInjectionSurface,
 } from "@/lib/connector-instance-native-read-injection";
 import { isKnownDestructiveToolName } from "@cinatra-ai/mcp-server/known-destructive-floor";
-import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
+import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server/request-context";
 import { logAuditEvent } from "@/lib/authz/audit";
 import { Buffer } from "node:buffer";
+import { types as nodeUtilTypes } from "node:util";
 // The vendor connection/instance CLIENTS are GONE from core (cinatra#975
 // Wave 3 CORE EVICTION, epic #978): each owning connector registers its
 // relocated client under the SAME capability id from its `register(ctx)`.
@@ -291,6 +286,7 @@ import {
   resolveDrupalInstanceAdmin,
   resolveWordPressInstanceAdmin,
   resolveYouTubeConnectionClient,
+  type DrupalInstanceRow,
 } from "@/lib/connector-client-providers";
 // External-MCP toolbox surfaces — instance settings, the cached reachability
 // probes, endpoint resolution, and the private-URL policy stay host-side and
@@ -333,18 +329,137 @@ let _registered = false;
 const HOST_PROVIDER_PACKAGE = "@cinatra-ai/host";
 
 /**
+ * A preview instance: the `preview` install profile on a production runtime,
+ * exact equality on both settings — the reading of `isPreviewInstance` in
+ * `@/lib/install-profile` (cinatra#4098). It is written out here rather than
+ * imported: this module is reached by the app's locked routes, and importing
+ * the install-profile module would add a module to each of their graphs (the
+ * route-graph ratchet). The unit cases of the dev-only writers pin its
+ * answers: a preview is admitted; production, demo and a preview profile
+ * without the production runtime are refused.
+ */
+function isPreviewInstanceEnv(env: Record<string, string | undefined>): boolean {
+  return env.CINATRA_RUNTIME_MODE === "production" && env.CINATRA_INSTALL_PROFILE === "preview";
+}
+
+/**
  * Dev-boot provisioning WRITERS (cinatra#976, epic #978 W-D) are DEV-ONLY: they
  * persist unvalidated local-dev instance rows / drive a local docker credential
  * rotate. Only the connector `dev-setup.ts` hook (invoked by the strictly
  * dev-gated `dev-auto-setup` shell) resolves them, but we defense-in-depth
  * refuse outside development so a member can never be a production affordance
  * even if resolved on another path. The persist helpers themselves ALSO enforce
- * loopback-only host-side. */
+ * loopback-only host-side.
+ *
+ * cinatra#4098: a preview instance (the `preview` install profile on a
+ * production runtime) runs the connector auto-setup too, so these members
+ * answer there as well. A production deployment is still refused. */
 function assertDevSetupHostOnly(member: string): void {
-  if (!isAppDevelopmentMode()) {
+  if (!isAppDevelopmentMode() && !isPreviewInstanceEnv(process.env)) {
     throw new Error(`${member} is a dev-only devSetup provisioning member; refused outside development.`);
   }
 }
+
+/**
+ * cinatra#4387: the install→org binding (cinatra#274) a dev-hook instance save
+ * carries. The HOST binds it — the hook never sees a user id (the
+ * `reownRefusedFixtureConnection` rule of the devSetup contract). The pair is
+ * the owner of the install-made connections the dev-boot shell pushed on this
+ * boot (`getDevInstallConnectionOwner`: the fixture account, or the first
+ * administrator and that administrator's organisation, cinatra#4112), as the
+ * Twenty dev attach reads it. Only on a development or a preview boot, and only
+ * with BOTH ids; otherwise nothing (the row keeps its existing binding).
+ */
+function devInstallOwnerBinding(): { orgId: string; runBy: string } | undefined {
+  if (!isAppDevelopmentMode() && !isPreviewInstanceEnv(process.env)) return undefined;
+  const owner = getDevInstallConnectionOwner();
+  const orgId = owner?.organizationId?.trim() ?? "";
+  const runBy = owner?.userId?.trim() ?? "";
+  return orgId && runBy ? { orgId, runBy } : undefined;
+}
+
+/**
+ * The dev-hook input with the host-bound binding, as a NEW plain object. The
+ * input is a plain object of data fields (the connector's dev hook passes
+ * object literals). The copy NEVER runs caller code: a Proxy input is refused
+ * before any key is read, and each field is read from its own property
+ * descriptor, so no getter is called. A field is data only when its descriptor
+ * has an OWN `value`, and every descriptor the copy defines has no prototype,
+ * so a `value`, `get` or `set` defined on Object.prototype is never read
+ * there. Its OWN ENUMERABLE DATA fields are
+ * copied one by one, except `orgId` and `runBy`, which are never read (on
+ * these dev members only the host names the owner). An own enumerable
+ * ACCESSOR field (a getter or a setter) is refused: the member throws and
+ * nothing reaches the connector. A field the input only inherits (for example
+ * a getter on a class prototype) is NOT copied, and the caller's object is
+ * never changed. Each field is DEFINED as an own data property (never
+ * assigned), so an own `__proto__` key (for example from `JSON.parse`) is
+ * copied as an ordinary field and cannot change the copy's prototype.
+ * `orgId` and `runBy` are then ALWAYS defined as own data properties of the
+ * copy: the host's pair on a bound boot, else `undefined`. So no setter or
+ * getter the copy would inherit (for example one defined on
+ * `Object.prototype`) can drop the host's pair or put another pair in its
+ * place. The result type holds for a plain-object input.
+ */
+function withDevInstallOwnerBinding<T extends object>(input: T): Omit<T, "orgId" | "runBy"> & {
+  orgId?: string;
+  runBy?: string;
+} {
+  if (nodeUtilTypes.isProxy(input)) {
+    throw new Error("A drupal-mcp dev instance save takes a plain object of data fields; a Proxy is refused.");
+  }
+  const out: Record<PropertyKey, unknown> = {};
+  for (const key of Reflect.ownKeys(input)) {
+    if (key === "orgId" || key === "runBy") continue;
+    const field = Reflect.getOwnPropertyDescriptor(input, key);
+    if (!field || !field.enumerable) continue;
+    // An OWN `value` only: `in` would also find a `value` defined on Object.prototype.
+    if (!Object.hasOwn(field, "value")) {
+      throw new Error(
+        `A drupal-mcp dev instance save takes data fields only; the accessor field ${String(key)} is refused.`,
+      );
+    }
+    Object.defineProperty(out, key, ownDataField(field.value));
+  }
+  const binding = devInstallOwnerBinding();
+  for (const [key, value] of [
+    ["orgId", binding?.orgId],
+    ["runBy", binding?.runBy],
+  ] as const) {
+    Object.defineProperty(out, key, ownDataField(value));
+  }
+  return out as Omit<T, "orgId" | "runBy"> & { orgId?: string; runBy?: string };
+}
+
+/**
+ * An enumerable, writable, configurable data-property descriptor with NO
+ * prototype. `Object.defineProperty` reads `get`, `set` and `value` of the
+ * descriptor through its prototype chain, so a plain object literal would pick
+ * up (and run the getter of) a `get` or `set` defined on Object.prototype.
+ */
+function ownDataField(value: unknown): PropertyDescriptor {
+  const field: PropertyDescriptor = Object.create(null);
+  field.value = value;
+  field.enumerable = true;
+  field.writable = true;
+  field.configurable = true;
+  return field;
+}
+
+// Host-LOCAL extension of the SDK `HostDrupalMcpService` (cinatra#4387; the
+// `HostExternalMcpRegistrySetupSurface` precedent below). Kept host-side, NOT in
+// the SDK contract: only the Drupal connector's dev hook resolves it, and the
+// hook declares the member structurally in its own deps type and probes it with
+// `typeof … === "function"`. WRITER (dev/preview): the validated `saveInstance`
+// with the install→org binding bound host-side (`withDevInstallOwnerBinding`).
+type HostDrupalMcpDevSaveSurface = HostDrupalMcpService & {
+  devSaveInstance(input: {
+    id?: string;
+    name: string;
+    siteUrl: string;
+    mcpApiKey?: string;
+  }): Promise<DrupalInstanceRow>;
+};
 
 // Host-LOCAL extension of the SDK `HostExternalMcpRegistryService` for the
 // "MCP Servers" connector setup-page surface (cinatra#612). Kept host-side
@@ -1122,14 +1237,24 @@ export function registerHostConnectorServices(): void {
     // strictly dev-gated `dev-auto-setup` shell. The dev-MODE guard is
     // host-side defense-in-depth; the relocated persist helper keeps its
     // intrinsic loopback-only hard-gate (and its own runtime-mode refusal).
+    // cinatra#4387: both dev writers bind the dev owner's org + user host-side
+    // (withDevInstallOwnerBinding), so the write-authority gate's per-instance
+    // org check can admit the dev administrator; with no owner, both are
+    // undefined (own fields of the copy, so nothing inherited is read).
     devPersistLocalInstanceUnvalidated: async (input) => {
       assertDevSetupHostOnly("drupal-mcp.devPersistLocalInstanceUnvalidated");
-      const persisted = await requireDrupalInstanceAdmin().devPersistLocalInstanceUnvalidated(input);
+      const persisted = await requireDrupalInstanceAdmin().devPersistLocalInstanceUnvalidated(
+        withDevInstallOwnerBinding(input),
+      );
       return { id: persisted.id };
+    },
+    devSaveInstance: async (input) => {
+      assertDevSetupHostOnly("drupal-mcp.devSaveInstance");
+      return requireDrupalInstanceAdmin().saveInstance(withDevInstallOwnerBinding(input));
     },
     devProbeWithBearer: probeDrupalMcpWithBearer,
     devInvalidateProbeCache: invalidateDrupalMcpProbeCache,
-  } satisfies HostDrupalMcpService);
+  } satisfies HostDrupalMcpDevSaveSurface);
 
   // The drupal widget auth-config store INVERTED to the drupal-mcp-connector
   // (cinatra#975 Wave 2): it now registers `@cinatra-ai/host:drupal-widget-auth`
@@ -1458,48 +1583,6 @@ export function registerHostConnectorServices(): void {
       );
     },
   } satisfies HostConnectorInstanceInvokerService);
-
-  // cinatra#2043 S5 — the CMS review-before-publish capability. A NEW host-local
-  // capability id (the anthropic-skill-config precedent — an arbitrary string,
-  // NOT a HOST_CONNECTOR_SERVICE_CAPABILITIES / sdk-extensions ABI entry). The
-  // wordpress-mcp-connector's staged-write trigger resolves it OPTIONALLY +
-  // lazily and is INERT until it is published here; the four bound seams
-  // (`isReviewActive` / `captureStagedWrite` / `resolveDisposition` /
-  // `recordApplyVerification`) delegate to the core capture + read-back +
-  // effect-disposition, deriving org/run/actor from the trusted MCP request
-  // frame — never connector input. Publication is UNCONDITIONAL at module load
-  // (the connector no-ops on the fence-off path); the capability reports the
-  // review fence truthfully. This is a thin DEFERRED wrapper that does NO
-  // host-service resolution and NO I/O here: `isReviewActive` is the pure fence,
-  // and the three write-driving members delegate to the REAL seam built at boot
-  // by register-cms-review-host-seam-runtime and installed into the globalThis
-  // slot by the system-loops `bind-cms-review-host-seam` phase. The heavy store
-  // bindings are deliberately kept OUT of this route-reachable binder — a literal
-  // dynamic-import specifier here would still grow every locked route's reachable
-  // graph (route-graph ratchet), so the runtime rides only the boot graph, never
-  // a route (the background-jobs-registry runner-slot precedent). If the boot
-  // phase never bound the slot (a swallowed boot-phase failure), a write-driving
-  // member fails CLOSED with a loud error rather than silently dropping a
-  // capture — but it is only reached when `isReviewActive()` is true, which on a
-  // healthy boot implies the slot is bound. A host-LOCAL capability id defined
-  // INLINE (the anthropic-skill-config precedent above) so this binder imports no
-  // value from the seam module — a value import would pull it onto a route.
-  const CMS_REVIEW_CAPABILITY = "@cinatra-ai/host:cms-review";
-  const requireBoundCmsReviewSeam = (): CmsReviewHostSeam => {
-    const seam = globalThis.__cinatraCmsReviewHostSeam;
-    if (!seam) {
-      throw new Error(
-        "[cms-review] the host seam was not bound at boot (system-loops `bind-cms-review-host-seam` phase) — refusing to capture/verify a staged CMS write fail-closed.",
-      );
-    }
-    return seam;
-  };
-  register(CMS_REVIEW_CAPABILITY, {
-    isReviewActive: () => isLifecycleReviewOrchestrationActive(),
-    captureStagedWrite: (input) => requireBoundCmsReviewSeam().captureStagedWrite(input),
-    resolveDisposition: (input) => requireBoundCmsReviewSeam().resolveDisposition(input),
-    recordApplyVerification: (input) => requireBoundCmsReviewSeam().recordApplyVerification(input),
-  } satisfies CmsReviewHostSeam);
 
   // The wordpress widget auth-config store INVERTED to the
   // wordpress-mcp-connector (cinatra#975 Wave 2): it now registers

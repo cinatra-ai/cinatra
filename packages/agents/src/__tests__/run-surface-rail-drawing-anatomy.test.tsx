@@ -264,6 +264,66 @@ describe("a separator stands between adjacent entries (item 2)", () => {
 
     expect(container.querySelectorAll(SEP_SEL).length).toBe(0);
   });
+
+  /**
+   * ONE MARK BEFORE THE CLOSING ROW (cinatra#4114). The drawing
+   * (specs/app-artifact-review.html §I, `.rail .sep`) stands exactly one mark
+   * between two adjacent entries, and a row the page marks `tail` (the Review
+   * forecast, the run's own record) is an entry like any other. With no page
+   * rows drawn between them, the last head row and the first tail row are
+   * adjacent, so one mark stands between them, never one from each side.
+   */
+  function closingSteps(): RunSurfaceRailStep[] {
+    return threeSteps().map((step) => (step.key === "review" ? { ...step, tail: true } : step));
+  }
+
+  function railParts(container: HTMLElement, extra = "") {
+    const column = container.querySelector<HTMLElement>(COLUMN_SEL)!;
+    return Array.from(column.querySelectorAll<HTMLElement>(`${SEP_SEL}, ${ROW_SEL}${extra}`));
+  }
+
+  it("puts ONE separator between the last head row and the closing row when no page rows are drawn (§I)", () => {
+    const { container } = render(
+      <RunSurfaceRail
+        steps={closingSteps()}
+        rail={null}
+        detail={<StepSurface name="detail" />}
+        initialSelection="recommendation"
+      />,
+    );
+    const parts = railParts(container);
+    const key = (part: HTMLElement) => part.getAttribute("data-run-surface-rail-step-key");
+    const lastHead = parts.findIndex((part) => key(part) === "recommendation");
+    const firstTail = parts.findIndex((part) => key(part) === "review");
+    const between = parts.slice(lastHead + 1, firstTail).filter((part) => part.matches(SEP_SEL));
+
+    expect(lastHead).toBeGreaterThanOrEqual(0);
+    expect(firstTail).toBeGreaterThan(lastHead);
+    expect(between.length).toBe(1);
+    expect(parts.map((part) => (part.matches(SEP_SEL) ? "sep" : "row"))).toEqual([
+      "row",
+      "sep",
+      "row",
+      "sep",
+      "row",
+    ]);
+  });
+
+  it("keeps one separator on each side of the page's own rows before the closing row (§I)", () => {
+    const { container } = render(
+      <RunSurfaceRail
+        steps={closingSteps()}
+        rail={<div data-testid="page-rail">steps</div>}
+        detail={<StepSurface name="detail" />}
+        initialSelection="recommendation"
+      />,
+    );
+    const kinds = railParts(container, ', [data-testid="page-rail"]').map((part) =>
+      part.matches(SEP_SEL) ? "sep" : part.matches(ROW_SEL) ? "row" : "page",
+    );
+
+    expect(kinds).toEqual(["row", "sep", "row", "sep", "page", "sep", "row"]);
+  });
 });
 
 describe("the rail's own vertical rhythm is the drawing's (item 2, forward + fix leg 1)", () => {

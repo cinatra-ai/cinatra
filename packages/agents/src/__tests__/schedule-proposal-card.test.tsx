@@ -233,7 +233,7 @@ describe("§VI the schedule proposal card", () => {
       container.querySelector('[data-conformance-id="schedule-duration"]')?.textContent,
     ).toContain("About 45s");
     expect(container.querySelector('[data-conformance-id="schedule-proposal-floor"]')).not.toBeNull();
-    expect(container.querySelector('[data-action="confirm-schedule-proposal"]')).not.toBeNull();
+    expect(container.querySelector('[data-action="confirm-schedule -> scheduled"]')).not.toBeNull();
     // …AND NOTHING ELSE. Plan (A) §7.2: "The floor is **Confirm**."
     expect(container.querySelector('[data-action="adjust-schedule-proposal"]')).toBeNull();
     // The rows are live on first paint, with no step to open them.
@@ -259,7 +259,7 @@ describe("§VI the schedule proposal card", () => {
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="schedule-option-rows"]')).not.toBeNull(),
     );
-    expect(isDisabled(container.querySelector('[data-action="confirm-schedule-proposal"]'))).toBe(true);
+    expect(isDisabled(container.querySelector('[data-action="confirm-schedule -> scheduled"]'))).toBe(true);
     expect(
       container.querySelector('[data-conformance-id="schedule-proposal-restricted-reason"]')
         ?.textContent,
@@ -292,7 +292,7 @@ describe("§VI the schedule proposal card", () => {
     expect(isDisabled(container.querySelector('[data-field="recurring-timezone"]'))).toBe(false);
     expect(container.querySelector('[data-action="save-schedule-changes"]')).not.toBeNull();
     // …and no Confirm: this schedule is armed, not proposed.
-    expect(container.querySelector('[data-action="confirm-schedule-proposal"]')).toBeNull();
+    expect(container.querySelector('[data-action="confirm-schedule -> scheduled"]')).toBeNull();
   });
 
   // THE DRAWING, AND THE WHOLE OF IT (cinatra#3174 fix leg 3): after Confirm the
@@ -369,7 +369,7 @@ describe("§VI the schedule proposal card", () => {
     const before = container.querySelector('[data-lifecycle-card="trigger_schedule_proposal"]');
     expect(container.querySelectorAll('[data-lifecycle-card="trigger_schedule_proposal"]')).toHaveLength(1);
 
-    fireEvent.click(container.querySelector('[data-action="confirm-schedule-proposal"]')!);
+    fireEvent.click(container.querySelector('[data-action="confirm-schedule -> scheduled"]')!);
     await waitFor(() =>
       expect(container.querySelector('[data-lifecycle-card-phase="settled"]')).not.toBeNull(),
     );
@@ -522,7 +522,7 @@ describe("§VI the schedule proposal card", () => {
     expect(container.querySelector('[data-conformance-id="schedule-option-rows"]')).not.toBeNull();
     expect(isDisabled(container.querySelector('[data-field="recurring-timezone"]'))).toBe(false);
     // The floor is Confirm, exactly as it is on a live proposal.
-    expect(container.querySelector('[data-action="confirm-schedule-proposal"]')).not.toBeNull();
+    expect(container.querySelector('[data-action="confirm-schedule -> scheduled"]')).not.toBeNull();
     expect(container.querySelector('[data-action="adjust-schedule-proposal"]')).toBeNull();
     expect(container.querySelector('[data-lifecycle-card-phase="expired"]')).not.toBeNull();
   });
@@ -706,9 +706,9 @@ describe("credential-aware decisions", () => {
     );
     const { container } = renderOn("chat_thread");
     await waitFor(() =>
-      expect(container.querySelector('[data-action="confirm-schedule-proposal"]')).not.toBeNull(),
+      expect(container.querySelector('[data-action="confirm-schedule -> scheduled"]')).not.toBeNull(),
     );
-    fireEvent.click(container.querySelector('[data-action="confirm-schedule-proposal"]')!);
+    fireEvent.click(container.querySelector('[data-action="confirm-schedule -> scheduled"]')!);
 
     await waitFor(() => expect(lastDecision(fetchMock).op).toBe("confirm"));
     const { url, init } = decisionInit(fetchMock);
@@ -732,9 +732,9 @@ describe("credential-aware decisions", () => {
     );
     const { container } = renderOn("site_widget");
     await waitFor(() =>
-      expect(container.querySelector('[data-action="confirm-schedule-proposal"]')).not.toBeNull(),
+      expect(container.querySelector('[data-action="confirm-schedule -> scheduled"]')).not.toBeNull(),
     );
-    fireEvent.click(container.querySelector('[data-action="confirm-schedule-proposal"]')!);
+    fireEvent.click(container.querySelector('[data-action="confirm-schedule -> scheduled"]')!);
 
     await waitFor(() => expect(lastDecision(fetchMock).op).toBe("confirm"));
     const { init } = decisionInit(fetchMock);
@@ -768,7 +768,7 @@ describe("credential-aware decisions", () => {
     );
     fireEvent.click(container.querySelector('[data-action="cancel-trigger-schedule"]')!);
     // Asked, not done.
-    const strip = container.querySelector('[data-conformance-id="schedule-cancel-confirm"]');
+    const strip = document.querySelector('[data-conformance-id="schedule-cancel-confirm"]');
     expect(strip).not.toBeNull();
     // cinatra#2972 rewrote these words with the act: Cancel schedule STOPS a
     // recurring schedule; it "never deletes the schedule or pauses the run".
@@ -776,7 +776,7 @@ describe("credential-aware decisions", () => {
     expect(strip?.textContent).not.toContain("paused");
     expect(decisionBodies(fetchMock)).toHaveLength(0);
 
-    fireEvent.click(strip!.querySelector('[data-action="confirm-destructive"]')!);
+    fireEvent.click(strip!.querySelector('[data-action="cancel-schedule"]')!);
     await waitFor(() => expect(lastDecision(fetchMock).op).toBe("cancel"));
   });
 
@@ -794,9 +794,9 @@ describe("credential-aware decisions", () => {
     );
     const { container } = renderOn("chat_thread");
     await waitFor(() =>
-      expect(container.querySelector('[data-action="confirm-schedule-proposal"]')).not.toBeNull(),
+      expect(container.querySelector('[data-action="confirm-schedule -> scheduled"]')).not.toBeNull(),
     );
-    fireEvent.click(container.querySelector('[data-action="confirm-schedule-proposal"]')!);
+    fireEvent.click(container.querySelector('[data-action="confirm-schedule -> scheduled"]')!);
     await waitFor(() =>
       expect(
         container.querySelector('[data-conformance-id="schedule-proposal-refusal"]')?.textContent,
@@ -841,7 +841,7 @@ describe("the rows are editable as they stand — no Adjust step", () => {
       expect(container.querySelector('[data-field="recurring-timezone"]')).not.toBeNull(),
     );
     expect(isDisabled(container.querySelector('[data-field="recurring-timezone"]'))).toBe(true);
-    expect(isDisabled(container.querySelector('[data-action="confirm-schedule-proposal"]'))).toBe(true);
+    expect(isDisabled(container.querySelector('[data-action="confirm-schedule -> scheduled"]'))).toBe(true);
   });
 
   it("an EDITED proposal is re-proposed and THEN confirmed, on the new ref", async () => {
@@ -884,7 +884,7 @@ describe("the rows are editable as they stand — no Adjust step", () => {
     fireEvent.change(container.querySelector('[data-field="recurring-timezone"]')!, {
       target: { value: "Europe/Lisbon" },
     });
-    fireEvent.click(container.querySelector('[data-action="confirm-schedule-proposal"]')!);
+    fireEvent.click(container.querySelector('[data-action="confirm-schedule -> scheduled"]')!);
 
     await waitFor(() => expect(decisions).toHaveLength(2));
     // ADJUST FIRST, carrying the corrected selections and no cron field.
@@ -1073,7 +1073,7 @@ describe("the rework — the step is the form and nothing else", () => {
       expect(container.querySelector('[data-action="cancel-trigger-schedule"]')).not.toBeNull(),
     );
     fireEvent.click(container.querySelector('[data-action="cancel-trigger-schedule"]')!);
-    const strip = container.querySelector(
+    const strip = document.querySelector(
       '[data-conformance-id="schedule-cancel-confirm"]',
     );
     expect(strip?.textContent).toContain("Stop this recurring schedule?");
@@ -1216,7 +1216,7 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
         host,
       ).toBeNull();
       expect(
-        view.container.querySelector('[data-action="confirm-schedule-proposal"]'),
+        view.container.querySelector('[data-action="confirm-schedule -> scheduled"]'),
         host,
       ).toBeNull();
       // AND NO STATUS LABEL AT ALL, of any kind (plan (A) §7.2). Not the
@@ -1363,7 +1363,7 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
     );
     fireEvent.click(container.querySelector('[data-action="cancel-trigger-schedule"]')!);
     expect(
-      container.querySelector('[data-conformance-id="schedule-cancel-confirm"]'),
+      document.querySelector('[data-conformance-id="schedule-cancel-confirm"]'),
     ).not.toBeNull();
 
     // The reader also starts editing the rows and never saves.
@@ -1380,7 +1380,7 @@ describe("the settled card draws the schedule as it stands, and nothing else", (
     fireEvent.focus(window);
     await waitFor(() =>
       expect(
-        container.querySelector('[data-conformance-id="schedule-cancel-confirm"]'),
+        document.querySelector('[data-conformance-id="schedule-cancel-confirm"]'),
       ).toBeNull(),
     );
     expect(

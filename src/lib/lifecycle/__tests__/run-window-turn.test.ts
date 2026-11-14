@@ -407,6 +407,54 @@ describe("every window takes the run's access", () => {
 });
 
 describe("when the model cannot use tools, the window says so", () => {
+  it.each(["I cannot reach the tools, but I think it is approved.", ""])(
+    "stores and returns only the platform notice after platform tools are lost (%j)",
+    async (answer) => {
+      turnBehaviour = (send) => {
+        send("turn_capability", { conversationOnly: false });
+        send("turn_capability", { platformToolsUnavailable: true });
+        send("text", { content: answer });
+      };
+      const out = await mod.runWindowTurn({
+        runId: "run-1", surface: "run-page", prompt: "approve it for me",
+      });
+      expect(out.entries.at(-1)?.text).toBe(mod.RUN_WINDOW_TOOL_LESS_NOTICE);
+      expect(appended.at(-1)?.text).toBe(mod.RUN_WINDOW_TOOL_LESS_NOTICE);
+      expect(stored.at(-1)?.text).toBe(mod.RUN_WINDOW_TOOL_LESS_NOTICE);
+    },
+  );
+
+  it("keeps the model's missing-tools claim when no reduction was reported", async () => {
+    const answer = "I cannot reach the tools, but I think it is approved.";
+    turnBehaviour = (send) => {
+      send("turn_capability", { conversationOnly: false });
+      send("text", { content: answer });
+    };
+    const out = await mod.runWindowTurn({
+      runId: "run-1", surface: "run-page", prompt: "approve it for me",
+    });
+    expect(out.toolLess).toBe(false);
+    expect(out.entries.at(-1)?.text).toBe(answer);
+    expect(appended.at(-1)?.text).toBe(answer);
+    expect(stored.at(-1)?.text).toBe(answer);
+    expect(out.entries.at(-1)?.text).not.toContain(mod.RUN_WINDOW_TOOL_LESS_NOTICE);
+  });
+
+  it("keeps the error sentence when the reduced attempt fails after partial text", async () => {
+    turnBehaviour = (send) => {
+      send("turn_capability", { platformToolsUnavailable: true });
+      send("text", { content: "An unfinished answer" });
+      send("error", { message: "private provider failure" });
+    };
+    const out = await mod.runWindowTurn({
+      runId: "run-1", surface: "review", prompt: "approve it for me",
+    });
+    const expected = "The assistant could not answer just now — please try again.";
+    expect(out.entries.at(-1)?.text).toBe(expected);
+    expect(appended.at(-1)?.text).toBe(expected);
+    expect(stored.at(-1)?.text).toBe(expected);
+  });
+
   it("puts the platform's own sentence first, and still shows the answer", async () => {
     turnBehaviour = (send) => {
       send("turn_capability", { conversationOnly: true });

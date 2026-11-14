@@ -375,3 +375,16 @@ describe("buildRunStepRail — lifecycle policy decisions (cinatra#2047 D-5)", (
     expect(reversed.entries.map((e) => e.key)).toEqual(forward.entries.map((e) => e.key));
   });
 });
+
+// Approved specs/app-artifact-review.html §I.3: one current entry, settled history above its successor.
+describe("§I.3 one current review across multiple artifacts", () => {
+  it("elects A at a same-ms tie, then B beneath settled A, then no current gate", () => {
+    const gates = [gate("C", "pending", "2026-10-10T00:00:01Z"), gate("B", "pending", "2026-10-10T00:00:00Z"), gate("A", "pending", "2026-10-10T00:00:00Z")];
+    const rail = () => buildRunStepRail({ gates }).entries;
+    expect(rail().filter(entry => entry.gate?.current).map(entry => entry.gate?.reviewTaskId)).toEqual(["A"]);
+    gates[2].status = "resolved";
+    expect(rail().map(entry => [entry.gate?.reviewTaskId, entry.gate?.current])).toEqual([["A", false], ["B", true], ["C", false]]);
+    gates.forEach(g => { g.status = "resolved"; });
+    expect(rail().filter(entry => entry.gate?.current)).toHaveLength(0);
+  });
+});

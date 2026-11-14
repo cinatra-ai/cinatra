@@ -10,10 +10,12 @@ import { createAuthClient } from "better-auth/react";
 
 export const mcpAuthClient = createAuthClient({
   baseURL:
-    process.env.NEXT_PUBLIC_BETTER_AUTH_URL ??
-    process.env.NEXT_PUBLIC_APP_URL ??
-    process.env.NEXT_PUBLIC_SITE_URL ??
-    "http://localhost:3000",
+    typeof window !== "undefined"
+      ? window.location.origin
+      : (process.env.NEXT_PUBLIC_BETTER_AUTH_URL ??
+        process.env.NEXT_PUBLIC_APP_URL ??
+        process.env.NEXT_PUBLIC_SITE_URL ??
+        "http://localhost:3000"),
   plugins: [
     usernameClient(),
     adminClient(),

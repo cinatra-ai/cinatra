@@ -66,6 +66,8 @@ export type RunInputStepKey = `input:${number}`;
  * different things.
  */
 export type RunParkedGateStepKey = "gate";
+/** Settled context history is keyed to the exact task it answered. */
+export type RunAnsweredContextStepKey = `context:${string}`;
 
 /**
  * THE RUN'S LAST STEP — what the run made (cinatra#3029).
@@ -124,6 +126,7 @@ export type RunStepSelection =
   | RunSurfaceRailLabelledKey
   | RunInputStepKey
   | RunParkedGateStepKey
+  | RunAnsweredContextStepKey
   | RunMadeStepKey
   | RunReviewGateStepKey
   | RunReviewAuditStepKey
@@ -358,8 +361,8 @@ export function parseRunStepSelection(
   if (/^input:\d+$/.test(value)) return value as RunInputStepKey;
   // A review task id is an opaque identifier; the only rule is that there IS
   // one, so a bare `review:` names no gate and is refused with the rest.
-  const keyed = /^(review|audit):(.+)$/.exec(value);
-  if (keyed) return value as RunReviewGateStepKey | RunReviewAuditStepKey;
+  const keyed = /^(review|audit|context):(.+)$/.exec(value);
+  if (keyed) return value as RunReviewGateStepKey | RunReviewAuditStepKey | RunAnsweredContextStepKey;
   return null;
 }
 

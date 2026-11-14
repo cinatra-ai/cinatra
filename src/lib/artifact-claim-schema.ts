@@ -427,6 +427,76 @@ $body$`,
     {
       text: `CREATE TRIGGER trg_run_context_selections_append_only BEFORE UPDATE OR DELETE ON "${q}"."run_context_selections" FOR EACH ROW EXECUTE FUNCTION "${q}"."fn_run_context_selections_append_only"()`,
     },
+    // The whole answer of each finalize, beside the per-ref rows above.
+    ...runContextAnswersSchemaQueries(schemaName),
+  ];
+}
+
+/** The table finalize appends ONE row to per finalize of a slot (cinatra#3080). */
+export const RUN_CONTEXT_ANSWERS_TABLE = "run_context_answers";
+
+// ---------------------------------------------------------------------------
+// Bootstrap DDL for `run_context_answers` — the WHOLE ANSWER of one finalize of
+// one context slot (cinatra#3080), hosted beside `run_context_selections` in
+// this leaf so the locked route graphs gain no module.
+//
+// The audit rows above cannot say what a run's answer to a slot IS: finalize
+// gives every ref its own content-addressed id and inserts it ON CONFLICT DO
+// NOTHING, so the rows of a slot are the set of refs the run EVER picked there.
+// A correction that removes a ref, or clears the slot, leaves no trace in them,
+// and an answer of nothing leaves no row at all. This table records what they
+// cannot: every finalize of a slot appends ONE row holding the complete ORDERED
+// ref set it wrote — an empty set included — in the SAME transaction as the
+// audit rows and the retention pins, so a committed answer always has both.
+//
+// "The latest answer" is the row with the greatest `answer_seq` for (org, run,
+// slot). The sequence is assigned inside that transaction, under a
+// transaction-scoped advisory lock on (org, run, slot), and is UNIQUE per
+// (org, run, slot): two finalizes of one slot are ordered by the order they
+// committed in, never by a clock. `answered_at` is recorded for people and is
+// never read to order answers.
+//
+// Append-only like the audit table: never UPDATE or DELETE (the BEFORE trigger
+// enforces it). The operator-upgrade twin is migrations/core/core__0113.
+export function runContextAnswersSchemaQueries(
+  schemaName: string,
+): { text: string }[] {
+  const q = schemaName.replaceAll('"', '""'); // identifier
+  return [
+    {
+      text: `CREATE TABLE IF NOT EXISTS "${q}"."run_context_answers" (
+  id                   text PRIMARY KEY,
+  org_id               text NOT NULL,
+  parent_run_id        text NOT NULL,
+  parent_package_name  text NOT NULL,
+  slot_id              text NOT NULL,
+  answer_seq           integer NOT NULL,
+  refs                 jsonb NOT NULL,
+  selected_by          text NOT NULL,
+  selection_mode       text NOT NULL,
+  answered_at          timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT rca_seq_chk CHECK (answer_seq >= 1),
+  CONSTRAINT rca_refs_chk CHECK (jsonb_typeof(refs) = 'array'),
+  CONSTRAINT rca_selectedby_chk CHECK (selected_by IN ('user','agent','autonomous')),
+  CONSTRAINT rca_selmode_chk CHECK (selection_mode IN ('interactive','autonomous'))
+)`,
+    },
+    {
+      text: `CREATE UNIQUE INDEX IF NOT EXISTS rca_run_slot_seq_idx ON "${q}"."run_context_answers" (org_id, parent_run_id, slot_id, answer_seq)`,
+    },
+    {
+      text: `CREATE OR REPLACE FUNCTION "${q}"."fn_run_context_answers_append_only"() RETURNS trigger LANGUAGE plpgsql AS $body$
+BEGIN
+  RAISE EXCEPTION 'run_context_answers is append-only: % forbidden — a later finalize appends a NEW answer', TG_OP;
+END;
+$body$`,
+    },
+    {
+      text: `DROP TRIGGER IF EXISTS trg_run_context_answers_append_only ON "${q}"."run_context_answers"`,
+    },
+    {
+      text: `CREATE TRIGGER trg_run_context_answers_append_only BEFORE UPDATE OR DELETE ON "${q}"."run_context_answers" FOR EACH ROW EXECUTE FUNCTION "${q}"."fn_run_context_answers_append_only"()`,
+    },
   ];
 }
 
@@ -556,10 +626,50 @@ export function artifactMaterializationLedgerSchemaQueries(
   image_model                 text,
   created_at                  timestamptz NOT NULL DEFAULT now()
 )` },
+    // cinatra#4264 (core__0128): the runtime's signed id of the ApiNode that
+    // filed the revision, written only when it equals node_id; else NULL.
+    // Added here rather than in the CREATE text, so a fresh install and an
+    // upgraded one take the same statement (the core__0126 precedent).
+    { text: `ALTER TABLE "${q}"."artifact_materializations" ADD COLUMN IF NOT EXISTS verified_step_id text` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS artifact_materializations_identity_idx ON "${q}"."artifact_materializations" (run_id, output_id, extension, content_hash)` },
     // Advisory cross-path lookup (the WARN-phase LLM-emit dedupe): finalized
     // declarative rows of one run by extension + content hash.
     { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_run_ext_hash_idx ON "${q}"."artifact_materializations" (run_id, extension, content_hash)` },
     { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_org_run_idx ON "${q}"."artifact_materializations" (org_id, run_id)` },
+    // cinatra#4264 (core__0128): "which node filed THIS revision" — the
+    // Regenerate provenance reader's exact lookup over materialize_tool rows.
+    { text: `CREATE INDEX IF NOT EXISTS artifact_materializations_org_artifact_rev_idx ON "${q}"."artifact_materializations" (org_id, artifact_id, representation_revision_id) WHERE path = 'materialize_tool'` },
+    ...agentRunStepSnapshotSchemaQueries(schemaName),
+  ];
+}
+
+/**
+ * THE STEP SNAPSHOTS OF A RUN (cinatra#4264, slice B1a; migration twin
+ * core__0128).
+ *
+ * Per run and node, the node's FULL resolved input as the flow runtime
+ * serialized it (`inputs_json`, stored verbatim and never re-serialized), the
+ * sha256 of those UTF-8 bytes and the sha256 of the flow version that ran. A
+ * Regenerate reruns one step from these values. `ambiguous` is set when a
+ * second, different snapshot of the same (run, node) arrives: neither is then
+ * trusted. A row lives exactly as long as its run (ON DELETE CASCADE).
+ *
+ * Spread from `artifactMaterializationLedgerSchemaQueries`, which the bootstrap
+ * runs after `agent_runs` exists (the foreign key needs it).
+ */
+export function agentRunStepSnapshotSchemaQueries(schemaName: string): { text: string }[] {
+  const q = schemaName.replaceAll('"', '""'); // identifier
+  return [
+    { text: `CREATE TABLE IF NOT EXISTS "${q}"."agent_run_step_snapshots" (
+  org_id         text NOT NULL,
+  run_id         text NOT NULL REFERENCES "${q}"."agent_runs"(id) ON DELETE CASCADE,
+  node_id        text NOT NULL,
+  inputs_json    text NOT NULL,
+  inputs_sha256  text NOT NULL,
+  flow_sha256    text NOT NULL,
+  ambiguous      boolean NOT NULL DEFAULT false,
+  created_at     timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (run_id, node_id)
+)` },
   ];
 }

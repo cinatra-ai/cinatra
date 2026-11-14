@@ -208,3 +208,22 @@ export type {
   SavedNangoConnection,
   NangoConnectionDetails,
 } from "@cinatra-ai/sdk-extensions";
+
+/** Call-time metadata adapters. Older installed pins degrade to UNKNOWN and
+ * never fall back to a migrating settings getter or a credential account API. */
+export async function listNangoConnectionAddressesForPreflight(query: {providerConfigKeys:string[];connectionIds?:string[]}) {
+  try {
+    const surface = getNangoSystem();
+    if (!surface?.listNangoConnectionAddresses) return {state:"unknown" as const,addresses:[]};
+    const { readStoredNangoPlatformSettingsForPreflight } = await import("@/lib/database-metadata");
+    return await surface.listNangoConnectionAddresses(query,readStoredNangoPlatformSettingsForPreflight);
+  } catch { return {state:"unknown" as const,addresses:[]}; }
+}
+export async function readNangoOAuthClientConfigurationPresenceForPreflight() {
+  try {
+    const surface = getNangoSystem();
+    if (!surface?.readNangoOAuthClientConfigurationPresence) return {state:"unknown" as const};
+    const { readStoredNangoPlatformSettingsForPreflight } = await import("@/lib/database-metadata");
+    return await surface.readNangoOAuthClientConfigurationPresence(surface.providerConfigKeys.googleOAuth,readStoredNangoPlatformSettingsForPreflight);
+  } catch { return {state:"unknown" as const}; }
+}

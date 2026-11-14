@@ -24,7 +24,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const query = vi.fn();
 
-vi.mock("@/lib/db/pooled", () => ({
+vi.mock("@/lib/db/pooled", async () => ({
+  ...await vi.importActual<typeof import("@/lib/db/pooled")>("@/lib/db/pooled"),
   getPooledDb: () => ({ query: (...a: unknown[]) => query(...a) }),
 }));
 vi.mock("@/lib/postgres-config", () => ({

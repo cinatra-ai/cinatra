@@ -28,8 +28,8 @@ import {
   reviewGateRailSettlement,
   reviewSettledCopy,
   reviewSettledOutcomeFromDisposition,
-  reviewTargetRowFacts,
 } from "../review-surface-model";
+import { reviewTargetRowFacts } from "../review-target-row-facts";
 
 const NOW = new Date("2026-08-29T06:26:52.662Z");
 const at = (msAgo: number) => new Date(NOW.getTime() - msAgo).toISOString();
@@ -78,10 +78,12 @@ describe("reviewTargetRowFacts — the meta line's updated time", () => {
     const line = reviewTargetRowFacts(artifact, NOW).join(" · ");
     expect(line).toBe(
       // THE ROW FACTS CARRY NO LABEL (the ratified drawing, §IV): the drawn
-      // line reads "… · Team · Private · text/html · updated 8 min ago". An
-      // earlier reading prefixed each fact with "Ownership:" / "Visibility:";
+      // line reads "… · Team: Growth · Private · text/html · updated 8 min ago".
+      // An earlier reading prefixed each fact with "Ownership:" / "Visibility:";
       // the drawing puts neither there, so the pin is re-taken on the drawn line.
-      "organization · organization · text/markdown · updated 8 min ago",
+      // An organization's artifact visible to its organization names the scope
+      // once (cinatra#3443); with no name resolved it floors to the type word.
+      "Organization · text/markdown · updated 8 min ago",
     );
     expect(line).not.toMatch(/\d{4}-\d{2}-\d{2}T/);
   });
@@ -232,5 +234,15 @@ describe("reviewGateRailSettlement — the rail entry says the drawing's word", 
     expect(reviewGateRailSettlement(undefined)).toBe("resolved");
     expect(reviewGateRailSettlement("comment")).toBe("resolved");
     expect(reviewGateRailSettlement(null)).not.toBe("Review requested");
+  });
+});
+
+
+describe("R3 casing leaves time and settlement unchanged", () => {
+  it("pins the approved Team · Private · text/html · updated 8 min ago line", () => {
+    expect(reviewTargetRowFacts({ ownerLevel: "team", visibility: "private", mime: "text/html", updatedAt: at(8 * 60_000) }, NOW).join(" · "))
+      .toBe("Team · Private · text/html · updated 8 min ago");
+    expect(reviewGateHeaderTitle("approved")).toBe("Continued");
+    expect(reviewGateHeaderTitle("changes_requested")).toBe("Changes requested");
   });
 });

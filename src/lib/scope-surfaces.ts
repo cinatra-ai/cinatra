@@ -292,33 +292,99 @@ export const SCOPE_SURFACE_TAB_ACTION: Record<
 };
 
 /**
+ * WHAT THE GATED NAME READ OF A SCOPE ANSWERED (cinatra#4453). Three answers,
+ * because the drawing draws three different crumbs for them (the components
+ * drawing, Breadcrumb section):
+ *
+ *   - `named`: the reader may read the entity, and it has a name. The crumb
+ *     shows that name.
+ *   - `blank`: the reader may read the entity, and its name is genuinely
+ *     unavailable (empty, or the name could not be read after the access
+ *     check). "While a name is genuinely unavailable, the crumb shows the id's
+ *     first eight characters plus an ellipsis".
+ *   - `unavailable`: the reader is refused, the entity is missing, or the
+ *     access check itself could not be taken. "a crumb standing for the refused
+ *     or the missing entity shows a fixed label naming the surface ... and never
+ *     any part of the id".
+ *
+ * A single `null` used to stand for all of these, so no surface could draw the
+ * middle answer.
+ */
+export type ScopeSurfaceEntityName =
+  | { state: "named"; name: string }
+  | { state: "blank" }
+  | { state: "unavailable" };
+
+/**
+ * What a surface hands the crumb and heading builders for the scope's name: the
+ * read's typed answer, or a name a route already holds as text (the workspace
+ * and personal scopes name themselves). Nothing at all is the refusal's
+ * answer, so a caller that holds no read never shows any part of an id.
+ */
+export type ScopeSurfaceNameInput = ScopeSurfaceEntityName | string | null | undefined;
+
+/** The typed answer for any input; text that is blank counts as `blank`. */
+export function toScopeSurfaceEntityName(input: ScopeSurfaceNameInput): ScopeSurfaceEntityName {
+  if (input == null) return { state: "unavailable" };
+  if (typeof input === "string") {
+    const name = input.trim();
+    return name ? { state: "named", name } : { state: "blank" };
+  }
+  return input;
+}
+
+/** The resolved name as text, or `null` for every answer that is not `named`. */
+export function scopeSurfaceEntityNameText(input: ScopeSurfaceNameInput): string | null {
+  const answer = toScopeSurfaceEntityName(input);
+  return answer.state === "named" ? answer.name : null;
+}
+
+/**
+ * THE ENTITY CRUMB'S LABEL for each answer (cinatra#4453): the name; for a
+ * `blank` answer of an id-bearing scope the id's first eight characters plus an
+ * ellipsis; otherwise the scope's fixed word, never any part of the id.
+ */
+export function scopeSurfaceEntityLabel(
+  scope: ScopeSurfaceRef,
+  input: ScopeSurfaceNameInput,
+): string {
+  const answer = toScopeSurfaceEntityName(input);
+  if (answer.state === "named") return answer.name;
+  if (answer.state === "blank" && "id" in scope) return `${scope.id.slice(0, 8)}\u2026`;
+  return SCOPE_SURFACE_ENTITY_FALLBACK[scope.kind];
+}
+
+/**
  * The crumb labels a scope surface RESOLVES and publishes (the Breadcrumb
  * pattern: "A crumb that stands for an entity id shows that entity's display
  * name — at every position, not only the last. Names come from the owning page's
  * server render, strictly after its access checks").
  *
- *   - the ENTITY crumb carries the resolved name, or — while the name is
- *     genuinely unavailable to this reader — the id's first eight characters
- *     plus an ellipsis, never a title-cased raw id;
+ *   - the ENTITY crumb draws what the drawing draws for each answer of the
+ *     gated name read (`scopeSurfaceEntityLabel`, cinatra#4453);
  *   - the LEAF crumb of a scoped tab carries the TAB's own name. Without it the
  *     shell's leaf-crumb rule takes the page heading, which on an entity page is
  *     the entity — so /workspace/assistants read "Workspace > Workspace" and an
  *     organization tab repeated the org's name after its own truncated id.
+ *   - the LEAF crumb of the Agents strip's Executions tab carries the strip's
+ *     own word. Without it the shell's leaf-crumb rule takes the page heading,
+ *     which on a scope page is the entity — so /personal/agents/executions read
+ *     "Personal > Agents > Personal" (cinatra#3693). The drawing's Breadcrumb
+ *     rule: the trail is the route the page sits on.
  */
 export function scopeSurfaceCrumbEntries(
   scope: ScopeSurfaceRef,
   tab: ScopeSurfaceTab | "dashboards",
-  title?: string,
+  title?: ScopeSurfaceNameInput,
+  agentsTab: "all" | "executions" = "all",
 ): { prefix: string; label: string }[] {
   const base = scopeSurfaceBase(scope);
-  const entityLabel =
-    title ??
-    ("id" in scope
-      ? `${scope.id.slice(0, 8)}\u2026`
-      : SCOPE_SURFACE_ENTITY_FALLBACK[scope.kind]);
-  const entries = [{ prefix: base, label: entityLabel }];
+  const entries = [{ prefix: base, label: scopeSurfaceEntityLabel(scope, title) }];
   if (tab !== "dashboards") {
     entries.push({ prefix: `${base}/${tab}`, label: SCOPE_SURFACE_TAB_LABEL[tab] });
+  }
+  if (tab === "agents" && agentsTab === "executions") {
+    entries.push({ prefix: `${base}/agents/executions`, label: "Executions" });
   }
   return entries;
 }

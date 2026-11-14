@@ -1439,23 +1439,58 @@ export function getTwentyConnectionState(): TwentyConnectionState {
 }
 
 /**
+ * The step of `saveTwentyConnection` that was running when it stopped
+ * (cinatra#4112). A caller that passes a `trace` reads it after a throw to
+ * name the failing step with a fixed word; it never carries error text, a key
+ * or an address.
+ */
+export type TwentySaveStage =
+  | "key"
+  | "url"
+  | "nango-config"
+  | "probe"
+  | "probe-unauthorized"
+  | "probe-unreachable"
+  | "foreign-owner"
+  | "row-read"
+  | "nango-import"
+  | "readback"
+  | "row-upsert"
+  | "identity"
+  | "cleanup"
+  | "done";
+
+/**
  * Connect (or re-connect) the instance-global Twenty workspace. Guards the URL,
  * live-probes the key, imports it into Nango under the shared external-MCP
  * provider (readback-verified), then upserts the singleton row. The caller MUST
  * have already authorized the actor as an admin/org-manager — this takes no
  * caller-supplied connection/scope pointer.
+ *
+ * `trace` (optional, cinatra#4112): the function writes the step it is running
+ * into `trace.stage` before each step, so a caller can name the failing step
+ * after a throw. It changes nothing else.
  */
-export async function saveTwentyConnection(input: {
-  instanceUrl: string;
-  apiKey: string;
-  /** The connecting admin (cinatra#952 W2): owns the connection's identity
-   * row. Threaded from the acting session by the server action. */
-  owner?: { userId: string; organizationId: string | null };
-}): Promise<void> {
+export async function saveTwentyConnection(
+  input: {
+    instanceUrl: string;
+    apiKey: string;
+    /** The connecting admin (cinatra#952 W2): owns the connection's identity
+     * row. Threaded from the acting session by the server action. */
+    owner?: { userId: string; organizationId: string | null };
+  },
+  trace?: { stage: TwentySaveStage },
+): Promise<void> {
+  const at = (stage: TwentySaveStage) => {
+    if (trace) trace.stage = stage;
+  };
+  at("key");
   const apiKey = (input.apiKey ?? "").trim();
   if (!apiKey) throw new TwentyConnectionError("Enter your Twenty API key.");
+  at("url");
   const { restBase, mcpUrl } = normalizeTwentyInstanceUrl(input.instanceUrl);
 
+  at("nango-config");
   if (!isNangoConfigured()) {
     throw new TwentyConnectionError(
       "The connection service (Nango) is not configured — an administrator must run `cinatra setup nango` first.",
@@ -1463,13 +1498,16 @@ export async function saveTwentyConnection(input: {
   }
 
   // (1) MANDATORY live probe BEFORE any persistence (fail-closed).
+  at("probe");
   const probe = await probeTwentyKey(restBase, apiKey);
   if (probe === "unauthorized") {
+    at("probe-unauthorized");
     throw new TwentyConnectionError(
       "Twenty rejected that API key (401/403). Check the key and try again.",
     );
   }
   if (probe !== "ok") {
+    at("probe-unreachable");
     throw new TwentyConnectionError(
       "Could not reach the Twenty instance to verify the key — check the instance URL and that Twenty is reachable.",
     );
@@ -1484,6 +1522,7 @@ export async function saveTwentyConnection(input: {
   // URL-derived connection id already has a LIVE identity owned by a
   // different user/org, refuse BEFORE the vault import / row upsert mutate
   // anything (the same fail-closed boundary the generic save route enforces).
+  at("foreign-owner");
   if (input.owner) {
     try {
       const { readNangoConnectionByNaturalKey } = await import(
@@ -1507,8 +1546,10 @@ export async function saveTwentyConnection(input: {
       // seam still hard-fails a foreign row before any grant is seeded.
     }
   }
+  at("row-read");
   const priorConnectionId =
     getExternalMcpServerByIdFresh(TWENTY_WORKSPACE_ROW_ID)?.nangoConnectionId ?? null;
+  at("nango-import");
   await ensureNangoIntegration({
     provider: TWENTY_NANGO_INTEGRATION_PROVIDER,
     providerConfigKey: EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY,
@@ -1521,6 +1562,7 @@ export async function saveTwentyConnection(input: {
   });
 
   // (3) Readback-verify the write landed (generic message only — never the value).
+  at("readback");
   const readback = await getNangoCredentials(EXTERNAL_MCP_NANGO_PROVIDER_CONFIG_KEY, connectionId, {
     forceRefresh: true,
   });
@@ -1535,6 +1577,7 @@ export async function saveTwentyConnection(input: {
   }
 
   // (4) Single row upsert: singleton id, workspace scope, Layer-B read allowlist.
+  at("row-upsert");
   upsertExternalMcpServer({
     id: TWENTY_WORKSPACE_ROW_ID,
     label: TWENTY_ROW_LABEL,
@@ -1552,6 +1595,7 @@ export async function saveTwentyConnection(input: {
   // gets its identity row (connector_key "externalMcp", owner = the
   // connecting admin) + the owner-scoped grant seed. Without an owner
   // (legacy programmatic path) the row is left for the core__0015 seed.
+  at("identity");
   if (input.owner) {
     const { registerSavedConnectionIdentity } = await import(
       "@/lib/connection-identity-seam"
@@ -1570,6 +1614,7 @@ export async function saveTwentyConnection(input: {
 
   // (6) After a URL change, best-effort remove the PREVIOUS instance's Nango
   // key — identity row FIRST (revocation-next-use), then the upstream token.
+  at("cleanup");
   if (priorConnectionId && priorConnectionId !== connectionId) {
     // Identity row FIRST (revocation-next-use), each step independently best-effort so a
     // degraded identity store never blocks the upstream token removal.
@@ -1588,6 +1633,7 @@ export async function saveTwentyConnection(input: {
       // Best-effort: the row no longer references the prior connection.
     }
   }
+  at("done");
 }
 
 // DEV-ONLY seeded-actor holder (cinatra#1238). The dev-boot shell
@@ -1596,14 +1642,49 @@ export async function saveTwentyConnection(input: {
 // hook. `devAttachTwentyBearerFromMintedKey` reads it instead of importing the
 // wide dev-auto-setup module graph — that edge would grow the production
 // route-graph of every route reachable through this broadly-imported registry.
-// Null off dev boot; the writer fails closed when unset.
-let seededDevActorForExternalMcp: { userId: string; organizationId: string } | null = null;
+// When the fixture account is not available on the boot (refused on a reachable
+// instance, or by a closed registration), the shell pushes the instance's first
+// administrator and their organisation instead (cinatra#4112,
+// `adoptFirstAdministratorAsConnectionOwner`). Null off dev boot; the writer
+// fails closed when unset.
+//
+// ONE HOLDER PER PROCESS (cinatra#4112): a production build (Next.js 16,
+// Turbopack) can hold this module more than once. The build of the 2af80105
+// preview carries it under three module ids, and the host binder
+// (`register-host-connector-services.ts`) under three; the boot shell and the
+// binder instrumentation loads share one instance, and the other two binders
+// sit in chunks that 206 entries and 46 entries load. Each binder instance
+// publishes the process-wide `@cinatra-ai/host:external-mcp-registry` provider
+// once, and a later publication replaces an earlier one. With a module-local
+// holder, an attach through another instance reads no owner. The holder is
+// therefore on `globalThis`, as the row cache above is, under a `Symbol.for`
+// key, as the capability registry's is, so every instance reads one holder.
+type DevActorForExternalMcp = { userId: string; organizationId: string };
+const DEV_ACTOR_HOLDER_KEY = Symbol.for("@cinatra-ai/host:external-mcp-registry/dev-actor/v1");
+type DevActorHolder = { [k: symbol]: DevActorForExternalMcp | null | undefined };
+
+function readSeededDevActorForExternalMcp(): DevActorForExternalMcp | null {
+  return (globalThis as unknown as DevActorHolder)[DEV_ACTOR_HOLDER_KEY] ?? null;
+}
 
 /** DEV-ONLY: the dev-boot shell pushes (or clears) the seeded dev-actor owner. */
-export function setDevActorForExternalMcp(
-  actor: { userId: string; organizationId: string } | null,
-): void {
-  seededDevActorForExternalMcp = actor;
+export function setDevActorForExternalMcp(actor: DevActorForExternalMcp | null): void {
+  (globalThis as unknown as DevActorHolder)[DEV_ACTOR_HOLDER_KEY] = actor
+    ? { userId: actor.userId, organizationId: actor.organizationId }
+    : null;
+}
+
+/**
+ * DEV-ONLY (cinatra#4387): the owner of the install-made connections that the
+ * dev-boot shell pushed through `setDevActorForExternalMcp` on THIS boot — the
+ * fixture account, or the first administrator and that administrator's
+ * organisation (cinatra#4112). Null off a dev/preview boot, or when the boot
+ * found no owner. A copy is returned, so a caller cannot change the holder.
+ * The host binds it to a dev-hook instance save itself; a hook never sees it.
+ */
+export function getDevInstallConnectionOwner(): { userId: string; organizationId: string } | null {
+  const actor = readSeededDevActorForExternalMcp();
+  return actor ? { userId: actor.userId, organizationId: actor.organizationId } : null;
 }
 
 /**
@@ -1625,48 +1706,221 @@ export function setDevActorForExternalMcp(
  * downgrades to owner-only under a null org (the InternalWorker mint would stay
  * denied), so this fails CLOSED (`resolved:false`) when no dev actor / org
  * resolves. Never throws. SECRET BOUNDARY: the key is never logged or returned;
- * any thrown message (a generic `TwentyConnectionError`) is swallowed to a
- * boolean result.
+ * any thrown message (a generic `TwentyConnectionError`) is swallowed.
+ *
+ * NAMED FAILURE (cinatra#4112): a result that is not resolved carries
+ * `failure`, one fixed word for the step that stopped it — `no-owner` (no
+ * pushed owner with an organisation), the `TwentySaveStage` word of the
+ * sanctioned save's step that threw (`key`, `url`, `nango-config`,
+ * `probe-unauthorized`, `probe-unreachable`, `foreign-owner`, `row-read`,
+ * `nango-import`, `readback`, `row-upsert`, `identity`), `no-row`,
+ * `resolver-null` or `resolver-error` — and the host logs that word
+ * once on the line `[dev-attach:twenty] not resolved: <word>`. The word never
+ * carries error text, a key or an address.
  */
+export type DevAttachTwentyFailure =
+  | "no-owner"
+  | TwentySaveStage
+  | "no-row"
+  | "resolver-null"
+  | "resolver-error";
+
+function devAttachNotResolved(
+  failure: DevAttachTwentyFailure,
+  connectionId: string | null,
+): { resolved: false; connectionId: string | null; failure: DevAttachTwentyFailure } {
+  try {
+    console.log(`[dev-attach:twenty] not resolved: ${failure}`);
+  } catch {
+    // A throwing log sink never fails the attach.
+  }
+  return { resolved: false, connectionId, failure };
+}
+
 export async function devAttachTwentyBearerFromMintedKey(input: {
   instanceUrl: string;
   apiKey: string;
-}): Promise<{ resolved: boolean; connectionId: string | null }> {
+}): Promise<{ resolved: boolean; connectionId: string | null; failure?: DevAttachTwentyFailure }> {
+  // The seeded dev-actor owner is PUSHED by the dev-boot shell
+  // (`dev-auto-setup.ts` -> `setDevActorForExternalMcp`, seeded BEFORE any
+  // connector devSetup hook runs). Reading it from the process-wide holder —
+  // rather than importing the dev-auto-setup module — keeps that wide dev-boot
+  // graph OUT of the production route-graph pressure (this registry is broadly
+  // reachable from /api/mcp, /chat, etc.; the edge would grow every route).
+  const actor = readSeededDevActorForExternalMcp();
+  if (!actor?.userId || !actor?.organizationId) {
+    return devAttachNotResolved("no-owner", null);
+  }
+  const trace: { stage: TwentySaveStage } = { stage: "key" };
   try {
-    // The seeded dev-actor owner is PUSHED here by the dev-boot shell
-    // (`dev-auto-setup.ts` -> `setDevActorForExternalMcp`, seeded BEFORE any
-    // connector devSetup hook runs). Reading it from a module-local holder —
-    // rather than importing the dev-auto-setup module — keeps that wide dev-boot
-    // graph OUT of the production route-graph pressure (this registry is broadly
-    // reachable from /api/mcp, /chat, etc.; the edge would grow every route).
-    const actor = seededDevActorForExternalMcp;
-    if (!actor?.userId || !actor?.organizationId) {
-      return { resolved: false, connectionId: null };
-    }
-    await saveTwentyConnection({
-      instanceUrl: input.instanceUrl,
-      apiKey: input.apiKey,
-      owner: { userId: actor.userId, organizationId: actor.organizationId },
-    });
-    // Verify the GATED resolver — not just the raw Nango readback — now mints a
-    // bearer, so the returned `resolved` is honest end-to-end (the row is upserted
-    // inside saveTwentyConnection, so it exists here on the first boot).
-    const row = getExternalMcpServerByIdFresh(TWENTY_WORKSPACE_ROW_ID);
-    if (!row) return { resolved: false, connectionId: null };
-    const bearer = await resolveExternalMcpServerBearer(row);
-    return { resolved: bearer != null, connectionId: row.nangoConnectionId };
+    await saveTwentyConnection(
+      {
+        instanceUrl: input.instanceUrl,
+        apiKey: input.apiKey,
+        owner: { userId: actor.userId, organizationId: actor.organizationId },
+      },
+      trace,
+    );
   } catch {
-    return { resolved: false, connectionId: null };
+    return devAttachNotResolved(trace.stage, null);
+  }
+  // Verify the GATED resolver — not just the raw Nango readback — now mints a
+  // bearer, so the returned `resolved` is honest end-to-end (the row is upserted
+  // inside saveTwentyConnection, so it exists here on the first boot).
+  let row: ExternalMcpServerRecord | null;
+  try {
+    row = getExternalMcpServerByIdFresh(TWENTY_WORKSPACE_ROW_ID);
+  } catch {
+    return devAttachNotResolved("no-row", null);
+  }
+  if (!row) return devAttachNotResolved("no-row", null);
+  let bearer: string | null;
+  try {
+    bearer = await resolveExternalMcpServerBearer(row);
+  } catch {
+    return devAttachNotResolved("resolver-error", row.nangoConnectionId);
+  }
+  if (bearer == null) return devAttachNotResolved("resolver-null", row.nangoConnectionId);
+  return { resolved: true, connectionId: row.nangoConnectionId };
+}
+
+/**
+ * DEV/PREVIEW-ONLY (cinatra#4112, cinatra#4137): hand the install-made
+ * connection of the external-MCP server row `serverId` that the REFUSED
+ * development fixture account owns to the owner the boot shell pushed (the
+ * instance's first administrator). An earlier, private boot made the
+ * connection for the fixture account; on a boot that refuses that account the
+ * connection must follow the new owner, or the connector's hook keeps a
+ * connection nobody can own and, once its key dies, mints a key per boot that
+ * the sanctioned save's foreign-owner guard refuses. Generic: the connector's
+ * own devSetup hook asks for it through the host's dev-setup helpers, naming
+ * its row and answering `checkKey` (does its service still accept the stored
+ * key?); this registry names no connector.
+ *
+ * NARROW BY CONSTRUCTION: it acts only when an owner is pushed AND the row's
+ * live `externalMcp` identity is owned by `refusedFixtureUserId`, the fixture
+ * account the shell refused on THIS boot. Any other owner is left alone, so
+ * the foreign-owner guard keeps refusing a save under somebody else's
+ * connection exactly as before.
+ *
+ * NEVER WORSE THAN BEFORE. Only the connector's service rejecting the stored
+ * key is a reason to remove anything; every other uncertainty leaves the
+ * connection as it is for a later boot:
+ *   - The stored key cannot be read (the gated resolver answers nothing — the
+ *     connection service's reader cannot tell a missing key from a failed
+ *     read), or the check cannot reach the service: nothing changes
+ *     ("deferred").
+ *   - The check answers "unauthorized": the connection is removed through
+ *     `disconnectExternalMcpServerConnection` ("cleared"), so the hook mints
+ *     ONE fresh key and attaches it for the new owner.
+ *   - The check answers "ok": the key, the Nango connection and the row stay
+ *     exactly as they are and only the OWNERSHIP moves — the fixture's
+ *     identity is revoked and the new owner's identity is registered through
+ *     the same identity seam the sanctioned save uses, with the same workspace
+ *     grant seed ("reowned"; no key is minted, nothing is checked between the
+ *     two writes). If the registration fails, an identity it left behind is
+ *     revoked and the fixture's ownership is restored ("deferred").
+ *   - A check that throws, or any other failure before a write: "failed".
+ *
+ * Never throws. SECRET BOUNDARY: the key is never logged or returned; it goes
+ * to `checkKey` only.
+ */
+export async function devReownRefusedFixtureConnection(input: {
+  serverId: string;
+  refusedFixtureUserId: string;
+  checkKey: (input: { apiKey: string; serverUrl: string }) => Promise<"ok" | "unauthorized" | "unreachable">;
+}): Promise<
+  "no-owner" | "no-connection" | "not-fixture-owned" | "deferred" | "reowned" | "cleared" | "failed"
+> {
+  const owner = readSeededDevActorForExternalMcp();
+  const fixtureUserId = input.refusedFixtureUserId;
+  if (!owner?.userId || !owner?.organizationId || !fixtureUserId || owner.userId === fixtureUserId) {
+    return "no-owner";
+  }
+  let identity: { id: string; ownerUserId: string; organizationId: string | null } | null = null;
+  let connectionId: string | null = null;
+  let identityStore: typeof import("@cinatra-ai/extensions/connection-identity-store");
+  let identitySeam: typeof import("@/lib/connection-identity-seam");
+  try {
+    identityStore = await import("@cinatra-ai/extensions/connection-identity-store");
+    identitySeam = await import("@/lib/connection-identity-seam");
+    const row = getExternalMcpServerByIdFresh(input.serverId);
+    if (!row?.nangoConnectionId) return "no-connection";
+    connectionId = row.nangoConnectionId;
+    identity = await identityStore.readNangoConnectionByNaturalKey("externalMcp", connectionId);
+    if (!identity || identity.ownerUserId !== fixtureUserId) return "not-fixture-owned";
+    if (!isNangoConfigured()) return "deferred";
+
+    // Read through the GATED resolver (the connection's own use-gate), never
+    // a raw credential read. No answer is not proof the key is gone.
+    const apiKey = await resolveExternalMcpServerBearer(row);
+    if (typeof apiKey !== "string" || apiKey.length === 0) return "deferred";
+    const verdict = await input.checkKey({ apiKey, serverUrl: row.serverUrl });
+    if (verdict === "unauthorized") {
+      await disconnectExternalMcpServerConnection(input.serverId);
+      return "cleared";
+    }
+    if (verdict !== "ok") return "deferred";
+  } catch {
+    // Nothing has been written on any path that reaches here.
+    return "failed";
+  }
+
+  // verdict === "ok": move the ownership only.
+  if (!identity || !connectionId) return "failed";
+  const { softDeleteNangoConnection } = identityStore;
+  const { registerSavedConnectionIdentity } = identitySeam;
+  const fixtureIdentity = identity;
+  const installed: { row: { id: string; created: boolean } | null } = { row: null };
+  try {
+    await softDeleteNangoConnection(fixtureIdentity.id);
+    await registerSavedConnectionIdentity({
+      connectorKey: "externalMcp",
+      connectionId,
+      ownerUserId: owner.userId,
+      organizationId: owner.organizationId,
+      seed: "workspace",
+      onIdentityRow: (row) => {
+        installed.row = { id: row.id, created: row.created };
+      },
+    });
+    return "reowned";
+  } catch {
+    // Put the fixture's ownership back so the connection keeps working and a
+    // later boot can retry: revoke what this attempt installed, then register
+    // the fixture's identity again with the same workspace seed.
+    try {
+      if (installed.row?.created) await softDeleteNangoConnection(installed.row.id);
+      await registerSavedConnectionIdentity({
+        connectorKey: "externalMcp",
+        connectionId,
+        ownerUserId: fixtureIdentity.ownerUserId,
+        organizationId: fixtureIdentity.organizationId,
+        seed: "workspace",
+      });
+      return "deferred";
+    } catch {
+      return "failed";
+    }
   }
 }
 
 /**
  * Disconnect the Twenty workspace: remove the row, then best-effort delete the
- * Nango connection. The row is read FRESH (bypassing the TTL cache) so a stale
- * null cache on another worker cannot leave the Nango key behind.
+ * Nango connection (`disconnectExternalMcpServerConnection` on the Twenty row).
  */
 export async function disconnectTwentyConnection(): Promise<void> {
-  const row = getExternalMcpServerByIdFresh(TWENTY_WORKSPACE_ROW_ID);
+  await disconnectExternalMcpServerConnection(TWENTY_WORKSPACE_ROW_ID);
+}
+
+/**
+ * Disconnect one external-MCP server row: revoke its connection identity,
+ * remove the row, then best-effort delete the Nango connection. The row is read
+ * FRESH (bypassing the TTL cache) so a stale null cache on another worker
+ * cannot leave the Nango key behind.
+ */
+export async function disconnectExternalMcpServerConnection(serverId: string): Promise<void> {
+  const row = getExternalMcpServerByIdFresh(serverId);
   // Revocation ordering (codex diff-round-3 finding 2): soft-delete the
   // IDENTITY row before the registry row — cross-worker row caches can keep
   // serving the row for up to the cache TTL, and the identity soft-delete is
@@ -1685,7 +1939,7 @@ export async function disconnectTwentyConnection(): Promise<void> {
       // Best-effort: identity store unavailable — the row + token deletes below still run.
     }
   }
-  deleteExternalMcpServer(TWENTY_WORKSPACE_ROW_ID);
+  deleteExternalMcpServer(serverId);
   if (row?.nangoConnectionId && isNangoConfigured()) {
     // The identity row was soft-deleted above (before the row delete); the
     // upstream token delete stays best-effort. External-MCP rows have no blob
@@ -1696,4 +1950,17 @@ export async function disconnectTwentyConnection(): Promise<void> {
       // Best-effort: the row (the resolver binding) is already deleted.
     }
   }
+}
+
+/** Call-time row-only run-start read. No schema init, cache fill, endpoint
+ * sweep, bearer retrieval, or identity creation. The existing use-gate decides
+ * access after this reader; enabled row/address alone grants nobody use. */
+export async function listExternalMcpServersForPreflight(): Promise<ExternalMcpServerRecord[]> {
+  if (process.env.NEXT_PHASE === "phase-production-build") throw new Error("Connection metadata unavailable");
+  try {
+    const { runPostgresQueriesAsync } = await import("@/lib/postgres-async");
+    const [result] = await runPostgresQueriesAsync({connectionString:getPostgresConnectionString(),transaction:false,queries:[{text:`SELECT id, label, server_url, nango_connection_id, scope, org_id, user_id, enabled, allowed_tools, allowed_catalog_tools, transport, created_at, updated_at FROM "${q(postgresSchema)}"."external_mcp_servers" ORDER BY created_at ASC`}]});
+    if (!Array.isArray(result?.rows)) throw new Error();
+    return (result.rows as RawRow[]).map(toRecord);
+  } catch { throw new Error("Connection metadata unavailable"); }
 }

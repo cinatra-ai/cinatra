@@ -168,9 +168,9 @@ describe("the snapshot carries the review reading and the data road at version 3
     expect(Object.prototype.hasOwnProperty.call(v1, "bytes")).toBe(false);
   });
 
-  it("(b5) the SDK leaf and the host contract both read version 4, with the review reading at 3", () => {
-    expect(sdkProps.ARTIFACT_RENDERER_PROPS_API_VERSION).toBe(4);
-    expect(hostProps.ARTIFACT_RENDERER_PROPS_API_VERSION).toBe(4);
+  it("(b5) the SDK leaf and the host contract both read version 5, with the review reading at 3", () => {
+    expect(sdkProps.ARTIFACT_RENDERER_PROPS_API_VERSION).toBe(5);
+    expect(hostProps.ARTIFACT_RENDERER_PROPS_API_VERSION).toBe(5);
     expect((hostProps as { ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION?: number })
       .ARTIFACT_RENDERER_PROPS_REVIEW_READING_VERSION).toBe(3);
     expect(hostProps.ARTIFACT_RENDERER_PROPS_BYTE_REFERENCE_VERSION).toBe(2);

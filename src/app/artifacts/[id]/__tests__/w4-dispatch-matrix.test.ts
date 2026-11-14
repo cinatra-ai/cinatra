@@ -27,7 +27,7 @@ import {
 
 import type { ActorContext } from "@/lib/authz/actor-context";
 import type { ArtifactSummary } from "@/lib/artifacts/artifact-service";
-import type { ArtifactRendererProps } from "@/lib/artifacts/artifact-renderer-props";
+import { ARTIFACT_RENDERER_PROPS_API_VERSION, type ArtifactRendererProps } from "@/lib/artifacts/artifact-renderer-props";
 import { runtimeAssetRegistry } from "@/lib/artifacts/runtime-renderer-registry";
 
 import { _resetFirstPartySeedForTests } from "../renderer-resolution";
@@ -54,6 +54,11 @@ const FLEET = [
   "pdf-artifact",
   "dashboard-artifact",
   "drupal-artifacts",
+  // The blog pipeline's three packs (cinatra#3033). Their types are the rows
+  // the pipeline files: the post, the LinkedIn draft and the idea.
+  "blog-post-artifact",
+  "linkedin-artifacts",
+  "blog-idea-artifact",
 ] as const;
 
 function registerFleet(): void {
@@ -76,18 +81,21 @@ function summary(objectType: string, identity: EffectiveIdentity): ArtifactSumma
   } as unknown as ArtifactSummary;
 }
 
+// Both roads are driven at the ceiling the page and the review core pass (the
+// host's newest props version), because the build-map arm floors a display that
+// declares more than its ceiling (#3978).
 function pageRoad(artifact: ArtifactSummary, mime: string) {
   return resolveArtifactDisplayMount({
     orgId: ORG,
     baseType: artifact.objectType,
     identity: artifact.presentationIdentity,
     mime,
-    propsApiVersion: 1,
+    propsApiVersion: ARTIFACT_RENDERER_PROPS_API_VERSION,
   });
 }
 function reviewRoad(artifact: ArtifactSummary, mime: string) {
   const { resolveMount } = bindArtifactReviewPorts({ orgId: ORG, actor });
-  return Promise.resolve(resolveMount({ artifact, mime, propsApiVersion: 1 }));
+  return Promise.resolve(resolveMount({ artifact, mime, propsApiVersion: ARTIFACT_RENDERER_PROPS_API_VERSION }));
 }
 
 /** label, objectType, identity, mime, the package that must answer (null = a
@@ -102,6 +110,17 @@ const TYPED: readonly Row[] = [
   ["typed binary", "@cinatra-ai/binary-artifact:artifact", winner("@cinatra-ai/binary-artifact"), "application/octet-stream", "@cinatra-ai/binary-artifact"],
   ["typed image", "@cinatra-ai/image-artifact:image", winner("@cinatra-ai/image-artifact"), "image/png", "@cinatra-ai/image-artifact"],
   ["typed PDF", "@cinatra-ai/pdf-artifact:document", winner("@cinatra-ai/pdf-artifact"), "application/pdf", "@cinatra-ai/pdf-artifact"],
+];
+
+// THE BLOG PIPELINE'S TYPED ROWS (cinatra#3033). Each row carries its blog pack's
+// own object type and that pack is the winner, yet no blog pack ships a display
+// (the three text displays were withdrawn), so a winner with no display falls
+// through to the media type, and the answer names the text or markdown pack
+// that draws the row. The expectation is that fall-through, on both roads.
+const BLOG_TYPED: readonly Row[] = [
+  ["typed blog post (markdown)", "@cinatra-ai/blog-post-artifact:post", winner("@cinatra-ai/blog-post-artifact"), "text/markdown", "@cinatra-ai/markdown-artifact"],
+  ["typed LinkedIn draft (text)", "@cinatra-ai/linkedin:post-draft", winner("@cinatra-ai/linkedin-artifacts"), "text/plain", "@cinatra-ai/text-artifact"],
+  ["typed blog idea", "@cinatra-ai/blog-idea-artifact:blog-idea", winner("@cinatra-ai/blog-idea-artifact"), "text/markdown", "@cinatra-ai/markdown-artifact"],
 ];
 
 const REPRESENTATION_ONLY: readonly Row[] = [
@@ -123,7 +142,9 @@ const REPRESENTATION_ONLY: readonly Row[] = [
 
 const REFERENCES: readonly Row[] = [
   ["the dashboard pointer", "@cinatra-ai/dashboard-artifact:dashboard", winner("@cinatra-ai/dashboard-artifact"), "application/vnd.cinatra.dashboard+json", null],
-  ["the Drupal reference", "@cinatra-ai/drupal:node", NO_WINNER, "text/html", null],
+  // The pack owns its pointer type in its own namespace (cinatra#4366), so its
+  // base identity is the pack; it ships no renderer, so the review floors.
+  ["the Drupal reference", "@cinatra-ai/drupal-artifacts:node-pointer", winner("@cinatra-ai/drupal-artifacts"), "text/html", null],
 ];
 
 afterEach(() => {
@@ -149,7 +170,7 @@ describe.each([
   ["the artifact detail", 0],
   ["the review", 1],
 ] as const)("acceptance 8 — %s road", (_road, index) => {
-  it.each([...TYPED, ...REPRESENTATION_ONLY, ...REFERENCES])(
+  it.each([...TYPED, ...BLOG_TYPED, ...REPRESENTATION_ONLY, ...REFERENCES])(
     "%s",
     async (...row) => {
       const expected = row[4];
@@ -168,7 +189,7 @@ describe.each([
         const FLOOR_PACKAGE: Record<string, string | null> = {
           "@acme/x:row": "@acme/x",
           "@cinatra-ai/dashboard-artifact:dashboard": "@cinatra-ai/dashboard-artifact",
-          "@cinatra-ai/drupal:node": "@cinatra-ai/drupal",
+          "@cinatra-ai/drupal-artifacts:node-pointer": "@cinatra-ai/drupal-artifacts",
         };
         expect(mount.kind).toBe("floor");
         expect(mount.packageName ?? null).toBe(FLOOR_PACKAGE[row[1] as string] ?? null);

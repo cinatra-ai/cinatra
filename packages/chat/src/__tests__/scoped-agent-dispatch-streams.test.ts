@@ -29,6 +29,12 @@ import { decideMessageRouting } from "../route-decision";
 import { classifyMentions, type AudienceScopedAssistantResolver } from "../classify-mentions";
 import { resolveDispatchPlan, shouldEnterSlackModeOnSend, countMentions } from "../chat-routing";
 import type { AssistantDeliveryLookup } from "../dispatch-planner";
+import { scopedMentionTokens } from "../mention-tokenizer";
+// The one server-side reader of a package name left after #2996: the scripted
+// model stand-in's start reading (cinatra#2942). Reached by relative path, as
+// this file reached the removed pre-router, and as the agents package's tests
+// reach this same package's source.
+import { scriptedTurnStartsAgent } from "../../../llm/src/scripted-test-provider";
 // THE OTHER SIDE OF THE SEAM. `explicit-dispatch.ts` is deliberately free of
 // `import "server-only"` so it can be unit-tested without the Next server
 // harness, which also lets this client-side suite hold both halves of the
@@ -304,4 +310,91 @@ describe("cinatra#2820 — the guards that must survive the router change", () =
       { handle: "slackbot", assistantUserId: "sb-1", offset: 0, length: 0 },
     ]);
   });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2942 — the scripted start reading and the client tokenizer read ONE
+// grammar.
+//
+// The pre-model pre-router the #2912 seam tied to the client is gone (#2996),
+// but one server-side reader of a package name is left: on a key-free
+// development stack the assistant is the scripted stand-in, and its start
+// reading (`scriptedTurnStartsAgent`) still reads `@cinatra-ai/<slug>` out of
+// the sentence and hands it to the real `agent_run`. It must accept and refuse
+// exactly what the client's mention tokenizer accepts and refuses: the start
+// character, the left guards (URL, email, doubled `@`), the right boundary and
+// the case fold. Every row is driven through BOTH readers and through the
+// client route decision, so a change to either reader alone goes red here.
+// ---------------------------------------------------------------------------
+
+/** The `@cinatra-ai` package the client tokenizer reads out of the sentence. */
+function clientPackageRef(content: string): string | null {
+  const token = scopedMentionTokens(content).find((t) => t.vendor === "cinatra-ai");
+  return token?.packageRef ?? null;
+}
+
+const PARITY_TABLE: ReadonlyArray<{
+  shape: string;
+  content: string;
+  packageRef: string | null;
+}> = [
+  {
+    shape: "a digit-initial slug is a package",
+    content: "use @cinatra-ai/9lives to do the thing",
+    packageRef: "@cinatra-ai/9lives",
+  },
+  {
+    shape: "an underscore ends no slug",
+    content: "use @cinatra-ai/foo_bar to do the thing",
+    packageRef: null,
+  },
+  {
+    shape: "an underscore ends no slug, capitalized",
+    content: "use @Cinatra-AI/Foo_Bar now",
+    packageRef: null,
+  },
+  {
+    shape: "a slash ends no slug",
+    content: "use @Cinatra-AI/Foo/Bar now",
+    packageRef: null,
+  },
+  {
+    shape: "an email local part starts no mention",
+    content: "use bob@cinatra-ai/foo now",
+    packageRef: null,
+  },
+  {
+    shape: "a URL path starts no mention",
+    content: "use https://example.com/@Cinatra-AI/Foo now",
+    packageRef: null,
+  },
+  {
+    shape: "a doubled @ starts no mention",
+    content: "use @@cinatra-ai/foo now",
+    packageRef: null,
+  },
+  {
+    shape: "the case folds",
+    content: "use @Cinatra-AI/Foo now",
+    packageRef: "@cinatra-ai/foo",
+  },
+  {
+    shape: "the canonical form",
+    content: AGENT_ONLY,
+    packageRef: AGENT_ONLY_PACKAGE,
+  },
+];
+
+describe("cinatra#2942 — the scripted start reading and the client tokenizer read one grammar", () => {
+  for (const row of PARITY_TABLE) {
+    it(`${row.shape}: ${JSON.stringify(row.content)} -> ${row.packageRef ?? "no package"} on both sides`, async () => {
+      expect(clientPackageRef(row.content)).toBe(row.packageRef);
+      expect(scriptedTurnStartsAgent(row.content)).toBe(row.packageRef);
+      // The client answers every one of them: the assistant reads the message
+      // whatever the tokenizer found in it.
+      expect(resolveDispatchPlan(await route(row.content), undefined)).toMatchObject({
+        kind: "stream",
+      });
+    });
+  }
 });

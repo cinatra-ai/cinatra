@@ -378,6 +378,8 @@ export async function createMcpRuntimeServer(input: {
           primitiveName: name,
           ctx,
           delegatedRestricted: !!ctx?.delegatedRestricted,
+          // The outward declaration planned at registration, never re-read here.
+          declaresOutward: planned.declaredOutward !== null,
         });
         if (!decision.allowed && decision.shouldBlock) {
           return {

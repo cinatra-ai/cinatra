@@ -26,6 +26,13 @@
  */
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 
+// cinatra#4150: every resume road reads the run's newest publish decision before it
+// sends. This suite is about another question, so no publish decision holds its run.
+vi.mock("../publish-decision-store", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readLatestDecisionForRun: async () => null,
+}));
+
 import { RunTransitionError } from "../run-status";
 
 const row = vi.hoisted(() => ({ status: "pending_approval" as string }));
@@ -39,6 +46,13 @@ const storeMock = vi.hoisted(() => ({
   transitionRunStatus: vi.fn(),
 }));
 vi.mock("../store", () => storeMock);
+vi.mock("../agent-run-hitl-prompts", () => ({
+  captureHitlPromptForContinue: async (input: never) => {
+    await (storeMock.writeHitlPrompt as unknown as (value: unknown) => Promise<void>)(input); return "captured-prompt";
+  },
+  recordSuccessfulContinue: async () => {},
+  continueBindingDigest: () => "", continueGateDigest: () => "",
+}));
 
 // No rows: the install-scope guard reads the run's scope ref straight off the
 // database and returns without a decision when there is none, so the REAL guard

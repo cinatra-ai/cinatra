@@ -49,11 +49,13 @@ import {
   buildArtifactDetailHeader,
 } from "./artifact-detail-header";
 import { resolveArtifactContentClass } from "@/lib/artifacts/artifact-content-channel";
+import { projectRecordedPageCaptureFacts } from "@/lib/artifacts/page-capture-facts-record";
 import {
   getRepresentationByIdForReplay,
   resolveEditorRevisionId,
 } from "@/lib/artifacts/representation-store";
 import { can } from "@/lib/authz/enforce";
+import { readOwnerDisplayName } from "@/lib/owner-display-names";
 import {
   ARTIFACT_EDIT_IDLE_PAUSE_MS,
   ARTIFACT_EDIT_TEXT_CAP_BYTES,
@@ -178,10 +180,23 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
   // type, no revision, no owner level or visibility, no kind beside the title,
   // and a size counted out in bytes. The model is pure and tested; this page
   // draws it and decides nothing about it.
+  // THE OWNER, NAMED (cinatra#3475). The drawing writes the owner of a row as
+  // its level word and the owning entity's NAME ("Team: Growth", "Organization:
+  // Acme Corp"), on this page exactly as on the library row. The name is read
+  // through the one owner-name resolver every scope surface reads (#1905),
+  // best-effort: an unresolved name floors the cell to the drawn level word,
+  // never to a stored value.
+  const ownerName = await readOwnerDisplayName(
+    artifact.ownerLevel,
+    (artifact.ownerLevel === "organization"
+      ? artifact.organizationId
+      : artifact.ownerId) ?? "",
+  );
   const header = buildArtifactDetailHeader({
     artifact,
     mime,
     revisionId,
+    ownerName,
   });
   // `PageHeader` broadcasts this string to the trail's leaf crumb, so it is the
   // one place the Breadcrumb rule against a raw id in a name's place lands.
@@ -207,7 +222,7 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
   // above still decides on `content.kind === "text"`. Pinned by
   // `w3-forward-content-road-substance`: taking the narrower reader here would
   // silently un-ship the classes wave 3 added.
-  const content =
+  const fileContent =
     revisionId && representationForm
       ? await hostArtifactContentBuilder()({
           orgId,
@@ -217,6 +232,15 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
           mime,
         })
       : absentArtifactContent(revisionId ?? null, contentClass ? "unsupported-form" : "absent");
+  // A PAGE CAPTURE'S FACTS (cinatra#4223): for a picture the channel has no
+  // class for, the facts recorded with this revision, as its object snapshot.
+  const content = projectRecordedPageCaptureFacts({
+    orgId,
+    artifactId: artifact.artifactId,
+    representationRevisionId: revisionId ?? null,
+    objectType: artifact.objectType,
+    fileProjection: fileContent,
+  });
 
   // THE EDIT CAPABILITY (enabler 0.20). Minted HERE and nowhere else: this is
   // the artifact's own page, the one surface the plan makes editable. The

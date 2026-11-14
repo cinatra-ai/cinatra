@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgSchema, text, integer, boolean, timestamp, index, uniqueIndex, primaryKey, jsonb } from "drizzle-orm/pg-core";
+import { pgSchema, text, integer, bigint, boolean, timestamp, index, uniqueIndex, primaryKey, jsonb, check } from "drizzle-orm/pg-core";
 
 // ---------------------------------------------------------------------------
 // Extension registry origin coordinates.
@@ -211,6 +211,13 @@ export const agentTemplates = cinatraSchema.table("agent_templates", {
   // produces parity was never established) — and falls through to the pre-#3208
   // registry read, preserving that fail-closed posture byte for byte.
   artifactBindings: text("artifact_bindings"),
+  // publishingSteps (cinatra#4150): the ids of the flow nodes the compiled OAS
+  // declares `metadata.cinatra.publishes: true`, JSON-as-text like gated_steps.
+  // Written by the install, import, seed and recompile writers. NULLABLE with no default and no
+  // backfill: null = unknown: a row written before this column existed, or by a writer that does not take the list from a compile. A
+  // legacy template cannot declare the flag (the key is new), so a reader treats
+  // null as "unknown", never as "publishes nothing".
+  publishingSteps: text("publishing_steps"),
   // lifecycleConfig: the agent-manifest LIFECYCLE declarations (cinatra#2038,
   // epic #2037 S0) compiled onto the template trigger-style (like trigger_mode /
   // gated_steps): requestedSkips / producedTypes / repairCapable as JSON-as-text.
@@ -294,6 +301,7 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // Self-referential link to orchestrator parent run. Nullable, no CASCADE:
   // children survive parent deletion.
   parentRunId: text("parent_run_id"),
+  startedByRunId: text("started_by_run_id"), // independent tool starter (#3749), never an orchestrator parent
   // Explicit AG-UI capability marker. Set to true for runs created with AG-UI
   // support. Null for legacy runs (no backfill). Used by AgenticRunPanel
   // to decide: SSE path (agUiEnabled=true) vs. legacy polling path (agUiEnabled=null|false).
@@ -424,6 +432,12 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // Migration: see src/lib/drizzle-store.ts run_token_hash entry + core__0020
   //   (ALTER TABLE cinatra.agent_runs ADD COLUMN IF NOT EXISTS run_token_hash text).
   runTokenHash: text("run_token_hash"),
+  // cinatra#4220: the run's host-derived connector-instance binding, JSON-as-text
+  // {connectorKey, instanceId}. Set ONLY by the dispatcher
+  // (setAgentRunConnectorInstanceBinding) after the per-instance use gate;
+  // write-once; never a run-creation input. Signed into the run's MCP actor
+  // token as its pin. Migration core__0122 + agentRunConnectorInstanceBindingSchemaQueries.
+  connectorInstanceBinding: text("connector_instance_binding"),
   // dependent_install_id: the installed_extension row id a run executes AS
   // (cinatra#1392 Gap 2). Threaded onto the signed run lineage (ActorContext)
   // so the A2A dispatch seam resolves edge-bound serving against a TRUSTED
@@ -475,6 +489,19 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   lifecycleMoment: text("lifecycle_moment"),
   lifecycleCardKind: text("lifecycle_card_kind"),
   lifecycleCardRef: text("lifecycle_card_ref"),
+  // THE PAUSE CLAIM (cinatra#4245): a generation-stamped lease on the run row,
+  // so a resume, a stop and a change request serialize on one row lock.
+  // pauseGeneration counts every change of what the run waits at; the claim
+  // triple says who holds the pause (token), how far it got (phase: claimed,
+  // sending, changes_requested) and until when (DB-clock expiry; NULL only for
+  // the changes_requested end mark). CHECKs agent_runs_pause_claim_phase_chk and
+  // agent_runs_pause_claim_shape_chk. A row from before the columns reads
+  // generation 0 and no claim. Migration: core__0126 + the bootstrap leaf
+  // agentRunPauseClaimSchemaQueries.
+  pauseGeneration: bigint("pause_generation", { mode: "number" }).notNull().default(0),
+  pauseClaimToken: text("pause_claim_token"),
+  pauseClaimPhase: text("pause_claim_phase"),
+  pauseClaimExpiresAt: timestamp("pause_claim_expires_at", { withTimezone: true }),
 }, (t) => ({
   templateIdIdx:    index("agent_runs_template_id_idx").on(t.templateId),
   statusIdx:        index("agent_runs_status_idx").on(t.status),
@@ -484,6 +511,7 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // Aligning the Drizzle schema declaration prevents `drizzle-kit generate`
   // from diffing against the live DB and attempting to drop/recreate as a
   // full index.
+  startedByRunIdIdx: index("agent_runs_started_by_run_id_idx").on(t.startedByRunId, t.orgId, t.createdAt).where(sql`started_by_run_id IS NOT NULL`),
   parentRunIdIdx:   index("agent_runs_parent_run_id_idx")
     .on(t.parentRunId)
     .where(sql`parent_run_id IS NOT NULL`),
@@ -495,6 +523,14 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   lifecycleMomentIdx: index("agent_runs_lifecycle_moment_idx")
     .on(t.lifecycleMoment)
     .where(sql`lifecycle_moment IS NOT NULL`),
+  // cinatra#4476 — the upgrade recovery reads the paused runs a page at a time, in
+  // id order after its cursor (`recoveryPageQuery`), so one pass reads at most one
+  // page of this index. DDL: core__0127 and its bootstrap twin in
+  // lifecycleInterceptionsSchemaQueries; declared with the same predicate so that
+  // drizzle-kit does not recreate it as a full index.
+  pendingApprovalIdIdx: index("agent_runs_pending_approval_id_idx")
+    .on(t.id)
+    .where(sql`status = 'pending_approval'`),
   // Index name MUST match the SQL DDL in src/lib/drizzle-store.ts
   // (`agent_runs_org_id_idx`). Drift causes drizzle-kit introspection to drop
   // and recreate the index.
@@ -737,6 +773,42 @@ export const artifactReviewResumeOutbox = cinatraSchema.table("artifact_review_r
   deadIdx:   index("artifact_review_resume_outbox_dead_idx").on(t.deadLetteredAt).where(sql`dead_lettered_at IS NOT NULL`),
 }));
 
+// cinatra#4476 — the upgrade recovery of a declared review's paused run that the
+// cinatra#4312 upgrade left with no live resume intent. DDL twin:
+// lifecycleInterceptionsSchemaQueries + migration core__0127.
+//
+// One row per pause (run, base review task id) that the recovery wrote for: its
+// once marker. A pause is recovered at most once, ever, whatever then happens to
+// the intent it re-armed or inserted. No foreign keys (the review-gate precedent).
+export const artifactReviewResumeRecovery = cinatraSchema.table("artifact_review_resume_recovery", {
+  runId:            text("run_id").notNull(),
+  baseReviewTaskId: text("base_review_task_id").notNull(),
+  // 'rearm': the family's newest decision's own intent was given a new budget;
+  // 'carry': a new intent carrying that decision was inserted on a free gate.
+  road:             text("road").notNull(),
+  gateId:           text("gate_id").notNull(),
+  createdAt:        timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  pk:        primaryKey({ columns: [t.runId, t.baseReviewTaskId] }),
+  roadCheck: check("artifact_review_resume_recovery_road_check", sql`road IN ('rearm', 'carry')`),
+}));
+
+// cinatra#4476 — when the upgrade ran: one row, written only by core__0127's `up`.
+// A fresh install has none, so it recovers nothing. The recovery reads the paused runs
+// in cycles, one page per pass: `high_water_run_id` is the greatest paused run id when
+// the cycle started (the cycle reads no run above it), `cursor_run_id` the last run id
+// of the cycle's last full page (the next pass reads the runs after it). A page that is
+// not full, or that ends at the mark, sets both back to null: the next pass starts a new
+// cycle from the first paused run.
+export const artifactReviewResumeRecoveryEpoch = cinatraSchema.table("artifact_review_resume_recovery_epoch", {
+  id:             text("id").primaryKey(),
+  upgradedAt:     timestamp("upgraded_at", { withTimezone: true }).notNull().defaultNow(),
+  cursorRunId:    text("cursor_run_id"),
+  highWaterRunId: text("high_water_run_id"),
+}, () => ({
+  idCheck: check("artifact_review_resume_recovery_epoch_id_check", sql`id = 'cinatra-4476'`),
+}));
+
 // ---------------------------------------------------------------------------
 // lifecycle-interceptions S0 (cinatra#2038, epic #2037) — the FOUNDATION tables
 // every later slice (S1–S7b) builds against. DDL twin: the
@@ -833,6 +905,28 @@ export const lifecycleContinuationPark = cinatraSchema.table("lifecycle_continua
     .where(sql`hold_notification = 'live'`),
 }));
 
+/** One stop in front of a declared publishing step (cinatra#4150). `parked` is the only open status;
+ * a row leaves it once, through publish-decision-store.ts. `surfaced_values` is JSON-as-text. */
+export const agentRunPublishDecisions = cinatraSchema.table("agent_run_publish_decisions", {
+  id:             text("id").primaryKey(),
+  orgId:          text("org_id"),
+  runId:          text("run_id").notNull(),
+  nodeId:         text("node_id").notNull(),
+  gateTaskId:     text("gate_task_id").notNull(),
+  a2aContextId:   text("a2a_context_id"),
+  status:         text("status").notNull().default("parked"), // parked | released | declined | expired | run_ended
+  surfacedValues: text("surfaced_values").notNull(),
+  decidedBy:      text("decided_by"),
+  decidedAt:      timestamp("decided_at", { withTimezone: true }),
+  decisionNote:   text("decision_note"),
+  createdAt:      timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  expiresAt:      timestamp("expires_at", { withTimezone: true }).notNull(),
+}, (t) => ({
+  parkUniq: uniqueIndex("agent_run_publish_decisions_park_uniq").on(t.runId, t.nodeId, t.gateTaskId),
+  dueIdx:   index("agent_run_publish_decisions_due_idx").on(t.expiresAt).where(sql`status = 'parked'`),
+  statusCheck: check("agent_run_publish_decisions_status_check", sql`status IN ('parked', 'released', 'declined', 'expired', 'run_ended')`),
+}));
+
 /** The zero-authority advisory seam — gate-bound, provenance-stamped, idempotent,
  * DECISION-FREE (no decision columns exist). Rows live WITH the gate. */
 export const gateAdvisoryComments = cinatraSchema.table("gate_advisory_comments", {
@@ -861,6 +955,12 @@ export const artifactVerificationRecords = cinatraSchema.table("artifact_verific
   fieldDiff:                       jsonb("field_diff").notNull().default(sql`'[]'::jsonb`),
   visualDiff:                      jsonb("visual_diff"),
   outcome:                         text("outcome").notNull(), // verified | drifted | unmet
+  // cinatra#4312 — the record's reopen gate. The verification writes it in that gate's
+  // insert transaction; core__0125's backfill, repeated by the review orchestration
+  // sweep, names a gate a repair row at attempt 2 or later rests on (an old writer's,
+  // or a caller's gate with a hand-written row). Null when neither named one, and
+  // again when the named gate is deleted (the foreign key sets it to null).
+  reopenedGateId:                  text("reopened_gate_id").references(() => artifactReviewGates.id, { onDelete: "set null" }),
   createdAt:                       timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   gateIdx: index("artifact_verification_records_gate_idx").on(t.gateId),
@@ -1057,10 +1157,35 @@ export const lifecycleRepair = cinatraSchema.table("lifecycle_repair", {
   idempotencyKey:                  text("idempotency_key").notNull(),
   createdAt:                       timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt:                       timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  // cinatra#4245: the run's pause_generation the change request ended (core__0126).
+  pausedRunGeneration:             bigint("paused_run_generation", { mode: "number" }),
+  // cinatra#4264 (core__0128): the Regenerate intent (NULL = an ordinary
+  // repair) and the source target a segment repair names.
+  regenerateNodeId:                text("regenerate_node_id"),
+  sourceArtifactId:                text("source_artifact_id"),
+  sourceRepresentationRevisionId:  text("source_representation_revision_id"),
 }, (t) => ({
   gateUniq:    uniqueIndex("lifecycle_repair_gate_uniq").on(t.gateId),
   lineageIdx:  index("lifecycle_repair_lineage_idx").on(t.lineageId),
   statusIdx:   index("lifecycle_repair_status_idx").on(t.status, t.createdAt),
+  successorIdx: index("lifecycle_repair_successor_idx").on(t.successorArtifactId, t.successorRepresentationRevisionId),
+}));
+
+/** The step snapshots of a run (cinatra#4264, core__0128): per (run, node) the
+ * node's full resolved input exactly as the flow runtime serialized it, its
+ * sha256 and the flow version's sha256. Removed with the run (ON DELETE
+ * CASCADE). `ambiguous` = a second, different snapshot of the same node came. */
+export const agentRunStepSnapshots = cinatraSchema.table("agent_run_step_snapshots", {
+  orgId:        text("org_id").notNull(),
+  runId:        text("run_id").notNull().references(() => agentRuns.id, { onDelete: "cascade" }),
+  nodeId:       text("node_id").notNull(),
+  inputsJson:   text("inputs_json").notNull(),
+  inputsSha256: text("inputs_sha256").notNull(),
+  flowSha256:   text("flow_sha256").notNull(),
+  ambiguous:    boolean("ambiguous").notNull().default(false),
+  createdAt:    timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.runId, t.nodeId] }),
 }));
 
 /** ROUTED ADDITION — the AC-6 rejected-recommendation efficacy row (S3 computed it
@@ -1158,6 +1283,7 @@ export const agentRunHitlPrompts = cinatraSchema.table("agent_run_hitl_prompts",
   excluded:   boolean("excluded").notNull().default(false),
   submittedValues: jsonb("submitted_values").$type<Record<string, unknown> | null>(),
   schemaSnapshot: jsonb("schema_snapshot").$type<Record<string, unknown> | null>(),
+  dispatchReceipt: jsonb("dispatch_receipt").$type<Record<string, unknown> | null>(),
 }, (t) => ({
   runIdAgentIdx: index("agent_run_hitl_prompts_run_id_agent_idx").on(t.runId, t.agentId),
 }));

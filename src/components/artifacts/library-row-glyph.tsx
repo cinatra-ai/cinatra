@@ -34,6 +34,7 @@ import {
 } from "@/lib/artifacts/artifact-renderer-props";
 import {
   classifyLoadablePath,
+  resolveSemanticDispatch,
   resolveSemanticListRowDispatch,
 } from "@/app/artifacts/[id]/renderer-resolution";
 
@@ -51,13 +52,19 @@ function glyphTier(summary: ArtifactSummary): {
   className: string;
   Fallback: typeof FileText;
 } {
+  // Keep the host cell tint and recorded-exception coverage, while its icon
+  // follows the row's declared detail renderer / file / structured-data case.
+  const semantic = summary.presentationIdentity.kind === "extension"
+    ? resolveSemanticDispatch(summary.objectType, summary.presentationIdentity)
+    : null;
+  const Fallback = semantic ? Boxes : isFileMime(summary.mime) ? FileText : Braces;
   if (summary.presentationIdentity.kind === "extension") {
-    return { className: "bg-primary/10 text-primary", Fallback: Boxes };
+    return { className: "bg-primary/10 text-primary", Fallback };
   }
   if (isFileMime(summary.mime)) {
-    return { className: "bg-warning/10 text-warning", Fallback: FileText };
+    return { className: "bg-warning/10 text-warning", Fallback };
   }
-  return { className: "bg-surface-muted text-muted-foreground", Fallback: Braces };
+  return { className: "bg-surface-muted text-muted-foreground", Fallback };
 }
 
 /**

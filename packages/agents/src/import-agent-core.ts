@@ -36,6 +36,7 @@ import {
 } from "@/lib/lifecycle/lifecycle-policy";
 import { readZipFiles } from "./zip-helpers";
 import { compileOasAgentJson } from "./oas-compiler";
+import { scanOasForVisibleInputContractFindings } from "./validate-oas-runtime-invariants";
 import { serializeArtifactBindingDeclaration } from "./artifact-binding";
 import {
   detectSpdxLicense,
@@ -307,10 +308,10 @@ export async function importAgentTemplateCore(
 
   let compiled;
   try {
+    const installPackageName = siblingPkgName ??
+      `@cinatra-ai/${slug.endsWith("-agent") ? slug : `${slug}-agent`}`;
     const compileResult = await compileOasAgentJson({
-      packageName:
-        siblingPkgName ??
-        `@cinatra-ai/${slug.endsWith("-agent") ? slug : `${slug}-agent`}`,
+      packageName: installPackageName,
       oasSourcePath: tmpOasJson,
     });
     if (!compileResult.ok) {
@@ -319,6 +320,14 @@ export async function importAgentTemplateCore(
       );
     }
     compiled = compileResult.value;
+    // Use the ZIP manifest/compiler identity, never the OAS's claimed identity.
+    const inputFindings = scanOasForVisibleInputContractFindings(
+      agent as unknown as Record<string, unknown>,
+      installPackageName,
+    );
+    if (inputFindings.length > 0) {
+      throw new Error(`Cannot install imported agent: ${inputFindings.map(finding => finding.message).join("\n")}`);
+    }
   } catch (compileErr) {
     // cinatra#3493 — the staging directory used to be removed on EVERY compile
     // outcome, which is precisely why there was never anything left to
@@ -492,6 +501,8 @@ export async function importAgentTemplateCore(
           // result on re-import, exactly as installAgentFromPackage's upsert
           // branch does.
           hasArtifactBindings: compiled.hasArtifactBindings,
+          // cinatra#4150: and its publishing-step declaration.
+          publishingSteps: compiled.publishingSteps,
           // cinatra#3208: and the DECLARATION that presence flag is about, from
           // the same compile, in the same patch as packageVersion. The two move
           // together or the row contradicts itself — claiming bindings exist
@@ -627,6 +638,8 @@ export async function importAgentTemplateCore(
       // cinatra#2498: the OAS compiler's own binding-presence result rides
       // the fresh create too, for the same reason.
       hasArtifactBindings: compiled.hasArtifactBindings,
+      // cinatra#4150: so does its publishing-step declaration.
+      publishingSteps: compiled.publishingSteps,
       // cinatra#3208: the executed declaration rides the fresh create too, so a
       // first install through the loader / ZIP path (dev-boot git-file scan,
       // hot-reload watcher, `cinatra setup`, the data/downloads system-agent

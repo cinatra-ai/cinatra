@@ -29,6 +29,7 @@
  * @property {string} displayName - user-facing label on the /connectors card
  * @property {string[]} mcpPrimitivePrefixes - prefix list used by the connectorDependencies backfill (e.g. `["apollo_"]`)
  * @property {string} setupSubroute - dispatch sub-route segment (always `"setup"`; reserved for future use)
+ * @property {boolean} [connectionConfigurationOnly] - The owning setup is an OAuth-client configuration, not an account connection.
  * @property {string} [consumesConnectionFrom] - the SLUG of the connector whose
  *   connection gates this one, for a connector that holds NO connection of its
  *   own (cinatra#3108). Omitted — the normal case — means the connector is
@@ -182,6 +183,7 @@ const RAW_DESCRIPTORS = [
   },
   {
     slug: "google-oauth-connector",
+    connectionConfigurationOnly: true,
     displayName: "Google",
     mcpPrimitivePrefixes: ["google_oauth_"],
     setupSubroute: "setup",
@@ -258,4 +260,28 @@ export function getConnectorDescriptorByPackageId(packageId) {
 /** @returns {ConnectorDescriptor | undefined} */
 export function getConnectorDescriptorBySlug(slug) {
   return CONNECTOR_DESCRIPTORS.find((d) => d.slug === slug);
+}
+
+/** Existing host compatibility aliases, pure data: safe for readonly discovery. */
+export const HOST_CONNECTOR_KEY_TO_CATALOG_SLUG = Object.freeze({
+  a2aServer: "a2a-server-connector",
+  apify: "apify-connector",
+  apollo: "apollo-connector",
+  claude: "anthropic-connector",
+  drupal: "drupal-mcp-connector",
+  gemini: "gemini-connector",
+  github: "github-connector",
+  gmail: "gmail-connector",
+  googleCalendar: "google-calendar-connector",
+  googleOAuth: "google-oauth-connector",
+  linkedin: "linkedin-connector",
+  openai: "openai-connector",
+  tailscale: "tailscale-connector",
+  tailscaleOauth: "tailscale-connector",
+  wordpress: "wordpress-mcp-connector",
+  youtube: "youtube-connector",
+});
+
+export function connectorKeysForPackageId(packageId) {
+ return Object.entries(HOST_CONNECTOR_KEY_TO_CATALOG_SLUG).filter(([,slug]) => getConnectorDescriptorBySlug(slug)?.packageId === packageId).map(([key]) => key);
 }

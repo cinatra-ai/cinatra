@@ -10,6 +10,7 @@ import { ScopeBadge, type ScopeLevel } from "@/components/scope-badge";
 import { buildDashboardActorFromSession } from "@/lib/dashboards/dashboard-actor";
 import { requireDashboardAccess, DashboardAccessError } from "@/lib/dashboards/authz";
 import { readOwnerDisplayName } from "@/lib/owner-display-names";
+import { artifactOwnerLabel } from "@/lib/artifacts/artifact-owner-label";
 import { resolveLiveExtensionPredicate } from "@/lib/dashboards/live-extension-oracle";
 // canonical-path has its OWN alias (not re-exported through the reads module):
 // the reads module rides the MCP handlers into the locked API-route graphs,
@@ -24,6 +25,8 @@ import {
 import { validateDashboardConfigV12 } from "@cinatra-ai/dashboards/extension-materialization";
 import { PortletHost, type PortletInstanceProp } from "@/components/dashboards/portlet-host";
 import { CrumbContributions } from "@/components/crumb-contributions";
+import { readScopeSurfaceEntityName } from "@/lib/scope-surface-entity-name";
+import { scopeSurfaceCrumbEntries, type ScopeSurfaceRef } from "@/lib/scope-surfaces";
 
 // Shared dashboard-detail screen (cinatra#1738): the flat /dashboards/[id]
 // route AND the canonical nested routes (/teams/[teamId]/dashboards/[id],
@@ -115,6 +118,23 @@ export async function DashboardDetailScreen({
   const canonical = canonicalDashboardPath(row);
   if (canonical !== currentPath) redirect(canonical);
 
+  // THE ENTITY'S CRUMB ON A NESTED ROUTE (cinatra#4453). The drawing: a crumb that
+  // stands for an entity id "shows that entity's display name, at every position,
+  // not only the last". Read here, after every gate above, through the entity's
+  // own gated read, whose typed answer the crumb draws: the name, the id's first
+  // eight characters for a name that is genuinely unavailable, and the entity's
+  // fixed word for a reader it refuses.
+  const anchorScope: ScopeSurfaceRef | null = expectedAnchor
+    ? { kind: expectedAnchor.entityType, id: expectedAnchor.entityId }
+    : null;
+  const anchorCrumbs = anchorScope
+    ? scopeSurfaceCrumbEntries(
+        anchorScope,
+        "dashboards",
+        await readScopeSurfaceEntityName(anchorScope),
+      )
+    : [];
+
   // One dashboard format (apiVersion 1.2), one renderer (cinatra#329). apiVersion
   // 1.2 dashboards render via PortletHost — both extension dashboards AND (as of
   // cinatra#326) operator/agent dashboards, whose drizzle-cube config rides in an
@@ -127,6 +147,12 @@ export async function DashboardDetailScreen({
   // Owner display name for the ScopeBadge (#1905) — best-effort, level-only
   // badge when unresolved.
   const ownerDisplayName = await readOwnerDisplayName(row.ownerLevel, row.ownerId);
+  // THE LEVEL WORD, NEVER THE STORED VALUE (cinatra#3475). The accessible name
+  // used to interpolate the raw stored level ("organization"), so the dashboard
+  // whose Artifacts library row reads "Organization: Acme Corp" named itself
+  // "organization" on its own page. The word comes from the one composer every
+  // scope surface reads; the name is still carried beside it.
+  const ownershipWord = artifactOwnerLabel(row.ownerLevel);
 
   let body: ReactNode;
   if (parsed.ok) {
@@ -147,7 +173,7 @@ export async function DashboardDetailScreen({
     <Main className="min-h-screen">
       {/* Post-gate crumb publisher (cinatra#1737): every gate above has
           passed, so the dashboard's name may reach the breadcrumb. */}
-      <CrumbContributions entries={[{ prefix: currentPath, label: row.name }]} />
+      <CrumbContributions entries={[...anchorCrumbs, { prefix: currentPath, label: row.name }]} />
       <PageHeader
         title={row.name}
         description={row.description ?? undefined}
@@ -157,8 +183,8 @@ export async function DashboardDetailScreen({
             ownerName={ownerDisplayName ?? undefined}
             aria-label={
               ownerDisplayName
-                ? `Ownership: ${row.ownerLevel} — ${ownerDisplayName}`
-                : `Ownership: ${row.ownerLevel}`
+                ? `Ownership: ${ownershipWord} — ${ownerDisplayName}`
+                : `Ownership: ${ownershipWord}`
             }
           />
         }

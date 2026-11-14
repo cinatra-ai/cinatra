@@ -12,7 +12,8 @@
 // (fully erased at runtime — no runtime import cycle; store.ts imports the three
 // values one-directionally).
 // ---------------------------------------------------------------------------
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
+import type { McpRequestContext } from "@cinatra-ai/mcp-server";
 import {
   deriveOboCeilingChain,
   parseOboCeilingChain,
@@ -39,6 +40,36 @@ import type { ActorContext } from "@/lib/authz/actor-context";
 import type { AgentAuthPolicy } from "./auth-policy";
 import type { AgentRunRecord } from "./store";
 
+/** Trusted create input still has to name a real same-organization starter.
+ * Historical starter IDs are not backfilled or rewritten if the run disappears. */
+export async function assertStarterRun(input: { id: string; orgId: string; startedByRunId?: string | null }): Promise<void> {
+  const starter = input.startedByRunId;
+  if (starter == null) return;
+  if (typeof starter !== "string" || !starter.trim() || starter !== starter.trim() || starter === input.id) {
+    throw new Error("The starter run is invalid; no child was created.");
+  }
+  const rows = await db.select({ id: agentRuns.id }).from(agentRuns)
+    .where(and(eq(agentRuns.id, starter), eq(agentRuns.orgId, input.orgId))).limit(1);
+  if (!rows.length) throw new Error("The starter run is absent from this organization; no child was created.");
+}
+
+/** #3749: only the signed OBO or trusted run-bound seam can name a starter.
+ * Ordinary chats and ambient run headers do not name a run that started one. */
+export function runStartedByFromFrame(frame: McpRequestContext | undefined): string | null {
+  const signed = frame?.delegatedActor?.delegation === "agent_run"
+    ? frame.delegatedActor.runId : undefined;
+  const seam = frame?.verifiedRunScopeId;
+  for (const id of [signed, seam]) {
+    if (id !== undefined && (typeof id !== "string" || id.trim().length === 0 || id !== id.trim())) {
+      throw new Error("The verified starter run is invalid; no child was started.");
+    }
+  }
+  if (signed && seam && signed !== seam) {
+    throw new Error("The verified starter run contexts disagree; no child was started.");
+  }
+  return signed ?? seam ?? null;
+}
+
 // ---------------------------------------------------------------------------
 // Defensive AgentAuthPolicy JSON parser.
 //
@@ -60,7 +91,6 @@ export function parseAuthPolicySafe(raw: string | null): AgentAuthPolicy | null 
     const parsed: unknown = JSON.parse(raw);
     const result = AgentAuthPolicySchema.safeParse(parsed);
     if (!result.success) {
-      // eslint-disable-next-line no-console
       console.warn(
         "[agent-builder/store] AgentAuthPolicy row failed zod validation; treating as null override",
         { issues: result.error.issues },
@@ -69,13 +99,24 @@ export function parseAuthPolicySafe(raw: string | null): AgentAuthPolicy | null 
     }
     return result.data;
   } catch (err) {
-    // eslint-disable-next-line no-console
     console.warn(
       "[agent-builder/store] AgentAuthPolicy row failed JSON.parse; treating as null override",
       { error: err instanceof Error ? err.message : String(err) },
     );
     return null;
   }
+}
+
+// The pause generation, parsed strictly (cinatra#4245): a safe integer >= 0, or
+// its canonical decimal text (the driver's form for a bigint read outside
+// Drizzle). Anything else is undefined, so a reader of the pause refuses rather
+// than guess a generation; it is never coerced to 0. A -0 reads as 0 (`+ 0`), so
+// Object.is and a JSON round trip agree with the stored value.
+export function parsePauseGeneration(raw: unknown): number | undefined {
+  const n = typeof raw === "number" ? raw
+    : typeof raw === "string" && /^(?:0|[1-9][0-9]{0,15})$/.test(raw) ? Number(raw)
+    : Number.NaN;
+  return Number.isSafeInteger(n) && n >= 0 ? n + 0 : undefined;
 }
 
 export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunRecord {
@@ -98,6 +139,7 @@ export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunReco
     a2aTaskId: row.a2aTaskId ?? null,
     a2aContextId: row.a2aContextId ?? null,
     parentRunId: row.parentRunId ?? null,
+    startedByRunId: row.startedByRunId ?? null,
     agUiEnabled: row.agUiEnabled ?? null,
     lgThreadId: row.lgThreadId ?? null,
     traceId: row.traceId ?? null,
@@ -122,10 +164,13 @@ export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunReco
     // carries it onto the ActorContext for edge-bound serving (cinatra#1392 Gap 2).
     dependentInstallId: row.dependentInstallId ?? null,
     // current attempt id for the OBO token's `att` claim (cinatra#1939 S3).
-    executionAttemptId: row.executionAttemptId ?? null,
+    executionAttemptId: row.executionAttemptId ?? null, humanWaitAttemptId: row.humanWaitAttemptId ?? null, // cinatra#3062: read by recommendationRunHasStartedForRow
     // run-start presence discriminator (cinatra#2067). Drizzle returns the typed
     // boolean column directly; null on pre-backfill / headless rows.
     humanPresent: row.humanPresent ?? null,
+    // cinatra#4220 — the dispatch-derived connector-instance binding, parsed
+    // fail-closed (null when absent or malformed).
+    connectorInstanceBinding: parseConnectorInstanceBinding(row.connectorInstanceBinding ?? null),
     // The lifecycle MOMENT TRIPLE (cinatra#2928). Surfaced as written: a run at
     // no moment reads all three as null, which is what every row created before
     // the columns existed reads too. Nothing here interprets the values — the
@@ -134,6 +179,8 @@ export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunReco
     lifecycleMoment: row.lifecycleMoment ?? null,
     lifecycleCardKind: row.lifecycleCardKind ?? null,
     lifecycleCardRef: row.lifecycleCardRef ?? null,
+    // The pause generation (cinatra#4245), parsed strictly; see above.
+    pauseGeneration: parsePauseGeneration(row.pauseGeneration),
     // The LAUNCH ANCHOR (cinatra#2809), surfaced AS STORED. It is decoded by
     // src/lib/launch-scope-anchor.ts at the surface that addresses the
     // instance, where a malformed or unknown payload reads UNANCHORED — the row
@@ -157,6 +204,28 @@ export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunReco
     // authority on which scopes a run may read assignments from.
     assignmentScopeSnapshot: row.assignmentScopeSnapshot ?? null,
   };
+}
+
+/** cinatra#4220 — fail-closed parse of agent_runs.connector_instance_binding.
+ * Returns the binding only for a JSON object with exactly the two keys
+ * connectorKey and instanceId, both non-empty strings; null otherwise. */
+export function parseConnectorInstanceBinding(
+  raw: string | null,
+): { connectorKey: string; instanceId: string } | null {
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const keys = Object.keys(value).sort();
+  if (keys.length !== 2 || keys[0] !== "connectorKey" || keys[1] !== "instanceId") return null;
+  const { connectorKey, instanceId } = value as Record<string, unknown>;
+  if (typeof connectorKey !== "string" || connectorKey.length === 0) return null;
+  if (typeof instanceId !== "string" || instanceId.length === 0) return null;
+  return { connectorKey, instanceId };
 }
 
 // ---------------------------------------------------------------------------

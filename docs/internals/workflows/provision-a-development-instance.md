@@ -170,11 +170,11 @@ and differ in one case only.
 
 Both start from the same predicate the rest of the codebase uses
 (`isAppDevelopmentMode()` / `getAppRuntimeMode()`, reading `CINATRA_RUNTIME_MODE`
-/ `APP_RUNTIME_MODE`) and then ask for more than it. That predicate is a
-two-value projection: every spelling that is not `production` or `prod` reads as
-development. Right for a feature switch, too generous for a setup command that
-writes — so the gates recognise their development instances **by name** and fail
-closed on everything else.
+/ `APP_RUNTIME_MODE`) and then ask for more than it. That predicate reads
+`development` and `dev` as development and every other named word as production
+(cinatra#3884). Right for a feature switch, still too generous for a setup
+command that writes — so the gates recognise their development instances **by
+name** and fail closed on everything else.
 
 The **shared gate** (`assertDevelopmentRuntime`) is what the command itself and
 the four legs an operator can undo ask for:
@@ -184,10 +184,13 @@ the four legs an operator can undo ask for:
   development-only switch in the codebase tests for, so it is exactly what the
   gate accepts. Any other declared value — a short form such as `dev`,
   `staging`, `preview`, a misspelling of `development` — is refused, under every
-  build. The shared reading accepts `prod` beside `production` only because the
-  strict switches are negative tests (`!== "development"`), so a short form
-  still turns every development path off; a short *development* form is the
-  opposite, a positive miss, and the gate does not recognise one.
+  build. A word that names no runtime mode at all is refused by its spelling
+  before anything else, naming the variable and the accepted spelling. The
+  shared reading accepts `prod` beside `production` and `dev` beside
+  `development`; the short production form is harmless because the strict
+  switches are negative tests (`!== "development"`), so it still turns every
+  development path off; a short *development* form is the opposite, a positive
+  miss, and the gate does not recognise one.
 - an **undeclared** runtime mode keeps parity with the shared reading, which
   defaults it to development explicitly: it is accepted whenever the build is
   not a production one, and refused under `NODE_ENV=production`, where "nobody
@@ -197,9 +200,9 @@ the four legs an operator can undo ask for:
   running one locally is exactly who this command is for.
 
 This is the one point where the gate disagrees with the app about which runtime
-it is in, and it disagrees only in the closed direction: it refuses runtimes the
-shared reading would call development, and never accepts one the shared reading
-calls production.
+it is in, and it disagrees only in the closed direction: it refuses the short
+development word the shared reading accepts, and never accepts one the shared
+reading calls production.
 
 The **strict gate** (`assertDeclaredDevelopmentRuntime`) is asked by the
 first-administrator leg alone. It calls the shared gate first — so a declared

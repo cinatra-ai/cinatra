@@ -25,9 +25,12 @@ import { setGoogleOAuthConnectionProvider } from "@cinatra-ai/sdk-extensions";
 import {
   getGoogleOAuthSettings,
   getGoogleOAuthStatus,
+  readGoogleOAuthConfigurationPresenceForPreflight,
   saveGoogleOAuthSettings,
 } from "@cinatra-ai/google-oauth-connection";
 import { getNangoOAuthCallbackUrl } from "@/lib/nango-system";
+import { getConnectorDescriptorBySlug } from "@cinatra-ai/connectors-catalog/descriptors.mjs";
+import { registerCapabilityProvider } from "@/lib/extension-capabilities-registry";
 
 // The single host-side Google-OAuth facade, delegating to the google-oauth-connection
 // host module. The connector resolves it via requireGoogleOAuthConnectionProvider()
@@ -40,3 +43,14 @@ const googleOAuthFacade = {
 };
 
 setGoogleOAuthConnectionProvider(googleOAuthFacade);
+
+// This connector's existing host binder owns the read-only configuration
+// reader. Register its actual function, not a cached presence verdict; core
+// resolves it lazily by the catalog's owning package and teardown removes it.
+const configurationOwner = getConnectorDescriptorBySlug("google-oauth-connector");
+if (configurationOwner?.connectionConfigurationOnly) {
+  registerCapabilityProvider("connection-configuration-presence", {
+    packageName: configurationOwner.packageId,
+    impl: { readPresence: readGoogleOAuthConfigurationPresenceForPreflight },
+  });
+}

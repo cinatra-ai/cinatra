@@ -1,3 +1,4 @@
+import { AgentRunEligibilityFixtures } from "./agent-run-eligibility-fixtures";
 import type { Metadata } from "next";
 
 import { Main } from "@/components/layout/main";
@@ -21,6 +22,7 @@ import {
 import { ConnectorSharingFixture } from "./connector-sharing-fixture";
 import { InstallConfigNeedsConformanceFixture } from "./install-config-needs-fixture";
 import { ApprovalsSchedulingConformanceFixtures } from "./approvals-scheduling-fixtures";
+import { SchedulingRecurrenceConformanceFixtures } from "./scheduling-recurrence-fixtures";
 import { SidebarAssistantsConformanceFixture } from "./sidebar-assistants-fixture";
 import { BreadcrumbEntityResolutionFixture } from "./breadcrumb-conformance-fixtures";
 import { NotificationsConformanceFixtures } from "./notifications-conformance-fixtures";
@@ -32,6 +34,7 @@ import { LifecycleScheduleCardFixtures } from "./lifecycle-schedule-card-fixture
 import { RunStepRailConformanceFixture } from "./run-step-rail-conformance-fixtures";
 import { ToastConformanceFixture } from "./toast-fixture";
 import { ReviewGateStateConformanceFixtures } from "./review-gate-state-fixtures";
+import { EmailGateConformanceFixtures } from "./gate-field-fixtures";
 import { LifecycleResolveFixtures } from "./lifecycle-resolve-fixtures";
 import { LifecycleTierFloorFixture } from "./lifecycle-tier-fixture";
 import { LifecycleOneOffFixtures } from "./lifecycle-one-off-fixtures";
@@ -41,6 +44,8 @@ import {
 } from "./primitive-wave-fixtures";
 import { PrimitiveWaveLeg2ConformanceFixtures } from "./primitive-wave-leg2-fixtures";
 import { ScopeAssignmentSkillsConformanceFixture } from "./scope-assignment-skills-fixture";
+import { ComponentSurfaceConformanceFixtures } from "./component-surface-fixtures";
+import { AgentCardAccentHoverFixture } from "./agent-card-accent-hover-fixture";
 import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_STATUS_PILL_STATUSES,
@@ -115,6 +120,7 @@ export default function ConformanceHarnessPage() {
       />
       <PageContent className="flex flex-col gap-8 pb-12">
         <ToastConformanceFixture />
+        <AgentRunEligibilityFixtures />
         <Card className="border-line bg-surface backdrop-blur-none">
           <CardHeader>
             <CardTitle>Status pills (surface: status-pills)</CardTitle>
@@ -242,6 +248,10 @@ export default function ConformanceHarnessPage() {
             scheduling-trigger-tab. */}
         <ApprovalsSchedulingConformanceFixtures />
 
+        {/* The scheduling step's recurrence selectors (design#212): the shipped
+            RecurrenceFrequencySelectors in the drawing's four readings. */}
+        <SchedulingRecurrenceConformanceFixtures />
+
         {/* App-shell surfaces adopted with the cinatra#3057 pin reconciliation:
             sidebar-assistants-entry (conformance/app.json) and
             breadcrumb-entity-resolution (conformance/app-components.json). */}
@@ -366,6 +376,21 @@ export default function ConformanceHarnessPage() {
         <Card className="border-line bg-surface backdrop-blur-none">
           <CardHeader>
             <CardTitle>
+              Email gate fields (surfaces: email-gate-sender-field,
+              email-gate-drafts-review-field, email-gate-recipients-review-field)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* cinatra#4319: the REAL field renderers of the email extension,
+                loaded through the build's field-renderer map and handed fixed
+                snapshots. No mail account, no CRM, no credential. */}
+            <EmailGateConformanceFixtures />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
               Lifecycle cards on the resolve seam (surfaces: verification-*, state-*,
               suggestion-floor)
             </CardTitle>
@@ -464,6 +489,22 @@ export default function ConformanceHarnessPage() {
           </CardHeader>
           <CardContent>
             <ScopeAssignmentSkillsConformanceFixture />
+          </CardContent>
+        </Card>
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>Component surfaces (app-components)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ComponentSurfaceConformanceFixtures />
+          </CardContent>
+        </Card>
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>Agent card accent hover (surface: agent-card-accent-hover)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <AgentCardAccentHoverFixture />
           </CardContent>
         </Card>
       </PageContent>

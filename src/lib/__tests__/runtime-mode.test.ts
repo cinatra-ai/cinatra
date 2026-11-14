@@ -1,9 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  APP_DEVELOPMENT_MODE_WORDS,
+  APP_PRODUCTION_MODE_WORDS,
   APP_RUNTIME_MODE_ENV_KEYS,
   getAppRuntimeMode,
   isAppDevelopmentMode,
+  isRecognisedAppRuntimeModeWord,
   normalizeAppRuntimeMode,
 } from "@/lib/runtime-mode";
 
@@ -88,5 +91,91 @@ describe("normalizeAppRuntimeMode", () => {
     expect(normalizeAppRuntimeMode(" PROD ")).toBe("production");
     expect(normalizeAppRuntimeMode("development")).toBe("development");
     expect(normalizeAppRuntimeMode("Development")).toBe("development");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3884 — a runtime mode named with a word this app does not recognise
+// runs in production mode. Only a development word reads development; a
+// production word and every other named word read production, under every
+// build and from either key.
+// ---------------------------------------------------------------------------
+
+describe("cinatra#3884 — a runtime mode named with an unrecognised word", () => {
+  const NODE_ENVS = ["development", "test", "production"];
+
+  function readUnder(
+    key: (typeof APP_RUNTIME_MODE_ENV_KEYS)[number],
+    value: string,
+    nodeEnv: string,
+  ) {
+    vi.unstubAllEnvs();
+    setEnv({ nodeEnv });
+    vi.stubEnv(key, value);
+    return { mode: getAppRuntimeMode(), development: isAppDevelopmentMode() };
+  }
+
+  it("staging and Prod-like read production under every build, from either key", () => {
+    for (const key of APP_RUNTIME_MODE_ENV_KEYS) {
+      for (const value of ["staging", "Prod-like", " Staging ", "preview"]) {
+        for (const nodeEnv of NODE_ENVS) {
+          expect(readUnder(key, value, nodeEnv), `${key}=${JSON.stringify(value)} NODE_ENV=${nodeEnv}`).toEqual({
+            mode: "production",
+            development: false,
+          });
+        }
+      }
+    }
+  });
+
+  it("a misspelling of the development word reads production under every build, from either key", () => {
+    for (const key of APP_RUNTIME_MODE_ENV_KEYS) {
+      for (const value of ["developmnet", "Developement", "develop", "devel"]) {
+        for (const nodeEnv of NODE_ENVS) {
+          expect(readUnder(key, value, nodeEnv), `${key}=${JSON.stringify(value)} NODE_ENV=${nodeEnv}`).toEqual({
+            mode: "production",
+            development: false,
+          });
+        }
+      }
+    }
+  });
+
+  it("the development words read development and the production words production, under every build", () => {
+    for (const key of APP_RUNTIME_MODE_ENV_KEYS) {
+      for (const nodeEnv of NODE_ENVS) {
+        for (const value of ["development", "Development", "dev", " DEV ", "\tdev\n"]) {
+          expect(readUnder(key, value, nodeEnv), `${key}=${JSON.stringify(value)} NODE_ENV=${nodeEnv}`).toEqual({
+            mode: "development",
+            development: true,
+          });
+        }
+        for (const value of ["production", "prod", " PROD "]) {
+          expect(readUnder(key, value, nodeEnv), `${key}=${JSON.stringify(value)} NODE_ENV=${nodeEnv}`).toEqual({
+            mode: "production",
+            development: false,
+          });
+        }
+      }
+    }
+  });
+
+  it("normalizeAppRuntimeMode reads only a development word as development", () => {
+    expect(normalizeAppRuntimeMode("dev")).toBe("development");
+    expect(normalizeAppRuntimeMode(" Dev ")).toBe("development");
+    expect(normalizeAppRuntimeMode("staging")).toBe("production");
+    expect(normalizeAppRuntimeMode("Prod-like")).toBe("production");
+    expect(normalizeAppRuntimeMode("developmnet")).toBe("production");
+  });
+
+  it("the recognised words are exactly the development words and the production words", () => {
+    expect([...APP_DEVELOPMENT_MODE_WORDS]).toEqual(["development", "dev"]);
+    expect([...APP_PRODUCTION_MODE_WORDS]).toEqual(["production", "prod"]);
+    for (const word of ["development", "Dev", "production", " PROD "]) {
+      expect(isRecognisedAppRuntimeModeWord(word), word).toBe(true);
+    }
+    for (const word of ["staging", "Prod-like", "developmnet", "demo", "test", ""]) {
+      expect(isRecognisedAppRuntimeModeWord(word), word).toBe(false);
+    }
   });
 });

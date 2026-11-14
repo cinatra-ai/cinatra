@@ -23,6 +23,8 @@ import {
   writeDurableHitlGateArtifact,
 } from "../store";
 
+import { readDurableHitlGateForContinue } from "../agent-run-hitl-prompts";
+
 /** Collapse SQL whitespace so assertions read on one line. */
 const flat = (text: string): string => text.replace(/\s+/g, " ").trim();
 
@@ -153,5 +155,23 @@ describe("readLatestDurableHitlGateArtifact", () => {
     const { query } = queryDouble([]);
 
     await expect(readLatestDurableHitlGateArtifact("run-2748", { query })).resolves.toBeNull();
+  });
+});
+
+describe("the internal Continue snapshot binds the exact task materialization",()=>{
+  it("reads the exact task rather than borrowing the newest gate",async()=>{
+    const {query,calls}=queryDouble([]);await readDurableHitlGateForContinue(ARTIFACT.runId,ARTIFACT.reviewTaskId,{query});
+    expect(flat(calls[0].text)).toContain("WHERE run_id = $1 AND review_task_id = $2");
+    expect(calls[0].values).toEqual([ARTIFACT.runId,ARTIFACT.reviewTaskId]);
+    expect(flat(calls[0].text)).toContain("materialized_at");expect(flat(calls[0].text)).not.toContain("LIMIT 1");
+  });
+  it("returns server renderer/schema and exact materialization time",async()=>{
+    const {query}=queryDouble([{run_id:ARTIFACT.runId,review_task_id:ARTIFACT.reviewTaskId,x_renderer:ARTIFACT.xRenderer,
+      input_schema:ARTIFACT.inputSchema,gate_values:ARTIFACT.values,field_name:null,materialized_at:new Date("2026-10-08T00:00:00Z")}]);
+    expect(await readDurableHitlGateForContinue(ARTIFACT.runId,ARTIFACT.reviewTaskId,{query})).toEqual({...ARTIFACT,materializedAt:"2026-10-08T00:00:00.000Z"});
+  });
+  it("rejects a returned row for another task/run",async()=>{
+    const {query}=queryDouble([{run_id:"foreign",review_task_id:ARTIFACT.reviewTaskId}]);
+    expect(await readDurableHitlGateForContinue(ARTIFACT.runId,ARTIFACT.reviewTaskId,{query})).toBeNull();
   });
 });

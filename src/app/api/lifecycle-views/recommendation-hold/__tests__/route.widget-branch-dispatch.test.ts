@@ -192,7 +192,7 @@ describe("the widget decision settles in place, with the run advancing (plan §6
       undefined,
       AUTHORITY,
     );
-    expect(enqueueAgentRun).toHaveBeenCalledWith({ runId: RUN_ID }, { jobId: RUN_ID });
+    expect(enqueueAgentRun).toHaveBeenCalledWith({ runId: RUN_ID }, { jobId: `run-start-${RUN_ID}-hold-1` });
 
     // 3. THE DISPATCHED RUN'S ACTOR IDENTITY — the member authority that grounds
     //    the transition is minted for the WIDGET principal in the org its
@@ -222,7 +222,7 @@ describe("the widget decision settles in place, with the run advancing (plan §6
       AUTHORITY,
     );
     expect(verifySessionAuthority).toHaveBeenCalledWith("u-cookie", ORG);
-    expect(enqueueAgentRun).toHaveBeenCalledWith({ runId: RUN_ID }, { jobId: RUN_ID });
+    expect(enqueueAgentRun).toHaveBeenCalledWith({ runId: RUN_ID }, { jobId: `run-start-${RUN_ID}-hold-1` });
     expect(requireAuthSession).toHaveBeenCalled();
 
     // …and with no session it still refuses exactly as it always did, before

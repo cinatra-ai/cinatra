@@ -13,6 +13,7 @@ import {
   updateAgentRunA2ATaskId,
   updateAgentRunA2AContextId,
   updateAgentRunStreamedText,
+  updateAgentRunInputParams,
   setAgentRunTokenHash,
   writeDurableHitlGateArtifact,
 } from "./store";
@@ -60,6 +61,13 @@ import {
   autoApplyHeadlessRecommendation,
   parseLifecycleConfig,
 } from "./recommendation-interception";
+// cinatra#4424: the run start binds a repair run's findings input to the
+// template it executes (already in this module's graph through
+// ./recommendation-interception).
+import {
+  parseLifecycleConfigText,
+  reconcileRepairFindingsInput,
+} from "@/lib/lifecycle/lifecycle-policy";
 import {
   GROUPED_SETUP_FORM_RENDERER_ID,
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
@@ -502,6 +510,13 @@ import {
   resolveRendererIdForKind,
 } from "./field-renderer-bindings.server";
 import { stepFiresRendererGate } from "./orchestrator-gate-predicate";
+import {
+  GATE_KEYS_NOT_FROM_RUN_INPUTS,
+  readStoredKeyList,
+  readTemplateGateKeys,
+  withoutGateKeysList,
+  withoutKeys,
+} from "./gate-keys-not-from-run-inputs";
 import { getOrAddWayflowRendererGateIndex, rememberWayflowGateTask, rememberLatestWayflowGateTask, rememberWayflowGateNodeClaim } from "@cinatra-ai/a2a";
 // Host capability resolution for the HITL schema enricher: the enricher itself
 // is provider-agnostic (agent-ui-protocol imports no provider package); THIS
@@ -509,6 +524,7 @@ import { getOrAddWayflowRendererGateIndex, rememberWayflowGateTask, rememberLate
 // enums resolve registration-driven.
 import { resolveEmailSendProviders } from "@/lib/email-send-providers";
 import { mintRunToken } from "@/lib/agent-run-token";
+import { holdRunAtPublishGate } from "./publish-decision-actions";
 // cinatra#2566 — the lifecycle card REF CODEC only (node:crypto + the app
 // secret). Deliberately NOT the refetch resolver: importing that here would pull
 // the review-gate + verification store graph into the run executor to mint one
@@ -518,6 +534,12 @@ import {
   encodeScheduleRunRef,
 } from "@/lib/lifecycle/lifecycle-card-ref";
 import { buildWayflowInitialMessagePayload } from "./wayflow-dispatch-payload";
+import {
+  persistStepSnapshots,
+  scrubWayflowHistoryCredentials,
+  snapshotNodesMetadata,
+  stripStepSnapshotClaims,
+} from "./step-snapshots";
 import {
   inventoryReviewTargets,
   nextUnresolvedLeg,
@@ -532,44 +554,26 @@ function enrichmentContextFor(userId: string | null) {
 }
 
 // ---------------------------------------------------------------------------
-// Credential keys are stripped from WayFlow task.history before persistence.
-// MUST stay in lockstep with docker/wayflow/cinatra_executors/input_message.py
-// _CREDENTIAL_KEYS and approval_gate.py _CREDENTIAL_KEYS (single source of truth
-// across the TS persistence path and the Python executor strip; tested for
-// parity in docker/wayflow/tests/test_approval_gate.py).
+// Credential keys are stripped from WayFlow task.history before persistence:
+// WAYFLOW_HISTORY_CREDENTIAL_KEYS and scrubWayflowHistoryCredentials live in
+// ./step-snapshots (moved there unchanged, cinatra#4264), which also checks the
+// step snapshot inputs against the same list.
 // ---------------------------------------------------------------------------
-const WAYFLOW_HISTORY_CREDENTIAL_KEYS: ReadonlySet<string> = new Set([
-  "bearer_token",
-  "api_key",
-  "a2a_bearer_token",
-  "mcp_server_url",
-  "password",
-  "secret",
-  "token",
-  "access_token",
-  "refresh_token",
-]);
 
 /**
- * Recursively scrub credential keys from any value before persisting it in
- * stepResults. Walks plain objects and arrays; primitives pass through. Keys
- * matched by WAYFLOW_HISTORY_CREDENTIAL_KEYS are dropped (not redacted) to
- * mirror the Python executors' frozenset-based strip exactly — replacing with
- * a placeholder would diverge from the executors and break future parity tests.
+ * The input-required leg's log line. `history_last` is read from the history
+ * WITHOUT the step snapshot claims (cinatra#4264): their inputs never reach a
+ * log.
  */
-function scrubWayflowHistoryCredentials(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((item) => scrubWayflowHistoryCredentials(item));
-  }
-  if (value && typeof value === "object") {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      if (WAYFLOW_HISTORY_CREDENTIAL_KEYS.has(k)) continue;
-      out[k] = scrubWayflowHistoryCredentials(v);
-    }
-    return out;
-  }
-  return value;
+export function formatWayflowInterruptLog(
+  runId: string,
+  task: { id?: unknown; metadata?: unknown; history?: ReadonlyArray<unknown> },
+  interruptPayload: Record<string, unknown>,
+): string {
+  const history = stripStepSnapshotClaims(
+    task.history as ReadonlyArray<{ role?: unknown; metadata?: unknown; messageId?: unknown; message_id?: unknown }> | undefined,
+  );
+  return `[wayflow-interrupt] run=${runId} task=${String(task.id)} interruptPayload=${(JSON.stringify(interruptPayload) ?? "null").slice(0, 500)} metadata=${(JSON.stringify(task.metadata) ?? "null").slice(0, 500)} history_last=${(JSON.stringify(history?.slice(-1)) ?? "null").slice(0, 500)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1764,9 +1768,12 @@ function isContextSelectorInterruptPayload(
 async function resolveWayflowXRenderer(
   runId: string,
   taskId: string,
-  approvalPolicySteps: Array<{ stepNumber?: number; requiresApproval?: boolean; hitlOwnedBy?: string; xRenderer?: string; gateCount?: number; schema?: Record<string, unknown>; inputMessageSchema?: Record<string, unknown>; skipLlm?: boolean; firesRendererGate?: boolean; artifactReviewTargetsInput?: string }>,
-): Promise<{ xRenderer: string; stepNumber: number | null; schema: Record<string, unknown> | null; artifactReviewTargetsInput: string | null }> {
+  approvalPolicySteps: Array<{ stepNumber?: number; requiresApproval?: boolean; hitlOwnedBy?: string; xRenderer?: string; gateCount?: number; schema?: Record<string, unknown>; inputMessageSchema?: Record<string, unknown>; skipLlm?: boolean; firesRendererGate?: boolean; artifactReviewTargetsInput?: string; surfaceGateInputKeys?: unknown }>,
+): Promise<{ xRenderer: string; stepNumber: number | null; schema: Record<string, unknown> | null; artifactReviewTargetsInput: string | null; surfaceGateInputKeys: string[] | null }> {
   const fallback = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
+  // cinatra#4457 — a gate the walk below cannot pin to one step withholds every
+  // key that any step lists (null: a list is unreadable, every run input).
+  const unpinnedKeys = (): string[] | null => readTemplateGateKeys(approvalPolicySteps);
   // All WayFlow-gated steps ordered by appearance: both self-owned (orchestrator
   // InputMessageNode gates) and child-agent steps. Steps without xRenderer still
   // advance the accumulator correctly (e.g. email-reviewer with no approval gate).
@@ -1805,7 +1812,7 @@ async function resolveWayflowXRenderer(
   // (blog-pipeline's idea_selection_gate) onto a phantom's null schema. Shared
   // predicate keeps this walk in lockstep with run-actions + instance-screens.
   const childSteps = approvalPolicySteps.filter(stepFiresRendererGate);
-  if (childSteps.length === 0) return { xRenderer: fallback, stepNumber: null, schema: null, artifactReviewTargetsInput: null };
+  if (childSteps.length === 0) return { xRenderer: fallback, stepNumber: null, schema: null, artifactReviewTargetsInput: null, surfaceGateInputKeys: unpinnedKeys() };
 
   // #1625 — SINGLE-RENDERER-GATE SHORT-CIRCUIT (contract (1)).
   // When the flow has EXACTLY ONE xRenderer-bearing gate, resolution is
@@ -1841,6 +1848,7 @@ async function resolveWayflowXRenderer(
       schema: step.schema ?? step.inputMessageSchema ?? null,
       artifactReviewTargetsInput:
         typeof step.artifactReviewTargetsInput === "string" ? step.artifactReviewTargetsInput : null,
+      surfaceGateInputKeys: readStoredKeyList(step.surfaceGateInputKeys),
     };
   }
 
@@ -1878,11 +1886,12 @@ async function resolveWayflowXRenderer(
         schema: step.schema ?? step.inputMessageSchema ?? null,
         artifactReviewTargetsInput:
           typeof step.artifactReviewTargetsInput === "string" ? step.artifactReviewTargetsInput : null,
+        surfaceGateInputKeys: readStoredKeyList(step.surfaceGateInputKeys),
       };
     }
     accumulated += gateCount;
   }
-  return { xRenderer: fallback, stepNumber: null, schema: null, artifactReviewTargetsInput: null };
+  return { xRenderer: fallback, stepNumber: null, schema: null, artifactReviewTargetsInput: null, surfaceGateInputKeys: unpinnedKeys() };
 }
 
 // ---------------------------------------------------------------------------
@@ -2212,6 +2221,16 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   const { runId, run, fromStatus, task, authority } = args;
   const taskState = task.status?.state;
 
+  // cinatra#4264 — the step snapshots this leg carries, verified against THIS
+  // handler's own runId (never an id read from the response) and stored BEFORE
+  // the resync below, so a response naming another run's task or context cannot
+  // land that run's snapshots here. Never throws; a fault is logged.
+  await persistStepSnapshots({
+    runId,
+    orgId: run.orgId,
+    history: (task as { history?: ReadonlyArray<{ role?: unknown; metadata?: unknown }> }).history,
+  });
+
   // Defensive resync (idempotent if unchanged): persist task.id / contextId
   // so the next resume's reverse-lookup by a2aTaskId still finds the run if
   // WayFlow assigned a new task ID. updateAgentRunA2ATaskId is an
@@ -2257,6 +2276,10 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         );
       }
     }
+    // cinatra#4150: a publish gate is classified first. It parks on its decision record
+    // only: no renderer, no generic review task. A missing or unverified claim on a
+    // publishing template ends the run failed.
+    if (await holdRunAtPublishGate({ run, fromStatus, task, claim: gateNodeClaim, authority })) return;
     const adapter = new DualAdapterDispatch(
       new AgUiAdapter(runId, run.templateId, (event) => publishAgUiEvent(runId, event)),
       new A2UiAdapter(
@@ -2267,7 +2290,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       ),
     );
     const interruptPayload = ((task.metadata as { pendingApproval?: unknown } | undefined)?.pendingApproval ?? {}) as Record<string, unknown>;
-    console.log(`[wayflow-interrupt] run=${runId} task=${task.id} interruptPayload=${(JSON.stringify(interruptPayload) ?? "null").slice(0, 500)} metadata=${(JSON.stringify(task.metadata) ?? "null").slice(0, 500)} history_last=${(JSON.stringify((task as { history?: unknown[] }).history?.slice(-1)) ?? "null").slice(0, 500)}`);
+    console.log(formatWayflowInterruptLog(runId, task, interruptPayload));
     // HITL renderers resolve campaignId via context.runId (passed
     // at agentic-run-panel.tsx:378) and a typed-object lookup. We no longer
     // enrich the HITL SSE payload with a precomputed campaignId.
@@ -2351,13 +2374,21 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // gate. Drives the marked-gate branch below (pin + route to the generic
     // review surface); null leaves every path byte-identical.
     let wayflowArtifactReviewTargetsInput: string | null = null;
+    // cinatra#4457 — the keys of a value-surfacing gate's message (the compiled
+    // step's surfaceGateInputKeys); empty for every other gate. FAIL CLOSED:
+    // null until the host has read them, and null means that no run input fills
+    // the gate (the template could not be read, is absent, or holds a list that
+    // is not an array of strings). A gate the host cannot pin to one step takes
+    // every key that any step of its template lists (`templateGateKeys`).
+    let wayflowSurfaceGateInputKeys: string[] | null = null;
+    let templateGateKeys: string[] | null = null;
     // #1625 (contract (1)) — SAFE CATCH: the sole renderer gate (when
     // the flow has exactly one xRenderer-bearing gate) is the unambiguous
     // resolution under ANY resolver fault. Computed up-front from the template so
     // the catch below never falls to the schema-field fallback for a
     // single-renderer-gate agent — the "never fallback for a sole-renderer gate"
     // guarantee holds even when the positional resolve throws (e.g. Redis fault).
-    let soleRendererGate: { xRenderer: string; stepNumber: number | null; schema: Record<string, unknown> | null; artifactReviewTargetsInput: string | null } | null = null;
+    let soleRendererGate: { xRenderer: string; stepNumber: number | null; schema: Record<string, unknown> | null; artifactReviewTargetsInput: string | null; surfaceGateInputKeys: string[] | null } | null = null;
     // IS THIS GATE THE AGENT ASKING FOR CONTEXT? (cinatra#3221, fix leg 6.)
     //
     // READ HERE, ABOVE THE RESOLVER, so the answer survives the catch below: the
@@ -2367,13 +2398,29 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     const gateAsksForContext = isContextSelectorInterruptPayload(spreadFromOutput);
     try {
       if (gateAsksForContext) {
+        // cinatra#4457 — a context ask names no step, and a flagged gate can
+        // send a context-shaped message: withhold every key the template lists.
+        // Read first and on its own, so that neither a template fault nor a
+        // fault below lets a run input fill the gate (null stays).
+        try {
+          const contextTmpl = await readAgentTemplateById(run.templateId);
+          wayflowSurfaceGateInputKeys = contextTmpl
+            ? readTemplateGateKeys(contextTmpl.approvalPolicy?.steps ?? [])
+            : null;
+        } catch {
+          wayflowSurfaceGateInputKeys = null;
+        }
         wayflowXRenderer =
           resolveRendererIdForKind("context-selector") ?? SCHEMA_FIELD_FALLBACK_RENDERER_ID;
         await rememberWayflowGateTask(runId, task.id);
       } else {
         const tmpl = await readAgentTemplateById(run.templateId);
-        const policySteps = (tmpl?.approvalPolicy?.steps ?? []) as Array<{
-          stepNumber?: number; requiresApproval?: boolean; hitlOwnedBy?: string; xRenderer?: string; gateCount?: number; schema?: Record<string, unknown>; inputMessageSchema?: Record<string, unknown>; firesRendererGate?: boolean; artifactReviewTargetsInput?: string;
+        const rawPolicySteps: unknown = tmpl?.approvalPolicy?.steps ?? [];
+        // Read before anything can throw on these steps, so the catch below
+        // keeps it; an absent template leaves it null.
+        templateGateKeys = tmpl ? readTemplateGateKeys(rawPolicySteps) : null;
+        const policySteps = rawPolicySteps as Array<{
+          stepNumber?: number; requiresApproval?: boolean; hitlOwnedBy?: string; xRenderer?: string; gateCount?: number; schema?: Record<string, unknown>; inputMessageSchema?: Record<string, unknown>; firesRendererGate?: boolean; artifactReviewTargetsInput?: string; surfaceGateInputKeys?: unknown;
         }>;
         const rendererGateSteps = policySteps.filter(stepFiresRendererGate);
         if (rendererGateSteps.length === 1) {
@@ -2384,10 +2431,15 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
             schema: s.schema ?? s.inputMessageSchema ?? null,
             artifactReviewTargetsInput:
               typeof s.artifactReviewTargetsInput === "string" ? s.artifactReviewTargetsInput : null,
+            surfaceGateInputKeys: readStoredKeyList(s.surfaceGateInputKeys),
           };
         }
+        const resolved = await resolveWayflowXRenderer(runId, task.id, policySteps);
         ({ xRenderer: wayflowXRenderer, stepNumber: wayflowStepNumber, schema: wayflowSchema, artifactReviewTargetsInput: wayflowArtifactReviewTargetsInput } =
-          await resolveWayflowXRenderer(runId, task.id, policySteps));
+          resolved);
+        // An absent template has no compiled step to say which keys are the
+        // gate's: no run input fills it.
+        wayflowSurfaceGateInputKeys = tmpl ? resolved.surfaceGateInputKeys : null;
       }
     } catch {
       // non-fatal. For a single-renderer-gate agent, resolve to that one gate
@@ -2398,6 +2450,11 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         wayflowStepNumber = soleRendererGate.stepNumber;
         wayflowSchema = soleRendererGate.schema;
         wayflowArtifactReviewTargetsInput = soleRendererGate.artifactReviewTargetsInput;
+        wayflowSurfaceGateInputKeys = soleRendererGate.surfaceGateInputKeys;
+      } else if (!gateAsksForContext) {
+        // cinatra#4457 — no step is pinned: every key any step of the template
+        // lists, or null (every run input) when the template was not read.
+        wayflowSurfaceGateInputKeys = templateGateKeys;
       }
     }
     // ------------------------------------------------------------------------
@@ -2818,8 +2875,35 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     const gateInputValues = stripReserved(interruptPayload);
     const spreadSafe =
       historyText === undefined ? stripReserved(spreadFromOutput) : spreadFromOutput;
+    // cinatra#4457 — A RUN INPUT NEVER FILLS A VALUE-SURFACING GATE'S OWN KEY.
+    // Such a gate's values reach the host only as its own message (or its
+    // pendingApproval). When the message is absent, cut short or does not parse
+    // as one object, `spreadSafe` is {} and a stored run input of the same name
+    // would be drawn as the gate's value: a person approves one list while the
+    // next step receives another. So the gate's keys are left out of the run's
+    // inputs here; each takes the gate's own value or stays absent, and the keys
+    // left absent ride in the gate's schema so the readers that merge the run's
+    // inputs again (hitl-context.ts) leave them out too. A gate without the flag
+    // whose template the host read has no keys here and keeps its values
+    // byte-identical. When the keys could not be read (null), every run input
+    // is withheld and listed.
+    const gateRunInputs = (run.inputParams ?? {}) as Record<string, unknown>;
+    const keysWithheldFromRunInputs =
+      wayflowSurfaceGateInputKeys ?? Object.keys(gateRunInputs);
+    const gateOwnValueKeys = new Set([
+      ...Object.keys(gateInputValues),
+      ...Object.keys(spreadSafe),
+    ]);
+    const gateKeysNotFromRunInputs = keysWithheldFromRunInputs.filter(
+      (k) => !gateOwnValueKeys.has(k),
+    );
+    // Only the host writes the list: a schema source that already holds the
+    // key (the gate's pendingApproval when the step has no schema, or a pack's
+    // own step schema) loses it, so a gate cannot withhold run inputs itself.
+    const gateSchemaSource = (wayflowSchema ?? interruptPayload) as Record<string, unknown>;
+    const gateSchemaBase = withoutGateKeysList(gateSchemaSource);
     const enrichedValues: Record<string, unknown> = {
-      ...(run.inputParams ?? {}),
+      ...withoutKeys(gateRunInputs, keysWithheldFromRunInputs),
       ...gateInputValues,
       ...spreadSafe,
       ...(wayflowStepNumber !== null ? { stepNumber: wayflowStepNumber } : {}),
@@ -2844,7 +2928,9 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       alreadyParked: fromStatus === "pending_approval",
       buildArtifact: async () => ({
         schema: await enrichSchemaWithResolvedData(
-          (wayflowSchema ?? interruptPayload) as Record<string, unknown>,
+          gateKeysNotFromRunInputs.length > 0
+            ? { ...gateSchemaBase, [GATE_KEYS_NOT_FROM_RUN_INPUTS]: gateKeysNotFromRunInputs }
+            : gateSchemaBase,
           enrichmentContextFor(run.runBy),
         ),
         xRenderer: wayflowXRenderer,
@@ -2998,7 +3084,10 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   const endNodeOutputs = extractCinatraEndNodeOutputs(rawHistory);
   // The pause claims (cinatra#3745) are recorded at their interrupts; the
   // stored history keeps its messages and drops only the claims.
-  const history = stripCinatraGateNodeClaims(stripCinatraEndNodeOutputMessages(rawHistory));
+  // cinatra#4264: the step snapshots live in agent_run_step_snapshots only.
+  const history = stripStepSnapshotClaims(
+    stripCinatraGateNodeClaims(stripCinatraEndNodeOutputMessages(rawHistory)),
+  );
   // A2A spec: role is "user" | "agent". Cinatra also emits "assistant". Accept BOTH.
   const lastAgentMessage = history?.slice().reverse().find((m) => m?.role === "agent" || m?.role === "assistant");
   // Narrow parts at access time — the signature accepts `unknown[]` so all three
@@ -3512,6 +3601,29 @@ export async function assertOrchestratorReady(
 // BullMQ worker function
 // ---------------------------------------------------------------------------
 
+/**
+ * cinatra#3582 — IS THIS REQUIRED FIELD ALREADY ANSWERED?
+ *
+ * The setup loop used to read KEY PRESENCE alone, so a run created with
+ * `brief: ""` had nothing pending: it never parked, never asked, and dispatched
+ * with an empty brief that failed at the agent's first step. Presence is not an
+ * answer — a blank value is the same silence an absent key is, read with the
+ * file's own `isEmptyDeclaredValue`.
+ *
+ * A field that declares a `default` IS answered, by that default: the run
+ * carries it and the loop must not ask (the same ruling the approval road takes
+ * in review-task-actions.ts, cinatra#3452).
+ */
+export function setupFieldIsAlreadyAnswered(
+  fieldSchema: Record<string, unknown>,
+  inputParams: Record<string, unknown>,
+  fieldName: string,
+): boolean {
+  if (!Object.prototype.hasOwnProperty.call(inputParams, fieldName)) return false;
+  if (Object.prototype.hasOwnProperty.call(fieldSchema, "default")) return true;
+  return !isEmptyDeclaredValue(inputParams[fieldName]);
+}
+
 export async function runAgentBuilderExecutionJob(
   data: {
     runId: string;
@@ -3556,6 +3668,69 @@ export async function runAgentBuilderExecutionJob(
   return mcpRequestContextStorage.run(next, () =>
     runAgentBuilderExecutionJobInner(data, jobId),
   );
+}
+
+/** The class name of a thrown value, for a log line that must not carry the
+ * value's own text (a storage error can carry the statement's parameters). */
+function thrownClassName(err: unknown): string {
+  const name = err instanceof Error ? err.name : typeof err;
+  return /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/.test(name) ? name : "Error";
+}
+
+/**
+ * cinatra#4424: a lifecycle repair run gets the reviewer's findings in the
+ * input that the template it EXECUTES declares (`repairFindingsInput`). The
+ * dispatch drain projected them under the declaration it read when it created
+ * the run; a re-import between that read and this start (a crash and re-drain
+ * over the existing deterministic run, or a run that waited in the queue) can
+ * change it. Given the lifecycle_config of the template the run start loaded,
+ * this writes the difference (`reconcileRepairFindingsInput`) and updates
+ * `run.inputParams` in place. A no-op for a run that is not a lifecycle
+ * repair, for a template that declares no findings input, and when the run
+ * already carries the text there.
+ *
+ * Returns false when it has moved the run queued -> failed: the write failed,
+ * or the template declares a findings input and the run carries no repair
+ * request object to build the text from. The stored error is a fixed message
+ * that names the input; the cause is logged by its class name only, never by
+ * its text. A failed write is terminal for the run (it does not park and
+ * retry), also when the row was written and only the read-back after it
+ * failed. If that status write fails too, its error propagates to the job
+ * runner, as for the other pre-dispatch failures. `updateAgentRunInputParams`
+ * reads the row, merges and writes the whole value: it is not a compare-and-set,
+ * so a second writer of the same run's inputs at the same moment (a duplicate
+ * delivery of this job) can overwrite the key.
+ */
+async function bindRepairFindingsInputAtStart(
+  runId: string,
+  run: AgentRunRecord,
+  lifecycleConfig: string | null,
+  executionAuthority: ReturnType<typeof mintAgentRunExecutionAuthority>,
+): Promise<boolean> {
+  if (run.sourceType !== "lifecycle_repair") return true;
+  const reconciliation = reconcileRepairFindingsInput(
+    parseLifecycleConfigText(lifecycleConfig),
+    run.inputParams ?? {},
+  );
+  if (!reconciliation) return true;
+  const fail = async (message: string, logLine: string): Promise<false> => {
+    console.error(`[agent-builder] run ${runId} rejected before dispatch: ${logLine}`);
+    await transitionRunStatus(runId, "queued", "failed", { error: message }, executionAuthority);
+    return false;
+  };
+  if ("noRequest" in reconciliation) {
+    const message =
+      `Repair run cannot start: it carries no repair request for its findings input "${reconciliation.input}"`;
+    return fail(message, message);
+  }
+  try {
+    const updated = await updateAgentRunInputParams(runId, reconciliation.write);
+    run.inputParams = updated.inputParams;
+    return true;
+  } catch (err) {
+    const message = `Repair run cannot start: its findings input "${reconciliation.input}" could not be written`;
+    return fail(message, `${message} (${thrownClassName(err)})`);
+  }
 }
 
 // Extracted inner. The outer wraps in the
@@ -3735,6 +3910,17 @@ async function runAgentBuilderExecutionJobInner(
       cause: err,
       nextAttempt: currentScopeRecheckPark + 1,
     });
+  }
+
+  // cinatra#4424: a lifecycle repair run gets the reviewer's findings in the
+  // input that the template loaded above declares. Right after the fire-time
+  // scope recheck, so nothing is written for a refused or unverified run, and
+  // before the headless recommendation, the version pinning, the input gates
+  // and every dispatch branch read the inputs.
+  if (
+    !(await bindRepairFindingsInputAtStart(runId, run, template.lifecycleConfig ?? null, executionAuthority))
+  ) {
+    return;
   }
 
   // ---------------------------------------------------------------------------
@@ -4006,7 +4192,15 @@ async function runAgentBuilderExecutionJobInner(
   const pendingFields = requiredFields.filter((fieldName) => {
     const fieldSchema = properties[fieldName] ?? {};
     if ((fieldSchema as { "x-hidden"?: boolean })["x-hidden"]) return false;
-    if (Object.prototype.hasOwnProperty.call(run.inputParams, fieldName)) return false;
+    if (
+      setupFieldIsAlreadyAnswered(
+        fieldSchema as Record<string, unknown>,
+        run.inputParams as Record<string, unknown>,
+        fieldName,
+      )
+    ) {
+      return false;
+    }
     return true;
   });
 
@@ -4070,7 +4264,16 @@ async function runAgentBuilderExecutionJobInner(
           (enrichedEnvelope.properties as Record<string, Record<string, unknown>>)[fieldName]
           ?? (fieldSchema as Record<string, unknown>);
         return {
-          schema: enrichedFieldSchema,
+          // cinatra#3582 — THE DECLARATION RIDES WITH THE FIELD'S OWN SCHEMA.
+          // This gate is minted only for a field `inputSchema.required` names
+          // (the `pendingFields` filter above), so the hint is true by
+          // construction. `x-` is the tree's own presentation-hint namespace:
+          // both input-schema roads copy those keys verbatim, the durable gate
+          // row stores the whole schema as jsonb, and every consumer that does
+          // not know the key ignores it — so no protocol argument, no new
+          // column and no migration. Without it the screen is handed no
+          // requiredness at all and draws a required field as "(optional)".
+          schema: { ...enrichedFieldSchema, "x-required": true },
           xRenderer,
           values: run.inputParams as Record<string, unknown>,
           reviewTaskId: syntheticId,
@@ -4696,6 +4899,31 @@ async function runAgentBuilderExecutionJobInner(
     ).catch(() => undefined);
 
     try {
+      // cinatra#4220 — the run's connector-instance binding, HOST-DERIVED here
+      // once from the run row's start input `instanceId` and authorized by the
+      // per-instance use gate for the run's own user and org. The llm-bridge
+      // signs it into the run's MCP actor token as its pin. No instanceId, no
+      // starting user, or an id no connector knows: no binding, behavior
+      // unchanged. A deny throws into the catch below, which fails the run with
+      // the gate's reason before anything is sent to the runtime. It runs FIRST
+      // in this try, before the A2A client is built: createExternalA2AClient
+      // fetches the agent card at once, so a refused run contacts nothing.
+      const startInstanceId = run.inputParams?.instanceId;
+      if (typeof startInstanceId === "string" && startInstanceId.length > 0 && run.runBy) {
+        const { deriveAgentRunConnectorInstanceBinding } = await import(
+          "@/lib/connector-instance-write-authority"
+        );
+        const binding = await deriveAgentRunConnectorInstanceBinding({
+          runId,
+          runBy: run.runBy,
+          orgId: run.orgId,
+          inputParams: run.inputParams,
+        });
+        if (binding) {
+          const { setAgentRunConnectorInstanceBinding } = await import("./run-token-store");
+          await setAgentRunConnectorInstanceBinding(runId, binding);
+        }
+      }
       // WayFlow A2AServer: one agent per container instance — served at root.
       // wayflowUrl already points to the container running `slug` (per-slug
       // routing handled above).
@@ -4759,6 +4987,14 @@ async function runAgentBuilderExecutionJobInner(
         runId: run.id,
         runToken: runToken.token,
       });
+      // cinatra#4264: the nodes whose inputs the runtime records, from the
+      // template's stored `regenerate` declaration. No declaration, or a repair
+      // run: {} and the message carries no metadata, exactly as before.
+      const snapshotMetadata = snapshotNodesMetadata({
+        runId: run.id,
+        sourceType: run.sourceType,
+        lifecycleConfig: template.lifecycleConfig ?? null,
+      });
       // #813: bind a fasta2a contextId to the run BEFORE the blocking sendTask.
       // WayFlow's flow calls back POST /api/context-resolve DURING sendTask with
       // this contextId (x-cinatra-a2a-context-id); readAgentRunByContextId must
@@ -4779,6 +5015,7 @@ async function runAgentBuilderExecutionJobInner(
           messageId: randomUUID(),
           contextId: dispatchContextId,
           parts: [{ kind: "text", text: JSON.stringify(initialMessagePayload) }],
+          ...(Object.keys(snapshotMetadata).length > 0 ? { metadata: snapshotMetadata } : {}),
         },
         configuration: { acceptedOutputModes: ["text"] },
       });

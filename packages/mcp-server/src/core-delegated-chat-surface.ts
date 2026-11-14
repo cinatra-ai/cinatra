@@ -70,6 +70,7 @@ export function plannedCorePrimitive(name: string): PlannedPrimitive {
     order: 0,
     declaredClass: HOST_PRIMITIVE_DECLARATIONS[normalized],
     declarationMalformed: false,
+    declaredOutward: null,
     ownerPackage: HOST_PRIMITIVE_OWNER_PACKAGE,
     resolvedVersion: HOST_PRIMITIVE_RELEASE_VERSION,
     capabilityKey: null,

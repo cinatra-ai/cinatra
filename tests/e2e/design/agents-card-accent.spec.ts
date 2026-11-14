@@ -21,6 +21,7 @@
  * design-fixtures.spec.ts), so the spec is platform-portable.
  */
 import { test, expect, type Locator, type Page } from "@playwright/test";
+import { waitForHydration } from "../config/hydration";
 
 const FIXTURE_PATH = "/design-fixtures/agents-card";
 
@@ -31,11 +32,12 @@ const INERT = '[data-surface-id="agents-card-inert"]';
 const ACCENT = `${INTERACTIVE} [data-slot="extension-card-banner"][data-accent-detail]`;
 const INERT_ACCENT = `${INERT} [data-slot="extension-card-banner"]`;
 
-// Click that retries until React hydration wires the handler — a click landing
-// before hydration is silently swallowed on the production standalone build
-// (same pattern as marketplace-detail-modal.spec.ts).
+// Wait for the card to hydrate before clicking: this target is a link whose
+// intended native fallback sets the address hash before React can intercept it.
+// Retrying a later click can open the modal without undoing that navigation.
 async function openViaHydrated(page: Page, target: Locator) {
   const modal = page.locator(MODAL);
+  await waitForHydration(page, { selectors: [ACCENT] });
   await expect(async () => {
     await target.click();
     await expect(modal).toBeVisible({ timeout: 2_000 });
@@ -83,6 +85,7 @@ test.describe("/agents accent panel — opens the detail modal (cinatra#1121)", 
     await page.goto(FIXTURE_PATH, { waitUntil: "domcontentloaded" });
     const accent = page.locator(ACCENT).first();
     const modal = page.locator(MODAL);
+    await waitForHydration(page, { selectors: [ACCENT] });
     await expect(async () => {
       await accent.focus();
       await expect(accent).toBeFocused();

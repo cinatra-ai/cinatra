@@ -33,12 +33,13 @@ import "server-only";
 
 import { AuthzError } from "@/lib/authz";
 import type { ActorContext } from "@/lib/authz";
-import { logDeniedAuditEventStrictWithCooldown } from "@/lib/authz/audit";
 import {
   listNangoConnectionsByConnector,
   type NangoConnectionIdentity,
 } from "@cinatra-ai/extensions/connection-identity-store";
 import {
+  auditSentinelDeny,
+  AmbiguousSharedConnectionError,
   connectionSubjectUserId,
   decideConnectionUse,
   enforceConnectionUse,
@@ -52,7 +53,6 @@ import {
 } from "@/lib/nango-system";
 
 export class NoUsableConnectionError extends AuthzError {}
-export class AmbiguousSharedConnectionError extends AuthzError {}
 export class ConnectionRecordMissingError extends Error {}
 
 export type ResolvedConnectionForUse = {
@@ -100,34 +100,6 @@ function blobAddressFor(identity: NangoConnectionIdentity): {
     );
   }
   return { providerConfigKey, connectionId: identity.connectionId };
-}
-
-async function auditSentinelDeny(input: {
-  connectorKey: string;
-  actor: ActorContext;
-  subjectUserId: string | undefined;
-  runId?: string;
-  reason: "no_candidate" | "ambiguous_shared_candidates";
-  candidateCount?: number;
-}): Promise<void> {
-  const { connectorKey, actor, subjectUserId, runId, reason, candidateCount } = input;
-  await logDeniedAuditEventStrictWithCooldown({
-    organizationId: actor.organizationId,
-    actorPrincipalId: actor.principalId,
-    actorPrincipalType: actor.principalType === "HumanUser" ? "human" : "system",
-    authSource: actor.authSource,
-    impersonatedUserId:
-      subjectUserId != null && subjectUserId !== actor.principalId ? subjectUserId : undefined,
-    resourceType: "connection",
-    resourceId: `connector:${connectorKey}`,
-    operation: "use",
-    runId,
-    metadata: {
-      connectorKey,
-      reason,
-      ...(candidateCount != null ? { candidateCount } : {}),
-    },
-  });
 }
 
 /**
@@ -277,3 +249,6 @@ export async function resolveConnectionForUse(input: {
   });
   return { identity: candidate, ...blobAddressFor(candidate), delegated: true };
 }
+
+
+export { hasRequiredConnectorConnectionForUse, ConnectionAvailabilityUnknownError, AmbiguousSharedConnectionError } from "@/lib/connection-use-gate";

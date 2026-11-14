@@ -543,6 +543,7 @@ export async function runWindowTurn(
 
   let text = "";
   let toolLess = false;
+  let platformToolsUnavailable = false;
   let acted = false;
   let platformSentence: string | null = null;
   let runtimeError: string | null = null;
@@ -584,6 +585,7 @@ export async function runWindowTurn(
           if (typeof d.content === "string") text += d.content;
         } else if (event === "turn_capability") {
           if (d.conversationOnly === true) toolLess = true;
+          if (d.platformToolsUnavailable === true) platformToolsUnavailable = true;
         } else if (event === "tool_result") {
           // DID THE CARD MOVE? Read off the turn's own relayed result rather
           // than inferred from the assistant's sentence — "where your sentence
@@ -606,7 +608,9 @@ export async function runWindowTurn(
     runtimeError = runtimeError ?? "the assistant turn failed";
   }
 
-  const answer = composeWindowAnswer({ text, toolLess, runtimeError, platformSentence });
+  const answer = composeWindowAnswer({
+    text, toolLess, platformToolsUnavailable, runtimeError, platformSentence,
+  });
   try {
     await appendRunWindowMessage({
       runId: input.runId,
@@ -706,10 +710,18 @@ export function readPlatformSentence(result: unknown): string | null {
 export function composeWindowAnswer(args: {
   text: string;
   toolLess: boolean;
+  platformToolsUnavailable?: boolean;
   runtimeError: string | null;
   platformSentence?: string | null;
 }): string {
   const body = args.text.trim();
+  if (args.platformToolsUnavailable) {
+    // A reduced attempt can still fail after emitting text. Keep that failure
+    // visible instead of presenting either the partial answer or a success notice.
+    return args.runtimeError
+      ? "The assistant could not answer just now — please try again."
+      : RUN_WINDOW_TOOL_LESS_NOTICE;
+  }
   if (args.toolLess) {
     // The notice comes FIRST and is never replaced by the model's words: the
     // person asked for something to happen and must be told plainly that typing

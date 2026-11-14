@@ -349,3 +349,270 @@ describe("prepareReviewTargetsCore — the props builder may read the pinned rev
     expect(r.prepared[0].props).toBe(built);
   });
 });
+
+// ---------------------------------------------------------------------------
+// CONCURRENT PREPARATION (cinatra#3334). The targets of one gate are prepared
+// with a bounded fan-out instead of one after another: a gate over several
+// targets used to spend the whole of the card's load bound inside this loop
+// before the first target body could stream.
+//
+// The three properties the surface above depends on are pinned here: the CAP
+// (a gate never opens more than four target preparations at once), the ORDER
+// (the result is the caller's order, never the completion order), and the
+// per-target DEGRADE ISOLATION (one target's floor is still that target's
+// floor, and it no longer holds the others behind it).
+// ---------------------------------------------------------------------------
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+/** Let every microtask AND every already-resolved continuation run. */
+async function settleTicks(): Promise<void> {
+  for (let i = 0; i < 5; i += 1) await new Promise((r) => setTimeout(r, 0));
+}
+
+describe("prepareReviewTargetsCore — concurrent, order-preserving, degrade-safe preparation (cinatra#3334)", () => {
+  it("prepares the targets concurrently with a fan-out cap of 4, and keeps the input order", async () => {
+    const targets = Array.from({ length: 9 }, (_, i) => t(`a${i}`, `r${i}`));
+    const gates = targets.map(() => deferred<void>());
+    let inFlight = 0;
+    let peak = 0;
+
+    const running = prepareReviewTargetsCore(
+      { runId: "run", reviewTaskId: "wayflow-t", targets },
+      ports({
+        readGatePinnedTargets: async () => ({ status: "pending", targets }),
+        readArtifact: async (id) => {
+          const index = Number(id.slice(1));
+          inFlight += 1;
+          peak = Math.max(peak, inFlight);
+          await gates[index].promise;
+          inFlight -= 1;
+          return { kind: "ok", artifact: fakeArtifact(id) };
+        },
+      }),
+    );
+
+    // Nine targets, none of them finished: the cap — and only the cap — is in
+    // flight. A serial loop reaches one.
+    await settleTicks();
+    expect(peak).toBe(4);
+    expect(inFlight).toBe(4);
+
+    // Released in REVERSE, so completion order is the opposite of input order:
+    // the result must still be the caller's order.
+    for (let i = targets.length - 1; i >= 0; i -= 1) {
+      gates[i].resolve();
+      await settleTicks();
+      expect(inFlight).toBeLessThanOrEqual(4);
+    }
+
+    const r = await running;
+    expect(peak).toBe(4);
+    expect(r.ok).toBe(true);
+    expect(r.ok === true && r.prepared.map((p) => p.target.artifactId)).toEqual(
+      targets.map((x) => x.artifactId),
+    );
+  });
+
+  it("a typed degrade on one target still yields ITS fallback while the others resolve", async () => {
+    const targets = [t("degraded", "r1"), t("b", "r2"), t("c", "r3")];
+    const held = deferred<void>();
+    const started: string[] = [];
+
+    const running = prepareReviewTargetsCore(
+      { runId: "run", reviewTaskId: "wayflow-t", targets },
+      ports({
+        readGatePinnedTargets: async () => ({ status: "pending", targets }),
+        readArtifact: async (id) => {
+          started.push(id);
+          if (id === "degraded") {
+            await held.promise;
+            return { kind: "not-found" };
+          }
+          return { kind: "ok", artifact: fakeArtifact(id) };
+        },
+      }),
+    );
+
+    // The degrading target is still in flight and the others are ALREADY
+    // through their read — the whole point of the fan-out.
+    await settleTicks();
+    expect(started).toEqual(["degraded", "b", "c"]);
+
+    held.resolve();
+    const r = await running;
+    expect(r.ok).toBe(true);
+    if (r.ok !== true) return;
+    expect(r.prepared.map((p) => p.target.artifactId)).toEqual(["degraded", "b", "c"]);
+    // Its OWN typed degrade, unchanged by the fan-out …
+    expect(r.prepared[0].props).toBeNull();
+    expect(r.prepared[0].mount).toEqual({
+      kind: "floor",
+      slot: "detail",
+      packageName: null,
+      reason: "unknown-or-tombstoned",
+    });
+    // … and the siblings resolved normally rather than inheriting it.
+    expect(r.prepared[1].mount.kind).toBe("build-map");
+    expect(r.prepared[2].mount.kind).toBe("build-map");
+  });
+
+  it("an unexpected rejection keeps the documented port contract — never a fallback", async () => {
+    const targets = [t("a", "r1"), t("b", "r2")];
+    const r = prepareReviewTargetsCore(
+      { runId: "run", reviewTaskId: "wayflow-t", targets },
+      ports({
+        readGatePinnedTargets: async () => ({ status: "pending", targets }),
+        buildProps: async () => {
+          throw new Error("the binder threw");
+        },
+      }),
+    );
+    // The core deliberately does not catch: a throwing port is a defect in the
+    // binder, not a silently floored card whose cause nobody sees.
+    await expect(r).rejects.toThrow("the binder threw");
+  });
+});
+
+// #3978: real preparation forwards only the authenticated canonical witness.
+describe("3978 authenticated pinned decision projection", () => {
+  const decidedAt = "2026-10-07T09:35:30.000Z";
+  const decision = { gateId: "gate-1", orgId: "org-1", runId: "run", reviewTaskId: "wayflow-t", fingerprint: "a".repeat(64), disposition: "approve" as const, decidedAt };
+  const input = { runId: "run", reviewTaskId: "wayflow-t", targets: [t("a", "1")], acceptResolvedGate: true };
+  function fixture(over: Record<string, unknown> = {}, version = 5, orgId: string | null = "org-1") {
+    const buildProps = vi.fn((value: Parameters<PrepareReviewPorts["buildProps"]>[0]) => ({ ...fakeProps(), propsApiVersion: value.propsApiVersion }));
+    const bound = ports({
+      verifyRunAccess: async () => ({ ok: true, ...(orgId === null ? {} : { orgId }) }),
+      readGatePinnedTargets: async () => ({ status: "resolved", targets: [t("a", "1")], decision: { ...decision, ...over } }),
+      resolveMount: () => ({ kind: "build-map", packageName: "@x/ext", generatedKey: "@x/ext::detail", propsApiVersion: version }),
+      buildProps,
+    });
+    return { bound, buildProps };
+  }
+  it("passes the exact authenticated decision to the pinned member's v5 builder", async () => {
+    const { bound, buildProps } = fixture();
+    expect((await prepareReviewTargetsCore(input, bound)).ok).toBe(true);
+    expect(buildProps.mock.calls[0][0]).toMatchObject({ representationRevisionId: "1", review: { reading: "continued", openLive: null, decidedAt } });
+  });
+  it.each([1, 2, 3, 4])("keeps negotiated v%s preparation builder input byte/key equal to the legacy path", async (version) => {
+    const { bound, buildProps } = fixture({}, version);
+    await prepareReviewTargetsCore(input, bound);
+    const legacy = fixture({}, version);
+    legacy.bound.readGatePinnedTargets = async () => ({ status: "resolved", targets: [t("a", "1")] });
+    await prepareReviewTargetsCore(input, legacy.bound);
+    expect(buildProps.mock.calls[0][0]).toEqual(legacy.buildProps.mock.calls[0][0]);
+    expect(buildProps.mock.calls[0][0]).not.toHaveProperty("review");
+  });
+  it.each([
+    { orgId: "foreign-org" }, { runId: "foreign-run" }, { reviewTaskId: "foreign-task" },
+    { gateId: "" }, { fingerprint: "" }, { fingerprint: "malformed" },
+    { disposition: "reject" }, { disposition: "comment" }, { decidedAt: "" },
+    { decidedAt: "2026-02-30T00:00:00.000Z" },
+  ])("suppresses facts from a mismatched or invalid canonical witness %j", async (over) => {
+    const { bound, buildProps } = fixture(over);
+    expect((await prepareReviewTargetsCore(input, bound)).ok).toBe(true);
+    expect(buildProps.mock.calls[0][0]).not.toHaveProperty("review");
+  });
+  it("does not substitute missing run authority or caller/model facts", async () => {
+    const { bound, buildProps } = fixture({}, 5, null);
+    await prepareReviewTargetsCore({ ...input, review: { decidedAt } } as typeof input, bound);
+    expect(buildProps.mock.calls[0][0]).not.toHaveProperty("review");
+  });
+  it("denies before gate/artifact reads when the actual viewer cannot read the run", async () => {
+    const { bound, buildProps } = fixture();
+    const gateRead = vi.fn(bound.readGatePinnedTargets);
+    bound.readGatePinnedTargets = gateRead;
+    bound.verifyRunAccess = async () => ({ ok: false, status: 403 });
+    expect(await prepareReviewTargetsCore(input, bound)).toEqual({ ok: false, error: { kind: "run-access-denied", status: 403 } });
+    expect(gateRead).not.toHaveBeenCalled(); expect(buildProps).not.toHaveBeenCalled();
+  });
+  it("never upgrades a pending row, missing witness or substituted revision into settled facts", async () => {
+    const { bound, buildProps } = fixture();
+    bound.readGatePinnedTargets = async () => ({ status: "pending", targets: [t("a", "1")] });
+    await prepareReviewTargetsCore(input, bound);
+    expect(buildProps.mock.calls[0][0]).not.toHaveProperty("review");
+    bound.readGatePinnedTargets = async () => ({ status: "resolved", targets: [t("a", "1")] });
+    buildProps.mockClear(); await prepareReviewTargetsCore(input, bound);
+    expect(buildProps.mock.calls[0][0]).not.toHaveProperty("review");
+    buildProps.mockClear();
+    expect(await prepareReviewTargetsCore({ ...input, targets: [t("a", "later-revision")] }, bound)).toMatchObject({ ok: false, error: { kind: "target-substitution" } });
+    expect(buildProps).not.toHaveBeenCalled();
+  });
+});
+
+// Exercise the actual artifact-side binder and snapshot builder, not a mock builder.
+describe("3978 real artifact binder decision forwarding", () => {
+  it("forwards the v5 decision through the real pinned builder and preserves legacy absence", async () => {
+    const { bindArtifactReviewPorts } = await import("@/app/artifacts/[id]/review-target-prepare");
+    const { absentArtifactContent } = await import("../artifact-renderer-props");
+    const bind = bindArtifactReviewPorts({ orgId: "org-1", actor: {} as Parameters<typeof bindArtifactReviewPorts>[0]["actor"],
+      buildContent: async (input) => absentArtifactContent(input.representationRevisionId) });
+    const artifact = { ...fakeArtifact("a"), ...fakeProps().artifact, artifactId: "a" };
+    const base = { artifact, representationRevisionId: "1", mime: "application/json", member: { mime: "application/json" } };
+    const review = { reading: "continued" as const, openLive: null, decidedAt: "2026-10-07T09:35:30.000Z" };
+    const actual = await bind.buildProps({ ...base, propsApiVersion: 5, review });
+    expect(actual.review).toEqual(review);
+    expect(actual.representation?.revisionId).toBe("1");
+    for (const propsApiVersion of [1, 2, 3, 4]) {
+      const before = await bind.buildProps({ ...base, propsApiVersion });
+      expect(await bind.buildProps({ ...base, propsApiVersion, review })).toEqual(before);
+      expect(before).not.toHaveProperty("review");
+    }
+  });
+});
+
+describe("3978 real reviewing-actor port binding", () => {
+  it("passes the same viewing principal and trusted org into the canonical readers", async () => {
+    const store = await import("@cinatra-ai/agents/artifact-review-gate-store");
+    const { bindReviewRunGatePorts } = await import("@/app/artifacts/[id]/review-gate-ports");
+    const ctx = { actor: { actorType: "human" as const, userId: "viewer-1", source: "route" as const }, orgId: "org-1" };
+    const access = vi.spyOn(store, "enforceReviewRunAccess").mockResolvedValue({ ok: true, orgId: "org-1" });
+    const read = vi.spyOn(store, "readGatePinnedTargets").mockResolvedValue({ status: "not-found" });
+    try {
+      const bound = bindReviewRunGatePorts(ctx);
+      expect(await bound.verifyRunAccess("run")).toEqual({ ok: true, orgId: "org-1" });
+      expect(access).toHaveBeenCalledWith("run", ctx.actor, "read", undefined, { includeOrgId: true });
+      await bound.readGatePinnedTargets("run", "task");
+      expect(read).toHaveBeenCalledWith("run", "task", { decisionFactsForOrgId: "org-1" });
+      access.mockResolvedValue({ ok: true, orgId: "foreign-org" });
+      expect(await bound.verifyRunAccess("run")).toEqual({ ok: false, status: 403 });
+      access.mockResolvedValue({ ok: false, status: 404 });
+      expect(await bound.verifyRunAccess("run")).toEqual({ ok: false, status: 404 });
+    } finally { access.mockRestore(); read.mockRestore(); }
+  });
+});
+
+describe("3978 real build-map version window", () => {
+  it("reads the actual merged email v5 declaration from the build map", async () => {
+    const { classifyArtifactDisplayMount } = await import("@/app/artifacts/[id]/renderer-resolution");
+    const { GENERATED_ARTIFACT_RENDERERS } = await import("@/lib/generated/artifact-renderers");
+    expect(GENERATED_ARTIFACT_RENDERERS["@cinatra-ai/email-artifacts::detail"].propsApiVersion).toBe(5);
+    const mount = await classifyArtifactDisplayMount({ dispatch: "semantic", packageName: "@cinatra-ai/email-artifacts",
+      generatedKey: "@cinatra-ai/email-artifacts::detail", propsApiVersion: 5 });
+    expect(mount).toMatchObject({ kind: "build-map", propsApiVersion: 5 });
+  });
+  it("preserves declarations across the whole supported window and floors malformed/too-new metadata", async () => {
+    const { classifyArtifactDisplayMount } = await import("@/app/artifacts/[id]/renderer-resolution");
+    const { GENERATED_ARTIFACT_RENDERERS } = await import("@/lib/generated/artifact-renderers");
+    const key = "@cinatra-ai/email-artifacts::detail";
+    const original = GENERATED_ARTIFACT_RENDERERS[key];
+    try {
+      for (const propsApiVersion of [1, 2, 3, 4, 5]) {
+        GENERATED_ARTIFACT_RENDERERS[key] = { ...original, propsApiVersion };
+        expect(await classifyArtifactDisplayMount({ dispatch: "semantic", packageName: original.packageName, generatedKey: key, propsApiVersion: 5 }))
+          .toMatchObject({ kind: "build-map", propsApiVersion });
+      }
+      for (const propsApiVersion of [0, -1, 1.5, NaN, 6]) {
+        GENERATED_ARTIFACT_RENDERERS[key] = { ...original, propsApiVersion };
+        expect(await classifyArtifactDisplayMount({ dispatch: "semantic", packageName: original.packageName, generatedKey: key, propsApiVersion: 5 }))
+          .toMatchObject({ kind: "floor", reason: "requires-rebuild" });
+      }
+    } finally { GENERATED_ARTIFACT_RENDERERS[key] = original; }
+  });
+});

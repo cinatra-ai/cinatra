@@ -16,26 +16,42 @@ import { LayoutDashboard } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import type { DashboardArtifactPointer } from "@/lib/dashboards/dashboard-artifact-surface";
+import { artifactRowMetaLine } from "@/lib/artifacts/artifact-owner-label";
 
 /** The defining-extension label a dashboard row shows (§VIII): the Dashboards
  *  extension that DEFINES `@cinatra-ai/dashboard-artifact:dashboard`. */
 export const DASHBOARD_ARTIFACT_EXTENSION_LABEL = "Dashboards";
 
 /** The row's muted meta line: the dashboard's scope over its relative updated
- *  time (mirrors the file-row meta shape). */
-function scopeMeta(pointer: DashboardArtifactPointer): string {
-  const scope = pointer.scopeChips[0]?.label ?? "Workspace";
+ *  time (mirrors the file-row meta shape).
+ *
+ *  §VIII draws that scope with its entity NAMED — "Team: Growth · updated 20
+ *  minutes ago" — so the line is composed by the one owner-label composer the
+ *  artifact row uses (cinatra#3475); the level word alone is the floor for a
+ *  locus that names no entity, or a name that did not resolve. */
+function scopeMeta(
+  pointer: DashboardArtifactPointer,
+  ownerName: string | null,
+): string {
   const rel = pointer.updatedAt
     ? formatDistanceToNow(new Date(pointer.updatedAt), { addSuffix: true })
     : "recently";
-  return `${scope} · updated ${rel}`;
+  return artifactRowMetaLine({
+    ownerLevel: pointer.ownerLevel,
+    ownerName,
+    relativeUpdated: rel,
+  });
 }
 
 export function DashboardLibraryRow({
   pointer,
+  ownerName,
   isLast,
 }: {
   pointer: DashboardArtifactPointer;
+  /** The owning team / organization / project's display name, resolved by the
+   *  page. Null where the locus names no entity or the name did not resolve. */
+  ownerName: string | null;
   isLast: boolean;
 }) {
   return (
@@ -65,7 +81,7 @@ export function DashboardLibraryRow({
           </span>
         </div>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          {scopeMeta(pointer)}
+          {scopeMeta(pointer, ownerName)}
         </p>
       </div>
       {/* A dashboard is a live view, not a file: the row offers ONLY Open, which

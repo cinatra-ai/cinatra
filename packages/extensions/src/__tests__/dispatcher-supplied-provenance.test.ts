@@ -25,12 +25,15 @@ type Row = {
   ownerId?: string | null;
   organizationId: string | null;
   source: Record<string, unknown> | null;
+  version?: string;
 };
 let rows: Row[] = [];
 
 const installExtensionManifest = vi.fn(async (row: Row) => {
-  rows.push({ ...row });
-  return row;
+  // Match the canonical store: supplied provenance has no version fallback.
+  const stored = { ...row, version: row.version ?? (row.source?.version as string | undefined) ?? "0.0.0" };
+  rows.push(stored);
+  return stored;
 });
 const dropRow = vi.fn(async (id: string) => {
   rows = rows.filter((r) => r.id !== id);
@@ -79,6 +82,7 @@ vi.mock("../activate-hook", () => ({
 }));
 
 import { extensionRegistry } from "../index";
+import { resolveInstallAccessTargetContract } from "../install-access-target";
 import { makeHandler } from "./__mocks__/extension-handler";
 import type { Actor, PackageRef } from "../index";
 
@@ -234,5 +238,70 @@ describe("the carve-out is decided by DECLARED provenance, not by the package NA
     );
 
     expect(installExtensionManifest).not.toHaveBeenCalled();
+  });
+});
+
+
+// cinatra#3693: the supplied package's resolved version is independent of its
+// local/github provenance and the install target's audience/row ownership.
+describe("resolved supplied versions", () => {
+  it.each(["local", "github"] as const)("retains the resolved %s agent version", async (type) => {
+    extensionRegistry.register(makeHandler("agent"));
+    const provenance = type === "local"
+      ? { type, path: "snapshots/agent.tgz", contentDigest: DIGEST }
+      : { type, repo: "acme/agent", ref: "v0.2.0", resolvedSha: SHA, contentDigest: DIGEST };
+    await extensionRegistry.install("agent", ref({ version: "0.2.0", provenance }), actor);
+
+    const written = installExtensionManifest.mock.calls[0]![0];
+    expect(written.version).toBe("0.2.0");
+    expect(rows[0]?.version).toBe("0.2.0");
+    expect(written.source).toMatchObject({ type, contentDigest: DIGEST });
+    expect(written.source).not.toHaveProperty("registryUrl");
+    expect(fireExtensionActivate.mock.calls[0]?.[2]).toBe("0.2.0");
+  });
+
+  it("preserves a versionless supplied reference's existing storage floor", async () => {
+    extensionRegistry.register(makeHandler("agent"));
+    await extensionRegistry.install("agent", localRef({ version: undefined }), actor);
+
+    const written = installExtensionManifest.mock.calls[0]![0];
+    expect(written.version).toBeUndefined();
+    expect(written.source).toMatchObject({ type: "local", contentDigest: DIGEST });
+    expect(rows[0]?.version).toBe("0.0.0");
+  });
+
+  it("keeps registry version and provenance unchanged", async () => {
+    extensionRegistry.register(makeHandler("agent"));
+    await extensionRegistry.install("agent", ref({ version: "0.2.0" }), actor);
+
+    expect(rows[0]?.version).toBe("0.2.0");
+    expect(rows[0]?.source).toMatchObject({ type: "verdaccio", version: "0.2.0", integrity: "dispatcher-install" });
+  });
+
+  it("keeps the platform install while a project audience gets its organization anchor", async () => {
+    extensionRegistry.register(makeHandler("agent"));
+    const packageName = "@acme/project-agent";
+    const platform: Row = {
+      id: "existing-platform-agent", packageName, status: "active",
+      ownerLevel: "platform", ownerId: "__platform__", organizationId: null,
+      version: "0.2.0", source: { type: "local", path: "bundled/agent", contentDigest: DIGEST },
+    };
+    rows.push({ ...platform });
+    const contract = resolveInstallAccessTargetContract({ level: "project", id: "project-1" }, "org-1");
+    expect(contract.rowOwnership).toEqual({ ownerLevel: "organization", ownerId: "org-1", organizationId: "org-1" });
+    expect(contract.policy).toEqual({
+      runListVisibility: ["project:project-1"], runDataVisibility: ["project:project-1"],
+      runExecuteVisibility: ["project:project-1"], allowRunSharing: false,
+    });
+
+    await extensionRegistry.install("agent", localRef({ packageName, version: "0.2.0" }), actor, { rowOwnership: contract.rowOwnership });
+
+    expect(rows).toHaveLength(2);
+    expect(rows.find((row) => row.id === platform.id)).toEqual(platform);
+    expect(rows.find((row) => row.organizationId === "org-1")).toMatchObject({
+      packageName, ownerLevel: "organization", ownerId: "org-1", version: "0.2.0",
+      source: { type: "local", contentDigest: DIGEST },
+    });
+    expect(installExtensionManifest).toHaveBeenCalledTimes(1);
   });
 });

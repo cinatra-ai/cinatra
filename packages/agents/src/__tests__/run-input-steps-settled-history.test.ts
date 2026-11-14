@@ -323,3 +323,13 @@ describe("a grouped form is ONE settled row, as it was one form", () => {
     expect(steps).toHaveLength(1);
   });
 });
+
+
+describe("a later context input moment retains the settled declared Setup history", () => {
+  it("carries its fully answered setup while a later input gate remains live", () => {
+    const steps = ideaAnswered(true);
+    expect(steps[0].settled).toBe(true);
+    expect(runOwesInputStep(steps)).toBe(false);
+    expect(runCarriesInputSteps(steps, true)).toBe(true);
+  });
+});

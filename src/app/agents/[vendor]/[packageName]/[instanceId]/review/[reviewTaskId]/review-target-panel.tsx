@@ -63,6 +63,7 @@ export function ReviewTargetPanel({
   prepared,
   orgId,
   capturePair = null,
+  framed = true,
 }: {
   prepared: PreparedReviewTarget;
   /** The reviewing surface's TRUSTED organization scope, from the host that
@@ -74,6 +75,15 @@ export function ReviewTargetPanel({
    * pictures are additive context beneath the decided representation, never a
    * substitute. */
   capturePair?: PinnedCapturePairView | null;
+  /** Does this panel draw its own frame (cinatra#3441)? §IV draws ONE frame per
+   * target: the immutable header over the representation, inside one border.
+   * Inside a gate that pins ONE target that frame is the CARD's, drawn round the
+   * header and the island that holds this document, so a border here too would
+   * be the nested body card the drawing does not draw, and so it is inside each
+   * frame of a gate the card draws as pairs, which names its one target
+   * (cinatra#4129). Every other caller — an island document that still draws
+   * several targets — keeps the frame. */
+  framed?: boolean;
 }): ReactNode {
   const { props, mount } = prepared;
   const provenance = reviewProvenanceLabel(mount);
@@ -91,7 +101,7 @@ export function ReviewTargetPanel({
     <div
       data-conformance-id="review-target"
       data-field="name=type.displayName"
-      className="rounded-control border border-line bg-surface-strong"
+      className={framed ? "rounded-control border border-line bg-surface-strong" : "bg-surface-strong"}
     >
       {/* §IV — THE TARGET HEADER IS THE CARD'S NOW (cinatra#3141 item 7).
           The header used to be drawn here, inside the island document, which is

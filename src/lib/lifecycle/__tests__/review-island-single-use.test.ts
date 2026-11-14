@@ -415,3 +415,68 @@ describe("the ledger is never an oracle", () => {
     expect(ledger.size).toBe(before);
   });
 });
+
+// cinatra#4129 — a pending gate that pins several targets is drawn as pairs on
+// every host, so the widget frames one island per pinned target, each at its
+// own address. The route makes those addresses with this same minter, called
+// once per target for ONE gate: each call must be its own grant, worth exactly
+// one paint, and spending one must leave the others whole.
+describe("cinatra#4129 — one grant per pinned target of ONE gate", () => {
+  /** One per-target call of the route: the SAME ref and gate every time. */
+  function mintForTarget(ref: string) {
+    const url = mintWidgetReviewIslandUrl({
+      claims: CLAIMS,
+      ref,
+      runId: GATE_A.runId,
+      reviewTaskId: GATE_A.reviewTaskId,
+    });
+    expect(url).not.toBeNull();
+    const credential = new URL(url!, "https://island.invalid").searchParams.get(
+      REVIEW_ISLAND_CREDENTIAL_QUERY_PARAM,
+    )!;
+    expect(credential.length).toBeGreaterThan(0);
+    return { ref, credential };
+  }
+
+  it("two addresses for one gate are two grants, each painting once", async () => {
+    const ref = refFor(GATE_A);
+    const first = mintForTarget(ref);
+    const second = mintForTarget(ref);
+    expect(ledger.size).toBe(2);
+    expect(first.credential).not.toBe(second.credential);
+
+    const paintedFirst = await resolveIslandCredentialReader({
+      credential: first.credential,
+      ref: first.ref,
+    });
+    const paintedSecond = await resolveIslandCredentialReader({
+      credential: second.credential,
+      ref: second.ref,
+    });
+    expect(paintedFirst?.reviewTaskId).toBe(GATE_A.reviewTaskId);
+    expect(paintedSecond?.reviewTaskId).toBe(GATE_A.reviewTaskId);
+    expect(ledger.size).toBe(0);
+
+    // A second presentation of EITHER is refused.
+    expect(
+      await resolveIslandCredentialReader({ credential: first.credential, ref: first.ref }),
+    ).toBeNull();
+    expect(
+      await resolveIslandCredentialReader({ credential: second.credential, ref: second.ref }),
+    ).toBeNull();
+  });
+
+  it("painting the second target first leaves the first target's address usable", async () => {
+    const ref = refFor(GATE_A);
+    const first = mintForTarget(ref);
+    const second = mintForTarget(ref);
+    expect(
+      await resolveIslandCredentialReader({ credential: second.credential, ref: second.ref }),
+    ).not.toBeNull();
+    expect(ledger.size).toBe(1);
+    expect(
+      await resolveIslandCredentialReader({ credential: first.credential, ref: first.ref }),
+    ).not.toBeNull();
+    expect(ledger.size).toBe(0);
+  });
+});

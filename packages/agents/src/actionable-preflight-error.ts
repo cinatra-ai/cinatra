@@ -20,6 +20,8 @@ export type ActionablePreflightFailure = {
   code: string;
   /** Deep-link to the fix (connector/LLM settings), when the error carries one. */
   settingsHref?: string;
+  /** Canonical connector identity, accepted only with its matching local setup address. */
+  packageId?: string;
 };
 
 /**
@@ -31,10 +33,31 @@ export function asActionablePreflightError(err: unknown): ActionablePreflightFai
   if (!err || typeof err !== "object" || !("code" in err)) return null;
   const code = (err as { code?: unknown }).code;
   if (typeof code !== "string" || !CODES.has(code)) return null;
-  const e = err as { message?: unknown; settingsHref?: unknown };
+  const e = err as { message?: unknown; settingsHref?: unknown; packageId?: unknown };
+  const route = code === "CONNECTOR_NOT_CONFIGURED" ? connectorSetupRoute(e.packageId) : null;
   return {
     error: typeof e.message === "string" ? e.message : "Agent run blocked",
     code,
     settingsHref: typeof e.settingsHref === "string" ? e.settingsHref : undefined,
+    ...(route && e.settingsHref === route.settingsHref ? { packageId: e.packageId as string } : {}),
   };
+}
+
+
+export type ConnectorConfigurationRefusal = {
+  packageId: string;
+  /** Trusted declaration name, or its package identity when none is declared. */
+  displayName: string;
+  /** Only present when this same reader may open the actual setup route. */
+  settingsHref: string | null;
+};
+
+/** The same safe route segments the connector preflight error accepts. */
+export function connectorSetupRoute(packageId: unknown) {
+  if (typeof packageId !== "string") return null;
+  const match = /^@([^/]+)\/([^/]+)$/.exec(packageId);
+  const safe = (value: string) => value !== "." && value !== ".." && /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9-])?$/.test(value);
+  if (!match || !safe(match[1]) || !safe(match[2])) return null;
+  const [, vendor, slug] = match;
+  return { vendor, slug, settingsHref: `/connectors/${vendor}/${slug}/setup` };
 }

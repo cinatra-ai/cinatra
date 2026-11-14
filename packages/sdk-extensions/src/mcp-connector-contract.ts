@@ -156,6 +156,25 @@ export type ExtensionToolAnnotations = {
  */
 export type DelegatedChatToolClass = "read" | "discovery" | "dispatch" | "none";
 
+/**
+ * How a registration DECLARES that its tool acts outward on a person's behalf:
+ * it sends a message or publishes (cinatra#3745).
+ *
+ * `outward: {}` states that the tool acts outward. `subject`, when present,
+ * names the tool's two INPUT FIELDS that carry the stored item this call acts
+ * on and its revision; a tool that takes free text declares no subject.
+ *
+ * A DECLARATION IS NEVER AUTHORIZATION: a declaration can only add this tool to
+ * what the host holds, never remove it. A value the host cannot read reads as
+ * outward. The host reads this field at the one choke point every
+ * `(name, config, handler)` registration passes through, and during an agent
+ * run holds a declared tool exactly as it holds the tools it names itself. This
+ * SDK declaration is the author-facing TYPE only.
+ */
+export type ExtensionToolOutwardDeclaration = {
+  subject?: { artifactId: string; representationRevisionId: string };
+};
+
 export type ExtensionMcpToolConfig = {
   title?: string;
   description?: string;
@@ -170,6 +189,11 @@ export type ExtensionMcpToolConfig = {
    * paths pass through (`policedRegisterTool`).
    */
   delegatedChat?: DelegatedChatToolClass;
+  /**
+   * The tool acts outward on a person's behalf. Optional and narrow-only — see
+   * `ExtensionToolOutwardDeclaration`.
+   */
+  outward?: ExtensionToolOutwardDeclaration;
 };
 
 /**

@@ -36,10 +36,9 @@ export type AccentTone = {
   /** CSS background colour (raw hex from spec §IV palette + cinatra-design). */
   bg: string;
   /**
-   * Foreground colour on the accent ground. The pinned drawing renders
-   * light text (`--surface-strong`) on every categorical ground; paper
-   * `#f1f1ed` hits AA at the banner-name scale (18px semibold = large
-   * text) on all seven.
+   * Foreground colour on the accent ground. The other six grounds retain
+   * their paper ink; clay uses opaque white as drawn in app-extensions
+   * §IV.3 so ordinary name/byline text clears the 4.5 contrast floor.
    */
   fg: string;
 };
@@ -60,7 +59,7 @@ export const ACCENT_PALETTE: Record<ExtensionAccent, AccentTone> = {
   rust: { bg: "#b0613a", fg: "#f1f1ed" },
   olive: { bg: "#6c6a3a", fg: "#f1f1ed" },
   plum: { bg: "#574a68", fg: "#f1f1ed" },
-  clay: { bg: "#a86b72", fg: "#f1f1ed" },
+  clay: { bg: "#a2666d", fg: "#ffffff" },
 };
 
 /**

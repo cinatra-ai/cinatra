@@ -137,6 +137,34 @@ describe("SDK ABI 2.2.0 foundation", () => {
     expect(declared.delegatedChat).toBe("read");
     expect(declaredConfig.delegatedChat).toBe("none");
   });
+
+  it("declares the outward declaration as OPTIONAL on the ctx.mcp.registerTool shape, with the config's own type", () => {
+    // cinatra#3745. A `ctx.mcp.registerTool` registration states that its tool
+    // acts outward on a person's behalf with the same type and the same meaning
+    // as `ExtensionMcpToolConfig.outward`. A registration that states nothing
+    // still type-checks, and a declaration can name the two input fields that
+    // carry the stored item and its revision.
+    const undeclared: HostMcpToolRegistration = {
+      name: "example_outward_tool",
+      handler: () => ({}),
+    };
+    expect(undeclared.outward).toBeUndefined();
+
+    const declared: HostMcpToolRegistration = {
+      name: "example_outward_tool",
+      handler: () => ({}),
+      outward: { subject: { artifactId: "itemId", representationRevisionId: "revisionId" } },
+    };
+    expect(declared.outward).toEqual({
+      subject: { artifactId: "itemId", representationRevisionId: "revisionId" },
+    });
+
+    // One type on both registration shapes.
+    type OutwardOnRegistration = HostMcpToolRegistration["outward"];
+    type OutwardOnConfig = ExtensionMcpToolConfig["outward"];
+    const sameType: Expect<Equals<OutwardOnRegistration, OutwardOnConfig>> = true;
+    expect(sameType).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

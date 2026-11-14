@@ -19,6 +19,9 @@
 // scripts/audit/lib/anchor-contract.mjs — the same third digest input the
 // acceptance gate recomputes, so a requirement that changed is a requirement
 // this check re-reads.
+// Eleven decided passive capture markers are accounted for separately: they
+// stay capture requirements, but make no claim about a drawn part. Every owner
+// anchor and every other capture selector still goes through the drawing check.
 //
 // WHERE THE DRAWINGS COME FROM. A checked-out copy named by
 // DESIGN_DRAWINGS_DIR, or the authenticated reader design-pin-freshness uses,
@@ -50,33 +53,75 @@
 // EVERY OTHER SELECTOR FORM IS A HARD FAILURE, never a silent pass and never an
 // approximated match — a descendant combinator, a tag or id selector, a
 // compound of classes, a class beside an attribute predicate, an operator other
-// than `=`, an unquoted value. It is REPORTED, by name, as `refused`, and the
-// run exits 2 — the "could not run honestly" convention — because a selector
-// this matcher cannot decide is one it may not certify in either direction. The
-// rest of the set is still read and still printed, so a refusal names itself
-// instead of hiding what the run did decide, and its suite pins that.
+// than `=`, an unquoted value, an empty selector. The matcher marks it
+// `refused`, because a selector it cannot decide is one it may not certify in
+// either direction. The report line and both refusal errors print a refused
+// selector as a JSON string (`quoteSelector`), so the empty selector reads
+// `""` instead of a blank. A run that reaches the refusal exit prints the
+// report of the whole set, with the refused selector named in it, and exits
+// 2 — the "could not run honestly" convention — so a refusal names itself
+// instead of hiding what the run did decide; its suite pins that. Besides a
+// read failure, two runs with a refused selector end before that report.
+// Outside `--print-unresolved`, a recorded `anchorsUnresolvedAtPin` that
+// disagrees with what the run finds is compared first and exits 1, so such a
+// run with a refused selector exits 1, not 2, and does not print the refusal
+// report. Under `--print-unresolved` a refused selector exits 2 with an error
+// that names it, and no unresolved set is printed.
 //
 // WHAT IT PRINTS. Kind names, origins, the selectors it was given, and which
 // GOVERNED DRAWING (by its position in the pin's own set) resolved each one.
+// Passive capture markers are explicitly reported as capture requirements,
+// never as resolved drawing anchors.
 // No drawing text, no drawing path, no revision: the report is about this
 // repository's own recorded claims, and the drawings are not public.
 //
-// IT IS RED TODAY, and that is the point: the recorded owner anchors do not
-// resolve at the pin the contract names. It is landed warn-first — its context
-// is not required until a separate pull request adds it — so the state is
-// visible without blocking, and it stays red until the anchor content itself
-// moves.
+// WHAT IT READS GREEN ON (cinatra#3677): all five recorded owner anchors
+// resolve at the pin the contract names. The four capture-origin controls that
+// stayed unresolved were a card's own buttons that no governed drawing draws
+// under the recorded value: the per-skill Confirm, Adjust and Skip, which the
+// drawing retired, and the schedule card's Confirm, whose floor the drawing
+// draws under another value (cinatra#3678). The anchor contract no longer
+// records the three per-skill controls
+// (`AGENT_OWNED_CAPTURE_CONTROLS` in scripts/audit/lib/anchor-contract.mjs),
+// while the capture recorder still grades pictures against them. The schedule
+// card's Confirm carries the drawn value since cinatra#4390, so the contract
+// records it again and it resolves in the governed drawing. A visible
+// control is still never excused HERE: every recorded owner anchor and every
+// capture selector other than the passive capture markers goes through the
+// drawing check. It landed warn-first and is now blocking (cinatra#3555): the
+// job has no job-level continue-on-error and its context is listed in
+// .github/branch-protections.json.
 //
 // Usage:
 //   node scripts/ci/design-anchor-resolution.mjs
 //   node scripts/ci/design-anchor-resolution.mjs --github-annotations
 //   node scripts/ci/design-anchor-resolution.mjs --print-unresolved
 //
-// Exit codes:
-//   0  every recorded anchor resolves, or the finding only warns for this event
+// WHEN THE DRAWINGS CANNOT BE READ (cinatra#3555). This check is a required
+// context and it reads the drawings through a credential. A fork pull request
+// has no Actions secrets, a Dependabot-triggered run gets a secret store of its
+// own, and the App credential or the design source can be refused or down: in
+// each the read fails. A pull request, merge group or branch push whose diff
+// changes no path this checker reads (the touched-path rule of design-pin-drift, over
+// scripts/ci/design-pin-gates.paths.json, whose pin paths include every
+// file the checker imports or opens as data) cannot change what the check
+// would find, so that run exits 0 with a ::notice and reads no verdict. A run
+// whose diff does change such a path, a push to main, a dispatch, a run with no
+// diff base (every pin then counts as touched) and a run that cannot read its
+// pin, contract, path map or diff base all keep exit 2, as does a path map that
+// names other pins than the ones read, and a run under --print-unresolved.
+//
+// Exit codes. A run takes the FIRST of these that applies, in this order:
+//   2  the gate could not read its pin, contract, path map, diff base or
+//      drawings ("could not run honestly"), except the untouched-diff run above
+//   1  a recorded `anchorsUnresolvedAtPin` disagrees with what this check
+//      finds, on any event
+//   2  the recorded set carries a selector form this matcher refuses
 //   1  a recorded anchor resolves in no governed drawing, under a red event
-//   2  the gate could not run honestly (no drawings, a missing drawing, a
-//      refused selector form, an unreadable pin or contract)
+//   0  every drawn anchor resolves, or the finding only warns for this event
+// `--print-unresolved` compares nothing: after the read failures it exits 2
+// on a refused selector form, and otherwise prints the unresolved set and
+// exits 0.
 
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -290,6 +335,56 @@ export function resolvesIn(index, selector) {
 // The recorded anchors
 // ---------------------------------------------------------------------------
 
+// These eleven selectors identify where a capture reads, not a drawn part.
+// Their capture requirements remain in the recorder and in the anchor digest.
+// A visible card, field or control is never classified by a prefix: only the
+// decided marker forms, originating in the capture requirements, belong here.
+const PASSIVE_CAPTURE_HOOKS = new Map([
+  [".cw-frame", "the widget's host frame"],
+  ["[data-conversation-list]", "the transcript container"],
+  ['[data-embed-assistant][data-phase="active"]', "the widget's active root"],
+  ['[data-lifecycle-card-host="chat_thread"]', "the card's chat host"],
+  ['[data-lifecycle-card-host="page_gate_region"]', "the card's review-page host"],
+  ['[data-lifecycle-card-host="run_card"]', "the card's run host"],
+  ['[data-lifecycle-card-host="site_widget"]', "the card's widget host"],
+  ["[data-lifecycle-card-state]", "the card's state marker"],
+  ['[data-lifecycle-card="agent_hitl_screen"]', "the input card's kind marker"],
+  ['[data-lifecycle-card="artifact_review_gate"]', "the review card's kind marker"],
+  ['[data-lifecycle-card="recommendation_hold"]', "the skills card's kind marker"],
+]);
+
+/** Read the existing serialized selector/scope/expect/within/tier format.
+ * Spaces inside quoted attribute literals belong to the selector, not to the
+ * following fields. An empty within value is the canonical double space.
+ * Malformed metadata refuses rather than silently losing a capture obligation.
+ */
+function captureAssertionOf(entry) {
+  const refuse = () => {
+    throw new UnsupportedSelectorError("a serialized capture requirement is malformed");
+  };
+  if (typeof entry !== "string" || /[\u0000-\u001f\u007f]/.test(entry)) refuse();
+  let quote = null;
+  let boundary = -1;
+  for (let i = 0; i < entry.length; i += 1) {
+    const char = entry[i];
+    if (quote !== null) {
+      if (char === quote) quote = null;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === " ") {
+      boundary = i;
+      break;
+    }
+  }
+  if (quote !== null || boundary <= 0) refuse();
+  const selector = entry.slice(0, boundary);
+  const tail = /^(frame|root|page) (present|absent) (.*) (canonical|audit)$/.exec(entry.slice(boundary + 1));
+  if (tail === null) refuse();
+  const [, scope, expect, within, tier] = tail;
+  if (within !== "") parseAnchorSelector(within);
+  return { selector, scope, expect, within, tier };
+}
+
 /**
  * Every anchor this repository RECORDS: the owner anchors the contract carries,
  * and the capture requirements recomputed live from the recorder. The capture
@@ -306,17 +401,23 @@ export function collectRecordedAnchors({ anchorContract, captureAnchors = null }
     }
   }
   if (captureAnchors) {
-    const seen = new Set();
+    const bySelector = new Map();
     for (const [host, cells] of Object.entries(captureAnchors)) {
       for (const [cell, entries] of Object.entries(cells)) {
         for (const entry of entries) {
-          if (typeof entry !== "string" || entry.startsWith("composition-only")) continue;
-          const selector = entry.split(" ")[0];
+          if (typeof entry === "string" && entry.startsWith("composition-only ") && entry.length > "composition-only ".length) continue;
+          const { selector, ...assertion } = captureAssertionOf(entry);
           const kind = cell === "*" ? host : cell.split("|")[0];
           const key = `${kind}::${selector}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          anchors.push({ kind, origin: "capture", selector });
+          let anchor = bySelector.get(key);
+          if (!anchor) {
+            anchor = { kind, origin: "capture", selector, captureAssertions: [] };
+            bySelector.set(key, anchor);
+            anchors.push(anchor);
+          }
+          // Keep every observation: a later positive claim cannot disappear
+          // behind an earlier absence, or behind another host/state's claim.
+          anchor.captureAssertions.push({ host, cell, ...assertion });
         }
       }
     }
@@ -329,7 +430,10 @@ export function collectRecordedAnchors({ anchorContract, captureAnchors = null }
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve every anchor against the drawings the pin governs. `governed` is in
+ * Resolve every drawn anchor against the drawings the pin governs. Passive
+ * capture markers are accounted for separately; they are not resolved drawing
+ * anchors and are never removed from the recorder's capture requirements.
+ * `governed` is in
  * the pin's own path order — the reported position is that order's, never the
  * path itself. `others` are drawings the pin does NOT govern: an anchor found
  * only there is UNRESOLVED, and the report says so in those words, because that
@@ -338,13 +442,20 @@ export function collectRecordedAnchors({ anchorContract, captureAnchors = null }
  * A selector this matcher cannot decide is `refused` — never quietly counted as
  * resolved and never counted as unresolved either, because both would be a
  * verdict the matcher did not reach. The caller turns a non-empty `refused`
- * into exit 2.
+ * into exit 2; outside `--print-unresolved` it first compares a recorded
+ * `anchorsUnresolvedAtPin`, and a disagreement there exits 1 instead.
  */
 export function checkAnchorResolution({ pin, anchors, governed, others = [], siblingsKnown = true }) {
   const governedIndexes = governed.map((d) => drawingIndexOf(d.text));
   const otherIndexes = others.map((d) => drawingIndexOf(d.text));
   const results = [];
+  const captureHooks = [];
   for (const anchor of anchors) {
+    const capturePurpose = anchor.origin === "capture" ? PASSIVE_CAPTURE_HOOKS.get(anchor.selector) : null;
+    if (capturePurpose) {
+      captureHooks.push({ ...anchor, capturePurpose });
+      continue;
+    }
     try {
       parseAnchorSelector(anchor.selector);
     } catch (err) {
@@ -373,14 +484,23 @@ export function checkAnchorResolution({ pin, anchors, governed, others = [], sib
     governedCount: governed.length,
     siblingsKnown,
     results,
+    captureHooks,
     unresolved: results.filter((r) => r.status === "unresolved"),
     refused: results.filter((r) => r.status === "refused"),
   };
 }
 
+/** A refused selector as the diagnostics print it: a JSON string, so `""` is the empty selector. */
+export function quoteSelector(selector) {
+  return JSON.stringify(String(selector));
+}
+
 /** The report. Kinds, origins, selectors, positions — no drawing text. */
 export function formatReport(report) {
-  const lines = [`pin "${report.pinId}" — ${report.results.length} recorded anchor(s)`];
+  const captureHooks = report.captureHooks ?? [];
+  const lines = [
+    `pin "${report.pinId}" — ${report.results.length} drawing anchor(s); ${captureHooks.length} capture requirement(s)`,
+  ];
   const byKind = new Map();
   for (const r of report.results) {
     if (!byKind.has(r.kind)) byKind.set(r.kind, []);
@@ -400,8 +520,15 @@ export function formatReport(report) {
                 ? "UNRESOLVED — no governed drawing draws it (the sibling drawings were not read, " +
                   "so this run cannot say whether one of them does)"
                 : "UNRESOLVED — no governed drawing draws it";
-      lines.push(`    ${r.selector}  [${r.origin}]  ${where}`);
+      // A refused selector is printed as a JSON string, so every refused form,
+      // the empty selector among them, is named in the report: `""` reads as
+      // the empty selector, where a bare blank would name nothing.
+      const shown = r.status === "refused" ? quoteSelector(r.selector) : r.selector;
+      lines.push(`    ${shown}  [${r.origin}]  ${where}`);
     }
+  }
+  for (const hook of captureHooks) {
+    lines.push(`  ${hook.kind}: ${hook.selector}  [capture]  capture requirement — not a drawn part (${hook.capturePurpose})`);
   }
   return lines.join("\n");
 }
@@ -524,6 +651,18 @@ export async function runCli({
     } catch (err) {
       return cannotRun(err instanceof DesignPinError ? err.message : "the path map could not be read");
     }
+    // The map must name exactly the pins this checker reads. A map that names
+    // fewer (or none) would resolve every diff to "no pin touched", global
+    // paths included, and so open the exit-0 road below for any diff. design-pin-drift
+    // refuses the same disagreement for its own map.
+    const mappedIds = Object.keys(map.pins).sort();
+    const pinIds = pins.map((p) => p.id).sort();
+    if (JSON.stringify(mappedIds) !== JSON.stringify(pinIds)) {
+      return cannotRun(
+        `the path map names [${mappedIds.join(", ")}] but the pins read are [${pinIds.join(", ")}]; ` +
+          "every pin needs a path list before this gate can decide which diffs touch it.",
+      );
+    }
     const base = (env.DESIGN_PIN_DRIFT_DIFF_BASE ?? "").trim();
     if (base === "") {
       log("::notice::no diff base is set — treating every pin as touched (fail-closed).");
@@ -532,7 +671,9 @@ export async function runCli({
       let touchedPaths;
       try {
         runGit(["rev-parse", "--verify", "--quiet", `${base}^{commit}`]);
-        touchedPaths = runGit(["diff", "--name-only", `${base}...HEAD`])
+        // No rename detection: with it, `--name-only` lists only the destination
+        // of a moved file, and the source (a path the checker may read) vanishes.
+        touchedPaths = runGit(["diff", "--name-only", "--no-renames", `${base}...HEAD`])
           .split("\n")
           .map((l) => l.trim())
           .filter(Boolean);
@@ -549,10 +690,24 @@ export async function runCli({
     try {
       drawings = await loadDrawings({ pin, env, createReader });
     } catch (err) {
-      if (err instanceof DesignSourceError) return cannotRun(`${err.message}.`);
-      return cannotRun(
-        err instanceof DesignPinError ? `${err.message}.` : "the drawings could not be read.",
-      );
+      const why =
+        err instanceof DesignSourceError || err instanceof DesignPinError
+          ? `${err.message}.`
+          : "the drawings could not be read.";
+      // A run that could not read the drawings decides nothing about a diff that
+      // changes no path this checker reads (see the header): it says so and
+      // exits 0. It certifies nothing, and it never takes this road on a push
+      // to main, on dispatch, with no diff base, or when any pin is touched. It
+      // never takes it under --print-unresolved either: that road promises that
+      // exit 0 means the whole unresolved set was printed.
+      if (!alwaysRed && !printUnresolved && touchedPinIds.length === 0) {
+        log(
+          `::notice title=design-anchor-resolution::the check did not run: ${why} ` +
+            "This diff changes no path the check reads, so the drawings could not change its verdict.",
+        );
+        return 0;
+      }
+      return cannotRun(why);
     }
     const pinAnchors = anchors.filter((a) => a.pinId === undefined || a.pinId === pin.id);
     reports.push(
@@ -580,7 +735,7 @@ export async function runCli({
       return cannotRun(
         "the recorded set carries a selector form this matcher refuses to approximate, so the " +
           "unresolved set is incomplete and is not printed: " +
-          `${merged.refused.map((r) => r.selector).join(", ")}.`,
+          `${merged.refused.map((r) => quoteSelector(r.selector)).join(", ")}.`,
       );
     }
     log(JSON.stringify([...new Set(merged.unresolved.map((r) => r.selector))].sort()));
@@ -590,8 +745,13 @@ export async function runCli({
   // G0 records `anchorsUnresolvedAtPin` as the set THIS check reports at the
   // pin, and the digest binds it — but a digest only proves the array was not
   // edited afterwards, never that it was true when it was written. So while the
-  // key is present, this is the script that compares the two. It is absent
-  // today, so this decides nothing yet and cannot.
+  // key is present, this is the script that compares the two. The contract
+  // records it (as the empty array), so every run that reaches this line
+  // compares it. `--print-unresolved` returns above, and so does a run that
+  // cannot read its pin, contract, path map, diff base or drawings (exit 2).
+  // A run that reaches this line reports a refused selector form only after
+  // it, so a run that carries one and also disagrees with the recorded array
+  // exits 1 here, not 2.
   if (Array.isArray(recordedUnresolved)) {
     const found = [...new Set(merged.unresolved.map((r) => r.selector))].sort();
     const recorded = [...new Set(recordedUnresolved)].sort();
@@ -618,12 +778,12 @@ export async function runCli({
     logError(text);
     return cannotRun(
       "the recorded set carries a selector form this matcher refuses to approximate: " +
-        `${merged.refused.map((r) => r.selector).join(", ")}. Every other anchor is reported above.`,
+        `${merged.refused.map((r) => quoteSelector(r.selector)).join(", ")}. Every other anchor is reported above.`,
     );
   }
 
   if (merged.unresolved.length === 0) {
-    log("ok: every recorded anchor resolves in a drawing its pin governs.");
+    log("ok: every drawing anchor resolves in a drawing its pin governs; passive capture requirements are accounted for separately.");
     return 0;
   }
   if (verdict.warn) {

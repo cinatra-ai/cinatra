@@ -23,9 +23,11 @@ import {
   SCOPE_SURFACE_TAB_ACTION,
   scopeSurfaceCrumbEntries,
   scopeSurfaceBase,
+  scopeSurfaceEntityNameText,
   scopeSurfaceEmptyTestId,
   scopeSurfaceSettingsHref,
   scopeSurfaceTabHrefs,
+  type ScopeSurfaceNameInput,
   type ScopeSurfaceRef,
   type ScopeSurfaceTab,
 } from "@/lib/scope-surfaces";
@@ -107,7 +109,7 @@ const TAB_ICON: Record<ScopeSurfaceTab, DomainIcon> = {
  */
 function dashboardsCaptionEntity(
   scope: ScopeSurfaceRef,
-  title: string | undefined,
+  title: string | null,
 ): string {
   if (scope.kind === "workspace") return SCOPE_SURFACE_ENTITY_FALLBACK.workspace;
   const kind = SCOPE_SURFACE_KIND_LABEL[scope.kind];
@@ -125,11 +127,13 @@ export function ScopeSurfacePage({
   scope: ScopeSurfaceRef;
   tab: ScopeSurfaceTab | "dashboards";
   /**
-   * The entity's own name, resolved by the route through its gated read.
-   * Omitted where the reader may not be told it — the header then falls back to
-   * the scope's kind noun, never to the tab's name and never to a raw id.
+   * The entity's own name, resolved by the route through its gated read: the
+   * read's typed answer (cinatra#4453), or the name as text where the scope
+   * names itself. The header shows only a `named` answer and otherwise falls
+   * back to the scope's kind noun, never to the tab's name and never to a raw
+   * id; the crumb draws what the drawing draws for each answer.
    */
-  title?: string;
+  title?: ScopeSurfaceNameInput;
   description?: string;
   /**
    * The tab's own body (cinatra#2808). Passed by a route whose slice has filled
@@ -146,15 +150,17 @@ export function ScopeSurfacePage({
 }) {
   const hrefs = scopeSurfaceTabHrefs(scope);
   const settingsHref = scopeSurfaceSettingsHref(scope);
+  const titleText = scopeSurfaceEntityNameText(title);
 
   return (
     <Main className="min-h-screen">
       {/* Post-gate crumb publisher: the route resolved the name behind the
-          entity's own read gate before rendering this shell. */}
-      <CrumbContributions entries={scopeSurfaceCrumbEntries(scope, tab, title)} />
+          entity's own read gate before rendering this shell. On the Agents
+          strip's Executions tab it also names the Executions leaf. */}
+      <CrumbContributions entries={scopeSurfaceCrumbEntries(scope, tab, title, agentsTab)} />
       <PageHeader
         label={SCOPE_SURFACE_KIND_LABEL[scope.kind]}
-        title={title ?? SCOPE_SURFACE_ENTITY_FALLBACK[scope.kind]}
+        title={titleText ?? SCOPE_SURFACE_ENTITY_FALLBACK[scope.kind]}
         description={description}
         divider={false}
       />
@@ -169,7 +175,7 @@ export function ScopeSurfacePage({
           <AgentsTabNav activeTab={agentsTab} scopeBase={scopeSurfaceBase(scope)} />
         ) : null}
         {tab === "dashboards" ? (
-          body ?? <DashboardsTabBody scope={scope} title={title} />
+          body ?? <DashboardsTabBody scope={scope} title={titleText} />
         ) : body != null ? (
           body
         ) : (
@@ -199,7 +205,7 @@ function DashboardsTabBody({
   title,
 }: {
   scope: ScopeSurfaceRef;
-  title?: string;
+  title: string | null;
 }) {
   return (
     <ScopeDashboardsTab

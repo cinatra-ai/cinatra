@@ -10,14 +10,15 @@
 //
 // The gate starts from the codebase's own predicate (`isAppDevelopmentMode()` /
 // `getAppRuntimeMode()`, reading CINATRA_RUNTIME_MODE / APP_RUNTIME_MODE) and
-// then asks for MORE than it. That predicate is a two-value projection: every
-// spelling that is not a production one projects onto "development". Right for
-// a feature switch, too generous for a setup command that writes — so this gate
-// requires a runtime mode it recognises BY NAME and fails closed on everything
-// else. It therefore disagrees with the app about which runtime it is in, on
-// purpose and in the CLOSED direction only: it refuses runtimes the shared
-// reading would call development, and it never accepts one the shared reading
-// calls production.
+// then asks for MORE than it. That predicate reads a development word
+// (`development` or `dev`) as development and every other named word as
+// production (cinatra#3884). Right for a feature switch, still too generous for
+// a setup command that writes — so this gate requires the runtime mode it
+// recognises BY NAME and fails closed on everything else. It therefore
+// disagrees with the app about which runtime it is in, on purpose and in the
+// CLOSED direction only: it refuses the short development word the shared
+// reading accepts, and it never accepts one the shared reading calls
+// production.
 //
 // TWO gates live here, and the second adds exactly ONE requirement to the
 // first. `assertDevelopmentRuntime` is what the four writes an operator can
@@ -35,6 +36,7 @@ import {
   APP_RUNTIME_MODE_ENV_KEYS as RUNTIME_MODE_ENV_KEYS,
   getAppRuntimeMode,
   isAppDevelopmentMode,
+  isRecognisedAppRuntimeModeWord,
 } from "@/lib/runtime-mode";
 
 export class DevelopmentRuntimeRefusedError extends Error {
@@ -61,12 +63,13 @@ export class DevelopmentRuntimeRefusedError extends Error {
  * `.env.example` ships, so it is exactly what these gates accept.
  *
  * A SHORT FORM is deliberately absent. The shared reading accepts `prod`
- * alongside `production` (`src/lib/runtime-mode.ts`), but that works only
- * because the strict switches are NEGATIVE tests — `!== "development"` — so a
- * short form still turns every development path off. A short development form
- * is the opposite: it is a positive miss. An instance declaring one would
- * receive these development-only writes while every development path in the app
- * stayed off, so the gate does not recognise it.
+ * alongside `production` and `dev` alongside `development`
+ * (`src/lib/runtime-mode.ts`). A short production form is harmless because
+ * the strict switches are NEGATIVE tests — `!== "development"` — so it still
+ * turns every development path off. A short development form is the
+ * opposite: it is a positive miss. An instance declaring one would receive
+ * these development-only writes while every strict development switch in the
+ * app stayed off, so the gate does not recognise it.
  *
  * `demo` is not a member either: a demo instance IS a development instance and
  * declares `CINATRA_RUNTIME_MODE=development`, carrying its overlay on the
@@ -103,6 +106,20 @@ function isDevelopmentSpelling(value: string): boolean {
 }
 
 /**
+ * The refusal of a declared runtime mode this command does not recognise. It
+ * names the variable and the accepted spellings, never the declared value.
+ */
+function unrecognisedDeclarationRefusal(operation: string): DevelopmentRuntimeRefusedError {
+  return new DevelopmentRuntimeRefusedError(
+    operation,
+    "a declared runtime mode this command does not recognise",
+    `${RUNTIME_MODE_ENV_PHRASE} declares a runtime mode this command does not ` +
+      `recognise. It runs on development instances only and accepts ` +
+      `${ACCEPTED_SPELLINGS_PHRASE} (any letter case, surrounding blanks trimmed).`,
+  );
+}
+
+/**
  * Refuse BEFORE any write unless this instance is a development instance.
  *
  * THREE conditions, and the last two ask for more than the canonical predicate
@@ -110,13 +127,17 @@ function isDevelopmentSpelling(value: string): boolean {
  *
  *   1. The shared reading calls this a production runtime → refused.
  *   2. A DECLARED runtime mode that is not a development spelling above →
- *      refused, under every build. The shared reading projects every
- *      non-production spelling onto "development"; this command recognises its
+ *      refused, under every build. The shared reading accepts the short
+ *      development word as development; this command recognises its
  *      development instances by name instead, so a setup command fails closed
- *      on a mode it does not recognise rather than treating a short form,
- *      `staging`, `preview` or a misspelling as a development instance. This is
- *      the one place the gate disagrees with the app about which runtime it is
- *      in, and it disagrees only in the closed direction.
+ *      on a short form rather than treating it as a development instance. A
+ *      word that names NO runtime mode at all (`staging`, `preview`, a
+ *      misspelling) is refused here FIRST, before condition 1: the shared
+ *      reading calls it production (cinatra#3884), but the refusal an
+ *      operator can act on names the variable and the accepted spelling, not a
+ *      production runtime nobody declared. This is the one place the gate
+ *      disagrees with the app about which runtime it is in, and it disagrees
+ *      only in the closed direction.
  *   3. An UNDECLARED runtime mode under `NODE_ENV=production` → refused. The
  *      shared reading defaults an undeclared mode to development explicitly
  *      (`getAppRuntimeMode()` returns "development" when no key carries a
@@ -134,20 +155,18 @@ function isDevelopmentSpelling(value: string): boolean {
  * repeats a value the environment supplied.
  */
 export function assertDevelopmentRuntime(operation: string): void {
+  const declared = declaredRuntimeMode();
+  if (declared !== null && !isRecognisedAppRuntimeModeWord(declared)) {
+    throw unrecognisedDeclarationRefusal(operation);
+  }
+
   if (!isAppDevelopmentMode()) {
     throw new DevelopmentRuntimeRefusedError(operation, getAppRuntimeMode());
   }
 
-  const declared = declaredRuntimeMode();
   if (declared !== null) {
     if (!isDevelopmentSpelling(declared)) {
-      throw new DevelopmentRuntimeRefusedError(
-        operation,
-        "a declared runtime mode this command does not recognise",
-        `${RUNTIME_MODE_ENV_PHRASE} declares a runtime mode this command does not ` +
-          `recognise. It runs on development instances only and accepts ` +
-          `${ACCEPTED_SPELLINGS_PHRASE} (any letter case, surrounding blanks trimmed).`,
-      );
+      throw unrecognisedDeclarationRefusal(operation);
     }
     return;
   }

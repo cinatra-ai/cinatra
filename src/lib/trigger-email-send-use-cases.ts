@@ -94,8 +94,9 @@ export type TriggerEmailSendDeps = {
     actor: PrimitiveActorContext,
   ) => Promise<ObjectsEnvelope | null>;
   // Pipeline-owned per-email artifact projection (cinatra#1455). The SINGLE
-  // write authority for the `email:body` / `email:recipient` per-item
-  // projections derived from the run-scoped bundles. A body the ledgered writer
+  // write authority for the `email:body` per-item projections derived from the
+  // run-scoped bundles (the delivery agent files the recipient records,
+  // cinatra#3089). A body the ledgered writer
   // refuses fails the send visibly (cinatra#3089); any other projection failure
   // is warned and the send goes on. Defaults to the ledger-backed materializer.
   emitEmailFanout?: (args: EmailFanoutArgs) => Promise<EmailFanoutResult>;
@@ -333,11 +334,12 @@ function recipientEmailFor(
 // `:recipients`, …) stay INTERNAL run-scoped machinery — HITL and the send
 // loop keep reading arrays out of them, unchanged. This seam is the durable
 // PROJECTION: at the initial-send fan-out boundary it materializes one
-// `email:body` artifact per draft item and one `email:recipient` record per
-// confirmed recipient. It is the SINGLE write authority for those per-item
-// projections; the projection is one-way (bundle -> artifact), so no
-// synchronization back to the bundle is needed (library-side draft editing is
-// not enabled here — if it ever is, an explicit sync-back must be added).
+// `email:body` artifact per draft item (the delivery agent files one
+// `email:recipient` record per confirmed recipient, cinatra#3089). It is the
+// SINGLE write authority for those per-item bodies; the projection is one-way
+// (bundle -> artifact), so no synchronization back to the bundle is needed
+// (library-side draft editing is not enabled here — if it ever is, an explicit
+// sync-back must be added).
 //
 // Coupling with the email-artifacts pack (cinatra#1454, runs in parallel):
 // #1454 CLAIMS these types (claim-only manifest mode, epic #1448) — its
@@ -361,8 +363,6 @@ function recipientEmailFor(
 
 /** `email:body` claimed artifact type (registered by the #1454 pack). */
 export const EMAIL_BODY_TYPE_ID = "@cinatra-ai/email:body";
-/** `email:recipient` claimed record type (registered by the #1454 pack). */
-export const EMAIL_RECIPIENT_TYPE_ID = "@cinatra-ai/email:recipient";
 
 /**
  * Deterministic external identity for a per-draft `email:body` projection.
@@ -371,16 +371,6 @@ export const EMAIL_RECIPIENT_TYPE_ID = "@cinatra-ai/email:recipient";
  */
 export function emailBodyExternalId(runScopeId: string, draftItemId: string): string {
   return `email-body:${runScopeId}:${draftItemId}`;
-}
-
-/**
- * Deterministic external identity for a per-recipient `email:recipient`
- * projection. `(runScopeId, contactKey)` where contactKey is the
- * provider-scoped contact id (retry-safe identity) or the normalized-email
- * fallback (cinatra#1454 mitigations).
- */
-export function emailRecipientExternalId(runScopeId: string, contactKey: string): string {
-  return `email-recipient:${runScopeId}:${contactKey}`;
 }
 
 /**
@@ -399,34 +389,6 @@ function deriveDraftItemId(draft: DraftRow, index: number): string {
   if (typeof explicit === "string" && explicit.trim() !== "") return explicit.trim();
   return `idx-${index}`;
 }
-
-/**
- * Retry-safe recipient contact key: provider-scoped contact id first, then a
- * normalized-email fallback. Returns null when neither is present — an
- * unidentifiable recipient is never projected.
- */
-function deriveRecipientContactKey(r: RecipientRow): string | null {
-  if (typeof r.contactId === "string" && r.contactId.trim() !== "") {
-    return `contact:${r.contactId.trim()}`;
-  }
-  const email = r.email ?? r.recipientEmail;
-  if (typeof email === "string" && email.trim() !== "") {
-    return `email:${email.trim().toLowerCase()}`;
-  }
-  return null;
-}
-
-export type EmailFanoutSaveResult = {
-  objectId: string;
-  type: string;
-  isNew: boolean;
-  wasMerged: boolean;
-};
-
-export type EmailFanoutSaveFn = (input: {
-  rawData: Record<string, unknown>;
-  typeHint: string;
-}) => Promise<EmailFanoutSaveResult>;
 
 /** One body of a send, written as a markdown revision on the materialization
  *  ledger (cinatra#3089): `outputId` is the message identity. */
@@ -480,40 +442,35 @@ export type EmailFanoutEmission = {
 
 export type EmailFanoutResult = {
   bodies: EmailFanoutEmission[];
-  recipients: EmailFanoutEmission[];
   /** true when the claimed type is not registered yet (#1454 not installed). */
-  skipped: { bodies: boolean; recipients: boolean };
+  skipped: { bodies: boolean };
 };
 
 /**
  * Pure per-email fan-out materializer — the single write authority for the
- * `email:body` / `email:recipient` per-item projections. Deterministic
- * (pipeline-owned, never prompt-directed): one `email:body` per draft item,
- * one `email:recipient` per confirmed recipient, each carrying an explicit
- * `externalId` so a retried run updates rather than duplicates.
+ * `email:body` per-item projections. Deterministic (pipeline-owned, never
+ * prompt-directed): one `email:body` per draft item, each carrying an explicit
+ * `externalId` so a retried run updates rather than duplicates. It writes no
+ * `email:recipient` record: the delivery agent files those (cinatra#3089).
  *
- * `save` performs the recipient write (the objects deterministic client in
- * production; a fake in tests). `writeBody` files each body as a markdown
- * revision on the materialization ledger (cinatra#3089): the message identity
- * and the content hash key it, so a retry reuses the row, and a refusal throws
- * `EmailBodyRefusedError`. `registeredTypes` is the installed-type gate:
- * a type absent from it is skipped, keeping this seam dormant until the #1454
- * pack registers the claim — no dynamic-type minting.
+ * `writeBody` files each body as a markdown revision on the materialization
+ * ledger (cinatra#3089): the message identity and the content hash key it, so
+ * a retry reuses the row, and a refusal throws `EmailBodyRefusedError`.
+ * `registeredTypes` is the installed-type gate: a type absent from it is
+ * skipped, keeping this seam dormant until the #1454 pack registers the claim
+ * — no dynamic-type minting.
  */
 export async function materializeEmailFanout(
   input: EmailFanoutInput,
   deps: {
-    save: EmailFanoutSaveFn;
     writeBody?: EmailFanoutBodyWriteFn;
     registeredTypes: ReadonlySet<string>;
   },
 ): Promise<EmailFanoutResult> {
-  const { runScopeId, campaignId, drafts, recipients } = input;
+  const { runScopeId, campaignId, drafts } = input;
   const bodies: EmailFanoutEmission[] = [];
-  const recipientsOut: EmailFanoutEmission[] = [];
 
   const canBody = deps.registeredTypes.has(EMAIL_BODY_TYPE_ID);
-  const canRecipient = deps.registeredTypes.has(EMAIL_RECIPIENT_TYPE_ID);
 
   // One `email:body` markdown revision per draft item, written through the
   // materialization ledger keyed (run, message identity, content hash)
@@ -574,53 +531,15 @@ export async function materializeEmailFanout(
     }
   }
 
-  // One `email:recipient` record per confirmed recipient, keyed
-  // (runScopeId, provider-scoped contact key | normalized email).
-  if (canRecipient) {
-    const seen = new Set<string>();
-    for (const r of recipients) {
-      const contactKey = deriveRecipientContactKey(r);
-      if (!contactKey) continue; // unidentifiable recipient — never projected
-      if (seen.has(contactKey)) continue; // de-dupe within the batch
-      seen.add(contactKey);
-      const externalId = emailRecipientExternalId(runScopeId, contactKey);
-      const email = r.email ?? r.recipientEmail;
-      const rawData: Record<string, unknown> = {
-        externalId,
-        runId: runScopeId,
-        campaignId,
-        // Minimum fields. The `email:recipient` claim carries projection:none
-        // (owned by #1454), so the address never lands in a Graphiti
-        // title/excerpt.
-        ...(typeof r.contactId === "string" && r.contactId.trim() !== ""
-          ? { contactId: r.contactId.trim() }
-          : {}),
-        ...(typeof email === "string" && email.trim() !== ""
-          ? { email: email.trim() }
-          : {}),
-        ...(typeof r.name === "string" && r.name.trim() !== "" ? { name: r.name.trim() } : {}),
-      };
-      const res = await deps.save({ rawData, typeHint: EMAIL_RECIPIENT_TYPE_ID });
-      recipientsOut.push({
-        typeId: EMAIL_RECIPIENT_TYPE_ID,
-        externalId,
-        objectId: res.objectId,
-        isNew: res.isNew,
-      });
-    }
-  }
-
   return {
     bodies,
-    recipients: recipientsOut,
-    skipped: { bodies: !canBody, recipients: !canRecipient },
+    skipped: { bodies: !canBody },
   };
 }
 
 // Lazy default projection: resolves registered types via the objects client
 // (claim-registered artifact types surface through `objects_types_list`), then
-// runs the materializer with the ledgered body writer (cinatra#3089) and the
-// deterministic objects-save write path for the recipients.
+// runs the materializer with the ledgered body writer (cinatra#3089).
 async function loadDefaultEmitEmailFanout(): Promise<
   NonNullable<TriggerEmailSendDeps["emitEmailFanout"]>
 > {
@@ -644,7 +563,6 @@ async function loadDefaultEmitEmailFanout(): Promise<
         recipients: args.recipients,
       },
       {
-        save: (inp) => client.save(inp) as Promise<EmailFanoutSaveResult>,
         writeBody: async (w) => {
           const orgId = args.actor.orgId;
           if (!orgId) {
@@ -765,9 +683,9 @@ async function runInitialSend(args: {
 
     // Durable per-item projection AT the fan-out boundary (cinatra#1455) —
     // where the run-scoped bundle is dissolved into individual items, BEFORE
-    // the per-email send. `email:body` is draftable and `email:recipient` is
-    // the confirmed-recipient snapshot, so the projection captures the
-    // CONFIRMED campaign set independent of the send outcome. A body the
+    // the per-email send. `email:body` is draftable (the delivery agent files
+    // the `email:recipient` snapshot, cinatra#3089), so the projection captures
+    // the APPROVED drafts independent of the send outcome. A body the
     // ledgered writer refuses is a visible failure of the send (cinatra#3089):
     // it is let through to the outer catch, so nothing is sent and the refusal
     // is named. Any other projection failure is warned and the send goes on.

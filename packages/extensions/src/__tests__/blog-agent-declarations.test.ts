@@ -22,11 +22,14 @@ const EXT = join(__dirname, "..", "..", "..", "..", "extensions", "cinatra-ai");
 const IDEA = "@cinatra-ai/blog-idea-artifact";
 const POST = "@cinatra-ai/blog-post-artifact";
 const IMAGE = "@cinatra-ai/blog-image-artifact";
+const PICTURE = "@cinatra-ai/image-artifact";
 const LINKEDIN = "@cinatra-ai/linkedin-artifacts";
+const BRAND_VOICE = "@cinatra-ai/brand-voice-artifact";
 
 const IDEA_TYPE = "@cinatra-ai/blog-idea-artifact:blog-idea";
 const POST_TYPE = "@cinatra-ai/blog-post-artifact:post";
 const IMAGE_TYPE = "@cinatra-ai/blog-image-artifact:blog-image";
+const PICTURE_TYPE = "@cinatra-ai/image-artifact:image";
 const LINKEDIN_TYPE = "@cinatra-ai/linkedin:post-draft";
 
 type Manifest = {
@@ -65,8 +68,10 @@ const TABLE: Array<{
   },
   {
     agent: "blog-draft-writer-agent",
+    // blog-draft-writer-agent#50 added the brand-voice edge: the writer reads
+    // the picked brand voice through its brand-voice context slot.
     produces: [{ extension: POST, objectTypeId: POST_TYPE }],
-    edges: [IDEA, POST].sort(),
+    edges: [IDEA, POST, BRAND_VOICE].sort(),
   },
   {
     agent: "blog-image-generator-agent",
@@ -77,9 +82,12 @@ const TABLE: Array<{
     // produces entry no recognised road reaches. (The host does file picture
     // bytes on its own campaigns road; that road is neither recognised by the
     // gate nor reachable from an agent.) Its entry waits with the pipeline's
-    // two. BOTH EDGES stay: they say what the run touches, which is true today.
+    // two. blog-image-generator-agent#5 dropped the blog-image edge: the
+    // pipeline that embeds this agent files the picture as
+    // `@cinatra-ai/image-artifact:image`. blog-image-generator-agent#6 added
+    // the brand-voice edge for the brand-voice context slot it reads.
     produces: [],
-    edges: [IMAGE, POST].sort(),
+    edges: [POST, BRAND_VOICE].sort(),
   },
   {
     agent: "blog-linkedin-writer-agent",
@@ -99,22 +107,27 @@ const TABLE: Array<{
   },
   {
     agent: "blog-wordpress-publish-agent",
+    // At its pin it declares one artifact edge, the blog post it publishes.
     produces: [],
-    edges: [IMAGE, POST].sort(),
+    edges: [POST],
   },
   {
     agent: "blog-pipeline-agent",
-    // A produces entry is a promise the run keeps: the pipeline files its draft
-    // and its LinkedIn post through terminal bindings today. Its ideas and its
-    // pictures go through mid-run write roads that are not built yet, so those
-    // two entries wait for them — the fleet's adoption gate refuses a declared
-    // production nothing materializes. All four EDGES stay: they say what the
-    // run touches, which is true either way.
+    // A produces entry is a promise the run keeps: the pipeline writes its draft
+    // and its LinkedIn post mid-run through the host's materialize tool, and
+    // files its featured image mid-run through the host's image tool as an
+    // image artifact. Only its ideas entry still waits for a write road — the
+    // fleet's adoption gate refuses a declared production nothing
+    // materializes. All four EDGES stay: they say what the run touches.
+    // blog-pipeline-agent#77 added a fifth, the brand-voice edge: the pipeline
+    // asks once for one stored brand voice and hands it to the writer and the
+    // image generator.
     produces: [
       { extension: POST, objectTypeId: POST_TYPE },
+      { extension: PICTURE, objectTypeId: PICTURE_TYPE },
       { extension: LINKEDIN, objectTypeId: LINKEDIN_TYPE },
     ],
-    edges: [IDEA, POST, IMAGE, LINKEDIN].sort(),
+    edges: [IDEA, POST, PICTURE, LINKEDIN, BRAND_VOICE].sort(),
   },
 ];
 
@@ -131,22 +144,28 @@ describe("the blog agents' declarations (plan section 5.3.2)", () => {
     });
   }
 
-  it("declares the fourteen dependency edges section 5.3.2 counts", () => {
-    // All fourteen. The last two arrived with the image agent's own package,
-    // which replaces the retired prompt writer.
-    const total = TABLE.reduce((n, row) => n + row.edges.length, 0);
-    expect(total).toBe(14);
+  it("declares fifteen artifact-kind dependency edges, counted from the manifests", () => {
+    // Section 5.3.2 counted fourteen; the image agent's own package, which
+    // replaces the retired prompt writer, brought the last two of them. The
+    // brand-voice slot (cinatra#4314) then added three brand-voice edges (the
+    // writer, the image generator and the pipeline) and dropped the image
+    // generator's blog-image edge, and the publish agent's pin dropped its
+    // blog-image edge (it declares only the blog post it publishes). The total
+    // is read from the pinned manifests, not summed from the table above, so a
+    // stale row cannot hide behind its own sum.
+    const total = TABLE.reduce((n, row) => n + edges(row.agent).length, 0);
+    expect(total).toBe(15);
   });
 
-  it("declares five of the nine typed produces entries", () => {
-    // Nine after the prototype. Three wait for their write roads, not for their
-    // packages: the image agent's own entry and the pipeline's idea and picture
-    // entries. No road an agent can take reaches a picture today. The fourth
-    // absence is different in kind: the LinkedIn PUBLISHER's entry is RETIRED,
-    // not waiting — at its pin it writes an address onto the writer's artifact
-    // instead of producing one, so it declares no produces entry at all.
+  it("declares six of the nine typed produces entries", () => {
+    // Nine after the prototype. Two wait, not for their packages: the image
+    // agent's own entry (the pipeline files the picture through its own image
+    // step) and the pipeline's ideas entry, which waits for its write road. The
+    // third absence is different in kind: the LinkedIn PUBLISHER's entry is
+    // RETIRED, not waiting — at its pin it writes an address onto the writer's
+    // artifact instead of producing one, so it declares no produces entry at all.
     const total = TABLE.reduce((n, row) => n + row.produces.length, 0);
-    expect(total).toBe(5);
+    expect(total).toBe(6);
     for (const row of TABLE) {
       for (const entry of row.produces) {
         expect(entry.objectTypeId).toMatch(/^@[\w-]+\/[\w-]+:[\w-]+$/);

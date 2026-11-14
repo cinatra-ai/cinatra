@@ -38,7 +38,8 @@ import { READING_BOUND_MS, elapsedSince, errorClass, pause, refuse, within } fro
  * whatever happens. Refuses, as a StepRefusal, a page it could not read before
  * the press (`unreadable`, and the mark comes off) and a press that could not be
  * made (`driver-failure`); `what` names the element in that refusal, such as
- * `the button "Save" on /agents`.
+ * `the button "Save" on /agents`. `act`, when given, is the press in place of
+ * the click of the marked element (pressKey presses a key with it).
  *
  * `settled` is null when a navigation started and did not land within the settle
  * bound: the caller refuses it in its own words. `checked` is null when it was
@@ -55,10 +56,11 @@ import { READING_BOUND_MS, elapsedSince, errorClass, pause, refuse, within } fro
  *   what: string,
  *   nothing: string,
  *   checks?: boolean,
+ *   act?: () => Promise<unknown>,
  * }} press
  * @returns {Promise<{ settled: { navigated: boolean, path: string } | null, checked: boolean | "mixed" | null, elapsedMs: number }>}
  */
-export async function pressAndSettle(page, { step, record, mark, from, href, bound, what, nothing, checks = false }) {
+export async function pressAndSettle(page, { step, record, mark, from, href, bound, what, nothing, checks = false, act }) {
   // The document the press starts from, noted so that a new one is known.
   const key = `__stepPress${mark}`;
   const noted = await within(page.evaluate(readDocument, { key, set: true }), READING_BOUND_MS);
@@ -84,7 +86,8 @@ export async function pressAndSettle(page, { step, record, mark, from, href, bou
   try {
     try {
       // `noWaitAfter`: the press returns once made; where it leads is read below.
-      await page.locator(markedBy(mark)).click({ timeout: bound.actionMs, noWaitAfter: true });
+      if (act) await act();
+      else await page.locator(markedBy(mark)).click({ timeout: bound.actionMs, noWaitAfter: true });
     } catch (error) {
       throw refuse(step, record, "driver-failure", `${what} could not be pressed (${errorClass(error)})`);
     }

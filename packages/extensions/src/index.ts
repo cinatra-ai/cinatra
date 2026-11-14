@@ -1092,6 +1092,10 @@ async function syncCanonicalManifestInstall(
         ownerId: rowAnchor.ownerId,
         organizationId: rowAnchor.organizationId,
         kind: kind as never,
+        // Supplied local/github provenance has no source.version. Carry the
+        // resolved package version independently; versionless references keep
+        // the canonical store's existing source-derived floor (cinatra#3693).
+        version: ref.version || undefined,
         // HONEST PROVENANCE (cinatra#3204 D2). A supplied package records where
         // it actually came from — `local` or `github`, carrying the content
         // digest over the delivered tree — instead of the synthetic registry row

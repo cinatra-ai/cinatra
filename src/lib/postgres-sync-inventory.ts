@@ -172,7 +172,7 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   "src/lib/dev-auto-setup.ts": {
     class: "migratable-background-setup",
     justification:
-      "Dev-only auto-setup; gated on CINATRA_RUNTIME_MODE===development, fire-and-forget on boot. Never on a production request path.",
+      "Development and preview-instance auto-setup; gated on CINATRA_RUNTIME_MODE===development or a preview instance (the preview install profile on a production runtime, cinatra#4098), fire-and-forget at boot. On a preview it runs the connector hooks without the development fixtures, and its sync calls there are read-only lookups (the first administrator, and the fixture account an earlier development boot left). Never on a production deployment, never on a request path.",
   },
   "src/lib/dev-fixture-seeder.ts": {
     class: "migratable-background-setup",
@@ -341,6 +341,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Artifact creation write on request paths. Migratable with the artifacts subsystem.",
   },
+  "src/lib/artifacts/artifact-revision-append.ts": {
+    class: "migratable-request-path",
+    justification:
+      "The append-a-revision-to-an-EXISTING-artifact writer (cinatra#3080, fix leg 8): the sibling of artifact-creation.ts on the other side of the same road \u2014 creation mints an artifact, this one files the NEXT REVISION of an artifact the host already owns, which is what the change road needs when Regenerate must settle its successor over the SAME artifact rather than a second, unrelated piece of work. Five call sites, all five of them transactional writes or the guarded read immediately before one: the target row's liveness and accepted-MIME read, the bytes door's resource/blob/representation/pointer/witness transaction, the re-file door's source-revision read, the re-file transaction itself, and the pointer compare-and-set a repair completion makes after its successor is accepted. It is on the bridge for exactly the reason its two neighbours are (artifact-creation.ts, cms-preview-capture-store.ts): it composes into the SAME synchronous artifacts store graph and shares their query builders, so one writer of the group cannot move to the async pooled layer alone. Request/run-time write; migratable to async pooled access with the artifacts subsystem, as a unit with those two.",
+  },
   "src/lib/artifacts/local-disk-blob-store.ts": {
     class: "migratable-request-path",
     justification:
@@ -411,6 +416,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Policy-aware content snapshots for claimed typed object rows (cinatra#1430): captures an immutable JSON snapshot of a typed row's normalized data at resolution time as a representation revision over a blob resource, keyed for reuse in object_content_snapshots. Composed at context-resolution request time; the write branch runs under a per-artifact advisory-locked transaction (re-read under the lock). Sync leaf mirroring representation-store/resource-store so it composes into the synchronous store graph; migratable to async pooled access with the artifacts subsystem.",
   },
+  "src/lib/artifacts/page-capture-facts-record.ts": {
+    class: "migratable-request-path",
+    justification:
+      "cinatra#4223 page capture facts: one bounded SELECT (at most two rows) of a revision's host-written artifact_audit record, read where an artifact display or a review target is prepared. Sync leaf so it composes with the synchronous artifact reads; migratable to async pooled access with the artifacts subsystem.",
+  },
   "src/lib/artifacts/object-backed-contract.ts": {
     class: "migratable-request-path",
     justification:
@@ -419,22 +429,17 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   "src/lib/artifacts/typed-promotion-store.ts": {
     class: "migratable-request-path",
     justification:
-      "The typed promotion road's store half (cinatra#3028, epic #3023 — enabler 0.14). Three sync call sites, all on the library's Confirm request path: the base-typed row read (with its latest representation and the blob's own detected mime, because the promotion re-validates the shared content against the target type's accepted forms), the matcher-association read, and the append-only representation revision the promotion adds over the base revision's own resource. The retype itself is NOT here — it goes through the canonical history-aware objects writer. Sync leaf mirroring representation-store / semantic-assertion-store so it composes into the synchronous store graph; migratable to async pooled access with the artifacts subsystem.",
+      "The typed promotion road's store half (cinatra#3028, epic #3023 — enabler 0.14). Four sync call sites, all on the library's Confirm request path: the base-typed row read (with its latest representation and the blob's own detected mime, because the promotion re-validates the shared content against the target type's accepted forms), the matcher-association read, the proof read of the row's latest type change (the promotion appends only when that change is its own keyed retype, cinatra#3319), and the append-only representation revision the promotion adds over the base revision's own resource. The retype itself is NOT here — it goes through the canonical history-aware objects writer. Sync leaf mirroring representation-store / semantic-assertion-store so it composes into the synchronous store graph; migratable to async pooled access with the artifacts subsystem.",
   },
   "src/lib/artifacts/context-selection-finalize.ts": {
     class: "migratable-request-path",
     justification:
       "Context-selection finalization (cinatra#1430): one transaction that re-validates the selection triple's coherence in SQL, appends the run_context_selections audit row, and writes a real artifact_refs retention pin — all under the SAME resource-level advisory lock the resource GC takes, closing the pin-vs-GC race. Request-time (context-agent) finalization; sync leaf composing into the synchronous store graph; migratable to async pooled access with the artifacts subsystem.",
   },
-  "src/lib/artifacts/cms-content-snapshot-capture.ts": {
-    class: "migratable-request-path",
-    justification:
-      "CMS content-snapshot capture (cinatra#2043, epic #2037 S5): persists fetched CMS content as a real artifact (resource + artifact_blobs + append-only representation) and, in the SAME transaction (the S0 same-tx ordering), splices the transactional ArtifactProduced event and the cms_snapshot_targets apply-binding row. Driven by the connector staged-write adapter (a follow-up lane); sync leaf mirroring object-content-snapshot/representation-store so it composes into the synchronous store graph; migratable to async pooled access with the artifacts subsystem.",
-  },
   "src/lib/artifacts/cms-preview-capture-store.ts": {
     class: "migratable-request-path",
     justification:
-      "Pinned CMS preview-capture store (cinatra#2044, epic #2037 S6): writes ONE immutable capture record per (pinned review target, role) — the capture objects row plus, for a captured record, the resource + artifact_blobs + representation triple for the screenshot — in a single transaction whose deterministic objects PK makes a re-drive roll back rather than duplicate; plus the two gate-scoped reads the review surface serves from. Runs on the staged-write/gate-creation path and on the review view path; sync leaf mirroring cms-content-snapshot-capture/representation-store so it composes into the synchronous store graph; migratable to async pooled access with the artifacts subsystem.",
+      "Pinned CMS preview-capture store (cinatra#2044, epic #2037 S6): writes ONE immutable capture record per (pinned review target, role) — the capture objects row plus, for a captured record, the resource + artifact_blobs + representation triple for the screenshot — in a single transaction whose deterministic objects PK makes a re-drive roll back rather than duplicate; plus the two gate-scoped reads the review surface serves from. Runs on the staged-write/gate-creation path and on the review view path; sync leaf mirroring representation-store so it composes into the synchronous store graph; migratable to async pooled access with the artifacts subsystem.",
   },
   "src/lib/artifacts/semantic-assertion-store.ts": {
     class: "migratable-request-path",

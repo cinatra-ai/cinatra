@@ -169,6 +169,12 @@ describe("a display is reachable only through a type some package registers (#30
         slot: "detail",
         generatedKey: "@cinatra-ai/slide-deck-artifact::detail",
       },
+      {
+        objectTypeId: "@cinatra-ai/slide-deck-artifact:deck",
+        packageName: "@cinatra-ai/slide-deck-artifact",
+        slot: "listRow",
+        generatedKey: "@cinatra-ai/slide-deck-artifact::listRow",
+      },
     ]);
   });
 

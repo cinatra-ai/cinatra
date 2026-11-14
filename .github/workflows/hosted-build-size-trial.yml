@@ -26,7 +26,7 @@ env:
   TRIAL_RUN_ID: ${{ github.run_id }}
   DOCKER_BUILD_RECORD_UPLOAD: "false"
 jobs:
-  # Source job SHA256: 589393084ee1f8064ce8e778362ba624c51fa2ab64afb8c18fe8a6a9b0711125
+  # Source job SHA256: b01c415b1571cc8c2ca4531e11fa7c66f716d48274199c5d12daecf305e55fe2
   design:
     name: trial / design / ${{ inputs.cohort }}
     if: ${{ github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && inputs.workload == 'design' && (inputs.cohort == 'standard' || inputs.cohort == 'large') }}
@@ -246,9 +246,9 @@ jobs:
         env:
           TRIAL_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: node scripts/ci/hosted-build-size-trial.mjs begin
-      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
 
@@ -365,7 +365,17 @@ jobs:
           # (design-build-cache.sh rebuild), and that build's result is this
           # step's result; with it off, the build's own exit code stands.
           CINATRA_TURBOPACK_BUILD_FS_CACHE: ${{ steps.build-cache.outputs.fs-cache }}
-        run: pnpm build || bash scripts/ci/design-build-cache.sh rebuild "$?"
+          # One design build at a time on a self-hosted machine (a cold build
+          # needs about 24.5 GB, measured on the restore step). Several runners
+          # share that machine and no swap step runs there; builds that
+          # overlapped were killed with exit 137, builds that ran alone were
+          # not. scripts/ci/design-build-host-lock.sh waits for the machine's
+          # lock (45 minutes at most, half of this job's 90), then builds; it
+          # builds without the lock when it cannot take one, and does nothing
+          # on a GitHub-hosted runner. The rebuild runs under the same lock.
+          DESIGN_BUILD_LOCK_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          DESIGN_BUILD_LOCK_WAIT_SECONDS: "2700"
+        run: bash scripts/ci/design-build-host-lock.sh bash -c 'pnpm build || bash scripts/ci/design-build-cache.sh rebuild "$?"'
 
       - name: Keep the design build cache for the next job (self-hosted only)
         # Keeps what the build just wrote for the next job on this runner
@@ -585,7 +595,7 @@ jobs:
           TRIAL_JOB_STATUS: ${{ job.status }}
         run: node scripts/ci/hosted-build-size-trial.mjs finish
 
-  # Source job SHA256: c8d4ebcf30b11c98bcce2799c8627ead31a008367c13098ae9cd5fde79c9c133
+  # Source job SHA256: 103ddbd0ce573aa21a46b90b33696e2f1933a94e6adbfcdf86e0987a8b29d974
   dashboard:
     name: trial / dashboard / ${{ inputs.cohort }}
     if: ${{ github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && inputs.workload == 'dashboard' && (inputs.cohort == 'standard' || inputs.cohort == 'large') }}
@@ -705,10 +715,10 @@ jobs:
           TRIAL_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: node scripts/ci/hosted-build-size-trial.mjs begin
       - name: Setup pnpm
-        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
 
@@ -951,7 +961,7 @@ jobs:
           TRIAL_JOB_STATUS: ${{ job.status }}
         run: node scripts/ci/hosted-build-size-trial.mjs finish
 
-  # Source job SHA256: 60478d7f605273a176b23a36f59659211ccced22fdd63af0f03b469380f56b4a
+  # Source job SHA256: db8d4cd19cc014b9ed256d0c13158ce588db2b78dc748fdd4b3f345bae1f1b93
   image:
     name: trial / image / ${{ inputs.cohort }}
     if: ${{ github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && inputs.workload == 'image' && (inputs.cohort == 'standard' || inputs.cohort == 'large') }}
@@ -983,6 +993,8 @@ jobs:
     # failure (artifacts/logs preserved) instead of letting it eat the
     # workflow budget invisibly. Same defensive class as the RBAC globalTimeout.
     timeout-minutes: 45
+    env:
+      DOCKERHUB_AUTH_AVAILABLE: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
     steps:
       # Hard-fail the build (definitive RED, never a non-failing "skip") when a
       # prerequisite gate did not pass — the type-safety enforcement for the
@@ -1088,7 +1100,14 @@ jobs:
           fi
           exit 0
 
-      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: Login to Docker Hub (pulls)
+        if: ${{ env.DOCKERHUB_AUTH_AVAILABLE == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       # SELF-HOSTED CACHE BACKEND (cinatra#3267). The Actions cache service
       # behind `type=gha` is only served to GitHub-hosted runners: on the
@@ -1107,7 +1126,7 @@ jobs:
       # and rebuilds — slower on a cold machine, never wrong.
       - name: Build image (load for prod-boot e2e)
         id: trial_build
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           load: true

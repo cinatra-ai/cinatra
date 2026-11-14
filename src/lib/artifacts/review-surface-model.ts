@@ -26,6 +26,7 @@ import type {
   PreparedReviewTarget,
   ReviewTargetMount,
 } from "@/lib/artifacts/artifact-review-preparation";
+import type { ArtifactReviewTarget } from "@/lib/artifacts/artifact-review-target";
 import type {
   ReviewDisposition,
   SubmitDecisionResult,
@@ -327,47 +328,11 @@ export function reviewProvenanceLabel(mount: ReviewTargetMount): {
 // the review route still grows no client-graph coupling). The former local
 // derivation is deleted — it was the third copy of the same string surgery.
 
-/**
- * The read-only row facts the header's meta line carries (§IV) — the ones the
- * drawing names: "the read-only row facts the host authorized — owner level /
- * visibility, MIME, and updated time".
- *
- * THE PAIR DRAWS BARE, because that is how the drawing draws it. Every example
- * meta line in the ratified drawings prints the two scope facts with no label at
- * all — "… · Team · Private · text/html · updated 8 min ago" in §IV, and the same
- * line again over §V.1's read-only review target. The labelled form this line
- * carried came from a local reading of a plan sentence ("the line gets labels or
- * drops the storage fact") rather than from the drawing, and the graded proof frames
- * measured it as a departure. The drawing decides: the labels go, both facts
- * stay, and the order is the drawing's.
- *
- * Pure copy, no type keying — every artifact type reads the same line.
- */
-export function reviewTargetRowFacts(
-  artifact: {
-    ownerLevel: string;
-    visibility: string;
-    mime: string;
-    updatedAt: string;
-  },
-  /** The instant to read `updatedAt` against. Injected so the reading is
-   *  testable; defaults to now, which is what every caller wants. */
-  now: Date = new Date(),
-): string[] {
-  return [
-    artifact.ownerLevel,
-    artifact.visibility,
-    artifact.mime,
-    // THE DRAWN READING IS RELATIVE, NOT AN INSTANT (cinatra#3046). The drawing
-    // writes "updated 8 min ago"; the decided target printed the stored column
-    // straight through — `2026-08-29T06:18:07.421Z`, milliseconds and all — which
-    // is a machine's reading of the same fact and is not what §IV draws. One
-    // formatter does it, for this line and for the header row facts the sibling
-    // leg (pull request 3058) draws from the same projection, so the two surfaces
-    // cannot render one column two ways.
-    `updated ${relativeInstant(artifact.updatedAt, now)}`,
-  ];
-}
+// The header meta line's row facts (§IV), reviewTargetRowFacts, are composed in
+// `@/lib/artifacts/review-target-row-facts`, beside the scope composer they word
+// the owner and the visibility with. They are not composed here: this module is
+// reached from the chat surface's own module graph (THE DEEP ENTRY above), and
+// only the hosts that draw the header read that line.
 
 /** How the drawn readings step, longest first. Minutes are the drawing's own
  *  unit ("8 min ago"); the rungs above it exist so a week-old artifact does not
@@ -452,6 +417,35 @@ export function reviewDecideDisabledReason(
 // agent's one-line summary when present + the decision permissions.
 // ---------------------------------------------------------------------------
 
+/**
+ * ONE TARGET OF THE STREAMING SURFACE (cinatra#3334).
+ *
+ * The surface used to carry targets that were already prepared, which meant the
+ * loader could not answer until the LAST of them was — and the page could not
+ * open a boundary around anything, because there was nothing left to wait for.
+ * It now carries the target's identity (available the moment the gate's pinned
+ * set is known) beside the promise of its display and the promise of its pinned
+ * capture, in the gate's order, so the page puts each one under its own
+ * boundary and a prepared target paints while its siblings are still resolving.
+ *
+ * The promises are started by the loader, after the preflight: nothing here can
+ * begin a target read before the run access, the gate state and the pinned-set
+ * check have answered.
+ */
+export interface ReviewTargetStream {
+  /** The pinned target, known at preflight — the key the page draws it under. */
+  target: ArtifactReviewTarget;
+  /** Its never-blank display, still being prepared. */
+  prepared: Promise<PreparedReviewTarget>;
+  /** S6 (#2044 L-B + L-D) — its PINNED visual before/after pair: the live page
+   *  beside the proposal composed into that page's own adapter-marked regions,
+   *  captured at gate creation and read from the store (the surface never
+   *  fetches the remote site at view time, so an old gate keeps showing its
+   *  original pictures). Null for a target that has none — every other artifact
+   *  type — which renders nothing at all: the pictures are additive context. */
+  capturePair: Promise<PinnedCapturePairView | null>;
+}
+
 export type ReviewSurfaceModel =
   /** A viewer with no read access to the run never sees the targets (§V). */
   | { kind: "not-authorized" }
@@ -493,10 +487,9 @@ export type ReviewSurfaceModel =
   | {
       kind: "settled";
       /** The frozen pinned set, prepared READ-ONLY — the reviewed target(s) the
-       * decided reading keeps, in gate order. */
-      targets: PreparedReviewTarget[];
-      /** As `ready`: the pinned before/after pair per target, where one exists. */
-      pinnedCapturePairs: Record<string, PinnedCapturePairView>;
+       * decided reading keeps, in gate order, each streaming under its own
+       * boundary exactly as on the pending reading. */
+      targets: ReviewTargetStream[];
       /** As `ready`: the producing agent's one-line summary, when present. */
       agentSummary: string | null;
     }
@@ -505,31 +498,19 @@ export type ReviewSurfaceModel =
       kind: "ready";
       runId: string;
       reviewTaskId: string;
-      targets: PreparedReviewTarget[];
+      /** The gate's pinned set in gate order, each target carrying the promise
+       * of its own display and its own pinned capture (cinatra#3334). */
+      targets: ReviewTargetStream[];
       /** The producing agent's one-line summary (§I/II) — rendered only when
        * present; absent for a gate whose producer supplied none. */
       agentSummary: string | null;
       /**
-       * S6 (#2044 L-B + L-D) — the PINNED visual before/after PAIR per target,
-       * keyed `<artifactId>:<representationRevisionId>` (the pinned pair):
-       * the live page beside the proposal composed into that page's own
-       * adapter-marked regions. Captured at gate creation and read from the
-       * store; the surface NEVER fetches the remote site at view time, so an old
-       * gate keeps showing its original pictures. Absent for a target that has
-       * none (every other artifact type), which renders nothing at all — the
-       * pictures are additive context.
+       * The decision axis (§V) — a PROMISE since cinatra#3334. It is the card's
+       * floor, below the frame, that consumes it, and no target's body waits on
+       * it, so resolving it is no longer allowed to hold the surface's answer.
        */
-      pinnedCapturePairs: Record<string, PinnedCapturePairView>;
-      permissions: ReviewDecisionPermissions;
+      permissions: Promise<ReviewDecisionPermissions>;
     };
-
-/** The key a target's pinned captures are stored under on the surface model. */
-export function pinnedCaptureKey(target: {
-  artifactId: string;
-  representationRevisionId: string;
-}): string {
-  return `${target.artifactId}:${target.representationRevisionId}`;
-}
 
 // ---------------------------------------------------------------------------
 // The decision submit OUTCOME the client renders after a submit (§IV/V). Maps
