@@ -1685,3 +1685,23 @@ describe("auth-route-guard - /api/cli control-plane exemption (behavioral + pin)
     expect(guardSource).not.toMatch(/"\/api"\s*,/);
   });
 });
+
+// cinatra#4150 part 7a-3b. Red at the 7a-3a tip: the guard 307s the decide POST to /sign-in.
+describe("the publish card's broker decide (part 7a-3b)", () => {
+  it("is ADMITTED cookieless, on its own exact entry, and no other publish-decision subpath is", async () => {
+    const res = await guardAppRoute(fakeRequest("/api/lifecycle-views/publish-decision/decide"));
+    expect(res.status ?? 200).toBe(200);
+    expect(res.headers.get("x-middleware-next")).toBe("1");
+    expect(res.headers.get("location")).toBeNull();
+    const exact = guardSource.match(/const PUBLIC_EXACT_PATHS = \[([\s\S]*?)\n\];/)?.[1] ?? "";
+    const line = exact.split("\n").find((l) => l.includes('"/api/lifecycle-views/publish-decision/decide"'));
+    expect(line, "the publish card decide must have its own entry").toBeDefined();
+    expect((line ?? "").toLowerCase()).toMatch(/reachability only/);
+    expect((line ?? "").toLowerCase()).toMatch(/exact path, never a prefix/);
+    expect(line ?? "").toMatch(/401/);
+    for (const p of ["/api/lifecycle-views/publish-decision/decide/", "/api/lifecycle-views/publish-decision/decide/x"]) {
+      const other = await guardAppRoute(fakeRequest(p));
+      expect(other.headers.get("location") ?? "", p).toContain("/sign-in");
+    }
+  });
+});

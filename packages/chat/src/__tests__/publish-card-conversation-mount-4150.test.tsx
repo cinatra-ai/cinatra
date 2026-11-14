@@ -162,16 +162,16 @@ describe("the publish card on the conversation hosts (cinatra#4150)", () => {
     // The run's own slot, and never inside the inline run card's subtree.
     expect(card.closest(`[data-agent-run-slot="${HELD_RUN_ID}"]`)).not.toBeNull();
     expect(card.closest('[data-lifecycle-card-host="run_card"]')).toBeNull();
-    // Both controls are drawn. Part 7a-3a: /chat sends through the session door; the widget has no door yet, and
-    // never the session one (its frame is same-origin to the app, so a cookie would answer as someone else).
+    // Both controls are drawn and live: /chat sends through the session door (part 7a-3a), the widget through the
+    // broker decide route on its own credential (part 7a-3b), never the session one.
     for (const action of ["decline-publish -> declined", "approve-publish -> released"]) {
       const control = card.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
       expect(control, action).not.toBeNull();
-      expect(control!.disabled, action).toBe(surface === "widget");
+      expect(control!.disabled, action).toBe(false);
     }
   });
 
-  it.each(["chat", "widget"] as const)("%s: Publish goes through the session action only on /chat", async (surface) => {
+  it.each(["chat", "widget"] as const)("%s: Publish goes through the session action on /chat, the broker on the widget", async (surface) => {
     publishDecideMock.mockClear();
     const root = await mountArm(surface, true);
     const approve = root.querySelector<HTMLButtonElement>('[data-action="approve-publish -> released"]')!;
@@ -179,10 +179,15 @@ describe("the publish card on the conversation hosts (cinatra#4150)", () => {
       approve.click();
       await Promise.resolve();
     });
+    const brokerPosts = (stub?.calls ?? []).filter((c) => c.url === `${BROKER}/decide`);
     if (surface === "chat") {
       expect(publishDecideMock).toHaveBeenCalledWith({ runId: HELD_RUN_ID, answer: "approve", note: "" });
+      expect(brokerPosts).toHaveLength(0);
     } else {
       expect(publishDecideMock).not.toHaveBeenCalled();
+      expect(brokerPosts).toHaveLength(1);
+      expect(brokerPosts[0]!.init.method).toBe("POST");
+      expect(JSON.parse(String(brokerPosts[0]!.init.body))).toEqual({ runId: HELD_RUN_ID, answer: "approve", note: "" });
     }
   });
 

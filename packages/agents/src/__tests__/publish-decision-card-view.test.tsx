@@ -386,13 +386,47 @@ describe("the session door (part 7a-3a)", () => {
     },
   );
 
-  it("the site widget has no door yet: both controls are disabled and the session action is never called", async () => {
-    const root = await rootOf(mountWithHostDoor("site_widget"));
+  // Part 7a-3b: the site widget's door is the BROKER decide route on its own credential (red at the 7a-3a tip: the
+  // widget had no door, so its controls were disabled and nothing was sent).
+  it("the site widget POSTs the answer to the broker decide route on its own credential, never the session action", async () => {
+    const mounted = mountWithHostDoor("site_widget");
+    const root = await rootOf(mounted);
     await settle();
-    expect(root.querySelector<HTMLButtonElement>(APPROVE)?.disabled).toBe(true);
-    expect(root.querySelector<HTMLButtonElement>(DECLINE)?.disabled).toBe(true);
-    fireEvent.click(root.querySelector(APPROVE)!);
+    expect(root.querySelector<HTMLButtonElement>(DECLINE)?.disabled).toBe(false);
+    fireEvent.change(root.querySelector("textarea")!, { target: { value: "Not ready yet." } });
+    brokerAnswer = { status: 200, body: { outcome: "decided" } };
+    await act(async () => {
+      fireEvent.click(root.querySelector(DECLINE)!);
+    });
     await settle();
+    const posts = requests.filter((r) => r.init.method === "POST");
+    expect(posts).toHaveLength(1);
+    expect(posts[0]!.url).toBe("/api/lifecycle-views/publish-decision/decide");
+    expect(posts[0]!.init.credentials).toBe("omit");
+    expect(posts[0]!.init.headers).toEqual({ "Content-Type": "application/json", Authorization: "Bearer cwu_site" });
+    expect(JSON.parse(String(posts[0]!.init.body))).toEqual({ runId: RUN_ID, answer: "decline", note: "Not ready yet." });
+    expect(decideActionMock).not.toHaveBeenCalled();
+  });
+
+  it("the broker's not_open is reported; a refusal, an error and an unknown answer leave the card as it was", async () => {
+    for (const [answer, expected] of [
+      [{ status: 200, body: { outcome: "not_open" } }, "no_longer_open"],
+      [{ status: 401, body: { error: "Unauthorized" } }, "pending"],
+      [{ status: 500, body: { error: "boom" } }, "pending"],
+      [{ status: 200, body: { outcome: "published" } }, "pending"],
+    ] as const) {
+      const mounted = mountWithHostDoor("site_widget");
+      const root = await rootOf(mounted);
+      await settle();
+      brokerAnswer = answer;
+      await act(async () => {
+        fireEvent.click(root.querySelector(APPROVE)!);
+      });
+      await settle();
+      expect((await rootOf(mounted)).getAttribute("data-lifecycle-card-state"), JSON.stringify(answer)).toBe(expected);
+      brokerAnswer = { status: 200, body: PENDING };
+      cleanup();
+    }
     expect(decideActionMock).not.toHaveBeenCalled();
   });
 

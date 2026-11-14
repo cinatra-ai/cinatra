@@ -24,6 +24,7 @@ import {
   WIDGET_LIFECYCLE_HITL_SCREEN_ROUTE_PATH,
   WIDGET_LIFECYCLE_HITL_SCREEN_SUBMIT_ROUTE_PATH,
   WIDGET_LIFECYCLE_PUBLISH_DECISION_ROUTE_PATH,
+  WIDGET_LIFECYCLE_PUBLISH_DECISION_DECIDE_ROUTE_PATH,
   WIDGET_CONVERSATION_READ_SCOPE,
   WIDGET_CONVERSATION_WRITE_SCOPE,
   WIDGET_TOOL_CONFIRM_SCOPE,
@@ -524,3 +525,29 @@ describe("the displayed-scope token", () => {
   });
 });
 
+
+// cinatra#4150 part 7a-3b. Red at the 7a-3a tip: the constant is undefined and the decide grant has no publish audience.
+describe("the PUBLISH CARD decide audience (part 7a-3b)", () => {
+  it("joins the EXISTING decide grant WITH its sentence; no new scope; the read grant has none of it", () => {
+    expect(WIDGET_LIFECYCLE_PUBLISH_DECISION_DECIDE_ROUTE_PATH).toBe("/api/lifecycle-views/publish-decision/decide");
+    const decide = WIDGET_EXTENSION_SCOPES[WIDGET_LIFECYCLE_DECIDE_SCOPE];
+    expect(decide.audiences).toContain(WIDGET_LIFECYCLE_PUBLISH_DECISION_DECIDE_ROUTE_PATH);
+    expect(decide.consentCopy).toContain("decide whether an agent may publish what it made");
+    const read = WIDGET_EXTENSION_SCOPES[WIDGET_LIFECYCLE_READ_SCOPE];
+    expect(read.audiences).not.toContain(WIDGET_LIFECYCLE_PUBLISH_DECISION_DECIDE_ROUTE_PATH);
+    const readAud = mintWidgetTokenAudience([WIDGET_LIFECYCLE_READ_SCOPE]);
+    const decideAud = mintWidgetTokenAudience([WIDGET_LIFECYCLE_DECIDE_SCOPE]);
+    expect(tokenSetHas(decideAud, WIDGET_LIFECYCLE_PUBLISH_DECISION_DECIDE_ROUTE_PATH)).toBe(true);
+    expect(tokenSetHas(readAud, WIDGET_LIFECYCLE_PUBLISH_DECISION_DECIDE_ROUTE_PATH)).toBe(false);
+    // No new scope: the vocabulary this build knows is unchanged.
+    expect(Object.keys(WIDGET_EXTENSION_SCOPES).sort()).toEqual(
+      [
+        WIDGET_LIFECYCLE_READ_SCOPE,
+        WIDGET_LIFECYCLE_DECIDE_SCOPE,
+        WIDGET_CONVERSATION_READ_SCOPE,
+        WIDGET_CONVERSATION_WRITE_SCOPE,
+        WIDGET_TOOL_CONFIRM_SCOPE,
+      ].sort(),
+    );
+  });
+});

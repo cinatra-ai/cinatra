@@ -323,3 +323,25 @@ describe("the decide answer (part 7a-3a)", () => {
     expect(access.declinePublishDecision).not.toHaveBeenCalled();
   });
 });
+
+// cinatra#4150 part 7a-3b: the widget publish grant travels with the widget reader, to the decision and to "may decide".
+// Red at the 7a-3a tip: the grant is dropped, so neither call carries it.
+describe("the widget publish grant (part 7a-3b)", () => {
+  const GRANT = Object.freeze({ runId: "run-1", userId: "user-a", orgId: "org-1" });
+  const WIDGET_WHO = { ...WHO, actor: { ...WHO.actor, source: "a2a" as const }, widgetGrant: GRANT };
+
+  it("is handed to Publish and to Do not publish", async () => {
+    access.approvePublishDecision.mockResolvedValue({ ok: true, resumed: true });
+    access.declinePublishDecision.mockResolvedValue({ ok: true, runStopped: true });
+    const core = cardCore as unknown as { decidePublishDecisionForActor: (i: unknown) => Promise<string> };
+    await core.decidePublishDecisionForActor({ runId: "run-1", answer: "approve", note: "", who: WIDGET_WHO });
+    await core.decidePublishDecisionForActor({ runId: "run-1", answer: "decline", note: "n", who: WIDGET_WHO });
+    expect(access.approvePublishDecision.mock.calls[0]![0]).toMatchObject({ widgetGrant: GRANT });
+    expect(access.declinePublishDecision.mock.calls[0]![0]).toMatchObject({ widgetGrant: GRANT, note: "n" });
+  });
+
+  it("is handed to the may-decide check of a pending card", async () => {
+    await publishDecisionCardStateForRun(RUN as unknown as Run, WIDGET_WHO as never);
+    expect(access.enforcePublishDecisionAccess.mock.calls[0]![0]).toMatchObject({ widgetGrant: GRANT });
+  });
+});

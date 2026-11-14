@@ -12,6 +12,7 @@ const resolveWidgetLifecycleActorContext = vi.fn();
 const resolveAssistantWidgetBinding = vi.fn();
 const readAgentRunById = vi.fn();
 const publishDecisionCardStateForRun = vi.fn();
+const mintWidgetPublishDecideGrant = vi.fn((..._a: unknown[]) => null as unknown);
 
 vi.mock("@/lib/lifecycle/widget-lifecycle-actor", async (importOriginal) => ({
   ...((await importOriginal()) as Record<string, unknown>),
@@ -26,6 +27,7 @@ vi.mock("@cinatra-ai/agents/store", () => ({
 vi.mock("@cinatra-ai/agents/publish-decision-card-core", () => ({
   PUBLISH_DECISION_CARD_NONE: { state: "none" },
   publishDecisionCardStateForRun: (...a: unknown[]) => publishDecisionCardStateForRun(...a),
+  mintWidgetPublishDecideGrant: (...a: unknown[]) => mintWidgetPublishDecideGrant(...a),
 }));
 
 import { WIDGET_PUBLISH_DECISION_READ_GRANT } from "@/lib/lifecycle/widget-lifecycle-actor";
@@ -140,5 +142,34 @@ describe("the read", () => {
     const res = await GET(request(RUN_ID));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ state: "none" });
+  });
+});
+
+// cinatra#4150 part 7a-3b: "may decide" on the widget. Red at the 7a-3a tip: the read never asks for the grant.
+describe("may decide on the widget (part 7a-3b)", () => {
+  const GRANT = Object.freeze({ runId: RUN_ID, userId: "user-widget", orgId: "org-widget" });
+
+  it("a reader whose token carries the decide grant reads the card WITH the widget publish grant for this run", async () => {
+    mintWidgetPublishDecideGrant.mockReturnValueOnce(GRANT);
+    await GET(request(RUN_ID));
+    expect(mintWidgetPublishDecideGrant).toHaveBeenCalledWith(CLAIMS, RUN_ID);
+    expect(publishDecisionCardStateForRun).toHaveBeenCalledWith(OWN_RUN, {
+      actor: ACTOR_CTX.actor,
+      roleHints: ACTOR_CTX.roleHints,
+      widgetGrant: GRANT,
+    });
+  });
+
+  it("a reader with no decide grant reads the card without one, so it reads restricted", async () => {
+    mintWidgetPublishDecideGrant.mockReturnValueOnce(null);
+    await GET(request(RUN_ID));
+    expect(mintWidgetPublishDecideGrant).toHaveBeenCalledWith(CLAIMS, RUN_ID);
+    expect(publishDecisionCardStateForRun.mock.calls[0]![1]).not.toHaveProperty("widgetGrant");
+  });
+
+  it("a run the session does not own mints no grant", async () => {
+    readAgentRunById.mockResolvedValue({ ...OWN_RUN, runBy: "someone-else" });
+    await GET(request(RUN_ID));
+    expect(mintWidgetPublishDecideGrant).not.toHaveBeenCalled();
   });
 });
