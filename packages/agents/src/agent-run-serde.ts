@@ -931,6 +931,23 @@ export async function readRunStepToolPolicy(runId: string, orgId: string): Promi
 export async function verifyRunExecutedSource(runId: string, orgId: string,
   attestation: VerifiedExecutedRunSource,
 ): Promise<VerifiedExecutedRunSource> {
+  return (await readBoundRunSource(runId, orgId, attestation)).proof;
+}
+/** cinatra#3745: the run's bound policy, read in the SAME statement that proves the run still runs
+ * under the proof's attempt and source. There is no second read between the proof and the policy. */
+export async function readCurrentRunStepToolPolicy(runId: string, orgId: string,
+  proof: VerifiedExecutedRunSource): Promise<RunStepToolPolicy> {
+  const parsed = parseVerifiedExecutedRunSource(proof);
+  if (!parsed) throw new RunStepToolPolicyRefusal("step_tool_source_proof_invalid");
+  const current = await readBoundRunSource(runId, orgId, parsed);
+  if (current.proof.executionAttemptId !== parsed.executionAttemptId) {
+    throw new RunStepToolPolicyRefusal("step_tool_run_source_inactive");
+  }
+  return current.policy;
+}
+async function readBoundRunSource(runId: string, orgId: string,
+  attestation: VerifiedExecutedRunSource,
+): Promise<{ proof: VerifiedExecutedRunSource; policy: RunStepToolPolicy }> {
   // Each claimed value is read once, here, into a frozen plain copy before any comparison: a getter or a proxy
   // cannot answer the checks below one value and the proof another.
   attestation = Object.freeze({ ...attestation });
@@ -960,7 +977,7 @@ export async function verifyRunExecutedSource(runId: string, orgId: string,
   readTrustedStepToolDeclaration(policy.source, attestation.stepId);
   const proof = parseVerifiedExecutedRunSource({ ...attestation, executionAttemptId: row.run.executionAttemptId });
   if (!proof) throw new RunStepToolPolicyRefusal("step_tool_source_proof_invalid");
-  return proof;
+  return { proof, policy };
 }
 export async function isRunExecutedSourceCurrent(runId: string, orgId: string,
   proof: VerifiedExecutedRunSource): Promise<boolean> {

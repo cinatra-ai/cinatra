@@ -1640,41 +1640,48 @@ export function createNonDefaultVersionHostContext(
 import type { ActionJson } from "@cinatra-ai/sdk-extensions";
 import { parseVerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server/request-context";
-import { assertRunStepToolAllowed, readRunStepToolPolicy, isRunExecutedSourceCurrent } from "@cinatra-ai/agents/store";
+import { assertRunStepToolAllowed, readCurrentRunStepToolPolicy } from "@cinatra-ai/agents/store";
+import { isProxy } from "node:util/types";
 
 export class ArtifactActionCheckRefusal extends Error {
   constructor(readonly code: string) { super(code); this.name = "ArtifactActionCheckRefusal"; }
 }
 /** Reject accessors, prototypes, sparse arrays, cycles and unbounded input.
- * No getter/toJSON is called; checkers receive only deeply frozen JSON copies. */
+ * No getter/toJSON is called; checkers receive only deeply frozen JSON copies.
+ * cinatra#3745: every own key is read, not only the enumerable ones: an array
+ * must be a plain Array whose own keys are exactly its indexes and `length`;
+ * an object's every own key must be an enumerable string-keyed data property.
+ * A proxy is refused before any of its traps runs. */
 export function immutableActionJson(value: unknown): ActionJson {
   const active = new Set<object>(); let nodes = 0;
+  const refuse = (): never => { throw new ArtifactActionCheckRefusal("action_json_invalid"); };
   function copy(v: unknown, depth: number): ActionJson {
     if (++nodes > 10000 || depth > 32) throw new ArtifactActionCheckRefusal("action_json_limit");
     if (v === null || typeof v === "boolean" || typeof v === "string") return v;
     if (typeof v === "number" && Number.isFinite(v)) return Object.is(v, -0) ? 0 : v;
-    if (typeof v !== "object" || !v || active.has(v)) throw new ArtifactActionCheckRefusal("action_json_invalid");
+    if (typeof v !== "object" || !v || active.has(v) || isProxy(v)) return refuse();
     const array = Array.isArray(v);
-    if (!array && Object.getPrototypeOf(v) !== Object.prototype && Object.getPrototypeOf(v) !== null) {
-      throw new ArtifactActionCheckRefusal("action_json_invalid");
-    }
-    if (Reflect.ownKeys(v).some((k) => typeof k === "symbol")) throw new ArtifactActionCheckRefusal("action_json_invalid");
+    const proto = Object.getPrototypeOf(v);
+    if (array ? proto !== Array.prototype : proto !== Object.prototype && proto !== null) return refuse();
+    const keys = Reflect.ownKeys(v);
+    if (keys.some((k) => typeof k === "symbol")) return refuse();
     active.add(v);
     try {
       if (array) {
-        if (Object.keys(v).length !== v.length) throw new ArtifactActionCheckRefusal("action_json_invalid");
+        const length = (v as unknown[]).length;
+        if (keys.length !== length + 1) return refuse();
         const out: ActionJson[] = [];
-        for (let i = 0; i < v.length; i++) {
+        for (let i = 0; i < length; i++) {
           const d = Object.getOwnPropertyDescriptor(v, String(i));
-          if (!d || !("value" in d)) throw new ArtifactActionCheckRefusal("action_json_invalid");
+          if (!d || !("value" in d) || !d.enumerable) return refuse();
           out.push(copy(d.value, depth + 1));
         }
         return Object.freeze(out);
       }
       const out: Record<string, ActionJson> = Object.create(null);
-      for (const key of Object.keys(v).sort()) {
+      for (const key of (keys as string[]).sort()) {
         const d = Object.getOwnPropertyDescriptor(v, key)!;
-        if (!("value" in d)) throw new ArtifactActionCheckRefusal("action_json_invalid");
+        if (!("value" in d) || !d.enumerable) return refuse();
         out[key] = copy(d.value, depth + 1);
       }
       return Object.freeze(out);
@@ -1700,14 +1707,25 @@ export async function prepareDeclaredRunToolArguments(toolName: string, args: un
   if (!frame?.runId) return args;
   // Capture before the first asynchronous source lookup; the effect and CHECK
   // see this exact detached value even if a caller retains the original object.
-  const frozenArguments = immutableActionJson(args ?? {});
+  // Absent MCP arguments are the empty argument object; every other value,
+  // null included, is copied as it is or refused.
+  const frozenArguments = immutableActionJson(args === undefined ? {} : args);
   const proof = parseVerifiedExecutedRunSource(frame.verifiedExecutedSource);
-  if (!frame.orgId || !proof || proof.stepId !== frame.verifiedStepId ||
-      !await isRunExecutedSourceCurrent(frame.runId, frame.orgId, proof)) {
+  if (!frame.orgId || !proof || proof.stepId !== frame.verifiedStepId) {
+    throw new OutwardActionRefusal("action_executed_source_missing_or_stale");
+  }
+  // cinatra#3745: ONE read proves the proof's attempt and source current and
+  // returns the policy bound to them; any failure of that read refuses. A run
+  // re-dispatched after this read keeps the same policy byte for byte (a rebind
+  // to another graph is refused), so a call admitted here is one its step declares.
+  let policy: unknown;
+  try {
+    policy = await readCurrentRunStepToolPolicy(frame.runId, frame.orgId, proof);
+  } catch {
     throw new OutwardActionRefusal("action_executed_source_missing_or_stale");
   }
   if (options?.inner === true) return frozenArguments;
-  assertRunStepToolAllowed({ policy: await readRunStepToolPolicy(frame.runId, frame.orgId),
+  assertRunStepToolAllowed({ policy,
     contextId: proof.contextId, executedSourceSha256: proof.executedSourceSha256,
     stepId: proof.stepId, toolName });
   return frozenArguments;

@@ -1,5 +1,6 @@
 import type { VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
-import { verifyRunExecutedSource, readRunStepToolPolicy, readTrustedStepToolDeclaration } from "@cinatra-ai/agents/store";
+import { verifyRunExecutedSource, readCurrentRunStepToolPolicy, readTrustedStepToolDeclaration } from "@cinatra-ai/agents/store";
+import type { StepToolReading } from "@cinatra-ai/agents/store";
 import "server-only";
 
 import * as path from "node:path";
@@ -1826,12 +1827,22 @@ export async function POST(req: Request): Promise<Response> {
     // cinatra#3745: a run-bound model call is offered only the tools its step
     // declares in the run's bound source. A run-bound call without a verified
     // executing source is offered no tool; a call with no resolved run is not
-    // restricted.
-    const stepToolPolicy = runForPorts
-      ? verifiedExecutedSource
-        ? readTrustedStepToolDeclaration((await readRunStepToolPolicy(runForPorts.id, runForPorts.orgId!)).source, verifiedExecutedSource.stepId)
-        : { kind: "declared" as const, tools: [] }
-      : undefined;
+    // restricted. The policy is read in the same statement that proves the
+    // verified source still current, here, just before the provider is reached:
+    // a run re-dispatched since the entry check is refused, and any failure of
+    // that read (a refusal, a malformed declaration, a store error) answers the
+    // entry check's fixed 403, never its text.
+    let stepToolPolicy: StepToolReading | undefined;
+    if (runForPorts && verifiedExecutedSource) {
+      try {
+        stepToolPolicy = readTrustedStepToolDeclaration((await readCurrentRunStepToolPolicy(runForPorts.id,
+          runForPorts.orgId!, verifiedExecutedSource)).source, verifiedExecutedSource.stepId);
+      } catch {
+        return NextResponse.json({ error: "Executing source could not be verified", code: "run_source_mismatch" }, { status: 403 });
+      }
+    } else if (runForPorts) {
+      stepToolPolicy = { kind: "declared", tools: [] };
+    }
     const dispatchOverrides =
       dispatch.kind === "dispatch"
         ? {

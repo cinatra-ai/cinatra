@@ -1068,7 +1068,7 @@ async function runDeterministicLlmTaskImpl(input: DeterministicLlmExecutionInput
     system,
     prompt: input.user,
     model: input.model,
-    tools: restrictStepToolOffers(exec.tools, input.stepToolPolicy),
+    tools: restrictStepToolOffers(exec.tools, resolveStepToolPolicy(input.stepToolPolicy)),
     maxSteps: exec.maxSteps,
     maxTokens: input.maxOutputTokens,
     // cinatra#2339: per-provider constraint sanitization at the core→adapter
@@ -1273,7 +1273,7 @@ async function runSkillAwareDeterministicLlmTaskImpl(input: SkillAwareDeterminis
     requestedMaxSteps: input.maxSteps,
     outputSchema: input.outputSchema,
   });
-  const execTools = restrictStepToolOffers(exec.tools ?? allTools, input.stepToolPolicy) ?? [];
+  const execTools = restrictStepToolOffers(exec.tools ?? allTools, resolveStepToolPolicy(input.stepToolPolicy)) ?? [];
   const system = [resolved.system, personalContext, skillContext, exec.systemCue]
     .filter(Boolean)
     .join("\n\n");
@@ -1485,7 +1485,7 @@ async function orchestrateGenerateImpl(input: OrchestrateGenerateInput & StepToo
       system: exec.systemCue
         ? [resolvedAtt.system, exec.systemCue].filter(Boolean).join("\n\n")
         : resolvedAtt.system,
-      tools: restrictStepToolOffers(exec.tools, input.stepToolPolicy),
+      tools: restrictStepToolOffers(exec.tools, resolveStepToolPolicy(input.stepToolPolicy)),
       maxSteps: exec.maxSteps,
       // cinatra#2339 — see runDeterministicLlmTaskImpl. This entry point may
       // resolve the adapter from the implicit-global default, so `input.provider`
@@ -1571,8 +1571,11 @@ async function orchestrateStreamImpl(input: OrchestrateStreamInput & StepToolPol
     executionAvailability: _executionAvailability,
     executionExecutor: _executionExecutor,
     executionEnvironment: _executionEnvironment,
+    // cinatra#3745: the step's ceiling is read below and never reaches the adapter.
+    stepToolPolicy: _stepToolPolicy,
     ...rest
   } = input as OrchestrateStreamInput & StepToolPolicyInput & { resolvedAttachments?: unknown };
+  void _stepToolPolicy;
   // Per-message resolution. Resolve EACH user message's attachments via the
   // per-message helper, which also SANITIZES every message (drops any
   // caller-smuggled `resolvedAttachments`, keeping only role + content +
@@ -1624,7 +1627,7 @@ async function orchestrateStreamImpl(input: OrchestrateStreamInput & StepToolPol
         ? [streamResolve.system, exec.systemCue].filter(Boolean).join("\n\n")
         : streamResolve.system,
       messages: streamResolve.messages,
-      tools: restrictStepToolOffers(exec.tools, input.stepToolPolicy),
+      tools: restrictStepToolOffers(exec.tools, resolveStepToolPolicy(input.stepToolPolicy)),
       ...(onUsageData ? { onUsageData } : {}),
     }),
   );
@@ -1689,7 +1692,7 @@ export async function generateWithFileInput(
       "Switch to OpenAI or Anthropic in LLM settings."
     );
   }
-  if (input.stepToolPolicy?.kind === "declared") throw new Error("step_tool_file_input_abi_unavailable");
+  if (resolveStepToolPolicy(input.stepToolPolicy)?.kind === "declared") throw new Error("step_tool_file_input_abi_unavailable");
   const { provider: _provider, stepToolPolicy: _stepToolPolicy, ...adapterInput } = input;
   void _stepToolPolicy;
   // Usage is emitted by the metering proxy (cinatra#2578).
@@ -1753,7 +1756,7 @@ export async function orchestrateSubmitBatch(
   if (!adapter.submitBatch) {
     throw new BatchNotSupportedError(input.provider);
   }
-  if (input.stepToolPolicy?.kind === "declared") throw new Error("step_tool_batch_abi_unavailable");
+  if (resolveStepToolPolicy(input.stepToolPolicy)?.kind === "declared") throw new Error("step_tool_batch_abi_unavailable");
   const { provider: _provider, stepToolPolicy: _stepToolPolicy, ...adapterInput } = input;
   void _stepToolPolicy;
   return adapter.submitBatch(adapterInput);
@@ -1917,7 +1920,7 @@ export type OrchestrateBatchV2ByIdInput = {
 export async function orchestrateSubmitBatchV2(
   input: OrchestrateSubmitBatchV2Input,
 ): Promise<LlmBatchV2SubmitResult> {
-  if (input.stepToolPolicy?.kind === "declared") throw new Error("step_tool_batch_abi_unavailable");
+  if (resolveStepToolPolicy(input.stepToolPolicy)?.kind === "declared") throw new Error("step_tool_batch_abi_unavailable");
   assertValidBatchV2Requests(input.requests);
   const { adapter, v2 } = await requireBatchSurface(input.provider);
   const requests = sanitizeBatchV2Requests(input.provider, input.requests);
@@ -2153,6 +2156,8 @@ export async function resolveConfiguredLlmRuntime(input?: {
   return resolveScriptedLlmRuntime();
 }
 
+import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server/request-context";
+
 /** Provider-neutral offer ceiling. A missing policy is never an empty allowlist. */
 export type StepToolOfferPolicy =
   | { readonly kind: "undeclared" }
@@ -2180,6 +2185,16 @@ export function restrictMcpServerOffer<T extends { allowedTools?: string[] | nul
 }
 
 export type StepToolPolicyInput = { stepToolPolicy?: StepToolOfferPolicy };
+/** The ceiling a call inside a run's request frame gets when its caller brings none: no tool. */
+const RUN_FRAME_WITHOUT_POLICY: StepToolOfferPolicy = Object.freeze({ kind: "declared" as const, tools: Object.freeze([] as string[]) });
+/** cinatra#3745: the ceiling a model call applies. A caller's policy is used as given. A call that
+ * brings none inside a run's request frame (a tool handler's own model call, for example) gets the
+ * empty ceiling: it is offered no tool and the file-input and batch roads refuse it. Only a call
+ * with no run frame keeps the unrestricted offer. */
+export function resolveStepToolPolicy(policy: StepToolOfferPolicy | undefined): StepToolOfferPolicy | undefined {
+  if (policy != null) return policy;
+  return mcpRequestContextStorage.getStore()?.runId ? RUN_FRAME_WITHOUT_POLICY : undefined;
+}
 /** Last filter AFTER every toolbox, skill and execution injection, for every adapter. */
 export function restrictStepToolOffers(tools: readonly LlmTool[] | undefined,
   policy: StepToolOfferPolicy | undefined): LlmTool[] | undefined {

@@ -281,11 +281,16 @@ export async function callHostPrimitive(
     try {
       const { enforceMcpBoundary } = await import("@/lib/authz/mcp-boundary");
       // cinatra#3745: a run frame's call first proves the run's verified executing
-      // source and the step's declared tools, and the handler gets the frozen copy
-      // of its input. Prepared inside this frame, never one an await dropped.
+      // source, and the handler gets the frozen copy of its input. Prepared inside
+      // this frame, never one an await dropped. A run frame reaches this invoker
+      // only from inside a live request's tool handler (a frame is never built here
+      // with a run), whose own name the step's declaration already admitted: this
+      // call is that tool's inner call, so its own name is not checked against the
+      // step's offer (`inner`).
       if (ctx?.runId) {
         const { prepareDeclaredRunToolArguments } = await import("@/lib/extension-host-context");
-        input = await mcpRequestContextStorage.run(ctx, () => prepareDeclaredRunToolArguments(primitiveName, input));
+        input = await mcpRequestContextStorage.run(ctx, () =>
+          prepareDeclaredRunToolArguments(primitiveName, input, { inner: true }));
       }
       decision = await enforceMcpBoundary({
         primitiveName,
@@ -295,6 +300,11 @@ export async function callHostPrimitive(
         declaresOutward: captured.planned.declaredOutward !== null,
       });
     } catch (err) {
+      // cinatra#3745: a refused run call keeps its refusal class and code (its
+      // message is that code only), so the caller answers it with the fixed 403.
+      const refusal = await import("@/lib/run-action-refusal")
+        .then(({ runActionRefusalCode }) => runActionRefusalCode(err)).catch(() => null);
+      if (refusal) throw err;
       throw new Error(
         `[extension-self-mcp] authorization unavailable for "${primitiveName}" (boundary_error): ` +
           (err instanceof Error ? err.message : String(err)),
