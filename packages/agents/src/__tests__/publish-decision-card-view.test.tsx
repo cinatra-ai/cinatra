@@ -7,11 +7,14 @@ import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react
 import type { LifecycleCardHost } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
 const stateMock = vi.fn();
+const decideActionMock = vi.fn();
 vi.mock("../publish-decision-card-actions", () => ({
   getPublishDecisionCardStateAction: (input: { runId: string }) => stateMock(input),
+  decidePublishDecisionAction: (input: unknown) => decideActionMock(input),
 }));
 
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
+import * as cardView from "../publish-decision-card-view";
 import { PublishDecisionCard, type PublishDecisionDecide } from "../publish-decision-card-view";
 
 const RUN_ID = "run-4150";
@@ -331,5 +334,75 @@ describe("the decide door", () => {
     expect(after.getAttribute("data-lifecycle-card-state")).toBe("pending");
     expect(after.querySelector<HTMLButtonElement>(DECLINE)?.disabled).toBe(false);
     expect(stateMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// cinatra#4150 part 7a-3a: the SESSION door and the host's own door. Red at the base: neither export exists.
+describe("the session door (part 7a-3a)", () => {
+  type Doors = {
+    decidePublishThroughSession: PublishDecisionDecide;
+    usePublishDecisionDoor: () => PublishDecisionDecide | undefined;
+  };
+  const doors = cardView as unknown as Doors;
+
+  function HostDoorCard() {
+    return <PublishDecisionCard runId={RUN_ID} decide={doors.usePublishDecisionDoor()} />;
+  }
+  function mountWithHostDoor(host: LifecycleCardHost) {
+    const auth = host === "site_widget" ? WIDGET_AUTH : undefined;
+    const frame = host === "site_widget" ? { assistant: "a", instanceId: "i" } : undefined;
+    return render(
+      <LifecycleCardSurfaceProvider host={host} auth={auth} frame={frame}>
+        <HostDoorCard />
+      </LifecycleCardSurfaceProvider>,
+    );
+  }
+
+  beforeEach(() => {
+    decideActionMock.mockReset();
+    decideActionMock.mockImplementation(async () => "decided");
+  });
+
+  it("the session door hands the input to the session action and answers what it answers", async () => {
+    decideActionMock.mockImplementation(async () => "not_open");
+    const input = { runId: RUN_ID, answer: "decline" as const, note: "Not ready yet." };
+    expect(await doors.decidePublishThroughSession(input)).toBe("not_open");
+    expect(decideActionMock).toHaveBeenCalledWith(input);
+  });
+
+  it.each(["chat_thread", "run_card", "page_gate_region"] as const)(
+    "%s: the host's door is the session door, so Do not publish sends the note through the session action",
+    async (host) => {
+      const root = await rootOf(mountWithHostDoor(host));
+      await settle();
+      expect(root.querySelector<HTMLButtonElement>(DECLINE)?.disabled).toBe(false);
+      fireEvent.change(root.querySelector("textarea")!, { target: { value: "Not ready yet." } });
+      await act(async () => {
+        fireEvent.click(root.querySelector(DECLINE)!);
+      });
+      await settle();
+      expect(decideActionMock).toHaveBeenCalledWith({ runId: RUN_ID, answer: "decline", note: "Not ready yet." });
+      cleanup();
+    },
+  );
+
+  it("the site widget has no door yet: both controls are disabled and the session action is never called", async () => {
+    const root = await rootOf(mountWithHostDoor("site_widget"));
+    await settle();
+    expect(root.querySelector<HTMLButtonElement>(APPROVE)?.disabled).toBe(true);
+    expect(root.querySelector<HTMLButtonElement>(DECLINE)?.disabled).toBe(true);
+    fireEvent.click(root.querySelector(APPROVE)!);
+    await settle();
+    expect(decideActionMock).not.toHaveBeenCalled();
+  });
+
+  it("a session door passed on a host that declares a credential is never sent through", async () => {
+    expect(typeof doors.decidePublishThroughSession).toBe("function");
+    const root = await rootOf(mountOn("site_widget", doors.decidePublishThroughSession));
+    await settle();
+    expect(root.querySelector<HTMLButtonElement>(APPROVE)?.disabled).toBe(true);
+    fireEvent.click(root.querySelector(APPROVE)!);
+    await settle();
+    expect(decideActionMock).not.toHaveBeenCalled();
   });
 });

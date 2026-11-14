@@ -48,8 +48,10 @@ vi.mock("../../../agents/src/agent-hitl-screen-actions", () => ({
 }));
 // The publish card's own session entry (cinatra#4150); "none" unless its own arm runs.
 const publishStateMock = vi.fn(async () => ({ state: "none" }) as Record<string, unknown>);
+const publishDecideMock = vi.fn(async (_input: unknown) => "decided");
 vi.mock("../../../agents/src/publish-decision-card-actions", () => ({
   getPublishDecisionCardStateAction: () => publishStateMock(),
+  decidePublishDecisionAction: (input: unknown) => publishDecideMock(input),
 }));
 vi.mock("../../../agents/src/hitl-actions", () => ({
   approveReviewTask: vi.fn(async () => undefined),
@@ -160,11 +162,27 @@ describe("the publish card on the conversation hosts (cinatra#4150)", () => {
     // The run's own slot, and never inside the inline run card's subtree.
     expect(card.closest(`[data-agent-run-slot="${HELD_RUN_ID}"]`)).not.toBeNull();
     expect(card.closest('[data-lifecycle-card-host="run_card"]')).toBeNull();
-    // Both controls are drawn; no host passes a decide door yet, so neither can send.
+    // Both controls are drawn. Part 7a-3a: /chat sends through the session door; the widget has no door yet, and
+    // never the session one (its frame is same-origin to the app, so a cookie would answer as someone else).
     for (const action of ["decline-publish -> declined", "approve-publish -> released"]) {
       const control = card.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
       expect(control, action).not.toBeNull();
-      expect(control!.disabled, action).toBe(true);
+      expect(control!.disabled, action).toBe(surface === "widget");
+    }
+  });
+
+  it.each(["chat", "widget"] as const)("%s: Publish goes through the session action only on /chat", async (surface) => {
+    publishDecideMock.mockClear();
+    const root = await mountArm(surface, true);
+    const approve = root.querySelector<HTMLButtonElement>('[data-action="approve-publish -> released"]')!;
+    await act(async () => {
+      approve.click();
+      await Promise.resolve();
+    });
+    if (surface === "chat") {
+      expect(publishDecideMock).toHaveBeenCalledWith({ runId: HELD_RUN_ID, answer: "approve", note: "" });
+    } else {
+      expect(publishDecideMock).not.toHaveBeenCalled();
     }
   });
 

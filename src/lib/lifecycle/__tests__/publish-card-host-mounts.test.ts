@@ -5,8 +5,9 @@
 // the INVENTORY of the two page hosts and the column, by reading source: the run panel and the review page are large
 // trees (the review page an async SERVER component with a session and stores), and standing them up would prove
 // more about a harness than about the mount. What must not rot silently is the SHAPE: each mount keyed by the run
-// alone, under a real host declaration, passing no decide door (so its controls stay disabled), and the run panel's
-// mount standing down inside a conversation host, where the column's card owns the run.
+// alone, under a real host declaration, passing its host's own decide door (part 7a-3a: the session door on the cookie
+// hosts, the column's host door on /chat and the widget), and the run panel's mount standing down inside a
+// conversation host, where the column's card owns the run.
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -39,18 +40,18 @@ function enclosingHost(source: string, index: number): string | null {
 
 describe("the publish card's mounts (cinatra#4150)", () => {
   it.each([
-    [PANEL, "run_card"],
-    [REVIEW_PAGE, "page_gate_region"],
-  ])("%s mounts the card ONCE, keyed by the run alone, under %s", (file, host) => {
+    [PANEL, "run_card", "<PublishDecisionCard runId={runId} decide={decidePublishThroughSession} />"],
+    [REVIEW_PAGE, "page_gate_region", "<PublishDecisionCard runId={runId} decide={decidePublishDecisionAction} />"],
+  ])("%s mounts the card ONCE, keyed by the run alone, under %s, with its door", (file, host, element) => {
     const source = read(file);
     const elements = cardElements(source);
-    expect(elements).toEqual(["<PublishDecisionCard runId={runId} />"]);
+    expect(elements).toEqual([element]);
     expect(enclosingHost(source, source.indexOf(elements[0]!))).toBe(host);
   });
 
   it("the run panel's mount stands down inside a conversation host, on the hitl screen's own switch", () => {
     const source = read(PANEL);
-    const at = source.indexOf("<PublishDecisionCard runId={runId} />");
+    const at = source.indexOf("<PublishDecisionCard runId={runId} decide={decidePublishThroughSession} />");
     const guard = source.lastIndexOf("{panelMountsHitlScreenCard ? (", at);
     expect(guard).toBeGreaterThan(-1);
     // The switch opens right before this mount's own provider, with nothing between them.
@@ -59,18 +60,28 @@ describe("the publish card's mounts (cinatra#4150)", () => {
     expect(source).toMatch(/const panelMountsHitlScreenCard = runCardOwnsLifecycleCopy\(ambientLifecycleHost\);/);
   });
 
-  it("the column mounts the card beside the hitl screen in every placement, with no decide door", () => {
+  it("the column mounts the card beside the hitl screen in every placement, with its host's own door", () => {
     const source = read(COLUMN);
-    expect(source).toContain('import { PublishDecisionCard } from "@cinatra-ai/agents/publish-decision-card-view";');
-    expect(cardElements(source)).toEqual(["<PublishDecisionCard runId={runId} />"]);
+    expect(source).toContain(
+      'import { PublishDecisionCard, usePublishDecisionDoor } from "@cinatra-ai/agents/publish-decision-card-view";',
+    );
+    expect(cardElements(source)).toEqual(["<PublishDecisionCard runId={runId} decide={publishDoor} />"]);
+    expect(source).toContain("const publishDoor = usePublishDecisionDoor();");
     // The turn's own placement and both moved placements draw it, exactly where they draw the hitl screen.
     expect(source).toContain("{turnCarriesSettledSchedule ? null : publishCard}");
     expect(source.match(/<div data-agent-run-screen-slot=\{runId\}>\{hitlScreen\}\{publishCard\}<\/div>/g)).toHaveLength(2);
   });
 
-  it("no mount passes a decide door: the card's controls stay disabled until one is built", () => {
+  it("each mount names its door, and each door is the one its host may use (part 7a-3a)", () => {
+    // The run page and the review page are cookie hosts: the session door, from the card's own session entry.
+    expect(read(PANEL)).toContain('import { decidePublishThroughSession } from "./publish-decision-card-view";');
+    expect(read(REVIEW_PAGE)).toContain(
+      'import { decidePublishDecisionAction } from "@cinatra-ai/agents/publish-decision-card-actions";',
+    );
+    // The column serves /chat and the widget: the door comes from the host declaration, never a fixed cookie door.
+    for (const element of cardElements(read(COLUMN))) expect(element).not.toMatch(/decidePublish/);
     for (const file of [PANEL, REVIEW_PAGE, COLUMN]) {
-      for (const element of cardElements(read(file))) expect(element, file).not.toMatch(/\bdecide=/);
+      for (const element of cardElements(read(file))) expect(element, file).toMatch(/\bdecide=\{[A-Za-z]+\}/);
     }
   });
 });

@@ -20,12 +20,17 @@ vi.mock("../store", () => storeMock);
 const decisions = vi.hoisted(() => ({ readLatestDecisionForRun: vi.fn() }));
 vi.mock("../publish-decision-store", () => decisions);
 
-const access = vi.hoisted(() => ({ enforcePublishDecisionAccess: vi.fn() }));
+const access = vi.hoisted(() => ({
+  enforcePublishDecisionAccess: vi.fn(),
+  approvePublishDecision: vi.fn(),
+  declinePublishDecision: vi.fn(),
+}));
 vi.mock("../publish-decision-actions", () => access);
 
 const names = vi.hoisted(() => ({ readDeciderName: vi.fn() }));
 vi.mock("@/lib/lifecycle/lifecycle-settled-outcome", () => names);
 
+import * as cardCore from "../publish-decision-card-core";
 import {
   publishDecisionCardStateForRun,
   resolvePublishDecisionCardStateForActor,
@@ -244,5 +249,77 @@ describe("the access door runs first", () => {
     for (const later of [decisions.readLatestDecisionForRun, storeMock.readAgentTemplateById, names.readDeciderName]) {
       expect(later.mock.invocationCallOrder[0]).toBeGreaterThan(door);
     }
+  });
+});
+
+// cinatra#4150 part 7a-3a: the ONE decide answer behind every door. Red at the base: decidePublishDecisionForActor
+// does not exist (cardCore.decidePublishDecisionForActor is not a function).
+describe("the decide answer (part 7a-3a)", () => {
+  const decideFor = (input: Record<string, unknown>) =>
+    (cardCore as unknown as { decidePublishDecisionForActor: (i: unknown) => Promise<string> }).decidePublishDecisionForActor({
+      runId: "run-1",
+      note: "",
+      who: WHO,
+      ...input,
+    });
+
+  it("Publish is approvePublishDecision for the verified actor, with no note", async () => {
+    access.approvePublishDecision.mockResolvedValue({ ok: true, resumed: true });
+    expect(await decideFor({ answer: "approve", note: "ignored" })).toBe("decided");
+    expect(access.approvePublishDecision).toHaveBeenCalledWith({
+      runId: "run-1",
+      actorContext: WHO.actor,
+      roleHints: WHO.roleHints,
+    });
+    expect(access.declinePublishDecision).not.toHaveBeenCalled();
+  });
+
+  it("Do not publish is declinePublishDecision with the note", async () => {
+    access.declinePublishDecision.mockResolvedValue({ ok: true, runStopped: true });
+    expect(await decideFor({ answer: "decline", note: "Not ready." })).toBe("decided");
+    expect(access.declinePublishDecision).toHaveBeenCalledWith({
+      runId: "run-1",
+      actorContext: WHO.actor,
+      roleHints: WHO.roleHints,
+      note: "Not ready.",
+    });
+  });
+
+  it("a Publish another road already released is decided too", async () => {
+    access.approvePublishDecision.mockResolvedValue({ ok: true, resumed: false });
+    expect(await decideFor({ answer: "approve" })).toBe("decided");
+  });
+
+  it("a late answer is not_open, on both roads", async () => {
+    const late = { ok: false, code: "publish_decision_not_open", currentStatus: "expired" };
+    access.approvePublishDecision.mockResolvedValue(late);
+    access.declinePublishDecision.mockResolvedValue(late);
+    expect(await decideFor({ answer: "approve" })).toBe("not_open");
+    expect(await decideFor({ answer: "decline" })).toBe("not_open");
+  });
+
+  it("a refusal or a fault is failed, and its log line carries no id, note or error text", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    access.approvePublishDecision.mockRejectedValue(new Error("run-1 secret store detail"));
+    access.declinePublishDecision.mockRejectedValue(Object.assign(new Error("Only a person can decide a publish."), { statusCode: 403 }));
+    expect(await decideFor({ answer: "approve" })).toBe("failed");
+    expect(await decideFor({ answer: "decline", note: "private words" })).toBe("failed");
+    // One fixed line per failure, and nothing else: a removed or reworded warn fails here.
+    expect(warn).toHaveBeenCalledTimes(2);
+    for (const call of warn.mock.calls) {
+      expect(call).toEqual(["[publish-decision] a decide door could not record the answer"]);
+      expect(call.map(String).join(" ")).not.toMatch(/run-1|secret|private words|Only a person/);
+    }
+    warn.mockRestore();
+  });
+
+  it.each([
+    ["an unknown answer", { answer: "publish" }],
+    ["an empty run id", { answer: "approve", runId: "" }],
+    ["an oversized run id", { answer: "approve", runId: "r".repeat(257) }],
+  ])("%s decides nothing", async (_name, input) => {
+    expect(await decideFor(input)).toBe("failed");
+    expect(access.approvePublishDecision).not.toHaveBeenCalled();
+    expect(access.declinePublishDecision).not.toHaveBeenCalled();
   });
 });
