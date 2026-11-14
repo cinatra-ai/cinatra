@@ -2,6 +2,8 @@ import "server-only";
 
 // WHICH PACKAGE'S CODE AN `extension_tool` CALL RUNS (cinatra#4154).
 //
+// Every call needs the proven step, placed in the exact parent installation's
+// flow (the run package's name-and-version context proves nothing about it).
 // A step of the run's own flow reaches the run package's own declared tools,
 // as before. A step of an EMBEDDED child flow reaches a tool of the child's own
 // package, but only when all of this holds, each read fail-closed:
@@ -31,7 +33,7 @@ import { declaredToolIsEmbeddable, parseDeclaredTools } from "@cinatra-ai/sdk-ex
 import {
   bindChildInstall,
   bindParentInstall,
-  childEdgeStillResolvesTo,
+  selectChildEdge,
   type InstallBindingCode,
   type InstallBindingDeps,
 } from "@/lib/extension-tool-install-binding";
@@ -109,12 +111,6 @@ async function guarded<T>(read: string, run: () => Promise<T> | T): Promise<T> {
     logFailure("[extension_tool] an origin read failed", { read }, e);
     return refuse("origin-unreadable");
   }
-}
-
-/** Whether a manifest block declares any `agent` dependency (no child is reachable otherwise). */
-function declaresAgentDependency(cinatra: Record<string, unknown>): boolean {
-  const deps: unknown = cinatra.dependencies;
-  return Array.isArray(deps) && deps.some((d) => isPlainObject(d) && d.kind === "agent");
 }
 
 // ---- the definition and reference graph ----
@@ -258,8 +254,6 @@ export async function resolveExtensionToolOrigin(
   deps: ExtensionToolOriginDeps = {},
 ): Promise<ExtensionToolOrigin> {
   const { run, context } = input;
-  // No agent dependency: no child is reachable, and nothing is read (today's road).
-  if (!declaresAgentDependency(context.cinatra)) return { kind: "parent" };
   const proven = run.verifiedStepId;
   if (!nonEmpty(proven)) return refuse("step-unproven");
   const stepId: string = proven;
@@ -299,10 +293,8 @@ export async function resolveExtensionToolOrigin(
     installId = derived.id;
   }
 
-  const parent = await bindParentInstall(
-    { installId, packageName: context.packageName, packageVersion: context.packageVersion, orgId: run.orgId },
-    deps,
-  );
+  const parentInput = { installId, packageName: context.packageName, packageVersion: context.packageVersion, orgId: run.orgId };
+  const parent = await bindParentInstall(parentInput, deps);
   if (!parent.ok) {
     return parent.code === "parent-not-materialized" ? developmentRoad(parent.code) : refuse(parent.code);
   }
@@ -361,17 +353,27 @@ export async function resolveExtensionToolOrigin(
   if (tool === undefined) return refuse("child-tool-undeclared");
   if (!declaredToolIsEmbeddable(tool)) refuse("not-embeddable");
 
-  const parentInstallId = parent.value.row.id;
+  // Just before the import, after the loader's child anchor check: the same live parent row at the same anchor,
+  // root and manifest, its one edge for the child still on this install, its flow still placing this step under
+  // this label. Any change or failed read is a changed installation, which the loader refuses (fixed sentence).
   const childInstallId = child.value.row.id;
+  const stillBound = async (): Promise<boolean> => {
+    try {
+      const again = await bindParentInstall(parentInput, deps);
+      if (!again.ok || again.value.digest !== parent.value.digest || again.value.root !== parent.value.root) return false;
+      if (!sameJson(again.value.cinatra, parent.value.cinatra)) return false;
+      const edge = selectChildEdge(again.value.row, label);
+      if (!edge.ok || edge.value.resolvedInstallId !== childInstallId) return false;
+      const now = classify(graphOf(await readFlow(again.value.root), ""), stepId, context.packageName);
+      return now.label === label && sameJson(now.step, step);
+    } catch {
+      return false;
+    }
+  };
   return {
     kind: "child",
     codeInstallId: childInstallId,
     context: { packageName: label, packageVersion: child.value.version, cinatra: child.value.cinatra },
-    install: {
-      installId: childInstallId,
-      digest: child.value.digest,
-      stillBound: () =>
-        childEdgeStillResolvesTo({ parentInstallId, childPackageName: label, childInstallId }, deps),
-    },
+    install: { installId: childInstallId, digest: child.value.digest, stillBound },
   };
 }
