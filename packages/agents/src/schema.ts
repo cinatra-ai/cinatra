@@ -1159,7 +1159,7 @@ export const lifecycleRepair = cinatraSchema.table("lifecycle_repair", {
   updatedAt:                       timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   // cinatra#4245: the run's pause_generation the change request ended (core__0126).
   pausedRunGeneration:             bigint("paused_run_generation", { mode: "number" }),
-  // cinatra#4264 (core__0127): the Regenerate intent (NULL = an ordinary
+  // cinatra#4264 (core__0128): the Regenerate intent (NULL = an ordinary
   // repair) and the source target a segment repair names.
   regenerateNodeId:                text("regenerate_node_id"),
   sourceArtifactId:                text("source_artifact_id"),
@@ -1171,7 +1171,7 @@ export const lifecycleRepair = cinatraSchema.table("lifecycle_repair", {
   successorIdx: index("lifecycle_repair_successor_idx").on(t.successorArtifactId, t.successorRepresentationRevisionId),
 }));
 
-/** The step snapshots of a run (cinatra#4264, core__0127): per (run, node) the
+/** The step snapshots of a run (cinatra#4264, core__0128): per (run, node) the
  * node's full resolved input exactly as the flow runtime serialized it, its
  * sha256 and the flow version's sha256. Removed with the run (ON DELETE
  * CASCADE). `ambiguous` = a second, different snapshot of the same node came. */

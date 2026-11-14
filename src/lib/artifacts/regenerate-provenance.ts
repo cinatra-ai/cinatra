@@ -23,7 +23,7 @@ import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 //   3. BIND. The candidate's run exists in the same org and runs the template of
 //      the repair being dispatched; otherwise null.
 //
-// Never "the latest": a revision written before core__0127, or by a node the
+// Never "the latest": a revision written before core__0128, or by a node the
 // runtime did not sign, has no provenance and a Regenerate of it is refused.
 // ---------------------------------------------------------------------------
 

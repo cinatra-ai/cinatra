@@ -1,4 +1,4 @@
-// core__0127 — the Regenerate step provenance (cinatra#4264, slice B1a).
+// core__0128 — the Regenerate step provenance (cinatra#4264, slice B1a).
 // Operator-upgrade twin of the fresh-install bootstrap DDL
 // (`artifactMaterializationLedgerSchemaQueries` and
 // `agentRunStepSnapshotSchemaQueries` in src/lib/artifact-claim-schema.ts, and
