@@ -100,7 +100,7 @@ export function usePublishDecisionCardState(params: {
 }
 
 const FRAME = "w-full min-w-0 overflow-hidden rounded-card border border-line bg-surface-strong";
-const KICK = "font-mono text-[9px] uppercase tracking-kicker text-muted-foreground";
+const KICK = "font-mono text-badge-2xs uppercase tracking-kicker text-muted-foreground";
 const MARKERS = {
   approved: ["publish-card-approved", "approved", "Publish approved"],
   declined: ["publish-card-declined", "idle", "Not published"],
@@ -180,7 +180,7 @@ export function PublishDecisionCard({ runId, decide }: { runId: string; decide?:
     };
     body = (
       <div className={`${FRAME} px-4 py-4 text-center`}>
-        <p className="text-[13px] font-semibold text-foreground">This publish request is no longer open</p>
+        <p className="text-row-title font-semibold text-foreground">This publish request is no longer open</p>
         <p className="mt-1 text-xs text-muted-foreground">
           It was already answered, it expired, or the run moved on.{" "}
           <Button type="button" variant="link" className="h-auto p-0 text-xs" onClick={refresh}>
@@ -194,8 +194,8 @@ export function PublishDecisionCard({ runId, decide }: { runId: string; decide?:
       <>
         <div className={FRAME}>
           <div className="border-b border-line px-3.5 py-2.5">
-            <span className="text-[13.5px] font-bold text-foreground">Publish this?</span>
-            <p className="mt-1 font-mono text-[10px] tracking-[0.04em] text-muted-foreground">
+            <span className="text-row-title font-bold text-foreground">Publish this?</span>
+            <p className="mt-1 font-mono text-fact-line text-muted-foreground">
               {state.agentName}
               {pending ? " \u00b7 nothing has been published" : null}
             </p>
@@ -205,7 +205,7 @@ export function PublishDecisionCard({ runId, decide }: { runId: string; decide?:
               {state.rows.map((row, i) => (
                 <div key={`${i}-${row.label}`}>
                   <dt className={KICK}>{row.label}</dt>
-                  <dd className="text-[12.5px] text-foreground">{row.value}</dd>
+                  <dd className="text-reading text-foreground">{row.value}</dd>
                 </div>
               ))}
             </dl>
@@ -236,7 +236,7 @@ export function PublishDecisionCard({ runId, decide }: { runId: string; decide?:
                 </Button>
               </div>
               {restricted ? (
-                <p className="mt-2.5 text-[11.5px] text-muted-foreground">
+                <p className="mt-2.5 text-xs text-muted-foreground">
                   Deciding whether this goes out needs approve access on the run.
                 </p>
               ) : null}
