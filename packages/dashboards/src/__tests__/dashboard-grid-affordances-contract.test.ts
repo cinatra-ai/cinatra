@@ -36,6 +36,10 @@ const DC_STYLES = readFileSync(
 const THEME_CSS_PATH = join(
   __dirname,
   "..",
+  "..",
+  "..",
+  "sdk-dashboard",
+  "src",
   "components",
   "dashboard-theme.css",
 );
