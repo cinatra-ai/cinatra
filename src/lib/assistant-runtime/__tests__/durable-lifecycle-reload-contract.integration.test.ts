@@ -186,6 +186,9 @@ vi.mock("../../../../packages/agents/src/agent-hitl-screen-actions", () => ({
     },
   }),
 }));
+vi.mock("../../../../packages/agents/src/publish-decision-card-actions", () => ({
+  getPublishDecisionCardStateAction: async () => ({ state: "none" }),
+}));
 vi.mock("../../../../packages/agents/src/hitl-actions", () => ({
   approveReviewTask: async () => undefined,
   rejectReviewTask: async () => undefined,

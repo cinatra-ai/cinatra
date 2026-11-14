@@ -74,6 +74,9 @@ vi.mock("../../../agents/src/run-recommendation-actions", () => ({
 vi.mock("../../../agents/src/agent-hitl-screen-actions", () => ({
   getAgentHitlScreenStateAction: vi.fn(async () => ({ state: "none" })),
 }));
+vi.mock("../../../agents/src/publish-decision-card-actions", () => ({
+  getPublishDecisionCardStateAction: async () => ({ state: "none" }),
+}));
 // THE COOKIE-BOUND ACTIONS, kept as spies rather than removed: a widget card or
 // panel that reached for one would be asking the app to answer as whoever else
 // is signed in on this browser, so "never called" is an assertion below.
