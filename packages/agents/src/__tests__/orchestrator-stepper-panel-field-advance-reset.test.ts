@@ -5,7 +5,8 @@
  * (schema-field-fallback) and the setup loop emits the next INTERRUPT with no
  * RUN_STARTED/RESUME frame in between, so HitlApprovalCard never unmounts
  * between fields. Two identity keys must therefore include the interrupt's
- * `fieldName`, not just the xRenderer:
+ * `fieldName`, not just the xRenderer; both now read the gate's identity,
+ * `hitlGateIdentityKey` (cinatra#3380), which also carries the review task:
  *
  *   (a) the RendererComponent React key — otherwise the renderer instance
  *       (and its internal input state, e.g. SchemaFieldRenderer's localValue)
@@ -23,6 +24,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it, expect } from "vitest";
+import { hitlGateIdentityKey } from "../hitl-gate-submit";
 
 const SRC = readFileSync(
   join(__dirname, "..", "orchestrator-stepper-panel.tsx"),
@@ -34,9 +36,12 @@ describe("orchestrator-stepper-panel — per-field setup advance resets input st
     // The renderer key must be a composite of xRenderer and fieldName so a
     // field→field advance under one shared xRenderer remounts the renderer.
     // An xRenderer-only key regresses to the carryover bug.
-    expect(SRC).toMatch(
-      /key=\{`\$\{interruptContext\.xRenderer\}::\$\{interruptContext\.fieldName \?\? ""\}`\}/,
-    );
+    expect(SRC).toMatch(/key=\{hitlGateIdentityKey\(interruptContext\)\}/);
+    // A field→field advance under one shared xRenderer and one review task
+    // changes that key.
+    const field = (fieldName: string) =>
+      hitlGateIdentityKey({ reviewTaskId: "setup-run", xRenderer: "@pack:field", fieldName });
+    expect(field("postTitle")).not.toBe(field("blogPostUrl"));
     // No renderer key may remain xRenderer-only.
     expect(SRC).not.toMatch(/key=\{interruptContext\.xRenderer\}/);
   });
@@ -47,8 +52,7 @@ describe("orchestrator-stepper-panel — per-field setup advance resets input st
     // xRenderer stays the same.
     const bufferKeyMatch = SRC.match(/const bufferKey =([\s\S]*?);/);
     expect(bufferKeyMatch, "bufferKey must be declared").toBeTruthy();
-    expect(bufferKeyMatch![1]).toMatch(/xRenderer/);
-    expect(bufferKeyMatch![1]).toMatch(/fieldName/);
+    expect(bufferKeyMatch![1]).toMatch(/hitlGateIdentityKey\(interruptContext\)/);
   });
 
   it("keeps the null-flicker guard on the buffer reset (non-null → non-null transitions only)", () => {
@@ -57,7 +61,7 @@ describe("orchestrator-stepper-panel — per-field setup advance resets input st
     // and the composite key must collapse to null when the context is null.
     expect(SRC).toMatch(/interruptContext != null\s*\?/);
     expect(SRC).toMatch(
-      /bufferKey !== null &&\s*prevBufferKeyRef\.current !== null &&\s*prevBufferKeyRef\.current !== bufferKey/,
+      /bufferKey !== null &&\s*prevBufferKey !== null &&\s*prevBufferKey !== bufferKey/,
     );
   });
 });
