@@ -339,7 +339,9 @@ export async function resumeStoppedOrchestratorAction(
     // task attaches no X-Cinatra-Run-Token and every run-identity resolution in
     // the resumed leg fails closed. Metadata (not text) because the message text
     // is what the gate's InputMessageNode yields to the flow.
-    const resumeMetadata = await mintResumeRunTokenMetadata(runId);
+    // cinatra#3745: the message names the attempt THIS claim minted, and the mint
+    // refuses when the run no longer runs under it (stopped and resumed again).
+    const resumeMetadata = await mintResumeRunTokenMetadata(runId, { executionAttemptId: attemptId });
     // Send into the existing context so fasta2a routes to the paused conversation.
     // Resume MUST reuse run.a2aContextId; a fresh contextId
     // would start a new conversation and the flow would retry from the beginning.
@@ -355,9 +357,11 @@ export async function resumeStoppedOrchestratorAction(
       configuration: { acceptedOutputModes: ["text"] },
     });
   } catch (err) {
-    await transitionRunStatus(runId, "running", "stopped", undefined, authority).catch((revertErr) => {
+    // cinatra#3745: only this claim's attempt is put back; a run stopped and resumed
+    // again meanwhile runs under a newer attempt and is left as it is.
+    await transitionRunStatus(runId, "running", "stopped", { runningAttempt: attemptId }, authority).catch((revertErr) => {
       if (revertErr instanceof RunTransitionError && revertErr.code === "stale_from_status") {
-        console.warn(`[resumeStoppedOrchestratorAction] compensation no-op for ${runId}: status already advanced`);
+        console.warn(`[resumeStoppedOrchestratorAction] compensation no-op for ${runId}: status or attempt already advanced`);
         return;
       }
       console.error("[resumeStoppedOrchestratorAction] compensation revert failed for run", runId, revertErr);

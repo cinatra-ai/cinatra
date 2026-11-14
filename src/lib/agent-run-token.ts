@@ -134,7 +134,7 @@ export async function verifyRunToken(
 //
 //   X-Cinatra-Raw-Source / -Executed-Source / -Declaration-Source: <sha256 hex>
 //   X-Cinatra-Step-Attestation: s2:<expiryEpochSeconds>:<hex>
-//   hex = HMAC-SHA256(key, "s2\n<contextId>\n<nodeId>\n<raw>\n<executed>\n<declaration>\n<expiryEpochSeconds>")
+//   hex = HMAC-SHA256(key, "s2\n<contextId>\n<nodeId>\n<attempt>\n<raw>\n<executed>\n<declaration>\n<expiryEpochSeconds>"), <attempt> = X-Cinatra-Execution-Attempt
 //
 // When a run pauses for a review the runtime records the pausing step as a
 // claim `{ node, attestation: "g1:<hex>" }` over
