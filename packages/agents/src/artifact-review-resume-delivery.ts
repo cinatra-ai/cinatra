@@ -133,7 +133,7 @@ export interface ResumeSweepSummary {
  * `retryable`. A `retryable`, a `lease-lost` and a throw each leave the intent
  * for a re-claim after its lease, and each claim uses one of its attempts
  * (cinatra#4312): see `sweepArtifactReviewResumeIntents`. A deferral
- * (cinatra#3745) gives its attempt back.
+ * (cinatra#3745) uses its attempt too.
  *
  * cinatra#3745: from the WayFlow branch on, the lease is renewed while the
  * delivery runs (`opts.leaseMs`, the length the sweep claimed it for) and fenced
@@ -243,9 +243,9 @@ async function deliverWayflowResume(
   //   running, mark, recorded          sent; the handler did not finish  replay the handler
   //   running, mark, not recorded      claimed; not sent or not recorded re-send, no claim
   //   pending_approval                 not claimed                      claim, then send
-  // A deferral sends, closes and moves nothing, and gives the attempt back: the
-  // next lease reads the run again. A read error throws: the intent stays
-  // delivering and is re-claimed.
+  // A deferral sends, closes and moves nothing; its claim's attempt stays used
+  // (cinatra#4312): the next lease reads the run again. A read error throws: the
+  // intent stays delivering and is re-claimed.
   const claim = await readResumeIntentClaim(gateId, leaseToken);
   if (!claim) return "lease-lost";
   if (run.status === "running" && !claim.runClaimed) {
@@ -275,6 +275,29 @@ async function deliverWayflowResume(
   // This gate's delivery already holds the run (mark set, nothing recorded): the
   // send is repeated without a second claim.
   const claimedByUs = run.status === "running";
+  // cinatra#4312 bounds this re-send. The claim of the intent's last attempt
+  // never re-sends a claimed run: it puts the run back on this gate under the
+  // lease (the release clears the mark) and leaves the intent, so the
+  // dead-letter pass takes it like any intent that used its attempts, with its
+  // run parked at the gate for ops, as before cinatra#3745. The replay above
+  // sends nothing and keeps its last attempt. A release this delivery cannot
+  // make leaves the run `running`; its intent is dead-lettered all the same.
+  if (claimedByUs && intent.finalAttempt === true) {
+    try {
+      await transitionRunStatus(run.id, "running", "pending_approval", { resumeIntentLease: { gateId, leaseToken } }, authority);
+    } catch (releaseErr: unknown) {
+      if ((releaseErr as { code?: string } | null)?.code === "resume_intent_lease_lost") return "lease-lost";
+      console.warn(
+        `[artifact-review-resume] gate=${gateId} run=${run.id} could not release the claim at its last attempt (${errorLabel(releaseErr)})`,
+      );
+      return "retryable";
+    }
+    console.warn(
+      `[artifact-review-resume] gate=${gateId} run=${run.id} used its last attempt while it held the run; ` +
+        `the run is back on this gate and the intent is left for the dead-letter pass`,
+    );
+    return "retryable";
+  }
   if (!run.a2aContextId) {
     // The paused run must carry the fasta2a context to resume; a missing context
     // is transient (execution persists it right after the initial send). Leave
@@ -761,7 +784,7 @@ async function closeIntent(gateId: string, leaseToken: string, runId: string, wh
   return ok ? "already-advanced" : "lease-lost";
 }
 
-/** cinatra#3745: no witness yet; the next lease reads the run again (the attempt is given back). */
+/** cinatra#3745: no witness yet; the next lease reads the run again (the attempt stays used, cinatra#4312). */
 async function deferIntent(gateId: string, leaseToken: string, runId: string, why: string): Promise<ResumeDeliveryOutcome> {
   const ok = await deferResumeIntent(gateId, leaseToken);
   console.log(`[artifact-review-resume] gate=${gateId} run=${runId} ${why} — ${ok ? "left for a later lease" : "LEASE-LOST"}`);
@@ -924,7 +947,11 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
   // `deliverArtifactReviewResumeIntent` (no lease token, a review task id that
   // is not `wayflow-`, a run not resolvable, a run with no a2aContextId, a
   // refusal whose terminal transition did not land, an unreadable scope check,
-  // an incomplete declared family). With the default `max_attempts` of 20 and
+  // an incomplete declared family, and the cinatra#3745 deferral while another
+  // driver holds the run). An intent whose delivery claimed the run is bounded
+  // the same way: the claim of its last attempt puts a claimed run with nothing
+  // recorded back on its gate instead of a re-send, so the pass below finds
+  // its run parked there. With the default `max_attempts` of 20 and
   // the default 5-minute lease, an intent that is never closed is
   // dead-lettered no sooner than about 100 minutes after its first claim (20
   // claims, each after the lease of the claim before it expired). That is

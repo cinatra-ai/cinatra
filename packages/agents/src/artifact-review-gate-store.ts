@@ -1088,6 +1088,12 @@ export interface ResumeIntentRow {
   runClaimedAt: Date | null;
   /** cinatra#3745: the A2A task this gate's send returned (run token stripped), recorded before the handler ran. */
   resumeTaskResult: unknown | null;
+  /**
+   * cinatra#3745 with cinatra#4312: true when the intent has used its last
+   * attempt (`attempts >= max_attempts`); on a row the claim returns, this claim
+   * took it. Absent on a row no store read built, which is read as false.
+   */
+  finalAttempt?: boolean;
 }
 
 function toResumeIntentRow(row: typeof artifactReviewResumeOutbox.$inferSelect): ResumeIntentRow {
@@ -1103,6 +1109,7 @@ function toResumeIntentRow(row: typeof artifactReviewResumeOutbox.$inferSelect):
     leaseExpiresAt: row.leaseExpiresAt,
     runClaimedAt: row.runClaimedAt ?? null,
     resumeTaskResult: row.resumeTaskResult ?? null,
+    finalAttempt: row.attempts >= row.maxAttempts,
   };
 }
 

@@ -9,11 +9,14 @@
  *   - a claimed delivery that dies, outlives its lease, loses its lease or
  *     fails before the wire is re-sent, replayed or left alone, never closed early;
  *   - a run another driver holds, with no recorded task of this gate, leaves the
- *     intent for a later lease with its attempt given back: a competing claim that
- *     fails before its dispatch never consumes the intent;
+ *     intent for a later lease: a competing claim that fails before its dispatch
+ *     never closes the intent, and each deferral uses its attempt (cinatra#4312);
  *   - the sweep claims one row at a time and renews the lease of the row it delivers;
  *   - a claimed intent whose run another driver stopped, failed or finished is
- *     closed by the next lease without a send, even past its final attempt.
+ *     closed by the next lease without a send, its last attempt included;
+ *   - a claimed intent stays within its attempts (cinatra#4312): the claim of its
+ *     last attempt puts the run back on its gate without a send, and the
+ *     dead-letter pass then takes the intent.
  *
  * The run edges' lease fence and the claim marks themselves are proven in
  * `resume-intent-run-edge-claim-3745.integration.test.ts`.
@@ -434,14 +437,14 @@ describe.skipIf(!HAS_DB)("the delivery re-sends, replays or leaves alone; it nev
     await expectNoStrand(run, gateId);
   });
 
-  it("T4 a lost run CAS records no claim, closes nothing and gives the attempt back", async () => {
+  it("T4 a lost run CAS records no claim, closes nothing and keeps the attempt used", async () => {
     const run = await seedRun("pending_approval");
     const gateId = await seedIntent(run);
     const row = await claimOne(gateId);
     h.beforeScope = async () => { await pool(`UPDATE ${T("agent_runs")} SET status = 'running' WHERE id = $1`, [run.runId]); };
     expect(await delivery.deliverArtifactReviewResumeIntent(row)).toBe("retryable");
     expect(h.sends.length).toBe(0);
-    expect(await intentState(gateId)).toMatchObject({ claimed: false, status: "delivering", attempts: 0, leaseToken: row.leaseToken });
+    expect(await intentState(gateId)).toMatchObject({ claimed: false, status: "delivering", attempts: 1, leaseToken: row.leaseToken });
     await expectNoStrand(run, gateId);
   });
 
@@ -452,10 +455,10 @@ describe.skipIf(!HAS_DB)("the delivery re-sends, replays or leaves alone; it nev
     expect(summary).toMatchObject({ attempted: 1, retryable: 1, alreadyAdvanced: 0 });
     expect(h.sends.length).toBe(0);
     expect(h.handled.length).toBe(0);
-    expect(await intentState(gateId)).toMatchObject({ status: "delivering", claimed: false, attempts: 1 });
+    expect(await intentState(gateId)).toMatchObject({ status: "delivering", claimed: false, attempts: 2 });
   });
 
-  it("T22 a competing claim that fails before its dispatch does not consume the intent: the next lease sends", async () => {
+  it("T22 a competing claim that fails before its dispatch does not close the intent: the next lease sends", async () => {
     const run = await seedRun("pending_approval");
     const gateId = await seedIntent(run);
     const row = await claimOne(gateId);
@@ -468,7 +471,7 @@ describe.skipIf(!HAS_DB)("the delivery re-sends, replays or leaves alone; it nev
     expect(h.sends.length).toBe(0);
     // ... and puts it back before its dispatch, as claimGateForResume and the human path do.
     await transitions.transitionRunStatus(run.runId, "running", "pending_approval", undefined, AUTHORITY as never);
-    expect(await intentState(gateId)).toMatchObject({ status: "delivering", claimed: false, attempts: 0 });
+    expect(await intentState(gateId)).toMatchObject({ status: "delivering", claimed: false, attempts: 1 });
     await expire(gateId);
     expect(await delivery.sweepArtifactReviewResumeIntents({ limit: 1 })).toMatchObject({ attempted: 1, delivered: 1 });
     expect(h.sends.map((x) => x.messageId)).toEqual([`artifact-review-resume-${gateId}`]);
@@ -481,7 +484,7 @@ describe.skipIf(!HAS_DB)("the delivery re-sends, replays or leaves alone; it nev
     const gateId = await seedIntent(run);
     await transitions.transitionRunStatus(run.runId, "pending_approval", "running", await pauseFenceFor(run.runId), AUTHORITY as never);
     expect(await delivery.sweepArtifactReviewResumeIntents({ limit: 1 })).toMatchObject({ attempted: 1, retryable: 1 });
-    expect(await intentState(gateId)).toMatchObject({ status: "delivering", claimed: false, attempts: 0 });
+    expect(await intentState(gateId)).toMatchObject({ status: "delivering", claimed: false, attempts: 1 });
     expect(h.sends.length).toBe(0);
     await transitions.transitionRunStatus(run.runId, "running", "pending_approval", undefined, AUTHORITY as never);
     await expire(gateId);
@@ -510,13 +513,31 @@ describe.skipIf(!HAS_DB)("the delivery re-sends, replays or leaves alone; it nev
     expect(h.sends.length).toBe(0);
   });
 
-  it("T25 a deferral at the final attempt gives the attempt back: no dead letter while another driver holds the run", async () => {
+  it("T25 a deferral at the last attempt uses it: the dead-letter pass takes the intent (cinatra#4312)", async () => {
     const run = await seedRun("running");
     const gateId = await seedIntent(run, { attempts: 19, maxAttempts: 20 });
     expect(await delivery.sweepArtifactReviewResumeIntents({ limit: 1 })).toMatchObject({ attempted: 1, retryable: 1 });
+    expect(h.sends.length).toBe(0);
     await expire(gateId);
     await gateStore.deadLetterExhaustedResumeIntents();
-    expect(await intentState(gateId)).toMatchObject({ status: "delivering", attempts: 19, deadLettered: false });
+    expect(await intentState(gateId)).toMatchObject({ status: "delivering", attempts: 20, deadLettered: true });
+    expect((await delivery.sweepArtifactReviewResumeIntents({ limit: 1 })).attempted).toBe(0);
+  });
+
+  it("T26 the last attempt of a claimed intent with nothing recorded puts the run back on its gate, sends nothing, and is dead-lettered (cinatra#4312)", async () => {
+    const run = await seedRun("running");
+    const gateId = await seedIntent(run, { status: "delivering", leaseExpired: true, runClaimed: true, attempts: 19, maxAttempts: 20 });
+    expect(await delivery.sweepArtifactReviewResumeIntents({ limit: 1 })).toMatchObject({ attempted: 1, retryable: 1 });
+    expect(h.sends.length).toBe(0);
+    expect(h.handled.length).toBe(0);
+    expect((await runState(run.runId)).status).toBe("pending_approval");
+    expect(await intentState(gateId)).toMatchObject({ status: "delivering", claimed: false, attempts: 20, deadLettered: false });
+    await expire(gateId);
+    await gateStore.deadLetterExhaustedResumeIntents();
+    expect(await intentState(gateId)).toMatchObject({ deadLettered: true });
+    expect((await delivery.sweepArtifactReviewResumeIntents({ limit: 1 })).attempted).toBe(0);
+    expect((await runState(run.runId)).status).toBe("pending_approval");
+    await expectNoStrand(run, gateId);
   });
 
   it("T12 RED (iii) a handler that wrote Redis and died before its CAS is replayed from the recorded result, not closed", async () => {
@@ -678,12 +699,12 @@ describe.skipIf(!HAS_DB)("the delivery re-sends, replays or leaves alone; it nev
 });
 
 describe.skipIf(!HAS_DB)("a claimed intent whose run another driver ended is closed, never re-claimed forever", () => {
-  // A claimed intent is never dead-lettered, and the claim takes it again at any
-  // attempt count. The delivery is what closes it once its run has left this gate.
+  // A claimed intent is bounded by its attempts like any other (cinatra#4312).
+  // The delivery closes it once its run has left this gate, on its last attempt too.
   for (const ended of ["stopped", "failed", "completed"] as const) {
-    it(`a claimed intent past its final attempt, its run ${ended}, closes on the next lease without a send`, async () => {
+    it(`a claimed intent at its last attempt, its run ${ended}, closes on that lease without a send`, async () => {
       const run = await seedRun("running");
-      const gateId = await seedIntent(run, { status: "delivering", leaseExpired: true, runClaimed: true, attempts: 20, maxAttempts: 20 });
+      const gateId = await seedIntent(run, { status: "delivering", leaseExpired: true, runClaimed: true, attempts: 19, maxAttempts: 20 });
       await pool(`UPDATE ${T("agent_runs")} SET status = $2 WHERE id = $1`, [run.runId, ended]);
       await gateStore.deadLetterExhaustedResumeIntents();
       expect((await intentState(gateId)).deadLettered).toBe(false);

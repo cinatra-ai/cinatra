@@ -622,6 +622,47 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
       expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-1", "lease-abc");
     });
 
+    it("B1 a claimed run with nothing recorded at the intent's last attempt goes back to its gate and is not re-sent (cinatra#4312)", async () => {
+      storeMock.readAgentRunByTaskId.mockResolvedValue(pausedRun({ status: "running" }));
+      gateStoreMock.readResumeIntentClaim.mockResolvedValue({ runClaimed: true, result: null });
+      expect(await deliverArtifactReviewResumeIntent(intent({ attempts: 20, finalAttempt: true }))).toBe("retryable");
+      expect(edges()).toEqual(["running->pending_approval"]);
+      for (const call of claimSpy.mock.calls) expect(leaseOf(call)).toEqual({ gateId: "gate-1", leaseToken: "lease-abc" });
+      expect(sendTaskSpy).not.toHaveBeenCalled();
+      expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+      expect(gateStoreMock.recordResumeTaskResult).not.toHaveBeenCalled();
+      expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+      expect(gateStoreMock.deferResumeIntent).not.toHaveBeenCalled();
+    });
+
+    it("B2 a release at the last attempt that finds its lease gone reports lease-lost and sends nothing", async () => {
+      storeMock.readAgentRunByTaskId.mockResolvedValue(pausedRun({ status: "running" }));
+      gateStoreMock.readResumeIntentClaim.mockResolvedValue({ runClaimed: true, result: null });
+      claimSpy.mockImplementation(async () => {
+        throw Object.assign(new Error("lease lost"), { code: "resume_intent_lease_lost" });
+      });
+      expect(await deliverArtifactReviewResumeIntent(intent({ attempts: 20, finalAttempt: true }))).toBe("lease-lost");
+      expect(sendTaskSpy).not.toHaveBeenCalled();
+      expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+      claimSpy.mockImplementation(async () => undefined);
+    });
+
+    it("B3 the last attempt still replays a recorded task: the replay sends nothing", async () => {
+      storeMock.readAgentRunByTaskId.mockResolvedValue(pausedRun({ status: "running" }));
+      const recorded = { id: "task-recorded", status: { state: "input-required" } };
+      gateStoreMock.readResumeIntentClaim.mockResolvedValue({ runClaimed: true, result: recorded });
+      expect(await deliverArtifactReviewResumeIntent(intent({ attempts: 20, finalAttempt: true }))).toBe("delivered");
+      expect(edges()).toEqual([]);
+      expect(sendTaskSpy).not.toHaveBeenCalled();
+      expect(handleWayflowTaskStateSpy).toHaveBeenCalledWith(expect.objectContaining({ fromStatus: "running", task: recorded }));
+    });
+
+    it("B4 an unclaimed run at the last attempt is claimed and sent as on any other attempt", async () => {
+      expect(await deliverArtifactReviewResumeIntent(intent({ attempts: 20, finalAttempt: true }))).toBe("delivered");
+      expect(edges()).toEqual(["pending_approval->running"]);
+      expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+    });
+
     it("D2 running with no mark and nothing recorded is another driver's hold: deferred, never closed or sent", async () => {
       storeMock.readAgentRunByTaskId.mockResolvedValue(pausedRun({ status: "running" }));
       expect(await deliverArtifactReviewResumeIntent(intent())).toBe("retryable");
