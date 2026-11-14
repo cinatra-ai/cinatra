@@ -264,7 +264,12 @@ describe("the windows under the run's own waiting screen are bound to it", () =>
     // The window itself is no longer inert: the turn's own fill reaches the
     // rows above it, and a turn that PRESSED re-draws the card instead.
     const win = read("packages/agents/src/schedule-prompt-window.tsx");
-    expect(win).toContain("await sendRunWindowTurn(prompt)");
+    // THE ONE CONTROLLER (cinatra#3487): only use-run-window-conversation.ts names
+    // the bridge's sender, so the window holds that controller's send under its
+    // own name — the same turn, reached through the run's own conversation.
+    expect(win).toContain('useRunWindowConversation({ runId, surface: "armed-trigger" })');
+    expect(win).toContain("const sendWindowTurn = runWindow.send;");
+    expect(win).toContain("await sendWindowTurn(prompt)");
     expect(win).toContain("effect.fill");
     expect(win).toContain("effect.acted");
     expect(win).not.toContain("IT CHANGES NOTHING BY ITSELF");

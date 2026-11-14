@@ -100,8 +100,13 @@ const railRow = (c: HTMLElement) =>
   c.querySelector('[data-conformance-id="schedule-rail-step"]') as HTMLElement | null;
 const stepDetail = (c: HTMLElement) =>
   c.querySelector('[data-conformance-id="schedule-step-detail"]') as HTMLElement | null;
+/**
+ * THE WINDOW THE PAGE DRAWS (cinatra#3487). The schedule screen mounts none of
+ * its own any more — it registers — so the window is the run page chrome's one
+ * window, found by its own anchor.
+ */
 const promptWindow = (c: HTMLElement) =>
-  c.querySelector('[data-conformance-id="schedule-prompt-window"]') as HTMLElement | null;
+  c.querySelector('[data-conformance-id="review-prompt-window"]') as HTMLElement | null;
 
 /**
  * HOW LONG THE WINDOW IS ALLOWED TO TAKE TO ARRIVE.
@@ -149,7 +154,7 @@ describe("the Schedule step stays clickable after a recurring fire", () => {
 });
 
 describe("the prompt window shows BELOW the scheduler", () => {
-  it("is mounted inside the schedule step's own detail, under the card", async () => {
+  it("is drawn in the run detail column, under the card and outside the screen", async () => {
     mockResolve();
     const { container } = mount();
     // BOTH NODES, NOT JUST THE CARD. The window is drawn a commit AFTER the
@@ -170,7 +175,12 @@ describe("the prompt window shows BELOW the scheduler", () => {
     // IN THE RUN DETAIL COLUMN, not in the rail and not at the end of the page.
     const detailColumn = container.querySelector('[data-conformance-id="run-detail-column"]')!;
     expect(detailColumn.contains(window_!)).toBe(true);
-    expect(stepDetail(container)!.contains(window_!)).toBe(true);
+    // AND NEVER INSIDE THE SCREEN'S OWN MARKUP (cinatra#3487). The ruling:
+    // "one window owned by the page … never part of that screen's component or
+    // markup". The drawing's clause this point is about is "below the
+    // scheduler, in the same column" — the column, which is what is read above.
+    expect(stepDetail(container)!.contains(window_!)).toBe(false);
+    expect(window_!.closest('[data-run-window-host="page-chrome"]')).not.toBeNull();
     expect(
       container
         .querySelector('[data-conformance-id="run-step-rail-column"]')!
@@ -200,11 +210,11 @@ describe("the prompt window shows BELOW the scheduler", () => {
     mockResolve();
     const { container } = mount();
     await waitFor(() => expect(promptWindow(container)).not.toBeNull(), WINDOW_ARRIVES);
-    // `data-conv-open` is the shipped panel's own root attribute, so this is
-    // the panel having PORTALLED INTO this mount rather than a div that merely
-    // exists.
+    // `data-conv-open` is the shipped panel's own root attribute, and since
+    // cinatra#3487 that root IS the window's anchor — so this reads the panel
+    // having been drawn rather than an empty node that merely exists.
     await waitFor(
-      () => expect(promptWindow(container)!.querySelector("[data-conv-open]")).not.toBeNull(),
+      () => expect(promptWindow(container)!.hasAttribute("data-conv-open")).toBe(true),
       WINDOW_ARRIVES,
     );
   });

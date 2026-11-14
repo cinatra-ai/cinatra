@@ -165,7 +165,14 @@ const PANEL_PROPS = {
 
 async function renderRunPage() {
   const { AgenticRunPanel } = await import("../agentic-run-panel");
-  render(<AgenticRunPanel {...PANEL_PROPS} surface="agent-detail" />);
+  // THE PAGE OWNS THE WINDOW (cinatra#3487): the screen registers with the run
+  // page's chrome, which is what draws the window the fill is typed into.
+  const { RunPageChrome } = await import("../run-page-chrome");
+  render(
+    <RunPageChrome>
+      <AgenticRunPanel {...PANEL_PROPS} surface="agent-detail" />
+    </RunPageChrome>,
+  );
   await waitFor(() => expect(document.querySelector("#field-idea")).not.toBeNull());
   await waitFor(() => expect(screen.queryByTestId("prompt-field")).not.toBeNull());
 }

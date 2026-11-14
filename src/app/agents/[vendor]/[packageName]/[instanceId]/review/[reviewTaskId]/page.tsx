@@ -62,6 +62,10 @@ import type { ReviewSubmitOutcome } from "@/lib/artifacts/review-surface-model";
 import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { LifecycleCardSurfaceProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
 import { ReviewGateCard } from "@cinatra-ai/agents/review-gate-card";
+// THE RUN PAGE'S CHROME (cinatra#3487): the review route mounts no prompt
+// window of its own — the chrome owns the one window and draws it below the
+// screen, and the review screen registers what it is and what it lends.
+import { RunPageChrome } from "@cinatra-ai/agents/run-page-chrome";
 import { AgentHitlScreenCard } from "@cinatra-ai/agents/agent-hitl-screen-card";
 import { readRunTriggerByRunId } from "@cinatra-ai/agents/trigger-store";
 import { readRecommendationParkForRun } from "@cinatra-ai/agents/recommendation-hold";
@@ -487,7 +491,12 @@ export default async function AgentRunReviewPage({
           back to nothing rather than to a second composition — there is only one
           drawing of a review, and an instance that cannot mint refs is a
           configuration fault to fix, not a reason to fork the surface. */
+          // THE PAGE'S CHROME WRAPS THE DETAIL COLUMN'S CONTENT, never the whole
+          // two-column frame (cinatra#3487): its window is drawn after its children,
+          // so it lands under the decision bar, in the same column, on every branch
+          // -- including a run with no gate step, which draws no rail frame of its own.
           const detailNode = (
+            <RunPageChrome>
             <LifecycleCardSurfaceProvider host="page_gate_region">
               {/* THE GATE REGION CARRIES THE REVIEW CARD AND THE RUN'S OWN
                   PARKED QUESTION — AND NOT THE SKILLS ROW (cinatra#3047, the
@@ -529,6 +538,7 @@ export default async function AgentRunReviewPage({
                 />
               ) : null}
             </LifecycleCardSurfaceProvider>
+            </RunPageChrome>
           );
           // THE TWO COLUMNS, AND THE GATE STEPS THAT HEAD THEM. Which steps
           // this run has, which numeral each carries and which of them can be
