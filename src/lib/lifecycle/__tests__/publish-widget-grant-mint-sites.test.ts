@@ -323,6 +323,14 @@ describe("the scanner refuses every import form of the mint (fixtures)", () => {
       `const { default: d } = await import("./publish-decision-actions");\nReflect.get(d, k)(claims, runId);`],
     ["a default name imported from the module", "src/lib/evil.ts", `import { default as core } from "${CORE}";\nReflect.get(core, k)(claims, runId);`],
     ["a default name re-exported from the module", "packages/agents/src/barrel.ts", `export { default as core } from "./publish-decision-actions";`],
+    // each of these passed the scanner that trusted any callee named require and any handle with no reads in its own file
+    ["a locally declared require", "src/lib/evil.ts",
+      `import { createRequire } from "node:module";\nconst load = createRequire(import.meta.url);\nconst require = (p: string) => load(p)[k](claims, runId);\nconst unused = require("${CORE}");`],
+    ["a require taken as a parameter", "src/lib/evil.ts", `export function grant(require: (p: string) => unknown) {\n  const unused = require("${CORE}");\n}`],
+    ["a require reassigned in the file", "scripts/x.cjs", `require = (p) => load(p)[k](claims, runId);\nconst unused = require("${CORE}");`],
+    ["a loaded handle exported by its declaration", "packages/agents/src/hold.ts", `export const h = await import("./publish-decision-actions");`],
+    ["a required handle exported by its declaration", "packages/agents/src/hold.ts", `export const h = require("${CORE}");`],
+    ["an exported import equals require", "packages/agents/src/hold.ts", `export import h = require("./publish-decision-actions");`],
   ])("%s is caught", (_label, file, text) => {
     expect(caught(file, text).length).toBeGreaterThan(0);
     expect(caught(file, text)[0]).toContain(file);
@@ -335,6 +343,7 @@ describe("the scanner refuses every import form of the mint (fixtures)", () => {
     expect(caught("src/lib/org-write/write-registry.ts", `const owned = ["packages/agents/src/publish-decision-actions.ts"];`)).toEqual([]);
     expect(caught("src/lib/org-write/other.ts", `const owned = ["packages/agents/src/publish-decision-actions.ts"];`)).not.toEqual([]);
     expect(caught("packages/agents/src/x.ts", `import { publishDecisionCardStateForRun } from "./publish-decision-card-core";\nexport { holdRunAtPublishGate } from "./publish-decision-actions";\ntype M = typeof import("./publish-decision-actions");`)).toEqual([]);
+    expect(caught("scripts/x.cjs", `const { holdRunAtPublishGate } = require("../packages/agents/src/publish-decision-actions");\nexports.hold = holdRunAtPublishGate;`)).toEqual([]);
     expect(caught("packages/agents/src/x.ts", `import { publishDecisionCards } from "./publish-decision-card-actions";\nconst note = "publish-decision-actions-log";`)).toEqual([]);
     expect(caught(RE_EXPORTER, `import { approvePublishDecision } from "./publish-decision-actions";\nexport { ${MINT} } from "./publish-decision-actions";`)).toEqual([]);
     expect(caught(CALLERS[1], `import { ${MINT}, publishDecisionCardStateForRun } from "${CORE}";\nconst g = ${MINT}(c, id);`)).toEqual([]);
