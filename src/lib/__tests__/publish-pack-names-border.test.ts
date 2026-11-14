@@ -27,11 +27,15 @@
 // set: a job or kit that ran the sync sets it, and then a missing tree FAILS
 // the case instead of skipping it, so the guard cannot pass vacuously.
 //
-// ORDER: while a pack declares the flag and still declares its renderer, the
-// renderer kinds `linkedin-draft-review` (register-default-renderers.ts:188) and
-// `wordpress-draft-confirm` (:233) are named in product code and this test goes
-// red. The pack changes delete those renderers in the same pack PRs, and the
-// core lock bump must drop the two keys with them.
+// THE HOST KIND TABLE: a renderer kind is the host's own vocabulary. The kind
+// table in packages/agents/src/register-default-renderers.ts (RENDERER_KIND_TABLE)
+// names every kind once, as a key, and a test keeps its keys set-equal with
+// KNOWN_FIELD_RENDERER_KINDS (scripts/extensions/agent-binding-kinds.mjs). A
+// publish pack may keep declaring a former screen id on one of those kinds, for
+// a run that paused there before the pack declared its publishing step, so a
+// table KEY is not a crossing. Only the key is exempt, only in that file, and
+// only while the keys and the vocabulary are set-equal: the same kind anywhere
+// else, and a pack name or renderer id anywhere, still is a crossing.
 
 import { afterEach, describe, expect, it } from "vitest";
 import * as path from "node:path";
@@ -141,17 +145,60 @@ export function namesOf(packs: PublishPack[]): { name: string; what: string; re:
 
 export type Hit = { file: string; line: number; what: string };
 
+const KIND_TABLE_FILE = "packages/agents/src/register-default-renderers.ts";
+const KIND_VOCABULARY_FILE = "scripts/extensions/agent-binding-kinds.mjs";
+
+/**
+ * The lines of the host kind table that hold a top-level key, with that key: line number (1-based, of the
+ * comment-masked file) to kind. Null when the table or the vocabulary cannot be read, or when the keys are not
+ * set-equal with KNOWN_FIELD_RENDERER_KINDS, so the exemption fails closed.
+ */
+export function kindTableKeys(root: string): Map<number, string> | null {
+  const tableFile = path.join(root, KIND_TABLE_FILE);
+  const vocabFile = path.join(root, KIND_VOCABULARY_FILE);
+  if (!existsSync(tableFile) || !existsSync(vocabFile)) return null;
+  const text = gate.maskComments(readFileSync(tableFile, "utf8"));
+  const start = text.indexOf("const RENDERER_KIND_TABLE");
+  const open = start < 0 ? -1 : text.indexOf("= {", start);
+  const close = open < 0 ? -1 : text.indexOf("\n};", open);
+  if (close < 0) return null;
+  const firstLine = text.slice(0, open).split("\n").length;
+  const keys = new Map<number, string>();
+  text
+    .slice(open, close)
+    .split("\n")
+    .forEach((l, i) => {
+      const m = /^  ("?)([a-z][a-z0-9-]*)\1\s*:\s*\{/.exec(l);
+      if (m) keys.set(firstLine + i, m[2]);
+    });
+  const vocab = /KNOWN_FIELD_RENDERER_KINDS\s*=\s*Object\.freeze\(\[([^\]]*)\]\)/.exec(readFileSync(vocabFile, "utf8"));
+  if (!vocab) return null;
+  const known = [...vocab[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+  const tableKinds = [...keys.values()].sort();
+  if (known.length === 0 || JSON.stringify(known) !== JSON.stringify(tableKinds)) return null;
+  return keys;
+}
+
 /** Scan the gate's product roots under `root` for the names; comments are masked first. */
 export function scanProductFor(root: string, packs: PublishPack[]): Hit[] {
   const names = namesOf(packs);
+  const tableKeys = kindTableKeys(root);
   const hits: Hit[] = [];
   for (const productRoot of gate.PRODUCT_ROOTS) {
     for (const file of gate.walkProductFiles(path.join(root, productRoot), [], root)) {
+      const rel = path.relative(root, file).split(path.sep).join("/");
       const text = gate.maskComments(readFileSync(file, "utf8"));
       const lines = text.split("\n");
       for (const n of names) {
         lines.forEach((l, i) => {
-          if (n.re.test(l)) hits.push({ file: path.relative(root, file).split(path.sep).join("/"), line: i + 1, what: n.what });
+          if (!n.re.test(l)) return;
+          // The host kind table's own key: the kind, once, as the key of that line, and nowhere else on it.
+          const isTableKey =
+            n.what.startsWith("renderer kind of ") &&
+            rel === KIND_TABLE_FILE &&
+            tableKeys?.get(i + 1) === n.name &&
+            !n.re.test(l.replace(n.name, ""));
+          if (!isTableKey) hits.push({ file: rel, line: i + 1, what: n.what });
         });
       }
     }
@@ -244,6 +291,56 @@ describe("A15 fixtures: each kind of name is found, each exclusion stays silent"
     put(root, "src/lib/types.d.ts", `export declare const d: ${n};\n`);
     put(root, "extensions/@cinatra-ai/demo-publish-agent/src/own.ts", `export const o = ${n};\n`);
     expect(scanProductFor(root, publishPacksOf(root))).toEqual([]);
+  });
+
+  // The host kind table (register-default-renderers.ts) and its vocabulary, as a fixture lays them out.
+  function kindTable(root: string, keys: string[], vocabulary: string[], extra = "") {
+    put(
+      root,
+      "packages/agents/src/register-default-renderers.ts",
+      "const RENDERER_KIND_TABLE: Record<\n  string,\n  { renderer: unknown }\n> = {\n" +
+        keys.map((k) => `  ${JSON.stringify(k)}: { renderer: Floor },\n`).join("") +
+        "};\n" +
+        extra,
+    );
+    put(
+      root,
+      "scripts/extensions/agent-binding-kinds.mjs",
+      `export const KNOWN_FIELD_RENDERER_KINDS = Object.freeze([\n${vocabulary.map((k) => `  ${JSON.stringify(k)},\n`).join("")}]);\n`,
+    );
+  }
+
+  it("the host kind table's own key is not a crossing; the same kind elsewhere in that file and in another file is", () => {
+    const root = fixtureRoot({ publishes: true });
+    kindTable(root, ["demo-confirm-card", "other-kind"], ["other-kind", "demo-confirm-card"], 'export const elsewhere = "demo-confirm-card";\n');
+    put(root, "src/lib/planted.ts", 'export const k = { "demo-confirm-card": 1 };\n');
+    const hits = scanProductFor(root, publishPacksOf(root));
+    expect(hits.map((h) => `${h.file}:${h.line} ${h.what}`).sort()).toEqual([
+      "packages/agents/src/register-default-renderers.ts:8 renderer kind of @cinatra-ai/demo-publish-agent",
+      "src/lib/planted.ts:1 renderer kind of @cinatra-ai/demo-publish-agent",
+    ]);
+  });
+
+  it("the table key is a crossing again when the table and the vocabulary are not set-equal", () => {
+    const root = fixtureRoot({ publishes: true });
+    kindTable(root, ["demo-confirm-card", "other-kind"], ["other-kind"]);
+    const hits = scanProductFor(root, publishPacksOf(root));
+    expect(hits.map((h) => `${h.file}:${h.line} ${h.what}`)).toEqual([
+      "packages/agents/src/register-default-renderers.ts:5 renderer kind of @cinatra-ai/demo-publish-agent",
+    ]);
+  });
+
+  it("a pack name or renderer id in the kind table file is still a crossing, and so is a table key in another file", () => {
+    const root = fixtureRoot({ publishes: true });
+    kindTable(root, ["demo-confirm-card"], ["demo-confirm-card"], 'export const id = "@cinatra-ai/demo-publish-agent:confirm-card";\n');
+    put(root, "packages/other/src/register-default-renderers.ts", 'const RENDERER_KIND_TABLE = {\n  "demo-confirm-card": { renderer: Floor },\n};\n');
+    const hits = scanProductFor(root, publishPacksOf(root)).map((h) => `${h.file}:${h.line} ${h.what}`);
+    expect(hits).toContain("packages/agents/src/register-default-renderers.ts:7 package name of @cinatra-ai/demo-publish-agent");
+    expect(hits).toContain("packages/agents/src/register-default-renderers.ts:7 renderer id of @cinatra-ai/demo-publish-agent");
+    expect(hits).toContain("packages/other/src/register-default-renderers.ts:2 renderer kind of @cinatra-ai/demo-publish-agent");
+    expect(hits.filter((h) => h.endsWith("renderer kind of @cinatra-ai/demo-publish-agent"))).toEqual([
+      "packages/other/src/register-default-renderers.ts:2 renderer kind of @cinatra-ai/demo-publish-agent",
+    ]);
   });
 
   it("a top-level publishes key is not the flag: only metadata.cinatra.publishes counts", () => {
