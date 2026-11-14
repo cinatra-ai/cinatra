@@ -535,6 +535,12 @@ import {
 } from "@/lib/lifecycle/lifecycle-card-ref";
 import { buildWayflowInitialMessagePayload } from "./wayflow-dispatch-payload";
 import {
+  persistStepSnapshots,
+  scrubWayflowHistoryCredentials,
+  snapshotNodesMetadata,
+  stripStepSnapshotClaims,
+} from "./step-snapshots";
+import {
   inventoryReviewTargets,
   nextUnresolvedLeg,
   normalizeReviewTargets,
@@ -548,44 +554,26 @@ function enrichmentContextFor(userId: string | null) {
 }
 
 // ---------------------------------------------------------------------------
-// Credential keys are stripped from WayFlow task.history before persistence.
-// MUST stay in lockstep with docker/wayflow/cinatra_executors/input_message.py
-// _CREDENTIAL_KEYS and approval_gate.py _CREDENTIAL_KEYS (single source of truth
-// across the TS persistence path and the Python executor strip; tested for
-// parity in docker/wayflow/tests/test_approval_gate.py).
+// Credential keys are stripped from WayFlow task.history before persistence:
+// WAYFLOW_HISTORY_CREDENTIAL_KEYS and scrubWayflowHistoryCredentials live in
+// ./step-snapshots (moved there unchanged, cinatra#4264), which also checks the
+// step snapshot inputs against the same list.
 // ---------------------------------------------------------------------------
-const WAYFLOW_HISTORY_CREDENTIAL_KEYS: ReadonlySet<string> = new Set([
-  "bearer_token",
-  "api_key",
-  "a2a_bearer_token",
-  "mcp_server_url",
-  "password",
-  "secret",
-  "token",
-  "access_token",
-  "refresh_token",
-]);
 
 /**
- * Recursively scrub credential keys from any value before persisting it in
- * stepResults. Walks plain objects and arrays; primitives pass through. Keys
- * matched by WAYFLOW_HISTORY_CREDENTIAL_KEYS are dropped (not redacted) to
- * mirror the Python executors' frozenset-based strip exactly — replacing with
- * a placeholder would diverge from the executors and break future parity tests.
+ * The input-required leg's log line. `history_last` is read from the history
+ * WITHOUT the step snapshot claims (cinatra#4264): their inputs never reach a
+ * log.
  */
-function scrubWayflowHistoryCredentials(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((item) => scrubWayflowHistoryCredentials(item));
-  }
-  if (value && typeof value === "object") {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      if (WAYFLOW_HISTORY_CREDENTIAL_KEYS.has(k)) continue;
-      out[k] = scrubWayflowHistoryCredentials(v);
-    }
-    return out;
-  }
-  return value;
+export function formatWayflowInterruptLog(
+  runId: string,
+  task: { id?: unknown; metadata?: unknown; history?: ReadonlyArray<unknown> },
+  interruptPayload: Record<string, unknown>,
+): string {
+  const history = stripStepSnapshotClaims(
+    task.history as ReadonlyArray<{ role?: unknown; metadata?: unknown; messageId?: unknown; message_id?: unknown }> | undefined,
+  );
+  return `[wayflow-interrupt] run=${runId} task=${String(task.id)} interruptPayload=${(JSON.stringify(interruptPayload) ?? "null").slice(0, 500)} metadata=${(JSON.stringify(task.metadata) ?? "null").slice(0, 500)} history_last=${(JSON.stringify(history?.slice(-1)) ?? "null").slice(0, 500)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -2233,6 +2221,16 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   const { runId, run, fromStatus, task, authority } = args;
   const taskState = task.status?.state;
 
+  // cinatra#4264 — the step snapshots this leg carries, verified against THIS
+  // handler's own runId (never an id read from the response) and stored BEFORE
+  // the resync below, so a response naming another run's task or context cannot
+  // land that run's snapshots here. Never throws; a fault is logged.
+  await persistStepSnapshots({
+    runId,
+    orgId: run.orgId,
+    history: (task as { history?: ReadonlyArray<{ role?: unknown; metadata?: unknown }> }).history,
+  });
+
   // Defensive resync (idempotent if unchanged): persist task.id / contextId
   // so the next resume's reverse-lookup by a2aTaskId still finds the run if
   // WayFlow assigned a new task ID. updateAgentRunA2ATaskId is an
@@ -2292,7 +2290,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       ),
     );
     const interruptPayload = ((task.metadata as { pendingApproval?: unknown } | undefined)?.pendingApproval ?? {}) as Record<string, unknown>;
-    console.log(`[wayflow-interrupt] run=${runId} task=${task.id} interruptPayload=${(JSON.stringify(interruptPayload) ?? "null").slice(0, 500)} metadata=${(JSON.stringify(task.metadata) ?? "null").slice(0, 500)} history_last=${(JSON.stringify((task as { history?: unknown[] }).history?.slice(-1)) ?? "null").slice(0, 500)}`);
+    console.log(formatWayflowInterruptLog(runId, task, interruptPayload));
     // HITL renderers resolve campaignId via context.runId (passed
     // at agentic-run-panel.tsx:378) and a typed-object lookup. We no longer
     // enrich the HITL SSE payload with a precomputed campaignId.
@@ -3086,7 +3084,10 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   const endNodeOutputs = extractCinatraEndNodeOutputs(rawHistory);
   // The pause claims (cinatra#3745) are recorded at their interrupts; the
   // stored history keeps its messages and drops only the claims.
-  const history = stripCinatraGateNodeClaims(stripCinatraEndNodeOutputMessages(rawHistory));
+  // cinatra#4264: the step snapshots live in agent_run_step_snapshots only.
+  const history = stripStepSnapshotClaims(
+    stripCinatraGateNodeClaims(stripCinatraEndNodeOutputMessages(rawHistory)),
+  );
   // A2A spec: role is "user" | "agent". Cinatra also emits "assistant". Accept BOTH.
   const lastAgentMessage = history?.slice().reverse().find((m) => m?.role === "agent" || m?.role === "assistant");
   // Narrow parts at access time — the signature accepts `unknown[]` so all three
@@ -4986,6 +4987,14 @@ async function runAgentBuilderExecutionJobInner(
         runId: run.id,
         runToken: runToken.token,
       });
+      // cinatra#4264: the nodes whose inputs the runtime records, from the
+      // template's stored `regenerate` declaration. No declaration, or a repair
+      // run: {} and the message carries no metadata, exactly as before.
+      const snapshotMetadata = snapshotNodesMetadata({
+        runId: run.id,
+        sourceType: run.sourceType,
+        lifecycleConfig: template.lifecycleConfig ?? null,
+      });
       // #813: bind a fasta2a contextId to the run BEFORE the blocking sendTask.
       // WayFlow's flow calls back POST /api/context-resolve DURING sendTask with
       // this contextId (x-cinatra-a2a-context-id); readAgentRunByContextId must
@@ -5006,6 +5015,7 @@ async function runAgentBuilderExecutionJobInner(
           messageId: randomUUID(),
           contextId: dispatchContextId,
           parts: [{ kind: "text", text: JSON.stringify(initialMessagePayload) }],
+          ...(Object.keys(snapshotMetadata).length > 0 ? { metadata: snapshotMetadata } : {}),
         },
         configuration: { acceptedOutputModes: ["text"] },
       });
