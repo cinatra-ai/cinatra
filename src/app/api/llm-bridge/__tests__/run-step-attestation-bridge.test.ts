@@ -585,6 +585,44 @@ describe("a source-bound call never gets a machine bearer", () => {
       expect(verifyRunExecutedSourceMock).not.toHaveBeenCalled();
     },
   );
+
+  // (b10a) At the parent an actor-less run (runBy null) got NO override, so the
+  // orchestration minted its own machine bearer for a source-bound step: that
+  // bearer carried neither the proof nor a binding, and the tool server served
+  // it with the machine caller's authority.
+  it("installs an authoritative override for an actor-less source-bound run that withholds the cinatra tool", async () => {
+    const actorless = { ...RUN, runBy: null };
+    readAgentRunByTokenHashMock.mockResolvedValue({ ...PROBE, runBy: null });
+    readAgentRunByIdMock.mockResolvedValue(actorless);
+    readAgentRunByContextIdMock.mockImplementation(async (ctx: string) => (ctx === CTX ? actorless : null));
+    readAgentRunTokenHashByIdMock.mockResolvedValue("a".repeat(64));
+    const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...sourceHeaders() }));
+    expect(res.status).toBe(200);
+    expect(verifyRunExecutedSourceMock).toHaveBeenCalledTimes(1);
+    const arg = runResolvedSkillAwareDeterministicLlmTaskMock.mock.calls[0]![0] as {
+      cinatraMcpToolOverride?: () => Promise<unknown>;
+    };
+    expect(typeof arg.cinatraMcpToolOverride).toBe("function");
+    expect(await arg.cinatraMcpToolOverride!()).toBeNull();
+    expect(resolveAgentRunMcpActorMock).not.toHaveBeenCalled();
+    expect(buildLlmMcpServerToolForAgentRunMock).not.toHaveBeenCalled();
+    expect(buildLlmMcpServerToolMock).not.toHaveBeenCalled();
+    expect(writeDurableRunContextBindingMock).not.toHaveBeenCalled();
+  });
+
+  // (b10b) Compatibility: an actor-less run without a source keeps main's road,
+  // no override, so the orchestration's own machine fallback serves it.
+  it("leaves an actor-less run without a source on the orchestration's machine fallback", async () => {
+    const actorless = { ...RUN, runBy: null };
+    readAgentRunByTokenHashMock.mockResolvedValue({ ...PROBE, runBy: null });
+    readAgentRunByIdMock.mockResolvedValue(actorless);
+    readAgentRunByContextIdMock.mockImplementation(async (ctx: string) => (ctx === CTX ? actorless : null));
+    const res = await POST(makeReq({ user: "hi" }, RUN_BOUND));
+    expect(res.status).toBe(200);
+    expect(verifyRunExecutedSourceMock).not.toHaveBeenCalled();
+    const arg = runResolvedSkillAwareDeterministicLlmTaskMock.mock.calls[0]![0] as Record<string, unknown>;
+    expect(arg).not.toHaveProperty("cinatraMcpToolOverride");
+  });
 });
 
 // Leave the module registry as this file found it.
