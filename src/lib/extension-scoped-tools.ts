@@ -137,7 +137,12 @@ export async function dispatchExtensionScopedTool(input: {
     stepRead: false,
   };
   const outcome = await dispatchScopedTool(input, trail);
-  if (trail.tool === "extension_tool") await auditToolDispatch(trail, outcome);
+  try {
+    if (trail.tool === "extension_tool") await auditToolDispatch(trail, outcome);
+  } finally {
+    // A slot no write took over (the event was not handed over) is freed here.
+    releaseDispatchAuditSlot(trail);
+  }
   return outcome;
 }
 
@@ -154,24 +159,57 @@ type DispatchTrail = ExtensionToolAttribution & {
   stepRead: boolean;
   /** Refused because too many dispatch events were pending: no further write is handed over. */
   auditBacklog?: boolean;
+  /** This call holds one of the DISPATCH_AUDIT_MAX_PENDING slots, not yet taken over by a write. */
+  auditSlot?: boolean;
 };
 
 /**
- * THE DISPATCH EVENTS STILL BEING WRITTEN ARE BOUNDED. An event counts as
- * pending from its handoff until its write settles. One still pending after
- * DISPATCH_AUDIT_SETTLE_MS is named once in the server log by a fixed line.
- * While DISPATCH_AUDIT_MAX_PENDING are pending, a new `extension_tool` call is
- * refused (403, fixed sentence) before its module is loaded, and the refusal is
- * named in the server log by a fixed line instead of a further write.
+ * THE DISPATCH EVENTS STILL BEING WRITTEN ARE BOUNDED: never more than
+ * DISPATCH_AUDIT_MAX_PENDING slots are taken. An `extension_tool` call takes a
+ * slot synchronously, before its origin is resolved or its module is loaded
+ * (no await between the check and the take), and holds it until its event's
+ * write settles. A call that finds every slot taken is refused (403, fixed
+ * sentence), named in the server log by a fixed line instead of a write. A
+ * call answered before it took a slot hands its event over only if it can take
+ * one then; otherwise a fixed line names it. A write still pending after
+ * DISPATCH_AUDIT_SETTLE_MS is named once by a fixed line and keeps its slot:
+ * only its settling frees it.
  */
 const DISPATCH_AUDIT_MAX_PENDING = 64;
 const DISPATCH_AUDIT_SETTLE_MS = 10_000;
 let pendingDispatchAudits = 0;
 const AUDIT_BACKLOG_REFUSAL = "extension_tool: the audit trail is not keeping up, so the call was not run";
 
-/** Hand one event to the sink and count it until its write settles. Never throws. */
-function handOffDispatchEvent(write: (event: AuditEventInput) => Promise<void>, event: AuditEventInput): void {
+/** Take a slot now, synchronously, or answer false when every slot is taken. */
+function takeDispatchAuditSlot(trail: DispatchTrail): boolean {
+  if (trail.auditSlot === true) return true;
+  if (pendingDispatchAudits >= DISPATCH_AUDIT_MAX_PENDING) return false;
   pendingDispatchAudits += 1;
+  trail.auditSlot = true;
+  return true;
+}
+
+/** Free the call's slot if no write took it over. */
+function releaseDispatchAuditSlot(trail: DispatchTrail): void {
+  if (trail.auditSlot !== true) return;
+  trail.auditSlot = false;
+  pendingDispatchAudits -= 1;
+}
+
+/** Hand one event to the sink; its write takes over the call's slot until it settles. Never throws. */
+function handOffDispatchEvent(
+  trail: DispatchTrail,
+  write: (event: AuditEventInput) => Promise<void>,
+  event: AuditEventInput,
+): void {
+  if (!takeDispatchAuditSlot(trail)) {
+    logFixedLine(
+      "[extension_tool] dispatch audit writes were pending at the bound; the event of this call was not handed over",
+      { tool: "extension_tool" },
+    );
+    return;
+  }
+  trail.auditSlot = false;
   const late = setTimeout(() => {
     logFixedLine("[extension_tool] a dispatch audit write did not settle in time; it is still counted as pending", {
       tool: "extension_tool",
@@ -278,7 +316,7 @@ async function auditToolDispatch(trail: DispatchTrail, outcome: ExtensionScopedT
     };
     const { logAuditEvent } = await import("@/lib/authz/audit");
     // Called now, before the answer returns; its promise is not awaited, only counted until it settles.
-    handOffDispatchEvent(logAuditEvent, event);
+    handOffDispatchEvent(trail, logAuditEvent, event);
   } catch {
     /* an audit write never changes the answer */
   }
@@ -462,8 +500,8 @@ async function runExtensionTool(
   },
   trail: DispatchTrail,
 ): Promise<unknown> {
-  // Too many dispatch events still pending (a stalled audit sink): refused before anything runs.
-  if (pendingDispatchAudits >= DISPATCH_AUDIT_MAX_PENDING) {
+  // The call takes its audit slot before anything here awaits; every slot taken (a stalled audit sink): refused.
+  if (!takeDispatchAuditSlot(trail)) {
     trail.auditBacklog = true;
     throw new ExtensionToolRefusal(AUDIT_BACKLOG_REFUSAL);
   }
