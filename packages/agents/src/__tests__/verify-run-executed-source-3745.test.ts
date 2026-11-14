@@ -30,7 +30,7 @@ const source = JSON.stringify({
 });
 const sha = (t: string) => createHash("sha256").update(t).digest("hex");
 const policy = { version: 1, contextId: "ctx", sourceSha256: "a".repeat(64), executedSourceSha256: "b".repeat(64), declarationSourceSha256: sha(source), source };
-const claim = (stepId = "step-1") => ({ contextId: "ctx", stepId, sourceSha256: policy.sourceSha256,
+const claim = (stepId = "step-1") => ({ contextId: "ctx", stepId, executionAttemptId: "attempt", sourceSha256: policy.sourceSha256,
   executedSourceSha256: policy.executedSourceSha256, declarationSourceSha256: policy.declarationSourceSha256 });
 beforeEach(() => {
   h.row = { run: { id: "run", orgId: "org", status: "running", executionAttemptId: "attempt", a2aContextId: "ctx" },

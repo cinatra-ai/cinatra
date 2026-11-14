@@ -62,6 +62,12 @@ const h = vi.hoisted(() => ({
   onSend: null as null | (() => Promise<unknown>),
   sendError: null as null | Error,
   sends: 0,
+  // The attempt each sent message named (cinatra#3745), null when it named none.
+  sentAttempts: [] as Array<unknown>,
+  // Runs once inside the next carrier call, before the carrier builds its metadata.
+  onMint: null as null | (() => Promise<void>),
+  // The real carrier (real token store and run read) instead of the fixed token.
+  realMint: false,
   staleRead: null as unknown,
   mintError: null as null | Error,
   createError: null as null | Error,
@@ -72,8 +78,9 @@ vi.mock("@cinatra-ai/a2a", () => ({
   createExternalA2AClient: vi.fn(async () => {
     if (h.createError) throw h.createError;
     return {
-      sendTask: vi.fn(async () => {
+      sendTask: vi.fn(async (params?: { message?: { metadata?: Record<string, unknown> } }) => {
         h.sends++;
+        h.sentAttempts.push(params?.message?.metadata?.["__cinatra_execution_attempt__"] ?? null);
         if (h.onSend) h.callbacks.push(await h.onSend());
         if (h.sendError) throw h.sendError;
         return { id: `task-next-${randomUUID()}`, contextId: h.contextId, status: { state: "completed" } };
@@ -90,12 +97,18 @@ vi.mock("../execution", () => ({
     h.handled.push({ fromStatus: input.fromStatus });
   }),
 }));
-vi.mock("../wayflow-run-token-carrier", () => ({
-  mintResumeRunTokenMetadata: vi.fn(async () => {
-    if (h.mintError) throw h.mintError;
-    return { cinatra_run_token: "token" };
-  }),
-}));
+vi.mock("../wayflow-run-token-carrier", async (orig) => {
+  const actual = await orig<typeof import("../wayflow-run-token-carrier")>();
+  return {
+    mintResumeRunTokenMetadata: vi.fn(async (...args: Parameters<typeof actual.mintResumeRunTokenMetadata>) => {
+      if (h.mintError) throw h.mintError;
+      const stall = h.onMint;
+      h.onMint = null;
+      if (stall) await stall();
+      return h.realMint ? actual.mintResumeRunTokenMetadata(...args) : { cinatra_run_token: "token" };
+    }),
+  };
+});
 vi.mock("../wayflow-url", () => ({
   WAYFLOW_UNDICI_TIMEOUT_MS: 60_000,
   WAYFLOW_A2A_TIMEOUT_MS: 86_400_000,
@@ -342,6 +355,9 @@ beforeEach(() => {
   h.onSend = callback;
   h.sendError = null;
   h.sends = 0;
+  h.sentAttempts = [];
+  h.onMint = null;
+  h.realMint = false;
   h.staleRead = null;
   h.mintError = null;
   h.createError = null;
@@ -421,6 +437,53 @@ describe.skipIf(!HAS_DB)("(c) the stopped-orchestrator resume", () => {
     expect(await callback(attemptA)).toMatchObject({ admitted: false, code: "run_source_mismatch",
       cause: "step_tool_run_source_inactive" });
     expect(await callback()).toMatchObject({ admitted: true, current: true });
+  });
+
+  // cinatra#3745 pre-2 finding 1: resume R1 claims attempt B and stalls before its message is built; the
+  // run is stopped and resume R2 claims attempt C, carrying the binding to C. R1's task must never go out
+  // labeled C (its run credential stays valid, so a C label would be admitted), and R1's failure must not
+  // move the run that R2 now runs.
+  it("a delayed resume never labels its task with the attempt of a later resume", async () => {
+    await seedDispatchedRun("stopped");
+    h.realMint = true;
+    h.onSend = () => callback((h.sentAttempts.at(-1) as string | null) ?? "");
+    const { resumeStoppedOrchestratorAction } = await import("../orchestrator-actions");
+    let attemptB: string | null = null;
+    let second: unknown;
+    h.onMint = async () => {
+      attemptB = (await rows()).runAttempt;
+      await transitions.transitionRunStatus(h.runId, "running", "stopped", undefined, AUTHORITY as never);
+      second = await resumeStoppedOrchestratorAction(h.runId);
+    };
+    expect(await resumeStoppedOrchestratorAction(h.runId)).toEqual({ ok: false, error: "resume failed" });
+    expect(second).toEqual({ ok: true });
+    const after = await rows();
+    expect(after.status).toBe("running");
+    expect(after.runAttempt).not.toBe(attemptB);
+    expect(after.boundAttempt).toBe(after.runAttempt);
+    // Only R2 sent, labeled with its own attempt, and only its callback is admitted.
+    expect(h.sends).toBe(1);
+    expect(h.sentAttempts).toEqual([after.runAttempt]);
+    expect(h.callbacks).toEqual([{ admitted: true, current: true, ...after }]);
+  });
+
+  it("a delayed resume whose send fails never stops the attempt of a later resume", async () => {
+    await seedDispatchedRun("stopped");
+    const { resumeStoppedOrchestratorAction } = await import("../orchestrator-actions");
+    let second: unknown;
+    // R1's send is in flight: the run is stopped and resumed again (R2), then R1's send fails.
+    h.onSend = async () => {
+      h.onSend = callback;
+      await transitions.transitionRunStatus(h.runId, "running", "stopped", undefined, AUTHORITY as never);
+      second = await resumeStoppedOrchestratorAction(h.runId);
+      h.sendError = new Error("wayflow unreachable");
+      return "r1-send";
+    };
+    expect(await resumeStoppedOrchestratorAction(h.runId)).toEqual({ ok: false, error: "resume failed" });
+    expect(second).toEqual({ ok: true });
+    const after = await rows();
+    expect(after).toEqual({ status: "running", runAttempt: after.runAttempt, boundAttempt: after.runAttempt });
+    expect(h.callbacks).toEqual([{ admitted: true, current: true, ...after }, "r1-send"]);
   });
 
   it("never admits a callback under a binding held by a foreign attempt", async () => {

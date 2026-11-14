@@ -190,6 +190,29 @@ describe("T6: every resume carries the node list through mintResumeRunTokenMetad
     h.readRun.mockRejectedValue(new Error("db down"));
     expect(Object.keys(await mintResumeRunTokenMetadata("R1"))).toEqual([CINATRA_RUN_TOKEN_MESSAGE_KEY]);
   });
+
+  // cinatra#3745 pre-2 finding 1: the stopped-orchestrator resume names the attempt ITS claim minted, never
+  // the run's attempt at the read. A delayed resume whose run was stopped and resumed again under a newer
+  // attempt must not label its task with that newer attempt: it gets no metadata at all.
+  it("names the attempt its caller claimed, and refuses when the run no longer runs under it", async () => {
+    h.readTemplate.mockResolvedValue({ lifecycleConfig: JSON.stringify({ review: {} }) });
+    const run = (status: string, executionAttemptId: unknown) =>
+      ({ id: "R1", templateId: "tmpl-1", sourceType: "agent_builder", status, executionAttemptId });
+    h.readRun.mockResolvedValue(run("running", "attempt-B"));
+    const metadata = await mintResumeRunTokenMetadata("R1", { executionAttemptId: "attempt-B" });
+    expect(metadata[CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY]).toBe("attempt-B");
+    expect(typeof metadata[CINATRA_RUN_TOKEN_MESSAGE_KEY]).toBe("string");
+    // Stopped and resumed again (attempt C), stopped, queued, or gone: no metadata, the resume sends nothing.
+    for (const current of [run("running", "attempt-C"), run("stopped", "attempt-B"), run("queued", "attempt-B"), null]) {
+      h.readRun.mockResolvedValue(current);
+      await expect(mintResumeRunTokenMetadata("R1", { executionAttemptId: "attempt-B" }))
+        .rejects.toThrow("resume_attempt_not_current");
+    }
+    // A read fault cannot confirm the attempt either.
+    h.readRun.mockRejectedValue(new Error("db down"));
+    await expect(mintResumeRunTokenMetadata("R1", { executionAttemptId: "attempt-B" }))
+      .rejects.toThrow("resume_attempt_not_current");
+  });
 });
 
 describe("Review 2 MF3: the input-required leg's log line carries no snapshot claim", () => {
