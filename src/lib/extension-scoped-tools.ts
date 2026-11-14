@@ -125,7 +125,7 @@ export async function dispatchExtensionScopedTool(input: {
   // often and in the same order as it does without the event; the trail keeps
   // what those reads saw, and the event is built from that alone. The event is
   // handed to the audit sink before the answer returns; the answer never waits
-  // for the write itself.
+  // for the write itself, and the writes still pending are bounded (below).
   const trail: DispatchTrail = {
     runPackage: null,
     codePackage: null,
@@ -152,7 +152,42 @@ type DispatchTrail = ExtensionToolAttribution & {
   branched: boolean;
   run: unknown;
   stepRead: boolean;
+  /** Refused because too many dispatch events were pending: no further write is handed over. */
+  auditBacklog?: boolean;
 };
+
+/**
+ * THE DISPATCH EVENTS STILL BEING WRITTEN ARE BOUNDED. An event counts as
+ * pending from its handoff until its write settles. One still pending after
+ * DISPATCH_AUDIT_SETTLE_MS is named once in the server log by a fixed line.
+ * While DISPATCH_AUDIT_MAX_PENDING are pending, a new `extension_tool` call is
+ * refused (403, fixed sentence) before its module is loaded, and the refusal is
+ * named in the server log by a fixed line instead of a further write.
+ */
+const DISPATCH_AUDIT_MAX_PENDING = 64;
+const DISPATCH_AUDIT_SETTLE_MS = 10_000;
+let pendingDispatchAudits = 0;
+const AUDIT_BACKLOG_REFUSAL = "extension_tool: the audit trail is not keeping up, so the call was not run";
+
+/** Hand one event to the sink and count it until its write settles. Never throws. */
+function handOffDispatchEvent(write: (event: AuditEventInput) => Promise<void>, event: AuditEventInput): void {
+  pendingDispatchAudits += 1;
+  const late = setTimeout(() => {
+    logFixedLine("[extension_tool] a dispatch audit write did not settle in time; it is still counted as pending", {
+      tool: "extension_tool",
+    });
+  }, DISPATCH_AUDIT_SETTLE_MS);
+  late.unref?.();
+  const settled = () => {
+    pendingDispatchAudits -= 1;
+    clearTimeout(late);
+  };
+  try {
+    void Promise.resolve(write(event)).then(settled, settled);
+  } catch {
+    settled();
+  }
+}
 
 /** Keep a value the dispatch read of `input.tool`, and give it back. */
 function seenTool(trail: DispatchTrail, value: unknown): unknown {
@@ -205,6 +240,12 @@ function originCodeOfAnswer(outcome: ExtensionScopedToolOutcome): string | undef
  */
 async function auditToolDispatch(trail: DispatchTrail, outcome: ExtensionScopedToolOutcome): Promise<void> {
   try {
+    if (trail.auditBacklog === true) {
+      logFixedLine("[extension_tool] a call was refused while dispatch audit writes were pending; no event was handed over", {
+        tool: "extension_tool",
+      });
+      return;
+    }
     const run = trail.run;
     const orgId = runField(run, "orgId");
     const runBy = runField(run, "runBy");
@@ -236,8 +277,8 @@ async function auditToolDispatch(trail: DispatchTrail, outcome: ExtensionScopedT
       },
     };
     const { logAuditEvent } = await import("@/lib/authz/audit");
-    // Called now, before the answer returns; its promise is not awaited.
-    void Promise.resolve(logAuditEvent(event)).catch(() => {});
+    // Called now, before the answer returns; its promise is not awaited, only counted until it settles.
+    handOffDispatchEvent(logAuditEvent, event);
   } catch {
     /* an audit write never changes the answer */
   }
@@ -421,6 +462,11 @@ async function runExtensionTool(
   },
   trail: DispatchTrail,
 ): Promise<unknown> {
+  // Too many dispatch events still pending (a stalled audit sink): refused before anything runs.
+  if (pendingDispatchAudits >= DISPATCH_AUDIT_MAX_PENDING) {
+    trail.auditBacklog = true;
+    throw new ExtensionToolRefusal(AUDIT_BACKLOG_REFUSAL);
+  }
   trail.runPackage = runContext.packageName;
   // WHOSE CODE RUNS (cinatra#4154): the run package's own, or, for a proven step
   // of an embedded child flow, the child's, from the exact child installation.
