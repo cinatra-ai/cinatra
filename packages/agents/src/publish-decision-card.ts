@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
-// The publish card's STATE SHAPE (cinatra#4150 part 7a-1a). Design 635da007, specs/app-lifecycle-cards.html XV
-// (the card and its three settled readings) and IV.1 (pending, loading, restricted, no longer open).
+// The publish card's STATE SHAPE (cinatra#4150 part 7a-1a): the card and its three settled readings, and the pending,
+// loading, restricted and no longer open readings.
 //
 // What the authorized read (publish-decision-card-core.ts) answers for one reader, and the parse a transport answer
 // goes through. This module imports nothing, so the card can import it without reaching the store: only a server entry

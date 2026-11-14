@@ -53,7 +53,13 @@ export async function publishDecisionCardStateForRun(
     agentName: template.name,
     rows: publishDecisionCardRows(declared, decision.surfacedValues),
   };
-  const deciderName = async () => (await readDeciderName(decision.decidedBy).catch(() => undefined)) ?? null;
+  // A settled card names its decider. A row with none recorded, or a name read that fails, draws nothing: never an
+  // anonymous card, and never a decline reason the read could not attribute.
+  const settled = async (draw: (deciderName: string | null) => PublishDecisionCardState) => {
+    if (!decision.decidedBy) return PUBLISH_DECISION_CARD_NONE;
+    const name = await readDeciderName(decision.decidedBy).catch(() => false as const);
+    return name === false ? PUBLISH_DECISION_CARD_NONE : draw(name ?? null);
+  };
   switch (decision.status) {
     case "parked": {
       const mayDecide = await enforcePublishDecisionAccess({
@@ -67,9 +73,9 @@ export async function publishDecisionCardStateForRun(
       return { state: "pending", ...common, mayDecide };
     }
     case "released":
-      return { state: "approved", ...common, deciderName: await deciderName() };
+      return settled((deciderName) => ({ state: "approved", ...common, deciderName }));
     case "declined":
-      return { state: "declined", ...common, deciderName: await deciderName(), reason: decision.decisionNote };
+      return settled((deciderName) => ({ state: "declined", ...common, deciderName, reason: decision.decisionNote }));
     case "expired":
       return { state: "expired", ...common };
     default:
