@@ -36,6 +36,13 @@ vi.mock("../auth-policy", () => ({
 const resolveOrgRoleForUser = vi.hoisted(() => vi.fn(async () => "member" as string | undefined));
 vi.mock("@/lib/auth-session", () => ({ resolveOrgRoleForUser }));
 
+// cinatra#4150 part 7a-2: the coordinator's publish moment, as a double (the coordinator's own suite pins the writes).
+const coordinatorMock = vi.hoisted(() => ({
+  onPublishGate: vi.fn(async () => undefined as unknown),
+  clearPublishMoment: vi.fn(async (_input: unknown) => undefined),
+}));
+vi.mock("../lifecycle-coordinator", () => coordinatorMock);
+
 import {
   PUBLISH_DECISION_NOT_OPEN,
   PUBLISH_DECISION_REQUIRED,
@@ -758,5 +765,81 @@ describe("the write registry tells the truth about the decline's authority (find
   it("the decline's one authority is the decider's member session in the run's org", () => {
     expect(src.match(/sessionAuthorityFromResolvedRole\(/g)).toHaveLength(1);
     expect(src).toContain("sessionAuthorityFromResolvedRole(run.orgId, role)");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4150 part 7a-2: the publish moment ends with the stop (the moment halves of A8 and A9).
+// ---------------------------------------------------------------------------
+
+const clears = () => coordinatorMock.clearPublishMoment.mock.calls.map(([input]) => {
+  const { run: r, whileStatus, why } = input as { run: { id: string }; whileStatus: string; why: string };
+  return [r.id, whileStatus, why];
+});
+
+describe("the publish moment is cleared when the run is stopped (A8, A9)", () => {
+  const NOW = new Date("2026-11-02T00:00:01Z");
+  const authorityFor = vi.fn((orgId: string) => ({ orgId, can: () => true }));
+
+  it("Do not publish clears the moment AFTER the stop, pinned to stopped, with the decider's authority", async () => {
+    expect(await declinePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, runStopped: true });
+    expect(clears()).toEqual([["run-1", "stopped", "declined"]]);
+    expect((coordinatorMock.clearPublishMoment.mock.calls[0]![0] as { authority: { orgId: string } }).authority.orgId).toBe("org-1");
+    expect(storeMock.transitionRunStatus.mock.invocationCallOrder[0]!).toBeLessThan(
+      coordinatorMock.clearPublishMoment.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("a decline that did not stop the run, or was not written, clears nothing", async () => {
+    storeMock.transitionRunStatus.mockRejectedValueOnce(stale());
+    expect(await declinePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, runStopped: false });
+    decisions.decide.mockResolvedValueOnce({ outcome: "lost", currentStatus: "expired" });
+    await declinePublishDecision({ runId: "run-1", actorContext: ACTOR });
+    expect(coordinatorMock.clearPublishMoment).not.toHaveBeenCalled();
+  });
+
+  it("a moment that cannot be cleared does not change the decline's answer", async () => {
+    coordinatorMock.clearPublishMoment.mockRejectedValueOnce(new Error("db down"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(await declinePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, runStopped: true });
+      expect(warn.mock.calls.map((c) => c.map(String).join(" ")).join("\n")).not.toMatch(/db down|run-1/);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("the expiry clears the moment of each run it stops, after the stop, pinned to stopped", async () => {
+    decisions.listDueParked.mockResolvedValue([decision()]);
+    const summary = await sweepExpiredPublishDecisions({ authorityFor, now: NOW });
+    expect(summary.expired).toBe(1);
+    expect(clears()).toEqual([["run-1", "stopped", "expired"]]);
+    expect(storeMock.transitionRunStatus.mock.invocationCallOrder[0]!).toBeLessThan(
+      coordinatorMock.clearPublishMoment.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it.each(["declined", "expired"])("the pass that finishes an unmade stop of a %s decision clears that moment too", async (status) => {
+    decisions.listSettledWithWaitingRun.mockResolvedValue([decision({ status })]);
+    await sweepExpiredPublishDecisions({ authorityFor, now: NOW });
+    expect(clears()).toEqual([["run-1", "stopped", status]]);
+  });
+
+  it("an expiry that stops no run (closed run_ended, or the run left meanwhile) clears nothing", async () => {
+    decisions.listDueParked.mockResolvedValue([decision()]);
+    storeMock.readAgentRunById.mockResolvedValue(run("stopped"));
+    await sweepExpiredPublishDecisions({ authorityFor, now: NOW });
+    storeMock.readAgentRunById.mockResolvedValue(run());
+    storeMock.transitionRunStatus.mockRejectedValueOnce(stale());
+    await sweepExpiredPublishDecisions({ authorityFor, now: NOW });
+    expect(coordinatorMock.clearPublishMoment).not.toHaveBeenCalled();
+  });
+
+  it("the pass that finishes an unmade stop clears nothing when its stop is stale (the run left meanwhile)", async () => {
+    decisions.listSettledWithWaitingRun.mockResolvedValue([decision({ status: "declined" })]);
+    storeMock.transitionRunStatus.mockRejectedValueOnce(stale());
+    const summary = await sweepExpiredPublishDecisions({ authorityFor, now: NOW });
+    expect(summary.stopped).toBe(0);
+    expect(coordinatorMock.clearPublishMoment).not.toHaveBeenCalled();
   });
 });

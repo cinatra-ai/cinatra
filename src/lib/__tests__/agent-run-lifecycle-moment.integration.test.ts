@@ -34,6 +34,7 @@ import { recordRunLifecycleMoment } from "@cinatra-ai/agents/store";
 import {
   advanceAgentRun,
   clearRunLifecycleMoment,
+  onPublishGate,
   onReviewedWorkChanged,
 } from "@cinatra-ai/agents/lifecycle-coordinator";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
@@ -480,6 +481,52 @@ describeDb("the writer states and clears the triple together", () => {
     });
 
     expect((await readTriple("run-audit-guard"))?.lifecycle_moment).toBe("audit");
+  });
+
+  // cinatra#4150: the publish park's write holds only while its decision is parked, in the same statement.
+  async function seedDecision(id: string, runId: string, status: string): Promise<void> {
+    await admin.query(
+      `INSERT INTO "${q(TEST_SCHEMA)}"."agent_run_publish_decisions"
+         (id, org_id, run_id, node_id, gate_task_id, status, surfaced_values, expires_at)
+       VALUES ($1, $2, $3, $1, $1, $4, '{}', now() + interval '1 day')`,
+      [id, ORG_ID, runId, status],
+    );
+  }
+  const park = (runId: string, decisionId: string) =>
+    onPublishGate({ run: { id: runId, orgId: ORG_ID }, decisionId, authority: writeAuthority() });
+
+  it("states the publish moment for a parked decision of a waiting run", async () => {
+    await admin.query(`DELETE FROM ${RUNS}`);
+    await seedRun("run-pub-parked", "pending_approval");
+    await seedDecision("dec-pub-parked", "run-pub-parked", "parked");
+    await park("run-pub-parked", "dec-pub-parked");
+    expect(await readTriple("run-pub-parked")).toEqual({
+      lifecycle_moment: "publish",
+      lifecycle_card_kind: "publish_decision",
+      lifecycle_card_ref: "dec-pub-parked",
+    });
+  });
+
+  it("a late park write for a decision Publish already released states nothing on the run given back to its wait", async () => {
+    await admin.query(`DELETE FROM ${RUNS}`);
+    await seedRun("run-pub-released", "pending_approval");
+    await seedDecision("dec-pub-released", "run-pub-released", "released");
+    await park("run-pub-released", "dec-pub-released");
+    expect((await readTriple("run-pub-released"))?.lifecycle_moment).toBeNull();
+  });
+
+  it("a late park write for an older decision keeps the newer decision's card", async () => {
+    await admin.query(`DELETE FROM ${RUNS}`);
+    await seedRun("run-pub-newer", "pending_approval");
+    await seedDecision("dec-pub-old", "run-pub-newer", "released");
+    await seedDecision("dec-pub-new", "run-pub-newer", "parked");
+    await park("run-pub-newer", "dec-pub-new");
+    await park("run-pub-newer", "dec-pub-old");
+    expect(await readTriple("run-pub-newer")).toEqual({
+      lifecycle_moment: "publish",
+      lifecycle_card_kind: "publish_decision",
+      lifecycle_card_ref: "dec-pub-new",
+    });
   });
 
   it("the partial index really covers the read it exists for", async () => {
