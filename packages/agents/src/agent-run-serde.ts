@@ -780,7 +780,7 @@ export async function selectWayflowRunStepToolPolicy(input: {
   const response = await fetchImpl(endpoint, { headers: { "X-Cinatra-Bridge-Token": bridgeToken },
     redirect: "error", cache: "no-store", signal: AbortSignal.timeout(10000) });
   if (!response.ok) throw new RunStepToolPolicyRefusal("step_tool_loader_selection_refused");
-  const body: unknown = await response.json();
+  const body = await readLoaderAnswer(response);
   const selected = (body as { selectedSourceBinding?: unknown } | null)?.selectedSourceBinding;
   if (!selected || typeof selected !== "object") throw new RunStepToolPolicyRefusal("step_tool_loader_binding_missing");
   const b = selected as Record<string, unknown>;
@@ -791,6 +791,39 @@ export async function selectWayflowRunStepToolPolicy(input: {
   return createRunStepToolPolicy({ contextId: input.contextId, rawSource: b.declarationSource,
     selectedRawSourceSha256: b.sourceSha256, selectedExecutedSourceSha256: b.executedSourceSha256 });
 }
+
+/** The loader's answer holds the agent's graph about twice (its composed document and the bound source); a larger
+ * answer is refused before it is read in full, parsed, hashed or stored (cinatra#3745). */
+export const LOADER_SELECTION_MAX_BYTES = 8 * 1024 * 1024;
+async function readLoaderAnswer(response: Response): Promise<unknown> {
+  const declared = response.headers.get("content-length");
+  if (declared !== null && !(Number(declared) <= LOADER_SELECTION_MAX_BYTES)) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new RunStepToolPolicyRefusal("step_tool_loader_answer_oversized");
+  }
+  if (!response.body) throw new RunStepToolPolicyRefusal("step_tool_loader_answer_invalid");
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > LOADER_SELECTION_MAX_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw new RunStepToolPolicyRefusal("step_tool_loader_answer_oversized");
+    }
+    chunks.push(value);
+  }
+  try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks))); }
+  catch { throw new RunStepToolPolicyRefusal("step_tool_loader_answer_invalid"); }
+}
+
+/** cinatra#3745 dispatch fence. The first message of a bound dispatch names the bound policy's three digests under
+ * this key; the loader's mount that receives it runs the task only when they are its own mount binding, so a reload
+ * between the select and the send fails the task instead of running another graph (docker/wayflow/agent_loader.py,
+ * `_take_expected_source`; the same key there). */
+export const CINATRA_EXPECTED_SOURCE_MESSAGE_KEY = "__cinatra_expected_source__";
 
 import type { VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
 import { parseVerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
@@ -881,6 +914,9 @@ export async function readRunStepToolPolicy(runId: string, orgId: string): Promi
 export async function verifyRunExecutedSource(runId: string, orgId: string,
   attestation: Omit<VerifiedExecutedRunSource, "executionAttemptId">,
 ): Promise<VerifiedExecutedRunSource> {
+  // Each claimed value is read once, here, into a frozen plain copy before any comparison: a getter or a proxy
+  // cannot answer the checks below one value and the proof another.
+  attestation = Object.freeze({ ...attestation });
   const [row] = await db.select({ run: agentRuns, binding: agentRunOutwardActionPolicies })
     .from(agentRuns).innerJoin(agentRunOutwardActionPolicies,
       eq(agentRuns.id, agentRunOutwardActionPolicies.runId))
@@ -897,6 +933,12 @@ export async function verifyRunExecutedSource(runId: string, orgId: string,
     throw new RunStepToolPolicyRefusal("step_tool_executed_source_mismatch");
   }
   // Proves the selected compiled step exists and its declaration remains valid.
+  // The step exists: an ApiNode of the bound graph carries that id (cinatra#3745).
+  const readers = invariantReaders as { hasApiNodeStep?: unknown };
+  if (typeof readers.hasApiNodeStep !== "function") throw new RunStepToolPolicyRefusal("step_tool_reader_unavailable");
+  if (!text(attestation.stepId) || readers.hasApiNodeStep(parseDocument(policy.source), attestation.stepId) !== true) {
+    throw new RunStepToolPolicyRefusal("step_tool_step_unknown");
+  }
   readTrustedStepToolDeclaration(policy.source, attestation.stepId);
   const proof = parseVerifiedExecutedRunSource({ ...attestation, executionAttemptId: row.run.executionAttemptId });
   if (!proof) throw new RunStepToolPolicyRefusal("step_tool_source_proof_invalid");

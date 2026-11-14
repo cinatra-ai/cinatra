@@ -446,14 +446,24 @@ function walkBridgeApiNodes(
   parsed: Record<string, unknown>,
   visit: (node: Record<string, unknown>, path: string) => void,
 ): void {
+  walkApiNodes(parsed, (node, path) => {
+    const url = node.url;
+    if (typeof url === "string" && url.includes("/api/llm-bridge")) {
+      visit(node, path);
+    }
+  });
+}
+
+/** Every ApiNode of a flow document, nested subflows included, whatever its target. */
+function walkApiNodes(
+  parsed: Record<string, unknown>,
+  visit: (node: Record<string, unknown>, path: string) => void,
+): void {
   function go(node: unknown, path: string): void {
     if (!isPlainObject(node)) return;
     const o = node as Record<string, unknown>;
     if (o.component_type === "ApiNode") {
-      const url = o.url;
-      if (typeof url === "string" && url.includes("/api/llm-bridge")) {
-        visit(o, path);
-      }
+      visit(o, path);
     }
     const refs = o.$referenced_components;
     if (isPlainObject(refs)) {
@@ -627,6 +637,20 @@ export function findStepToolDeclaration(
     kind: "declared",
     tools: first!.filter((name) => rest.every((list) => list.includes(name))),
   };
+}
+
+/**
+ * Whether a flow document holds an ApiNode with the given id, nested subflows
+ * included, whatever its target (cinatra#3745: the step a run's executing-source
+ * proof names must be a step of the run's bound graph).
+ */
+export function hasApiNodeStep(document: unknown, stepId: string): boolean {
+  if (!isPlainObject(document) || typeof stepId !== "string" || stepId === "") return false;
+  let found = false;
+  walkApiNodes(document, (node) => {
+    if (node.id === stepId) found = true;
+  });
+  return found;
 }
 
 function scanForStepToolDeclarations(

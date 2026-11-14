@@ -5,6 +5,7 @@ import {
   readAgentRunById,
   selectWayflowRunStepToolPolicy,
   bindRunStepToolPolicy,
+  CINATRA_EXPECTED_SOURCE_MESSAGE_KEY,
   readAgentTemplateById,
   readAgentTemplates,
   readAgentTemplateVersionBySemver,
@@ -5106,6 +5107,11 @@ async function runAgentBuilderExecutionJobInner(
         await updateAgentRunA2AContextId(runId, dispatchContextId);
       }
       const policy = await selectWayflowRunStepToolPolicy({ agentUrl: wayflowUrl, contextId: dispatchContextId });
+      // cinatra#3745 dispatch fence: the first message names the selected source, which the bind below binds or
+      // refuses; the loader's mount runs the task only when that source is its own, so a reload between the select
+      // and the send fails the task and never runs another graph. Set after the inputs, so no input can replace it.
+      initialMessagePayload[CINATRA_EXPECTED_SOURCE_MESSAGE_KEY] = { sourceSha256: policy.sourceSha256,
+        executedSourceSha256: policy.executedSourceSha256, declarationSourceSha256: policy.declarationSourceSha256 };
       const currentDispatchRun = await readAgentRunById(runId);
       if (!currentDispatchRun?.executionAttemptId) throw new Error("step_tool_dispatch_attempt_missing");
       await bindRunStepToolPolicy({ runId, orgId: run.orgId,

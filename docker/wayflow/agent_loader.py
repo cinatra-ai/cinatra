@@ -372,6 +372,73 @@ def _extract_and_scrub_run_token(
     return (metadata_token or text_token), message
 
 
+#: cinatra#3745 dispatch fence: the reserved initial-message key under which the
+#: host names the source binding it selected and bound to the run before its
+#: send. MUST equal CINATRA_EXPECTED_SOURCE_MESSAGE_KEY in
+#: packages/agents/src/agent-run-serde.ts (a cross-language ABI, no shared import).
+CINATRA_EXPECTED_SOURCE_MESSAGE_KEY = "__cinatra_expected_source__"
+_EXPECTED_SOURCE_FIELDS = ("sourceSha256", "executedSourceSha256", "declarationSourceSha256")
+
+
+def _take_expected_source(
+    message: Optional[Dict[str, Any]], assistant: Any
+) -> Optional[Dict[str, Any]]:
+    """cinatra#3745 dispatch fence: run a bound first task only on the mount whose
+    source the host bound.
+
+    The host reads the loader's source binding on the composed-OAS route, binds it
+    to the run, then sends the first task, naming the bound source in the first
+    text part's JSON under ``CINATRA_EXPECTED_SOURCE_MESSAGE_KEY``. A reload
+    between the read and the send can route the send to another mount of the same
+    agent, and during a reload the registry can name the new mount while the
+    router still serves the prior one. So the mount that receives the task
+    (``assistant``, the worker's own) compares the named source with its frozen
+    mount binding here, before any conversation is loaded or started: equal, the
+    key is removed and the task runs; anything else raises, and the task fails
+    with no step run.
+
+    A message without the key is returned unchanged (a resume, or a dispatch that
+    bound nothing). A key that is not exactly the three digests of this mount's
+    binding, or a mount without its read-only binding, raises. The caller's
+    message is never changed in place.
+    """
+    if not isinstance(message, dict):
+        return message
+    parts = message.get("parts")
+    if not isinstance(parts, list) or not parts:
+        return message
+    p0 = parts[0]
+    if not (
+        isinstance(p0, dict)
+        and p0.get("kind") == "text"
+        and isinstance(p0.get("text"), str)
+    ):
+        return message
+    try:
+        parsed = json.loads(p0["text"])
+    except (ValueError, TypeError):
+        return message
+    if not isinstance(parsed, dict) or CINATRA_EXPECTED_SOURCE_MESSAGE_KEY not in parsed:
+        return message
+    expected = parsed.pop(CINATRA_EXPECTED_SOURCE_MESSAGE_KEY)
+    binding = getattr(assistant, "_cinatra_executed_source", None)
+    if (
+        not isinstance(binding, MappingProxyType)
+        or not isinstance(expected, dict)
+        or set(expected.keys()) != set(_EXPECTED_SOURCE_FIELDS)
+        or any(
+            not isinstance(expected[k], str) or expected[k] != binding.get(k)
+            for k in _EXPECTED_SOURCE_FIELDS
+        )
+    ):
+        raise ValueError("executed_source_mismatch")
+    new_p0 = dict(p0)
+    new_p0["text"] = json.dumps(parsed)
+    new_message = dict(message)
+    new_message["parts"] = [new_p0, *parts[1:]]
+    return new_message
+
+
 def _scrub_run_token_from_message_for_storage(
     message: Any,
 ) -> Any:
@@ -1246,6 +1313,12 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
             if _scrubbed_message is not None:
                 params["message"] = _scrubbed_message
             _rt_token = _WAYFLOW_RUN_TOKEN.set(_run_token or "")
+            # cinatra#3745 dispatch fence: a bound first task runs only on the
+            # mount whose source the host bound; otherwise it fails here, before
+            # any conversation is loaded or started.
+            _fenced_message = _take_expected_source(params.get("message"), self.assistant)
+            if _fenced_message is not None:
+                params["message"] = _fenced_message
 
             # Propagate context_id to ApiCallStep via ContextVar so
             # X-Cinatra-A2A-Context-Id is injected on llm-bridge calls.
