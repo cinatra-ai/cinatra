@@ -404,3 +404,23 @@ describe("runAgentBuilderExecutionJob — the first dispatch binds the executed 
     expect(hoisted.sendTask).not.toHaveBeenCalled();
   });
 });
+
+// cinatra#3745 dispatch fence: the first message names the bound source, so the
+// loader's mount that receives it runs the task only for its own source.
+describe("runAgentBuilderExecutionJob — the first message names the bound source", () => {
+  it("carries the three digests of the policy it bound under the loader's fence key", async () => {
+    hoisted.runOverride = makeRun({ orgId: "org-test-1" });
+    hoisted.templateOverride = makeTemplate({ gatedSteps: [] });
+
+    await runAgentBuilderExecutionJob({ runId: "run-test-1" }, "job-1");
+
+    const [{ policy }] = hoisted.bindRunStepToolPolicy.mock.calls[0]! as [{ policy: Record<string, unknown> }];
+    const [sent] = hoisted.sendTask.mock.calls[0]! as [{ message: { parts: Array<{ text: string }> } }];
+    const payload = JSON.parse(sent.message.parts[0]!.text) as Record<string, unknown>;
+    expect(payload.__cinatra_expected_source__).toEqual({
+      sourceSha256: policy.sourceSha256, executedSourceSha256: policy.executedSourceSha256,
+      declarationSourceSha256: policy.declarationSourceSha256,
+    });
+    expect(payload.cinatra_run_id).toBe("run-test-1");
+  });
+});

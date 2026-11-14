@@ -45,7 +45,8 @@ describe("the loader's selected source, read before dispatch", () => {
  const sha = (t: string) => createHash("sha256").update(t).digest("hex");
  const graph = JSON.stringify({ flow: { id: "step" } });
  const binding = { sourceSha256: "a".repeat(64), executedSourceSha256: "b".repeat(64), declarationSourceSha256: sha(graph), declarationSource: graph };
- const answer = (body: unknown, ok = true) => vi.fn(async (_url: URL | string, _init?: RequestInit) => ({ ok, json: async () => body }) as unknown as Response);
+ // A real Response: the host reads the answer as a bounded byte stream (cinatra#3745).
+ const answer = (body: unknown, ok = true) => vi.fn(async (_url: URL | string, _init?: RequestInit) => new Response(JSON.stringify(body), { status: ok ? 200 : 503 }));
  const env = () => { vi.stubEnv("WAYFLOW_BASE_URL", "http://wayflow.test:3010"); vi.stubEnv("CINATRA_BRIDGE_TOKEN", "bridge-test-value"); };
  afterEach(() => { vi.unstubAllEnvs(); });
 

@@ -68,6 +68,7 @@ vi.mock("@cinatra-ai/agents/store", () => ({
   updateAgentRunA2AContextId: vi.fn(),
   selectWayflowRunStepToolPolicy: (input: { contextId: string }) => selectSourcePolicy(input),
   bindRunStepToolPolicy: (input: unknown) => bindSourcePolicy(input),
+  CINATRA_EXPECTED_SOURCE_MESSAGE_KEY: "__cinatra_expected_source__",
 }));
 vi.mock("@cinatra-ai/a2a", () => ({
   createExternalA2AClient: (...a: unknown[]) => createExternalA2AClient(...(a as [])),

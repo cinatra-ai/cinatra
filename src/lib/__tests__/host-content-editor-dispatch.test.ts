@@ -84,6 +84,7 @@ vi.mock("@cinatra-ai/agents/store",()=>({
  updateAgentRunA2AContextId:(runId:string,contextId:string)=>updateRunContextId(runId,contextId),
  selectWayflowRunStepToolPolicy:(input:{contextId:string})=>selectSourcePolicy(input),
  bindRunStepToolPolicy:(input:unknown)=>bindSourcePolicy(input),
+ CINATRA_EXPECTED_SOURCE_MESSAGE_KEY:"__cinatra_expected_source__",
 }));
 
 // --- per-instance (cinatra#274) identity resolver ----------------------------
@@ -588,5 +589,24 @@ describe("#3745 selected-source binding before content-editor effects",()=>{
   await expect(dispatchContentEditorViaA2A(input())).rejects.toThrow("step_tool_reader_unavailable");expect(sendTask).not.toHaveBeenCalled();
   bindSourcePolicy.mockRejectedValueOnce(Error("step_tool_dispatch_rebind_refused"));
   await expect(dispatchContentEditorViaA2A(input())).rejects.toThrow("step_tool_dispatch_rebind_refused");expect(sendTask).not.toHaveBeenCalled();
+ });
+ // cinatra#3745 dispatch fence: the loader's mount that receives the task runs it only for the source bound here.
+ it("names the bound source's three digests in the message it sends",async()=>{
+  await dispatchContentEditorViaA2A(input());
+  const sent=JSON.parse(lastSentText());
+  expect(sent.__cinatra_expected_source__).toEqual({sourceSha256:"a".repeat(64),executedSourceSha256:"b".repeat(64),declarationSourceSha256:"c".repeat(64)});
+  expect(sent.postId).toBe("7");
+ });
+ it("a queued -> running claim that fails sends nothing and fails the still-queued carrier run",async()=>{
+  transitionRunStatus.mockImplementation(async (...a:unknown[])=>{if(a[1]==="queued"&&a[2]==="running")throw Error("claim_failed_before_commit");});
+  try{
+   await expect(dispatchContentEditorViaA2A(input())).rejects.toThrow("claim_failed_before_commit");
+   const run=createCarrierRun.mock.calls.at(-1)![0];
+   expect(sendTask).not.toHaveBeenCalled();
+   expect(selectSourcePolicy).not.toHaveBeenCalled();
+   expect(bindSourcePolicy).not.toHaveBeenCalled();
+   expect(transitionRunStatus).toHaveBeenCalledWith(run.id,"queued","failed",expect.objectContaining({error:"claim_failed_before_commit"}),expect.anything());
+   expect(transitionRunStatus).not.toHaveBeenCalledWith(run.id,"running","failed",expect.anything(),expect.anything());
+  }finally{transitionRunStatus.mockImplementation(async()=>{});}
  });
 });
