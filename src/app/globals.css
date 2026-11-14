@@ -1438,9 +1438,11 @@ textarea:focus::placeholder {
 
 /* The mono label above the rule. A label that WRAPS its own control is left
    alone: the treatment would inherit into the field it wraps and turn the
-   reader's own text into a kicker. */
+   reader's own text into a kicker. A control drawn as a button with a radio,
+   checkbox or switch role is a wrapped control too: an option row that wraps
+   its radio keeps the title and detail type its renderer gives it. */
 .lifecycle-fields-subordinate
-  label:not(:has(input)):not(:has(textarea)):not(:has(select)) {
+  label:not(:has(input)):not(:has(textarea)):not(:has(select)):not(:has([role="radio"])):not(:has([role="checkbox"])):not(:has([role="switch"])) {
   font-family: var(--font-mono);
   font-size: var(--badge-text-2xs);
   letter-spacing: var(--badge-tracking);
