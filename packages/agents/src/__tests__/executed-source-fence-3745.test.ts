@@ -44,7 +44,9 @@ describe("the loader's answer is bounded before it is read", () => {
 
   it("refuses a valid binding padded past the bound, and stops reading it", async () => {
     env();
-    const padded = JSON.stringify({ selectedSourceBinding: binding, composedOas: "x".repeat(LOADER_SELECTION_MAX_BYTES) });
+    // Padded by 1 MiB (16 chunks) past the bound, so a read that stops at the first chunk over the bound
+    // leaves chunks unread; a padding inside the last chunk could not show that the read stopped.
+    const padded = JSON.stringify({ selectedSourceBinding: binding, composedOas: "x".repeat(LOADER_SELECTION_MAX_BYTES + 16 * 65536) });
     const encoded = new TextEncoder().encode(padded);
     let pulled = 0; let cancelled = false;
     const body = new ReadableStream<Uint8Array>({

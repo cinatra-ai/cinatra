@@ -53,6 +53,24 @@ vi.mock("@cinatra-ai/agents", () => ({
     setAgentRunConnectorInstanceBinding(runId, binding),
 }));
 
+// cinatra#3745: a carrier run binds the loader's selected source before its first send. Explicit
+// storage and selected-source ports, as in the other content-editor dispatch suites: no
+// PostgreSQL and no loader request.
+const readSourceRun = vi.fn(async () => {
+  const input = createCarrierRun.mock.calls.at(-1)?.[0] as unknown as { orgId?: string } | undefined;
+  return { orgId: input?.orgId ?? "org-from-run", executionAttemptId: "attempt", a2aContextId: null as string | null };
+});
+vi.mock("@cinatra-ai/agents/store", () => ({
+  readAgentRunById: () => readSourceRun(),
+  updateAgentRunA2AContextId: vi.fn(async () => undefined),
+  selectWayflowRunStepToolPolicy: async (input: { contextId: string }) => ({
+    version: 1, contextId: input.contextId, source: "{}",
+    sourceSha256: "a".repeat(64), executedSourceSha256: "b".repeat(64), declarationSourceSha256: "c".repeat(64),
+  }),
+  bindRunStepToolPolicy: async () => undefined,
+  CINATRA_EXPECTED_SOURCE_MESSAGE_KEY: "__cinatra_expected_source__",
+}));
+
 // --- the host derivation (its gates are pinned by agent-run-connector-instance-pin-4220.test.ts)
 const deriveAgentRunConnectorInstanceBinding = vi.fn<(input: unknown) => Promise<unknown>>();
 vi.mock("@/lib/connector-instance-write-authority", () => ({

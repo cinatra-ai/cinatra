@@ -31,9 +31,10 @@ const FIRST_TASK_SENDS = ["packages/agents/src/execution.ts", "src/lib/host-cont
 /** Resumes of a dispatched run: not first tasks. */
 const RESUME_SENDS = [
   "packages/agents/src/artifact-review-resume-delivery.ts",
-  "packages/agents/src/mcp/handlers.ts",
   "packages/agents/src/orchestrator-actions.ts",
   "packages/agents/src/review-task-actions.ts",
+  // The agent_run_resume WayFlow send (cinatra#4245): mcp/handlers.ts now calls it here.
+  "packages/agents/src/run-resume-under-claim.ts",
 ];
 
 /** Every tracked source file under src/ and packages/ (the index, so a file in any directory is seen). */
