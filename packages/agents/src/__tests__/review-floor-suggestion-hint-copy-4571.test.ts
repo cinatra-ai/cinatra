@@ -5,8 +5,8 @@
  * A pending review with suggestions told the reader nothing is recorded until
  * they "approve or reject below", while the floor below draws Comment,
  * Regenerate and Continue. The words are the approved drawing's, verbatim:
- * cinatra-ai/design specs/app-lifecycle-cards.html section VIII (revision
- * 3beff055, design#247, the binding the cinatra#3080 grade governs), the
+ * the app lifecycle cards design spec, section VIII (revision 3beff055,
+ * the binding the cinatra#3080 grade governs), the
  * `note-line` under the suggestion chips. The parity fixture pins the rendered
  * card, so it must carry the same words.
  */
