@@ -86,6 +86,36 @@ describe("collectInstalledFieldRendererBindings", () => {
     warn.mockRestore();
   });
 
+  it("SKIP-WARNs a component declared by a package of kind agent (cinatra#3470), keeps an artifact's", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    writePkg("s", "drawing-agent", {
+      name: "@s/drawing-agent",
+      cinatra: {
+        kind: "agent",
+        fieldRenderers: [
+          { id: "@s/drawing-agent:own", kind: "cta", priority: 70, component: { entry: "src/r" } },
+          { id: "@s/drawing-agent:declared", kind: "cta", priority: 70 },
+        ],
+      },
+    });
+    writePkg("s", "view-artifact", {
+      name: "@s/view-artifact",
+      cinatra: {
+        kind: "artifact",
+        fieldRenderers: [
+          { id: "@s/view-artifact:view", kind: "cta", priority: 70, component: { entry: "src/v" } },
+        ],
+      },
+    });
+    const entries = collectInstalledFieldRendererBindings();
+    expect(entries.map((e) => e.id).sort()).toEqual([
+      "@s/drawing-agent:declared",
+      "@s/view-artifact:view",
+    ]);
+    expect(warn.mock.calls.some((c) => String(c[0]).includes("cinatra#3470"))).toBe(true);
+    warn.mockRestore();
+  });
+
   it("returns [] when the install dir is unreadable (normal degraded state)", () => {
     rmSync(FIXTURE_DIR, { recursive: true, force: true });
     expect(collectInstalledFieldRendererBindings()).toEqual([]);
