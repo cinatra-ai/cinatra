@@ -60,8 +60,15 @@ export const REVIEW_FLOOR_SUBMISSION_FIELDS = {
 /** The page action's whole input: the submission fields and nothing else. */
 export const reviewFloorSubmissionInputSchema = z.object(REVIEW_FLOOR_SUBMISSION_FIELDS).strict();
 
-/** The sentence a malformed or over-long submission is answered with. */
-export const REVIEW_FLOOR_SUBMISSION_INVALID = `This decision could not be sent: the note and the prompt are each limited to ${REVIEW_FLOOR_TEXT_MAX_CHARS.toLocaleString("en-US")} characters.`;
+/**
+ * The sentence a malformed or over-long submission is answered with, as a
+ * `not-permitted` outcome. NOT a sentence of its own: it is the answer the
+ * card already shows when the decide route refuses a request (a 400 for the
+ * same malformed or over-long body, `review-gate-card.tsx`), so the same press
+ * reads the same through either entry, on every host.
+ */
+export const REVIEW_FLOOR_SUBMISSION_INVALID =
+  "This decision could not be recorded on this surface. Open the review to continue.";
 
 /**
  * The partition the decision helper takes, from a parsed submission: absent

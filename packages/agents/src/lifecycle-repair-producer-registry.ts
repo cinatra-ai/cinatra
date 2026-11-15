@@ -27,7 +27,7 @@
 // one source of truth without a consumer having to load the implementation.
 // ---------------------------------------------------------------------------
 
-import type { CompiledManifestLifecycle } from "@/lib/lifecycle/lifecycle-policy";
+import { readRepairFindingsInput, type CompiledManifestLifecycle } from "@/lib/lifecycle/lifecycle-policy";
 
 /** The produced-artifact ROLES core itself implements a typed repair for. A role
  * here means: "when a reviewer requests changes on an artifact of this role's
@@ -85,8 +85,8 @@ export function coreRepairsObjectType(
 // ---------------------------------------------------------------------------
 // readProducingStepNoteInput (cinatra#3080, acceptance item 4)
 //
-// Kept in this pure module, which the review store already imports, so the
-// read adds no module to any route's core import graph.
+// Kept in this pure module, which the review store already imports. It reads
+// a compiled declaration the caller has already loaded; it does no I/O.
 //
 // THE ONE QUESTION REGENERATE ASKS of the run under review: which text input of
 // the step that produced this work does the reviewer's Note fill? The decision
@@ -96,31 +96,32 @@ export function coreRepairsObjectType(
 // producing step declares no such input refuses Regenerate with a plain reason.
 // Comment and Continue work as usual.
 //
-// THE READ IS THE NARROWEST HONEST ONE. The agent manifest's lifecycle block
-// (`agentLifecycleDeclarationSchema` in `verdaccio/package-contract.ts`) is
-// STRICT and has no step-level Note-input field yet. No step can therefore
-// declare one, and this read finds none for every run. It does NOT fall back to
-// the agent-level `repairCapable` boolean: that flag says the agent can answer
-// a typed repair request. It does not name the input the Note goes into, and
-// reading it as if it did is the proxy the decision rules out.
-//
-// When the contract gains the declaration field (with its migration), this is
-// the one place that reads it. Until then every Regenerate is refused here.
+// THE DECLARATION IS THE STRICT CONTRACT'S OWN FIELD (pre-review 1 of #4571,
+// finding 2). The producing step is the producing run, and its template's
+// manifest names the input a reviewer's words go into:
+// `cinatra.lifecycle.repairFindingsInput` (cinatra#4424, a field of the strict
+// `agentLifecycleDeclarationSchema` in `verdaccio/package-contract.ts`),
+// compiled onto `agent_templates.lifecycle_config`. The repair that a
+// Regenerate opens is answered through that same declaration: the dispatch
+// drain puts the findings text into exactly that input
+// (`projectRepairFindingsInput`), and the run start re-derives it from the
+// template it executes. So the read names the input the words will really
+// reach, and nothing else counts. It does NOT fall back to the agent-level
+// `repairCapable` boolean: that flag says the agent can answer a typed repair
+// request, not which input the Note goes into, and reading it as if it did is
+// the proxy the decision rules out. No stand-in flag exists.
 // ---------------------------------------------------------------------------
 
 /**
- * The name of the text input that the producing step of `producerRunId`
- * declares for the reviewer's Note, or null when it declares none.
- *
- * Always null today: the contract has no field that could hold such a
- * declaration, so there is nothing to read. Callers treat null as "Regenerate
- * is not available on this review".
+ * The name of the text input that the producing step declares for the
+ * reviewer's Note, or null when it declares none (or names an input that is
+ * not admissible). `lifecycle` is the producing run's template's compiled
+ * lifecycle declaration (`agent_templates.lifecycle_config`, read fail-soft);
+ * null when the run, its template or the declaration is absent. Callers treat
+ * null as "Regenerate is not available on this review".
  */
-export async function readProducingStepNoteInput(
-  producerRunId: string | null,
-): Promise<string | null> {
-  // No declaration field exists in the contract yet; the run is named so the
-  // signature already carries what the real read will key on.
-  void producerRunId;
-  return null;
+export function readProducingStepNoteInput(
+  lifecycle: Pick<CompiledManifestLifecycle, "repairFindingsInput"> | null | undefined,
+): string | null {
+  return readRepairFindingsInput(lifecycle);
 }

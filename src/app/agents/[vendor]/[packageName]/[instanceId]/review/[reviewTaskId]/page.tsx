@@ -385,10 +385,11 @@ export default async function AgentRunReviewPage({
     // THE SAME BOUNDS AS THE DECIDE ROUTE (cinatra#3080). This action is a second
     // client-reachable entry to the one decision helper, so its input is parsed
     // by the ONE validator the route spreads into its body - never trusted for
-    // its declared type, and never bounded by a number of its own.
+    // its declared type, and never bounded by a number of its own. A refused
+    // input gets the outcome the card shows for a refused decide request.
     const checked = reviewFloorSubmissionInputSchema.safeParse(input);
     if (!checked.success) {
-      return { kind: "error", message: REVIEW_FLOOR_SUBMISSION_INVALID };
+      return { kind: "not-permitted", message: REVIEW_FLOOR_SUBMISSION_INVALID };
     }
     return submitReviewDecisionAction(
       runId,

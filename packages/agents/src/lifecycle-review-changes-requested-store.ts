@@ -57,6 +57,7 @@ import {
 import { isAutoReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
 import { isDeclaredReviewLeg, isDeclaredReviewTaskId } from "@/lib/artifacts/artifact-review-target";
 import { producedEventId, type ContinuationMode } from "@/lib/lifecycle/lifecycle-produced-event";
+import { parseLifecycleConfigText, type CompiledManifestLifecycle } from "@/lib/lifecycle/lifecycle-policy";
 import type { ChangesRequestedRequest, RepairFinding } from "@/lib/lifecycle/lifecycle-repair";
 
 /** Re-export the entry point's result so the surface (a src-side model) can map it
@@ -164,34 +165,38 @@ async function resolveCoreRepairCapable(artifactId: string): Promise<boolean> {
 }
 
 /**
- * Resolve the producing agent's `repairCapable` declaration from its run's
- * compiled manifest lifecycle (`agent_templates.lifecycle_config`, JSON-as-text).
+ * Resolve the producing run's template's compiled manifest lifecycle
+ * (`agent_templates.lifecycle_config`, JSON-as-text). Both facts the change road
+ * keys on come from it: the agent's `repairCapable` declaration (the typed
+ * road) and the input it declares for the reviewer's words,
+ * `repairFindingsInput` (Regenerate, through `readProducingStepNoteInput`).
  * Best-effort + fail-soft: any missing link (orphan run, no template, absent/
- * malformed config, no `repairCapable`) yields FALSE — the entry point then routes
- * to a human / org route (never a producer repair), the safe default. Mirrors the
- * orchestration store's `resolveManifest` read, narrowed to the one boolean the
- * repair route keys on (kept local to avoid an import cycle — the orchestration
- * store imports the repair store).
+ * malformed config) yields NULL, which reads as no `repairCapable` and no
+ * declared input; the entry point then routes a typed request to a human / org
+ * route and refuses a Regenerate, the safe defaults. Mirrors the orchestration
+ * store's `resolveManifest` read (kept local to avoid an import cycle: the
+ * orchestration store imports the repair store). This was `resolveRepairCapable`
+ * (the name older comments use); its `repairCapable` reading is unchanged: a
+ * producer is repair-capable exactly when the stored block says
+ * `repairCapable: true`.
  */
-async function resolveRepairCapable(producerRunId: string | null): Promise<boolean> {
-  if (!producerRunId) return false;
+async function resolveProducerLifecycle(producerRunId: string | null): Promise<CompiledManifestLifecycle | null> {
+  if (!producerRunId) return null;
   try {
     const [run] = await db
       .select({ templateId: agentRuns.templateId })
       .from(agentRuns)
       .where(eq(agentRuns.id, producerRunId))
       .limit(1);
-    if (!run?.templateId) return false;
+    if (!run?.templateId) return null;
     const [tmpl] = await db
       .select({ lifecycleConfig: agentTemplates.lifecycleConfig })
       .from(agentTemplates)
       .where(eq(agentTemplates.id, run.templateId))
       .limit(1);
-    if (!tmpl?.lifecycleConfig) return false;
-    const parsed = JSON.parse(tmpl.lifecycleConfig) as { repairCapable?: unknown };
-    return parsed?.repairCapable === true;
+    return parseLifecycleConfigText(tmpl?.lifecycleConfig ?? null);
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -260,17 +265,19 @@ export async function recordReviewSurfaceChangesRequested(
   // manifest, OR when CORE implements the repair for the artifact type under
   // review (the first repairing producer's implementation lives in core, so no
   // package manifest can declare it — cinatra#2047 D-1).
+  const producerLifecycle = await resolveProducerLifecycle(producerRunId);
   const repairCapable =
-    (await resolveRepairCapable(producerRunId)) ||
+    producerLifecycle?.repairCapable === true ||
     (await resolveCoreRepairCapable(baseTarget.artifactId));
   const origin = input.origin ?? "typed";
   // FOR A REGENERATE, THE STEP'S OWN DECLARATION decides (cinatra#3080, the
   // 2026-10-13 decision), never `repairCapable` above: the operation refuses a
-  // Regenerate whose producing step names no Note input. The contract has no
-  // field for that declaration yet, so this read finds none and every
-  // Regenerate is refused with the plain reason. The typed road is unchanged.
+  // Regenerate whose producing step names no Note input. The declaration is the
+  // producing template's `repairFindingsInput` (cinatra#4424), the input the
+  // repair's dispatch puts the reviewer's words into. The typed road is
+  // unchanged.
   const producingStepNoteInput =
-    origin === "regenerate" ? await readProducingStepNoteInput(producerRunId) : null;
+    origin === "regenerate" ? readProducingStepNoteInput(producerLifecycle) : null;
 
   // A stable idempotency key over the gate + the EXACT feedback: a response-lost
   // retry with the same feedback re-derives the same repair (idempotent); different
