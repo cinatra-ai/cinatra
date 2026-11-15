@@ -15,7 +15,7 @@
  * store. MOCKED: the latest-task record in Redis (`ctl.latest`), the run-wait
  * notices, the repair run's launch and enqueue (the launch records the paused
  * run's status at the moment it is called), the member check and actor context
- * of the drain, the CMS input projection, and for the worker the WayFlow URL,
+ * of the drain, and for the worker the WayFlow URL,
  * its dispatch scope check and the A2A client (`ctl.sent` records a send).
  *
  * Forced failures are database triggers armed per run (`arm`): a failed stop, a
@@ -129,10 +129,6 @@ vi.mock("@/lib/auth-session", async (orig) => ({
 vi.mock("@/lib/authz/build-actor-context-from-run", async (orig) => ({
   ...(await orig<typeof import("@/lib/authz/build-actor-context-from-run")>()),
   buildActorContextFromRun: vi.fn(async () => ({})),
-}));
-vi.mock("../lifecycle-repair-cms-production-bridge", async (orig) => ({
-  ...(await orig<typeof import("../lifecycle-repair-cms-production-bridge")>()),
-  projectCmsRepairInputParams: vi.fn(async () => ({})),
 }));
 
 const TEST_SCHEMA = `cinatra_test_end_mark_4245_${process.pid}`;
