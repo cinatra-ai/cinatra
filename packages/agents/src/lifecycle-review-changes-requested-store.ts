@@ -279,11 +279,21 @@ export async function recordReviewSurfaceChangesRequested(
   // request that carries none hashes exactly what it hashed before the field
   // existed — an in-flight retry across the deploy boundary still reconciles
   // against its own repair instead of reading as a second decision.
+  //
+  // THE ORIGIN IS PART OF THE KEY (pre-review 1 of #4571, finding 3). A typed
+  // conversation comment and a lent Regenerate with the same words used to
+  // derive one key, so a Regenerate after a typed comment reconciled against the
+  // typed repair and answered idempotent success, even when that repair had
+  // escalated and no successor would ever be made. A Regenerate key takes its
+  // own prefix (`rg:`), so it never equals a typed key whatever the words; the
+  // typed key (`pw:`) is byte-identical to the one stored rows carry, so a typed
+  // retry still reconciles against its own repair.
   const keyMaterial =
     prompt.length > 0
       ? `${gate.id} ${trimmed} ${prompt}`
       : `${gate.id} ${trimmed}`;
-  const idempotencyKey = `pw:${createHash("sha256").update(keyMaterial).digest("hex")}`;
+  const keyPrefix = origin === "regenerate" ? "rg" : "pw";
+  const idempotencyKey = `${keyPrefix}:${createHash("sha256").update(keyMaterial).digest("hex")}`;
   const findings: RepairFinding[] = [
     { id: PROMPT_WINDOW_FINDING_ID, message: trimmed },
     ...(prompt.length > 0 ? [{ id: PICTURE_PROMPT_FINDING_ID, message: prompt }] : []),

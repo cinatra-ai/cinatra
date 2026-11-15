@@ -363,7 +363,26 @@ export async function recordChangesRequested(
     .from(lifecycleRepair)
     .where(eq(lifecycleRepair.gateId, request.gateId))
     .limit(1);
-  if (existing[0]) {
+  // A REGENERATE RECONCILES ONLY AGAINST ITS OWN ROW (pre-review 1 of #4571,
+  // finding 3). The key carries the origin, so a row with this request's key is
+  // this Regenerate's own earlier press (a double press, a second tab): that one
+  // reconciles here, idempotently. Any OTHER row on the gate is a different
+  // decision, typed or otherwise, and a Regenerate never adopts it: it goes on
+  // to Regenerate's own guards below, where the gate-state read answers first
+  // (that row's commit resolved the gate, so the first decision stands) and the
+  // declared-Note-input refusal after it, before any write.
+  const ownRow =
+    !!existing[0] &&
+    (input.origin !== "regenerate" || existing[0].idempotencyKey === request.idempotencyKey);
+  if (existing[0] && !ownRow) {
+    // The other row's transaction closed the gate, so its notification clear is
+    // owed whatever this call answers (cinatra#2864, as below).
+    await dispatchAutoGateResolved({
+      runId: input.runId,
+      reviewTaskId: input.reviewTaskId,
+    });
+  }
+  if (existing[0] && ownRow) {
     // cinatra#2864 — a RE-DRIVE clears too. A repair row exists for this gate only
     // because a prior call's transaction committed, and that transaction CASed the
     // gate to `resolved` in the same breath — so the gate is closed, whatever this
