@@ -41,7 +41,7 @@ import {
 } from "./agent-hitl-screen-card";
 import type { AgentRunMessageBody } from "./store";
 import { StatusPill } from "@/components/ui/status-pill";
-import { fieldRendererRegistry } from "./field-renderer-registry";
+import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext, FieldRendererProps } from "./field-renderer-registry";
 import { ArrowRight } from "lucide-react";
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
@@ -1710,16 +1710,16 @@ export function AgenticRunPanel({
   // this is the analogous fix for the panel-level buffer.
   //
   // The key is the gate's identity, `hitlGateIdentityKey` (the one gate key of
-  // this panel). It holds the REVIEW TASK (cinatra#3380, cinatra#3562): a
-  // mid-run gate carries no fieldName and can repeat its renderer, and a value
-  // written for one gate must not read as the next gate's answer. A gate of
-  // another review task with the same renderer and field (a mid-run list step
-  // has no field) starts with an empty buffer. The renderer of that gate is a
-  // new instance (its React key holds the task), and it seeds its own state
-  // from the `value` it is given. Without the reset it would be seeded with the
-  // earlier task's pick, and the Continue could approve the new task with that
-  // pick. The reset runs during this render, so the new renderer never
-  // receives the earlier buffer.
+  // this panel). It holds the REVIEW TASK (cinatra#3380, cinatra#3035,
+  // cinatra#3562): a mid-run gate carries no fieldName and can repeat its
+  // renderer, and a value written (or a pick made) for one gate must not read
+  // as the next gate's answer. A gate of another review task with the same
+  // renderer and field (a mid-run list step has no field) starts with an
+  // empty buffer. The renderer of that gate is a new instance (its React key
+  // holds the task), and it seeds its own state from the `value` it is given.
+  // Without the reset it would be seeded with the earlier task's pick, and the
+  // Continue could approve the new task with that pick. The reset runs during
+  // this render, so the new renderer never receives the earlier buffer.
   const bufferedHitlValueKey = effectiveHitlContext
     ? hitlGateIdentityKey(effectiveHitlContext)
     : null;
@@ -2197,12 +2197,14 @@ export function AgenticRunPanel({
         size="sm"
         // Unavailable while the gate's renderer reports its value unsendable
         // (see `gateValidity`; a renderer that never reports changes nothing,
-        // cinatra#3562), or while the gate's declared renderer value is
-        // unwritten (cinatra#3380).
+        // cinatra#3562), while the gate's declared renderer value is unwritten
+        // (cinatra#3380), or while a gate whose kind declares the hold has no
+        // pick (cinatra#3035).
         disabled={
           isApproving ||
           activeGateReportedInvalid ||
-          opts?.awaitingRendererValue === true
+          opts?.awaitingRendererValue === true ||
+          continueAwaitsAPick(hitlRendererEntry?.entry, bufferedHitlValue)
         }
         className="gap-1.5"
         // THE HITL SCREEN'S ONE DECISION (cinatra#2930). Named on the row this
@@ -3226,7 +3228,8 @@ export function AgenticRunPanel({
                       // would pre-fill field 2 under field 2's label. The key is
                       // the gate's identity, `hitlGateIdentityKey`: the review
                       // task (cinatra#3380, a mid-run gate can repeat its
-                      // renderer; cinatra#3562, a gate of another review task
+                      // renderer; cinatra#3035, a later gate's renderer starts
+                      // with no pick; cinatra#3562, a gate of another review task
                       // with the same renderer and field gets a new renderer and
                       // a new validity owner, never the one that reported on the
                       // gate before it), the renderer and the field.

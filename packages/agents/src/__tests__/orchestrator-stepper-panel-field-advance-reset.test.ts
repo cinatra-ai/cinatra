@@ -54,6 +54,11 @@ describe("orchestrator-stepper-panel — per-field setup advance resets input st
     const field = (fieldName: string) =>
       hitlGateIdentityKey({ reviewTaskId: "setup-run", xRenderer: "@pack:field", fieldName });
     expect(field("postTitle")).not.toBe(field("blogPostUrl"));
+    // A later gate with the same renderer (another review task) changes it too,
+    // so its renderer starts with no pick (cinatra#3035).
+    const gate = (reviewTaskId: string) =>
+      hitlGateIdentityKey({ reviewTaskId, xRenderer: "@pack:ideas", fieldName: null });
+    expect(gate("task-1")).not.toBe(gate("task-2"));
     // No renderer key may remain xRenderer-only.
     expect(SRC).not.toMatch(/key=\{interruptContext\.xRenderer\}/);
   });

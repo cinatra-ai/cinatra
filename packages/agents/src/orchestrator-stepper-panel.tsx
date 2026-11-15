@@ -148,7 +148,7 @@ import {
 } from "./run-surface-status";
 import { useRunRowWatch } from "./use-run-row-watch";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
-import { fieldRendererRegistry } from "./field-renderer-registry";
+import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext, FieldRendererProps } from "./field-renderer-registry";
 import {
   ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
@@ -755,7 +755,8 @@ function HitlApprovalCard({
   // sequential per-field setup gates all reuse the SAME xRenderer
   // (schema-field-fallback), so an xRenderer-only key never fires on a
   // field→field advance (postTitle → blogPostUrl) and field 1's buffered
-  // value bleeds into field 2.
+  // value bleeds into field 2. A pick made for one gate must not read as the
+  // next gate's answer either (cinatra#3035).
   //
   // The key is the gate's identity, `hitlGateIdentityKey` (the one gate key of
   // this panel; `setupGateIdentity` reads it too). The review task is part of
@@ -1467,7 +1468,8 @@ function HitlApprovalCard({
             // pre-fills the next field. The key is the gate's identity,
             // `hitlGateIdentityKey`, through `setupGateIdentity`: the review
             // task is in it (cinatra#3380, a mid-run gate can repeat its
-            // renderer; cinatra#3562, a gate of another review task with the
+            // renderer; cinatra#3035, a later gate's renderer starts with no
+            // pick; cinatra#3562, a gate of another review task with the
             // same renderer and field gets a new renderer and a new validity
             // owner, never the one that reported on the gate before it).
             key={setupGateKey}
@@ -1671,12 +1673,20 @@ function HitlApprovalCard({
 
         {showContinueButton && (
           <div className="flex justify-end pt-2 border-t border-line">
+            {/* cinatra#3380: held while the gate's declared renderer value is unwritten.
+                cinatra#3035: held while a gate whose kind declares the hold has no pick. */}
             <Button
               size="sm"
               // Unavailable while the gate's renderer reports its value
-              // unsendable (cinatra#3562), or while the gate's declared renderer
-              // value is unwritten (cinatra#3380).
-              disabled={isApproving || gateReportedInvalid || continueAwaitsRendererValue}
+              // unsendable (cinatra#3562), while the gate's declared renderer
+              // value is unwritten (cinatra#3380), or while a gate whose kind
+              // declares the hold has no pick (cinatra#3035).
+              disabled={
+                isApproving ||
+                gateReportedInvalid ||
+                continueAwaitsRendererValue ||
+                continueAwaitsAPick(entry, bufferedHitlValue)
+              }
               onClick={handleContinue}
               className="gap-1.5"
             >
