@@ -117,7 +117,10 @@ function input(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   createExternalA2AClient.mockResolvedValue({ sendTask });
+  // A completed Task: a carrier run completes only for one (cinatra#3745).
   sendTask.mockResolvedValue({
+    kind: "task",
+    status: { state: "completed" },
     history: [
       { role: "user", parts: [{ kind: "text", text: "{}" }] },
       { role: "agent", parts: [{ kind: "text", text: "{\"ok\":true}" }] },

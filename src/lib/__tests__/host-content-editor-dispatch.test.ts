@@ -132,7 +132,10 @@ beforeEach(() => {
     id: input.id,
     inputParams: {},
   }));
+  // A completed Task: a carrier run completes only for one (cinatra#3745).
   sendTask.mockResolvedValue({
+    kind: "task",
+    status: { state: "completed" },
     history: [{ role: "agent", parts: [{ kind: "text", text: '{"postId":"7"}' }] }],
   });
 });
@@ -608,5 +611,30 @@ describe("#3745 selected-source binding before content-editor effects",()=>{
    expect(transitionRunStatus).toHaveBeenCalledWith(run.id,"queued","failed",expect.objectContaining({error:"claim_failed_before_commit"}),expect.anything());
    expect(transitionRunStatus).not.toHaveBeenCalledWith(run.id,"running","failed",expect.anything(),expect.anything());
   }finally{transitionRunStatus.mockImplementation(async()=>{});}
+ });
+ // cinatra#3745: sendTask resolves a failed Task (the loader's mount refuses a task whose bound source is not its own,
+ // before any step runs), so the carrier run completes only for a completed Task and fails for any other state.
+ const resolvedTask=(state:string|undefined)=>({kind:"task",id:"task-1",contextId:"ctx-1",...(state===undefined?{}:{status:{state}}),
+  history:[{role:"agent",parts:[{kind:"text",text:'{"postId":"7"}'}]}]});
+ it.each(["failed","input-required","canceled","working",undefined])("a resolved Task in state %s fails the carrier run running -> failed and never completes it",async(state)=>{
+  sendTask.mockResolvedValueOnce(resolvedTask(state));
+  await expect(dispatchContentEditorViaA2A(input())).rejects.toThrow("content_editor_task_not_completed");
+  const run=createCarrierRun.mock.calls.at(-1)![0];
+  expect(sendTask).toHaveBeenCalledTimes(1);
+  expect(transitionRunStatus).toHaveBeenCalledWith(run.id,"running","failed",expect.objectContaining({error:expect.stringContaining("content_editor_task_not_completed")}),expect.anything());
+  expect(transitionRunStatus).not.toHaveBeenCalledWith(run.id,"running","completed",expect.anything(),expect.anything());
+ });
+ it("a resolved completed Task completes the carrier run and returns the agent's reply",async()=>{
+  sendTask.mockResolvedValueOnce(resolvedTask("completed"));
+  await expect(dispatchContentEditorViaA2A(input())).resolves.toBe('{"postId":"7"}');
+  const run=createCarrierRun.mock.calls.at(-1)![0];
+  expect(transitionRunStatus).toHaveBeenCalledWith(run.id,"running","completed",expect.anything(),expect.anything());
+  expect(transitionRunStatus).not.toHaveBeenCalledWith(run.id,"running","failed",expect.anything(),expect.anything());
+ });
+ it("an anonymous dispatch (no carrier run) keeps returning the reply of a resolved Task in any state",async()=>{
+  sendTask.mockResolvedValueOnce(resolvedTask("failed"));
+  await expect(dispatchContentEditorViaA2A({agentUrl:"http://agent",payload:{postId:"7"},timeoutMs:1000})).resolves.toBe('{"postId":"7"}');
+  expect(createCarrierRun).not.toHaveBeenCalled();
+  expect(transitionRunStatus).not.toHaveBeenCalled();
  });
 });

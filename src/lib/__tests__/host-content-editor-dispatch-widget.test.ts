@@ -139,7 +139,10 @@ beforeEach(() => {
   readAgentTemplateByPackageName.mockResolvedValue({ id: "tmpl_wp" });
   readLatestAgentVersionIdForTemplate.mockResolvedValue("ver_1");
   createCarrierRun.mockImplementation(async (input: { id: string }) => ({ id: input.id, inputParams: {} }));
+  // A completed Task: a carrier run completes only for one (cinatra#3745).
   sendTask.mockResolvedValue({
+    kind: "task",
+    status: { state: "completed" },
     history: [{ role: "agent", parts: [{ kind: "text", text: '{"postId":"7"}' }] }],
   });
   resolveOrgRoleForUser.mockResolvedValue("member");
