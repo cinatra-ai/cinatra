@@ -2,11 +2,15 @@
  * ITEM 7 OF cinatra#3487 - THE WINDOW'S TOOLS ARE THE COMPOSER'S, READ FROM THE
  * API ON THE REAL PAGE.
  *
- * The enforcement item: "On the real pages (the design-conformance suite on a
- * sealed boot): with the review screen active, an unrelated request typed into
- * the page's window is answered by the assistant with the same tool manifest
- * the API reports for the chat composer; the manifests are read from the API,
- * never from the DOM, so a decorated attribute cannot stand in."
+ * The enforcement item, as corrected on the issue on 2026-11-15: "On the real
+ * pages (the authenticated agents-run suite on a sealed boot,
+ * `tests/e2e/agents-run/tool-manifest-parity-3487.spec.ts`): with the review
+ * screen of a run active, an unrelated request typed into the page's window is
+ * answered by the assistant and takes no review action. One report of
+ * `GET /api/assistants/chat/tool-manifest` for that run then gives the window
+ * the same tool manifest as the chat composer (equal manifest hashes and equal
+ * tool lists). The manifests are read from the API, never from the DOM, so a
+ * decorated attribute cannot stand in."
  *
  * HOW IT IS READ. `packages/agent-ui-protocol/CONTRACT.md` section 5.2 (the
  * tool-manifest report) binds the shape: ONE request to
@@ -44,13 +48,14 @@
  * window's road reached the assistant; the comparison of the tools is the
  * report's, not a reading of what that turn handed to its provider.
  *
- * WHICH SUITE. The item names the design-conformance suite. That suite's
- * project (`tests/e2e/config/design.config.ts`, design-conformance-functional)
- * runs on pull requests and in the merge queue against a production boot of
- * harness routes, with no signed-in session and no run in review, so this test
- * cannot pass there and is NOT wired into it: it lives in the authenticated
- * agents-run suite and runs on a booted instance. Running it inside the design-conformance suite is a part of
- * item 7 that is not met yet.
+ * WHICH SUITE. The item names the authenticated agents-run suite on a sealed
+ * boot. This test needs a signed-in session, a run whose review gate is
+ * pending and a real model provider, so it is not part of pull-request CI (the
+ * live agent suites need a running runtime and paid model credentials). It is
+ * NOT wired into the design-conformance suite either: that suite runs harness
+ * routes with no signed-in session and no run in review. Item 7 is met when
+ * this spec has merged and one run of it on a sealed boot passes with a run
+ * whose review is active, recorded at the close of the issue.
  *
  * THE TARGET. `E2E_TOOL_MANIFEST_REVIEW_PATH` names the review page of a run on
  * the boot whose review screen is active:
