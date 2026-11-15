@@ -66,9 +66,10 @@ const RESUME_ROAD_ANCHORS: Record<string, { from: string; claim: string; send?: 
     claim: "THE GATE IS DECIDED ONCE",
     send: "await sendWayflowResume(",
   },
+  // cinatra#3745: agent_run_resume claims the gate (claimGateForResume) and reads the hold under that claim
   "packages/agents/src/mcp/handlers.ts": {
     from: "async function handleAgentBuilderRunResume(",
-    claim: "claimRunBeforeSend(",
+    claim: "claimGateForResume(",
   },
   "packages/agents/src/artifact-review-resume-delivery.ts": {
     from: "export async function deliverArtifactReviewResumeIntent(",

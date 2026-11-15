@@ -173,11 +173,48 @@ transaction, the same record the page capture tool writes, so a screenshot it
 files draws with its facts row. Facts the record cannot take (a URL over 2048
 characters or with a control character) are refused before anything is filed.
 
+## File the six media kinds
+
+The review island draws media only through the byte road, which serves six
+kinds: image, video, audio, pdf, document and archive. This development command
+files one artifact of each kind for one user, and can open a real review gate
+that pins all six:
+
+```sh
+CINATRA_RUNTIME_MODE=development node --env-file=.env.local scripts/fixtures/file-media-kinds.mjs \
+  --org ORGANIZATION_ID --user FIXTURE_ADMIN_USER_ID --review-run
+```
+
+The samples are small files built from code
+(`scripts/fixtures/lib/media-kind-samples.ts`): a PNG, a VP8 WebM, a PCM WAV, a
+one-page PDF, a Word document and a ZIP archive. They are the same bytes on
+every run. The user must be a member of the organization: the command reads
+that membership first, because the upload route takes both from a signed-in
+session. Each sample then goes through the upload route's service entry: its
+form is mapped to the one installed required artifact type that accepts it.
+The blob store detects the form while it stores the bytes, and the writer
+refuses a form the type does not accept before it writes any artifact row.
+The artifacts are the user's private uploads. Membership and every kind are
+checked before the first write, so a non-member or a missing type files
+nothing. The six are filed one after another with no rollback: a failure at a
+later kind leaves the earlier ones filed, and each run files a new set. The
+command prints the six artifacts and their `review_targets`.
+
+With `--review-run`, the command also seeds a run of the marked review gate
+fixture (`tests/fixtures/review-gate-agent`) with those targets. Stage that
+fixture under the lane's `extensions/` first, as for the screenshot fixture.
+Only run creation is seeded; WayFlow pauses the run and the run executor pins
+the targets in a real gate. The command fails unless the gate pins exactly the
+six filed revisions. A failure there leaves the six artifacts and the run in
+place. This option needs the isolated database, Redis and an explicit queue
+name. The command prints the run and its review task.
+
 ## Validation and remaining acceptance
 
 ```sh
 pnpm exec vitest run src/lib/__tests__/dev-screenshot-producer.test.ts
 pnpm exec vitest run src/lib/__tests__/dev-screenshot-fixture.test.ts
+pnpm exec vitest run src/lib/__tests__/dev-media-kinds-fixture.test.ts
 node --import tsx --test scripts/fixtures/__tests__/screenshot-capture.test.ts
 ```
 

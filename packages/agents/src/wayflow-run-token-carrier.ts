@@ -1,6 +1,7 @@
 import { mintRunToken, CINATRA_RUN_TOKEN_MESSAGE_KEY } from "@/lib/agent-run-token";
 import { setAgentRunTokenHash } from "./store";
 import { buildWayflowInitialMessagePayload } from "./wayflow-dispatch-payload";
+import { readSnapshotNodesMetadataForRun } from "./step-snapshots";
 
 // ---------------------------------------------------------------------------
 // WayFlow A2A RESUME run-token carrier (#1193).
@@ -75,13 +76,19 @@ export type ResumeRunTokenMetadata = { [key: string]: unknown };
  *
  * The returned object is passed straight to `message.metadata`; the raw token is
  * never logged, never persisted, and never placed in the message text.
+ *
+ * cinatra#4264: this is the ONE function all four resume roads call, so it also
+ * carries the step-snapshot node list of the run's template (when its stored
+ * lifecycle declares `regenerate`, never for a lifecycle repair run). Without a
+ * declaration the metadata is the token alone, as before.
  */
 export async function mintResumeRunTokenMetadata(
   runId: string,
 ): Promise<ResumeRunTokenMetadata> {
   const runToken = mintRunToken();
   await setAgentRunTokenHash(runId, runToken.tokenHash);
-  return { [CINATRA_RUN_TOKEN_MESSAGE_KEY]: runToken.token };
+  const snapshotNodes = await readSnapshotNodesMetadataForRun(runId);
+  return { ...snapshotNodes, [CINATRA_RUN_TOKEN_MESSAGE_KEY]: runToken.token };
 }
 
 /**

@@ -60,7 +60,7 @@ import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 
 import { db } from "./db";
 import { agentRuns, artifactProducedOutbox, artifactReviewGates } from "./schema";
-import { transitionRunStatus } from "./run-transition";
+import { transitionRunStatus, type ResumeGateIdentity } from "./run-transition";
 import { RunTransitionError, type AgentRunStatus } from "./run-status";
 
 /**
@@ -555,6 +555,8 @@ export interface HoldRunInput {
   withheld: WithheldTerminal;
   /** Test seam (see `ProducedReviewDrain`). */
   drain?: ProducedReviewDrain;
+  /** cinatra#3745: the claimed resume leg this park belongs to; its edge carries it in the CAS (`resumeLeg`). */
+  resumeLeg?: ResumeGateIdentity;
 }
 
 export type HoldRunOutcome =
@@ -855,7 +857,11 @@ async function parkRun(
         PARKED_STATUS,
         // ONE COMMIT (fix leg 12): the parked status and the park itself land in
         // the same guarded transaction, so no reader can see one without the other.
-        { stepResults: parkedStepResults, producedReviewPark: parkColumn },
+        {
+          stepResults: parkedStepResults,
+          producedReviewPark: parkColumn,
+          ...(input.resumeLeg ? { resumeLeg: input.resumeLeg } : {}),
+        },
         authority,
       ),
     ).catch((err) => {

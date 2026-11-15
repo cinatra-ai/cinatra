@@ -17,7 +17,11 @@
  *  1. FIRST-PARTY (`phantomDeps`): a source import of another pnpm WORKSPACE
  *     member (e.g. `@cinatra-ai/llm`) not declared by the importer. Scanned
  *     across every workspace member (`packages/*` + every synced
- *     `extensions/*` tree).
+ *     `extensions/*` tree). One exact exemption, for synced extensions only:
+ *     the host-served read-only dashboard COMPOSITION specifier
+ *     (`HOST_DASHBOARD_COMPOSITION_MODULE`, cinatra#3092), whose package is a
+ *     workspace member but which an extension may not declare (see
+ *     `extractInternalImports`).
  *
  *  2. THIRD-PARTY (`thirdPartyPhantomDeps`, cinatra#2480): a production-value
  *     import of an npm-registry package not declared by the importer. Scoped
@@ -199,8 +203,22 @@ export function resolveSpecifierToPackage(spec) {
 /** Extract the set of OTHER-workspace package names imported by `source`.
  * Covers `from "x"`, side-effect `import "x"`, `import("x")`, `require("x")`,
  * and `export ... from "x"`. `internalNames` is the Set of workspace member
- * names; `selfName` is excluded. */
-export function extractInternalImports(source, internalNames, selfName) {
+ * names; `selfName` is excluded.
+ *
+ * `hostServedExempt` (true for a SYNCED-EXTENSION member only) skips an import
+ * of EXACTLY the host-served read-only dashboard composition specifier
+ * (`HOST_DASHBOARD_COMPOSITION_MODULE`, cinatra#3092). Its package is a
+ * workspace member here, so the import lands on this first-party leg, not on
+ * the third-party leg that already exempts it. A synced extension cannot
+ * declare it: the extension kind gate and scripts/extensions/inventory.mjs
+ * admit the specifier, never its base package, so a declared
+ * `@cinatra-ai/sdk-dashboard` in a production bucket (dependencies,
+ * peerDependencies, optionalDependencies; devDependencies are not read by
+ * those gates) is an SDK-only violation. The match is on the RAW
+ * specifier, before the resolver collapses a subpath, so the package root
+ * and every other subpath stay findings. A `packages/*` member keeps the
+ * plain rule (it can declare the workspace package). */
+export function extractInternalImports(source, internalNames, selfName, { hostServedExempt = false } = {}) {
   const found = new Set();
   const patterns = [
     /\bfrom\s*["']([^"']+)["']/g,            // import/export ... from "x"
@@ -211,6 +229,7 @@ export function extractInternalImports(source, internalNames, selfName) {
   for (const re of patterns) {
     let m;
     while ((m = re.exec(source)) !== null) {
+      if (hostServedExempt && m[1] === HOST_DASHBOARD_COMPOSITION_MODULE) continue;
       const pkg = resolveSpecifierToPackage(m[1]);
       if (pkg && pkg !== selfName && internalNames.has(pkg)) found.add(pkg);
     }
@@ -510,7 +529,7 @@ function scan() {
       const relFile = relative(REPO_ROOT, file);
       if (TEST_RE.test(relFile)) continue;
       const source = readFileSync(file, "utf8");
-      const imported = extractInternalImports(source, internalNames, m.name);
+      const imported = extractInternalImports(source, internalNames, m.name, { hostServedExempt: m.synced });
       for (const dep of imported) if (!m.declared.has(dep)) missing.add(dep);
       // THIRD-PARTY leg is scoped to synced-extension members only (see the
       // file header) — packages/* is deliberately not scanned for this class.

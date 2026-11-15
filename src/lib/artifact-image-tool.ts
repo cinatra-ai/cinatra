@@ -441,6 +441,8 @@ export async function generateArtifactImage(
         orgId: input.orgId,
         runId: input.runId,
         nodeId: input.nodeId,
+        // cinatra#4264: the filing step of this revision, as the runtime signed it.
+        ...(input.verifiedStepId !== undefined ? { verifiedStepId: input.verifiedStepId } : {}),
         artifactId: input.artifactId,
         baseRepresentationRevisionId: input.baseRepresentationRevisionId,
         content: bytes,
