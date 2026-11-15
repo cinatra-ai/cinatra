@@ -264,6 +264,33 @@ describe("execution.ts — the recorded pause step", () => {
     }
   });
 
+  // (x5) The resume delivery answers a parked run from `pending_approval` with no
+  // claim. A failed write of the answer's task id must not stop the handler there:
+  // the latest gate task has to name the answer's gate, or the re-claimed intent
+  // passes the delivery's latest-task guard and sends the earlier gate's decision
+  // again into this gate's context.
+  it("on the resume delivery, a failed task-id write still records the answer's gate as the latest gate task", async () => {
+    storeMock.updateAgentRunA2ATaskId.mockRejectedValue(new Error("could not write a2a_task_id"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const run = { ...makeRun(), status: "pending_approval" as const, a2aTaskId: "task-gate-0" };
+      await handleWayflowTaskState({
+        authority: TEST_AUTHORITY,
+        runId: run.id,
+        run,
+        fromStatus: "pending_approval",
+        task: pausedTask([agentMessage()]),
+      });
+      expect(storeMock.updateAgentRunA2ATaskId).toHaveBeenCalledWith(run.id, "task-gate-1");
+      expect(gateStore.rememberLatestWayflowGateTask).toHaveBeenCalledWith(run.id, "task-gate-1");
+      expect(onInterruptSpy).toHaveBeenCalledTimes(1);
+      // A re-emit on a parked run writes no edge.
+      expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   // (x4)
   it("the pure reader answers the claim of the last agent message and null for other shapes", () => {
     expect(helpers.extractCinatraGateNodeClaim([agentMessage({ cinatra_gate_node: CLAIM })])).toEqual(CLAIM);

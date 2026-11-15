@@ -101,6 +101,23 @@ export type ArtifactRendererDataRoad = {
 };
 
 /**
+ * THE SESSION DATA ROAD a first-party surface hands its displays (cinatra#4311,
+ * the core slice): the application's own cube route — the address the
+ * dashboards shell itself uses — reached with the reader's session cookie.
+ *
+ * AN ADDRESS, NEVER A CREDENTIAL. Handing it out grants nothing: every series
+ * request is authorized again by that route, from the reader's own session,
+ * fail closed. A surface whose reader holds no cookie (the island) hands NONE,
+ * and its display draws its own no-series reading.
+ *
+ * Named HERE, beside the type, because every surface that builds a snapshot
+ * already imports this module: naming the address costs no route graph a
+ * module.
+ */
+export const ARTIFACT_RENDERER_SESSION_DATA_ROAD: Readonly<ArtifactRendererDataRoad> =
+  Object.freeze({ road: "session", apiUrl: "/api/dashboards/cubejs-api/v1" });
+
+/**
  * The CONTENT-CHANNEL ABI version (enabler 0.3 of `PLAN: Agents Lifecycle (C)`,
  * cinatra#3027), mirrored here.
  *
@@ -344,7 +361,9 @@ export interface ArtifactRendererProps {
    * THE REVIEW READING (props v3, cinatra#3092). Which reading of a review the
    * surface draws this display in. `openLive` — the live navigation's address —
    * is null in the pending reading whatever the surface passed: the builder
-   * forces it. ABSENT outside a review, and ABSENT BELOW v3.
+   * forces it. ABSENT where no review stands, and ABSENT BELOW v3. The artifact's
+   * own page hands the pending reading while a gate is open on the artifact, or
+   * when it cannot tell.
    */
   review?: ArtifactRendererReviewReading;
   /**
@@ -395,8 +414,8 @@ export function buildArtifactRendererProps(input: {
    */
   edit: ArtifactEditCapability;
   /**
-   * The review reading this surface draws (v3). Optional: a surface outside a
-   * review passes none. A `pending` reading is written with `openLive: null`
+   * The review reading this surface draws (v3). Optional: where no review stands
+   * a surface passes none. A `pending` reading is written with `openLive: null`
    * whatever is passed here — a pending review was not continued and carries no
    * live link.
    */
