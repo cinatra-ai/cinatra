@@ -147,3 +147,26 @@ describe("the conversation's comment is its own submission, and the Note-field C
     expect(p.pinned).toHaveBeenCalledTimes(1); expect(p.changes).not.toHaveBeenCalled();
   });
 });
+
+// A SUPPLIED PARTITION OUTSIDE CONTINUE IS REFUSED, EMPTY OR NOT (cinatra#3080
+// fold, pre-review finding 5). The terminal-only rule is about the field
+// being sent, not about how many ids it lists: an empty `{}` normalized to two
+// empty arrays used to slip past and be dropped silently.
+describe("a suggestion partition is refused outside Continue even when it is empty", () => {
+  const EMPTY = { accepted: [], dismissed: [] };
+  for (const disposition of ["comment", "conversation-comment", "regenerate"] as const) {
+    it(`${disposition} with an empty partition is refused before any gate read or write`, async () => {
+      expect(await submitReviewDecisionAction("run", "task", disposition, "fix the crop", undefined, EMPTY)).toMatchObject({ kind: "error" });
+      expect(p.pinned).not.toHaveBeenCalled(); expect(p.changes).not.toHaveBeenCalled(); expect(p.decision).not.toHaveBeenCalled();
+    });
+  }
+  it("Continue (and its approve alias) still takes an empty partition", async () => {
+    p.decision.mockResolvedValue({ ok: true, idempotent: false, fingerprint: "continue", plan: {} });
+    expect(await submitReviewDecisionAction("run", "task", "continue", null, undefined, EMPTY)).toEqual({ kind: "decided", disposition: "approve", idempotent: false });
+    expect(await submitReviewDecisionAction("run", "task", "approve", null, undefined, EMPTY)).toEqual({ kind: "decided", disposition: "approve", idempotent: false });
+  });
+  it("an absent partition (null or undefined) is not a supplied one", async () => {
+    expect(await submitReviewDecisionAction("run", "task", "comment", "words", undefined, null)).toEqual({ kind: "annotated" });
+    expect(await submitReviewDecisionAction("run", "task", "comment", "words")).toEqual({ kind: "annotated" });
+  });
+});
