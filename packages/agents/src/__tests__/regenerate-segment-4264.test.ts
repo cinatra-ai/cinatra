@@ -399,7 +399,12 @@ describe("a segment run is never resumed", () => {
     ]) {
       const source = readFileSync(path.resolve(__dirname, file), "utf8");
       const send = source.indexOf("sendTask({");
-      const mint = source.lastIndexOf("await mintResumeRunTokenMetadata(", send);
+      // A road mints in its own body (await) or as the value of the gate claim's awaited callback
+      // (return): the MCP resume road since main's claim on resume (#4665).
+      const mint = Math.max(
+        source.lastIndexOf("await mintResumeRunTokenMetadata(", send),
+        source.lastIndexOf("return mintResumeRunTokenMetadata(", send),
+      );
       expect(mint, file).toBeGreaterThan(0);
       expect(source.slice(mint, send), file).not.toContain("sendTask(");
     }
