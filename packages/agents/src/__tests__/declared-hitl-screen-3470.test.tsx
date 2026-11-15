@@ -39,7 +39,7 @@ import {
   __resetFieldRendererComponentMapForTests,
   __setFieldRendererComponentMapForTests,
 } from "../field-renderer-components";
-import { BlogIdeaSelectionRenderer } from "../blog-idea-selection-renderer";
+import { CtaRenderer } from "../cta-renderer";
 import { SchemaOnlyFloorRenderer } from "../schema-field-renderer";
 
 const ID = "@acme-test/publish-agent:confirm";
@@ -281,8 +281,9 @@ describe("a declared card holds the host's Continue (cinatra#3470)", () => {
 
   it("a 'kind' layout and a binding without a screen never hold the Continue", () => {
     registerFieldRendererBindings([
-      { id: ID, kind: "blog-idea-selection", priority: 80, midRunHitl: true, screen: { layout: "kind" } },
+      { id: ID, kind: "cta", priority: 80, midRunHitl: true, screen: { layout: "kind" } },
     ]);
+    expect(entryOf()).toBeDefined();
     expect(entryOf()?.continueReady).toBeUndefined();
     registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90 }]);
     expect(entryOf()?.continueReady).toBeUndefined();
@@ -292,10 +293,18 @@ describe("a declared card holds the host's Continue (cinatra#3470)", () => {
 describe("registration validates the declaration again (cinatra#3470)", () => {
   it("a 'kind' layout registers the host's own component for that kind", () => {
     registerFieldRendererBindings([
+      { id: ID, kind: "cta", priority: 80, midRunHitl: true, screen: { layout: "kind" } },
+    ]);
+    expect(entryOf()?.renderer).toBe(CtaRenderer);
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it("a 'kind' layout on blog-idea-selection registers nothing: the host keeps no idea chooser of its own (cinatra#4429)", () => {
+    registerFieldRendererBindings([
       { id: ID, kind: "blog-idea-selection", priority: 80, midRunHitl: true, screen: { layout: "kind" } },
     ]);
-    expect(entryOf()?.renderer).toBe(BlogIdeaSelectionRenderer);
-    expect(errorSpy).not.toHaveBeenCalled();
+    expect(entryOf()).toBeUndefined();
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(`declared screen of ${ID} refused`));
   });
 
   it("a 'kind' layout whose host entry is only the schema floor registers nothing", () => {
