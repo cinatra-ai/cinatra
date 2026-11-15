@@ -45,7 +45,9 @@ artifacts at real pinned revisions with no LLM anywhere in the chain.
    with the targets pre-filled and enqueue the execution job. Only run CREATION is
    seeded, exactly as `tests/e2e/agents-run/seed.ts` already does; everything
    downstream is the shipped path.
-3. `waitForMarkedReviewGate(runId)` — poll until the executor has minted the gate.
+3. `waitForMarkedReviewGates(runId)` — poll until the executor has minted the
+   gates, and return every gate row of the run (a run of several targets gets one
+   single-target gate per artifact).
 
 ## Keeping the marker in sync
 
