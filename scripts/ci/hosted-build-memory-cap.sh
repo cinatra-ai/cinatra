@@ -44,8 +44,11 @@
 #
 # IF THE CAP CANNOT BE SET on a GitHub-hosted runner (no cgroup v2 memory
 # controller, a machine under 4096 MiB plus the reserve, a bad setting, a
-# write refused), it FAILS CLOSED: one ::error:: line naming the reason, the
-# build does not run, and the exit code is 125. An uncapped build is the
+# write refused, a cgroup value that does not read back as written, the
+# wrapper not listed in its cgroup, or for `buildx-opts` a GITHUB_OUTPUT that
+# is unset, not an existing regular file or not writable), it FAILS CLOSED:
+# one ::error:: line naming the reason, the build does not run (`buildx-opts`
+# fails its step, so setup-buildx never starts), and the exit code is 125. An uncapped build is the
 # build that loses the runner. CINATRA_BUILD_MEMORY_CAP=0 is the explicit way
 # to build uncapped. Otherwise `run` returns the exit code of <command>.
 #
@@ -94,26 +97,29 @@ cap_applies() {
   return 0
 }
 
-# Sets CAP_MIB and TOTAL_MIB, or prints the reason and returns 1.
+REASON=""
+# Sets CAP_MIB and TOTAL_MIB, or sets REASON and returns 1. Runs in the
+# wrapper's own shell (never in a $(...) subshell), so its values are the ones
+# the wrapper uses.
 compute_cap() {
   local total_kb
   total_kb="$(awk '/^MemTotal:/ { print $2; exit }' "$MEMINFO" 2>/dev/null || true)"
   if ! is_whole "$total_kb"; then
-    echo "cannot read MemTotal from $MEMINFO"
+    REASON="cannot read MemTotal from $MEMINFO"
     return 1
   fi
   if ! is_whole "$RESERVE_MIB"; then
-    echo "CINATRA_BUILD_MEMORY_RESERVE_MIB=$RESERVE_MIB is not a whole number of MiB"
+    REASON="CINATRA_BUILD_MEMORY_RESERVE_MIB=$RESERVE_MIB is not a whole number of MiB"
     return 1
   fi
   if [ -n "$SWAP_MAX_MIB" ] && ! is_whole "$SWAP_MAX_MIB"; then
-    echo "CINATRA_BUILD_SWAP_MAX_MIB=$SWAP_MAX_MIB is not a whole number of MiB"
+    REASON="CINATRA_BUILD_SWAP_MAX_MIB=$SWAP_MAX_MIB is not a whole number of MiB"
     return 1
   fi
   TOTAL_MIB=$((total_kb / 1024))
   CAP_MIB=$((TOTAL_MIB - RESERVE_MIB))
   if [ "$CAP_MIB" -lt "$MIN_CAP_MIB" ]; then
-    echo "the machine has ${TOTAL_MIB} MiB; a cap of ${CAP_MIB} MiB after the ${RESERVE_MIB} MiB reserve is under ${MIN_CAP_MIB} MiB"
+    REASON="the machine has ${TOTAL_MIB} MiB; a cap of ${CAP_MIB} MiB after the ${RESERVE_MIB} MiB reserve is under ${MIN_CAP_MIB} MiB"
     return 1
   fi
   return 0
@@ -126,8 +132,17 @@ swap_text() {
 cmd_buildx_opts() {
   local out="${GITHUB_OUTPUT:-/dev/stdout}" reason opts=""
   if reason="$(cap_applies)"; then
-    if reason="$(compute_cap)"; then
-      compute_cap >/dev/null
+    # Hosted: the options must reach the step output, or setup-buildx would
+    # start an uncapped builder.
+    if [ -z "${GITHUB_OUTPUT:-}" ]; then
+      refuse "GITHUB_OUTPUT is not set, so the driver options cannot reach setup-buildx"
+      return $?
+    fi
+    if [ ! -f "$out" ]; then
+      refuse "GITHUB_OUTPUT ($out) is not an existing regular file"
+      return $?
+    fi
+    if compute_cap; then
       opts="memory=${CAP_MIB}m"
       if [ -n "$SWAP_MAX_MIB" ]; then
         opts="${opts}
@@ -136,41 +151,57 @@ memory-swap=$((CAP_MIB + SWAP_MAX_MIB))m"
         opts="${opts}
 memory-swap=-1"
       fi
-      echo "::notice title=build memory cap::buildkit container capped at ${CAP_MIB} MiB of RAM (machine ${TOTAL_MIB} MiB, reserve ${RESERVE_MIB} MiB), $(swap_text)"
     else
-      refuse "$reason"
+      refuse "$REASON"
       return $?
     fi
-  else
-    echo "build memory cap: not applied: ${reason}"
+    # One write, so its status is the status of the whole block.
+    if ! printf '%s\n' "driver_opts<<CINATRA_MEMCAP_EOF" "$opts" "CINATRA_MEMCAP_EOF" 2>/dev/null >>"$out"; then
+      refuse "cannot write the driver options to GITHUB_OUTPUT ($out)"
+      return $?
+    fi
+    echo "::notice title=build memory cap::buildkit container capped at ${CAP_MIB} MiB of RAM (machine ${TOTAL_MIB} MiB, reserve ${RESERVE_MIB} MiB), $(swap_text)"
+    return 0
   fi
+  echo "build memory cap: not applied: ${reason}"
   {
     echo "driver_opts<<CINATRA_MEMCAP_EOF"
-    [ -n "$opts" ] && printf '%s\n' "$opts"
     echo "CINATRA_MEMCAP_EOF"
   } >>"$out"
   return 0
 }
 
-# Prints the reason and returns 1 when cgroup v2 with the memory controller
-# is not usable under CGROOT.
+# Sets REASON and returns 1 when cgroup v2 with the memory controller is not
+# usable under CGROOT.
 cgroup_ready() {
   if [ ! -r "$CGROOT/cgroup.controllers" ]; then
-    echo "no cgroup v2 hierarchy at $CGROOT"
+    REASON="no cgroup v2 hierarchy at $CGROOT"
     return 1
   fi
   if ! grep -qw memory "$CGROOT/cgroup.controllers"; then
-    echo "the cgroup v2 memory controller is not available at $CGROOT"
+    REASON="the cgroup v2 memory controller is not available at $CGROOT"
     return 1
   fi
   if ! grep -qw memory "$CGROOT/cgroup.subtree_control" 2>/dev/null; then
     if ! write_file "$CGROOT/cgroup.subtree_control" "+memory" \
       || ! grep -qw memory "$CGROOT/cgroup.subtree_control" 2>/dev/null; then
-      echo "cannot enable the memory controller for child cgroups at $CGROOT"
+      REASON="cannot enable the memory controller for child cgroups at $CGROOT"
       return 1
     fi
   fi
   return 0
+}
+
+# write_checked <file> <value>: write as root, then read the file back (no
+# root needed) and fail unless it holds exactly <value>. A cgroup byte value
+# that is a whole number of pages reads back unchanged.
+write_checked() {
+  write_file "$1" "$2" && [ "$(cat "$1" 2>/dev/null)" = "$2" ]
+}
+
+# in_cgroup <cgroup>: the wrapper ($$) is listed in the cgroup's cgroup.procs.
+in_cgroup() {
+  grep -qx "$$" "$1/cgroup.procs" 2>/dev/null
 }
 
 read_value() {
@@ -216,19 +247,19 @@ cmd_run() {
     "$@"
     return $?
   fi
-  if ! reason="$(compute_cap)" || ! reason="$(cgroup_ready)"; then
-    refuse "$reason"
+  if ! compute_cap || ! cgroup_ready; then
+    refuse "$REASON"
     return $?
   fi
-  compute_cap >/dev/null
   CG="$CGROOT/cinatra-build-$$"
   trap 'on_signal 130' INT
   trap 'on_signal 143' TERM
   trap 'on_signal 129' HUP
   if ! as_root mkdir -p "$CG" 2>/dev/null \
-    || ! write_file "$CG/memory.max" "$((CAP_MIB * 1024 * 1024))" \
-    || { [ -n "$SWAP_MAX_MIB" ] && ! write_file "$CG/memory.swap.max" "$((SWAP_MAX_MIB * 1024 * 1024))"; } \
-    || ! write_file "$CG/cgroup.procs" "$$"; then
+    || ! write_checked "$CG/memory.max" "$((CAP_MIB * 1024 * 1024))" \
+    || { [ -n "$SWAP_MAX_MIB" ] && ! write_checked "$CG/memory.swap.max" "$((SWAP_MAX_MIB * 1024 * 1024))"; } \
+    || ! write_file "$CG/cgroup.procs" "$$" \
+    || ! in_cgroup "$CG"; then
     reason="cannot set up the cgroup $CG"
     leave_cgroup
     refuse "$reason"

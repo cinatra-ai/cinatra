@@ -726,7 +726,7 @@ function machine({ memTotalKb = 16365568, controllers = "cpuset cpu io memory pi
   const cg = path.join(dir, "cgroup");
   fs.mkdirSync(cg);
   fs.writeFileSync(path.join(dir, "meminfo"), `MemTotal:       ${memTotalKb} kB\nMemFree:         1000 kB\n`);
-  fs.writeFileSync(path.join(cg, "cgroup.controllers"), `${controllers}\n`);
+  if (controllers !== null) fs.writeFileSync(path.join(cg, "cgroup.controllers"), `${controllers}\n`);
   fs.writeFileSync(path.join(cg, "cgroup.subtree_control"), `${subtree}\n`);
   fs.writeFileSync(path.join(cg, "cgroup.procs"), "");
   const output = path.join(dir, "github-output");
@@ -735,20 +735,20 @@ function machine({ memTotalKb = 16365568, controllers = "cpuset cpu io memory pi
 }
 
 function capScript(m, args, env = {}) {
-  return spawnSync("bash", [MEMCAP_SCRIPT, ...args], {
-    encoding: "utf8",
-    env: {
-      // never the CI job's own environment: RUNNER_ENVIRONMENT is set per case
-      PATH: process.env.PATH,
-      HOME: m.dir,
-      CINATRA_MEMCAP_MEMINFO: m.meminfo,
-      CINATRA_MEMCAP_CGROUP_ROOT: m.cg,
-      CINATRA_MEMCAP_SUDO: "",
-      GITHUB_OUTPUT: m.output,
-      RUNNER_ENVIRONMENT: "github-hosted",
-      ...env,
-    },
-  });
+  const all = {
+    // never the CI job's own environment: RUNNER_ENVIRONMENT is set per case
+    PATH: process.env.PATH,
+    HOME: m.dir,
+    CINATRA_MEMCAP_MEMINFO: m.meminfo,
+    CINATRA_MEMCAP_CGROUP_ROOT: m.cg,
+    CINATRA_MEMCAP_SUDO: "",
+    GITHUB_OUTPUT: m.output,
+    RUNNER_ENVIRONMENT: "github-hosted",
+    ...env,
+  };
+  // a null value leaves the variable unset
+  for (const [k, v] of Object.entries(all)) if (v === null) delete all[k];
+  return spawnSync("bash", [MEMCAP_SCRIPT, ...args], { encoding: "utf8", env: all });
 }
 
 const buildCgroups = (m) => fs.readdirSync(m.cg).filter((n) => n.startsWith("cinatra-build-"));
@@ -756,19 +756,32 @@ const buildCgroups = (m) => fs.readdirSync(m.cg).filter((n) => n.startsWith("cin
 /**
  * A stand-in for sudo on the stand-in tree. It refuses one root action when
  * FAKE_SUDO_REFUSE is set: the whole command line (for example `mkdir -p <dir>`
- * or `tee <file>`) is matched against that glob. `rmdir` removes the folder
- * with its plain files, as rmdir removes a real cgroup with its interface
- * files. Every other action runs as asked.
+ * or `tee <file>`) is matched against that glob. With FAKE_SUDO_DROP it
+ * instead reports success for a matching action without doing it (a write the
+ * kernel did not take). `rmdir` removes the folder with its plain files, as
+ * rmdir removes a real cgroup with its interface files. Every other action
+ * runs as asked.
  */
 function fakeSudo(m) {
   const file = path.join(m.dir, "fake-sudo");
   fs.writeFileSync(
     file,
     '#!/usr/bin/env bash\nif [ -n "${FAKE_SUDO_REFUSE:-}" ]; then case "$*" in $FAKE_SUDO_REFUSE) exit 1 ;; esac; fi\n' +
+      'if [ -n "${FAKE_SUDO_DROP:-}" ]; then case "$*" in $FAKE_SUDO_DROP) cat >/dev/null; exit 0 ;; esac; fi\n' +
       'if [ "$1" = rmdir ]; then shift; exec rm -r "$@"; fi\nexec "$@"\n',
     { mode: 0o755 },
   );
   return file;
+}
+
+/** The one ::error line of a fail-closed refusal, checked for its reason. */
+function expectOneRefusal(r, reason) {
+  expect(r.status, reason + r.stdout + r.stderr).toBe(REFUSED_RC);
+  const errors = r.stdout.split("\n").filter((l) => l.startsWith("::error"));
+  expect(errors, reason).toHaveLength(1);
+  expect(errors[0]).toContain("::error title=build memory cap::cannot cap the build memory: ");
+  expect(errors[0]).toContain(reason);
+  expect(r.stdout).not.toContain("::warning");
 }
 
 const REFUSED_RC = 125;
@@ -850,6 +863,8 @@ describe("scripts/ci/hosted-build-memory-cap.sh, run against a stand-in cgroup t
       [{}, {}, "mkdir *", "cannot set up the cgroup"],
       [{}, {}, "tee */memory.max", "cannot set up the cgroup"],
       [{}, {}, "tee */cinatra-build-*/cgroup.procs", "cannot set up the cgroup"],
+      [{}, { CINATRA_BUILD_SWAP_MAX_MIB: "8192" }, "tee */memory.swap.max", "cannot set up the cgroup"],
+      [{ controllers: null }, {}, null, "no cgroup v2 hierarchy"],
     ]) {
       const m = machine(shape);
       const extra = { CINATRA_MEMCAP_SUDO: fakeSudo(m), ...(refuse ? { FAKE_SUDO_REFUSE: refuse } : {}) };
@@ -863,6 +878,20 @@ describe("scripts/ci/hosted-build-memory-cap.sh, run against a stand-in cgroup t
       expect(errors[0]).toContain(reason);
       expect(errors[0]).toContain("set CINATRA_BUILD_MEMORY_CAP=0 to build uncapped");
       expect(r.stdout).not.toContain("::warning");
+    }
+  });
+
+  it("fails closed when a cgroup write reports success but did not take (read back), with no build", () => {
+    for (const [env, drop] of [
+      [{}, "tee */memory.max"],
+      [{ CINATRA_BUILD_SWAP_MAX_MIB: "8192" }, "tee */memory.swap.max"],
+      [{}, "tee */cinatra-build-*/cgroup.procs"],
+    ]) {
+      const m = machine();
+      const r = capScript(m, ["run", ...markerBuild(m)], { ...env, CINATRA_MEMCAP_SUDO: fakeSudo(m), FAKE_SUDO_DROP: drop });
+      expectOneRefusal(r, "cannot set up the cgroup");
+      expect(fs.existsSync(path.join(m.dir, MARKER)), drop).toBe(false);
+      expect(buildCgroups(m), drop).toEqual([]);
     }
   });
 
@@ -924,6 +953,35 @@ describe("scripts/ci/hosted-build-memory-cap.sh, run against a stand-in cgroup t
       expect(fs.readFileSync(m.output, "utf8")).toBe("driver_opts<<CINATRA_MEMCAP_EOF\nCINATRA_MEMCAP_EOF\n");
     }
   });
+
+  it("fails closed when the driver options cannot reach GITHUB_OUTPUT: unset, empty, missing or not a file", () => {
+    for (const [value, reason] of [
+      [null, "GITHUB_OUTPUT is not set"],
+      ["", "GITHUB_OUTPUT is not set"],
+      ["missing", "is not an existing regular file"],
+      ["folder", "is not an existing regular file"],
+    ]) {
+      const m = machine();
+      const out = value === "missing" ? path.join(m.dir, "no-such-output") : value === "folder" ? m.dir : value;
+      const r = capScript(m, ["buildx-opts"], { GITHUB_OUTPUT: out });
+      expectOneRefusal(r, reason);
+      expect(r.stdout, reason).not.toContain("driver_opts<<");
+      expect(fs.existsSync(path.join(m.dir, "no-such-output")), reason).toBe(false);
+      expect(fs.readFileSync(m.output, "utf8"), reason).toBe("");
+    }
+  });
+
+  it.skipIf(typeof process.getuid === "function" && process.getuid() === 0)(
+    "fails closed when GITHUB_OUTPUT cannot be written (a root user could write it, so not run as root)",
+    () => {
+      const m = machine();
+      fs.chmodSync(m.output, 0o444);
+      const r = capScript(m, ["buildx-opts"]);
+      expectOneRefusal(r, "cannot write the driver options to GITHUB_OUTPUT");
+      expect(fs.readFileSync(m.output, "utf8")).toBe("");
+      expect(r.stdout).not.toContain("::notice");
+    },
+  );
 
   it("fails closed when a hosted image build cannot be sized: one error line, no driver options", () => {
     for (const [shape, env, reason] of [
