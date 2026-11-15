@@ -55,8 +55,11 @@ vi.mock("@cinatra-ai/agents/store", () => ({
   assertRunStepToolAllowed: h.assertRunStepToolAllowed,
   RunStepToolPolicyRefusal: h.RunStepToolPolicyRefusal,
 }));
+// cinatra#3745: the route refuses a verified source whose mint returns no
+// authority (the proof is no longer current) before any tool runs, so the
+// double mints one, as the sibling route suite does.
 vi.mock("@/lib/org-write/run-authority-mint", () => ({
-  mintRunWriteAuthorityForMcp: vi.fn(async () => undefined),
+  mintRunWriteAuthorityForMcp: vi.fn(async () => Object.freeze({ authority: "run-authority-under-test" })),
 }));
 vi.mock("@cinatra-ai/a2a", () => ({
   resolveLatestWayflowGateTaskId: vi.fn(async () => null),
@@ -126,13 +129,16 @@ const VERIFIED_SOURCE = Object.freeze({ contextId: CTX, stepId: NODE, executionA
 const SENTENCE = "The run's tool call was refused.";
 const ATTEST_BEFORE = process.env.CINATRA_CONTEXT_ATTEST_KEY;
 
+/** The source-bound pair the runtime signs over the step, its task's attempt and the executing source. */
 function sourceHeaders(): Record<string, string> {
   const expiry = Math.floor(Date.now() / 1000) + 300;
+  const attempt = VERIFIED_SOURCE.executionAttemptId;
   const sig = createHmac("sha256", ATTEST_KEY)
-    .update(`s2\n${CTX}\n${NODE}\n${SOURCE.sourceSha256}\n${SOURCE.executedSourceSha256}\n${SOURCE.declarationSourceSha256}\n${expiry}`)
+    .update(`s2\n${CTX}\n${NODE}\n${attempt}\n${SOURCE.sourceSha256}\n${SOURCE.executedSourceSha256}\n${SOURCE.declarationSourceSha256}\n${expiry}`)
     .digest("hex");
   return {
     "x-cinatra-step-node": NODE,
+    "x-cinatra-execution-attempt": attempt,
     "x-cinatra-step-attestation": `s2:${expiry}:${sig}`,
     "x-cinatra-raw-source": SOURCE.sourceSha256,
     "x-cinatra-executed-source": SOURCE.executedSourceSha256,
