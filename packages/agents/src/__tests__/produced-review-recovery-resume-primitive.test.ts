@@ -143,6 +143,9 @@ vi.mock("../wayflow-url", () => ({
 vi.mock("../wayflow-run-token-carrier", () => ({
   mintResumeRunTokenMetadata: vi.fn(async () => ({})),
 }));
+// cinatra#3745: the handler binds the resume's answer to its claim (imported at the call).
+const bindSpy = vi.hoisted(() => vi.fn(async (_input: Record<string, unknown>) => true));
+vi.mock("../run-transition", () => ({ bindResumeLegToTask: bindSpy }));
 vi.mock("../compiler", () => ({ compileWorkflow: vi.fn() }));
 vi.mock("../verdaccio/client", () => ({
   deleteAgentPackageVersion: vi.fn(),
@@ -205,6 +208,7 @@ function pausedRun() {
     status: "pending_approval",
     a2aTaskId: "task-1",
     a2aContextId: "ctx-1",
+    executionAttemptId: "attempt-1",
     orgId: "org-1",
     runBy: "user-a",
     authPolicy: null,
@@ -293,17 +297,24 @@ describe("cinatra#3007 — an unrecordable hold inside the resume primitive", ()
       Buffer.byteLength(JSON.stringify(data.producedReviewHold) ?? "", "utf8"),
     ).toBeLessThanOrEqual(PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES);
 
-    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    // The only transition is the resume's own claim of the gate before its send
+    // (cinatra#3745); no terminal status is written.
+    const edges = (storeMock.transitionRunStatus.mock.calls as unknown as Array<[string, string, string]>)
+      .map((c) => [c[1], c[2]]);
+    expect(edges).toEqual([["pending_approval", "running"]]);
   });
 
   it("the delivered payload lets a later convergence pass land the withheld verdict", async () => {
     await resume().catch(() => undefined);
     const [, data] = deliveredRecovery()!;
+    // The resume claimed the gate before its send (cinatra#3745), so the run the
+    // later pass finds is running.
+    storeMock.transitionRunStatus.mockClear();
 
     holdSpy.mockResolvedValue({ held: false, reason: "no-review" });
     await recoverProducedReviewHold({
       runId: "run-1",
-      run: { orgId: "org-1", status: "pending_approval" },
+      run: { orgId: "org-1", status: "running" },
       recovery: data.producedReviewHold as never,
       authority: AUTHORITY,
       park: data.producedReviewHoldPark as number,
@@ -313,11 +324,91 @@ describe("cinatra#3007 — an unrecordable hold inside the resume primitive", ()
       [string, string, string, Record<string, unknown> | undefined, unknown]
     >;
     expect(calls).toHaveLength(1);
-    expect([calls[0][1], calls[0][2]]).toEqual(["pending_approval", "completed"]);
+    expect([calls[0][1], calls[0][2]]).toEqual(["running", "completed"]);
     expect(calls[0][3]?.stepResults).toBeDefined();
     // The withheld terminal write carries no derivation outbox: cinatra#3029
     // (PR 3311) retired the response-text derivation on the path that produced
     // this payload, so a replayed verdict must not claim one either.
     expect(calls[0][3]?.derivationOutbox).toBeUndefined();
+  });
+});
+
+describe("cinatra#3745 — agent_run_resume claims the gate before it records or sends", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    authSessionMock.getAuthSession.mockResolvedValue(null);
+    authSessionMock.isPlatformAdmin.mockReturnValue(false);
+    authSessionMock.resolveOrgRoleForUser.mockResolvedValue("member");
+    enforceRunAccessSpy.mockResolvedValue(undefined);
+    storeMock.readAgentRunById.mockResolvedValue(pausedRun());
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tmpl-1",
+      packageName: "@cinatra-ai/web-research-agent",
+      sourceType: "internal",
+      agentAuthPolicy: null,
+    });
+    sendTaskSpy.mockResolvedValue(completedTask());
+    holdSpy.mockResolvedValue({ held: true, reason: "hold-unpersisted" });
+  });
+
+  it("an already answered gate (the claim loses) returns an error naming gate and run; nothing is recorded or sent", async () => {
+    storeMock.transitionRunStatus.mockRejectedValueOnce(
+      Object.assign(new Error("stale_from_status"), { code: "stale_from_status" }),
+    );
+    const { mintResumeRunTokenMetadata } = await import("../wayflow-run-token-carrier");
+    const result = (await resume()) as Record<string, unknown>;
+    expect(result.error).toBe("Run is not pending approval: gate task-1 on run run-1 was already answered.");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(storeMock.writeHitlPrompt).not.toHaveBeenCalled();
+    expect(mintResumeRunTokenMetadata).not.toHaveBeenCalled();
+  });
+
+  it("a won claim comes before the mint and the send", async () => {
+    const order: string[] = [];
+    storeMock.transitionRunStatus.mockImplementationOnce((async (_runId: string, from: string, to: string) => {
+      order.push(`${from}->${to}`);
+    }) as never);
+    const { mintResumeRunTokenMetadata } = await import("../wayflow-run-token-carrier");
+    vi.mocked(mintResumeRunTokenMetadata).mockImplementationOnce(async () => {
+      order.push("mint");
+      return {};
+    });
+    sendTaskSpy.mockImplementationOnce(async () => {
+      order.push("send");
+      return completedTask();
+    });
+    await resume().catch(() => undefined);
+    expect(order.slice(0, 3)).toEqual(["pending_approval->running", "mint", "send"]);
+  });
+
+  it("the claim is bound to the gate the handler read: its a2a task and its execution attempt", async () => {
+    await resume().catch(() => undefined);
+    const [runId, from, to, meta] = storeMock.transitionRunStatus.mock.calls[0] as unknown as [
+      string, string, string, { resumeGate?: Record<string, unknown> } | undefined,
+    ];
+    expect([runId, from, to]).toEqual(["run-1", "pending_approval", "running"]);
+    expect(meta?.resumeGate).toMatchObject({ a2aTaskId: "task-1", executionAttemptId: "attempt-1" });
+  });
+
+  it("WayFlow's answer goes to the handler bound to the claim: the gate's task and its attempt", async () => {
+    await resume().catch(() => undefined);
+    expect(bindSpy).toHaveBeenCalledTimes(1);
+    expect(bindSpy).toHaveBeenCalledWith(expect.objectContaining({
+      runId: "run-1",
+      orgId: "org-1",
+      claimed: { a2aTaskId: "task-1", executionAttemptId: "attempt-1" },
+      taskId: "task-1",
+    }));
+  });
+
+  it("an answer that returns after the run left the claim moves nothing past the claim", async () => {
+    bindSpy.mockResolvedValueOnce(false);
+    await resume().catch(() => undefined);
+    // The produced-review hold is never asked and no edge follows the claim.
+    expect(holdSpy).not.toHaveBeenCalled();
+    const edges = (storeMock.transitionRunStatus.mock.calls as unknown as Array<[string, string, string]>)
+      .map((c) => [c[1], c[2]]);
+    expect(edges).toEqual([["pending_approval", "running"]]);
+    expect(storeMock.updateAgentRunA2ATaskId).not.toHaveBeenCalled();
   });
 });

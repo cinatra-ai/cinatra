@@ -79,6 +79,9 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
+vi.mock("@cinatra-ai/agents/artifact-open-review-read", () => ({
+  isArtifactUnderOpenReview: async () => false,
+}));
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: mocks.getAuthSession,
   requireActorContext: mocks.requireActorContext,
@@ -99,6 +102,7 @@ vi.mock("@/lib/artifacts/representation-store", () => ({
 }));
 vi.mock("../review-surface-roads", () => ({
   hostArtifactContentBuilder: mocks.hostArtifactContentBuilder,
+  SESSION_DATA_ROAD: { road: "session", apiUrl: "/api/dashboards/cubejs-api/v1" },
 }));
 vi.mock("@/lib/authz/enforce", () => ({ can: mocks.can }));
 vi.mock("@/lib/dashboards/dashboard-artifact-surface", () => ({
