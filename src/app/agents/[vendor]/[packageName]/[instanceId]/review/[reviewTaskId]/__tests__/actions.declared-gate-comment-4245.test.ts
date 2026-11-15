@@ -1,12 +1,18 @@
 /**
  * cinatra#4245 (D2): the review page's decision action on the review step a flow
- * declares itself (`wayflow-<task>`, no `#n` suffix). A typed comment goes to the
- * change-request road (spec 5.2); the store's answer
- * is mapped to its own outcome. Only the store's not-eligible refusal (one of the
- * cases the issue names: a sibling gate pending, no produced event naming the
- * gate, a producer that cannot repair, ...) falls back to the plain annotation;
- * a pause refusal never does (H1-H3). Red at 3020d014: the action sends the
- * step's own gate straight to the annotation and never asks the store.
+ * declares itself (`wayflow-<task>`, no `#n` suffix). The prompt window's typed
+ * change request (the lent Comment of the run's assistant, which passes
+ * `typedChangeRequest`) goes to the change-request road (spec 5.2); the store's
+ * answer is mapped to its own outcome. Only the store's not-eligible refusal (one
+ * of the cases the issue names: a sibling gate pending, no produced event naming
+ * the gate, a producer that cannot repair, ...) falls back to the plain
+ * annotation; a pause refusal never does (H1-H3). Red at 3020d014: the action
+ * sends the step's own gate straight to the annotation and never asks the store.
+ *
+ * The decision bar's Comment button stays the non-terminal note of design
+ * section VI ("leaves the gate pending - nothing resumes, and the run stays
+ * paused"): on the step's own gate it never asks the store (H10). Red at
+ * 9c6d09cb: the button's comment took the change-request road too.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -39,11 +45,17 @@ beforeEach(() => {
   p.changes.mockResolvedValue({ ok: true, status: "requested", idempotent: false });
 });
 
+/** The prompt window's typed change request: the lent Comment names the road. */
 async function commentOnStep(note = "Say it in plain words") {
+  return submitReviewDecisionAction(RUN, STEP, "comment", note, undefined, null, { typedChangeRequest: true });
+}
+
+/** The decision bar's Comment button: the page's bound action passes no road. */
+async function pressCommentOnStep(note = "Say it in plain words") {
   return submitReviewDecisionAction(RUN, STEP, "comment", note);
 }
 
-describe("a comment on the step's own declared gate (cinatra#4245 D2)", () => {
+describe("a typed change request on the step's own declared gate (cinatra#4245 D2)", () => {
   it("H1 pause-held maps to the retryable error, never to the annotation", async () => {
     p.changes.mockResolvedValue(refuse("pause-held"));
     const outcome = await commentOnStep();
@@ -116,10 +128,30 @@ describe("a comment on the step's own declared gate (cinatra#4245 D2)", () => {
     p.fence = false;
     expect(await commentOnStep()).toEqual({ kind: "annotated" });
     p.fence = true;
-    expect(await submitReviewDecisionAction(RUN, STEP, "comment", "   ")).toEqual({ kind: "annotated" });
+    expect(await submitReviewDecisionAction(RUN, STEP, "comment", "   ", undefined, null, { typedChangeRequest: true })).toEqual({ kind: "annotated" });
     p.pinned.mockResolvedValue([TARGET, { artifactId: "art-img", representationRevisionId: "rev-img-1" }]);
     expect(await commentOnStep()).toEqual({ kind: "annotated" });
     expect(p.changes).not.toHaveBeenCalled();
     expect(p.decision).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("the decision bar's Comment button on the step's own declared gate (design section VI)", () => {
+  it("H10 the button's comment is a non-terminal note: the store is never asked and the run stays paused", async () => {
+    const outcome = await pressCommentOnStep();
+    expect(outcome).toEqual({ kind: "annotated" });
+    expect(p.changes).not.toHaveBeenCalled();
+    expect(p.enforce).not.toHaveBeenCalledWith({ runId: RUN, op: "approveHitl", actorCtx: actor });
+    expect(p.decision).toHaveBeenCalledTimes(1);
+    expect(p.decision.mock.calls[0][0].decision).toMatchObject({
+      runId: RUN, reviewTaskId: STEP, disposition: "comment", comment: "Say it in plain words", reviewedTargets: [TARGET],
+    });
+  });
+
+  it("H11 guard (green at base): a picture leg (`#n`) keeps its change request from the button too; the run stays paused there", async () => {
+    await submitReviewDecisionAction(RUN, `${STEP}#2`, "comment", "Make the sky darker");
+    expect(p.changes).toHaveBeenCalledTimes(1);
+    expect(p.changes.mock.calls[0][0]).toMatchObject({ runId: RUN, reviewTaskId: `${STEP}#2`, baseTarget: TARGET });
+    expect(p.enforce).not.toHaveBeenCalledWith({ runId: RUN, op: "approveHitl", actorCtx: actor });
   });
 });
