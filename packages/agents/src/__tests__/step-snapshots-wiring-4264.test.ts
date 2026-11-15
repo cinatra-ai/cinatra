@@ -148,14 +148,18 @@ describe("T6: every resume carries the node list through mintResumeRunTokenMetad
 
   it("each of the four resume callers sends that function's result as the message metadata", () => {
     const root = path.resolve(__dirname, "..");
-    for (const file of [
-      "review-task-actions.ts",
-      "mcp/handlers.ts",
-      "orchestrator-actions.ts",
-      "artifact-review-resume-delivery.ts",
-    ]) {
+    // How each caller binds `resumeMetadata` to the function's result. agent_run_resume mints
+    // under its gate claim (cinatra#3745): the claim's value is the minted metadata.
+    const MINTED = /\bresumeMetadata = await mintResumeRunTokenMetadata\(/;
+    const binds: Record<string, RegExp[]> = {
+      "review-task-actions.ts": [MINTED],
+      "mcp/handlers.ts": [/return mintResumeRunTokenMetadata\(run\.id\);/, /const resumeMetadata = claim\.value;/],
+      "orchestrator-actions.ts": [MINTED],
+      "artifact-review-resume-delivery.ts": [MINTED],
+    };
+    for (const [file, patterns] of Object.entries(binds)) {
       const source = readFileSync(path.join(root, file), "utf8");
-      expect(source, file).toMatch(/const resumeMetadata = await mintResumeRunTokenMetadata\(/);
+      for (const pattern of patterns) expect(source, file).toMatch(pattern);
       expect(source, file).toMatch(/metadata: resumeMetadata/);
     }
   });

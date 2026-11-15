@@ -414,9 +414,9 @@ describe("agent_run_resume on a template that lists no publishing step, for a ru
     expect(sendTaskSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("a run with no decision is not claimed: the hold is read once and the road goes on as on main", async () => {
+  it("a run with no decision is claimed (cinatra#3745: agent_run_resume claims every gate) and its hold is read once", async () => {
     await resume();
-    expect(claimed(moves())).toBe(false);
+    expect(claimed(moves())).toBe(true);
     expect(decisions.readLatestDecisionForRun).toHaveBeenCalledTimes(1);
     expect(sendTaskSpy).toHaveBeenCalledTimes(1);
   });
