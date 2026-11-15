@@ -468,7 +468,7 @@ describe("agent_run_resume on a template that lists no publishing step, for a ru
     expect(sendTaskSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("a run with no decision reads the hold once; the pause claim and its fence go on as on every resume", async () => {
+  it("a run with no decision reads the hold once; the pause claim and its fence go on as on every resume (cinatra#3745: every gate is claimed)", async () => {
     await resume();
     expect(decisions.readLatestDecisionForRun).toHaveBeenCalledTimes(1);
     expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);

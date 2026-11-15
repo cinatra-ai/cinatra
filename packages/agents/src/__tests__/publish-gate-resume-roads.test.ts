@@ -69,6 +69,7 @@ const RESUME_ROAD_ANCHORS: Record<string, { from: string; claim: string; hold: s
     fence: "pauseFence:",
     send: "await sendWayflowResume(",
   },
+  // agent_run_resume (mcp/handlers.ts calls it): the pause claim, its fence bound to the gate read (cinatra#3745)
   "packages/agents/src/run-resume-under-claim.ts": {
     from: "export async function resumeWayflowUnderPauseClaim(",
     claim: "claimPause(",

@@ -10,7 +10,8 @@ import "server-only";
 // fence, record the answer, send, handle the answer, settle. A stop that commits
 // before the fence wins: the status change clears the claim, the fence then fails
 // and nothing is sent. A stop during a live send loses: the seam refuses it with
-// `pause_resume_in_flight`.
+// `pause_resume_in_flight`. A lost fence gives this claim back (a no-op when the
+// claim is no longer this resume's).
 //
 // What records the answer (the prompt row) runs only after a fence this claimer
 // won. A claimer whose lease expired and was taken over stops at its fence, so it
@@ -137,6 +138,10 @@ export async function resumeWayflowUnderPauseClaim(args: {
     return { error: REFUSALS[claim.reason] ?? `Run is not pending approval (status: ${claim.status}). Only pending_approval runs can be resumed.` };
   }
   const ref = { runId: run.id, orgId: run.orgId, token: claim.token };
+  // cinatra#3745: the gate this resume read (its a2a task, in its execution
+  // attempt). The fence is bound to it, and the answer is applied only while the
+  // run is still `running` at it (execution.ts, `claimedGate`).
+  const gate = { a2aTaskId: run.a2aTaskId, executionAttemptId: run.executionAttemptId ?? null };
 
   let resumeMessage: Record<string, unknown> | undefined;
   try {
@@ -155,7 +160,13 @@ export async function resumeWayflowUnderPauseClaim(args: {
       metadata: resumeMetadata,
     };
     if (args.recheckPublishHold) await recheckPublishHoldUnderClaim(run.id);
-    await transitionRunStatus(run.id, "pending_approval", "running", { pauseFence: { token: claim.token, generation: claim.generation } }, authority);
+    await transitionRunStatus(
+      run.id,
+      "pending_approval",
+      "running",
+      { pauseFence: { token: claim.token, generation: claim.generation }, resumeGate: gate },
+      authority,
+    );
   } catch (stepError) {
     if (!(stepError instanceof RunTransitionError && stepError.code === "stale_from_status")) {
       if (await givePauseBackOnHoldFault(ref, authority, stepError, "[resumeWayflowUnderPauseClaim] could not give the claim back after a publish-hold refusal")) {
@@ -163,6 +174,20 @@ export async function resumeWayflowUnderPauseClaim(args: {
       }
       return failPreSendStep({ ...ref, expiresAt: claim.expiresAt }, authority, stepError);
     }
+    // A lost fence sent nothing, and its rollback wrote nothing, so this claim can
+    // still be live: the fence is bound to the gate (cinatra#3745), and the run can
+    // be at another gate at the same generation (the delivery worker re-emits the
+    // next gate in place, with no status change). Give the pause back, so the next
+    // resume is not refused as `held` until the lease ends. The release clears only
+    // this token's `claimed` lease: when a stop or another claimer has it, it is
+    // `lost` and changes nothing. A failed release is logged (a constant and the
+    // error's name only); the lease then frees itself when it ends.
+    await releasePauseClaim(ref, authority).catch((releaseError: unknown) => {
+      console.warn(
+        "[resumeWayflowUnderPauseClaim] could not give the claim back after a lost fence",
+        releaseError instanceof Error ? releaseError.name : "error",
+      );
+    });
     return {
       error:
         (await readRun())?.status === "stopped"
@@ -194,7 +219,7 @@ export async function resumeWayflowUnderPauseClaim(args: {
     } as never)) as WayflowTask;
     // The fence moved the row to `running`, so the handler's edges start there.
     const { handleWayflowTaskState } = await import("./execution");
-    await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task, authority, pauseClaimToken: claim.token });
+    await handleWayflowTaskState({ runId: run.id, run, fromStatus: "running", task, authority, pauseClaimToken: claim.token, claimedGate: gate });
     finalState = task.status?.state;
   } catch (error) {
     failure = { error };

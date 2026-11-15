@@ -45,6 +45,7 @@ import {
   readAgentRunsByTemplateRaw,
   type AgentRunRecord,
 } from "../store";
+import { resumeMessageFromInput } from "./resume-message";
 // Run-scoped test-delivery send + parse primitives (#1625): the two handlers
 // live in ./test-delivery-handlers (extracted to keep this primitive hub under
 // the file-size ratchet). The send PORT, ledger store, and port types are
@@ -2071,8 +2072,8 @@ async function handleAgentBuilderRunResume(
 
     // cinatra#2485 C — the install-scope run gate. A resume DRIVES execution,
     // and this handler's WayFlow branch does so through a DIRECT `sendTask`:
-    // it enqueues nothing and transitions nothing, so it reaches neither
-    // layer-2 chokepoint. Without this, a principal authorized on the run by
+    // it enqueues nothing and its gate claim is no `→queued` edge, so it reaches
+    // neither layer-2 chokepoint. Without this, a principal authorized on the run by
     // policy (an org admin, a co-owner) could resume a team-/project-scoped
     // agent's run from outside that scope. Both the RESUMING principal and the
     // run owner must be inside the agent's scope; asserted before
@@ -2157,38 +2158,12 @@ async function handleAgentBuilderRunResume(
         timeoutMs: WAYFLOW_A2A_TIMEOUT_MS,
         fetchImpl: createWayflowFetch(),
       });
-      // Precedence for the WayFlow resume message — kept identical to
-      // approveReviewTaskInternal (review-task-actions.ts) so UI and MCP paths
-      // stay in lockstep:
-      //   1. userResponse (string, non-empty after trim)  — structured-form path,
-      //      passed through UNCHANGED to preserve JSON formatting.
-      //   2. approvalNote (string, non-empty after trim) — legacy bare-approval, trimmed.
-      //   3. fallback "[Approved by operator]"           — bare click-to-approve.
-      // userResponse wins over approvalNote when both are present; renderers needing
-      // the approval note delivered to WayFlow must embed it inside the JSON payload.
-      const trimmedNote = typeof approvalNote === "string" ? approvalNote.trim() : "";
-      let resumeText: string;
-      if (typeof userResponse === "string" && userResponse.trim().length > 0) {
-        resumeText = userResponse;
-      } else if (trimmedNote.length > 0) {
-        resumeText = trimmedNote;
-      } else {
-        resumeText = "[Approved by operator]";
-      }
-      // Payload extraction. MCP handler input has no structured `valuesObj`, so on parse failure submittedValues stays null.
-      let submittedValues: Record<string, unknown> | null = null;
-      if (typeof userResponse === "string" && userResponse.trim().length > 0) {
-        try {
-          const parsed = JSON.parse(userResponse);
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-            submittedValues = parsed as Record<string, unknown>;
-          }
-        } catch {
-          // No structured fallback in MCP path — leave null.
-        }
-      }
+      // The resume message and its submitted values (precedence: ./resume-message, as the UI approve).
+      const { resumeText, trimmedNote, submittedValues } = resumeMessageFromInput(userResponse, approvalNote);
 
       // cinatra#4245: claim, token and message, fence, prompt, send, answer, settle.
+      // cinatra#3745: the fence is bound to the gate read here (its a2a task and
+      // execution attempt), and the answer to that claimed gate.
       return await resumeWayflowUnderPauseClaim({
         run: { ...run, a2aTaskId: run.a2aTaskId, a2aContextId: run.a2aContextId },
         client,
