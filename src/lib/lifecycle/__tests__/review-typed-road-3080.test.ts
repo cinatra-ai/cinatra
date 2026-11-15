@@ -206,6 +206,7 @@ describe("the press reaches the one review entry", () => {
         resolveActor: vi.fn(async () => ACTOR),
         consume: vi.fn(async () => ({ outcome: "consumed" as const, messageText: WORDS })),
         submitReviewDecision,
+        preflightReviewPress: async () => null,
       } as never,
     );
 

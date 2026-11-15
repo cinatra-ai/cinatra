@@ -101,6 +101,9 @@ function deps(bound: unknown, over: Record<string, unknown> = {}) {
       return { outcome: "consumed" as const, messageText: personWords };
     }),
     submitReviewDecision,
+    // The pre-spend review preflight (cinatra#4571 pre-1 finding 1) is proven in
+    // lent-review-press-authorize-first-4571.test.ts; here it admits every press.
+    preflightReviewPress: async () => null,
     confirmHold,
     skipHold,
     writeSelection,
