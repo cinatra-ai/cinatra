@@ -23,6 +23,9 @@
  *      pass every rendering test, while recording nothing.
  *   4. There is no per-item decision entry anywhere: nothing but the two review
  *      decision entries accepts `suggestionDecisions` off the wire (#2047 row 8).
+ *      Since cinatra#3080 both take it through ONE submission validator, so no
+ *      module but those two entries may reach that validator (its module or any
+ *      name it exports), read over the WHOLE tree.
  *
  * WHAT THIS CANNOT PROVE: a text scan is defeated by an anchor assembled at
  * runtime. It closes the reachable, nameable ways to draw a second chip.
@@ -119,6 +122,72 @@ describe("ONE component draws the suggestion chip", () => {
 /** The ONE input validator both review decision entries parse (cinatra#3080). */
 const FLOOR_SUBMISSION_INPUT =
   "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/floor-submission-input.ts";
+/** Its module name, as every import, re-export or dynamic import spells it. */
+const FLOOR_SUBMISSION_MODULE = "floor-submission-input";
+/** The two review decision entries: the ONLY modules that may reach the validator. */
+const REVIEW_DECISION_ENTRIES = [
+  "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
+  "src/app/api/lifecycle-views/decide/route.ts",
+].sort();
+/** A test file: the only thing the reach scan leaves out (a test is no entry). */
+const TEST_FILE = /\.(test|spec)\.[cm]?[jt]sx?$/;
+
+/**
+ * Every code file under the scanned roots, `__tests__`, `tests` and
+ * `__generated__` included (FILES skips those folders, so a module placed there
+ * would be invisible to it). Only dependencies and the Next.js build output are
+ * left out.
+ */
+function walkAllCodeFiles(dir: string, out: string[] = []): string[] {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return out;
+  }
+  for (const entry of entries) {
+    if (entry === "node_modules" || entry === ".next") continue;
+    const full = join(dir, entry);
+    let isDir = false;
+    try {
+      isDir = statSync(full).isDirectory();
+    } catch {
+      continue;
+    }
+    if (isDir) {
+      walkAllCodeFiles(full, out);
+      continue;
+    }
+    if (/\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/.test(entry)) out.push(full);
+  }
+  return out;
+}
+
+/** The names the validator exports, read from its own source. */
+function validatorExports(source: string): string[] {
+  const declared =
+    /^export\s+(?:declare\s+)?(?:async\s+)?(?:const|let|var|function\*?|class|type|interface|enum)\s+([A-Za-z_$][\w$]*)/gm;
+  const names = [...source.matchAll(declared)].map((m) => m[1]);
+  for (const m of source.matchAll(/^export\s*(?:type\s*)?\{([^}]*)\}/gm)) {
+    for (const part of m[1].split(",")) {
+      const name = part.trim().split(/\s+as\s+/).pop()?.trim();
+      if (name) names.push(name);
+    }
+  }
+  return [...new Set(names)].sort();
+}
+
+/**
+ * Every non-test module that reaches the validator: it names the validator's
+ * module or ANY name the validator exports. Fail closed: a mention is enough.
+ */
+function reachOfValidator(files: { path: string; source: string }[], names: string[]): string[] {
+  return files
+    .filter((f) => f.path !== FLOOR_SUBMISSION_INPUT && !TEST_FILE.test(f.path))
+    .filter((f) => f.source.includes(FLOOR_SUBMISSION_MODULE) || names.some((n) => f.source.includes(n)))
+    .map((f) => f.path)
+    .sort();
+}
 
 describe("ONE decision path carries the marks", () => {
   it("the review page's route-bound action FORWARDS the partition", () => {
@@ -151,6 +220,47 @@ describe("ONE decision path carries the marks", () => {
     expect(filesMatching(/suggestionDecisions:\s*z\s*\n?\s*\./)).toEqual([FLOOR_SUBMISSION_INPUT]);
     const route = readFileSync(join(REPO_ROOT, "src/app/api/lifecycle-views/decide/route.ts"), "utf8");
     expect(route).toMatch(/\.\.\.REVIEW_FLOOR_SUBMISSION_FIELDS,/);
+    // A third entry that spreads the validator's fields and forwards its parsed
+    // partition spells no `suggestionDecisions: z.` and would pass the pin above.
+    // So the validator's REACH is pinned too: any non-test module, anywhere under
+    // the scanned roots, that names its module or anything it exports.
+    const all = SEARCH_ROOTS.flatMap((root) => walkAllCodeFiles(join(REPO_ROOT, root))).map((f) => ({
+      path: relPath(f),
+      source: readFileSync(f, "utf8"),
+    }));
+    expect(all.length).toBeGreaterThan(FILES.length);
+    const names = validatorExports(readFileSync(join(REPO_ROOT, FLOOR_SUBMISSION_INPUT), "utf8"));
+    for (const carrier of [
+      "REVIEW_FLOOR_SUBMISSION_FIELDS",
+      "reviewFloorSubmissionInputSchema",
+      "partitionFromFloorSubmissionInput",
+    ]) {
+      expect(names).toContain(carrier);
+    }
+    expect(reachOfValidator(all, names)).toEqual(REVIEW_DECISION_ENTRIES);
+    // The one exclusion stays closed: no non-test module imports a test file.
+    const importsATest =
+      /(?:\bfrom|\bimport|\brequire)\s*(?:\(\s*)?["'`][^"'`\n]*\.(?:test|spec)(?:\.[cm]?[jt]sx?)?["'`]/;
+    expect(all.filter((f) => !TEST_FILE.test(f.path) && importsATest.test(f.source)).map((f) => f.path)).toEqual([]);
+  });
+
+  it("a third entry that reuses the validator is caught by the reach scan (fixture)", () => {
+    const names = validatorExports(readFileSync(join(REPO_ROOT, FLOOR_SUBMISSION_INPUT), "utf8"));
+    const spec = `@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/${FLOOR_SUBMISSION_MODULE}`;
+    const thirdEntry = {
+      path: "src/app/api/review-floor/route.ts",
+      source: [
+        `import { REVIEW_FLOOR_SUBMISSION_FIELDS, partitionFromFloorSubmissionInput } from "${spec}";`,
+        "const body = z.object({ ...REVIEW_FLOOR_SUBMISSION_FIELDS });",
+        "export const forward = (raw: unknown) => partitionFromFloorSubmissionInput(body.parse(raw));",
+      ].join("\n"),
+    };
+    const shim = {
+      path: "src/lib/review/__tests__/floor-shim.ts",
+      source: `export { partitionFromFloorSubmissionInput as fromFloor } from "${spec}";`,
+    };
+    const test = { path: "src/app/api/review-floor/route.test.ts", source: thirdEntry.source };
+    expect(reachOfValidator([thirdEntry, shim, test], names)).toEqual([thirdEntry.path, shim.path].sort());
   });
 
   it("no route is named for per-item suggestion decisions", () => {

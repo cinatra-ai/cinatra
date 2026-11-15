@@ -17,7 +17,11 @@
  *      shape a per-item accept endpoint would have to take.
  *   2. The set of production modules that accept a client-supplied partition at
  *      all is a PINNED inventory. Adding an entry point is then a deliberate edit
- *      to this list with a reviewer looking, not a quiet addition.
+ *      to this list with a reviewer looking, not a quiet addition. Since
+ *      cinatra#3080 the partition's wire shape lives in ONE submission
+ *      validator; the modules that reach that validator (its module or any
+ *      name it exports) are a second pinned set, read over the WHOLE tree, so
+ *      a new entry that reuses the validator cannot hide behind it.
  *   3. The ledger's per-item write happens in exactly ONE module, and it is the
  *      one that owns the gate CAS — so a decision row cannot exist without the
  *      decision that authorized it.
@@ -137,6 +141,95 @@ function isServerActionModule(source: string): boolean {
   return false;
 }
 
+// ---- THE ONE SUBMISSION VALIDATOR and who may reach it (cinatra#3080) ------
+
+/** The ONE input validator both server entries parse. */
+const FLOOR_SUBMISSION_INPUT =
+  "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/floor-submission-input.ts";
+/** Its module name, as every import, re-export or dynamic import spells it. */
+const FLOOR_SUBMISSION_MODULE = "floor-submission-input";
+/** The ONLY modules that may reach it: the two server entries. */
+const FLOOR_SUBMISSION_ENTRIES = [
+  "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
+  "src/app/api/lifecycle-views/decide/route.ts",
+].sort();
+/** The carriers the validator must still export (guards against a vacuous scan). */
+const FLOOR_SUBMISSION_CARRIERS = [
+  "REVIEW_FLOOR_SUBMISSION_FIELDS",
+  "reviewFloorSubmissionInputSchema",
+  "partitionFromFloorSubmissionInput",
+];
+const ANY_CODE_EXT = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
+/** A test file. The only thing the reach scan leaves out: a test is no server entry. */
+const TEST_FILE = /\.(test|spec)\.[cm]?[jt]sx?$/;
+/** A non-test module that imports a test file would reopen that one exclusion. */
+const IMPORTS_A_TEST_FILE =
+  /(?:\bfrom|\bimport|\brequire)\s*(?:\(\s*)?["'`][^"'`\n]*\.(?:test|spec)(?:\.[cm]?[jt]sx?)?["'`]/;
+
+/**
+ * EVERY code file under the scanned roots: `__tests__`, `tests`, fixtures and
+ * `__generated__` included, only dependencies and the Next.js build output left
+ * out. The pinned set above skips those folders, so a module placed there would
+ * be invisible to it; the validator's reach is read over the whole tree instead.
+ */
+function allCodeFiles(): { path: string; source: string }[] {
+  const out: { path: string; source: string }[] = [];
+  const visit = (dir: string) => {
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry === "node_modules" || entry === ".next") continue;
+      const full = join(dir, entry);
+      let isDir = false;
+      try {
+        isDir = statSync(full).isDirectory();
+      } catch {
+        continue;
+      }
+      if (isDir) {
+        visit(full);
+        continue;
+      }
+      if (!ANY_CODE_EXT.test(entry)) continue;
+      out.push({ path: relative(REPO_ROOT, full).replaceAll("\\", "/"), source: readFileSync(full, "utf8") });
+    }
+  };
+  for (const root of SEARCH_ROOTS) visit(join(REPO_ROOT, root));
+  return out;
+}
+
+/** The names a module exports, read from its own source. */
+function exportedNames(source: string): string[] {
+  const names = new Set<string>();
+  const declared =
+    /^export\s+(?:declare\s+)?(?:async\s+)?(?:const|let|var|function\*?|class|type|interface|enum)\s+([A-Za-z_$][\w$]*)/gm;
+  for (const m of source.matchAll(declared)) names.add(m[1]);
+  for (const m of source.matchAll(/^export\s*(?:type\s*)?\{([^}]*)\}/gm)) {
+    for (const part of m[1].split(",")) {
+      const name = part.trim().split(/\s+as\s+/).pop()?.trim();
+      if (name) names.add(name);
+    }
+  }
+  return [...names].sort();
+}
+
+/**
+ * Every non-test module that reaches the validator: it names the validator's
+ * module (an import, a re-export, a dynamic import) or ANY name the validator
+ * exports. Fail closed: a mention is enough, and only test files are left out.
+ */
+function validatorReach(all: { path: string; source: string }[], names: string[]): string[] {
+  return all
+    .filter((f) => f.path !== FLOOR_SUBMISSION_INPUT && !TEST_FILE.test(f.path))
+    .filter((f) => f.source.includes(FLOOR_SUBMISSION_MODULE) || names.some((n) => f.source.includes(n)))
+    .map((f) => f.path)
+    .sort();
+}
+
 describe("the suggestion decision has exactly ONE path", () => {
   const files = productionFiles();
 
@@ -210,6 +303,64 @@ describe("the suggestion decision has exactly ONE path", () => {
     expect(route).toMatch(/partitionFromFloorSubmissionInput\(parsed\.data\)/);
     expect(page).toMatch(/reviewFloorSubmissionInputSchema\.safeParse\(input\)/);
     expect(page).toMatch(/partitionFromFloorSubmissionInput\(checked\.data\)/);
+  });
+
+  it("nothing but the two server entries reaches the ONE submission validator", () => {
+    // The pinned set above names the modules that SPELL `suggestionDecisions`.
+    // A third entry that spreads the validator's fields and forwards its parsed
+    // partition spells nothing of the kind, so it would pass that pin. This pin
+    // is on the validator's reach instead: any module, anywhere under the
+    // scanned roots, that names the validator's module or anything it exports.
+    const all = allCodeFiles();
+    expect(all.length).toBeGreaterThan(files.length);
+    const validator = all.find((f) => f.path === FLOOR_SUBMISSION_INPUT);
+    expect(validator).toBeDefined();
+    const names = exportedNames(validator?.source ?? "");
+    for (const carrier of FLOOR_SUBMISSION_CARRIERS) expect(names).toContain(carrier);
+    expect(validatorReach(all, names)).toEqual(FLOOR_SUBMISSION_ENTRIES);
+  });
+
+  it("no non-test module imports a test file (the reach scan's one exclusion stays closed)", () => {
+    const importers = allCodeFiles()
+      .filter((f) => !TEST_FILE.test(f.path) && IMPORTS_A_TEST_FILE.test(f.source))
+      .map((f) => f.path);
+    expect(importers).toEqual([]);
+  });
+
+  it("the reach scan refuses a third entry that reuses the validator (fixture)", () => {
+    const validator = allCodeFiles().find((f) => f.path === FLOOR_SUBMISSION_INPUT);
+    const names = exportedNames(validator?.source ?? "");
+    const spec = `@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/${FLOOR_SUBMISSION_MODULE}`;
+    // A new endpoint: spreads the fields, forwards the partition, never spells
+    // `suggestionDecisions` and has no "suggestion" in its path.
+    const thirdEntry = {
+      path: "src/app/api/review-floor/route.ts",
+      source: [
+        'import { z } from "zod";',
+        `import { REVIEW_FLOOR_SUBMISSION_FIELDS, partitionFromFloorSubmissionInput } from "${spec}";`,
+        "const body = z.object({ ...REVIEW_FLOOR_SUBMISSION_FIELDS });",
+        "export const forward = (raw: unknown) => partitionFromFloorSubmissionInput(body.parse(raw));",
+      ].join("\n"),
+    };
+    // A re-export under another name, placed where the pinned set does not look.
+    const shim = {
+      path: "src/lib/review/__tests__/floor-shim.ts",
+      source: `export { partitionFromFloorSubmissionInput as fromFloor } from "${spec}";`,
+    };
+    // A dynamic import that names only the module.
+    const lazy = {
+      path: "packages/agents/src/lazy-floor.ts",
+      source: `export const load = () => import("${spec}");`,
+    };
+    // A test file is no server entry: left out.
+    const test = { path: "src/app/api/review-floor/route.test.ts", source: thirdEntry.source };
+    expect(validatorReach([thirdEntry, shim, lazy, test], names)).toEqual(
+      [thirdEntry.path, shim.path, lazy.path].sort(),
+    );
+    // A non-test module importing a test file is caught by the guard above.
+    expect(IMPORTS_A_TEST_FILE.test('import { forward } from "./route.test";')).toBe(true);
+    expect(IMPORTS_A_TEST_FILE.test('const m = await import("../x.spec.ts");')).toBe(true);
+    expect(IMPORTS_A_TEST_FILE.test('import { a } from "./latest";')).toBe(false);
   });
 
   it("the client producers reach exactly ONE endpoint — the gate-scoped entry", () => {
