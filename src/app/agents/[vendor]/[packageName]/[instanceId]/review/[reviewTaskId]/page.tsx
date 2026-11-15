@@ -74,6 +74,11 @@ import {
 
 import { resolveReviewActorContext } from "./review-actor";
 import { submitReviewDecisionAction } from "./actions";
+import {
+  REVIEW_FLOOR_SUBMISSION_INVALID,
+  partitionFromFloorSubmissionInput,
+  reviewFloorSubmissionInputSchema,
+} from "./floor-submission-input";
 import { ReviewGateBlocked } from "./review-gate-states";
 import { ReviewRunSteps, type ReviewRunStep } from "./review-run-steps";
 import { RunNotAuthorizedPanel } from "@cinatra-ai/agents/run-not-authorized-panel";
@@ -376,14 +381,23 @@ export default async function AgentRunReviewPage({
     // before any store is touched. Passing it through here rather than minting a
     // page-local per-item action is what keeps the page and the card on ONE
     // decision path (#2047 row 8).
+    //
+    // THE SAME BOUNDS AS THE DECIDE ROUTE (cinatra#3080). This action is a second
+    // client-reachable entry to the one decision helper, so its input is parsed
+    // by the ONE validator the route spreads into its body - never trusted for
+    // its declared type, and never bounded by a number of its own.
+    const checked = reviewFloorSubmissionInputSchema.safeParse(input);
+    if (!checked.success) {
+      return { kind: "error", message: REVIEW_FLOOR_SUBMISSION_INVALID };
+    }
     return submitReviewDecisionAction(
       runId,
       reviewTaskId,
-      input.disposition,
-      input.comment,
+      checked.data.disposition,
+      checked.data.comment ?? null,
       undefined,
-      input.suggestionDecisions ?? null,
-      input.regeneratePrompt ?? null,
+      partitionFromFloorSubmissionInput(checked.data),
+      checked.data.regeneratePrompt ?? null,
     );
   }
 

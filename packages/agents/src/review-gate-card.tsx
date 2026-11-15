@@ -2126,7 +2126,7 @@ export function SuggestionChips({
           {recorded
             ? "These are the per-item choices this review recorded."
             : interactive
-              ? "Press a suggestion to dismiss it, press it again to accept it. Nothing is recorded until you approve or reject below."
+              ? "Press a suggestion to dismiss it, press it again to accept it. Nothing is recorded until you press Continue or Regenerate below."
               : "Deciding these needs approve access on this run."}
         </p>
       ) : null}

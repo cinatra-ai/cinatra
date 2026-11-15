@@ -150,11 +150,12 @@ export async function submitReviewDecisionAction(
   // A suggestion partition is TERMINAL-ONLY (cinatra#2571): it rides Continue.
   // The change road below short-circuits BEFORE the core, so without this guard a
   // partition sent with a Regenerate or the conversation's comment would be
-  // silently dropped rather than refused.
-  const carriesSuggestions =
-    !!suggestionDecisions &&
-    (suggestionDecisions.accepted.length > 0 || suggestionDecisions.dismissed.length > 0);
-  if (carriesSuggestions && action !== "continue") {
+  // silently dropped rather than refused. The rule is about the field being
+  // SUPPLIED, not about how many ids it lists: an empty partition outside
+  // Continue is refused too (cinatra#3080), never normalized away. Absent
+  // (`null` / `undefined`) is the only "no partition".
+  const suppliesSuggestions = suggestionDecisions !== null && suggestionDecisions !== undefined;
+  if (suppliesSuggestions && action !== "continue") {
     return {
       kind: "error",
       message: "Suggestion decisions require a Continue — the decision they ride on.",

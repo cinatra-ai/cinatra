@@ -7421,14 +7421,22 @@ function ratifiedFloorActions(): SurfaceDriver["actions"] {
       },
     },
     // Regenerate opens the SUCCESSOR gate: the reviewed work is turned back and
-    // the held effect stays held until the successor is decided.
+    // the held effect stays held until the successor is decided. That is the
+    // manifest's outcome NAME and the action's eventual effect, not an element:
+    // what the floor draws when the press lands is the changes-requested notice
+    // (the gate resolves into a repair, `requested` while the repair is in
+    // flight). The successor gate is opened later, by the producer's response,
+    // as a new card. So the driver asserts the real sequence: the notice, then
+    // no floor control left on this gate and no Continued reading.
     "regenerate-review": {
       outcome: "successor-gate-opened",
       run: async (_page, root) => {
         await floorControl(root, "regenerate-review", "successor-gate-opened").click();
-        await expect(
-          root.locator('[data-review-outcome="successor-gate-opened"]'),
-        ).toBeVisible();
+        const notice = root.locator('[data-review-outcome="changes-requested"]');
+        await expect(notice).toBeVisible();
+        await expect(notice).toHaveAttribute("data-changes-status", "requested");
+        await expect(floorControl(root, "regenerate-review", "successor-gate-opened")).toHaveCount(0);
+        await expect(root.locator('[data-review-outcome="decided"]')).toHaveCount(0);
       },
     },
     // Continue is TERMINAL: the gate resolves and the run is released.
