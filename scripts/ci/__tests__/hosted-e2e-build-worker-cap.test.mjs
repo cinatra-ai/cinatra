@@ -1,9 +1,9 @@
 // Hosted e2e production builds run ONE page-data worker.
 //
 // Every job in .github/workflows/*.yml that (a) can run on a GitHub-hosted
-// runner, (b) declares job-level service containers (postgres/redis) and (c) has
-// a step that runs the production app build must set CINATRA_BUILD_CPUS: "1" in
-// that build step's own `env:`. The knob maps to experimental.cpus in
+// runner and (b) has a step that runs the production app build must set
+// CINATRA_BUILD_CPUS: "1" in that build step's own `env:`, with or without
+// job-level service containers. The knob maps to experimental.cpus in
 // next.config.ts and bounds the page-data worker fan-out; each worker is a
 // whole extra Node process with its own heap.
 //
@@ -23,15 +23,20 @@
 // `CINATRA_BUILD_CPUS=1` in its `build-args`. The build-image.yml `image` job
 // lost its runner in that build the same way, with no services at all.
 //
+// A hosted build with NO services is not exempt either. The build-image.yml
+// `presence-degraded-build` job runs `pnpm build` directly on the runner with
+// no service containers; it kept the default fan-out and lost its runner in
+// that step on a main push (the job cap fired late, no job log was uploaded,
+// and the main run ended cancelled).
+//
 // The jobs are DISCOVERED from the real workflow files, not listed by hand, so
-// a new hosted build next to services is covered the day it is added.
+// a new hosted build is covered the day it is added.
 //
 // What counts, read from the workflows as they are:
 // - Hosted: every `runs-on` here is a literal `ubuntu-*` label or an expression
 //   that falls back to `ubuntu-latest`. A job is left out only when its
 //   runs-on is a literal `self-hosted` label with no hosted fallback. A runs-on
 //   that cannot be classified counts as hosted (fail closed).
-// - Services: a job-level `services:` key.
 // - Production build: a `run:` line (a comment line does not count) that calls
 //   `pnpm build` (also `npm|yarn|bun [run] build`, with or without options
 //   before `build`), `next build` or `scripts/next-build.mjs`, including when
@@ -98,7 +103,7 @@ function readKey(lines, keyIndent, key, allowDash = false) {
   return null;
 }
 
-/** The jobs of one workflow file: [{ key, runsOn, hasServices, steps }]. */
+/** The jobs of one workflow file: [{ key, runsOn, steps }]. */
 function parseJobs(text) {
   const lines = text.split("\n");
   const at = lines.findIndex((l) => /^jobs:\s*$/.test(l));
@@ -124,7 +129,6 @@ function parseJobs(text) {
     return {
       key: l.trim().replace(/:.*$/, ""),
       runsOn: runsOn ? [runsOn.inline, ...runsOn.body].join(" ").trim() : null,
-      hasServices: readKey(body, keyIndent, "services") !== null,
       steps: stepsBlock ? parseSteps(stepsBlock.body) : [],
     };
   });
@@ -222,12 +226,12 @@ function runsProductionBuild(run) {
     );
 }
 
-/** Every hosted job with services and a production build step, as { file, job, step }. */
+/** Every hosted job with a production build step, as { file, job, step }. */
 function discover(files) {
   const found = [];
   for (const file of files) {
     for (const job of parseJobs(file.text)) {
-      if (!job.hasServices || !isHosted(job.runsOn)) continue;
+      if (!isHosted(job.runsOn)) continue;
       for (const step of job.steps) {
         if (runsProductionBuild(step.run)) found.push({ file: file.name, job: job.key, step });
       }
@@ -282,12 +286,15 @@ const KNOWN_FLOOR = [
   "e2e-app-suites.yml / render-smoke-e2e / Build app (production)",
   "dashboard-live-verify.yml / smoke / Build app (production)",
   "design-baselines-refresh.yml / refresh / Build (standalone production server)",
+  // No services: discovered since the services condition was dropped. The step
+  // name reads as the reader cuts it at the ` #` of "(the #109 class ...)".
+  "build-image.yml / presence-degraded-build / Build against the shrunk maps (the",
 ];
 
-describe("hosted e2e builds next to service containers run one page-data worker", () => {
+describe("hosted production app builds run one page-data worker", () => {
   const discovered = discover(workflowFiles());
 
-  it("discovers every known hosted build next to services (the floor)", () => {
+  it("discovers every known hosted build (the floor)", () => {
     const names = discovered.map(label);
     for (const known of KNOWN_FLOOR) {
       expect(names, `discovery lost "${known}"`).toContain(known);
@@ -296,7 +303,7 @@ describe("hosted e2e builds next to service containers run one page-data worker"
 
   it('sets CINATRA_BUILD_CPUS: "1" on every discovered build step', () => {
     const uncapped = discovered.filter(({ step }) => step.env.CINATRA_BUILD_CPUS !== "1").map(label);
-    expect(uncapped, "hosted build steps next to services without the cap").toEqual([]);
+    expect(uncapped, "hosted production build steps without the cap").toEqual([]);
   });
 
   for (const hit of discovered) {
@@ -395,15 +402,16 @@ describe("the workflow reader the cap test relies on", () => {
   it("reads the indented and the compact step layout, and the step env", () => {
     for (const steps of [SPACED, COMPACT]) {
       const hits = run(wrap("${{ fromJSON(vars.CI_RUNNER_E2E || '\"ubuntu-latest\"') }}", steps));
-      expect(hits.map(label)).toEqual(["t.yml / a / Build"]);
+      expect(hits.map(label)).toEqual(["t.yml / a / Build", "t.yml / b / other"]);
       expect(hits[0].step.env.CINATRA_BUILD_CPUS).toBe("1");
+      expect(hits[1].step.env.CINATRA_BUILD_CPUS).toBeUndefined();
     }
   });
 
-  it("leaves out a job with no services and a self-hosted-only job", () => {
-    expect(run(wrap("[self-hosted, linux]", SPACED))).toEqual([]);
-    // job b above has a build step but no services: never discovered
-    expect(run(wrap("ubuntu-latest", SPACED)).map((h) => h.job)).toEqual(["a"]);
+  it("leaves out a self-hosted-only job and keeps a hosted job with no services", () => {
+    // job b above is hosted with a build step and no services: still discovered
+    expect(run(wrap("[self-hosted, linux]", SPACED)).map((h) => h.job)).toEqual(["b"]);
+    expect(run(wrap("ubuntu-latest", SPACED)).map((h) => h.job)).toEqual(["a", "b"]);
   });
 
   it("counts a runs-on it cannot classify as hosted", () => {
