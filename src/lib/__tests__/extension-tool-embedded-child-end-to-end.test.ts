@@ -23,10 +23,11 @@
  * file it was loaded from, and it calls two ports: one data write and one
  * objects save. The test reads that the module ran from the exact child
  * installation's root, that the write reached the child's own table under the
- * child's own role, that the save is of a type the child declares and is
- * bound to this run, and that every audit event of the call names the run
- * package, the package whose code ran, the exact child installation and the
- * verified step.
+ * child's own role (set in the write's own transaction directly before it, and
+ * no other role set), that the save is of a type the child declares and is
+ * bound to this run, and that the call writes exactly three audit events, each
+ * naming the run package, the package whose code ran, the exact child
+ * installation and the verified step.
  *
  *   pnpm exec vitest run src/lib/__tests__/extension-tool-embedded-child-end-to-end.test.ts
  */
@@ -431,14 +432,30 @@ describe("an embedded child step's extension_tool call, through the real resolve
     expect(result.row).toEqual({ inserted: true, row: { id: "row-1", org_id: ORG } });
     expect(result.saved).toEqual({ objectId: "object-1", type: RECORD_TYPE, isNew: true });
 
-    // The data write reached the child's own table, under the child's own role, in the run's organisation.
+    // The data write reached the child's own table, in the run's organisation:
+    // the run's organisation and the row's id fill the insert's own two
+    // placeholders, and the conflict arm looks for the same row.
     const childTable = declaredTablePhysicalName(CHILD, "child_rows");
-    const insert = query.mock.calls.find((c) => String(c[0]).startsWith("WITH"));
-    expect(insert).toBeDefined();
-    expect(String(insert![0])).toContain(`"cinatra"."${childTable}"`);
-    expect(insert![1]).toEqual(expect.arrayContaining([ORG, "row-1"]));
-    expect(statements()).toContain(`SET LOCAL ROLE "${extensionDatabaseRoleName(CHILD)}"`);
-    expect(statements().some((s) => s.includes(declaredTablePhysicalName(PARENT, "child_rows")))).toBe(false);
+    const all = statements();
+    const at = all.findIndex((s) => s.startsWith("WITH"));
+    expect(all.filter((s) => s.startsWith("WITH"))).toHaveLength(1);
+    expect(all[at]).toContain(
+      `INSERT INTO "cinatra"."${childTable}" ("org_id", "id") VALUES ($1, $2) ON CONFLICT DO NOTHING `,
+    );
+    expect(all[at]).toContain(`FROM "cinatra"."${childTable}" WHERE "org_id" = $3 AND "id" = $4 LIMIT 1`);
+    expect(query.mock.calls[at]![1]).toEqual([ORG, "row-1", ORG, "row-1"]);
+
+    // The write ran under the child's own role: the child's role is set in the
+    // write's own transaction directly before the write, and no other role is
+    // set anywhere in the call.
+    const childRole = `SET LOCAL ROLE "${extensionDatabaseRoleName(CHILD)}"`;
+    expect(all[at - 1]).toBe(childRole);
+    expect(all.slice(at - 2, at + 2)).toEqual(["BEGIN", childRole, all[at], "COMMIT"]);
+    expect(
+      all.filter((s) => /\b(?:SET|RESET)\s+(?:LOCAL\s+|SESSION\s+)?ROLE\b|\bSESSION\s+AUTHORIZATION\b/i.test(s)),
+    ).toEqual([childRole]);
+    expect(all.some((s) => s.includes(extensionDatabaseRoleName(PARENT)))).toBe(false);
+    expect(all.some((s) => s.includes(declaredTablePhysicalName(PARENT, "child_rows")))).toBe(false);
 
     // The save is of a type the child declares, through the host's objects save, bound to this run.
     expect(objectsSave).toHaveBeenCalledTimes(1);
@@ -449,11 +466,26 @@ describe("an embedded child step's extension_tool call, through the real resolve
     };
     expect(save.primitiveName).toBe("objects_save");
     expect(save.input).toEqual({ typeHint: RECORD_TYPE, rawData: { ref: "row-1", sourceRun: RUN.id } });
-    expect(save.actor).toMatchObject({ orgId: ORG, runId: RUN.id });
+    expect(save.actor).toEqual({
+      actorType: "human",
+      userId: ACTOR.principalId,
+      source: "a2a",
+      orgId: ORG,
+      platformRole: ACTOR.platformRole,
+      runId: RUN.id,
+    });
 
-    // Every audit event of the call names whose code ran for which run.
+    // Every audit event of the call names whose code ran for which run: the
+    // call writes exactly these three events, in this order.
+    expect(logAuditEvent.mock.calls.map((c) => (c[0] as Event).operation)).toEqual([
+      "extension_data.insertIfAbsent",
+      "objects_save",
+      "extension_tool.dispatch",
+    ]);
+    const byTheRun = { actorPrincipalId: RUN.runBy, actorPrincipalType: "a2a", authSource: "agent" };
     const [write] = eventsOf("extension_data.insertIfAbsent");
     expect(write).toMatchObject({
+      ...byTheRun,
       organizationId: ORG,
       runId: RUN.id,
       decision: "allowed",
@@ -462,6 +494,7 @@ describe("an embedded child step's extension_tool call, through the real resolve
     });
     const [saved] = eventsOf("objects_save");
     expect(saved).toMatchObject({
+      ...byTheRun,
       organizationId: ORG,
       runId: RUN.id,
       decision: "allowed",
@@ -471,6 +504,7 @@ describe("an embedded child step's extension_tool call, through the real resolve
     const dispatch = eventsOf("extension_tool.dispatch");
     expect(dispatch).toHaveLength(1);
     expect(dispatch[0]).toMatchObject({
+      ...byTheRun,
       organizationId: ORG,
       runId: RUN.id,
       resourceId: CHILD,
@@ -493,6 +527,8 @@ describe("an embedded child step's extension_tool call, through the real resolve
     expect(objectsSave).not.toHaveBeenCalled();
     expect(eventsOf("extension_data.insertIfAbsent")).toHaveLength(0);
     expect(eventsOf("objects_save")).toHaveLength(0);
+    // The dispatch event is the call's only audit event.
+    expect(logAuditEvent).toHaveBeenCalledTimes(1);
     const dispatch = eventsOf("extension_tool.dispatch");
     expect(dispatch).toHaveLength(1);
     expect(dispatch[0]).toMatchObject({
