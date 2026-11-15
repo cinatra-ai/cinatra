@@ -887,3 +887,100 @@ describe.skipIf(!HAS_DB)("the delivery's claim of the run is the pause fence (ci
     expect(await outboxRow(gateId)).toEqual({ status: "delivering", leaseToken: "other" });
   });
 });
+
+// cinatra#3745 S4. A run parked on its produced output's review sits in
+// `pending_approval` at its declared gate, carrying the park's column and the
+// withheld terminal write in `step_results` (the state the hold's already-parked
+// branch writes). Its WayFlow work is done; the produced-review drain owns its
+// release. No delivery of a decided declared gate may take that away from it: not
+// a failed send, and not the release of a later lease or of the settle after the
+// worker that claimed the run died with nothing recorded.
+describe.skipIf(!HAS_DB)("cinatra#3745 S4: a run parked on its produced output's review keeps its park", () => {
+  const OUTBOX = () => T("artifact_review_resume_outbox");
+  const steal = (gateId: string) => pool(`UPDATE ${OUTBOX()} SET lease_token = 'other' WHERE gate_id = $1`, [gateId]);
+  /** The worker that held the lease is gone: its lease is another token's and has lapsed. */
+  const dieAndLapse = (gateId: string) =>
+    pool(`UPDATE ${OUTBOX()} SET lease_token = 'dead-worker', lease_expires_at = now() - interval '1 second' WHERE gate_id = $1`, [gateId]);
+  const WITHHELD = {
+    status: "completed" as const,
+    derivationOutbox: {
+      orgId: ORG, templateId: "tpl-3745", packageVersion: null, createdBy: USER,
+      content: "the final post", contentIsJson: false, contentHash: "sha256-s4-final-post",
+    },
+  };
+
+  async function seedPark(run: Run): Promise<{ column: string; steps: string }> {
+    const hold = await import("../run-produced-review-hold");
+    const column = hold.encodeProducedReviewPark(WITHHELD);
+    const steps = JSON.stringify(hold.attachWithheldTerminal([{ kind: "wayflow_response", text: "the final post" }], WITHHELD));
+    const r = await pool(
+      `UPDATE ${T("agent_runs")} SET produced_review_park = $2, step_results = $3 WHERE id = $1 AND status = 'pending_approval'`,
+      [run.runId, column, steps],
+    );
+    expect(r.rowCount).toBe(1);
+    return { column, steps };
+  }
+
+  /** The park and its withheld write are on the row byte for byte, and the drain still lists the run. */
+  async function expectParkKept(run: Run, seeded: { column: string; steps: string }) {
+    const r = await pool(`SELECT status, produced_review_park, step_results FROM ${T("agent_runs")} WHERE id = $1`, [run.runId]);
+    expect(r.rows[0]).toEqual({ status: "pending_approval", produced_review_park: seeded.column, step_results: seeded.steps });
+    const hold = await vi.importActual<typeof import("../run-produced-review-hold")>("../run-produced-review-hold");
+    expect(await hold.listReleasableHeldRuns(200)).toContainEqual({ runId: run.runId, orgId: ORG });
+  }
+
+  /** The send of the delivery that claimed the run: its worker loses the lease, then the send fails. */
+  function loseLeaseThenFail(gateId: string) {
+    h.sendImpl = async () => {
+      await steal(gateId);
+      throw new Error("wayflow unreachable");
+    };
+  }
+
+  it("S4 RED a failed send keeps the park: the claim of the parked run is refused, nothing is sent, the intent closes", async () => {
+    const run = await seedRun("pending_approval");
+    const seeded = await seedPark(run);
+    const gateId = await seedIntent(run);
+    h.sendImpl = async () => { throw new Error("wayflow unreachable"); };
+    const summary = await delivery.sweepArtifactReviewResumeIntents({ limit: 1 });
+    expect(h.sends.length).toBe(0);
+    await expectParkKept(run, seeded);
+    expect(summary).toMatchObject({ attempted: 1, alreadyAdvanced: 1, failed: 0 });
+    expect(await intentState(gateId)).toMatchObject({ status: "done", claimed: false, deadLettered: false });
+    expect(await pauseClaimState(run.runId)).toEqual({ status: "pending_approval", token: null, phase: null });
+    expect(h.handled.length).toBe(0);
+  });
+
+  it("S4 RED a later lease's release after the claiming worker died keeps the park", async () => {
+    const run = await seedRun("pending_approval");
+    const seeded = await seedPark(run);
+    const gateId = await seedIntent(run, { attempts: 18, maxAttempts: 20 });
+    loseLeaseThenFail(gateId);
+    await delivery.sweepArtifactReviewResumeIntents({ limit: 1 });
+    // On a claim that cleared the park, the run would now be `running` with the
+    // claim mark set and nothing recorded; the next lease (the intent's last
+    // attempt) would put it back on its gate.
+    await dieAndLapse(gateId);
+    await delivery.sweepArtifactReviewResumeIntents({ limit: 1 });
+    await gateStore.deadLetterExhaustedResumeIntents();
+    expect(h.sends.length).toBe(0);
+    await expectParkKept(run, seeded);
+    expect(await intentState(gateId)).toMatchObject({ status: "done", claimed: false, deadLettered: false });
+    expect(await pauseClaimState(run.runId)).toEqual({ status: "pending_approval", token: null, phase: null });
+  });
+
+  it("S4 RED the settle's release after the claiming worker died at the last attempt keeps the park", async () => {
+    const run = await seedRun("pending_approval");
+    const seeded = await seedPark(run);
+    const gateId = await seedIntent(run, { attempts: 19, maxAttempts: 20 });
+    loseLeaseThenFail(gateId);
+    await delivery.sweepArtifactReviewResumeIntents({ limit: 1 });
+    // On a claim that cleared the park, the next sweep's settle would lease the
+    // exhausted claimed intent again, put the run back and dead-letter it.
+    await dieAndLapse(gateId);
+    await delivery.sweepArtifactReviewResumeIntents({ limit: 1 });
+    expect(h.sends.length).toBe(0);
+    await expectParkKept(run, seeded);
+    expect(await intentState(gateId)).toMatchObject({ status: "done", claimed: false, deadLettered: false });
+  });
+});

@@ -234,8 +234,10 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
     expect(claimSpy.mock.calls[0]![3]).toEqual({
       pauseFence: { token: "tok", generation: 1 },
       resumeIntentLease: { gateId: "gate-1", leaseToken: "lease-abc" },
-      // cinatra#3745: the fence is bound to the gate it read, as on the MCP resume.
-      resumeGate: { a2aTaskId: "task-1", executionAttemptId: null },
+      // cinatra#3745: the fence is bound to the gate it read, as on the MCP resume,
+      // and refuses, in its own transaction, a claim that would clear a
+      // produced-review park (S4).
+      resumeGate: { a2aTaskId: "task-1", executionAttemptId: null, onParkCleared: expect.any(Function) },
     });
     expect(handleWayflowTaskStateSpy).toHaveBeenCalledWith(expect.objectContaining({
       fromStatus: "running", pauseClaimToken: "tok", claimedGate: { a2aTaskId: "task-1", executionAttemptId: null },
@@ -251,6 +253,48 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
     expect(order).toEqual(["pending_approval->running", "running->pending_approval"]);
     expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
     claimSpy.mockImplementation(async () => undefined);
+  });
+
+  // cinatra#3745 S4: a run parked on its produced output's review has reached its
+  // terminal write (the park withholds it), so its WayFlow work is done. A claim
+  // that cleared the park and then went back on the gate (a failed send, or a
+  // later lease's or the settle's release after the worker died) would leave the
+  // run pending_approval with neither the park nor its withheld terminal write.
+  // The mock stands in for the real transition: the claim clears the park and
+  // hands it to onParkCleared inside the claim's transaction; a throw there rolls
+  // the claim back and reaches the caller.
+  const S4_PARK = { producedReviewPark: '{"status":"completed"}', withheldTerminal: { status: "completed" } };
+  const claimClearsPark = () => claimSpy.mockImplementation(async (...args: unknown[]) => {
+    const meta = args[3] as { resumeGate?: { onParkCleared?: (park: unknown) => void } } | undefined;
+    if (args[1] === "pending_approval" && args[2] === "running") meta?.resumeGate?.onParkCleared?.(S4_PARK);
+    return undefined;
+  });
+
+  it("S4 cinatra#3745: a claim that would clear a produced-review park is refused in its transaction: the pause claim is given back, nothing is sent and the intent closes", async () => {
+    const { releasePauseClaim } = await import("../run-pause-claim");
+    claimClearsPark();
+    expect(await deliverArtifactReviewResumeIntent(intent())).toBe("already-advanced");
+    expect(claimSpy.mock.calls.map((c) => `${c[1]}->${c[2]}`)).toEqual(["pending_approval->running"]);
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+    expect(releasePauseClaim).toHaveBeenCalledTimes(1);
+    expect(releasePauseClaim).toHaveBeenCalledWith({ runId: "run-1", orgId: "org-1", token: "tok" }, expect.anything());
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-1", "lease-abc");
+    expect(gateStoreMock.deferResumeIntent).not.toHaveBeenCalled();
+  });
+
+  it("S4 cinatra#3745: the refused claim of a parked run closes the intent even when the pause claim cannot be given back", async () => {
+    const { releasePauseClaim } = await import("../run-pause-claim");
+    vi.mocked(releasePauseClaim).mockRejectedValueOnce(Object.assign(new Error("db blip"), { code: "57P01" }));
+    claimClearsPark();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(await deliverArtifactReviewResumeIntent(intent())).toBe("already-advanced");
+    } finally {
+      warn.mockRestore();
+    }
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-1", "lease-abc");
   });
 
   it("D1 cinatra#3745: a lost claim sends nothing, closes nothing and leaves the intent for a later lease", async () => {

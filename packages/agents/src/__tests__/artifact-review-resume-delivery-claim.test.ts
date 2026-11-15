@@ -194,7 +194,7 @@ describe("cinatra#4245 and cinatra#3745 — the delivery worker, the pause claim
       {
         pauseFence: { token: "tok-w", generation: 5 },
         resumeIntentLease: { gateId: "gate-1", leaseToken: LEASE },
-        resumeGate: { a2aTaskId: "task-1", executionAttemptId: null },
+        resumeGate: { a2aTaskId: "task-1", executionAttemptId: null, onParkCleared: expect.any(Function) },
       },
     ]);
     expect(claims.fencePauseInPlace).not.toHaveBeenCalled();
