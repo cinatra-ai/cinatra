@@ -394,6 +394,10 @@ export async function createOrUpdateCustomSkillForAgent(input: {
       maxOutputTokens: attempt === 1 ? 5200 : 6200,
       reasoningEffort: "medium",
       logLabel: `${logLabel}${attempt === 1 ? "" : "-retry"}`,
+      // cinatra#3745: the generation is offered no tool. The run-completion autosave
+      // calls it with a run's prompts and no run request frame, so the empty
+      // ceiling is explicit, never inferred.
+      stepToolPolicy: { kind: "declared", tools: [] },
     });
 
   let response = await runRequest(1);
