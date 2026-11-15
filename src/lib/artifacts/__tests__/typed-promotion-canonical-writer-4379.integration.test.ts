@@ -711,6 +711,33 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#4379 — the canonical writer's keyed ret
     expect(representationsOf(objectId)).toEqual(after);
   });
 
+  it("3319: COMPLETES an interrupted promotion on the person's road for the user whose keyed retype the real writer stored, and for no other user", async () => {
+    const objectId = nextId("obj-own-retype");
+    const { resourceId } = seedRepresentedRow(objectId);
+    writerRetype(objectId, promotionKey(objectId, resourceId, OWN_TYPE, 1));
+    // The person's road of a pack that declares no matcher (a claim-backed
+    // type): no threshold, so the matcher's draft is no authority, and no person
+    // assertion stands (the binding reconcile archived it). The only authority
+    // left is the writer's own event: an update by this user, under the key.
+    const personsRoad = (userId: string) => ({
+      ...confirmation(objectId),
+      threshold: null,
+      createdBy: userId,
+      principal: userId,
+      actor: { userId, orgId: ORG },
+    });
+    expect(await promotionStore.promoteMatchedArtifactType(personsRoad("user-4379-other"))).toEqual({
+      ok: false,
+      reason: "already-promoted",
+    });
+    expect(representationsOf(objectId)).toHaveLength(1);
+    const out = await promotionStore.promoteMatchedArtifactType(personsRoad(USER));
+    expect(out).toMatchObject({ ok: true, retyped: false, toType: OWN_TYPE, revision: 2 });
+    const after = representationsOf(objectId);
+    expect(after.map((r) => r.revision)).toEqual([1, 2]);
+    expect(after[1]!.resource_id).toBe(resourceId);
+  });
+
   it("APPENDS NOTHING on a row the real writer retyped without the promotion's key", async () => {
     const objectId = nextId("obj-unkeyed");
     seedRepresentedRow(objectId);

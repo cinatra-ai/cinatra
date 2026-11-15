@@ -3,8 +3,7 @@ import { randomUUID, createHash } from "node:crypto";
 
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 // Sync-leaf connection/schema primitives (the artifact write-path contract):
-// never import `@/lib/database` from a sync store leaf. Mirrors
-// `cms-content-snapshot-capture.ts`.
+// never import `@/lib/database` from a sync store leaf.
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 
@@ -61,7 +60,8 @@ export const CMS_PREVIEW_CAPTURE_OBJECT_TYPE = "@cinatra-ai/objects:cms-preview-
  *               capture is the real "now".
  *   `current` — the PROPOSAL, rendered inside that same page's captured theme
  *               chrome by placing the proposed field values into the regions the
- *               adapter marked as its own (`cms-preview-region-composition.ts`).
+ *               adapter marked as its own (the region composition, retired with
+ *               the gate capture pipeline in cinatra#3862 leg 8).
  *               The proposal is deliberately NOT on the site — that is the whole
  *               point of holding it — so it cannot be fetched; it is composed,
  *               and the surface says so.
@@ -72,7 +72,7 @@ export const CMS_PREVIEW_CAPTURE_OBJECT_TYPE = "@cinatra-ai/objects:cms-preview-
  *   `repaired` — cinatra#2286 S10: the producer's RE-STAGED write for a repair
  *               round, captured bound to the repair's SUCCESSOR target's own
  *               `(artifactId, representationRevisionId)` through the same
- *               unmodified `capturePinnedPreviewPair` pipeline every other
+ *               unmodified pair pipeline (retired in cinatra#3862 leg 8) every other
  *               `current`/`before` pair goes through — nothing about that path
  *               needs to know it is a repair. Paired with the repair's BASE
  *               target's own `current` capture on the `repair` comparison
@@ -190,8 +190,7 @@ export interface PreviewCaptureWriteFacts {
 }
 
 /**
- * PURE composition of the capture transaction's query list (no DB, no blob I/O),
- * mirroring `buildCmsSnapshotCaptureQueries`:
+ * PURE composition of the capture transaction's query list (no DB, no blob I/O):
  *   [0] the capture `objects` row (deterministic PK — a duplicate rolls back).
  *   [1] the PNG content write, ONLY for a captured record.
  *   [2] the artifact-writer PROVENANCE WITNESS for that PNG representation.

@@ -118,7 +118,7 @@ WHERE rep.id = $1 AND rep.artifact_id = $2 AND rep.org_id = $3
     -- never to caller-supplied data. SCOPE, stated exactly: the predicate admits
     -- representations authored by a HOST ARTIFACT WRITER — createSemanticArtifact
     -- (the artifact write CHOKE POINT the lifecycle contract names and every
-    -- materializer calls) and the two CMS capture writers, each emitting the
+    -- materializer calls) and the other host writers, each emitting the
     -- 'create' artifact_audit row carrying this representation_revision_id inside
     -- the SAME transaction as the representation it describes. The table is
     -- append-only and NO objects/MCP write path, route, extension DB port,
@@ -143,8 +143,8 @@ WHERE rep.id = $1 AND rep.artifact_id = $2 AND rep.org_id = $3
     -- into "authored bytes no read path admits". The former gap here (the two CMS
     -- capture writers minted form='file' representations WITHOUT the audit row,
     -- so a future claim over either type would have stranded them) is CLOSED:
-    -- both now emit the witness from that same builder, inside their own capture
-    -- transaction.
+    -- the preview-capture store emits the witness from that same builder, inside
+    -- its own capture transaction, and the page snapshot writer left (#3862).
     OR (
       o.type = ANY($5::text[])
       AND (

@@ -248,5 +248,3 @@ never who may decide it — see §4.
 
 - [Authoring guide — lifecycle producers](../workflows/authoring-lifecycle-producers.md)
   — what an agent may declare, and how those declarations meet these bounds.
-- [The CMS review adapter contract](../contracts/cms-review-adapter-contract.md)
-  — how a remote CMS write becomes a reviewable target under this policy.

@@ -20,18 +20,22 @@
  * credential, and it stays exactly as it was.
  *
  * The test reads the REAL configuration the framework loads: it imports
- * next.config.ts's default export and awaits its `headers()`. The root suite
- * supplies the one variable the file's fail-fast guard requires
- * (SUPABASE_DB_URL, vitest.config.ts `test.env`).
+ * next.config.ts's default export for the production-server phase and awaits
+ * its `headers()`. The root suite supplies the one variable the file's
+ * fail-fast guard requires (SUPABASE_DB_URL, vitest.config.ts `test.env`).
  */
 import { describe, it, expect } from "vitest";
+import { PHASE_PRODUCTION_SERVER } from "next/constants";
 
 type HeaderEntry = { key: string; value: string };
 type HeaderRule = { source: string; headers: HeaderEntry[] };
 
 async function loadHeaderRules(): Promise<HeaderRule[]> {
   const mod = await import("../../../next.config");
-  const config = mod.default as { headers?: () => Promise<HeaderRule[]> };
+  // The default export is Next's config function of the phase (cinatra#4546).
+  const config = mod.default(PHASE_PRODUCTION_SERVER) as {
+    headers?: () => Promise<HeaderRule[]>;
+  };
   expect(typeof config.headers).toBe("function");
   return (await config.headers!()) as HeaderRule[];
 }

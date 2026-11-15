@@ -29,6 +29,9 @@ export default defineConfig({
       // index pulls in @/lib/database from the app layer. That app-layer module
       // is not available in the mcp-server test sandbox, so this alias targets
       // the standalone local-skill-files module with only node: built-in imports.
+      // The leaf subpath comes first: a string alias also matches `<key>/...`,
+      // so the bare key alone would rewrite it onto `local-skill-files.ts/...`.
+      "@cinatra-ai/skills/local-skill-files": path.join(repoRoot, "packages/skills/src/local-skill-files.ts"),
       "@cinatra-ai/skills": path.join(repoRoot, "packages/skills/src/local-skill-files.ts"),
     },
   },

@@ -46,12 +46,6 @@ describe("cinatra#2951 — the uncalled direct repair function is gone", () => {
 });
 
 describe("cinatra#2951 — the comments name the new-run road", () => {
-  it("the CMS bridge names the dispatched new run, not a direct-call function", () => {
-    const source = read("lifecycle-repair-cms-production-bridge.ts");
-    expect(source).not.toContain("repairBlogPostDraft");
-    expect(source).toContain("dispatched `producer_repair` run");
-  });
-
   it("the dispatch store names the producing agent's own graph on the dispatched run", () => {
     const source = read("lifecycle-repair-dispatch-store.ts");
     expect(source).not.toContain("repairBlogPostDraft");

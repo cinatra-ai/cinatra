@@ -862,6 +862,9 @@ export async function writeClaimedArtifact(input: {
    *  path only) — journalled on the ledger row this write claims, so the
    *  DECIDING RUNG of every default-road artifact is auditable. */
   detection?: MaterializationDetection | null;
+  /** cinatra#4264: the runtime's signed step of the call (the tool path only);
+   *  recorded on the ledger row only when it equals `nodeId`. */
+  verifiedStepId?: string;
   extension: string;
   title: string;
   mime: string;
@@ -931,6 +934,7 @@ export async function writeClaimedArtifact(input: {
     extension: input.extension,
     contentHash,
     detection: input.detection ?? null,
+    ...(input.verifiedStepId !== undefined ? { verifiedStepId: input.verifiedStepId } : {}),
   });
   // cinatra#1893 Q3: the 4-part unique key (run, output_id, extension,
   // content_hash) excludes `path`. A same-key row whose `path` DIFFERS from this
@@ -1679,6 +1683,8 @@ export async function materializeToolArtifact(input: {
       outputId: input.nodeId,
       nodeId: input.nodeId,
       path: "materialize_tool",
+      // cinatra#4264: the filing step, recorded only when it is this node.
+      ...(input.verifiedStepId !== undefined ? { verifiedStepId: input.verifiedStepId } : {}),
       extension: input.extension,
       title,
       mime: input.mime,

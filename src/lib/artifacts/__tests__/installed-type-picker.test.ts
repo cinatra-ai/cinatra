@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+
+import { matcherManifestRegistry, objectTypeRegistry } from "@cinatra-ai/objects/registry";
 
 import {
   selectMeaningTypesAcceptingMime,
@@ -7,7 +9,11 @@ import {
   type RegisteredArtifactMeaningType,
   type MatcherChannelMeaningType,
   type InstalledMeaningType,
+  type ClaimBackedMeaningType,
 } from "../installed-type-picker";
+// The cinatra#3319 exports are reached through the namespace, so this file still
+// collects where they are absent and each new case fails on its own.
+import * as picker from "../installed-type-picker";
 
 // epic #1883 slice A4, spec design@16efd8d2 §VI.1 — the installed-type picker
 // admits only installed, file-accepting types whose `accepts` include the
@@ -200,5 +206,197 @@ describe("unionMeaningTypesAcceptingMime", () => {
     expect(got.map((t) => t.extension)).not.toContain("@acme/legal");
     // an unrelated matcher pack still surfaces
     expect(got.map((t) => t.extension)).toContain("@cinatra-ai/brand-voice");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3319: the CLAIM-BACKED channel — a host-registered type the org's
+// claim arbitration admits for a pack that mints no own type and declares no
+// matchers (the LinkedIn post draft), keyed by the CLAIMING extension.
+// ---------------------------------------------------------------------------
+
+const POST_DRAFT = "@cinatra-ai/linkedin:post-draft";
+const LINKEDIN = "@cinatra-ai/linkedin-artifacts";
+/** The winning claim's identity each entry carries (cinatra#3319). */
+const WINNER = { extensionVersion: "1.0.0", installId: "inst-linkedin-1", scope: "org:org-1" };
+const claimBacked: ClaimBackedMeaningType[] = [
+  {
+    objectTypeId: POST_DRAFT,
+    extension: LINKEDIN,
+    acceptMimes: ["text/markdown", "text/plain"],
+    ...WINNER,
+  },
+];
+
+describe("selectClaimBackedMeaningTypesAcceptingMime (cinatra#3319)", () => {
+  it("3319 T1 offers the post draft for a markdown upload, named by its type and its pack's declared label", () => {
+    expect(picker.selectClaimBackedMeaningTypesAcceptingMime(claimBacked, "text/markdown")).toEqual([
+      {
+        objectTypeId: POST_DRAFT,
+        extension: LINKEDIN,
+        displayName: "Post draft",
+        extensionLabel: "LinkedIn post",
+      },
+    ]);
+  });
+
+  it("3319 T1 drops the artifact's own base type (excludeTypeId) and a universal `*/*` entry", () => {
+    expect(
+      picker.selectClaimBackedMeaningTypesAcceptingMime(claimBacked, "text/markdown", {
+        excludeTypeId: POST_DRAFT,
+      }),
+    ).toEqual([]);
+    const catchAll: ClaimBackedMeaningType[] = [
+      { objectTypeId: "@x/floor:object", extension: "@x/floor-artifacts", acceptMimes: ["*/*"], ...WINNER },
+    ];
+    expect(picker.selectClaimBackedMeaningTypesAcceptingMime(catchAll, "text/markdown")).toEqual([]);
+  });
+});
+
+describe("unionMeaningTypesAcceptingMime — claim-backed candidates (cinatra#3319)", () => {
+  const matcherX: InstalledMeaningType = {
+    objectTypeId: null,
+    extension: "@acme/gtm",
+    displayName: "Gtm",
+    extensionLabel: "Gtm",
+  };
+  const claimX: InstalledMeaningType = {
+    objectTypeId: "@acme/gtm:note",
+    extension: "@acme/gtm",
+    displayName: "Note",
+    extensionLabel: "Gtm",
+  };
+  const claimY: InstalledMeaningType = {
+    objectTypeId: POST_DRAFT,
+    extension: LINKEDIN,
+    displayName: "Post draft",
+    extensionLabel: "LinkedIn post",
+  };
+
+  it("3319 T2 adds claim-backed candidates LAST: X keeps its matcher candidate, Y is added", () => {
+    const got = unionMeaningTypesAcceptingMime([], [matcherX], {
+      claimBackedCandidates: [claimX, claimY],
+    });
+    expect(got).toEqual([matcherX, claimY]);
+  });
+
+  it("3319 T2 excludeExtension drops a claim-backed candidate too", () => {
+    const got = unionMeaningTypesAcceptingMime([], [matcherX], {
+      excludeExtension: "@acme/gtm",
+      claimBackedCandidates: [claimX, claimY],
+    });
+    expect(got).toEqual([claimY]);
+  });
+});
+
+describe("listInstalledMeaningTypesAcceptingMime — a matcher entry under a claim-backed pack's name (cinatra#3319)", () => {
+  afterEach(() => matcherManifestRegistry._clearForTests());
+
+  it("3319 T16: the claim-backed candidate stands and the matcher entry under the same package name is no candidate", () => {
+    // Another version of the pack, installed elsewhere, registered matchers in
+    // the process-global registry, which is keyed by package only.
+    matcherManifestRegistry.register({
+      packageName: LINKEDIN,
+      matcherSkillIds: [`${LINKEDIN}:match`],
+      matcherConfidenceThreshold: 0.5,
+      fileMimeTypes: ["text/markdown"],
+    });
+    const got = picker.listInstalledMeaningTypesAcceptingMime("text/markdown", { claimBacked });
+    expect(got.filter((t) => t.extension === LINKEDIN)).toEqual([
+      {
+        objectTypeId: POST_DRAFT,
+        extension: LINKEDIN,
+        displayName: "Post draft",
+        extensionLabel: "LinkedIn post",
+      },
+    ]);
+    // Without a claim-backed entry the matcher entry is a candidate, as before.
+    const plain = picker.listInstalledMeaningTypesAcceptingMime("text/markdown");
+    expect(plain.filter((t) => t.extension === LINKEDIN).map((t) => t.objectTypeId)).toEqual([null]);
+  });
+
+  it("3319 T25 (picker): a claim-backed pack that registers a type without isArtifact has no object-type candidate, so its one candidate is the claim-backed entry", () => {
+    // The pack's own registration carries no `isArtifact`, so the object-type
+    // channel (which lists only artifact types) holds no candidate of it.
+    objectTypeRegistry.register(
+      { type: "@cinatra-ai/linkedin-artifacts:settings", category: "data" } as never,
+      LINKEDIN,
+    );
+    try {
+      expect(objectTypeRegistry.getTypesForPackage(LINKEDIN)).toEqual([
+        "@cinatra-ai/linkedin-artifacts:settings",
+      ]);
+      const got = picker.listInstalledMeaningTypesAcceptingMime("text/markdown", { claimBacked });
+      expect(got.filter((t) => t.extension === LINKEDIN)).toEqual([
+        {
+          objectTypeId: POST_DRAFT,
+          extension: LINKEDIN,
+          displayName: "Post draft",
+          extensionLabel: "LinkedIn post",
+        },
+      ]);
+    } finally {
+      objectTypeRegistry.removeByPackage(LINKEDIN);
+    }
+  });
+});
+
+// cinatra#3319 T40: the claim-backed channel's remaining branches.
+describe("claim-backed candidates — the remaining selection branches (cinatra#3319 T40)", () => {
+  afterEach(() => {
+    matcherManifestRegistry._clearForTests();
+    objectTypeRegistry.removeByPackage(LINKEDIN);
+  });
+
+  it("3319 T40 (a) a blank MIME, an empty or malformed accepts and a MIME the accepts do not admit offer nothing", () => {
+    expect(picker.selectClaimBackedMeaningTypesAcceptingMime(claimBacked, "  ")).toEqual([]);
+    expect(picker.selectClaimBackedMeaningTypesAcceptingMime(claimBacked, "image/png")).toEqual([]);
+    for (const acceptMimes of [[], "text/markdown", null]) {
+      const entries = [{ ...claimBacked[0], acceptMimes } as unknown as ClaimBackedMeaningType];
+      expect(picker.selectClaimBackedMeaningTypesAcceptingMime(entries, "text/markdown")).toEqual([]);
+    }
+  });
+
+  it("3319 T40 (b) claim-backed candidates are ordered by display name, then extension", () => {
+    const entries: ClaimBackedMeaningType[] = [
+      { objectTypeId: "@acme/zeta:zulu-note", extension: "@acme/zeta-artifacts", acceptMimes: ["text/markdown"], ...WINNER },
+      { objectTypeId: "@acme/alpha:alpha-note", extension: "@acme/alpha-artifacts", acceptMimes: ["text/markdown"], ...WINNER },
+    ];
+    expect(
+      picker.selectClaimBackedMeaningTypesAcceptingMime(entries, "text/markdown").map((t) => t.extension),
+    ).toEqual(["@acme/alpha-artifacts", "@acme/zeta-artifacts"]);
+  });
+
+  it("3319 T40 (c) a pack with a registered artifact type and a claim-backed entry is listed once, as its object-type candidate", () => {
+    objectTypeRegistry.register(
+      {
+        type: "@cinatra-ai/linkedin-artifacts:brief",
+        category: "data",
+        isArtifact: { accepts: { file: { mimeTypes: ["text/markdown"] } } },
+      } as never,
+      LINKEDIN,
+    );
+    const got = picker.listInstalledMeaningTypesAcceptingMime("text/markdown", { claimBacked });
+    expect(got.filter((t) => t.extension === LINKEDIN).map((t) => t.objectTypeId)).toEqual([
+      "@cinatra-ai/linkedin-artifacts:brief",
+    ]);
+  });
+
+  it("3319 T40 (d) a row typed with the claim-backed type drops every candidate of its claimant, the claimant's own registered type too", () => {
+    objectTypeRegistry.register(
+      {
+        type: "@cinatra-ai/linkedin-artifacts:brief",
+        category: "data",
+        isArtifact: { accepts: { file: { mimeTypes: ["text/markdown"] } } },
+      } as never,
+      LINKEDIN,
+    );
+    const typed = picker.listInstalledMeaningTypesAcceptingMime("text/markdown", {
+      excludeTypeId: POST_DRAFT,
+      claimBacked,
+    });
+    expect(typed.filter((t) => t.extension === LINKEDIN)).toEqual([]);
+    const untyped = picker.listInstalledMeaningTypesAcceptingMime("text/markdown", { claimBacked });
+    expect(untyped.filter((t) => t.extension === LINKEDIN)).toHaveLength(1);
   });
 });

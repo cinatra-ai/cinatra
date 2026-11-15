@@ -13,6 +13,8 @@
  * committed copy to that hash: adopting a later drawing turns this file red until its tab list is read again from
  * the new bytes. Read again at version 0.13.0 (design@67ecd66d, cinatra#4388): the changes since version 0.12.0 leave
  * §I and §IV unchanged, so the four tabs and their order are the same.
+ * Read again at version 0.14.0 (design@104eaf3c, cinatra#4476): the new section XI leaves §I and §IV unchanged, so the
+ * four tabs and their order are the same.
  *
  * The console page is a server component, so its wiring is pinned by source assertion, the repository's
  * established pattern (see ./review-policy-surface.test.ts).
@@ -29,7 +31,7 @@ const CONSOLE_PAGE = "src/app/configuration/artifacts/page.tsx";
 const CONSOLE_STRIP = "src/components/artifacts/console/console-tabs.tsx";
 
 /** The spec-source hash of the drawing the tab list below was read from. */
-const DRAWING_CONTENT_HASH = "sha256:dd0eeaf1e9aaeede212214e7711e57a7c76fa3d000a501c13266da971a0e70c6";
+const DRAWING_CONTENT_HASH = "sha256:c4aac5f31aa873714c63891d69ecd41d3b92e387a8b5161798390d7840ddd9b3";
 
 /** The console's tabs as the drawing draws them, in order, each with the manifest surface of its panel. */
 const DRAWN_TABS = [

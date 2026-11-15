@@ -240,6 +240,9 @@ type TypeChangeEvent = {
   result_version: unknown;
   idempotency_key: unknown;
   org_id: unknown;
+  operation?: unknown;
+  actor_kind?: unknown;
+  actor_id?: unknown;
 };
 
 /**
@@ -252,12 +255,17 @@ type TypeChangeEvent = {
  * for that event's own base version. A restore, a merge, a native type, the
  * person's standing assertion or a later move away is therefore never a proof.
  * A failed read throws: an error is never a proof.
+ *
+ * With `actorUserId` (cinatra#3319) it proves more: that event is also an
+ * `update` the canonical writer recorded for exactly that user. That is the
+ * converging branch's third authority, the acting person's own retype.
  */
 function readPromotionProof(input: {
   orgId: string;
   artifactId: string;
   sharedResourceId: string;
   toType: string;
+  actorUserId?: string;
 }): boolean {
   ensurePostgresSchema();
   const s = schema();
@@ -266,7 +274,7 @@ function readPromotionProof(input: {
     queries: [
       {
         text: `SELECT object_type, before_snapshot->>'type' AS before_type,
-  base_version, result_version, idempotency_key, org_id
+  base_version, result_version, idempotency_key, org_id, operation, actor_kind, actor_id
 FROM "${s}"."object_change_event"
 WHERE object_id = $1 AND org_id = $2
   AND (before_snapshot->>'type') IS DISTINCT FROM object_type
@@ -286,6 +294,16 @@ LIMIT 1`,
   if (latest === null) return false;
   const { event } = latest;
   const baseVersion = readVersion(event.base_version);
+  if (
+    input.actorUserId !== undefined &&
+    !(
+      event.operation === "update" &&
+      event.actor_kind === "user" &&
+      event.actor_id === input.actorUserId
+    )
+  ) {
+    return false;
+  }
   return (
     event.org_id === input.orgId &&
     event.object_type === input.toType &&
@@ -421,8 +439,22 @@ export async function promoteMatchedArtifactType(input: {
       // read as if it stood on its own here, which is an asymmetry and not a
       // second rule.
       input.confirmed &&
-      (personAsserted || (matcher !== null && matcher.confidence >= matcher.threshold)) &&
-      mimeAccepted(input.ownType.acceptsMimes, row.latestRevision.mime)
+      mimeAccepted(input.ownType.acceptsMimes, row.latestRevision.mime) &&
+      (personAsserted ||
+        (matcher !== null && matcher.confidence >= matcher.threshold) ||
+        // THE THIRD AUTHORITY, read last (cinatra#3319): the acting person's
+        // own keyed retype, still the row's latest type change. The binding
+        // reconcile that retype queued may already have archived the person's
+        // assertion, and a pack that declares no matcher (a claim-backed type)
+        // has no matcher road, so an interrupted promotion on the person's
+        // road would otherwise strand. Another person's retype is no authority.
+        readPromotionProof({
+          orgId: input.orgId,
+          artifactId: input.artifactId,
+          sharedResourceId: row.latestRevision.resourceId,
+          toType: input.ownType.typeId,
+          actorUserId: input.actor.userId,
+        }))
     ) {
       // AND ONLY ON PROOF (cinatra#3319, cinatra#4266): the conditions above
       // also hold for a row that carried this type from the start, or that a

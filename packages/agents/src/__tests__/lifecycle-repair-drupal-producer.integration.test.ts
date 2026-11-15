@@ -18,13 +18,9 @@
  * `producer_repair` + a real dispatch on the pinned declaration.
  *
  * WHAT THIS SUITE DELIBERATELY DOES NOT RE-ARGUE. Everything downstream of the
- * dispatch is CMS-GENERIC and already proven end to end by #2296's suite
- * (`lifecycle-repair-cms-roundtrip.integration.test.ts`): the repaired capture,
- * the re-review, the approval-released apply, the read-back binding and the
- * exactly-one-gate invariant. Core's CMS bridge keys on its own outbox /
- * snapshot-target rows and never on a package name
- * (`lifecycle-repair-cms-production-bridge.ts`), so re-driving those rungs under
- * a Drupal name would duplicate a proof rather than add one. What is genuinely
+ * dispatch is generic: since cinatra#3862 leg 7 every repair completes
+ * through the generic completer, which keys on no package name, so re-driving
+ * it under a Drupal name would duplicate a proof rather than add one. What is genuinely
  * Drupal-specific — and what the pin is FOR — is everything up to and including
  * the dispatch, plus the reviewer's findings in the input the pinned commit/tree declares
  * (`instructions`, cinatra#4424). That is exactly this suite's scope.
@@ -154,10 +150,9 @@ async function produce(over: Partial<ArtifactProducedEvent> = {}): Promise<Artif
   return ev;
 }
 
-/** Insert a `cms_snapshot_targets` row directly — the apply binding a real
- * `captureCmsContentSnapshot` writes (SQL mirrored from
- * `buildCmsSnapshotCaptureQueries`'s `targetInsert`, as the sibling CMS suites
- * do). `resourceType: "node"` is the DRUPAL shape (WordPress writes "post"). */
+/** Insert a `cms_snapshot_targets` row directly — the apply binding the
+ * retired CMS capture wrote (SQL mirrored from its `targetInsert`, as the
+ * sibling CMS suites do). `resourceType: "node"` is the DRUPAL shape (WordPress writes "post"). */
 async function insertDrupalSnapshotTarget(input: {
   artifactId: string;
   snapshotRevisionId: string;

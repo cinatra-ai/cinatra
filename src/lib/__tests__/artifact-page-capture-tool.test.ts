@@ -50,7 +50,7 @@ import {
   pageCaptureInstallStateError,
   type ArtifactPageCaptureToolDeps,
 } from "@/lib/artifact-page-capture-tool";
-import { captureDegradeCopy, type CaptureDegradeReason } from "@/lib/artifacts/cms-preview-capture";
+import { captureDegradeCopy, type CaptureDegradeReason } from "@/lib/artifacts/registered-page-render";
 import { MATERIALIZATION_FINALIZE_CONFLICT_MARKER } from "@/lib/artifacts/materialization-ledger";
 import type { PageCaptureBudgetAnswer, PageCaptureBudgetRefusal } from "@/lib/artifacts/page-capture-budget";
 import { PageCaptureFactsRecordError, type RecordedPageCaptureFacts } from "@/lib/artifacts/page-capture-facts-record";

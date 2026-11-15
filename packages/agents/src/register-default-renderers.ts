@@ -101,6 +101,8 @@ const RENDERER_KIND_TABLE: Record<
      * setup surface then draws the product's Continue beside the field.
      */
     drawsOwnSubmit?: true;
+    /** A component of this kind commits a pick, so its gate's Continue waits for one; see `FieldRendererEntry.holdsContinueUntilPicked` (cinatra#3035). The schema floor commits none, so a binding the floor draws never holds. */
+    holdsContinueUntilPicked?: true;
     /**
      * Optional custom condition factory for kinds whose match logic goes
      * beyond strict ID equality (e.g. gmail-sender's context gating +
@@ -119,7 +121,11 @@ const RENDERER_KIND_TABLE: Record<
   // makeExtensionFieldRenderer), and a not-in-build binding of this kind
   // degrades to the SchemaFieldRenderer floor here (AC4 never-blank). Same
   // shape as final-list-review / scrape-schema-review below.
-  "blog-idea-selection": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true, drawsOwnSubmit: true },
+  // The kind still declares the pick hold (cinatra#3035): the extension branch
+  // of registerFieldRendererBindings reads it from this table, so the pack's
+  // chooser keeps the step's Continue held until a pick is made. The floor
+  // below commits no pick, so a binding it draws does not hold.
+  "blog-idea-selection": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true, drawsOwnSubmit: true, holdsContinueUntilPicked: true },
   "campaign-recipients-review": {
     renderer: CampaignRecipientsReviewRenderer,
     bareAliases: ["campaign-recipients-review"],
@@ -318,6 +324,9 @@ export function registerFieldRendererBindings(
         // here, and a control-less extension-shipped setup renderer is the next
         // slice's work, not a guess made on this one.
         drawsOwnSubmit: true,
+        // The kind's hold travels with the binding whoever draws the step (cinatra#3035).
+        // A wrapper instance that settles on the floor tells its own host (RendererFloorReportContext).
+        holdsContinueUntilPicked: RENDERER_KIND_TABLE[b.kind]?.holdsContinueUntilPicked === true,
         midRunHitl: b.midRunHitl === true,
       });
       continue;
@@ -345,6 +354,9 @@ export function registerFieldRendererBindings(
       // kind inherits its kind's declaration. The extension branch above
       // declares its own (true) — see the note there.
       drawsOwnSubmit: kindEntry.drawsOwnSubmit === true,
+      // The KIND's answer once more (cinatra#3035): a kind whose component commits a pick holds its gate's Continue until one is made.
+      // The schema floor commits no pick, so a kind drawn by the floor never holds.
+      holdsContinueUntilPicked: kindEntry.holdsContinueUntilPicked === true && kindEntry.renderer !== SchemaOnlyFloorRenderer,
       midRunHitl: b.midRunHitl === true,
     });
   }

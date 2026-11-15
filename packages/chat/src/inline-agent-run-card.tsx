@@ -246,7 +246,9 @@ export function InlineAgentRunCard({
    * panel mounts none of its own — so the panel has nothing to read it from.
    * The plan's ruling is what it carries: "The agentic run progress card
    * appears once the skills are decided; no skill inside it can be selected."
-   * The panel draws no skill picker when this is true. Absent/false is the
+   * In this turn the bound design's §V supersedes the first half (the turn
+   * stands the panel down beneath the settled row, cinatra#3062). The panel
+   * draws no skill picker when this is true. Absent/false is the
    * unchanged reading, for a run that never had a recommendation.
    */
   recommendationDecided?: boolean;

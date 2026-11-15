@@ -69,6 +69,24 @@ describe("bindBridgeRunId", () => {
     if (res.ok) expect(res.runId).toBe("run-1");
   });
 
+  it("returns the attempt of the context-resolved run, read at binding (cinatra#3092)", async () => {
+    readByCtx.mockResolvedValue({ id: "run-1", executionAttemptId: "att-1" });
+    const res = await bindBridgeRunId(
+      req({ "x-cinatra-a2a-context-id": "ctx-1" }),
+      "run-1",
+    );
+    expect(res).toEqual({ ok: true, runId: "run-1", executionAttemptId: "att-1" });
+  });
+
+  it("returns a null attempt when the context-resolved run has none (cinatra#3092)", async () => {
+    readByCtx.mockResolvedValue({ id: "run-1", executionAttemptId: null });
+    const res = await bindBridgeRunId(
+      req({ "x-cinatra-a2a-context-id": "ctx-1" }),
+      "run-1",
+    );
+    expect(res).toEqual({ ok: true, runId: "run-1", executionAttemptId: null });
+  });
+
   it("fails closed (403) when readAgentRunByContextId throws", async () => {
     readByCtx.mockRejectedValue(new Error("db down"));
     const res = await bindBridgeRunId(

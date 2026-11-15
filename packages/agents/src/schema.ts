@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgSchema, text, integer, boolean, timestamp, index, uniqueIndex, primaryKey, jsonb, check } from "drizzle-orm/pg-core";
+import { pgSchema, text, integer, bigint, boolean, timestamp, index, uniqueIndex, primaryKey, jsonb, check } from "drizzle-orm/pg-core";
 
 // ---------------------------------------------------------------------------
 // Extension registry origin coordinates.
@@ -218,6 +218,11 @@ export const agentTemplates = cinatraSchema.table("agent_templates", {
   // legacy template cannot declare the flag (the key is new), so a reader treats
   // null as "unknown", never as "publishes nothing".
   publishingSteps: text("publishing_steps"),
+  // publishRows (cinatra#4150): the publish card's rows per declared node,
+  // { [nodeId]: [{ label, input }] }, JSON-as-text, written beside
+  // publishingSteps by the same writers. NULLABLE, no default, no backfill:
+  // null = unknown, never "no rows".
+  publishRows: text("publish_rows"),
   // lifecycleConfig: the agent-manifest LIFECYCLE declarations (cinatra#2038,
   // epic #2037 S0) compiled onto the template trigger-style (like trigger_mode /
   // gated_steps): requestedSkips / producedTypes / repairCapable as JSON-as-text.
@@ -489,6 +494,19 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   lifecycleMoment: text("lifecycle_moment"),
   lifecycleCardKind: text("lifecycle_card_kind"),
   lifecycleCardRef: text("lifecycle_card_ref"),
+  // THE PAUSE CLAIM (cinatra#4245): a generation-stamped lease on the run row,
+  // so a resume, a stop and a change request serialize on one row lock.
+  // pauseGeneration counts every change of what the run waits at; the claim
+  // triple says who holds the pause (token), how far it got (phase: claimed,
+  // sending, changes_requested) and until when (DB-clock expiry; NULL only for
+  // the changes_requested end mark). CHECKs agent_runs_pause_claim_phase_chk and
+  // agent_runs_pause_claim_shape_chk. A row from before the columns reads
+  // generation 0 and no claim. Migration: core__0126 + the bootstrap leaf
+  // agentRunPauseClaimSchemaQueries.
+  pauseGeneration: bigint("pause_generation", { mode: "number" }).notNull().default(0),
+  pauseClaimToken: text("pause_claim_token"),
+  pauseClaimPhase: text("pause_claim_phase"),
+  pauseClaimExpiresAt: timestamp("pause_claim_expires_at", { withTimezone: true }),
 }, (t) => ({
   templateIdIdx:    index("agent_runs_template_id_idx").on(t.templateId),
   statusIdx:        index("agent_runs_status_idx").on(t.status),
@@ -510,6 +528,14 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   lifecycleMomentIdx: index("agent_runs_lifecycle_moment_idx")
     .on(t.lifecycleMoment)
     .where(sql`lifecycle_moment IS NOT NULL`),
+  // cinatra#4476 — the upgrade recovery reads the paused runs a page at a time, in
+  // id order after its cursor (`recoveryPageQuery`), so one pass reads at most one
+  // page of this index. DDL: core__0127 and its bootstrap twin in
+  // lifecycleInterceptionsSchemaQueries; declared with the same predicate so that
+  // drizzle-kit does not recreate it as a full index.
+  pendingApprovalIdIdx: index("agent_runs_pending_approval_id_idx")
+    .on(t.id)
+    .where(sql`status = 'pending_approval'`),
   // Index name MUST match the SQL DDL in src/lib/drizzle-store.ts
   // (`agent_runs_org_id_idx`). Drift causes drizzle-kit introspection to drop
   // and recreate the index.
@@ -747,9 +773,51 @@ export const artifactReviewResumeOutbox = cinatraSchema.table("artifact_review_r
   maxAttempts:    integer("max_attempts").notNull().default(20),
   deadLetteredAt: timestamp("dead_lettered_at", { withTimezone: true }),
   lastError:      text("last_error"),
+  // cinatra#3745 (core__0132): runClaimedAt — this gate's delivery moved the run
+  // pending_approval -> running (set and cleared with that edge, under the lease);
+  // resumeTaskResult — the A2A task its send returned, recorded before the handler
+  // runs (the durable "sent, not yet handled" witness; never carries a run token).
+  runClaimedAt:   timestamp("run_claimed_at", { withTimezone: true }),
+  resumeTaskResult: jsonb("resume_task_result"),
 }, (t) => ({
   statusIdx: index("artifact_review_resume_outbox_status_idx").on(t.status, t.createdAt),
   deadIdx:   index("artifact_review_resume_outbox_dead_idx").on(t.deadLetteredAt).where(sql`dead_lettered_at IS NOT NULL`),
+}));
+
+// cinatra#4476 — the upgrade recovery of a declared review's paused run that the
+// cinatra#4312 upgrade left with no live resume intent. DDL twin:
+// lifecycleInterceptionsSchemaQueries + migration core__0127.
+//
+// One row per pause (run, base review task id) that the recovery wrote for: its
+// once marker. A pause is recovered at most once, ever, whatever then happens to
+// the intent it re-armed or inserted. No foreign keys (the review-gate precedent).
+export const artifactReviewResumeRecovery = cinatraSchema.table("artifact_review_resume_recovery", {
+  runId:            text("run_id").notNull(),
+  baseReviewTaskId: text("base_review_task_id").notNull(),
+  // 'rearm': the family's newest decision's own intent was given a new budget;
+  // 'carry': a new intent carrying that decision was inserted on a free gate.
+  road:             text("road").notNull(),
+  gateId:           text("gate_id").notNull(),
+  createdAt:        timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  pk:        primaryKey({ columns: [t.runId, t.baseReviewTaskId] }),
+  roadCheck: check("artifact_review_resume_recovery_road_check", sql`road IN ('rearm', 'carry')`),
+}));
+
+// cinatra#4476 — when the upgrade ran: one row, written only by core__0127's `up`.
+// A fresh install has none, so it recovers nothing. The recovery reads the paused runs
+// in cycles, one page per pass: `high_water_run_id` is the greatest paused run id when
+// the cycle started (the cycle reads no run above it), `cursor_run_id` the last run id
+// of the cycle's last full page (the next pass reads the runs after it). A page that is
+// not full, or that ends at the mark, sets both back to null: the next pass starts a new
+// cycle from the first paused run.
+export const artifactReviewResumeRecoveryEpoch = cinatraSchema.table("artifact_review_resume_recovery_epoch", {
+  id:             text("id").primaryKey(),
+  upgradedAt:     timestamp("upgraded_at", { withTimezone: true }).notNull().defaultNow(),
+  cursorRunId:    text("cursor_run_id"),
+  highWaterRunId: text("high_water_run_id"),
+}, () => ({
+  idCheck: check("artifact_review_resume_recovery_epoch_id_check", sql`id = 'cinatra-4476'`),
 }));
 
 // ---------------------------------------------------------------------------
@@ -1100,10 +1168,35 @@ export const lifecycleRepair = cinatraSchema.table("lifecycle_repair", {
   idempotencyKey:                  text("idempotency_key").notNull(),
   createdAt:                       timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt:                       timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  // cinatra#4245: the run's pause_generation the change request ended (core__0126).
+  pausedRunGeneration:             bigint("paused_run_generation", { mode: "number" }),
+  // cinatra#4264 (core__0128): the Regenerate intent (NULL = an ordinary
+  // repair) and the source target a segment repair names.
+  regenerateNodeId:                text("regenerate_node_id"),
+  sourceArtifactId:                text("source_artifact_id"),
+  sourceRepresentationRevisionId:  text("source_representation_revision_id"),
 }, (t) => ({
   gateUniq:    uniqueIndex("lifecycle_repair_gate_uniq").on(t.gateId),
   lineageIdx:  index("lifecycle_repair_lineage_idx").on(t.lineageId),
   statusIdx:   index("lifecycle_repair_status_idx").on(t.status, t.createdAt),
+  successorIdx: index("lifecycle_repair_successor_idx").on(t.successorArtifactId, t.successorRepresentationRevisionId),
+}));
+
+/** The step snapshots of a run (cinatra#4264, core__0128): per (run, node) the
+ * node's full resolved input exactly as the flow runtime serialized it, its
+ * sha256 and the flow version's sha256. Removed with the run (ON DELETE
+ * CASCADE). `ambiguous` = a second, different snapshot of the same node came. */
+export const agentRunStepSnapshots = cinatraSchema.table("agent_run_step_snapshots", {
+  orgId:        text("org_id").notNull(),
+  runId:        text("run_id").notNull().references(() => agentRuns.id, { onDelete: "cascade" }),
+  nodeId:       text("node_id").notNull(),
+  inputsJson:   text("inputs_json").notNull(),
+  inputsSha256: text("inputs_sha256").notNull(),
+  flowSha256:   text("flow_sha256").notNull(),
+  ambiguous:    boolean("ambiguous").notNull().default(false),
+  createdAt:    timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  pk: primaryKey({ columns: [t.runId, t.nodeId] }),
 }));
 
 /** ROUTED ADDITION — the AC-6 rejected-recommendation efficacy row (S3 computed it
@@ -1669,4 +1762,20 @@ export const agentRunTokens = cinatraSchema.table("agent_run_tokens", {
   tokenHash: text("token_hash").primaryKey(),
   runId:     text("run_id").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// #3745: immutable per-dispatch source identity. No mutable template fallback.
+export const agentRunOutwardActionPolicies = cinatraSchema.table("agent_run_outward_action_policies", {
+  runId: text("run_id").primaryKey(), orgId: text("org_id").notNull(),
+  executionAttemptId: text("execution_attempt_id").notNull(),
+  policy: jsonb("policy").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+// A durable burned gate is never removed by gate/run deletion. No CASCADE and
+// no stored argument/parallel approval. Remote effect failure does not refund it.
+export const artifactReviewActionConsumptions = cinatraSchema.table("artifact_review_action_consumptions", {
+  gateId: text("gate_id").primaryKey(), runId: text("run_id").notNull(), orgId: text("org_id").notNull(),
+  stepId: text("step_id").notNull(), toolIdentity: jsonb("tool_identity").notNull(),
+  executedSourceSha256: text("executed_source_sha256").notNull(),
+  consumedAt: timestamp("consumed_at", { withTimezone: true }).notNull().defaultNow(),
 });

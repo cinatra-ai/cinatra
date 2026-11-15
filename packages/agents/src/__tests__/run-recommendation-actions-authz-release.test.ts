@@ -156,7 +156,7 @@ beforeEach(() => {
   hasRunRecommendationSkip.mockReturnValue(false);
   // The run-level skip marker writer VERIFIES its write and returns whether the
   // marker read back (cinatra#2794); the happy path is "it landed".
-  writeRunRecommendationSkip.mockReturnValue(true);
+  writeRunRecommendationSkip.mockReturnValue({ outcome: "recorded" });
   readRunCoOwners.mockResolvedValue([]);
   // The DEFAULT is a hold that owns no claim — one parked before cinatra#2906 —
   // so every arm written before this field existed keeps its exact reading.

@@ -12,7 +12,8 @@
  *
  *   • the card is INSIDE `[data-conversation-list]`;
  *   • it sits in a wrapper marked `data-chat-thread-recommendation-hold`;
- *   • that wrapper contains the chip row and BOTH action anchors;
+ *   • that wrapper IS the row, and carries the decision the drawing gives this
+ *     host — a checkbox per skill and one Continue (cinatra#3062);
  *   • and the wrapper is OUTSIDE the inline run panel's subtree, because the
  *     panel is the separate `run_card` host and a card nested inside it would
  *     make "which host drew this" unanswerable.
@@ -123,11 +124,26 @@ vi.mock("../../../agents/src/server-actions", () => ({
 //
 // What stays stubbed is the panel's chrome and its data fetch, which belong to
 // the agents package's own tests.
+// When `draws` is set, the stub reports that it draws a review screen, the way
+// the shipped panel reports its reading (`onReviewReadingChange`), and draws a
+// marked stand-in for that screen.
+const panelReview = vi.hoisted(() => ({ draws: false }));
 vi.mock("../inline-agent-run-card", () => ({
-  InlineAgentRunCard: ({ runId }: { runId: string }) => {
+  InlineAgentRunCard: ({
+    runId,
+    onReviewReadingChange,
+  }: {
+    runId: string;
+    onReviewReadingChange?: (runId: string, drawsReview: boolean) => void;
+  }) => {
     const ambientHost = useLifecycleCardHost();
+    const draws = panelReview.draws;
+    React.useEffect(() => {
+      onReviewReadingChange?.(runId, draws);
+    }, [runId, draws, onReviewReadingChange]);
     return (
       <div data-testid="inline-run-panel" data-run-card-host="" data-run-id={runId}>
+        {draws ? <div data-panel-review-stand-in="">Review requested</div> : null}
         {runCardOwnsLifecycleCopy(ambientHost) ? (
           <LifecycleCardSurfaceProvider host="run_card">
             <RecommendationHoldCard runId={runId} wireRef={null} />
@@ -164,6 +180,7 @@ import {
   useLifecycleCardHost,
 } from "../../../agents/src/lifecycle-card-runtime";
 import { RecommendationHoldCard } from "@cinatra-ai/agents/run-recommendation-card";
+import { resetDrawnRecommendationReadings } from "../../../agents/src/run-recommendation-reading-register";
 
 import {
   installWidgetServiceStub,
@@ -172,7 +189,9 @@ import {
 } from "./conversation-column-harness";
 
 /** The assistant turn a parked chat dispatch actually produces: one `agent_run`
- *  tool call with the server-pinned run id, and the dispatch line beside it. */
+ *  tool call with the server-pinned run id, and the dispatch line beside it.
+ *  The line is the sentence the platform mints for a parked start
+ *  (`RUN_START_PARKED_CLAUSE`), the line the 3062-walk1 round recorded. */
 function dispatchTurn(): UiMessage[] {
   return [
     { id: "u1", role: "user", content: `run cinatra_blog-draft-writer-agent for me` },
@@ -191,7 +210,7 @@ function dispatchTurn(): UiMessage[] {
         },
         {
           kind: "text",
-          content: `Dispatched \`${PACKAGE}\` (runId: \`${RUN_ID}\`, status: \`pending_input\`). The run is paused for your decision on the recommended skills.`,
+          content: `Dispatched \`${PACKAGE}\` (runId: \`${RUN_ID}\`, status: \`pending_input\`). The run paused for a decision on the recommended skills.`,
         },
       ],
     } as unknown as UiMessage,
@@ -225,6 +244,12 @@ beforeEach(() => {
   holdState.current = HELD;
   holdState.calls = [];
   holdState.pending = null;
+  panelReview.draws = false;
+  // A FRESH BROWSER SESSION PER ARM (cinatra#3062, fix leg 3). The card
+  // remembers the row it drew, keyed by run, so that a remount redraws it
+  // instead of emptying the turn — every arm here reuses one run id, so each
+  // starts from a reader who has been shown nothing.
+  resetDrawnRecommendationReadings();
 });
 afterEach(cleanup);
 
@@ -251,84 +276,91 @@ describe("the §V card is mounted in the conversation transcript", () => {
     expect(wrapper?.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
   });
 
-  it("puts the chip row and ITS PER-CHIP action anchors on that marker root", async () => {
-    // RE-ANCHORED to the §V redraw (cinatra#2841), same guarantee. This pinned
-    // "the marked element really carries the decidable row, not a pointer to
-    // it". Two things about the drawing moved underneath it: the row IS the
-    // card, so the chip row is the marker's OWN element rather than a
-    // descendant of it; and the decision affordances are PER CHIP, so the
-    // row-level Confirm/Skip pair this used to name is drawn nowhere. Both
-    // halves are still asserted here — the row, and real pressable decision
-    // controls inside it — so a pointer still cannot satisfy this test.
+  it("puts the row and ITS decision controls on that marker root", async () => {
+    // RE-ANCHORED TWICE, same guarantee. This pinned "the marked element really
+    // carries the decidable row, not a pointer to it". §V's redraw
+    // (cinatra#2841) made the row the CARD, so the row is the marker's own
+    // element rather than a descendant; and cinatra#3062 gives this host §V's
+    // checklist, so the decision controls it carries are a checkbox per skill
+    // and one Continue. Both halves are still asserted — the row, and real
+    // pressable decision controls inside it — so a pointer still cannot satisfy
+    // this test.
     const { container } = await mountHeldTurn();
     const wrapper = container.querySelector("[data-chat-thread-recommendation-hold]");
 
     await waitFor(() => {
       if (!wrapper?.querySelector("[data-recommendation-chip]")) {
-        throw new Error("no chip drawn on the marked row");
+        throw new Error("no pill drawn on the marked row");
       }
     });
     expect(wrapper?.hasAttribute("data-run-recommendation-chip-row")).toBe(true);
-    expect(wrapper?.querySelector('[data-skill-action="confirm"]')).not.toBeNull();
-    expect(wrapper?.querySelector('[data-skill-action="adjust"]')).not.toBeNull();
-    expect(wrapper?.querySelector('[data-skill-action="skip"]')).not.toBeNull();
-    // §V deleted the row-level pair; it may not come back on this host either.
+    expect(wrapper?.getAttribute("data-run-recommendation-reading")).toBe("skills-checklist");
+    expect(wrapper?.querySelector("[data-skills-step-checkbox]")).not.toBeNull();
+    const cont = wrapper?.querySelector<HTMLButtonElement>("[data-skills-step-continue]");
+    expect(cont).not.toBeNull();
+    expect(cont!.disabled).toBe(false);
+    // Nothing to press on a pill, and the row-level pair §V deleted long ago may
+    // not come back on this host either.
+    expect(wrapper?.querySelector("[data-skill-action]")).toBeNull();
     expect(wrapper?.querySelector('[data-action="confirm-run-recommendation"]')).toBeNull();
     expect(wrapper?.querySelector('[data-action="skip-run-recommendation"]')).toBeNull();
   });
 
-  it("KEEPS TODAY'S DRAWING while the run page changes (cinatra#3047, review point E)", async () => {
-    // The review changed the RUN PAGE's reading of this card: its Skills step
-    // draws a checkbox in front of each skill name and one Continue beneath the
-    // list, and no per-chip Confirm / Adjust / Skip. Point E asks for a separate
-    // issue to bring the same two changes to the chat and the widget — so until
-    // that issue lands, the conversation must keep drawing exactly what it draws
-    // today. This is the pin for that: the three affordances are present, and
-    // NEITHER of the run page's two new controls has leaked onto this host.
+  it("TAKES THE DRAWING the run page took (cinatra#3062, and #3047's point E)", async () => {
+    // THE PIN THAT WAS INVERTED, and it is the red-first proof of this change.
+    // It read "KEEPS TODAY'S DRAWING while the run page changes": the three
+    // per-chip affordances present, and neither of the run page's two controls
+    // on this host — because cinatra#3047's point E gave the chat and the widget
+    // their own issue. This is that issue, so the same four assertions are made
+    // the other way round, on the same mounted card.
     const { container } = await mountHeldTurn();
     const wrapper = container.querySelector("[data-chat-thread-recommendation-hold]");
     await waitFor(() => {
       if (!wrapper?.querySelector("[data-recommendation-chip]")) {
-        throw new Error("no chip drawn on the marked row");
+        throw new Error("no pill drawn on the marked row");
       }
     });
 
-    expect(wrapper?.querySelectorAll('[data-skill-action="confirm"]').length).toBeGreaterThan(0);
-    expect(wrapper?.querySelectorAll('[data-skill-action="adjust"]').length).toBeGreaterThan(0);
-    expect(wrapper?.querySelectorAll('[data-skill-action="skip"]').length).toBeGreaterThan(0);
-    // The run page's Skills-step reading, absent here.
-    expect(wrapper?.querySelector("[data-skills-step-checkbox]")).toBeNull();
-    expect(wrapper?.querySelector("[data-skills-step-continue]")).toBeNull();
-    expect(wrapper?.querySelector('[role="checkbox"]')).toBeNull();
-    expect(wrapper?.getAttribute("data-run-recommendation-reading")).toBeNull();
+    expect(wrapper?.querySelectorAll("[data-skill-action]")).toHaveLength(0);
+    // §V's reading, drawn here now: a real checkbox per pill and one Continue.
+    expect(wrapper?.querySelectorAll("[data-skills-step-checkbox]").length).toBeGreaterThan(0);
+    expect(wrapper?.querySelectorAll("[data-skills-step-continue]")).toHaveLength(1);
+    expect(wrapper?.querySelector('[role="checkbox"]')).not.toBeNull();
+    expect(wrapper?.getAttribute("data-run-recommendation-reading")).toBe("skills-checklist");
     // …and the host that decided which reading is drawn is this one.
     expect(wrapper?.getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
   });
 
-  it("keeps it while the run page's THREE REFINEMENTS land too (cinatra#3047, points 1-4)", async () => {
-    // The second round of the same review refined the run page further: its
-    // boxes stay editable until the run starts, its settled all-clear reading
-    // drops the skip outcome panel, every pill prints "<Skill name> by
-    // <vendor>", and the row sits in the detail with no card around it. Point E
-    // still governs this host, so NONE of those four has reached it — stated as
-    // four absences rather than left to be inferred from the arm above.
+  it("takes the THREE REFINEMENTS with it (cinatra#3062; #3047 points 1-4)", async () => {
+    // THE SECOND INVERTED PIN. It read "keeps it while the run page's three
+    // refinements land too" and stated four absences: no editable-until-started
+    // reading, no checklist pills, no vendor byline, and the card root as it
+    // was. The refinements apply to every host — the issue says so in its own
+    // words — so the same four are now stated as presences, on the same card.
     const { container } = await mountHeldTurn();
     const wrapper = container.querySelector("[data-chat-thread-recommendation-hold]");
     await waitFor(() => {
       if (!wrapper?.querySelector("[data-recommendation-chip]")) {
-        throw new Error("no chip drawn on the marked row");
+        throw new Error("no pill drawn on the marked row");
       }
     });
 
-    // 1. no editable-until-started reading, and nothing that states one.
-    expect(wrapper?.getAttribute("data-skills-step-editable")).toBeNull();
-    expect(wrapper?.getAttribute("data-skills-step-submitted")).toBeNull();
-    // 2. the conversation's own chips, not the run page's pills.
-    expect(wrapper?.querySelector("[data-skills-step-pill]")).toBeNull();
-    expect(wrapper?.querySelector("[data-skills-step-list]")).toBeNull();
-    // 3. no vendor byline on this host's chips.
+    // 1. the editable-until-started reading, stated on the row itself.
+    expect(wrapper?.getAttribute("data-skills-step-editable")).toBe("true");
+    expect(wrapper?.getAttribute("data-skills-step-submitted")).toBe("false");
+    // 2. the checklist pills, in their list.
+    expect(wrapper?.querySelector("[data-skills-step-pill]")).not.toBeNull();
+    expect(wrapper?.querySelector("[data-skills-step-list]")).not.toBeNull();
+    // 3. every pill went through the app's own byline resolver, which states
+    //    what it resolved on the pill root. This fixture's candidates declare no
+    //    vendor, so the resolved state is `missing` and — per the ratified
+    //    drawing, which gives the pill a vendor and no stand-in for one — the
+    //    pill draws the skill's name alone, with no byline element.
+    expect(wrapper?.querySelector("[data-skills-step-pill]")?.getAttribute(
+      "data-skills-step-vendor-state",
+    )).toBe("missing");
     expect(wrapper?.querySelector("[data-skills-step-vendor]")).toBeNull();
-    // 4. and the card root is the row itself, exactly as it is today.
+    // 4. and the card root is still the row itself, declaring what it is.
     expect(wrapper?.getAttribute("data-lifecycle-card")).toBe("recommendation_hold");
     expect(wrapper?.getAttribute("data-lifecycle-card-state")).toBe("held");
   });
@@ -445,14 +477,21 @@ describe("the decided card settles in the same conversation", () => {
     // RE-ANCHORED (cinatra#2841): the settled row IS the marked root, so the
     // decision it recorded is read off that element instead of a descendant.
     expect(wrapper?.getAttribute("data-run-recommendation-decision")).toBe("confirmed");
-    // §V: "each chip states its own outcome in place" — the settled reading is
-    // still per chip, in the same turn, with no navigation.
+    // §V: "Once the run has started the same pills are drawn with the state
+    // their boxes were left in, read-only, and with no Continue." The settled
+    // reading is still in the same turn, with no navigation — and each pill
+    // states in its own box that the skill was applied.
+    const applied = wrapper?.querySelector(
+      '[data-recommendation-chip][data-skill-applied="true"]',
+    );
+    expect(applied).not.toBeNull();
+    expect(applied?.querySelector('[role="checkbox"]')?.getAttribute("aria-checked")).toBe("true");
+    // Settled means settled: nothing left to press. The Continue is gone, the
+    // boxes are disabled, and both retired drawings stay retired.
+    expect(wrapper?.querySelector("[data-skills-step-continue]")).toBeNull();
     expect(
-      wrapper?.querySelector('[data-recommendation-chip][data-chip-mark="confirmed"]'),
-    ).not.toBeNull();
-    // Settled means settled: nothing left to press. Both the per-chip
-    // affordances §V draws while live AND the row-level pair it deleted are
-    // absent — the second half keeps the old drawing from creeping back.
+      wrapper?.querySelector<HTMLButtonElement>("[data-skills-step-checkbox]")?.disabled,
+    ).toBe(true);
     expect(wrapper?.querySelector("[data-skill-action]")).toBeNull();
     expect(wrapper?.querySelector('[data-action="confirm-run-recommendation"]')).toBeNull();
     expect(wrapper?.querySelector('[data-action="skip-run-recommendation"]')).toBeNull();
@@ -479,9 +518,12 @@ describe("the decided card settles in the same conversation", () => {
     });
     const wrapper = result.container.querySelector("[data-chat-thread-recommendation-hold]");
     expect(wrapper?.getAttribute("data-run-recommendation-decision")).toBe("skipped");
+    // §V: a skill the run did not take is a pill with its box CLEAR — there is
+    // no outcome word beside it, and no panel stands in for the row.
     expect(
-      wrapper?.querySelector('[data-recommendation-chip][data-chip-mark="skipped"]'),
+      wrapper?.querySelector('[data-recommendation-chip][data-skill-applied="false"]'),
     ).not.toBeNull();
+    expect(wrapper?.querySelector("[data-recommendation-outcome-panel]")).toBeNull();
   });
 });
 
@@ -571,10 +613,11 @@ describe("the turn shows exactly one recommendation card", () => {
 //    skill inside it can be selected."
 //
 // So the turn's shape is decided by the ROW'S STATE, not by the presence of an
-// `agent_run` part: held draws the chip row alone, and the decision is what
-// brings the run card in. Both conversation hosts are measured, because one
-// column serves `/chat` and the widget and a rule that holds on only one of
-// them is not the rule.
+// `agent_run` part: held draws the chip row alone. The plan's second sentence
+// is superseded by the bound design's §V for the decided turn (see the arms
+// below): the decision does NOT bring the run card in beneath the settled row.
+// Both conversation hosts are measured, because one column serves `/chat` and
+// the widget and a rule that holds on only one of them is not the rule.
 // ---------------------------------------------------------------------------
 describe("the agentic run progress card waits for the skills decision", () => {
   it("draws the chip row and NO run card while the hold is open", async () => {
@@ -624,7 +667,29 @@ describe("the agentic run progress card waits for the skills decision", () => {
     }
   });
 
-  it("brings the run card in once the decision has landed", async () => {
+  // §V AT THE BOUND DESIGN (cinatra#3062): "Once the run has started the same
+  // pills are drawn with the state their boxes were left in, read-only, and
+  // with no Continue … No reading is ever redrawn as a row above another card."
+  // The plan's older "the run card appears once the skills are decided" drew
+  // the settled row ABOVE the run progress card, which a graded round failed
+  // (the settled cells, both palettes). So a decided turn keeps the panel MOUNTED -
+  // it is still this turn's one publisher of the run's later gates - but
+  // stood down: out of the picture and out of the accessibility tree.
+  const RUN_PANEL = '[data-testid="inline-run-panel"]';
+  function expectPanelStoodDown(container: HTMLElement) {
+    const panel = container.querySelector(RUN_PANEL);
+    expect(panel, "the decided turn unmounted its gate publisher").not.toBeNull();
+    const wrapper = panel!.closest(`[data-inline-run-panel-stood-down="${RUN_ID}"]`);
+    expect(wrapper, "the run card is drawn beneath the settled row").not.toBeNull();
+    expect(wrapper!.hasAttribute("hidden")).toBe(true);
+    expect(wrapper!.getAttribute("aria-hidden")).toBe("true");
+    // The settled row is still drawn, in the same container.
+    const slot = container.querySelector(`[data-agent-run-slot="${RUN_ID}"]`);
+    expect(slot?.querySelector("[data-chat-thread-recommendation-hold]")).not.toBeNull();
+    expect(slot?.contains(wrapper)).toBe(true);
+  }
+
+  it("draws NO run card beneath the settled row once the decision has landed", async () => {
     holdState.current = { state: "confirmed", runId: RUN_ID, skillNames: ["blog-content"] };
     const { container } = await mountSurface("chat", { messages: dispatchTurn() });
 
@@ -634,16 +699,12 @@ describe("the agentic run progress card waits for the skills decision", () => {
       }
     });
     await waitFor(() => {
-      if (!container.querySelector('[data-testid="inline-run-panel"]')) {
-        throw new Error("no run card after the decision");
-      }
+      if (!container.querySelector(RUN_PANEL)) throw new Error("no gate publisher after the decision");
     });
-    // The settled chips are ABOVE it, in the same container, exactly as before.
-    const slot = container.querySelector('[data-testid="inline-run-panel"]')?.parentElement;
-    expect(slot?.querySelector("[data-chat-thread-recommendation-hold]")).not.toBeNull();
+    expectPanelStoodDown(container);
   });
 
-  it("brings the run card in for a skipped decision too", async () => {
+  it("draws no run card beneath a skipped decision either", async () => {
     holdState.current = {
       state: "skipped",
       runId: RUN_ID,
@@ -652,10 +713,139 @@ describe("the agentic run progress card waits for the skills decision", () => {
     const { container } = await mountSurface("chat", { messages: dispatchTurn() });
 
     await waitFor(() => {
-      if (!container.querySelector('[data-testid="inline-run-panel"]')) {
-        throw new Error("no run card after the skip");
+      if (!container.querySelector(RUN_PANEL)) throw new Error("no gate publisher after the skip");
+    });
+    expectPanelStoodDown(container);
+  });
+
+  it("draws the dispatch line ABOVE the row, with the row in its own slot (§V)", async () => {
+    const { container } = await mountHeldTurn();
+    const root = container.querySelector('[data-lifecycle-card="recommendation_hold"]');
+    expect(root).not.toBeNull();
+    const slot = container.querySelector(`[data-agent-run-slot="${RUN_ID}"]`);
+    expect(slot?.contains(root)).toBe(true);
+    const TEXT = "paused for a decision on the recommended skills";
+    const carriers = [...container.querySelectorAll("*")].filter(
+      (el) =>
+        el.textContent?.includes(TEXT) &&
+        ![...el.children].some((c) => c.textContent?.includes(TEXT)),
+    );
+    expect(carriers, "the dispatch line is not in the turn").toHaveLength(1);
+    const line = carriers[0]!;
+    expect(slot!.contains(line)).toBe(false);
+    expect(
+      line.compareDocumentPosition(root!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      "the row is drawn beneath the dispatch line",
+    ).toBeTruthy();
+  });
+
+  it("shows the review a decided turn's panel draws, beneath the settled row", async () => {
+    // §II: the run's review is drawn in place, in the run's own slot. The
+    // stand-down covers only a panel that asks nothing.
+    holdState.current = { state: "confirmed", runId: RUN_ID, skillNames: ["blog-content"] };
+    panelReview.draws = true;
+    const { container } = await mountSurface("chat", { messages: dispatchTurn() });
+
+    await waitFor(() => {
+      if (!container.querySelector('[data-run-recommendation-decision="confirmed"]')) {
+        throw new Error("settled row not drawn");
       }
     });
+    await waitFor(() => {
+      const review = container.querySelector("[data-panel-review-stand-in]");
+      if (!review || review.closest("[hidden]")) throw new Error("the review the panel draws is not shown");
+    });
+    const panel = container.querySelector(RUN_PANEL)!;
+    expect(panel.closest("[data-inline-run-panel-stood-down]")).toBeNull();
+    expect(panel.closest('[aria-hidden="true"]')).toBeNull();
+    const slot = container.querySelector(`[data-agent-run-slot="${RUN_ID}"]`);
+    const row = slot?.querySelector("[data-chat-thread-recommendation-hold]");
+    expect(row).not.toBeNull();
+    expect(slot?.contains(panel)).toBe(true);
+    expect(
+      row!.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING,
+      "the review is drawn beneath the settled row",
+    ).toBeTruthy();
+  });
+
+  it("keeps the row in place and draws the line above it when the line streams in after the run's part", async () => {
+    // The trace of a live turn: the start's tool part lands first, the model's
+    // text part arrives while the turn streams.
+    const [user, assistant] = dispatchTurn() as unknown as [UiMessage, UiMessage & { parts: unknown[] }];
+    const runOnly = [user, { ...assistant, parts: [assistant.parts[0]] } as unknown as UiMessage];
+    const result = await mountSurface("chat", { messages: runOnly, streamingIds: ["a1"] });
+    await waitFor(() => {
+      if (!result.container.querySelector('[data-lifecycle-card="recommendation_hold"]')) {
+        throw new Error("the held row is not drawn before the line arrives");
+      }
+    });
+    const rowBefore = result.container.querySelector('[data-lifecycle-card="recommendation_hold"]')!;
+
+    result.rerender(surfaceElement("chat", { messages: dispatchTurn(), streamingIds: ["a1"] }));
+    const TEXT = "paused for a decision on the recommended skills";
+    const deepest = () =>
+      [...result.container.querySelectorAll("*")].filter(
+        (el) =>
+          el.textContent?.includes(TEXT) &&
+          ![...el.children].some((c) => c.textContent?.includes(TEXT)),
+      );
+    await waitFor(() => {
+      if (deepest().length !== 1) throw new Error("the streamed line is not drawn");
+    });
+    const rowAfter = result.container.querySelector('[data-lifecycle-card="recommendation_hold"]');
+    expect(rowAfter, "the row was remounted when the line arrived").toBe(rowBefore);
+    const slot = result.container.querySelector(`[data-agent-run-slot="${RUN_ID}"]`);
+    const line = deepest()[0]!;
+    expect(slot!.contains(rowAfter)).toBe(true);
+    expect(slot!.contains(line)).toBe(false);
+    expect(
+      line.compareDocumentPosition(rowAfter!) & Node.DOCUMENT_POSITION_FOLLOWING,
+      "the row is drawn beneath the streamed line",
+    ).toBeTruthy();
+  });
+
+  it("never draws the line beneath the row while the line itself streams in, chunk by chunk", async () => {
+    // A live turn's text part grows: the head alone, the head and the first
+    // words of the clause, the whole line. Every state draws the line above the
+    // run's slot, and the row keeps its node.
+    const [user, assistant] = dispatchTurn() as unknown as [UiMessage, UiMessage & { parts: unknown[] }];
+    const head = `Dispatched \`${PACKAGE}\` (runId: \`${RUN_ID}\`, status: \`pending_input\`).`;
+    const turnWith = (content: string) => [
+      user,
+      { ...assistant, parts: [assistant.parts[0], { kind: "text", content }] } as unknown as UiMessage,
+    ];
+    const states = [head, `${head} The run`, `${head} The run paused for a decision on the recommended skills.`];
+    const result = await mountSurface("chat", { messages: turnWith(states[0]!), streamingIds: ["a1"] });
+    await waitFor(() => {
+      if (!result.container.querySelector('[data-lifecycle-card="recommendation_hold"]')) {
+        throw new Error("the held row is not drawn");
+      }
+    });
+    const rowFirst = result.container.querySelector('[data-lifecycle-card="recommendation_hold"]')!;
+    const lineCarrier = () =>
+      [...result.container.querySelectorAll("*")].filter(
+        (el) =>
+          el.textContent?.includes("Dispatched") &&
+          ![...el.children].some((c) => c.textContent?.includes("Dispatched")),
+      );
+    for (const [at, state] of states.entries()) {
+      if (at > 0) result.rerender(surfaceElement("chat", { messages: turnWith(state), streamingIds: ["a1"] }));
+      await waitFor(() => {
+        if (!lineCarrier()[0]?.textContent?.includes(state.replace(/`/g, ""))) {
+          throw new Error(`state ${at} is not drawn`);
+        }
+      });
+      const carriers = lineCarrier();
+      expect(carriers, `state ${at}: one line`).toHaveLength(1);
+      const row = result.container.querySelector('[data-lifecycle-card="recommendation_hold"]');
+      expect(row, `state ${at}: the row was remounted`).toBe(rowFirst);
+      const slot = result.container.querySelector(`[data-agent-run-slot="${RUN_ID}"]`);
+      expect(slot!.contains(carriers[0]!), `state ${at}: the line is inside the run's slot`).toBe(false);
+      expect(
+        carriers[0]!.compareDocumentPosition(row!) & Node.DOCUMENT_POSITION_FOLLOWING,
+        `state ${at}: the row is drawn beneath the line`,
+      ).toBeTruthy();
+    }
   });
 
   it("FAILS OPEN: a run that was never held keeps its run card", async () => {
@@ -755,13 +945,61 @@ describe("the agentic run progress card waits for the skills decision", () => {
       expect(result.container.querySelector('[data-testid="inline-run-panel"]')).toBeNull();
       // Past it: the question is unreadable and the turn draws what it always did.
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(10_000);
+        await vi.advanceTimersByTimeAsync(50_000);
       });
       expect(
         result.container.querySelector('[data-testid="inline-run-panel"]'),
         "a read that never answers withheld the run card for ever",
       ).not.toBeNull();
       expect(settle).not.toBeNull();
+    } finally {
+      holdState.pending = null;
+      vi.useRealTimers();
+    }
+  });
+
+  it("never draws the run card while a SLOW read of a held run is still on its way", async () => {
+    // cinatra#3062 (the widget cells of a graded capture): the read of a held run is
+    // measured at twelve to thirty seconds under load on a development runtime.
+    // A deadline that passes inside that window draws the run progress card over
+    // the open question, and the person sees the forbidden card until the late
+    // answer takes it away. Here the read answers HELD after 25 s: the run card
+    // must appear in no frame, and the row must be drawn once the answer lands.
+    vi.useFakeTimers();
+    const RUN_PANEL = '[data-testid="inline-run-panel"]';
+    try {
+      let settle: ((value: Record<string, unknown> | null) => void) | null = null;
+      holdState.pending = new Promise<Record<string, unknown> | null>((resolve) => {
+        settle = resolve;
+      });
+      const result = render(surfaceElement("chat", { messages: dispatchTurn() }));
+      let everSeen = result.container.querySelector(RUN_PANEL) !== null;
+      const observer = new MutationObserver(() => {
+        if (result.container.querySelector(RUN_PANEL)) everSeen = true;
+      });
+      observer.observe(result.container, { childList: true, subtree: true });
+      try {
+        for (let i = 0; i < 25; i += 1) {
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(1_000);
+          });
+        }
+        expect(result.container.querySelector(RUN_PANEL)).toBeNull();
+        holdState.pending = null;
+        holdState.current = HELD;
+        await act(async () => {
+          settle!(HELD);
+          await vi.advanceTimersByTimeAsync(100);
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1_000);
+        });
+      } finally {
+        observer.disconnect();
+      }
+      expect(result.container.querySelector("[data-recommendation-chip]")).not.toBeNull();
+      expect(everSeen, "the run progress card was on screen while the slow read was on its way").toBe(false);
+      expect(result.container.querySelector(RUN_PANEL)).toBeNull();
     } finally {
       holdState.pending = null;
       vi.useRealTimers();
@@ -816,5 +1054,107 @@ describe("the agentic run progress card waits for the skills decision", () => {
     const { container } = await mountHeldTurn();
     expect(container.querySelector("[data-chat-thread-recommendation-hold]")).not.toBeNull();
     expect(container.querySelector('[data-testid="inline-run-panel"]')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE SETTLED ROW KEEPS ITS PLACE IN THE TURN (cinatra#3062, fix leg 3).
+// ---------------------------------------------------------------------------
+// The ratified drawing's section V:
+//
+//   "A row the reader did see keeps its place in the turn and states, box by
+//    box, that no recommended skill was applied — otherwise the question, the
+//    answer and the fact that nothing was applied all vanish from the transcript
+//    together, and nothing on screen says any of it happened."
+//
+// A conversation RE-CREATES its turns: the page replaces its whole message array
+// whenever the server's copy of the thread grows, and a reload rebuilds them from
+// the persisted parts. Both remount this card, whose own read is a round trip —
+// so a mount with no answer yet used to draw no card DOM at all and the settled
+// row left the turn. A live boot measured fifteen seconds of that after the one
+// Continue, and twenty on a fresh load.
+//
+// BOTH CONVERSATION HOSTS, because one column serves `/chat` and the widget and
+// a rule that holds on only one of them is not the rule.
+describe("the settled skills row survives the transcript's own re-creation", () => {
+  const SETTLED = {
+    state: "confirmed",
+    runId: RUN_ID,
+    skillNames: ["blog-content"],
+    decided: [
+      { skillId: "@cinatra-ai/chat:blog-content", name: "blog-content", mark: "confirmed" },
+    ],
+    holdRef: "hold-ref-1",
+    runStarted: false,
+    canDecide: true,
+    candidates: [
+      {
+        skillId: "@cinatra-ai/chat:blog-content",
+        name: "blog-content",
+        vendorName: "Cinatra",
+        skillRevisionId: "rev-1",
+        recommended: true,
+      },
+    ],
+  };
+
+  it("redraws the settled row on the chat host when the new read has not landed", async () => {
+    holdState.current = SETTLED;
+    const first = await mountSurface("chat", { messages: dispatchTurn() });
+    await waitFor(() => {
+      if (!first.container.querySelector("[data-chat-thread-recommendation-hold]")) {
+        throw new Error("no settled row on the first mount");
+      }
+    });
+    cleanup();
+
+    // The transcript re-creates the turn; the fresh mount's read HANGS.
+    holdState.pending = new Promise(() => {});
+    const again = await mountSurface("chat", { messages: dispatchTurn() });
+    const row = again.container.querySelector("[data-chat-thread-recommendation-hold]");
+    expect(row, "the settled row left the turn while a fresh mount re-read it").not.toBeNull();
+    expect(row!.getAttribute("data-run-recommendation-settled")).toBe("true");
+    expect(
+      Array.from(again.container.querySelectorAll("[data-skills-step-pill]")).map((p) =>
+        p.getAttribute("data-skill-applied"),
+      ),
+      "the row states, box by box, what the run applied",
+    ).toEqual(["true"]);
+  });
+
+  it("redraws the settled row on the widget host too", async () => {
+    // The widget reads the SAME hold through its own broker transport, so the
+    // rule has to hold against that read rather than against the cookie one.
+    const first = installWidgetServiceStub({
+      lifecycle: () => null,
+      recommendationHold: () => SETTLED,
+    });
+    try {
+      const view = render(surfaceElement("widget", { messages: dispatchTurn() }));
+      await waitFor(() => {
+        if (!view.container.querySelector('[data-lifecycle-card="recommendation_hold"]')) {
+          throw new Error("no settled row on the widget's first mount");
+        }
+      });
+    } finally {
+      first.restore?.();
+    }
+    cleanup();
+
+    // The widget's broker read now never answers.
+    const hung = installWidgetServiceStub({
+      lifecycle: () => null,
+      recommendationHold: () => {
+        throw new Error("the broker read has not landed");
+      },
+    });
+    try {
+      const again = render(surfaceElement("widget", { messages: dispatchTurn() }));
+      const row = again.container.querySelector('[data-lifecycle-card="recommendation_hold"]');
+      expect(row, "the settled row left the widget's turn on a remount").not.toBeNull();
+      expect(row!.getAttribute("data-run-recommendation-settled")).toBe("true");
+    } finally {
+      hung.restore?.();
+    }
   });
 });

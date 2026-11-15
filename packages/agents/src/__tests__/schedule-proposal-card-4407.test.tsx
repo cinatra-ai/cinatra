@@ -491,7 +491,7 @@ describe("a live change of frequency from a monthly schedule every 12 months (ci
       );
       await pick(rows, "recurring-frequency", label);
       await waitFor(() => expect(rows.querySelector('[data-field="recurring-frequency"]')?.textContent).toBe(label));
-      fireEvent.click(container.querySelector('[data-action="confirm-schedule-proposal"]')!);
+      fireEvent.click(container.querySelector('[data-action="confirm-schedule -> scheduled"]')!);
       await waitFor(() => expect(decisions(fetchMock).length).toBeGreaterThan(0));
       const sent = selectionOf(decisions(fetchMock)[0]);
       expect(sent).toMatchObject({ frequency, dayOfMonth: 10 });
@@ -563,7 +563,7 @@ describe("a missing or unknown frequency at runtime draws no selector and does n
       await waitFor(() => expect(fetchMock).toHaveBeenCalled());
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(again.container.querySelector('[data-conformance-id="schedule-option-rows"]')).toBeNull();
-      expect(again.container.querySelector('[data-action="confirm-schedule-proposal"]')).toBeNull();
+      expect(again.container.querySelector('[data-action="confirm-schedule -> scheduled"]')).toBeNull();
     });
 
     it(`the editable card body with ${name} draws no shared control and no interval number`, () => {
@@ -638,7 +638,7 @@ describe("the waiting run's direct Confirm carries a shared selector that was ch
     await waitFor(() =>
       expect(rows.querySelector('[data-field="recurring-day-of-month"]')?.textContent).toBe("15"),
     );
-    fireEvent.click(container.querySelector('[data-action="confirm-schedule-proposal"]')!);
+    fireEvent.click(container.querySelector('[data-action="confirm-schedule -> scheduled"]')!);
     await waitFor(() => expect(decisions(fetchMock).length).toBeGreaterThan(0));
     const bodies = decisions(fetchMock);
     // One request, straight to confirm: never the proposal's re-propose composite.
@@ -661,7 +661,7 @@ describe("the waiting run's direct Confirm carries a shared selector that was ch
     await waitFor(() => expect(rows.querySelector('[data-field="recurring-nth-week"]')).not.toBeNull());
     await pick(rows, "recurring-nth-week", "2nd");
     await waitFor(() => expect(rows.querySelector('[data-field="recurring-nth-week"]')?.textContent).toBe("2nd"));
-    fireEvent.click(container.querySelector('[data-action="confirm-schedule-proposal"]')!);
+    fireEvent.click(container.querySelector('[data-action="confirm-schedule -> scheduled"]')!);
     await waitFor(() => expect(decisions(fetchMock).length).toBeGreaterThan(0));
     expect(decisions(fetchMock)).toHaveLength(1);
     expect(decisions(fetchMock)[0].op).toBe("confirm");
@@ -694,7 +694,7 @@ describe("the expired card's repropose carries a shared selector that was change
     await waitFor(() =>
       expect(rows.querySelector('[data-field="recurring-day-of-month"]')?.textContent).toBe("20"),
     );
-    fireEvent.click(container.querySelector('[data-action="confirm-schedule-proposal"]')!);
+    fireEvent.click(container.querySelector('[data-action="confirm-schedule -> scheduled"]')!);
     await waitFor(() => expect(decisions(fetchMock).length).toBe(2));
     const [adjust, confirm] = decisions(fetchMock);
     expect(adjust.op).toBe("adjust");
@@ -717,7 +717,7 @@ describe("the expired card's repropose carries a shared selector that was change
     );
     await pick(rows, "recurring-yearly-month", "Sep");
     await waitFor(() => expect(rows.querySelector('[data-field="recurring-yearly-month"]')?.textContent).toBe("Sep"));
-    fireEvent.click(container.querySelector('[data-action="confirm-schedule-proposal"]')!);
+    fireEvent.click(container.querySelector('[data-action="confirm-schedule -> scheduled"]')!);
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="schedule-proposal-refusal"]')?.textContent).toContain(
         "You may not confirm this schedule.",

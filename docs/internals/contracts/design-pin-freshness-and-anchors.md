@@ -145,17 +145,18 @@ authenticated reader at the contract's own pinned revision — and says so.
   proves the array was not edited afterwards; it can never prove it was true
   when it was written, and this is the script that decides that.
 
-- **Four card controls that no governed drawing draws under the recorded
-  value are not anchors of the contract.** The anchor contract leaves them out
-  of the capture requirements it records (`AGENT_OWNED_CAPTURE_CONTROLS` in
-  `scripts/audit/lib/anchor-contract.mjs`, a closed list per kind), each for its
-  own reason. The skills card's per-skill Confirm, Adjust and Skip: the drawing
-  retired them. The schedule card's own Confirm,
-  `[data-action="confirm-schedule-proposal"]`: the governed drawing draws that
-  floor under another value, `confirm-schedule -> scheduled`, and the product's
-  value is tracked in cinatra#3678. The capture recorder still grades the
-  pictures of each control's own kind against it; only the contract's digest
-  and this check stop asking a drawing to draw them (cinatra#3677).
+- **Card controls that no governed drawing draws are not anchors of the
+  contract.** The anchor contract leaves them out of the capture requirements
+  it records (`AGENT_OWNED_CAPTURE_CONTROLS` in
+  `scripts/audit/lib/anchor-contract.mjs`, a closed list per kind). Today the
+  list holds the skills card's per-skill Confirm, Adjust and Skip: the drawing
+  retired them. The capture recorder still grades the pictures of each
+  control's own kind against it; only the contract's digest and this check stop
+  asking a drawing to draw them (cinatra#3677). cinatra#3677 also left out the
+  schedule card's own Confirm, because the product emitted another value than
+  the governed drawing draws. Since cinatra#4390 the product emits the drawn
+  value, `confirm-schedule -> scheduled`, so the contract records that control
+  again and it resolves in the governed drawing.
 
 With those controls out, every recorded owner anchor and capture requirement
 resolves in a governed drawing or is a passive capture marker, and

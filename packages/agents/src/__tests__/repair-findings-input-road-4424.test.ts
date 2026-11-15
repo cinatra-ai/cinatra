@@ -3,10 +3,10 @@
  * a repair run's producer declares; the drain adds no CMS fallback input. The
  * structured findings still travel in `lifecycleRepairRequest`.
  *
- * 1. No code file except the CMS repair bridge itself and this test (the walk
- *    skips its own file) names `projectCmsRepairInputParams`: the dispatch
- *    drain no longer asks the
- *    bridge for `task` and `instructions` text, for any base. Source text, not
+ * 1. No code file except this test (the walk skips its own file) names
+ *    `projectCmsRepairInputParams`: the dispatch drain no longer asks for
+ *    `task` and `instructions` text, for any base, and the CMS repair bridge
+ *    that defined it is gone (cinatra#3862 leg 7, slice S3). Source text, not
  *    behaviour: the invariant is the absence of a caller (the same technique as
  *    `blog-repair-new-run-road-structural.test.ts`).
  * 2. The development lock pins the Drupal and WordPress agent commits whose
@@ -21,7 +21,6 @@ import { agentLifecycleDeclarationSchema } from "../verdaccio/package-contract";
 import { normalizeLifecycle, projectRepairFindingsInput } from "@/lib/lifecycle/lifecycle-policy";
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..", "..");
-const BRIDGE = path.join(REPO_ROOT, "packages/agents/src/lifecycle-repair-cms-production-bridge.ts");
 const SELF = path.resolve(__filename);
 const SCAN_ROOTS = ["src", "packages", "scripts"];
 const SKIP_DIRS = new Set(["node_modules", ".next", "dist", "build", "coverage", ".turbo"]);
@@ -40,24 +39,20 @@ function codeFiles(dir: string, out: string[] = []): string[] {
 }
 
 describe("cinatra#4424 — the dispatch drain no longer calls the CMS repair bridge's projection", () => {
-  // The title says "except the bridge itself", but this test file names the
-  // function too: the walk skips it (SELF below). The title stays as the kits
-  // recorded it.
-  it("no module except the bridge itself names projectCmsRepairInputParams", () => {
+  it("no module names projectCmsRepairInputParams (the bridge that defined it is gone)", () => {
     const files = SCAN_ROOTS.flatMap((root) => codeFiles(path.join(REPO_ROOT, root)));
-    // The walk must actually reach the drain and the bridge, or an empty scan passes.
-    expect(files).toContain(BRIDGE);
+    // The walk must actually reach the drain, or an empty scan passes.
     expect(files).toContain(path.join(REPO_ROOT, "packages/agents/src/lifecycle-repair-dispatch-store.ts"));
     const callers = files
-      .filter((file) => file !== BRIDGE && path.resolve(file) !== SELF)
+      .filter((file) => path.resolve(file) !== SELF)
       .filter((file) => readFileSync(file, "utf8").includes("projectCmsRepairInputParams"))
       .map((file) => path.relative(REPO_ROOT, file));
     expect(callers).toEqual([]);
   });
 
-  it("the drain does not load the bridge module at all", () => {
+  it("the drain loads no CMS module at all", () => {
     const drain = readFileSync(path.join(REPO_ROOT, "packages/agents/src/lifecycle-repair-dispatch-store.ts"), "utf8");
-    expect(drain).not.toContain("lifecycle-repair-cms-production-bridge");
+    expect(drain).not.toMatch(/["']\.\/(?:lifecycle-repair-cms|cms-)[^"']*["']/);
   });
 });
 

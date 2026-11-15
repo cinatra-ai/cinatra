@@ -49,6 +49,10 @@ import {
   validateCaptureRecord,
   validateWalkPlan,
 } from "../lib/chat-hitl-capture-recorder.mjs";
+// The CANONICAL contract itself, for the one assertion that pins the capture
+// vocabulary PER HOST — the recorder derives its own view from this and does
+// not re-export it.
+import { CARD_KINDS } from "../../ci/lib/capture-record-contract.mjs";
 import { loadWalkPlan } from "../__fixtures__/capture-walk/load-walk-plan.mjs";
 import {
   CAPTURE_INDEX_PATH,
@@ -106,8 +110,8 @@ function chatAssertions(kind = "recommendation_hold", state = "pending") {
  * assert nothing about the card, be accepted here, and be refused by the
  * canonical half that never had the chat-only guard.
  */
-function hostAssertions(host, kind = "recommendation_hold", state = "pending") {
-  return captureRequirementsFor(host, kind, state).map((r) => ({
+function hostAssertions(host, kind = "recommendation_hold", state = "pending", cell = null) {
+  return captureRequirementsFor(host, kind, state, cell).map((r) => ({
     ...r,
     expect: r.expect ?? "present",
     count: (r.expect ?? "present") === "absent" ? 0 : 1,
@@ -584,10 +588,15 @@ describe("the recorder OBSERVES rather than taking dictation", () => {
   it("reads the final URL and every required anchor off the page itself", async () => {
     const page = fakePage({
       url: "http://localhost:3000/chat?thread=t-9",
+      // A page drawing exactly what the shipped card draws: every anchor the
+      // reading OWES is there, and every anchor it forbids is not. The fixture
+      // used to answer 1 to all of them alike, which since the decision group
+      // became per host (cinatra#3062) is a page showing the retired per-chip
+      // controls beside the Continue — a card the chat host does not draw.
       counts: Object.fromEntries(
         chatThreadRequirementsFor("recommendation_hold").map((r) => [
           r.within ? `${r.within}>>${r.selector}` : r.selector,
-          1,
+          r.expect === "absent" ? 0 : 1,
         ]),
       ),
     });
@@ -1078,10 +1087,41 @@ describe("the manifest to capture-index binding", () => {
     // the widget and the review page — which is exactly what a PENDING capture
     // of this kind is required to show, so it is the field the capture gate
     // must stay in step with.
+    //
+    // THE TWO LISTS AGREE ABOUT THE CHAT NOW, AND THAT IS THE PIN
+    // (cinatra#3062). They used to be apart on purpose: this table describes ONE
+    // host — the chat — which draws §V's checklist and decides with the Continue
+    // beneath the list, while the capture vocabulary was a single kind-wide list
+    // naming the three per-chip affordances, so the recorder refused every
+    // honest capture of the card the chat actually draws.
+    //
+    // The capture group is PER HOST now, so the chat's entry there is the same
+    // one control this table names. `KIND_REQUIRED_ACTIONS` is the host-BLIND
+    // convenience view and still reports the kind's default — the reading the
+    // review page's gate region keeps — which is why the two spellings below are
+    // different without being in disagreement.
     const row = CHAT_THREAD_CARRIAGE_CONTRACT.find((r) => r.kind === "recommendation_hold");
-    for (const action of KIND_REQUIRED_ACTIONS.recommendation_hold) {
-      expect(row.decisionControls).toContain(action);
+    expect(row.decisionControls).toEqual(["[data-skills-step-continue]"]);
+    expect(CARD_KINDS.recommendation_hold.decisionControlsByHost.chat_thread).toEqual(
+      row.decisionControls,
+    );
+    // …and the same one control on the other three declared hosts, because §V
+    // reproduces ONE row rather than redrawing it per host. The review page's
+    // gate region is among them: `SKILLS_CHECKLIST_HOSTS` names all four, so
+    // leaving it on the trio (cinatra#3062, before the convergence round) made
+    // the contract refuse an honest picture of the shipped gate region.
+    for (const host of ["run_card", "page_gate_region", "site_widget"]) {
+      expect(CARD_KINDS.recommendation_hold.decisionControlsByHost[host]).toEqual([
+        "[data-skills-step-continue]",
+      ]);
     }
+    // The kind's host-blind default is now reachable by NO declared host; it
+    // survives as the vocabulary the frozen pre-redraw cells are graded against.
+    expect(KIND_REQUIRED_ACTIONS.recommendation_hold).toEqual([
+      '[data-skill-action="confirm"]',
+      '[data-skill-action="adjust"]',
+      '[data-skill-action="skip"]',
+    ]);
     // …and the owner anchor is still asserted, as the thing it actually is:
     // the one anchor the owner draws wherever it draws.
     expect(row.ownerAnchors).toEqual(['[data-conformance-id="run-chip-row"]']);
@@ -1279,19 +1319,30 @@ function drivenPage(page) {
 
 const CARD_ROOT = '[data-lifecycle-card="recommendation_hold"]';
 const HOST_ANCHOR = '[data-lifecycle-card-host="chat_thread"]';
-// The ratified §V decision set (cinatra#2841): PER CHIP, three controls, the
-// same three `recommendation_hold.decisionControls` names in
-// `scripts/ci/lib/capture-record-contract.mjs` and the same three the held-turn
-// contract carries as its `ownerAnchors`. The row-level Confirm/Skip pair these
-// constants used to spell was retired with the redraw and is emitted nowhere in
-// `run-recommendation-chip-row.tsx`, so fixtures built on it measured selectors
-// the shipped card never draws.
+// THE DECISION SET THIS HOST DRAWS (cinatra#3062). These fixtures photograph a
+// `recommendation_hold` on `chat_thread`, and §V gives that reading one decision
+// act: "The reader sets the boxes and presses Continue beneath the list … and the
+// whole row is answered at once", with "a pill carries nothing to press — no
+// Confirm, no Adjust, no Skip."
+//
+// The per-chip trio these constants used to spell is the review page's gate
+// region's vocabulary now, and it is exercised as such further down; a fixture
+// built on it here measured selectors the shipped chat card never draws, which
+// is the same defect the row-level Confirm/Skip pair had before it.
+const CONTINUE = "[data-skills-step-continue]";
 const CONFIRM = '[data-skill-action="confirm"]';
 const ADJUST = '[data-skill-action="adjust"]';
 const SKIP = '[data-skill-action="skip"]';
-const DECISION_CONTROLS = [CONFIRM, ADJUST, SKIP];
+/**
+ * The trio NO declared host draws any longer — kept as the vocabulary the 26
+ * frozen pre-redraw cells were photographed against (cinatra#3062, convergence
+ * round). It named the review page's gate region until that host was found to
+ * be drawing the checklist like the other three.
+ */
+const RETIRED_CONTROLS = [CONFIRM, ADJUST, SKIP];
+const DECISION_CONTROLS = [CONTINUE];
 
-/** One `recommendation_hold` card, painted or not, with its own controls. */
+/** One `recommendation_hold` card as the chat draws it, painted or not. */
 function heldCard(runId, { visible = true } = {}) {
   const inner = fakeElement({}, { visible });
   return fakeElement(
@@ -1557,18 +1608,18 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
     // a count taken inside a verification card answers nothing about the
     // recommendation card this record claims to photograph.
     const assertions = chatAssertions().map((a) =>
-      a.selector === CONFIRM
+      a.selector === CONTINUE
         ? { ...a, within: '[data-lifecycle-card="verification_summary"]' }
         : a,
     );
     expect(validateCaptureRecord(chatRecord({ assertions }), { hashOf, virtualFilesystem: true }).join("\n")).toMatch(
-      /requires \[data-skill-action="confirm"\] root-scoped inside/,
+      /requires \[data-skills-step-continue\] root-scoped inside/,
     );
   });
 
   it("the BINDING compares `within` too, not only scope", () => {
     const assertions = chatAssertions().map((a) =>
-      a.selector === CONFIRM
+      a.selector === CONTINUE
         ? { ...a, within: '[data-lifecycle-card="verification_summary"]' }
         : a,
     );
@@ -1577,14 +1628,14 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
         manifest: manifestClaiming("X9__chat_thread__recommendation-hold-held"),
         index: indexOf([chatRecord({ cell: "X9__chat_thread__recommendation-hold-held", assertions })]),
       }).join("\n"),
-    ).toMatch(/does not observe \[data-skill-action="confirm"\] present/);
+    ).toMatch(/does not observe \[data-skills-step-continue\] present/);
   });
 
   it("REFUSES a painted count above its own attached count, at EITHER tier", () => {
     // The line between an omission and a false claim. A record may decline to
     // report a painted count; it may not report one it could not have observed.
     const assertions = chatAssertions().map((a) =>
-      a.selector === CONFIRM ? { ...a, count: 1, visible: 4 } : a,
+      a.selector === CONTINUE ? { ...a, count: 1, visible: 4 } : a,
     );
     const record = chatRecord({ assertions });
     delete record.instance;
@@ -1599,6 +1650,9 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
     // The asymmetry stated as a case. If `absent` were judged on the painted
     // count, a settled capture would pass with its decision controls still in
     // the DOM and merely hidden — which is a card a reader can still be shown.
+    // Measured on a control the DECIDED reading forbids outright. §V keeps a
+    // Continue on a settled reading whose run has not started, so the control
+    // that must be GONE from a decided checklist capture is the retired trio.
     const assertions = chatAssertions("recommendation_hold", "decided").map((a) =>
       a.selector === CONFIRM ? { ...a, count: 1, visible: 0 } : a,
     );
@@ -1612,14 +1666,14 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
 
   it("the BINDING refuses an attached-but-unpainted anchor too, not only the validator", () => {
     const assertions = chatAssertions().map((a) =>
-      a.selector === CONFIRM ? { ...a, visible: 0 } : a,
+      a.selector === CONTINUE ? { ...a, visible: 0 } : a,
     );
     expect(
       auditManifestIndexBinding({
         manifest: manifestClaiming("X9__chat_thread__recommendation-hold-held"),
         index: indexOf([chatRecord({ cell: "X9__chat_thread__recommendation-hold-held", assertions })]),
       }).join("\n"),
-    ).toMatch(/does not observe \[data-skill-action="confirm"\] present/);
+    ).toMatch(/does not observe \[data-skills-step-continue\] present/);
   });
 
 
@@ -1635,12 +1689,50 @@ describe("a capture names WHICH card it measured, and whether it was on the scre
     // The §V redraw (cinatra#2841) grew this group from two members to three,
     // so the case is walked over the whole group rather than over Skip alone —
     // a group member that stopped being required would otherwise go unmeasured.
+    //
+    // THE GROUP IS PER HOST NOW (cinatra#3062), so the walk is over the group
+    // THIS host draws — one member, the Continue beneath the list — and the
+    // multi-member case it was written for is measured below, on the review
+    // page's gate region, which is the host that still draws the trio.
     for (const dropped of DECISION_CONTROLS) {
       const assertions = chatAssertions().map((a) =>
         a.selector === dropped ? { ...a, count: 0, visible: 0 } : a,
       );
       expect(
         validateCaptureRecord(chatRecord({ assertions }), { hashOf, virtualFilesystem: true }).join("\n"),
+      ).toMatch(
+        new RegExp(
+          `${dropped.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} PRESENT \\(root-scoped\\)`,
+        ),
+      );
+    }
+  });
+
+  it("still requires EVERY member of the one group that has three of them", () => {
+    // WHERE THE MULTI-MEMBER CASE LIVES NOW (cinatra#3062, convergence round).
+    // It used to be measured on the review page's gate region, on the belief
+    // that that host still drew the per-chip trio. It does not — every declared
+    // host draws §V's checklist and owes the one Continue — so the only group
+    // with several members left is the one a FROZEN PRE-REDRAW CELL is graded
+    // against: a picture taken before the redraw reached its host, which owes
+    // the whole trio it photographed.
+    //
+    // And the divergence this arm was written to declare is CLOSED there: the
+    // canonical contract no longer takes any one of the three on such a cell,
+    // it takes all three, so both tiers now refuse the same record.
+    const cell = "A1__recommendation-card__chat_thread__pending__light";
+    const record = { ...chatRecord(), cell };
+    const base = hostAssertions("chat_thread", "recommendation_hold", "pending", cell);
+    expect(base.filter((a) => RETIRED_CONTROLS.includes(a.selector))).toHaveLength(3);
+    for (const dropped of RETIRED_CONTROLS) {
+      const assertions = base.map((a) =>
+        a.selector === dropped ? { ...a, count: 0, visible: 0 } : a,
+      );
+      expect(
+        validateCaptureRecord({ ...record, assertions }, {
+          hashOf,
+          virtualFilesystem: true,
+        }).join("\n"),
       ).toMatch(
         new RegExp(
           `${dropped.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} PRESENT \\(root-scoped\\)`,

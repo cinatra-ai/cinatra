@@ -126,7 +126,6 @@ export const NOT_TARGET_RULES = [
   ["src/lib/lifecycle/lifecycle-suggestion-producer.ts", "const key = `${t.target.artifactId}", "a length-prefixed set key for dedupe; never an address, a key a surface draws by, or a header"],
   ["src/lib/artifacts/matcher-enqueue.ts", "artifact-match__", "the matcher job's id; never an address, a drawn key or a header"],
   ["src/lib/artifacts/matcher-runtime.ts", "return `${args.artifactId}${ext}`;", "the stored file name of a matched artifact's bytes; never an address, a drawn key or a header"],
-  ["src/lib/cms-review-host-seam.ts", ":post-apply`", "a verification record's synthetic post-apply revision, stored as plain text; no gate pins it"],
   ["src/lib/lifecycle/lifecycle-card-refetch.ts", "clamp(reviewedRevisionId,", "bounds a verification summary's display text; a verification record's revision, not a gate's pin"],
   ["src/lib/lifecycle/lifecycle-card-refetch.ts", "clamp(repairedRevisionId,", "bounds a verification summary's display text; a verification record's revision, not a gate's pin"],
   // --- the context selector: a selection candidate (artifact, revision AND assertion), not a gate's pin

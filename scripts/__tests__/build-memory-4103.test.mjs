@@ -7,6 +7,7 @@
 // read straight from the real files, so a later edit that drops either one fails here.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { PHASE_PRODUCTION_BUILD } from "next/constants";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,7 +52,7 @@ afterEach(() => {
 
 const UPLOAD_VARS = ["SENTRY_AUTH_TOKEN", "SENTRY_ORG", "SENTRY_PROJECT"];
 
-// Runs the real next.config.ts with the given upload variables set and returns what it handed to withSentryConfig.
+// Runs the real next.config.ts for the production build phase with the given upload variables set and returns what it handed to withSentryConfig.
 // Only withSentryConfig is replaced: a spy that returns its first argument tagged, so the wrapped case is visible.
 async function loadConfig(set) {
   for (const name of UPLOAD_VARS) vi.stubEnv(name, set.includes(name) ? `value-of-${name}` : "");
@@ -59,7 +60,8 @@ async function loadConfig(set) {
   const withSentryConfig = vi.fn((config) => ({ ...config, wrappedBySentry: true }));
   vi.doMock("@sentry/nextjs", () => ({ withSentryConfig }));
   const mod = await import("../../next.config");
-  return { withSentryConfig, config: mod.default };
+  // The default export is Next's config function of the phase (cinatra#4546); this test reads the production build's.
+  return { withSentryConfig, config: mod.default(PHASE_PRODUCTION_BUILD) };
 }
 
 // A configured upload reads the maps, so the row with all three variables keeps the config and the options as they were at the base.

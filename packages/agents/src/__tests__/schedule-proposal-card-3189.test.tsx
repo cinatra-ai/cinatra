@@ -374,7 +374,7 @@ describe("the card draws the recurring row's frequency selectors (cinatra#3189 P
     await waitFor(() =>
       expect(rows.querySelector('[data-field="recurring-day-of-month"]')?.textContent).toBe("15"),
     );
-    fireEvent.click(container.querySelector('[data-action="confirm-schedule-proposal"]')!);
+    fireEvent.click(container.querySelector('[data-action="confirm-schedule -> scheduled"]')!);
     await waitFor(() => expect(decisions(fetchMock).length).toBeGreaterThan(0));
     const sent = decisions(fetchMock).map(
       (d) => (d.schedule as Extract<ProposedSchedule, { kind: "recurring" }> | undefined)?.selection,

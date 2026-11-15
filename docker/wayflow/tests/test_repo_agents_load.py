@@ -147,16 +147,17 @@ def _agent_oas_params() -> list["pytest.ParameterSet"]:
 
 def _runtime_preload(raw_text: str, label: str) -> str:
     """Apply the pre-``load_json`` transforms of ``_mount_one_sync``, in its
-    order: context-subflow injection, HITL gate reconcile, then env
-    substitution. It omits the bridge ``output_schema`` derivation
-    (``_derive_bridge_output_schemas``), which only adds ``data.output_schema``
-    to model-bridge ApiNodes."""
+    order: context-subflow injection, the publish gates (cinatra#4150), HITL
+    gate reconcile, then env substitution. It omits the bridge
+    ``output_schema`` derivation (``_derive_bridge_output_schemas``), which
+    only adds ``data.output_schema`` to model-bridge ApiNodes."""
     parsed = json.loads(raw_text)
     if isinstance(parsed, dict):
         if inject_context_subflows is not None:
             composed, report = inject_context_subflows(parsed, label)
             if report:
                 parsed = composed
+        agent_loader._insert_publish_gates(parsed, label)
         agent_loader._reconcile_input_message_gates(parsed, label)
         raw_text = json.dumps(parsed)
     return agent_loader._substitute_placeholders(raw_text)
@@ -552,3 +553,35 @@ def test_synthetic_an_unresolved_reference_fails_loudly() -> None:
     agent = _SynRuntime(id="root", steps={"send_a": _syn_step("a", "send_a", "tool_a")})
     with pytest.raises(AssertionError, match="names no referenced component"):
         _passthrough_mismatch(doc, agent, **_SYN_WALK)
+
+
+# cinatra#4150 PR 4 (A1-A3 in the runtime). No pinned pack declares
+# `metadata.cinatra.publishes` yet, so the shared parity fixture stands in for
+# the two publish packs (it was copied by hand from their node ids and their
+# edges into the publishing step at the lock pins). Each flow must load through the same
+# pre-load pipeline with one gate in front of each declared step, the gates must
+# be the ids the host derives from the compiler's publishingSteps (the fixture
+# lists them; packages/agents/src/__tests__/publish-gate-parity.test.ts reads the
+# same file), and the loaded flow must no longer be API-only.
+_PARITY_FIXTURE = _HERE.parent / "fixtures" / "publish_gate_parity.json"
+
+
+def _publish_gate_params() -> list["pytest.ParameterSet"]:
+    if not _PARITY_FIXTURE.is_file():
+        return []
+    doc = json.loads(_PARITY_FIXTURE.read_text(encoding="utf-8"))
+    return [pytest.param(doc["gatePrefix"], case, id=case["name"]) for case in doc["flows"]]
+
+
+@pytest.mark.skipif(
+    AgentSpecLoader is None or agent_loader is None,
+    reason="wayflowcore not installed (run inside the wayflow image)",
+)
+@pytest.mark.parametrize("prefix,case", _publish_gate_params())
+def test_a_declared_publishing_step_loads_behind_its_gate(prefix: str, case: dict) -> None:
+    flow = AgentSpecLoader().load_json(_runtime_preload(json.dumps(case["flow"]), case["name"]))
+    assert agent_loader._is_apinode_only_flow(flow) is False
+    gates = sorted(name for name in flow.steps if name.startswith(prefix))
+    assert gates == sorted(prefix + step for step in case["publishingSteps"])
+    for gate in gates:
+        assert type(flow.steps[gate]).__name__ == "InputMessageStep"

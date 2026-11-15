@@ -20,6 +20,7 @@
     "./injection": "./src/injection/index.ts",
     "./llm-matching/constants": "./src/llm-matching/constants.ts",
     "./llm-matching/types": "./src/llm-matching/types.ts",
+    "./local-skill-files": "./src/local-skill-files.ts",
     "./mcp-client": "./src/mcp/client/deterministic-client.ts",
     "./mcp-handlers": "./src/mcp/handlers.ts",
     "./mcp-module": "./src/mcp/module.ts",

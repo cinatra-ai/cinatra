@@ -37,7 +37,7 @@ vi.mock("@/lib/extension-install-anchor", () => ({
   makeDefaultInstallAnchorResolver: async () => anchorMock,
 }));
 
-import { objectTypeRegistry } from "@cinatra-ai/objects";
+import { artifactPackSurfaceRegistry, objectTypeRegistry } from "@cinatra-ai/objects";
 import { rescanArtifactBridgeFromStore } from "@/lib/extension-artifact-bridge-rescan";
 
 function writeStorePackage(
@@ -295,5 +295,146 @@ describe("rescanArtifactBridgeFromStore — cinatra#792 single-digest anchor kin
     const res = await rescanArtifactBridgeFromStore({ storeRoot });
     expect(res.registered).toEqual([]);
     expect(objectTypeRegistry.resolve(TYPE_ID)).toBeNull();
+  });
+});
+
+// cinatra#3319 T51: the store surface of the artifact pack surface channel
+// agrees with the runtime's store winner. A store rescan keeps a store surface
+// only for a package that it registers from a store record in the same pass; a
+// package in its scope that it skips, refuses or no longer finds on disk loses
+// its store surface. The development-tree surface is the bundled scan's.
+describe("rescanArtifactBridgeFromStore — cinatra#3319 store surfaces of the pack surface channel", () => {
+  let storeRoot: string;
+  const PKG = "@cinatra-ai/t51-artifacts";
+  const OTHER = "@cinatra-ai/t51-other-artifacts";
+  const D1 = "d1".padEnd(64, "0");
+  const D2 = "d2".padEnd(64, "0");
+
+  beforeEach(() => {
+    storeRoot = mkdtempSync(path.join(tmpdir(), "artifact-store-3319-t51-"));
+    objectTypeRegistry._clearForTests();
+    artifactPackSurfaceRegistry._clearForTests();
+    writeAllowedMock.mockReset().mockResolvedValue(true);
+    anchorMock.mockReset().mockResolvedValue(null);
+    hasLiveRowMock.mockReset().mockResolvedValue(false);
+  });
+  afterEach(() => {
+    rmSync(storeRoot, { recursive: true, force: true });
+    objectTypeRegistry._clearForTests();
+    artifactPackSurfaceRegistry._clearForTests();
+  });
+
+  it("3319 T51 (a) a valid store record joined by a second digest of the same package, kind and version that the live row does not bind: the rescan registers neither and removes the store surface it had registered", async () => {
+    // A live row whose anchor binds no digest: one record registers.
+    anchorMock.mockResolvedValue({ digest: null, kind: "artifact" });
+    writeStorePackage(storeRoot, "t51", D1, artifactPkg(PKG));
+    expect((await rescanArtifactBridgeFromStore({ storeRoot })).registered).toEqual([PKG]);
+    expect(artifactPackSurfaceRegistry.get(PKG, "store")?.record).toEqual({ source: "store", digest: D1 });
+    // A second digest arrives: the runtime activates neither record.
+    writeStorePackage(storeRoot, "t51", D2, artifactPkg(PKG));
+    expect((await rescanArtifactBridgeFromStore({ storeRoot })).registered).toEqual([]);
+    expect(artifactPackSurfaceRegistry.get(PKG, "store")).toBeNull();
+  });
+
+  it("3319 T51 (b) an install rescan of one package whose row is no longer live removes that package's store surface only: another package's store surface and the pack's development-tree surface stand", async () => {
+    writeStorePackage(storeRoot, "t51", D1, artifactPkg(PKG));
+    writeStorePackage(storeRoot, "t51-other", D2, artifactPkg(OTHER));
+    expect((await rescanArtifactBridgeFromStore({ storeRoot })).registered.sort()).toEqual([PKG, OTHER].sort());
+    artifactPackSurfaceRegistry.register({
+      packageName: PKG,
+      version: "0.1.0",
+      fileMimeTypes: ["text/markdown"],
+      matcherSkillIds: [],
+      record: { source: "bundled" },
+    });
+    writeAllowedMock.mockResolvedValue(false);
+    const res = await rescanArtifactBridgeFromStore({ storeRoot, onlyPackage: PKG });
+    expect(res.skippedNotActive).toEqual([PKG]);
+    expect(artifactPackSurfaceRegistry.get(PKG, "store")).toBeNull();
+    expect(artifactPackSurfaceRegistry.get(PKG, "bundled")?.record).toEqual({ source: "bundled" });
+    expect(artifactPackSurfaceRegistry.get(OTHER, "store")?.record).toEqual({ source: "store", digest: D2 });
+  });
+
+  it("3319 T51 (c) a full rescan that no longer finds the package's record on disk removes its store surface", async () => {
+    writeStorePackage(storeRoot, "t51", D1, artifactPkg(PKG));
+    await rescanArtifactBridgeFromStore({ storeRoot });
+    expect(artifactPackSurfaceRegistry.get(PKG, "store")?.record).toEqual({ source: "store", digest: D1 });
+    rmSync(path.join(storeRoot, "artifact"), { recursive: true, force: true });
+    expect((await rescanArtifactBridgeFromStore({ storeRoot })).registered).toEqual([]);
+    expect(artifactPackSurfaceRegistry.get(PKG, "store")).toBeNull();
+  });
+
+  it("3319 T51 (d) with two digests on disk, the store surface of the digest the row binds stands", async () => {
+    anchorMock.mockResolvedValue({ digest: D2, kind: "artifact" });
+    writeStorePackage(storeRoot, "t51", D1, artifactPkg(PKG));
+    writeStorePackage(storeRoot, "t51", D2, artifactPkg(PKG));
+    expect((await rescanArtifactBridgeFromStore({ storeRoot })).registered).toEqual([PKG]);
+    expect(artifactPackSurfaceRegistry.get(PKG, "store")?.record).toEqual({ source: "store", digest: D2 });
+  });
+
+  it("3319 T51 (e) a later manifest of the record that the bridge refuses removes the store surface of the earlier valid one", async () => {
+    writeStorePackage(storeRoot, "t51", D1, artifactPkg(PKG));
+    await rescanArtifactBridgeFromStore({ storeRoot });
+    expect(artifactPackSurfaceRegistry.get(PKG, "store")?.record).toEqual({ source: "store", digest: D1 });
+    // A key an artifact manifest may not carry: the bridge refuses the whole manifest.
+    const valid = artifactPkg(PKG);
+    writeStorePackage(storeRoot, "t51", D1, {
+      ...valid,
+      cinatra: { ...(valid.cinatra as Record<string, unknown>), serverEntry: "./server.js" },
+    });
+    expect((await rescanArtifactBridgeFromStore({ storeRoot })).registered).toEqual([]);
+    expect(artifactPackSurfaceRegistry.get(PKG, "store")).toBeNull();
+  });
+
+  it("3319 T51 (f) a pack that declares no type of its own registers no object type, and its store surface stands across rescans", async () => {
+    writeStorePackage(storeRoot, "t51", D1, {
+      name: PKG,
+      version: "0.1.0",
+      cinatra: { kind: "artifact", artifact: { accepts: { file: { mimeTypes: ["text/markdown"] } } } },
+    });
+    expect((await rescanArtifactBridgeFromStore({ storeRoot })).registered).toEqual([]);
+    expect((await rescanArtifactBridgeFromStore({ storeRoot })).registered).toEqual([]);
+    expect(artifactPackSurfaceRegistry.get(PKG, "store")).toMatchObject({
+      version: "0.1.0",
+      fileMimeTypes: ["text/markdown"],
+      record: { source: "store", digest: D1 },
+    });
+  });
+
+  // cinatra#3319 T52: a read of the canonical store that fails inside a pass.
+  // The anchor read is not guarded: its rejection rejects the rescan before the
+  // pass ends, so the pass removes nothing. The two access gates map their own
+  // read error to a refusal (the write gate answers false, the live-row probe
+  // answers true), so the pass skips the record and removes its store surface.
+  it("3319 T52 (a) an anchor read that rejects inside a pass rejects the rescan and removes no store surface", async () => {
+    anchorMock.mockResolvedValue({ digest: null, kind: "artifact" });
+    writeStorePackage(storeRoot, "t51", D1, artifactPkg(PKG));
+    writeStorePackage(storeRoot, "t51-other", D2, artifactPkg(OTHER));
+    expect((await rescanArtifactBridgeFromStore({ storeRoot })).registered.sort()).toEqual([PKG, OTHER].sort());
+    writeStorePackage(storeRoot, "t51", D2, artifactPkg(PKG));
+    anchorMock.mockRejectedValue(new Error("db down"));
+    await expect(rescanArtifactBridgeFromStore({ storeRoot })).rejects.toThrow("db down");
+    expect(artifactPackSurfaceRegistry.get(PKG, "store")?.record).toEqual({ source: "store", digest: D1 });
+    expect(artifactPackSurfaceRegistry.get(OTHER, "store")?.record).toEqual({ source: "store", digest: D2 });
+  });
+
+  it("3319 T52 (b) a write gate that refuses one package, as on its read error, makes a full pass remove that package's store surface only", async () => {
+    writeStorePackage(storeRoot, "t51", D1, artifactPkg(PKG));
+    writeStorePackage(storeRoot, "t51-other", D2, artifactPkg(OTHER));
+    await rescanArtifactBridgeFromStore({ storeRoot });
+    writeAllowedMock.mockImplementation(async (name?: string) => name !== PKG);
+    const res = await rescanArtifactBridgeFromStore({ storeRoot });
+    expect(res.skippedNotActive).toEqual([PKG]);
+    expect(artifactPackSurfaceRegistry.get(PKG, "store")).toBeNull();
+    expect(artifactPackSurfaceRegistry.get(OTHER, "store")?.record).toEqual({ source: "store", digest: D2 });
+  });
+
+  it("3319 T52 (c) with no anchor, a live-row probe that answers true, as on its read error, makes the pass remove the store surface", async () => {
+    writeStorePackage(storeRoot, "t51", D1, artifactPkg(PKG));
+    await rescanArtifactBridgeFromStore({ storeRoot });
+    expect(artifactPackSurfaceRegistry.get(PKG, "store")?.record).toEqual({ source: "store", digest: D1 });
+    hasLiveRowMock.mockResolvedValue(true);
+    expect((await rescanArtifactBridgeFromStore({ storeRoot })).registered).toEqual([]);
+    expect(artifactPackSurfaceRegistry.get(PKG, "store")).toBeNull();
   });
 });

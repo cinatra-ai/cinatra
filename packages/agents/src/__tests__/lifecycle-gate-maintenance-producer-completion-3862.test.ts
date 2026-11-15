@@ -5,10 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // and its three counters are gone. Every collaborator of the sweep is replaced:
 // the database answers every read and write with an empty list, the earlier
 // steps find nothing to do, and the generic completer only records that it ran
-// (in a shared order list) and answers fixed counts. The CMS bridge is mocked
-// only as a witness: loading it records "cms". The dispatch step, the one road
-// that still loads the bridge, is mocked above, so only a completion step could
-// load it here. No database.
+// (in a shared order list) and answers fixed counts. Slice S3 of leg 7
+// removed the CMS bridge itself. No database.
 //
 // The sweep is imported INSIDE the case; the mocks are registered per case
 // (vi.doMock) and removed after it (vi.doUnmock + resetModules), so nothing this
@@ -22,7 +20,6 @@ const MOCKED = [
   "@/lib/lifecycle/lifecycle-activation",
   "../lifecycle-continuation-park-store",
   "../lifecycle-repair-dispatch-store",
-  "../lifecycle-repair-cms-production-bridge",
   "../lifecycle-repair-producer-completion-store",
 ] as const;
 
@@ -69,12 +66,6 @@ beforeEach(() => {
     dispatchPendingProducerRepairs: async () => ({ dispatched: 0, escalated: 0 }),
     repairIdFromRunId: () => null,
   }));
-  vi.doMock("../lifecycle-repair-cms-production-bridge", () => {
-    order.push("cms");
-    return {
-      completeDispatchedProducerCmsRepairs: async () => ({ completed: 0, unresolved: 0, repairedCaptureMissing: 0 }),
-    };
-  });
   vi.doMock("../lifecycle-repair-producer-completion-store", () => ({
     completeDispatchedProducerRepairs: async () => {
       order.push("generic");
@@ -92,7 +83,7 @@ afterEach(() => {
 });
 
 describe("cinatra#3862 leg 7 — the maintenance sweep completes repairs through the generic completer only", () => {
-  it("runs the generic completer, never the CMS bridge, and its summary has no CMS repair counters", async () => {
+  it("runs the generic completer, and its summary has no CMS repair counters", async () => {
     const { sweepLifecycleGateMaintenance } = await import("../lifecycle-review-orchestration-store");
     const summary = await sweepLifecycleGateMaintenance();
 

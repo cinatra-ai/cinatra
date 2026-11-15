@@ -81,9 +81,11 @@
 // under the recorded value: the per-skill Confirm, Adjust and Skip, which the
 // drawing retired, and the schedule card's Confirm, whose floor the drawing
 // draws under another value (cinatra#3678). The anchor contract no longer
-// records them
+// records the three per-skill controls
 // (`AGENT_OWNED_CAPTURE_CONTROLS` in scripts/audit/lib/anchor-contract.mjs),
-// while the capture recorder still grades pictures against them. A visible
+// while the capture recorder still grades pictures against them. The schedule
+// card's Confirm carries the drawn value since cinatra#4390, so the contract
+// records it again and it resolves in the governed drawing. A visible
 // control is still never excused HERE: every recorded owner anchor and every
 // capture selector other than the passive capture markers goes through the
 // drawing check. It landed warn-first and is now blocking (cinatra#3555): the
