@@ -183,7 +183,7 @@ type RequestBody = {
    *  payload (e.g. a watcher orchestrator's save_watcher echoes back url/title/
    *  plus a savedWatcherRef pointing at the created object), set
    *  `result_input_passthrough: true` so the route's response is
-   *  `{...input.rawData, [result_id_field]: result.id}` — matching the
+   *  `{...input.rawData, [result_id_field]: result.id ?? result.objectId}` — matching the
    *  shape the LLM-based persist node returned. */
   result_input_passthrough?: unknown;
   result_id_field?: unknown;
@@ -886,8 +886,10 @@ export async function POST(req: Request): Promise<Response> {
     // save_watcher echoes back the inputs + a savedWatcherRef pointing
     // at the created object). When `result_input_passthrough: true`, the
     // route merges `input.rawData` (objects_save case) or `input` (other
-    // tools) with `{[result_id_field]: result.id}`. The OAS declares the
-    // exact field name expected downstream.
+    // tools) with `{[result_id_field]: <saved id>}`. The OAS declares the
+    // exact field name expected downstream. objects_save returns the new id
+    // as `objectId` (it has no `id`), so the id is read from `id`, then
+    // `objectId`, then the declared field itself.
     if (body.result_input_passthrough === true) {
       const idField =
         typeof body.result_id_field === "string" ? body.result_id_field : "id";
@@ -903,7 +905,7 @@ export async function POST(req: Request): Promise<Response> {
           : input;
       const shaped: Record<string, unknown> = {
         ...echoFields,
-        [idField]: resultObj.id ?? resultObj[idField] ?? null,
+        [idField]: resultObj.id ?? resultObj.objectId ?? resultObj[idField] ?? null,
       };
       // THE FILED REVIEW SET RIDES OUT ON THE ECHO, for every extension alike:
       // a declared module that filed review targets gets them back at the top
