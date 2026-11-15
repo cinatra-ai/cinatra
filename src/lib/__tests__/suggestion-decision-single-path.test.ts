@@ -168,8 +168,12 @@ describe("the suggestion decision has exactly ONE path", () => {
       .sort();
     expect(carriers).toEqual([
       // ---- THE TWO SERVER ENTRIES, and the one core behind both -------------
-      // The gate-scoped decision entry: bounds the SHAPE and forwards.
-      "src/app/api/lifecycle-views/decide/route.ts",
+      // AMENDED for cinatra#3080: the gate-scoped decide route no longer spells
+      // the partition's shape itself. It spreads the ONE submission validator
+      // below into its body (pinned by the test after this one), so the route
+      // leaves this set and the validator joins it. Still exactly one place
+      // bounds the SHAPE, and both entries parse it.
+      "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/floor-submission-input.ts",
       // The review PAGE's route-bound action (cinatra#2572, epic #2564 S6c).
       // The SECOND entry, and the one S6b already described: it closes over the
       // route's own gate and forwards into the helper below. It is not a second
@@ -190,6 +194,22 @@ describe("the suggestion decision has exactly ONE path", () => {
       "packages/agents/src/review-decision-bar.tsx",
       "packages/agents/src/review-gate-card.tsx",
     ].sort());
+  });
+
+  it("both server entries take the partition through the ONE submission validator", () => {
+    // AMENDED for cinatra#3080: the pin above no longer lists the decide route,
+    // because the route names the validator's fields rather than the partition.
+    // This keeps the route in view: it spreads the validator's fields into its
+    // body and hands the parsed partition on through the validator's own
+    // function, and the page's action parses the same validator first.
+    const byPath = new Map(files.map((f) => [f.path, f.source]));
+    const route = byPath.get("src/app/api/lifecycle-views/decide/route.ts") ?? "";
+    const page =
+      byPath.get("src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx") ?? "";
+    expect(route).toMatch(/\.\.\.REVIEW_FLOOR_SUBMISSION_FIELDS,/);
+    expect(route).toMatch(/partitionFromFloorSubmissionInput\(parsed\.data\)/);
+    expect(page).toMatch(/reviewFloorSubmissionInputSchema\.safeParse\(input\)/);
+    expect(page).toMatch(/partitionFromFloorSubmissionInput\(checked\.data\)/);
   });
 
   it("the client producers reach exactly ONE endpoint — the gate-scoped entry", () => {

@@ -116,6 +116,10 @@ describe("ONE component draws the suggestion chip", () => {
   });
 });
 
+/** The ONE input validator both review decision entries parse (cinatra#3080). */
+const FLOOR_SUBMISSION_INPUT =
+  "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/floor-submission-input.ts";
+
 describe("ONE decision path carries the marks", () => {
   it("the review page's route-bound action FORWARDS the partition", () => {
     const page = readFileSync(
@@ -129,15 +133,24 @@ describe("ONE decision path carries the marks", () => {
     expect(page).toMatch(/suggestionDecisions\?: SuggestionDecisionPartition \| null/);
     // …and it reaches the ONE helper. A page that dropped it would render chips
     // and record nothing, and every rendering test would still pass.
-    expect(page).toMatch(/input\.suggestionDecisions \?\? null/);
+    // AMENDED for cinatra#3080: the action parses its input with the ONE
+    // submission validator and forwards the parsed partition through the
+    // validator's own function, which keeps an absent partition absent.
+    expect(page).toMatch(/reviewFloorSubmissionInputSchema\.safeParse\(input\)/);
+    expect(page).toMatch(/partitionFromFloorSubmissionInput\(checked\.data\)/);
+    const validator = readFileSync(join(REPO_ROOT, FLOOR_SUBMISSION_INPUT), "utf8");
+    expect(validator).toMatch(/input\.suggestionDecisions \?\? null/);
   });
 
   it("nothing but the two review decision entries accepts a partition off the wire", () => {
     // The gate-scoped card entry and the page's own action. A third acceptor
     // would be the per-item approval pathway #2047 row 8 bans.
-    expect(filesMatching(/suggestionDecisions:\s*z\s*\n?\s*\./)).toEqual([
-      "src/app/api/lifecycle-views/decide/route.ts",
-    ]);
+    // AMENDED for cinatra#3080: both entries now take the partition through the
+    // ONE submission validator, so the validator is the one module that spells
+    // the partition's wire shape; the decide route spreads its fields.
+    expect(filesMatching(/suggestionDecisions:\s*z\s*\n?\s*\./)).toEqual([FLOOR_SUBMISSION_INPUT]);
+    const route = readFileSync(join(REPO_ROOT, "src/app/api/lifecycle-views/decide/route.ts"), "utf8");
+    expect(route).toMatch(/\.\.\.REVIEW_FLOOR_SUBMISSION_FIELDS,/);
   });
 
   it("no route is named for per-item suggestion decisions", () => {

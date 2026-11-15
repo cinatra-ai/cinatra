@@ -719,9 +719,18 @@ describe.skipIf(!HAS_DB)("item 5 — the note and the picture's prompt are two v
     const second = await regenerate(runId, reviewTaskId, base, "warmer light", "a blue bicycle");
     expect(second.ok).toBe(false);
     if (second.ok) throw new Error("unreachable");
-    // The gate is already repairing on the first request; a second, DIFFERENT
-    // one is a conflict rather than a quiet reuse of the first repair.
-    expect(second.code).toBe("gate-conflict");
+    // AMENDED for cinatra#3080 (pre-review 1 of #4571, finding 3): a Regenerate
+    // reconciles only against its OWN row (the same key). The first request's
+    // commit resolved the gate, so a second, DIFFERENT one is answered by the
+    // gate-state read: the first decision stands, never a quiet reuse of the
+    // first repair.
+    expect(second.code).toBe("gate-not-pending");
+    // Nothing of the second request was written: one repair, the first prompt.
+    const after = await gateRow(runId, reviewTaskId);
+    const repairs = await repairRowsFor(after!.id);
+    expect(repairs).toHaveLength(1);
+    const findings = repairs[0].findings as Array<{ id: string; message: string }>;
+    expect(findings.find((f) => f.id === "picture-prompt")?.message).toBe("a red bicycle");
   });
 });
 
