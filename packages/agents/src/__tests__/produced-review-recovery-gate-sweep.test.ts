@@ -201,6 +201,8 @@ function intent(): ResumeIntentRow {
     attempts: 1,
     leaseToken: "lease-abc",
     leaseExpiresAt: new Date(Date.now() + 60_000),
+    runClaimedAt: null,
+    resumeTaskResult: null,
   };
 }
 
