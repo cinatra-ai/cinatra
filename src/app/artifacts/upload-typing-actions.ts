@@ -26,6 +26,7 @@
 // ---------------------------------------------------------------------------
 
 import { revalidatePath } from "next/cache";
+import { matcherManifestRegistry, objectTypeRegistry } from "@cinatra-ai/objects/registry";
 
 import {
   getAuthSession,
@@ -36,6 +37,7 @@ import type { ActorContext } from "@/lib/authz/actor-context";
 import { ensureArtifactTypesRegisteredWithStore } from "@/lib/artifacts/ensure-artifact-registry";
 import {
   listInstalledMeaningTypesAcceptingMime,
+  type ClaimBackedMeaningType,
   type InstalledMeaningType,
 } from "@/lib/artifacts/installed-type-picker";
 import { resolveActiveInstallForActor } from "@/lib/extension-install-resolution";
@@ -52,6 +54,10 @@ import {
 } from "@/lib/notifications";
 import { resolveRecipientToUserIds } from "@cinatra-ai/notifications/server";
 import { loadMarketplaceBrowse } from "@/lib/marketplace-browse";
+import {
+  narrowMeaningOfferToOffered,
+  type PickerMeaningOffer,
+} from "@/lib/artifacts/picker-meaning-offer";
 
 /**
  * Apply the per-actor extension-ACCESS gate to raw §VI.1 picker candidates. The
@@ -76,37 +82,91 @@ import { loadMarketplaceBrowse } from "@/lib/marketplace-browse";
  *   NON-channel OBJECT-TYPE candidates → the A4 addressability gate, UNCHANGED:
  *   a host-declared SYSTEM extension OR an addressable ACTIVE install for this
  *   actor's scope (`resolveActiveInstallForActor`).
+ *
+ *   CLAIM-BACKED extensions (cinatra#3319) → the A4 addressability gate AND the
+ *   claim-scoped gate of the winning claim's own install
+ *   (`canActorAccessClaimedArtifactExtension`, the gate the effective type
+ *   catalog reads a claim through). This is decided by the organisation's claim
+ *   identity, before the matcher-channel test: the matcher registry is keyed by
+ *   package only, and the winning install declares no matchers, so an entry
+ *   under a claim-backed extension's name is not that install's and never
+ *   selects the org-scoped matcher gate.
+ *
+ *   A FAILED CLAIM-BACKED READ (`claimBackedReadFailed`, cinatra#3319): which
+ *   packs are claim-backed cannot be told, so their matcher entries are not
+ *   dropped from the list. A matcher-channel member whose claim state is
+ *   therefore unknown (`readClaimStateUnknown`) is refused, before the
+ *   org-scoped gate is asked. Every other member keeps that gate, and so does
+ *   the package that registers the row's own type on the presented-base screen
+ *   (`registrantsOfRowType`): its answer needs no claim, so it is main's.
+ *
+ *   CHANNEL MEMBERSHIP is the caller's `matcherChannel`, read from the matcher
+ *   registry in the same synchronous step as the candidate list it classifies
+ *   (`readMatcherChannelPackages`), never re-read here after an await: a hot
+ *   rescan between the two reads could otherwise turn a matcher candidate into
+ *   an object-type candidate and skip the matcher gates.
  */
 async function filterCandidatesByActorAccess(
   candidates: InstalledMeaningType[],
   actor: ActorContext,
   orgId: string,
+  claimBacked: readonly ClaimBackedMeaningType[],
+  claimBackedReadFailed: boolean,
+  matcherChannel: ReadonlySet<string>,
+  registrantsOfRowType: ReadonlySet<string> = new Set(),
 ): Promise<InstalledMeaningType[]> {
   if (candidates.length === 0) return [];
+  const claimByExtension = new Map(claimBacked.map((e) => [e.extension, e]));
+  const channelPackages = new Set(
+    [...matcherChannel].filter((packageName) => !claimByExtension.has(packageName)),
+  );
   const { isSystemExtension } = await import(
     "@cinatra-ai/extensions/system-extension-inventory"
   );
-  const { matcherManifestRegistry } = await import("@cinatra-ai/objects/registry");
-  const channelPackages = new Set(
-    matcherManifestRegistry.list().map((e) => e.packageName),
-  );
-  // The org-scoped write gate (== the A6 resolver) is loaded ONLY when a
-  // candidate is actually a matcher-channel member, so the common object-type
-  // path never pulls the server-only artifact-extension-access module.
-  const orgWriteAllowed = candidates.some((c) => channelPackages.has(c.extension))
-    ? (
-        await import("@/lib/artifacts/artifact-extension-access")
-      ).isArtifactExtensionWriteAllowed
+  // Read only when the claim-backed read failed and a matcher-channel member
+  // is a candidate, so the common path reads no claim here.
+  const claimStateUnknown: (extension: string) => boolean =
+    claimBackedReadFailed && candidates.some((c) => channelPackages.has(c.extension))
+      ? await readClaimStateUnknown(orgId)
+      : () => false;
+  // The org-scoped write gate (== the A6 resolver) and the claim-scoped gate are
+  // loaded ONLY when a candidate needs one, so the common object-type path never
+  // pulls the server-only artifact-extension-access module.
+  const access = candidates.some(
+    (c) => channelPackages.has(c.extension) || claimByExtension.has(c.extension),
+  )
+    ? await import("@/lib/artifacts/artifact-extension-access")
     : null;
   const uniqueExtensions = [...new Set(candidates.map((c) => c.extension))];
   const accessible = new Set<string>();
   await Promise.all(
     uniqueExtensions.map(async (extension) => {
+      const claim = claimByExtension.get(extension);
+      if (claim) {
+        // Claim-backed: the A4 gate, then the winning claim's own install.
+        if (
+          access &&
+          (isSystemExtension(extension) ||
+            (await resolveActiveInstallForActor(extension, actor)) !== null) &&
+          (await access.canActorAccessClaimedArtifactExtension(
+            { extensionPackage: extension, installId: claim.installId, scope: claim.scope },
+            actor,
+            "read",
+          ))
+        ) {
+          accessible.add(extension);
+        }
+        return;
+      }
       if (channelPackages.has(extension)) {
+        // A member that might be a claim-backed pack, while the claim-backed
+        // read failed: refused (its entry may be another version's), unless it
+        // registers the row's own type, whose answer needs no claim.
+        if (claimStateUnknown(extension) && !registrantsOfRowType.has(extension)) return;
         // Matcher-channel member: the A6 org-scoped write gate ALONE (offered ==
-        // will-present). `orgWriteAllowed` is guaranteed non-null here (some
-        // candidate is a channel member ⇒ the module was loaded).
-        if (orgWriteAllowed && (await orgWriteAllowed(extension, orgId))) {
+        // will-present). `access` is guaranteed non-null here (some candidate is
+        // a channel member ⇒ the module was loaded).
+        if (access && (await access.isArtifactExtensionWriteAllowed(extension, orgId))) {
           accessible.add(extension);
         }
         return;
@@ -123,6 +183,320 @@ async function filterCandidatesByActorAccess(
   return candidates.filter((c) => accessible.has(c.extension));
 }
 
+/**
+ * THE MATCHER ENTRIES WHOSE CLAIM STATE IS UNKNOWN (cinatra#3319), read after
+ * the claim-backed read failed. A claim-backed pack's matcher entry is then no
+ * longer dropped from the list, and under the org-scoped matcher gate it would
+ * be admitted on another version's entry. This answers true for a package that
+ * could be such a pack: one that passes every rule of the claim-backed reader
+ * but the surface read (`readClaimBackedCandidatePackagesForOrg`: one winning
+ * claim, at an exact version, bound to an install row, over a host-registered
+ * type, by a package that registers no artifact type of its own). When the
+ * claims cannot be read either, any package that registers no artifact type
+ * could be one (a package that registers one never is: rule 1). Every other
+ * package answers false, and its matcher entry keeps the org-scoped gate, as on
+ * main.
+ */
+async function readClaimStateUnknown(orgId: string): Promise<(extension: string) => boolean> {
+  let candidates: ReadonlySet<string> | null;
+  try {
+    const { readClaimBackedCandidatePackagesForOrg } = await import(
+      "@/lib/artifacts/resolve-bound-artifact-type"
+    );
+    candidates = new Set(readClaimBackedCandidatePackagesForOrg(orgId));
+  } catch {
+    candidates = null;
+  }
+  if (candidates !== null) {
+    const known = candidates;
+    return (extension) => known.has(extension);
+  }
+  return (extension) =>
+    !objectTypeRegistry
+      .getTypesForPackage(extension)
+      .some((typeId) => objectTypeRegistry.resolve(typeId)?.isArtifact != null);
+}
+
+/**
+ * The packages the matcher registry holds an entry of (cinatra#3319): the
+ * matcher-channel membership `filterCandidatesByActorAccess` classifies
+ * candidates by. Callers read it in the same synchronous step as the candidate
+ * list, so both reflect one registry state.
+ */
+function readMatcherChannelPackages(): ReadonlySet<string> {
+  return new Set(matcherManifestRegistry.list().map((e) => e.packageName));
+}
+
+/**
+ * The fixed codes a refusal of the claim-backed reader carries
+ * (`ClaimSurfaceUnreadableCode` in resolve-bound-artifact-type). Only a value
+ * equal to one of these literals is ever logged.
+ */
+const CLAIM_READ_CODES: ReadonlySet<string> = new Set([
+  "dispatcher-unreadable",
+  "no-development-tree",
+  "store-record-mismatch",
+  "no-anchored-source",
+  "version-mismatch",
+  "trust-anchor-unreadable",
+  "trust-gate-no-anchor",
+]);
+
+/**
+ * The built-in error classes a failed claim-backed read may be named by,
+ * chosen by identity (`instanceof`), never by a name the value reports.
+ */
+const CLAIM_READ_ERROR_CLASSES: ReadonlyArray<readonly [string, (err: unknown) => boolean]> = [
+  ["TypeError", (err) => err instanceof TypeError],
+  ["RangeError", (err) => err instanceof RangeError],
+  ["SyntaxError", (err) => err instanceof SyntaxError],
+  ["Error", (err) => err instanceof Error],
+];
+
+/**
+ * One word that classifies a failed claim-backed read (cinatra#3319): the
+ * reader's own refusal code when the value carries one of CLAIM_READ_CODES,
+ * else the first built-in class it is an instance of, else "other". Never
+ * text taken from the thrown value, and never a throw: a getter or proxy trap
+ * that throws only skips that test.
+ */
+function classifyClaimReadFailure(error: unknown): string {
+  try {
+    const code = (error as { claimReadCode?: unknown } | null)?.claimReadCode;
+    if (typeof code === "string" && CLAIM_READ_CODES.has(code)) {
+      for (const known of CLAIM_READ_CODES) if (known === code) return known;
+    }
+  } catch {
+    /* a getter or proxy trap that throws carries no code */
+  }
+  for (const [word, isInstance] of CLAIM_READ_ERROR_CLASSES) {
+    try {
+      if (isInstance(error)) return word;
+    } catch {
+      /* not that class */
+    }
+  }
+  return "other";
+}
+
+/**
+ * The organisation's claim-backed meaning types for one request (cinatra#3319),
+ * read leniently by both actions: a failed read answers no type, and
+ * `claimBackedReadFailed` says so, so the access gate can refuse the matcher
+ * entries whose claim state is then unknown. A failed read writes one fixed
+ * server-log line with one classifying word (`classifyClaimReadFailure`),
+ * never the error's text; a log line that cannot be written is dropped, so the
+ * answer is the same for every rejected value.
+ */
+async function readClaimBackedForRequest(orgId: string): Promise<{
+  claimBacked: ClaimBackedMeaningType[];
+  claimBackedReadFailed: boolean;
+}> {
+  const { readClaimBackedMeaningTypesForOrg } = await import(
+    "@/lib/artifacts/resolve-bound-artifact-type"
+  );
+  try {
+    return {
+      claimBacked: await readClaimBackedMeaningTypesForOrg(orgId),
+      claimBackedReadFailed: false,
+    };
+  } catch (error) {
+    try {
+      console.warn(
+        "[artifacts] the claim-backed read failed; the upload picker offers no claim-backed type:",
+        classifyClaimReadFailure(error),
+      );
+    } catch {
+      /* a log line that cannot be written is dropped; the answer never depends on it */
+    }
+    return { claimBacked: [], claimBackedReadFailed: true };
+  }
+}
+
+/**
+ * THE PRESENTED BASE MEANING (spec §VI.1 "Derived meaning & suggestion chips",
+ * cinatra#3319). The candidate list keeps the extension that defines the row's
+ * CURRENT type off the picker (`excludeTypeId`), because re-asserting that
+ * extension is normally a no-op. It is not a no-op when the row PRESENTS exactly
+ * that extension's live matcher draft: as its auto-surfaced meaning (a draft at
+ * or above the pack's threshold) or as a suggestion (a draft that did not
+ * auto-surface). The drawing says the picker then opens pre-selected on it or
+ * draws it as a suggestion chip, and that confirming it writes a user-sourced
+ * meaning.
+ *
+ * Of the given extensions, this answers the admitted picker candidates of those
+ * for which ALL of these hold:
+ *   - the extension defines the row's current type (`extensionDefinition`, the
+ *     same question the converging road asks through `extensionDefinesType`:
+ *     the extension the base exclusion removed, and no other);
+ *   - it is an installed type whose `accepts` admit the file's MIME now (the
+ *     same list, read without the base exclusion — the drawing's admission
+ *     rule);
+ *   - this actor passes the same per-actor access gate as every candidate.
+ * The caller also requires the row's presentation reading to present the
+ * extension (its pre-selection or one of its suggestions). The list and the
+ * confirmation both decide through this one function, so what the picker offers
+ * is what the confirmation accepts.
+ */
+async function presentedBaseCandidates(input: {
+  extensions: readonly string[];
+  mime: string;
+  objectType: string | null | undefined;
+  actor: ActorContext;
+  orgId: string;
+  claimBacked: readonly ClaimBackedMeaningType[];
+  claimBackedReadFailed: boolean;
+}): Promise<InstalledMeaningType[]> {
+  return (
+    await screenPresentedBase(input, (extension, objectType) =>
+      extensionDefinition(extension, objectType, input.orgId),
+    )
+  ).accessible;
+}
+
+/**
+ * The checks of {@link presentedBaseCandidates}, with each stage's answer kept:
+ * `admitted` are the definers' installed types that accept the MIME, and
+ * `accessible` are those this actor passes the access gate for. The list reads
+ * the definer leniently (a failed read is "not a definer"); the confirmation
+ * passes a definer read that throws, so a failed read is never an answer.
+ * The definer read says HOW the extension defines the type: a package that
+ * registers it (`"registers"`) defines it without a claim, so its access is
+ * decided as on main, also while the claim-backed read fails (cinatra#3319).
+ */
+async function screenPresentedBase(
+  input: {
+    extensions: readonly string[];
+    mime: string;
+    objectType: string | null | undefined;
+    actor: ActorContext;
+    orgId: string;
+    /** The organisation's claim-backed meaning types (cinatra#3319), so a
+     *  claim-backed type is admitted through the same list the picker draws. */
+    claimBacked: readonly ClaimBackedMeaningType[];
+    /** The claim-backed read failed (cinatra#3319): the access gate refuses
+     *  the matcher entries whose claim state is then unknown. */
+    claimBackedReadFailed: boolean;
+  },
+  definesType: (extension: string, objectType: string) => Promise<ExtensionDefinition>,
+): Promise<{ admitted: InstalledMeaningType[]; accessible: InstalledMeaningType[] }> {
+  const { objectType } = input;
+  if (!objectType || input.extensions.length === 0) return { admitted: [], accessible: [] };
+  const definers = new Set<string>();
+  // Each extension's ONE definer reading decides both whether it defines the
+  // row's type and whether it registers it.
+  const registrants = new Set<string>();
+  for (const extension of new Set(input.extensions)) {
+    const definition = await definesType(extension, objectType);
+    if (definition === null) continue;
+    definers.add(extension);
+    if (definition === "registers") registrants.add(extension);
+  }
+  if (definers.size === 0) return { admitted: [], accessible: [] };
+  const admitted = listInstalledMeaningTypesAcceptingMime(input.mime, {
+    claimBacked: input.claimBacked,
+  }).filter((t) => definers.has(t.extension));
+  const matcherChannel = readMatcherChannelPackages();
+  return {
+    admitted,
+    accessible: await filterCandidatesByActorAccess(
+      admitted,
+      input.actor,
+      input.orgId,
+      input.claimBacked,
+      input.claimBackedReadFailed,
+      matcherChannel,
+      registrants,
+    ),
+  };
+}
+
+/** The offered types with the presented base meaning added, in the picker's
+ *  stable order (alphabetical by display name, then extension). */
+function withPresentedBase(
+  types: InstalledMeaningType[],
+  base: readonly InstalledMeaningType[],
+): InstalledMeaningType[] {
+  const added = base.filter((b) => !types.some((t) => t.extension === b.extension));
+  if (added.length === 0) return types;
+  return [...types, ...added].sort(
+    (a, b) =>
+      a.displayName.localeCompare(b.displayName) || a.extension.localeCompare(b.extension),
+  );
+}
+
+/**
+ * The confirmation's half of {@link presentedBaseCandidates}: does this request
+ * confirm the row's presented base meaning? Asked FIRST when the candidate gate
+ * refused the extension, before the converging road, so a presented meaning
+ * never reaches the promotion road. The definer, MIME and access checks come
+ * first; only then is the row's ONE presentation reading taken (the same
+ * `resolveArtifactPresentationReading` the list's deferred reading uses), and
+ * its pre-selection or one of its suggestions must name exactly this extension.
+ *
+ *   "presented" — the reading presents exactly this extension.
+ *   "absent"    — every read answered, and the extension is not a presented
+ *                 base meaning: it defines no such type, no installed type of it
+ *                 accepts the file, or the complete reading does not present it.
+ *                 The converging road decides, and it needs the row's own proof.
+ *   "refused"   — a read failed (thrown, or a reading that degraded a failed
+ *                 read to an empty offer), or the access gate denied this actor
+ *                 the extension. The confirmation is refused: a failed or denied
+ *                 verification must never fall through to the converging road,
+ *                 whose store can append a revision on the matcher alone.
+ */
+async function confirmsPresentedBaseMeaning(input: {
+  artifactId: string;
+  extension: string;
+  mime: string;
+  objectType: string;
+  actor: ActorContext;
+  orgId: string;
+  claimBacked: readonly ClaimBackedMeaningType[];
+  claimBackedReadFailed: boolean;
+}): Promise<"presented" | "absent" | "refused"> {
+  try {
+    const { admitted, accessible } = await screenPresentedBase(
+      {
+        extensions: [input.extension],
+        mime: input.mime,
+        objectType: input.objectType,
+        actor: input.actor,
+        orgId: input.orgId,
+        claimBacked: input.claimBacked,
+        claimBackedReadFailed: input.claimBackedReadFailed,
+      },
+      (extension, objectType) => readExtensionDefinition(extension, objectType, input.orgId),
+    );
+    if (admitted.length === 0) return "absent";
+    if (accessible.length === 0) return "refused";
+    const { resolveArtifactPresentationReading } = await import(
+      "@/lib/objects/presentation-identity"
+    );
+    const reading = resolveArtifactPresentationReading({
+      orgId: input.orgId,
+      artifactId: input.artifactId,
+      baseType: input.objectType,
+    });
+    if (reading.complete !== true) return "refused";
+    const { offer } = reading;
+    const presents =
+      offer.preselect === input.extension ||
+      offer.suggestions.some((s) => s.extension === input.extension);
+    return presents ? "presented" : "absent";
+  } catch {
+    return "refused";
+  }
+}
+
+/** The one refusal a confirmation answers when its type cannot be accepted. */
+const INVALID_TYPE_REFUSAL = {
+  ok: false,
+  reason: "invalid-type",
+  message:
+    "That type is not an installed type that accepts this file — refresh and pick again.",
+} as const;
+
 export type ArtifactMarketplacePack = {
   packageName: string;
   version: string;
@@ -131,7 +505,16 @@ export type ArtifactMarketplacePack = {
 };
 
 export type ListTypesResult =
-  | { ok: true; types: InstalledMeaningType[]; mime: string }
+  | {
+      ok: true;
+      types: InstalledMeaningType[];
+      mime: string;
+      /** The row's derived meaning narrowed to `types` (§VI.1, cinatra#3319):
+       *  the extension the picker opens pre-selected on and the suggestion
+       *  chips. Absent when nothing is offered or the detail read answered
+       *  none; the picker then opens with nothing selected and no chip. */
+      meaning?: PickerMeaningOffer;
+    }
   | { ok: false; reason: "auth-required" | "not-found" | "denied" };
 
 /**
@@ -150,7 +533,12 @@ export async function listInstalledTypesForArtifact(
   const orgId = session?.session?.activeOrganizationId ?? null;
   const actor = await getActorContext();
   if (!orgId || !actor) return { ok: false, reason: "auth-required" };
-  const read = readArtifactForDetail({ orgId, actor, artifactId });
+  // `withMeaningOffer` (cinatra#3319): the detail read runs the row's gates now
+  // and DEFERS its one presentation reading to `readPresentation()`, which this
+  // action calls only after the registry warm below. So the gates still come
+  // before any store scan, the warm runs once per request, and the offer and
+  // the candidate list are decided over the same registry.
+  const read = readArtifactForDetail({ orgId, actor, artifactId, withMeaningOffer: true });
   if (read.kind === "not-found") return { ok: false, reason: "not-found" };
   if (read.kind === "denied") return { ok: false, reason: "denied" };
   // The picker reads the in-process object-type registry, and the ordinary read
@@ -161,15 +549,81 @@ export async function listInstalledTypesForArtifact(
   // anchor-refused pack still never reaches the offer.
   await ensureArtifactTypesRegisteredWithStore();
   const { mime, objectType } = read.artifact;
-  const raw = listInstalledMeaningTypesAcceptingMime(
-    mime,
-    objectType ? { excludeTypeId: objectType } : undefined,
-  );
+  // THE CLAIM-BACKED MEANING TYPES (cinatra#3319): a host-registered type an
+  // artifact-safe claim of this organisation admits, which neither registry
+  // channel lists. Read through the ONE claim arbitration the writer and the
+  // byte-serve reader use, after the gates and the warm above. The list reads
+  // them leniently: a failed read offers no claim-backed type and still answers
+  // the ordinary list, without the matcher entries whose claim state is then
+  // unknown (the confirmation reads a failure the same way).
+  const { claimBacked, claimBackedReadFailed } = await readClaimBackedForRequest(orgId);
+  const raw = listInstalledMeaningTypesAcceptingMime(mime, {
+    ...(objectType ? { excludeTypeId: objectType } : {}),
+    claimBacked,
+  });
+  // The matcher channel the list was drawn from, read in the same step.
+  const matcherChannel = readMatcherChannelPackages();
   // Per-actor extension-access gate: drop candidates whose defining extension
   // is not addressable by THIS actor (foreign-org / foreign-scope / torn-down),
   // and matcher-channel members not org-writable (== the A6 resolver's gate).
-  const types = await filterCandidatesByActorAccess(raw, actor, orgId);
-  return { ok: true, types, mime };
+  // The pack whose claim owns the row's type is the row's own meaning, as the
+  // registrant of a registered type is, so it is no ordinary candidate
+  // (cinatra#3319): the presented-base check below decides it. The list reads
+  // the claims leniently (a failed read names no claimant), because the
+  // confirmation reads them again and refuses on a failure.
+  const claimant = objectType ? await readRowTypeClaimantLeniently(orgId, objectType) : null;
+  const types = (
+    await filterCandidatesByActorAccess(
+      raw,
+      actor,
+      orgId,
+      claimBacked,
+      claimBackedReadFailed,
+      matcherChannel,
+    )
+  ).filter((t) => t.extension !== claimant);
+  // THE DERIVED MEANING (§VI.1, cinatra#3319): a matcher draft at or above its
+  // pack's threshold opens the picker pre-selected on it; a draft that did not
+  // auto-surface is a suggestion chip. It is the detail read's one presentation
+  // reading, taken here, after the warm above, and narrowed to the offered
+  // types: the types above (installed, accepting this file's MIME, not the
+  // row's base type, addressable by this actor), plus the row's base-defining
+  // extension when the reading presents exactly it (pre-selection or
+  // suggestion) and it passes the same MIME and access checks
+  // (`presentedBaseCandidates`). The confirmation gate decides through the same
+  // function and refuses any other extension.
+  const meaningOffer = read.readPresentation?.().meaningOffer;
+  if (!meaningOffer) return { ok: true, types, mime };
+  const presentedOutside = [
+    ...new Set(
+      [
+        ...(meaningOffer.preselect ? [meaningOffer.preselect] : []),
+        ...meaningOffer.suggestions.map((s) => s.extension),
+      ].filter((extension) => !types.some((t) => t.extension === extension)),
+    ),
+  ];
+  const offered =
+    presentedOutside.length === 0
+      ? types
+      : withPresentedBase(
+          types,
+          await presentedBaseCandidates({
+            extensions: presentedOutside,
+            mime,
+            objectType,
+            actor,
+            orgId,
+            claimBacked,
+            claimBackedReadFailed,
+          }),
+        );
+  if (offered.length === 0) return { ok: true, types: offered, mime };
+  return {
+    ok: true,
+    types: offered,
+    mime,
+    meaning: narrowMeaningOfferToOffered(meaningOffer, offered),
+  };
 }
 
 export type AssertMeaningResult =
@@ -253,12 +707,85 @@ export async function assertUploadMeaning(input: {
   // refused here as "not installed".
   await ensureArtifactTypesRegisteredWithStore();
   const { mime, objectType } = read.artifact;
-  const raw = listInstalledMeaningTypesAcceptingMime(
-    mime,
-    objectType ? { excludeTypeId: objectType } : undefined,
+  // The same claim-backed population the candidate LIST offered (cinatra#3319),
+  // so the validation gate decides against what the picker drew. A failed read
+  // is read as the list reads it: no claim-backed type, so none is a candidate
+  // and none is promoted, and the access gate refuses a matcher entry whose
+  // claim state is then unknown (`readClaimStateUnknown`), so nothing is
+  // written for a claim-backed pack. It does not refuse the confirmation
+  // outright, so a road that needs no claim-backed type (a type a package
+  // registers) still answers. Each step below that needs a claim reads it
+  // itself, and a failed read there ends in a refusal: the row's claimant
+  // (`readRowTypeClaimant`) and the definer of a row whose type no package
+  // registers (`readExtensionDefinition`; its lenient form on the converging
+  // road reads a failure as "not a definer", which is refused too).
+  const { claimBacked, claimBackedReadFailed } = await readClaimBackedForRequest(orgId);
+  const raw = listInstalledMeaningTypesAcceptingMime(mime, {
+    ...(objectType ? { excludeTypeId: objectType } : {}),
+    claimBacked,
+  });
+  const candidates = await filterCandidatesByActorAccess(
+    raw,
+    actor,
+    orgId,
+    claimBacked,
+    claimBackedReadFailed,
+    readMatcherChannelPackages(),
   );
-  const candidates = await filterCandidatesByActorAccess(raw, actor, orgId);
-  if (!candidates.some((c) => c.extension === input.extension)) {
+  let ordinary = candidates.some((c) => c.extension === input.extension);
+  if (ordinary && objectType) {
+    // THE ROW'S OWN CLAIMANT IS NO ORDINARY CANDIDATE (cinatra#3319): the
+    // registry names the host, not the pack, for a claim-backed type, so the
+    // exclusion above keeps that pack on the list. Its binding blocks a fresh
+    // assertion and its confirmation must be verified against the row's
+    // presentation like the registrant's. A failed claim read refuses: whether
+    // this pack owns the row cannot be told.
+    try {
+      ordinary = (await readRowTypeClaimant(orgId, objectType)) !== input.extension;
+    } catch {
+      return { ...INVALID_TYPE_REFUSAL };
+    }
+  }
+  if (!ordinary) {
+    // THE PRESENTED BASE MEANING (§VI.1, cinatra#3319), decided FIRST. The row
+    // presents this extension's live matcher draft (its auto-surfaced meaning or
+    // a suggestion chip), so the picker offered it, and confirming it records the
+    // person's user-sourced meaning. It is decided BEFORE the converging road,
+    // and it never calls the promotion road: a presented extension has an active
+    // matcher draft, so no user assertion of it stands, and an interrupted
+    // promotion (which wrote the person's assertion before it promoted) is
+    // therefore never presented. The converging road below would only append a
+    // revision for a promotion that never happened.
+    const presentedBase = objectType
+      ? await confirmsPresentedBaseMeaning({
+          artifactId: input.artifactId,
+          extension: input.extension,
+          mime,
+          objectType,
+          actor,
+          orgId,
+          claimBacked,
+          claimBackedReadFailed,
+        })
+      : "absent";
+    // A failed or denied verification refuses the confirmation here: it never
+    // reaches the converging road below.
+    if (presentedBase === "refused") return { ...INVALID_TYPE_REFUSAL };
+    if (presentedBase === "presented") {
+      // A user assertion is blocked only by a binding of the same pack: the row's
+      // own claim-backed type, which already asserts this pack with a higher
+      // authority. The meaning the person confirmed then already stands, so the
+      // answer is the one a fresh write gives.
+      assertSemanticType({
+        orgId,
+        artifactId: input.artifactId,
+        extension: input.extension,
+        assertedBy: "user",
+        principal: actor.principalId ?? null,
+      });
+      revalidatePath("/artifacts");
+      return { ok: true };
+    }
     // THE CONVERGING RE-CONFIRMATION, and the reason it lives HERE rather than
     // behind the candidate gate: the candidate list EXCLUDES every candidate of
     // the extension that defines the row's CURRENT type, so a row an earlier
@@ -267,31 +794,43 @@ export async function assertUploadMeaning(input: {
     // retyped, with its promotion revision missing — so without this the
     // convergence the road promises is unreachable from the product.
     //
-    // It completes and nothing else: the road itself still demands the matcher's
-    // assertion at its threshold, so a row that merely CARRIES this extension's
-    // type is refused there and this call falls through to the same
-    // `invalid-type` it always answered. No meaning assertion is written — the
-    // call that retyped the row wrote the person's, and a second identical
-    // assertion would stack a duplicate for a choice already recorded.
-    if (objectType && (await extensionDefinesType(input.extension, objectType))) {
+    // It completes and nothing else: the store appends a promotion revision only
+    // when the row's own history proves that a promotion retyped it and did not
+    // append (its keyed retype is the row's latest type change). A row that
+    // merely CARRIES this extension's type, natively or through a restore, gets
+    // no revision. No meaning assertion is written: the call that retyped the
+    // row wrote the person's, and a second identical assertion would stack a
+    // duplicate for a choice already recorded.
+    if (objectType && (await extensionDefinesType(input.extension, objectType, orgId))) {
       const completed = await promoteOnConfirmedMeaning({
         orgId,
         artifactId: input.artifactId,
         extension: input.extension,
         principalId: actor.principalId ?? null,
         userId: session?.user?.id ?? null,
+        claimBacked,
       });
       if (completed?.promoted) {
         revalidatePath("/artifacts");
         return { ok: true, promotion: completed };
       }
+      // THE ROW-OWN CONFIRMATION COUNTS ONCE (cinatra#3319, cinatra#4266). A
+      // second, stale picker of a row whose own meaning the person already
+      // confirmed arrives here, and the store wrote nothing for it. The person's
+      // meaning stands, so that is the answer; anything else is refused.
+      if (
+        await personsOwnMeaningStands(completed, {
+          orgId,
+          artifactId: input.artifactId,
+          extension: input.extension,
+          principal: actor.principalId ?? null,
+        })
+      ) {
+        revalidatePath("/artifacts");
+        return { ok: true };
+      }
     }
-    return {
-      ok: false,
-      reason: "invalid-type",
-      message:
-        "That type is not an installed type that accepts this file — refresh and pick again.",
-    };
+    return { ...INVALID_TYPE_REFUSAL };
   }
   const result = assertSemanticType({
     orgId,
@@ -327,6 +866,7 @@ export async function assertUploadMeaning(input: {
     extension: input.extension,
     principalId: actor.principalId ?? null,
     userId: session?.user?.id ?? null,
+    claimBacked,
   });
 
   revalidatePath("/artifacts");
@@ -339,11 +879,100 @@ export async function assertUploadMeaning(input: {
  * The one question the converging re-confirmation asks: it is what separates
  * "this row is already in the type this extension defines" (the interrupted
  * promotion's own row) from "this extension has nothing to do with this row".
+ * The pack defines the type when it registered it, or when its claim wins the
+ * type in this organization (a claim-backed type, which the host registers).
  */
-async function extensionDefinesType(extension: string, objectType: string): Promise<boolean> {
+async function extensionDefinesType(
+  extension: string,
+  objectType: string,
+  orgId: string,
+): Promise<boolean> {
   try {
-    const { objectTypeRegistry } = await import("@cinatra-ai/objects/registry");
-    return objectTypeRegistry.getRegisteringPackage(objectType) === extension;
+    return await readExtensionDefinesType(extension, objectType, orgId);
+  } catch {
+    return false;
+  }
+}
+
+/** {@link extensionDefinesType} without the fallback: a failed read throws, so
+ *  the confirmation can refuse it instead of reading it as "not a definer". */
+async function readExtensionDefinesType(
+  extension: string,
+  objectType: string,
+  orgId: string,
+): Promise<boolean> {
+  return (await readExtensionDefinition(extension, objectType, orgId)) !== null;
+}
+
+/** How an extension defines a type (cinatra#3319): its package registered it,
+ *  its claim wins it in the organisation, or neither (null). */
+type ExtensionDefinition = "registers" | "claims" | null;
+
+/** {@link readExtensionDefinesType}, saying how: one registry reading, then the
+ *  claim read only for a package that does not register the type. A failed
+ *  read throws. */
+async function readExtensionDefinition(
+  extension: string,
+  objectType: string,
+  orgId: string,
+): Promise<ExtensionDefinition> {
+  if (objectTypeRegistry.getRegisteringPackage(objectType) === extension) return "registers";
+  return (await readRowTypeClaimant(orgId, objectType)) === extension ? "claims" : null;
+}
+
+/** {@link readExtensionDefinition} for the list: a failed read is "not a definer". */
+async function extensionDefinition(
+  extension: string,
+  objectType: string,
+  orgId: string,
+): Promise<ExtensionDefinition> {
+  try {
+    return await readExtensionDefinition(extension, objectType, orgId);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The pack whose winning artifact-safe claim in this organization is over the
+ * row's type, or null (cinatra#3319). A failed claim read throws.
+ */
+async function readRowTypeClaimant(orgId: string, objectType: string): Promise<string | null> {
+  const { readArtifactSafeClaimWinnerForType } = await import(
+    "@/lib/artifacts/resolve-bound-artifact-type"
+  );
+  return readArtifactSafeClaimWinnerForType(orgId, objectType);
+}
+
+/** {@link readRowTypeClaimant} for the list: a failed read names no claimant. */
+async function readRowTypeClaimantLeniently(
+  orgId: string,
+  objectType: string,
+): Promise<string | null> {
+  try {
+    return await readRowTypeClaimant(orgId, objectType);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * THE REPEAT OF A CONFIRMATION THAT STANDS (cinatra#3319, cinatra#4266). True
+ * only when the promotion road wrote nothing because there was nothing to do (it
+ * does not apply to this pack, or it answered `already-promoted`) and the acting
+ * person's own assertion of the extension reads true. A store error, any other
+ * refusal and a failed assertion read are false, so the confirmation is refused.
+ */
+async function personsOwnMeaningStands(
+  outcome: Exclude<Extract<AssertMeaningResult, { ok: true }>["promotion"], undefined> | null,
+  input: { orgId: string; artifactId: string; extension: string; principal: string | null },
+): Promise<boolean> {
+  if (outcome !== null && (outcome.promoted || outcome.reason !== "already-promoted")) {
+    return false;
+  }
+  try {
+    const { readPersonAssertion } = await import("@/lib/artifacts/typed-promotion-store");
+    return readPersonAssertion(input);
   } catch {
     return false;
   }
@@ -367,12 +996,19 @@ async function promoteOnConfirmedMeaning(input: {
   extension: string;
   principalId: string | null;
   userId: string | null;
+  /** The organisation's claim-backed meaning types (cinatra#3319), as the
+   *  candidate gate read them. */
+  claimBacked: readonly ClaimBackedMeaningType[];
 }): Promise<Exclude<Extract<AssertMeaningResult, { ok: true }>["promotion"], undefined> | null> {
   if (!input.userId) return null;
+  // THE CLAIM-BACKED IDENTITY FIRST (cinatra#3319): the entry this request's
+  // claim-backed read admitted, taken before any await, so the promotion
+  // follows the claim that admitted the choice. The registries are global and
+  // keyed by package: a concurrent activation of another version of the pack
+  // can register an artifact type or a matcher under its name, and neither then
+  // replaces the claim's type, its accepts or its null threshold.
+  const claimEntry = input.claimBacked.find((e) => e.extension === input.extension);
   try {
-    const { matcherManifestRegistry, objectTypeRegistry } = await import(
-      "@cinatra-ai/objects/registry"
-    );
     const { semanticRendererRegistry } = await import(
       "@cinatra-ai/objects/artifact-renderer-registry"
     );
@@ -395,20 +1031,33 @@ async function promoteOnConfirmedMeaning(input: {
     // confirmation that retyped nothing and reported nothing. It is separated
     // from the first by the pack's OWN registration state — a semantic display
     // registered for an object type no package registers.
-    const owned = objectTypeRegistry
-      .getTypesForPackage(input.extension)
-      .map((typeId) => ({ typeId, def: objectTypeRegistry.resolve(typeId) }))
-      .filter((t) => t.def?.isArtifact != null);
+    // A CLAIM-BACKED OWN TYPE (cinatra#3319). A pack whose type the host
+    // registers (no `isArtifact`, no package) owns no registered artifact type,
+    // yet the organisation's artifact-safe claim winner names its one type and
+    // the accepts the runtime reports for the pack at that version. A
+    // claim-backed entry exists only for a pack that registered no artifact
+    // type when the claims were read (rule 1), so a pack with its own
+    // registered type is unchanged; the registry is not read again for a pack
+    // that has one.
+    const owned = claimEntry
+      ? []
+      : objectTypeRegistry
+          .getTypesForPackage(input.extension)
+          .map((typeId) => ({ typeId, def: objectTypeRegistry.resolve(typeId) }))
+          .filter((t) => t.def?.isArtifact != null);
     const entryPlan = planPromotionEntry({
-      ownedRegisteredTypes: owned.map((t) => t.typeId),
+      ownedRegisteredTypes: claimEntry ? [claimEntry.objectTypeId] : owned.map((t) => t.typeId),
       shipsDisplayForUnregisteredType: semanticRendererRegistry
         .listByPackage(input.extension)
         .some((d) => objectTypeRegistry.getRegisteringPackage(d.objectTypeId) === null),
     });
     if (entryPlan.kind === "not-applicable") return null;
     if (entryPlan.kind === "refuse") return { promoted: false, reason: entryPlan.reason };
-    const ownType = owned.find((t) => t.typeId === entryPlan.typeId)!;
-    const acceptsMimes = ownType.def?.isArtifact?.accepts?.file?.mimeTypes ?? [];
+    const ownType = { typeId: entryPlan.typeId };
+    const acceptsMimes: readonly string[] = claimEntry
+      ? claimEntry.acceptMimes
+      : (owned.find((t) => t.typeId === entryPlan.typeId)!.def?.isArtifact?.accepts?.file
+          ?.mimeTypes ?? []);
 
     // THE THRESHOLD IS THE EXTENSION'S OWN, read from the same matcher channel
     // the matcher itself resolved it from — never a default invented here. A
@@ -418,9 +1067,14 @@ async function promoteOnConfirmedMeaning(input: {
     // which is why a missing declaration no longer ends the call. Returning
     // early here is what made a person's assertion on a matcher-less pack a
     // silent no-op.
-    const entry = matcherManifestRegistry
-      .list()
-      .find((e) => e.packageName === input.extension);
+    //
+    // A CLAIM-BACKED type's threshold is null (cinatra#3319): its winning
+    // install declares no matchers, and the process-global matcher registry is
+    // keyed by package only, so an entry under the pack's name is not that
+    // install's and never sets the threshold of this organisation's promotion.
+    const entry = claimEntry
+      ? undefined
+      : matcherManifestRegistry.list().find((e) => e.packageName === input.extension);
     const threshold = entry ? entry.matcherConfidenceThreshold : null;
 
     // The org-write kernel authority the canonical objects writer requires,

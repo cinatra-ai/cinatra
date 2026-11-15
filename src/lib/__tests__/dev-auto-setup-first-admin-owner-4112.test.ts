@@ -52,7 +52,7 @@ const h = vi.hoisted(() => {
     signUpEmail: vi.fn<(...args: unknown[]) => Promise<never>>(async () => {
       throw new Error("registration is closed in this unit test");
     }),
-    rotateDevFixturePassword: vi.fn(async () => true),
+    rotateDevFixturePassword: vi.fn<(...args: unknown[]) => Promise<boolean>>(async () => true),
     removeDevFixturePasswordFile: vi.fn(),
   };
 });
@@ -101,14 +101,22 @@ vi.mock("@/lib/auth", async (importOriginal) => ({
   auth: { api: { signUpEmail: (...args: unknown[]) => h.signUpEmail(...args) }, $context: Promise.resolve({}) },
 }));
 
-vi.mock("@/lib/dev-fixture-secret", async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  resolveDevFixturePassword: () => ({ password: "unit-only", source: "generated" }),
-  printDevFixtureSecretOnce: vi.fn(),
-  removeDevFixturePasswordFile: () => h.removeDevFixturePasswordFile(),
-  retireDevFixturePassword: vi.fn(async () => true),
-  rotateDevFixturePassword: () => h.rotateDevFixturePassword(),
-}));
+// The password handoff file is the REAL helper (written under the case's
+// instance root, which `process.cwd()` answers below): a boot that wires the
+// fixture writes it, a boot that refuses the fixture takes it away.
+vi.mock("@/lib/dev-fixture-secret", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/dev-fixture-secret")>();
+  return {
+    ...real,
+    resolveDevFixturePassword: () => ({ password: "unit-only-fixture-password", source: "generated" }),
+    removeDevFixturePasswordFile: (cwd?: string) => {
+      h.removeDevFixturePasswordFile();
+      real.removeDevFixturePasswordFile(cwd);
+    },
+    retireDevFixturePassword: vi.fn(async () => true),
+    rotateDevFixturePassword: (...args: unknown[]) => h.rotateDevFixturePassword(...args),
+  };
+});
 
 vi.mock("@cinatra-ai/mcp-server/credentials", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -242,6 +250,70 @@ describe("the owner of the install-made connections (cinatra#4112)", () => {
     expect(setDevActorForExternalMcp).toHaveBeenCalledTimes(1);
     expect(setDevActorForExternalMcp).toHaveBeenCalledWith(FIXTURE);
     expect(state.adminQueries).toEqual([]);
+  });
+
+  it("a second boot in the same module pushes the cached fixture owner again before the hook runs", async () => {
+    state.fixtureUserId = FIXTURE.userId;
+    state.orgByUser[FIXTURE.userId] = FIXTURE.organizationId;
+
+    await mod.runDevAutoSetup();
+    expect(state.ownerAtHook).toEqual(FIXTURE);
+
+    // The holder is process-wide: another module instance clears it, then replaces it.
+    for (const between of [null, { userId: "someone-else", organizationId: "org-other" }]) {
+      state.pushedOwner = between;
+      state.ownerAtHook = undefined;
+      await mod.runDevAutoSetup();
+      expect(state.ownerAtHook).toEqual(FIXTURE);
+    }
+    expect(setDevActorForExternalMcp).toHaveBeenCalledTimes(3);
+    expect(runDevSetup).toHaveBeenCalledTimes(3);
+  });
+
+  it("a cached fixture owner is dropped on a later boot that refuses the fixture: the first administrator, or nobody, owns the connection", async () => {
+    for (const withAdmin of [true, false]) {
+      vi.resetModules();
+      mod = await import("@/lib/dev-auto-setup");
+      const secret = await import("@/lib/dev-fixture-secret");
+      secret.removeDevFixturePasswordFile(root);
+      Object.assign(state, { pushedOwner: null, ownerAtHook: undefined, publicBaseUrl: null, adminUserId: null, orgByUser: {} });
+      state.fixtureUserId = FIXTURE.userId;
+      state.orgByUser[FIXTURE.userId] = FIXTURE.organizationId;
+      if (withAdmin) seatFirstAdministrator();
+
+      // A private boot caches the fixture account and writes the handoff.
+      await mod.runDevAutoSetup();
+      expect(state.ownerAtHook).toEqual(FIXTURE);
+      expect(secret.readDevFixturePasswordFile(root)).toBe("unit-only-fixture-password");
+
+      // The same process boots again, now reachable from outside: the fixture
+      // is refused.
+      state.publicBaseUrl = LANE_ADDRESS;
+      state.ownerAtHook = undefined;
+      const seen = logLines().length;
+      await mod.runDevAutoSetup();
+      expect(logLines().slice(seen).some((l) => l.includes("refusing to seed the development fixture account"))).toBe(true);
+      if (withAdmin) expect(state.ownerAtHook).toEqual(ADMIN);
+      else expect(state.ownerAtHook ?? null).toBeNull();
+
+      // The refusal took the password handoff away.
+      expect(secret.readDevFixturePasswordFile(root)).toBeNull();
+
+      // Private again: the refusal dropped the cached actor, so this boot wires
+      // the fixture account afresh (its password is rotated again) instead of
+      // serving the actor the first boot cached, and writes the handoff again
+      // with the password the account now carries.
+      state.publicBaseUrl = null;
+      state.ownerAtHook = undefined;
+      const rotations = h.rotateDevFixturePassword.mock.calls.length;
+      await mod.runDevAutoSetup();
+      expect(h.rotateDevFixturePassword.mock.calls.length).toBe(rotations + 1);
+      expect(state.ownerAtHook).toEqual(FIXTURE);
+      const calls = h.rotateDevFixturePassword.mock.calls;
+      const rotatedTo = calls[calls.length - 1]?.[1];
+      expect(rotatedTo).toBe("unit-only-fixture-password");
+      expect(secret.readDevFixturePasswordFile(root)).toBe(rotatedTo);
+    }
   });
 
   it("no administrator yet: nothing is pushed, the attach stays not resolved, and one log line says why", async () => {

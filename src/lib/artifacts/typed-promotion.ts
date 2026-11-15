@@ -303,6 +303,11 @@ export function promotionRevisionId(input: {
  * after the canonical writer's compare-and-set has already committed the type
  * change, so a lost race never reaches here.
  *
+ * AND ONLY OVER THE REVISION THE PROMOTION READ (cinatra#3319): when the latest
+ * revision is no longer `baseRevisionId` (a content writer appended after the
+ * read), `1 / 0` aborts the statement and its transaction, so a stale resource
+ * never becomes the latest content again.
+ *
  * THE BASE ROW KEEPS ITS HISTORY: the table is append-only (a trigger forbids
  * UPDATE and DELETE) and the revision is `MAX + 1`, so nothing earlier moves.
  * The resource is the BASE revision's own — the content is shared, never copied.
@@ -316,6 +321,8 @@ export function buildPromotionRepresentationAppend(
     sharedResourceId: string;
     form: "file" | "connectorRef" | "dashboard";
     createdBy: string | null;
+    /** The latest revision when the promotion read the row. */
+    baseRevisionId: string;
   },
 ): { text: string; values: unknown[] } {
   const s = schema.replaceAll('"', '""');
@@ -325,6 +332,8 @@ export function buildPromotionRepresentationAppend(
 SELECT $1::text, $2::text, $3::text, $4::text,
   COALESCE((SELECT MAX(revision) FROM "${s}"."representation" WHERE org_id = $2 AND artifact_id = $3), 0) + 1,
   $5::text, $6
+WHERE 1 / (SELECT COUNT(*)::int FROM (SELECT id FROM "${s}"."representation" WHERE org_id = $2 AND artifact_id = $3
+  ORDER BY revision DESC LIMIT 1) latest WHERE latest.id = $7::text) = 1
 ON CONFLICT (id) DO NOTHING
 RETURNING id, revision`,
     values: [
@@ -334,6 +343,7 @@ RETURNING id, revision`,
       input.sharedResourceId,
       input.form,
       input.createdBy,
+      input.baseRevisionId,
     ],
   };
 }

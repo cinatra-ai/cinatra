@@ -169,3 +169,63 @@ describe("cinatra#2047 D-1 — core repair capability keys on the produced ROLE"
     expect(coreRepairsObjectType(":post", resolve("@vendor/some-artifact"))).toBe(false);
   });
 });
+
+describe("cinatra#4424 — the declared repair findings input", () => {
+  it("the schema admits a producer that names the input its repair run gets the findings in", () => {
+    expect(
+      agentLifecycleDeclarationSchema.safeParse({
+        repairCapable: true,
+        repairFindingsInput: { input: "instructions" },
+      }).success,
+    ).toBe(true);
+  });
+
+  it("the schema REFUSES a bare string, an unknown member, a non-identifier and a reserved input", () => {
+    for (const repairFindingsInput of [
+      "instructions",
+      { input: "instructions", step: "draft" },
+      { input: "" },
+      { input: "two words" },
+      { input: "1st" },
+      { input: "lifecycleRepairRequest" },
+      { input: "__proto__" },
+      { input: "toString" },
+      { input: "hasOwnProperty" },
+      { input: "x".repeat(129) },
+      { input: 5 },
+      { input: null },
+      { input: ["instructions"] },
+      {},
+    ]) {
+      expect(agentLifecycleDeclarationSchema.safeParse({ repairFindingsInput }).success).toBe(false);
+    }
+  });
+
+  it("the reader keeps an admissible input name, ignores any other member, and drops a declaration without one", () => {
+    expect(
+      readManifestLifecycle({
+        cinatra: { lifecycle: { repairCapable: true, repairFindingsInput: { input: "instructions" } } },
+      }),
+    ).toEqual({ repairCapable: true, repairFindingsInput: { input: "instructions" } });
+    for (const repairFindingsInput of ["instructions", { input: "lifecycleRepairRequest" }, { input: 7 }, [], null]) {
+      expect(normalizeLifecycle({ repairCapable: true, repairFindingsInput })).toEqual({ repairCapable: true });
+    }
+    expect(normalizeLifecycle({ repairFindingsInput: { input: "instructions", extra: 1 } })).toEqual({
+      repairFindingsInput: { input: "instructions" },
+    });
+  });
+
+  it("the persisted text is stable and round-trips; a producer that declares none persists the same text as before", () => {
+    const declared = { repairFindingsInput: { input: "instructions" }, repairCapable: true, producedTypes: ["t"] };
+    const text = serializeLifecycleConfig(declared);
+    expect(text).toBe(
+      '{"producedTypes":["t"],"repairCapable":true,"repairFindingsInput":{"input":"instructions"}}',
+    );
+    expect(parseLifecycleConfigText(text)).toEqual({
+      producedTypes: ["t"],
+      repairCapable: true,
+      repairFindingsInput: { input: "instructions" },
+    });
+    expect(serializeLifecycleConfig({ repairCapable: true })).toBe('{"repairCapable":true}');
+  });
+});

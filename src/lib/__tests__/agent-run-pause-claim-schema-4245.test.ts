@@ -1,7 +1,7 @@
 /**
  * cinatra#4245 PR A1: the pause claim columns, inert.
  *
- * The operator upgrade (core__0116) and the fresh-install bootstrap must give a
+ * The operator upgrade (core__0126) and the fresh-install bootstrap must give a
  * database the same four agent_runs columns, the same two CHECKs and the same
  * lifecycle_repair column; Drizzle must declare what the DDL creates. No
  * database is started here: the DB tier beside this file applies the DDL.
@@ -12,6 +12,13 @@
  * (C1/C6); up runs outside a transaction, adds each CHECK NOT VALID and
  * validates it in its own statement (C4); the regclass text survives a schema
  * name holding a double quote (C5).
+ *
+ * Pre-2 fold (red at 675c2bfc): up bounds every lock wait with lock_timeout,
+ * set first and reset last.
+ *
+ * Red at 07f5d27b: the shape CHECK alone, read without the phase CHECK,
+ * admitted a claim with an unknown, an empty or a case-varied phase and an
+ * expiry. Its claim branch now requires one of the three phases.
  */
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -19,7 +26,7 @@ import { agentRuns, lifecycleRepair } from "../../../packages/agents/src/schema"
 import { agentRunPauseClaimSchemaQueries } from "../agent-run-created-at-schema";
 import { lifecycleRepairSchemaQueries } from "../artifacts/artifact-review-gate-schema";
 import { buildCreateStoreSchemaQueries } from "../drizzle-store";
-import * as migration from "../../../migrations/core/core__0116_agent-run-pause-claim.mjs";
+import * as migration from "../../../migrations/core/core__0126_agent-run-pause-claim.mjs";
 import { readManifestUnion } from "../../../migrations/manifest-reader.mjs";
 
 const FIXTURE = "cinatra_fixture";
@@ -36,19 +43,22 @@ const operatorUp = (): string[] => {
   migration.up({ sql, noTransaction: vi.fn() });
   return sql.mock.calls.map((call) => String(call[0]));
 };
+/** The DDL of up, without the lock_timeout SET before it and the RESET after it. */
+const operatorDdl = (): string[] => operatorUp().slice(1, -1);
 const PHASE_CHK = "agent_runs_pause_claim_phase_chk";
 const SHAPE_CHK = "agent_runs_pause_claim_shape_chk";
 const SHAPE_SQL =
-  "(pause_claim_token IS NULL AND pause_claim_phase IS NULL AND pause_claim_expires_at IS NULL) OR (pause_claim_token IS NOT NULL AND pause_claim_phase IS NOT NULL AND (pause_claim_phase = 'changes_requested') = (pause_claim_expires_at IS NULL))";
+  "(pause_claim_token IS NULL AND pause_claim_phase IS NULL AND pause_claim_expires_at IS NULL) OR (pause_claim_token IS NOT NULL AND pause_claim_phase IS NOT NULL AND pause_claim_phase IN ('claimed','sending','changes_requested') AND (pause_claim_phase = 'changes_requested') = (pause_claim_expires_at IS NULL))";
 
 // Evaluates the shape CHECK text over one row without a database, in SQL's
 // three-valued logic (NULL is `null`), for the subset the CHECK uses: OR, AND,
-// boolean `=`, `col IS [NOT] NULL` and `col = 'literal'`. A CHECK admits a row
-// unless the expression is FALSE. The DB tier beside this file proves the same
+// boolean `=`, `col IS [NOT] NULL`, `col = 'literal'` and `col IN ('a', ...)`
+// over non-NULL literals (NULL IN (...) is NULL; a case-sensitive match). A
+// CHECK admits a row unless the expression is FALSE. The DB tier beside this file proves the same
 // matrix on a real Postgres.
 type Tri = boolean | null;
 function shapeAdmits(checkSql: string, row: Record<string, string | null>): boolean {
-  const tokens = checkSql.match(/\(|\)|=|'[^']*'|[A-Za-z_]+/g) ?? [];
+  const tokens = checkSql.match(/\(|\)|=|,|'[^']*'|[A-Za-z_]+/g) ?? [];
   expect(tokens.join("")).toBe(checkSql.replaceAll(/\s+/g, ""));
   let at = 0;
   const take = (want?: string): string => {
@@ -85,6 +95,20 @@ function shapeAdmits(checkSql: string, row: Record<string, string | null>): bool
       take("NULL");
       return negated ? value !== null : value === null;
     }
+    if (tokens[at] === "IN") {
+      take();
+      take("(");
+      const list: string[] = [];
+      for (;;) {
+        const literal = take();
+        expect(literal).toMatch(/^'[^']*'$/);
+        list.push(literal.slice(1, -1));
+        if (tokens[at] !== ",") break;
+        take();
+      }
+      take(")");
+      return value === null ? null : list.includes(value);
+    }
     take("=");
     const literal = take();
     expect(literal).toMatch(/^'[^']*'$/);
@@ -119,8 +143,8 @@ describe("pause claim columns: Drizzle declares what the DDL creates (cinatra#42
 });
 
 describe("pause claim columns: operator upgrade and bootstrap parity (cinatra#4245)", () => {
-  it("core__0116 up emits exactly the bootstrap leaf's statements, then the lifecycle_repair column", () => {
-    const operator = operatorUp().map(normalized);
+  it("core__0126 up emits exactly the bootstrap leaf's statements, then the lifecycle_repair column", () => {
+    const operator = operatorDdl().map(normalized);
     const bootstrap = [
       ...agentRunPauseClaimSchemaQueries(FIXTURE).map((row) => row.text),
       ...repairColumnLine(FIXTURE),
@@ -130,12 +154,12 @@ describe("pause claim columns: operator upgrade and bootstrap parity (cinatra#42
   });
 
   it("adds every column with IF NOT EXISTS and each CHECK only while pg_constraint lacks its name", () => {
-    const [columns, phase, shape, , , repair] = operatorUp();
+    const [columns, phase, shape, , , repair] = operatorDdl();
     for (const name of ["pause_generation bigint NOT NULL DEFAULT 0", "pause_claim_token text", "pause_claim_phase text", "pause_claim_expires_at timestamptz"]) {
       expect(columns).toContain(`ADD COLUMN IF NOT EXISTS ${name}`);
     }
     expect(repair).toBe("ALTER TABLE lifecycle_repair ADD COLUMN IF NOT EXISTS paused_run_generation bigint");
-    const [, , , validatePhase, validateShape] = operatorUp();
+    const [, , , validatePhase, validateShape] = operatorDdl();
     for (const [stmt, name] of [[phase, PHASE_CHK], [shape, SHAPE_CHK]] as const) {
       expect(normalized(stmt)).toMatch(new RegExp(`IF NOT EXISTS \\( SELECT 1 FROM pg_constraint WHERE conname = '${name}' AND conrelid = 'agent_runs'::regclass \\) THEN ALTER TABLE agent_runs ADD CONSTRAINT ${name} CHECK`));
     }
@@ -211,6 +235,30 @@ describe("pause claim columns: the shape CHECK admits exactly the lease shapes (
       expect(shapeAdmits(read(), lease(null, null, "ts"))).toBe(false);
     },
   );
+
+  // The shape CHECK ALONE, without the phase CHECK: a phase outside the three
+  // (unknown, empty, case-varied) is refused with or without an expiry and
+  // with or without a token, so the matrix over that wider domain admits
+  // exactly the four lease shapes.
+  const OUTSIDE = ["held", "", "Claimed", "SENDING", "Changes_Requested"];
+  it.each<[string, () => string]>([["the operator upgrade", () => migration.pauseClaimShapeCheckSql], ["the bootstrap", leafShape]])(
+    "%s, read alone, refuses an unknown, an empty and a case-varied phase with an expiry",
+    (_label, read) => {
+      for (const phase of OUTSIDE) {
+        expect(shapeAdmits(read(), lease("tok", phase, "ts")), `tok|${phase}|ts`).toBe(false);
+        expect(shapeAdmits(read(), lease("tok", phase, null)), `tok|${phase}|-`).toBe(false);
+      }
+      const verdicts: string[] = [];
+      for (const token of [null, "tok"]) {
+        for (const phase of [null, ...migration.PAUSE_CLAIM_PHASES, ...OUTSIDE]) {
+          for (const expiry of [null, "ts"]) {
+            if (shapeAdmits(read(), lease(token, phase, expiry))) verdicts.push(`${token ?? "-"}|${phase ?? "-"}|${expiry ?? "-"}`);
+          }
+        }
+      }
+      expect(verdicts.sort()).toEqual([...ADMITTED].sort());
+    },
+  );
 });
 
 describe("pause claim columns: no table scan under ACCESS EXCLUSIVE (pre-1 C4)", () => {
@@ -242,6 +290,29 @@ describe("pause claim columns: no table scan under ACCESS EXCLUSIVE (pre-1 C4)",
   );
 });
 
+describe("pause claim columns: every lock wait is bounded (pre-2 fold)", () => {
+  it("up sets lock_timeout first and resets it last, around exactly the DDL", () => {
+    const all = operatorUp();
+    expect(all).toHaveLength(8);
+    expect(all[0]).toBe(`SET lock_timeout = ${migration.PAUSE_CLAIM_LOCK_TIMEOUT_MS}`);
+    expect(all.at(-1)).toBe("RESET lock_timeout");
+    expect(all.slice(1, -1)).toEqual(migration.pauseClaimDdlStatements);
+    expect(all.filter((stmt) => /lock_timeout/.test(stmt))).toHaveLength(2);
+  });
+
+  it("the bound is 5 s, under a fifth of the application's 27 s server cancel", () => {
+    // src/lib/db/pooled.ts: a pooled transaction's statement is cancelled at
+    // 0.9 x the 30 s POSTGRES_ASYNC_TIMEOUT_MS default.
+    const appServerCancelMs = 0.9 * 30_000;
+    expect(migration.PAUSE_CLAIM_LOCK_TIMEOUT_MS).toBe(5_000);
+    expect(migration.PAUSE_CLAIM_LOCK_TIMEOUT_MS).toBeLessThan(appServerCancelMs / 5);
+  });
+
+  it("the bootstrap leaf sets no lock_timeout of its own", () => {
+    for (const { text } of agentRunPauseClaimSchemaQueries(FIXTURE)) expect(text).not.toMatch(/lock_timeout/);
+  });
+});
+
 describe("pause claim columns: rollback and ledger (cinatra#4245)", () => {
   it("down drops the two constraints first, then exactly the five new columns", () => {
     const sql = vi.fn();
@@ -257,8 +328,8 @@ describe("pause claim columns: rollback and ledger (cinatra#4245)", () => {
   it("ships its manifest fragment naming the module and both tables", () => {
     const { entries, errors } = readManifestUnion(path.resolve(__dirname, "../../../migrations"));
     expect(errors).toEqual([]);
-    const entry = entries.find((row: Record<string, unknown>) => row.seq === "0116");
-    expect(entry?.file).toBe("core/core__0116_agent-run-pause-claim.mjs");
+    const entry = entries.find((row: Record<string, unknown>) => row.seq === "0126");
+    expect(entry?.file).toBe("core/core__0126_agent-run-pause-claim.mjs");
     expect(entry?.tables).toEqual(["agent_runs", "lifecycle_repair"]);
     // The convention counts a NOT NULL column and a CHECK on an existing table
     // as user-land-affecting, so the fragment says so (schema-migration-gate).

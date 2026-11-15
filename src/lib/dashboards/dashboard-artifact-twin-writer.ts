@@ -121,6 +121,7 @@ function buildDashboardRepresentationQuery(
   schema: string,
   ctx: DashboardTwinContext,
   representationRevisionId: string,
+  producerRunId: string | null,
 ): SubstrateQuery {
   const s = schema.replaceAll('"', '""');
   // THE PINNED CONFIGURATION RECORD (cinatra#3092): the configuration the
@@ -130,11 +131,15 @@ function buildDashboardRepresentationQuery(
   // reader (`resolveNonFileArtifactRevision`) reads. A context without one
   // writes NULL, byte for byte the statement it wrote before.
   const pinned = ctx.configuration != null;
+  // THE PRODUCING RUN (cinatra#3092): the run id the writer validated in this
+  // organization is the revision's `created_by_run_id`; without one the column
+  // stays NULL, byte for byte the statement it wrote before.
+  const runParam = producerRunId != null ? `$${pinned ? 7 : 6}::text` : "NULL";
   return {
     text: `INSERT INTO "${s}"."representation"
   (id, org_id, artifact_id, resource_id, revision, form, created_by, created_by_run_id, classifier_signals)
 SELECT $1::text, $2::text, $3::text, $4::text,
-       COALESCE(MAX(r.revision), 0) + 1, '${DASHBOARD_REPRESENTATION_FORM}', $5::text, NULL, ${pinned ? "$6::jsonb" : "NULL"}
+       COALESCE(MAX(r.revision), 0) + 1, '${DASHBOARD_REPRESENTATION_FORM}', $5::text, ${runParam}, ${pinned ? "$6::jsonb" : "NULL"}
 FROM "${s}"."representation" r
 WHERE r.org_id = $2::text AND r.artifact_id = $3::text`,
     values: [
@@ -146,6 +151,7 @@ WHERE r.org_id = $2::text AND r.artifact_id = $3::text`,
       ...(pinned
         ? [JSON.stringify({ [PINNED_CONFIGURATION_SIGNAL_KEY]: ctx.configuration })]
         : []),
+      ...(producerRunId != null ? [producerRunId] : []),
     ],
   };
 }
@@ -173,8 +179,13 @@ VALUES (gen_random_uuid()::text, $1::text, $2::text, NULL, $3::text, $4::text, $
 }
 
 /** Build the ORDERED substrate query list for a twin call. Pure — the caller runs
- *  each `{text,values}` on the dashboards tx via `tx.execute(rawWithParams(...))`. */
-export function buildDashboardTwinQueries(ctx: DashboardTwinContext): SubstrateQuery[] {
+ *  each `{text,values}` on the dashboards tx via `tx.execute(rawWithParams(...))`.
+ *  `producerRunId` is the producing run AFTER the writer read it in this
+ *  organization (`readSameOrgProducerRunId`); never `ctx.producerRunId` raw. */
+export function buildDashboardTwinQueries(
+  ctx: DashboardTwinContext,
+  producerRunId: string | null = null,
+): SubstrateQuery[] {
   const schema = postgresSchema;
 
   // 0. Advisory lock FIRST (delta D2) — serializes representation revision.
@@ -307,10 +318,13 @@ export function buildDashboardTwinQueries(ctx: DashboardTwinContext): SubstrateQ
   // in which case `maybeBuildProducedEventInsertOp` returns null and this splices
   // NOTHING (the twin query list is byte-identical to the pre-flip one).
   // ORIGIN: an extension-MATERIALIZED dashboard
-  // (`extensionId` set) is `agent_generated` (review-eligible per policy); a
-  // user/operator-built dashboard is `upload` (→ user_provided → the review core
-  // default SKIPS, unless an org bound requires it). The dashboard produces no
-  // external effect at write time, so `destinationClass` defaults to `none`.
+  // (`extensionId` set) is `agent_generated` (review-eligible per policy), and so
+  // is a dashboard an agent RUN wrote (cinatra#3092: the validated producing run
+  // is the event's `producer_run_id`, so the gate binds to that real run and the
+  // run page finds it); a user/operator-built dashboard is `upload` (→
+  // user_provided → the review core default SKIPS, unless an org bound requires
+  // it). The dashboard produces no external effect at write time, so
+  // `destinationClass` defaults to `none`.
   // Appended LAST — the twin's result rows are positional only for the pinned
   // substrate ops above (all before this); the event's result is never read.
   const s = schema.replaceAll('"', '""');
@@ -319,8 +333,8 @@ export function buildDashboardTwinQueries(ctx: DashboardTwinContext): SubstrateQ
     artifactId: ctx.dashboardId,
     representationRevisionId,
     emitter: "dashboard_twin_writer",
-    originKind: ctx.extensionId != null ? "agent_generated" : "upload",
-    producerRunId: null,
+    originKind: ctx.extensionId != null || producerRunId != null ? "agent_generated" : "upload",
+    producerRunId,
     producerAgentId: null,
   });
 
@@ -328,7 +342,7 @@ export function buildDashboardTwinQueries(ctx: DashboardTwinContext): SubstrateQ
     lock,
     buildDashboardResourceQuery(schema, ctx),
     objectsOutbox,
-    buildDashboardRepresentationQuery(schema, ctx, representationRevisionId),
+    buildDashboardRepresentationQuery(schema, ctx, representationRevisionId, producerRunId),
     buildDashboardAuditQuery(schema, ctx, "upsert"),
     ...meaningOps,
     ...bindingOps,
@@ -336,12 +350,48 @@ export function buildDashboardTwinQueries(ctx: DashboardTwinContext): SubstrateQ
   ];
 }
 
+/** The rows of a `tx.execute` result: node-postgres answers `{ rows }`, other
+ *  drivers an array. Anything else reads as no rows. */
+function resultRows(result: unknown): readonly unknown[] {
+  if (Array.isArray(result)) return result;
+  const rows = (result as { rows?: unknown } | null | undefined)?.rows;
+  return Array.isArray(rows) ? rows : [];
+}
+
+/**
+ * THE PRODUCING RUN, VALIDATED (cinatra#3092). The context's run id comes from
+ * the caller's verified MCP frame; it is trusted only when an `agent_runs` row
+ * with that id exists in THIS organization, read on the same transaction. A
+ * missing or cross-organization run reads as no run (the write goes on
+ * without run attribution; an extension-materialized row keeps its
+ * `agent_generated` origin), mirroring `resolveProducerAssertionPlan`, which never
+ * persists a cross-tenant run id. No run id on the context ⇒ no read at all.
+ */
+export async function readSameOrgProducerRunId(
+  tx: TwinTx,
+  ctx: DashboardTwinContext,
+): Promise<string | null> {
+  const runId = ctx.producerRunId;
+  if (ctx.operation !== "upsert" || typeof runId !== "string" || runId.length === 0) {
+    return null;
+  }
+  const s = postgresSchema.replaceAll('"', '""');
+  const result = await tx.execute(
+    rawWithParams(
+      `SELECT id FROM "${s}"."agent_runs" WHERE id = $1::text AND org_id = $2::text LIMIT 1`,
+      [runId, ctx.orgId],
+    ),
+  );
+  return resultRows(result).length > 0 ? runId : null;
+}
+
 /** The registered twin writer: run each substrate query on the dashboards tx. */
 export const dashboardArtifactTwinWriter: DashboardArtifactTwinWriter = async (
   tx: TwinTx,
   ctx: DashboardTwinContext,
 ): Promise<void> => {
-  for (const q of buildDashboardTwinQueries(ctx)) {
+  const producerRunId = await readSameOrgProducerRunId(tx, ctx);
+  for (const q of buildDashboardTwinQueries(ctx, producerRunId)) {
     await tx.execute(rawWithParams(q.text, q.values));
   }
 };

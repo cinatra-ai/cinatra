@@ -88,3 +88,75 @@ export function publicationOperationLedgerSchemaQueries(
     },
   ];
 }
+
+// Bootstrap DDL for the publish-decision record (cinatra#4150): one row per stop in front of a
+// declared publishing step. The DB enforces one row per stop (park_uniq) and the closed status
+// set (the status CHECK). No foreign keys, as for artifact_publication_operations: the history
+// outlives the run row. In this leaf so no new module joins a route's graph; an existing
+// deployment gets the table through migration core__0119.
+export function publishDecisionSchemaQueries(schemaName: string): { text: string }[] {
+  const q = schemaName.replaceAll('"', '""'); // identifier
+  return [
+    {
+      text: `CREATE TABLE IF NOT EXISTS "${q}"."agent_run_publish_decisions" (
+  id               text PRIMARY KEY,
+  org_id           text,
+  run_id           text NOT NULL,
+  node_id          text NOT NULL,
+  gate_task_id     text NOT NULL,
+  a2a_context_id   text,
+  status           text NOT NULL DEFAULT 'parked',
+  surfaced_values  text NOT NULL,
+  decided_by       text,
+  decided_at       timestamptz,
+  decision_note    text,
+  created_at       timestamptz NOT NULL DEFAULT now(),
+  expires_at       timestamptz NOT NULL,
+  CONSTRAINT agent_run_publish_decisions_status_check
+    CHECK (status IN ('parked', 'released', 'declined', 'expired', 'run_ended'))
+)`,
+    },
+    {
+      text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_run_publish_decisions_park_uniq ON "${q}"."agent_run_publish_decisions" (run_id, node_id, gate_task_id)`,
+    },
+    {
+      // The expiry sweep finds due open decisions without touching settled rows.
+      text: `CREATE INDEX IF NOT EXISTS agent_run_publish_decisions_due_idx ON "${q}"."agent_run_publish_decisions" (expires_at) WHERE status = 'parked'`,
+    },
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// `page_capture_leases` (cinatra#4223): the page capture budget's shared store
+// (src/lib/artifacts/page-capture-budget.ts). One row is one capture the budget
+// admitted; `released_at` is set when it ends; a lease never released stops
+// counting as in flight at `expires_at` but always counts toward the run's
+// total. A PURELY ADDITIVE table, so it ships in the idempotent bootstrap DDL
+// (buildCreateStoreSchemaQueries), not a numbered migration. It lives in THIS
+// leaf, which drizzle-store.ts already imports, because a new module imported
+// by drizzle-store.ts would join the first-party graph of every locked route
+// (scripts/audit/route-graph-ratchet.mjs) and grow each ceiling by one.
+// ---------------------------------------------------------------------------
+
+/** The table name, shared by the schema builder, the store and the tests. */
+export const PAGE_CAPTURE_LEASES_TABLE = "page_capture_leases";
+
+export function pageCaptureLeasesSchemaQueries(schemaName: string): { text: string }[] {
+  const q = schemaName.replaceAll('"', '""');
+  return [
+    {
+      text: `CREATE TABLE IF NOT EXISTS "${q}"."page_capture_leases" (
+      id text PRIMARY KEY,
+      org_id text NOT NULL,
+      run_id text NOT NULL,
+      acquired_at timestamptz NOT NULL DEFAULT now(),
+      expires_at timestamptz NOT NULL,
+      released_at timestamptz,
+      CHECK (expires_at > acquired_at)
+    )`,
+    },
+    {
+      text: `CREATE INDEX IF NOT EXISTS page_capture_leases_run_idx ON "${q}"."page_capture_leases" (org_id, run_id)`,
+    },
+  ];
+}

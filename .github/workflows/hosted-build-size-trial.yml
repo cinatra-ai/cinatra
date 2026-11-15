@@ -26,7 +26,7 @@ env:
   TRIAL_RUN_ID: ${{ github.run_id }}
   DOCKER_BUILD_RECORD_UPLOAD: "false"
 jobs:
-  # Source job SHA256: d422b77eba5ca58f490606555ae709c44203c7ecacfda849a3fe80a1cfc96ce1
+  # Source job SHA256: b01c415b1571cc8c2ca4531e11fa7c66f716d48274199c5d12daecf305e55fe2
   design:
     name: trial / design / ${{ inputs.cohort }}
     if: ${{ github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && inputs.workload == 'design' && (inputs.cohort == 'standard' || inputs.cohort == 'large') }}
@@ -365,7 +365,17 @@ jobs:
           # (design-build-cache.sh rebuild), and that build's result is this
           # step's result; with it off, the build's own exit code stands.
           CINATRA_TURBOPACK_BUILD_FS_CACHE: ${{ steps.build-cache.outputs.fs-cache }}
-        run: pnpm build || bash scripts/ci/design-build-cache.sh rebuild "$?"
+          # One design build at a time on a self-hosted machine (a cold build
+          # needs about 24.5 GB, measured on the restore step). Several runners
+          # share that machine and no swap step runs there; builds that
+          # overlapped were killed with exit 137, builds that ran alone were
+          # not. scripts/ci/design-build-host-lock.sh waits for the machine's
+          # lock (45 minutes at most, half of this job's 90), then builds; it
+          # builds without the lock when it cannot take one, and does nothing
+          # on a GitHub-hosted runner. The rebuild runs under the same lock.
+          DESIGN_BUILD_LOCK_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          DESIGN_BUILD_LOCK_WAIT_SECONDS: "2700"
+        run: bash scripts/ci/design-build-host-lock.sh bash -c 'pnpm build || bash scripts/ci/design-build-cache.sh rebuild "$?"'
 
       - name: Keep the design build cache for the next job (self-hosted only)
         # Keeps what the build just wrote for the next job on this runner
@@ -951,7 +961,7 @@ jobs:
           TRIAL_JOB_STATUS: ${{ job.status }}
         run: node scripts/ci/hosted-build-size-trial.mjs finish
 
-  # Source job SHA256: db8d4cd19cc014b9ed256d0c13158ce588db2b78dc748fdd4b3f345bae1f1b93
+  # Source job SHA256: 0e6489cff5074092160b76f924dccb6caf741fb1bbed9383545f894b62ae9176
   image:
     name: trial / image / ${{ inputs.cohort }}
     if: ${{ github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && inputs.workload == 'image' && (inputs.cohort == 'standard' || inputs.cohort == 'large') }}
@@ -1125,8 +1135,15 @@ jobs:
           # in-build tsc (types are gated by the required Typecheck job). Only set
           # here, in CI — a local `docker build` (no build-arg) keeps the check.
           # MUST stay identical on the push step below so its cache hit is total.
+          # CINATRA_BUILD_CPUS=1: one page-data worker for the in-image
+          # `next build` (Dockerfile ARG -> experimental.cpus in next.config.ts).
+          # Uncapped, Next runs 3 workers on this 4-vCPU runner, the build's
+          # measured tree peak (~15.5 GiB) sits at the runner's memory, and this
+          # step hung until the runner stopped responding. The same cap as the
+          # hosted e2e "Build app (production)" steps; it changes no app code.
           build-args: |
             CI=true
+            CINATRA_BUILD_CPUS=1
 
       # Boot the image WITHOUT private extensions cloned (the checkout above
       # has no extensions/ tree at all): fresh Postgres + Redis on an isolated

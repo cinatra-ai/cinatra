@@ -35,6 +35,12 @@ import {
   RunTransitionError,
 } from "./store";
 import { cancelOrchestratorRun } from "./orchestrator-execution";
+import {
+  PUBLISH_DECISION_REQUIRED,
+  assertNoOpenPublishDecision,
+  isPublishDecisionRequired,
+  publishHoldFault,
+} from "./publish-decision-actions";
 import { mintResumeRunTokenMetadata } from "./wayflow-run-token-carrier";
 import {
   WAYFLOW_A2A_TIMEOUT_MS,
@@ -185,6 +191,7 @@ export async function revalidateOrchestratorStatusAction(
  *   - "template not found"
  *   - "no-package-name"     — template.packageName is null; cannot derive vendor/slug
  *   - "no-wayflow-url"      — WAYFLOW_BASE_URL is unset or resolveWayflowUrl rejected the packageName
+ *   - "publish_decision_required" — the run waits or ended at a publish decision
  *   - "race condition — run status changed"
  *   - "resume failed"
  */
@@ -267,6 +274,19 @@ export async function resumeStoppedOrchestratorAction(
       return { ok: false, error: "Forbidden" };
     }
     throw err;
+  }
+
+  // cinatra#4150: a run that waits or ended at a publish decision is never resumed here:
+  // its context still holds the publish gate. Read after the claim above, so a decision
+  // written before it is seen; a refusal tries to put the run back to stopped (if that move
+  // fails too, the run stays queued and nothing is sent). A hold that cannot be read throws
+  // one fixed text that names no run and carries no store error.
+  try {
+    await assertNoOpenPublishDecision(run.id);
+  } catch (err) {
+    await transitionRunStatus(runId, "queued", "stopped", undefined, authority).catch(() => undefined);
+    if (isPublishDecisionRequired(err)) return { ok: false, error: PUBLISH_DECISION_REQUIRED };
+    throw publishHoldFault(err);
   }
 
   // Split try/catch so post-sendTask errors never revert to "stopped"

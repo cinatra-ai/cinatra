@@ -2,9 +2,13 @@ import "server-only";
 import { createHash } from "node:crypto";
 import type { Pool } from "pg";
 import {
+  ARTIFACT_IMAGE_TOOL,
+  ARTIFACT_MATERIALIZE_TOOL,
   collectArtifactBindingsFromOasDocument,
   parseArtifactBindingDeclaration,
   producesObjectTypeIdForExtension,
+  readArtifactReviewTargetsInput,
+  readFlowControlTopology,
   type CollectedArtifactBinding,
   type PersistedArtifactBindingDeclaration,
   type SemanticArtifactProducesRef,
@@ -334,8 +338,172 @@ const pinnedBindingsCache = new Map<
     errors: string[];
     produces: string[];
     producesRefs: SemanticArtifactProducesRef[];
+    reviewedWriteNodeIds: ReadonlySet<string>;
   }
 >();
+
+/**
+ * cinatra#3035: the ids of the nodes whose write a marked review gate THAT
+ * EXECUTES reviews. Read with the compiler's own topology and marker reading
+ * (`readFlowControlTopology`, `readArtifactReviewTargetsInput`), so only what
+ * compiles to a marked step counts: a top-level InputMessageNode reachable from
+ * the start node (the compiler propagates no marker out of a nested subflow).
+ * Such a gate reviews a write only when its marker names one of its own declared
+ * inputs (not blank once trimmed) and all of these hold, read the fail-closed
+ * way (when in doubt, unreviewed, so the core default review stays):
+ * - the writer is a top-level artifact-writing passthrough ApiNode
+ *   (`artifact_materialize` or `artifact_image_generate`) reachable from start;
+ * - a DATA path carries THAT writer's output into the targets input: a direct
+ *   edge, or through executed non-writing ApiNodes (collectors) only. The walk
+ *   never passes through another writer (its inputs feed a different artifact),
+ *   a FlowNode or any other node, and each edge it follows runs from a node
+ *   that control-reaches the node it feeds;
+ * - the gate POST-DOMINATES the writer and every collector on that path: every
+ *   control path from it to the end passes the gate (all branches counted).
+ * A write inside a FlowNode's subflow reads unreviewed, and so does a node id
+ * that also stands in a subflow or in an unreviewed place.
+ */
+function readReviewedWriteNodeIds(doc: Record<string, unknown>): ReadonlySet<string> {
+  const refs: Record<string, unknown> = isRecord(doc.$referenced_components)
+    ? doc.$referenced_components
+    : {};
+  const { adjacency, reachable } = readFlowControlTopology(doc);
+  const executed = new Set(reachable);
+  const edges = Array.isArray(doc.data_flow_connections) ? doc.data_flow_connections : [];
+  const reaches = (from: string, to: string): boolean => {
+    const seen = new Set<string>();
+    const queue = [...(adjacency.get(from) ?? [])];
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      if (id === to) return true;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      queue.push(...(adjacency.get(id) ?? []));
+    }
+    return false;
+  };
+  // The gate post-dominates `from` when `from` reaches the gate and no node
+  // without a successor (the end, or a dead end) is reachable from `from`
+  // without passing the gate. Every edge counts, whatever its branch.
+  const postDominates = (gateId: string, from: string): boolean => {
+    if (from === gateId || !reaches(from, gateId)) return false;
+    const seen = new Set<string>([from]);
+    const queue = [from];
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      const next = adjacency.get(id) ?? [];
+      if (next.length === 0) return false;
+      for (const n of next) {
+        if (n === gateId || seen.has(n)) continue;
+        seen.add(n);
+        queue.push(n);
+      }
+    }
+    return true;
+  };
+  const apiTool = (id: string): string | undefined | null => {
+    const node = refs[id];
+    if (!isRecord(node) || node.component_type !== "ApiNode") return null;
+    const tool = isRecord(node.data) ? node.data.tool : undefined;
+    return typeof tool === "string" ? tool : undefined;
+  };
+  const isWriter = (id: string): boolean => {
+    const tool = apiTool(id);
+    return tool === ARTIFACT_MATERIALIZE_TOOL || tool === ARTIFACT_IMAGE_TOOL;
+  };
+  // Data edges by destination: each node -> the nodes that feed any of its inputs.
+  const feeders = new Map<string, string[]>();
+  for (const edge of edges) {
+    if (!isRecord(edge)) continue;
+    const from = refOf(edge.source_node);
+    const to = refOf(edge.destination_node);
+    if (from === undefined || to === undefined) continue;
+    if (!feeders.has(to)) feeders.set(to, []);
+    feeders.get(to)!.push(from);
+  }
+  const reviewedPlaces = new Set<string>();
+  for (const gateId of reachable) {
+    const gate = refs[gateId];
+    if (!isRecord(gate) || gate.component_type !== "InputMessageNode") continue;
+    const targetsInput = readArtifactReviewTargetsInput(gate);
+    if (targetsInput === undefined || targetsInput.trim().length === 0) continue;
+    const inputs = Array.isArray(gate.inputs) ? gate.inputs : [];
+    if (!inputs.some((port) => isRecord(port) && port.title === targetsInput)) continue;
+    // Backwards from the gate's targets input: writers end the walk, executed
+    // collectors the gate post-dominates pass it on, every other node stops it.
+    const visited = new Set<string>();
+    const pending: string[] = [];
+    for (const edge of edges) {
+      if (!isRecord(edge) || refOf(edge.destination_node) !== gateId) continue;
+      if (edge.destination_input !== targetsInput) continue;
+      const source = refOf(edge.source_node);
+      if (source !== undefined && reaches(source, gateId)) pending.push(source);
+    }
+    while (pending.length > 0) {
+      const id = pending.pop()!;
+      if (visited.has(id) || id === gateId) continue;
+      visited.add(id);
+      if (!executed.has(id) || !postDominates(gateId, id)) continue;
+      if (isWriter(id)) {
+        reviewedPlaces.add(id);
+        continue;
+      }
+      if (apiTool(id) === null) continue;
+      for (const from of feeders.get(id) ?? []) {
+        if (reaches(from, id)) pending.push(from);
+      }
+    }
+  }
+  // Each node id -> the places it stands in. Anything inside a called
+  // FlowNode's subflow stands in NESTED, a place no gate reviews.
+  const NESTED = "\u0000nested";
+  const places = new Map<string, Set<string>>();
+  const place = (id: unknown, at: string): void => {
+    if (typeof id !== "string" || id.length === 0) return;
+    if (!places.has(id)) places.set(id, new Set());
+    places.get(id)!.add(at);
+  };
+  for (const top of reachable) {
+    place(top, top);
+    const component = refs[top];
+    if (!isRecord(component)) continue;
+    place(component.id, top);
+    if (component.component_type !== "FlowNode") continue;
+    const seen = new Set<object>();
+    const pending: unknown[] = [component.subflow];
+    while (pending.length > 0) {
+      const value = pending.pop();
+      if (value === null || typeof value !== "object" || seen.has(value)) continue;
+      seen.add(value);
+      if (Array.isArray(value)) {
+        for (const item of value) pending.push(item);
+        continue;
+      }
+      const record = value as Record<string, unknown>;
+      if (typeof record.component_type === "string") place(record.id, NESTED);
+      const ref = record.$component_ref;
+      if (typeof ref === "string") {
+        place(ref, NESTED);
+        pending.push(refs[ref]);
+      }
+      for (const item of Object.values(record)) pending.push(item);
+    }
+  }
+  const reviewed = new Set<string>();
+  for (const [id, at] of places) {
+    if ([...at].every((p) => reviewedPlaces.has(p))) reviewed.add(id);
+  }
+  return reviewed;
+}
+
+function refOf(value: unknown): string | undefined {
+  const ref = isRecord(value) ? value.$component_ref : undefined;
+  return typeof ref === "string" ? ref : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 async function loadRunPackageBindings(input: {
   packageName: string;
@@ -347,6 +515,8 @@ async function loadRunPackageBindings(input: {
   /** The FULL typed produces entries (cinatra#1454) — carries per-entry
    *  objectTypeId so the materializer resolves the declared target type. */
   producesRefs: SemanticArtifactProducesRef[];
+  /** cinatra#3035: the nodes whose write an executed marked gate reviews. */
+  reviewedWriteNodeIds: ReadonlySet<string>;
 }> {
   const cacheKey =
     input.packageVersion !== null
@@ -391,7 +561,13 @@ async function loadRunPackageBindings(input: {
   const produces = producesRefs.map((r) => r.extension);
   const payload = pkg.payload;
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    const empty = { bindings: [], errors: [] as string[], produces, producesRefs };
+    const empty = {
+      bindings: [],
+      errors: [] as string[],
+      produces,
+      producesRefs,
+      reviewedWriteNodeIds: new Set<string>(),
+    };
     if (cacheKey !== null) pinnedBindingsCache.set(cacheKey, empty);
     return empty;
   }
@@ -399,7 +575,12 @@ async function loadRunPackageBindings(input: {
     payload as Record<string, unknown>,
     { produces, producesRefs },
   );
-  const result = { ...collected, produces, producesRefs };
+  const result = {
+    ...collected,
+    produces,
+    producesRefs,
+    reviewedWriteNodeIds: readReviewedWriteNodeIds(payload as Record<string, unknown>),
+  };
   if (cacheKey !== null) pinnedBindingsCache.set(cacheKey, result);
   return result;
 }
@@ -456,6 +637,47 @@ export async function loadRunDerivationContext(input: {
     producesRefs: loaded.producesRefs,
     hasBindings: loaded.bindings.length > 0,
     bindings: loaded.bindings,
+  };
+}
+
+/**
+ * cinatra#3035: the image road's write facts from ONE reading of the run's
+ * package — the typed produces refs and whether an executed marked gate reviews
+ * the write `nodeId` makes. An unpinned run (a dist-tag that can move) reads the
+ * registry once here and takes both answers from that one result. A pinned run
+ * whose template persisted its executed declaration takes the produces refs from
+ * it (as `loadRunDerivationContext` does) and the review answer from the
+ * registry copy of that SAME immutable version; that read failing leaves the
+ * write with the core default review rather than refusing it.
+ */
+export async function loadRunImageWriteFacts(input: {
+  templateId: string;
+  packageVersion: string | null;
+  nodeId: string;
+}): Promise<{ producesRefs: SemanticArtifactProducesRef[]; reviewed: boolean }> {
+  const { packageName, executedDeclaration } = await resolveTemplatePackageAndBindingsFlag(
+    input.templateId,
+    input.packageVersion,
+  );
+  if (packageName === null) return { producesRefs: [], reviewed: false };
+  if (executedDeclaration !== null) {
+    let reviewed = false;
+    try {
+      reviewed = (
+        await loadRunPackageBindings({ packageName, packageVersion: input.packageVersion })
+      ).reviewedWriteNodeIds.has(input.nodeId);
+    } catch {
+      reviewed = false;
+    }
+    return { producesRefs: executedDeclaration.producesRefs, reviewed };
+  }
+  const loaded = await loadRunPackageBindings({
+    packageName,
+    packageVersion: input.packageVersion,
+  });
+  return {
+    producesRefs: loaded.producesRefs,
+    reviewed: loaded.reviewedWriteNodeIds.has(input.nodeId),
   };
 }
 
@@ -640,6 +862,9 @@ export async function writeClaimedArtifact(input: {
    *  path only) — journalled on the ledger row this write claims, so the
    *  DECIDING RUNG of every default-road artifact is auditable. */
   detection?: MaterializationDetection | null;
+  /** cinatra#4264: the runtime's signed step of the call (the tool path only);
+   *  recorded on the ledger row only when it equals `nodeId`. */
+  verifiedStepId?: string;
   extension: string;
   title: string;
   mime: string;
@@ -709,6 +934,7 @@ export async function writeClaimedArtifact(input: {
     extension: input.extension,
     contentHash,
     detection: input.detection ?? null,
+    ...(input.verifiedStepId !== undefined ? { verifiedStepId: input.verifiedStepId } : {}),
   });
   // cinatra#1893 Q3: the 4-part unique key (run, output_id, extension,
   // content_hash) excludes `path`. A same-key row whose `path` DIFFERS from this
@@ -1343,7 +1569,12 @@ export async function authorizeToolMaterializeWrite(input: {
   objectTypeId?: string;
   mime: string;
   content: string;
-}): Promise<{ ok: true; target: ResolvedBoundTarget } | { ok: false; error: string }> {
+  /** cinatra#3035: the writing node; absent (the append road) reads unreviewed. */
+  nodeId?: string;
+}): Promise<
+  | { ok: true; target: ResolvedBoundTarget; reviewed: boolean }
+  | { ok: false; error: string }
+> {
   const packageName = await resolveTemplatePackageName(input.templateId);
   if (packageName === null) {
     return {
@@ -1387,7 +1618,11 @@ export async function authorizeToolMaterializeWrite(input: {
       producesObjectTypeIdForExtension(loaded.producesRefs, input.extension) ?? undefined,
   });
   if (!resolved.ok) return { ok: false, error: resolved.error };
-  return { ok: true, target: resolved.target };
+  return {
+    ok: true,
+    target: resolved.target,
+    reviewed: input.nodeId !== undefined && loaded.reviewedWriteNodeIds.has(input.nodeId),
+  };
 }
 
 export async function materializeToolArtifact(input: {
@@ -1399,6 +1634,10 @@ export async function materializeToolArtifact(input: {
   createdBy: string | null;
   /** The calling ApiNode's id — the ledger output identity. */
   nodeId: string;
+  /** cinatra#3035: the runtime's signed step of the call, when it verified. The
+   *  write reads reviewed only when it is the named node: a request's own
+   *  node_id is never the review authority. */
+  verifiedStepId?: string;
   extension: string;
   /** OPTIONAL declared-type discriminator (cinatra#1454) — the exact
    *  `@scope/pkg:local-id` the tool materializes into. */
@@ -1422,6 +1661,10 @@ export async function materializeToolArtifact(input: {
       objectTypeId: input.objectTypeId,
       mime: input.mime,
       content: input.content,
+      // cinatra#3035: the review is read only for the verified calling step.
+      ...(input.verifiedStepId !== undefined && input.verifiedStepId === input.nodeId
+        ? { nodeId: input.nodeId }
+        : {}),
     });
     if (!authorized.ok) return { ok: false, error: authorized.error };
     const resolved = authorized;
@@ -1440,6 +1683,8 @@ export async function materializeToolArtifact(input: {
       outputId: input.nodeId,
       nodeId: input.nodeId,
       path: "materialize_tool",
+      // cinatra#4264: the filing step, recorded only when it is this node.
+      ...(input.verifiedStepId !== undefined ? { verifiedStepId: input.verifiedStepId } : {}),
       extension: input.extension,
       title,
       mime: input.mime,
@@ -1447,6 +1692,9 @@ export async function materializeToolArtifact(input: {
       ownership,
       resolvedTarget: resolved.target,
       mimeDescription: "the call declared MIME",
+      // cinatra#3035: a mid-run write an executed marked gate reviews carries
+      // the intermediate origin; that gate is the review of it.
+      ...(resolved.reviewed ? { originKind: "live_generator" as const } : {}),
     });
   } catch (err) {
     return {

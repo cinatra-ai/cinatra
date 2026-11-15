@@ -1,5 +1,5 @@
 import "server-only";
-import { readLocalPackageSkillContent } from "@cinatra-ai/skills";
+import { readLocalPackageSkillContent } from "@cinatra-ai/skills/local-skill-files";
 
 /**
  * MCP autodiscovery instructions delivered in the `initialize` response.

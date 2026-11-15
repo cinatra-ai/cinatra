@@ -86,9 +86,11 @@ const gate = (packageDir, strict = false) => runConformanceGate({ packageDir, sd
 const allFindings = (r) => [...(r.blocking ?? []), ...(r.known ?? []), ...(r.advisory ?? [])];
 const borderFindings = (r) => allFindings(r).filter((f) => f.rule.startsWith("border."));
 
-// THE PROMPTING CASE (A4): a connector that hands a page's words to the
-// application's CMS review seam with its staged change — the seam stores them
-// as an artifact for the display's diff.
+// THE PROMPTING CASE (A4), RETIRED (cinatra#3862 leg 7): a connector that handed
+// a page's words to the application's CMS review seam with its staged change.
+// The application no longer publishes that capability and the SDK no longer
+// lists it, so naming it is no road; the content-editor agents file the page
+// snapshot themselves.
 const CMS_REVIEW_REGISTER =
   'import type { ExtensionHostContext } from "@cinatra-ai/sdk-extensions/host-context";\n' +
   "export function register(ctx: ExtensionHostContext) {\n" +
@@ -98,6 +100,9 @@ const CMS_REVIEW_REGISTER =
   "      seam.impl.captureStagedWrite({ stagedChange: change, resolved: { words: change.pageWords } }),\n" +
   "  });\n" +
   "}\n";
+
+// A host capability that still stores an artifact: the mail routing.
+const MAIL_ROUTING_REGISTER = CMS_REVIEW_REGISTER.replace('"@cinatra-ai/host:cms-review"', '"@cinatra-ai/host:email-routing"');
 
 describe("class 4 — a connector whose manifest declares a produced type or claims an object type", () => {
   it("U-a: cinatra.produces in package.json fails border.connector-declares-produces", () => {
@@ -137,13 +142,19 @@ describe("class 4 — a connector whose manifest declares a produced type or cla
 });
 
 describe("class 5 — a connector whose code calls a road that creates an artifact", () => {
-  it("U-e: THE PROMPTING CASE — the CMS review seam with the page's words fails border.connector-creates-artifact", () => {
-    const r = gate(connector({ register: CMS_REVIEW_REGISTER }));
+  it("U-e: a host capability that stores an artifact (the mail routing) named in connector code fails border.connector-creates-artifact", () => {
+    const r = gate(connector({ register: MAIL_ROUTING_REGISTER }));
     expect(r.conform).toBe(false);
     const hit = r.blocking.filter((f) => f.rule === "border.connector-creates-artifact");
     expect(hit).toHaveLength(1);
     expect(hit[0].file).toBe("src/register.ts");
-    expect(hit[0].detail).toContain("@cinatra-ai/host:cms-review");
+    expect(hit[0].detail).toContain("@cinatra-ai/host:email-routing");
+  });
+
+  it("U-e: the retired CMS review capability is no road: a connector naming it carries no border finding (cinatra#3862 leg 7)", () => {
+    const r = gate(connector({ register: CMS_REVIEW_REGISTER }));
+    expect(r.infra).toBe(false);
+    expect(borderFindings(r)).toEqual([]);
   });
 
   it("U-f: a tool that calls the MCP tool artifact_authoring_emit fails the same rule", () => {
@@ -199,11 +210,10 @@ describe("the road list is derived from the SDK's declaration, fail closed", () 
     "packages/sdk-ui/package.json",
   ];
 
-  it("U-g: loadLiveRules derives the four roads in their declared order", () => {
+  it("U-g: loadLiveRules derives the three roads in their declared order", () => {
     const rules = loadLiveRules(REPO_ROOT);
     expect(rules.ok).toBe(true);
     expect(rules.artifactCreatingRoads).toEqual([
-      "@cinatra-ai/host:cms-review",
       "@cinatra-ai/host:email-routing",
       "artifact_materialize",
       "artifact_authoring_emit",
@@ -296,7 +306,7 @@ describe("not a connector, not a call — no border finding", () => {
 
 describe("the floor — the four connectors that name a road today", () => {
   const FLOORED = "@cinatra-ai/email-connector";
-  const FLOORED_REGISTER = CMS_REVIEW_REGISTER.replace('"@cinatra-ai/host:cms-review"', '"@cinatra-ai/host:email-routing"');
+  const FLOORED_REGISTER = MAIL_ROUTING_REGISTER;
 
   it("U-i: a floored file naming its floored road is conform with the finding in known, and blocking under strict", () => {
     const dir = connector({ name: FLOORED, register: FLOORED_REGISTER });

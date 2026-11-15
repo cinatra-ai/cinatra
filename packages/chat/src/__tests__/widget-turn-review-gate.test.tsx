@@ -152,7 +152,11 @@ import { LIFECYCLE_VIEW_RESOLVE_PATH } from "../../../agents/src/lifecycle-card-
 import { LIFECYCLE_VIEW_DECIDE_PATH } from "../../../agents/src/review-gate-card";
 import { NAMED_AGENT_START_TOOL_NAME } from "../run-start-tool-names";
 import type { UiMessage } from "../types";
-import { installWidgetServiceStub, mountSurface } from "./conversation-column-harness";
+import {
+  installWidgetServiceStub,
+  mountSurface,
+  WIDGET_LIFECYCLE_SURFACE,
+} from "./conversation-column-harness";
 
 const RUN_ID = "run-3051-widget";
 const GATE_REF = "lcr-opaque-3051";
@@ -501,4 +505,90 @@ describe("a run started from the widget's own composer (#3051)", () => {
     expectEveryLifecycleCallBrokered(server.calls);
     expectNoCookieAction();
   }, 60_000);
+
+  // cinatra#4217 (R76 MUST-FIX 2): the frame renews its sign-in while the turn
+  // stays open, and the server refuses the token it renewed away from. The
+  // swap from the working placeholder to the review screen is learned through
+  // the run card's slot reader, so a reader that kept its first headers would
+  // keep the placeholder up for ever after a renewal. Only the run route
+  // refuses the spent token here: that is the read this hunk rebuilds, and the
+  // panel's own tick already builds its headers on every look.
+  it("after a renewal the open turn still swaps the working placeholder for the review screen", async () => {
+    let userToken = "cwu_first";
+    const spent = new Set<string>();
+    const headers = vi
+      .spyOn(WIDGET_LIFECYCLE_SURFACE.auth, "headers")
+      .mockImplementation(() => ({
+        Authorization: "Bearer cit_site",
+        "X-Cinatra-Widget-User-Token": userToken,
+        "X-Cinatra-Widget-Assistant": "wordpress",
+        "X-Cinatra-Widget-Origin": "https://blog.example.com",
+      }));
+    try {
+      let seed = seedBody();
+      server = installTurnServer({
+        seed: () => seed,
+        gate: () => PENDING,
+        messages: namedStartTranscript(),
+      });
+      const served = globalThis.fetch;
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const token = headersOf(init ?? {})["x-cinatra-widget-user-token"];
+        if (url === seedUrl(RUN_ID) && token !== undefined && spent.has(token)) {
+          server!.calls.push({ url, init: init ?? {} });
+          return new Response(JSON.stringify({ error: "Unauthorized" }), {
+            status: 401,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return served(input, init);
+      }) as unknown as typeof fetch;
+
+      const { container } = await mountSurface("widget", { messages: namedStartTranscript() });
+      const root = container as HTMLElement;
+
+      // Before the renewal: the run works, the slot is the placeholder.
+      await waitFor(() => expect(root.querySelector(PLACEHOLDER)).not.toBeNull(), {
+        timeout: 15_000,
+      });
+      expect(root.querySelector(SLOT)?.getAttribute("data-run-review-slot")).toBe("working");
+
+      // Done, and the review has not opened yet: the placeholder stays.
+      const readsBefore = callsTo(server.calls, seedUrl(RUN_ID)).length;
+      seed = seedBody({ status: "completed", reviewGate: { ref: null, awaiting: true } });
+      await waitFor(
+        () =>
+          expect(callsTo(server!.calls, seedUrl(RUN_ID)).length).toBeGreaterThan(
+            readsBefore + 1,
+          ),
+        { timeout: 20_000 },
+      );
+      expect(root.querySelector(PLACEHOLDER)).not.toBeNull();
+      expect(root.querySelector(REVIEW_CARD)).toBeNull();
+
+      // The frame renews; the first token is spent. Then the review opens.
+      userToken = "cwu_renewed";
+      spent.add("cwu_first");
+      seed = seedBody({ status: "completed", reviewGate: { ref: GATE_REF, awaiting: false } });
+
+      const card = await waitFor(
+        () => {
+          const el = root.querySelector(REVIEW_CARD);
+          if (!el) throw new Error("after the renewal the review screen never replaced the placeholder");
+          return el;
+        },
+        { timeout: 20_000 },
+      );
+      await waitFor(() => expect(root.querySelector(APPROVE)).not.toBeNull());
+      expect(root.querySelector(SLOT)?.getAttribute("data-run-review-slot")).toBe("review");
+      expect(root.querySelector(SLOT)?.contains(card)).toBe(true);
+      expect(cardCounts(root)).toEqual({
+        reviewCards: 1, slots: 1, placeholders: 0, promptWindows: 0, settledExchanges: 0,
+      });
+      expectNoCookieAction();
+    } finally {
+      headers.mockRestore();
+    }
+  }, 90_000);
 });

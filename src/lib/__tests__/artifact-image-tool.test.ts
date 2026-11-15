@@ -50,7 +50,10 @@ function deps(over: Partial<ArtifactImageToolDeps> = {}): ArtifactImageToolDeps 
         model: "test-image-model",
       }),
     }),
-    loadProducesRefs: async () => [{ extension: "@cinatra-ai/picture-artifact" }],
+    loadWriteFacts: async () => ({
+      producesRefs: [{ extension: "@cinatra-ai/picture-artifact" }],
+      reviewed: false,
+    }),
     resolveOwnership: async () => ({
       ownerLevel: "organization",
       ownerId: "org-1",
@@ -77,15 +80,16 @@ const call = {
 describe("acceptance item 3 — a request without a provider is refused with its reason", () => {
   it("answers a stated no-provider refusal instead of throwing, and writes nothing", async () => {
     const countRunImages = vi.fn(async () => 0);
-    const loadProducesRefs = vi.fn(async () => [
-      { extension: "@cinatra-ai/picture-artifact" },
-    ]);
+    const loadWriteFacts = vi.fn(async () => ({
+      producesRefs: [{ extension: "@cinatra-ai/picture-artifact" }],
+      reviewed: false,
+    }));
     const outcome = await generateArtifactImage(
       call,
       deps({
         resolveImageProvider: async () => null,
         countRunImages,
-        loadProducesRefs,
+        loadWriteFacts,
       }),
     );
 
@@ -96,7 +100,7 @@ describe("acceptance item 3 — a request without a provider is refused with its
     expect(outcome.error).toMatch(/no image provider is configured/i);
     expect(outcome.error).toMatch(/no picture was made/i);
     // Nothing was read and nothing was counted on the way to the refusal.
-    expect(loadProducesRefs).not.toHaveBeenCalled();
+    expect(loadWriteFacts).not.toHaveBeenCalled();
     expect(countRunImages).not.toHaveBeenCalled();
   });
 
@@ -140,7 +144,10 @@ describe("enabler 0.28 — the rest of the tool's stated refusals", () => {
           provider: "test-provider",
           generateImage: PROVIDER_NEVER_CALLED,
         }),
-        loadProducesRefs: async () => [{ extension: "@cinatra-ai/picture-artifact" }],
+        loadWriteFacts: async () => ({
+          producesRefs: [{ extension: "@cinatra-ai/picture-artifact" }],
+          reviewed: false,
+        }),
       }),
     );
     expect(outcome.ok).toBe(false);

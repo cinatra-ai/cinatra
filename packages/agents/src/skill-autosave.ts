@@ -21,6 +21,7 @@ import "server-only";
  */
 import { readSkillAutosaveConfig } from "@/lib/skill-autosave";
 import { resolveUserContextForUserId } from "@/lib/auth-session";
+import type { ActorContext } from "@/lib/authz";
 import {
   createOrUpdateCustomSkillForAgent,
   buildDefaultPersonalSkillName,
@@ -66,11 +67,14 @@ export async function runSkillAutosaveOnRunCompletion(runId: string): Promise<vo
   //
   // The narrowing includes `orgId` so the background
   // `resolveUserContextForUserId` call below can pass
-  // `{ activeOrganizationId: run.orgId }`. Without it, the resolver would
-  // fall back to an arbitrary session/default org (auth-session.ts:263)
-  // producing wrong project-scoped reads. When `run.orgId` is unavailable
-  // (e.g. legacy NULL row), `resolveUserContextForUserId` FAILS CLOSED for
-  // Sources 2+3 (returns only Source 1 owned; no access/co-owner grants).
+  // `{ activeOrganizationId: run.orgId }`. Without it, the resolver falls
+  // back to the person's first session row's organization, else their
+  // default membership organization, and resolves that organization's role,
+  // team roles and project grants. When `run.orgId` is unavailable (e.g. a
+  // legacy NULL row) that fallback still runs; only when it finds no
+  // organization at all does the resolver return just the implicitly owned
+  // project grants. The team axis of a fallback organization is dropped
+  // below (see `actorForCatalogRead`).
   let run: {
     id: string;
     title?: string | null;
@@ -123,15 +127,16 @@ export async function runSkillAutosaveOnRunCompletion(runId: string): Promise<vo
       // Without this, admin-hidden `system` skill content leaks into the LLM
       // generation prompt and the persisted `basedOnSkillIds`.
       // Pass `run.orgId` so project-grant resolution anchors on the run's org,
-      // not an arbitrary session/default-org fallback. When run.orgId is
-      // unavailable the resolver fails closed for Sources 2+3 (only Source 1 /
-      // owned grants remain).
-      const { actorContext: actor } = await resolveUserContextForUserId(
+      // not a session/default-org fallback. When run.orgId is unavailable the
+      // resolver falls back to the person's session or default organization
+      // (see the run read above).
+      const { actorContext: resolvedActor } = await resolveUserContextForUserId(
         ownerUserId,
         run?.orgId
           ? { activeOrganizationId: run.orgId }
           : undefined,
       );
+      const actor = actorForCatalogRead(resolvedActor, run?.orgId ?? null);
 
       const persisted = await createOrUpdateCustomSkillForAgent({
         agentId,
@@ -153,4 +158,28 @@ export async function runSkillAutosaveOnRunCompletion(runId: string): Promise<vo
       );
     }
   }
+}
+
+/**
+ * The actor the matched-skill catalog read runs under.
+ *
+ * With the run's own organization, it is the resolved actor unchanged: the
+ * run owner's teams in that organization are the teams the owner has there
+ * with a cookie session (cinatra#4536).
+ *
+ * Without one (a legacy run with a NULL `org_id`), the resolver anchors on the
+ * person's session or default organization, which the run never named. Its
+ * team membership must not admit team-scoped skill content into the
+ * generation prompt or `basedOnSkillIds`, so the team axis is left out, as it
+ * was before the resolver carried `teamIds`. A copy is returned; the resolved
+ * actor is not changed.
+ */
+function actorForCatalogRead(
+  resolved: ActorContext,
+  runOrgId: string | null,
+): ActorContext {
+  if (runOrgId) return resolved;
+  const narrowed: ActorContext = { ...resolved };
+  delete narrowed.teamIds;
+  return narrowed;
 }

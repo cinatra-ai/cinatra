@@ -193,9 +193,10 @@ export async function submitAgentHitlScreenForActor(input: {
     // the composer, in another tab. The question IS answered, so the screen
     // settles rather than showing a refusal for a decision that landed.
     if (isAlreadyResolvedError(message)) return { ok: true };
-    console.warn(
-      `[submitAgentHitlScreenForActor] refused run ${runId}: ${message}`,
-    );
+    // cinatra#4150: a publish-hold refusal (a fixed text) is logged without the run id.
+    const code = (error as { code?: unknown } | null)?.code;
+    const held = code === "publish_decision_required" || code === "publish_decision_unavailable";
+    console.warn(held ? `[submitAgentHitlScreenForActor] refused: ${message}` : `[submitAgentHitlScreenForActor] refused run ${runId}: ${message}`);
     return REFUSED;
   }
   return { ok: true };

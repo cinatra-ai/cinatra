@@ -134,6 +134,29 @@ describe("the fixture password is a per-boot secret, never a source literal", ()
     expect(fs.readFileSync(file, "utf8").trim()).toBe(secret);
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
   });
+
+  // cinatra#4112: a boot that refuses the fixture takes the file away; a later
+  // boot in the same process that wires the account again must put it back.
+  it("writes the file again after it was taken away, with the boot's one value", async () => {
+    vi.resetModules();
+    const boot = await import("@/lib/dev-fixture-secret");
+    const cwd = tempInstanceRoot();
+    const { password } = boot.resolveDevFixturePassword({});
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      boot.printDevFixtureSecretOnce("fixture@example.com", password, "generated", cwd);
+      expect(boot.readDevFixturePasswordFile(cwd)).toBe(password);
+      boot.removeDevFixturePasswordFile(cwd);
+      expect(boot.readDevFixturePasswordFile(cwd)).toBeNull();
+      boot.printDevFixtureSecretOnce("fixture@example.com", boot.resolveDevFixturePassword({}).password, "generated", cwd);
+      expect(boot.readDevFixturePasswordFile(cwd)).toBe(password);
+      // Without a removal in between, a second call still writes and says nothing.
+      boot.printDevFixtureSecretOnce("fixture@example.com", password, "generated", cwd);
+      expect(spy).toHaveBeenCalledTimes(2);
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

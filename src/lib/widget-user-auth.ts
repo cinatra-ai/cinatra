@@ -39,6 +39,7 @@ import {
   runPostgresQueriesSync,
   quotePostgresIdentifier,
 } from "@/lib/postgres-sync";
+import { WIDGET_BROKER_ROUTE_PATH } from "@/lib/widget-broker-route";
 import {
   normalizeWidgetAuthSessionId,
   readWidgetAuthSessionLiveness,
@@ -71,8 +72,10 @@ import {
 //      POST /api/widget-auth/token when the CMS BACKEND redeems the code (PKCE
 //      verifier + the same `cnx_` whose site/org the code is bound to). It is
 //      an OPAQUE `cwu_` bearer bound to {userId, orgId, siteOrigin, agentSlug,
-//      instanceId, aud, scope, exp, jti, siteId}. NO refresh token — on expiry
-//      the widget re-runs the login flow.
+//      instanceId, aud, scope, exp, jti, siteId}. NO refresh token. The
+//      frame-owned flow RENEWS the bearer it holds (cinatra#4217,
+//      renewUserWidgetToken below) up to a maximum session lifetime; after that,
+//      or on any refusal, the widget re-runs the login flow.
 //
 // DESIGN — OPAQUE server-side-tracked artifacts (NOT JWTs), mirroring the
 // site-scoped widget-token-broker.ts: single-issuer/single-verifier, instant
@@ -99,10 +102,16 @@ import {
 
 // TTLs. The transaction + code are single-leg, short-lived (mirrors the connect
 // AUTH_CODE_TTL_MS of 120s). The user token is the browser-held bearer: short
-// (15m), NO refresh — re-login on expiry (spec).
+// (15m), no refresh token. cinatra#4217: the frame holding it may RENEW it — a
+// successor with a fresh 15m life is written, and the presented bearer keeps at
+// most USER_TOKEN_RENEW_GRACE_SECONDS for requests already sent with it — but
+// never past USER_TOKEN_MAX_SESSION_SECONDS after the original sign-in; after
+// that the person signs in again.
 const TRANSACTION_TTL_SECONDS = 600; // 10 min — covers the interactive login
 const CODE_TTL_SECONDS = 120; // 2 min — code→token redeem window
 const USER_TOKEN_TTL_SECONDS = 15 * 60; // 15 min — browser-held bearer
+const USER_TOKEN_MAX_SESSION_SECONDS = 8 * 60 * 60; // 8 h — one working day per sign-in
+const USER_TOKEN_RENEW_GRACE_SECONDS = 30; // a renewed bearer's last half-minute
 
 const USER_TOKEN_PREFIX = "cwu_";
 const TOKEN_RANDOM_BYTES = 32;
@@ -838,6 +847,10 @@ export type RedeemUserTokenResult =
       token: string;
       tokenType: "Bearer";
       expiresIn: number;
+      /** cinatra#4217 — the seconds to the new session's cap. The token row's
+       *  created_at is the same now() its expiry counts from, so this is the
+       *  whole maximum session lifetime. */
+      sessionExpiresIn: number;
       scope: string;
     }
   | { ok: false; reason: RedeemRejectReason };
@@ -988,6 +1001,7 @@ export function redeemUserAuthCode(input: {
     token: rawToken,
     tokenType: "Bearer",
     expiresIn: USER_TOKEN_TTL_SECONDS,
+    sessionExpiresIn: USER_TOKEN_MAX_SESSION_SECONDS,
     scope,
   };
 }
@@ -1203,11 +1217,186 @@ export function consumeUserWidgetToken(input: {
   };
 }
 
+// ---------------------------------------------------------------------------
+// cinatra#4217 — USER TOKEN RENEWAL, for the frame-owned sign-in only.
+//
+// The frame that holds a `cwu_` presents it before it runs out and receives a
+// successor. Three properties, each enforced in the DATABASE, not here:
+//
+//   • SINGLE CLAIM. ONE statement (a data-modifying CTE) deletes the presented
+//     row, writes its successor, and writes the presented bearer back with at
+//     most USER_TOKEN_RENEW_GRACE_SECONDS of life. Two renewals of the same
+//     bearer cannot both succeed: the second waits on the row lock, finds the
+//     row it read deleted, and claims nothing. The written-back row is never
+//     renewable, because the claim demands more life than the grace window. It
+//     NARROWS, and does not remove, the swap race: the frame builds its headers
+//     when a request starts and a review decision has no retry, so a request
+//     that left with the old bearer can still land only if the server verifies
+//     it within the grace window after the renewal committed AND while the old
+//     pair's transport token still lives (it may end first). One that reaches
+//     the verifier later than either is refused as any expired bearer is,
+//     although its bearer alone would have lived longer. The frame stays
+//     signed in: a refused review decision shows the card's existing
+//     "could not be recorded" text, and sending it again builds the request
+//     with the renewed pair.
+//   • SAME IDENTITY, SAME jti. Every column of the successor is copied from the
+//     claimed row except its hash and expiry. The jti is kept on purpose: the
+//     review island, the capture capability, the chat resume token, the MCP
+//     actor token and the pending tool-call session are all sealed on it and
+//     re-check it LIVE, so a fresh jti would kill each of them mid-flight at
+//     every renewal. (The lent-action grants carry their own jti, not this
+//     one.) Every renewal leaves the bearer it spent as one grace row of at
+//     most the grace window, so a chain has its successor plus one grace row
+//     for each of its renewals in the last USER_TOKEN_RENEW_GRACE_SECONDS, all
+//     with identical claims; at most one of them, the successor, is renewable.
+//     The two readers that select by jti and check expiry in code order by
+//     expiry, so an expired predecessor that lingers is never the row they read.
+//   • A HARD CAP. `created_at` is copied too, so it stays the time of the
+//     original sign-in; the successor's expiry is the EARLIER of now + TTL and
+//     created_at + USER_TOKEN_MAX_SESSION_SECONDS, and a chain already at its cap
+//     is not claimed at all. A renewed session therefore ends no later than the
+//     cap, however often the frame renews.
+//
+// Before the claim, the presented token passes the ONE verifier,
+// consumeUserWidgetToken, against the chat audience every token carries and the
+// SERVER-DERIVED site origin: expired, signed-out, revoked, rotated or foreign
+// tokens are refused exactly as a chat turn refuses them, with the same reasons.
+// The token must also belong to the site the frame's binding re-derived — a
+// token minted for another site row is refused even when the origins agree.
+// ---------------------------------------------------------------------------
+
+export type RenewUserTokenReason =
+  | ConsumeUserTokenReason
+  /** The token is bound to a different site row than the frame's binding. */
+  | "site_mismatch"
+  /** Nothing was claimed: the chain reached its maximum lifetime, the token
+   *  has no more than the grace window left, it was already renewed, or a
+   *  concurrent renewal of the same bearer claimed it first. */
+  | "not_renewable";
+
+export type RenewUserTokenResult =
+  | {
+      ok: true;
+      token: string;
+      tokenType: "Bearer";
+      expiresIn: number;
+      /** cinatra#4217 — whole seconds left to the session cap, floored. */
+      sessionExpiresIn: number;
+      scope: string;
+      /** The person the chain belongs to (the verified claim), for the audit
+       *  line only. Never a token, a hash or a jti. */
+      userId: string;
+    }
+  | { ok: false; reason: RenewUserTokenReason };
+
+// cinatra#4217 — the renewal's ONE statement. $1 = the presented token's hash,
+// $2 = the successor's hash, $3 = the maximum session lifetime, $4 = one token
+// life, $5 = the grace window. Every column but the hash and the two times is
+// copied from the claimed row. Kept as its own function so the real-database
+// test runs this very text, two connections at once.
+//
+// THE STATEMENT READS clock_timestamp() AND NO now(). now() is the time the
+// TRANSACTION began; READ COMMITTED takes the statement's snapshot later, and a
+// transaction may begin long before its statement runs. Two guards depend on it:
+//   • the LIFE guard. A second renewal of the same bearer whose transaction
+//     began before the first one committed could SEE the first one's grace row
+//     and still find it "more than the grace window" away from its own, earlier
+//     now(): it would claim the grace row and fork the chain;
+//   • the CAP guard. A transaction that began just before created_at + MAX and
+//     ran its statement after it would still find the chain under its cap and
+//     claim it, writing a successor whose cap is already past while expires_in,
+//     reckoned from the stale now(), reads positive.
+// clock_timestamp() is read while the statement runs, after the snapshot, so it
+// is never earlier than a grace row the snapshot can see nor than the cap
+// instant the statement acts at. The grace write, the successor's expiry and
+// expires_in read the same clock, so every time the statement writes or
+// advertises is reckoned from the instant it acts, not from a stale start.
+//
+// THE ADVERTISED LIVES ARE FLOORED (cinatra#4217 rebuild): `expires_in` (the
+// successor's life) and `session_expires_in` (the time left to the session
+// cap) are whole seconds rounded DOWN, so neither ever advertises more life
+// than is left. The frame counts both from a clock reading taken before it
+// sent the request, which keeps every renewal decision early, never late.
+function renewClaimStatement(): string {
+  const table = qTable(USER_TOKEN_TABLE);
+  const copied =
+    `jti, user_id, site_id, client, org_id, site_origin, agent_slug, instance_id, ` +
+    `credential_version, aud, iss, scope, ${WIDGET_AUTH_SESSION_COLUMN}`;
+  return (
+    `WITH claimed AS (DELETE FROM ${table} WHERE token_hash = $1 ` +
+    `AND expires_at > clock_timestamp() + make_interval(secs => $5) ` +
+    `AND created_at + make_interval(secs => $3) > clock_timestamp() ` +
+    `RETURNING ${copied}, expires_at, created_at), ` +
+    `grace AS (INSERT INTO ${table} (token_hash, ${copied}, expires_at, created_at) ` +
+    `SELECT $1, ${copied}, LEAST(expires_at, clock_timestamp() + make_interval(secs => $5)), created_at ` +
+    `FROM claimed) ` +
+    `INSERT INTO ${table} (token_hash, ${copied}, expires_at, created_at) ` +
+    `SELECT $2, ${copied}, ` +
+    `LEAST(clock_timestamp() + make_interval(secs => $4), created_at + make_interval(secs => $3)), ` +
+    `created_at FROM claimed ` +
+    `RETURNING jti, scope, ` +
+    `FLOOR(EXTRACT(EPOCH FROM (expires_at - clock_timestamp())))::int AS expires_in, ` +
+    `FLOOR(EXTRACT(EPOCH FROM (created_at + make_interval(secs => $3) - clock_timestamp())))::int AS session_expires_in`
+  );
+}
+
+export function renewUserWidgetToken(input: {
+  token: string;
+  agentSlug: string;
+  /** The site the frame's binding was RE-DERIVED to, server-side. */
+  site: VerifiedSiteContext;
+}): RenewUserTokenResult {
+  const verdict = consumeUserWidgetToken({
+    token: input.token,
+    agentSlug: input.agentSlug,
+    routePath: WIDGET_BROKER_ROUTE_PATH,
+    requestOrigin: input.site.siteOrigin,
+  });
+  if (!verdict.ok) return { ok: false, reason: verdict.reason };
+  if (verdict.claims.siteId !== input.site.siteId) {
+    return { ok: false, reason: "site_mismatch" };
+  }
+
+  const rawToken = USER_TOKEN_PREFIX + randomBytes(TOKEN_RANDOM_BYTES).toString("base64url");
+  const [claimed] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: renewClaimStatement(),
+        values: [
+          sha256Hex(input.token),
+          sha256Hex(rawToken),
+          USER_TOKEN_MAX_SESSION_SECONDS,
+          USER_TOKEN_TTL_SECONDS,
+          USER_TOKEN_RENEW_GRACE_SECONDS,
+        ],
+      },
+    ],
+  });
+  const row = claimed?.rows?.[0] as Record<string, unknown> | undefined;
+  if (!row) return { ok: false, reason: "not_renewable" };
+  const expiresIn = Number(row.expires_in);
+  const sessionExpiresIn = Number(row.session_expires_in);
+  return {
+    ok: true,
+    token: rawToken,
+    tokenType: "Bearer",
+    expiresIn: Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : 0,
+    sessionExpiresIn:
+      Number.isFinite(sessionExpiresIn) && sessionExpiresIn > 0 ? sessionExpiresIn : 0,
+    scope: String(row.scope ?? ""),
+    userId: verdict.claims.userId,
+  };
+}
+
 export const __testing = {
   sha256Base64Url,
   sha256Hex,
   USER_TOKEN_PREFIX,
   USER_TOKEN_TTL_SECONDS,
+  USER_TOKEN_MAX_SESSION_SECONDS,
+  USER_TOKEN_RENEW_GRACE_SECONDS,
+  renewClaimStatement,
   CODE_TTL_SECONDS,
   TRANSACTION_TTL_SECONDS,
   userTokenScope,

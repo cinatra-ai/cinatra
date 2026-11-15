@@ -127,6 +127,7 @@ export function ExtensionsMarketplaceClient({ cards }: Props) {
         <ToolbarSearchGroup className="w-full max-w-md flex-none">
           <ToolbarSearchInput
             placeholder="Search by name, description, or package…"
+            aria-label="Search by name, description, or package…"
             defaultValue={searchParams.get("q") ?? ""}
             onChange={(e) => handleSearchChange(e.target.value)}
           />

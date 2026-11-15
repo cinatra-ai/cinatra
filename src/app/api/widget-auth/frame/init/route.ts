@@ -4,6 +4,7 @@ import { resolveWidgetStreamAgentUnion } from "@/lib/widget-stream-agents.server
 import { createAuthTransaction } from "@/lib/widget-user-auth";
 import { deriveFrameBinding, resolveFrameRequestOrigin } from "@/lib/widget-frame-auth";
 import { allowNamedRateLimit } from "@/lib/connect-rate-limit";
+import { rateLimitClientAddress } from "@/lib/rate-limit-client-address";
 import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
 
 export const runtime = "nodejs";
@@ -51,18 +52,12 @@ type InitBody = {
 
 const GENERIC_400 = { error: "invalid_request" } as const;
 
-function clientIp(request: Request): string {
-  const fwd = request.headers.get("x-forwarded-for");
-  if (fwd) return fwd.split(",")[0]?.trim() || "unknown";
-  return request.headers.get("x-real-ip")?.trim() || "unknown";
-}
-
 function str(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
 export async function POST(request: Request): Promise<Response> {
-  const ip = clientIp(request);
+  const ip = rateLimitClientAddress(request);
   const ua = request.headers.get("user-agent");
 
   // 1. SAME-ORIGIN GATE FIRST, before any body work. Defense in depth (headers

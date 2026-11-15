@@ -78,7 +78,10 @@ const call = {
 function deps(): ArtifactImageToolDeps {
   return {
     resolveImageProvider: artifactImageToolDeps().resolveImageProvider,
-    loadProducesRefs: async () => [{ extension: "@cinatra-ai/picture-artifact" }],
+    loadWriteFacts: async () => ({
+      producesRefs: [{ extension: "@cinatra-ai/picture-artifact" }],
+      reviewed: false,
+    }),
     resolveOwnership: async () => ({
       ownerLevel: "organization",
       ownerId: "org-1",

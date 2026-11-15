@@ -267,9 +267,13 @@ export async function fetchMentionables(
   try {
     const res = await fetch("/api/assistants/list", requestInit(transport));
     if (!res.ok) return [];
-    const data = (await res.json()) as { assistants?: { id: string; handle: string }[] };
+    const data = (await res.json()) as {
+      assistants?: { id: string; handle: string; displayName?: string }[];
+    };
     if (!Array.isArray(data.assistants)) return [];
-    return data.assistants.map((a) => ({ ...a, displayName: a.handle }));
+    // The rows are labelled by their handle; the directory's display name is
+    // kept as `name` for a person's avatar initials (cinatra#4292).
+    return data.assistants.map((a) => ({ ...a, name: a.displayName ?? null, displayName: a.handle }));
   } catch {
     return [];
   }

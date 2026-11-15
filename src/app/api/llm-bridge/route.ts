@@ -52,6 +52,7 @@ import {
   readAgentRunByTokenHash,
   readAgentRunTokenHashById,
   readAgentTemplateById,
+  publishCallAllowed,
   OasCinatraLlmSchema,
   type LlmProvider,
 } from "@cinatra-ai/agents";
@@ -936,7 +937,16 @@ export async function POST(req: Request): Promise<Response> {
   let runFromContextId: Awaited<ReturnType<typeof readAgentRunByContextId>> =
     null;
   let contextIdUnresolved = false;
-  if (a2aContextId) {
+  // cinatra#4150 — a context lookup that FAILED is refused below even when no token
+  // resolved a run: the context-id would have been the run the publish check asks
+  // about, so a read fault must not let the call go on as a call of no run.
+  let contextLookupFailed = false;
+  // cinatra#4150 — the context-id is read only on the bridge-token path. A bearer
+  // (JWT) caller carries no organization the run could be bound to, and its call
+  // can never act as a run (runForPorts is the token's run, read only on the
+  // bridge path), so its context header selects nothing and is not looked up: the
+  // answer cannot depend on whether another organization's run exists.
+  if (a2aContextId && isBridgeAuthorized) {
     try {
       runFromContextId = await readAgentRunByContextId(a2aContextId);
       // PRESENT-but-unresolvable is a POSITIVE conflict signal, not "no
@@ -947,6 +957,7 @@ export async function POST(req: Request): Promise<Response> {
     } catch {
       // A lookup FAILURE is likewise not evidence of agreement — fail closed.
       contextIdUnresolved = true;
+      contextLookupFailed = true;
     }
   }
 
@@ -970,11 +981,12 @@ export async function POST(req: Request): Promise<Response> {
     !!runFromToken &&
     (contextIdUnresolved ||
       (!!runFromContextId && runFromContextId.id !== runFromToken.id));
-  if (bodyRunMismatch || runTokenDivergent) {
+  if (bodyRunMismatch || runTokenDivergent || contextLookupFailed) {
     console.warn(
       `[llm-bridge-run-select] REFUSED code=run_mismatch ` +
         `claimed=${claimsRun ? String(body.agent_run_id).slice(0, 64) : "-"} ` +
-        `body-mismatch=${bodyRunMismatch} token-divergent=${runTokenDivergent}`,
+        `body-mismatch=${bodyRunMismatch} token-divergent=${runTokenDivergent} ` +
+        `context-lookup-failed=${contextLookupFailed}`,
     );
     return NextResponse.json(
       { error: "Run identity could not be verified", code: "run_mismatch" },
@@ -998,6 +1010,17 @@ export async function POST(req: Request): Promise<Response> {
           attestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER),
         }) ?? undefined)
       : undefined;
+
+  // cinatra#4150 — no publish without a released decision, enforced at the call,
+  // before any provider is reached. The run is the one the token proved, else the
+  // one the context-id header names; the step is the verified step above, or none.
+  const publishRun = runFromToken ?? runFromContextId;
+  if (publishRun && !(await publishCallAllowed(publishRun, verifiedStepId))) {
+    return NextResponse.json(
+      { error: "This call waits for a publish decision.", code: "publish_not_released" },
+      { status: 403 },
+    );
+  }
 
   // ---------------------------------------------------------------------------
   // Provider-aware dispatch resolution.
@@ -1859,6 +1882,13 @@ export async function POST(req: Request): Promise<Response> {
                   // `stp` claim (cinatra#3745): the verified step of the
                   // calling model step, carried to the tool server's frame.
                   ...(verifiedStepId ? { verifiedStepId } : {}),
+                  // `pin` claim (cinatra#4220): the run row's host-derived
+                  // connector-instance binding, set once at dispatch after the
+                  // per-instance use gate. Read from the token-resolved run row
+                  // only — never from the request body or a tool argument.
+                  ...(runForPorts.connectorInstanceBinding
+                    ? { connectorInstancePin: runForPorts.connectorInstanceBinding }
+                    : {}),
                 },
                 issueAgentRunMcpActorToken,
                 cinatraMcpAllowedTools,
@@ -1966,9 +1996,14 @@ export async function POST(req: Request): Promise<Response> {
         // this context ONLY when the resolved run row itself carries an
         // instance binding (host-derived, the same pin data the agent-run
         // MCP actor token would carry — NEVER request-payload input);
-        // today's agent_run rows carry no instance binding, so the context
-        // stays surface-only until one exists.
-        toolboxBuildContext: { surface: "agent_run" },
+        // the binding is set at dispatch (cinatra#4220); a run with no binding
+        // stays surface-only.
+        toolboxBuildContext: {
+          surface: "agent_run",
+          ...(runForPorts?.connectorInstanceBinding
+            ? { connectorInstancePin: runForPorts.connectorInstanceBinding }
+            : {}),
+        },
         logLabel: body.agent_id ?? "wayflow",
         actorContext: bridgeActorContext,
         telemetryRequestedProvider: dispatch.requestedProvider,

@@ -352,8 +352,8 @@ async function _copyRuntimeFiles(srcRoot: string, dstRoot: string): Promise<void
     { rel: "NOTICE.md", recursive: false, required: false },
   ];
   for (const entry of sourcesToCopy) {
-    const src = path.join(srcRoot, entry.rel);
-    const dst = path.join(dstRoot, entry.rel);
+    const src = path.join(/* turbopackIgnore: true */ srcRoot, entry.rel);
+    const dst = path.join(/* turbopackIgnore: true */ dstRoot, entry.rel);
     try {
       await stat(src);
     } catch {

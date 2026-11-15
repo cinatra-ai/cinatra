@@ -190,12 +190,13 @@ describe("the scoped run page's trail (issue #2809 item 3)", () => {
     expect(published.map((c) => c.prefix)).not.toContain(BARE_RUN_PATH);
   });
 
-  it("shows the id's first eight characters plus an ellipsis while the name is unavailable", () => {
+  // The name read answers nothing on a refusal, so the fixed word stands in
+  // (cinatra#4453): "never any part of the id".
+  it("shows the scope's fixed word, with no part of the id, when no name was read", () => {
     renderScopedRun(undefined);
     const labels = trailOn(SCOPED_RUN_PATH).map((c) => c.label);
-    expect(labels).toEqual([`${ORG_ID.slice(0, 8)}…`, "Agents", RUN_NAME]);
-    // Never a title-cased raw id.
-    expect(labels[0]).not.toContain("-4d2e");
+    expect(labels).toEqual(["Organization", "Agents", RUN_NAME]);
+    expect(labels[0]).not.toContain(ORG_ID.slice(0, 8));
   });
 
   it("keeps the BARE run page exactly as it was", () => {

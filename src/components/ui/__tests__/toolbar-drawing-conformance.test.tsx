@@ -65,7 +65,7 @@ function renderToolbar() {
       <ToolbarButton>Agents</ToolbarButton>
       <ToolbarSeparator />
       <ToolbarSearchGroup>
-        <ToolbarSearchInput placeholder="Search by name…" />
+        <ToolbarSearchInput aria-label="Search by name…" placeholder="Search by name…" />
       </ToolbarSearchGroup>
     </Toolbar>,
   );

@@ -10,9 +10,8 @@ import {
 import {
   isActorTeamMemberForChat,
   readChatThreadOwnershipById,
-  loadChatThreadForActorAccess,
 } from "@/lib/chat-thread-store";
-import { evaluateChatThreadAccess } from "@/lib/chat-thread-access";
+import { readAssistantThreadPayloadForActor } from "@/lib/assistant-thread-read";
 import {
   getAuthSession,
   isPlatformAdmin,
@@ -513,20 +512,12 @@ export async function handleListAssistantThreads(): Promise<Response> {
 // SOLE writer) and ARMED the DB fence (any stray chat_threads INSERT/UPDATE
 // fail-closes), so the reconstruction is faithful for every post-cutover thread.
 //
-// PRE-CUTOVER EXCLUSION: a thread with no durable turn content (a content-less
-// mirror shadow minted before PR1 EXPAND, or an empty thread) reconstructs to
-// null and is treated as NOT FOUND — the caller 404s, matching the list-path
-// exclusion. `info` is unused now (access is already decided by the caller); the
-// signature is retained so the caller is unchanged.
+// The access decision and the reconstruction live in ONE function,
+// `readAssistantThreadPayloadForActor` (`assistant-thread-read.ts`), which the
+// /chat route's server render also calls to name the thread in its breadcrumb
+// (cinatra#4453). A thread with no durable turn content reconstructs to null
+// there and is NOT FOUND here, matching the list-path exclusion.
 // ---------------------------------------------------------------------------
-async function resolveThreadReadPayload(
-  threadId: string,
-  info: { ownerUserId: string | null; teamId: string | null },
-): Promise<unknown> {
-  void info;
-  // null == absent-from-structured-store OR pre-cutover (content-less) → 404.
-  return reconstructThreadPayload(threadId);
-}
 
 /** GET /api/assistants/threads/[threadId] — tenant-scoped single-thread read.
  * Mirrors GET /api/chat/thread/[threadId]: a missing row or a denial both
@@ -606,26 +597,9 @@ async function readAssistantThreadForActor(input: {
   actorUserId: string;
   isPlatformAdmin: boolean;
 }): Promise<Response> {
-  const { threadId, actorUserId, isPlatformAdmin: admin } = input;
-  const info = loadChatThreadForActorAccess({ threadId, actorUserId, isPlatformAdmin: admin });
-  const allowed =
-    info !== null &&
-    evaluateChatThreadAccess({
-      ownerUserId: info.ownerUserId,
-      teamId: info.teamId,
-      actorUserId,
-      isPlatformAdmin: admin,
-      isActorTeamMember: info.isActorTeamMember,
-    });
-
-  if (!info || !allowed) {
-    return Response.json({ error: "Not found" }, { status: 404 });
-  }
-
-  // PR2 CUTOVER: reconstruct from the structured store. A pre-cutover thread
-  // (no durable content) reconstructs to null → 404 (existence not disclosed,
-  // same as a denied/missing read).
-  const payload = await resolveThreadReadPayload(threadId, info);
+  // A denied, a missing and a pre-cutover thread (no durable content) all read
+  // as null → 404, so a thread's existence is not disclosed.
+  const payload = readAssistantThreadPayloadForActor(input);
   if (payload === null) {
     return Response.json({ error: "Not found" }, { status: 404 });
   }

@@ -40,7 +40,7 @@ import {
 import { CrumbContributions } from "@/components/crumb-contributions";
 import { buildRunStepPath } from "@/lib/agent-url";
 import { canonicalRunPath, parseLaunchScopeAnchor } from "@/lib/launch-scope-anchor";
-import { scopeSurfaceCrumbEntries, type ScopeSurfaceRef } from "@/lib/scope-surfaces";
+import { scopeSurfaceCrumbEntries, type ScopeSurfaceNameInput, type ScopeSurfaceRef } from "@/lib/scope-surfaces";
 
 /** What the scoped shell hands the review page; absent on the bare route. */
 export type ReviewPageScopeProps = {
@@ -48,8 +48,8 @@ export type ReviewPageScopeProps = {
   scopeBase?: string | null;
   /** The scope itself, for the trail's head. */
   launchScope?: ScopeSurfaceRef | null;
-  /** The scope's resolved name, read behind the scope's own gate. */
-  scopeTitle?: string | null;
+  /** The scope's name, read behind the scope's own gate, as the read's typed answer (cinatra#4453). */
+  scopeTitle?: ScopeSurfaceNameInput;
 };
 
 /**
@@ -96,7 +96,7 @@ export function reviewPageScopeCrumbs({
   if (!launchScope) return null;
   return (
     <CrumbContributions
-      entries={scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle ?? undefined)}
+      entries={scopeSurfaceCrumbEntries(launchScope, "agents", scopeTitle)}
     />
   );
 }

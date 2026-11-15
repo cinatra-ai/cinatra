@@ -3,7 +3,7 @@ import "server-only";
 /**
  * email-test-delivery passthrough seam shapers (#1625).
  *
- * Pure, zero-dependency, unit-tested (mirrors ./blog-pipeline-seam and
+ * Pure, zero-dependency, unit-tested (mirrors
  * ./artifact-materialize-shaper). The passthrough route wires these into its
  * per-tool input-shaper table and its post-handler response path so the
  * CERTIFIED send primitive (packages/agents handlers.ts) stays byte-identical.

@@ -106,7 +106,11 @@ import {
 import dynamic from "next/dynamic";
 import type { UiMessage } from "./types";
 import type { ApplyIntentRef } from "./renderable-views";
-import type { ChatViewComponents, LifecycleSurfaceDeclaration } from "./chat-messages-view";
+import type {
+  ChatMessagesViewProps,
+  ChatViewComponents,
+  LifecycleSurfaceDeclaration,
+} from "./chat-messages-view";
 
 // THE conversation renderer, and the column's LAZY BOUNDARY for the heavy
 // renderers behind it (marked/katex via ./markdown-render, the mermaid wrapper,
@@ -211,7 +215,8 @@ export type ConversationColumnProps = {
   animating: boolean;
   theme: ThemeName;
   userId?: string;
-  sessionUser?: { name?: string | null; image?: string | null } | null;
+  /** Forwarded as is, so the column takes every field the list draws (cinatra#4292). */
+  sessionUser?: ChatMessagesViewProps["sessionUser"];
   activeThreadId: string | null;
   activeAssistantHandle?: string;
   assistantHandleMap: Map<string, string>;

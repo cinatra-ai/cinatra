@@ -22,7 +22,6 @@ import Link from "next/link";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { SearchParamToast, type SearchParamToastConfig } from "@/components/search-param-toast";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Empty,
@@ -31,7 +30,6 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { StatusPill, type StatusPillStatus } from "@/components/ui/status-pill";
 import {
   Table,
   TableBody,
@@ -58,15 +56,13 @@ import {
   RejectButton,
   ViewDetailSheet,
 } from "./admin-action-buttons";
+import { viewerMayDecide } from "@/lib/approvals/sources/marketplace-state";
 import { VendorApplicationsStatusFilter } from "./status-filter";
+import { VendorApplicationStatusCell } from "./vendor-application-status-cell";
 
 type StatusFilterValue = NonNullable<
   MarketplaceVendorApplicationListAdminInput["status"]
 >[number];
-
-/** The concrete reservation statuses a row can carry (excludes the `stuck`
- *  pseudo-filter, which is a cross-cutting attribute, not a row status). */
-type RowStatus = MarketplaceVendorApplicationAdminRow["status"];
 
 const STATUS_VALUES: StatusFilterValue[] = [
   "applied",
@@ -76,14 +72,6 @@ const STATUS_VALUES: StatusFilterValue[] = [
   "reset",
   "stuck",
 ];
-
-const STATUS_PILL_MAP: Record<RowStatus, StatusPillStatus> = {
-  applied: "needs-review",
-  approved: "approved",
-  rejected: "declined",
-  cancelled: "archived",
-  reset: "idle",
-};
 
 const PAGE_LIMIT = 50;
 
@@ -222,18 +210,12 @@ export default async function VendorApplicationsAdminPage({
                       {new Date(row.applied_at).toLocaleString()}
                     </TableCell>
                     <TableCell>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <StatusPill status={STATUS_PILL_MAP[row.status]}>
-                          {row.status}
-                        </StatusPill>
-                        {row.repair_stuck_at ? (
-                          <Badge variant="destructive">
-                            {row.recovery_attempts > 0
-                              ? `Repair stuck · ${row.recovery_attempts} attempts`
-                              : "Repair stuck"}
-                          </Badge>
-                        ) : null}
-                      </div>
+                      <VendorApplicationStatusCell
+                        status={row.status}
+                        viewerMayDecide={viewerMayDecide(row.eligibility)}
+                        repairStuckAt={row.repair_stuck_at}
+                        attempts={row.recovery_attempts}
+                      />
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">

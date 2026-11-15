@@ -135,9 +135,13 @@ export async function readProducedEvent(eventId: string): Promise<ProducedEventR
 
 /** Mark an event PROCESSED (S1's orchestration handed it off). Idempotent:
  * re-processing a processed row is a no-op. Returns true iff a pending row was
- * transitioned. */
-export async function markProducedEventProcessed(eventId: string): Promise<boolean> {
-  const done = await db
+ * transitioned. `executor` is the module `db` or a caller's open transaction
+ * (cinatra#4245: the sweep marks a reused event under its row lock). */
+export async function markProducedEventProcessed(
+  eventId: string,
+  executor: Executor = db,
+): Promise<boolean> {
+  const done = await executor
     .update(artifactProducedOutbox)
     .set({ status: "processed", processedAt: sql`now()` })
     .where(

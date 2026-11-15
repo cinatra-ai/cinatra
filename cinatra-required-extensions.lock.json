@@ -40,9 +40,9 @@
     {
       "packageName": "@cinatra-ai/blog-content-skill",
       "repo": "cinatra-ai/blog-content-skill",
-      "resolvedSha": "77d3cc8d1379e78e9b795649931ee39aa0f11491",
+      "resolvedSha": "e04c1c3a9483d69b3ff0a4a2a8d9492bc23dc8f3",
       "packageVersion": "0.1.0",
-      "treeSha256": "bfdb4b38db0a5cd84a72d529446fe08704ce2e2e318f8aea474d3f258679961a"
+      "treeSha256": "356f9a63d0bff22b247622c77787ee1c4af97e94ff6295aee1b544e895656b1b"
     },
     {
       "packageName": "@cinatra-ai/chart-artifact",
@@ -75,9 +75,9 @@
     {
       "packageName": "@cinatra-ai/dashboard-artifact",
       "repo": "cinatra-ai/dashboard-artifact",
-      "resolvedSha": "6c08044b02a7f6bd990884e3575172f70ae6c741",
+      "resolvedSha": "9032d8b51bcbb940711d7973ac82fdf6933c6855",
       "packageVersion": "0.1.0",
-      "treeSha256": "82800e4ed531f5fe525ed06c26c33f45ba6be146acdbea3c3624519c79f2ba12"
+      "treeSha256": "aa18d2de52e97906aebcab2a997ae647917059703ff83aa307bd69ef073939a2"
     },
     {
       "packageName": "@cinatra-ai/document-artifact",

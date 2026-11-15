@@ -29,6 +29,9 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { Client } from "pg";
 import * as zod from "zod";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
+import { replayStoreSchema } from "@/lib/test-support/store-schema-replay";
+import { promotionRevisionId } from "@/lib/artifacts/typed-promotion";
+import type { TypedPromotionRetype } from "@/lib/artifacts/typed-promotion-store";
 
 vi.mock("@/lib/database", async () => {
   const cfg = await import("@/lib/postgres-config");
@@ -55,6 +58,20 @@ vi.mock("@/lib/register-all-object-types", () => ({ registerAllObjectTypes: () =
 
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
 const HAS_REAL_DB = DB_URL !== "" && !isPlaceholderDbUrl(DB_URL);
+
+// cinatra#4404: the refusal is at module scope, not in a hook. Without a usable
+// database URL, `describe.skipIf` skips every suite in the file and a file with
+// nothing left to run never runs its hooks, so the dedicated config's run
+// (`vitest/integration/3028.config.ts`, which sets the flag) would pass by
+// running nothing.
+if (process.env.CINATRA_LIFECYCLE_C_W4_REALDB === "1" && !HAS_REAL_DB) {
+  throw new Error(
+    "cinatra#4404 W4: CINATRA_LIFECYCLE_C_W4_REALDB=1 asks this tier to run against a real Postgres, " +
+      "but SUPABASE_DB_URL is unset, empty or a placeholder: set it to a scratch database. " +
+      "The tier builds and drops its own schema, so any throwaway database will do.",
+  );
+}
+
 const TEST_SCHEMA = "cinatra_test_w4_object_backed_3028";
 const ORG = "org-3028-w4";
 const EXT = "@cinatra-ai/campaigns-artifact";
@@ -68,6 +85,7 @@ let snapshotMod: typeof import("@/lib/artifacts/object-content-snapshot");
 let bindingMod: typeof import("@/lib/objects/binding-write-path");
 let contractMod: typeof import("@/lib/artifacts/object-backed-contract");
 let promotionStore: typeof import("@/lib/artifacts/typed-promotion-store");
+let representationStore: typeof import("@/lib/artifacts/representation-store");
 let producedEvent: typeof import("@/lib/lifecycle/lifecycle-produced-event");
 let registry: typeof import("@cinatra-ai/objects/registry");
 
@@ -94,25 +112,100 @@ const AUTHORITY = {
  * connector registry) — which a node tier that provisions neither must not pull
  * in. What this tier is here to prove is the promotion's DATA effects, so it
  * substitutes the SAME compare-and-set the canonical writer performs — anchored
- * on the row's own version, writing nothing when it misses — and the road's use
- * of the canonical writer is pinned by the unit tier instead.
+ * on the row's own version, writing nothing when it misses — and recording the
+ * change event with the key it is handed, in the same statement, as the
+ * canonical writer does (cinatra#3319: the road appends only when that keyed
+ * event is the row's latest type change). The road's use of the canonical writer
+ * itself is not run here: the real writer's module graph is the boot graph this
+ * tier must not pull in (the CI command's config aliases only `server-only`,
+ * none of the root config's other stubs). The unit tier pins that the production
+ * retype hands the road's key to the canonical writer (the CANON case of
+ * `typed-promotion-proof-3319.test.ts`), with a substituted store. The real
+ * writer against the real change-event row runs in its own tier, whose config
+ * provisions that boot graph (`typed-promotion-canonical-writer-4379.integration.test.ts`,
+ * `pnpm test:typed-promotion-real-writer`, cinatra#4379).
  */
-const RETYPE = async (input: {
+type RetypeInput = {
   orgId: string;
   artifactId: string;
   toType: string;
   expectedVersion: number;
-}) => {
-  const res = sql(
-    `UPDATE "${S()}"."objects" SET type = $3, version = version + 1, updated_at = now()
-     WHERE id = $1 AND org_id = $2 AND version = $4 AND deleted_at IS NULL
-     RETURNING id`,
-    [input.artifactId, input.orgId, input.toType, input.expectedVersion],
-  );
-  return (res?.rows?.length ?? 0) > 0
-    ? ({ ok: true } as const)
-    : ({ ok: false, reason: "row-moved" } as const);
+  /** Always set by the store at this head; absent on the tree before it. */
+  idempotencyKey?: string;
 };
+function retypeRecording(keyOf: (input: RetypeInput) => string) {
+  return async (input: RetypeInput) => {
+    const res = sql(
+      `WITH prev AS (
+         SELECT type FROM "${S()}"."objects"
+         WHERE id = $1 AND org_id = $2 AND version = $4 AND deleted_at IS NULL
+       ), upd AS (
+         UPDATE "${S()}"."objects" SET type = $3, version = version + 1, updated_at = now()
+         WHERE id = $1 AND org_id = $2 AND version = $4 AND deleted_at IS NULL
+         RETURNING id, type, version
+       )
+       INSERT INTO "${S()}"."object_change_event"
+         (id, change_set_id, sequence, object_id, object_type, operation, history_effect,
+          before_snapshot, after_snapshot, base_version, result_version, org_id,
+          idempotency_key, event_checksum)
+       SELECT $5, $5, 1, upd.id, upd.type, 'update', 'reversible-internal',
+              jsonb_build_object('type', prev.type), jsonb_build_object('type', upd.type),
+              $4, upd.version, $2, $6, 'stub'
+       FROM upd, prev
+       RETURNING object_id`,
+      [
+        input.artifactId,
+        input.orgId,
+        input.toType,
+        input.expectedVersion,
+        nextId("evt"),
+        keyOf(input),
+      ],
+    );
+    return (res?.rows?.length ?? 0) > 0
+      ? ({ ok: true } as const)
+      : ({ ok: false, reason: "row-moved" } as const);
+  };
+}
+// A store that hands no key (the tree before cinatra#3319) gets a generic one,
+// as the canonical writer generates it; such an event is never a proof.
+const RETYPE = retypeRecording((input) => input.idempotencyKey ?? nextId("evt-generated"));
+
+/** The key a promotion's own retype records (`typed-promotion-store.ts`). */
+function promotionKey(objectId: string, resourceId: string, toType: string, base: number) {
+  return `typed-promotion:${promotionRevisionId({ artifactId: objectId, sharedResourceId: resourceId, toType })}:${base}`;
+}
+
+/** One change event of the row, as a writer of a type change records it. */
+function seedChangeEvent(input: {
+  objectId: string;
+  type: string;
+  beforeType: string | null;
+  base: number | null;
+  result: number;
+  key: string;
+}) {
+  sql(
+    `INSERT INTO "${S()}"."object_change_event"
+       (id, change_set_id, sequence, object_id, object_type, operation, history_effect,
+        before_snapshot, after_snapshot, base_version, result_version, org_id,
+        idempotency_key, event_checksum)
+     VALUES ($1, $1, 1, $2, $3, $4, 'reversible-internal',
+             CASE WHEN $5::text IS NULL THEN NULL ELSE jsonb_build_object('type', $5::text) END,
+             jsonb_build_object('type', $3::text), $6::int, $7::int, $8, $9, 'stub')`,
+    [
+      nextId("evt"),
+      input.objectId,
+      input.type,
+      input.beforeType === null ? "create" : "update",
+      input.beforeType,
+      input.base,
+      input.result,
+      ORG,
+      input.key,
+    ],
+  );
+}
 
 const S = () => TEST_SCHEMA;
 
@@ -229,25 +322,103 @@ function typeOf(objectId: string): string {
   );
 }
 
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * cinatra#4404 — the application's slug-move triggers on the SHARED `public`
+ * tables. Every schema in the database shares these tables, so this tier must
+ * leave the triggers exactly as it found them: the store builder emits a
+ * `DROP TRIGGER` / `CREATE TRIGGER` pair for each, bound to the functions of
+ * the schema it builds, and a replay of those pairs into this throwaway schema
+ * would rebind them here and lose them at the `DROP SCHEMA ... CASCADE`.
+ * `replayStoreSchema` skips them. This reading checks that for these three
+ * named triggers only, on each run whose setup reaches the reading.
+ */
+const SHARED_SLUG_TRIGGERS_SQL = `
+  SELECT c.relname AS table_name, t.tgname AS trigger_name, t.tgenabled AS enabled,
+         pg_get_triggerdef(t.oid) AS definition
+    FROM pg_trigger t
+    JOIN pg_class c ON c.oid = t.tgrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'public' AND NOT t.tgisinternal
+     AND (c.relname, t.tgname) IN (('user', 'user_slug_move_trg'),
+                                   ('team', 'team_slug_move_trg'),
+                                   ('organization', 'org_slug_move_trg'))
+   ORDER BY c.relname, t.tgname`;
+
+/** The definitions read before setup; undefined until setup has read them. */
+let sharedSlugTriggersBefore: string[] | undefined;
+
+async function readSharedSlugTriggers(client: Client): Promise<string[]> {
+  const res = await client.query<{
+    table_name: string;
+    trigger_name: string;
+    enabled: string;
+    definition: string;
+  }>(SHARED_SLUG_TRIGGERS_SQL);
+  return res.rows.map(
+    (r) => `public."${r.table_name}" ${r.trigger_name} enabled=${r.enabled}: ${r.definition}`,
+  );
+}
+
+/**
+ * Fail when the definitions now differ from the reading before setup. Read
+ * after setup too: a database that holds none of these triggers (the CI seed)
+ * would read "none" again after a rebind-then-CASCADE, so only the reading
+ * between the replay and the cases shows a rebind there.
+ */
+async function assertSharedSlugTriggersUnchanged(client: Client, when: string): Promise<void> {
+  const before = sharedSlugTriggersBefore;
+  // A silent return: no reading exists only when setup threw before or in its
+  // first reading, and that setup failure fails the run itself.
+  if (before === undefined) return;
+  const now = await readSharedSlugTriggers(client);
+  if (JSON.stringify(now) !== JSON.stringify(before)) {
+    throw new Error(
+      `cinatra#4404: the slug-move triggers on public."user", public."team" and public."organization" changed ${when}; ` +
+        `before: [${before.join(" | ")}]; now: [${now.join(" | ")}]`,
+    );
+  }
+}
+
+/**
+ * The blob root this file created; undefined until `mkdtempSync` has returned.
+ * Teardown removes this directory only, never a root it did not create.
+ */
+let createdBlobRoot: string | undefined;
+
 beforeAll(async () => {
   if (!HAS_REAL_DB) return;
   process.env.SUPABASE_SCHEMA = TEST_SCHEMA;
-  process.env.CINATRA_ARTIFACT_DATA_ROOT = mkdtempSync(path.join(tmpdir(), "cin-3028-"));
+  createdBlobRoot = mkdtempSync(path.join(tmpdir(), "cin-3028-"));
+  process.env.CINATRA_ARTIFACT_DATA_ROOT = createdBlobRoot;
 
   const client = new Client({ connectionString: DB_URL });
   await client.connect();
-  await client.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`);
-  await client.query(`CREATE SCHEMA "${TEST_SCHEMA}"`);
-  const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
-  for (const qy of buildCreateStoreSchemaQueries(TEST_SCHEMA)) {
-    const head = qy.text.trim().slice(0, 6).toUpperCase();
-    if (head !== "CREATE" && head !== "ALTER " && head !== "DROP T" && head !== "DROP S") continue;
-    try {
-      await client.query(qy.text, (qy as { values?: unknown[] }).values as never[]);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!msg.includes("does not exist")) throw err;
-    }
+  try {
+    sharedSlugTriggersBefore = await readSharedSlugTriggers(client);
+    await client.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`);
+    await client.query(`CREATE SCHEMA "${TEST_SCHEMA}"`);
+    const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
+    // The shared replay: of the statements with its four default heads, it skips
+    // each one whose own target it reads as a shared `public` table written with a
+    // quoted table name (`public."x"` or `"public"."x"`), the form the builder
+    // writes (the slug-move trigger pairs among them).
+    await replayStoreSchema(client, buildCreateStoreSchemaQueries(TEST_SCHEMA));
+    await assertSharedSlugTriggersUnchanged(client, "during this tier's setup");
+  } catch (err) {
+    // On a throw after the connect, this client is closed before the error is
+    // thrown again. A failed close is thrown together with the setup failure in
+    // an AggregateError, not in its place.
+    await client.end().catch((endErr: unknown) => {
+      throw new AggregateError(
+        [err, endErr],
+        `cinatra#4404 W4 setup failed: ${errText(err)}; its client close failed too: ${errText(endErr)}`,
+      );
+    });
+    throw err;
   }
   await client.end();
   (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized = true;
@@ -258,6 +429,7 @@ beforeAll(async () => {
   bindingMod = await import("@/lib/objects/binding-write-path");
   contractMod = await import("@/lib/artifacts/object-backed-contract");
   promotionStore = await import("@/lib/artifacts/typed-promotion-store");
+  representationStore = await import("@/lib/artifacts/representation-store");
   producedEvent = await import("@/lib/lifecycle/lifecycle-produced-event");
   registry = await import("@cinatra-ai/objects/registry");
 }, 120_000);
@@ -284,15 +456,55 @@ function registerObjectBackedType(typeId: string) {
   );
 }
 
+// After a successful connect, the three database steps (the schema drop, the
+// trigger check, the client close) are each tried whatever an earlier one did.
+// A failed connect skips those three steps; the connect failure is collected
+// and the blob root removal still runs. Each failure of a step that runs is
+// collected under that step's name, and the failures are thrown together. A
+// swallowed failure would go unreported; a swallowed drop failure would also
+// leave the schema behind.
 afterAll(async () => {
   if (!HAS_REAL_DB) return;
+  const failures: Error[] = [];
+  const step = async (label: string, run: () => Promise<unknown> | unknown): Promise<boolean> => {
+    try {
+      await run();
+      return true;
+    } catch (err) {
+      failures.push(new Error(`cinatra#3028 W4 teardown: ${label} failed: ${errText(err)}`, { cause: err }));
+      return false;
+    }
+  };
+
   const client = new Client({ connectionString: DB_URL });
-  await client.connect();
-  await client.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`).catch(() => {});
-  await client.end().catch(() => {});
-  const root = process.env.CINATRA_ARTIFACT_DATA_ROOT;
-  if (root) rmSync(root, { recursive: true, force: true });
+  if (await step("connect", () => client.connect())) {
+    await step(`DROP SCHEMA "${TEST_SCHEMA}"`, () =>
+      client.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`),
+    );
+    // Read after the drop. It shows a difference the drop leaves behind, such
+    // as a trigger that was there before and was dropped, or was rebound to this
+    // schema's functions and removed with them. A trigger that setup created
+    // where none was before is removed again by the drop and reads as no
+    // difference here; only the reading after setup shows that case.
+    await step("the shared public slug-move trigger check", () =>
+      assertSharedSlugTriggersUnchanged(client, "across this tier (read after its teardown)"),
+    );
+    await step("client close", () => client.end());
+  }
+  // Only the root this file created: when setup threw before its mkdtemp, the
+  // environment may still name a directory this file did not create.
+  await step("remove the blob root", () => {
+    if (createdBlobRoot) rmSync(createdBlobRoot, { recursive: true, force: true });
+  });
   delete (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized;
+
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(
+      failures,
+      `cinatra#3028 W4 teardown found ${failures.length} failures: ${failures.map((e) => e.message).join(" | ")}`,
+    );
+  }
 });
 
 describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.13 the object-backed contract (real DB + disk)", () => {
@@ -527,8 +739,17 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.14 the typed promotion road
     // and the matcher's assertion is still on the row. A later confirmation
     // CONVERGES it rather than stranding it.
     const objectId = nextId("obj-interrupted");
-    seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
+    const seeded = seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
     seedMatcherAssertion({ objectId, extension: EXT, confidence: 0.9 });
+    // The interrupted promotion's own retype, keyed, is the row's latest type change.
+    seedChangeEvent({
+      objectId,
+      type: OWN_TYPE,
+      beforeType: BASE_TYPE,
+      base: 0,
+      result: 1,
+      key: promotionKey(objectId, seeded.resourceId, OWN_TYPE, 0),
+    });
     const out = await promotionStore.promoteMatchedArtifactType({
       orgId: ORG,
       artifactId: objectId,
@@ -631,10 +852,18 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.14 the typed promotion road
     expect(representationsOf(objectId)).toHaveLength(1);
   });
 
-  it("COMPLETES the converging append for the person who asserted, once confirmed", async () => {
+  it("COMPLETES the converging append for the person who asserted, once confirmed, on the keyed retype", async () => {
     const objectId = nextId("obj-carries-own-person");
-    seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
+    const seeded = seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
     seedPersonAssertion({ objectId, extension: EXT, principal: "principal-alice" });
+    seedChangeEvent({
+      objectId,
+      type: OWN_TYPE,
+      beforeType: BASE_TYPE,
+      base: 0,
+      result: 1,
+      key: promotionKey(objectId, seeded.resourceId, OWN_TYPE, 0),
+    });
     const out = await promotionStore.promoteMatchedArtifactType({
       orgId: ORG,
       artifactId: objectId,
@@ -669,4 +898,367 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#3028 W4 — 0.14 the typed promotion road
     expect(out).toEqual({ ok: false, reason: "not-confirmed" });
     expect(typeOf(objectId)).toBe(BASE_TYPE);
   });
+
+  // THE PROVEN-PROMOTION GUARD (cinatra#3319, cinatra#4266), on the real proof
+  // read: the store appends only when the promotion's own keyed retype is the
+  // row's latest type change.
+  const OTHER_TYPE = "@cinatra-ai/campaigns:other";
+  function personArgs(objectId: string, principal: string) {
+    return {
+      orgId: ORG,
+      artifactId: objectId,
+      extension: EXT,
+      ownType: { typeId: OWN_TYPE, acceptsMimes: ["text/markdown"] },
+      threshold: null,
+      confirmed: true,
+      principal,
+      actor: ACTOR,
+      authority: AUTHORITY,
+      retype: RETYPE,
+    };
+  }
+
+  it("4266: a row typed from upload, the person's own meaning confirmed twice, keeps its one revision", async () => {
+    const objectId = nextId("obj-4266-native");
+    seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
+    seedPersonAssertion({ objectId, extension: EXT, principal: "principal-4266" });
+    seedChangeEvent({ objectId, type: OWN_TYPE, beforeType: null, base: null, result: 1, key: nextId("evt-create") });
+    for (let i = 0; i < 2; i += 1) {
+      expect(await promotionStore.promoteMatchedArtifactType(personArgs(objectId, "principal-4266"))).toEqual({
+        ok: false,
+        reason: "already-promoted",
+      });
+    }
+    expect(representationsOf(objectId)).toHaveLength(1);
+  });
+
+  it("R12-MF2: a restore back into the type (a generic key) is no proof, so nothing is appended", async () => {
+    const objectId = nextId("obj-restored");
+    seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
+    seedPersonAssertion({ objectId, extension: EXT, principal: "principal-restore" });
+    seedChangeEvent({ objectId, type: OWN_TYPE, beforeType: null, base: null, result: 1, key: nextId("evt-create") });
+    seedChangeEvent({ objectId, type: OTHER_TYPE, beforeType: OWN_TYPE, base: 1, result: 2, key: nextId("evt-move") });
+    seedChangeEvent({ objectId, type: OWN_TYPE, beforeType: OTHER_TYPE, base: 2, result: 3, key: nextId("restore") });
+    expect(await promotionStore.promoteMatchedArtifactType(personArgs(objectId, "principal-restore"))).toEqual({
+      ok: false,
+      reason: "already-promoted",
+    });
+    expect(representationsOf(objectId)).toHaveLength(1);
+  });
+
+  it("R11: a keyed retype that a later move away and back overwrote is no proof", async () => {
+    const objectId = nextId("obj-overwritten");
+    const seeded = seedRepresentedRow({ objectId, type: OWN_TYPE, mime: "text/markdown" });
+    seedPersonAssertion({ objectId, extension: EXT, principal: "principal-overwritten" });
+    seedChangeEvent({
+      objectId,
+      type: OWN_TYPE,
+      beforeType: BASE_TYPE,
+      base: 0,
+      result: 1,
+      key: promotionKey(objectId, seeded.resourceId, OWN_TYPE, 0),
+    });
+    seedChangeEvent({ objectId, type: OTHER_TYPE, beforeType: OWN_TYPE, base: 1, result: 2, key: nextId("evt-move") });
+    seedChangeEvent({ objectId, type: OWN_TYPE, beforeType: OTHER_TYPE, base: 2, result: 3, key: nextId("restore") });
+    expect(await promotionStore.promoteMatchedArtifactType(personArgs(objectId, "principal-overwritten"))).toEqual({
+      ok: false,
+      reason: "already-promoted",
+    });
+    expect(representationsOf(objectId)).toHaveLength(1);
+  });
+
+  it("a fresh retype whose event carries another key appends nothing and answers promotion-unproven", async () => {
+    const objectId = nextId("obj-unkeyed");
+    seedRepresentedRow({ objectId, type: BASE_TYPE, mime: "text/markdown" });
+    seedMatcherAssertion({ objectId, extension: EXT, confidence: 0.9 });
+    const out = await promotionStore.promoteMatchedArtifactType({
+      orgId: ORG,
+      artifactId: objectId,
+      extension: EXT,
+      ownType: { typeId: OWN_TYPE, acceptsMimes: ["text/markdown"] },
+      threshold: 0.8,
+      confirmed: true,
+      actor: ACTOR,
+      authority: AUTHORITY,
+      retype: retypeRecording(() => nextId("evt-generic")),
+    });
+    expect(out).toEqual({ ok: false, reason: "promotion-unproven" });
+    // The retype committed; the revision did not.
+    expect(typeOf(objectId)).toBe(OWN_TYPE);
+    expect(representationsOf(objectId)).toHaveLength(1);
+  });
+
+  it("C4: a real editor append between the retype and the append is never superseded: nothing appended, representation-moved", async () => {
+    const objectId = nextId("obj-editor-race");
+    const seeded = seedRepresentedRow({ objectId, type: BASE_TYPE, mime: "text/markdown" });
+    seedMatcherAssertion({ objectId, extension: EXT, confidence: 0.9 });
+    const editorResource = nextId("res-editor");
+    sql(
+      `INSERT INTO "${S()}"."resource" (id, org_id, kind, substance_key, mime, size_bytes, created_by, metadata)
+       VALUES ($1,$2,'blob',$3,'text/markdown',10,NULL,'{}'::jsonb)`,
+      [editorResource, ORG, nextId("sub")],
+    );
+    const { appendRepresentationWithExpectedBase } = await import("@/lib/artifacts/representation-store");
+    let edited: unknown = null;
+    const out = await promotionStore.promoteMatchedArtifactType({
+      orgId: ORG,
+      artifactId: objectId,
+      extension: EXT,
+      ownType: { typeId: OWN_TYPE, acceptsMimes: ["text/markdown"] },
+      threshold: 0.8,
+      confirmed: true,
+      actor: ACTOR,
+      authority: AUTHORITY,
+      retype: async (input) => {
+        const retyped = await RETYPE(input);
+        // The editor saves on the revision it read, under its own lock.
+        edited = await appendRepresentationWithExpectedBase({
+          orgId: ORG,
+          artifactId: objectId,
+          baseRevisionId: seeded.revisionId,
+          resourceId: editorResource,
+          form: "file",
+        });
+        return retyped;
+      },
+    });
+    expect(edited).toMatchObject({ kind: "appended" });
+    expect(out).toEqual({ ok: false, reason: "representation-moved" });
+    expect(typeOf(objectId)).toBe(OWN_TYPE);
+    // The editor's revision stays the latest; the stale resource is not re-appended.
+    expect(representationsOf(objectId).map((r) => r.resource_id)).toEqual([
+      seeded.resourceId,
+      editorResource,
+    ]);
+  });
+});
+
+describe.skipIf(!HAS_REAL_DB)("cinatra#3319 — the promotion intent survives the binding reconcile (real DB)", () => {
+  const BASE_TYPE = "@cinatra-ai/text-artifact:text";
+  const INTERRUPTED = "3319: interrupted after the retype committed";
+
+  /** One wrong field on the retype's change event, for the forged-shape cases. */
+  type Forge = { operation?: string; actorKind?: string; baseVersionOffset?: number };
+
+  /**
+   * THE RETYPE, then a stop. The canonical writer's compare-and-set and its
+   * change event commit in ONE statement, so this port does the same — the type
+   * change, `version + 1`, and the event carrying the key it is given — and then
+   * throws: the state an interruption between the road's two transactions
+   * leaves. A port given no key writes a random one, which is the writer's own
+   * default (`canonical-writer.ts`, `options.idempotencyKey ?? newIdempotencyKey()`).
+   */
+  function interruptingRetype(forge: Forge = {}) {
+    return async (input: {
+      orgId: string;
+      artifactId: string;
+      toType: string;
+      expectedVersion: number;
+      idempotencyKey?: string;
+      actor: { userId: string; orgId: string };
+    }): Promise<{ ok: false; reason: "row-moved" }> => {
+      const res = sql(
+        `WITH prev AS (
+           SELECT type FROM "${S()}"."objects"
+           WHERE id = $1 AND org_id = $2 AND version = $4 AND deleted_at IS NULL
+         ), updated AS (
+           UPDATE "${S()}"."objects" SET type = $3, version = version + 1, updated_at = now()
+           WHERE id = $1 AND org_id = $2 AND version = $4 AND deleted_at IS NULL
+           RETURNING id, type, version, org_id
+         )
+         INSERT INTO "${S()}"."object_change_event"
+           (id, change_set_id, sequence, object_id, object_type, operation, history_effect,
+            before_snapshot, after_snapshot,
+            base_version, result_version, actor_id, actor_kind, org_id, idempotency_key, event_checksum)
+         SELECT $5::text, $6::text, 1, updated.id, updated.type, $7::text, 'reversible-internal',
+                jsonb_build_object('type', prev.type), jsonb_build_object('type', updated.type),
+                $8::int, updated.version, $9::text, $10::text, updated.org_id, $11::text, $12::text
+         FROM updated, prev
+         RETURNING id`,
+        [
+          input.artifactId,
+          input.orgId,
+          input.toType,
+          input.expectedVersion,
+          nextId("evt-3319"),
+          nextId("cs-3319"),
+          forge.operation ?? "update",
+          input.expectedVersion + (forge.baseVersionOffset ?? 0),
+          input.actor.userId,
+          forge.actorKind ?? "user",
+          input.idempotencyKey ?? nextId("random-key-3319"),
+          nextId("checksum-3319"),
+        ],
+      );
+      if ((res?.rows?.length ?? 0) === 0) return { ok: false, reason: "row-moved" };
+      throw new Error(INTERRUPTED);
+    };
+  }
+
+  function promote(p: {
+    objectId: string;
+    ownType: string;
+    actor: { userId: string; orgId: string };
+    retype?: TypedPromotionRetype;
+  }) {
+    return promotionStore.promoteMatchedArtifactType({
+      orgId: ORG,
+      artifactId: p.objectId,
+      extension: EXT,
+      ownType: { typeId: p.ownType, acceptsMimes: ["text/markdown"] },
+      // The person's road only: the pack declares no matcher machinery.
+      threshold: null,
+      confirmed: true,
+      createdBy: p.actor.userId,
+      principal: p.actor.userId,
+      actor: p.actor,
+      authority: AUTHORITY,
+      retype: p.retype ?? RETYPE,
+    });
+  }
+
+  /** A markdown upload, the person's own assertion and an active dedicated
+   *  claim for the target type, promoted by the person and interrupted after
+   *  the retype committed. */
+  async function seedInterruptedPromotion(label: string, forge: Forge = {}) {
+    const ownType = `@cinatra-ai/campaigns:draft-3319-${label}`;
+    const actor = { userId: `user-3319-${label}`, orgId: ORG };
+    const objectId = nextId(`obj-3319-${label}`);
+    const seeded = seedRepresentedRow({ objectId, type: BASE_TYPE, mime: "text/markdown" });
+    seedPersonAssertion({ objectId, extension: EXT, principal: actor.userId });
+    seedDedicatedClaim({ id: nextId(`claim-3319-${label}`), type: ownType, ext: EXT });
+    await expect(
+      promote({ objectId, ownType, actor, retype: interruptingRetype(forge) }),
+    ).rejects.toThrow(INTERRUPTED);
+    // The retype landed; the append never ran.
+    expect(typeOf(objectId)).toBe(ownType);
+    expect(representationsOf(objectId)).toHaveLength(1);
+    return { ownType, actor, objectId, seeded };
+  }
+
+  function personAssertionsOf(objectId: string): string[] {
+    return (
+      (sql(
+        `SELECT eligibility FROM "${S()}"."semantic_assertion"
+         WHERE org_id=$1 AND artifact_id=$2 AND asserted_by='user'`,
+        [ORG, objectId],
+      ).rows ?? []) as Array<{ eligibility: string }>
+    ).map((r) => r.eligibility);
+  }
+
+  /** The binding reconcile the retype queues, run for real: it archives the
+   *  winner extension's classic assertion, the person's own. */
+  function reconcile(objectId: string) {
+    bindingMod.reconcileArtifactBinding({ orgId: ORG, artifactId: objectId });
+    expect(personAssertionsOf(objectId)).toEqual(["archived"]);
+  }
+
+  function witnessCount(objectId: string, representationRevisionId: string): number {
+    return (
+      sql(
+        `SELECT 1 FROM "${S()}"."artifact_audit"
+         WHERE org_id=$1 AND artifact_id=$2 AND representation_revision_id=$3 AND action='create'`,
+        [ORG, objectId, representationRevisionId],
+      ).rows ?? []
+    ).length;
+  }
+
+  /** A second markdown resource, for an edit save over the same row. */
+  function seedEditResource(): string {
+    const resourceId = nextId("res-edit-3319");
+    const blobId = nextId("blob-edit-3319");
+    sql(
+      `INSERT INTO "${S()}"."resource" (id, org_id, kind, substance_key, mime, size_bytes, created_by, metadata)
+       VALUES ($1,$2,'blob',$3,'text/markdown',10,NULL, jsonb_build_object('storageKey','k','blobId',$4::text))`,
+      [resourceId, ORG, nextId("sub-edit-3319"), blobId],
+    );
+    sql(
+      `INSERT INTO "${S()}"."artifact_blobs"
+         (id, org_id, storage_backend, storage_key, sha256, size_bytes, mime_detected, created_by)
+       VALUES ($1,$2,'local-disk',$3,$4,10,'text/markdown',NULL)`,
+      [blobId, ORG, nextId("key-edit-3319"), nextId("sha-edit-3319")],
+    );
+    return resourceId;
+  }
+
+  /** An edit save through the expected-base road, on the seeded revision. */
+  async function appendEdit(objectId: string, baseRevisionId: string, userId: string) {
+    const edit = await representationStore.appendRepresentationWithExpectedBase({
+      orgId: ORG,
+      artifactId: objectId,
+      baseRevisionId,
+      resourceId: seedEditResource(),
+      form: "file",
+      createdBy: userId,
+    });
+    expect(edit.kind).toBe("appended");
+    if (edit.kind !== "appended") throw new Error("the edit save did not append");
+    return edit.record.id;
+  }
+
+  it("3319 T8 the person who promoted completes an interrupted promotion after the reconcile archived their assertion", async () => {
+    const { ownType, actor, objectId, seeded } = await seedInterruptedPromotion("t8");
+    reconcile(objectId);
+
+    // Another person has no event of their own on the row.
+    const other = { userId: "user-3319-t8-other", orgId: ORG };
+    expect(await promote({ objectId, ownType, actor: other })).toEqual({
+      ok: false,
+      reason: "already-promoted",
+    });
+    expect(representationsOf(objectId)).toHaveLength(1);
+
+    const out = await promote({ objectId, ownType, actor });
+    expect(out).toMatchObject({ ok: true, retyped: false, revision: 2, toType: ownType });
+    if (!out.ok) return;
+    const after = representationsOf(objectId);
+    expect(after).toHaveLength(2);
+    expect(after[1]!.id).toBe(out.representationRevisionId);
+    // The promotion shares the seeded revision's content.
+    expect(after[1]!.resource_id).toBe(seeded.resourceId);
+    expect(witnessCount(objectId, out.representationRevisionId)).toBe(1);
+  });
+
+  it("3319 T9 an edit appended after the reconcile is not promoted by the old intent", async () => {
+    const { ownType, actor, objectId, seeded } = await seedInterruptedPromotion("t9");
+    reconcile(objectId);
+    // An edit save moves the head; the row's version does not move.
+    const editId = await appendEdit(objectId, seeded.revisionId, actor.userId);
+
+    expect(await promote({ objectId, ownType, actor })).toEqual({
+      ok: false,
+      reason: "already-promoted",
+    });
+    expect(representationsOf(objectId).map((r) => r.id)).toEqual([seeded.revisionId, editId]);
+  });
+
+  const FORGED: Array<{ label: string; field: string; forge: Forge }> = [
+    { label: "t10-actor-kind", field: "actor_kind 'agent'", forge: { actorKind: "agent" } },
+    { label: "t10-operation", field: "operation 'create'", forge: { operation: "create" } },
+    {
+      label: "t10-base-version",
+      field: "base_version two below the row's version",
+      forge: { baseVersionOffset: -1 },
+    },
+  ];
+  for (const forged of FORGED) {
+    it(`3319 T10 a retype event with the right key and ${forged.field} does not converge`, async () => {
+      const { ownType, actor, objectId } = await seedInterruptedPromotion(forged.label, forged.forge);
+      // The one event on the row carries the forged field.
+      const events = (sql(
+        `SELECT operation, actor_kind, base_version, result_version FROM "${S()}"."object_change_event"
+         WHERE org_id=$1 AND object_id=$2`,
+        [ORG, objectId],
+      ).rows ?? []) as Array<{ operation: string; actor_kind: string; base_version: number; result_version: number }>;
+      expect(events).toHaveLength(1);
+      expect(Number(events[0]!.result_version)).toBe(2);
+      reconcile(objectId);
+
+      expect(await promote({ objectId, ownType, actor })).toEqual({
+        ok: false,
+        reason: "already-promoted",
+      });
+      expect(representationsOf(objectId)).toHaveLength(1);
+    });
+  }
 });

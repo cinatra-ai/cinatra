@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Deterministic producer-assertion resolution. Security-critical: a
 // missing or CROSS-ORG createdByRunId
@@ -224,5 +224,60 @@ describe("resolveProducerAssertionPlan", () => {
       orgId: "org-a",
     });
     expect(plan).toEqual({ validatedRunId: null, produces: [] });
+  });
+});
+
+// cinatra#4223: the page capture tool (and every other caller of the writer) reaches these reads. A thrown value's
+// message can carry a host, a url or a credential, so a failed read logs a fixed line and the caller's ids, never
+// text taken from the thrown value.
+describe("resolveProducerAssertionPlan: a failed read logs no text of its error", () => {
+  const SECRET = "producer-secret-host";
+  let warned: ReturnType<typeof vi.spyOn>;
+  let errored: ReturnType<typeof vi.spyOn>;
+  const logLines = () => JSON.stringify([...warned.mock.calls, ...errored.mock.calls]);
+
+  beforeEach(() => {
+    runPostgresQueriesSyncMock.mockReset();
+    getAgentPackageMock.mockReset();
+    readProducesMock.mockReset();
+    writeAllowedMock.mockReset().mockResolvedValue(true);
+    warned = vi.spyOn(console, "warn").mockImplementation(() => {});
+    errored = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    warned.mockRestore();
+    errored.mockRestore();
+  });
+
+  it("the agent_runs lookup throws: an empty plan, and a log line without the error's text", async () => {
+    runPostgresQueriesSyncMock.mockImplementationOnce(() => {
+      throw new Error(`connect ECONNREFUSED ${SECRET}:5432`);
+    });
+    const plan = await resolveProducerAssertionPlan({ createdByRunId: "run-x", orgId: "org-a" });
+    expect(plan).toEqual({ validatedRunId: null, produces: [] });
+    expect(warned).toHaveBeenCalledTimes(1);
+    expect(logLines()).not.toContain(SECRET);
+  });
+
+  it("the agent_templates lookup throws: the run kept, no produces, and a log line without the error's text", async () => {
+    stageRunRow({ org_id: "org-a", package_version: "1.0.0", template_id: "tpl-1" });
+    runPostgresQueriesSyncMock.mockImplementationOnce(() => {
+      throw new Error(`connect ECONNREFUSED ${SECRET}:5432`);
+    });
+    const plan = await resolveProducerAssertionPlan({ createdByRunId: "run-x", orgId: "org-a" });
+    expect(plan).toEqual({ validatedRunId: "run-x", produces: [] });
+    expect(warned).toHaveBeenCalledTimes(1);
+    expect(logLines()).not.toContain(SECRET);
+  });
+
+  it("the package manifest read throws: the run kept, no produces, and a log line without the error's text", async () => {
+    stageRunRow({ org_id: "org-a", package_version: "1.0.0", template_id: "tpl-1" });
+    stageTemplateRow({ package_name: "@vendor/the-agent" });
+    getAgentPackageMock.mockRejectedValue(new Error(`GET https://${SECRET}/@vendor%2fthe-agent failed`));
+    const plan = await resolveProducerAssertionPlan({ createdByRunId: "run-x", orgId: "org-a" });
+    expect(plan).toEqual({ validatedRunId: "run-x", produces: [] });
+    expect(warned).toHaveBeenCalledTimes(1);
+    expect(logLines()).toContain("@vendor/the-agent");
+    expect(logLines()).not.toContain(SECRET);
   });
 });

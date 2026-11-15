@@ -133,6 +133,10 @@ export async function discoverActiveExtensionCapabilities(input: {
   scope: ExtensionDiscoveryScope;
   /** Pre-read canonical snapshot — see {@link CanonicalRowsSnapshot}. */
   canonicalRows?: CanonicalRowsSnapshot;
+  /** Told of a kind whose reader facet threw (that kind then yields `[]`), so
+   *  a caller that must not read a failed facet as "nothing" can fail closed
+   *  (cinatra#3319). Omitted, a throwing facet stays isolated, as before. */
+  onError?: (kind: string, error: unknown) => void;
 }): Promise<DiscoveredCapabilities> {
   return discoverActiveCapabilities(
     { kind: input.kind, actor: input.actor, scope: input.scope },
@@ -141,6 +145,7 @@ export async function discoverActiveExtensionCapabilities(input: {
         readActiveManifestsFromStore({ kind: i.kind, canonicalRows: input.canonicalRows }),
       resolveHandler: (k) => extensionRegistry.tryResolve(k),
     },
+    input.onError ? { onError: input.onError } : undefined,
   );
 }
 

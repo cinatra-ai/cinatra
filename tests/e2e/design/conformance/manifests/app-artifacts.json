@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app-artifacts.html",
-  "contentHash": "sha256:f1d26ced35085568cc8286365a625939d77021d7836e03c46e0871468f415de9",
+  "contentHash": "sha256:c4aac5f31aa873714c63891d69ecd41d3b92e387a8b5161798390d7840ddd9b3",
   "surfaces": [
     {
       "id": "artifacts-facet",
@@ -321,36 +321,6 @@
       ]
     },
     {
-      "id": "artifact-dashboard-pointer",
-      "fields": [
-        {
-          "field": "name",
-          "source": "identity.displayName"
-        }
-      ],
-      "actions": [
-        {
-          "action": "open-dashboard",
-          "outcome": "dashboard-canonical"
-        }
-      ],
-      "states": [
-        "error",
-        "loading"
-      ]
-    },
-    {
-      "id": "artifact-dashboard-scope-chips",
-      "fields": [],
-      "actions": [
-        {
-          "action": "open-scope",
-          "outcome": "scope-view"
-        }
-      ],
-      "states": []
-    },
-    {
       "id": "scope-dashboards-tab",
       "fields": [
         {
@@ -501,6 +471,222 @@
       "fields": [],
       "actions": [],
       "states": []
+    },
+    {
+      "id": "lifecycle-ops-header",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "lifecycle-ops-stuck-releases",
+      "fields": [
+        {
+          "field": "run",
+          "source": "intent.runId"
+        },
+        {
+          "field": "review-task",
+          "source": "intent.reviewTaskId"
+        },
+        {
+          "field": "decision",
+          "source": "intent.kind"
+        },
+        {
+          "field": "attempts",
+          "source": "intent.attempts"
+        },
+        {
+          "field": "max-attempts",
+          "source": "intent.maxAttempts"
+        },
+        {
+          "field": "dead-lettered",
+          "source": "intent.deadLetteredAt"
+        },
+        {
+          "field": "last-error",
+          "source": "intent.lastError"
+        }
+      ],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "lifecycle-ops-accepted-suggestions",
+      "fields": [
+        {
+          "field": "run",
+          "source": "application.runId"
+        },
+        {
+          "field": "review-task",
+          "source": "application.reviewTaskId"
+        },
+        {
+          "field": "state",
+          "source": "application.deadLetteredAt"
+        },
+        {
+          "field": "applied",
+          "source": "application.appliedCount"
+        },
+        {
+          "field": "accepted",
+          "source": "application.acceptedCount"
+        },
+        {
+          "field": "attempts",
+          "source": "application.attempts"
+        },
+        {
+          "field": "max-attempts",
+          "source": "application.maxAttempts"
+        },
+        {
+          "field": "since",
+          "source": "application.deadLetteredAt"
+        },
+        {
+          "field": "last-error",
+          "source": "application.lastError"
+        },
+        {
+          "field": "run",
+          "source": "application.runId"
+        },
+        {
+          "field": "review-task",
+          "source": "application.reviewTaskId"
+        },
+        {
+          "field": "state",
+          "source": "application.deadLetteredAt"
+        },
+        {
+          "field": "applied",
+          "source": "application.appliedCount"
+        },
+        {
+          "field": "accepted",
+          "source": "application.acceptedCount"
+        },
+        {
+          "field": "attempts",
+          "source": "application.attempts"
+        },
+        {
+          "field": "max-attempts",
+          "source": "application.maxAttempts"
+        },
+        {
+          "field": "since",
+          "source": "application.createdAt"
+        },
+        {
+          "field": "last-error",
+          "source": "application.lastError"
+        }
+      ],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "lifecycle-ops-blocked-effects",
+      "fields": [
+        {
+          "field": "run",
+          "source": "park.runId"
+        },
+        {
+          "field": "artifact",
+          "source": "park.artifactId"
+        },
+        {
+          "field": "checkpoint",
+          "source": "park.checkpoint"
+        },
+        {
+          "field": "blocked-effect",
+          "source": "park.protectedEffect"
+        },
+        {
+          "field": "deadline-passed",
+          "source": "park.resolvedAt"
+        }
+      ],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "lifecycle-ops-stuck-releases-empty",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "empty"
+      ]
+    },
+    {
+      "id": "lifecycle-ops-accepted-suggestions-empty",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "empty"
+      ]
+    },
+    {
+      "id": "lifecycle-ops-blocked-effects-empty",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "empty"
+      ]
+    },
+    {
+      "id": "lifecycle-ops-stuck-releases-rearmed",
+      "fields": [
+        {
+          "field": "run",
+          "source": "intent.runId"
+        },
+        {
+          "field": "review-task",
+          "source": "intent.reviewTaskId"
+        },
+        {
+          "field": "decision",
+          "source": "intent.kind"
+        },
+        {
+          "field": "attempts",
+          "source": "intent.attempts"
+        },
+        {
+          "field": "max-attempts",
+          "source": "intent.maxAttempts"
+        },
+        {
+          "field": "dead-lettered",
+          "source": "intent.deadLetteredAt"
+        },
+        {
+          "field": "last-error",
+          "source": "intent.lastError"
+        }
+      ],
+      "actions": [],
+      "states": [
+        "error"
+      ]
+    },
+    {
+      "id": "lifecycle-ops-no-organization",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "empty"
+      ]
     }
   ]
 }

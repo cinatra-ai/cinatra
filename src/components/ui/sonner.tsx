@@ -15,6 +15,44 @@ function resolveSonnerTheme(theme: string | undefined): SonnerTheme {
   return 'light'
 }
 
+// The typed toasts' glyphs, as the components drawing (Toast / Sonner) draws
+// them: a 14px stroked mark in the toast's own status colour, in place of
+// the library's filled discs. Success is the check, warning the triangle and error
+// the cross. Info has no drawn glyph there, so it keeps the library's own. The
+// default toast's glyph is added by the toast wrapper
+// (packages/sdk-ui/src/toast.ts), because the library keeps no slot for an
+// untyped toast's icon (cinatra#3189).
+function TypeGlyph({ children }: { children: React.ReactNode }) {
+  return (
+    <svg
+      viewBox='0 0 24 24'
+      width={14}
+      height={14}
+      fill='none'
+      stroke='currentColor'
+      strokeWidth={2.4}
+      strokeLinecap='round'
+      strokeLinejoin='round'
+      aria-hidden='true'
+      data-toast-glyph=''
+    >
+      {children}
+    </svg>
+  )
+}
+
+const TYPE_ICONS: NonNullable<ToasterProps['icons']> = {
+  success: <TypeGlyph><path d='M20 6 9 17l-5-5' /></TypeGlyph>,
+  warning: (
+    <TypeGlyph>
+      <path d='M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z' />
+      <path d='M12 9v4' />
+      <path d='M12 17h.01' />
+    </TypeGlyph>
+  ),
+  error: <TypeGlyph><path d='M18 6 6 18' /><path d='m6 6 12 12' /></TypeGlyph>,
+}
+
 export function Toaster({ ...props }: ToasterProps) {
   const { theme = 'system' } = useTheme()
 
@@ -22,6 +60,7 @@ export function Toaster({ ...props }: ToasterProps) {
     <Sonner
       theme={resolveSonnerTheme(theme)}
       className='toaster group [&_div[data-content]]:w-full'
+      icons={TYPE_ICONS}
       style={
         {
           // Five toast variants use the popover surface with status-coloured
@@ -45,10 +84,13 @@ export function Toaster({ ...props }: ToasterProps) {
           // rule can answer the library's own; this component keeps the toast's
           // colours, which is all a custom property can carry.
 
-          // Default toast — popover surface, foreground text.
+          // Default toast — popover surface, ink text and the ink border:
+          // the drawn default has `border: 1px solid var(--line-strong)`, the
+          // same ink as its text, so its border matches its text as every
+          // variant's does (cinatra#3189).
           '--normal-bg': 'var(--popover)',
           '--normal-text': 'var(--popover-foreground)',
-          '--normal-border': 'var(--border)',
+          '--normal-border': 'var(--line-strong)',
 
           // Info — indigo text on popover surface.
           '--info-bg': 'var(--popover)',

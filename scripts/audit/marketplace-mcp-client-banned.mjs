@@ -170,6 +170,11 @@ export const CURRENT_ALLOWLIST = Object.freeze([
   "src/lib/approvals/__tests__/marketplace-decision-helpers.test.ts",
   "src/lib/approvals/sources/__tests__/marketplace-shared.test.ts",
   "src/lib/approvals/sources/__tests__/marketplace-sources.test.ts",
+  // Unit test of the test-only marketplace MCP stub (tests/e2e/marketplace-approvals):
+  // it drives the stub through the vendored client (`/http-client`) and checks each reply
+  // against the vendored output types, the same client the approval pages call. Test-only,
+  // not new production coupling; moves to the contract import with the swap.
+  "src/app/configuration/marketplace/__tests__/marketplace-mcp-stub.test.ts",
 ]);
 
 /** Files / directories the scanner skips entirely (perf + accuracy).

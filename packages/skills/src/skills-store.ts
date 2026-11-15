@@ -308,7 +308,7 @@ export function writeSkillsStorageConfig(value: { dataPath?: string; storePath?:
 
 export function getSkillsDataRootPath(): string {
   const { dataPath } = readSkillsStorageConfig();
-  return path.isAbsolute(dataPath) ? dataPath : path.join(process.cwd(), dataPath);
+  return path.isAbsolute(dataPath) ? dataPath : path.join(/* turbopackIgnore: true */ process.cwd(), dataPath);
 }
 
 /**
@@ -319,7 +319,7 @@ export function getSkillsDataRootPath(): string {
  */
 export function getSkillStoreRootPath(): string {
   const { storePath } = readSkillsStorageConfig();
-  return path.isAbsolute(storePath) ? storePath : path.join(process.cwd(), storePath);
+  return path.isAbsolute(storePath) ? storePath : path.join(/* turbopackIgnore: true */ process.cwd(), storePath);
 }
 
 // cinatra#793: the extension store's `skill/` subtree root lives in the

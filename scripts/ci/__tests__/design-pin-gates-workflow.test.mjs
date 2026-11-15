@@ -7,9 +7,10 @@
 // pin it was graded against). A checker that exists and is never invoked is a
 // gate only on paper: it decides nothing, it turns nothing red, and the state
 // it was built to make visible stays exactly as silent as before it was
-// written. Both G3 and G4 are landed WARN-FIRST, which means the job runs and
-// the context is not required — so the job running is the whole of what
-// "visible" is, and it is pinned here.
+// written. The freshness gate (G3) is landed WARN-FIRST, which means the job
+// runs and the context is not required — so the job running is the whole of
+// what "visible" is, and it is pinned here. The anchor gate (G4) was landed
+// the same way and is now blocking (cinatra#3555), pinned below.
 //
 // The workflow is read LINE-BASED rather than through a yaml dependency: these
 // gate jobs are pure-node and install nothing, the convention
@@ -27,8 +28,10 @@
 //      costs a runner slot and nothing else;
 //   3. the three jobs are three DIFFERENT jobs.
 
-import { readFileSync, readdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
@@ -37,8 +40,10 @@ import { parseTriggers } from "../merge-group-coverage-guard.mjs";
 import { INVENTORY_PATH } from "../merge-readiness.mjs";
 import {
   ANCHOR_RESOLUTION_CHECKER_PATH,
+  COMMIT_BEARING_PINS,
   FRESHNESS_CHECKER_PATH,
   GLOBAL_PATHS,
+  MAP_PATH,
   RECORD_GRAMMAR_CHECKER_PATH,
   RECORD_GRAMMAR_WORKFLOW_PATH,
   WORKFLOW_PATH,
@@ -187,35 +192,194 @@ describe("every design-pin gate runs as its own job in the workflow", () => {
     expect(new Set(jobs).size).toBe(GATES.length);
   });
 
-  // THE ANCHOR GATE REPORTS, IT DOES NOT BLOCK (cinatra#3144 G1 item 6, G4).
-  // Its checker's own header says it is landed WARN-FIRST "so the state is
-  // visible without blocking anything", and this repository offers exactly one
-  // mechanism that makes that sentence true: a JOB-LEVEL `continue-on-error:
-  // true`, which keeps the workflow RUN green while the job's own check run
-  // still carries the finding. The STEP-level key on the token-mint step is a
-  // different thing entirely — it exists so a refused credential cannot abort
-  // the job silently, and the checker still fails CLOSED behind it — so the
-  // INDENT is the assertion here: the job's own indent + 2, never a step's.
+  // THE ANCHOR GATE BLOCKS (cinatra#3555 item 4, cinatra#3144 G4).
+  // It landed WARN-FIRST: a JOB-LEVEL `continue-on-error: true`, which kept the
+  // workflow RUN green while the job's own check run still carried the finding,
+  // with the context in the readiness inventory's `excluded` list as
+  // report-only. The follow-up the checker's header promised makes it blocking,
+  // and three records say so together; the first two are asserted here, the
+  // third (the branch-protection declaration) below.
   //
-  // The readiness inventory is the other half and cannot be left out: its
-  // generator reads that same declaration and drops the context into
-  // `excluded` as report-only. A context still sitting in `expected` is one a
-  // merge waits on, so the disposition would be undone while the workflow key
-  // still looked right.
-  it("reports the anchor-resolution gate without blocking a merge", () => {
+  //   1. the job declares no `continue-on-error` of its own. The STEP-level key
+  //      on the token-mint step is a different thing: it exists so a refused
+  //      credential cannot abort the job silently, and the checker still fails
+  //      CLOSED behind it (exit 2) - so the INDENT is the assertion here: the
+  //      job's own indent + 2, never a step's;
+  //   2. the readiness inventory lists the context as `expected`, so a merge
+  //      waits on it, and no longer as `excluded` as report-only. Its
+  //      generator reads the same declaration, so a context still sitting in
+  //      `excluded` is one the workflow key no longer justifies.
+  it("blocks a merge on the anchor-resolution gate", () => {
     const running = [...jobBlocks(workflow())].filter(([, block]) =>
       block.includes(ANCHOR_RESOLUTION_CHECKER_PATH),
     );
     expect(running).toHaveLength(1);
     const [job, block] = running[0];
 
-    expect(block, `${job} - job-level continue-on-error`).toMatch(/^ {4}continue-on-error: true$/m);
+    expect(block, `${job} - job-level continue-on-error`).not.toMatch(/^ {4}continue-on-error:/m);
 
     const readiness = JSON.parse(readFileSync(resolve(REPO_ROOT, INVENTORY_PATH), "utf8"));
-    expect(readiness.expected.map((row) => row.context), `${job} - expected`).not.toContain(job);
-    const dropped = readiness.excluded.find((row) => row.context === job);
-    expect(dropped, `${job} - excluded row`).toBeDefined();
-    expect(dropped.reason, `${job} - exclusion reason`).toMatch(/^report-only:/);
+    expect(readiness.expected.map((row) => row.context), `${job} - expected`).toContain(job);
+    expect(
+      readiness.excluded.find((row) => row.context === job),
+      `${job} - excluded row`,
+    ).toBeUndefined();
+  });
+
+  it("lists the anchor-resolution gate as a required branch-protection context", () => {
+    const protections = JSON.parse(
+      readFileSync(resolve(REPO_ROOT, ".github/branch-protections.json"), "utf8"),
+    );
+    expect(protections.required_status_checks.contexts).toContain("design-anchor-resolution");
+  });
+
+  // A REQUIRED GATE THAT NEEDS A SECRET MUST NOT BLOCK A RUN THAT HAS NONE
+  // (cinatra#3555). The job reads the drawings through a credential minted in
+  // its own mint step. A fork pull request has no Actions secrets, a
+  // Dependabot-triggered run gets its own secret store instead, and the design
+  // source or the App installation can be down: in each the token is empty. The
+  // checker then exits 0 with a notice when the pull request changes no path it
+  // reads, and 2 when it does. The unit suite drives the checker; these tests
+  // drive the JOB'S OWN step text (the shell the runner runs) against the real
+  // checker in a throwaway git repository, so the base the step computes, the
+  // environment it passes and the checker's verdict are read together.
+  //
+  //   1. the checkout has the history the diff base needs (fetch-depth: 0);
+  //   2. the mint step keeps its STEP-level continue-on-error (an empty token
+  //      reaches the checker instead of aborting the job), and the job itself
+  //      sets no DESIGN_DRAWINGS_DIR (a pull request cannot point the checker
+  //      at its own drawings);
+  //   3. the step run with no credential and an untouched diff exits 0 with a
+  //      notice, and with a touched mapped path exits 2.
+  describe("the anchor-resolution job with no credential", () => {
+    const jobBlock = () => {
+      const running = [...jobBlocks(workflow())].filter(([, block]) =>
+        block.includes(ANCHOR_RESOLUTION_CHECKER_PATH),
+      );
+      expect(running).toHaveLength(1);
+      return running[0][1];
+    };
+
+    /** The `run:` text of the step named `name`, with its indentation removed. */
+    function stepRun(block, name) {
+      const lines = block.split("\n");
+      const at = lines.findIndex((l) => l.trim() === `- name: ${name}`);
+      expect(at, `${name} - step`).toBeGreaterThan(-1);
+      const run = lines.findIndex((l, i) => i > at && /^ {8}run: \|\s*$/.test(l));
+      expect(run, `${name} - run`).toBeGreaterThan(at);
+      const out = [];
+      for (let i = run + 1; i < lines.length; i++) {
+        if (lines[i].trim() !== "" && !/^ {10}/.test(lines[i])) break;
+        out.push(lines[i].replace(/^ {10}/, ""));
+      }
+      return out.join("\n");
+    }
+
+    it("has the history its diff base needs and keeps the mint step non-fatal", () => {
+      const block = jobBlock();
+      expect(block).toMatch(/^ {10}fetch-depth: 0$/m);
+      const mint = /- name: Mint the design-source read token\n((?: {8,}.*\n?)+)/.exec(block);
+      expect(mint, "mint step").not.toBeNull();
+      expect(mint[1]).toMatch(/^ {8}continue-on-error: true$/m);
+      expect(block).not.toContain("DESIGN_DRAWINGS_DIR:");
+    });
+
+    // `event` is the GitHub event the runner would run the step under:
+    //   pull_request: the baseline is `origin/<base.ref>`, a remote-tracking ref;
+    //   merge_group:  the baseline is the event's own `merge_group.base_sha`;
+    //   push:         the baseline is the event's `before` (gates.yml receives a
+    //                 push on main only, which exits 2 on its own; a push to a
+    //                 feature branch is run here for the `before` road).
+    // `renameFrom` commits that file in the base and MOVES it to `touchedPath`
+    // in the change, so the diff carries a rename.
+    function runStep({ touchedPath, event = "push", renameFrom = null }) {
+      const root = mkdtempSync(join(tmpdir(), "anchor-job-"));
+      const git = (...args) =>
+        execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.test", "-c", "commit.gpgsign=false", ...args], {
+          cwd: root,
+          encoding: "utf8",
+          env: { PATH: process.env.PATH, HOME: root, GIT_CONFIG_NOSYSTEM: "1" },
+        });
+      // The checker, its imports taken transitively, and the files it reads as data.
+      const files = new Set([ANCHOR_RESOLUTION_CHECKER_PATH, MAP_PATH]);
+      const todo = [ANCHOR_RESOLUTION_CHECKER_PATH];
+      while (todo.length) {
+        const rel = todo.pop();
+        const text = read(rel);
+        for (const m of text.matchAll(/(?:from|import)\s*\(?\s*["'](\.[^"']+)["']/g)) {
+          const dep = normalize(join(dirname(rel), m[1])).split("\\").join("/");
+          if (!files.has(dep)) {
+            files.add(dep);
+            todo.push(dep);
+          }
+        }
+      }
+      for (const p of COMMIT_BEARING_PINS) {
+        files.add(p.authority);
+        files.add(p.mirror);
+      }
+      for (const rel of files) {
+        mkdirSync(dirname(join(root, rel)), { recursive: true });
+        writeFileSync(join(root, rel), read(rel));
+      }
+      if (renameFrom) {
+        mkdirSync(dirname(join(root, renameFrom)), { recursive: true });
+        writeFileSync(join(root, renameFrom), "a file the checker reads, with enough text to count as the same file\n".repeat(8));
+      }
+      git("init", "-q", "-b", "main");
+      git("add", "-A");
+      git("commit", "-q", "-m", "base");
+      const before = git("rev-parse", "HEAD").trim();
+      if (event === "pull_request") git("update-ref", "refs/remotes/origin/main", before);
+      mkdirSync(dirname(join(root, touchedPath)), { recursive: true });
+      if (renameFrom) git("mv", renameFrom, touchedPath);
+      else writeFileSync(join(root, touchedPath), "changed\n");
+      git("add", "-A");
+      git("commit", "-q", "-m", "change");
+      // The expressions the runner would substitute for the event.
+      const script = stepRun(jobBlock(), "Design Anchor Resolution")
+        .replaceAll("${{ github.event.pull_request.base.ref }}", event === "pull_request" ? "main" : "")
+        .replaceAll("${{ github.event.merge_group.base_sha }}", event === "merge_group" ? before : "")
+        .replaceAll("${{ github.event.before }}", event === "push" ? before : "");
+      expect(script).not.toContain("${{");
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH,
+          HOME: root,
+          GITHUB_EVENT_NAME: event,
+          ...(event === "push" ? { GITHUB_REF_NAME: "feature/x" } : {}),
+          DESIGN_SOURCE_TOKEN: "",
+        },
+      });
+      rmSync(root, { recursive: true, force: true });
+      return { code: result.status, out: `${result.stdout}\n${result.stderr}` };
+    }
+
+    for (const event of ["pull_request", "merge_group", "push"]) {
+      it(`${event}: exits 0 with a notice for a diff that changes no path the checker reads`, () => {
+        const r = runStep({ touchedPath: "README.md", event });
+        expect(r.out).toContain("::notice");
+        expect(r.code).toBe(0);
+      });
+
+      it(`${event}: exits 2 for a diff that changes a path the checker reads`, () => {
+        const r = runStep({ touchedPath: "src/lib/lifecycle/__tests__/anchor-contract-binding.test.ts", event });
+        expect(r.out).toContain("could not run honestly");
+        expect(r.code).toBe(2);
+      });
+    }
+
+    it("pull_request: exits 2 for a diff that MOVES a path the checker reads (a rename lists its source)", () => {
+      const r = runStep({
+        event: "pull_request",
+        renameFrom: "src/lib/lifecycle/__tests__/anchor-contract-binding.test.ts",
+        touchedPath: "docs/moved-binding.test.ts",
+      });
+      expect(r.out).toContain("could not run honestly");
+      expect(r.code).toBe(2);
+    });
   });
 });
 

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { compileOasAgentJson } from "./oas-compiler";
+import { compileOasAgentJson, type PublishRows } from "./oas-compiler";
 import { scanOasForVisibleInputContractFindings } from "./validate-oas-runtime-invariants";
 import {
   readManifestLifecycle,
@@ -124,6 +124,16 @@ export type AgentTemplateInstallSeed = {
    * lifecycleConfig), not part of the agent's source identity.
    */
   artifactBindings: string | null;
+  /**
+   * The ids of the flow nodes the compiled OAS declares
+   * `metadata.cinatra.publishes: true` (cinatra#4150), persisted on
+   * `agent_templates.publishing_steps`. A compiled ROW column like triggerMode,
+   * deliberately NOT part of the version `snapshot`.
+   */
+  publishingSteps: string[];
+  /** The publish card's rows per declared node (cinatra#4150), persisted on
+   * `agent_templates.publish_rows` beside publishingSteps; not in `snapshot`. */
+  publishRows: PublishRows;
   /** Deterministic snapshot persisted to the agent_versions row. */
   snapshot: Record<string, unknown>;
   /** sha256(JSON.stringify(snapshot)) — full hex, matches the prior install flow. */
@@ -318,6 +328,9 @@ export async function buildAgentTemplateInstallSeed(input: {
     artifactBindings: compiled.artifactBindings
       ? serializeArtifactBindingDeclaration(compiled.artifactBindings)
       : null,
+    // cinatra#4150 — the compiler's publishing-step declaration.
+    publishingSteps: compiled.publishingSteps,
+    publishRows: compiled.publishRows,
     snapshot,
     contentHash,
   };

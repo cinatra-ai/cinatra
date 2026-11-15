@@ -16,6 +16,12 @@ const storeMock = vi.hoisted(() => ({
   readAgentTemplateById: vi.fn(),
 }));
 vi.mock("../store", () => storeMock);
+// cinatra#4150: every resume road reads the run's newest publish decision before it
+// sends. This suite is about another question, so no publish decision holds its run.
+vi.mock("../publish-decision-store", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readLatestDecisionForRun: async () => null,
+}));
 const claims = vi.hoisted(() => ({
   claimPause: vi.fn(),
   fencePauseInPlace: vi.fn(),

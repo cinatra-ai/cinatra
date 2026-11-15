@@ -28,7 +28,6 @@ const ports = {
   readRepair: vi.fn(),
   submitRepairResponse: vi.fn(),
   readDeliveredRepairRequest: vi.fn(),
-  resolveCmsRepairBaseTarget: vi.fn(),
   resolveOrgRoleForUser: vi.fn(),
   refileRevisionOntoArtifact: vi.fn(),
   advanceArtifactPointerOntoRevision: vi.fn(),
@@ -45,7 +44,6 @@ const MOCKED = [
   "../db",
   "../lifecycle-repair-store",
   "../lifecycle-repair-dispatch-store",
-  "../lifecycle-repair-cms-production-bridge",
   "@/lib/auth-session",
   "@/lib/artifacts/artifact-revision-append",
 ] as const;
@@ -120,16 +118,12 @@ beforeEach(async () => {
     repairRunId: runOf,
     readDeliveredRepairRequest: ports.readDeliveredRepairRequest,
   }));
-  vi.doMock("../lifecycle-repair-cms-production-bridge", () => ({
-    resolveCmsRepairBaseTarget: ports.resolveCmsRepairBaseTarget,
-  }));
   vi.doMock("@/lib/auth-session", () => ({ resolveOrgRoleForUser: ports.resolveOrgRoleForUser }));
   vi.doMock("@/lib/artifacts/artifact-revision-append", () => ({
     refileRevisionOntoArtifact: ports.refileRevisionOntoArtifact,
     advanceArtifactPointerOntoRevision: ports.advanceArtifactPointerOntoRevision,
     SemanticArtifactRevisionAppendRefusal: FakeRefusal,
   }));
-  ports.resolveCmsRepairBaseTarget.mockResolvedValue(null);
   ports.readDeliveredRepairRequest.mockResolvedValue({ originatingRunBy: "user-1" });
   ports.resolveOrgRoleForUser.mockResolvedValue("member");
   ports.readRepair.mockImplementation(async (id: string) => repairRow(id));

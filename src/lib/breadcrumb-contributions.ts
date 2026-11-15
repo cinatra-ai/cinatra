@@ -55,6 +55,38 @@ export type CrumbSnapshot = {
   readonly entries: readonly CrumbContribution[];
 };
 
+// ONE CANONICAL FORM FOR EVERY CRUMB PATH COMPARISON (cinatra#4295). The
+// router reads a path segment decoded, so `/%74eams/<id>` is `/teams/<id>`,
+// and publishers write their prefixes with `encodeURIComponent`. A raw string
+// compare missed every contribution on an encoded address, and the trail then
+// drew the id placeholder where the route had published the name. Each segment
+// is decoded and encoded again, so `%2F` inside a segment stays apart from a
+// segment boundary; a malformed escape stays raw and so matches only itself.
+// Empty segments collapse, as the trail's own split does.
+function canonicalCrumbSegment(segment: string): string {
+  try {
+    return encodeURIComponent(decodeURIComponent(segment));
+  } catch {
+    return segment;
+  }
+}
+
+export function canonicalCrumbPath(path: string): string {
+  return "/" + path.split("/").filter(Boolean).map(canonicalCrumbSegment).join("/");
+}
+
+/** Do two crumb paths name the same route path (see `canonicalCrumbPath`)? */
+export function sameCrumbPath(a: string, b: string): boolean {
+  return canonicalCrumbPath(a) === canonicalCrumbPath(b);
+}
+
+/** Is `pathname` the crumb path `prefix` or a path below it? */
+function isAtOrBelowCrumbPath(pathname: string, prefix: string): boolean {
+  const here = canonicalCrumbPath(pathname);
+  const base = canonicalCrumbPath(prefix);
+  return here === base || here.startsWith(base + "/");
+}
+
 let snapshot: CrumbSnapshot | null = null;
 
 /** Replace the snapshot wholesale (route-scoped — never a merge) + notify. */
@@ -70,7 +102,8 @@ export function publishCrumbContributions(
   for (const entry of entries) {
     if (!entry.insertBefore && !entry.appendAfter) {
       const existing = deduped.findIndex(
-        (e) => !e.insertBefore && !e.appendAfter && e.prefix === entry.prefix,
+        (e) =>
+          !e.insertBefore && !e.appendAfter && sameCrumbPath(e.prefix, entry.prefix),
       );
       if (existing !== -1) deduped.splice(existing, 1);
     }
@@ -113,7 +146,7 @@ export function markPageNotFound(pathname: string): void {
  * mark; a bare call (a reset, a test) still lifts whatever is marked. */
 export function clearPageNotFound(pathname?: string): void {
   if (notFoundPathname === null) return;
-  if (pathname !== undefined && notFoundPathname !== pathname) return;
+  if (pathname !== undefined && !sameCrumbPath(notFoundPathname, pathname)) return;
   notFoundPathname = null;
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent(CRUMB_CONTRIBUTIONS_EVENT));
@@ -122,7 +155,7 @@ export function clearPageNotFound(pathname?: string): void {
 
 /** Whether THIS pathname is the one the boundary marked. */
 export function isPageNotFound(pathname: string): boolean {
-  return notFoundPathname !== null && notFoundPathname === pathname;
+  return notFoundPathname !== null && sameCrumbPath(notFoundPathname, pathname);
 }
 
 /** The current snapshot (parked value for late-mounting consumers). */
@@ -148,9 +181,9 @@ export function selectCrumbContributions(
   currentEpoch: string,
 ): CrumbContribution[] {
   if (!snapshot || snapshot.epoch !== currentEpoch) return [];
-  const samePath = snapshot.pathname === pathname;
+  const samePath = sameCrumbPath(snapshot.pathname, pathname);
   return snapshot.entries.filter((entry) => {
     if (entry.insertBefore || entry.appendAfter) return samePath;
-    return pathname === entry.prefix || pathname.startsWith(entry.prefix + "/");
+    return isAtOrBelowCrumbPath(pathname, entry.prefix);
   });
 }

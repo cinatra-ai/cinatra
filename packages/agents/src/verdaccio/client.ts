@@ -77,6 +77,44 @@ export async function carryManifestConsumes(
 }
 
 /**
+ * Carry the source `cinatra.tools` and `cinatra.declaredTables` into the
+ * publisher's REBUILT cinatra block (cinatra#3924).
+ *
+ * A run reads both from the registry manifest of the version its template is
+ * bound to (`src/lib/extension-run-package.ts`): the generic tool dispatch
+ * resolves a declared tool's name against `cinatra.tools`, and the data tool
+ * and the data port operate only on `cinatra.declaredTables`. This publisher
+ * builds a fresh cinatra block, so without this carry both were lost on
+ * publish and every declared tool name was refused as undeclared.
+ *
+ * Each value is validated by the SDK parser the run itself applies
+ * (`parseDeclaredTools`, `parseDeclaredTables`); a declaration that does not
+ * parse THROWS and aborts the publish before anything is written. A value that
+ * parses is carried VERBATIM, so the run parses exactly what the author
+ * declared. Absent (missing or `null`, which both parsers read as an empty
+ * list) stays absent.
+ */
+export async function carryManifestRunDeclarations(
+  gitPkgJson: Record<string, unknown>,
+  packageName: string,
+): Promise<{ tools?: unknown; declaredTables?: unknown }> {
+  const cinatra = gitPkgJson.cinatra;
+  if (typeof cinatra !== "object" || cinatra === null || Array.isArray(cinatra)) return {};
+  const { tools, declaredTables } = cinatra as Record<string, unknown>;
+  const { parseDeclaredTools, parseDeclaredTables } = await import("@cinatra-ai/sdk-extensions/manifest");
+  const carried: { tools?: unknown; declaredTables?: unknown } = {};
+  if (tools !== undefined && tools !== null) {
+    parseDeclaredTools(tools, packageName);
+    carried.tools = tools;
+  }
+  if (declaredTables !== undefined && declaredTables !== null) {
+    parseDeclaredTables(declaredTables, packageName);
+    carried.declaredTables = declaredTables;
+  }
+  return carried;
+}
+
+/**
  * Carry the source `cinatra.logo` into the generated distribution manifest
  * (cinatra#2469 — "every extension kind must be able to self-define
  * `cinatra.logo`"; maintainer decision 2026-08-06).
@@ -640,6 +678,9 @@ export async function publishAgentPackageFromGitDir(
   // An explicitly-present empty array is PRESERVED (declared-nothing !=
   // undeclared); absence stays absent.
   const consumesEntries = await carryManifestConsumes(gitPkgJson, packageName);
+  // cinatra#3924: the declarations a run reads from this manifest. Validated
+  // here, before any write; see `carryManifestRunDeclarations`.
+  const runDeclarations = await carryManifestRunDeclarations(gitPkgJson, packageName);
   const hasApprovalGates = approvalPolicy.steps.some((s) => s.requiresApproval);
   const publishedAt = new Date().toISOString();
 
@@ -698,6 +739,11 @@ export async function publishAgentPackageFromGitDir(
       ...(Array.isArray(cinatraDeps) && cinatraDeps.length > 0 ? { dependencies: cinatraDeps } : {}),
       ...(producesEntries.length > 0 ? { produces: producesEntries } : {}),
       ...(consumesEntries !== undefined ? { consumes: consumesEntries } : {}),
+      // cinatra#3924: the declared tools and tables a run reads survive the rebuild.
+      ...(runDeclarations.tools !== undefined ? { tools: runDeclarations.tools } : {}),
+      ...(runDeclarations.declaredTables !== undefined
+        ? { declaredTables: runDeclarations.declaredTables }
+        : {}),
       // cinatra#2469: the agent's self-declared card logo survives the rebuild.
       ...(logo !== undefined ? { logo } : {}),
       // cinatra#2494: the agent's self-declared card displayName/vendor

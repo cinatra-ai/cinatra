@@ -70,6 +70,7 @@ export function ModelPricingTable({ rows }: ModelPricingTableProps) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search models, providers…"
+            aria-label="Search models, providers…"
           />
         </ToolbarSearchGroup>
         <ToolbarGroup className="ml-auto">

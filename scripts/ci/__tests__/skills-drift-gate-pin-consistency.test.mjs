@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { GATE_CALLER } from "../skills-drift-watched-packages.mjs";
+import { GATE_CALLER, parseGateSkillsRepos } from "../skills-drift-watched-packages.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const EXPECTED_PIN = "e643ec2ef8474bae81bd93fabb87de09a701c8ad";
@@ -57,4 +57,25 @@ describe("skills-drift caller engine pins advance together", () => {
   it("leaves no reference to the superseded engine commit in the caller", () => {
     expect(caller.includes(SUPERSEDED_PIN)).toBe(false);
   });
+});
+
+// LOCKSTEP guard for the skill pins. The caller's header requires each
+// `skills_repos:` entry to name the same commit as that repository's
+// resolvedSha in the required-extensions lock, moved in the same change.
+// Without this check a lock refresh can move a skill while the gate keeps
+// scanning the older SKILL.md and its watch set.
+describe("skills-drift caller skill pins match the required-extensions lock", () => {
+  const lock = JSON.parse(
+    fs.readFileSync(path.join(REPO_ROOT, "cinatra-required-extensions.lock.json"), "utf8"),
+  );
+  const pins = parseGateSkillsRepos(caller);
+
+  it.each(pins.map((p) => [`${p.owner}/${p.name}`, p.sha]))(
+    "pins %s at the lock's resolvedSha",
+    (repo, sha) => {
+      const entries = lock.packages.filter((p) => p.repo === repo);
+      expect(entries, `${repo} has no single entry in the required-extensions lock`).toHaveLength(1);
+      expect(sha).toBe(entries[0].resolvedSha);
+    },
+  );
 });

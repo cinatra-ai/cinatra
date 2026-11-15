@@ -387,4 +387,76 @@ describeDb("dependency-scoped artifact reads (cinatra#3031 acceptance 3 and 4)",
       extensionArtifactsList(await readCtx(), { limit: 2, cursor: "not-a-cursor" }),
     ).rejects.toThrow(/is not a cursor this listing wrote/);
   });
+
+  // THE TYPE A CALLER NAMES ON A READ. A caller that declares two artifact
+  // dependencies may list one type and then read one artifact of it. The two
+  // calls are two row reads, and a typed promotion may retype the artifact
+  // between them to the caller's OTHER declared type. The read is then still
+  // admitted, so it would return the other type's text. A caller that names
+  // the type it expects gets that type or a refusal, decided on the same row
+  // read that picks the revision it reads.
+  const BOTH_DEPENDENCIES = [IDEA_PKG, POST_PKG].map((packageName) => ({
+    packageName,
+    kind: "artifact",
+    edgeType: "runtime",
+    versionConstraint: { kind: "semver-range", range: "^1.0.0" },
+    requirement: "required",
+  }));
+
+  it("A READ THAT NAMES THE TYPE IT LISTED refuses a row retyped since the listing, and reads nothing", async () => {
+    const { extensionArtifactsList, extensionArtifactContentRead } = await import(
+      "@/lib/artifacts/extension-artifact-reads"
+    );
+    const ctx = await readCtx(BOTH_DEPENDENCIES);
+    const page = await extensionArtifactsList(ctx, { types: [IDEA_TYPE], limit: 50 });
+    expect(page.artifacts.find((a) => a.artifactId === "idea-2")?.objectType).toBe(IDEA_TYPE);
+    // The retype, between the listing and the read: the row's type is what a
+    // typed promotion changes, and the read admits the new type too.
+    await admin.query(`UPDATE "${q(SCHEMA)}"."objects" SET type = $1 WHERE id = 'idea-2'`, [POST_TYPE]);
+    try {
+      auditEvents.length = 0;
+      const refused = await extensionArtifactContentRead(ctx, {
+        artifactId: "idea-2",
+        objectType: IDEA_TYPE,
+      }).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(refused).toMatchObject({ name: "ArtifactContentRefusal", reason: "type-mismatch" });
+      expect(auditEvents).toHaveLength(1);
+      expect(auditEvents[0]).toMatchObject({
+        decision: "denied",
+        operation: "artifact_content_read",
+        resourceId: "idea-2",
+      });
+      expect((auditEvents[0]?.metadata as Record<string, unknown>).reason).toBe("type-mismatch");
+      // Without the type name the same read is admitted and answers the type it
+      // read: the caller can see what it got, and the type name refuses it.
+      const unnamed = await extensionArtifactContentRead(ctx, { artifactId: "idea-2" });
+      expect(unnamed.text).toBe("# idea 2\n\nthe body of idea 2\n");
+      expect(unnamed.objectType).toBe(POST_TYPE);
+    } finally {
+      await admin.query(`UPDATE "${q(SCHEMA)}"."objects" SET type = $1 WHERE id = 'idea-2'`, [IDEA_TYPE]);
+    }
+  });
+
+  it("a read that names the row's own type reads it, and every content read answers the type it read", async () => {
+    const { extensionArtifactContentRead } = await import("@/lib/artifacts/extension-artifact-reads");
+    const ctx = await readCtx(BOTH_DEPENDENCIES);
+    const named = await extensionArtifactContentRead(ctx, { artifactId: "idea-3", objectType: IDEA_TYPE });
+    expect(named.text).toBe("# idea 3\n\nthe body of idea 3\n");
+    expect(named.objectType).toBe(IDEA_TYPE);
+    const post = await extensionArtifactContentRead(ctx, { artifactId: "post-1" });
+    expect(post.objectType).toBe(POST_TYPE);
+  });
+
+  it("the get that names a type refuses an artifact of another admitted type", async () => {
+    const { extensionArtifactGet } = await import("@/lib/artifacts/extension-artifact-reads");
+    const ctx = await readCtx(BOTH_DEPENDENCIES);
+    await expect(
+      extensionArtifactGet(ctx, { artifactId: "post-1", objectType: IDEA_TYPE }),
+    ).rejects.toMatchObject({ name: "ArtifactContentRefusal", reason: "type-mismatch" });
+    const got = await extensionArtifactGet(ctx, { artifactId: "post-1", objectType: POST_TYPE });
+    expect(got.objectType).toBe(POST_TYPE);
+  });
 });

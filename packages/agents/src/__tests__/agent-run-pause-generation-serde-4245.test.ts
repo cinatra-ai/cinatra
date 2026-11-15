@@ -71,6 +71,11 @@ describe("the run record's pause generation (cinatra#4245)", () => {
     expect(deserializeRun(row(raw)).pauseGeneration).toBeUndefined();
   });
 
+  it("reads a negative zero as the generation 0, never as -0", () => {
+    expect(Object.is(parsePauseGeneration(-0), 0)).toBe(true);
+    expect(Object.is(deserializeRun(row(-0)).pauseGeneration, 0)).toBe(true);
+  });
+
   it("accepts the largest safe integer, as a number and as its decimal text", () => {
     expect(parsePauseGeneration(Number.MAX_SAFE_INTEGER)).toBe(Number.MAX_SAFE_INTEGER);
     expect(parsePauseGeneration(String(Number.MAX_SAFE_INTEGER))).toBe(Number.MAX_SAFE_INTEGER);

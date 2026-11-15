@@ -44,7 +44,10 @@ function TabsTrigger({
     <TabsPrimitive.Trigger
       data-slot='tabs-trigger'
       className={cn(
-        'relative inline-flex items-center gap-1.5 whitespace-nowrap px-1 py-2 text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-50',
+        // Face: the drawing sets its tab labels in its sans face, Archivo, the
+        // "UI chrome" face (specs/app-components.html, Tabs and `--font-sans`);
+        // the app's Archivo token is `--font-display` (cinatra#3189).
+        'relative inline-flex items-center gap-1.5 whitespace-nowrap px-1 py-2 font-display text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-50',
         // 2px indigo underline on the active state (offset to live just below
         // the row baseline so the click target stays compact).
         'data-[state=active]:text-primary after:pointer-events-none after:absolute after:inset-x-0 after:-bottom-px after:h-[2px] after:bg-transparent data-[state=active]:after:bg-primary',

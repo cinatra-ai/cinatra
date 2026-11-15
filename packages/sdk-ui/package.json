@@ -31,7 +31,8 @@
     "./search-param-toast": "./src/search-param-toast.tsx",
     "./lib/utils": "./src/lib/utils.ts",
     "./lib/access-visibility": "./src/lib/access-visibility.ts",
-    "./lib/extension-accent": "./src/lib/extension-accent.ts"
+    "./lib/extension-accent": "./src/lib/extension-accent.ts",
+    "./lib/user-avatar": "./src/lib/user-avatar.ts"
   },
   "files": [
     "src/**/*.ts",

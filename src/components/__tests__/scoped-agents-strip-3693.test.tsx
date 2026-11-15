@@ -211,7 +211,7 @@ describe("A2: the trail of each scope's Executions tab ends at Executions (cinat
       name: `E6 /organizations/${ORG_ID}/agents/executions with the name withheld`,
       scope: { kind: "organization", id: ORG_ID },
       title: undefined,
-      expected: ["Organizations", `${ORG_ID.slice(0, 8)}…`, "Agents", "Executions"],
+      expected: ["Organizations", "Organization", "Agents", "Executions"],
     },
   ];
 

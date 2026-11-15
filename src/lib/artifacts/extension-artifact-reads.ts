@@ -149,10 +149,19 @@ export async function extensionArtifactsList(
   return page;
 }
 
-/** The GET, admitted per declared dependency and bound to the run's organisation. */
+/**
+ * The GET, admitted per declared dependency and bound to the run's organisation.
+ *
+ * `objectType` NAMES THE TYPE THE CALLER EXPECTS. A caller that declares more
+ * than one artifact dependency is admitted for each of their types, so a row
+ * retyped between its listing and this read (a typed promotion changes the
+ * type in place) would still be admitted. A caller that names the type it
+ * listed gets a row of that type or a refusal, decided on this one row read,
+ * which is also the read that picks the revision a content read serves.
+ */
 export async function extensionArtifactGet(
   ctx: ExtensionArtifactReadContext,
-  request: { artifactId: string },
+  request: { artifactId: string; objectType?: string },
 ): Promise<ArtifactSummary> {
   const audit = ctx.audit ?? defaultAudit;
   const base = auditBase({ ...ctx, operation: "artifacts_get" });
@@ -182,6 +191,23 @@ export async function extensionArtifactGet(
     }).catch(() => {});
     throw new ArtifactAdmissionRefusal(ctx.admission, artifact.objectType);
   }
+  if (request.objectType !== undefined && artifact.objectType !== request.objectType) {
+    await audit({
+      ...base,
+      resourceId: request.artifactId,
+      decision: "denied",
+      metadata: {
+        ...admissionMetadata(ctx.admission),
+        reason: "type-mismatch",
+        objectType: artifact.objectType,
+        expectedObjectType: request.objectType,
+      },
+    }).catch(() => {});
+    throw new ArtifactContentRefusal(
+      "type-mismatch",
+      `artifacts_get: ${request.artifactId} is not an artifact of the type ${request.objectType}`,
+    );
+  }
   await audit({
     ...base,
     resourceId: request.artifactId,
@@ -202,21 +228,39 @@ export type ExtensionArtifactContent = {
   totalBytes: number;
 };
 
+/** A content read's answer: the text, and the type of the row it was read from. */
+export type ExtensionArtifactContentReadResult = ExtensionArtifactContent & {
+  /** The object type of the row this read admitted and read the revision of. */
+  objectType: string;
+};
+
 /**
  * The CONTENT READ: the text of one representation, up to the cap. New in W7 —
  * "nothing returns content" was the whole of the before-state.
+ *
+ * `objectType`, when named, is checked by the GET below on the same row read
+ * that gives the revision this read serves; the answer carries the row's type
+ * either way, so a caller can refuse a host that does not check it.
  */
 export async function extensionArtifactContentRead(
   ctx: ExtensionArtifactReadContext,
-  request: { artifactId: string; representationRevisionId?: string; maxBytes?: number },
-): Promise<ExtensionArtifactContent> {
+  request: {
+    artifactId: string;
+    representationRevisionId?: string;
+    maxBytes?: number;
+    objectType?: string;
+  },
+): Promise<ExtensionArtifactContentReadResult> {
   const audit = ctx.audit ?? defaultAudit;
   const base = auditBase({ ...ctx, operation: "artifact_content_read" });
   // The GET's admission and organisation binding are the same ones this read
   // needs; going through it means there is ONE place a type is admitted.
   const artifact = await extensionArtifactGet(
     { ...ctx, audit: async () => {} },
-    { artifactId: request.artifactId },
+    {
+      artifactId: request.artifactId,
+      ...(request.objectType !== undefined ? { objectType: request.objectType } : {}),
+    },
   ).catch(async (e) => {
     await audit({
       ...base,
@@ -224,7 +268,10 @@ export async function extensionArtifactContentRead(
       decision: "denied",
       metadata: {
         ...admissionMetadata(ctx.admission),
-        reason: e instanceof ArtifactAdmissionRefusal ? e.reason : "not-found",
+        reason:
+          e instanceof ArtifactAdmissionRefusal || e instanceof ArtifactContentRefusal
+            ? e.reason
+            : "not-found",
       },
     }).catch(() => {});
     throw e;
@@ -253,7 +300,7 @@ export async function extensionArtifactContentRead(
         truncated: result.truncated,
       },
     }).catch(() => {});
-    return result;
+    return { ...result, objectType: artifact.objectType };
   } catch (e) {
     await audit({
       ...base,

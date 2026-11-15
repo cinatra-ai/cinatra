@@ -57,6 +57,11 @@ vi.mock("drizzle-orm", () => ({
 
 import { readScopeSurfaceEntityName } from "@/lib/scope-surface-entity-name";
 
+// The typed answers (cinatra#4453): "named", "blank" for a reader the gate allows
+// whose entity has no name to show, and "unavailable" for every refusal.
+const UNAVAILABLE = { state: "unavailable" };
+const BLANK = { state: "blank" };
+
 const SIGNED_IN = {
   user: { id: "u1" },
   session: { activeOrganizationId: "org_1" },
@@ -73,13 +78,13 @@ beforeEach(() => {
 
 describe("the scopes the drawing names itself need no read at all", () => {
   it("returns no name for the workspace scope and touches no store", async () => {
-    expect(await readScopeSurfaceEntityName({ kind: "workspace" })).toBeNull();
+    expect(await readScopeSurfaceEntityName({ kind: "workspace" })).toEqual(UNAVAILABLE);
     expect(session.getAuthSession).not.toHaveBeenCalled();
     expect(authDb.betterAuthDb.execute).not.toHaveBeenCalled();
   });
 
   it("returns no name for the personal scope and touches no store", async () => {
-    expect(await readScopeSurfaceEntityName({ kind: "personal" })).toBeNull();
+    expect(await readScopeSurfaceEntityName({ kind: "personal" })).toEqual(UNAVAILABLE);
     expect(authDb.betterAuthDb.execute).not.toHaveBeenCalled();
   });
 });
@@ -98,14 +103,14 @@ describe("the organization name is told only to a member OF THAT organization", 
   it("names the organization for a member, gating on the requested organization", async () => {
     expect(
       await readScopeSurfaceEntityName({ kind: "organization", id: "o1" }),
-    ).toBe("Acme Corp");
+    ).toEqual({ state: "named", name: "Acme Corp" });
     expect(authDb.readUserIsOrgMember).toHaveBeenCalledWith("u1", "o1");
   });
 
   it("tells a member of a DIFFERENT organization nothing about this one", async () => {
     expect(
       await readScopeSurfaceEntityName({ kind: "organization", id: "o2" }),
-    ).toBeNull();
+    ).toEqual(UNAVAILABLE);
     expect(authDb.readUserIsOrgMember).toHaveBeenCalledWith("u1", "o2");
     expect(authDb.betterAuthDb.execute).not.toHaveBeenCalled();
   });
@@ -114,7 +119,7 @@ describe("the organization name is told only to a member OF THAT organization", 
     authDb.readUserIsOrgMember.mockResolvedValue(false);
     expect(
       await readScopeSurfaceEntityName({ kind: "organization", id: "o1" }),
-    ).toBeNull();
+    ).toEqual(UNAVAILABLE);
     expect(authDb.betterAuthDb.execute).not.toHaveBeenCalled();
   });
 
@@ -122,7 +127,7 @@ describe("the organization name is told only to a member OF THAT organization", 
     session.getAuthSession.mockResolvedValue(null);
     expect(
       await readScopeSurfaceEntityName({ kind: "organization", id: "o1" }),
-    ).toBeNull();
+    ).toEqual(UNAVAILABLE);
     expect(authDb.readUserIsOrgMember).not.toHaveBeenCalled();
   });
 });
@@ -141,7 +146,7 @@ describe("the project name is told only to a holder of a grant for THAT project"
     store.rows.value = [{ id: "p1", name: "Apollo" }];
     expect(
       await readScopeSurfaceEntityName({ kind: "project", id: "p1" }),
-    ).toBe("Apollo");
+    ).toEqual({ state: "named", name: "Apollo" });
     expect(gate.actorHoldsProjectGrant).toHaveBeenCalledWith(
       expect.anything(),
       "p1",
@@ -152,7 +157,7 @@ describe("the project name is told only to a holder of a grant for THAT project"
     store.rows.value = [{ id: "p2", name: "Nebula" }];
     expect(
       await readScopeSurfaceEntityName({ kind: "project", id: "p2" }),
-    ).toBeNull();
+    ).toEqual(UNAVAILABLE);
     expect(gate.actorHoldsProjectGrant).toHaveBeenCalledWith(
       expect.anything(),
       "p2",
@@ -164,7 +169,7 @@ describe("the project name is told only to a holder of a grant for THAT project"
     gate.actorHoldsProjectGrant.mockReturnValue(false);
     expect(
       await readScopeSurfaceEntityName({ kind: "project", id: "p1" }),
-    ).toBeNull();
+    ).toEqual(UNAVAILABLE);
   });
 
   it("tells a caller with no resolved actor nothing", async () => {
@@ -172,7 +177,7 @@ describe("the project name is told only to a holder of a grant for THAT project"
     session.getActorContext.mockResolvedValue(null);
     expect(
       await readScopeSurfaceEntityName({ kind: "project", id: "p1" }),
-    ).toBeNull();
+    ).toEqual(UNAVAILABLE);
   });
 });
 
@@ -196,9 +201,7 @@ describe("the team name is told to a member or manager of THAT team", () => {
 
   it("names the team for a member, whatever organization the session has active", async () => {
     authDb.betterAuthDb.execute.mockResolvedValue(teamRow());
-    expect(await readScopeSurfaceEntityName({ kind: "team", id: "t1" })).toBe(
-      "Growth",
-    );
+    expect(await readScopeSurfaceEntityName({ kind: "team", id: "t1" })).toEqual({ state: "named", name: "Growth" });
   });
 
   it("tells a member of the team's organization who is not on the team nothing", async () => {
@@ -207,7 +210,7 @@ describe("the team name is told to a member or manager of THAT team", () => {
     teamAuthority.canManageTeamMembers.mockReturnValue(false);
     expect(
       await readScopeSurfaceEntityName({ kind: "team", id: "t1" }),
-    ).toBeNull();
+    ).toEqual(UNAVAILABLE);
     // The authority question is asked about the TEAM's organization, never the
     // session's active one.
     expect(session.resolveOrgRoleForUser).toHaveBeenCalledWith(OTHER_ORG, "u1");
@@ -219,18 +222,14 @@ describe("the team name is told to a member or manager of THAT team", () => {
     teamAuthority.canManageTeamMembers.mockImplementation(
       (input: { platformAdmin: boolean }) => input.platformAdmin,
     );
-    expect(await readScopeSurfaceEntityName({ kind: "team", id: "t1" })).toBe(
-      "Growth",
-    );
+    expect(await readScopeSurfaceEntityName({ kind: "team", id: "t1" })).toEqual({ state: "named", name: "Growth" });
   });
 
   it("names the team for a non-member who MAY manage it, on the authority the org role gives", async () => {
     authDb.betterAuthDb.execute.mockResolvedValue(teamRow({ is_member: false }));
     session.resolveOrgRoleForUser.mockResolvedValue("org_owner");
     teamAuthority.canManageTeamMembers.mockReturnValue(true);
-    expect(await readScopeSurfaceEntityName({ kind: "team", id: "t1" })).toBe(
-      "Growth",
-    );
+    expect(await readScopeSurfaceEntityName({ kind: "team", id: "t1" })).toEqual({ state: "named", name: "Growth" });
     expect(session.resolveOrgRoleForUser).toHaveBeenCalledWith(OTHER_ORG, "u1");
     expect(teamAuthority.canManageTeamMembers).toHaveBeenCalledWith({
       platformAdmin: false,
@@ -242,7 +241,7 @@ describe("the team name is told to a member or manager of THAT team", () => {
     session.getAuthSession.mockResolvedValue(null);
     expect(
       await readScopeSurfaceEntityName({ kind: "team", id: "t1" }),
-    ).toBeNull();
+    ).toEqual(UNAVAILABLE);
     expect(authDb.betterAuthDb.execute).not.toHaveBeenCalled();
   });
 
@@ -250,7 +249,7 @@ describe("the team name is told to a member or manager of THAT team", () => {
     authDb.betterAuthDb.execute.mockResolvedValue({ rows: [] });
     expect(
       await readScopeSurfaceEntityName({ kind: "team", id: "nope" }),
-    ).toBeNull();
+    ).toEqual(UNAVAILABLE);
   });
 });
 
@@ -259,6 +258,68 @@ describe("a store failure never takes the page down", () => {
     authDb.readUserIsOrgMember.mockRejectedValue(new Error("store down"));
     expect(
       await readScopeSurfaceEntityName({ kind: "organization", id: "o1" }),
-    ).toBeNull();
+    ).toEqual(UNAVAILABLE);
+  });
+});
+
+describe("an entity the reader may read but whose name is genuinely unavailable answers blank (cinatra#4453)", () => {
+  it("answers blank for a team the reader is on whose name is empty or only spaces", async () => {
+    authDb.betterAuthDb.execute.mockResolvedValue({
+      rows: [{ name: "", organizationId: "org_2", is_member: true }],
+    });
+    expect(await readScopeSurfaceEntityName({ kind: "team", id: "t1" })).toEqual(BLANK);
+    authDb.betterAuthDb.execute.mockResolvedValue({
+      rows: [{ name: "   ", organizationId: "org_2", is_member: true }],
+    });
+    expect(await readScopeSurfaceEntityName({ kind: "team", id: "t1" })).toEqual(BLANK);
+  });
+
+  it("answers unavailable, not blank, for a nameless team the reader is not on", async () => {
+    authDb.betterAuthDb.execute.mockResolvedValue({
+      rows: [{ name: "", organizationId: "org_2", is_member: false }],
+    });
+    expect(await readScopeSurfaceEntityName({ kind: "team", id: "t1" })).toEqual(UNAVAILABLE);
+  });
+
+  it("answers blank for a project the reader holds a grant on whose name is empty", async () => {
+    session.getActorContext.mockResolvedValue({ id: "u1" });
+    gate.actorHoldsProjectGrant.mockImplementation(
+      (_actor: unknown, projectId: string) => projectId === "p1",
+    );
+    store.rows.value = [{ id: "p1", name: "" }];
+    expect(await readScopeSurfaceEntityName({ kind: "project", id: "p1" })).toEqual(BLANK);
+  });
+
+  it("answers unavailable, not blank, for a nameless project the reader holds no grant on", async () => {
+    session.getActorContext.mockResolvedValue({ id: "u1" });
+    gate.actorHoldsProjectGrant.mockReturnValue(false);
+    store.rows.value = [{ id: "p1", name: "" }];
+    expect(await readScopeSurfaceEntityName({ kind: "project", id: "p1" })).toEqual(UNAVAILABLE);
+  });
+
+  it("answers blank for a member of an organization whose name is only spaces", async () => {
+    authDb.readUserIsOrgMember.mockResolvedValue(true);
+    authDb.betterAuthDb.execute.mockResolvedValue({ rows: [{ name: "  " }] });
+    expect(await readScopeSurfaceEntityName({ kind: "organization", id: "o1" })).toEqual(BLANK);
+  });
+
+  it("answers blank for a member when the name read after the membership check fails", async () => {
+    authDb.readUserIsOrgMember.mockResolvedValue(true);
+    authDb.betterAuthDb.execute.mockRejectedValue(new Error("store down"));
+    expect(await readScopeSurfaceEntityName({ kind: "organization", id: "o1" })).toEqual(BLANK);
+  });
+
+  it("answers unavailable when the membership check itself fails", async () => {
+    authDb.readUserIsOrgMember.mockRejectedValue(new Error("store down"));
+    expect(await readScopeSurfaceEntityName({ kind: "organization", id: "o1" })).toEqual(UNAVAILABLE);
+  });
+
+  it("trims the spaces around a name", async () => {
+    authDb.readUserIsOrgMember.mockResolvedValue(true);
+    authDb.betterAuthDb.execute.mockResolvedValue({ rows: [{ name: " Acme Corp " }] });
+    expect(await readScopeSurfaceEntityName({ kind: "organization", id: "o1" })).toEqual({
+      state: "named",
+      name: "Acme Corp",
+    });
   });
 });

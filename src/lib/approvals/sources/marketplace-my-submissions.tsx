@@ -1,6 +1,5 @@
 import "server-only";
 
-import { formatDistanceToNow } from "date-fns";
 import Link from "next/link";
 
 import { createHttpMarketplaceMcpClient } from "@cinatra-ai/marketplace-mcp-client/http-client";
@@ -8,7 +7,8 @@ import type { MarketplaceVendorSubmission } from "@cinatra-ai/marketplace-mcp-cl
 
 import { MarketplaceDecisionActions } from "../marketplace-decision-actions";
 import { withdrawMarketplaceSubmission } from "../marketplace-decision-helpers";
-import { MarketplaceRowView, type MarketplaceBadgeVariant } from "./marketplace-row";
+import { relativeTimeText } from "../relative-time";
+import { MarketplaceRowView } from "./marketplace-row";
 import { marketplaceMySubmissionsContract } from "./marketplace-my-submissions.contract";
 import {
   MARKETPLACE_GROUP,
@@ -39,20 +39,6 @@ interface MySubmissionRaw {
   promotionState: string;
   promotionError: string | null;
   decisionReason: string | null;
-}
-
-function statusVariant(status: string): MarketplaceBadgeVariant {
-  switch (status) {
-    case "approved":
-    case "promoted":
-      return "default";
-    case "rejected":
-      return "destructive";
-    case "pending":
-      return "secondary";
-    default:
-      return "outline";
-  }
 }
 
 function toRow(s: MarketplaceVendorSubmission): ApprovalRow {
@@ -103,10 +89,16 @@ export const marketplaceMySubmissionsSource: ApprovalSource = {
 
   rowRenderer(row: ApprovalRow) {
     const raw = (row.raw ?? {}) as MySubmissionRaw;
-    const submitted = formatDistanceToNow(new Date(row.createdAt), { addSuffix: true });
-    const detail =
-      raw.promotionState && raw.promotionState !== "none" ? ` · promotion ${raw.promotionState}` : "";
-    const reason = raw.decisionReason ? ` · ${raw.decisionReason}` : "";
+    // A submitted_at the marketplace sent malformed is not drawn (date-fns
+    // throws on an invalid date); the row still renders.
+    const submitted = relativeTimeText(row.createdAt);
+    const meta = [
+      submitted ? `submitted ${submitted}` : null,
+      raw.promotionState && raw.promotionState !== "none" ? `promotion ${raw.promotionState}` : null,
+      raw.decisionReason || null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
     const right =
       row.status === "pending" ? (
         <MarketplaceDecisionActions sourceId={SOURCE_ID} rowId={row.id} mode="withdraw" />
@@ -121,9 +113,8 @@ export const marketplaceMySubmissionsSource: ApprovalSource = {
     return (
       <MarketplaceRowView
         title={row.title}
-        statusLabel={row.status}
-        statusVariant={statusVariant(row.status)}
-        meta={`submitted ${submitted}${detail}${reason}`}
+        state={row.status}
+        meta={meta}
         right={right}
       />
     );

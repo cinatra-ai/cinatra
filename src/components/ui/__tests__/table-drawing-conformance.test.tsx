@@ -11,9 +11,10 @@
 //   "body 13-14px ink"
 //   "IDs/times mono 11px slate"
 //   "cell padding 10-14px"
-//   "PaginatedTable handles offset, sort, and selection; Table is the dumb DOM
-//    primitive. Headers always uppercase mono with the navy underline; never
-//    centre body cells; right-align numerics and timestamps."
+//   "PaginatedTable pages by offset only; it has no sort and no row selection;
+//    Table is the dumb DOM primitive. Headers always uppercase mono with the
+//    navy underline; never centre body cells; right-align numerics and
+//    timestamps."
 //
 // FIXED IN LEG 2 ON THE DOM SEAM, not in this file, and the reason is a
 // boundary rather than a judgement about the drawing. `table.tsx` is a VENDORED
@@ -118,11 +119,11 @@ describe('clause: "Table is the dumb DOM primitive"', () => {
     expect(renderTable().head.tagName.toLowerCase()).toBe("th");
   });
 
-  // NOT APPLICABLE at this primitive, with the reason: "PaginatedTable handles
-  // offset, sort, and selection" assigns that behaviour to the SIBLING
-  // component. It is graded in paginated-table-drawing-conformance.test.tsx.
+  // NOT APPLICABLE at this primitive, with the reason: "PaginatedTable pages by
+  // offset only; it has no sort and no row selection" is a clause about the
+  // SIBLING component. It is graded in paginated-table-drawing-conformance.test.tsx.
   it.skip(
-    "not applicable at this primitive: offset, sort and selection belong to PaginatedTable, graded in its own file",
+    "not applicable at this primitive: offset paging, and the absence of sort and selection, belong to PaginatedTable, graded in its own file",
     () => {},
   );
 });

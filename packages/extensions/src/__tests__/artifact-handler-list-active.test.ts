@@ -12,10 +12,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const listArtifactsMock = vi.fn();
+// cinatra#3319: the bridge's pack surfaces, the facet's second native source.
+const listSurfacesMock = vi.fn();
 
 vi.mock("@cinatra-ai/objects", () => ({
   objectTypeRegistry: {
     listArtifacts: () => listArtifactsMock(),
+  },
+  artifactPackSurfaceRegistry: {
+    list: () => listSurfacesMock() ?? [],
   },
 }));
 
@@ -139,5 +144,65 @@ describe("artifact handler listActive (IoC reader facet)", () => {
       manifests: [manifest("@cinatra-ai/invoice-artifact")],
     });
     expect(result).toHaveLength(0);
+  });
+
+  // cinatra#3319 (MUST-FIX 2 of pre-review 3): a pack whose types the
+  // host registers has no object-type descriptor, so the facet reports its
+  // manifest surface as the bridge recorded it, under the same lifecycle and
+  // visibility gate. This is the one road the upload picker reads a claim-backed
+  // pack's capabilities from.
+  const surface = (packageName: string) => ({
+    packageName,
+    version: "1.0.0",
+    fileMimeTypes: ["text/markdown"],
+    matcherSkillIds: [],
+    record: { source: "store", digest: "a".repeat(64) },
+  });
+
+  it("3319 T45 (a) reports the bridge's surface of a live, visible pack as a package-level descriptor, after the object-type descriptors", async () => {
+    listArtifactsMock.mockReturnValue([artifactDef("@cinatra-ai/invoice-artifact:invoice")]);
+    listSurfacesMock.mockReturnValue([surface("@cinatra-ai/linkedin-artifacts")]);
+    const result = await handler.listActive!({
+      actor,
+      scope: scopeWith(),
+      manifests: [
+        manifest("@cinatra-ai/invoice-artifact"),
+        manifest("@cinatra-ai/linkedin-artifacts"),
+      ],
+    });
+    expect(result).toEqual([
+      artifactDef("@cinatra-ai/invoice-artifact:invoice"),
+      {
+        packageName: "@cinatra-ai/linkedin-artifacts",
+        artifactPack: surface("@cinatra-ai/linkedin-artifacts"),
+      },
+    ]);
+  });
+
+  it("3319 T45 (b) does not report the surface of a pack that is not lifecycle-live", async () => {
+    listArtifactsMock.mockReturnValue([]);
+    listSurfacesMock.mockReturnValue([surface("@cinatra-ai/linkedin-artifacts")]);
+    const result = await handler.listActive!({
+      actor,
+      scope: scopeWith(),
+      manifests: [manifest("@cinatra-ai/invoice-artifact")],
+    });
+    expect(result).toEqual([]);
+  });
+
+  it("3319 T45 (c) does not report the surface of a pack another organisation owns", async () => {
+    listArtifactsMock.mockReturnValue([]);
+    listSurfacesMock.mockReturnValue([surface("@acme-private/secret-artifacts")]);
+    const result = await handler.listActive!({
+      actor,
+      scope: scopeWith({ organizationId: "org-actor" }),
+      manifests: [
+        manifest("@acme-private/secret-artifacts", {
+          ownerLevel: "organization",
+          organizationId: "org-OTHER",
+        }),
+      ],
+    });
+    expect(result).toEqual([]);
   });
 });

@@ -63,5 +63,5 @@ export function writeRunDataRoot(value: string): void {
  *  reject every path under a root configured with one. */
 export function resolveRunDataRoot(): string {
   const cfg = readRunDataRoot();
-  return path.isAbsolute(cfg) ? path.resolve(cfg) : path.resolve(process.cwd(), cfg);
+  return path.isAbsolute(cfg) ? path.resolve(cfg) : path.resolve(/* turbopackIgnore: true */ process.cwd(), cfg);
 }

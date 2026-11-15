@@ -8,7 +8,9 @@
  *   - scanOasForStartNodeInputsWithoutRequired
  *
  * Additionally enforces the locked behavior:
- *   - single ApiNode targeting templated /api/llm-bridge
+ *   - two ApiNodes: one targeting templated /api/llm-bridge, and the brand-voice
+ *     read `read_brand_voice` (blog-draft-writer-agent#50) at
+ *     /api/agents/passthrough; no third ApiNode
  *   - OpenAI/gpt-5.5 LLM pair with no capabilityRequired
  *   - 1 HITL by design (context-selector from @cinatra-ai/context-selection-agent integration)
  *   - no toolboxes (no web_search)
@@ -36,6 +38,33 @@ const oasPath = path.resolve(
 );
 
 const oas = JSON.parse(fs.readFileSync(oasPath, "utf8")) as Record<string, unknown>;
+
+// The brand-voice read that blog-draft-writer-agent#50 and
+// blog-image-generator-agent#6 add (cinatra#4314): one more ApiNode, the typed
+// extension-tool read of the brand voice picked for the run. Its URL, method and
+// body are the one further call shape that the text-leaf parity gate admits
+// beside its allowlisted endpoints (the bridge, /api/context-resolve and
+// /api/context-finalize): packages/extensions/src/__tests__/blog-text-parity.test.ts,
+// ALLOWED_API_URLS and BRAND_VOICE_READ.
+const BRIDGE_URL = "{{CINATRA_BASE_URL}}/api/llm-bridge";
+const BRAND_VOICE_READ_URL = "{{CINATRA_BASE_URL}}/api/agents/passthrough";
+const BRAND_VOICE_READ_DATA = {
+  tool: "extension_tool",
+  input: { name: "brand_voice_text", input: { bindings: "{{ brandVoiceContextSlotBindings }}" } },
+  agent_run_id: "{{ cinatra_run_id }}",
+};
+
+const expectBrandVoiceRead = (node: Record<string, unknown>): void => {
+  expect(node.id).toBe("read_brand_voice");
+  expect(node.url).toBe(BRAND_VOICE_READ_URL);
+  expect(node.http_method).toBe("POST");
+  // The exact body: the one read-only tool, its bindings from the brand-voice
+  // slot, and no toolbox_ids key (no toolbox joins a passthrough read).
+  expect(node.data).toEqual(BRAND_VOICE_READ_DATA);
+  expect(node).not.toHaveProperty("toolbox_ids");
+  const inputs = (node.inputs as Array<Record<string, unknown>>).map((i) => i.title);
+  expect(inputs).toContain("brandVoiceContextSlotBindings");
+};
 
 describe("blog-draft-writer-agent OAS validates against L1, LLM metadata, and StartNode input scans", () => {
   it("validateOasAgentJson returns [] (no L1 findings)", () => {
@@ -88,19 +117,24 @@ describe("blog-draft-writer-agent OAS validates against L1, LLM metadata, and St
     ]);
   });
 
-  it("ApiNode targets {{CINATRA_BASE_URL}}/api/llm-bridge with agent_id='blog-draft-writer-agent' and no skill_source_path", () => {
+  it("has exactly two ApiNodes: the brand-voice read and one targeting {{CINATRA_BASE_URL}}/api/llm-bridge with agent_id='blog-draft-writer-agent' and no skill_source_path", () => {
     const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const apiNodes = Object.values(refs).filter((c) => c.component_type === "ApiNode");
-    expect(apiNodes).toHaveLength(1);
-    const apiNode = apiNodes[0]!;
-    expect(apiNode.url).toBe("{{CINATRA_BASE_URL}}/api/llm-bridge");
+    expect(apiNodes).toHaveLength(2);
+    const bridgeNodes = apiNodes.filter((c) => c.url === BRIDGE_URL);
+    const otherNodes = apiNodes.filter((c) => c.url !== BRIDGE_URL);
+    expect(bridgeNodes).toHaveLength(1);
+    expect(otherNodes).toHaveLength(1);
+    expectBrandVoiceRead(otherNodes[0]!);
+    const apiNode = bridgeNodes[0]!;
+    expect(apiNode.url).toBe(BRIDGE_URL);
     expect(apiNode.http_method).toBe("POST");
     const data = apiNode.data as Record<string, unknown>;
     expect(data.agent_id).toBe("blog-draft-writer-agent");
     expect(data.skill_source_path).toBeUndefined();
   });
 
-  it("StartNode required=['idea'] + hidden covers other 11 inputs including cinatra_run_id, context-slot wiring, contextSlotBindings, and projectId; EndNode declares the structured blog-post outputs (title/excerpt/content+artifact/sourcesUsed/notes); 18 DFE + 3 CFE", () => {
+  it("StartNode required=['idea'] + hidden covers other 11 inputs including cinatra_run_id, context-slot wiring, contextSlotBindings, and projectId; EndNode declares the structured blog-post outputs (title/excerpt/content+artifact/sourcesUsed/notes); 20 DFE + 4 CFE", () => {
     const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const start = refs.start;
     expect(start).toBeDefined();
@@ -145,8 +179,10 @@ describe("blog-draft-writer-agent OAS validates against L1, LLM metadata, and St
     expect(artifact?.extension).toBe("@cinatra-ai/blog-post-artifact");
 
     const dfc = oas.data_flow_connections as unknown[];
-    expect(dfc.length).toBe(18);
+    // blog-draft-writer-agent#50's brand-voice read adds two data-flow and one
+    // control-flow connection (18 / 3 before it).
+    expect(dfc.length).toBe(20);
     const cfc = oas.control_flow_connections as unknown[];
-    expect(cfc.length).toBe(3);
+    expect(cfc.length).toBe(4);
   });
 });

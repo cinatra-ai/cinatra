@@ -34,9 +34,10 @@ const OAS_CONTENT = JSON.stringify({
   metadata: { cinatra: { packageName: "@cinatra-ai/wordpress-agent" } },
 });
 
-/** The sibling manifest shape a repair-capable CMS producer ships — the same
- * `cinatra.lifecycle` block the lock-pinned `@cinatra-ai/wordpress-agent`
- * release declares, alongside the contract fields the synthesis already carried. */
+/** The sibling manifest shape of a repair-capable CMS producer — a generic
+ * stand-in whose `cinatra.lifecycle` block declares only `repairCapable`,
+ * alongside the contract fields the synthesis already carried. The test
+ * mocks the file read; it compares this fixture with no agent's manifest. */
 const PKG_WITH_LIFECYCLE = JSON.stringify({
   name: "@cinatra-ai/wordpress-agent",
   version: "0.1.6",

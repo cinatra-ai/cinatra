@@ -32,6 +32,10 @@ import {
 // malformed/absent manifest). Any missing link => structured log +
 // empty produces (the artifact still persists; the LLM matcher still
 // runs as the fallback).
+//
+// A failed read's log line names the read and the caller's ids, never text
+// taken from the thrown value (cinatra#4223): a store or registry message can
+// carry a host, a url or a credential.
 // ---------------------------------------------------------------------------
 
 export type ProducerAssertionPlan = {
@@ -52,9 +56,12 @@ const q = (): string => postgresSchema.replaceAll('"', '""');
 /**
  * Resolve the trusted producer-assertion plan for an artifact being
  * created by a deterministic agent run. Pure-ish: one or two scoped
- * SELECTs + a registry manifest read. Never throws -- every failure
- * path degrades to `{ validatedRunId: <validated|null>, produces: [] }`
- * so artifact creation is never blocked by producer resolution.
+ * SELECTs + a registry manifest read. A failed lookup or manifest read is
+ * caught and degrades to `{ validatedRunId: <validated|null>, produces: [] }`
+ * so a failed producer read does not block artifact creation. The call still
+ * rejects when a step that no try covers throws: the schema setup before the
+ * first lookup, a read of the input or of the run row (also inside a catch
+ * block), or a log line.
  */
 export async function resolveProducerAssertionPlan(input: {
   createdByRunId?: string | null;
@@ -86,10 +93,9 @@ FROM "${schema}"."agent_runs" WHERE id = $1 LIMIT 1`,
       ],
     });
     runRow = res?.rows?.[0] as typeof runRow;
-  } catch (err) {
+  } catch {
     console.warn(
-      "[producer-assertions] agent_runs lookup failed:",
-      err instanceof Error ? err.message : err,
+      `[producer-assertions] agent_runs lookup failed for createdByRunId ${input.createdByRunId} -- no producer assertions; the error's text is not logged`,
     );
     return empty;
   }
@@ -127,10 +133,9 @@ FROM "${schema}"."agent_templates" WHERE id = $1 LIMIT 1`,
     });
     const row = res?.rows?.[0] as { package_name?: string | null } | undefined;
     packageName = row?.package_name ?? undefined;
-  } catch (err) {
+  } catch {
     console.warn(
-      "[producer-assertions] agent_templates lookup failed:",
-      err instanceof Error ? err.message : err,
+      `[producer-assertions] agent_templates lookup failed for template ${runRow.template_id} -- no producer assertions (provenance still recorded); the error's text is not logged`,
     );
     return { validatedRunId, produces: [] };
   }
@@ -193,10 +198,9 @@ FROM "${schema}"."agent_templates" WHERE id = $1 LIMIT 1`,
     );
     const produces = candidateProduces.filter((_, i) => allowed[i]);
     return { validatedRunId, produces };
-  } catch (err) {
+  } catch {
     console.warn(
-      `[producer-assertions] manifest read failed for ${packageName}@${runRow.package_version ?? "(default)"}:`,
-      err instanceof Error ? err.message : err,
+      `[producer-assertions] manifest read failed for ${packageName}@${runRow.package_version ?? "(default)"} -- no producer assertions (provenance still recorded); the error's text is not logged`,
     );
     return { validatedRunId, produces: [] };
   }

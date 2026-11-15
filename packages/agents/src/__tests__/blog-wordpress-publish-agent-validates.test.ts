@@ -96,10 +96,12 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
     const components = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const start = components.start as Record<string, unknown>;
     const meta = (start.metadata as Record<string, unknown>).cinatra as Record<string, unknown>;
+    // cinatra#4313: the connected site is the start input `instanceId`, the one
+    // name the run's connector-instance binding (cinatra#4220) is derived from.
     expect(meta.required).toEqual([
       "postArtifactId",
       "postRepresentationRevisionId",
-      "wordpressInstanceId",
+      "instanceId",
     ]);
     expect(meta.hidden).toEqual(["cinatra_run_id"]);
   });

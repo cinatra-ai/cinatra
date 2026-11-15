@@ -86,6 +86,13 @@ export type DashboardActor = {
    * conversion lands with its callers threading this in the same commit.
    */
   readonly authority?: OrgWriteAuthority;
+  /**
+   * The agent run this actor writes for (cinatra#3092): forwarded from the MCP
+   * request frame's verified run id by the dashboards registry, and absent for
+   * every session caller. It grants nothing: access is decided above, and the
+   * content writers only hand it to the twin as the write's producing run.
+   */
+  readonly runId?: string;
 };
 
 export type DashboardAccess = {

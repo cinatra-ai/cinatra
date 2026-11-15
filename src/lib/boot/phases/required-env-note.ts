@@ -3,11 +3,12 @@
 // The HARD-required env vars are enforced at import time by
 // `@/lib/boot/required-env-preflight` (before register()), because a boot phase runs
 // too late (env-sensitive binders import first). This phase covers the SOFT-required
-// set: it re-checks the soft vars (currently CINATRA_BRIDGE_TOKEN) and, when one is
-// missing in prod, records a `retryable` (NON-deploy-blocking) failure so the deficit
-// is VISIBLE in the boot phase log / health `degradedPhases` — not only in an
-// import-time console.warn that an operator may miss. A WayFlow deploy therefore sees
-// "CINATRA_BRIDGE_TOKEN missing" in the readiness surface; a non-WayFlow deploy is not
+// set: it re-checks the soft vars (every name of SOFT_REQUIRED_ENV: CINATRA_BRIDGE_TOKEN
+// and CINATRA_CONTEXT_ATTEST_KEY) and, when one is missing in prod, records a
+// `retryable` (NON-deploy-blocking) failure so the deficit is VISIBLE in the boot phase
+// log / health `degradedPhases` — not only in an import-time console.warn that an
+// operator may miss. A WayFlow deploy therefore sees the missing name (for example
+// "CINATRA_BRIDGE_TOKEN") in the readiness surface; a non-WayFlow deploy is not
 // blocked (retryable, not fatal, not the deploy-blocking `degraded` class).
 //
 // Deliberately NOT importing "server-only": unit tests import the phase list.

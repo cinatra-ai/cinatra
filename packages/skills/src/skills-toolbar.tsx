@@ -26,7 +26,6 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Check, LayoutGrid, Plus, Table2 } from "lucide-react";
-import { Input } from "@/components/ui/input";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -34,7 +33,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
-import { Toolbar, ToolbarButton, ToolbarGroup, ToolbarSeparator } from "@/components/ui/toolbar";
+import {
+  Toolbar,
+  ToolbarButton,
+  ToolbarGroup,
+  ToolbarSearchInput,
+  ToolbarSeparator,
+} from "@/components/ui/toolbar";
 import { AccessCombobox } from "@/components/access-combobox";
 import { getListViewCookieName } from "@/lib/list-view";
 import type { AvailableScopes } from "@/components/access-scope";
@@ -152,13 +157,17 @@ export function SkillsToolbar({
       </ToolbarGroup>
       <ToolbarSeparator />
       <ToolbarGroup>
-        <Input
-          type="search"
-          value={searchValue}
-          onChange={(e) => setSearchValue(e.target.value)}
-          placeholder="Search skills or extensions"
-          className="h-8 w-[180px] lg:w-[260px]"
-        />
+        {/* The toolbar's own search pill (app-components.html §Toolbar:
+            "embedded controls: borderless"; the search field keeps its white
+            surface), not a standalone bordered Input. */}
+        <div className="w-[180px] lg:w-[260px]">
+          <ToolbarSearchInput
+            value={searchValue}
+            onChange={(e) => setSearchValue(e.target.value)}
+            placeholder="Search skills or extensions"
+            aria-label="Search skills or extensions"
+          />
+        </div>
       </ToolbarGroup>
       <ToolbarSeparator />
       <ToolbarGroup>

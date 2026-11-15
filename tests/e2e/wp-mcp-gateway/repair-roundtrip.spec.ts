@@ -27,12 +27,14 @@
 //   R4 stability — a second independent read-back returns the same repaired
 //                  state (durable, not transient).
 //
-// The CINATRA-side leg (request-changes → producer_repair route → dispatch →
-// completion → repaired capture → re-review → approve → effect release) is
-// proven on a real Postgres by
-// packages/agents/src/__tests__/lifecycle-repair-cms-roundtrip.integration.test.ts
-// (the agents-integration-db CI job); its row is recorded in the verdict file
-// this suite writes, per the S9 program-acceptance evidence convention.
+// The CINATRA-side leg is proven on a real Postgres by
+// packages/agents/src/__tests__/lifecycle-repair-cms-base-generic-completion-3862.integration.test.ts
+// (the agents-integration-db CI job): a dispatched repair of a captured CMS
+// base completes through the generic completer, which re-files the answer onto
+// the base and opens a successor gate (cinatra#3862 leg 7; the CMS completion
+// drain, its repaired capture and the round-trip suite that proved them are
+// gone). Its row is recorded in the verdict file this suite writes, per the S9
+// program-acceptance evidence convention.
 //
 // A FAIL verdict is recorded honestly with the observed detail — each test only
 // ASSERTS liveness (the gateway was reachable); the PASS/FAIL verdict is DATA,
@@ -255,9 +257,9 @@ after(() => {
   // The cinatra-side leg's row — recorded HERE, unconditionally, so a FAIL
   // early-return in R3/R4 can never drop it from the committed evidence.
   record({
-    item: "repair-roundtrip/cinatra-lifecycle-leg (request-changes → producer_repair → completion → repaired capture → approve → release)",
+    item: "repair-roundtrip/cinatra-lifecycle-leg (producer_repair dispatch → generic completion re-files the answer onto the CMS base → successor gate)",
     verdict: "PENDING_GATE",
-    evidence: "packages/agents/src/__tests__/lifecycle-repair-cms-roundtrip.integration.test.ts",
+    evidence: "packages/agents/src/__tests__/lifecycle-repair-cms-base-generic-completion-3862.integration.test.ts",
     detail: {
       reason:
         "DB-backed leg — executes in the agents-integration-db CI job (real Postgres) of the PR that carries it; " +
@@ -291,9 +293,9 @@ after(() => {
       "WP-side leg driven live via the gateway execute triad against the booted pinned WordPress: produce (draft) → " +
       "reviewer-requested changes applied through ewpa/update-post (the connector's content-review-keyed write the " +
       "producer repair re-drives) → read-back of the repaired fields with draft status preserved → stability re-read. " +
-      "The cinatra-side leg (changes_requested → producer_repair route off the lock-pinned wordpress-agent manifest → " +
-      "dispatch → CMS completion drain → repaired capture → re-review approve → effect release → read-back binding) " +
-      "runs on a real Postgres in packages/agents/src/__tests__/lifecycle-repair-cms-roundtrip.integration.test.ts " +
+      "The cinatra-side leg (a dispatched producer_repair of a captured CMS base → the generic completer re-files the " +
+      "answer onto the base → successor gate; cinatra#3862 leg 7) runs on a real Postgres in " +
+      "packages/agents/src/__tests__/lifecycle-repair-cms-base-generic-completion-3862.integration.test.ts " +
       "(the agents-integration-db CI job) and is cited as its own row below, per the S9 evidence convention " +
       "(do-not-duplicate-assertions).",
     exposureMode: "triad-only",

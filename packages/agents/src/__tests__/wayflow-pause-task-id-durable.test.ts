@@ -71,6 +71,9 @@ vi.mock("../run-produced-review-hold", () => ({
   readGateRunOwner: vi.fn(async () => null),
   listReleasableHeldRuns: vi.fn(async () => []),
 }));
+// cinatra#3745: a claimed leg is bound first (only the claimed-leg cases pass a claimed gate).
+const bindSpy = vi.hoisted(() => vi.fn(async (_input: Record<string, unknown>) => true));
+vi.mock("../run-transition", () => ({ bindResumeLegToTask: bindSpy }));
 vi.mock("../trigger-gate", () => ({ isTriggerReleased: vi.fn(async () => true) }));
 vi.mock("../skill-autosave", () => ({
   runSkillAutosaveOnRunCompletion: vi.fn(async () => undefined),
@@ -269,14 +272,76 @@ describe("cinatra#4245 — the durable pause task id", () => {
     );
   });
 
-  it("guard (green at base): a write that fails at any other state stays best-effort", async () => {
-    storeMock.updateAgentRunA2ATaskId.mockRejectedValueOnce(new Error("db down") as never);
-    await handleWayflowTaskState({
-      ...pausedAt("task-new"),
-      task: { ...sendInterruptTask("task-new"), status: { state: "failed", message: { parts: [] } } },
+  // cinatra#3745 x cinatra#4245: the MCP resume holds both a pause claim token and a
+  // claimed gate. The leg is bound first, the write under the token then proves the
+  // token, and only then may the park edge follow, naming the pause's task id AND
+  // carrying the bound leg.
+  const claimedLeg = { a2aTaskId: "task-old", executionAttemptId: "attempt-1" };
+
+  it("a claimed leg that holds the token: bind, write under the token, then the park edge with both", async () => {
+    const order: string[] = [];
+    bindSpy.mockImplementationOnce(async () => {
+      order.push("bind");
+      return true;
     });
+    storeMock.updateAgentRunA2ATaskId.mockImplementationOnce((async () => {
+      order.push("token-write");
+      return { written: true };
+    }) as never);
+    storeMock.transitionRunStatus.mockImplementationOnce((async () => {
+      order.push("edge");
+      return undefined;
+    }) as never);
+    await handleWayflowTaskState({ ...pausedAt("task-new"), pauseClaimToken: "tok-live", claimedGate: claimedLeg });
+    expect(order).toEqual(["bind", "token-write", "edge"]);
+    expect(storeMock.updateAgentRunA2ATaskId).toHaveBeenCalledWith("run-td-1", "task-new", { pauseClaimToken: "tok-live" });
     expect(storeMock.transitionRunStatus).toHaveBeenCalledWith(
-      "run-td-1", "running", "failed", expect.anything(), TEST_AUTHORITY,
+      "run-td-1", "running", "pending_approval",
+      { pauseTaskId: "task-new", resumeLeg: { a2aTaskId: "task-new", executionAttemptId: "attempt-1" } },
+      TEST_AUTHORITY,
     );
+  });
+
+  it("a claimed leg whose bind holds but whose token no longer holds the run (0 rows): no gate, no transition", async () => {
+    storeMock.updateAgentRunA2ATaskId.mockResolvedValueOnce({ written: false } as never);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await handleWayflowTaskState({ ...pausedAt("task-new"), pauseClaimToken: "tok-old", claimedGate: claimedLeg });
+    } finally {
+      warn.mockRestore();
+    }
+    expect(bindSpy).toHaveBeenCalledTimes(1);
+    expect(storeMock.updateAgentRunA2ATaskId).toHaveBeenCalledWith("run-td-1", "task-new", { pauseClaimToken: "tok-old" });
+    expect(onInterruptSpy).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+  });
+
+  it("a claimed leg whose bind holds but whose write under the token throws at a terminal state: the error leaves, no transition", async () => {
+    storeMock.updateAgentRunA2ATaskId.mockRejectedValueOnce(new Error("db blip") as never);
+    await expect(
+      handleWayflowTaskState({
+        ...pausedAt("task-new"),
+        task: { ...sendInterruptTask("task-new"), status: { state: "completed", message: { parts: [] } } },
+        pauseClaimToken: "tok-live",
+        claimedGate: claimedLeg,
+      }),
+    ).rejects.toThrow("db blip");
+    expect(bindSpy).toHaveBeenCalledTimes(1);
+    expect(onInterruptSpy).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+  });
+
+  // Main moved under this file: since cinatra#3745 a write without a claim from
+  // `running` is awaited in every state (resume-leg-bound-to-claim-3745.test.ts), so
+  // the old best-effort guard for the other states reads the new rule.
+  it("guard: without a claim, from running, a write that fails at any other state throws too, and no edge follows", async () => {
+    storeMock.updateAgentRunA2ATaskId.mockRejectedValueOnce(new Error("db down") as never);
+    await expect(
+      handleWayflowTaskState({
+        ...pausedAt("task-new"),
+        task: { ...sendInterruptTask("task-new"), status: { state: "failed", message: { parts: [] } } },
+      }),
+    ).rejects.toThrow("db down");
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
   });
 });

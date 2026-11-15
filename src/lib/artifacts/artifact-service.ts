@@ -52,6 +52,8 @@ import { resolveEffectiveIdentity } from "@cinatra-ai/objects/effective-identity
 import {
   resolveArtifactPresentationIdentities,
   resolveArtifactPresentationIdentity,
+  resolveArtifactPresentationReading,
+  type ArtifactMeaningOffer,
   type PresentationIdentity,
 } from "@/lib/objects/presentation-identity";
 
@@ -796,7 +798,19 @@ export function getArtifact(input: {
  *     the detail route renders the not-authorized panel, NOT a 404.
  */
 export type ArtifactDetailAccess =
-  | { kind: "ok"; artifact: ArtifactSummary }
+  | {
+      kind: "ok";
+      artifact: ArtifactSummary;
+      /** The type picker's DEFERRED presentation reading (spec §VI.1,
+       *  cinatra#3319). Present only when the caller asked for it
+       *  (`withMeaningOffer`) and the read is org-scoped; `artifact` then
+       *  carries no presentation step (its presentation fields are the
+       *  effective identity, as for an orgless read). The call runs the row's
+       *  ONE presentation reading, at most once, and answers the summary with
+       *  that presentation and the meaning offer from the same reading. The
+       *  caller runs it after its own registry warm, so the gates come first. */
+      readPresentation?: () => { artifact: ArtifactSummary; meaningOffer: ArtifactMeaningOffer };
+    }
   | { kind: "not-found" }
   | { kind: "denied" };
 
@@ -811,8 +825,17 @@ export function readArtifactForDetail(input: {
   artifactId: string;
   orgId: string | null;
   actor?: ActorContext;
+  /** The type picker's candidate list (cinatra#3319) also needs the row's
+   *  derived meaning. With this flag the read runs its gates and defers its
+   *  ONE presentation reading to `readPresentation()` (see
+   *  {@link ArtifactDetailAccess}): still one reading per request, taken when
+   *  the caller has warmed the registries. */
+  withMeaningOffer?: boolean;
 }): ArtifactDetailAccess {
-  return readArtifactAccess(input, { allowDeleted: false });
+  return readArtifactAccess(input, {
+    allowDeleted: false,
+    withMeaningOffer: input.withMeaningOffer === true,
+  });
 }
 
 /**
@@ -847,10 +870,12 @@ export function readArtifactForSettledReview(input: {
 }
 
 /** The shared body of the two readings above — one implementation, one place a
- *  rung could be dropped. `allowDeleted` is the ONLY thing that varies. */
+ *  rung could be dropped. `allowDeleted` is the only thing that varies in the
+ *  gates; `withMeaningOffer` only defers and widens what the ONE presentation
+ *  reading answers (cinatra#3319), never which rows pass. */
 function readArtifactAccess(
   input: { artifactId: string; orgId: string | null; actor?: ActorContext },
-  options: { allowDeleted: boolean },
+  options: { allowDeleted: boolean; withMeaningOffer?: boolean },
 ): ArtifactDetailAccess {
   const rec = getObjectById(input.artifactId, { orgId: input.orgId }, input.actor, {
     allowDeleted: options.allowDeleted,
@@ -871,6 +896,31 @@ function readArtifactAccess(
           baseType: rec.type,
         })
       : undefined;
+  if (input.orgId !== null && options.withMeaningOffer === true) {
+    // ONE reading answers the presentation and the picker's meaning offer
+    // (cinatra#3319): no second blocking read, and the two cannot disagree.
+    // DEFERRED, so the caller's registry warm runs after these gates and
+    // before the reading; memoized, so it is never read twice.
+    const orgId = input.orgId;
+    let answered: { artifact: ArtifactSummary; meaningOffer: ArtifactMeaningOffer } | null = null;
+    return {
+      kind: "ok",
+      artifact: toSummary(rec, enrichment),
+      readPresentation: () => {
+        if (answered) return answered;
+        const reading = resolveArtifactPresentationReading({
+          orgId,
+          artifactId: rec.id,
+          baseType: rec.type,
+        });
+        answered = {
+          artifact: toSummary(rec, enrichment, reading.presentation),
+          meaningOffer: reading.offer,
+        };
+        return answered;
+      },
+    };
+  }
   const presentation =
     input.orgId !== null
       ? resolveArtifactPresentationIdentity({

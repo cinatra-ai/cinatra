@@ -156,10 +156,13 @@ const FIELD = "brief";
 
 /**
  * ONE ROW PER DRAWN KIND, in the order the schema-driven fallback chain of
- * schema-field-renderer.tsx tests them. `drawnAt` names the lines that draw the
- * kind and its label, read from the branch chain itself. The registry-matched
- * road (schema-field-renderer.tsx:482-488) is NOT one of these kinds: a
- * renderer resolved from the registry owns its own drawing and its own submit.
+ * schema-field-renderer.tsx tests them. `drawnAt` names the branch that draws
+ * the kind, its label and its control, by the branch's own comment heading in
+ * that chain ("Enum -> Select", "Boolean -> Checkbox", ...), not by line
+ * numbers, which moved with every change above them. The registry-matched road
+ * (the "1) Registry-first" `matched` return above the chain) is NOT one of
+ * these kinds: a renderer resolved from the registry owns its own drawing and
+ * its own submit.
  */
 type KindRow = {
   kind: string;
@@ -177,33 +180,55 @@ type KindRow = {
   minimum?: { declared: number; tooShort: string; atLeast: string };
   /**
    * cinatra#3582 (convergence round) — the kinds whose control ALSO submits on
-   * Enter (schema-field-renderer.tsx:635, :702, :740, :800). A bar that only
+   * Enter (the `onKeyDown` Enter handlers of the number, uri, email and
+   * single-line string branches of schema-field-renderer.tsx). A bar that only
    * sits on the Continue is not a bar: the keyboard is a second door into the
    * same submit.
    */
   enterSubmits?: boolean;
+  /**
+   * cinatra#4310 — the kind's control is a box that is TICKED, not typed into:
+   * a real answer is given by a click on the box.
+   */
+  answerByTick?: boolean;
+  /**
+   * cinatra#4310 — a kind with no blank. The control left untouched already
+   * holds an answer, and the Continue sends exactly this value.
+   */
+  untouchedSends?: unknown;
+  /**
+   * cinatra#4310 — for a kind with no blank, the value the Continue sends once
+   * the real answer is given on the control.
+   */
+  answeredSends?: unknown;
 };
 
 const KINDS: KindRow[] = [
   {
     kind: "enum (Select)",
-    drawnAt: "497-518, label 502 — no submit control of its own",
+    drawnAt: "Enum -> Select, label in its row — no submit control of its own",
     schema: { type: "string", enum: ["alpha", "beta"] },
     drawsAContinue: false,
     controlId: `field-${FIELD}`,
     answer: "alpha",
   },
   {
+    // cinatra#4310 — the box STAGES the answer and the Continue beneath it
+    // sends it. A boolean has no blank: the box left clear is the answer
+    // `false`, so the untouched Continue sends `false` rather than nothing.
     kind: "boolean (Checkbox)",
-    drawnAt: "521-539, label 533 — no submit control of its own",
+    drawnAt: "Boolean -> Checkbox, label in its one box row, Continue in its control floor",
     schema: { type: "boolean" },
-    drawsAContinue: false,
+    drawsAContinue: true,
     controlId: `field-${FIELD}`,
     answer: "true",
+    answerByTick: true,
+    untouchedSends: false,
+    answeredSends: true,
   },
   {
     kind: "object single-text",
-    drawnAt: "542-556 -> SingleTextObjectField, label 973, Continue 985",
+    drawnAt: "Object -> SingleTextObjectField, its label and its Continue",
     schema: {
       type: "object",
       properties: { text: { type: "string" } },
@@ -216,7 +241,7 @@ const KINDS: KindRow[] = [
   },
   {
     kind: "object structured",
-    drawnAt: "542-556 -> StructuredObjectField, label 1327, Continue 1378",
+    drawnAt: "Object -> StructuredObjectField, its label and its Continue",
     schema: {
       type: "object",
       properties: { headline: { type: "string" } },
@@ -228,7 +253,7 @@ const KINDS: KindRow[] = [
   },
   {
     kind: "object json",
-    drawnAt: "542-556 -> JsonObjectField, label 1510, Continue 1529",
+    drawnAt: "Object -> JsonObjectField, its label and its Continue",
     schema: { type: "object" },
     drawsAContinue: true,
     controlId: `field-${FIELD}`,
@@ -236,7 +261,7 @@ const KINDS: KindRow[] = [
   },
   {
     kind: "number / integer",
-    drawnAt: "575-609, label 586, Continue 602",
+    drawnAt: "Number / integer, label above the box, Continue in its control floor",
     schema: { type: "integer" },
     drawsAContinue: true,
     controlId: `field-${FIELD}`,
@@ -246,7 +271,7 @@ const KINDS: KindRow[] = [
   },
   {
     kind: "array",
-    drawnAt: "615-639, label 618, Continue 632",
+    drawnAt: "Array -> textarea, label above the box, Continue in its control floor",
     schema: { type: "array", items: { type: "string" } },
     drawsAContinue: true,
     controlId: `field-${FIELD}`,
@@ -255,7 +280,7 @@ const KINDS: KindRow[] = [
   },
   {
     kind: "string format uri",
-    drawnAt: "643-677, label 648, Continue 670",
+    drawnAt: "String with format=uri, label above the box, Continue in its control floor",
     schema: { type: "string", format: "uri" },
     drawsAContinue: true,
     controlId: `field-${FIELD}`,
@@ -270,7 +295,7 @@ const KINDS: KindRow[] = [
   },
   {
     kind: "string format email",
-    drawnAt: "681-715, label 686, Continue 708",
+    drawnAt: "String with format=email, label above the box, Continue in its control floor",
     schema: { type: "string", format: "email" },
     drawsAContinue: true,
     controlId: `field-${FIELD}`,
@@ -285,7 +310,7 @@ const KINDS: KindRow[] = [
   },
   {
     kind: "string multi-line",
-    drawnAt: "719-744, label 722, Continue 737",
+    drawnAt: "String fallback (textarea), label above the box, Continue in its control floor",
     schema: { type: "string", "x-multiline": true },
     drawsAContinue: true,
     controlId: `field-${FIELD}`,
@@ -295,7 +320,7 @@ const KINDS: KindRow[] = [
   },
   {
     kind: "string single-line",
-    drawnAt: "746-771, label 748, Continue 764",
+    drawnAt: "String fallback (single line), label above the box, Continue in its control floor",
     schema: { type: "string" },
     drawsAContinue: true,
     controlId: `field-${FIELD}`,
@@ -336,6 +361,17 @@ function typeInto(controlId: string, value: string) {
   const el = document.getElementById(controlId);
   if (!el) throw new Error(`no control #${controlId} on screen`);
   fireEvent.change(el, { target: { value } });
+}
+
+/** Give the row's real answer on its control: typed, or a tick on the box. */
+function answerInto(row: KindRow) {
+  if (row.answerByTick) {
+    const el = document.getElementById(row.controlId);
+    if (!el) throw new Error(`no control #${row.controlId} on screen`);
+    fireEvent.click(el);
+    return;
+  }
+  typeInto(row.controlId, row.answer);
 }
 
 /**
@@ -390,6 +426,22 @@ describe("cinatra#3582 — every start-field kind refuses a blank for a field th
       // The label of a field the agent declared required never calls it optional.
       expect(occurrencesOfOptional(view.container.textContent ?? "")).toBe(0);
 
+      if (row.untouchedSends !== undefined) {
+        // cinatra#4310 — a kind with no blank: the untouched control is an
+        // answer, and the Continue sends it once...
+        pressContinue();
+        await waitFor(() => {
+          expect(submits).toEqual([row.untouchedSends]);
+        });
+        // ...and the real answer, given on the control, is sent by the next press.
+        answerInto(row);
+        pressContinue();
+        await waitFor(() => {
+          expect(submits).toEqual([row.untouchedSends, row.answeredSends]);
+        });
+        return;
+      }
+
       if (row.drawsAContinue) {
         pressContinue();
       } else {
@@ -402,7 +454,7 @@ describe("cinatra#3582 — every start-field kind refuses a blank for a field th
 
       // ...and once the field carries a real answer the door opens.
       if (row.drawsAContinue) {
-        typeInto(row.controlId, row.answer);
+        answerInto(row);
         pressContinue();
         await waitFor(() => {
           expect(submits).toHaveLength(1);
@@ -410,7 +462,7 @@ describe("cinatra#3582 — every start-field kind refuses a blank for a field th
       }
     });
 
-    it(`${row.kind}: a field DECLARED OPTIONAL behaves exactly as it does today`, async () => {
+    it(`${row.kind}: a field DECLARED OPTIONAL is not held back by the required bar`, async () => {
       const { submits } = mountField(row.schema, { required: false });
 
       if (!row.drawsAContinue) {

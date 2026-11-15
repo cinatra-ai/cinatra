@@ -2499,6 +2499,14 @@ function ReviewTargetIsland({
           style={{ height }}
           onLoad={(event) => {
             announcePalette();
+            // READ THE FRAME NOW, inside the handler (cinatra#4188). React sets
+            // `event.currentTarget` only while it dispatches the event and nulls
+            // it afterwards, but a state updater runs whenever React next
+            // renders this island. When another update is already queued here
+            // (for example the height the island reported just before), that
+            // render comes after the dispatch, and a read inside the updater got
+            // `null`: the denial was then taken for a drawn target.
+            const servedTheDenial = islandFrameServedTheDenial(event.currentTarget);
             setLoad((current) =>
               current.identity === identity
                 ? // LOADED IS NOT THE SAME AS DREW (cinatra#2853, the picture
@@ -2516,7 +2524,7 @@ function ReviewTargetIsland({
                   // one thing that changes is the one case that produced a blank
                   // panel. A preview that is not there is drawn as a preview that
                   // is not there, which is a state that HAS a drawing.
-                  islandFrameServedTheDenial(event.currentTarget)
+                  servedTheDenial
                   ? { ...current, loaded: false, timedOut: true }
                   : { ...current, loaded: true }
                 : current,

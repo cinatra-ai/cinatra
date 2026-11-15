@@ -224,6 +224,10 @@ export const CONFORMANCE_STATUS_PILL_STATUSES = [
   "queued",
   "idle",
   "archived",
+  // The two idle-family pills the marketplace approval states add
+  // (specs/app.html, pill roster and block V.1; cinatra#4296).
+  "withdrawn",
+  "reset",
   "failed",
   "declined",
 ] as const;

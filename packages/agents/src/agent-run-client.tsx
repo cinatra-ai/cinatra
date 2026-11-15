@@ -142,6 +142,7 @@ export function AgentRunClient({ rows }: { rows: AgentRunRowModel[] }) {
         <ToolbarSearchGroup className="w-full max-w-md flex-none">
           <ToolbarSearchInput
             placeholder="Search agents…"
+            aria-label="Search agents…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />

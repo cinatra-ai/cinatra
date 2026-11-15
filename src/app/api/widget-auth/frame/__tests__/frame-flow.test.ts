@@ -107,6 +107,7 @@ beforeEach(() => {
     token: "cwu_the_user_bearer",
     tokenType: "Bearer",
     expiresIn: 900,
+    sessionExpiresIn: 28_800,
     scope: "wordpress-content-editor.user lifecycle.read",
   });
   mintWidgetStreamToken.mockReturnValue({
@@ -255,6 +256,18 @@ describe("POST /api/widget-auth/frame/token", () => {
     expect(json.transportToken).toBe("cit_the_site_transport");
     expect(res.headers.get("Access-Control-Allow-Origin")).toBeNull();
     expect(res.headers.get("Access-Control-Allow-Credentials")).toBeNull();
+  });
+
+  // cinatra#4217 rebuild, C23 (the token route's half): the sign-in answers the
+  // user token's own life and the session's whole life beside the pair's life.
+  // RED AT main and a246d839: neither field was sent.
+  it("C23: the sign-in answers userExpiresIn = T_user and sessionExpiresIn = MAX beside expiresIn = min(user, transport)", async () => {
+    const res = await frameToken(frameRequest("/api/widget-auth/frame/token", body));
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as Record<string, unknown>;
+    expect(json.expiresIn).toBe(600);
+    expect(json.userExpiresIn).toBe(900);
+    expect(json.sessionExpiresIn).toBe(28_800);
   });
 
   it("mints the transport token for the SERVER-DERIVED site and agent, bound to its credential generation", async () => {
@@ -468,5 +481,53 @@ describe("cinatra#3715 — a binding refusal of the transaction answers the one 
       "init_failure",
       expect.objectContaining({ reason: "instance_unresolved", siteId: SITE.siteId }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4217 — the per-address bucket is keyed on the hop the platform
+// appended to X-Forwarded-For (the LAST one), never on a hop the caller wrote.
+// RED BEFORE: both routes keyed it on the FIRST hop, so a caller could name any
+// address's bucket, and rotate the first hop to get a fresh one.
+// ---------------------------------------------------------------------------
+describe("cinatra#4217 — a forged X-Forwarded-For hop keys no bucket", () => {
+  const CLIENT = "2001:db8::9";
+  const initBody = {
+    ...SELECTORS,
+    codeChallenge: "a".repeat(43),
+    codeChallengeMethod: "S256",
+    state: "state-value-1234",
+  };
+  const tokenBody = {
+    ...SELECTORS,
+    grantType: "authorization_code",
+    code: "an-authorization-code",
+    codeVerifier: "v".repeat(64),
+  };
+
+  it("init: two forged first hops from one client charge that client's one key", async () => {
+    for (const forged of ["2001:db8::5", "2001:db8::a1, 2001:db8::a2"]) {
+      await frameInit(
+        frameRequest("/api/widget-auth/frame/init", initBody, { "X-Forwarded-For": `${forged}, ${CLIENT}` }),
+      );
+    }
+    const ipKeys = allowNamedRateLimit.mock.calls
+      .map((c) => (c[0] as { key: string }).key)
+      .filter((k) => k.startsWith("frame-init-ip:"));
+    expect(ipKeys).toEqual([`frame-init-ip:${CLIENT}`, `frame-init-ip:${CLIENT}`]);
+  });
+
+  it("token: two forged first hops from one client charge that client's one address bucket", async () => {
+    for (const forged of ["2001:db8::5", "2001:db8::a1, 2001:db8::a2"]) {
+      const res = await frameToken(
+        frameRequest("/api/widget-auth/frame/token", tokenBody, { "X-Forwarded-For": `${forged}, ${CLIENT}` }),
+      );
+      expect(res.status).toBe(200);
+    }
+    const ips = allowConnectTokenRequest.mock.calls.map((c) => (c[0] as { ip: string }).ip);
+    expect(ips).toEqual([CLIENT, CLIENT]);
+    for (const [, fields] of emitWidgetAuthAudit.mock.calls) {
+      expect((fields as { ip?: string }).ip, "the audit names the same address").toBe(CLIENT);
+    }
   });
 });

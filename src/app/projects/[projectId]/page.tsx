@@ -7,6 +7,7 @@ import * as authSession from "@/lib/auth-session";
 const { requireActorContext } = authSession;
 import { projectsDb, projects } from "@/lib/projects-store";
 import { readScopeSurfaceEntityName } from "@/lib/scope-surface-entity-name";
+import { scopeSurfaceEntityLabel } from "@/lib/scope-surfaces";
 import { CrumbContributions } from "@/components/crumb-contributions";
 import { actorHoldsProjectGrant } from "@/lib/authz/project-read-gate";
 
@@ -22,14 +23,17 @@ import { buildScopeReferenceSource } from "@/components/dashboards/scope-referen
 import { buildScopeCatalogNode } from "@/components/dashboards/scope-catalog-node";
 
 // Gate-repeating metadata (cinatra#1737, the dashboards pattern): the tab
-// title repeats the page's read gate before disclosing the project name; any
-// failure yields the generic title. The gate and the read live in ONE place
+// title repeats the page's read gate before disclosing the project name. A
+// refused or missing project, or any failure of the read, yields the generic
+// title; a reader the gate allows whose project has a blank name gets the id's
+// first eight characters plus an ellipsis, as the crumb does. The gate and the read live in ONE place
 // (cinatra#2807 fix leg 2) so this tab title and the page heading beneath it
 // can never disagree about what the viewer may be told.
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { projectId } = await params;
-  const name = await readScopeSurfaceEntityName({ kind: "project", id: projectId });
-  return { title: name || "Project" };
+  const scope = { kind: "project", id: projectId } as const;
+  // The tab mirrors the trail's entity crumb under the same rules (cinatra#4453).
+  return { title: scopeSurfaceEntityLabel(scope, await readScopeSurfaceEntityName(scope)) };
 }
 
 type Props = {

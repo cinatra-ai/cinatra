@@ -55,7 +55,7 @@ describe("ToolbarChild", () => {
         <ToolbarButton>Tab</ToolbarButton>
         <ToolbarSeparator />
         <ToolbarSearchGroup>
-          <ToolbarSearchInput placeholder="Search…" />
+          <ToolbarSearchInput aria-label="Search…" placeholder="Search…" />
         </ToolbarSearchGroup>
       </Toolbar>,
     );
@@ -68,7 +68,7 @@ describe("ToolbarChild", () => {
         <ToolbarButton>Tab</ToolbarButton>
         <ToolbarSeparator />
         <ToolbarSearchGroup>
-          <ToolbarSearchInput placeholder="Search…" />
+          <ToolbarSearchInput aria-label="Search…" placeholder="Search…" />
         </ToolbarSearchGroup>
       </ToolbarChild>,
     );

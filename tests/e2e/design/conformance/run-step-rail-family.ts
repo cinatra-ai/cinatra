@@ -169,7 +169,7 @@ export type RunStepRailRow = {
  * packages/agents/src/orchestrator-stepper-panel.tsx.
  *
  * Every other pair the drawing declares in this family — toggle-skill,
- * continue, save-schedule, cancel-schedule, pick-idea, generate-ideas,
+ * continue, save-schedule, cancel-schedule, pick-idea,
  * open-output, continue-review, regenerate-review — appears nowhere in src/ or
  * packages/, which is what puts its surface on the readiness list below rather
  * than in a driver that presses something else and reports its outcome.
@@ -377,24 +377,18 @@ export const RUN_STEP_RAIL_ROWS_BY_SURFACE: Readonly<
     kind: "idea",
     state: "open",
     fields: [{ name: "title", source: "idea.first-line" }],
-    actions: [
-      { name: "pick-idea", outcome: "idea-reserved" },
-      { name: "generate-ideas", outcome: "ideas-stored" },
-    ],
+    actions: [{ name: "pick-idea", outcome: "idea-reserved" }],
     states: ["empty", "error", "kind:artifact", "loading"],
     mounted: false,
     unshippedAspects: [],
     evidence: {
       absentAnchors: ["run-idea-step"],
-      absentActions: [
-        { name: "pick-idea", outcome: "idea-reserved" },
-        { name: "generate-ideas", outcome: "ideas-stored" },
-      ],
+      absentActions: [{ name: "pick-idea", outcome: "idea-reserved" }],
       shippedFiles: [],
       unexportedModules: [],
     },
     readiness:
-      "the stored-ideas step is not in the tree: no element in src/ or packages/ carries the run-idea-step anchor, no control declares pick-idea to idea-reserved or generate-ideas to ideas-stored, and no element binds title to idea.first-line, so nothing draws one row per unused stored idea with the Continue held unavailable until a row is picked",
+      "the stored-ideas step is not in the tree: no element in src/ or packages/ carries the run-idea-step anchor, no control declares pick-idea to idea-reserved, and no element binds title to idea.first-line, so nothing draws one row per entry the agent's declared list offers, with the Continue held unavailable until a row is picked",
   },
   "run-outputs-list": {
     surface: "run-outputs-list",

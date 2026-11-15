@@ -55,7 +55,7 @@ export function writeExtensionDataRoot(value: string): void {
 /** The configured root as an ABSOLUTE path (relative values resolve against cwd). */
 export function resolveExtensionDataRoot(): string {
   const cfg = readExtensionDataRoot();
-  return path.isAbsolute(cfg) ? cfg : path.join(process.cwd(), cfg);
+  return path.isAbsolute(cfg) ? cfg : path.join(/* turbopackIgnore: true */ process.cwd(), cfg);
 }
 
 // ---------------------------------------------------------------------------
@@ -116,7 +116,7 @@ function resolveStoreDataRootFromEnv(): string {
   const raw = process.env[EXTENSION_DATA_ROOT_ENV];
   const configured =
     typeof raw === "string" && raw.trim() ? raw.trim() : DEFAULT_EXTENSION_DATA_ROOT;
-  return path.isAbsolute(configured) ? configured : path.join(process.cwd(), configured);
+  return path.isAbsolute(configured) ? configured : path.join(/* turbopackIgnore: true */ process.cwd(), configured);
 }
 
 // The two store-layout facts the walk needs, restated as LEAF constants rather

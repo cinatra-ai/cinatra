@@ -127,7 +127,7 @@ beforeEach(() => {
   );
   // The run-level skip marker writer VERIFIES its write and returns whether the
   // marker read back (cinatra#2794); the happy path is "it landed".
-  writeRunRecommendationSkip.mockReturnValue(true);
+  writeRunRecommendationSkip.mockReturnValue({ outcome: "recorded" });
 });
 
 describe("RESUME rides the VERIFIED release, never the call", () => {

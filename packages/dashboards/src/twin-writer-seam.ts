@@ -92,6 +92,18 @@ export interface DashboardTwinContext {
    * existing `pairTwin` call site.
    */
   readonly configuration?: unknown;
+  /**
+   * THE PRODUCING RUN (cinatra#3092): the agent run whose tool call made this
+   * write, as the caller's VERIFIED MCP request frame names it (the run id only
+   * a verified channel can serve). Set by `twinCtx` on the content writes
+   * (create, update, publish) when the acting principal carries a run; absent
+   * for a person's write and for every lifecycle write. The host twin trusts it
+   * only after it reads the run in the same organization; it then records the
+   * run on the revision and on the produced event, so the review gate and the
+   * run page find the dashboard through its run. Absent ⇒ the write is
+   * unchanged byte for byte.
+   */
+  readonly producerRunId?: string | null;
 }
 
 /** The minimal transaction surface the twin needs: run a spliced host builder

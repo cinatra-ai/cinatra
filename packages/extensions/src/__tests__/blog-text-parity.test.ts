@@ -17,8 +17,9 @@
  *  (c) output schema/shape — the agent OAS outputs + the EndNode's declarative
  *      artifact binding match the product shape EXACTLY.
  *  (d) declared tool wiring — the leaf OAS wires no toolbox, no tool-bearing
- *      component and no endpoint outside the LLM/context allowlist, and its
- *      inline configuration instructs the model not to call tools.
+ *      component and no endpoint outside the LLM/context allowlist (plus the
+ *      ONE brand-voice read of cinatra#4314, below), and its inline
+ *      configuration instructs the model not to call tools.
  *  (e) emitted HITL events — leaf gen agents declare hitlScreens=[] (no HITL);
  *      HITL is the orchestrator's reviewer-gate concern.
  *
@@ -68,6 +69,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 const EXT = join(__dirname, "..", "..", "..", "..", "extensions", "cinatra-ai");
 
@@ -107,6 +109,83 @@ const ALLOWED_API_URLS = new Set([
   `${BASE_URL}/api/context-resolve`,
   `${BASE_URL}/api/context-finalize`,
 ]);
+
+/**
+ * The ONE further call shape a text leaf may carry (cinatra#4314): a read of the
+ * text of the brand voice picked for the run, through `brand_voice_text`. That
+ * is a tool module the agent's pack declares; the host runs it on its generic
+ * `extension_tool` road (src/lib/extension-scoped-tools.ts:61, :111;
+ * src/app/api/agents/passthrough/route.ts:636-659), and the artifact reads it makes
+ * are typed by cinatra#4402. A slot binding is only a reference, and the bridge
+ * does not resolve it. The pack describes the module as a read; this gate
+ * matches the call shape only, and the node attaches no toolbox to the model's
+ * turn.
+ *
+ * Matched EXACTLY — URL, method and the whole request body — and at most once
+ * per leaf: any other passthrough body, tool, tool name, binding source or URL,
+ * a toolbox on the node, or a second such read still fails (d). Any other
+ * component, of any type, whose `data` is the read's body fails (d): at any
+ * other URL or method, an allowlisted URL too.
+ */
+const BRAND_VOICE_READ = {
+  url: `${BASE_URL}/api/agents/passthrough`,
+  http_method: "POST",
+  data: {
+    tool: "extension_tool",
+    input: {
+      name: "brand_voice_text",
+      input: { bindings: "{{ brandVoiceContextSlotBindings }}" },
+    },
+    agent_run_id: "{{ cinatra_run_id }}",
+  },
+};
+
+function isBrandVoiceRead(c: Ref): boolean {
+  return (
+    c.component_type === "ApiNode" &&
+    c.url === BRAND_VOICE_READ.url &&
+    c.http_method === BRAND_VOICE_READ.http_method &&
+    isDeepStrictEqual(c.data, BRAND_VOICE_READ.data)
+  );
+}
+
+/** Every endpoint problem of (d) over a leaf's components; empty means clean. */
+function endpointProblems(components: Ref[]): string[] {
+  const problems: string[] = [];
+  let reads = 0;
+  for (const c of components) {
+    const where = `${c.component_type} ${c.id ?? c.name ?? "<anon>"}`;
+    if (isBrandVoiceRead(c)) {
+      reads += 1;
+      continue;
+    }
+    // The read's body is matched with its URL, method and node type, never
+    // alone: at an allowlisted URL, or on another node type, it would still
+    // be the tool call.
+    if (isDeepStrictEqual(c.data, BRAND_VOICE_READ.data)) {
+      problems.push(
+        c.component_type === "ApiNode"
+          ? `${where} carries the brand-voice read's body outside its exact URL and method`
+          : `${where} carries the brand-voice read's body, which only the exact ApiNode read may carry`,
+      );
+    }
+    if (c.component_type !== "ApiNode") continue;
+    // `typeof === "string"` before the Set lookup, never String(c.url): the
+    // coercion would let a malformed `"url": ["…/api/context-resolve"]`
+    // stringify into an allowlisted value.
+    if (!(typeof c.url === "string" && ALLOWED_API_URLS.has(c.url))) {
+      problems.push(`${where} calls a non-allowlisted endpoint: ${JSON.stringify(c.url)}`);
+    }
+    // A toolbox_ids declaration is permitted, but only the empty one.
+    if (c.data && typeof c.data === "object" && "toolbox_ids" in c.data) {
+      if (!(Array.isArray(c.data.toolbox_ids) && c.data.toolbox_ids.length === 0)) {
+        problems.push(`${where} declares a non-empty toolbox`);
+      }
+    }
+  }
+  if (reads > 1) problems.push(`${reads} brand-voice reads: a text leaf may carry at most one`);
+  return problems;
+}
 
 /**
  * Keys that declare a tool surface on a component or on its request payload.
@@ -330,20 +409,8 @@ for (const p of PRODUCTS) {
             expect(c.data[key], `${where}.data declares ${key}`).toBeUndefined();
           }
         }
-        if (c.component_type !== "ApiNode") continue;
-        // `typeof === "string"` before the Set lookup, never String(c.url): the
-        // coercion would let a malformed `"url": ["…/api/context-resolve"]`
-        // stringify into an allowlisted value.
-        expect(
-          typeof c.url === "string" && ALLOWED_API_URLS.has(c.url),
-          `${where} calls a non-allowlisted endpoint: ${JSON.stringify(c.url)}`,
-        ).toBe(true);
-        // A toolbox_ids declaration is permitted, but only the empty one.
-        if (c.data && typeof c.data === "object" && "toolbox_ids" in c.data) {
-          expect(c.data.toolbox_ids, `${where} declares a non-empty toolbox`)
-            .toEqual([]);
-        }
       }
+      expect(endpointProblems(components)).toEqual([]);
 
       // Tool-discipline statement, now read from the INLINE configuration the
       // (a) fold moved it into (phrasing varies per agent, but every leaf
@@ -365,3 +432,105 @@ for (const p of PRODUCTS) {
     });
   });
 }
+
+/* ------------------------------------------------------------------------- *
+ * The one added call shape of (d) still refuses everything else
+ * (cinatra#4314). Synthetic components, so the refusals do not move with the
+ * pins.
+ * ------------------------------------------------------------------------- */
+describe("blog-text parity (d): the brand-voice read is the only added call shape", () => {
+  const read = (over: Ref = {}, data: Ref = {}) => ({
+    component_type: "ApiNode",
+    id: "read_brand_voice",
+    url: BRAND_VOICE_READ.url,
+    http_method: "POST",
+    ...over,
+    data: { ...structuredClone(BRAND_VOICE_READ.data), ...data },
+  });
+  const bridgeNode = { component_type: "ApiNode", id: "write", url: LLM_BRIDGE_URL, data: {} };
+  const passthrough = `${BASE_URL}/api/agents/passthrough`;
+  const refused = (where: string, url: string) =>
+    `ApiNode ${where} calls a non-allowlisted endpoint: ${JSON.stringify(url)}`;
+  const misplaced = (where: string) =>
+    `ApiNode ${where} carries the brand-voice read's body outside its exact URL and method`;
+
+  it("accepts exactly one brand-voice read beside the bridge", () => {
+    expect(endpointProblems([bridgeNode, read()])).toEqual([]);
+  });
+
+  it("refuses a second brand-voice read", () => {
+    expect(endpointProblems([bridgeNode, read(), read({ id: "read_again" })])).toEqual([
+      "2 brand-voice reads: a text leaf may carry at most one",
+    ]);
+  });
+
+  it("refuses any other passthrough body, tool, tool name or binding source", () => {
+    const others = [
+      read({}, { tool: "objects_save" }),
+      read({}, { input: { name: "objects_save", input: { bindings: "{{ brandVoiceContextSlotBindings }}" } } }),
+      read({}, { input: { name: "brand_voice_text", input: { bindings: "{{ draftContextContextSlotBindings }}" } } }),
+      read({}, { input: { name: "brand_voice_text", input: { bindings: "{{ brandVoiceContextSlotBindings }}", extra: 1 } } }),
+      read({}, { agent_run_id: "" }),
+      read({}, { extra: true }),
+      read({}, { toolbox_ids: [] }),
+      read({}, { toolbox_ids: ["cinatra-mcp"] }),
+      read({ http_method: "GET" }),
+    ];
+    for (const c of others) {
+      expect(endpointProblems([bridgeNode, c])).toContain(refused("read_brand_voice", passthrough));
+    }
+    const noTool = read();
+    delete (noTool.data as Ref).tool;
+    expect(endpointProblems([noTool])).toContain(refused("read_brand_voice", passthrough));
+  });
+
+  it("refuses the same body at any other URL", () => {
+    for (const url of [
+      `${passthrough}?next=/api/objects/save`,
+      `${BASE_URL}/api/objects/save`,
+      "https://elsewhere/api/agents/passthrough",
+      `${BASE_URL}/api/agents/passthrough/`,
+    ]) {
+      expect(endpointProblems([read({ url })])).toEqual([
+        misplaced("read_brand_voice"),
+        refused("read_brand_voice", url),
+      ]);
+    }
+  });
+
+  it("refuses the same body at an allowlisted URL, or with another method", () => {
+    for (const url of [...ALLOWED_API_URLS]) {
+      expect(endpointProblems([bridgeNode, read({ url })])).toEqual([misplaced("read_brand_voice")]);
+      expect(endpointProblems([read({ url, http_method: "GET" })])).toEqual([misplaced("read_brand_voice")]);
+    }
+    expect(endpointProblems([read({ http_method: "GET" })])).toEqual([
+      misplaced("read_brand_voice"),
+      refused("read_brand_voice", passthrough),
+    ]);
+    expect(endpointProblems([read({ http_method: undefined })])).toContain(misplaced("read_brand_voice"));
+  });
+
+  it("refuses the read's body on a node that is not an ApiNode", () => {
+    const branch = { ...read(), component_type: "BranchingNode", id: "branch" };
+    expect(endpointProblems([bridgeNode, branch])).toEqual([
+      "BranchingNode branch carries the brand-voice read's body, which only the exact ApiNode read may carry",
+    ]);
+    const other = { ...read({ url: LLM_BRIDGE_URL }), component_type: "ToolNode", id: "other" };
+    expect(endpointProblems([bridgeNode, other])).toEqual([
+      "ToolNode other carries the brand-voice read's body, which only the exact ApiNode read may carry",
+    ]);
+  });
+
+  it("refuses an allowlisted URL that is not a string", () => {
+    const url = [LLM_BRIDGE_URL];
+    expect(endpointProblems([{ ...bridgeNode, url }])).toEqual([
+      `ApiNode write calls a non-allowlisted endpoint: ${JSON.stringify(url)}`,
+    ]);
+  });
+
+  it("keeps refusing a non-empty toolbox on any other node", () => {
+    expect(
+      endpointProblems([{ ...bridgeNode, data: { toolbox_ids: ["cinatra-mcp"] } }]),
+    ).toEqual(["ApiNode write declares a non-empty toolbox"]);
+  });
+});

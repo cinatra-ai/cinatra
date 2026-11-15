@@ -26,6 +26,12 @@ type AgentPageLayoutProps = {
   description?: string;
   actions?: ReactNode;
   initialRunName: string;
+  /**
+   * What the run's crumb draws while the run has no name, from the server's read
+   * of the run's own template (`readRunCrumbIdentity`, cinatra#4453). Absent,
+   * the crumb falls back to `templateName`.
+   */
+  runFallbackName?: string;
   runId: string | null;
   isPublished?: boolean;
   showTriggerTab?: boolean;
@@ -149,6 +155,7 @@ export function AgentPageLayout({
   description,
   actions,
   initialRunName,
+  runFallbackName,
   runId,
   isPublished,
   showTriggerTab = false,
@@ -171,7 +178,10 @@ export function AgentPageLayout({
   // the former divergent pair (the name-changed event + the AppShell
   // instance-name fetch). Rename + name-set flows update `runName`, which
   // re-publishes.
-  const runCrumbName = runName || templateName || `${instanceId.slice(0, 8)}…`;
+  // Trimmed, so a blank title draws no blank crumb (cinatra#4453); the server's
+  // fallback for this run (`readRunCrumbIdentity`) comes before the route's
+  // template name, so the run's own template names it.
+  const runCrumbName = runName.trim() || runFallbackName || templateName.trim() || `${instanceId.slice(0, 8)}…`;
   const crumbLabel = ownerLabel ? `${runCrumbName} · ${ownerLabel}` : runCrumbName;
   // Epoch-capture guard (mirrors CrumbContributions): the identity this
   // layout publishes was authorized by the server render that mounted it. A

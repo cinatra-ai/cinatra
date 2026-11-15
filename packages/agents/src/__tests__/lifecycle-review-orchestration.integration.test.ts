@@ -1180,14 +1180,10 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
       // fenced with the rest (the whole sweep short-circuits before it runs).
       repairsDispatched: 0,
       repairsEscalated: 0,
-      // cinatra#2286 S10 PR2 added the CMS repair-COMPLETION sub-drain; same
-      // fence, same short-circuit.
-      cmsRepairsCompleted: 0,
-      cmsRepairsUnresolved: 0,
-      cmsRepairsUncaptured: 0,
       // cinatra#3862 leg 1 (the completer of cinatra#3080) added the GENERIC
-      // repair-completion sub-drain right after the CMS one; same fence, same
-      // short-circuit.
+      // repair-completion sub-drain; same fence, same short-circuit. Since leg 7
+      // (slice 2) it is the only completion sub-drain: the CMS one and its
+      // three counters are gone.
       producerRepairsCompleted: 0,
       producerRepairsUnresolved: 0,
     });

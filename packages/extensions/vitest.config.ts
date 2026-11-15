@@ -223,6 +223,12 @@ export default defineConfig({
         __dirname,
         "../../src/components/extensions/installed-extension-card.tsx",
       ),
+      // The Extensions lifecycle chip the card re-exports and LifecycleBadges
+      // draws (cinatra#4296): a pure presentational leaf, mapped to real source.
+      "@/components/extensions/installed-status-indicator": path.join(
+        __dirname,
+        "../../src/components/extensions/installed-status-indicator.tsx",
+      ),
     },
   },
   test: {

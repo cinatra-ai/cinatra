@@ -44,6 +44,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { ApprovalPendingPill } from "@/lib/approvals/approval-pills";
 import { cn } from "@/lib/utils";
 
 import { NotificationsBellSkeleton } from "@cinatra-ai/notifications/client";
@@ -226,23 +227,6 @@ function NotificationRow({
   );
 }
 
-function EligibilityPill({ actionable }: { actionable: boolean }) {
-  if (actionable) {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-full border border-warning/40 bg-warning/15 px-2 py-0.5 text-xs font-semibold text-warning">
-        <span aria-hidden className="size-1.5 rounded-full bg-warning" />
-        Awaiting you
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border border-line-strong px-2 py-0.5 text-xs font-medium text-muted-foreground">
-      <span aria-hidden className="size-1.5 rounded-full bg-muted-foreground" />
-      Awaiting others
-    </span>
-  );
-}
-
 function ApprovalRow({
   title,
   meta,
@@ -289,7 +273,7 @@ function ApprovalRow({
           <span className="font-sans text-sm font-semibold text-foreground">
             {title}
           </span>
-          <EligibilityPill actionable={actionable} />
+          <ApprovalPendingPill viewerMayDecide={actionable} />
         </div>
         <p className="mt-1 text-xs text-muted-foreground">{meta}</p>
       </div>

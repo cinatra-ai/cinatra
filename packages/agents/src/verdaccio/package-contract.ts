@@ -157,6 +157,15 @@ export const agentProducesSchema = z.array(
     .strict(),
 );
 
+// Input names a `repairFindingsInput` declaration may never take (cinatra#4424):
+// the typed request the repair dispatch drain delivers itself, and every
+// property name of `Object.prototype`. Mirrors `RESERVED_REPAIR_FINDINGS_INPUT_NAMES`
+// in `src/lib/lifecycle/lifecycle-policy.ts`.
+const REPAIR_FINDINGS_RESERVED_INPUTS = new Set([
+  "lifecycleRepairRequest",
+  ...Object.getOwnPropertyNames(Object.prototype),
+]);
+
 // The `lifecycle` block (cinatra#2038 S0 → cinatra#2047 D-1) — the agent
 // manifest's LIFECYCLE declarations, compiled onto `agent_templates.lifecycle_config`
 // exactly as `trigger_mode` / `gated_steps` are (epic #2037's "agent-manifest
@@ -175,6 +184,26 @@ export const agentLifecycleDeclarationSchema = z
      * `changes_requested` route keys on it: true ⇒ the repair is dispatched to
      * the producer; absent/false ⇒ an org route or a human escalation. */
     repairCapable: z.boolean().optional(),
+    /** The root input of this template that a dispatched repair run gets the
+     * reviewer's findings in (cinatra#4424), e.g. `{ input: "instructions" }`.
+     * An identifier, never the drain's own `lifecycleRepairRequest` and never
+     * a property name of `Object.prototype`. Mirrors `isRepairFindingsInputName` in
+     * `src/lib/lifecycle/lifecycle-policy.ts` (pinned equal by
+     * `lifecycle-repair-findings-input.test.ts`). */
+    repairFindingsInput: z
+      .object({
+        input: z
+          .string()
+          .max(128)
+          .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, {
+            message: "repairFindingsInput.input must name one input as an identifier",
+          })
+          .refine((name) => !REPAIR_FINDINGS_RESERVED_INPUTS.has(name), {
+            message: "repairFindingsInput.input names a reserved input",
+          }),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -494,7 +523,8 @@ export function parseAgentPackageManifestForInstall(
 // edited revision on, through the required `artifact_authoring_emit` consumed
 // primitive and with no terminal binding of its own — or by an IMAGE-TOOL STEP
 // (cinatra#3035): a passthrough ApiNode that calls the host's image tool
-// (`artifact_image_generate`) with a literal extension the produces list
+// (`artifact_image_generate`, or the page capture tool `artifact_page_capture`,
+// cinatra#4223) with a literal extension the produces list
 // declares and names itself as the ledger's node. All four are named side by
 // side as the roads that resolve a produces entry; the authoring emit is read
 // from `cinatra.consumes` because it is a capability edge, not a node
@@ -612,7 +642,7 @@ export function evaluateProducesMaterializationContract(args: {
         `no EndNode output binding (outputs[].cinatra.artifact), no ` +
         `artifact_materialize passthrough node, no required ` +
         `${ARTIFACT_AUTHORING_EMIT_PRIMITIVE} claim in cinatra.consumes, and no ` +
-        `artifact_image_generate passthrough step filing it — so the ` +
+        `artifact_image_generate or artifact_page_capture passthrough step filing it — so the ` +
         `declared artifact is never persisted. Add one of the four roads for ` +
         `"${ext}", or declare nothing (cinatra#924).`,
       source: "deterministic",

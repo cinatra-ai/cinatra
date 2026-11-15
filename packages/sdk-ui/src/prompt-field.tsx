@@ -5,7 +5,6 @@ import Link from "next/link";
 import { Plus, Paperclip, ExternalLink } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar";
 import { Button } from "./ui/button";
-import { Checkbox } from "./ui/checkbox";
 import { Input } from "./ui/input";
 import {
   DropdownMenu,
@@ -17,7 +16,9 @@ import {
 } from "./ui/dropdown-menu";
 import { Label } from "./ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { Switch } from "./ui/checkbox";
 import { cn } from "./lib/utils";
+import { userAvatarAccent, userInitials } from "./lib/user-avatar";
 import { LoadingSpinner } from "./loading-spinner";
 
 // ---------------------------------------------------------------------------
@@ -56,6 +57,14 @@ export type Mentionable = {
   displayName: string;
   type?: "assistant" | "user";
   image?: string | null;
+  /** A person's persisted avatar accent (`user.accent_color`), when the host has it. */
+  accentColor?: string | null;
+  /**
+   * A person's display name from the directory, when the host has it. It gives
+   * a user row's avatar initials ("Grace Hopper" draws "GH"); the chat sets
+   * `displayName` to the handle, so the row's label is unchanged.
+   */
+  name?: string | null;
 };
 
 export type PromptFieldProps = {
@@ -377,12 +386,11 @@ function AttachmentMenu({ autosave, onUploadClick, uploadDisabled = false, remot
               disabled={!autosave.canToggle || !autosave.onToggle}
               className="pr-1.5 [&_[data-slot='dropdown-menu-checkbox-item-indicator']]:hidden"
             >
-              <Checkbox
-                checked={autosave.enabled}
-                tabIndex={-1}
-                aria-hidden="true"
-                className="size-4 shrink-0 rounded-[4px] border-line bg-surface shadow-none data-[state=checked]:border-primary data-[state=checked]:bg-primary [&_svg]:text-primary-foreground!"
-              />
+              {/* An immediate-effect setting draws a switch, not a checkbox
+                  (cinatra#4297). The row itself is the control: the switch is
+                  its visual only, so it is hidden from the tab order and from
+                  assistive technology, which reads the row's aria-checked. */}
+              <Switch checked={autosave.enabled} tabIndex={-1} aria-hidden="true" />
               Skills autosave
             </DropdownMenuCheckboxItem>
           )}
@@ -773,7 +781,15 @@ export const PromptField = forwardRef<PromptFieldHandle, PromptFieldProps>(funct
               >
                 <Avatar data-size="sm" className="shrink-0">
                   {m.image && <AvatarImage src={m.image} alt={m.displayName} />}
-                  <AvatarFallback>{m.displayName.charAt(0).toUpperCase()}</AvatarFallback>
+                  {m.type === "user" ? (
+                    <AvatarFallback accent={userAvatarAccent({ id: m.id, accentColor: m.accentColor })}>
+                      {/* A row carries no e-mail; its handle ("ada_lovelace") reads
+                          like an e-mail's local part, so it stands in for one. */}
+                      {userInitials({ name: m.name || m.displayName, email: m.handle })}
+                    </AvatarFallback>
+                  ) : (
+                    <AvatarFallback>{m.displayName.charAt(0).toUpperCase()}</AvatarFallback>
+                  )}
                 </Avatar>
                 <span className="truncate">{m.displayName}</span>
               </li>

@@ -3328,6 +3328,15 @@ jobs:
           # postgres sidecar (swap-thrash → hang); the default ~2GB OOMs. 3072 is
           # the stable middle that GCs cleanly instead of thrashing.
           NODE_OPTIONS: --max-old-space-size=3072
+          # One page-data worker, as the /agents smoke build already runs. This
+          # build sits at the hosted runner's memory size (measured tree peak
+          # ~15.5 GiB with 3 workers on a ~15.6 GiB runner, see
+          # docs/internals/workflows/constrained-host-builds.md) and the service
+          # containers come on top. With the default 3 workers this step hung
+          # until the job cap with the runner no longer responding (the step
+          # cap above never fired, the job log was never uploaded). The knob
+          # maps to experimental.cpus in next.config.ts.
+          CINATRA_BUILD_CPUS: "1"
         run: pnpm build
 
       - name: Start production server on port 3000
@@ -4043,6 +4052,35 @@ jobs:
           node scripts/audit/chat-hitl-one-card-gate.mjs
           node scripts/audit/chat-hitl-one-card-gate.mjs --audit
 
+      # cinatra#3089 (lifecycle-d W1), acceptance item 5 - the email fan-out
+      # cutover is forward-only. A fixture schema holds the raw body rows, the
+      # recipient rows and the associations a send wrote before the cutover;
+      # the production fan-out then runs twice over the same send, and every row
+      # the schema held before the first drive must read back byte-identical
+      # after both. A stubbed store cannot rewrite a row, so only this database
+      # can show that none was rewritten. Wired here on arrival, by the same
+      # convention as the real-DB tiers above, so it cannot join the class of
+      # root tiers that run nowhere.
+      #
+      # APPENDED, after the one-card gate, for the reason that gate records:
+      # adding a step after the last one is the one placement that cannot have
+      # changed the measured order of the steps above. The tier creates a schema
+      # under a name it draws for the run
+      # (`cinatra_test_email_fanout_history_3089_<pid>_<random>`) and at its end
+      # drops that schema without `CASCADE`, keeping it, and failing, when
+      # pg_depend shows an object outside it that depends on one inside it (a
+      # reference Postgres does not record there, or a dependent not yet
+      # committed, is not seen). It also
+      # reads objects and table rows outside that schema, `public` included,
+      # and fails when its teardown reads them differently than its setup did,
+      # so a change made there while it runs can fail it. `shell: bash` and
+      # `!cancelled()` are the siblings' and load-bearing for the same reasons
+      # stated at the tiers above.
+      - name: Email fan-out history byte-identical - real-DB tier (cinatra#3089, item 5)
+        if: ${{ !cancelled() && needs.detect.outputs.skip_runtime != 'true' }}
+        shell: bash
+        run: pnpm test:email-fanout-history
+
   image:
     # The container build itself, UN-SERIALIZED from the unit tier (critical-path
     # fix): it now starts at `detect` instead of waiting ~5-6 min for `test` +
@@ -4248,8 +4286,15 @@ jobs:
           # in-build tsc (types are gated by the required Typecheck job). Only set
           # here, in CI — a local `docker build` (no build-arg) keeps the check.
           # MUST stay identical on the push step below so its cache hit is total.
+          # CINATRA_BUILD_CPUS=1: one page-data worker for the in-image
+          # `next build` (Dockerfile ARG -> experimental.cpus in next.config.ts).
+          # Uncapped, Next runs 3 workers on this 4-vCPU runner, the build's
+          # measured tree peak (~15.5 GiB) sits at the runner's memory, and this
+          # step hung until the runner stopped responding. The same cap as the
+          # hosted e2e "Build app (production)" steps; it changes no app code.
           build-args: |
             CI=true
+            CINATRA_BUILD_CPUS=1
           cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha' || format('type=local,src={0}', env.LOCAL_BUILDX_CACHE_DIR) }}
           cache-to: ${{ runner.environment == 'github-hosted' && 'type=gha,mode=max' || format('type=local,dest={0},mode=max', env.LOCAL_BUILDX_CACHE_DIR) }}
 
@@ -4464,6 +4509,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             CI=true
+            CINATRA_BUILD_CPUS=1
           cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha' || format('type=local,src={0}', env.LOCAL_BUILDX_CACHE_DIR) }}
 
   # ---------------------------------------------------------------------------
@@ -4601,6 +4647,7 @@ jobs:
           tags: cinatra-upgrade-proof:candidate
           build-args: |
             CI=true
+            CINATRA_BUILD_CPUS=1
           cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha' || format('type=local,src={0}', env.LOCAL_BUILDX_CACHE_DIR) }}
 
       - name: Upgrade proof from each previous-release base
@@ -4735,6 +4782,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             CI=true
+            CINATRA_BUILD_CPUS=1
           cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha' || format('type=local,src={0}', env.LOCAL_BUILDX_CACHE_DIR) }}
 
   # GATED prod-deploy dispatch. Release-gating (Model A): on a v* tag, after the

@@ -350,7 +350,7 @@
       "actions": [
         {
           "action": "click",
-          "selector": "[data-action=\"confirm-schedule-proposal\"]"
+          "selector": "[data-action=\"confirm-schedule -> scheduled\"]"
         },
         {
           "action": "waitForSelector",

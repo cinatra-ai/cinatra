@@ -7,7 +7,8 @@
 // default branch — they arrive with the per-scope surfaces change
 // (cinatra#3152). Each driver is therefore wrapped in `awaitingMount()`, which
 // SKIPS the battery with a named reason instead of passing on an assertion it
-// never made.
+// never made. The four recurrence readings of the components drawing left this
+// list when their harness mount landed (scheduling-recurrence-mount.test.mjs).
 //
 // This file is what holds that arrangement honest. It is the successor of the
 // pending-advance record retired when the application pin advanced: the
@@ -32,12 +33,15 @@ const CONTRACT_TS = path.join(CONF_DIR, "contract.ts");
 const readJson = (p) => JSON.parse(readFileSync(p, "utf8"));
 const contractSource = readFileSync(CONTRACT_TS, "utf8");
 
-/** Every surface driven behind the guard, with the manifest that declares it. */
+/**
+ * Every surface driven behind the guard, with the manifest that declares it and
+ * the change that brings its component.
+ */
 const AWAITING_SURFACES = [
-  { id: "sidebar-workspace-entry", manifest: "app.json" },
-  { id: "workspace-scope-page", manifest: "app.json" },
-  { id: "workspace-scope-empty-tab", manifest: "app.json" },
-  { id: "scope-dashboards-tab", manifest: "app-artifacts.json" },
+  { id: "sidebar-workspace-entry", manifest: "app.json", awaits: "cinatra#3152" },
+  { id: "workspace-scope-page", manifest: "app.json", awaits: "cinatra#3152" },
+  { id: "workspace-scope-empty-tab", manifest: "app.json", awaits: "cinatra#3152" },
+  { id: "scope-dashboards-tab", manifest: "app-artifacts.json", awaits: "cinatra#3152" },
 ];
 
 describe("every awaiting-mount surface is declared and driven", () => {
@@ -71,9 +75,12 @@ describe("every awaiting-mount surface is declared and driven", () => {
     },
   );
 
-  it("names the change the guard is waiting for", () => {
-    expect(contractSource).toContain("cinatra#3152");
-  });
+  it.each([...new Set(AWAITING_SURFACES.map((surface) => surface.awaits))])(
+    "names the change %s the guard is waiting for",
+    (change) => {
+      expect(contractSource).toContain(change);
+    },
+  );
 });
 
 describe("no awaiting-mount surface is absorbed instead of driven", () => {

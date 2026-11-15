@@ -51,6 +51,10 @@ export default defineConfig({
     fileParallelism: false,
     include: [
       "src/lib/artifacts/__tests__/lifecycle-c-w8-image-tool.integration.test.ts",
+      // cinatra#4223: the page capture tool, on the same schema, after the image tool.
+      "src/lib/artifacts/__tests__/page-capture-tool-4223.integration.test.ts",
+      // cinatra#4223: a filed page capture read back through the artifact page and the review target.
+      "src/lib/artifacts/__tests__/page-capture-display-4223.integration.test.ts",
     ],
     exclude: ["**/node_modules/**"],
     env: {

@@ -171,6 +171,13 @@ import { issueAgentRunMcpActorToken } from "../agent-run-mcp-actor-token";
 import { isDelegatedWidgetMcpToolAllowed } from "@cinatra-ai/mcp-server/delegated-widget-tool-policy";
 // The REAL host frame reader (reads the ALS mock above) + the REAL dispatch.
 import { resolveWidgetActorFromFrame } from "../widget-actor-frame";
+// cinatra#4220 — the carrier run's connector-instance derivation (pinned by
+// host-content-editor-dispatch-binding-4220.test.ts); here it finds no binding,
+// so this suite's dispatch behaves as before.
+vi.mock("@/lib/connector-instance-write-authority", () => ({
+  deriveAgentRunConnectorInstanceBinding: async () => null,
+}));
+
 import { dispatchContentEditorViaA2A } from "../host-content-editor-dispatch";
 
 const WIDGET_INPUT: WidgetMcpActorTokenInput = {

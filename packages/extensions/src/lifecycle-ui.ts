@@ -2,7 +2,8 @@
 //
 // Pure (no React) so it is fully unit-testable. The badge descriptors map to
 // shadcn <Badge variant> values; the component layer (lifecycle-badges.tsx)
-// renders them. Disabled-action reasons drive the marketplace's
+// renders them, except the lifecycle states (`locked`, `archived`), which it
+// draws as the Extensions marked-text chip instead of a Badge (cinatra#4296). Disabled-action reasons drive the marketplace's
 // disabled-affordance copy.
 
 import type {

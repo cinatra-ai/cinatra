@@ -55,7 +55,12 @@ const { dbMock } = vi.hoisted(() => {
     // stable and readable discriminator.
     select(cols: Record<string, unknown>) {
       const keys = Object.keys(cols ?? {});
-      const picked: unknown[] = keys.includes("templateId")
+      // cinatra#4245: the event's own row, read under its lock before a gate is
+      // emitted — still pending and unlinked here.
+      const eventRow = keys.includes("continuationAddress") && keys.includes("representationRevisionId") && !keys.includes("eventId");
+      const picked: unknown[] = eventRow
+        ? [{ orgId: ORG, producerRunId: RUN, artifactId: "art-2929", representationRevisionId: "rev-2929", status: "pending", continuationAddress: null }]
+        : keys.includes("templateId")
         ? state.rows.agentRuns
         : keys.includes("hasArtifactBindings") || keys.includes("lifecycleConfig")
           ? state.rows.agentTemplates
@@ -66,11 +71,16 @@ const { dbMock } = vi.hoisted(() => {
         from: () => chain,
         where: () => chain,
         orderBy: () => chain,
+        for: () => chain,
         limit: () => Promise.resolve(picked),
         then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
           Promise.resolve(picked).then(res, rej),
       };
       return chain;
+    },
+    // cinatra#4245: the link decision runs in a transaction on the event row.
+    transaction(fn: (tx: unknown) => Promise<unknown>) {
+      return fn(dbMock);
     },
     update() {
       const chain: Record<string, unknown> = {

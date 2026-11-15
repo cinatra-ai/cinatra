@@ -1,25 +1,54 @@
 // The pure core of scripts/ci/extension-suite-gate.mjs (cinatra#2288 slice 2):
 // classification, report parsing, run planning, shape matching and the finding
 // rules. Every input is data, so the whole rule set is exercised without
-// spawning a single vitest process.
+// spawning a single vitest process. The node:test runner cases start node on
+// small files written to a temporary folder, with short bounds.
 //
 // The cases below are not hypotheticals — each one is a shape observed on the
 // materialized tree at the pins this gate landed against, named in the test
 // title so a future reader can tell a real regression from a fixture edit.
-import { describe, expect, it } from "vitest";
+import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-import {
+import { afterAll, describe, expect, it } from "vitest";
+
+import nodeTopLevelReporter, {
   classifyPackage,
   fenceWorkflowCommands,
+  foldNodeRuns,
+  installNodeRunCleanup,
   isFirstPartyMirror,
+  isHostRunNodeTest,
   judge,
+  listLiveNodeRuns,
+  listSurvivingNodeGroups,
+  NODE_FILE_TIMEOUT_MS,
+  NODE_GATE_DEADLINE_MS,
+  NODE_KILL_GRACE_MS,
+  NODE_RECORDS_CAP,
+  NODE_TEST_TIMEOUT_MS,
+  nodeGateDeadlineMs,
+  needsStandaloneRun,
+  nodeTestArgs,
   observedShape,
+  parseNodeTap,
   parseReport,
   planRun,
+  readRecordFile,
+  readTopLevel,
+  standaloneRanTest,
   renderManifest,
   resolveMaterializedSha,
+  runNodeSuites,
+  runNodeTest,
+  runNodeTestFile,
   shapeMatches,
   skipsStandaloneTests,
+  stopLiveNodeRuns,
   TEST_FILE_RE,
 } from "../extension-suite-gate.mjs";
 
@@ -553,10 +582,12 @@ describe("judge — a lost JSON report is fatal for enforced AND carved packages
 });
 
 describe("judge — AC6: the companion skip may never outrun what the host does", () => {
-  it("FAILS when a repo skips its tests standalone and this gate does not run them", () => {
+  it("FAILS when a repo skips its tests standalone and this gate cannot run them (no runner named)", () => {
+    // A node:test package that skips is RUN here (the node:test road below);
+    // only a skipping package whose runner cannot be identified stays unrunnable.
     const packages = [
       pkg({ slug: "gated", testFiles: ["x.test.ts"] }),
-      pkg({ slug: "orphan", runner: "other", testFiles: ["tests/a.test.mjs"], standaloneTestsSkipped: true }),
+      pkg({ slug: "orphan", runner: "other", runnerEvidence: "unknown", testFiles: ["tests/a.test.mjs"], standaloneTestsSkipped: true }),
     ];
     const results = resultsFor([["gated", green(["x.test.ts"])]]);
     const f = judge({ packages, results, carveOuts: [] }).findings.find((x) => x.kind === "dishonest-skip");
@@ -580,6 +611,1462 @@ describe("judge — AC6: the companion skip may never outrun what the host does"
       ["b", green(["y.test.ts"])],
     ]);
     expect(judge({ packages, results, carveOuts: [carve("a")] }).findings).toEqual([]);
+  });
+});
+
+// The node:test road (cinatra#4314's dev-lock bump): brand-voice-artifact at
+// dec0bb58 added test/own-type.test.mjs, a node:test file, while its own ci.yml
+// keeps skipping tests as run by the host. Check 3 could only name it; nothing
+// ran it. This gate now runs such a package with `node --test`, file by file,
+// and enforces it like a vitest suite.
+const TAP_GREEN = [
+  "TAP version 13",
+  "# Subtest: the pack declares one type, the brand-voice guide, under its own package name",
+  "ok 1 - the pack declares one type, the brand-voice guide, under its own package name",
+  "  ---",
+  "  duration_ms: 0.6",
+  "  type: 'test'",
+  "  ...",
+  "# Subtest: every declared type's namespace is this package, so the host registers it",
+  "ok 2 - every declared type's namespace is this package, so the host registers it",
+  "# Subtest: the typed export declares the same types as package.json",
+  "ok 3 - the typed export declares the same types as package.json",
+  "1..3",
+  "# tests 3",
+  "# suites 0",
+  "# pass 3",
+  "# fail 0",
+  "# cancelled 0",
+  "# skipped 0",
+  "# todo 0",
+  "# duration_ms 41.2",
+].join("\n");
+
+const TAP_RED = [
+  "TAP version 13",
+  "# Subtest: outer",
+  "    # Subtest: inner",
+  "    not ok 1 - inner",
+  "    # tests 9",
+  "not ok 1 - outer",
+  "ok 2 - fine",
+  "not ok 3 - pending one # TODO later",
+  "1..3",
+  "# tests 3",
+  "# pass 1",
+  "# fail 1",
+  "# cancelled 0",
+  "# skipped 0",
+  "# todo 1",
+].join("\n");
+
+const TAP_EMPTY = ["TAP version 13", "1..0", "# tests 0", "# pass 0", "# fail 0", "# cancelled 0", "# skipped 0", "# todo 0"].join("\n");
+
+// What node 24 prints for `node --test --test-reporter=tap <file>` when the
+// file registers no test (read on a lane host with node v24.20.0): the runner
+// reports the FILE ITSELF as one passing test, named by the path it was given,
+// so the summary says `# tests 1` although no test ran.
+const tapFileOnly = (file) =>
+  [
+    "TAP version 13",
+    `# Subtest: ${file}`,
+    `ok 1 - ${file}`,
+    "  ---",
+    "  duration_ms: 38.1",
+    "  type: 'test'",
+    "  ...",
+    "1..1",
+    "# tests 1",
+    "# suites 0",
+    "# pass 1",
+    "# fail 0",
+    "# cancelled 0",
+    "# skipped 0",
+    "# todo 0",
+    "# duration_ms 44.0",
+  ].join("\n");
+
+const BRAND_VOICE_SOURCE = `import { test } from "node:test";\nimport assert from "node:assert/strict";\ntest("x", () => assert.ok(true));\n`;
+
+const brandVoice = (over = {}) =>
+  classifyPackage({
+    slug: "brand-voice-artifact",
+    id: "cinatra-ai/brand-voice-artifact",
+    sha: PIN,
+    dirty: false,
+    dir: "extensions/cinatra-ai/brand-voice-artifact",
+    pkgJson: mirrorPkg({ name: "@cinatra-ai/brand-voice-artifact", type: "module" }),
+    entries: ["package.json", "src", "test", ".github"],
+    testFiles: ["test/own-type.test.mjs"],
+    readTestSource: () => BRAND_VOICE_SOURCE,
+    ciWorkflow: SKIP_CI,
+    ...over,
+  });
+
+const PLAIN_TAP = "TAP version 13\nok 1 - a\n1..1\n# tests 1\n# suites 0\n# pass 1\n";
+const nodeGreen = (files) => foldNodeRuns(files.map((file) => ({ file, exitCode: 0, tap: TAP_GREEN })));
+
+describe("parseNodeTap — the top-level summary, or none", () => {
+  it("reads the counts of a green run", () => {
+    expect(parseNodeTap(TAP_GREEN)).toEqual({ summary: true, tests: 3, pass: 3, fail: 0, cancelled: 0, skipped: 0, todo: 0, failedNames: [], fileOnly: false });
+  });
+
+  it("reads node's report of the file itself as the one test as a file that ran no test", () => {
+    expect(parseNodeTap(tapFileOnly("test/empty.test.mjs"), "test/empty.test.mjs").fileOnly).toBe(true);
+    // the TAP name is not read: one top-level result and no suite is file-only for any path until a record proves a test
+    expect(parseNodeTap(tapFileOnly("test/empty.test.mjs"), "test/own-type.test.mjs").fileOnly).toBe(true);
+    expect(parseNodeTap(tapFileOnly("test/empty.test.mjs")).fileOnly).toBe(true);
+    // more than one top-level result is a test
+    expect(parseNodeTap(TAP_GREEN, "test/own-type.test.mjs").fileOnly).toBe(false);
+    const twoTop = tapFileOnly("test/x.test.mjs").replace("1..1", "ok 2 - another\n1..2");
+    expect(parseNodeTap(twoTop, "test/x.test.mjs").fileOnly).toBe(false);
+    // a describe block counts as a suite, so a file of that name with a suite is not file-only
+    expect(parseNodeTap(tapFileOnly("test/x.test.mjs").replace("# suites 0", "# suites 1"), "test/x.test.mjs").fileOnly).toBe(false);
+  });
+
+  it("needs both a location other than 1:1 and a plain run that shows a test", () => {
+    const f = "test/own-type.test.mjs";
+    const tap = tapFileOnly(f);
+    expect(parseNodeTap(tap, f, [{ name: f, line: 1, column: 1 }], PLAIN_TAP).fileOnly).toBe(true);
+    expect(parseNodeTap(tap, f, [{ name: f, line: 2, column: 1 }], PLAIN_TAP).fileOnly).toBe(false);
+    expect(parseNodeTap(tap, f, [{ name: f, line: 1, column: 22 }], PLAIN_TAP).fileOnly).toBe(false);
+    // no record reads in the safe direction: file-only; the location, not the name, is the filter
+    expect(parseNodeTap(tap, f, [], PLAIN_TAP).fileOnly).toBe(true);
+    expect(parseNodeTap(tap, f, [{ name: "other", line: 2, column: 1 }], PLAIN_TAP).fileOnly).toBe(false);
+  });
+
+  it("does not take a location alone as proof: a later node's report of an empty file at 2:1 stays file-only", () => {
+    const f = "test/empty.test.mjs";
+    const later = [{ name: f, line: 2, column: 1 }];
+    expect(parseNodeTap(tapFileOnly(f), f, later).fileOnly).toBe(true);
+    const r = foldNodeRuns([{ file: f, exitCode: 0, tap: tapFileOnly(f), topLevel: later }]);
+    expect(r).toMatchObject({ ok: true, executedFiles: [], numTotalTests: 0 });
+    for (const tap of [undefined, null, "", 7, "# tests 1\n", "ok 1 - a\n", "ok 1 - a\n# tests 0\n", "  ok 1 - a\n  # tests 1\n"]) {
+      expect(standaloneRanTest(tap), String(tap)).toBe(false);
+      expect(parseNodeTap(tapFileOnly(f), f, later, tap).fileOnly, String(tap)).toBe(true);
+    }
+    expect(standaloneRanTest(PLAIN_TAP)).toBe(true);
+    expect(standaloneRanTest("not ok 1 - a\n# tests 1\n")).toBe(true);
+  });
+
+  it("asks for the plain run only for a green lone result with a location other than 1:1", () => {
+    const f = "test/x.test.mjs";
+    const tap = tapFileOnly(f);
+    const at = [{ name: f, line: 2, column: 1 }];
+    expect(needsStandaloneRun({ file: f, exitCode: 0, tap, topLevel: at })).toBe(true);
+    expect(needsStandaloneRun({ file: f, exitCode: 0, tap, topLevel: [{ name: f, line: 1, column: 1 }] })).toBe(false);
+    expect(needsStandaloneRun({ file: f, exitCode: 0, tap })).toBe(false);
+    expect(needsStandaloneRun({ file: f, exitCode: 1, tap, topLevel: at })).toBe(false);
+    expect(needsStandaloneRun({ file: f, exitCode: 0, tap, topLevel: at, timedOut: true })).toBe(false);
+    expect(needsStandaloneRun({ file: f, exitCode: 0, tap: TAP_GREEN, topLevel: at })).toBe(false);
+  });
+
+  it("keeps a red lone result with a location as a run test, which the package's red then reports", () => {
+    const f = "test/x.test.mjs";
+    const red = "TAP version 13\nnot ok 1 - a\n1..1\n# tests 1\n# suites 0\n# pass 0\n# fail 1\n";
+    expect(parseNodeTap(red, f, [{ name: f, line: 2, column: 1 }]).fileOnly).toBe(false);
+    expect(foldNodeRuns([{ file: f, exitCode: 1, tap: red, topLevel: [{ name: f, line: 2, column: 1 }] }])).toMatchObject({ ok: false });
+    expect(parseNodeTap(red, f, [{ name: f, line: 1, column: 1 }]).fileOnly).toBe(true);
+    const cancelled = "TAP version 13\nnot ok 1 - a\n1..1\n# tests 1\n# suites 0\n# pass 0\n# fail 0\n# cancelled 1\n";
+    expect(parseNodeTap(cancelled, f, [{ name: f, line: 2, column: 1 }]).fileOnly).toBe(false);
+    expect(parseNodeTap(cancelled, f, [{ name: f, line: 1, column: 1 }]).fileOnly).toBe(true);
+  });
+
+  it("takes a location as the filter only when line and column are positive integers other than 1:1", () => {
+    const f = "test/empty.test.mjs";
+    const tap = tapFileOnly(f);
+    for (const r of [
+      { name: f, line: null, column: null },
+      { name: f },
+      { name: f, line: 0, column: 4 },
+      { name: f, line: 2, column: 0 },
+      { name: f, line: -2, column: 1 },
+      { name: f, line: 2.5, column: 1 },
+      { name: f, line: "2", column: "1" },
+      { name: f, line: 1, column: 1 },
+    ]) {
+      expect(parseNodeTap(tap, f, [r], PLAIN_TAP).fileOnly, JSON.stringify(r)).toBe(true);
+    }
+    expect(parseNodeTap(tap, f, [{ name: f, line: 1, column: 2 }], PLAIN_TAP).fileOnly).toBe(false);
+    expect(parseNodeTap(tap, f, [{ name: f, line: 3, column: 1 }], PLAIN_TAP).fileOnly).toBe(false);
+  });
+
+  it("does not read a test name from TAP, so a path with a SKIP or TODO directive in it stays file-only", () => {
+    const f = "test/empty # SKIP.test.mjs";
+    expect(parseNodeTap(tapFileOnly(f), f).fileOnly).toBe(true);
+    expect(parseNodeTap(tapFileOnly(f), f, [{ name: f, line: 1, column: 1 }]).fileOnly).toBe(true);
+    expect(parseNodeTap(tapFileOnly("test/empty \\# SKIP.test.mjs"), f).fileOnly).toBe(true);
+    expect(parseNodeTap(tapFileOnly("test/empty # TODO.test.mjs"), "test/empty # TODO.test.mjs").fileOnly).toBe(true);
+  });
+
+  it("reads only TOP-LEVEL summary lines and names failing tests, not TODO ones", () => {
+    const t = parseNodeTap(TAP_RED);
+    expect(t.tests).toBe(3);
+    expect(t.fail).toBe(1);
+    expect(t.todo).toBe(1);
+    expect(t.failedNames).toEqual(["inner", "outer"]);
+  });
+
+  it("does not name a skipped `not ok` line as a failure", () => {
+    const tap = ["TAP version 13", "not ok 1 - flaky # SKIP not today", "not ok 2 - real", "1..2", "# tests 2", "# fail 1", "# skipped 1"].join("\n");
+    expect(parseNodeTap(tap).failedNames).toEqual(["real"]);
+  });
+
+  it("returns summary:false when no top-level `# tests` line was printed (fail-closed)", () => {
+    expect(parseNodeTap("TAP version 13\n    # tests 4\n").summary).toBe(false);
+    expect(parseNodeTap("").summary).toBe(false);
+    expect(parseNodeTap(undefined).summary).toBe(false);
+  });
+});
+
+describe("foldNodeRuns — per-file node:test runs as one suite result", () => {
+  it("a green run of every file is ok, complete and reported", () => {
+    const r = nodeGreen(["test/a.test.mjs", "test/b.test.mjs"]);
+    expect(r).toMatchObject({ ok: true, exitCode: 0, reportOk: true, numTotalTests: 6, numFailedTests: 0 });
+    expect(r.executedFiles).toEqual(["test/a.test.mjs", "test/b.test.mjs"]);
+  });
+
+  it("a failing file makes the suite red and names its failures by file", () => {
+    const r = foldNodeRuns([
+      { file: "test/a.test.mjs", exitCode: 0, tap: TAP_GREEN },
+      { file: "test/b.test.mjs", exitCode: 1, tap: TAP_RED },
+    ]);
+    expect(r.ok).toBe(false);
+    expect(r.exitCode).toBe(1);
+    expect(r.numFailedTests).toBe(1);
+    expect(r.failedTestNames).toEqual(["test/b.test.mjs › inner", "test/b.test.mjs › outer"]);
+  });
+
+  it("a file that registers no test is NOT executed", () => {
+    const r = foldNodeRuns([
+      { file: "test/a.test.mjs", exitCode: 0, tap: TAP_GREEN },
+      { file: "test/empty.test.mjs", exitCode: 0, tap: TAP_EMPTY },
+    ]);
+    expect(r.ok).toBe(true);
+    expect(r.executedFiles).toEqual(["test/a.test.mjs"]);
+  });
+
+  it("a file node reports as its own one test is NOT executed, and that pseudo-test is not counted", () => {
+    const r = foldNodeRuns([
+      { file: "test/a.test.mjs", exitCode: 0, tap: TAP_GREEN },
+      { file: "test/empty.test.mjs", exitCode: 0, tap: tapFileOnly("test/empty.test.mjs") },
+    ]);
+    expect(r.ok).toBe(true);
+    expect(r.executedFiles).toEqual(["test/a.test.mjs"]);
+    expect(r.numTotalTests).toBe(3);
+  });
+
+  it("a run without a summary loses the report and is not ok, even at exit 0", () => {
+    const r = foldNodeRuns([{ file: "test/a.test.mjs", exitCode: 0, tap: "garbage" }]);
+    expect(r).toMatchObject({ ok: false, reportOk: false, executedFiles: [] });
+  });
+
+  it("no files at all is never ok", () => {
+    expect(foldNodeRuns([])).toMatchObject({ ok: false, reportOk: false });
+  });
+
+  it("a non-zero exit is not ok even when the TAP summary reads green", () => {
+    const r = foldNodeRuns([{ file: "test/a.test.mjs", exitCode: 1, tap: TAP_GREEN }]);
+    expect(r).toMatchObject({ ok: false, exitCode: 1, reportOk: true, numFailedTests: 0 });
+    expect(r.executedFiles).toEqual(["test/a.test.mjs"]);
+  });
+
+  it("a cancelled test is not ok and counts as failed, even at exit 0", () => {
+    const tap = TAP_GREEN.replace("# pass 3", "# pass 2").replace("# cancelled 0", "# cancelled 1");
+    const r = foldNodeRuns([{ file: "test/a.test.mjs", exitCode: 0, tap }]);
+    expect(r).toMatchObject({ ok: false, exitCode: 0, reportOk: true, numFailedTests: 1 });
+  });
+
+  it("counts skipped and todo tests as pending, across files", () => {
+    const tap = TAP_GREEN.replace("# skipped 0", "# skipped 1").replace("# todo 0", "# todo 2");
+    const r = foldNodeRuns([
+      { file: "test/a.test.mjs", exitCode: 0, tap },
+      { file: "test/b.test.mjs", exitCode: 0, tap: TAP_GREEN.replace("# todo 0", "# todo 1") },
+    ]);
+    expect(r).toMatchObject({ ok: true, numPendingTests: 4 });
+  });
+
+  it("a run killed at the file bound loses the report and runs no file, even after a green summary", () => {
+    const r = foldNodeRuns([
+      { file: "test/a.test.mjs", exitCode: 0, tap: TAP_GREEN },
+      { file: "test/b.test.mjs", exitCode: -1, tap: TAP_GREEN, timedOut: true },
+    ]);
+    expect(r).toMatchObject({ ok: false, reportOk: false, exitCode: -1, timedOutFiles: ["test/b.test.mjs"] });
+    expect(r.executedFiles).toEqual(["test/a.test.mjs"]);
+  });
+
+  it("a file not started before the gate's node:test deadline loses the report, is named, and is not executed", () => {
+    const res = foldNodeRuns([
+      { file: "test/a.test.mjs", exitCode: 0, tap: TAP_GREEN },
+      { file: "test/b.test.mjs", exitCode: -1, tap: "", notStarted: true },
+    ]);
+    expect(res).toMatchObject({ ok: false, reportOk: false, timedOutFiles: [], notStartedFiles: ["test/b.test.mjs"], executedFiles: ["test/a.test.mjs"] });
+    const packages = [pkg({ slug: "gated", testFiles: ["x.test.ts"] }), brandVoice({ testFiles: ["test/a.test.mjs", "test/b.test.mjs"] })];
+    const results = resultsFor([
+      ["gated", green(["x.test.ts"])],
+      ["brand-voice-artifact", res],
+    ]);
+    const f = judge({ packages, results, carveOuts: [] }).findings;
+    expect(f.map((x) => x.kind)).toEqual(["no-report"]);
+    expect(f[0].message).toContain("was not started before the gate's node:test deadline for test/b.test.mjs");
+    expect(renderManifest({ packages, results, carveOuts: [] })).toMatch(
+      /brand-voice-artifact .* node:test here — TIMED OUT \(0 file\(s\) killed, 1 not started before the deadline\)$/m,
+    );
+  });
+
+  it("a package with a killed file and files not started names both kinds in one finding and one manifest row", () => {
+    const res = foldNodeRuns([
+      { file: "test/a.test.mjs", exitCode: -1, tap: "", timedOut: true },
+      { file: "test/b.test.mjs", exitCode: -1, tap: "", notStarted: true },
+      { file: "test/c.test.mjs", exitCode: -1, tap: "", notStarted: true },
+    ]);
+    expect(res).toMatchObject({ ok: false, reportOk: false, timedOutFiles: ["test/a.test.mjs"], notStartedFiles: ["test/b.test.mjs", "test/c.test.mjs"], executedFiles: [] });
+    const packages = [pkg({ slug: "gated", testFiles: ["x.test.ts"] }), brandVoice({ testFiles: ["test/a.test.mjs", "test/b.test.mjs", "test/c.test.mjs"] })];
+    const results = resultsFor([
+      ["gated", green(["x.test.ts"])],
+      ["brand-voice-artifact", res],
+    ]);
+    const f = judge({ packages, results, carveOuts: [] }).findings;
+    expect(f.map((x) => x.kind)).toEqual(["no-report"]);
+    expect(f[0].message).toContain(
+      "`node --test` was still running at its bound and was killed for test/a.test.mjs; it was not started before the gate's node:test deadline for test/b.test.mjs, test/c.test.mjs — the run did not finish",
+    );
+    expect(renderManifest({ packages, results, carveOuts: [] })).toMatch(
+      /brand-voice-artifact .* node:test here — TIMED OUT \(1 file\(s\) killed, 2 not started before the deadline\)$/m,
+    );
+  });
+
+  it("judges the plain run's ending: not started or killed loses the report and is named, not able to start loses it, a non-zero exit is red", () => {
+    const f = "test/a.test.mjs";
+    const lone = { file: f, exitCode: 0, tap: tapFileOnly(f), topLevel: [{ name: f, line: 2, column: 1 }] };
+    // a vitest suite beside it, so the gate does not stop at "no-suites" before it reads the node:test package
+    const packages = [pkg({ slug: "gated", testFiles: ["x.test.ts"] }), brandVoice({ testFiles: [f] })];
+    const judged = (res) => {
+      const results = resultsFor([
+        ["gated", green(["x.test.ts"])],
+        ["brand-voice-artifact", res],
+      ]);
+      return { f: judge({ packages, results, carveOuts: [] }).findings, row: renderManifest({ packages, results, carveOuts: [] }) };
+    };
+    const notStarted = foldNodeRuns([{ ...lone, standalone: { notStarted: true } }]);
+    expect(notStarted).toMatchObject({ ok: false, reportOk: false, notStartedFiles: [`${f} (plain run)`], executedFiles: [] });
+    let j = judged(notStarted);
+    expect(j.f.map((x) => x.kind)).toEqual(["no-report"]);
+    expect(j.f[0].message).toContain(`the plain \`node\` run of a lone test was not started before the gate's node:test deadline for ${f} —`);
+    expect(j.f[0].message).not.toContain("`node --test`");
+    expect(j.row).toMatch(/node:test here — TIMED OUT \(0 file\(s\) killed, 1 not started before the deadline\)$/m);
+    const killed = foldNodeRuns([{ ...lone, standalone: { exitCode: -1, timedOut: true, startFailed: false } }]);
+    expect(killed).toMatchObject({ ok: false, reportOk: false, timedOutFiles: [`${f} (plain run)`], executedFiles: [] });
+    j = judged(killed);
+    expect(j.f.map((x) => x.kind)).toEqual(["no-report"]);
+    expect(j.f[0].message).toContain(`the plain \`node\` run of a lone test was still running at its bound and was killed for ${f} —`);
+    expect(j.f[0].message).not.toContain("`node --test`");
+    expect(j.row).toMatch(/node:test here — TIMED OUT \(1 file\(s\) killed\)$/m);
+    const noStart = foldNodeRuns([{ ...lone, standalone: { exitCode: -1, timedOut: false, startFailed: true } }]);
+    expect(noStart).toMatchObject({ ok: false, reportOk: false, plainNotRunFiles: [f], timedOutFiles: [], notStartedFiles: [] });
+    j = judged(noStart);
+    expect(j.f.map((x) => x.kind)).toEqual(["no-report"]);
+    expect(j.f[0].message).toContain(`the plain \`node\` run of a lone test could not start for ${f} —`);
+    expect(j.f[0].message).not.toContain("`node --test`");
+    expect(j.row).toMatch(/node:test here — NO REPORT \(exit -1\)$/m);
+    const red = foldNodeRuns([{ ...lone, standalone: { exitCode: 3, timedOut: false, startFailed: false } }]);
+    expect(red).toMatchObject({ ok: false, reportOk: true, exitCode: 3, executedFiles: [] });
+    j = judged(red);
+    expect(j.f.map((x) => x.kind)).toEqual(["suite-red"]);
+    expect(j.f[0].message).toContain("node:test suite FAILED (exit 3");
+    expect(j.row).toMatch(/node:test here — RED \(exit 3\)$/m);
+    // a killed `node --test` run and a plain run not started, in one package: each is named with its own command
+    const g = "test/b.test.mjs";
+    const mixed = foldNodeRuns([
+      { file: g, exitCode: -1, tap: "", timedOut: true },
+      { ...lone, standalone: { notStarted: true } },
+    ]);
+    j = judged(mixed);
+    expect(j.f[0].message).toContain(
+      `\`node --test\` was still running at its bound and was killed for ${g}; the plain \`node\` run of a lone test was not started before the gate's node:test deadline for ${f} —`,
+    );
+    // a plain run ended by a signal (exit null) is red as exit -1
+    expect(foldNodeRuns([{ ...lone, standalone: { exitCode: null, timedOut: false, startFailed: false } }])).toMatchObject({ ok: false, reportOk: true, exitCode: -1 });
+    // a plain run that exited 0 adds no finding of its own: its TAP decides file-only
+    expect(foldNodeRuns([{ ...lone, standalone: { exitCode: 0, timedOut: false, startFailed: false }, standaloneTap: PLAIN_TAP }])).toMatchObject({
+      ok: true,
+      reportOk: true,
+      executedFiles: [f],
+    });
+  });
+
+  it("a run killed by a signal (exit code null) is not ok and reads as exit -1", () => {
+    const r = foldNodeRuns([{ file: "test/a.test.mjs", exitCode: null, tap: TAP_GREEN }]);
+    expect(r).toMatchObject({ ok: false, exitCode: -1 });
+  });
+});
+
+describe("runNodeTestFile — a child that cannot start", () => {
+  it("resolves as exit -1 with no TAP, which folds into a lost report", async () => {
+    const run = await runNodeTestFile({ cwd: "/nonexistent-extension-suite-gate-dir", file: "test/a.test.mjs" });
+    expect(run).toMatchObject({ file: "test/a.test.mjs", exitCode: -1, tap: "", startFailed: true });
+    expect(foldNodeRuns([run])).toMatchObject({ ok: false, reportOk: false, exitCode: -1 });
+    expect(fs.existsSync(run.recDir)).toBe(false);
+  });
+
+  it("resolves the same way when the spawn throws at once, and removes the record folder", async () => {
+    const run = await runNodeTestFile({ cwd: os.tmpdir(), file: "test/a\0b.test.mjs" });
+    expect(run).toMatchObject({ exitCode: -1, tap: "", startFailed: true });
+    expect(run.recDir).toMatch(/ext-suite-node-/);
+    expect(fs.existsSync(run.recDir)).toBe(false);
+    expect(foldNodeRuns([run])).toMatchObject({ ok: false, reportOk: false });
+  });
+});
+
+// Small node:test files for the runner cases, written to one temporary folder.
+const NODE_FIXTURES = {
+  "t/two.test.mjs": `import { test } from "node:test";\ntest("one", () => {});\ntest("two", () => {});\n`,
+  "t/empty.test.mjs": `import "node:test";\n`,
+  "t/same.test.mjs": `import { test } from "node:test";\ntest("t/same.test.mjs", () => {});\n`,
+  "t/print.test.mjs": `console.log("ok 1 - fake");\nconsole.log("# tests 1");\n`,
+  "t/plainspin.test.mjs": `import { test } from "node:test";\ntest("t/plainspin.test.mjs", () => {});\nif (!process.env.NODE_TEST_CONTEXT) {\n  const end = Date.now() + 20000;\n  while (Date.now() < end) {}\n}\n`,
+  "t/plainred.test.mjs": `import { test } from "node:test";\ntest("t/plainred.test.mjs", () => {});\nprocess.on("exit", () => {\n  if (!process.env.NODE_TEST_CONTEXT) process.exitCode = 3;\n});\n`,
+  "t/loaderr.test.mjs": `import { test } from "node:test";\ntest("never", () => {});\nthrow new Error("boom at load");\n`,
+  "t/hang.test.mjs": `import { test } from "node:test";\ntest("hang", async () => { setInterval(() => {}, 1000); await new Promise(() => {}); });\n`,
+  "t/spin.test.mjs": `import { test } from "node:test";\ntest("spin", () => { for (;;) {} });\n`,
+  "t/loud.test.mjs": `import { test } from "node:test";\nprocess.stdout.write("x".repeat(450000) + "\\n");\ntest("after the noise", () => {});\n`,
+  "t/empty # SKIP.test.mjs": `import "node:test";\n`,
+  // a test that starts a second process in its group, which holds the output pipe, and then spins
+  "t/spawner.test.mjs": `import { test } from "node:test";\nimport { spawn } from "node:child_process";\ntest("spawn and spin", () => {\n  spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "inherit" });\n  for (;;) {}\n});\n`,
+};
+const nodeDir = fs.mkdtempSync(path.join(os.tmpdir(), "esg-node-"));
+for (const [file, src] of Object.entries(NODE_FIXTURES)) {
+  fs.mkdirSync(path.dirname(path.join(nodeDir, file)), { recursive: true });
+  fs.writeFileSync(path.join(nodeDir, file), src);
+}
+afterAll(() => fs.rmSync(nodeDir, { recursive: true, force: true }));
+const runFixture = (file, bounds = {}) => runNodeTestFile({ cwd: nodeDir, file, testTimeoutMs: 2000, fileTimeoutMs: 20_000, ...bounds });
+// Waits until no process of the group is left (kill -0 of the group fails with
+// ESRCH), polling every 50 ms up to `ms`; true when the group is gone.
+const groupGone = async (pgid, ms = 10_000) => {
+  const end = Date.now() + ms;
+  for (;;) {
+    try {
+      process.kill(-pgid, 0);
+    } catch (e) {
+      if (e.code === "ESRCH") return true;
+      throw e;
+    }
+    if (Date.now() > end) return false;
+    await new Promise((r) => setTimeout(r, 50));
+  }
+};
+
+describe("nodeTopLevelReporter and readTopLevel — one record per top-level test", () => {
+  it("writes the name and location of each top-level pass or fail, and nothing else", async () => {
+    async function* events() {
+      yield { type: "test:start", data: { nesting: 0, name: "a", line: 2, column: 1 } };
+      yield { type: "test:pass", data: { nesting: 1, name: "inner", line: 3, column: 3 } };
+      yield { type: "test:pass", data: { nesting: 0, name: "a", line: 2, column: 1 } };
+      yield { type: "test:fail", data: { nesting: 0, name: "b", line: 5, column: 1 } };
+      yield { type: "test:stdout", data: { nesting: 0, message: '{"name":"spoof","line":9,"column":9}' } };
+    }
+    const lines = [];
+    for await (const l of nodeTopLevelReporter(events())) lines.push(l);
+    expect(lines).toEqual(['{"name":"a","line":2,"column":1}\n', '{"name":"b","line":5,"column":1}\n']);
+    expect(readTopLevel(lines.join(""))).toEqual([
+      { name: "a", line: 2, column: 1 },
+      { name: "b", line: 5, column: 1 },
+    ]);
+  });
+
+  it("writes a null location when node gives none, which proves no test", async () => {
+    const f = "test/empty.test.mjs";
+    async function* events() {
+      yield { type: "test:pass", data: { nesting: 0, name: f } };
+    }
+    const lines = [];
+    for await (const l of nodeTopLevelReporter(events())) lines.push(l);
+    expect(lines).toEqual([`{"name":"${f}","line":null,"column":null}\n`]);
+    const recs = readTopLevel(lines.join(""));
+    expect(recs).toEqual([{ name: f, line: null, column: null }]);
+    expect(parseNodeTap(tapFileOnly(f), f, recs).fileOnly).toBe(true);
+  });
+
+  it("reads nothing from a missing file or a line that is not a record", () => {
+    expect(readTopLevel(undefined)).toEqual([]);
+    expect(readTopLevel('not json\n{"line":1}\n')).toEqual([]);
+  });
+});
+
+// The identity of a process from /proc/<pid>: its working directory, its process group (field 5 of stat) and its start
+// time (field 22, in clock ticks since boot), read after the command name, which can hold spaces and parentheses.
+// Null when any of them cannot be read.
+const procIdentity = (procDir, pid) => {
+  try {
+    const cwd = fs.readlinkSync(path.join(procDir, String(pid), "cwd"));
+    const stat = fs.readFileSync(path.join(procDir, String(pid), "stat"), "utf8");
+    const f = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    const pgid = Number(f[2]);
+    const start = f[19];
+    if (!Number.isInteger(pgid) || !/^[0-9]+$/.test(start ?? "")) return null;
+    return { cwd, pgid, start };
+  } catch {
+    return null;
+  }
+};
+
+// The cleanup of a main case that did not reach its end, in two steps. procScan lists the processes whose working
+// directory is the case's temporary folder `root` or a folder in it (a name no other process has), above pid 1 and other
+// than this one, each with its identity. killScanned then, for each, reads the identity again just before its first
+// signal and signals only a process whose working directory, process group and start time are unchanged, so a pid that
+// ended and was given to another process after the scan is not signalled. It signals the process group only when the
+// process leads it (the gate starts each node:test child in a group of its own, led by the child) and the group is
+// neither 1 nor this process's own, nor this process's own group unread; otherwise the process alone. So a process
+// whose group leader has already ended is signalled alone, and a member of that group whose working directory is out
+// of `root` is not reached. No pattern is matched, and a pid file is not read. A process that changed its working
+// directory out of `root` is not found. Between the last read and a signal a pid can still change hands (no pidfd in
+// node): a window of one system call before the first signal; a leader's own signal follows its group signal unread.
+// Without /proc (not Linux) nothing is signalled. killScanned (and killInRoot) return the signals sent.
+const procScan = (root, { procDir = "/proc", ownPid = process.pid } = {}) => {
+  let names;
+  let real;
+  try {
+    names = fs.readdirSync(procDir);
+    real = fs.realpathSync(root);
+  } catch {
+    return [];
+  }
+  const out = [];
+  const pids = names.filter((n) => /^[0-9]+$/.test(n)).map(Number).filter((pid) => pid > 1 && pid !== ownPid).sort((a, b) => a - b);
+  for (const pid of pids) {
+    const id = procIdentity(procDir, pid);
+    if (id && (id.cwd === real || id.cwd.startsWith(`${real}/`))) out.push({ pid, ...id });
+  }
+  return out;
+};
+const killScanned = (scanned, { procDir = "/proc", kill = (pid, sig) => process.kill(pid, sig), ownPgid } = {}) => {
+  const own = ownPgid ?? procIdentity(procDir, "self")?.pgid ?? null;
+  const done = [];
+  for (const e of scanned) {
+    const now = procIdentity(procDir, e.pid);
+    if (!now || now.cwd !== e.cwd || now.pgid !== e.pgid || now.start !== e.start) continue;
+    const g = e.pgid;
+    for (const target of g === e.pid && g > 1 && own !== null && g !== own ? [-g, e.pid] : [e.pid]) {
+      try {
+        kill(target, "SIGKILL");
+        done.push(target);
+      } catch {
+        // already gone
+      }
+    }
+  }
+  return done;
+};
+const killInRoot = (root, opts = {}) => killScanned(procScan(root, opts), opts);
+
+describe("killInRoot — the cleanup of the main cases", () => {
+  // a stat line with the fields killInRoot reads: pgrp (field 5) and starttime (field 22)
+  const statLine = (pid, comm, pgrp, start) => `${pid} (${comm}) S 1 ${pgrp} ${pgrp} ${"0 ".repeat(14)}1 ${start} 0 0`;
+
+  it("signals only processes whose working directory is in the case's folder, and a group only when the process leads it", () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "ext-suite-proc-"));
+    try {
+      const root = path.join(base, "root");
+      fs.mkdirSync(path.join(root, "pack"), { recursive: true });
+      fs.mkdirSync(path.join(base, "rootx"));
+      const proc = path.join(base, "proc");
+      const fake = (pid, cwd, stat) => {
+        fs.mkdirSync(path.join(proc, String(pid)), { recursive: true });
+        if (cwd) fs.symlinkSync(cwd, path.join(proc, String(pid), "cwd"));
+        if (stat) fs.writeFileSync(path.join(proc, String(pid), "stat"), stat);
+      };
+      const real = fs.realpathSync(root);
+      fake(1, real, statLine(1, "init", 1, 5));
+      fake(100, path.join(real, "pack"), statLine(100, "node", 100, 500)); // leads its own group: group and process
+      fake(101, fs.realpathSync(path.join(base, "rootx")), statLine(101, "node", 101, 501)); // a sibling folder
+      fake(102, real, statLine(102, "a b) c", 7777, 502)); // in the runner's own group: the process only
+      fake(103, null, statLine(103, "gone", 103, 503)); // no working directory
+      fake(104, "/", statLine(104, "other", 104, 504)); // elsewhere
+      fake(105, real, statLine(105, "node", 1, 505)); // in group 1: the process only
+      fake(106, real, null); // no stat: not signalled
+      fake(107, real, statLine(107, "node", 4242, 507)); // in a group it does not lead: the process only
+      fake(108, real, "108 (short) S 1 108 108"); // a stat without a start time: not signalled
+      fake(109, real, statLine(109, "n) x", 109, 509)); // a name with ")" that leads its own group: group and process
+      fake(200, real, statLine(200, "vitest", 200, 600)); // this process
+      fake(7777, real, statLine(7777, "sh", 7777, 700)); // leads the runner's own group: the process only
+      fs.mkdirSync(path.join(proc, "self"));
+      const calls = [];
+      const kill = (pid, sig) => calls.push([pid, sig]);
+      expect(killInRoot(root, { procDir: proc, kill, ownPid: 200, ownPgid: 7777 })).toEqual([-100, 100, 102, 105, 107, -109, 109, 7777]);
+      expect(calls).toEqual([
+        [-100, "SIGKILL"],
+        [100, "SIGKILL"],
+        [102, "SIGKILL"],
+        [105, "SIGKILL"],
+        [107, "SIGKILL"],
+        [-109, "SIGKILL"],
+        [109, "SIGKILL"],
+        [7777, "SIGKILL"],
+      ]);
+      // this process's own group unread (self has no stat): no group is signalled, only the processes
+      const pidsOnly = [];
+      expect(killInRoot(root, { procDir: proc, kill: (pid) => pidsOnly.push(pid), ownPid: 200 })).toEqual([100, 102, 105, 107, 109, 7777]);
+      expect(pidsOnly).toEqual([100, 102, 105, 107, 109, 7777]);
+      // a signal that finds the process gone is not counted
+      const gone = () => {
+        throw Object.assign(new Error("kill ESRCH"), { code: "ESRCH" });
+      };
+      expect(killInRoot(root, { procDir: proc, kill: gone, ownPid: 200, ownPgid: 7777 })).toEqual([]);
+      // no /proc, or no such folder: nothing is signalled
+      expect(killInRoot(root, { procDir: path.join(base, "none"), kill })).toEqual([]);
+      expect(killInRoot(path.join(base, "none"), { procDir: proc, kill })).toEqual([]);
+      expect(calls).toHaveLength(8);
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("does not signal a pid that changed hands after the scan: another start time, group or working directory", () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "ext-suite-proc-"));
+    try {
+      const root = path.join(base, "root");
+      fs.mkdirSync(root);
+      const proc = path.join(base, "proc");
+      const real = fs.realpathSync(root);
+      const put = (pid, cwd, stat) => {
+        const d = path.join(proc, String(pid));
+        fs.rmSync(d, { recursive: true, force: true });
+        fs.mkdirSync(d, { recursive: true });
+        fs.symlinkSync(cwd, path.join(d, "cwd"));
+        fs.writeFileSync(path.join(d, "stat"), stat);
+      };
+      for (const pid of [300, 301, 302, 303]) put(pid, real, statLine(pid, "node", pid, 900 + pid));
+      const scanned = procScan(root, { procDir: proc, ownPid: 200 });
+      expect(scanned.map((e) => e.pid)).toEqual([300, 301, 302, 303]);
+      // after the scan: 300 ended and its pid went to a process with another start time; 301 to one in another group;
+      // 302 to one elsewhere; 303 ended and nothing has its pid; 304 is new
+      put(300, real, statLine(300, "other", 300, 9999));
+      put(301, real, statLine(301, "other", 5555, 1201));
+      put(302, "/", statLine(302, "other", 302, 1202));
+      fs.rmSync(path.join(proc, "303"), { recursive: true, force: true });
+      put(304, real, statLine(304, "node", 304, 1204));
+      const calls = [];
+      expect(killScanned(scanned, { procDir: proc, kill: (pid) => calls.push(pid), ownPgid: 7777 })).toEqual([]);
+      expect(calls).toEqual([]);
+      // unchanged, the same scan is signalled, the group with its leader
+      for (const pid of [300, 301, 302, 303]) put(pid, real, statLine(pid, "node", pid, 900 + pid));
+      expect(killScanned(scanned, { procDir: proc, kill: (pid) => calls.push(pid), ownPgid: 7777 })).toEqual([-300, 300, -301, 301, -302, 302, -303, 303]);
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("main — the gate process over a fixture repository", () => {
+  const mainFixture = () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "ext-suite-main-"));
+    const dir = path.join(root, "extensions", "cinatra-ai", "pack");
+    fs.mkdirSync(path.join(dir, ".github", "workflows"), { recursive: true });
+    fs.mkdirSync(path.join(dir, "test"));
+    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "@cinatra-ai/pack", version: "0.0.0", peerDependencies: { "@cinatra-ai/host": "*" } }));
+    fs.writeFileSync(path.join(dir, ".github", "workflows", "ci.yml"), SKIP_CI);
+    // The spin ends by itself after 60 s and writes its pid, which the signal case waits for.
+    fs.writeFileSync(
+      path.join(dir, "test", "spin.test.mjs"),
+      `import fs from "node:fs";\nimport { test } from "node:test";\nfs.writeFileSync(new URL("../spin.pid", import.meta.url), String(process.pid));\ntest("spin", () => {\n  const end = Date.now() + 60000;\n  while (Date.now() < end) {}\n});\n`,
+    );
+    return root;
+  };
+  const spinPid = (root) => path.join(root, "extensions", "cinatra-ai", "pack", "spin.pid");
+  // On a pass the gate has killed the node:test group itself. A case that does not reach its end kills the
+  // gate, and the processes of the case's folder and the group of each one that leads its own (killInRoot).
+  const startGate = (root, env = {}) => {
+    const script = fileURLToPath(new URL("../extension-suite-gate.mjs", import.meta.url));
+    const gate = spawn(process.execPath, [script], { cwd: root, env: { ...process.env, EXTENSION_SUITE_JOBS: "1", ...env }, stdio: ["ignore", "pipe", "pipe"] });
+    const seen = { out: "" };
+    gate.stdout.on("data", (d) => (seen.out += d));
+    gate.stderr.on("data", (d) => (seen.out += d));
+    return { gate, seen, exited: new Promise((r) => gate.on("exit", (code, sig) => r({ code, sig }))) };
+  };
+
+  it("passes the node:test deadline: the spinning file is ended by it and the manifest is printed", async () => {
+    const root = mainFixture();
+    const { gate, seen, exited } = startGate(root, { EXTENSION_SUITE_NODE_DEADLINE_MS: "4000" });
+    let done = false;
+    try {
+      const within = await Promise.race([exited, new Promise((r) => setTimeout(() => r("still running after 25 s"), 25_000))]);
+      expect(within, seen.out).toEqual({ code: 1, sig: null });
+      // The file is killed at the deadline, or, on a host so loaded that the gate reaches the node:test phase after
+      // it, not started: either way the deadline ended the phase, which without it would run the spin for 60 s.
+      expect(seen.out).toMatch(/TIMED OUT \((1 file\(s\) killed|0 file\(s\) killed, 1 not started before the deadline)\)/);
+      done = true;
+    } finally {
+      gate.kill("SIGKILL");
+      if (!done) killInRoot(root);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 40_000);
+
+  it("installs the signal cleanup: a SIGTERM during the node:test phase exits 143", async () => {
+    const root = mainFixture();
+    const { gate, seen, exited } = startGate(root);
+    let done = false;
+    try {
+      const t0 = Date.now();
+      // the signal comes once the spinning file runs (its pid file is written)
+      while (!fs.existsSync(spinPid(root)) && Date.now() - t0 < 20_000) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(fs.existsSync(spinPid(root)), seen.out).toBe(true);
+      gate.kill("SIGTERM");
+      const within = await Promise.race([exited, new Promise((r) => setTimeout(() => r("still running after 8 s"), 8000))]);
+      expect(within, seen.out).toEqual({ code: 143, sig: null });
+      done = true;
+    } finally {
+      gate.kill("SIGKILL");
+      if (!done) killInRoot(root);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 40_000);
+});
+
+describe("runNodeTestFile — the real node runner, with short bounds", () => {
+  it("bounds each test, ends the file with its tests, and writes the top-level records to their own file", () => {
+    const args = nodeTestArgs("t/a.test.mjs", "/tmp/rec.jsonl", 1234);
+    expect(args).toEqual([
+      "--test",
+      "--test-reporter=tap",
+      "--test-reporter-destination=stdout",
+      expect.stringMatching(/^--test-reporter=file:\/\/.*\/scripts\/ci\/extension-suite-gate\.mjs$/),
+      "--test-reporter-destination=/tmp/rec.jsonl",
+      "--test-timeout=1234",
+      "--test-force-exit",
+      "t/a.test.mjs",
+    ]);
+    expect(nodeTestArgs("t/a.test.mjs", "/tmp/rec.jsonl")).toContain(`--test-timeout=${NODE_TEST_TIMEOUT_MS}`);
+    expect(NODE_TEST_TIMEOUT_MS).toBe(30_000);
+    expect(NODE_FILE_TIMEOUT_MS).toBe(300_000);
+    expect(NODE_GATE_DEADLINE_MS).toBe(20 * 60_000);
+    expect(NODE_KILL_GRACE_MS).toBe(10_000);
+  });
+
+  it("takes the node:test deadline from EXTENSION_SUITE_NODE_DEADLINE_MS only to shorten it", () => {
+    expect(nodeGateDeadlineMs({})).toBe(NODE_GATE_DEADLINE_MS);
+    expect(nodeGateDeadlineMs({ EXTENSION_SUITE_NODE_DEADLINE_MS: "20000" })).toBe(20_000);
+    for (const v of ["1200000", "99999999", "abc", "0", "-5", "1.5", ""]) {
+      expect(nodeGateDeadlineMs({ EXTENSION_SUITE_NODE_DEADLINE_MS: v }), v).toBe(NODE_GATE_DEADLINE_MS);
+    }
+  });
+
+  it("a green file exits 0 with its summary and folds as executed", async () => {
+    const run = await runFixture("t/two.test.mjs");
+    expect(run).toMatchObject({ file: "t/two.test.mjs", exitCode: 0 });
+    expect(run.timedOut).toBeUndefined();
+    expect(run.recDir).toMatch(/ext-suite-node-/);
+    expect(fs.existsSync(run.recDir)).toBe(false);
+    expect(listLiveNodeRuns()).toEqual([]);
+    expect(parseNodeTap(run.tap)).toMatchObject({ summary: true, tests: 2, pass: 2, fail: 0 });
+    expect(foldNodeRuns([run])).toMatchObject({ ok: true, reportOk: true, executedFiles: ["t/two.test.mjs"], numTotalTests: 2 });
+  });
+
+  it("a file that registers no test runs none, and a real test named by the file's path is a test", async () => {
+    const empty = await runFixture("t/empty.test.mjs");
+    const same = await runFixture("t/same.test.mjs");
+    expect(needsStandaloneRun(empty)).toBe(false);
+    expect(needsStandaloneRun(same)).toBe(true);
+    const plainEmpty = await runFixture("t/empty.test.mjs", { standalone: true });
+    const plainSame = await runFixture("t/same.test.mjs", { standalone: true });
+    const plainPrint = await runFixture("t/print.test.mjs", { standalone: true });
+    expect(plainEmpty).toMatchObject({ exitCode: 0 });
+    expect(standaloneRanTest(plainEmpty.records)).toBe(false);
+    expect(plainSame).toMatchObject({ exitCode: 0 });
+    expect(standaloneRanTest(plainSame.records)).toBe(true);
+    // a file that prints TAP and registers no test: the plain run's TAP has its own file
+    expect(plainPrint.tap).toContain("# tests 1");
+    expect(standaloneRanTest(plainPrint.records)).toBe(false);
+    expect(empty.topLevel).toEqual([{ name: "t/empty.test.mjs", line: 1, column: 1 }]);
+    expect(same.topLevel).toEqual([{ name: "t/same.test.mjs", line: 2, column: 1 }]);
+    expect(parseNodeTap(empty.tap, empty.file, empty.topLevel)).toMatchObject({ summary: true, tests: 1, fileOnly: true });
+    expect(parseNodeTap(same.tap, same.file, same.topLevel)).toMatchObject({ summary: true, tests: 1, pass: 1, fileOnly: true });
+    expect(parseNodeTap(same.tap, same.file, same.topLevel, plainSame.records)).toMatchObject({ summary: true, tests: 1, pass: 1, fileOnly: false });
+    const r = await runNodeTest({ repoRoot: nodeDir, pkg: { id: "fixture:lone", dir: ".", testFiles: ["t/empty.test.mjs", "t/same.test.mjs"] }, testTimeoutMs: 2000, fileTimeoutMs: 20_000 });
+    expect(r).toMatchObject({ ok: true, executedFiles: ["t/same.test.mjs"], numTotalTests: 1 });
+  });
+
+  it("a plain run that exits red proves nothing and makes the suite red with its exit code", async () => {
+    const r = await runNodeTest({ repoRoot: nodeDir, pkg: { id: "fixture:lone", dir: ".", testFiles: ["t/plainred.test.mjs"] }, testTimeoutMs: 2000, fileTimeoutMs: 20_000 });
+    expect(r).toMatchObject({ ok: false, reportOk: true, exitCode: 3, executedFiles: [], numTotalTests: 0 });
+    expect(r.detail).toContain("plain run, exit 3");
+  });
+
+  // A stand-in for the first (`--test`) run of a lone test: at once, or once the clock has reached `holdUntil`
+  // (it holds the event loop until then), it writes a record at 2:1 to the reporter file named last in its
+  // arguments, prints the TAP of one passing result and closes with exit 0. It has no pid, so nothing is killed
+  // through it, and its timing does not depend on the load of the host.
+  const loneFirstRun = (file, args, holdUntil = 0) => {
+    const c = new EventEmitter();
+    c.stdout = new EventEmitter();
+    c.stderr = new EventEmitter();
+    c.kill = () => false;
+    const dest = args.filter((a) => a.startsWith("--test-reporter-destination=")).pop().slice("--test-reporter-destination=".length);
+    setImmediate(() => {
+      while (Date.now() <= holdUntil) {
+        // hold the event loop: no timer of the run fires before the close
+      }
+      fs.writeFileSync(dest, `${JSON.stringify({ name: file, line: 2, column: 1 })}\n`);
+      c.stdout.emit("data", tapFileOnly(file));
+      c.emit("close", 0);
+    });
+    return c;
+  };
+  const firstStandIn = (holdUntil) => (cmd, args, opts) => (args.includes("--test") ? loneFirstRun(args[args.length - 1], args, holdUntil) : spawn(cmd, args, opts));
+
+  it("a plain run killed at the file bound proves nothing, loses the report and is named as killed", async () => {
+    const r = await runNodeTest({ repoRoot: nodeDir, pkg: { id: "fixture:lone", dir: ".", testFiles: ["t/plainspin.test.mjs"] }, testTimeoutMs: 2000, fileTimeoutMs: 5000, killGraceMs: 2000, spawnChild: firstStandIn() });
+    expect(r).toMatchObject({ ok: false, reportOk: false, timedOutFiles: ["t/plainspin.test.mjs (plain run)"], executedFiles: [], numTotalTests: 0 });
+    expect(r.detail).toContain("(plain run, exit -1, killed)");
+    expect(r.detail).toMatch(/after 5000 ms and was killed/);
+    expect(listLiveNodeRuns()).toEqual([]);
+  }, 30_000);
+
+  it("a plain run killed at the gate's deadline proves nothing, loses the report and is named as killed", async () => {
+    const r = await runNodeTest({ repoRoot: nodeDir, pkg: { id: "fixture:lone", dir: ".", testFiles: ["t/plainspin.test.mjs"] }, testTimeoutMs: 2000, fileTimeoutMs: 60_000, killGraceMs: 2000, deadlineAt: Date.now() + 6000, spawnChild: firstStandIn() });
+    expect(r).toMatchObject({ ok: false, reportOk: false, timedOutFiles: ["t/plainspin.test.mjs (plain run)"], executedFiles: [], numTotalTests: 0 });
+    expect(r.detail).toContain("(plain run, exit -1, killed)");
+    expect(r.detail).toContain("at the gate's node:test deadline and was killed");
+    expect(listLiveNodeRuns()).toEqual([]);
+  }, 30_000);
+
+  it("does not start the plain run once the gate's deadline has passed, and names it as not started", async () => {
+    const calls = [];
+    const deadlineAt = Date.now() + 300;
+    const hold = firstStandIn(deadlineAt);
+    const spawnChild = (cmd, args, opts) => {
+      calls.push(args.includes("--test") ? "first" : "plain");
+      return hold(cmd, args, opts);
+    };
+    const r = await runNodeTest({ repoRoot: nodeDir, pkg: { id: "fixture:lone", dir: ".", testFiles: ["t/same.test.mjs"] }, testTimeoutMs: 2000, fileTimeoutMs: 20_000, deadlineAt, spawnChild });
+    expect(calls).toEqual(["first"]);
+    expect(r).toMatchObject({ ok: false, reportOk: false, notStartedFiles: ["t/same.test.mjs (plain run)"], timedOutFiles: [], executedFiles: [] });
+    expect(r.detail).toContain("(plain run, not started)");
+  });
+
+  it("hands its spawn to the first run as well as to the plain run", async () => {
+    const calls = [];
+    const spawnChild = (cmd, args, opts) => {
+      calls.push(args.includes("--test") ? "first" : "plain");
+      return spawn(cmd, args, opts);
+    };
+    const r = await runNodeTest({ repoRoot: nodeDir, pkg: { id: "fixture:lone", dir: ".", testFiles: ["t/same.test.mjs"] }, testTimeoutMs: 2000, fileTimeoutMs: 20_000, spawnChild });
+    expect(calls).toEqual(["first", "plain"]);
+    expect(r).toMatchObject({ ok: true, executedFiles: ["t/same.test.mjs"], numTotalTests: 1 });
+  }, 30_000);
+
+  it("a plain run that cannot start proves nothing and loses the report", async () => {
+    const spawnChild = (cmd, args, opts) => {
+      if (!args.includes("--test")) throw new Error("plain spawn refused");
+      return spawn(cmd, args, opts);
+    };
+    const r = await runNodeTest({ repoRoot: nodeDir, pkg: { id: "fixture:lone", dir: ".", testFiles: ["t/same.test.mjs"] }, testTimeoutMs: 2000, fileTimeoutMs: 20_000, spawnChild });
+    expect(r).toMatchObject({ ok: false, reportOk: false, plainNotRunFiles: ["t/same.test.mjs"], executedFiles: [], numTotalTests: 0 });
+    expect(r.detail).toContain("(plain run, exit -1)");
+  }, 30_000);
+
+  it("a file that registers no test and has a SKIP directive in its path runs none", async () => {
+    const run = await runFixture("t/empty # SKIP.test.mjs");
+    expect(run.exitCode).toBe(0);
+    expect(foldNodeRuns([run])).toMatchObject({ ok: true, executedFiles: [], numTotalTests: 0 });
+  });
+
+  it("a file that throws at load is not ok", async () => {
+    const run = await runFixture("t/loaderr.test.mjs");
+    expect(run.exitCode).not.toBe(0);
+    expect(foldNodeRuns([run]).ok).toBe(false);
+  });
+
+  it("a test that hangs is ended at the per-test timeout, named as failed, and its file still exits", async () => {
+    const run = await runFixture("t/hang.test.mjs", { testTimeoutMs: 300 });
+    expect(run.timedOut).toBeUndefined();
+    expect(run.exitCode).not.toBe(0);
+    const r = foldNodeRuns([run]);
+    expect(r).toMatchObject({ ok: false, reportOk: true });
+    expect(r.failedTestNames).toEqual(["t/hang.test.mjs › hang"]);
+  });
+
+  it("a file still running at the file bound is killed, and its run reads as a lost report", async () => {
+    const started = Date.now();
+    const run = await runFixture("t/spin.test.mjs", { fileTimeoutMs: 1500 });
+    expect(Date.now() - started).toBeLessThan(12_000);
+    expect(run).toMatchObject({ file: "t/spin.test.mjs", exitCode: -1, timedOut: true, kill: "group", closed: true });
+    expect(run.detail).toContain("was still running after 1500 ms and was killed (kill: group, closed)");
+    expect(await groupGone(run.pid)).toBe(true);
+    expect(fs.existsSync(run.recDir)).toBe(false);
+    const res = foldNodeRuns([run]);
+    expect(res).toMatchObject({ ok: false, reportOk: false, exitCode: -1, timedOutFiles: ["t/spin.test.mjs"], executedFiles: [] });
+    const packages = [pkg({ slug: "gated", testFiles: ["x.test.ts"] }), brandVoice({ testFiles: ["t/spin.test.mjs"] })];
+    const results = resultsFor([
+      ["gated", green(["x.test.ts"])],
+      ["brand-voice-artifact", res],
+    ]);
+    const f = judge({ packages, results, carveOuts: [] }).findings;
+    expect(f.map((x) => x.kind)).toEqual(["no-report"]);
+    expect(f[0].message).toContain("killed for t/spin.test.mjs");
+    expect(renderManifest({ packages, results, carveOuts: [] })).toMatch(/brand-voice-artifact .* node:test here — TIMED OUT \(1 file\(s\) killed\)$/m);
+  }, 20_000);
+
+  it("waits for the close of a killed file whose test started a second process, and the whole group is gone", async () => {
+    const run = await runFixture("t/spawner.test.mjs", { fileTimeoutMs: 1500 });
+    expect(run).toMatchObject({ exitCode: -1, timedOut: true, kill: "group", closed: true });
+    expect(await groupGone(run.pid)).toBe(true);
+    expect(fs.existsSync(run.recDir)).toBe(false);
+  }, 20_000);
+
+  // A stand-in child that never emits close: its pid is a real process in its own group, or no process at all.
+  const silentChild = (pid) => {
+    const c = new EventEmitter();
+    c.pid = pid;
+    c.stdout = new EventEmitter();
+    c.stderr = new EventEmitter();
+    c.kill = () => false;
+    return c;
+  };
+
+  it("resolves without a close when none comes within the kill grace, and says so", async () => {
+    const sleeper = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore", detached: true });
+    const run = await runNodeTestFile({ cwd: nodeDir, file: "t/x.test.mjs", fileTimeoutMs: 200, killGraceMs: 300, spawnChild: () => silentChild(sleeper.pid) });
+    expect(run).toMatchObject({ exitCode: -1, timedOut: true, kill: "group", closed: false });
+    expect(run.detail).toContain("was still running after 200 ms and was killed (kill: group, no close within 300 ms)");
+    expect(await groupGone(sleeper.pid)).toBe(true);
+    expect(fs.existsSync(run.recDir)).toBe(false);
+    expect(listLiveNodeRuns()).toEqual([]);
+    // the group of a run that ended without a close stays under the signal cleanup
+    expect(listSurvivingNodeGroups()).toContain(sleeper.pid);
+    expect(stopLiveNodeRuns()).toContainEqual({ pid: sleeper.pid, kill: expect.any(String), recDir: null });
+    expect(listSurvivingNodeGroups()).toEqual([]);
+  }, 20_000);
+
+  it("records a kill that reached only the child as leader", async () => {
+    const c = silentChild(2 ** 22 + 12345);
+    c.kill = () => true;
+    const run = await runNodeTestFile({ cwd: nodeDir, file: "t/x.test.mjs", fileTimeoutMs: 100, killGraceMs: 100, spawnChild: () => c });
+    expect(run).toMatchObject({ exitCode: -1, timedOut: true, kill: "leader", closed: false });
+    expect(run.detail).toContain("(kill: leader, no close within 100 ms)");
+    stopLiveNodeRuns();
+  });
+
+  it("records a child kill that throws as failed", async () => {
+    const c = silentChild(2 ** 22 + 12345);
+    c.kill = () => {
+      throw new Error("kill refused");
+    };
+    const run = await runNodeTestFile({ cwd: nodeDir, file: "t/x.test.mjs", fileTimeoutMs: 100, killGraceMs: 100, spawnChild: () => c });
+    expect(run).toMatchObject({ exitCode: -1, timedOut: true, kill: "failed", closed: false });
+    expect(stopLiveNodeRuns()).toEqual([{ pid: 2 ** 22 + 12345, kill: "failed", recDir: null }]);
+  });
+
+  it("lets the gate exit when a process outside the killed group still holds the output pipes", async () => {
+    // A real child in its own group, as the gate starts node --test; it starts a holder in a session of its own that
+    // inherits the gate's pipes, so the group kill does not reach it and no close comes.
+    const pidFile = path.join(nodeDir, "holder.pid");
+    const holder = [
+      'const { spawn } = require("node:child_process");',
+      'const h = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "inherit", detached: true });',
+      'require("node:fs").writeFileSync(process.env.ESG_HOLDER_PID_FILE, String(h.pid));',
+      "for (;;) {}",
+    ].join("\n");
+    const gateUrl = new URL("../extension-suite-gate.mjs", import.meta.url).href;
+    // The script text is fixed: the gate's URL, the folder and the holder's source reach the child through its
+    // environment, so no value is built into the code it runs.
+    const script = [
+      'import { spawn } from "node:child_process";',
+      "const g = await import(process.env.ESG_GATE_URL);",
+      "const holder = process.env.ESG_HOLDER_SRC;",
+      'const r = await g.runNodeTestFile({ cwd: process.env.ESG_NODE_DIR, file: "t/x.test.mjs", fileTimeoutMs: 1500, killGraceMs: 300, spawnChild: (cmd, args, opts) => spawn(cmd, ["-e", holder], opts) });',
+      'console.log(JSON.stringify({ kill: r.kill, closed: r.closed, timedOut: r.timedOut, surviving: typeof g.listSurvivingNodeGroups === "function" ? g.listSurvivingNodeGroups().length : null }));',
+    ].join("\n");
+    const gate = spawn(process.execPath, ["--input-type=module", "-e", script], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, ESG_HOLDER_PID_FILE: pidFile, ESG_GATE_URL: gateUrl, ESG_NODE_DIR: nodeDir, ESG_HOLDER_SRC: holder },
+    });
+    let out = "";
+    gate.stdout.on("data", (c) => (out += c));
+    const exited = new Promise((r) => gate.on("exit", (code, sig) => r({ code, sig })));
+    const within = await Promise.race([exited, new Promise((r) => setTimeout(() => r("still running after 8 s"), 8000))]);
+    let holderPid = 0;
+    try {
+      holderPid = Number(fs.readFileSync(pidFile, "utf8"));
+    } catch {
+      // no holder started
+    }
+    try {
+      expect(holderPid).toBeGreaterThan(0);
+      expect(within).toEqual({ code: 0, sig: null });
+      expect(JSON.parse(out.trim().split("\n").pop())).toEqual({ kill: "group", closed: false, timedOut: true, surviving: 1 });
+      // the holder was real and outlived the kill of the group
+      expect(() => process.kill(holderPid, 0)).not.toThrow();
+    } finally {
+      gate.kill("SIGKILL");
+      if (holderPid > 0) {
+        try {
+          process.kill(holderPid, "SIGKILL");
+        } catch {
+          // already gone
+        }
+      }
+    }
+  }, 20_000);
+
+  it("takes the pid out of the signal cleanup when a close comes after the grace", async () => {
+    const c = silentChild(2 ** 22 + 22345);
+    const run = await runNodeTestFile({ cwd: nodeDir, file: "t/x.test.mjs", fileTimeoutMs: 50, killGraceMs: 50, spawnChild: () => c });
+    expect(run).toMatchObject({ timedOut: true, closed: false });
+    expect(listSurvivingNodeGroups()).toContain(c.pid);
+    c.emit("close", 0);
+    expect(listSurvivingNodeGroups()).not.toContain(c.pid);
+  });
+
+  it("removes an entry only for its own child: a late close of an older child leaves a later child with the same pid", async () => {
+    const pid = 2 ** 22 + 72345;
+    // two running children given the same pid: the older one's close leaves the later one under the signal cleanup
+    const a = silentChild(pid);
+    const b = silentChild(pid);
+    const pa = runNodeTestFile({ cwd: nodeDir, file: "t/a.test.mjs", fileTimeoutMs: 60_000, spawnChild: () => a });
+    const pb = runNodeTestFile({ cwd: nodeDir, file: "t/b.test.mjs", fileTimeoutMs: 60_000, spawnChild: () => b });
+    a.emit("close", 0);
+    await pa;
+    expect(listLiveNodeRuns().map((r) => r.pid)).toContain(pid);
+    b.emit("close", 0);
+    await pb;
+    expect(listLiveNodeRuns().map((r) => r.pid)).not.toContain(pid);
+    // two killed children that ended without a close, given the same pid: the older one's late close leaves the later one
+    const c = silentChild(pid);
+    const d = silentChild(pid);
+    d.kill = () => true;
+    expect(await runNodeTestFile({ cwd: nodeDir, file: "t/c.test.mjs", fileTimeoutMs: 50, killGraceMs: 50, spawnChild: () => c })).toMatchObject({ kill: "failed", closed: false });
+    expect(await runNodeTestFile({ cwd: nodeDir, file: "t/d.test.mjs", fileTimeoutMs: 50, killGraceMs: 50, spawnChild: () => d })).toMatchObject({ kill: "leader", closed: false });
+    c.emit("close", 0);
+    expect(listSurvivingNodeGroups()).toContain(pid);
+    // the entry is the later child's: its kill reaches it as leader
+    expect(stopLiveNodeRuns()).toContainEqual({ pid, kill: "leader", recDir: null });
+    expect(listSurvivingNodeGroups()).not.toContain(pid);
+  });
+
+  it("ends a run on a close from a child with no pid, and keeps no pid", async () => {
+    const c = silentChild(undefined);
+    const p = runNodeTestFile({ cwd: nodeDir, file: "t/x.test.mjs", fileTimeoutMs: 60_000, spawnChild: () => c });
+    const before = listSurvivingNodeGroups();
+    c.emit("close", 0);
+    const run = await p;
+    expect(run).toMatchObject({ exitCode: 0, tap: "" });
+    expect(run.timedOut).toBeUndefined();
+    expect(listSurvivingNodeGroups()).toEqual(before);
+    expect(listLiveNodeRuns()).toEqual([]);
+  });
+
+  it("keeps the record true when a child.kill() emits error during the kill", async () => {
+    const c = silentChild(2 ** 22 + 32345);
+    c.kill = () => {
+      c.emit("error", new Error("kill failed"));
+      return false;
+    };
+    const t0 = Date.now();
+    const run = await runNodeTestFile({ cwd: nodeDir, file: "t/x.test.mjs", fileTimeoutMs: 50, killGraceMs: 60_000, spawnChild: () => c });
+    expect(Date.now() - t0).toBeLessThan(10_000);
+    expect(run).toMatchObject({ exitCode: -1, timedOut: true, kill: "failed", closed: false });
+    // the run ended at the error, not at the end of a grace it did not wait for
+    expect(run.detail).toContain("(kill: failed, no close: an error came first (Error: kill failed))");
+    expect(run.detail).not.toContain("no close within");
+    expect(listSurvivingNodeGroups()).toContain(c.pid);
+    expect(listLiveNodeRuns().map((r) => r.pid)).not.toContain(c.pid);
+    stopLiveNodeRuns();
+  });
+
+  it("lets the gate exit at once when a child.kill() emits error during the kill: the grace timer is cleared", async () => {
+    const gateUrl = new URL("../extension-suite-gate.mjs", import.meta.url).href;
+    const script = [
+      'import { EventEmitter } from "node:events";',
+      `const g = await import(${JSON.stringify(gateUrl)});`,
+      "const c = new EventEmitter();",
+      "c.pid = 2 ** 22 + 42345;",
+      "c.stdout = new EventEmitter();",
+      "c.stderr = new EventEmitter();",
+      'c.kill = () => { c.emit("error", new Error("kill failed")); return false; };',
+      `const r = await g.runNodeTestFile({ cwd: ${JSON.stringify(nodeDir)}, file: "t/x.test.mjs", fileTimeoutMs: 50, killGraceMs: 60000, spawnChild: () => c });`,
+      "console.log(JSON.stringify({ kill: r.kill, closed: r.closed }));",
+    ].join("\n");
+    const gate = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "inherit"] });
+    let out = "";
+    gate.stdout.on("data", (d) => (out += d));
+    const exited = new Promise((r) => gate.on("exit", (code, sig) => r({ code, sig })));
+    const within = await Promise.race([exited, new Promise((r) => setTimeout(() => r("still running after 8 s"), 8000))]);
+    gate.kill("SIGKILL");
+    expect(within).toEqual({ code: 0, sig: null });
+    expect(JSON.parse(out.trim().split("\n").pop())).toEqual({ kill: "failed", closed: false });
+  }, 20_000);
+
+  it("ends a run on an error from a running child, and on an error after the kill keeps the kill's result", async () => {
+    const running = silentChild(2 ** 22 + 52345);
+    const p1 = runNodeTestFile({ cwd: nodeDir, file: "t/x.test.mjs", fileTimeoutMs: 60_000, spawnChild: () => running });
+    running.emit("error", new Error("boom"));
+    const r1 = await p1;
+    expect(r1).toMatchObject({ exitCode: -1, tap: "", startFailed: true });
+    expect(r1.timedOut).toBeUndefined();
+    expect(r1.detail).toContain("boom");
+    expect(listSurvivingNodeGroups()).not.toContain(running.pid);
+    const after = silentChild(2 ** 22 + 62345);
+    after.kill = () => false;
+    const p2 = runNodeTestFile({ cwd: nodeDir, file: "t/x.test.mjs", fileTimeoutMs: 50, killGraceMs: 60_000, spawnChild: () => after });
+    setTimeout(() => after.emit("error", new Error("late")), 300);
+    const r2 = await p2;
+    expect(r2).toMatchObject({ exitCode: -1, timedOut: true, kill: "failed", closed: false });
+    expect(r2.detail).toContain("no close: an error came first (Error: late)");
+    expect(listSurvivingNodeGroups()).toContain(after.pid);
+    stopLiveNodeRuns();
+  });
+
+  it("lets the gate exit when the kill reached nothing and the child still runs", async () => {
+    // A real child outside any group of its own, whose kill the stand-in refuses: the group kill and the child kill
+    // both fail, the child keeps running, and the gate must still be free to exit.
+    const pidFile = path.join(nodeDir, "unkilled.pid");
+    const gateUrl = new URL("../extension-suite-gate.mjs", import.meta.url).href;
+    const script = [
+      'import { spawn } from "node:child_process";',
+      'import fs from "node:fs";',
+      `const g = await import(${JSON.stringify(gateUrl)});`,
+      "const spawnChild = (cmd, args, opts) => {",
+      '  const c = spawn(cmd, ["-e", "setTimeout(() => {}, 30000)"], { ...opts, detached: false });',
+      "  c.kill = () => false;",
+      `  fs.writeFileSync(${JSON.stringify(pidFile)}, String(c.pid));`,
+      "  return c;",
+      "};",
+      `const r = await g.runNodeTestFile({ cwd: ${JSON.stringify(nodeDir)}, file: "t/x.test.mjs", fileTimeoutMs: 1000, killGraceMs: 300, spawnChild });`,
+      "console.log(JSON.stringify({ kill: r.kill, closed: r.closed, timedOut: r.timedOut }));",
+    ].join("\n");
+    const gate = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    gate.stdout.on("data", (c) => (out += c));
+    const exited = new Promise((r) => gate.on("exit", (code, sig) => r({ code, sig })));
+    const within = await Promise.race([exited, new Promise((r) => setTimeout(() => r("still running after 8 s"), 8000))]);
+    let childPid = 0;
+    try {
+      childPid = Number(fs.readFileSync(pidFile, "utf8"));
+    } catch {
+      // no child started
+    }
+    try {
+      expect(childPid).toBeGreaterThan(0);
+      expect(within).toEqual({ code: 0, sig: null });
+      expect(JSON.parse(out.trim().split("\n").pop())).toEqual({ kill: "failed", closed: false, timedOut: true });
+      expect(() => process.kill(childPid, 0)).not.toThrow();
+    } finally {
+      gate.kill("SIGKILL");
+      if (childPid > 0) {
+        try {
+          process.kill(childPid, "SIGKILL");
+        } catch {
+          // already gone
+        }
+      }
+    }
+  }, 20_000);
+
+  it("installs the cleanup for SIGTERM and SIGINT, which exit with 143 and 130", () => {
+    const proc = new EventEmitter();
+    const codes = [];
+    proc.exit = (code) => codes.push(code);
+    installNodeRunCleanup(proc);
+    proc.emit("SIGINT");
+    proc.emit("SIGTERM");
+    expect(codes).toEqual([130, 143]);
+    expect(proc.listenerCount("SIGINT") + proc.listenerCount("SIGTERM")).toBe(0);
+  });
+
+  it("records a kill that reached nothing as failed", async () => {
+    const run = await runNodeTestFile({ cwd: nodeDir, file: "t/x.test.mjs", fileTimeoutMs: 100, killGraceMs: 100, spawnChild: () => silentChild(2 ** 22 + 12345) });
+    expect(run).toMatchObject({ exitCode: -1, timedOut: true, kill: "failed", closed: false });
+    expect(foldNodeRuns([run])).toMatchObject({ ok: false, reportOk: false });
+  });
+
+  it("a SIGTERM to the gate kills the running node:test group and removes its record folder", async () => {
+    const gateUrl = new URL("../extension-suite-gate.mjs", import.meta.url).href;
+    const script = [
+      `const g = await import(${JSON.stringify(gateUrl)});`,
+      "g.installNodeRunCleanup();",
+      `g.runNodeTestFile({ cwd: ${JSON.stringify(nodeDir)}, file: "t/spin.test.mjs", testTimeoutMs: 60000, fileTimeoutMs: 60000 });`,
+      "const t = setInterval(() => { const l = g.listLiveNodeRuns(); if (l.length === 1) { clearInterval(t); console.log(JSON.stringify(l[0])); } }, 20);",
+    ].join("\n");
+    const gate = spawn(process.execPath, ["--input-type=module", "-e", script], { stdio: ["ignore", "pipe", "pipe"] });
+    const exited = new Promise((r) => gate.on("exit", (code, sig) => r({ code, sig })));
+    let err = "";
+    gate.stderr.on("data", (c) => (err += c));
+    const live = await new Promise((resolve, reject) => {
+      let buf = "";
+      gate.stdout.on("data", (c) => {
+        buf += c;
+        const m = /^(\{.*\})$/m.exec(buf);
+        if (m) resolve(JSON.parse(m[1]));
+      });
+      exited.then((e) => reject(new Error(`the gate exited first: ${JSON.stringify(e)} ${err}`)));
+    });
+    expect(live.recDir).toMatch(/ext-suite-node-/);
+    expect(fs.existsSync(live.recDir)).toBe(true);
+    gate.kill("SIGTERM");
+    expect(await exited).toEqual({ code: 143, sig: null });
+    expect(await groupGone(live.pid)).toBe(true);
+    expect(fs.existsSync(live.recDir)).toBe(false);
+  }, 20_000);
+
+  it("reads a reporter file only up to the stdout cap, and a larger one not at all", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ext-suite-cap-"));
+    const file = path.join(dir, "r.txt");
+    try {
+      expect(NODE_RECORDS_CAP).toBe(400_000);
+      expect(readRecordFile(file)).toEqual({ text: "", over: false, failed: false });
+      fs.writeFileSync(file, "abcd");
+      expect(readRecordFile(file, 4)).toEqual({ text: "abcd", over: false, failed: false });
+      expect(readRecordFile(file, 3)).toEqual({ text: "", over: true, failed: false });
+      fs.writeFileSync(file, "x".repeat(NODE_RECORDS_CAP));
+      expect(readRecordFile(file).text.length).toBe(NODE_RECORDS_CAP);
+      fs.appendFileSync(file, "x");
+      expect(readRecordFile(file)).toEqual({ text: "", over: true, failed: false });
+      // a folder in the file's place cannot be read: no records, no throw
+      expect(readRecordFile(dir)).toEqual({ text: "", over: false, failed: true });
+      // nor can a path below a plain file, which fails at the open (ENOTDIR), unlike a missing file
+      expect(readRecordFile(path.join(file, "below"))).toEqual({ text: "", over: false, failed: true });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not read a reporter file over the cap: its records give nothing, and the detail says so", async () => {
+    const line = `${JSON.stringify({ name: "t/x.test.mjs", line: 2, column: 1 })}\n`;
+    const big = line.repeat(Math.ceil((NODE_RECORDS_CAP + 1) / line.length));
+    const c = silentChild(undefined);
+    const spawnChild = (cmd, args) => {
+      const dest = args.filter((a) => a.startsWith("--test-reporter-destination=")).pop().slice("--test-reporter-destination=".length);
+      setImmediate(() => {
+        fs.writeFileSync(dest, big);
+        c.emit("close", 0);
+      });
+      return c;
+    };
+    const run = await runNodeTestFile({ cwd: nodeDir, file: "t/x.test.mjs", fileTimeoutMs: 60_000, spawnChild });
+    expect(run).toMatchObject({ exitCode: 0, records: "", topLevel: [] });
+    expect(run.detail).toContain(`t/x.test.mjs: its reporter file is over ${NODE_RECORDS_CAP} bytes and was not read`);
+    expect(fs.existsSync(run.recDir)).toBe(false);
+  });
+
+  it("ends a run whose reporter file cannot be read: its records give nothing, the detail says so, and the folder is removed", async () => {
+    const c = silentChild(undefined);
+    const spawnChild = (cmd, args) => {
+      const dest = args.filter((a) => a.startsWith("--test-reporter-destination=")).pop().slice("--test-reporter-destination=".length);
+      setImmediate(() => {
+        fs.mkdirSync(dest);
+        c.emit("close", 0);
+      });
+      return c;
+    };
+    const run = await runNodeTestFile({ cwd: nodeDir, file: "t/x.test.mjs", fileTimeoutMs: 60_000, spawnChild });
+    expect(run).toMatchObject({ exitCode: 0, records: "", topLevel: [] });
+    expect(run.detail).toContain("t/x.test.mjs: its reporter file could not be read");
+    expect(fs.existsSync(run.recDir)).toBe(false);
+  });
+
+  it("keeps the tail of a long output, where the summary is", async () => {
+    const run = await runFixture("t/loud.test.mjs");
+    expect(run.tap.length).toBeLessThanOrEqual(400_000);
+    expect(parseNodeTap(run.tap)).toMatchObject({ summary: true, tests: 1, pass: 1 });
+  });
+});
+
+describe("runNodeTest and runNodeSuites — every file of a package, into the shared results map", () => {
+  // Any string is a results-map key; these ids are not of the owner/name form of a repository name.
+  const nodePkg = { id: "fixture:node-pack", dir: ".", testFiles: ["t/two.test.mjs", "t/empty.test.mjs"] };
+
+  it("runs every file of the package and names each run in the detail", async () => {
+    const res = await runNodeTest({ repoRoot: nodeDir, pkg: nodePkg, testTimeoutMs: 2000, fileTimeoutMs: 20_000 });
+    expect(res).toMatchObject({ ok: true, executedFiles: ["t/two.test.mjs"], numTotalTests: 2 });
+    expect(res.detail).toMatch(/^--- node --test t\/two\.test\.mjs \(exit 0\)$/m);
+    expect(res.detail).toMatch(/^--- node --test t\/empty\.test\.mjs \(exit 0\)$/m);
+  });
+
+  it("adds each node:test result to the vitest results map by its id, keeping the vitest entries", async () => {
+    const vitestRes = green(["x.test.ts"]);
+    const results = new Map([["fixture:gated", vitestRes]]);
+    const lines = [];
+    const out = await runNodeSuites({ repoRoot: nodeDir, nodeRun: [nodePkg], jobs: 2, results, log: (l) => lines.push(l), testTimeoutMs: 2000, fileTimeoutMs: 20_000 });
+    expect(out).toBe(results);
+    expect([...results.keys()].sort()).toEqual(["fixture:gated", "fixture:node-pack"]);
+    expect(results.get("fixture:gated")).toBe(vitestRes);
+    expect(results.get("fixture:node-pack")).toMatchObject({ ok: true, executedFiles: ["t/two.test.mjs"] });
+    expect(lines.some((l) => l.startsWith("::group::PASS fixture:node-pack [node:test]"))).toBe(true);
+  });
+
+  it("stops at the gate's node:test deadline: the running file is killed and the rest are not started", async () => {
+    const late = { id: "fixture:late", dir: ".", testFiles: ["t/spin.test.mjs", "t/two.test.mjs"] };
+    const started = Date.now();
+    const res = await runNodeTest({ repoRoot: nodeDir, pkg: late, testTimeoutMs: 2000, fileTimeoutMs: 8000, deadlineAt: Date.now() + 1500 });
+    expect(Date.now() - started).toBeLessThan(7000);
+    expect(res).toMatchObject({ ok: false, reportOk: false, timedOutFiles: ["t/spin.test.mjs"], notStartedFiles: ["t/two.test.mjs"], executedFiles: [] });
+    expect(res.detail).toContain("t/spin.test.mjs was still running at the gate's node:test deadline and was killed (kill: group, closed)");
+    expect(res.detail).toMatch(/^--- node --test t\/spin\.test\.mjs \(exit -1, killed\)$/m);
+    expect(res.detail).toMatch(/^--- node --test t\/two\.test\.mjs \(exit -1, not started\)$/m);
+  }, 20_000);
+
+  it("passes the deadline to every package, and logs a package that did not pass as FAIL", async () => {
+    const results = new Map();
+    const lines = [];
+    await runNodeSuites({ repoRoot: nodeDir, nodeRun: [nodePkg], jobs: 1, results, log: (l) => lines.push(l), deadlineAt: Date.now() - 1 });
+    expect(results.get("fixture:node-pack")).toMatchObject({ ok: false, reportOk: false, notStartedFiles: ["t/empty.test.mjs", "t/two.test.mjs"] });
+    expect(lines.some((l) => l.startsWith("::group::FAIL fixture:node-pack [node:test]"))).toBe(true);
+  });
+
+  it("does nothing and prints nothing when no package is on the node:test road", async () => {
+    const results = new Map();
+    const lines = [];
+    await runNodeSuites({ repoRoot: nodeDir, nodeRun: [], jobs: 2, results, log: (l) => lines.push(l) });
+    expect(results.size).toBe(0);
+    expect(lines).toEqual([]);
+  });
+});
+
+describe("the node:test road — a skipping node:test package is RUN here", () => {
+  it("brand-voice-artifact's shape (dec0bb58) classifies as a node:test package only this gate can run", () => {
+    const bv = brandVoice();
+    expect(bv).toMatchObject({ runner: "other", runnerEvidence: "node-test", standaloneTestsSkipped: true });
+    expect(isHostRunNodeTest(bv)).toBe(true);
+    expect(planRun({ packages: [bv], carveOuts: [] }).nodeRun.map((p) => p.id)).toEqual(["cinatra-ai/brand-voice-artifact"]);
+  });
+
+  it("is NOT on the road when its own CI runs it, when no runner is named, or when it has no test file", () => {
+    expect(isHostRunNodeTest(brandVoice({ ciWorkflow: "run: corepack pnpm test" }))).toBe(false);
+    expect(isHostRunNodeTest(brandVoice({ readTestSource: () => "it('x', () => {});" }))).toBe(false);
+    expect(isHostRunNodeTest({ ...brandVoice(), testFiles: [] })).toBe(false);
+    expect(isHostRunNodeTest(pkg({ slug: "v" }))).toBe(false);
+  });
+
+  it("a green, complete run passes and the dishonest-skip finding no longer fires", () => {
+    const packages = [pkg({ slug: "gated", testFiles: ["x.test.ts"] }), brandVoice()];
+    const results = resultsFor([
+      ["gated", green(["x.test.ts"])],
+      ["brand-voice-artifact", nodeGreen(["test/own-type.test.mjs"])],
+    ]);
+    expect(judge({ packages, results, carveOuts: [] }).findings).toEqual([]);
+  });
+
+  it("never executed FAILS as not-run (the claim is still unmet)", () => {
+    const packages = [pkg({ slug: "gated", testFiles: ["x.test.ts"] }), brandVoice()];
+    const results = resultsFor([["gated", green(["x.test.ts"])]]);
+    const kinds = judge({ packages, results, carveOuts: [] }).findings.map((f) => [f.kind, f.slug]);
+    expect(kinds).toEqual([["not-run", "brand-voice-artifact"]]);
+  });
+
+  it("a red run FAILS as suite-red", () => {
+    const packages = [pkg({ slug: "gated", testFiles: ["x.test.ts"] }), brandVoice()];
+    const results = resultsFor([
+      ["gated", green(["x.test.ts"])],
+      ["brand-voice-artifact", foldNodeRuns([{ file: "test/own-type.test.mjs", exitCode: 1, tap: TAP_RED }])],
+    ]);
+    const kinds = judge({ packages, results, carveOuts: [] }).findings.map((f) => f.kind);
+    expect(kinds).toEqual(["suite-red"]);
+  });
+
+  it("a file that ran no test FAILS as uncollected, even when the run is green", () => {
+    const packages = [pkg({ slug: "gated", testFiles: ["x.test.ts"] }), brandVoice({ testFiles: ["test/a.test.mjs", "test/own-type.test.mjs"] })];
+    const results = resultsFor([
+      ["gated", green(["x.test.ts"])],
+      [
+        "brand-voice-artifact",
+        foldNodeRuns([
+          { file: "test/a.test.mjs", exitCode: 0, tap: TAP_EMPTY },
+          { file: "test/own-type.test.mjs", exitCode: 0, tap: TAP_GREEN },
+        ]),
+      ],
+    ]);
+    const f = judge({ packages, results, carveOuts: [] }).findings;
+    expect(f.map((x) => x.kind)).toEqual(["uncollected-files"]);
+    expect(f[0].message).toContain("test/a.test.mjs");
+  });
+
+  it("a file that node reports as its own one passing test FAILS as uncollected (what node 24 prints for an empty file)", () => {
+    const packages = [pkg({ slug: "gated", testFiles: ["x.test.ts"] }), brandVoice({ testFiles: ["test/empty.test.mjs", "test/own-type.test.mjs"] })];
+    const results = resultsFor([
+      ["gated", green(["x.test.ts"])],
+      [
+        "brand-voice-artifact",
+        foldNodeRuns([
+          { file: "test/empty.test.mjs", exitCode: 0, tap: tapFileOnly("test/empty.test.mjs") },
+          { file: "test/own-type.test.mjs", exitCode: 0, tap: TAP_GREEN },
+        ]),
+      ],
+    ]);
+    const f = judge({ packages, results, carveOuts: [] }).findings;
+    expect(f.map((x) => x.kind)).toEqual(["uncollected-files"]);
+    expect(f[0].message).toContain("test/empty.test.mjs");
+  });
+
+  it("a lost TAP summary FAILS as no-report and is not also judged as red", () => {
+    const packages = [pkg({ slug: "gated", testFiles: ["x.test.ts"] }), brandVoice()];
+    const results = resultsFor([
+      ["gated", green(["x.test.ts"])],
+      ["brand-voice-artifact", foldNodeRuns([{ file: "test/own-type.test.mjs", exitCode: 0, tap: "" }])],
+    ]);
+    expect(judge({ packages, results, carveOuts: [] }).findings.map((f) => f.kind)).toEqual(["no-report"]);
+  });
+
+  it("a ledger entry never exempts a node:test package, and is reported as stale", () => {
+    const packages = [pkg({ slug: "gated", testFiles: ["x.test.ts"] }), brandVoice()];
+    const results = resultsFor([["gated", green(["x.test.ts"])]]);
+    const out = judge({ packages, results, carveOuts: [carve("brand-voice-artifact")] });
+    expect(out.carved).toEqual([]);
+    expect(out.findings.map((f) => f.kind)).toContain("not-run");
+    expect(out.notices.map((n) => [n.kind, n.slug])).toEqual([["stale-carve-out", "cinatra-ai/brand-voice-artifact"]]);
+    expect(out.notices[0].message).toContain("no longer a vitest suite (runner=other)");
+  });
+
+  it("a checkout with local modifications stays on the road and is judged", () => {
+    const bv = brandVoice({ dirty: true });
+    expect(planRun({ packages: [bv], carveOuts: [] }).nodeRun.map((p) => p.id)).toEqual(["cinatra-ai/brand-voice-artifact"]);
+    const packages = [pkg({ slug: "gated", testFiles: ["x.test.ts"] }), bv];
+    const results = resultsFor([
+      ["gated", green(["x.test.ts"])],
+      ["brand-voice-artifact", foldNodeRuns([{ file: "test/own-type.test.mjs", exitCode: 1, tap: TAP_RED }])],
+    ]);
+    expect(judge({ packages, results, carveOuts: [] }).findings.map((f) => f.kind)).toEqual(["suite-red"]);
+  });
+
+  it("shows on the manifest as run here, with its own status", () => {
+    const packages = [brandVoice()];
+    const ok = renderManifest({ packages, results: resultsFor([["brand-voice-artifact", nodeGreen(["test/own-type.test.mjs"])]]), carveOuts: [] });
+    expect(ok).toMatch(/brand-voice-artifact .* node:test here — ok$/m);
+    const notRun = renderManifest({ packages, results: new Map(), carveOuts: [] });
+    expect(notRun).toMatch(/brand-voice-artifact .* node:test here — NOT RUN$/m);
+  });
+
+  it("shows a red run as RED with its exit code, and a file that ran no test as INCOMPLETE", () => {
+    const red = renderManifest({
+      packages: [brandVoice()],
+      results: resultsFor([["brand-voice-artifact", foldNodeRuns([{ file: "test/own-type.test.mjs", exitCode: 1, tap: TAP_RED }])]]),
+      carveOuts: [],
+    });
+    expect(red).toMatch(/brand-voice-artifact .* node:test here — RED \(exit 1\)$/m);
+    const lost = renderManifest({
+      packages: [brandVoice()],
+      results: resultsFor([["brand-voice-artifact", foldNodeRuns([{ file: "test/own-type.test.mjs", exitCode: 0, tap: "" }])]]),
+      carveOuts: [],
+    });
+    expect(lost).toMatch(/brand-voice-artifact .* node:test here — NO REPORT \(exit 0\)$/m);
+    const files = ["test/empty.test.mjs", "test/own-type.test.mjs"];
+    const incomplete = renderManifest({
+      packages: [brandVoice({ testFiles: files })],
+      results: resultsFor([
+        [
+          "brand-voice-artifact",
+          foldNodeRuns([
+            { file: files[0], exitCode: 0, tap: tapFileOnly(files[0]) },
+            { file: files[1], exitCode: 0, tap: TAP_GREEN },
+          ]),
+        ],
+      ]),
+      carveOuts: [],
+    });
+    expect(incomplete).toMatch(/brand-voice-artifact .* node:test here — INCOMPLETE \(1 file\(s\) ran no test\)$/m);
   });
 });
 

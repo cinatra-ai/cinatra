@@ -232,11 +232,15 @@ describe("the repository's own pin is untouched by this suite", () => {
     // The adoption HAS run on this branch, so the re-examination array is
     // recorded — sorted and without a repeat. This suite still writes only to
     // its own temporary trees; what it asserts here is that it left the
-    // repository's record alone, not that the record never moved.
+    // repository's record alone, not that the record never moved. Since
+    // cinatra#3677 the recorded set is EMPTY at this pin — still present, in the
+    // one-line shape `upsertJsonStringArrayField` writes for no values.
     const recorded = contract.anchorsUnresolvedAtPin;
     expect(Array.isArray(recorded)).toBe(true);
-    expect(recorded.length).toBeGreaterThan(0);
-    expect([...recorded]).toEqual([...new Set(recorded)].sort());
+    expect(recorded).toEqual([]);
+    expect(
+      readFileSync(join(REPO_ROOT, "scripts/audit/chat-hitl-anchor-contract.json"), "utf8"),
+    ).toContain('\n "anchorsUnresolvedAtPin": [],\n');
   });
 });
 

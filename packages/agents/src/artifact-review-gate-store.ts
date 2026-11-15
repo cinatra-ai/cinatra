@@ -48,10 +48,12 @@ import { electCurrentReviewGate } from "./run-step-rail";
 // ---------------------------------------------------------------------------
 
 import { createHash, randomUUID } from "node:crypto";
-import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, getTableColumns, gte, inArray, isNotNull, isNull, lt, lte, or, sql } from "drizzle-orm";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 
 import { db } from "./db";
+import { createdAtMicrosSql } from "./declared-review-pause";
+import type { GuardedRunTx } from "./org-write-run-seam";
 import { dispatchAutoGateResolved } from "./run-wait-notifier";
 // THE PARK'S OWN READING (cinatra#3046), from the module that writes the marker.
 // Re-exported below for the seed route, which reads this module already and must
@@ -151,7 +153,7 @@ export class ArtifactReviewGateError extends Error {
 // successor-gate emit + finalize ATOMIC (cinatra#2065 Seam A): a rollback before
 // the caller's commit leaves NO gate row, so a fresh-target retry never strands a
 // gate or hits a pin conflict.
-type GateStoreExecutor =
+export type GateStoreExecutor =
   | typeof db
   | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -340,6 +342,9 @@ export interface ReviewGateRow {
   resolvedBy: string | null;
   resolvedAt: Date | null;
   createdAt: Date;
+  /** cinatra#4312 — `created_at` in microseconds since the epoch, as decimal text,
+   * signed before 1970 (`createdAtMicrosSql`); set by `listReviewGatesForRun`. */
+  createdAtMicros?: string;
 }
 
 export async function readReviewGate(
@@ -403,7 +408,7 @@ async function readReviewGateVia(
 // ---------------------------------------------------------------------------
 export async function listReviewGatesForRun(runId: string, executor: GateStoreExecutor = db): Promise<ReviewGateRow[]> {
   const rows = await executor
-    .select()
+    .select({ ...getTableColumns(artifactReviewGates), createdAtMicros: createdAtMicrosSql(artifactReviewGates.createdAt) })
     .from(artifactReviewGates)
     .where(eq(artifactReviewGates.runId, runId))
     .orderBy(artifactReviewGates.createdAt);
@@ -419,6 +424,7 @@ export async function listReviewGatesForRun(runId: string, executor: GateStoreEx
     resolvedBy: row.resolvedBy,
     resolvedAt: row.resolvedAt,
     createdAt: row.createdAt,
+    createdAtMicros: row.createdAtMicros,
   }));
 }
 
@@ -1078,16 +1084,13 @@ export interface ResumeIntentRow {
   attempts: number;
   leaseToken: string | null;
   leaseExpiresAt: Date | null;
+  /** cinatra#3745: set while this gate's delivery holds the run it moved pending_approval -> running. */
+  runClaimedAt: Date | null;
+  /** cinatra#3745: the A2A task this gate's send returned (run token stripped), recorded before the handler ran. */
+  resumeTaskResult: unknown | null;
 }
 
-export async function readResumeIntent(gateId: string): Promise<ResumeIntentRow | null> {
-  const rows = await db
-    .select()
-    .from(artifactReviewResumeOutbox)
-    .where(eq(artifactReviewResumeOutbox.gateId, gateId))
-    .limit(1);
-  const row = rows[0];
-  if (!row) return null;
+function toResumeIntentRow(row: typeof artifactReviewResumeOutbox.$inferSelect): ResumeIntentRow {
   return {
     gateId: row.gateId,
     runId: row.runId,
@@ -1098,7 +1101,19 @@ export async function readResumeIntent(gateId: string): Promise<ResumeIntentRow 
     attempts: row.attempts,
     leaseToken: row.leaseToken,
     leaseExpiresAt: row.leaseExpiresAt,
+    runClaimedAt: row.runClaimedAt ?? null,
+    resumeTaskResult: row.resumeTaskResult ?? null,
   };
+}
+
+export async function readResumeIntent(gateId: string): Promise<ResumeIntentRow | null> {
+  const rows = await db
+    .select()
+    .from(artifactReviewResumeOutbox)
+    .where(eq(artifactReviewResumeOutbox.gateId, gateId))
+    .limit(1);
+  const row = rows[0];
+  return row ? toResumeIntentRow(row) : null;
 }
 
 /**
@@ -1128,6 +1143,18 @@ export async function claimPendingResumeIntents(opts?: {
           // Gate-store extension (cinatra#2038 S0): a DEAD-LETTERED intent is
           // never re-claimed — its attempts were exhausted; it awaits ops.
           isNull(artifactReviewResumeOutbox.deadLetteredAt),
+          // cinatra#4312 — nor an intent that has used its attempts but is not
+          // dead-lettered yet: the sweep dead-letters it
+          // (deadLetterExhaustedResumeIntents) instead of a further attempt.
+          // Each claim uses an attempt (the update below), whatever the
+          // delivery then returns, a `retryable` outcome included
+          // (artifact-review-resume-delivery `sweepArtifactReviewResumeIntents`).
+          // cinatra#3745: an intent whose delivery claimed the run is bounded
+          // the same way. The delivery's claim of the last attempt puts a
+          // claimed run with nothing recorded back on its gate instead of a
+          // re-send (artifact-review-resume-delivery), so the dead-letter pass
+          // leaves no run `running` that a release could have reached.
+          lt(artifactReviewResumeOutbox.attempts, artifactReviewResumeOutbox.maxAttempts),
           or(
             eq(artifactReviewResumeOutbox.status, "pending"),
             and(
@@ -1156,30 +1183,171 @@ export async function claimPendingResumeIntents(opts?: {
       .returning();
   });
 
-  return claimed.map((row) => ({
-    gateId: row.gateId,
-    runId: row.runId,
-    reviewTaskId: row.reviewTaskId,
-    kind: row.kind as "approve" | "reject",
-    responseText: row.responseText,
-    status: row.status as "pending" | "delivering" | "done",
-    attempts: row.attempts,
-    leaseToken: row.leaseToken,
-    leaseExpiresAt: row.leaseExpiresAt,
-  }));
+  return claimed.map(toResumeIntentRow);
+}
+
+/**
+ * The held-lease guard every in-flight write of a delivery shares (cinatra#3745):
+ * the row is `delivering`, not dead-lettered, under the caller's lease token. The
+ * token is the fence: a reclaim replaces it. The expiry time is not read here.
+ */
+function heldLease(gateId: string, leaseToken: string) {
+  return and(
+    eq(artifactReviewResumeOutbox.gateId, gateId),
+    eq(artifactReviewResumeOutbox.leaseToken, leaseToken),
+    eq(artifactReviewResumeOutbox.status, "delivering"),
+    isNull(artifactReviewResumeOutbox.deadLetteredAt),
+  );
+}
+
+/**
+ * Extend a held lease (cinatra#3745). The delivery renews while it is in
+ * flight and fences on it before every send, re-send and replay. False when the
+ * lease is no longer this worker's: the caller must send, release and close nothing.
+ */
+export async function renewResumeIntentLease(gateId: string, leaseToken: string, leaseMs: number): Promise<boolean> {
+  const ms = Math.max(1000, leaseMs);
+  const renewed = await db
+    .update(artifactReviewResumeOutbox)
+    .set({ leaseExpiresAt: sql`now() + (${ms} || ' milliseconds')::interval`, updatedAt: sql`now()` })
+    .where(heldLease(gateId, leaseToken))
+    .returning({ gateId: artifactReviewResumeOutbox.gateId });
+  return renewed.length === 1;
+}
+
+/**
+ * The claim mark and send witness of an intent this worker leases, read AFTER
+ * the run (cinatra#3745): an entry into `running` by another driver clears the
+ * mark in the run's own transaction, so the claim-time copy can be stale. Null
+ * when the row is no longer under this lease.
+ */
+export async function readResumeIntentClaim(
+  gateId: string,
+  leaseToken: string,
+): Promise<{ runClaimed: boolean; result: unknown } | null> {
+  const rows = await db
+    .select({ runClaimedAt: artifactReviewResumeOutbox.runClaimedAt, result: artifactReviewResumeOutbox.resumeTaskResult })
+    .from(artifactReviewResumeOutbox)
+    .where(heldLease(gateId, leaseToken))
+    .limit(1);
+  const row = rows[0];
+  return row ? { runClaimed: row.runClaimedAt != null, result: row.result ?? null } : null;
+}
+
+/**
+ * Record the A2A task this gate's send returned, under the held lease and the
+ * delivery's own run claim (cinatra#3745), BEFORE the handler runs. A
+ * re-claim that finds it replays the handler instead of re-sending. The caller
+ * strips the run token first. False when the lease or the claim is gone.
+ */
+export async function recordResumeTaskResult(gateId: string, leaseToken: string, task: unknown): Promise<boolean> {
+  const recorded = await db
+    .update(artifactReviewResumeOutbox)
+    .set({ resumeTaskResult: task, updatedAt: sql`now()` })
+    .where(and(heldLease(gateId, leaseToken), isNotNull(artifactReviewResumeOutbox.runClaimedAt)))
+    .returning({ gateId: artifactReviewResumeOutbox.gateId });
+  return recorded.length === 1;
+}
+
+// The two writes a run edge makes to the resume intents (cinatra#3745).
+// transitionRunStatus (run-transition.ts) calls them inside the run's own
+// guarded transaction, right after its CAS. They live here because this store
+// owns every write to the resume outbox (the review-decision writer guard).
+
+/** What a fenced run edge does to its intent's claim mark. */
+export type ResumeIntentClaimMark = "claim" | "release" | "none";
+
+/**
+ * Fence a run edge on its intent's held lease, in the run's transaction, and
+ * move the claim mark with the edge: "claim" sets run_claimed_at and clears the
+ * recorded task, "release" clears both, "none" only fences. A release also
+ * needs the mark still set: an entry into `running` by another driver clears
+ * it, so a delivery that read the run before that entry puts nothing back.
+ * False when no row is `delivering` under this lease for this run (for a
+ * release, with the mark set); the caller then throws, so the run CAS rolls
+ * back with it.
+ */
+export async function fenceResumeIntentLeaseInRunTx(
+  tx: GuardedRunTx,
+  input: { runId: string; gateId: string; leaseToken: string; claimMark: ResumeIntentClaimMark },
+): Promise<boolean> {
+  const claimMark =
+    input.claimMark === "claim"
+      ? { runClaimedAt: sql`now()`, resumeTaskResult: null }
+      : input.claimMark === "release"
+        ? { runClaimedAt: null, resumeTaskResult: null }
+        : {};
+  const fenced = await (tx as unknown as typeof db)
+    .update(artifactReviewResumeOutbox)
+    .set({ ...claimMark, updatedAt: sql`now()` })
+    .where(
+      and(
+        eq(artifactReviewResumeOutbox.gateId, input.gateId),
+        eq(artifactReviewResumeOutbox.runId, input.runId),
+        eq(artifactReviewResumeOutbox.leaseToken, input.leaseToken),
+        eq(artifactReviewResumeOutbox.status, "delivering"),
+        isNull(artifactReviewResumeOutbox.deadLetteredAt),
+        ...(input.claimMark === "release" ? [isNotNull(artifactReviewResumeOutbox.runClaimedAt)] : []),
+      ),
+    )
+    .returning({ gateId: artifactReviewResumeOutbox.gateId });
+  return fenced.length === 1;
+}
+
+/**
+ * On every run edge into `running`, in the run's transaction: clear the claim
+ * marks of the run's OTHER delivering intents, because another driver advances
+ * the run from now on. The recorded task is KEPT: it is the witness that the
+ * intent's resume was delivered, so its delivery closes instead of waiting, and
+ * with no mark it is never replayed (cinatra#3745). `keepGateId` is the
+ * delivery's own gate on its claim (null on any other entry). One statement on
+ * the tx's `execute` surface.
+ */
+export async function clearOtherResumeClaimsInRunTx(
+  tx: GuardedRunTx,
+  input: { runId: string; keepGateId: string | null },
+): Promise<void> {
+  const keep = input.keepGateId === null ? sql`` : sql` AND gate_id <> ${input.keepGateId}`;
+  await tx.execute(
+    sql`UPDATE ${artifactReviewResumeOutbox} SET run_claimed_at = NULL, updated_at = now()
+        WHERE run_id = ${input.runId} AND status = 'delivering' AND run_claimed_at IS NOT NULL${keep}`,
+  );
+}
+
+/**
+ * Leave a leased intent for a later lease (cinatra#3745). The delivery found
+ * another driver holding the run with no witness that this gate's resume was
+ * delivered, so it decides nothing now: a claim that fails before its dispatch
+ * puts the run back on this gate. The row stays `delivering` under this lease
+ * until the lease lapses. The claim's attempt stays used, as for every outcome
+ * that leaves an intent for a re-claim (cinatra#4312): a deferral that repeats
+ * on every attempt is dead-lettered for ops like any other. False when the
+ * lease is no longer this worker's.
+ */
+export async function deferResumeIntent(gateId: string, leaseToken: string): Promise<boolean> {
+  const deferred = await db
+    .update(artifactReviewResumeOutbox)
+    .set({ updatedAt: sql`now()` })
+    .where(heldLease(gateId, leaseToken))
+    .returning({ gateId: artifactReviewResumeOutbox.gateId });
+  return deferred.length === 1;
 }
 
 /**
  * Mark a leased resume intent DELIVERED — single-shot, guarded by the lease
  * token so a STALE worker (whose lease expired and was re-claimed) can never mark
- * another worker's in-flight delivery done. Returns true iff this call owned the
- * live lease.
+ * another worker's in-flight delivery done. Returns true iff the row was still
+ * `delivering` under this token. The token is the fence (a reclaim replaces it);
+ * neither the expiry time nor `dead_lettered_at` is read, so an expired token
+ * that no one reclaimed, and a dead-lettered row still `delivering`, are marked
+ * done (cinatra#3745 states this; it changes nothing here).
  */
 export async function markResumeIntentDelivered(
   gateId: string,
   leaseToken: string,
+  executor: GateStoreExecutor = db,
 ): Promise<boolean> {
-  const done = await db
+  const done = await executor
     .update(artifactReviewResumeOutbox)
     .set({ status: "done", updatedAt: sql`now()` })
     .where(
@@ -1191,6 +1359,30 @@ export async function markResumeIntentDelivered(
     )
     .returning({ gateId: artifactReviewResumeOutbox.gateId });
   return done.length === 1;
+}
+
+/**
+ * cinatra#4312 — run `fn` in one transaction that holds a SHARE lock on the
+ * run's row. The resume worker writes the acknowledgement that keeps a run
+ * parked (another artifact of the pause, or a regenerated artifact's review, is
+ * open; no resume is sent) inside this lock, on a re-read of the family and of
+ * its repair lineages. A close of a lineage with no gate decision takes the
+ * same row with `FOR NO KEY UPDATE` before it reads the lineage and the family's
+ * decisions and inserts a resume intent that carries the latest one
+ * (lifecycle-repair-store `carryDeclaredReviewDecision`). So the two cannot
+ * interleave: either the acknowledgement commits first and the close then reads
+ * the lineage closed and inserts the carrier, or the close commits first and the
+ * re-read sees the lineage closed and the worker resumes the run itself. A run
+ * row that does not exist takes no lock; `fn` still runs.
+ */
+export async function withRunDecisionLock<T>(
+  runId: string,
+  fn: (tx: GateStoreExecutor) => Promise<T>,
+): Promise<T> {
+  return db.transaction(async (tx) => {
+    await tx.select({ id: agentRuns.id }).from(agentRuns).where(eq(agentRuns.id, runId)).for("share");
+    return fn(tx);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1224,6 +1416,10 @@ export async function deadLetterExhaustedResumeIntents(opts?: {
   // actively in-flight (a `delivering` row with a LIVE lease is left to finish).
   const eligibleCond = and(
     isNull(artifactReviewResumeOutbox.deadLetteredAt),
+    // cinatra#3745: an intent whose delivery claimed the run is dead-lettered
+    // like any other once it used its attempts. A run its last claim could not
+    // put back on the gate stays `running` for ops (agent_run_stop is the
+    // operator road).
     gte(artifactReviewResumeOutbox.attempts, artifactReviewResumeOutbox.maxAttempts),
     or(
       // A pending (un-leased) exhausted row.
@@ -1261,6 +1457,64 @@ export async function deadLetterExhaustedResumeIntents(opts?: {
     .where(and(inArray(artifactReviewResumeOutbox.gateId, eligible), eligibleCond))
     .returning({ gateId: artifactReviewResumeOutbox.gateId });
   return dead.length;
+}
+
+/** cinatra#4476 — the attempts a re-armed intent gets on top of those it used. */
+export const RECOVERY_ATTEMPTS_BUDGET = 20;
+
+/**
+ * cinatra#4476 — RE-ARM one resume intent that used its attempts, ONCE, for the
+ * upgrade recovery (`declared-review-recovery.ts`, which holds the run row
+ * `FOR NO KEY UPDATE` and the pause's once marker in the same transaction).
+ *
+ * A compare-and-set on the whole state: the row is `pending` or `delivering` (the
+ * two states a writer leaves an open intent in; a `done` row and a row in any other
+ * status are never written), it is dead-lettered or has used its attempts, and no
+ * lease is live (`pending`, or a lease that is missing or expired). So an intent a
+ * worker holds, one the claim can still take, and a closed one are never written.
+ * The write:
+ *   - `status` 'pending', `lease_token` and `lease_expires_at` cleared: the next
+ *     claim takes it like a new intent, and no earlier holder's lease token can
+ *     mark it (the mark is lease-guarded);
+ *   - `dead_lettered_at` cleared: it leaves the ops list;
+ *   - `attempts` kept, `max_attempts` = attempts + RECOVERY_ATTEMPTS_BUDGET: the
+ *     count of claims stays the record, and the bound holds again after the new
+ *     budget;
+ *   - `last_error` keeps the earlier error behind a note of the re-arm.
+ * The kind and response text are not written. Returns true when it wrote the row.
+ */
+export async function rearmExhaustedResumeIntent(
+  executor: GateStoreExecutor,
+  gateId: string,
+): Promise<boolean> {
+  const rows = await executor
+    .update(artifactReviewResumeOutbox)
+    .set({
+      status: "pending",
+      leaseToken: null,
+      leaseExpiresAt: null,
+      deadLetteredAt: null,
+      maxAttempts: sql`${artifactReviewResumeOutbox.attempts} + ${RECOVERY_ATTEMPTS_BUDGET}`,
+      lastError: sql`'re-armed once by the upgrade recovery; before: ' || coalesce(${artifactReviewResumeOutbox.lastError}, 'no error recorded')`,
+      updatedAt: sql`now()`,
+    })
+    .where(
+      and(
+        eq(artifactReviewResumeOutbox.gateId, gateId),
+        inArray(artifactReviewResumeOutbox.status, ["pending", "delivering"]),
+        or(
+          isNotNull(artifactReviewResumeOutbox.deadLetteredAt),
+          gte(artifactReviewResumeOutbox.attempts, artifactReviewResumeOutbox.maxAttempts),
+        ),
+        or(
+          eq(artifactReviewResumeOutbox.status, "pending"),
+          isNull(artifactReviewResumeOutbox.leaseExpiresAt),
+          lte(artifactReviewResumeOutbox.leaseExpiresAt, sql`now()`),
+        ),
+      ),
+    )
+    .returning({ gateId: artifactReviewResumeOutbox.gateId });
+  return rows.length === 1;
 }
 
 export interface DeadLetteredResumeRow {

@@ -93,6 +93,11 @@ ENCRYPTION_KEY="00000000000000000000000000000000000000000000000000000000000000e2
 # boot (missing => a clear soft-required WARN, not a boot abort); provided here so the
 # positive path exercises the "present" branch. The deploy provisions the real value.
 BRIDGE_TOKEN="prod-boot-e2e-bridge-token-0000000000000000"
+# WayFlow step and context attest key (cinatra#4154), soft-required like the bridge
+# token. Provided so each boot's only degraded phases are the ones a case drives:
+# probe keeps the first 300 characters of /api/health, and an extra
+# required-env-soft-check entry in degradedPhases pushed blockingPhases past that cut.
+ATTEST_KEY="prod-boot-e2e-attest-key-00000000000000000000"
 DB_URL_IN_NET="postgresql://postgres:postgres@${PG}:5432/postgres"
 
 # Negative/rollback-case container + volume names (cinatra#789). Torn down alongside
@@ -187,6 +192,7 @@ run_boot_case() {
     -e NANGO_ENCRYPTION_KEY="prod-boot-e2e-placeholder-not-a-real-key" \
     -e OPENAI_API_KEY="sk-prod-boot-e2e-placeholder" \
     -e CINATRA_BRIDGE_TOKEN="$BRIDGE_TOKEN" \
+    -e CINATRA_CONTEXT_ATTEST_KEY="$ATTEST_KEY" \
     "$@" \
     "$IMAGE" >/dev/null 2>&1 || { echo "crashed 0 -"; return 0; }
 
@@ -334,6 +340,7 @@ docker run -d --name "$APP" --network "$NET" \
   -e NANGO_ENCRYPTION_KEY="prod-boot-e2e-placeholder-not-a-real-key" \
   -e OPENAI_API_KEY="sk-prod-boot-e2e-placeholder" \
   -e CINATRA_BRIDGE_TOKEN="$BRIDGE_TOKEN" \
+  -e CINATRA_CONTEXT_ATTEST_KEY="$ATTEST_KEY" \
   -e CINATRA_EXTENSION_DATA_ROOT="$EXTENSION_DATA_ROOT" \
   -v "${AGENT_INSTALL_VOL}:${EXTENSION_DATA_ROOT}" \
   "$IMAGE" >/dev/null

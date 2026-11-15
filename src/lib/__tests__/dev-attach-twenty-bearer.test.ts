@@ -2,9 +2,9 @@
 // (`devAttachTwentyBearerFromMintedKey`) MUST fail closed when the seeded dev
 // actor (or its organization) is not available. The dev-boot shell
 // (`dev-auto-setup.ts`) PUSHES the seeded owner via `setDevActorForExternalMcp`
-// before any connector devSetup hook runs; the writer reads that module-local
+// before any connector devSetup hook runs; the writer reads that process-wide
 // holder (NOT an import of the wide dev-auto-setup graph, so the production
-// route-graph pressure stays flat). `saveTwentyConnection` seeds the
+// route-graph pressure stays flat; one holder per process, cinatra#4112). `saveTwentyConnection` seeds the
 // `externalMcp` identity + grant with `seed:"workspace"`, which downgrades to
 // owner-only under a null organization — the InternalWorker mint would then stay
 // denied — so the writer refuses BEFORE any minting/import when no non-null-org
@@ -22,7 +22,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // A spy so we can prove the writer never reaches the sanctioned save when the
 // owner is unset/unusable. `runPostgresQueriesSync` is the lowest-level effect
 // `saveTwentyConnection` (via the row upsert) would hit.
-const runPostgresQueriesSync = vi.fn((_input?: unknown) => [{ rows: [], rowCount: 0 }]);
+const runPostgresQueriesSync = vi.fn<(input?: unknown) => { rows: unknown[]; rowCount: number }[]>(() => [
+  { rows: [], rowCount: 0 },
+]);
 vi.mock("@/lib/postgres-sync", () => ({
   runPostgresQueriesSync: (input: unknown) => runPostgresQueriesSync(input),
 }));
@@ -45,7 +47,7 @@ describe("devAttachTwentyBearerFromMintedKey — fail-closed on an unusable dev 
       apiKey: APIKEY,
     });
 
-    expect(r).toEqual({ resolved: false, connectionId: null });
+    expect(r).toEqual({ resolved: false, connectionId: null, failure: "no-owner" });
     // No sanctioned save was attempted (its row upsert never ran).
     expect(runPostgresQueriesSync).not.toHaveBeenCalled();
   });
@@ -58,7 +60,7 @@ describe("devAttachTwentyBearerFromMintedKey — fail-closed on an unusable dev 
       apiKey: APIKEY,
     });
 
-    expect(r).toEqual({ resolved: false, connectionId: null });
+    expect(r).toEqual({ resolved: false, connectionId: null, failure: "no-owner" });
     expect(runPostgresQueriesSync).not.toHaveBeenCalled();
   });
 

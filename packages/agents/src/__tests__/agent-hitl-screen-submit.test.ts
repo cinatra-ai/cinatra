@@ -212,3 +212,24 @@ describe("the refusals, and they are all the same refusal", () => {
     }
   });
 });
+
+// cinatra#4150 PR 3a, pre-review 3 finding 3: a publish-hold refusal from the core is logged without the run id.
+describe("a publish-hold refusal from the core", () => {
+  it.each(["publish_decision_required", "publish_decision_unavailable"])(
+    "%s refuses like any other, and its warning names no run",
+    async (code) => {
+      approveReviewTaskInternal.mockRejectedValue(
+        Object.assign(new Error("Resume failed: the publish hold could not be checked."), { code }),
+      );
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      try {
+        await expect(call()).resolves.toEqual({ ok: false, error: AGENT_HITL_SUBMIT_REFUSAL });
+        const lines = warn.mock.calls.map((c) => c.map(String).join(" "));
+        expect(lines.some((l) => l.includes("[submitAgentHitlScreenForActor] refused"))).toBe(true);
+        expect(lines.join("\n")).not.toContain(RUN_ID);
+      } finally {
+        warn.mockRestore();
+      }
+    },
+  );
+});

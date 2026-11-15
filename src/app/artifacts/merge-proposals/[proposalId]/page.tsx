@@ -77,7 +77,9 @@ export default async function MergeProposalDetailPage({ params }: Props) {
   return (
     <Main className="min-h-screen">
       <PageHeader
-        title={`Merge proposal ${proposalId.slice(0, 16)}…`}
+        // The title is also the trail's leaf: the drawing's placeholder is the id's
+        // first eight characters plus an ellipsis (cinatra#4453).
+        title={`Merge proposal ${proposalId.slice(0, 8)}…`}
         description={`${proposal.sourceKind} → ${proposal.objectType} (v${proposal.baseVersion})`}
         actions={
           <div className="flex items-center gap-2">

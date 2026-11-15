@@ -35,10 +35,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { resolve as resolvePath } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Client } from "pg";
 import { z } from "zod";
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
+import { registerArtifactExtensionDir } from "@cinatra-ai/objects/register-artifact-extensions";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 import { vi } from "vitest";
@@ -92,6 +94,18 @@ const PICTURE_TYPE = "@cinatra-ai/picture-artifact:picture";
  *  makes and not the only option available. */
 const NOTE_EXT = "@cinatra-ai/note-artifact";
 const NOTE_TYPE = "@cinatra-ai/note-artifact:note";
+
+/**
+ * THE REAL IMAGE TYPE (cinatra#3033, closing reading): the required-lock pin
+ * image-artifact 52d9265c (cinatra-required-extensions.lock.json) declares
+ * `@cinatra-ai/image-artifact:image`. The suite registers it from the pinned
+ * pack's own manifest on disk, through the same bridge the app boots with, so
+ * the schema, the accepted forms and the dispositions are the pack's, not a
+ * copy written here.
+ */
+const IMAGE_EXT = "@cinatra-ai/image-artifact";
+const IMAGE_TYPE = "@cinatra-ai/image-artifact:image";
+const REPO_ROOT = resolvePath(__dirname, "..", "..", "..", "..");
 
 /** Two real 1x1 PNGs — different bytes, so a regeneration is a different
  *  picture and not a de-duplicated re-drive of the first. */
@@ -190,10 +204,15 @@ function providerServing(images: string[]) {
       }),
       // The run package's declared production, in the shape the registry loader
       // returns it.
-      loadProducesRefs: async () => [
-        { extension: PICTURE_EXT, objectTypeId: PICTURE_TYPE },
-        { extension: NOTE_EXT, objectTypeId: NOTE_TYPE },
-      ],
+      // One reading supplies both write facts (cinatra#3035): the fixture
+      // package marks no review gate, so no registry is read for it.
+      loadWriteFacts: async () => ({
+        producesRefs: [
+          { extension: PICTURE_EXT, objectTypeId: PICTURE_TYPE },
+          { extension: NOTE_EXT, objectTypeId: NOTE_TYPE },
+        ],
+        reviewed: false,
+      }),
       ...over,
     }),
   };
@@ -289,7 +308,18 @@ beforeAll(async () => {
   objectTypeRegistry._clearForTests();
   registerPictureType();
   registerNoteType();
+  const imagePackRegistered = registerArtifactExtensionDir(
+    resolvePath(REPO_ROOT, "extensions/cinatra-ai/image-artifact"),
+  );
+  if (!imagePackRegistered || !objectTypeRegistry.resolve(IMAGE_TYPE)) {
+    throw new Error(
+      "the pinned image-artifact pack did not register " +
+        IMAGE_TYPE +
+        ": sync the pinned extensions (scripts/ci/sync-dev-extensions.mjs --pinned) before this tier",
+    );
+  }
   await seedClaim(PICTURE_TYPE, PICTURE_EXT);
+  await seedClaim(IMAGE_TYPE, IMAGE_EXT);
   await seedClaim(NOTE_TYPE, NOTE_EXT);
   await sql(
     `INSERT INTO "${S()}"."agent_templates"
@@ -567,6 +597,223 @@ describe.skipIf(!HAS_REAL_DB)(
       expect(loser.reason).toBe("stale_base");
       // The refusal left the picture at two revisions.
       expect(await revisionCount(first.artifactId)).toBe(2);
+    });
+  },
+);
+
+/** A provider of another name and model that answers the given picture. */
+function otherProvider(image: string) {
+  return async () => ({
+    provider: "other-image-provider",
+    generateImage: async () => ({ imageData: image, mimeType: "image/png", model: "other-model" }),
+  });
+}
+
+describe.skipIf(!HAS_REAL_DB)(
+  "cinatra#4223 — a re-drive reports the facts stored with the revision it returns",
+  () => {
+    it("a re-drive of the same node with the same bytes from another provider reports the first write's provider and model", async () => {
+      const runId = nextId("run");
+      await seedRun(runId);
+      const base = {
+        runId,
+        orgId: ORG,
+        templateId: TEMPLATE,
+        packageVersion: "1.0.0",
+        createdBy: "user-3032",
+        nodeId: "picture-node",
+        extension: PICTURE_EXT,
+        title: "The lighthouse",
+        prompt: "a lighthouse at dusk",
+        data: { post: "post-artifact-1", placement: "featured" },
+      };
+      const first = await tool.generateArtifactImage(base, providerServing([PNG_RED]).deps());
+      if (!first.ok) throw new Error(first.error);
+
+      const again = await tool.generateArtifactImage(
+        base,
+        providerServing([PNG_RED]).deps({ resolveImageProvider: otherProvider(PNG_RED) }),
+      );
+      expect(again.ok).toBe(true);
+      if (!again.ok) throw new Error(again.error);
+      expect(again.deduped).toBe(true);
+      expect(again.artifactId).toBe(first.artifactId);
+      expect(again.representationRevisionId).toBe(first.representationRevisionId);
+      // The facts stored with that revision, never this attempt's.
+      expect(again.provider).toBe("test-image-provider");
+      expect(again.model).toBe("test-image-model-1");
+      const ledger = await ledgerRow(runId, "picture-node");
+      expect(ledger?.image_provider).toBe("test-image-provider");
+    });
+
+    it("a re-drive of a landed regeneration from another provider reports that append's stored facts", async () => {
+      const runId = nextId("run");
+      await seedRun(runId);
+      const create = {
+        runId,
+        orgId: ORG,
+        templateId: TEMPLATE,
+        packageVersion: "1.0.0",
+        createdBy: "user-3032",
+        nodeId: "picture-node",
+        extension: PICTURE_EXT,
+        title: "The lighthouse",
+        prompt: "a lighthouse at dusk",
+        data: { post: "post-artifact-1", placement: "featured" },
+      };
+      const first = await tool.generateArtifactImage(create, providerServing([PNG_RED]).deps());
+      if (!first.ok) throw new Error(first.error);
+      const regen = {
+        ...create,
+        title: "",
+        prompt: "the same lighthouse, at dawn",
+        artifactId: first.artifactId,
+        baseRepresentationRevisionId: first.representationRevisionId,
+      };
+      const appended = await tool.generateArtifactImage(regen, providerServing([PNG_BLUE]).deps());
+      if (!appended.ok) throw new Error(appended.error);
+      expect(appended.revision).toBe(2);
+
+      const again = await tool.generateArtifactImage(
+        regen,
+        providerServing([PNG_BLUE]).deps({ resolveImageProvider: otherProvider(PNG_BLUE) }),
+      );
+      expect(again.ok).toBe(true);
+      if (!again.ok) throw new Error(again.error);
+      expect(again.deduped).toBe(true);
+      expect(again.representationRevisionId).toBe(appended.representationRevisionId);
+      expect(again.revision).toBe(2);
+      expect(again.provider).toBe("test-image-provider");
+      expect(again.model).toBe("test-image-model-1");
+      expect(await revisionCount(first.artifactId)).toBe(2);
+    });
+  },
+);
+
+describe.skipIf(!HAS_REAL_DB)(
+  "cinatra#4223 — the stored-facts read answers exactly one finalized picture row, or nothing",
+  () => {
+    it("reads the provider and model of exactly one finalized row of that organisation, artifact and revision", async () => {
+      const { readRevisionImageProvenance } = await import("@/lib/artifacts/materialization-ledger");
+      const runId = nextId("run");
+      await seedRun(runId);
+      const first = await tool.generateArtifactImage(
+        {
+          runId,
+          orgId: ORG,
+          templateId: TEMPLATE,
+          packageVersion: "1.0.0",
+          createdBy: "user-3032",
+          nodeId: "reader-node",
+          extension: PICTURE_EXT,
+          title: "The lighthouse",
+          prompt: "a lighthouse at dusk",
+          data: { post: "post-artifact-1", placement: "featured" },
+        },
+        providerServing([PNG_RED]).deps(),
+      );
+      if (!first.ok) throw new Error(first.error);
+      const key = {
+        orgId: ORG,
+        artifactId: first.artifactId,
+        representationRevisionId: first.representationRevisionId,
+      };
+      const table = `"${S()}"."artifact_materializations"`;
+      const where = `run_id = $1 AND output_id = 'reader-node'`;
+
+      // One finalized row: its facts.
+      expect(await readRevisionImageProvenance(key)).toEqual({
+        provider: "test-image-provider",
+        model: "test-image-model-1",
+      });
+      // Another organisation, another revision: no row.
+      expect(await readRevisionImageProvenance({ ...key, orgId: "org-other" })).toBeNull();
+      expect(
+        await readRevisionImageProvenance({ ...key, representationRevisionId: "rep-none" }),
+      ).toBeNull();
+
+      // A null or empty stored model reads as a null model.
+      await sql(`UPDATE ${table} SET image_model = NULL WHERE ${where}`, [runId]);
+      expect(await readRevisionImageProvenance(key)).toEqual({
+        provider: "test-image-provider",
+        model: null,
+      });
+      await sql(`UPDATE ${table} SET image_model = '' WHERE ${where}`, [runId]);
+      expect((await readRevisionImageProvenance(key))?.model).toBeNull();
+
+      // An empty stored provider is no fact: nothing.
+      await sql(`UPDATE ${table} SET image_provider = '' WHERE ${where}`, [runId]);
+      expect(await readRevisionImageProvenance(key)).toBeNull();
+      await sql(`UPDATE ${table} SET image_provider = 'test-image-provider' WHERE ${where}`, [runId]);
+
+      // A row that is not finalized is no fact: nothing.
+      await sql(`UPDATE ${table} SET phase = 'claimed' WHERE ${where}`, [runId]);
+      expect(await readRevisionImageProvenance(key)).toBeNull();
+      await sql(`UPDATE ${table} SET phase = 'finalized' WHERE ${where}`, [runId]);
+      expect((await readRevisionImageProvenance(key))?.provider).toBe("test-image-provider");
+
+      // Two finalized rows for one revision are ambiguous: nothing, never a guess.
+      await sql(
+        `INSERT INTO ${table}
+           (id, org_id, run_id, output_id, node_id, path, extension, content_hash, phase,
+            artifact_id, representation_revision_id, image_prompt, image_provider, image_model)
+         SELECT $2, org_id, run_id, output_id || '#second', node_id, path, extension, content_hash, phase,
+                artifact_id, representation_revision_id, image_prompt, 'other-image-provider', image_model
+           FROM ${table} WHERE ${where}`,
+        [runId, nextId("ledger")],
+      );
+      expect(await readRevisionImageProvenance(key)).toBeNull();
+    });
+  },
+);
+
+describe.skipIf(!HAS_REAL_DB)(
+  "the pipeline's image is filed as the REAL image type, joined to its post (cinatra#3033)",
+  () => {
+    it("files the image as @cinatra-ai/image-artifact:image with data.post equal to the run's post artifact and data.placement featured, as an image/* form", async () => {
+      const runId = nextId("run");
+      await seedRun(runId);
+      // The run's post artifact id: what the draft-writing step filed. The
+      // image names it, and the join below reads it back off the filed row.
+      const postArtifactId = nextId("post-artifact");
+      const provider = providerServing([PNG_RED]);
+
+      const outcome = await tool.generateArtifactImage(
+        {
+          runId,
+          orgId: ORG,
+          templateId: TEMPLATE,
+          packageVersion: "1.0.0",
+          createdBy: "user-3032",
+          nodeId: "image-node",
+          extension: IMAGE_EXT,
+          title: "Featured image",
+          prompt: "a lighthouse at dusk",
+          data: { post: postArtifactId, placement: "featured" },
+        },
+        provider.deps({
+          // The run package declares the real image kind as its production.
+          loadWriteFacts: async () => ({
+            producesRefs: [{ extension: IMAGE_EXT, objectTypeId: IMAGE_TYPE }],
+            reviewed: false,
+          }),
+        }),
+      );
+
+      expect(outcome.ok).toBe(true);
+      if (!outcome.ok) throw new Error(outcome.error);
+
+      const row = await objectRow(outcome.artifactId);
+      // The filed row's type is the pack's real one, not the stand-in.
+      expect(row?.type).toBe(IMAGE_TYPE);
+      // The join: the image names the post the same run wrote, and where it sits.
+      expect(row?.data.post).toBe(postArtifactId);
+      expect(row?.data.placement).toBe("featured");
+      // An image form, carried on the row and on the outcome.
+      expect(String(row?.data.mime)).toMatch(/^image\//);
+      expect(outcome.mime).toMatch(/^image\//);
+      // The bytes on disk are the bytes the provider produced.
+      expect((await artifactBytes(outcome.artifactId)).toString("base64")).toBe(PNG_RED);
     });
   },
 );

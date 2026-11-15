@@ -1,6 +1,6 @@
 # Contributing to Cinatra
 
-Thanks for your interest. Cinatra is the open source AI workspace, and external contributions — bug reports, agents, connectors, skills, documentation, and code — are welcome.
+Thanks for your interest. Cinatra is The Open Source Agentic Teams Workspace, and external contributions — bug reports, agents, connectors, skills, documentation, and code — are welcome.
 
 This page covers how to get a development environment running and how to propose changes. For the deeper architecture and authoring references, start at the [Developer Guide](https://docs.cinatra.ai/guides/developer/).
 
@@ -61,8 +61,34 @@ measured:
 | 64 min | 16.4 GB | 0.1 GB | 1.9 GB |
 | 77 min | 19.6 GB | 0.1 GB | 4.9 GB |
 
-Two such processes fill a 62 GB machine to the point of swapping, which slows
+Those figures are the "before" state. Two such processes fill a 62 GB machine to the point of swapping, which slows
 every page and every end-to-end step.
+
+A later measurement of the current `pnpm dev` read a much lower, flat figure when
+the server was idle. A 64 GB Linux machine ran one development server (Next.js
+16.2.10). For each row the script waited until `/api/auth/get-session` answered
+200, sent one warm request, and then the server stayed idle for 90 minutes. The script read `RssAnon` and `VmSwap` from `/proc/<pid>/status` at
+minute 10 and at minute 90 (1 GB here is 1,000,000 kB):
+
+| Idle development server | Anonymous memory, minute 10 | Anonymous memory, minute 90 | Swapped out, minute 90 |
+|---|---|---|---|
+| Default `pnpm dev` | 4.83 GB | 4.82 GB | 0 |
+| `CINATRA_DEV_SOURCE_MAPS=0` | 5.58 GB | 5.52 GB | 0 |
+| `CINATRA_TURBOPACK_DEV_FS_CACHE=0` (filesystem cache off) | 5.51 GB | 0.88 GB (swapped out, see below) | 4.39 GB |
+| Webpack mode (`pnpm dev:webpack`) | 5.69 GB | 5.65 GB | 0 |
+
+Only the default row is the figure to expect from `pnpm dev`. The first three
+rows were measured at one commit (`f276fc93`). The webpack row was measured
+later, at the merge commit of #4594 (`37467986`), because webpack mode did not
+start at the earlier commit; so it is not a one-setting comparison with the
+default row.
+
+The low minute-90 figure of the filesystem-cache-off row is not memory that was
+released. The machine was under unrelated load during that run, and the kernel
+paged the idle server out: anonymous memory plus swapped-out memory at minute 90
+was 5.27 GB, close to the 5.51 GB at minute 10. These are idle figures after one
+warm request. They do not show how much memory a server holds while pages are
+being compiled.
 
 - **The memory line.** Once a minute the development server writes one line to
   its log, for example

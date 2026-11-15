@@ -7,11 +7,17 @@
 // in chat-page.tsx.
 import type { WidgetDefinition, WidgetManifest } from "@cinatra-ai/sdk-ui";
 import type { ChatViewComponents } from "./chat-messages-view";
+import type { ChatThreadName } from "@/lib/chat-shell-bus";
 
 export type ChatPageMode = "create-agent" | "create-workflow";
 
 export type ChatPageProps = {
   initialThreadId?: string;
+  /** The name of `initialThreadId`, read by the route's server render through
+   *  the thread read route's own read (cinatra#4453), typed: `named`, `blank` or
+   *  `unavailable`. The breadcrumb draws it until the page's own reads of that
+   *  thread arrive, so a direct load does not wait on a fetch. */
+  initialThreadName?: ChatThreadName;
   /** The route-resolved assistant binding for this mount (cinatra#1878 W3): the
    *  bound assistant PACKAGE and, for a remote-capable assistant, the connected
    *  site instance. Seeds the client's URL builders + thread binding so new

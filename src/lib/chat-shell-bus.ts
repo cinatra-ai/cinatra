@@ -20,10 +20,44 @@
 
 export const CHAT_TITLE_CHANGED_EVENT = "cinatra:chat:title-changed";
 export const CHAT_SHOW_PANEL_EVENT = "cinatra:chat:show-panel";
+/** A thread renamed on this page: `{ threadId, title }` (cinatra#4453). */
+export const CHAT_THREAD_RENAMED_EVENT = "cinatra:chat:thread-renamed";
 
 export type ChatPanel = "threads" | "teams";
 
 // --- Active chat thread title -------------------------------------------
+
+/**
+ * WHAT A READ OF A THREAD ANSWERED FOR ITS NAME (cinatra#4453). Three answers,
+ * because the components drawing (Breadcrumb section) draws three crumbs:
+ *
+ *   - `named`: the reader may read the thread, and it has a title. The crumb
+ *     shows the title.
+ *   - `blank`: the reader may read the thread, and its title is empty. "While a
+ *     name is genuinely unavailable, the crumb shows the id's first eight
+ *     characters plus an ellipsis".
+ *   - `unavailable`: the read refused the reader, found no thread, or failed.
+ *     The trail draws no thread crumb, so no part of the id reaches a reader
+ *     who may not read the thread.
+ */
+export type ChatThreadName =
+  | { state: "named"; name: string }
+  | { state: "blank" }
+  | { state: "unavailable" };
+
+/** The answer for a thread a read returned (its title), or `unavailable` for none. */
+export function chatThreadNameFromTitle(title: string | null | undefined): ChatThreadName {
+  if (title == null) return { state: "unavailable" };
+  const name = title.trim();
+  return name ? { state: "named", name } : { state: "blank" };
+}
+
+/** The thread crumb's label for an answer, or `null` for no thread crumb. */
+export function chatThreadCrumbLabel(answer: ChatThreadName, threadId: string): string | null {
+  if (answer.state === "named") return answer.name;
+  if (answer.state === "blank") return `${threadId.slice(0, 8)}\u2026`;
+  return null;
+}
 
 let currentChatThreadTitle: string | null = null;
 
