@@ -183,7 +183,8 @@ type RequestBody = {
    *  payload (e.g. a watcher orchestrator's save_watcher echoes back url/title/
    *  plus a savedWatcherRef pointing at the created object), set
    *  `result_input_passthrough: true` so the route's response is
-   *  `{...input.rawData, [result_id_field]: result.id}` — matching the
+   *  `{...input.rawData, [result_id_field]: result.id ?? result[result_id_field]}`
+   *  (objects_save also falls back to `result.objectId`) — matching the
    *  shape the LLM-based persist node returned. */
   result_input_passthrough?: unknown;
   result_id_field?: unknown;
@@ -886,8 +887,13 @@ export async function POST(req: Request): Promise<Response> {
     // save_watcher echoes back the inputs + a savedWatcherRef pointing
     // at the created object). When `result_input_passthrough: true`, the
     // route merges `input.rawData` (objects_save case) or `input` (other
-    // tools) with `{[result_id_field]: result.id}`. The OAS declares the
-    // exact field name expected downstream.
+    // tools) with `{[result_id_field]: <saved id>}`. The OAS declares the
+    // exact field name expected downstream. The id is read from `id`, then
+    // from the declared field itself. objects_save returns the new id as
+    // `objectId` (it has no `id`), so for objects_save alone `objectId` comes
+    // last. Other tools keep the declared field: the outreach review persist
+    // primitives return `{ ok, runId, objectId }`, where objectId is the bundle
+    // they wrote, not the id their node declares.
     if (body.result_input_passthrough === true) {
       const idField =
         typeof body.result_id_field === "string" ? body.result_id_field : "id";
@@ -901,9 +907,10 @@ export async function POST(req: Request): Promise<Response> {
               ? (input.rawData as Record<string, unknown>)
               : {})
           : input;
+      const savedObjectId = tool === "objects_save" ? resultObj.objectId : undefined;
       const shaped: Record<string, unknown> = {
         ...echoFields,
-        [idField]: resultObj.id ?? resultObj[idField] ?? null,
+        [idField]: resultObj.id ?? resultObj[idField] ?? savedObjectId ?? null,
       };
       // THE FILED REVIEW SET RIDES OUT ON THE ECHO, for every extension alike:
       // a declared module that filed review targets gets them back at the top
