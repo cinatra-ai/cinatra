@@ -1519,7 +1519,7 @@ describe("OrchestratorStepperPanel — every send of a held gate sends nothing (
 });
 
 // ---------------------------------------------------------------------------
-// cinatra#3562, fold 3 — Codex pre-review 2, MUST-FIX 1 to 3.
+// cinatra#3562: each gate keeps its own identity, pick and resume text on the stepper.
 // ---------------------------------------------------------------------------
 
 /** A list step that reports nothing and hands over one pick per press. */

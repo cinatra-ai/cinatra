@@ -227,7 +227,7 @@ describe("agent-run resume + WayFlow text-only envelope", () => {
   });
 });
 
-// cinatra#3562, fold 3 (Codex pre-review 2, MUST-FIX 3): END TO END from the
+// cinatra#3562, a list step's picks reach the run: END TO END from the
 // payload a run surface builds for a mid-run list step to the text WayFlow
 // receives. The server sends a nonblank `userResponse` before `approvalNote`,
 // so the list step's payload must carry no `userResponse` of its own.

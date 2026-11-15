@@ -1431,7 +1431,7 @@ describe("AgenticRunPanel — every send of a held gate sends nothing (cinatra#3
 });
 
 // ---------------------------------------------------------------------------
-// cinatra#3562, fold 3 — Codex pre-review 2, MUST-FIX 1 to 3.
+// cinatra#3562: each gate keeps its own identity, pick and resume text on the run panel.
 // ---------------------------------------------------------------------------
 
 /** A list step that hands over its pick together with a reply text. */

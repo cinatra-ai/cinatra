@@ -816,7 +816,7 @@ describe("createGateValidityStore (cinatra#3562)", () => {
   });
 });
 
-// cinatra#3562, fold 3 (Codex pre-review 2, MUST-FIX 1): the gate identity is
+// cinatra#3562, two gates never share one identity: the gate identity is
 // injective. Reached through the module namespace, so each case fails on its
 // own assertion where a helper is missing. The identity is
 // `hitlGateIdentityKey` (cinatra#3380), the one gate key of every run surface.
