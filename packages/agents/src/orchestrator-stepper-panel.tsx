@@ -142,7 +142,7 @@ import {
 } from "./run-surface-status";
 import { useRunRowWatch } from "./use-run-row-watch";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
-import { fieldRendererRegistry } from "./field-renderer-registry";
+import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext } from "./field-renderer-registry";
 import {
   ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
@@ -718,9 +718,10 @@ function HitlApprovalCard({
   // sequential per-field setup gates all reuse the SAME xRenderer
   // (schema-field-fallback), so an xRenderer-only key never fires on a
   // field→field advance (postTitle → blogPostUrl) and field 1's buffered
-  // value bleeds into field 2. The review task is part of the key (cinatra#3380):
-  // a mid-run gate carries no fieldName and can repeat its renderer, and a value
-  // written for one gate must not read as the next gate's answer.
+  // value bleeds into field 2. The review task is part of the key (cinatra#3380,
+  // cinatra#3035): a mid-run gate carries no fieldName and can repeat its
+  // renderer, and a value written (or a pick made) for one gate must not read
+  // as the next gate's answer.
   //
   // THE RESET IS DONE IN RENDER, not after it (cinatra#3380). The next gate's
   // renderer can write its answer from a layout effect when it mounts (a list
@@ -1386,7 +1387,8 @@ function HitlApprovalCard({
             // internal input state, e.g. SchemaFieldRenderer's localValue)
             // survives the field advance and the previous field's typed text
             // pre-fills the next field. The review task is in the key too
-            // (cinatra#3380): a mid-run gate can repeat its renderer.
+            // (cinatra#3380, cinatra#3035): a mid-run gate can repeat its
+            // renderer, and a later gate's renderer starts with no pick.
             key={hitlGateIdentityKey(interruptContext)}
             // The gate's REAL field identity (cinatra#2541). `fieldName` is what
             // the renderer labels itself from (resolveFieldLabel) and ids its
@@ -1578,9 +1580,15 @@ function HitlApprovalCard({
 
         {showContinueButton && (
           <div className="flex justify-end pt-2 border-t border-line">
+            {/* cinatra#3380: held while the gate's declared renderer value is unwritten.
+                cinatra#3035: held while a gate whose kind declares the hold has no pick. */}
             <Button
               size="sm"
-              disabled={isApproving || continueAwaitsRendererValue}
+              disabled={
+                isApproving ||
+                continueAwaitsRendererValue ||
+                continueAwaitsAPick(entry, bufferedHitlValue)
+              }
               onClick={handleContinue}
               className="gap-1.5"
             >
