@@ -71,7 +71,6 @@ import {
 } from "@cinatra-ai/sdk-extensions/artifact-edit-channel";
 
 import { ArtifactReadDeniedPanel } from "./read-denied-panel";
-import { DashboardPointerDetail } from "./dashboard-pointer-detail";
 import { ArtifactStructuredDataView } from "@/components/artifacts/artifact-structured-data-view";
 import { isSelectionPreparing } from "./renderer-dispatch";
 import { ArtifactDisplayMountPoint } from "./artifact-display-mount";
@@ -350,33 +349,6 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
     mime,
     propsApiVersion: rendererProps.propsApiVersion,
   });
-
-  // THE DASHBOARD POINTER STAYS WHERE THE DISPATCH ANSWERS A FLOOR (cinatra#4311).
-  // This is not an interception: the dispatch above has already run, and it
-  // answered a floor of some reason: no installed display claims this dashboard,
-  // or the display that claims it needs a rebuild. The page then draws the
-  // pointer it has drawn for a dashboard row since cinatra#1895 (its header and
-  // its Open dashboard affordance) instead of the generic floor, so an admitted
-  // dashboard keeps its way to its canonical surface. The pointer comes from the
-  // type's read gate, which already authorized it. Where the dispatch answers a
-  // display that mounts, this branch is not reached; the pointer slice of
-  // cinatra#4311 deletes it.
-  if (mount.kind === "floor" && typeGate.dashboardPointer) {
-    return (
-      <Main className="min-h-screen">
-        <PageHeader
-          title={artifactDisplayTitle(artifact)}
-          description="A dashboard artifact — opens at its canonical surface."
-        />
-        <PageContent
-          className="flex flex-col gap-6 pb-8"
-          data-render-dispatch="dashboard-pointer"
-        >
-          <DashboardPointerDetail pointer={typeGate.dashboardPointer} />
-        </PageContent>
-      </Main>
-    );
-  }
 
   return (
     <Main className="min-h-screen">
