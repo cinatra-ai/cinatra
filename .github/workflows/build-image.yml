@@ -5025,6 +5025,14 @@ jobs:
       - name: Build against the shrunk maps (the #109 class is a build error)
         env:
           NODE_OPTIONS: --max-old-space-size=4096
+          # One page-data worker, as every other hosted production app build
+          # runs (scripts/ci/__tests__/hosted-e2e-build-worker-cap.test.mjs).
+          # This was the one hosted `pnpm build` left at the default fan-out
+          # (3 workers on the 4-vCPU runner). It lost its runner in this step
+          # on a main push: the 34-minute job cap fired late, the job log was
+          # never uploaded, and the whole run ended cancelled. The knob maps to
+          # experimental.cpus in next.config.ts; it changes no app code.
+          CINATRA_BUILD_CPUS: "1"
           SUPABASE_DB_URL: postgresql://build:build@127.0.0.1:5432/build
           BETTER_AUTH_SECRET: build-only-placeholder-not-used-at-runtime
           NANGO_ENCRYPTION_KEY: build-only-placeholder-not-used-at-runtime
