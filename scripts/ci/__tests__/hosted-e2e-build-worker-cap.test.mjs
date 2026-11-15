@@ -752,6 +752,29 @@ function capScript(m, args, env = {}) {
 }
 
 const buildCgroups = (m) => fs.readdirSync(m.cg).filter((n) => n.startsWith("cinatra-build-"));
+
+/**
+ * A stand-in for sudo on the stand-in tree. It refuses one root action when
+ * FAKE_SUDO_REFUSE is set: the whole command line (for example `mkdir -p <dir>`
+ * or `tee <file>`) is matched against that glob. `rmdir` removes the folder
+ * with its plain files, as rmdir removes a real cgroup with its interface
+ * files. Every other action runs as asked.
+ */
+function fakeSudo(m) {
+  const file = path.join(m.dir, "fake-sudo");
+  fs.writeFileSync(
+    file,
+    '#!/usr/bin/env bash\nif [ -n "${FAKE_SUDO_REFUSE:-}" ]; then case "$*" in $FAKE_SUDO_REFUSE) exit 1 ;; esac; fi\n' +
+      'if [ "$1" = rmdir ]; then shift; exec rm -r "$@"; fi\nexec "$@"\n',
+    { mode: 0o755 },
+  );
+  return file;
+}
+
+const REFUSED_RC = 125;
+const MARKER = "build-ran";
+// A stand-in build that leaves a marker file, so a test can tell it never ran.
+const markerBuild = (m) => ["bash", "-c", `touch "${path.join(m.dir, MARKER)}"; exit 5`];
 const capOf = (memTotalKb, reserveMib = 2048) => Math.floor(memTotalKb / 1024) - reserveMib;
 
 describe("scripts/ci/hosted-build-memory-cap.sh, run against a stand-in cgroup tree", () => {
@@ -817,18 +840,48 @@ describe("scripts/ci/hosted-build-memory-cap.sh, run against a stand-in cgroup t
     }
   });
 
-  it("warns and builds uncapped when the cap cannot be set", () => {
-    for (const [shape, reason] of [
-      [{ controllers: "cpu io pids" }, "memory controller is not available"],
-      [{ memTotalKb: 4 * 1024 * 1024 }, "under 4096 MiB"],
+  it("fails closed on a GitHub-hosted runner when the cap cannot be set: one error line, no build", () => {
+    for (const [shape, env, refuse, reason] of [
+      [{ controllers: "cpu io pids" }, {}, null, "memory controller is not available"],
+      [{ memTotalKb: 4 * 1024 * 1024 }, {}, null, "under 4096 MiB"],
+      [{}, { CINATRA_BUILD_MEMORY_RESERVE_MIB: "2g" }, null, "is not a whole number of MiB"],
+      [{}, { CINATRA_MEMCAP_MEMINFO: "/nonexistent/meminfo" }, null, "cannot read MemTotal"],
+      [{ subtree: "cpu io pids" }, {}, "tee */cgroup.subtree_control", "cannot enable the memory controller"],
+      [{}, {}, "mkdir *", "cannot set up the cgroup"],
+      [{}, {}, "tee */memory.max", "cannot set up the cgroup"],
+      [{}, {}, "tee */cinatra-build-*/cgroup.procs", "cannot set up the cgroup"],
     ]) {
       const m = machine(shape);
-      const r = capScript(m, ["run", "bash", "-c", "exit 5"]);
-      expect(r.status, reason).toBe(5);
-      expect(buildCgroups(m)).toEqual([]);
-      expect(r.stdout).toContain("::warning title=build memory cap::not applied:");
-      expect(r.stdout).toContain(reason);
+      const extra = { CINATRA_MEMCAP_SUDO: fakeSudo(m), ...(refuse ? { FAKE_SUDO_REFUSE: refuse } : {}) };
+      const r = capScript(m, ["run", ...markerBuild(m)], { ...env, ...extra });
+      expect(r.status, reason + r.stdout + r.stderr).toBe(REFUSED_RC);
+      expect(fs.existsSync(path.join(m.dir, MARKER)), reason).toBe(false);
+      expect(buildCgroups(m), reason).toEqual([]);
+      const errors = r.stdout.split("\n").filter((l) => l.startsWith("::error"));
+      expect(errors, reason).toHaveLength(1);
+      expect(errors[0]).toContain("::error title=build memory cap::cannot cap the build memory: ");
+      expect(errors[0]).toContain(reason);
+      expect(errors[0]).toContain("set CINATRA_BUILD_MEMORY_CAP=0 to build uncapped");
+      expect(r.stdout).not.toContain("::warning");
     }
+  });
+
+  it("builds uncapped on a hosted runner only when the cap is explicitly turned off", () => {
+    const m = machine({ controllers: "cpu io pids" });
+    const r = capScript(m, ["run", ...markerBuild(m)], { CINATRA_BUILD_MEMORY_CAP: "0" });
+    expect(r.status, r.stdout + r.stderr).toBe(5);
+    expect(fs.existsSync(path.join(m.dir, MARKER))).toBe(true);
+    expect(r.stdout).toContain("build memory cap: not applied: turned off (CINATRA_BUILD_MEMORY_CAP=0)");
+  });
+
+  it("removes its cgroup and ends with the signal's code when the step is cancelled", () => {
+    const m = machine();
+    const r = capScript(m, ["run", "bash", "-c", "kill -TERM $PPID; sleep 0.3; exit 0"], { CINATRA_MEMCAP_SUDO: fakeSudo(m) });
+    expect(r.signal, r.stdout + r.stderr).toBe(null);
+    expect(r.status, r.stdout + r.stderr).toBe(143);
+    expect(buildCgroups(m)).toEqual([]);
+    expect(fs.readFileSync(path.join(m.cg, "cgroup.procs"), "utf8")).toMatch(/^\d+\n$/);
+    expect(r.stdout).toContain("build memory cap: stopped by a signal");
   });
 
   it("enables the memory controller for child cgroups when the root does not yet", () => {
@@ -848,8 +901,10 @@ describe("scripts/ci/hosted-build-memory-cap.sh, run against a stand-in cgroup t
   it("writes the buildkit driver options for a hosted image build", () => {
     const m = machine();
     expect(capScript(m, ["buildx-opts"]).status).toBe(0);
+    // no swap cap asked for: swap stays as the job set it up (Docker's default
+    // would allow only as much swap as the memory cap)
     expect(fs.readFileSync(m.output, "utf8")).toBe(
-      `driver_opts<<CINATRA_MEMCAP_EOF\nmemory=${capOf(16365568)}m\nCINATRA_MEMCAP_EOF\n`,
+      `driver_opts<<CINATRA_MEMCAP_EOF\nmemory=${capOf(16365568)}m\nmemory-swap=-1\nCINATRA_MEMCAP_EOF\n`,
     );
     const s = machine();
     expect(capScript(s, ["buildx-opts"], { CINATRA_BUILD_SWAP_MAX_MIB: "8192" }).status).toBe(0);
@@ -858,15 +913,32 @@ describe("scripts/ci/hosted-build-memory-cap.sh, run against a stand-in cgroup t
     );
   });
 
-  it("writes empty driver options on any other runner, or when the cap cannot be sized", () => {
+  it("writes empty driver options on any other runner, or with the cap turned off", () => {
     for (const [shape, env] of [
       [{}, { RUNNER_ENVIRONMENT: "self-hosted" }],
+      [{ memTotalKb: 2 * 1024 * 1024 }, { RUNNER_ENVIRONMENT: "self-hosted" }],
       [{}, { CINATRA_BUILD_MEMORY_CAP: "0" }],
-      [{ memTotalKb: 2 * 1024 * 1024 }, {}],
     ]) {
       const m = machine(shape);
       expect(capScript(m, ["buildx-opts"], env).status).toBe(0);
       expect(fs.readFileSync(m.output, "utf8")).toBe("driver_opts<<CINATRA_MEMCAP_EOF\nCINATRA_MEMCAP_EOF\n");
+    }
+  });
+
+  it("fails closed when a hosted image build cannot be sized: one error line, no driver options", () => {
+    for (const [shape, env, reason] of [
+      [{ memTotalKb: 2 * 1024 * 1024 }, {}, "under 4096 MiB"],
+      [{}, { CINATRA_BUILD_SWAP_MAX_MIB: "lots" }, "is not a whole number of MiB"],
+      [{}, { CINATRA_MEMCAP_MEMINFO: "/nonexistent/meminfo" }, "cannot read MemTotal"],
+    ]) {
+      const m = machine(shape);
+      const r = capScript(m, ["buildx-opts"], env);
+      expect(r.status, reason + r.stdout + r.stderr).toBe(REFUSED_RC);
+      expect(fs.readFileSync(m.output, "utf8"), reason).toBe("");
+      const errors = r.stdout.split("\n").filter((l) => l.startsWith("::error"));
+      expect(errors, reason).toHaveLength(1);
+      expect(errors[0]).toContain("::error title=build memory cap::cannot cap the build memory: ");
+      expect(errors[0]).toContain(reason);
     }
   });
 });
