@@ -223,4 +223,26 @@ describe("the floor commits no pick, so a floor-drawn idea step does not hold it
     // No state is kept by binding id any more.
     expect(src("extension-field-renderer.tsx")).not.toMatch(/new Set<string>\(\)/);
   });
+
+  it("each Continue caller keeps its floor report for the gate its renderer is keyed by", () => {
+    const src = (file: string) => readFileSync(join(__dirname, "..", file), "utf8");
+    // The key each caller remounts its renderer on is the key its floor report is kept for.
+    const keyedOn: Array<[string, string]> = [
+      ["agent-hitl-screen-card.tsx", "gateKey"],
+      ["agentic-run-panel.tsx", "bufferedHitlValueKey"],
+      ["orchestrator-stepper-panel.tsx", "bufferKey"],
+    ];
+    for (const [file, key] of keyedOn) {
+      const text = src(file);
+      expect(
+        text.includes(`const [rendererFloored, setRendererFloored] = useGateRendererFloor(${key});`),
+        `${file} keeps its floor report for ${key}`,
+      ).toBe(true);
+      // No plain boolean kept above the per-gate key.
+      expect(
+        /\[rendererFloored, setRendererFloored\] = useState\(/.test(text),
+        `${file} keeps a plain floor boolean`,
+      ).toBe(false);
+    }
+  });
 });

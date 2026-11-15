@@ -15,6 +15,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { Profiler } from "react";
 
 import type { LifecycleCardHost } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
@@ -338,5 +339,45 @@ describe("AgentHitlScreenCard - the idea step's hold follows the renderer instan
     expect(cardContinue(floored.container)!.disabled).toBe(false);
     // The loaded chooser still holds its own Continue until a pick.
     expect(cardContinue(loading.container)!.disabled).toBe(true);
+  });
+
+  // Review 3 of #4429: the card keeps the report above the renderer it remounts per
+  // gate, so the record of gate A's floor must not reach gate B's first frame. Every
+  // commit of gate B is read in the commit itself (the Profiler's onRender runs before
+  // any passive effect of that commit), not after the effects have settled.
+  it("a later gate of the same binding, after the earlier gate settled on the floor, draws its Continue held from its first frame while it loads", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    loadFloorComponent = () => Promise.reject(new Error("chunk unavailable"));
+    registerFloorBinding();
+    asking = floorGate("task-3035-floor-5a");
+    const heldInFrame: boolean[] = [];
+    let recording = false;
+    const onRender = () => {
+      if (!recording) return;
+      if (!(document.body.textContent ?? "").includes("Idea for task-3035-floor-5b")) return;
+      const button = cardContinue(document.body);
+      if (button) heldInFrame.push(button.disabled);
+    };
+    const profiled = (wireRef: string) => (
+      <Profiler id="hitl-screen-card" onRender={onRender}>
+        {card("chat_thread", wireRef)}
+      </Profiler>
+    );
+    const mounted = render(profiled("task-3035-floor-5a"));
+    await settle();
+    // Gate A settled on its floor: the floor commits no pick, so its Continue is not held.
+    await waitFor(() => expect(cardContinue(mounted.container)!.disabled).toBe(false));
+
+    // The run moves on: gate B mounts the same binding again, and its component is still loading.
+    loadFloorComponent = () => new Promise(() => {});
+    asking = floorGate("task-3035-floor-5b");
+    recording = true;
+    mounted.rerender(profiled("task-3035-floor-5b"));
+    await settle();
+    await waitFor(() => expect(mounted.container.textContent).toContain("Idea for task-3035-floor-5b"));
+    expect(heldInFrame.length).toBeGreaterThan(0);
+    // Held in every committed frame of gate B, the first one included.
+    expect(heldInFrame).not.toContain(false);
+    expect(cardContinue(mounted.container)!.disabled).toBe(true);
   });
 });

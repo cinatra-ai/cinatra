@@ -40,7 +40,7 @@ import {
 import type { AgentRunMessageBody } from "./store";
 import { StatusPill } from "@/components/ui/status-pill";
 import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
-import { RendererFloorReportContext } from "./schema-field-renderer";
+import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
 import type { FieldRendererContext } from "./field-renderer-registry";
 import { ArrowRight } from "lucide-react";
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
@@ -685,8 +685,6 @@ export function AgenticRunPanel({
   // Accumulates renderer-produced values (e.g. campaignId from recipients renderer)
   // so the Continue button can include them in the resume payload.
   const [bufferedHitlValue, setBufferedHitlValue] = useState<Record<string, unknown>>({});
-  // cinatra#3035: the mounted gate renderer reports here when it settles on the floor.
-  const [rendererFloored, setRendererFloored] = useState(false);
   // The AI-assist prompt window's state.
   // aiSuggestions is the stable suggestion payload threaded into renderers — it
   // changes only when the user submits a prompt, NOT on every poll tick (unlike
@@ -1631,6 +1629,9 @@ export function AgenticRunPanel({
   const bufferedHitlValueKey = effectiveHitlContext
     ? hitlGateIdentityKey(effectiveHitlContext)
     : null;
+  // cinatra#3035: the mounted gate renderer reports here when it settles on the
+  // floor, for this gate only: a later gate reads its own hold from its first frame.
+  const [rendererFloored, setRendererFloored] = useGateRendererFloor(bufferedHitlValueKey);
   const [prevBufferedHitlValueKey, setPrevBufferedHitlValueKey] = useState<string | null>(null);
   if (
     bufferedHitlValueKey !== null &&

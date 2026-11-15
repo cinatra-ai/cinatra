@@ -99,7 +99,7 @@ import {
 } from "./review-gate-card";
 import { ensureOrCheckRunNameAction } from "./run-name-actions";
 import { approveReviewTask } from "./hitl-actions";
-import { GateContinueHoldContext, RendererFloorReportContext } from "./schema-field-renderer";
+import { GateContinueHoldContext, RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
 // Wrap the legacy `userResponse` text with the WayFlow `user_envelope`
 // shape when paperclip attachments are pending. Refs persist attachments
 // captured at Suggest time; consumed at gate Continue.
@@ -699,8 +699,6 @@ function HitlApprovalCard({
   // suppression, but it was write-only here — this panel's re-show guard is
   // the awaitingNextStep state in the parent — so it was removed.
   const [bufferedHitlValue, setBufferedHitlValue] = useState<Record<string, unknown>>({});
-  // cinatra#3035: the mounted gate renderer reports here when it settles on the floor.
-  const [rendererFloored, setRendererFloored] = useState(false);
   // Reset the per-gate buffer when a new HITL gate opens (xRenderer changes).
   // Without this, gate N+1's handleContinue sends gate N's accumulated values
   // to approveReviewTask, leaking one gate's `userResponse` into the next gate's
@@ -732,6 +730,9 @@ function HitlApprovalCard({
   const [prevBufferKey, setPrevBufferKey] = useState<string | null>(null);
   const bufferKey =
     interruptContext != null ? hitlGateIdentityKey(interruptContext) : null;
+  // cinatra#3035: the mounted gate renderer reports here when it settles on the
+  // floor, for this gate only: a later gate reads its own hold from its first frame.
+  const [rendererFloored, setRendererFloored] = useGateRendererFloor(bufferKey);
   if (
     bufferKey !== null &&
     prevBufferKey !== null &&
