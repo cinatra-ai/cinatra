@@ -80,6 +80,9 @@ function intent(): ResumeIntentRow {
     attempts: 1,
     leaseToken: "lease-abc",
     leaseExpiresAt: new Date(Date.now() + 60_000),
+    // cinatra#3745: an intent this delivery has not claimed the run for, with nothing recorded.
+    runClaimedAt: null,
+    resumeTaskResult: null,
   };
 }
 

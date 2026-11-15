@@ -822,6 +822,34 @@ async function tombstonedSkillIds(skillIds: readonly string[]): Promise<Set<stri
 // restart, and its dropped memo lets a later RESTORE re-register.
 const registrationMemo = new Map<string, Promise<void>>();
 
+// The registration runs that have SETTLED. A memo entry holds its run's promise
+// from the moment the run starts, so a memo entry alone does not say that the
+// skill is registered: the run can still be in flight, or it can still drop the
+// entry when it ends. The read-only accessor below reads both.
+const settledRegistrationRuns = new WeakSet<Promise<void>>();
+
+function trackRegistrationRunSettled(run: Promise<void>): void {
+  // `run` never rejects (each run catches its own failure), so this only marks.
+  void run.then(() => {
+    settledRegistrationRuns.add(run);
+  });
+}
+
+/**
+ * READ-ONLY: true exactly when this process has registered EVERY id of
+ * `skillIds`: each id has a memoized registration whose run has settled and
+ * kept it (a failed id drops its memo entry before its run settles). It
+ * starts no registration, reads no store and changes no memo entry. The
+ * tool-manifest route (packages/agent-ui-protocol/CONTRACT.md section 5.2,
+ * "Read only") reads it instead of registering skills itself.
+ */
+export function areInstalledSkillsRegistered(skillIds: readonly string[]): boolean {
+  return skillIds.every((id) => {
+    const run = registrationMemo.get(id);
+    return run !== undefined && settledRegistrationRuns.has(run);
+  });
+}
+
 /**
  * Lazily register the SKILL.md body of whichever active extension provides
  * `skillId` into the `cinatra.skills` catalog. Generic replacement for the
@@ -884,6 +912,7 @@ export function ensureInstalledSkillRegistered(
     );
   });
   registrationMemo.set(skillId, run);
+  trackRegistrationRunSettled(run);
   return run;
 }
 
@@ -968,6 +997,7 @@ export async function ensureInstalledSkillsRegistered(
     // Share the in-flight promise across every pending id (concurrent callers
     // dedupe); the run tail deletes the memo for ids that ultimately failed.
     for (const id of pending) registrationMemo.set(id, run);
+    trackRegistrationRunSettled(run);
   }
 
   // Settle on every requested id — those just started here AND any that were
@@ -1536,6 +1566,16 @@ export const RETIRED_CHAT_NAMESPACE_SKILL_IDS = [
 ] as const;
 
 let retiredSupersededChatSkills: Promise<void> | null = null;
+// True once a retirement run has completed WITHOUT failing in this process.
+let retiredSupersededChatSkillsSettled = false;
+
+/**
+ * READ-ONLY: true once this process has completed the superseded chat-skill
+ * retirement without a failure. It starts no retirement and reads no store.
+ */
+export function isSupersededChatSkillRetirementSettled(): boolean {
+  return retiredSupersededChatSkillsSettled;
+}
 
 /**
  * Idempotent, memoized-per-process retirement of the superseded
@@ -1552,6 +1592,7 @@ export function retireSupersededChatSkillsOnce(): Promise<void> {
         `[cinatra:skills] retired ${retired.length} superseded chat skill row(s): ${retired.join(", ")}`,
       );
     }
+    retiredSupersededChatSkillsSettled = true;
   })().catch((err) => {
     retiredSupersededChatSkills = null;
     console.warn(

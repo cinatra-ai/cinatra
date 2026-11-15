@@ -288,9 +288,11 @@ type ResolvedWindowActor = {
 /**
  * Resolve the caller and enforce the RUN's access for `op`. Every entry point in
  * this module goes through it, so no window can be served on a looser rule than
- * another.
+ * another. Exported for the tool-manifest route, which resolves the window's
+ * actor with `op = "read"` (packages/agent-ui-protocol/CONTRACT.md section 5.2);
+ * it only reads.
  */
-async function requireRunWindowAccess(
+export async function requireRunWindowAccess(
   runId: string,
   op: "respondToHitl" | "read",
   /**

@@ -273,3 +273,51 @@ describe("core__0126 pause claim columns (cinatra#4245)", () => {
     expect(down).not.toMatch(/\bDROP (?:COLUMN|CONSTRAINT|TABLE) (?!IF EXISTS)|\bCASCADE\b|\bDROP TABLE\b/);
   });
 });
+
+describe("core__0128 regenerate step provenance (cinatra#4264 B1a)", () => {
+  it("runs outside a transaction, only adds on up (re-up is a no-op), and its down states and does the destructive drop", async () => {
+    const files = await validateCoreMigrationsDir(path.join(REPO_ROOT, CORE_MIGRATIONS_DIR));
+    expect(files.filter((name) => name.startsWith("core__0128_"))).toEqual(["core__0128_regenerate-step-provenance.mjs"]);
+    const file = path.join(REPO_ROOT, CORE_MIGRATIONS_DIR, "core__0128_regenerate-step-provenance.mjs");
+    const mod = await import(file);
+    const noTx = [];
+    const record = (fn) => { const calls = []; fn({ sql: (text) => calls.push(String(text)), noTransaction: () => noTx.push(fn.name) }); return calls; };
+    const up = record(mod.up);
+    expect(record(mod.up)).toEqual(up);
+    // CONCURRENTLY cannot run in a transaction block: up must declare noTransaction.
+    expect(noTx).toEqual(["up", "up"]);
+    expect(up[0]).toBe("SET lock_timeout = 5000");
+    expect(up.at(-1)).toBe("RESET lock_timeout");
+    const adds = up.flatMap((stmt) => stmt.match(/ADD COLUMN (?:IF NOT EXISTS )?\w+/g) ?? []);
+    expect(adds.every((add) => add.startsWith("ADD COLUMN IF NOT EXISTS "))).toBe(true);
+    expect(adds.map((add) => add.split(" ").pop()).sort()).toEqual(
+      ["regenerate_node_id", "source_artifact_id", "source_representation_revision_id", "verified_step_id"],
+    );
+    // Both indexes are built CONCURRENTLY, IF NOT EXISTS, each after a guard that
+    // drops only an INVALID index of its name (a failed earlier build).
+    for (const name of ["artifact_materializations_org_artifact_rev_idx", "lifecycle_repair_successor_idx"]) {
+      const create = up.findIndex((stmt) => stmt.includes(`CREATE INDEX CONCURRENTLY IF NOT EXISTS ${name} `));
+      expect(create).toBeGreaterThan(0);
+      expect(up[create - 1]).toContain(`c.relname = '${name}'`);
+      expect(up[create - 1]).toMatch(/AND NOT i\.indisvalid/);
+    }
+    expect(up.join("\n")).toMatch(/WHERE path = 'materialize_tool'/);
+    // The snapshot table is removed with its run.
+    const table = up.find((stmt) => stmt.startsWith("CREATE TABLE IF NOT EXISTS agent_run_step_snapshots"));
+    expect(table).toMatch(/run_id text NOT NULL REFERENCES agent_runs\(id\) ON DELETE CASCADE/);
+    expect(table).toMatch(/PRIMARY KEY \(run_id, node_id\)/);
+    // No up statement rewrites or constrains existing rows.
+    expect(up.join("\n")).not.toMatch(/\bUPDATE\b|\bDELETE FROM\b|ADD CONSTRAINT/);
+    // Down: IF EXISTS throughout, drops exactly what up added, and the module says it destroys data.
+    const down = record(mod.down).join(";\n");
+    expect(down).not.toMatch(/\bDROP (?:COLUMN|TABLE|INDEX) (?!IF EXISTS)|\bCASCADE\b/);
+    const droppedColumns = [...down.matchAll(/DROP COLUMN IF EXISTS (\w+)/g)].map((m) => m[1]).sort();
+    expect(droppedColumns).toEqual(adds.map((add) => add.split(" ").pop()).sort());
+    expect([...down.matchAll(/DROP INDEX IF EXISTS (\w+)/g)].map((m) => m[1]).sort()).toEqual(
+      ["artifact_materializations_org_artifact_rev_idx", "lifecycle_repair_successor_idx"],
+    );
+    expect(down).toMatch(/DROP TABLE IF EXISTS agent_run_step_snapshots/);
+    const { readFile } = await import("node:fs/promises");
+    expect(await readFile(file, "utf8")).toMatch(/DOWN IS DATA-DESTRUCTIVE/);
+  });
+});
