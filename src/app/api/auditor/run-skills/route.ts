@@ -178,11 +178,13 @@ const RUN_OUTPUT_SCHEMA = {
 type GeneratedPreview = { name: string; description: string; content: string };
 
 /** cinatra#3745: the audit reads the audited run's data, so its model call is run-bound but has no
- * run request frame. It gets a fixed host ceiling: only the skill-delivery tools (the skill shell
- * and container skills), never an MCP server or a function tool. */
+ * run request frame. It asks for no injected MCP server and gets a fixed host ceiling that admits
+ * the skill-delivery tools by kind only (the skill shell and container skills): no tool name
+ * admits anything, so no MCP server or function tool passes it. */
 const AUDITOR_SKILL_TOOL_CEILING: StepToolOfferPolicy = Object.freeze({
   kind: "declared" as const,
-  tools: Object.freeze(["shell", "container_skills"]),
+  tools: Object.freeze([] as string[]),
+  builtinTools: Object.freeze(["shell", "container_skills"] as const),
 });
 
 // ---------------------------------------------------------------------------
@@ -392,6 +394,7 @@ export async function POST(request: Request): Promise<Response> {
         injectedSkills,
         outputSchema: RUN_OUTPUT_SCHEMA as unknown as Record<string, unknown>,
         logLabel: "auditor.run-skills",
+        declaredToolboxIds: [],
         stepToolPolicy: AUDITOR_SKILL_TOOL_CEILING,
       }),
     );

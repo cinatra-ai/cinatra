@@ -2158,16 +2158,24 @@ export async function resolveConfiguredLlmRuntime(input?: {
 
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server/request-context";
 
-/** Provider-neutral offer ceiling. A missing policy is never an empty allowlist. */
+/** Provider built-in tool kinds; never a function tool or an MCP server. */
+export type StepBuiltinToolType = "shell" | "container_skills" | "web_search" | "sandbox_execution";
+const STEP_BUILTIN_TOOL_TYPES: readonly string[] = Object.freeze(["shell", "container_skills", "web_search", "sandbox_execution"]);
+/** Provider-neutral offer ceiling. A missing policy is never an empty allowlist. `tools` matches
+ * by name; `builtinTools` admits a built-in tool by its kind only, so a function tool or an MCP
+ * tool never passes it by a colliding name. */
 export type StepToolOfferPolicy =
   | { readonly kind: "undeclared" }
-  | { readonly kind: "declared"; readonly tools: readonly string[] };
+  | { readonly kind: "declared"; readonly tools: readonly string[];
+      readonly builtinTools?: readonly StepBuiltinToolType[] };
 export function intersectStepToolNames(
   offered: readonly string[], policy: StepToolOfferPolicy,
 ): string[] {
   if (policy.kind === "undeclared") return [...new Set(offered)];
   if (policy.kind !== "declared" || !Array.isArray(policy.tools) ||
-      policy.tools.some((t) => typeof t !== "string" || t.length === 0)) {
+      policy.tools.some((t) => typeof t !== "string" || t.length === 0) ||
+      (policy.builtinTools !== undefined && (!Array.isArray(policy.builtinTools) ||
+        policy.builtinTools.some((t) => !STEP_BUILTIN_TOOL_TYPES.includes(t))))) {
     throw new Error("step_tool_offer_policy_invalid");
   }
   return [...new Set(offered)].filter((t) => policy.tools.includes(t));
@@ -2210,7 +2218,9 @@ export function restrictStepToolOffers(tools: readonly LlmTool[] | undefined,
       key = `mcp:${tool.serverUrl}:${tool.serverLabel}`;
     } else {
       const name = "name" in tool && typeof tool.name === "string" ? tool.name : tool.type;
-      if (!name || !intersectStepToolNames([name], policy).length) continue;
+      const builtin = tool.type !== undefined && STEP_BUILTIN_TOOL_TYPES.includes(tool.type) &&
+        policy.builtinTools?.includes(tool.type as StepBuiltinToolType) === true;
+      if (!name || !(builtin || intersectStepToolNames([name], policy).length)) continue;
       retained = tool; key = `tool:${name}`;
     }
     if (!retained || ambiguous.has(key)) continue;
