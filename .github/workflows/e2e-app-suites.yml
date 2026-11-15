@@ -287,6 +287,10 @@ jobs:
         timeout-minutes: 20
         env:
           NODE_OPTIONS: --max-old-space-size=3072
+          # One page-data worker: same cap and reason as the RBAC e2e build
+          # step in build-image.yml (a 3-worker build next to the service
+          # containers hung the runner until the job cap).
+          CINATRA_BUILD_CPUS: "1"
         run: pnpm build
 
       - name: Start production server on port 3000
@@ -517,6 +521,10 @@ jobs:
         timeout-minutes: 20
         env:
           NODE_OPTIONS: --max-old-space-size=3072
+          # One page-data worker: same cap and reason as the RBAC e2e build
+          # step in build-image.yml (a 3-worker build next to the service
+          # containers hung the runner until the job cap).
+          CINATRA_BUILD_CPUS: "1"
         run: pnpm build
 
       - name: Start production server on port 3000
