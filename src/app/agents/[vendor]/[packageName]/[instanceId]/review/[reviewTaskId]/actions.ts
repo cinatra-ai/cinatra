@@ -76,6 +76,20 @@ export async function submitReviewDecisionAction(
    * row 8). Omitted by every caller that surfaces no suggestions.
    */
   suggestionDecisions?: SuggestionDecisionPartition | null,
+  /**
+   * WHICH ROAD a comment came by (cinatra#4245 D2, design section VI).
+   *
+   * `typedChangeRequest` is set ONLY by the run assistant's lent Comment
+   * (`src/lib/lifecycle/lent-action-mcp.ts`), which files the person's own words
+   * typed into the gate's prompt window (inside a conversation, the composer that
+   * stands in for it): section VI's one channel for requesting changes. The
+   * decision bar's Comment button (the page's bound action and the
+   * gate-scoped decide route) never passes it, so a client cannot set it. It
+   * matters only on the step's OWN declared gate, where a change request ends
+   * the run's pause: there the button's Comment stays the non-terminal note
+   * ("leaves the gate pending - nothing resumes, and the run stays paused").
+   */
+  options?: { readonly typedChangeRequest?: boolean },
 ): Promise<ReviewSubmitOutcome> {
   // Continue is transport compatibility, never a new persisted disposition.
   const disposition: ReviewDisposition = requestedDisposition === "continue"
@@ -146,9 +160,12 @@ export async function submitReviewDecisionAction(
   //     request keeps the run paused (cinatra#4312);
   //   - the step's OWN gate (no `#n`, cinatra#4245): its change request ends the
   //     run's pause, and the repair drain stops the run before the repair run
-  //     starts. That is terminal for the run, so it also needs the access a
-  //     terminal decision needs (`approveHitl`); a reviewer who may only respond
-  //     keeps the plain annotation.
+  //     starts. Only the prompt window's typed change request takes it (the lent
+  //     Comment, `options.typedChangeRequest`); the decision bar's Comment button
+  //     stays the non-terminal note of design section VI. That change request is
+  //     terminal for the run, so it also needs the access a terminal decision
+  //     needs (`approveHitl`); a reviewer who may only respond keeps the plain
+  //     annotation.
   // This action does not read the gate's pin or event; the store decides. Only its
   // not-eligible refusal (and a `#n` gate it reads as no lifecycle gate) falls back
   // to the plain annotation below; every other answer, a pause refusal included,
@@ -162,7 +179,9 @@ export async function submitReviewDecisionAction(
     isLifecycleReviewOrchestrationActive() &&
     ((isAutoReviewTaskId(reviewTaskId) && !isBatchAutoReviewTaskId(reviewTaskId)) || declaredGate) &&
     pinnedTargets.length === 1 &&
-    (!endsPause || (await enforceReviewDecisionAccess({ runId, op: "approveHitl", actorCtx })).ok)
+    (!endsPause ||
+      (options?.typedChangeRequest === true &&
+        (await enforceReviewDecisionAccess({ runId, op: "approveHitl", actorCtx })).ok))
   ) {
     const result = await submitReviewSurfaceChangesRequested({
       runId,
