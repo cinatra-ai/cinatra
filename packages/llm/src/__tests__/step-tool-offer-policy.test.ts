@@ -33,6 +33,15 @@ describe("provider-independent declared-tool ceiling",()=>{
    {type:"mcp",serverUrl:"https://example.test",serverLabel:"s",allowedTools:["mail_send"]},
   ]);
  });
+ // cinatra#3745: the auditor's fixed host ceiling (src/app/api/auditor/run-skills/route.ts) keeps the
+ // skill-delivery tools and drops every MCP server and function tool of the same offer.
+ it("a skill-only ceiling keeps the skill shell and container skills and drops MCP servers and functions",()=>{
+  const shell={type:"shell",skills:[]};const container={type:"container_skills",skills:[]};
+  const offered=[shell,container,{type:"function",name:"mail_send"},
+   {type:"mcp",serverUrl:"https://example.test",serverLabel:"cinatra",allowedTools:["mail_send","objects_save"]},
+   {type:"mcp",serverUrl:"https://other.test",serverLabel:"ext"}];
+  expect(restrictStepToolOffers(offered as never,{kind:"declared",tools:["shell","container_skills"]})).toEqual([shell,container]);
+ });
  it("offers nothing to a step that declares no tool",()=>{
   expect(restrictStepToolOffers([{type:"function",name:"a"}] as never,{kind:"declared",tools:[]})).toBeUndefined();
  });
