@@ -33,14 +33,39 @@ describe("provider-independent declared-tool ceiling",()=>{
    {type:"mcp",serverUrl:"https://example.test",serverLabel:"s",allowedTools:["mail_send"]},
   ]);
  });
- // cinatra#3745: the auditor's fixed host ceiling (src/app/api/auditor/run-skills/route.ts) keeps the
- // skill-delivery tools and drops every MCP server and function tool of the same offer.
+ // cinatra#3745: the auditor's fixed host ceiling (src/app/api/auditor/run-skills/route.ts) admits the
+ // skill-delivery tools by kind only. A function tool or an MCP tool whose NAME is a built-in kind
+ // ("shell", "container_skills") must never pass it.
+ const SKILL_ONLY={kind:"declared",tools:[],builtinTools:["shell","container_skills"]} as const;
  it("a skill-only ceiling keeps the skill shell and container skills and drops MCP servers and functions",()=>{
   const shell={type:"shell",skills:[]};const container={type:"container_skills",skills:[]};
   const offered=[shell,container,{type:"function",name:"mail_send"},
    {type:"mcp",serverUrl:"https://example.test",serverLabel:"cinatra",allowedTools:["mail_send","objects_save"]},
    {type:"mcp",serverUrl:"https://other.test",serverLabel:"ext"}];
-  expect(restrictStepToolOffers(offered as never,{kind:"declared",tools:["shell","container_skills"]})).toEqual([shell,container]);
+  expect(restrictStepToolOffers(offered as never,SKILL_ONLY)).toEqual([shell,container]);
+ });
+ it("a skill-only ceiling drops MCP servers and function tools whose names collide with a built-in kind",()=>{
+  const shell={type:"shell",skills:[]};const container={type:"container_skills",skills:[]};
+  const offered=[shell,container,{type:"function",name:"shell"},{name:"container_skills"},
+   {type:"mcp",serverUrl:"https://a.test",serverLabel:"a",allowedTools:["shell"]},
+   {type:"mcp",serverUrl:"https://b.test",serverLabel:"b",allowedTools:["container_skills"]},
+   {type:"mcp",serverUrl:"https://c.test",serverLabel:"c",allowedTools:["shell","container_skills","mail_send"]}];
+  expect(restrictStepToolOffers(offered as never,SKILL_ONLY)).toEqual([shell,container]);
+  expect(restrictStepToolOffers(offered.slice(2) as never,SKILL_ONLY)).toBeUndefined();
+ });
+ it("ordinary skill delivery under the skill-only ceiling keeps its built-in shell",()=>{
+  const shell={type:"shell",skills:[{name:"a",description:"a",path:"/skills/a"}]};
+  expect(restrictStepToolOffers([shell] as never,SKILL_ONLY)).toEqual([shell]);
+ });
+ it("the empty ceiling also drops the built-in skill-delivery tools",()=>{
+  expect(restrictStepToolOffers([{type:"shell",skills:[]},{type:"container_skills",skills:[]}] as never,
+   {kind:"declared",tools:[]})).toBeUndefined();
+ });
+ it("rejects a built-in kind that is a function tool or an MCP server",()=>{
+  for (const kind of ["function","mcp",""]) {
+   expect(()=>restrictStepToolOffers(undefined,{kind:"declared",tools:[],builtinTools:[kind]} as never))
+    .toThrow("step_tool_offer_policy_invalid");
+  }
  });
  it("offers nothing to a step that declares no tool",()=>{
   expect(restrictStepToolOffers([{type:"function",name:"a"}] as never,{kind:"declared",tools:[]})).toBeUndefined();

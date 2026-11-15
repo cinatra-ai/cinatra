@@ -5,10 +5,11 @@
  * run-bound. It runs under an actor frame only, never inside a run's MCP
  * request frame, so the ceiling the llm package infers for a run frame does
  * not apply: a call that brings no ceiling here would keep the unrestricted
- * offer (every always-injected MCP server). The route therefore passes its
- * own ceiling: only the skill-delivery tools (the skill shell and container
- * skills). Both callers of the route are pinned: the
- * WayFlow bridge road and a session.
+ * offer (every always-injected MCP server). The route therefore asks for no
+ * injected MCP server (an empty toolbox list) and passes its own ceiling,
+ * which admits the skill-delivery tools by kind only (the skill shell and
+ * container skills), never a function or MCP tool by name. Both callers of
+ * the route are pinned: the WayFlow bridge road and a session.
  *
  * Drives the real route; the run store, the auth checks, the skill-set
  * resolver and the model call are test doubles.
@@ -105,8 +106,16 @@ describe("the auditor's run-bound model call gets a fixed skill-only tool ceilin
       expect(h.llmCalls).toHaveLength(1);
       expect(h.llmCalls[0].stepToolPolicy).toEqual({
         kind: "declared",
-        tools: ["shell", "container_skills"],
+        tools: [],
+        builtinTools: ["shell", "container_skills"],
       });
+    });
+    it(`the ${road} road asks for no injected MCP server`, async () => {
+      h.isBridge = road === "bridge";
+      const res = await POST(runPhaseRequest());
+      expect(res.status).toBe(200);
+      expect(h.llmCalls).toHaveLength(1);
+      expect(h.llmCalls[0].declaredToolboxIds).toEqual([]);
     });
   }
 });
