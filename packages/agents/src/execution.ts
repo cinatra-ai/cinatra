@@ -25,6 +25,7 @@ import {
   stateRunScheduleMoment,
 } from "./lifecycle-coordinator";
 import type { AgentTemplateRecord, AgentRunRecord, AgentRunStatus } from "./store";
+import type { ResumeGateIdentity } from "./run-transition";
 import {
   resolveWayflowUrl,
   describeWayflowDispatchError,
@@ -1021,6 +1022,8 @@ async function producedReviewHoldsRun(args: {
   authority: OrgWriteAuthority | undefined;
   /** Which terminal edge is asking — log context only. */
   where: string;
+  /** cinatra#3745: the claimed resume leg the park belongs to (its CAS carries it). */
+  resumeLeg?: ResumeGateIdentity;
   /** How many recovery deliveries this run's withheld write has already taken.
    *  Only a recovery leg carries one; a first raise leaves it at zero. */
   holdPark?: number;
@@ -1039,6 +1042,7 @@ async function producedReviewHoldsRun(args: {
         fromStatus: args.fromStatus,
         stepResults: args.stepResults,
         withheld: args.withheld,
+        ...(args.resumeLeg ? { resumeLeg: args.resumeLeg } : {}),
       },
       args.authority,
     );
@@ -1920,7 +1924,10 @@ async function resolveWayflowXRenderer(
 //     where the run ACTUALLY is, and every edge it needs out of `running` — to
 //     `pending_approval` for the next gate, to `completed`, `failed` or
 //     `waiting_trigger` — the state machine already carries.
-//   - mcp/handlers resume          → "pending_approval"
+//   - mcp/handlers resume          → "running" — cinatra#3745: that road claims
+//     the gate (claimGateForResume, bound to the gate's a2a task and execution
+//     attempt) before it records or sends, and passes that claim as
+//     `claimedGate`, so the answer is applied only while the run holds it.
 //
 // Same-status short-circuit: when fromStatus === target, return without
 // calling transitionRunStatus. The pair pending_approval -> pending_approval
@@ -1942,8 +1949,9 @@ async function resolveWayflowXRenderer(
 //   - store.ts:updateAgentRunA2ATaskId is an unconditional
 //     overwrite so the resync below actually works (was first-writer-wins).
 //
-// RunTransitionError codes (from store.ts:1038-1061): "illegal_transition"
-// and "stale_from_status" — only the latter is swallowed.
+// RunTransitionError codes (run-status.ts RunTransitionError): "illegal_transition",
+// "stale_from_status" and "resume_intent_lease_lost" — only "stale_from_status"
+// is swallowed here.
 //
 // State machine (canonical):
 //   - input-required → re-emit INTERRUPT, transition to pending_approval (skipped on resume)
@@ -1977,6 +1985,14 @@ export type HandleWayflowTaskStateArgs = {
     history?: ReadonlyArray<{ role?: string; parts?: readonly unknown[] }>;
     metadata?: unknown;
   };
+  /**
+   * cinatra#3745: the gate a resume CLAIMED before it sent (its a2a task and
+   * execution attempt; the MCP resume passes it). The answer is then applied
+   * only while the run is still `running` at that claim (bindResumeLegToTask),
+   * and every edge below carries the leg in its CAS (`resumeLeg`). Absent on
+   * every other road.
+   */
+  claimedGate?: ResumeGateIdentity;
 };
 
 /** The anchor version this build vouches for. Copy of
@@ -2218,28 +2234,82 @@ export function declaredOutputsResponseText(
 }
 
 export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): Promise<void> {
-  const { runId, run, fromStatus, task, authority } = args;
+  const { runId, run, fromStatus, task, authority, claimedGate } = args;
   const taskState = task.status?.state;
+
+  // cinatra#3745: the run's a2a_task_id is the gate identity a resume claim binds
+  // to, so the answer's task id is written BEFORE anything below can park the
+  // run at that answer. From `running` (the worker's dispatch, the human and the
+  // MCP resume) a failed write stops here instead of parking under the earlier
+  // gate's id, where a stale claim of that gate would win: the caller's catch
+  // decides what the run becomes. From `pending_approval` the write stays best
+  // effort; see the unclaimed resync below.
+  let legFence: { resumeLeg: ResumeGateIdentity } | undefined;
+  if (claimedGate) {
+    // A claimed resume leg: the answer is applied only while the run is still
+    // `running` at the claimed gate in the claimed attempt. An answer that comes
+    // back after the run was stopped, retried or moved on writes nothing at all.
+    const { bindResumeLegToTask } = await import("./run-transition");
+    const bound = await bindResumeLegToTask({
+      runId,
+      orgId: run.orgId,
+      claimed: claimedGate,
+      taskId: task.id,
+      contextId: task.contextId ?? null,
+    });
+    if (!bound) {
+      console.warn(
+        `[wayflow] run=${runId} task=${task.id} state=${taskState} is not applied: the run no longer ` +
+          `holds the resume claim of gate ${claimedGate.a2aTaskId}`,
+      );
+      return;
+    }
+    legFence = { resumeLeg: { a2aTaskId: task.id, executionAttemptId: claimedGate.executionAttemptId } };
+  }
 
   // cinatra#4264 — the step snapshots this leg carries, verified against THIS
   // handler's own runId (never an id read from the response) and stored BEFORE
   // the resync below, so a response naming another run's task or context cannot
   // land that run's snapshots here. Never throws; a fault is logged.
+  // cinatra#3745: on a claimed resume leg they are stored only after the claim
+  // check above, so an answer that no longer holds the claim stores none.
   await persistStepSnapshots({
     runId,
     orgId: run.orgId,
     history: (task as { history?: ReadonlyArray<{ role?: unknown; metadata?: unknown }> }).history,
   });
 
-  // Defensive resync (idempotent if unchanged): persist task.id / contextId
-  // so the next resume's reverse-lookup by a2aTaskId still finds the run if
-  // WayFlow assigned a new task ID. updateAgentRunA2ATaskId is an
-  // unconditional overwrite so this persists on every call.
-  if (task.id !== run.a2aTaskId) {
-    await updateAgentRunA2ATaskId(runId, task.id).catch(() => undefined);
-  }
-  if (task.contextId && task.contextId !== run.a2aContextId) {
-    await updateAgentRunA2AContextId(runId, task.contextId).catch(() => undefined);
+  if (!claimedGate) {
+    // Defensive resync (idempotent if unchanged): persist task.id / contextId so
+    // the next resume's reverse-lookup by a2aTaskId still finds the run if
+    // WayFlow assigned a new task ID. updateAgentRunA2ATaskId is an unconditional
+    // overwrite and retries the transient collision itself.
+    if (task.id !== run.a2aTaskId) {
+      if (fromStatus === "pending_approval") {
+        // The resume delivery (artifact-review-resume-delivery.ts) applies its
+        // answer from `pending_approval` with no claim. If a failed write
+        // stopped here, the run would stay parked under the earlier gate's id
+        // while WayFlow waits at this answer, the Redis latest-task map below
+        // would still name the earlier gate, and the re-claimed intent would
+        // pass both of the delivery's guards and send the earlier gate's
+        // decision again into this answer's context. So the write stays best
+        // effort on this road, as before: the answer is applied and the
+        // delivery closes its intent. The column can still name the earlier
+        // gate, where a stale claim of that gate would win; the delivery
+        // claims nothing yet.
+        await updateAgentRunA2ATaskId(runId, task.id).catch((err) => {
+          console.warn(
+            `[wayflow] run=${runId} task=${task.id} a2a_task_id write failed on the resume delivery ` +
+              `(applied anyway): ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+      } else {
+        await updateAgentRunA2ATaskId(runId, task.id);
+      }
+    }
+    if (task.contextId && task.contextId !== run.a2aContextId) {
+      await updateAgentRunA2AContextId(runId, task.contextId).catch(() => undefined);
+    }
   }
 
   console.log(
@@ -2256,10 +2326,11 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // correctness-critical (NOT best-effort, NOT inside the xRenderer catch
     // below): a Redis failure THROWS here and prevents the interrupt from being
     // published, so a send can never resolve a stale identity from the racy
-    // `agent_runs.a2a_task_id` column (the defensive resync above persists that
-    // column best-effort and may leave it stale under a "tuple concurrently
-    // updated" race). Redis is already load-bearing for gate resume (the
-    // reverse-map fallback), so this is no new hard dependency.
+    // `agent_runs.a2a_task_id` column (the resync above writes that column before
+    // the park, but on the resume delivery that write is best effort, and a later
+    // write can still race this read: the column is not this send's identity).
+    // Redis is already load-bearing for gate resume (the reverse-map fallback),
+    // so this is no new hard dependency.
     await rememberLatestWayflowGateTask(runId, task.id);
     // cinatra#3745 — record which step of the flow paused the run, as the flow
     // runtime signed it. Best-effort: a store fault is logged and the
@@ -2826,7 +2897,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         // winning is the only proof the run is really parked here.
         let parkedAtReview = false;
         try {
-          await transitionRunStatus(runId, fromStatus, "pending_approval", undefined, authority);
+          await transitionRunStatus(runId, fromStatus, "pending_approval", legFence, authority);
           parkedAtReview = true;
         } catch (e) {
           if (!(e instanceof RunTransitionError && e.code === "stale_from_status")) throw e;
@@ -2960,7 +3031,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         }),
       parkRun: async () => {
         try {
-          await transitionRunStatus(runId, fromStatus, "pending_approval", undefined, authority);
+          await transitionRunStatus(runId, fromStatus, "pending_approval", legFence, authority);
         } catch (e) {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
           throw e;
@@ -3004,12 +3075,13 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
             stepResults: [],
             withheld: { status: "failed", error },
             authority,
+            resumeLeg: legFence?.resumeLeg,
             where: "human gate",
           })
         ) {
           return;
         }
-        await transitionRunStatus(runId, fromStatus, "failed", { error }, authority).catch((e) => {
+        await transitionRunStatus(runId, fromStatus, "failed", { error, ...legFence }, authority).catch((e) => {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
           throw e;
         });
@@ -3048,6 +3120,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         stepResults: [],
         withheld: { status: "failed", error: errMsg },
         authority,
+        resumeLeg: legFence?.resumeLeg,
         where: "wayflow failed",
       })
     ) {
@@ -3067,7 +3140,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     if (fromStatus === "failed") {
       return;
     }
-    await transitionRunStatus(runId, fromStatus, "failed", { error: errMsg }, authority).catch((e) => {
+    await transitionRunStatus(runId, fromStatus, "failed", { error: errMsg, ...legFence }, authority).catch((e) => {
       if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
       throw e;
     });
@@ -3344,6 +3417,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           // (`completedAt` + `stepResults`) exactly, as it must.
           : { status: "completed" },
       authority,
+      resumeLeg: legFence?.resumeLeg,
       where: "wayflow completed",
     })
   ) {
@@ -3361,7 +3435,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       runId,
       fromStatus,
       "failed",
-      { error, stepResults: terminalStepResults },
+      { error, stepResults: terminalStepResults, ...legFence },
       authority,
     ).catch((err) => {
       // stale_from_status: a concurrent stop/cancel already moved the row;
@@ -3465,6 +3539,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   await transitionRunStatus(runId, fromStatus, "completed", {
     completedAt: new Date(),
     stepResults: terminalStepResults,
+    ...legFence,
   }, authority).catch((err) => {
     // stale_from_status: a concurrent stop/cancel already moved the row;
     // skip RUN_FINISHED so the UI reflects the DB winner, not us.

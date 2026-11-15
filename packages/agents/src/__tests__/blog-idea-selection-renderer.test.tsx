@@ -15,11 +15,12 @@
  * shared reviewer-output binding was removed in the #1796 Stage-3 teardown).
  *
  * Asserts:
- *   - a radio-per-idea chooser renders and commits ideas[0] on mount as
- *     {selectedIdeaJson, userResponse} = JSON.stringify(idea);
+ *   - a radio-per-idea chooser renders with nothing picked and commits nothing on
+ *     mount (cinatra#3035); a pick commits {selectedIdeaJson, userResponse};
  *   - changing the pick re-commits the newly chosen idea;
  *   - the no-ideas case degrades to the schema floor (no chooser, no
  *     selectedIdeaJson auto-commit) — never blank;
+ *   - a declared empty-state message is drawn as written (cinatra#3035);
  *   - the binding id resolves to this renderer at the pre-relocation priority
  *     (80) and classifies as a mid-run HITL gate (parity with the `:output`
  *     suffix classification the shared reviewer binding used to provide).
@@ -30,10 +31,12 @@ import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 
 import { BlogIdeaSelectionRenderer } from "../blog-idea-selection-renderer";
 import {
+  continueAwaitsAPick,
   fieldRendererRegistry,
   type FieldRendererContext,
+  type FieldRendererEntry,
 } from "../field-renderer-registry";
-import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
+import { ensureDefaultFieldRenderersRegistered, registerFieldRendererBindings } from "../register-default-renderers";
 import { hasFieldRendererComponent } from "../field-renderer-components";
 import {
   classifyMidRunHitl,
@@ -55,7 +58,7 @@ const GATE_SCHEMA = {
   required: ["selectedIdeaJson"],
 };
 
-function renderChooser(value: unknown, schema: unknown = GATE_SCHEMA) {
+function renderChooser(value: unknown, schema: unknown = GATE_SCHEMA, bindingParams?: Record<string, unknown>) {
   const onChange = vi.fn();
   return {
     onChange,
@@ -66,6 +69,7 @@ function renderChooser(value: unknown, schema: unknown = GATE_SCHEMA) {
         value={value}
         onChange={onChange}
         context={CTX}
+        bindingParams={bindingParams}
       />,
     ),
   };
@@ -74,16 +78,13 @@ function renderChooser(value: unknown, schema: unknown = GATE_SCHEMA) {
 afterEach(cleanup);
 
 describe("BlogIdeaSelectionRenderer — dedicated idea chooser (cinatra#1796 S2)", () => {
-  it("renders a radio per idea and commits ideas[0] on mount as {selectedIdeaJson, userResponse}", () => {
+  it("renders a radio per idea with nothing picked and commits nothing on mount (cinatra#3035)", () => {
     const { onChange } = renderChooser({ ideas: IDEAS });
     expect(screen.getByText("Idea Alpha")).toBeTruthy();
     expect(screen.getByText("Idea Beta")).toBeTruthy();
     expect(screen.getAllByRole("radio")).toHaveLength(2);
-    // The exact payload shape the gate + its passthrough seam expect.
-    expect(onChange).toHaveBeenCalledWith({
-      selectedIdeaJson: JSON.stringify(IDEAS[0]),
-      userResponse: JSON.stringify(IDEAS[0]),
-    });
+    expect(document.querySelectorAll('[role="radio"][aria-checked="true"]')).toHaveLength(0);
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("selecting the second idea commits ideas[1] in the same payload shape", () => {
@@ -102,6 +103,7 @@ describe("BlogIdeaSelectionRenderer — dedicated idea chooser (cinatra#1796 S2)
 
   it("commits selectedIdeaJson === userResponse (single-string InputMessageNode contract)", () => {
     const { onChange } = renderChooser({ ideas: IDEAS });
+    fireEvent.click(screen.getAllByRole("radio")[0]!);
     const call = onChange.mock.calls.at(-1)![0] as {
       selectedIdeaJson: string;
       userResponse: string;
@@ -124,6 +126,35 @@ describe("BlogIdeaSelectionRenderer — dedicated idea chooser (cinatra#1796 S2)
     renderChooser({ ideas: [] });
     expect(screen.queryByText("Select one blog idea to draft.")).toBeNull();
     expect(screen.queryAllByRole("radio")).toHaveLength(0);
+  });
+
+  it("an empty ideas array draws the declared empty-state message as written and commits nothing (cinatra#3035)", () => {
+    const { onChange } = renderChooser({ ideas: [] }, GATE_SCHEMA, { emptyStateMessage: "No idea is left to draft." });
+    expect(screen.getByText("No idea is left to draft.")).toBeTruthy();
+    expect(screen.queryAllByRole("radio")).toHaveLength(0);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+describe("the kind-binding road holds the idea step's Continue until a pick (cinatra#3035)", () => {
+  it("a runtime binding of the idea kind mounts the host chooser with no pick, and its Continue waits", () => {
+    const id = "@cinatra-ai/kind-road-3035:ideas";
+    registerFieldRendererBindings([{ id, kind: "blog-idea-selection", priority: 80, midRunHitl: true }]);
+    const entry = fieldRendererRegistry.resolve("selectedIdeaJson", { "x-renderer": id }, CTX as never);
+    expect(entry?.renderer).toBe(BlogIdeaSelectionRenderer);
+    const Renderer = entry!.renderer;
+    const onChange = vi.fn();
+    render(<Renderer fieldName="selectedIdeaJson" schema={GATE_SCHEMA} value={{ ideas: IDEAS }} onChange={onChange} context={CTX} />);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(continueAwaitsAPick(entry, {})).toBe(true);
+  });
+
+  it("continueAwaitsAPick holds only a held entry with no non-empty string pick", () => {
+    const held = { holdsContinueUntilPicked: true } as FieldRendererEntry;
+    expect(continueAwaitsAPick(undefined, {})).toBe(false);
+    expect(continueAwaitsAPick({ holdsContinueUntilPicked: false } as FieldRendererEntry, {})).toBe(false);
+    for (const pick of [undefined, "", 7, { id: "x" }]) expect(continueAwaitsAPick(held, { userResponse: pick })).toBe(true);
+    expect(continueAwaitsAPick(held, { userResponse: JSON.stringify(IDEAS[0]) })).toBe(false);
   });
 });
 

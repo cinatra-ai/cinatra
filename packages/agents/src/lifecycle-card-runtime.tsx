@@ -92,6 +92,13 @@ export const LIFECYCLE_RECOMMENDATION_DECIDE_PATH =
 export const LIFECYCLE_HITL_SCREEN_PATH = "/api/lifecycle-views/hitl-screen";
 
 /**
+ * The BROKER READ of a run's publish card (cinatra#4150). Like the hitl screen, the publish decision is carried as a
+ * typed INTERRUPT with no view ref, so a credential-declaring host reads it by the run the transcript names. A GET: the
+ * read sends no decision. A cookie host never uses it.
+ */
+export const LIFECYCLE_PUBLISH_DECISION_PATH = "/api/lifecycle-views/publish-decision";
+
+/**
  * The BROKER ANSWER to that question (cinatra#2930, lifecycle-b W3).
  *
  * The other half of the path above, and it exists for the same reason: a server
