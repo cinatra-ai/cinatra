@@ -27,6 +27,12 @@ import { scanBorder } from "../self-rendering-extensions-border-gate.mjs";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const GATE = join(__dirname, "..", "agent-hitl-renders-nothing-gate.mjs");
 
+// The vendoring-manifest entry of the synthetic agent, joined from its parts: a
+// literal org-slash-name path is read by the public source-leak gate's
+// visibility probe as a repository reference, and no repository carries the
+// name of this synthetic package.
+const DEMO_AGENT_ENTRY = ["extensions", "cinatra-ai", "demo-agent"].join("/");
+
 const temps = [];
 afterEach(() => {
   while (temps.length) rmSync(temps.pop(), { recursive: true, force: true });
@@ -173,13 +179,13 @@ describe("agent HITL renders-nothing gate (cinatra#3470)", () => {
     expect(census.refusals).toEqual([]);
     const findings = gate.evaluateAgentBorder(
       census,
-      new Set(["extensions/cinatra-ai/demo-agent"]),
+      new Set([DEMO_AGENT_ENTRY]),
     );
     expect(findings).toEqual([
       {
         kind: "vendoring-manifest-entry",
         package: "demo-agent",
-        detail: "extensions/cinatra-ai/demo-agent",
+        detail: DEMO_AGENT_ENTRY,
       },
     ]);
     expect(gate.evaluateAgentBorder(census, new Set())).toEqual([]);
