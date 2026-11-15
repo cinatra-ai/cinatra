@@ -325,6 +325,8 @@ describe("CompiledAgentOas type extensions + discriminated-union shape", () => {
         artifactBindings: null,
         // cinatra#4150 — the nodes declared publishes: true.
         publishingSteps: [],
+        // cinatra#4150 — the publish card's rows per declared node.
+        publishRows: {},
         // Sibling cinatra.json metadata.
         cinatraConfig: null,
       },
