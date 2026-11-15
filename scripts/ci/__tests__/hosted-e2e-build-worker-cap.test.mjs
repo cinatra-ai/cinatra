@@ -895,6 +895,26 @@ describe("scripts/ci/hosted-build-memory-cap.sh, run against a stand-in cgroup t
     }
   });
 
+  it("refuses a setting with a leading zero instead of reading it as octal or aborting", () => {
+    for (const env of [
+      { CINATRA_BUILD_MEMORY_RESERVE_MIB: "02048" },
+      { CINATRA_BUILD_MEMORY_RESERVE_MIB: "0100" },
+      { CINATRA_BUILD_SWAP_MAX_MIB: "08192" },
+    ]) {
+      const m = machine();
+      const r = capScript(m, ["run", ...markerBuild(m)], env);
+      expectOneRefusal(r, "is not a whole number of MiB");
+      expect(fs.existsSync(path.join(m.dir, MARKER)), JSON.stringify(env)).toBe(false);
+      const b = machine();
+      expectOneRefusal(capScript(b, ["buildx-opts"], env), "is not a whole number of MiB");
+      expect(fs.readFileSync(b.output, "utf8"), JSON.stringify(env)).toBe("");
+    }
+    // a plain 0 is still a whole number: no reserve is a cap at the machine's RAM
+    const z = machine();
+    expect(capScript(z, ["buildx-opts"], { CINATRA_BUILD_MEMORY_RESERVE_MIB: "0" }).status).toBe(0);
+    expect(fs.readFileSync(z.output, "utf8")).toContain(`memory=${capOf(16365568, 0)}m`);
+  });
+
   it("builds uncapped on a hosted runner only when the cap is explicitly turned off", () => {
     const m = machine({ controllers: "cpu io pids" });
     const r = capScript(m, ["run", ...markerBuild(m)], { CINATRA_BUILD_MEMORY_CAP: "0" });

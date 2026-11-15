@@ -74,8 +74,10 @@ write_file() {
   printf '%s\n' "$2" | as_root tee "$1" >/dev/null 2>&1
 }
 
+# A whole number with no leading zero: bash arithmetic reads 0100 as octal
+# (64) and aborts on 08, so neither may reach $((...)).
 is_whole() {
-  case "$1" in '' | *[!0-9]*) return 1 ;; *) return 0 ;; esac
+  case "$1" in '' | *[!0-9]* | 0?*) return 1 ;; *) return 0 ;; esac
 }
 
 # refuse <reason>: the one-line fail-closed error of a hosted run.
