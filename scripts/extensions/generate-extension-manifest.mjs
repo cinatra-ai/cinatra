@@ -2459,7 +2459,12 @@ export async function buildManifest() {
   const roleDeclarations = [];
   for (const r of records) {
     const cin = readCinatraManifest(r.sourceDir);
-    const { entries, errors } = validateFieldRendererDeclarations(r.packageName, cin.fieldRenderers);
+    // The package kind carries the agent clause of the three-kind rule
+    // (cinatra#3470): a kind:"agent" component declaration is a generation
+    // error, so `--check` is red on it.
+    const { entries, errors } = validateFieldRendererDeclarations(r.packageName, cin.fieldRenderers, {
+      kind: cin.kind,
+    });
     bindingErrors.push(...errors);
     allFieldRendererEntries.push(...entries);
     if (cin.roles !== undefined) {

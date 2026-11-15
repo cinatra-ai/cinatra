@@ -2207,6 +2207,19 @@ jobs:
       - name: Self-rendering extensions border gate tests
         run: pnpm exec vitest run scripts/extensions/__tests__/self-rendering-extensions-border-gate.test.mjs
 
+      # Agent HITL renders-nothing gate (cinatra#3470): the agent clause of the
+      # three-kind rule, "agents do NOT render the HITL view themselves". NO
+      # baseline (owner ruling: legacy implementations are not allowed to
+      # stay): a kind:agent package that declares a field-renderer component,
+      # carries a primitive copy under src/components/ui/, reaches into the
+      # product's primitives or has a vendoring-manifest entry fails. Reads the
+      # same declared, cloned-back extension tree as the border gate above.
+      - name: Agent HITL renders-nothing gate (no baseline)
+        run: node scripts/extensions/agent-hitl-renders-nothing-gate.mjs
+
+      - name: Agent HITL renders-nothing gate tests
+        run: pnpm exec vitest run scripts/extensions/__tests__/agent-hitl-renders-nothing-gate.test.mjs
+
       # Build-config consistency check. config/build-config.manifest.json
       # is the single source of truth for the tsconfig.json @cinatra-ai/* path
       # aliases AND the next.config.ts serverExternalPackages + transpilePackages
