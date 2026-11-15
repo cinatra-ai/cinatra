@@ -547,7 +547,10 @@ async function deliverWayflowResume(
   // this gate's resume was delivered (a claim can fail before its dispatch and
   // put the run back), so the intent is deferred without a send; a pause that a
   // change request ended needs no send, and the intent is done. Every later run
-  // edge carries this intent's lease (cinatra#3745).
+  // edge carries this intent's lease (cinatra#3745). A run parked on its produced
+  // output's review is never claimed (S4): the claim refuses it in its own
+  // transaction (`refuseParkedRunClaim`), the pause claim is given back and the
+  // intent is done with nothing sent.
   const pause = await claimPause({ runId: run.id, orgId: run.orgId, generation: run.pauseGeneration as number }, authority);
   if (pause.kind === "refused") {
     if (pause.reason === "changes-requested") {
@@ -630,11 +633,23 @@ async function deliverWayflowResume(
       {
         pauseFence: { token: pause.token, generation: pause.generation },
         resumeIntentLease: { gateId, leaseToken },
-        resumeGate: gate,
+        resumeGate: { ...gate, onParkCleared: refuseParkedRunClaim },
       },
       authority,
     );
   } catch (claimErr: unknown) {
+    if (claimErr instanceof ParkedRunClaimRefused) {
+      // The claim rolled back with the park, its withheld terminal write, the
+      // claim mark and the edge: the run is parked exactly as it was read, and the
+      // produced-review drain releases it. The pause claim is still this worker's
+      // (the refusal wrote nothing); a release that fails is logged, and the
+      // claim's lease frees itself.
+      await releasePauseClaim(pauseRef, authority).catch((releaseErr: unknown) => {
+        console.warn(`[artifact-review-resume] gate=${gateId} run=${run.id} could not give the pause claim back (${errorLabel(releaseErr)})`);
+      });
+      return closeIntent(gateId, leaseToken, run.id,
+        `is parked on its produced output's review; its WayFlow work is done and nothing was sent (kind=${kind})`);
+    }
     const code = (claimErr as { code?: string } | null)?.code;
     if (code === "resume_intent_lease_lost" || code === "stale_from_status") {
       // A lost intent lease rolled the edge back, and a lost compare-and-set
@@ -905,6 +920,32 @@ async function settleExhaustedResumeClaim(intent: ResumeIntentRow): Promise<"dea
       `${dead ? "dead-lettered" : "LEASE-LOST"}; ${why}`,
   );
   return dead ? "dead-lettered" : "lease-lost";
+}
+
+/**
+ * cinatra#3745 S4: the refusal the delivery's claim of the run raises in its own
+ * transaction when the claim would clear a produced-review park. Every exit from
+ * `pending_approval` clears the park (cinatra#3046 leg 12), the claim included,
+ * and hands what it cleared to `onParkCleared` inside the claim's transaction. A
+ * run parked on its produced output's review has reached its terminal write (the
+ * park withholds it), so its WayFlow work is done and no resume is owed to it.
+ * And a claim that cleared the park and then went back on the gate (a failed
+ * send, or the release of a later lease or of the settle after the claiming
+ * worker died with nothing recorded) would leave the run `pending_approval` with
+ * neither the park nor its withheld terminal write, which no drain could then
+ * release. The throw rolls the claim back, so the park never leaves the row.
+ */
+class ParkedRunClaimRefused extends Error {
+  readonly code = "produced_review_parked";
+  constructor() {
+    super("the run is parked on its produced output's review");
+    this.name = "ParkedRunClaimRefused";
+  }
+}
+
+/** The claim's `onParkCleared`: any park the claim would clear refuses the claim. */
+function refuseParkedRunClaim(): never {
+  throw new ParkedRunClaimRefused();
 }
 
 /** cinatra#3745: the claimed intents that used their attempts one sweep settles. */
