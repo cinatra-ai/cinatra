@@ -39,7 +39,7 @@ import {
 } from "./agent-hitl-screen-card";
 import type { AgentRunMessageBody } from "./store";
 import { StatusPill } from "@/components/ui/status-pill";
-import { fieldRendererRegistry } from "./field-renderer-registry";
+import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext } from "./field-renderer-registry";
 import { ArrowRight } from "lucide-react";
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
@@ -1624,9 +1624,9 @@ export function AgenticRunPanel({
   // state was already fixed by the composite React `key` (cinatra#2541/#2556);
   // this is the analogous fix for the panel-level buffer.
   //
-  // The review task is part of the key (cinatra#3380): a mid-run gate carries no
-  // fieldName and can repeat its renderer, and a value written for one gate must
-  // not read as the next gate's answer.
+  // The review task is part of the key (cinatra#3380, cinatra#3035): a mid-run
+  // gate carries no fieldName and can repeat its renderer, and a value written
+  // (or a pick made) for one gate must not read as the next gate's answer.
   const bufferedHitlValueKey = effectiveHitlContext
     ? hitlGateIdentityKey(effectiveHitlContext)
     : null;
@@ -2087,18 +2087,21 @@ export function AgenticRunPanel({
       ) : null}
       <Button
         size="sm"
+        // cinatra#3380: held while the gate's declared renderer value is unwritten.
+        // cinatra#3035: held while a gate whose kind declares the hold has no pick.
+        // cinatra#3470: a declared card holds the screen's Continue until a
+        // choice is made and every required value holds text. Never the
+        // bare-gate row (the tool-call banner with its Reject).
         disabled={
           isApproving ||
-          opts?.awaitingRendererValue === true ||
-          // cinatra#3470: a declared card holds the screen's Continue until a
-          // choice is made and every required value holds text. Never the
-          // bare-gate row (the tool-call banner with its Reject).
           (!opts?.withReject &&
             continueHeldByRenderer(
               hitlRendererEntry?.entry,
               effectiveHitlContext.currentValues,
               bufferedHitlValue,
-            ))
+            )) ||
+          opts?.awaitingRendererValue === true ||
+          continueAwaitsAPick(hitlRendererEntry?.entry, bufferedHitlValue)
         }
         className="gap-1.5"
         // THE HITL SCREEN'S ONE DECISION (cinatra#2930). Named on the row this
@@ -3073,7 +3076,8 @@ export function AgenticRunPanel({
                       // xRenderer-only key would mutate `fieldName` on a LIVE
                       // renderer instance: field 1's typed text (SchemaFieldRenderer's
                       // localValue, which a non-string next value does not clear)
-                      // would pre-fill field 2 under field 2's label.
+                      // would pre-fill field 2 under field 2's label. The review
+                      // task leads it (cinatra#3035): a later gate's renderer starts with no pick.
                       key={hitlGateIdentityKey(effectiveHitlContext)}
                       // The gate's REAL field identity (cinatra#2541) — the same
                       // seam the orchestrator stepper regressed at, with the
