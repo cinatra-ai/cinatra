@@ -28,27 +28,42 @@
  *   SUPABASE_DB_URL=postgres://…/cinatra_lane_3080 \
  *     pnpm exec vitest run --config vitest.integration.config.ts src/__tests__/review-floor-3080.integration.test.ts
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 
-// THE ONE READ THIS SUITE STANDS IN FOR. Regenerate is available exactly when
-// the producing step declares the Note input (the 2026-10-13 decision). The
-// contract has no field for that declaration yet, so the real read finds none
-// for every run and no row can be seeded to change that. To prove what the
-// store does on the arm where a step DOES declare one, this suite answers that
-// single read per run. Everything else here is the real store on a real
-// Postgres. The real read's answer today (none, for every run) is pinned
-// without a database in `regenerate-needs-a-declared-note-input-3080.test.ts`.
-const declaredNoteInputs = vi.hoisted(() => new Map<string, string>());
-vi.mock("../lifecycle-repair-producer-registry", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../lifecycle-repair-producer-registry")>()),
-  readProducingStepNoteInput: async (producerRunId: string | null) =>
-    (producerRunId ? declaredNoteInputs.get(producerRunId) : undefined) ?? null,
-}));
+// NOTHING HERE STANDS IN FOR THE DECLARATION READ (pre-review 1 of #4571,
+// finding 2). Regenerate is available exactly when the producing step declares
+// the input the reviewer's words go into (the 2026-10-13 decision). The real,
+// strict-schema declaration of that input is `cinatra.lifecycle.
+// repairFindingsInput` (cinatra#4424). Each run here is seeded on a template
+// whose `lifecycle_config` is compiled the way an install compiles it
+// (`readManifestLifecycle` then `serializeLifecycleConfig`, as
+// `build-agent-template-seed.ts` does) from a manifest whose lifecycle block
+// first passed the STRICT `agentLifecycleDeclarationSchema`. A run whose
+// manifest declares no findings input is the refusal arm, read by the same
+// real read.
+import { agentLifecycleDeclarationSchema } from "../verdaccio/package-contract";
+import {
+  parseLifecycleConfigText,
+  projectRepairFindingsInput,
+  readManifestLifecycle,
+  serializeLifecycleConfig,
+  REPAIR_FINDINGS_TEXT_LEAD,
+} from "@/lib/lifecycle/lifecycle-policy";
 
 import type { ReviewDecisionCommitPlan } from "@/lib/artifacts/artifact-review-decision";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
+
+/** The template root input the fixture manifest names for the reviewer's words. */
+const DECLARED_INPUT = "instructions";
+
+/** The `lifecycle_config` text an install writes for this lifecycle block, after
+ *  the strict manifest parse (which throws on any key the contract lacks). */
+function compiledLifecycleConfig(block: unknown): string | null {
+  const lifecycle = agentLifecycleDeclarationSchema.parse(block);
+  return serializeLifecycleConfig(readManifestLifecycle({ cinatra: { lifecycle } }));
+}
 
 const TEST_SCHEMA = "cinatra_test_review_floor_3080";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
@@ -86,26 +101,36 @@ async function seedRun(opts?: {
   // counted repair rows rather than asking whether anything could ever answer
   // them. The template is seeded now, and what it DECLARES is which arm the test
   // is on: a step that can make the work again, or nothing that can.
-  // For a Regenerate the arm is set by the STEP'S Note-input declaration, not by
-  // the agent-level `repairCapable` flag; the flag still sets the typed road's arm.
+  // For a Regenerate the arm is set by the STEP'S Note-input declaration
+  // (`repairFindingsInput`), not by the agent-level `repairCapable` flag; the
+  // flag still sets the typed road's arm.
+  const lifecycleConfig = compiledLifecycleConfig({
+    repairCapable: opts?.repairCapable ?? true,
+    ...((opts?.declaresNoteInput ?? true) ? { repairFindingsInput: { input: DECLARED_INPUT } } : {}),
+  });
   await client.query(
     `INSERT INTO "${q(TEST_SCHEMA)}"."agent_templates"
        (id, package_name, org_id, name, source_nl, compiled_plan, input_schema, approval_policy, lifecycle_config)
      VALUES ($1, $2, $3, 'review-floor fixture', 'fixture', '[]', '{}', '{}', $4)`,
-    [
-      templateId,
-      `@cinatra-ai/review-floor-fixture-${templateId}`,
-      ORG,
-      JSON.stringify({ repairCapable: opts?.repairCapable ?? true }),
-    ],
+    [templateId, `@cinatra-ai/review-floor-fixture-${templateId}`, ORG, lifecycleConfig],
   );
   await client.query(
     `INSERT INTO "${q(TEST_SCHEMA)}"."agent_runs" (id, template_id, org_id, run_by, status, input_params)
      VALUES ($1, $2, $3, $4, 'queued', '{}')`,
     [runId, templateId, ORG, OWNER_ID],
   );
-  if (opts?.declaresNoteInput ?? true) declaredNoteInputs.set(runId, "note");
   return runId;
+}
+
+/** The template's compiled lifecycle, read back from the row the fixture wrote. */
+async function templateLifecycle(runId: string) {
+  const { rows } = await client.query(
+    `SELECT t.lifecycle_config FROM "${q(TEST_SCHEMA)}"."agent_templates" t
+       JOIN "${q(TEST_SCHEMA)}"."agent_runs" r ON r.template_id = t.id
+      WHERE r.id = $1`,
+    [runId],
+  );
+  return parseLifecycleConfigText((rows[0] as { lifecycle_config: string | null }).lifecycle_config);
 }
 
 /** A LIFECYCLE auto-review gate — the class the change road recognises. */
@@ -525,6 +550,40 @@ describe.skipIf(!HAS_DB)("item 4 — Regenerate rides the change road's canonica
     expect(result.route.kind).toBe("producer_repair");
   });
 
+  // WHERE THE REVIEWER'S WORDS GO (finding 2 of pre-review 1, #4571). The
+  // repair this Regenerate opens is answered by the dispatch drain, which puts
+  // the findings text into exactly the declared input
+  // (`projectRepairFindingsInput`, cinatra#4424). Read from the stored repair
+  // and the stored template: the input is the declared one, and its text is the
+  // #4424 lead line, a blank line, then the note as finding 1.
+  it("the note reaches the declared input as the #4424 lead line plus the note as finding 1", async () => {
+    const runId = await seedRun();
+    const base = target();
+    const reviewTaskId = await emitLifecycleGate(runId, [base]);
+
+    const result = await regenerate(runId, reviewTaskId, base, "make the sky bluer");
+    expect(result.ok).toBe(true);
+    const after = await gateRow(runId, reviewTaskId);
+    const [repair] = await repairRowsFor(after!.id);
+    expect(projectRepairFindingsInput(await templateLifecycle(runId), repair.findings)).toEqual({
+      [DECLARED_INPUT]: `${REPAIR_FINDINGS_TEXT_LEAD}\n\n1. make the sky bluer`,
+    });
+  });
+
+  it("a picture's prompt follows the note as finding 2 in the same declared input", async () => {
+    const runId = await seedRun();
+    const base = target();
+    const reviewTaskId = await emitLifecycleGate(runId, [base]);
+
+    const result = await regenerate(runId, reviewTaskId, base, "warmer light", "a red bicycle at golden hour");
+    expect(result.ok).toBe(true);
+    const after = await gateRow(runId, reviewTaskId);
+    const [repair] = await repairRowsFor(after!.id);
+    expect(projectRepairFindingsInput(await templateLifecycle(runId), repair.findings)).toEqual({
+      [DECLARED_INPUT]: `${REPAIR_FINDINGS_TEXT_LEAD}\n\n1. warmer light\n2. a red bicycle at golden hour`,
+    });
+  });
+
   it("refuses an EMPTY note with a reason, and writes nothing at all", async () => {
     const runId = await seedRun();
     const base = target();
@@ -663,5 +722,26 @@ describe.skipIf(!HAS_DB)("item 5 — the note and the picture's prompt are two v
     // The gate is already repairing on the first request; a second, DIFFERENT
     // one is a conflict rather than a quiet reuse of the first repair.
     expect(second.code).toBe("gate-conflict");
+  });
+});
+
+// NO STAND-IN FLAG (the 2026-10-13 decision stands). The strict lifecycle block
+// refuses any step-level key the contract lacks, so the only way a manifest can
+// name the input is `repairFindingsInput`. Pure: runs without a database.
+describe("finding 2 of #4571: the declaration is the strict contract's own field", () => {
+  it("a manifest naming the input through repairFindingsInput compiles onto lifecycle_config", () => {
+    expect(
+      parseLifecycleConfigText(compiledLifecycleConfig({ repairFindingsInput: { input: DECLARED_INPUT } })),
+    ).toEqual({ repairFindingsInput: { input: DECLARED_INPUT } });
+  });
+
+  it("the strict schema refuses an invented step-level key", () => {
+    expect(() => compiledLifecycleConfig({ repairCapable: true, noteInput: "prompt" })).toThrow();
+  });
+
+  it("a manifest that declares no findings input compiles to no declaration", () => {
+    expect(parseLifecycleConfigText(compiledLifecycleConfig({ repairCapable: true }))).toEqual({
+      repairCapable: true,
+    });
   });
 });

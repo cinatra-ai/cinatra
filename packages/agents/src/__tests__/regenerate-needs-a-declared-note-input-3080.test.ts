@@ -11,6 +11,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // one; a chain awaited without `.limit()` reads as no rows), and
 // `db.transaction` is a spy, so "nothing was written" is a fact the test can
 // read. The declaration read is NOT replaced: its real answer is what is pinned.
+// The declaration is `cinatra.lifecycle.repairFindingsInput` (cinatra#4424) on
+// the producing run's template, compiled from a manifest whose lifecycle block
+// passed the strict `agentLifecycleDeclarationSchema` (pre-review 1 of #4571,
+// finding 2).
 
 const ports = vi.hoisted(() => ({
   reads: [] as unknown[][],
@@ -60,6 +64,21 @@ vi.mock("../run-wait-notifier", () => ({
   dispatchAutoGateOpen: vi.fn(async () => {}),
   dispatchAutoGateResolved: vi.fn(async () => {}),
 }));
+
+/** The `lifecycle_config` text an install writes for this lifecycle block
+ *  (`build-agent-template-seed.ts`), after the strict manifest parse. */
+async function compiledLifecycleText(block: unknown): Promise<string | null> {
+  const { agentLifecycleDeclarationSchema } = await import("../verdaccio/package-contract");
+  const { readManifestLifecycle, serializeLifecycleConfig } = await import("@/lib/lifecycle/lifecycle-policy");
+  const lifecycle = agentLifecycleDeclarationSchema.parse(block);
+  return serializeLifecycleConfig(readManifestLifecycle({ cinatra: { lifecycle } }));
+}
+
+/** That text read back as the template's compiled lifecycle. */
+async function compiledLifecycle(block: unknown) {
+  const { parseLifecycleConfigText } = await import("@/lib/lifecycle/lifecycle-policy");
+  return parseLifecycleConfigText(await compiledLifecycleText(block));
+}
 
 const RUN = "run-3080-mf2";
 const BASE = { artifactId: "art-3080-mf2", representationRevisionId: "rev-3080-mf2" };
@@ -135,10 +154,37 @@ describe("cinatra#3080 — Regenerate needs the producing step's declared Note i
     });
   });
 
-  it("the real declaration read finds none: the contract has no field that could hold one", async () => {
+  it("the real declaration read finds none on a template that declares no findings input", async () => {
     const { readProducingStepNoteInput } = await import("../lifecycle-repair-producer-registry");
-    expect(await readProducingStepNoteInput(RUN)).toBeNull();
-    expect(await readProducingStepNoteInput(null)).toBeNull();
+    expect(readProducingStepNoteInput(await compiledLifecycle({ repairCapable: true }))).toBeNull();
+    expect(readProducingStepNoteInput(null)).toBeNull();
+  });
+
+  it("the real declaration read names the input a strict manifest declares through repairFindingsInput", async () => {
+    const { readProducingStepNoteInput } = await import("../lifecycle-repair-producer-registry");
+    expect(
+      readProducingStepNoteInput(
+        await compiledLifecycle({ repairCapable: true, repairFindingsInput: { input: "instructions" } }),
+      ),
+    ).toBe("instructions");
+  });
+
+  it("ADMITS a Regenerate whose producing template declares repairFindingsInput: it goes on to the write", async () => {
+    // The producing template declares the findings input. After the gate-state
+    // read (pending) the canonical operation derives the lineage from the
+    // decided gate's own row and opens the transaction.
+    ports.reads[1] = [
+      { lifecycleConfig: await compiledLifecycleText({ repairFindingsInput: { input: "instructions" } }) },
+    ];
+    // This template does not declare `repairCapable`, so the composer also asks
+    // whether CORE repairs the base artifact's type: one read of that type,
+    // which finds none. Regenerate does not key on that answer; the declaration
+    // alone admits it.
+    ports.reads.splice(2, 0, []);
+    ports.reads.push([{ id: "gate-3080-mf2", runId: RUN, reviewTaskId: TASK, orgId: "org-3080-mf2" }]);
+    await press("regenerate");
+    expect(ports.transaction).toHaveBeenCalledTimes(1);
+    expect(ports.reads).toEqual([]);
   });
 
   it("the TYPED road on the same agent is unchanged: it still goes on to record the change request", async () => {
@@ -164,7 +210,7 @@ describe("cinatra#3080 — a Regenerate on a RESOLVED gate is blocked, not refus
   it("answers gate-not-pending on a gate a Continue already resolved, with the real declaration read, and writes nothing", async () => {
     gateAlreadyResolved();
     const { readProducingStepNoteInput } = await import("../lifecycle-repair-producer-registry");
-    expect(await readProducingStepNoteInput(RUN)).toBeNull();
+    expect(readProducingStepNoteInput(await compiledLifecycle({ repairCapable: true }))).toBeNull();
 
     const result = await press("regenerate");
 

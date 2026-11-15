@@ -68,3 +68,34 @@ describe("both entries parse the one validator", () => {
     expect(stripComments(read(PAGE))).not.toMatch(/10_000|10000/);
   });
 });
+
+// NO NEW COPY FOR THE BOUNDS REFUSAL (#4571 fold join). An over-bound note sent
+// through the decide route is refused with a 400, and the card answers every
+// non-2xx from that route with one existing sentence, as `not-permitted`. The
+// page action answers the same refusal with that same outcome, so the same
+// press reads the same on every host and no sentence exists only on the page.
+describe("the page action's bounds refusal reuses the decide road's answer", () => {
+  const CARD = "packages/agents/src/review-gate-card.tsx";
+  const SURFACE_SENTENCE =
+    "This decision could not be recorded on this surface. Open the review to continue.";
+
+  it("the card answers a refused decide response with the existing sentence", () => {
+    const card = read(CARD);
+    const refused = card.slice(card.indexOf("if (!response.ok) {"), card.indexOf("return asSubmitOutcome("));
+    expect(refused).toContain('kind: "not-permitted"');
+    expect(refused).toContain(JSON.stringify(SURFACE_SENTENCE));
+  });
+
+  it("the shared refusal is that sentence, and the page action answers it as not-permitted", async () => {
+    const { REVIEW_FLOOR_SUBMISSION_INVALID } = await import("../floor-submission-input");
+    expect(REVIEW_FLOOR_SUBMISSION_INVALID).toBe(SURFACE_SENTENCE);
+    const page = stripComments(read(PAGE));
+    const action = page.slice(page.indexOf("async function submitAction("), page.indexOf("const gateCardRef"));
+    expect(action).toMatch(/return \{ kind: "not-permitted", message: REVIEW_FLOOR_SUBMISSION_INVALID \}/);
+  });
+
+  it("the validator module carries no sentence of its own", () => {
+    const own = stripComments(read(`${PAGE.slice(0, PAGE.lastIndexOf("/"))}/floor-submission-input.ts`));
+    expect(own).not.toMatch(/could not be sent|characters\./);
+  });
+});
