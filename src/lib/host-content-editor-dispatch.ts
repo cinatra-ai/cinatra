@@ -652,6 +652,14 @@ export async function dispatchContentEditorViaA2A(
       },
       configuration: { acceptedOutputModes: ["text"] },
     });
+    // cinatra#3745: sendTask resolves a failed Task too (the loader's mount refuses a task whose bound source is not
+    // its own, before any step runs). A carrier run completes only for a completed Task; any other state throws here,
+    // so the catch below records running -> failed.
+    const state: unknown = task.status?.state;
+    if (runId && state !== "completed") {
+      const named = typeof state === "string" && /^[a-z-]{1,32}$/.test(state) ? state : "unknown";
+      throw new Error(`content_editor_task_not_completed (state: ${named})`);
+    }
   } catch (err) {
     if (runId && dispatchAuthority) {
       try {
