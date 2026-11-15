@@ -134,7 +134,7 @@ import {
   type AgentHitlScreenState,
 } from "./agent-hitl-screen";
 import { getAgentHitlScreenStateAction } from "./agent-hitl-screen-actions";
-import { fieldRendererRegistry, type FieldRendererContext } from "./field-renderer-registry";
+import { continueAwaitsAPick, fieldRendererRegistry, type FieldRendererContext } from "./field-renderer-registry";
 import { hasMidRunHitlBinding } from "./orchestrator-mid-run-hitl";
 import { DispatchRenderer, type PresentationHint } from "./result-renderers";
 import { approveReviewTask } from "./hitl-actions";
@@ -829,6 +829,8 @@ export function AgentHitlScreenFields({
         </p>
       ) : (
         <Renderer
+          // The full gate identity (review task, renderer, field), as the buffer
+          // is keyed (cinatra#3380, cinatra#3035): a later gate remounts with no pick.
           key={hitlGateKey(gate)}
           fieldName={hitlRendererFieldName(gate.fieldName ?? undefined)}
           schema={renderSchema}
@@ -903,11 +905,13 @@ export function AgentHitlScreenFields({
 function HitlContinueControl({
   submitting,
   blocked,
+  awaitsPick = false,
   awaitingRendererValue = false,
   onPress,
 }: {
   submitting: boolean;
   blocked: boolean;
+  awaitsPick?: boolean; // cinatra#3035: the gate's kind holds its Continue until a pick, as on the run page
   /** cinatra#3380 — the gate declares a value its renderer must produce and the
    *  renderer has written none yet. Unavailable, with no title: `blocked` keeps
    *  its credential meaning and its sentence. */
@@ -920,7 +924,7 @@ function HitlContinueControl({
         size="sm"
         className="gap-1.5"
         data-action="submit-hitl-screen"
-        disabled={submitting || blocked || awaitingRendererValue}
+        disabled={submitting || blocked || awaitingRendererValue || awaitsPick}
         {...(blocked
           ? {
               title:
@@ -941,11 +945,13 @@ export function AgentHitlScreenContinue({
   buffered,
   submitting,
   blocked,
+  awaitsPick,
   onContinue,
 }: {
   gate: AgentHitlScreenGate;
   buffered: Record<string, unknown>;
   submitting: boolean;
+  awaitsPick?: boolean;
   /** This host has NO identity to answer with — neither a cookie session nor a
    *  declared credential. The control is drawn and inert rather than firing a
    *  request the server would have to guess the caller of. */
@@ -956,6 +962,7 @@ export function AgentHitlScreenContinue({
     <HitlContinueControl
       submitting={submitting}
       blocked={blocked}
+      awaitsPick={awaitsPick}
       // cinatra#3380 — the same rule the run panel and the stepper apply to
       // their mid-run Continue (`hitl-gate-submit.ts`): a gate that declares
       // a value its renderer must produce waits for the renderer to write one.
@@ -1471,6 +1478,7 @@ export function AgentHitlScreenCard({
             buffered={activeBuffered}
             submitting={submitting}
             blocked={(!cookieSession && auth === null) || withholdRenderer}
+            awaitsPick={continueAwaitsAPick(resolveHitlGateEntry(runId, gate), activeBuffered)}
             onContinue={onContinue}
           />
         ) : cardOwnsSetupSend ? (
