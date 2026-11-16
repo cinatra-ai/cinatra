@@ -245,12 +245,16 @@ describe("publishAgentPackageFromGitDir carries the run-read declarations (cinat
     expect(puts).toHaveLength(0);
   });
 
-  // Before the fix the publish resolves, so vitest reports the resolved promise:
-  // red-first-expect: instead of rejecting
+  // Before the fix the publish resolves, so the first assertion of this case
+  // fails with its own message, which no other case of this file carries:
+  // red-first-expect: a failed compile must refuse the publish
   it("cinatra#4264: a failed compile refuses the publish before any registry write", async () => {
     vi.mocked(compileOasAgentJson).mockResolvedValueOnce({ ok: false, error: "boom" } as never);
     const agentDir = await writeAgentDir({});
-    await expect(publishAgentPackageFromGitDir({ agentDir }, CONFIG)).rejects.toThrow(/compile failed .*cinatra#4264/);
+    const publish = publishAgentPackageFromGitDir({ agentDir }, CONFIG);
+    const refused = await publish.then(() => false, () => true);
+    expect(refused, "a failed compile must refuse the publish").toBe(true);
+    await expect(publish).rejects.toThrow(/compile failed .*cinatra#4264/);
     expect(puts).toHaveLength(0);
   });
 });
