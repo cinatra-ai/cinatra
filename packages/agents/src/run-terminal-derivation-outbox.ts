@@ -66,7 +66,14 @@ async function commitTerminalTransitionWithOutbox(
   tx: GuardedRunTx,
 ): Promise<boolean> {
   const dtx = tx as unknown as typeof db;
-  const updates: Partial<typeof agentRuns.$inferInsert> = { status: to };
+  // cinatra#4245 pause claim rule 1 (run-transition.ts): a status change clears
+  // the claim.
+  const updates: Partial<typeof agentRuns.$inferInsert> = {
+    status: to,
+    pauseClaimToken: null,
+    pauseClaimPhase: null,
+    pauseClaimExpiresAt: null,
+  };
   // ONE terminal timestamp for the whole transactional write (the caller's, or
   // now()); no divergence between the snapshot and a side-effect clock.
   updates.completedAt = meta.completedAt ?? new Date();

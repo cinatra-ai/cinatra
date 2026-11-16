@@ -1,7 +1,7 @@
 import "server-only";
 import { NextResponse } from "next/server";
 
-import { readAgentRunById } from "@cinatra-ai/agents";
+import { publishCallAllowed, readAgentRunById } from "@cinatra-ai/agents";
 import { collectAllPrimitiveHandlers } from "@/lib/primitive-handlers";
 import { isAuthorizedBridgeRequest } from "@/lib/wayflow-bridge-auth";
 import { bindBridgeRunId } from "@/lib/authz/bridge-run-binding";
@@ -10,7 +10,10 @@ import {
   RUN_STEP_NODE_HEADER,
   RUN_STEP_ATTESTATION_HEADER,
 } from "@/lib/agent-run-token";
-import { buildActorContextFromRun } from "@/lib/authz/build-actor-context-from-run";
+import {
+  buildActorContextFromRun,
+  resolveRunOwnerMembershipOrgRole,
+} from "@/lib/authz/build-actor-context-from-run";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 import { withActorContext } from "@cinatra-ai/llm/actor-context";
@@ -143,6 +146,11 @@ const ALLOWED_TOOLS = new Set([
   // and never a wildcard. The folder is host-side and is never mounted into a
   // sandbox, so these three are the only way an agent reaches it directly.
   ...RUN_FOLDER_TOOLS,
+  // THE RUN'S DASHBOARD WRITE (cinatra#3092). The one dashboards tool admitted
+  // here, dispatched by ./run-dashboard-create as the PROVEN run's owner, with
+  // that run's id and the run org-write authority the MCP transport mints for
+  // an agent-run frame. Update, publish and archive are not admitted.
+  "dashboards_create",
 ]);
 
 // Tools that must execute inside an mcpRequestContextStorage frame carrying the
@@ -175,7 +183,8 @@ type RequestBody = {
    *  payload (e.g. a watcher orchestrator's save_watcher echoes back url/title/
    *  plus a savedWatcherRef pointing at the created object), set
    *  `result_input_passthrough: true` so the route's response is
-   *  `{...input.rawData, [result_id_field]: result.id}` — matching the
+   *  `{...input.rawData, [result_id_field]: result.id ?? result[result_id_field]}`
+   *  (objects_save also falls back to `result.objectId`) — matching the
    *  shape the LLM-based persist node returned. */
   result_input_passthrough?: unknown;
   result_id_field?: unknown;
@@ -453,6 +462,14 @@ export async function POST(req: Request): Promise<Response> {
       { status: 404 },
     );
   }
+  // cinatra#4150 — no publish without a released decision, enforced at the call,
+  // before any tool runs: the run the binding proved, the verified step or none.
+  if (!(await publishCallAllowed(run, verifiedStepId))) {
+    return NextResponse.json(
+      { error: "This call waits for a publish decision.", code: "publish_not_released" },
+      { status: 403 },
+    );
+  }
   let actor: PrimitiveActorContext;
   let alsActorContext: ActorContext;
   try {
@@ -462,6 +479,17 @@ export async function POST(req: Request): Promise<Response> {
       orgId: run.orgId,
     });
     alsActorContext = actorContext;
+    // cinatra#4313: the owner's role from a real membership row only; any
+    // fault of that read stamps no role and never fails the call.
+    let membershipOrgRole: Awaited<ReturnType<typeof resolveRunOwnerMembershipOrgRole>>;
+    try {
+      membershipOrgRole =
+        actorContext.principalType === "HumanUser"
+          ? await resolveRunOwnerMembershipOrgRole({ orgId: run.orgId, runBy: run.runBy })
+          : undefined;
+    } catch {
+      membershipOrgRole = undefined;
+    }
     // Build a proper PrimitiveActorContext for
     // the handler rather than blindly casting the ActorContext. The two
     // shapes have different field names:
@@ -476,6 +504,16 @@ export async function POST(req: Request): Promise<Response> {
       source: "a2a",
       orgId: actorContext.organizationId,
       platformRole: actorContext.platformRole,
+      // cinatra#4313: the run owner's org role for the run's own org, stamped
+      // only when it was read from a real membership row (a departed owner or
+      // a lookup error stamps none), together with the run's OBO ceiling, as
+      // the MCP transport stamps both. Without a role an org owner's run
+      // carries no org role, and the kernel refuses object.update on an
+      // organization-owned row (the publish write-back onto its post
+      // artifact through objects_update). The ceiling, when the run has one,
+      // confines that role to the agent's anchored scope.
+      ...(membershipOrgRole ? { orgRole: membershipOrgRole } : {}),
+      ...(run.oboCeiling ? { oboCeiling: run.oboCeiling } : {}),
     };
   } catch (err) {
     // cinatra#4223: a fixed sentence for every error, never the exception's
@@ -551,6 +589,8 @@ export async function POST(req: Request): Promise<Response> {
           orgId: run.orgId,
           runId: run.id,
           nodeId: shaped.nodeId,
+          // cinatra#4264: the signed step, compared with the request node_id.
+          ...(verifiedStepId ? { verifiedStepId } : {}),
           artifactId: shaped.artifactId,
           baseRepresentationRevisionId: shaped.baseRepresentationRevisionId,
           content: shaped.content,
@@ -695,6 +735,18 @@ export async function POST(req: Request): Promise<Response> {
         );
       }
       result = outcome.result;
+    } else if (tool === "dashboards_create") {
+      // cinatra#3092: written as the run PROVEN above (binding.runId), never a
+      // run the body names; refused unless the attempt the binding read is
+      // still the run's live attempt.
+      const { runDashboardCreate } = await import("./run-dashboard-create");
+      const outcome = await withActorContext(alsActorContext, () =>
+        runDashboardCreate({ binding, run, input }),
+      );
+      if (!outcome.ok) {
+        return NextResponse.json({ error: outcome.error }, { status: outcome.status });
+      }
+      result = outcome.result;
     } else if (EXTENSION_SCOPED_TOOLS.has(tool)) {
       // cinatra#3031 (epic #3023 W7). The scope comes from the run PROVEN by
       // bindBridgeRunId above — its template package and the version the run is
@@ -835,8 +887,13 @@ export async function POST(req: Request): Promise<Response> {
     // save_watcher echoes back the inputs + a savedWatcherRef pointing
     // at the created object). When `result_input_passthrough: true`, the
     // route merges `input.rawData` (objects_save case) or `input` (other
-    // tools) with `{[result_id_field]: result.id}`. The OAS declares the
-    // exact field name expected downstream.
+    // tools) with `{[result_id_field]: <saved id>}`. The OAS declares the
+    // exact field name expected downstream. The id is read from `id`, then
+    // from the declared field itself. objects_save returns the new id as
+    // `objectId` (it has no `id`), so for objects_save alone `objectId` comes
+    // last. Other tools keep the declared field: the outreach review persist
+    // primitives return `{ ok, runId, objectId }`, where objectId is the bundle
+    // they wrote, not the id their node declares.
     if (body.result_input_passthrough === true) {
       const idField =
         typeof body.result_id_field === "string" ? body.result_id_field : "id";
@@ -850,9 +907,10 @@ export async function POST(req: Request): Promise<Response> {
               ? (input.rawData as Record<string, unknown>)
               : {})
           : input;
+      const savedObjectId = tool === "objects_save" ? resultObj.objectId : undefined;
       const shaped: Record<string, unknown> = {
         ...echoFields,
-        [idField]: resultObj.id ?? resultObj[idField] ?? null,
+        [idField]: resultObj.id ?? resultObj[idField] ?? savedObjectId ?? null,
       };
       // THE FILED REVIEW SET RIDES OUT ON THE ECHO, for every extension alike:
       // a declared module that filed review targets gets them back at the top

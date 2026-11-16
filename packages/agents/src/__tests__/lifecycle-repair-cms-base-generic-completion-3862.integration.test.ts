@@ -252,7 +252,7 @@ describe.skipIf(!HAS_DB)("cinatra#3862 leg 7 — the generic completer on a capt
   it("CAPTURE ONLY: a repair run whose only write is a host capture is never claimed; the repair stays open, unresolved", async () => {
     const ctx = await driveToFinishedCmsBaseRepair();
     // A revision the snapshot type accepts, written by the repair run, but by
-    // the capture writer's emitter.
+    // the retired capture writer's emitter.
     await seedRunAnswer({ runId: ctx.repairRunId, type: CMS_SNAPSHOT_TYPE, mime: CMS_FIELDS_MIME, emitter: CMS_SNAPSHOT_EMITTER });
 
     const summary = await completion.completeDispatchedProducerRepairs({ limit: 50 });

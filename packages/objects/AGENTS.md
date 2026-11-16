@@ -128,6 +128,38 @@ result. Shape:
 }
 ```
 
+### Retired host types (`registerRetired`, cinatra#4366)
+
+When a type's definer moves it (for example a pack that renames its type into
+its own namespace), the host keeps the former id registered with
+`objectTypeRegistry.registerRetired(def)` so stored rows of it still resolve and
+fail closed on writes. The definition must declare projection `none` (the rows
+are never projected) or `artifact-safe` (the rows stay in the artifact library
+and open read-only, as before the move); anything else throws.
+`objectTypeRegistry.isRetired(type)` marks the id:
+
+- `objects_save` refuses it with `OBJECTS_TYPE_NOT_REGISTERED`, as it refuses a
+  tombstoned id;
+- `objects_update` of a stored row of it (content or project move) is refused,
+  after the authorization gate and the not-found check, with:
+
+```typescript
+{
+  code: "OBJECTS_TYPE_RETIRED",
+  message: 'object type "<type>" is retired; its stored rows are read-only',
+  retryable: false,
+  details: { type: string },
+}
+```
+
+- the classifier catalog and `objects_types_list` leave it out.
+
+`objects_get`, `objects_list` and `objects_delete` are unchanged. The only
+retired host type is `@cinatra-ai/drupal:node`, the former id of the Drupal
+pack's pointer type. It keeps projection `artifact-safe`, so a stored row of it
+stays listed in the artifact library and its artifact page opens as before;
+only edits are refused.
+
 ## Dynamic object type registry — REMOVED (engine teardown, epic #1785 entry 95, #1793)
 
 The dynamic-types **engine is gone**. `auto-registrar.ts` (the module that

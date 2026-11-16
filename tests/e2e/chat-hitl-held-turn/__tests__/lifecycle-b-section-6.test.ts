@@ -383,14 +383,16 @@ describe("§6 One road — the tool-capability primitives are confined to the mo
     // `src/lib/assistant-runtime/__tests__/model-routing.test.ts`, which asserts
     // the notice names the refusal and forbids pretending the action happened.
     //
-    // The defining module and the turn composer that appends the notice are the
-    // whole legitimate set.
+    // The defining module, the turn composer that appends the notice and the
+    // turn's tool assembly (extracted from the composer, CONTRACT.md section
+    // 5.2) are the whole legitimate set.
     const readers = sourcesMatching(
       /isConversationOnlyProvider|PROVIDERS_WITHOUT_NATIVE_MCP|conversationOnlyNoticeFor/,
     );
     expect(readers).toEqual([
       "src/lib/assistant-runtime/model-routing.ts",
       "src/lib/assistant-runtime/runtime.ts",
+      "src/lib/assistant-runtime/turn-tool-assembly.ts",
     ]);
   });
 });

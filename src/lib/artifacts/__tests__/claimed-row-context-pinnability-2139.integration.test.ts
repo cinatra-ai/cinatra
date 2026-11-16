@@ -21,13 +21,12 @@
  * finalization rejects, or a selection whose bytes never serve.
  *
  * RESIDUAL (b) — THE WITNESS INVARIANT COVERS EVERY HOST FILE WRITER.
- * `captureCmsContentSnapshot` and `writePinnedPreviewCapture` minted `form='file'`
- * representations WITHOUT the witness. Both of their object types register an
- * `isArtifact` descriptor — which is exactly what puts them under the pack-typed
- * serve arm — so a claim reserved over either type would have stranded the
- * capture on its own review surface. Both now emit the witness from the shared
- * builder inside their own capture transaction, and the proof below is not "the
- * row exists" but the end-to-end consequence: a CLAIMED capture still serves.
+ * `writePinnedPreviewCapture` minted `form='file'` representations WITHOUT the
+ * witness. Its object type registers an `isArtifact` descriptor — which is
+ * exactly what puts it under the pack-typed serve arm — so a claim reserved over
+ * that type would have stranded the capture on its own review surface. It now
+ * emits the witness from the shared builder inside its own capture transaction.
+ * (The CMS page snapshot capture had the same cases; it left with cinatra#3862.)
  *
  * ISOLATION (the #1868 / #1430 / #2047 integration pattern): a FRESH schema per
  * file from the CANONICAL `buildCreateStoreSchemaQueries` DDL; the blob root is a
@@ -109,7 +108,6 @@ let snapshotMod: typeof import("@/lib/artifacts/object-content-snapshot");
 let resolverMod: typeof import("@/lib/artifacts/context-resolver");
 let finalizeMod: typeof import("@/lib/artifacts/context-selection-finalize");
 let readMod: typeof import("@/lib/artifacts/artifact-read");
-let cmsCaptureMod: typeof import("@/lib/artifacts/cms-content-snapshot-capture");
 let previewStoreMod: typeof import("@/lib/artifacts/cms-preview-capture-store");
 
 const S = () => TEST_SCHEMA;
@@ -266,7 +264,6 @@ beforeAll(async () => {
   resolverMod = await import("@/lib/artifacts/context-resolver");
   finalizeMod = await import("@/lib/artifacts/context-selection-finalize");
   readMod = await import("@/lib/artifacts/artifact-read");
-  cmsCaptureMod = await import("@/lib/artifacts/cms-content-snapshot-capture");
   previewStoreMod = await import("@/lib/artifacts/cms-preview-capture-store");
 
   objectTypeRegistry._clearForTests();
@@ -795,72 +792,6 @@ describe.skipIf(!HAS_REAL_DB)(
 describe.skipIf(!HAS_REAL_DB)(
   "cinatra#2139 residual (b) — every host FILE writer rides the provenance witness (real DB + disk)",
   () => {
-    it("captureCmsContentSnapshot emits the witness for its snapshot representation, in the SAME transaction", async () => {
-      const res = await cmsCaptureMod.captureCmsContentSnapshot({
-        orgId: ORG,
-        pointer: {
-          url: "https://blog.example.com/?p=42",
-          connectorId: "wordpress-mcp-connector",
-          externalId: "42",
-          state: "linked",
-          title: "Hello Post",
-        },
-        resolved: { mime: "text/html", text: "<h1>Original</h1><p>body</p>" },
-        capturedAt: new Date().toISOString(),
-        scopeManifest: { paths: ["title", "body"] },
-        connectorInstance: "wordpress-mcp-connector:inst-1",
-        resourceType: "post",
-        cmsResourceId: "42",
-        baseRemoteRevisionRef: "etag-1",
-        operationId: nextId("op"),
-        emitProducedEvent: false,
-      });
-      expect(witnessCount(res.artifactId, res.snapshotRevisionId)).toBe(1);
-    });
-
-    it("a CLAIMED captured CMS snapshot still SERVES — the consequence the missing witness would have cost", async () => {
-      const res = await cmsCaptureMod.captureCmsContentSnapshot({
-        orgId: ORG,
-        pointer: {
-          url: "https://blog.example.com/?p=77",
-          connectorId: "wordpress-mcp-connector",
-          externalId: "77",
-          state: "linked",
-          title: "Claimed Post",
-        },
-        resolved: { mime: "text/html", text: "<h1>Claimed</h1>" },
-        capturedAt: new Date().toISOString(),
-        scopeManifest: { paths: ["title"] },
-        connectorInstance: "wordpress-mcp-connector:inst-1",
-        resourceType: "post",
-        cmsResourceId: "77",
-        operationId: nextId("op"),
-        emitProducedEvent: false,
-      });
-
-      // Reserve a claim over the capture type and bind the row — the future the
-      // KNOWN GAP described. Before the witness, this is exactly the state that
-      // made the capture stop serving on its own review surface.
-      seedDedicatedClaim({
-        id: nextId("claim-cms"),
-        type: CMS_SNAPSHOT_TYPE,
-        ext: CMS_SNAPSHOT_EXT,
-        dispositions: { projection: "artifact-safe", pinnable: true, snapshotPolicy: "none" },
-      });
-      bindingMod.reconcileArtifactBinding({ orgId: ORG, artifactId: res.artifactId });
-      expect(bindingMod.readActiveBinding(ORG, res.artifactId)).not.toBeNull();
-
-      const served = readMod.resolveArtifactVersionForServe({
-        orgId: ORG,
-        artifactId: res.artifactId,
-        representationRevisionId: res.snapshotRevisionId,
-        liveOnly: true,
-      });
-      expect(served).not.toBeNull();
-      expect(served!.storageKey).toBeTruthy();
-      expect(served!.sizeBytes).toBeGreaterThan(0);
-    });
-
     it("writePinnedPreviewCapture emits the witness for its PNG — and a DEGRADED capture emits none (no representation to vouch for)", async () => {
       const captured = await previewStoreMod.writePinnedPreviewCapture({
         orgId: ORG,

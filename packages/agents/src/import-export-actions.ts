@@ -37,6 +37,7 @@ import {
 } from "./store";
 import type { CreateAgentTemplateInput } from "./store";
 import { importAgentTemplateCore } from "./import-agent-core";
+import { isCompiledPublishRows } from "./oas-compiler";
 import { publishAgentTemplateAndBindVersion } from "./publish-template";
 import { deriveAgentTemplateIdentityClaim } from "./agent-template-identity";
 import { logAuditEvent } from "@/lib/authz";
@@ -121,6 +122,9 @@ export type LocalAgentTemplateSeed = {
    * threaded like artifactBindings because the writer below does not spread its
    * seed. Undefined/omitted normalizes to NULL ("unknown") at the store layer. */
   publishingSteps?: string[] | null;
+  /** The publish card's rows per declared node (cinatra#4150), threaded the
+   * same way; omitted normalizes to NULL ("unknown"). */
+  publishRows?: Record<string, Array<{ label: string; input: string }>> | null;
   // Install-time owner tier. NULL means a row whose owner tier has not been
   // normalized yet. Threaded from installRegistryPackageAtScope's target
   // through installAgentPackageWithDependencies -> installAgentFromPackage.
@@ -160,6 +164,15 @@ export async function createLocalAgentTemplateVersion(input: {
   seed: LocalAgentTemplateSeed;
   nameOverride?: string;
 }): Promise<{ templateId: string; versionId: string }> {
+  // cinatra#4150 — this module is "use server", so a client can call this export. The publish card's rows are
+  // accepted only as the compiler produced them (the same object); any other map is refused before anything is written.
+  // The seed is read once: the write carries a copy of the very value checked, never a second read of the seed.
+  const seedPublishRows = input.seed.publishRows ?? null;
+  if (seedPublishRows !== null && !isCompiledPublishRows(seedPublishRows)) {
+    throw new Error("publishRows must be the compiler's own output");
+  }
+  const checkedPublishRows: typeof seedPublishRows =
+    seedPublishRows === null ? null : JSON.parse(JSON.stringify(seedPublishRows));
   const snapshotInput = isRecord(input.seed.snapshot) ? input.seed.snapshot : {};
   const sourceNlValue = snapshotInput.sourceNl ?? input.seed.sourceNl;
   const compiledPlanValue = snapshotInput.compiledPlan ?? input.seed.compiledPlan;
@@ -220,6 +233,7 @@ export async function createLocalAgentTemplateVersion(input: {
     artifactBindings: input.seed.artifactBindings ?? null,
     // cinatra#4150 — the publishing-step declaration rides the same create.
     publishingSteps: input.seed.publishingSteps ?? null,
+    publishRows: checkedPublishRows,
     status: (input.seed.status as "draft" | "published") ?? "draft",
   });
 

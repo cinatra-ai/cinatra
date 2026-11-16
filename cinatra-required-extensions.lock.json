@@ -40,9 +40,9 @@
     {
       "packageName": "@cinatra-ai/blog-content-skill",
       "repo": "cinatra-ai/blog-content-skill",
-      "resolvedSha": "e04c1c3a9483d69b3ff0a4a2a8d9492bc23dc8f3",
+      "resolvedSha": "720df017eb2b1a0acde9d98d53a92986f3b49246",
       "packageVersion": "0.1.0",
-      "treeSha256": "356f9a63d0bff22b247622c77787ee1c4af97e94ff6295aee1b544e895656b1b"
+      "treeSha256": "61e9057bd6414ba323659ea0da98a32ca3094bf1e0353b39aba6d78b15fc618a"
     },
     {
       "packageName": "@cinatra-ai/chart-artifact",
@@ -75,9 +75,9 @@
     {
       "packageName": "@cinatra-ai/dashboard-artifact",
       "repo": "cinatra-ai/dashboard-artifact",
-      "resolvedSha": "6c08044b02a7f6bd990884e3575172f70ae6c741",
+      "resolvedSha": "9032d8b51bcbb940711d7973ac82fdf6933c6855",
       "packageVersion": "0.1.0",
-      "treeSha256": "82800e4ed531f5fe525ed06c26c33f45ba6be146acdbea3c3624519c79f2ba12"
+      "treeSha256": "aa18d2de52e97906aebcab2a997ae647917059703ff83aa307bd69ef073939a2"
     },
     {
       "packageName": "@cinatra-ai/document-artifact",
@@ -131,9 +131,9 @@
     {
       "packageName": "@cinatra-ai/markdown-artifact",
       "repo": "cinatra-ai/markdown-artifact",
-      "resolvedSha": "6b10324644129b4559491d3cb4a24a59a84f6953",
+      "resolvedSha": "4ed0f6f4f94e78199a25777668d13d0a914cf534",
       "packageVersion": "0.1.0",
-      "treeSha256": "5889258efb285112c92a3a98aa5d9e6a0c50784905d47c06b3a5434ee0ea09be"
+      "treeSha256": "ee8d4320ccb495b32b7a118fb7b830bd13234689604e3ef93ae5dcf2cac5010f"
     },
     {
       "packageName": "@cinatra-ai/nango-connector",

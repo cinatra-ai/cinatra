@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useInsertionEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -38,7 +39,8 @@ import {
 } from "./agent-hitl-screen-card";
 import type { AgentRunMessageBody } from "./store";
 import { StatusPill } from "@/components/ui/status-pill";
-import { fieldRendererRegistry } from "./field-renderer-registry";
+import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
+import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
 import type { FieldRendererContext } from "./field-renderer-registry";
 import { ArrowRight } from "lucide-react";
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
@@ -77,13 +79,17 @@ import { approveReviewTask } from "./hitl-actions";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
   buildChatGateSubmitPayload,
+  gateAwaitsRendererValue,
+  gateCarriesPresentationHint,
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
+  hitlGateIdentityKey,
   isSetupGateTaskId,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
+  withDeclaredRendererValues,
   wrapPrimitiveSetupPayload,
 } from "./hitl-gate-submit";
 import {
@@ -97,6 +103,15 @@ import {
   type HitlGateContext as HitlContext,
   type RunWaitInterruptDescriptor,
 } from "./run-surface-status";
+import {
+  armAnsweredGate,
+  clearAnsweredPair,
+  createAnsweredGateLedger,
+  isReviewTaskClaimed,
+  releaseAnsweredGate,
+  resetAnsweredGates,
+  type AnsweredGateLedger,
+} from "./answered-gate-ledger";
 // Pending-approval recovery book-keeping — pure classification
 // of each derived-context hydration attempt, plus the BOUNDED predicates that
 // gate the recovery state and its telemetry.
@@ -709,7 +724,20 @@ export function AgenticRunPanel({
   // After clicking Approve/Reject, suppress re-showing the same HITL screen while the
   // server processes the resume. Prevents "Loading recipients" loop caused by the poll
   // returning pending_approval with the old context before the server advances the graph.
-  const justSubmittedXRendererRef = useRef<string | null>(null);
+  // The suppression reads one answered-gate ledger (cinatra#3080,
+  // answered-gate-ledger.ts), kept in this ref, not in React state. Its
+  // `pair` is the gate of the last armed submit (renderer and review task,
+  // written in one assignment) with the tokens of the submits of that gate.
+  // Its `claims` are the questions (review task, renderer and field) answered
+  // on this mount whose review task names one gate, each with the tokens of
+  // the submits that answered it. Polls are not ordered, so a late one can
+  // still carry a gate answered earlier; a claimed question is not drawn while
+  // the claim stands, and another question under its review task is
+  // (cinatra#3739).
+  // A blocked or thrown submit releases only what its own token added, and
+  // Re-check releases everything. The shared `setup-<runId>` id is never
+  // claimed.
+  const answeredGateLedgerRef = useRef<AnsweredGateLedger>(createAnsweredGateLedger());
   // AND THE GATE THE PERSON ANSWERED, BY ITS OWN REVIEW TASK (cinatra#3739).
   // Armed and released exactly where the suppression above is, but keyed on
   // the review task rather than the renderer, because a later setup field may
@@ -1096,13 +1124,18 @@ export function AgenticRunPanel({
   // Suppress re-showing the same HITL screen after Approve/Reject while the server
   // processes the resume. Prevents "Loading recipients" flash caused by the poll
   // returning pending_approval with the stale context before the graph advances.
-  // Clear suppression when a different xRenderer arrives (next step's HITL).
+  // Clear the pair when a different xRenderer arrives (next step's HITL), or
+  // the same renderer with a review task that names one gate, is not claimed
+  // and differs from the armed one (cinatra#3080: two context gates in a
+  // row). Only the pair is cleared; the claims stay.
+  const answeredGateLedger = answeredGateLedgerRef.current;
   const suppression = applyJustSubmittedSuppression(
     rawEffectiveHitlContext,
-    justSubmittedXRendererRef.current,
+    answeredGateLedger.pair,
+    answeredGateLedger.claims,
   );
   if (suppression.clearSuppression) {
-    justSubmittedXRendererRef.current = null;
+    clearAnsweredPair(answeredGateLedger);
   }
   //
   // AND A PARKED RUN'S OLD INTERRUPT IS NOT A GATE (cinatra#3046). A run parked
@@ -1179,7 +1212,8 @@ export function AgenticRunPanel({
   // path (shared pure builders in ./hitl-gate-submit). The flags preserve each
   // path's historical behavior exactly:
   //   - trackApproving: drive the isApproving spinner state
-  //   - suppressGate: arm justSubmittedXRendererRef (stale-gate re-show guard)
+  //   - suppressGate: arm the answered-gate ledger for this submit (stale-gate
+  //     re-show guard); a blocked or thrown submit releases only its own token
   //   - clearAttachmentsOnSuccess: consume pendingAttachmentsRef ONLY on a
   //     true success (an "already resolved" race or a throw leaves them so
   //     the user can retry without re-attaching)
@@ -1201,8 +1235,25 @@ export function AgenticRunPanel({
       errorMode: "rethrow" | "toast";
     }) => {
       if (args.trackApproving) setIsApproving(true);
+      // This submit's own token: a failure below releases only what it added,
+      // never the pair or the claim of another submit (cinatra#3080).
+      let ownToken: number | null = null;
+      const releaseOwnSuppression = () => {
+        if (ownToken === null) return;
+        const ledger = answeredGateLedgerRef.current;
+        releaseAnsweredGate(ledger, ownToken);
+        ownToken = null;
+        const stillClaimed = isReviewTaskClaimed(ledger, args.reviewTaskId);
+        setAnsweredReviewTaskId((current) =>
+          current === args.reviewTaskId && !stillClaimed ? null : current,
+        );
+      };
       if (args.suppressGate) {
-        justSubmittedXRendererRef.current = args.xRenderer;
+        ownToken = armAnsweredGate(answeredGateLedgerRef.current, {
+          xRenderer: args.xRenderer,
+          reviewTaskId: args.reviewTaskId,
+          fieldName: latestHitlContextRef.current?.fieldName ?? null,
+        });
         setAnsweredReviewTaskId(args.reviewTaskId);
         setAnsweredQuestionShape(
           `${args.xRenderer}::${latestHitlContextRef.current?.fieldName ?? ""}`,
@@ -1219,12 +1270,10 @@ export function AgenticRunPanel({
           // RETURNED outcome, so it is handled here and never becomes a throw:
           // the `rethrow` caller is the setup-field submit, whose rethrow is
           // what put the masked framework string into SchemaFieldRenderer's
-          // submitError line. Nothing is submitted, so the suppression is
-          // released and the surface draws the blocked state instead.
-          if (args.suppressGate) {
-            justSubmittedXRendererRef.current = null;
-            setAnsweredReviewTaskId(null);
-          }
+          // submitError line. Nothing is submitted by THIS submit, so it
+          // releases what it armed and the surface draws the blocked state
+          // instead. Another submit's pair or claim stays (cinatra#3080).
+          releaseOwnSuppression();
           setGateBlocked(outcome.blocked);
           return;
         }
@@ -1232,10 +1281,7 @@ export function AgenticRunPanel({
       } catch (err) {
         const msg = err instanceof Error ? err.message : "unknown";
         if (!isAlreadyResolvedError(msg)) {
-          if (args.suppressGate) {
-            justSubmittedXRendererRef.current = null;
-            setAnsweredReviewTaskId(null);
-          }
+          releaseOwnSuppression();
           if (args.errorMode === "rethrow") throw err;
           toast.error("Could not continue this run.");
         }
@@ -1348,10 +1394,31 @@ export function AgenticRunPanel({
         buffered: bufferedHitlValueRef.current,
         pendingAttachments: pendingAttachmentsRef.current,
       });
+      // cinatra#3380 — a caller of the published submit (none yet) is a second entrance
+      // to the same resume as the gate's Continue, so it is held by the same
+      // rule: a mid-run gate that declares a value its renderer must produce
+      // (`hitl-gate-submit.ts`) is not resumed until the answer carries that
+      // value. Nothing is sent. A gate that carries a presentation hint is drawn
+      // through the generic dispatch renderer, which writes nothing, so it is out
+      // of the rule, as on its Continue. The rule reads what the renderer wrote and
+      // what the caller handed in, BEFORE the host adds approved, approvedAt and
+      // userResponse: those are the host's, and a gate that declares one of them
+      // is not answered by them. And what released the gate is what is sent: each
+      // declared key of that answer goes back over the host's fields.
+      const callerFields =
+        value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
+      const answer = { ...bufferedHitlValueRef.current, ...callerFields };
+      const heldByTheRule =
+        (ctx.xRenderer.endsWith(":output") || hasMidRunHitlBinding(ctx.xRenderer)) &&
+        !isSetupGateTaskId(ctx.reviewTaskId) &&
+        !gateCarriesPresentationHint(ctx.currentValues);
+      if (heldByTheRule && gateAwaitsRendererValue(ctx.inputSchema, answer)) {
+        throw new Error("This step is waiting for a choice on its card. Choose one there, then continue.");
+      }
       await performGateSubmit({
         reviewTaskId: ctx.reviewTaskId,
         xRenderer: ctx.xRenderer,
-        payload,
+        payload: heldByTheRule ? withDeclaredRendererValues(ctx.inputSchema, answer, payload) : payload,
         payloadFieldName,
         trackApproving: true,
         suppressGate: true,
@@ -1556,12 +1623,15 @@ export function AgenticRunPanel({
   // state was already fixed by the composite React `key` (cinatra#2541/#2556);
   // this is the analogous fix for the panel-level buffer.
   //
-  // The key collapses to `${xRenderer}::` for mid-run gates (no fieldName),
-  // so those keep resetting on xRenderer change alone — unchanged from today.
-  const bufferedHitlValueKey =
-    currentXRenderer !== null
-      ? `${currentXRenderer}::${effectiveHitlContext?.fieldName ?? ""}`
-      : null;
+  // The review task is part of the key (cinatra#3380, cinatra#3035): a mid-run
+  // gate carries no fieldName and can repeat its renderer, and a value written
+  // (or a pick made) for one gate must not read as the next gate's answer.
+  const bufferedHitlValueKey = effectiveHitlContext
+    ? hitlGateIdentityKey(effectiveHitlContext)
+    : null;
+  // cinatra#3035: the mounted gate renderer reports here when it settles on the
+  // floor, for this gate only: a later gate reads its own hold from its first frame.
+  const [rendererFloored, setRendererFloored] = useGateRendererFloor(bufferedHitlValueKey);
   const [prevBufferedHitlValueKey, setPrevBufferedHitlValueKey] = useState<string | null>(null);
   if (
     bufferedHitlValueKey !== null &&
@@ -1570,6 +1640,22 @@ export function AgenticRunPanel({
     setPrevBufferedHitlValueKey(bufferedHitlValueKey);
     setBufferedHitlValue({});
   }
+  // THE GATE ON SCREEN, AS OF THE LAST COMMIT (cinatra#3380). A renderer that has
+  // been replaced can still call its `onChange` after an await, and the buffer
+  // above is the gate on screen's: such a write is no answer to it. Each
+  // renderer's `onChange` carries the gate it was drawn for and is compared with
+  // this. It is set in an insertion effect, which runs in the commit before every
+  // layout effect, so the next gate's renderer, writing from its own layout
+  // effect when it mounts, already reads its own gate here. Only another gate
+  // moves it, as only another gate resets the buffer.
+  const liveHitlGateKeyRef = useRef<string | null>(bufferedHitlValueKey);
+  useInsertionEffect(() => {
+    if (bufferedHitlValueKey !== null) liveHitlGateKeyRef.current = bufferedHitlValueKey;
+  }, [bufferedHitlValueKey]);
+  const isHitlGateOnScreen = useCallback(
+    (forGate: string) => liveHitlGateKeyRef.current === forGate,
+    [],
+  );
 
   // cinatra#3423 — the resume re-read described above, wired where the gate
   // context is known. `parkedWithNoGate` is the run saying it is standing at a
@@ -1771,7 +1857,7 @@ export function AgenticRunPanel({
   // clear itself on the next gate in that flow.
   const handleRecheckDerivedContext = useCallback(async () => {
     setIsRechecking(true);
-    justSubmittedXRendererRef.current = null;
+    resetAnsweredGates(answeredGateLedgerRef.current);
     try {
       await refetchDerivedContext();
     } finally {
@@ -1940,6 +2026,13 @@ export function AgenticRunPanel({
     withReject?: boolean;
     approveLabel?: string;
     approvingLabel?: string;
+    /** cinatra#3380 — the gate declares a value its renderer must produce
+     *  (`gateAwaitsRendererValue`) and the renderer has written none yet: the
+     *  Continue is drawn disabled, and a disabled button takes no press. */
+    awaitingRendererValue?: boolean;
+    /** cinatra#3380 — the schema whose declared keys the renderer's buffer
+     *  answers: each one it wrote is sent as written, over the host fields. */
+    declaredSchema?: Record<string, unknown> | null;
   }): ReactNode => effectiveHitlContext && (
     <div className="flex justify-end items-center gap-2 pt-2 border-t border-line">
       {opts?.withReject ? (
@@ -1996,7 +2089,13 @@ export function AgenticRunPanel({
       ) : null}
       <Button
         size="sm"
-        disabled={isApproving}
+        // cinatra#3380: held while the gate's declared renderer value is unwritten.
+        // cinatra#3035: held while a gate whose kind declares the hold has no pick.
+        disabled={
+          isApproving ||
+          opts?.awaitingRendererValue === true ||
+          (!rendererFloored && continueAwaitsAPick(hitlRendererEntry?.entry, bufferedHitlValue))
+        }
         className="gap-1.5"
         // THE HITL SCREEN'S ONE DECISION (cinatra#2930). Named on the row this
         // panel draws INSIDE the screen card, and deliberately not on the
@@ -2039,6 +2138,15 @@ export function AgenticRunPanel({
             effectiveHitlContext.currentValues,
             nextBuffered,
           );
+          // cinatra#3380 — a key the gate declares and the renderer wrote is sent
+          // as the renderer wrote it, over approved, approvedAt and the wrap above.
+          if (opts?.declaredSchema) {
+            nextBuffered = withDeclaredRendererValues(
+              opts.declaredSchema,
+              bufferedHitlValue,
+              nextBuffered,
+            );
+          }
           await performGateSubmit({
             reviewTaskId: effectiveHitlContext.reviewTaskId,
             xRenderer: effectiveHitlContext.xRenderer,
@@ -2292,11 +2400,14 @@ export function AgenticRunPanel({
   // `effectiveHitlContext` reaches null down two very different roads. One is
   // the road this placeholder is for: the row carries no interrupt at all,
   // because the person answered it and the run moved past it. The other is
-  // `applyJustSubmittedSuppression`, which nulls a NON-null interrupt for as
-  // long as the just-submitted renderer matches - and it matches on the
-  // renderer alone, never on the review task, while a run's sequential setup
-  // fields deliberately reuse one renderer. So the step AFTER a submitted one
-  // can be a real, live, unanswered question wearing a null context.
+  // `applyJustSubmittedSuppression`, which nulls a NON-null interrupt that is
+  // a question claimed on this mount, and otherwise for as long as the
+  // just-submitted renderer matches, unless the interrupt's review task names
+  // one gate and differs from a non-blank armed one (cinatra#3080) - and a
+  // run's sequential setup fields deliberately share one renderer and one
+  // review task (`setup-<runId>`), which names no single gate. So the step
+  // AFTER a submitted one can be a real, live, unanswered question wearing a
+  // null context.
   //
   // Drawing the quiet placeholder over that would hide a question the run is
   // waiting on, and hide with it the Re-check that is the one control which
@@ -2866,7 +2977,13 @@ export function AgenticRunPanel({
                   // so approvalActionsRow is always relevant here.
                   return (
                     <>
-                      <DispatchRenderer hint={hitlPresentationHint} mode="edit" />
+                      <DispatchRenderer
+                        // A new instance for each gate (cinatra#3380), as the
+                        // registry renderer below.
+                        key={hitlGateIdentityKey(effectiveHitlContext)}
+                        hint={hitlPresentationHint}
+                        mode="edit"
+                      />
                       {approvalActionsRow}
                     </>
                   );
@@ -2883,6 +3000,8 @@ export function AgenticRunPanel({
                   );
                 }
                 const RendererComponent = hitlRendererEntry.entry.renderer;
+                // The gate this renderer is drawn for (cinatra#3380).
+                const rendererGateKey = hitlGateIdentityKey(effectiveHitlContext);
                 // Mid-run HITL screens (`:output` suffix) buffer values into
                 // bufferedHitlValue and show a Continue button below. The
                 // context-selector renderer also buffers selections for an outer
@@ -2940,20 +3059,20 @@ export function AgenticRunPanel({
                 // affordances are one resume path with two entrances, not two.
                 return (
                   <>
+                    <RendererFloorReportContext.Provider value={setRendererFloored}>
                     <RendererComponent
-                      // Keyed by xRenderer AND fieldName — the identity the
-                      // orchestrator stepper already uses (#810), adopted here
-                      // in cinatra#2541 because this surface now passes a
+                      // Keyed by the gate's identity: the review task (cinatra#3380,
+                      // a mid-run gate can repeat its renderer), xRenderer and
+                      // fieldName (#810, adopted here in cinatra#2541) because this surface now passes a
                       // fieldName that CHANGES between gates. Sequential
                       // per-field setup gates share one xRenderer and arrive
                       // with no RUN_STARTED/RESUME frame between them, so an
                       // xRenderer-only key would mutate `fieldName` on a LIVE
                       // renderer instance: field 1's typed text (SchemaFieldRenderer's
                       // localValue, which a non-string next value does not clear)
-                      // would pre-fill field 2 under field 2's label. fieldName is
-                      // undefined for mid-run gates, so those keep their existing
-                      // xRenderer-keyed identity exactly.
-                      key={`${effectiveHitlContext.xRenderer}::${effectiveHitlContext.fieldName ?? ""}`}
+                      // would pre-fill field 2 under field 2's label. The review
+                      // task leads it (cinatra#3035): a later gate's renderer starts with no pick.
+                      key={hitlGateIdentityKey(effectiveHitlContext)}
                       // The gate's REAL field identity (cinatra#2541) — the same
                       // seam the orchestrator stepper regressed at, with the
                       // same consequence: `fieldName` is what the renderer
@@ -2991,7 +3110,12 @@ export function AgenticRunPanel({
                         if (next && typeof next === "object" && !Array.isArray(next)) {
                           const newValues = next as Record<string, unknown>;
                           nextBuffered = { ...bufferedHitlValue, ...newValues };
-                          setBufferedHitlValue(nextBuffered); // visual update
+                          // A renderer that has been replaced writes for a gate
+                          // that is gone (cinatra#3380): the buffer is the gate on
+                          // screen's, so that write does not reach it.
+                          if (isHitlGateOnScreen(rendererGateKey)) {
+                            setBufferedHitlValue(nextBuffered); // visual update
+                          }
                         }
                         // Grouped-setup forms: approve immediately on form submit so the
                         // user only ever sees one Continue button (no separate row below).
@@ -3051,7 +3175,11 @@ export function AgenticRunPanel({
                       }}
                       context={hitlRendererEntry.context}
                       mode="edit"
-                      onApply={handleApply}
+                      // A suggestion applied by a replaced renderer is no answer
+                      // to the gate on screen either (cinatra#3380).
+                      onApply={(suggestions: Record<string, unknown>) => {
+                        if (isHitlGateOnScreen(rendererGateKey)) handleApply(suggestions);
+                      }}
                       aiSuggestions={aiSuggestions}
                       // cinatra#3532 — where the product owns the send, the
                       // renderer's own submit is not drawn inside the field
@@ -3076,8 +3204,21 @@ export function AgenticRunPanel({
                           : undefined
                       }
                     />
-                    {/* Show the external Continue button only for non-grouped-setup midrun renderers. */}
-                    {isMidRunHitl && !isGroupedSetup && approvalActionsRow}
+                    </RendererFloorReportContext.Provider>
+                    {/* Show the external Continue button only for non-grouped-setup midrun renderers.
+                        cinatra#3380 — it stays unavailable while the gate declares a
+                        value its renderer must produce and the renderer has written
+                        none (`hitl-gate-submit.ts`); a gate that declares none is
+                        drawn exactly as before. */}
+                    {isMidRunHitl &&
+                      !isGroupedSetup &&
+                      renderApprovalActionsRow({
+                        awaitingRendererValue: gateAwaitsRendererValue(
+                          hitlRendererEntry.fieldSchema,
+                          bufferedHitlValue,
+                        ),
+                        declaredSchema: hitlRendererEntry.fieldSchema,
+                      })}
                     {/* cinatra#3532 — the product's Continue for a setup field
                         whose renderer declares no submit control of its own:
                         the same control the fallback field's card draws, and it

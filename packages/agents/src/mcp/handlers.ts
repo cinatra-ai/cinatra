@@ -23,8 +23,6 @@ import {
   readAgentRunsByTemplate,
   readAgentRunMessages,
   appendAgentRunMessage,
-  transitionRunStatus,
-  RunTransitionError,
   type AgentRunStatus,
   updateAgentTemplate,
   resolveDefaultOrgId,
@@ -39,7 +37,6 @@ import {
   readAgentTemplateByPackageName,
   type AgentTemplateRecord,
   type AgentTemplateVersionRecord,
-  writeHitlPrompt,
   readAllHitlPromptsForRun,
   updateHitlPromptsExcludedForRunAgent,
   type HitlPromptRecord,
@@ -48,6 +45,7 @@ import {
   readAgentRunsByTemplateRaw,
   type AgentRunRecord,
 } from "../store";
+import { resumeMessageFromInput } from "./resume-message";
 // Run-scoped test-delivery send + parse primitives (#1625): the two handlers
 // live in ./test-delivery-handlers (extracted to keep this primitive hub under
 // the file-size ratchet). The send PORT, ledger store, and port types are
@@ -67,6 +65,7 @@ import {
   type SetTriggerForActorArgs,
 } from "../trigger-service";
 import { randomUUID, createHash } from "node:crypto";
+import { resumeWayflowUnderPauseClaim, stopRunRespectingPauseClaim } from "../run-resume-under-claim";
 import { readdir, readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
@@ -2073,8 +2072,8 @@ async function handleAgentBuilderRunResume(
 
     // cinatra#2485 C — the install-scope run gate. A resume DRIVES execution,
     // and this handler's WayFlow branch does so through a DIRECT `sendTask`:
-    // it enqueues nothing and transitions nothing, so it reaches neither
-    // layer-2 chokepoint. Without this, a principal authorized on the run by
+    // it enqueues nothing and its gate claim is no `→queued` edge, so it reaches
+    // neither layer-2 chokepoint. Without this, a principal authorized on the run by
     // policy (an org admin, a co-owner) could resume a team-/project-scoped
     // agent's run from outside that scope. Both the RESUMING principal and the
     // run owner must be inside the agent's scope; asserted before
@@ -2159,90 +2158,22 @@ async function handleAgentBuilderRunResume(
         timeoutMs: WAYFLOW_A2A_TIMEOUT_MS,
         fetchImpl: createWayflowFetch(),
       });
-      // Precedence for the WayFlow resume message — kept identical to
-      // approveReviewTaskInternal (review-task-actions.ts) so UI and MCP paths
-      // stay in lockstep:
-      //   1. userResponse (string, non-empty after trim)  — structured-form path,
-      //      passed through UNCHANGED to preserve JSON formatting.
-      //   2. approvalNote (string, non-empty after trim) — legacy bare-approval, trimmed.
-      //   3. fallback "[Approved by operator]"           — bare click-to-approve.
-      // userResponse wins over approvalNote when both are present; renderers needing
-      // the approval note delivered to WayFlow must embed it inside the JSON payload.
-      const trimmedNote = typeof approvalNote === "string" ? approvalNote.trim() : "";
-      let resumeText: string;
-      if (typeof userResponse === "string" && userResponse.trim().length > 0) {
-        resumeText = userResponse;
-      } else if (trimmedNote.length > 0) {
-        resumeText = trimmedNote;
-      } else {
-        resumeText = "[Approved by operator]";
-      }
-      // Payload extraction. MCP handler input has no structured `valuesObj`, so on parse failure submittedValues stays null.
-      let submittedValues: Record<string, unknown> | null = null;
-      if (typeof userResponse === "string" && userResponse.trim().length > 0) {
-        try {
-          const parsed = JSON.parse(userResponse);
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-            submittedValues = parsed as Record<string, unknown>;
-          }
-        } catch {
-          // No structured fallback in MCP path — leave null.
-        }
-      }
+      // The resume message and its submitted values (precedence: ./resume-message, as the UI approve).
+      const { resumeText, trimmedNote, submittedValues } = resumeMessageFromInput(userResponse, approvalNote);
 
-      await writeHitlPrompt({
-        runId: run.id,
-        agentId: packageName,                          // existing local var; do NOT change to template.packageName
-        stepKey: run.a2aTaskId,                        // bare task.id, no `wayflow-` prefix
-        message: trimmedNote,
-        submittedValues,
-        // MCP path: schema not available at resume time — schema_snapshot stored as null
-        schemaSnapshot: null,
-        excluded: trimmedNote.length === 0,
-      }).catch((e) => {
-        console.warn(`[handleAgentBuilderRunResume] writeHitlPrompt failed run=${run.id}`, e);
+      // cinatra#4245: claim, token and message, fence, prompt, send, answer, settle.
+      // cinatra#3745: the fence is bound to the gate read here (its a2a task and
+      // execution attempt), and the answer to that claimed gate.
+      return await resumeWayflowUnderPauseClaim({
+        run: { ...run, a2aTaskId: run.a2aTaskId, a2aContextId: run.a2aContextId },
+        client,
+        resumeText,
+        prompt: { agentId: packageName, message: trimmedNote, submittedValues },
+        authority: resumeAuthority,
+        readRun: () => readAgentRunById(run.id),
+        // cinatra#4150 (A5): a publishing template, or a run with a decision, reads the hold again under the claim.
+        recheckPublishHold: (template.publishingSteps?.length ?? 0) > 0 || decided,
       });
-      // #1193 resume carrier: mint this leg's per-run credential and persist its
-      // hash BEFORE the blocking sendTask, then carry the RAW token in the A2A
-      // message METADATA. Kept in lockstep with the UI resume path
-      // (review-task-actions.ts) — both drive the same HITL gate, so both must
-      // carry run identity into the resumed leg. Metadata (not text) because
-      // `resumeText` reaches the gate's InputMessageNode VERBATIM.
-      const { mintResumeRunTokenMetadata } = await import("../wayflow-run-token-carrier");
-      const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
-      // cinatra#4150 (A5): on a publishing template, or for a run with a decision (it met a publish gate, whatever the list says), the run is claimed and the hold read again before the send.
-      const sendFrom = await publishHold.claimRunBeforeSend(run.id, (template.publishingSteps?.length ?? 0) > 0 || decided, resumeAuthority).catch((e: unknown) => publishHold.publishHoldAnswer(e));
-      if (typeof sendFrom !== "string") return sendFrom ?? { error: "Run is not pending approval: another resume holds it." };
-      // Send into the existing context so fasta2a routes to the paused conversation.
-      const task = await client.sendTask({
-        message: {
-          role: "user",
-          kind: "message",
-          messageId: randomUUID(),
-          contextId: run.a2aContextId,
-          parts: [{ kind: "text", text: resumeText }],
-          metadata: resumeMetadata,
-        },
-        configuration: { acceptedOutputModes: ["text"] },
-      });
-
-      // multi-gate handler; lazy import (this file lives in packages/agents/src/mcp/). fromStatus: "pending_approval" (a2aTaskId
-      // is set only when the run paused at an A2A gate), or "running" after the cinatra#4150 claim above.
-      const { handleWayflowTaskState } = await import("../execution");
-      await handleWayflowTaskState({ runId: run.id, run, fromStatus: sendFrom, task, authority: resumeAuthority });
-
-      const finalState = task.status?.state;
-      return {
-        runId: run.id,
-        status:
-          finalState === "input-required" ? "pending_approval"
-          : finalState === "failed" ? "failed"
-          : "completed",
-        message:
-          finalState === "input-required" ? "WayFlow task paused at next gate."
-          : finalState === "failed" ? "WayFlow task failed."
-          : "WayFlow task completed.",
-      };
     }
 
     // ---------------------------------------------------------------------------
@@ -2361,14 +2292,14 @@ async function handleAgentBuilderRunStop(
     // (e.g. public_site_widget, which does not call run_stop) ⇒ the seam
     // fail-closes with AgentRunOrgWriteAuthorityError("missing").
     const frameAuthority = (request.actor as { orgWriteAuthority?: OrgWriteAuthority }).orgWriteAuthority;
-    await transitionRunStatus(runId, run.status as AgentRunStatus, "stopped", undefined, frameAuthority).catch((err) => {
-      if (err instanceof RunTransitionError && err.code === "stale_from_status") {
-        // Race: status changed between our read and the CAS. Safe to ignore — the
-        // run is terminal either way by the time this path unwinds.
-        return;
-      }
-      throw err;
+    // cinatra#4245: a lost compare-and-set is not a stop; a live send refuses one.
+    const notStopped = await stopRunRespectingPauseClaim({
+      runId,
+      fromStatus: run.status as AgentRunStatus,
+      authority: frameAuthority,
+      readRun: () => readAgentRunById(runId, actor, roles),
     });
+    if (notStopped) return notStopped;
     void logAuditEvent({
       actorPrincipalId: request.actor?.userId,
       actorPrincipalType: (request.actor?.actorType as AuditEventInput["actorPrincipalType"]) ?? "human",
@@ -2429,7 +2360,7 @@ async function handleAgentBuilderRunsStop(
     // per-run at the seam. Per-run/template authz was already enforced above.
     const frameAuthority = (request.actor as { orgWriteAuthority?: OrgWriteAuthority }).orgWriteAuthority;
 
-    let result: { stopped: number; alreadyTerminal: number; total: number };
+    let result: { stopped: number; alreadyTerminal: number; resuming: number; total: number };
     if (hasRunIds) {
       // Per-run authorization: load each run, enforce execute access, collect
       // the allowed IDs, then bulk-stop only those.
@@ -2462,7 +2393,7 @@ async function handleAgentBuilderRunsStop(
           throw rowErr;
         }
       }
-      if (allowedIds.length === 0) return { stopped: 0, alreadyTerminal: 0, total: 0 };
+      if (allowedIds.length === 0) return { stopped: 0, alreadyTerminal: 0, resuming: 0, total: 0 };
       result = await bulkStopAgentRuns(allowedIds, frameAuthority);
     } else {
       // Template path: verify the template is owned by the actor's org (or
@@ -2488,6 +2419,7 @@ async function handleAgentBuilderRunsStop(
     return {
       stopped: result.stopped,
       alreadyTerminal: result.alreadyTerminal,
+      resuming: result.resuming,
       total: result.total,
     };
   } catch (err) {

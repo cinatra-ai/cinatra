@@ -11,8 +11,8 @@
  * Source text, not behaviour: the invariant is the absence of the modules and
  * of every importer (the same technique as
  * `packages/agents/src/__tests__/blog-repair-new-run-road-structural.test.ts`).
- * The page snapshot writer (`cms-content-snapshot-capture.ts`) and the picture
- * pair's road stay; slice S4 and leg 8 remove them.
+ * The page snapshot writer and the picture pair's road stayed in this slice;
+ * slice S4 and leg 8 remove them.
  */
 import { describe, expect, it } from "vitest";
 import { existsSync, readdirSync, readFileSync } from "node:fs";

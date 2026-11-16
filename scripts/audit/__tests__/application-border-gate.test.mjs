@@ -411,9 +411,15 @@ describe("test of record: the application border floor over the real tree", () =
     expect(countProblems(committed)).toEqual([]);
   });
 
-  it("the CMS snapshot capture is on the class 2 floor and carries a class 3 ceiling", () => {
-    expect(committed.names["src/lib/artifacts/cms-content-snapshot-capture.ts :: name :: cms"]).toBeDefined();
-    expect(committed.ceilings["src/lib/artifacts/cms-content-snapshot-capture.ts"]).toBeDefined();
+  it("the CMS snapshot capture left the class 2 floor and the class 3 ceilings with its module (cinatra#3862)", () => {
+    // Built from parts so that this file does not name the retired module
+    // (src/lib/__tests__/cms-snapshot-writer-retired-3862.test.ts reads the JS,
+    // TS and JSON files under src/, packages/, scripts/ and config/, except
+    // inside directories named node_modules, .next, dist, build, coverage or
+    // .turbo).
+    const writer = "src/lib/artifacts/" + "cms-content-snapshot" + "-capture.ts";
+    expect(committed.names[`${writer} :: name :: cms`]).toBeUndefined();
+    expect(committed.ceilings[writer]).toBeUndefined();
   });
 
   it("the vocabulary holds more than zero claimed ids", () => {

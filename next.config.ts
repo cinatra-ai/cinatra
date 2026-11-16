@@ -429,6 +429,7 @@ const nextConfig: NextConfig = {
     "@cinatra-ai/anthropic-connector",
     "@cinatra-ai/audio-artifact",
     "@cinatra-ai/binary-artifact",
+    "@cinatra-ai/dashboard-artifact",
     "@cinatra-ai/document-artifact",
     "@cinatra-ai/image-artifact",
     "@cinatra-ai/json-artifact",

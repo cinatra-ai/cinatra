@@ -23,6 +23,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock("server-only", () => ({}));
 vi.mock("@cinatra-ai/agents", () => ({
+  publishCallAllowed: async () => true, // cinatra#4150: no publish decision holds this run
   readAgentRunById: h.readAgentRunById,
   readAgentRunByContextId: h.readAgentRunByContextId,
 }));

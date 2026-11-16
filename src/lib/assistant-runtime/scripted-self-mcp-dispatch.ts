@@ -106,6 +106,24 @@ type JsonRpcResponse = {
 };
 
 /**
+ * The WHATWG canonical form of the MCP URL: lowercase scheme and host, no
+ * explicit default port. `fetch` sends this form whatever spelling it is
+ * given, and the transport derives the expected token audience from the
+ * request it receives. So the dispatch signs for and fetches the SAME
+ * canonical string; otherwise `HTTP://LOCALHOST:3060` or `http://localhost:80`
+ * in the configuration would mint an audience the transport refuses. The path
+ * is kept as `getLocalMcpServerUrl` built it (no trailing slash is added). A
+ * string that does not parse is returned unchanged, so `fetch` reports it.
+ */
+export function canonicalMcpUrl(raw: string): string {
+  try {
+    return new URL(raw).href;
+  } catch {
+    return raw;
+  }
+}
+
+/**
  * Read one JSON-RPC response out of a streamable-HTTP reply. The server answers
  * either `application/json` or an SSE frame sequence depending on negotiation,
  * so both are accepted — the payload is identical.
@@ -174,7 +192,13 @@ type OnDispatched = (resultText: string) => void;
  * second copy to drift into a wider one.
  */
 function createDispatchWithBearer(params: {
-  token: string;
+  /**
+   * Mints the bearer for the MCP URL this dispatch calls. The URL is the LOCAL
+   * one, so the token's audience must be that URL: the transport binds a
+   * delegated token to the request origin exactly, and the mint's default
+   * audience is the PUBLIC URL whenever a public base URL is stored.
+   */
+  mintToken: (mcpUrl: string) => string;
   /** Names the surface in the MCP `clientInfo` — visible in transport logs. */
   clientName: string;
   onDispatched?: OnDispatched;
@@ -185,10 +209,12 @@ function createDispatchWithBearer(params: {
    */
   timeouts?: { handshakeMs: number; callMs: number };
 }): ScriptedSelfMcpDispatch {
-  const { token, clientName, onDispatched } = params;
+  const { mintToken, clientName, onDispatched } = params;
   const handshakeMs = params.timeouts?.handshakeMs ?? SELF_MCP_HANDSHAKE_TIMEOUT_MS;
   const callMs = params.timeouts?.callMs ?? SELF_MCP_CALL_TIMEOUT_MS;
-  const mcpUrl = getLocalMcpServerUrl(MCP_BASE_PATH);
+  // Canonical once, then used for BOTH the token audience and every fetch.
+  const mcpUrl = canonicalMcpUrl(getLocalMcpServerUrl(MCP_BASE_PATH));
+  const token = mintToken(mcpUrl);
 
   let sessionId: string | null = null;
   let rpcId = 0;
@@ -331,19 +357,24 @@ export function createScriptedSelfMcpDispatch(params: {
 }): ScriptedSelfMcpDispatch {
   const { widgetPrincipal, turnRunId, onDispatched } = params;
   return createDispatchWithBearer({
-    token: issueWidgetMcpActorToken({
-      userId: widgetPrincipal.userId,
-      orgId: widgetPrincipal.orgId,
-      instanceId: widgetPrincipal.instanceId,
-      kind: widgetPrincipal.assistantHandle,
-      jti: randomUUID(),
-      // The two seals (cinatra#2687), byte-for-byte the pair `runtime.ts` mints
-      // on the production path: the principal's parent `cwu_` row, and THIS
-      // turn's run id.
-      parentJti: widgetPrincipal.parentTokenJti,
-      turnRunId,
-      lifecycleRead: widgetPrincipal.lifecycleRead,
-    }),
+    mintToken: (mcpUrl) =>
+      issueWidgetMcpActorToken(
+        {
+          userId: widgetPrincipal.userId,
+          orgId: widgetPrincipal.orgId,
+          instanceId: widgetPrincipal.instanceId,
+          kind: widgetPrincipal.assistantHandle,
+          jti: randomUUID(),
+          // The two seals (cinatra#2687), byte-for-byte the pair `runtime.ts` mints
+          // on the production path: the principal's parent `cwu_` row, and THIS
+          // turn's run id.
+          parentJti: widgetPrincipal.parentTokenJti,
+          turnRunId,
+          lifecycleRead: widgetPrincipal.lifecycleRead,
+        },
+        // Signed for the URL this dispatch calls (see createDispatchWithBearer).
+        { audience: mcpUrl },
+      ),
     clientName: "cinatra-scripted-widget-turn",
     onDispatched,
     ...(params.timeouts ? { timeouts: params.timeouts } : {}),
@@ -377,12 +408,12 @@ export function createScriptedChatSelfMcpDispatch(params: {
 }): ScriptedSelfMcpDispatch {
   const { userId, orgId, platformRole, onDispatched } = params;
   return createDispatchWithBearer({
-    token: issueChatMcpActorToken({
-      delegation: "chat",
-      userId,
-      orgId,
-      platformRole,
-    }),
+    mintToken: (mcpUrl) =>
+      issueChatMcpActorToken(
+        { delegation: "chat", userId, orgId, platformRole },
+        // Signed for the URL this dispatch calls (see createDispatchWithBearer).
+        { audience: mcpUrl },
+      ),
     clientName: "cinatra-scripted-chat-turn",
     onDispatched,
   });

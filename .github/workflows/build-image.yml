@@ -3328,7 +3328,16 @@ jobs:
           # postgres sidecar (swap-thrash → hang); the default ~2GB OOMs. 3072 is
           # the stable middle that GCs cleanly instead of thrashing.
           NODE_OPTIONS: --max-old-space-size=3072
-        run: pnpm build
+          # One page-data worker, as the /agents smoke build already runs. This
+          # build sits at the hosted runner's memory size (measured tree peak
+          # ~15.5 GiB with 3 workers on a ~15.6 GiB runner, see
+          # docs/internals/workflows/constrained-host-builds.md) and the service
+          # containers come on top. With the default 3 workers this step hung
+          # until the job cap with the runner no longer responding (the step
+          # cap above never fired, the job log was never uploaded). The knob
+          # maps to experimental.cpus in next.config.ts.
+          CINATRA_BUILD_CPUS: "1"
+        run: bash scripts/ci/hosted-build-memory-cap.sh run pnpm build
 
       - name: Start production server on port 3000
         if: ${{ needs.detect.outputs.skip_runtime != 'true' }}
@@ -4218,7 +4227,18 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # The buildkit container gets the memory cap of every hosted production
+      # build (scripts/ci/hosted-build-memory-cap.sh): the in-image `next build`
+      # may use the runner's RAM minus a reserve, so a memory squeeze stays
+      # inside the build and the runner keeps answering. Empty on a
+      # self-hosted runner (no cap there).
+      - name: Size the build memory cap (GitHub-hosted only)
+        id: memcap
+        run: bash scripts/ci/hosted-build-memory-cap.sh buildx-opts
+
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: ${{ steps.memcap.outputs.driver_opts }}
 
       # SELF-HOSTED CACHE BACKEND (cinatra#3267). The Actions cache service
       # behind `type=gha` is only served to GitHub-hosted runners: on the
@@ -4277,8 +4297,15 @@ jobs:
           # in-build tsc (types are gated by the required Typecheck job). Only set
           # here, in CI — a local `docker build` (no build-arg) keeps the check.
           # MUST stay identical on the push step below so its cache hit is total.
+          # CINATRA_BUILD_CPUS=1: one page-data worker for the in-image
+          # `next build` (Dockerfile ARG -> experimental.cpus in next.config.ts).
+          # Uncapped, Next runs 3 workers on this 4-vCPU runner, the build's
+          # measured tree peak (~15.5 GiB) sits at the runner's memory, and this
+          # step hung until the runner stopped responding. The same cap as the
+          # hosted e2e "Build app (production)" steps; it changes no app code.
           build-args: |
             CI=true
+            CINATRA_BUILD_CPUS=1
           cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha' || format('type=local,src={0}', env.LOCAL_BUILDX_CACHE_DIR) }}
           cache-to: ${{ runner.environment == 'github-hosted' && 'type=gha,mode=max' || format('type=local,dest={0},mode=max', env.LOCAL_BUILDX_CACHE_DIR) }}
 
@@ -4380,7 +4407,18 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The buildkit container gets the memory cap of every hosted production
+      # build (scripts/ci/hosted-build-memory-cap.sh): the in-image `next build`
+      # may use the runner's RAM minus a reserve, so a memory squeeze stays
+      # inside the build and the runner keeps answering. Empty on a
+      # self-hosted runner (no cap there).
+      - name: Size the build memory cap (GitHub-hosted only)
+        id: memcap
+        run: bash scripts/ci/hosted-build-memory-cap.sh buildx-opts
+
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: ${{ steps.memcap.outputs.driver_opts }}
 
       # SELF-HOSTED CACHE BACKEND (cinatra#3267) — the reader half of the same
       # design: this job only IMPORTS the cache (cache-from, no cache-to). On a
@@ -4493,6 +4531,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             CI=true
+            CINATRA_BUILD_CPUS=1
           cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha' || format('type=local,src={0}', env.LOCAL_BUILDX_CACHE_DIR) }}
 
   # ---------------------------------------------------------------------------
@@ -4568,8 +4607,20 @@ jobs:
             echo "::notice::Tag '$TAG' is not a release tag — checkpoint image, upgrade proof not applicable."
           fi
 
+      # The buildkit container gets the memory cap of every hosted production
+      # build (scripts/ci/hosted-build-memory-cap.sh): the in-image `next build`
+      # may use the runner's RAM minus a reserve, so a memory squeeze stays
+      # inside the build and the runner keeps answering. Empty on a
+      # self-hosted runner (no cap there).
+      - name: Size the build memory cap (GitHub-hosted only)
+        id: memcap
+        if: ${{ steps.guard.outputs.release == 'true' }}
+        run: bash scripts/ci/hosted-build-memory-cap.sh buildx-opts
+
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
         if: ${{ steps.guard.outputs.release == 'true' }}
+        with:
+          driver-opts: ${{ steps.memcap.outputs.driver_opts }}
 
       # SELF-HOSTED CACHE BACKEND (cinatra#3267) — the reader half of the same
       # design: this job only IMPORTS the cache (cache-from, no cache-to). On a
@@ -4630,6 +4681,7 @@ jobs:
           tags: cinatra-upgrade-proof:candidate
           build-args: |
             CI=true
+            CINATRA_BUILD_CPUS=1
           cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha' || format('type=local,src={0}', env.LOCAL_BUILDX_CACHE_DIR) }}
 
       - name: Upgrade proof from each previous-release base
@@ -4712,7 +4764,18 @@ jobs:
           echo "::notice::Release clearance confirmed for '$TAG'."
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The buildkit container gets the memory cap of every hosted production
+      # build (scripts/ci/hosted-build-memory-cap.sh): the in-image `next build`
+      # may use the runner's RAM minus a reserve, so a memory squeeze stays
+      # inside the build and the runner keeps answering. Empty on a
+      # self-hosted runner (no cap there).
+      - name: Size the build memory cap (GitHub-hosted only)
+        id: memcap
+        run: bash scripts/ci/hosted-build-memory-cap.sh buildx-opts
+
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: ${{ steps.memcap.outputs.driver_opts }}
 
       # SELF-HOSTED CACHE BACKEND (cinatra#3267) — the reader half of the same
       # design: this job only IMPORTS the cache (cache-from, no cache-to). On a
@@ -4764,6 +4827,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             CI=true
+            CINATRA_BUILD_CPUS=1
           cache-from: ${{ runner.environment == 'github-hosted' && 'type=gha' || format('type=local,src={0}', env.LOCAL_BUILDX_CACHE_DIR) }}
 
   # GATED prod-deploy dispatch. Release-gating (Model A): on a v* tag, after the
@@ -5006,11 +5070,19 @@ jobs:
       - name: Build against the shrunk maps (the #109 class is a build error)
         env:
           NODE_OPTIONS: --max-old-space-size=4096
+          # One page-data worker, as every other hosted production app build
+          # runs (scripts/ci/__tests__/hosted-e2e-build-worker-cap.test.mjs).
+          # This was the one hosted `pnpm build` left at the default fan-out
+          # (3 workers on the 4-vCPU runner). It lost its runner in this step
+          # on a main push: the 34-minute job cap fired late, the job log was
+          # never uploaded, and the whole run ended cancelled. The knob maps to
+          # experimental.cpus in next.config.ts; it changes no app code.
+          CINATRA_BUILD_CPUS: "1"
           SUPABASE_DB_URL: postgresql://build:build@127.0.0.1:5432/build
           BETTER_AUTH_SECRET: build-only-placeholder-not-used-at-runtime
           NANGO_ENCRYPTION_KEY: build-only-placeholder-not-used-at-runtime
           OPENAI_API_KEY: build-only-placeholder-not-used-at-runtime
-        run: pnpm build
+        run: bash scripts/ci/hosted-build-memory-cap.sh run pnpm build
 
   # Publish a GitHub Release for a semver v* tag with auto-generated notes
   # (merged PRs / commits since the previous tag). A SEPARATE job (least

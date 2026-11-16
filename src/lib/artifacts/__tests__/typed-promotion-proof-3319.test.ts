@@ -594,3 +594,162 @@ describe("C1/C2: a version is a nonnegative safe integer or its digits, and noth
     expect(db.appends).toEqual([]);
   });
 });
+
+describe("3319: the converging road's third authority is the acting person's own keyed retype", () => {
+  /** An interrupted promotion on the person's road of a pack that declares no
+   *  matcher (a claim-backed type): the row carries the pack's type, and the
+   *  binding reconcile the retype queued archived the person's assertion. */
+  function strandedRow(events: Array<Record<string, unknown>>): void {
+    db.row = { type: OWN_TYPE, version: 4 };
+    db.personAsserted = false;
+    db.matcher = null;
+    db.events = events;
+  }
+  /** The keyed retype as the canonical writer records it: an update by a user. */
+  const retypeBy = (over: { operation?: string; actorKind?: string; actorId?: string } = {}) => ({
+    ...keyedRetype(3),
+    operation: over.operation ?? "update",
+    actor_kind: over.actorKind ?? "user",
+    actor_id: over.actorId ?? PRINCIPAL,
+  });
+  const personsRoad = () => args({ threshold: null });
+
+  it("O1: the person whose keyed retype is the row's latest type change completes it: one revision, not retyped, and a repeat adds none", async () => {
+    strandedRow([retypeBy(), created(BASE_TYPE)]);
+    const { promoteMatchedArtifactType } = await store();
+    expect(await promoteMatchedArtifactType(personsRoad())).toMatchObject({
+      ok: true,
+      revision: 2,
+      toType: OWN_TYPE,
+      retyped: false,
+    });
+    expect(await promoteMatchedArtifactType(personsRoad())).toEqual({
+      ok: false,
+      reason: "already-promoted",
+    });
+    expect(db.appends).toHaveLength(2);
+    expect(db.revisionPresent).toBe(true);
+  });
+
+  it("O2: another person's keyed retype is no authority for this person (green at base)", async () => {
+    strandedRow([retypeBy({ actorId: "u-other" }), created(BASE_TYPE)]);
+    const { promoteMatchedArtifactType } = await store();
+    expect(await promoteMatchedArtifactType(personsRoad())).toEqual({
+      ok: false,
+      reason: "already-promoted",
+    });
+    expect(db.appends).toEqual([]);
+  });
+
+  it("O3: a keyed retype recorded for an agent is no authority (green at base)", async () => {
+    strandedRow([retypeBy({ actorKind: "agent" }), created(BASE_TYPE)]);
+    const { promoteMatchedArtifactType } = await store();
+    expect(await promoteMatchedArtifactType(personsRoad())).toEqual({
+      ok: false,
+      reason: "already-promoted",
+    });
+    expect(db.appends).toEqual([]);
+  });
+
+  it("O4: a keyed event that is not an update is no authority (green at base)", async () => {
+    strandedRow([retypeBy({ operation: "create" }), created(BASE_TYPE)]);
+    const { promoteMatchedArtifactType } = await store();
+    expect(await promoteMatchedArtifactType(personsRoad())).toEqual({
+      ok: false,
+      reason: "already-promoted",
+    });
+    expect(db.appends).toEqual([]);
+  });
+
+  it("O5: a keyed retype by this person that a later move away and back overwrote is no authority (green at base)", async () => {
+    strandedRow([
+      retypeBy(),
+      event({ type: OTHER_TYPE, before: OWN_TYPE, base: 4, key: "evt-move" }),
+      event({ type: OWN_TYPE, before: OTHER_TYPE, base: 5, key: "restore:evt-9" }),
+    ]);
+    const { promoteMatchedArtifactType } = await store();
+    expect(await promoteMatchedArtifactType(personsRoad())).toEqual({
+      ok: false,
+      reason: "already-promoted",
+    });
+    expect(db.appends).toEqual([]);
+  });
+
+  it("O6: a failed read of the row's history is no authority: the call throws and appends nothing", async () => {
+    strandedRow([retypeBy()]);
+    db.proofThrows = true;
+    const { promoteMatchedArtifactType } = await store();
+    await expect(promoteMatchedArtifactType(personsRoad())).rejects.toThrow("history read failed");
+    expect(db.appends).toEqual([]);
+  });
+
+  it("O7: an unconfirmed call never reaches the own-retype read (green at base)", async () => {
+    strandedRow([retypeBy()]);
+    db.proofThrows = true;
+    const { promoteMatchedArtifactType } = await store();
+    expect(await promoteMatchedArtifactType(args({ threshold: null, confirmed: false }))).toMatchObject({
+      ok: false,
+    });
+    expect(db.appends).toEqual([]);
+  });
+
+  it("O8: on a matcher pack's road, the person's own keyed retype completes it when the matcher's draft is below the threshold", async () => {
+    strandedRow([retypeBy(), created(BASE_TYPE)]);
+    db.matcher = 0.4;
+    const { promoteMatchedArtifactType } = await store();
+    expect(await promoteMatchedArtifactType(args({ threshold: 0.7 }))).toMatchObject({
+      ok: true,
+      revision: 2,
+      toType: OWN_TYPE,
+      retyped: false,
+    });
+    expect(db.appends).toHaveLength(1);
+  });
+
+  it("O9: a row whose file the pack does not accept is no completion, and the own-retype read never runs (green at base)", async () => {
+    strandedRow([retypeBy()]);
+    db.proofThrows = true;
+    const { promoteMatchedArtifactType } = await store();
+    const res = await promoteMatchedArtifactType(
+      args({ threshold: null, ownType: { typeId: OWN_TYPE, acceptsMimes: ["application/pdf"] } }),
+    );
+    expect(res).toMatchObject({ ok: false });
+    expect(db.appends).toEqual([]);
+  });
+
+  it("O10: a keyed retype whose operation, actor kind or actor is missing or null is no authority (green at base)", async () => {
+    const { promoteMatchedArtifactType } = await store();
+    for (const field of ["operation", "actor_kind", "actor_id"] as const) {
+      for (const value of [null, undefined]) {
+        const ev: Record<string, unknown> = { ...retypeBy() };
+        if (value === undefined) delete ev[field];
+        else ev[field] = value;
+        strandedRow([ev, created(BASE_TYPE)]);
+        db.appends = [];
+        db.revisionPresent = false;
+        expect(await promoteMatchedArtifactType(personsRoad())).toEqual({
+          ok: false,
+          reason: "already-promoted",
+        });
+        expect(db.appends).toEqual([]);
+      }
+    }
+  });
+
+  it("O11: a move away after the own-retype read and before the append's proof read lands nothing (green at base)", async () => {
+    strandedRow([retypeBy(), created(BASE_TYPE)]);
+    let reads = 0;
+    db.afterProofRead = () => {
+      reads += 1;
+      // Once the own-retype read has selected its rows, another writer moves the
+      // row away: the append's own proof read then finds a later type change.
+      if (reads === 1) db.events.push(event({ type: OTHER_TYPE, before: OWN_TYPE, base: 4, key: "evt-move" }));
+    };
+    const { promoteMatchedArtifactType } = await store();
+    expect(await promoteMatchedArtifactType(personsRoad())).toEqual({
+      ok: false,
+      reason: "already-promoted",
+    });
+    expect(db.appends).toEqual([]);
+  });
+});

@@ -63,6 +63,7 @@ vi.mock("@/lib/agents-store", () => ({
 vi.mock("@cinatra-ai/agents", async () => {
   const { z } = await import("zod");
   return {
+    publishCallAllowed: async () => true, // cinatra#4150: no publish decision holds this run
     readAgentRunByContextId: vi.fn(async () => null),
     // Capability-matrix helpers consumed by _llm-dispatch.ts (engineering#417).
     // Pure mirrors of llm-provider-policy.ts so the dispatch capability gate +

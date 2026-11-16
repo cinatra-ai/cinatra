@@ -374,6 +374,7 @@
     "@cfworker/json-schema": "^4.1.1",
     "@cinatra-ai/audio-artifact": "workspace:*",
     "@cinatra-ai/binary-artifact": "workspace:*",
+    "@cinatra-ai/dashboard-artifact": "workspace:*",
     "@cinatra-ai/document-artifact": "workspace:*",
     "@cinatra-ai/image-artifact": "workspace:*",
     "@cinatra-ai/json-artifact": "workspace:*",

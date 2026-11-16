@@ -253,13 +253,27 @@ function issueAudience(): string {
   return getPublicMcpServerUrl() ?? getLocalMcpServerUrl(MCP_BASE_PATH);
 }
 
-function issueIssuer(): string {
-  const origin = deriveOrigin(issueAudience());
+function issueIssuer(audience: string): string {
+  const origin = deriveOrigin(audience);
   return `${origin}${AUTH_BASE_PATH}`;
 }
 
-export function issueWidgetMcpActorToken(input: WidgetMcpActorTokenInput): string {
+/**
+ * Mint options. `audience` names the MCP URL the token is sent to, when the
+ * caller calls a URL other than the default one (the scripted self-MCP
+ * dispatch calls the LOCAL MCP URL). Same contract as the chat token's
+ * `ChatMcpActorTokenOptions`: `iss` follows the same origin, the verifier
+ * still binds the token to the request's own origin exactly, and no claim
+ * that carries authority changes. The production mint passes no options.
+ */
+export type WidgetMcpActorTokenOptions = { audience?: string };
+
+export function issueWidgetMcpActorToken(
+  input: WidgetMcpActorTokenInput,
+  options: WidgetMcpActorTokenOptions = {},
+): string {
   const now = Math.floor(Date.now() / 1000);
+  const audience = options.audience ?? issueAudience();
   const header = { alg: "HS256", typ: "JWT" };
   const payload: WidgetMcpActorTokenClaims = {
     t: WIDGET_MCP_TOKEN_TYPE,
@@ -276,8 +290,8 @@ export function issueWidgetMcpActorToken(input: WidgetMcpActorTokenInput): strin
     // is the single fail-closed reading of it.
     ...(input.lifecycleRead === true ? { lcr: true as const } : {}),
     scope: TOKEN_SCOPE,
-    aud: issueAudience(),
-    iss: issueIssuer(),
+    aud: audience,
+    iss: issueIssuer(audience),
     iat: now,
     exp: now + TOKEN_TTL_SECONDS,
     // Only ever the elevated literal is written; `member` is the ABSENCE of the

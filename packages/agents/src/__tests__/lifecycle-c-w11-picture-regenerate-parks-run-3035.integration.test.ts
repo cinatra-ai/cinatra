@@ -89,6 +89,9 @@ beforeAll(async () => {
   crStore = await import("../lifecycle-review-changes-requested-store");
   resumeDelivery = await import("../artifact-review-resume-delivery");
   dbMod = await import("../db");
+  // cinatra#4245: a resume takes the pause claim, an org-guarded write, so the run's
+  // organization exists, as it does for every real run.
+  await pool(`INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $1, $1, now()) ON CONFLICT (id) DO NOTHING`, [ORG]);
 }, 90_000);
 
 beforeEach(async () => {
@@ -1394,7 +1397,7 @@ async function sweepReviewOrchestration() {
   return run();
 }
 
-describe.skipIf(!HAS_DB)("cinatra#4312 — the sweep's naming never closes a declared leg's lineage (review 6, finding 1)", () => {
+describe.skipIf(!HAS_DB)("cinatra#4312 — the sweep's naming on a declared leg's lineage (review 6, finding 1; since cinatra#4476 the chain check reads an old writer's attempt on the named gate)", () => {
   // As in the group above: `sweep()` claims every outstanding intent, so an intent an
   // earlier case left pending or delivering is set aside first.
   beforeEach(async () => {
@@ -1405,24 +1408,26 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — the sweep's naming never closes a dec
     );
   });
 
-  it("AN OLD WRITER'S ESCALATED NOTE, THEN THE NAMING: the sweep names the gate, but the declared-lineage check refuses it as a reopen, so the lineage reads malformed before and after and never reads closed; the post's intent stays as the worker left it, and the successor's decision is left for re-claim", async () => {
+  it("AN OLD WRITER'S ESCALATED NOTE, THEN THE NAMING (cinatra#4476): before the naming the lineage reads malformed; the sweep names the gate, the chain check reads the old writer's attempt on the named reopen gate of the declared lineage, so the lineage reads closed (attempt 2 escalated) and the naming carries the post's decision on that gate; the next sweep resumes the run once with it", async () => {
     const { p, pressed, successor, postGateId } = await parkedOnARegeneratedPicture();
+    const postText = (await intentOf(postGateId))!.response_text;
     const reopen = await oldWritersNoteOnTheReopenSlot(pressed.repairId, successor, p.runId, "escalated");
     await expect(repairStore.isRepairLineageOpen(pressed.settledGateId)).rejects.toMatchObject({ code: "malformed-lineage" });
 
     await sweepReviewOrchestration();
     expect(await reopenNameOf(successor.gateId)).toBe(reopen);
-    await expect(repairStore.isRepairLineageOpen(pressed.settledGateId)).rejects.toMatchObject({ code: "malformed-lineage" });
+    expect(await repairStore.isRepairLineageOpen(pressed.settledGateId)).toBe(false);
     expect(await intentStatusOf(postGateId)).toBe("done");
+    await expectCarrier(reopen, p.leg2, postText);
     await expectParked(p);
 
-    await approve(p.runId, successor.taskId);
-    const decided = await gateStore.readReviewGate(p.runId, successor.taskId);
-    await expectLeftForReclaim(await sweep(), decided!.id);
-    expect(await runStatus(p.runId)).toBe("pending_approval");
+    advanceRunsOnResume();
+    const summary = await sweep();
+    expect(summary.failed).toBe(0);
+    expectResumedWith(p, postText);
   });
 
-  it("DISPATCH ESCALATION BEFORE THE NAMING: the drain escalates an old writer's requested attempt 2 on the unnamed gate; the close reads the lineage malformed and carries nothing, before and after the naming, and the post's intent stays as the worker left it (an old binary's state)", async () => {
+  it("DISPATCH ESCALATION BEFORE THE NAMING (cinatra#4476): the drain escalates an old writer's requested attempt 2 on the unnamed gate; the close reads the lineage malformed and carries nothing; after the naming the lineage reads closed, the naming carries the post's decision on the reopen gate, and the next sweep resumes the run once", async () => {
     const { p, pressed, successor, postGateId } = await parkedOnARegeneratedPicture();
     const before = await intentOf(postGateId);
     const reopen = await oldWritersNoteOnTheReopenSlot(pressed.repairId, successor, p.runId, "requested");
@@ -1440,12 +1445,14 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — the sweep's naming never closes a dec
 
     await sweepReviewOrchestration();
     expect(await reopenNameOf(successor.gateId)).toBe(reopen);
-    await expect(repairStore.isRepairLineageOpen(pressed.settledGateId)).rejects.toMatchObject({ code: "malformed-lineage" });
-    expect(await intentOf(reopen)).toBeUndefined();
+    expect(await repairStore.isRepairLineageOpen(pressed.settledGateId)).toBe(false);
+    await expectCarrier(reopen, p.leg2, before!.response_text);
     expect(await intentOf(postGateId)).toEqual(before);
+    await expectParked(p);
+    advanceRunsOnResume();
     const summary = await sweep();
     expect(summary.failed).toBe(0);
-    await expectParked(p);
+    expectResumedWith(p, before!.response_text);
   });
 });
 // ---------------------------------------------------------------------------
@@ -1682,7 +1689,7 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — plan (b): the carrier of a declared r
     expectResumedWith(p, successorText);
   });
 
-  it("b3 — TWO CARRIERS COMMIT TOGETHER: two pictures' lineages go stale in two sessions that commit together; each inserts its own carrier, and the run is never stranded. Taken one after the other the second finds the run advanced; delivered at the same time both can send, at least once, as two legs decided at the same time do on main", async () => {
+  it("b3 — TWO CARRIERS COMMIT TOGETHER: two pictures' lineages go stale in two sessions that commit together; each inserts its own carrier, and the run is never stranded. Taken one after the other the second finds the run advanced; delivered at the same time the pause claim lets one send and keeps the other for the sweep, at least once, as two legs decided at the same time do on main's road", async () => {
     // A control on main's road: two legs decided at the same time, no lineage.
     const main = await pausedPipeline();
     await approve(main.runId, main.step);
@@ -1690,9 +1697,34 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — plan (b): the carrier of a declared r
     const legs = await gateStore.claimPendingResumeIntents({ limit: 50, leaseMs: 300_000 });
     const mainRows = legs.filter((c) => c.runId === main.runId);
     expect(mainRows).toHaveLength(2);
-    await Promise.all(mainRows.map((row) => resumeDelivery.deliverArtifactReviewResumeIntent(row)));
+    // cinatra#4245: each delivery takes the pause claim before it sends, so one pause
+    // takes one answer at a time. Of two deliveries at the same time one sends. The
+    // other meets the first one's live claim ("retryable": its intent stays leased,
+    // and the sweep claims it again when the lease ends), or read the pause before
+    // the first fence and finds it moved on ("already-advanced": done, no send), or
+    // starts after the first one settled and sends at the next generation.
+    const deliverTogether = async (rows: typeof mainRows) => {
+      const outcomes = await Promise.all(rows.map((row) => resumeDelivery.deliverArtifactReviewResumeIntent(row)));
+      expect(outcomes.every((o) => o === "delivered" || o === "retryable" || o === "already-advanced")).toBe(true);
+      expect(outcomes).toContain("delivered");
+      return outcomes;
+    };
+    const count = (outcomes: string[], outcome: string) => outcomes.filter((o) => o === outcome).length;
+    // The held intent's lease ends; the next sweep claims it again and sends.
+    const reclaimHeld = async (rows: typeof mainRows) => {
+      for (const row of rows) {
+        if ((await intentStatusOf(row.gateId)) === "delivering") {
+          await setIntent(row.gateId, "lease_expires_at = now() - interval '1 second'");
+        }
+      }
+      await sweep();
+    };
+    const firstMain = await deliverTogether(mainRows);
+    expect(resumesOf(main)).toHaveLength(count(firstMain, "delivered"));
+    await reclaimHeld(mainRows);
     const mainSends = resumesOf(main).length;
-    expect(mainSends).toBe(2);
+    expect(mainSends).toBe(count(firstMain, "delivered") + count(firstMain, "retryable"));
+    for (const row of mainRows) expect(await intentStatusOf(row.gateId)).toBe("done");
 
     const runOf = async (carriedSequentially: boolean) => {
       const p = await pausedPipeline(true, 2);
@@ -1730,8 +1762,11 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — plan (b): the carrier of a declared r
         const rows = (await gateStore.claimPendingResumeIntents({ limit: 50, leaseMs: 300_000 }))
           .filter((c) => c.runId === p.runId);
         expect(rows.map((r) => r.gateId).sort()).toEqual([a.pressed.settledGateId, b.pressed.settledGateId].sort());
-        await Promise.all(rows.map((row) => resumeDelivery.deliverArtifactReviewResumeIntent(row)));
-        expect(resumesOf(p)).toHaveLength(mainSends);
+        // The same claim rule as the control: one sends now, a held one after its lease.
+        const first = await deliverTogether(rows);
+        expect(resumesOf(p)).toHaveLength(count(first, "delivered"));
+        await reclaimHeld(rows);
+        expect(resumesOf(p)).toHaveLength(count(first, "delivered") + count(first, "retryable"));
         expect(resumesOf(p).every((r) => r.message.parts[0].text === text)).toBe(true);
       }
       expect(await intentStatusOf(a.pressed.settledGateId)).toBe("done");

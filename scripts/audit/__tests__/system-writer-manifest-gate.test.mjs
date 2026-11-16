@@ -60,6 +60,7 @@ import {
   makeFloorRepo,
   makeOneCommitCheckout,
 } from "./floor-base-fixture.mjs";
+import { parsePermits } from "../lib/floor-base-guard.mjs";
 import { ORG_WRITE_REGISTRY } from "../../../src/lib/org-write/write-registry";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -438,9 +439,22 @@ describe("system-writer-manifest — the record road for a new writer", () => {
   const NEW = row("scripts/new.mjs", "drizzle:agentRuns", 1);
   const NEW_KEY = "scripts/new.mjs [drizzle:agentRuns]";
 
-  it("the permits file of this commit holds no records", () => {
-    const doc = JSON.parse(readFileSync(join(REPO_ROOT, PERMIT_FILE), "utf8"));
-    expect(doc.permits).toEqual([]);
+  it("the committed records are valid, unique and name current manifest rows", () => {
+    const writerKeys = new Set(loadManifest(REPO_ROOT).writers.map(({ file, ref }) => JSON.stringify([file, ref])));
+    const permits = parsePermits(readFileSync(join(REPO_ROOT, PERMIT_FILE), "utf8"), {
+      list: PERMIT_LIST,
+      rowKey: (row) => {
+        expect(row).toBeTypeOf("object");
+        expect(Object.keys(row).sort()).toEqual(["file", "ref"]);
+        expect(row.file).toBeTypeOf("string");
+        expect(row.ref).toBeTypeOf("string");
+        expect(row.file).not.toBe("");
+        expect(row.ref).not.toBe("");
+        return JSON.stringify([row.file, row.ref]);
+      },
+    });
+    expect(new Set(permits.map(({ key }) => key)).size).toBe(permits.length);
+    for (const { key } of permits) expect(writerKeys.has(key)).toBe(true);
   });
 
   it("an addition with its record in the same change PASSES, with a NOTICE naming row, reason and pull request", () => {

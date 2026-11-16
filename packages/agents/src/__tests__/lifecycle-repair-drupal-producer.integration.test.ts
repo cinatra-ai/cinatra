@@ -150,10 +150,9 @@ async function produce(over: Partial<ArtifactProducedEvent> = {}): Promise<Artif
   return ev;
 }
 
-/** Insert a `cms_snapshot_targets` row directly — the apply binding a real
- * `captureCmsContentSnapshot` writes (SQL mirrored from
- * `buildCmsSnapshotCaptureQueries`'s `targetInsert`, as the sibling CMS suites
- * do). `resourceType: "node"` is the DRUPAL shape (WordPress writes "post"). */
+/** Insert a `cms_snapshot_targets` row directly — the apply binding the
+ * retired CMS capture wrote (SQL mirrored from its `targetInsert`, as the
+ * sibling CMS suites do). `resourceType: "node"` is the DRUPAL shape (WordPress writes "post"). */
 async function insertDrupalSnapshotTarget(input: {
   artifactId: string;
   snapshotRevisionId: string;

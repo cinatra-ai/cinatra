@@ -307,6 +307,8 @@ async function readOnlyWithinOneRefresh(
 describe("the skills card reads the run's start within one refresh of the run row", () => {
   it("in /chat: read-only with no Continue within one refresh of the start", async () => {
     await readOnlyWithinOneRefresh("chat");
+    // The re-read is asked from an effect of the redraw's commit: let it land.
+    await advanceUntil(() => row.cookieReads >= 2, 15_000);
     expect(row.cookieReads).toBeGreaterThanOrEqual(2);
   }, 60_000);
 
