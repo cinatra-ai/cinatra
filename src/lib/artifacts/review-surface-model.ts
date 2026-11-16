@@ -546,6 +546,11 @@ export const REVIEW_DISPOSITIONS: ReadonlyArray<ReviewDisposition> = [
   "comment",
 ];
 
+/** The not-permitted copy of a decision whose run access was denied (one string for
+ * both decision roads). */
+const RUN_ACCESS_DENIED_COPY =
+  "You do not have the run access this decision needs — a terminal decision requires approve access, a comment requires respond access.";
+
 /**
  * Map the #1807 decision core's typed `SubmitDecisionResult` to the surface's
  * visible outcome (§IV/§V). FAIL-CLOSED presentation is the load-bearing rule: a
@@ -568,11 +573,7 @@ export function mapSubmitResultToOutcome(
   }
   switch (result.error.kind) {
     case "run-access-denied":
-      return {
-        kind: "not-permitted",
-        message:
-          "You do not have the run access this decision needs — a terminal decision requires approve access, a comment requires respond access.",
-      };
+      return { kind: "not-permitted", message: RUN_ACCESS_DENIED_COPY };
     // FAIL-CLOSED: a conflicting/settled gate is a block, never a silent success.
     case "gate-conflict":
     case "gate-not-pending":
@@ -609,6 +610,14 @@ export function mapSubmitResultToOutcome(
  * BLOCK, never a silent success; a tombstoned/moved base is a `revision-not-live`
  * block; a mismatched pinned set is a `targets-mismatch` block; anything else is a
  * retryable error. Pure — no React / DB — so the whole mapping is unit-tested.
+ *
+ * cinatra#4245: a change request that ends a declared pause maps each refusal of
+ * that pause by its own code (spec 5.2), with no new copy: a pause that is gone
+ * (`pause-moved-on`, `pause-not-pending`, `pause-gate-mismatch`) is the
+ * `no-longer-pending` block; a pause a resume holds, one that cannot be read, a
+ * mode conflict, a repair that would escalate and a failed guarded record are
+ * the retryable error; a decider who is no member is `not-permitted`. None of
+ * them is the annotation (see `declaredCommentStaysANote`).
  */
 export function mapChangesRequestedToOutcome(
   result: RecordChangesRequestedResult,
@@ -621,15 +630,39 @@ export function mapChangesRequestedToOutcome(
     case "gate-conflict":
     case "gate-not-pending":
     case "not-a-lifecycle-gate":
+    case "pause-moved-on":
+    case "pause-not-pending":
+    case "pause-gate-mismatch":
       return { kind: "blocked", reason: "no-longer-pending" };
+    case "declared-gate-not-permitted":
+      return { kind: "not-permitted", message: RUN_ACCESS_DENIED_COPY };
     case "tombstoned-base":
     case "stale-base":
       return { kind: "blocked", reason: "revision-not-live" };
     case "targets-mismatch":
       return { kind: "blocked", reason: "targets-mismatch" };
+    case "pause-held":
+    case "pause-unverifiable":
+    case "pause-mode-conflict":
+    case "pause-not-repairable":
+    case "declared-record-failed":
     default:
       // invalid-request / idempotency-key-reuse / empty-feedback / a transient
       // failure — the decision did not commit; safe to retry.
       return { kind: "error", message: "The change request could not be recorded." };
   }
+}
+
+/**
+ * cinatra#4245: does a comment on a DECLARED (`wayflow-`) gate fall back to the
+ * plain annotation after the change-request road refused it? Only for the store's
+ * not-eligible refusal of the step's own gate (the cases the issue names: an empty
+ * comment, more than one target, another gate of the same step pending, no
+ * produced event naming the gate, a continuation that is not effects-gated, a
+ * producer that cannot repair) and for a `#n` leg the store reads as no lifecycle
+ * gate (cinatra#4312). Every other refusal, a pause refusal included, is mapped by
+ * `mapChangesRequestedToOutcome`, never demoted to a note.
+ */
+export function declaredCommentStaysANote(result: RecordChangesRequestedResult): boolean {
+  return !result.ok && (result.code === "declared-gate-not-eligible" || result.code === "not-a-lifecycle-gate");
 }

@@ -38,6 +38,7 @@ import "server-only";
 
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
+import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 import { pgSchema, text } from "drizzle-orm/pg-core";
 
 import { db } from "./db";
@@ -46,7 +47,7 @@ import {
   coreRepairsObjectType,
   type CoreRepairableProducedRole,
 } from "./lifecycle-repair-producer-registry";
-import { readReviewGate } from "./artifact-review-gate-store";
+import { listReviewGatesForRun, readReviewGate } from "./artifact-review-gate-store";
 import { readProducedEvent } from "./lifecycle-produced-outbox-store";
 import {
   recordChangesRequested,
@@ -54,7 +55,15 @@ import {
 } from "./lifecycle-repair-store";
 
 import { isAutoReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
-import { isDeclaredReviewLeg, isDeclaredReviewTaskId } from "@/lib/artifacts/artifact-review-target";
+import {
+  baseReviewTaskId,
+  DECLARED_REVIEW_TASK_PREFIX,
+  hasPendingSiblingLeg,
+  isDeclaredReviewLeg,
+  isDeclaredReviewTaskId,
+} from "@/lib/artifacts/artifact-review-target";
+import { resolveOrgRoleForUser } from "@/lib/auth-session";
+import { sessionAuthorityFromResolvedRole } from "@/lib/org-write/authority";
 import { producedEventId, type ContinuationMode } from "@/lib/lifecycle/lifecycle-produced-event";
 import type { ChangesRequestedRequest, RepairFinding } from "@/lib/lifecycle/lifecycle-repair";
 
@@ -68,6 +77,15 @@ export type { RecordChangesRequestedResult } from "./lifecycle-repair-store";
  * finding ids). The distinguishing datum across submits is the FEEDBACK, which the
  * idempotency key encodes below. */
 const PROMPT_WINDOW_FINDING_ID = "prompt-window";
+
+/** cinatra#4245: the refusal for the step's own declared gate (`wayflow-<task>`)
+ * when it does not meet every condition of a change request that ends the run's
+ * pause. The review action maps it back to the plain annotation. */
+const DECLARED_GATE_NOT_ELIGIBLE = "declared-gate-not-eligible";
+
+/** cinatra#4245: the deciding user is no member of the gate's org, so no session
+ * authority can end the pause (fail closed; nothing is written). */
+const DECLARED_GATE_NOT_PERMITTED = "declared-gate-not-permitted";
 
 export interface RecordReviewSurfaceChangesRequestedInput {
   /** The reviewed gate's run id (the route param — the auto-gate's producing run). */
@@ -171,12 +189,24 @@ async function resolveRepairCapable(producerRunId: string | null): Promise<boole
  * failure so the surface renders its BLOCKED state.
  *
  * Guards (defence in depth — the action also checks these before calling):
- *   - the gate must exist and be a LIFECYCLE gate (auto/repair-successor task id)
- *     or a later leg (the picture's, never the post's own) of a per-artifact
- *     DECLARED review (cinatra#3035 W11), proven by the family witness on its pin;
+ *   - the gate must exist and be a LIFECYCLE gate (auto/repair-successor task id),
+ *     a later leg (the picture's) of a per-artifact DECLARED review (cinatra#3035
+ *     W11), proven by the family witness on its pin, or the step's own DECLARED
+ *     gate (`wayflow-<task>`, cinatra#4245);
  *   - the gate must pin EXACTLY the one base target (the repair path is single-base).
  * A non-lifecycle / mismatched / multi-target gate returns a typed failure rather
  * than closing the wrong gate.
+ *
+ * The step's own declared gate (cinatra#4245) takes the
+ * change request only when every condition of the issue holds: one pinned target;
+ * no other gate of the same review step of the run pending; the produced event of
+ * that revision names this gate as its continuation address, in the gate's org,
+ * with the gate's run as its producing run, on the effects-gated continuation; and
+ * a producer that can repair. Any other case is `declared-gate-not-eligible` (the
+ * action keeps the plain note). An eligible request names the pause it ends
+ * (`declaredPause`, with the deciding member's session authority), so the record
+ * writes the run's end mark and the drain stops the run before its repair run. A
+ * picture leg keeps its plain change request: the run stays paused (cinatra#4312).
  */
 export async function recordReviewSurfaceChangesRequested(
   input: RecordReviewSurfaceChangesRequestedInput,
@@ -187,8 +217,16 @@ export async function recordReviewSurfaceChangesRequested(
   if (!lifecycleGate && !isDeclaredReviewTaskId(reviewTaskId)) {
     return { ok: false, code: "not-a-lifecycle-gate", error: "not a lifecycle review gate" };
   }
+  // cinatra#4245: the step's own declared gate (no `#n` leg suffix) ends the pause.
+  const declaredStep = !lifecycleGate && baseReviewTaskId(reviewTaskId) === reviewTaskId;
+  const notEligible = (why: string): RecordChangesRequestedResult => ({
+    ok: false,
+    code: DECLARED_GATE_NOT_ELIGIBLE,
+    error: `the declared review gate cannot take a change request: ${why}`,
+  });
   const trimmed = feedback.trim();
   if (trimmed.length === 0) {
+    if (declaredStep) return notEligible("the comment is empty");
     return { ok: false, code: "empty-feedback", error: "changes_requested needs typed feedback" };
   }
 
@@ -196,10 +234,9 @@ export async function recordReviewSurfaceChangesRequested(
   if (!gate) {
     return { ok: false, code: "gate-not-pending", error: "the review gate is no longer available" };
   }
-  // A flow-authored gate takes this road only as a later leg (the picture's) of a
-  // declared per-artifact review, read from the family witness on its pin; the
-  // post's own leg and any other flow-authored gate keep their plain Comment.
-  if (!lifecycleGate && !isDeclaredReviewLeg({ runId, orgId: gate.orgId, reviewTaskId, pinnedTargets: gate.pinnedTargets })) {
+  // A later leg (the picture's) of a declared per-artifact review is read from the
+  // family witness on its pin; a `#n` gate without it keeps its plain Comment.
+  if (!lifecycleGate && !declaredStep && !isDeclaredReviewLeg({ runId, orgId: gate.orgId, reviewTaskId, pinnedTargets: gate.pinnedTargets })) {
     return { ok: false, code: "not-a-lifecycle-gate", error: "not a lifecycle review gate" };
   }
   // The repair path is single-base: the gate must pin exactly the one reviewed
@@ -209,7 +246,11 @@ export async function recordReviewSurfaceChangesRequested(
     gate.pinnedTargets[0].artifactId !== baseTarget.artifactId ||
     gate.pinnedTargets[0].representationRevisionId !== baseTarget.representationRevisionId
   ) {
+    if (declaredStep) return notEligible("the gate does not pin exactly this one target");
     return { ok: false, code: "targets-mismatch", error: "the gate does not pin exactly this base target" };
+  }
+  if (declaredStep && hasPendingSiblingLeg({ reviewTaskId, gates: await listReviewGatesForRun(runId) })) {
+    return notEligible("another gate of the same review step is pending");
   }
 
   // The produced event carries the continuation + producer provenance the repair
@@ -222,6 +263,12 @@ export async function recordReviewSurfaceChangesRequested(
   const continuationAddress = event?.continuationAddress ?? null;
   const producerRunId = event?.producerRunId ?? gate.runId;
   const producerAgentId = event?.producerAgentId ?? null;
+  if (declaredStep) {
+    if (!event || event.continuationAddress !== gate.id || event.orgId !== gate.orgId || event.producerRunId !== gate.runId) {
+      return notEligible("no produced event names this gate");
+    }
+    if (event.continuationMode !== "async_effects_gated") return notEligible("the continuation is not effects-gated");
+  }
 
   // A producer is repair-capable when it DECLARES the capability in its compiled
   // manifest, OR when CORE implements the repair for the artifact type under
@@ -230,6 +277,22 @@ export async function recordReviewSurfaceChangesRequested(
   const repairCapable =
     (await resolveRepairCapable(producerRunId)) ||
     (await resolveCoreRepairCapable(baseTarget.artifactId));
+  // An escalated repair is never drained, so the run would wait at an ended pause.
+  if (declaredStep && !repairCapable) return notEligible("the producer cannot repair");
+
+  // The pause the request ends, under the deciding member's session authority in
+  // the gate's org; a decider who is no member (or none) writes nothing.
+  let declaredPause: { pauseTaskId: string; authority: OrgWriteAuthority } | undefined;
+  if (declaredStep) {
+    const role = input.decidedBy ? await resolveOrgRoleForUser(gate.orgId, input.decidedBy) : undefined;
+    if (role === undefined) {
+      return { ok: false, code: DECLARED_GATE_NOT_PERMITTED, error: "the deciding user is no member of the gate's organization" };
+    }
+    declaredPause = {
+      pauseTaskId: reviewTaskId.slice(DECLARED_REVIEW_TASK_PREFIX.length),
+      authority: sessionAuthorityFromResolvedRole(gate.orgId, role),
+    };
+  }
 
   // A stable idempotency key over the gate + the EXACT feedback: a response-lost
   // retry with the same feedback re-derives the same repair (idempotent); different
@@ -258,6 +321,7 @@ export async function recordReviewSurfaceChangesRequested(
       producerAgentId,
       currentBaseRevisionId,
       decidedBy: input.decidedBy ?? null,
+      ...(declaredPause ? { declaredPause } : {}),
     });
   } catch (err) {
     // The entry point THROWS a gate CAS conflict (the gate is not pending — a
@@ -265,6 +329,11 @@ export async function recordReviewSurfaceChangesRequested(
     // failure the surface maps to its BLOCKED state; the transaction rolled back,
     // so nothing was written.
     const message = err instanceof Error ? err.message : String(err);
+    // A declared request's guard refusal or database error is no settled gate:
+    // the transaction rolled back, so it is retryable (never a silent block).
+    if (declaredPause && !message.includes("gate CAS conflict")) {
+      return { ok: false, code: "declared-record-failed", error: message };
+    }
     return { ok: false, code: "gate-not-pending", error: message };
   }
 }

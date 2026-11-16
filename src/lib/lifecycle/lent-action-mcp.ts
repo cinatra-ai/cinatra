@@ -641,6 +641,12 @@ export async function handleLentAction(
       // inside — the decision route's own rule, for the same reason.
       actorCtx,
       null,
+      // The lent Comment files the words typed to the run's assistant in the
+      // gate's prompt window (inside a conversation, the composer that stands in
+      // for it): design section VI's one channel for requesting changes, so it
+      // names that road (cinatra#4245 D2). The decision bar's Comment button
+      // never does.
+      disposition === "comment" ? { typedChangeRequest: true } : undefined,
     );
     return say({
       ok: outcome.kind === "decided" || outcome.kind === "annotated" || outcome.kind === "changes-requested",
