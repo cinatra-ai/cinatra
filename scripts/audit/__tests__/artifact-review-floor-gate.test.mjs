@@ -334,6 +334,20 @@ test("the committed baseline may only shrink against the base branch", () => {
   assert.deepEqual(baselineGrowth({ floorTypes: [{ type: "a" }] }, { floorTypes: [{ type: "a" }, { type: "z" }] }), []);
 });
 
+// cinatra#4311: the committed baseline holds exactly one floor type, the Drupal
+// page pointer, and its reason says why it stays there: the pointer is drawn as
+// the generic floor by design and is never a review target. The gate reads
+// neither text, so this test holds them.
+test("the committed baseline holds only the Drupal page pointer, drawn as the generic floor by design", () => {
+  const baseline = JSON.parse(src(BASELINE_REL));
+  assert.deepEqual(baseline.floorTypes.map((e) => e.type), ["@cinatra-ai/drupal-artifacts:node-pointer"]);
+  const reason = baseline.floorTypes[0].reason;
+  assert.ok(reason.includes("drawn as the generic floor by design"), reason);
+  assert.ok(reason.includes("never a review target"), reason);
+  assert.ok(!reason.includes("decided outside plan"), reason);
+  assert.ok(!baseline.$comment.includes("finishes at none"), baseline.$comment);
+});
+
 // ---------------------------------------------------------------------------
 // A DECLARED one-for-one rename (cinatra#4366). A pack that renames a floor
 // type's id moves one entry: the old id leaves, the new id arrives. Without a
