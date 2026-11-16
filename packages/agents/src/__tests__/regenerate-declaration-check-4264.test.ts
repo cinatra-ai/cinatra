@@ -70,6 +70,12 @@ function refused(oas: Rec, entries: unknown = [ENTRY]): string {
   return error;
 }
 
+describe("cinatra#4264 A1: the package contract", () => {
+  it("exports checkRegenerateDeclaration (absent before this change)", () => {
+    expect(typeof checkRegenerateDeclaration).toBe("function");
+  });
+});
+
 describe("cinatra#4264 A1: checkRegenerateDeclaration accepts", () => {
   it.each(["ApiNode", "AgentNode", "FlowNode"])("a %s step filed by an ApiNode", (kind) => {
     expect(checkRegenerateDeclaration(flow(kind), [ENTRY])).toEqual({ ok: true });

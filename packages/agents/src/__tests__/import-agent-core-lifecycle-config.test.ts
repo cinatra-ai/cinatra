@@ -89,6 +89,7 @@ vi.mock("../agent-template-identity", async () => identityClaimMockFrom((n: stri
 
 import { importAgentTemplateCore } from "../import-agent-core";
 import { createZipBuffer } from "../zip-helpers";
+import { agentLifecycleDeclarationSchema } from "../verdaccio/package-contract";
 
 const OAS = JSON.stringify({
   agentspec_version: "26.1.0",
@@ -191,6 +192,9 @@ describe("cinatra#2044 GAP 2 — importAgentTemplateCore compiles cinatra.lifecy
 
   it("cinatra#4264 A1a: a declared regenerate list is not stored on lifecycleConfig (A1b stores it)", async () => {
     const regenerate = [{ artifactNode: "file_image", step: "image_flow", noteInput: "prompt" }];
+    // The manifest schema admits this list (it refused the key before cinatra#4264),
+    // so the null below reads "admitted and not stored", not a malformed block.
+    expect(agentLifecycleDeclarationSchema.safeParse({ regenerate }).success).toBe(true);
     await importZip({ lifecycle: { regenerate } });
     expect(createInput().lifecycleConfig).toBeNull();
   });
