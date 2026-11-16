@@ -27,6 +27,34 @@ export const AGENT_HITL_CARD_KIND: LifecycleCardKind =
  * the whole of it: `childRunId` is an execution detail no drawing reads, and a
  * card should not carry a field it cannot use.
  */
+export type HitlRenderInputs = {
+  bindingId: string;
+  reviewTaskId: string;
+  instanceField: string;
+  instanceId: string;
+  identityValues: Record<string, string>;
+  siteHost: string;
+};
+
+/** Optional render-only data is discarded on malformed transport input. It
+ * never changes the validity of a legacy gate or its decision fields. */
+function parseRenderInputs(value: unknown, bindingId: string, reviewTaskId: string): HitlRenderInputs | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return;
+  const v = value as Record<string, unknown>;
+  if (v.bindingId !== bindingId || v.reviewTaskId !== reviewTaskId || typeof v.instanceField !== "string" || !/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/.test(v.instanceField) || typeof v.instanceId !== "string" || !v.instanceId || v.instanceId.length > 256 || typeof v.siteHost !== "string" || !v.siteHost || v.siteHost.length > 512) return;
+  const canonicalHost = ["http:", "https:"].some(protocol => {
+    try {
+      const parsed = new URL(`${protocol}//${v.siteHost}`);
+      return parsed.host === v.siteHost && !parsed.username && !parsed.password && parsed.pathname === "/" && !parsed.search && !parsed.hash;
+    } catch { return false; }
+  });
+  if (!canonicalHost) return;
+  if (!v.identityValues || typeof v.identityValues !== "object" || Array.isArray(v.identityValues)) return;
+  const entries = Object.entries(v.identityValues);
+  if (entries.length === 0 || entries.length > 8 || entries.some(([k, v]) => !/^[a-zA-Z][a-zA-Z0-9_]{0,63}$/.test(k) || typeof v !== "string" || !v || v.length > 512)) return;
+  return { bindingId, reviewTaskId, instanceField: v.instanceField, instanceId: v.instanceId, identityValues: Object.fromEntries(entries) as Record<string, string>, siteHost: v.siteHost };
+}
+
 export type AgentHitlScreenGate = {
   /** The review-task identity the answer is submitted against. */
   reviewTaskId: string;
@@ -38,6 +66,8 @@ export type AgentHitlScreenGate = {
   currentValues: Record<string, unknown>;
   /** The setup-loop field identity, or `null` for a mid-run gate. */
   fieldName: string | null;
+  /** Authorized presentation only; excluded from inputs and answers. */
+  renderInputs?: HitlRenderInputs;
 };
 
 /**
@@ -103,6 +133,7 @@ export function parseAgentHitlScreenState(data: unknown): AgentHitlScreenState |
     value !== null && typeof value === "object" && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : {};
+  const renderInputs = parseRenderInputs((gate as { renderInputs?: unknown }).renderInputs, xRenderer, reviewTaskId);
   return {
     state: "asking",
     runId,
@@ -113,6 +144,7 @@ export function parseAgentHitlScreenState(data: unknown): AgentHitlScreenState |
       inputSchema: asRecord((gate as { inputSchema?: unknown }).inputSchema),
       currentValues: asRecord((gate as { currentValues?: unknown }).currentValues),
       fieldName: typeof fieldName === "string" ? fieldName : null,
+      ...(renderInputs ? { renderInputs } : {}),
     },
   };
 }
