@@ -42,6 +42,12 @@
  * sibling read, so the declared record does not see it and ends the pause
  * beside a started repair run. A `markhold` on a run keeps the transaction that
  * writes the run's end mark waiting right after that write (M15).
+ * The case M16 is red at 5b078f24: two records that end no pause and escalate,
+ * on sibling legs of one run, each held the run row FOR SHARE while it asked
+ * for the row FOR NO KEY UPDATE in the decision carry
+ * (carryDeclaredReviewDecision), which waits for the other's SHARE, so Postgres
+ * ended one of them with a deadlock. Another session that holds the run row FOR
+ * SHARE keeps both records waiting at the carry until the test lets them go.
  *
  * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided. With
  * X4245_PAUSE_CLAIM_REALDB=1 a missing database throws instead of skipping.
@@ -253,11 +259,11 @@ async function arm(key: string, kind: "stop" | "clear" | "repair", on = true) {
   if (on) await pool(`INSERT INTO ${S()}."fail_4245d1" (key, kind) VALUES ($1, $2)`, [key, kind]);
   else await pool(`DELETE FROM ${S()}."fail_4245d1" WHERE key = $1 AND kind = $2`, [key, kind]);
 }
-/** Wait (at most 10 s) until a backend of this database reads `where` in pg_stat_activity. */
-async function waitForBackend(where: string) {
+/** Wait (at most 10 s) until `atLeast` backends of this database read `where` in pg_stat_activity. */
+async function waitForBackend(where: string, atLeast = 1) {
   for (let i = 0; i < 200; i += 1) {
     const { rows } = await pool(`SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND ${where}`);
-    if ((rows[0] as { n: number }).n > 0) return;
+    if ((rows[0] as { n: number }).n >= atLeast) return;
     await new Promise((r) => setTimeout(r, 50));
   }
   throw new Error(`no backend reads ${where}`);
@@ -890,5 +896,41 @@ describe.skipIf(!HAS_DB)("a plain repair a drain selected before the end mark (p
     expect(await repairsOf(p.gateId)).toEqual([]);
     expect(await readRun(p.runId)).toMatchObject({ status: "pending_approval", generation: 10, token: null, phase: null });
     expect((await repairsOf(b.gateId))[0].status).toBe("dispatched");
+  });
+});
+
+describe.skipIf(!HAS_DB)("two records that end no pause and escalate, on sibling legs of one run", () => {
+  it("M16: both escalated records commit; neither waits for the other's lock on the run row (no deadlock)", async () => {
+    const p = await seedPaused({ generation: 11 });
+    const b = await addLeg(p);
+    const holder = new Client({ connectionString: DB_URL });
+    await holder.connect();
+    let first: ReturnType<typeof changeRequest> | undefined;
+    let second: ReturnType<typeof changeRequest> | undefined;
+    try {
+      // Another session holds the run row FOR SHARE, so each record waits at the decision carry's
+      // FOR NO KEY UPDATE of that row, inside its transaction, and both transactions are open at once.
+      await holder.query("BEGIN");
+      await holder.query(`SELECT id FROM ${S()}."agent_runs" WHERE id = $1 FOR SHARE`, [p.runId]);
+      first = changeRequest(p, { declared: false, repairCapable: false });
+      await settledOrWaiting(first, `wait_event_type = 'Lock' AND query ILIKE '%for no key update%'`);
+      second = changeRequest(p, { declared: false, repairCapable: false, gateOf: b, reviewTaskId: `wayflow-${p.task}#2` });
+      await waitForBackend(`wait_event_type = 'Lock' AND query ILIKE '%for no key update%'`, 2);
+    } finally {
+      await holder.query("COMMIT").catch(() => {});
+      await holder.end().catch(() => {});
+      await Promise.allSettled([first, second]);
+    }
+    // At 5b078f24 one of the two fails with a deadlock (each held the row FOR SHARE).
+    const [one, two] = await Promise.allSettled([first, second]);
+    expect(one).toMatchObject({ status: "fulfilled", value: { ok: true, status: "escalated", idempotent: false } });
+    expect(two).toMatchObject({ status: "fulfilled", value: { ok: true, status: "escalated", idempotent: false } });
+    for (const gateId of [p.gateId, b.gateId]) {
+      expect(await gateStatus(gateId)).toEqual({ status: "resolved", disposition: "changes_requested" });
+      const [repair, ...more] = await repairsOf(gateId);
+      expect(more).toEqual([]);
+      expect(repair).toMatchObject({ status: "escalated", generation: null });
+    }
+    expect(await readRun(p.runId)).toMatchObject({ status: "pending_approval", generation: 11, token: null, phase: null });
   });
 });

@@ -172,7 +172,7 @@ export interface RecordChangesRequestedInput {
    * no pause, then writes the gate's compare-and-set (bound to `runId`, the org
    * and the gate's review task) and the repair row, which keeps the generation
    * the mark ended (the drain's order to stop the run). A record that ends no
-   * pause takes its gate's run row FOR SHARE first, so it commits either before
+   * pause takes its gate's run row FOR KEY SHARE first, so it commits either before
    * the declared record's sibling read (which refuses while that repair is still
    * `requested`; one the drain moved off `requested` first does not refuse it: a
    * dispatched one started its repair run before the end mark existed, an
@@ -592,7 +592,7 @@ export async function recordChangesRequested(
           // start its repair run without a stop of its own, so the record refuses
           // to end the pause beside one (the refusal rolls the mark back). The
           // read follows the mark: the mark holds the run row, and a record that
-          // ends no pause takes that row FOR SHARE before it writes, so it has
+          // ends no pause takes that row FOR KEY SHARE before it writes, so it has
           // either committed before this read or commits after this transaction,
           // and the drain then holds its repair while the run carries the end mark.
           // A repair a drain selected before the mark and launches during it is
@@ -624,16 +624,22 @@ export async function recordChangesRequested(
     }
   } else {
     persisted = await db.transaction(async (tx) => {
-      // cinatra#4245: the gate's run row FOR SHARE, before any write, so this
+      // cinatra#4245: the gate's run row FOR KEY SHARE, before any write, so this
       // record and a declared record of the same run cannot cross (see the
-      // sibling read of the declared road). No row (a gate of no run) locks nothing.
+      // sibling read of the declared road): the end mark holds the row FOR UPDATE,
+      // and KEY SHARE waits for that mode as SHARE does. KEY SHARE, not SHARE: an
+      // escalated record takes the same row FOR NO KEY UPDATE in this transaction
+      // (carryDeclaredReviewDecision), and SHARE conflicts with that mode, so two
+      // escalated records of one run each held SHARE and waited for the other's
+      // (a deadlock; one record failed). KEY SHARE conflicts with neither that
+      // mode nor a status write of the run. No row (a gate of no run) locks nothing.
       await tx
         .select({ id: agentRuns.id })
         .from(agentRuns)
         .where(
           sql`EXISTS (SELECT 1 FROM ${artifactReviewGates} g WHERE g.id = ${request.gateId} AND g.run_id = ${agentRuns.id} AND g.org_id = ${agentRuns.orgId})`,
         )
-        .for("share");
+        .for("key share");
       return writeRecord(tx, null);
     });
   }
