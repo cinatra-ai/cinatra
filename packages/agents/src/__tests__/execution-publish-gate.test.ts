@@ -56,6 +56,8 @@ const storeMock = vi.hoisted(() => ({
   findSavedConnectionForAgentUrl: vi.fn(async () => null),
   updateAgentRunA2ATaskId: vi.fn(async () => undefined),
   updateAgentRunA2AContextId: vi.fn(async () => undefined),
+  // cinatra#4150 part 7a-2: the coordinator's moment write, which the publish park now reaches.
+  recordRunLifecycleMoment: vi.fn(async () => undefined),
 }));
 vi.mock("../store", () => storeMock);
 vi.mock("../trigger-gate", () => ({ isTriggerReleased: vi.fn(async () => true) }));
@@ -315,6 +317,65 @@ describe("a run that reaches a publish gate (A4 without the moment)", () => {
     await pause(sign(GATE));
     expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
     expect(onInterruptSpy).not.toHaveBeenCalled();
+  });
+});
+
+// cinatra#4150 part 7a-2: the moment half of A4. The park states the publish moment AFTER its move, through the
+// coordinator, pinned to pending_approval, with the publish card and the decision's id; a park that did not hold the
+// run states nothing.
+const momentWrites = () =>
+  (storeMock.recordRunLifecycleMoment.mock.calls as unknown as Array<[Record<string, unknown>]>).map(([input]) => input);
+
+describe("a run that reaches a publish gate states the publish moment (A4)", () => {
+  it("after the move to pending_approval: moment publish, card publish_decision, the decision's id as its reference", async () => {
+    await pause(sign(GATE));
+    expect(momentWrites()).toEqual([
+      {
+        runId: "run-pub-1",
+        orgId: "org-test",
+        moment: "publish",
+        cardKind: "publish_decision",
+        cardRef: "dec-1",
+        onlyWhileStatus: "pending_approval",
+        onlyWhilePublishDecisionParked: "dec-1",
+      },
+    ]);
+    expect(storeMock.transitionRunStatus.mock.invocationCallOrder[0]!).toBeLessThan(
+      storeMock.recordRunLifecycleMoment.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("a gate that reaches an already waiting run states the moment too, and moves nothing", async () => {
+    await pause(sign(GATE), "pending_approval");
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    expect(momentWrites()).toEqual([expect.objectContaining({ moment: "publish", cardRef: "dec-1" })]);
+  });
+
+  it("a lost move, an answered gate task and an unwritten decision state no moment", async () => {
+    storeMock.transitionRunStatus.mockRejectedValueOnce(Object.assign(new Error("stale"), { code: "stale_from_status" }));
+    await pause(sign(GATE));
+    decisions.insertParkedDecision.mockResolvedValueOnce({ inserted: false, decision: parkedRow("declined") });
+    await pause(sign(GATE));
+    decisions.insertParkedDecision.mockRejectedValueOnce(new Error("db down"));
+    await pause(sign(GATE));
+    expect(storeMock.recordRunLifecycleMoment).not.toHaveBeenCalled();
+  });
+
+  it("a moment record that fails does not fail the park, and is logged by a fixed name with no run id or store text", async () => {
+    // Through the REAL coordinator: its failure reaches the publish road's one log line.
+    storeMock.recordRunLifecycleMoment.mockRejectedValueOnce(new Error("db failure: run-pub-1"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    let logged = "";
+    try {
+      await pause(sign(GATE));
+      logged = warn.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
+    } finally {
+      warn.mockRestore();
+    }
+    expect(logged).toContain("[publish-decision] the publish moment was not recorded: Error");
+    expect(logged).not.toMatch(/run-pub-1|db failure/);
+    expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
+    expect(decisions.decide).not.toHaveBeenCalled();
   });
 });
 

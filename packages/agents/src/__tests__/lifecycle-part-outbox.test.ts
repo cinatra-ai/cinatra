@@ -53,6 +53,12 @@ describe("which moments feed the run outbox", () => {
     // the run outbox, because there is no run."
     expect(momentFeedsRunOutbox("schedule")).toBe(true);
   });
+
+  it("feeds the PUBLISH moment, now that its card is mounted on every host (cinatra#4150)", () => {
+    // The publish card is interrupt-represented, like the HITL screen: the host writer adds no part for it, and every
+    // host draws it from the run's own state. Feeding the moment hands it to that one writer, as for the HITL screen.
+    expect(momentFeedsRunOutbox("publish")).toBe(true);
+  });
 });
 
 describe("the provenance vocabulary", () => {
@@ -83,6 +89,21 @@ describe("the seam", () => {
     await emitLifecycleMomentOpened(ENTRY);
     expect(onMomentOpened).toHaveBeenCalledTimes(1);
     expect(onMomentOpened).toHaveBeenCalledWith(ENTRY);
+  });
+
+  it("hands the publish moment to the wired writer (cinatra#4150)", async () => {
+    const onMomentOpened = vi.fn().mockResolvedValue(undefined);
+    setLifecyclePartOutbox({ onMomentOpened });
+    const entry: LifecycleMomentOpened = {
+      runId: "run-1",
+      orgId: "org-1",
+      moment: "publish",
+      cardKind: "publish_decision",
+      cardRef: "dec-1",
+    };
+    await emitLifecycleMomentOpened(entry);
+    expect(onMomentOpened).toHaveBeenCalledTimes(1);
+    expect(onMomentOpened).toHaveBeenCalledWith(entry);
   });
 
   it("does nothing at all when no host wired one", async () => {
@@ -136,6 +157,36 @@ describe("the coordinator's wait on the outbox is BOUNDED", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("starts the budget before the writer runs, so a writer that stalls synchronously past it is reported (cinatra#4150)", async () => {
+    // A host writer that does its store read synchronously holds the thread for as long as the read takes. The budget's
+    // timer must already exist when it does, or the overrun goes unreported. The stall is the writer moving the fake
+    // clock past the budget while it runs.
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      setLifecyclePartOutbox({
+        onMomentOpened: () => {
+          vi.advanceTimersByTime(LIFECYCLE_OUTBOX_BUDGET_MS + 3_000);
+          return Promise.resolve();
+        },
+      });
+      await expect(emitLifecycleMomentOpened(ENTRY)).resolves.toBeUndefined();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0])).toContain("[lifecycle-part-outbox]");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never calls the writer on the caller's synchronous path (cinatra#4150)", async () => {
+    const onMomentOpened = vi.fn().mockResolvedValue(undefined);
+    setLifecyclePartOutbox({ onMomentOpened });
+    const settled = emitLifecycleMomentOpened(ENTRY);
+    expect(onMomentOpened).not.toHaveBeenCalled();
+    await settled;
+    expect(onMomentOpened).toHaveBeenCalledTimes(1);
   });
 
   it("does not wait out the budget when the writer answers at once", async () => {

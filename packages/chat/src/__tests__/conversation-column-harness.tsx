@@ -35,6 +35,7 @@ import { LIFECYCLE_VIEW_RESOLVE_PATH } from "../renderable-views/lifecycle-card"
 import {
   LIFECYCLE_RECOMMENDATION_DECIDE_PATH,
   LIFECYCLE_HITL_SCREEN_PATH,
+  LIFECYCLE_PUBLISH_DECISION_PATH,
   LIFECYCLE_RECOMMENDATION_HOLD_PATH,
 } from "@cinatra-ai/agents/lifecycle-card-runtime";
 import {
@@ -416,6 +417,11 @@ export type WidgetServiceStubOptions = {
    */
   hitlScreen?: (runId: string) => unknown | Promise<unknown> | null;
   /**
+   * The BROKER READ of the PUBLISH CARD (cinatra#4150): a GET addressed by the run in its query. Absent, it answers
+   * `{ state: "none" }`, the reading of a run with no open decision; `null` is the route's refusal.
+   */
+  publishDecision?: (runId: string) => unknown | Promise<unknown> | null;
+  /**
    * The RUN SEED read (cinatra#3044).
    *
    * The transcript reads the run itself to learn which lifecycle moment it
@@ -458,6 +464,12 @@ export function installWidgetServiceStub(options: WidgetServiceStubOptions = {})
       })();
       const answer = options.lifecycle(requested);
       return answer === null ? json({ error: "Not available to you." }, 404) : json(answer);
+    }
+    if (url.startsWith(`${LIFECYCLE_PUBLISH_DECISION_PATH}?`)) {
+      if (!options.publishDecision) return json({ state: "none" });
+      const runId = new URL(url, "http://widget.test").searchParams.get("runId") ?? "";
+      const answer = await options.publishDecision(runId);
+      return answer === null || answer === undefined ? json({ error: "Unauthorized" }, 401) : json(answer);
     }
     if (url === LIFECYCLE_HITL_SCREEN_PATH) {
       if (!options.hitlScreen) return json({ state: "none" });

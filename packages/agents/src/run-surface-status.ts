@@ -380,6 +380,8 @@ export function classifyRunWaitInterrupt(
   // classifier has nothing to say about it and keeps its fail-closed answer.
   if (interrupt.lifecycleMoment === "hitl") return "input";
   if (interrupt.lifecycleMoment === "review") return "approval";
+  // publish — the run waits on its publish decision (cinatra#4150): an approval.
+  if (interrupt.lifecycleMoment === "publish") return "approval";
   if (
     typeof interrupt.fieldName === "string" &&
     interrupt.fieldName.trim().length > 0
@@ -467,16 +469,25 @@ export function waitNotificationLandsInConversation(
 /** Badge copy for a setup-field INPUT pause. */
 export const AWAITING_INPUT_BADGE_LABEL = "Awaiting input";
 
+/** The run page's reading of a run its publish decision ended (cinatra#4150; the drawing's section XV). */
+export const NOT_PUBLISHED_BADGE_LABEL = "Not published";
+
 /**
  * Status → badge LABEL for both run surfaces. Every status keeps its previous
  * humanized rendering (`pending_approval` → "pending approval", …); ONLY a
  * `pending_approval` that the discriminator reads as an input pause changes,
- * to "Awaiting input".
+ * to "Awaiting input", and a `stopped` run whose publish decision (the publish
+ * card's state) was declined or expired reads "Not published": an expired
+ * request is a decline, and nothing was published either way.
  */
 export function runStatusBadgeLabel(
   status: string,
   interrupt?: RunWaitInterruptDescriptor | null,
+  publishDecision?: string | null,
 ): string {
+  if (status === "stopped" && (publishDecision === "declined" || publishDecision === "expired")) {
+    return NOT_PUBLISHED_BADGE_LABEL;
+  }
   if (
     status === "pending_approval" &&
     classifyRunWaitInterrupt(interrupt) === "input"

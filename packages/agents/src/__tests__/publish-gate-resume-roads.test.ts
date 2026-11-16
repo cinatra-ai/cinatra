@@ -126,6 +126,10 @@ describe("the road list equals the product sendTask call sites", () => {
     expect(claimed).toBeLessThan(gate);
     expect(gate).toBeLessThan(released);
     expect(released).toBeLessThan(send);
+    // cinatra#4150 part 7a-2: the publish moment ends between the release and the send.
+    const cleared = at(src, "c.clearPublishMoment(", start);
+    expect(released).toBeLessThan(cleared);
+    expect(cleared).toBeLessThan(send);
   });
 
   it("the content-editor send carries no context id", () => {
@@ -169,9 +173,13 @@ describe("the facts the hold rests on", () => {
     expect(delivery).toContain("sweepExpiredPublishDecisions({ authorityFor: mintAgentRunExecutionAuthority })");
   });
 
-  it("no lifecycle moment is written for a publish gate in this part", () => {
+  it("cinatra#4150 part 7a-2: the park states the publish moment only through the coordinator, after its move", () => {
     const actions = read("packages/agents/src/publish-decision-actions.ts");
-    expect(actions).not.toMatch(/onPublishGate|lifecycle-coordinator|lifecycleMoment/);
+    const hold = at(actions, "export async function holdRunAtPublishGate(");
+    const move = at(actions, 'moveRun(run.id, fromStatus, "pending_approval"', hold);
+    expect(at(actions, "c.onPublishGate(", hold)).toBeGreaterThan(move);
+    // The coordinator is the moment's one writer: this module never writes or compares a moment itself.
+    expect(actions).not.toMatch(/recordRunLifecycleMoment|lifecycleMoment/);
   });
 });
 

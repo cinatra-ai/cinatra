@@ -159,6 +159,11 @@ export function getLifecyclePartOutbox(): LifecyclePartOutbox | null {
  * A moment that reaches this function ALWAYS has a run (the coordinator's other
  * carrier never gets here), so the schedule moment it names is the CONFIRMED
  * one, which is run-carried.
+ *
+ * THE PUBLISH MOMENT FEEDS IT TOO (cinatra#4150), now that its card is mounted
+ * on every host. Its kind is interrupt-represented, like the HITL screen's, so
+ * the host writer adds no part for it: each host, the site widget among them,
+ * draws the card from the run's own state.
  */
 export function momentFeedsRunOutbox(moment: LifecycleMoment): boolean {
   const kind = LIFECYCLE_MOMENT_CARD_KIND[moment];
@@ -196,24 +201,34 @@ export async function emitLifecycleMomentOpened(
   const outbox = getLifecyclePartOutbox();
   if (!outbox) return;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let reported = false;
+  const reportOverrun = () => {
+    if (reported) return;
+    reported = true;
+    console.warn(
+      "[lifecycle-part-outbox] the",
+      entry.moment,
+      "injection for run",
+      entry.runId,
+      `did not settle within ${LIFECYCLE_OUTBOX_BUDGET_MS}ms — the run goes on and the card arrives only if a tool asks for it`,
+    );
+  };
+  const started = Date.now();
   try {
-    await Promise.race([
-      outbox.onMomentOpened(entry),
-      new Promise<void>((resolve) => {
-        timer = setTimeout(() => {
-          console.warn(
-            "[lifecycle-part-outbox] the",
-            entry.moment,
-            "injection for run",
-            entry.runId,
-            `did not settle within ${LIFECYCLE_OUTBOX_BUDGET_MS}ms — the run goes on and the card arrives only if a tool asks for it`,
-          );
-          resolve();
-        }, LIFECYCLE_OUTBOX_BUDGET_MS);
-        // A timer must never hold a worker process open past its work.
-        (timer as unknown as { unref?: () => void }).unref?.();
-      }),
-    ]);
+    // THE BUDGET STARTS FIRST (cinatra#4150 part 7b). The timer exists before any writer work, and the writer is called
+    // off the caller's synchronous path, so a writer that throws or stalls at once never runs ahead of its budget.
+    const budget = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        reportOverrun();
+        resolve();
+      }, LIFECYCLE_OUTBOX_BUDGET_MS);
+      // A timer must never hold a worker process open past its work.
+      (timer as unknown as { unref?: () => void }).unref?.();
+    });
+    const write = Promise.resolve().then(() => outbox.onMomentOpened(entry));
+    await Promise.race([write, budget]);
+    // A writer that held the thread synchronously cannot be cut short from here; it is reported once it lets go.
+    if (Date.now() - started > LIFECYCLE_OUTBOX_BUDGET_MS) reportOverrun();
   } catch (err) {
     // The run id is request-influenced, so it is a discrete ARGUMENT and never
     // interpolated into the format string (CodeQL js/tainted-format-string).

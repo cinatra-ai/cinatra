@@ -3,7 +3,7 @@
   "routes": {
     "/sign-in": 165,
     "/api/mcp": 1323,
-    "/chat": 1428,
+    "/chat": 1433,
     "/api/a2a": 1331,
     "/api/llm-bridge": 1341
   },
@@ -27,10 +27,10 @@
       "pr": 4665
     },
     "/chat": {
-      "from": 1427,
-      "to": 1428,
-      "reason": "Issue 3745 slice P4a adds exactly one core module to this route, packages/agents/src/mcp/resume-message.ts: the agent_run_resume WayFlow resume message, extracted from packages/agents/src/mcp/handlers.ts, which is its only non-test importer; the module has no imports of its own. The gate of this pull request at head d99e9b142975 reads one more core module than the ceiling on every one of the four routes (the module name is INFERRED from the import edges against main 03518eab8; the gate prints counts, not names). The other edges this pull request adds (handlers.ts to run-status.ts, execution.ts and run-produced-review-hold.ts to run-transition.ts, run-transition.ts to run-produced-review-hold.ts and artifact-review-gate-store.ts) reach modules that main already imports from other core modules. The growth is additive and no module leaves the route; the ceiling rises by one over the main ceiling.",
-      "pr": 4665
+      "from": 1428,
+      "to": 1433,
+      "reason": "Issue 4150 (the publish card) mounts the card in the shared chat column beside the hitl screen, which adds five core modules to this route: the card (packages/agents/src/publish-decision-card-view.tsx), its state shape (publish-decision-card.ts), its session read action (publish-decision-card-actions.ts), the read it calls (publish-decision-card-core.ts) and the settled-outcome helper that read uses (src/lib/lifecycle/lifecycle-settled-outcome.ts). The card is the route's own surface, so the growth is accepted; it is additive and no module leaves the route. Measured with scripts/route-graph.mjs: the base of this change reads 1428 and this change reads 1433.",
+      "pr": 0
     },
     "/sign-in": {
       "from": 164,

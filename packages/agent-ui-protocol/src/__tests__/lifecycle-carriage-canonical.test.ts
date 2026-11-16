@@ -33,11 +33,12 @@ describe("the lifecycle carriage record", () => {
   });
 
   it("makes every RUN-CARRIED kind's truth the run's own row", () => {
-    // Four of the five. A card mounted from run state is a card no model can
+    // Five of the six. A card mounted from run state is a card no model can
     // withhold, which is the whole claim the injection makes.
     expect([...LIFECYCLE_RUN_CARRIED_KINDS].sort()).toEqual([
       "agent_hitl_screen",
       "artifact_review_gate",
+      "publish_decision",
       "recommendation_hold",
       "verification_summary",
     ]);
@@ -82,6 +83,7 @@ describe("the lifecycle carriage record", () => {
     ]);
     expect([...LIFECYCLE_INTERRUPT_KINDS].sort()).toEqual([
       "agent_hitl_screen",
+      "publish_decision",
       "recommendation_hold",
     ]);
   });

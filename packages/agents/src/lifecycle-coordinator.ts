@@ -35,8 +35,9 @@ import "server-only";
 //
 // THE POLICY TABLE IS UNCHANGED. `LifecycleCheckpoint` still has its three
 // checkpoints — the organization's rules first, the product's defaults next.
-// Two of the five moments are simply not policy matters: the HITL moment is the
-// agent's own (the step asks or it does not), and a schedule has no artifact
+// Three of the six moments are simply not policy matters: the HITL moment is the
+// agent's own (the step asks or it does not), the publish moment is the agent's
+// declaration (cinatra#4150), and a schedule has no artifact
 // type, destination or origin, so it is not a row in that table. The schedule
 // DEFAULT therefore lives here, stated once, below.
 // ---------------------------------------------------------------------------
@@ -370,6 +371,10 @@ async function stateMoment(input: {
    *  writer wants when it must not displace what it read. `null` is a value
    *  ("only while it states nothing"), `undefined` leaves it unconstrained. */
   onlyWhileMoment?: string | null;
+  /** The publish moment's guard (cinatra#4150): write only while this decision is parked. */
+  onlyWhilePublishDecisionParked?: string;
+  /** Throw a failure to the caller instead of logging it here (the publish road logs by a fixed error name). */
+  rethrow?: true;
 }): Promise<void> {
   try {
     await recordRunLifecycleMoment(
@@ -385,6 +390,9 @@ async function stateMoment(input: {
         ...(input.onlyWhileMoment === undefined
           ? {}
           : { onlyWhileMoment: input.onlyWhileMoment }),
+        ...(input.onlyWhilePublishDecisionParked === undefined
+          ? {}
+          : { onlyWhilePublishDecisionParked: input.onlyWhilePublishDecisionParked }),
       },
       input.authority,
     );
@@ -409,6 +417,7 @@ async function stateMoment(input: {
       });
     }
   } catch (err) {
+    if (input.rethrow) throw err;
     // The run id is request-influenced, so it is a discrete ARGUMENT and never
     // interpolated into the format string (CodeQL js/tainted-format-string).
     console.warn(
@@ -1050,7 +1059,10 @@ export type ReleaseReason =
   | "continue"
   | "trigger_fired"
   | "approval_resumed"
-  | "recommendation_decided";
+  | "recommendation_decided"
+  // cinatra#4150: Publish released the run's publish decision. That road keeps its own claim and resume
+  // (publish-decision-actions.ts) and borrows only the moment's end, `clearPublishMoment`.
+  | "publish_approved";
 
 export type AdvanceInput = {
   run: Pick<AgentRunRecord, "id" | "orgId" | "status">;
@@ -1352,6 +1364,61 @@ export async function onRunStoppedAtReviewGate(
     status: current?.status ?? input.run.status,
     moment: "review",
   };
+}
+
+/**
+ * THE RUN STOPPED IN FRONT OF A PUBLISHING STEP (cinatra#4150).
+ *
+ * The same entry shape as the pause and the review gate above. The publish park (`holdRunAtPublishGate`) wrote the
+ * decision and moved the run to pending_approval; this records that the run stands at the publish moment, with the
+ * decision's id as the card reference. Pinned to pending_approval AND, in the same statement, to that decision still
+ * being parked: a decision answered between the park and this record (a Publish whose send failed gives the run back
+ * to pending_approval with the decision released), or a run that has since parked at a newer decision, never gets
+ * this card back. A failure is THROWN, not logged here: the publish road logs it by a fixed error name, with no run id
+ * and no store text, and the decision row, not the moment, holds the run.
+ */
+export type PublishGateInput = {
+  run: Pick<AgentRunRecord, "id" | "orgId">;
+  /** The parked publish decision's id. */
+  decisionId: string;
+  authority: OrgWriteAuthority | undefined;
+};
+
+export async function onPublishGate(input: PublishGateInput): Promise<CoordinatorAnswer> {
+  await stateMoment({
+    run: input.run,
+    moment: "publish",
+    cardRef: input.decisionId,
+    authority: input.authority,
+    onlyWhileStatus: "pending_approval",
+    onlyWhilePublishDecisionParked: input.decisionId,
+    rethrow: true,
+  });
+  const current = await readAgentRunById(input.run.id);
+  return {
+    carrier: { kind: "run", run: current ?? (input.run as AgentRunRecord) },
+    status: current?.status ?? "pending_approval",
+    moment: "publish",
+  };
+}
+
+/**
+ * The publish moment ends (cinatra#4150): Do not publish or the expiry stopped the run, or Publish released it.
+ *
+ * Pinned to the publish moment AND to the status the caller just won, with no read before it: the guard is the write
+ * itself, so a run that has since parked at a newer moment, or has moved on, keeps what it states. A failure is
+ * THROWN to the publish road, which logs it by a fixed error name; the decision record still governs the run.
+ */
+export async function clearPublishMoment(input: {
+  run: Pick<AgentRunRecord, "id" | "orgId">;
+  whileStatus: Extract<AgentRunStatus, "running" | "stopped">;
+  why: Extract<ReleaseReason, "publish_approved"> | "declined" | "expired";
+  authority: OrgWriteAuthority | undefined;
+}): Promise<void> {
+  await recordRunLifecycleMoment(
+    { runId: input.run.id, orgId: input.run.orgId, moment: null, onlyWhileMoment: "publish", onlyWhileStatus: input.whileStatus },
+    input.authority,
+  );
 }
 
 // ---------------------------------------------------------------------------

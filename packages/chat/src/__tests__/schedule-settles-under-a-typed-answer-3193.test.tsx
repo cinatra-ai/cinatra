@@ -73,6 +73,9 @@ const hitlReading = { current: { state: "none" } as Record<string, unknown>, pen
 vi.mock("../../../agents/src/agent-hitl-screen-actions", () => ({
   getAgentHitlScreenStateAction: async (runId: string) => hitlReading.forRun?.(runId) ?? hitlReading.pending ?? hitlReading.current,
 }));
+vi.mock("../../../agents/src/publish-decision-card-actions", () => ({
+  getPublishDecisionCardStateAction: async () => ({ state: "none" }),
+}));
 
 const approveMock = vi.fn(async () => undefined);
 vi.mock("../../../agents/src/hitl-actions", () => ({

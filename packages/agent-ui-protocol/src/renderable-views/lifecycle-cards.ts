@@ -42,8 +42,8 @@ import {
 // ---------------------------------------------------------------------------
 
 /**
- * Every lifecycle interaction that becomes a card. Closed set of FIVE. Adding a
- * sixth interaction means adding a kind HERE first — that is what keeps "one
+ * Every lifecycle interaction that becomes a card. Closed set of SIX. Adding a
+ * seventh interaction means adding a kind HERE first — that is what keeps "one
  * card per interaction" enforceable instead of aspirational.
  *
  * `agent_hitl_screen` is the fifth (cinatra#2928, lifecycle-b W2a). It is the
@@ -54,6 +54,10 @@ import {
  * is not drawn by this slice: W2a registers the kind as data, and W3
  * (cinatra#2930) mounts it — which is why its host cells are OWED in the
  * parity ratchet rather than recorded.
+ *
+ * `publish_decision` is the sixth (cinatra#4150): one confirmation, owned by the application, in front of a step an
+ * agent declares as publishing. It lands with its card mounted on all four hosts, so none of its cells is owed. The
+ * publish moment states it on a run held at a publish gate.
  */
 export const LIFECYCLE_CARD_KINDS = [
   "artifact_review_gate",
@@ -61,6 +65,7 @@ export const LIFECYCLE_CARD_KINDS = [
   "recommendation_hold",
   "trigger_schedule_proposal",
   "agent_hitl_screen",
+  "publish_decision",
 ] as const;
 
 export type LifecycleCardKind = (typeof LIFECYCLE_CARD_KINDS)[number];
@@ -70,7 +75,7 @@ export type LifecycleCardKind = (typeof LIFECYCLE_CARD_KINDS)[number];
 // ---------------------------------------------------------------------------
 
 /**
- * The five moments a run can reach, as a closed set.
+ * The six moments a run can reach, as a closed set.
  *
  *   recommendation — before the run, a person is present, and the agent has
  *                    skills to recommend. Decided by the policy.
@@ -85,8 +90,11 @@ export type LifecycleCardKind = (typeof LIFECYCLE_CARD_KINDS)[number];
  *   audit          — after a change lands on reviewed work. Decided by the
  *                    policy. THE ONE MOMENT THAT DOES NOT PARK THE RUN: it
  *                    records and signals its reading, and the run goes on.
+ *   publish        — during the run, in front of a step the agent declares as
+ *                    publishing (cinatra#4150). Decided by the declaration: the
+ *                    run waits on its publish decision. No policy.
  *
- * The policy table keeps its own three checkpoints unchanged; two of these five
+ * The policy table keeps its own three checkpoints unchanged; three of these six
  * moments are simply not policy matters.
  */
 export const LIFECYCLE_MOMENTS = [
@@ -95,6 +103,7 @@ export const LIFECYCLE_MOMENTS = [
   "hitl",
   "review",
   "audit",
+  "publish",
 ] as const;
 
 export type LifecycleMoment = (typeof LIFECYCLE_MOMENTS)[number];
@@ -117,12 +126,13 @@ export const LIFECYCLE_MOMENT_CARD_KIND = {
   hitl: "agent_hitl_screen",
   review: "artifact_review_gate",
   audit: "verification_summary",
+  publish: "publish_decision",
 } as const satisfies Record<LifecycleMoment, LifecycleCardKind>;
 
 /**
  * Does this moment PARK the run?
  *
- * Four of the five do. The audit is a READING: it is recorded and signalled and
+ * Five of the six do. The audit is a READING: it is recorded and signalled and
  * the run continues, so a caller that parks on it would stall a run nobody is
  * waiting for. Stated once, here, so no surface has to remember the exception.
  */
@@ -256,6 +266,9 @@ export const LIFECYCLE_CARD_CARRIAGE = {
   // data-part view type and therefore no resolve envelope. Its truth is the
   // run's own stated moment.
   agent_hitl_screen: { canonical: "run_state", represent: "interrupt" },
+  // `publish_decision` (cinatra#4150) is an INTERRUPT for the same reason: the run is stopped in front of its
+  // publishing step until a person answers, and its truth is the run's own decision record.
+  publish_decision: { canonical: "run_state", represent: "interrupt" },
 } as const satisfies Record<LifecycleCardKind, LifecycleCardCarriageRow>;
 
 /** Which fact decides a card is live. */
@@ -2307,6 +2320,8 @@ export const LIFECYCLE_INTERRUPT_RENDERER_IDS = {
   // pattern-matching a task-id prefix; the card W3 (cinatra#2930) mounts on it
   // is not part of this slice.
   agent_hitl_screen: "@cinatra-ai/lifecycle:agent-hitl-screen",
+  // cinatra#4150 — the publish card's own namespaced id, the same shape as the two above.
+  publish_decision: "@cinatra-ai/lifecycle:publish-decision",
 } as const satisfies Record<LifecycleInterruptKind, string>;
 
 /**

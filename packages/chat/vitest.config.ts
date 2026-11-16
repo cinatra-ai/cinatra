@@ -99,6 +99,11 @@ export default defineConfig({
         root,
         "packages/agents/src/agent-hitl-screen-card.tsx",
       ),
+      // cinatra#4150 -- the publish card, mounted beside it. Subpath alias, above the bare entry.
+      "@cinatra-ai/agents/publish-decision-card-view": path.join(
+        root,
+        "packages/agents/src/publish-decision-card-view.tsx",
+      ),
       "@cinatra-ai/agents/agent-hitl-screen": path.join(
         root,
         "packages/agents/src/agent-hitl-screen.ts",

@@ -27,11 +27,24 @@
 // set: a job or kit that ran the sync sets it, and then a missing tree FAILS
 // the case instead of skipping it, so the guard cannot pass vacuously.
 //
-// ORDER: while a pack declares the flag and still declares its renderer, the
-// renderer kinds `linkedin-draft-review` (register-default-renderers.ts:188) and
-// `wordpress-draft-confirm` (:233) are named in product code and this test goes
-// red. The pack changes delete those renderers in the same pack PRs, and the
-// core lock bump must drop the two keys with them.
+// THE HOST KIND TABLE: a renderer kind is the host's own vocabulary. The kind
+// table in packages/agents/src/register-default-renderers.ts (RENDERER_KIND_TABLE)
+// names every kind once, as a key, and a test keeps its keys set-equal with
+// KNOWN_FIELD_RENDERER_KINDS (scripts/extensions/agent-binding-kinds.mjs). A
+// publish pack may keep declaring a former screen id on one of those kinds, for
+// a run that paused there before the pack declared its publishing step, so a
+// table KEY is not a crossing. Only the key is exempt, only in that file, and
+// only while the keys and the vocabulary are set-equal: the same kind anywhere
+// else, and a pack name or renderer id anywhere, still is a crossing.
+//
+// How the two are read (kindTableKeysFrom): both sources with their comments
+// masked and the content of their strings blanked, so a commented-out or quoted
+// declaration is never the declaration; a key is a top-level key only at brace
+// depth 1 of the table object, never a nested property that happens to sit at
+// the same indentation; and each declaration must be found exactly once, or the
+// test FAILS (it never falls back to an empty or a guessed reading). A table that
+// holds a regular expression or a template placeholder is refused the same way,
+// because the walk cannot see through either.
 
 import { afterEach, describe, expect, it } from "vitest";
 import * as path from "node:path";
@@ -141,17 +154,136 @@ export function namesOf(packs: PublishPack[]): { name: string; what: string; re:
 
 export type Hit = { file: string; line: number; what: string };
 
+const KIND_TABLE_FILE = "packages/agents/src/register-default-renderers.ts";
+const KIND_VOCABULARY_FILE = "scripts/extensions/agent-binding-kinds.mjs";
+
+/**
+ * `text` (comments already masked) with the CONTENT of every string and template literal blanked: the quotes,
+ * every offset and every newline stay, so a brace, a bracket or a declaration spelled inside a string is never
+ * read as code. An unterminated string ends at its line.
+ */
+function blankStrings(text: string): string {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    out += ch;
+    i += 1;
+    if (ch !== '"' && ch !== "'" && ch !== "`") continue;
+    const quote = ch;
+    while (i < text.length && text[i] !== quote && (text[i] !== "\n" || quote === "`")) {
+      const width = text[i] === "\\" ? 2 : 1;
+      out += text.slice(i, i + width).replace(/[^\n]/g, " ");
+      i += width;
+    }
+    if (text[i] === quote) {
+      out += quote;
+      i += 1;
+    }
+  }
+  return out;
+}
+
+/** A source as the kind table reader sees it: `text` has its comments masked, `code` also has its strings blanked. */
+type Code = { text: string; code: string };
+const codeOf = (source: string): Code => {
+  const text = gate.maskComments(source);
+  return { text, code: blankStrings(text) };
+};
+
+/** The one match of `re` (global) in a source's code; any other count is a test failure, never a guess. */
+function onlyMatch(src: Code, re: RegExp, what: string): RegExpMatchArray {
+  const all = [...src.code.matchAll(re)];
+  if (all.length !== 1) throw new Error(`expected exactly one ${what} outside comments and strings, found ${all.length}`);
+  return all[0];
+}
+
+/**
+ * The lines of the host kind table that hold a top-level key, with that key: line number (1-based, of the
+ * comment-masked file) to kind, from the text of the table file and of the vocabulary file. A key counts only at
+ * brace depth 1 of the table object. Null when the keys are not set-equal with KNOWN_FIELD_RENDERER_KINDS, so the
+ * exemption fails closed; throws when a declaration is not found exactly once, or the table or the vocabulary
+ * cannot be read as plain literals.
+ */
+export function kindTableKeysFrom(tableSource: string, vocabularySource: string): Map<number, string> | null {
+  const table = codeOf(tableSource);
+  const declaration = onlyMatch(table, /\bconst\s+RENDERER_KIND_TABLE\b/g, `const RENDERER_KIND_TABLE in ${KIND_TABLE_FILE}`);
+  const assignment = /=\s*\{/g;
+  assignment.lastIndex = declaration.index ?? 0;
+  const opened = assignment.exec(table.code);
+  if (!opened) throw new Error(`RENDERER_KIND_TABLE in ${KIND_TABLE_FILE} is not assigned an object literal`);
+  const open = opened.index + opened[0].length - 1;
+  const keys = new Map<number, string>();
+  let depth = 0;
+  let line = table.text.slice(0, open).split("\n").length;
+  let close = -1;
+  for (let i = open; i < table.code.length && close < 0; i += 1) {
+    const c = table.code[i];
+    if (c === "{") depth += 1;
+    else if (c === "}") {
+      depth -= 1;
+      if (depth === 0) close = i;
+    } else if (c === "\n") {
+      line += 1;
+      if (depth === 1) {
+        const end = table.text.indexOf("\n", i + 1);
+        const m = /^\s*("?)([a-z][a-z0-9-]*)\1\s*:\s*\{/.exec(table.text.slice(i + 1, end < 0 ? undefined : end));
+        if (m) keys.set(line, m[2]);
+      }
+    }
+  }
+  if (close < 0) throw new Error(`the RENDERER_KIND_TABLE object literal in ${KIND_TABLE_FILE} is not closed`);
+  // A regular expression or a template placeholder can hide a brace or a quote from the walk above, so a table that holds one is refused.
+  if (table.code.slice(open, close).includes("/") || table.text.slice(open, close).includes("${")) {
+    throw new Error(`the RENDERER_KIND_TABLE object literal in ${KIND_TABLE_FILE} holds a regular expression or a template placeholder, which this reader does not parse`);
+  }
+
+  const vocabulary = codeOf(vocabularySource);
+  const exported = onlyMatch(
+    vocabulary,
+    /\bexport\s+const\s+KNOWN_FIELD_RENDERER_KINDS\s*=\s*Object\s*\.\s*freeze\s*\(\s*\[/g,
+    `exported KNOWN_FIELD_RENDERER_KINDS in ${KIND_VOCABULARY_FILE}`,
+  );
+  const from = (exported.index ?? 0) + exported[0].length;
+  const to = vocabulary.code.indexOf("]", from);
+  if (to < 0) throw new Error(`KNOWN_FIELD_RENDERER_KINDS in ${KIND_VOCABULARY_FILE} is not closed`);
+  if (vocabulary.code.slice(from, to).replace(/"\s*"/g, "").replace(/[\s,]/g, "") !== "") {
+    throw new Error(`KNOWN_FIELD_RENDERER_KINDS in ${KIND_VOCABULARY_FILE} holds something other than double-quoted string literals`);
+  }
+  const known = [...vocabulary.text.slice(from, to).matchAll(/"([^"]*)"/g)].map((m) => m[1]).sort();
+  const tableKinds = [...keys.values()].sort();
+  if (known.length === 0 || JSON.stringify(known) !== JSON.stringify(tableKinds)) return null;
+  return keys;
+}
+
+/** The same, from the two files under `root`; null when either file is missing (a tree without the host's table). */
+export function kindTableKeys(root: string): Map<number, string> | null {
+  const tableFile = path.join(root, KIND_TABLE_FILE);
+  const vocabFile = path.join(root, KIND_VOCABULARY_FILE);
+  if (!existsSync(tableFile) || !existsSync(vocabFile)) return null;
+  return kindTableKeysFrom(readFileSync(tableFile, "utf8"), readFileSync(vocabFile, "utf8"));
+}
+
 /** Scan the gate's product roots under `root` for the names; comments are masked first. */
 export function scanProductFor(root: string, packs: PublishPack[]): Hit[] {
   const names = namesOf(packs);
+  const tableKeys = kindTableKeys(root);
   const hits: Hit[] = [];
   for (const productRoot of gate.PRODUCT_ROOTS) {
     for (const file of gate.walkProductFiles(path.join(root, productRoot), [], root)) {
+      const rel = path.relative(root, file).split(path.sep).join("/");
       const text = gate.maskComments(readFileSync(file, "utf8"));
       const lines = text.split("\n");
       for (const n of names) {
         lines.forEach((l, i) => {
-          if (n.re.test(l)) hits.push({ file: path.relative(root, file).split(path.sep).join("/"), line: i + 1, what: n.what });
+          if (!n.re.test(l)) return;
+          // The host kind table's own key: the kind, once, as the key of that line, and nowhere else on it.
+          const isTableKey =
+            n.what.startsWith("renderer kind of ") &&
+            rel === KIND_TABLE_FILE &&
+            tableKeys?.get(i + 1) === n.name &&
+            !n.re.test(l.replace(n.name, ""));
+          if (!isTableKey) hits.push({ file: rel, line: i + 1, what: n.what });
         });
       }
     }
@@ -246,6 +378,56 @@ describe("A15 fixtures: each kind of name is found, each exclusion stays silent"
     expect(scanProductFor(root, publishPacksOf(root))).toEqual([]);
   });
 
+  // The host kind table (register-default-renderers.ts) and its vocabulary, as a fixture lays them out.
+  function kindTable(root: string, keys: string[], vocabulary: string[], extra = "") {
+    put(
+      root,
+      "packages/agents/src/register-default-renderers.ts",
+      "const RENDERER_KIND_TABLE: Record<\n  string,\n  { renderer: unknown }\n> = {\n" +
+        keys.map((k) => `  ${JSON.stringify(k)}: { renderer: Floor },\n`).join("") +
+        "};\n" +
+        extra,
+    );
+    put(
+      root,
+      "scripts/extensions/agent-binding-kinds.mjs",
+      `export const KNOWN_FIELD_RENDERER_KINDS = Object.freeze([\n${vocabulary.map((k) => `  ${JSON.stringify(k)},\n`).join("")}]);\n`,
+    );
+  }
+
+  it("the host kind table's own key is not a crossing; the same kind elsewhere in that file and in another file is", () => {
+    const root = fixtureRoot({ publishes: true });
+    kindTable(root, ["demo-confirm-card", "other-kind"], ["other-kind", "demo-confirm-card"], 'export const elsewhere = "demo-confirm-card";\n');
+    put(root, "src/lib/planted.ts", 'export const k = { "demo-confirm-card": 1 };\n');
+    const hits = scanProductFor(root, publishPacksOf(root));
+    expect(hits.map((h) => `${h.file}:${h.line} ${h.what}`).sort()).toEqual([
+      "packages/agents/src/register-default-renderers.ts:8 renderer kind of @cinatra-ai/demo-publish-agent",
+      "src/lib/planted.ts:1 renderer kind of @cinatra-ai/demo-publish-agent",
+    ]);
+  });
+
+  it("the table key is a crossing again when the table and the vocabulary are not set-equal", () => {
+    const root = fixtureRoot({ publishes: true });
+    kindTable(root, ["demo-confirm-card", "other-kind"], ["other-kind"]);
+    const hits = scanProductFor(root, publishPacksOf(root));
+    expect(hits.map((h) => `${h.file}:${h.line} ${h.what}`)).toEqual([
+      "packages/agents/src/register-default-renderers.ts:5 renderer kind of @cinatra-ai/demo-publish-agent",
+    ]);
+  });
+
+  it("a pack name or renderer id in the kind table file is still a crossing, and so is a table key in another file", () => {
+    const root = fixtureRoot({ publishes: true });
+    kindTable(root, ["demo-confirm-card"], ["demo-confirm-card"], 'export const id = "@cinatra-ai/demo-publish-agent:confirm-card";\n');
+    put(root, "packages/other/src/register-default-renderers.ts", 'const RENDERER_KIND_TABLE = {\n  "demo-confirm-card": { renderer: Floor },\n};\n');
+    const hits = scanProductFor(root, publishPacksOf(root)).map((h) => `${h.file}:${h.line} ${h.what}`);
+    expect(hits).toContain("packages/agents/src/register-default-renderers.ts:7 package name of @cinatra-ai/demo-publish-agent");
+    expect(hits).toContain("packages/agents/src/register-default-renderers.ts:7 renderer id of @cinatra-ai/demo-publish-agent");
+    expect(hits).toContain("packages/other/src/register-default-renderers.ts:2 renderer kind of @cinatra-ai/demo-publish-agent");
+    expect(hits.filter((h) => h.endsWith("renderer kind of @cinatra-ai/demo-publish-agent"))).toEqual([
+      "packages/other/src/register-default-renderers.ts:2 renderer kind of @cinatra-ai/demo-publish-agent",
+    ]);
+  });
+
   it("a top-level publishes key is not the flag: only metadata.cinatra.publishes counts", () => {
     const root = fixtureRoot({ publishes: false });
     put(
@@ -274,6 +456,131 @@ describe("A15 fixtures: each kind of name is found, each exclusion stays silent"
       rendererIds: ["@cinatra-ai/demo-publish-agent:confirm-card"],
       rendererKinds: ["demo-confirm-card"],
     });
+  });
+});
+
+describe("A15 kind table reader: top-level keys only, real declarations only, each exactly once", () => {
+  const vocabOf = (kinds: string[], before = "") =>
+    `${before}export const KNOWN_FIELD_RENDERER_KINDS = Object.freeze([\n${kinds.map((k) => `  ${JSON.stringify(k)},\n`).join("")}]);\n`;
+  const tableOf = (kinds: string[], before = "") =>
+    `${before}const RENDERER_KIND_TABLE = {\n${kinds.map((k) => `  ${JSON.stringify(k)}: { renderer: Floor },\n`).join("")}};\n`;
+  const crossing = (line: number) => `${KIND_TABLE_FILE}:${line} renderer kind of @cinatra-ai/demo-publish-agent`;
+  // The two sources laid into a fixture tree, then scanned: the crossings the scan reports.
+  const scanWith = (tableSource: string, vocabularySource: string) => {
+    const root = fixtureRoot({ publishes: true });
+    put(root, KIND_TABLE_FILE, tableSource);
+    put(root, KIND_VOCABULARY_FILE, vocabularySource);
+    return scanProductFor(root, publishPacksOf(root)).map((h) => `${h.file}:${h.line} ${h.what}`);
+  };
+
+  // The pack's kind is only a NESTED property (line 5), written at the indentation of a top-level key.
+  const NESTED = [
+    "const RENDERER_KIND_TABLE = {",
+    '  "other-kind": {',
+    "    renderer: Floor,",
+    "    params: {",
+    '  "demo-confirm-card": { renderer: Floor },',
+    "    },",
+    "  },",
+    '  "second-kind": { renderer: Floor },',
+    "};",
+    "",
+  ].join("\n");
+
+  it("a nested property at the indentation of a key is not a top-level key", () => {
+    const keys = kindTableKeysFrom(NESTED, vocabOf(["other-kind", "second-kind"]));
+    expect(keys && [...keys]).toEqual([
+      [2, "other-kind"],
+      [8, "second-kind"],
+    ]);
+  });
+
+  it("a kind that is only a nested property is not in the table, even when the vocabulary lists it", () => {
+    const vocabulary = vocabOf(["demo-confirm-card", "other-kind", "second-kind"]);
+    expect(kindTableKeysFrom(NESTED, vocabulary)).toBeNull();
+    expect(scanWith(NESTED, vocabulary)).toEqual([crossing(5)]);
+  });
+
+  const STALE_VOCABULARIES: [string, string][] = [
+    ["a line comment", '// export const KNOWN_FIELD_RENDERER_KINDS = Object.freeze(["demo-confirm-card", "other-kind"]);\n'],
+    ["a block comment", '/*\nexport const KNOWN_FIELD_RENDERER_KINDS = Object.freeze([\n  "demo-confirm-card",\n  "other-kind",\n]);\n*/\n'],
+  ];
+  for (const [label, stale] of STALE_VOCABULARIES) {
+    it(`a stale vocabulary in ${label} does not stand in for the real export`, () => {
+      const table = tableOf(["demo-confirm-card", "other-kind"]);
+      const vocabulary = vocabOf(["other-kind"], stale); // the real export lists one kind only
+      expect(kindTableKeysFrom(table, vocabulary)).toBeNull();
+      expect(scanWith(table, vocabulary)).toEqual([crossing(2)]);
+    });
+  }
+
+  it("the real export is the one read, whatever a stale comment lists", () => {
+    const stale = '// export const KNOWN_FIELD_RENDERER_KINDS = Object.freeze(["other-kind"]);\n';
+    const keys = kindTableKeysFrom(tableOf(["demo-confirm-card", "other-kind"]), vocabOf(["demo-confirm-card", "other-kind"], stale));
+    expect(keys && [...keys.values()].sort()).toEqual(["demo-confirm-card", "other-kind"]);
+  });
+
+  it("a commented-out or quoted table declaration is not the table", () => {
+    const stale = '// const RENDERER_KIND_TABLE = {\n//   "stale-kind": { renderer: Floor },\n// };\nconst note = "const RENDERER_KIND_TABLE = {";\n';
+    const keys = kindTableKeysFrom(tableOf(["other-kind"], stale), vocabOf(["other-kind"]));
+    expect(keys && [...keys]).toEqual([[6, "other-kind"]]);
+  });
+
+  // A brace and a quote inside strings, and a template that spans two lines, hold braces that are not code.
+  const STRINGY = [
+    "const RENDERER_KIND_TABLE = {",
+    '  "other-kind": { renderer: Floor, note: "} \\" {", also: \'}\' },',
+    '  "second-kind": { renderer: Floor, note: `}',
+    '  "third-kind": { x: 1 }` },',
+    '  "fourth-kind": { renderer: Floor },',
+    "};",
+    "",
+  ].join("\n");
+
+  it("a brace or a quote inside a string does not move the depth", () => {
+    const keys = kindTableKeysFrom(STRINGY, vocabOf(["other-kind", "second-kind", "fourth-kind"]));
+    expect(keys && [...keys]).toEqual([
+      [2, "other-kind"],
+      [3, "second-kind"],
+      [5, "fourth-kind"],
+    ]);
+  });
+
+  const UNREADABLE: [string, string, string, RegExp][] = [
+    ["no table declaration", "export const unrelated = 1;\n", vocabOf(["a-kind"]), /exactly one const RENDERER_KIND_TABLE.*found 0/],
+    ["a table declared only in a comment", '// const RENDERER_KIND_TABLE = {\n//   "a-kind": { renderer: Floor },\n// };\n', vocabOf(["a-kind"]), /RENDERER_KIND_TABLE.*found 0/],
+    ["two table declarations", tableOf(["a-kind"]) + tableOf(["a-kind"]), vocabOf(["a-kind"]), /RENDERER_KIND_TABLE.*found 2/],
+    ["a table that is never closed", 'const RENDERER_KIND_TABLE = {\n  "a-kind": { renderer: Floor },\n', vocabOf(["a-kind"]), /RENDERER_KIND_TABLE.*not closed/],
+    ["a table that holds a regular expression", 'const RENDERER_KIND_TABLE = {\n  "a-kind": { renderer: Floor, match: /x}/ },\n};\n', vocabOf(["a-kind"]), /does not parse/],
+    ["a table that holds a regular expression with a quote", 'const RENDERER_KIND_TABLE = {\n  "a-kind": { renderer: Floor, match: /"{/ },\n};\n', vocabOf(["a-kind"]), /does not parse|is not closed/],
+    ["a table that holds a template placeholder", 'const RENDERER_KIND_TABLE = {\n  "a-kind": { renderer: Floor, note: `${x}` },\n};\n', vocabOf(["a-kind"]), /does not parse/],
+    ["no vocabulary export", tableOf(["a-kind"]), "export const KNOWN_A2UI_TRANSLATOR_KINDS = Object.freeze([]);\n", /exactly one exported KNOWN_FIELD_RENDERER_KINDS.*found 0/],
+    ["a vocabulary that is not exported", tableOf(["a-kind"]), 'const KNOWN_FIELD_RENDERER_KINDS = Object.freeze(["a-kind"]);\n', /KNOWN_FIELD_RENDERER_KINDS.*found 0/],
+    ["a vocabulary declared only in a comment", tableOf(["a-kind"]), '// export const KNOWN_FIELD_RENDERER_KINDS = Object.freeze(["a-kind"]);\n', /KNOWN_FIELD_RENDERER_KINDS.*found 0/],
+    ["two vocabulary exports", tableOf(["a-kind"]), vocabOf(["a-kind"]) + vocabOf(["a-kind"]), /KNOWN_FIELD_RENDERER_KINDS.*found 2/],
+    ["a vocabulary that spreads another list", tableOf(["a-kind"]), 'export const KNOWN_FIELD_RENDERER_KINDS = Object.freeze(["a-kind", ...OTHER]);\n', /other than double-quoted string literals/],
+  ];
+  for (const [label, table, vocabulary, message] of UNREADABLE) {
+    it(`fails the test (throws) for ${label}`, () => {
+      expect(() => kindTableKeysFrom(table, vocabulary)).toThrow(message);
+    });
+  }
+
+  it("a scan throws when the table file is there but its declaration is not", () => {
+    const root = fixtureRoot({ publishes: true });
+    put(root, KIND_TABLE_FILE, "export const nothing = 1;\n");
+    put(root, KIND_VOCABULARY_FILE, vocabOf(["a-kind"]));
+    expect(() => scanProductFor(root, publishPacksOf(root))).toThrow(/RENDERER_KIND_TABLE.*found 0/);
+  });
+});
+
+describe("A15 host kind table: the real files", () => {
+  it("each declaration is found exactly once, and the top-level keys are set-equal with the vocabulary", () => {
+    const keys = kindTableKeys(REPO_ROOT);
+    expect(keys, `${KIND_TABLE_FILE} or ${KIND_VOCABULARY_FILE} is missing, or the table keys are not the vocabulary`).not.toBeNull();
+    const lines = readFileSync(path.join(REPO_ROOT, KIND_TABLE_FILE), "utf8").split("\n");
+    expect(keys?.size).toBeGreaterThan(0);
+    for (const [line, kind] of keys ?? []) expect(lines[line - 1]).toContain(kind);
   });
 });
 

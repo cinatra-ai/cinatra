@@ -440,6 +440,10 @@ export function injectionForTurn(
 export const lifecycleRunOutbox: LifecyclePartOutbox = {
   async onMomentOpened(entry: LifecycleMomentOpened): Promise<void> {
     try {
+      // NOTHING TO WRITE, NOTHING TO READ (cinatra#4150 part 7b). A kind this writer adds no part for (an interrupt
+      // kind: the HITL screen, the recommendation hold, the publish card) is refused before the store is read, so
+      // feeding such a moment costs no lookup, and a slow store never holds the road that stated it.
+      if (buildInjectedLifecyclePart(entry) === null) return;
       const turn = findAssistantTurnForAgentRun(entry.runId);
       // Not playing out in a conversation — a schedule firing, another agent, an
       // outside system. The ordinary case, and nothing is owed.

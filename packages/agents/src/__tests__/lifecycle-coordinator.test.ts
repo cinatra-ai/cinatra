@@ -175,7 +175,13 @@ describe("the five moments", () => {
 
   it("park the run — except the audit, which is a reading", () => {
     const parking = LIFECYCLE_MOMENTS.filter((m: LifecycleMoment) => lifecycleMomentParksRun(m));
-    expect([...parking].sort()).toEqual(["hitl", "recommendation", "review", "schedule"]);
+    expect([...parking].sort()).toEqual(["hitl", "publish", "recommendation", "review", "schedule"]);
     expect(lifecycleMomentParksRun("audit")).toBe(false);
+  });
+
+  it("cinatra#4150: the sixth moment is publish, it mounts the publish card, and it parks the run", () => {
+    expect([...LIFECYCLE_MOMENTS]).toEqual(["recommendation", "schedule", "hitl", "review", "audit", "publish"]);
+    expect(cardKindForMoment("publish" as LifecycleMoment)).toBe("publish_decision");
+    expect(lifecycleMomentParksRun("publish" as LifecycleMoment)).toBe(true);
   });
 });

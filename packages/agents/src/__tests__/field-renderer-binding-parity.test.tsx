@@ -34,6 +34,7 @@ import { CtaRenderer } from "../cta-renderer";
 import { SchemaOnlyFloorRenderer } from "../schema-field-renderer";
 import { GroupedSetupFormRenderer } from "../grouped-setup-form-renderer";
 import { classifyMidRunHitl, hasMidRunHitlBinding } from "../orchestrator-mid-run-hitl";
+import { hasFieldRendererComponent } from "../field-renderer-components";
 
 // Gmail context: the gmail-sender condition is context-gated (gmail
 // connected + aliases present) — the gating itself is pinned separately
@@ -72,9 +73,11 @@ const PARITY_TABLE: ReadonlyArray<
   ["@cinatra-ai/context-selection-agent:context-selector", ContextSelectorRenderer as never, 90],
   ["context-selector", ContextSelectorRenderer as never, 90],
   // MIGRATED field-renderer COMPONENTS (cinatra#1625 S8/M3): list-curator's
-  // scrape-schema-review + final-list-review (→ @cinatra-ai/list-curator-agent),
-  // blog-linkedin's draft-review (→ @cinatra-ai/blog-linkedin-publish-agent) and
-  // blog-wordpress's draft-confirm (→ @cinatra-ai/blog-wordpress-publish-agent).
+  // scrape-schema-review + final-list-review (→ @cinatra-ai/list-curator-agent).
+  // (blog-linkedin's draft-review and blog-wordpress's draft-confirm migrated the
+  // same way; their components left with the packs' own confirmation screens,
+  // cinatra#4150. Each pack keeps its former id without a component, so it
+  // resolves to the schema floor — asserted in the former-screen case below.)
   // Their ids now resolve to the ExtensionFieldRenderer wrapper (still priority
   // 90, same strict-id condition) — asserted in the dedicated migrated-binding
   // block below, not in this frozen host-component table.
@@ -172,8 +175,6 @@ describe("resolution parity with the retired hand map", () => {
   it.each([
     ["@cinatra-ai/list-curator-agent:scrape-schema-review", 90],
     ["@cinatra-ai/list-curator-agent:final-list-review", 90],
-    ["@cinatra-ai/blog-linkedin-publish-agent:draft-review", 90],
-    ["@cinatra-ai/blog-wordpress-publish-agent:draft-confirm", 90],
     // follow-up-cadence relocated into @cinatra-ai/email-artifacts
     // (cinatra#1625): BOTH scoped ids load the same pack component, priority 90.
     ["@cinatra-ai/email-follow-up-agent:follow-up-cadence", 90],
@@ -318,6 +319,32 @@ describe("resolution parity with the retired hand map", () => {
   });
 
 
+  it("cinatra#4150: a run paused at a publish pack's former screen still resolves to the schema floor with Continue", () => {
+    // The packs now declare their publishing step and the application asks on
+    // its own publish card, so neither pack ships a screen component. Each
+    // keeps declaring its former screen id, midRunHitl and without a component,
+    // so a run that paused there before the upgrade (its stored question keeps
+    // that id) resolves to the host's schema floor, which draws its own
+    // Continue, and is read as a mid-run step (the stepper's outer Continue).
+    const FORMER_SCREENS = [
+      { id: "@cinatra-ai/blog-linkedin-publish-agent:draft-review", kind: "linkedin-draft-review", declaredBy: "@cinatra-ai/blog-linkedin-publish-agent" },
+      { id: "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm", kind: "wordpress-draft-confirm", declaredBy: "@cinatra-ai/blog-wordpress-publish-agent" },
+    ];
+    for (const s of FORMER_SCREENS) {
+      expect(
+        GENERATED_FIELD_RENDERER_BINDINGS.filter((b) => b.id === s.id),
+        s.id,
+      ).toEqual([{ id: s.id, kind: s.kind, priority: 90, midRunHitl: true, declaredBy: s.declaredBy }]);
+      expect(hasFieldRendererComponent(s.id), `${s.id} ships no component`).toBe(false);
+      const entry = resolveWith(s.id);
+      expect(entry?.id, s.id).toBe(s.id);
+      expect(entry?.renderer, s.id).toBe(SchemaOnlyFloorRenderer);
+      expect(entry?.drawsOwnSubmit, `${s.id} draws its own Continue`).toBe(true);
+      expect(hasMidRunHitlBinding(s.id), s.id).toBe(true);
+      expect(classifyMidRunHitl(s.id), s.id).toBe(true);
+    }
+  });
+
   it("an unknown namespaced id resolves to NO custom entry (schema-fallback path)", () => {
     expect(resolveWith("@cinatra-ai/unknown-agent:whatever")).toBeNull();
   });
@@ -370,8 +397,6 @@ describe("the idea step's binding holds its Continue until a pick", () => {
 
 describe("mid-run HITL classification parity", () => {
   it.each([
-    "@cinatra-ai/blog-linkedin-publish-agent:draft-review",
-    "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm",
     "@cinatra-ai/context-selection-agent:context-selector",
     // cinatra#1959: the pack-served re-entrant drafts / follow-ups gates carry
     // midRunHitl:true in the merged bindings (email-artifacts declares it), so the

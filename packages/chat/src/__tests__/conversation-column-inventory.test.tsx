@@ -100,6 +100,9 @@ const hitlScreenStateMock = vi.fn(async () => ({ state: "none" }) as Record<stri
 vi.mock("../../../agents/src/agent-hitl-screen-actions", () => ({
   getAgentHitlScreenStateAction: () => hitlScreenStateMock(),
 }));
+vi.mock("../../../agents/src/publish-decision-card-actions", () => ({
+  getPublishDecisionCardStateAction: async () => ({ state: "none" }),
+}));
 vi.mock("../../../agents/src/hitl-actions", () => ({
   approveReviewTask: vi.fn(async () => undefined),
   rejectReviewTask: vi.fn(async () => undefined),

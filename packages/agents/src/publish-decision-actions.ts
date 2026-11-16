@@ -60,6 +60,17 @@ const isStale = (err: unknown): boolean =>
 const LOGGED_ERROR_NAMES = new Set(["Error", "TypeError", "RangeError", "SyntaxError", "AbortError", "TimeoutError", "AuthzError"]);
 const nameOf = (err: unknown): string => (err instanceof Error ? (LOGGED_ERROR_NAMES.has(err.name) ? err.name : "Error") : "error");
 
+/** The run's publish moment, which the coordinator alone states and clears (part 7a-2). Loaded at the call and
+ *  best-effort: a lifecycle record never fails or changes a decision, and the decision row alone holds the run. The
+ *  coordinator throws its failures here, the one place they are logged: by a fixed error name, no id, no store text. */
+async function publishMoment(step: (c: typeof import("./lifecycle-coordinator")) => Promise<unknown>): Promise<void> {
+  try {
+    await step(await import("./lifecycle-coordinator"));
+  } catch (err) {
+    console.warn(`[publish-decision] the publish moment was not recorded: ${nameOf(err)}`);
+  }
+}
+
 /** Refuses a resume when the run's newest decision exists and is not `released`. A read error propagates. Answers
  *  whether the run has a (released) decision: such a run met a publish gate, so it can meet one again. */
 export async function assertNoOpenPublishDecision(runId: string): Promise<boolean> {
@@ -160,10 +171,11 @@ const opaque = (err: unknown): unknown => err instanceof AuthzError || STORE_COD
  * False: not a publish gate, the caller goes on as before. True: handled, the caller returns.
  *   - a verified `cinatra_publish_gate__<node>` claim (the prefix wins over the template's
  *     list): the row is written FIRST (a failure ends the run failed), then the run moves to
- *     pending_approval; a lost move closes the row run_ended;
+ *     pending_approval; a lost move closes the row run_ended; a run held on a parked row then
+ *     states the publish moment (onPublishGate);
  *   - a missing or unverified claim on a template that lists publishing steps, or an unverified publish-gate claim
  *     on a template that is not found or cannot be read: the run ends failed, publish_gate_unverified.
- * No renderer, no generic review task and no lifecycle moment is offered for a publish gate.
+ * No renderer and no generic review task is offered for a publish gate.
  */
 export async function holdRunAtPublishGate(args: {
   run: AgentRunRecord;
@@ -209,10 +221,12 @@ export async function holdRunAtPublishGate(args: {
     return true;
   }
   // A stop this gate task already answered is closed; the newest-decision rule keeps it closed.
-  if (park.decision.status !== "parked" || fromStatus === "pending_approval") return true;
-  if (!(await moveRun(run.id, fromStatus, "pending_approval", undefined, authority))) {
+  if (park.decision.status !== "parked") return true;
+  if (fromStatus !== "pending_approval" && !(await moveRun(run.id, fromStatus, "pending_approval", undefined, authority))) {
     await decide(park.decision.id, { from: "parked", to: "run_ended", actor: null });
+    return true;
   }
+  await publishMoment((c) => c.onPublishGate({ run, decisionId: park.decision.id, authority }));
   return true;
 }
 
@@ -220,17 +234,45 @@ export type PublishDecisionAnswer =
   | { ok: true; runStopped: boolean }
   | { ok: false; code: typeof PUBLISH_DECISION_NOT_OPEN; currentStatus: PublishDecisionStatus | null };
 
-type DecideInput = { runId: string; actorContext: PrimitiveActorContext; roleHints?: ActorRoleHints };
+/**
+ * THE WIDGET PUBLISH GRANT (cinatra#4150 part 7a-3b). The site widget's person proves itself with its own `cwu_`, which
+ * the widget routes consume at their audience; the actor they build is a human of source "a2a", the same shape the MCP
+ * frame entry builds. So the actor alone never admits a widget decider: the decision needs this grant too, which only
+ * mintWidgetPublishDecideGrant makes (a module-held set, so a plain object is no grant), for ONE run, ONE person and
+ * ONE org, and only from claims that carry the existing `lifecycle.decide` scope.
+ */
+export type WidgetPublishDecideGrant = Readonly<{ runId: string; userId: string; orgId: string }>;
+const WIDGET_PUBLISH_GRANTS = new WeakSet<WidgetPublishDecideGrant>();
+
+/** Called only by the widget publish routes, with the claims of a `cwu_` they consumed. Null without the decide scope. */
+export function mintWidgetPublishDecideGrant(
+  claims: { userId: string; orgId: string; grantedScopes: readonly string[] },
+  runId: string,
+): WidgetPublishDecideGrant | null {
+  if (!claims.userId || !claims.orgId || typeof runId !== "string" || runId.length === 0) return null;
+  if (!Array.isArray(claims.grantedScopes) || !claims.grantedScopes.includes("lifecycle.decide")) return null;
+  const grant: WidgetPublishDecideGrant = Object.freeze({ runId, userId: claims.userId, orgId: claims.orgId });
+  WIDGET_PUBLISH_GRANTS.add(grant);
+  return grant;
+}
+
+type DecideInput = { runId: string; actorContext: PrimitiveActorContext; roleHints?: ActorRoleHints; widgetGrant?: WidgetPublishDecideGrant };
 const forbidden = (message: string) => new AuthzError({ statusCode: 403, reason: "forbidden", message });
 /**
- * Who counts as a person for Publish and Do not publish: a human actor that reached the product through its own UI or a
- * session route (source "ui" or "route"), carrying no token scopes, with a user id and no delegated agent ceiling. Every
- * other actor is refused: an A2A, MCP, worker, scheduler or agent source (the header-built human of the passthrough road
- * included), and any token-scoped actor. Local to the publish decision; the other human-only gates keep their own rules.
+ * Who counts as a person for Publish and Do not publish: a human actor with no token scopes, a user id and no delegated
+ * agent ceiling, that reached the product either through its own UI or a session route (source "ui" or "route"), or
+ * through the site widget (source "a2a") WITH a widget publish grant minted for this run, this person and the actor's
+ * org. Every other actor is refused: an A2A or MCP frame actor without that grant, a worker, scheduler or agent source
+ * (the header-built human of the passthrough road included), and any token-scoped actor. Local to the publish decision.
  */
-function isPublishDecider(actor: PrimitiveActorContext | null | undefined): actor is PrimitiveActorContext & { userId: string } {
-  return actor?.actorType === "human" && (actor.source === "ui" || actor.source === "route") && actor.tokenScopes === undefined
-    && typeof actor.userId === "string" && actor.userId.length > 0 && !actor.oboCeiling;
+function isPublishDecider(input: DecideInput): boolean {
+  const actor = input.actorContext;
+  if (actor?.actorType !== "human" || actor.tokenScopes !== undefined || actor.oboCeiling) return false;
+  if (typeof actor.userId !== "string" || actor.userId.length === 0) return false;
+  if (actor.source === "ui" || actor.source === "route") return true;
+  const grant = input.widgetGrant;
+  return actor.source === "a2a" && grant !== undefined && WIDGET_PUBLISH_GRANTS.has(grant) && grant.runId === input.runId
+    && grant.userId === actor.userId && typeof actor.orgId === "string" && grant.orgId === actor.orgId;
 }
 
 /** A run that is not found, and a run the person may not see (outside its organization), answer the same. */
@@ -238,8 +280,9 @@ const hidden = () => new AuthzError({ statusCode: 404, reason: "hidden", message
 
 /**
  * Who may decide a publish, for Publish and Do not publish alike. The decider is ONE principal: the person of
- * `actorContext` (isPublishDecider: a human actor from the UI or a session route, with no token scopes, a user id and no
- * delegated agent ceiling; every other actor is refused before any read), and a member of the run's organization.
+ * `actorContext` (isPublishDecider: a human actor from the UI or a session route, or a site widget person holding a
+ * widget publish grant for this run, with no token scopes, a user id and no delegated agent ceiling; every other actor
+ * is refused before any read), and a member of the run's organization. A widget decider's run must be its own.
  *   - A run with a human owner: run.execute and run.approveHitl under the run's effective policy, as every gate decision.
  *   - A run with no human owner (runBy null, and only null): the policy's owner tier would refuse everyone, so the
  *     person's role in the run's organization is resolved first and both permissions are asked of the kernel for that
@@ -251,9 +294,11 @@ const hidden = () => new AuthzError({ statusCode: 404, reason: "hidden", message
  */
 export async function enforcePublishDecisionAccess(input: DecideInput): Promise<{ run: AgentRunRecord; deciderId: string; authority: OrgWriteAuthority }> {
   const actor = input.actorContext;
-  if (!isPublishDecider(actor)) throw forbidden("Only a person can decide a publish.");
-  const deciderId = actor.userId;
+  if (!isPublishDecider(input)) throw forbidden("Only a person can decide a publish.");
+  const deciderId = actor.userId as string;
   const run = await readAgentRunById(input.runId);
+  // A widget decider reaches only its OWN run (it started it) in the org its token is bound to, as every widget road.
+  if (input.widgetGrant && (!run || run.runBy !== deciderId || run.orgId !== input.widgetGrant.orgId)) throw hidden();
   const { enforceRunAccess, resolveEffectivePolicy } = await import("./auth-policy");
   const { resolveOrgRoleForUser } = await import("@/lib/auth-session");
   const notMember = hidden;
@@ -300,7 +345,9 @@ export async function declinePublishDecision(input: DecideInput & { note?: strin
     const answer = await decide(open.id, { from: "parked", to: "declined", actor: deciderId, note });
     if (answer.outcome === "lost") return { ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: answer.currentStatus };
     // false: the run is not waiting at the gate. A fault here, or a run still running, leaves the stop to the expiry pass.
-    return { ok: true, runStopped: await stopHeldRun(run.id, "pending_approval", authority) };
+    const runStopped = await stopHeldRun(run.id, "pending_approval", authority);
+    if (runStopped) await publishMoment((c) => c.clearPublishMoment({ run, whileStatus: "stopped", why: "declined", authority }));
+    return { ok: true, runStopped };
   } catch (err) {
     throw opaque(err);
   }
@@ -375,6 +422,9 @@ export async function approvePublishDecision(input: DecideInput): Promise<Publis
   } catch (err) {
     throw opaque(err);
   }
+  // Released under the claim: the publish moment ends here, BEFORE the send, because the send runs the resumed flow
+  // and parks it at its next gate itself, which may state a new publish moment that a later clear would take off.
+  await publishMoment((c) => c.clearPublishMoment({ run, whileStatus: "running", why: "publish_approved", authority }));
   let sent = false;
   try {
     const { sendWayflowResume } = await import("./review-task-actions");
@@ -462,7 +512,10 @@ export async function sweepExpiredPublishDecisions(opts: {
     if (answer.outcome === "lost") summary.lost += 1;
     else if (ended || !held || !run) summary.runEnded += 1;
     else {
-      await stopHeldRun(run.id, held, opts.authorityFor(run.orgId)); // a stale answer: the run left meanwhile
+      const authority = opts.authorityFor(run.orgId);
+      if (await stopHeldRun(run.id, held, authority)) { // false, a stale answer: the run left meanwhile
+        await publishMoment((c) => c.clearPublishMoment({ run, whileStatus: "stopped", why: "expired", authority }));
+      }
       summary.expired += 1;
     }
   });
@@ -473,7 +526,11 @@ export async function sweepExpiredPublishDecisions(opts: {
     if (!run || !held) return; // the run moved meanwhile
     const newest = await readLatestDecisionForRun(run.id);
     if (newest && newest.id !== row.id) return; // a newer decision governs the run
-    if (await stopHeldRun(run.id, held, opts.authorityFor(run.orgId))) summary.stopped += 1;
+    const authority = opts.authorityFor(run.orgId);
+    if (!(await stopHeldRun(run.id, held, authority))) return;
+    summary.stopped += 1;
+    const why = row.status === "declined" ? "declined" : "expired";
+    await publishMoment((c) => c.clearPublishMoment({ run, whileStatus: "stopped", why, authority }));
   });
   return summary;
 }

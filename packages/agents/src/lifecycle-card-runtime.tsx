@@ -98,6 +98,10 @@ export const LIFECYCLE_HITL_SCREEN_PATH = "/api/lifecycle-views/hitl-screen";
  */
 export const LIFECYCLE_PUBLISH_DECISION_PATH = "/api/lifecycle-views/publish-decision";
 
+/** The BROKER DECIDE of the publish card (cinatra#4150 part 7a-3b): Publish / Do not publish from a credential-declaring
+ *  host, on its own credential. A cookie host never uses it; it keeps the session action. */
+export const LIFECYCLE_PUBLISH_DECISION_DECIDE_PATH = "/api/lifecycle-views/publish-decision/decide";
+
 /**
  * The BROKER ANSWER to that question (cinatra#2930, lifecycle-b W3).
  *

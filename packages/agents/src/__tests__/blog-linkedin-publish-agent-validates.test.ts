@@ -10,12 +10,18 @@
  * facts (a generation poll, the post.linkedinDrafts[] extraction, the
  * update-then-publish pair) are therefore negative-asserted rather than
  * required — they are what this pin removed.
+ *
+ * cinatra#4150: at this pin the pack asks nothing itself. Its `publish` node
+ * declares `publishes: true`, so the application holds the run in front of it
+ * on its own publish card; the pack's own review screen and its HITL gate are
+ * gone.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { describe, it, expect } from "vitest";
 
+import { collectPublishingSteps, collectPublishRows } from "../oas-compiler";
 import {
   scanOasForLlmMetadata,
   scanOasForStartNodeInputsWithoutRequired,
@@ -74,12 +80,18 @@ describe("blog-linkedin-publish-agent — 7 structural pins", () => {
     expect(llm.capabilityRequired).toBeUndefined();
   });
 
-  it("Pin 4: hitlScreens has exactly one renderer key + toolboxes OMITTED", () => {
+  it("Pin 4: no screen of its own (hitlScreens OMITTED, the former id kept without a component) + toolboxes OMITTED (cinatra#4150)", () => {
     const meta = (oas.metadata as Record<string, unknown>).cinatra as Record<string, unknown>;
-    expect(meta.hitlScreens).toEqual([
-      "@cinatra-ai/blog-linkedin-publish-agent:draft-review",
-    ]);
+    expect(meta.hitlScreens).toBeUndefined();
     expect(meta.toolboxes).toBeUndefined();
+    // The package ships no screen component either: the application's publish
+    // card replaces the pack's own review screen. It keeps declaring the former
+    // screen's id, without a component, so a run that paused there before the
+    // upgrade still resolves to the host's schema floor and shows Continue.
+    const cinatra = pkg.cinatra as Record<string, unknown>;
+    expect(cinatra.fieldRenderers).toEqual([
+      { id: "@cinatra-ai/blog-linkedin-publish-agent:draft-review", kind: "linkedin-draft-review", priority: 90, midRunHitl: true },
+    ]);
   });
 
   it("Pin 5: single ApiNode targeting templated /api/llm-bridge, agent_id, no skill_source_path", () => {
@@ -157,16 +169,54 @@ describe("blog-linkedin-publish-agent — inline instruction contract", () => {
     expect(skill).not.toMatch(/status === "draft"/);
   });
 
-  it("names the connector's publish primitive, and the review screen does not edit the copy", () => {
+  it("names the connector's publish primitive, and the copy is not edited here", () => {
     expect(skill).toContain("linkedin_post_publish");
-    expect(skill).toContain("The screen shows the copy; it does not edit it.");
+    expect(skill).toContain("YOU DO NOT WRITE.");
     // The operator-edit road (update-then-publish on the blog record) is gone.
     expect(skill).not.toContain("blog_post_publish_linkedin_update");
     expect(skill).not.toContain("blog_post_publish_linkedin_publish");
   });
 
-  it("declares the HITL renderer key explicitly", () => {
-    expect(skill).toContain("@cinatra-ai/blog-linkedin-publish-agent:draft-review");
+  it("asks nothing itself: the run stops on the application's publish confirmation (cinatra#4150)", () => {
+    expect(skill).toContain("the run stops in front of it on the host's publish confirmation");
+    // Every post-gate envelope says the person approved; a failure shows in the address.
+    expect(skill).toContain("the person already approved this publish on the application's card");
+    expect(skill).not.toContain("approved: false");
+    // The pack's own gate is gone: no renderer key, no INTERRUPT, no screen.
+    expect(skill).not.toContain(":draft-review");
+    expect(skill).not.toContain("x-renderer");
+    expect(skill).not.toContain("INTERRUPT");
+  });
+});
+
+// cinatra#4150: the publish step is the flow's one declared publishing step, so
+// the application stops the run in front of it until a person decides on the
+// publish card, and the card shows the post and where it goes. The write-back
+// step writes onto the artifact, not to LinkedIn, so it declares that it does
+// not publish.
+describe("blog-linkedin-publish-agent — the declared publishing step (cinatra#4150)", () => {
+  const components = () => oas.$referenced_components as Record<string, Record<string, unknown>>;
+  const cinatraOf = (node: Record<string, unknown>) =>
+    ((node.metadata as Record<string, unknown>).cinatra ?? {}) as Record<string, unknown>;
+
+  it("the publish node declares publishes: true and the write-back node publishes: false", () => {
+    expect(cinatraOf(components().publish).publishes).toBe(true);
+    expect(cinatraOf(components().write_address).publishes).toBe(false);
+  });
+
+  it("the compiler reads exactly one publishing step, the publish node", () => {
+    expect(collectPublishingSteps(oas)).toEqual({ ok: true, steps: ["publish"] });
+  });
+
+  it("the card shows two read-only rows: the post and its destination", () => {
+    const rows = collectPublishRows(oas, ["publish"]);
+    expect(rows.ok).toBe(true);
+    expect(rows.ok && { ...rows.rows }).toEqual({
+      publish: [
+        { label: "Post", input: "postText" },
+        { label: "Destination", input: "destinationName" },
+      ],
+    });
   });
 });
 

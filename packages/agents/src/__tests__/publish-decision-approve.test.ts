@@ -39,6 +39,13 @@ vi.mock("../agent-run-serde", () => ({ assertAgentRunDispatchAuthorized }));
 
 vi.mock("../wayflow-url", () => ({ resolveWayflowUrl: (pkg: string) => `http://wayflow.test/${pkg}` }));
 
+// cinatra#4150 part 7a-2: the coordinator's publish moment, as a double (the coordinator's own suite pins the writes).
+const coordinatorMock = vi.hoisted(() => ({
+  onPublishGate: vi.fn(async () => undefined as unknown),
+  clearPublishMoment: vi.fn(async (_input: unknown) => undefined),
+}));
+vi.mock("../lifecycle-coordinator", () => coordinatorMock);
+
 // The run's current gate visit (the latest-task map the interrupt writes): "task-1" is the gate task of decision() below.
 // A full double, as in artifact-review-resume-delivery.test.ts: Publish reads only this one export. A partial double loads
 // the real module, whose graph imports this package's index back over the partial doubles above; in CI that load failed,
@@ -186,6 +193,10 @@ describe("Publish (A7)", () => {
     expect(err.code).toBe("publish_resume_failed");
     expect(err.message).not.toMatch(/wayflow down|run-1|ctx-1/);
     expect(moves()).toEqual([["run-1", "pending_approval", "running"], ["run-1", "running", "pending_approval"]]);
+    // The moment was cleared once, under the claim, before the send: the run waits again with a released decision and
+    // no moment, and the card (keyed by the run) still draws.
+    expect(coordinatorMock.clearPublishMoment).toHaveBeenCalledTimes(1);
+    expect(coordinatorMock.clearPublishMoment.mock.invocationCallOrder[0]!).toBeLessThan(sendWayflowResume.mock.invocationCallOrder[0]!);
 
     decisions.readOpenDecisionForRun.mockResolvedValue(null);
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released" }));
@@ -491,5 +502,49 @@ describe("who may decide a publish (A11)", () => {
       expect(decisions.decide).not.toHaveBeenCalled();
       expect(sendWayflowResume).not.toHaveBeenCalled();
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4150 part 7a-2: the publish moment ends when Publish releases the run (the moment half of A7).
+// ---------------------------------------------------------------------------
+
+describe("Publish clears the publish moment (A7)", () => {
+  const clearInput = () => coordinatorMock.clearPublishMoment.mock.calls.map(([input]) => {
+    const { run: r, whileStatus, why } = input as { run: { id: string }; whileStatus: string; why: string };
+    return [r.id, whileStatus, why];
+  });
+
+  it("after the released decision and BEFORE the send, pinned to the claim's running, with release reason publish_approved", async () => {
+    // The send runs the resumed flow and parks it at its next gate itself, which may state a new publish moment: a
+    // clear after the send would take that newer card off.
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: true });
+    expect(clearInput()).toEqual([["run-1", "running", "publish_approved"]]);
+    const cleared = coordinatorMock.clearPublishMoment.mock.invocationCallOrder[0]!;
+    expect(decisions.decide.mock.invocationCallOrder[0]!).toBeLessThan(cleared);
+    expect(cleared).toBeLessThan(sendWayflowResume.mock.invocationCallOrder[0]!);
+  });
+
+  it("a Publish that releases nothing clears nothing: a late answer, a lost claim, another gate", async () => {
+    decisions.decide.mockResolvedValueOnce({ outcome: "lost", currentStatus: "declined" });
+    await approvePublishDecision({ runId: "run-1", actorContext: ACTOR });
+    storeMock.transitionRunStatus.mockRejectedValueOnce(stale());
+    await approvePublishDecision({ runId: "run-1", actorContext: ACTOR });
+    resolveLatestWayflowGateTaskId.mockResolvedValueOnce("task-9");
+    await approvePublishDecision({ runId: "run-1", actorContext: ACTOR });
+    expect(coordinatorMock.clearPublishMoment).not.toHaveBeenCalled();
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+  });
+
+  it("a moment that cannot be cleared still resumes the run", async () => {
+    coordinatorMock.clearPublishMoment.mockRejectedValueOnce(new Error("db down"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: true });
+      expect(warn.mock.calls.map((c) => c.map(String).join(" ")).join("\n")).not.toMatch(/db down|run-1/);
+    } finally {
+      warn.mockRestore();
+    }
+    expect(sendWayflowResume).toHaveBeenCalledTimes(1);
   });
 });

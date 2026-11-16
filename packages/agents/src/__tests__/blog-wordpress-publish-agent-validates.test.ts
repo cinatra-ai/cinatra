@@ -7,15 +7,20 @@
  * artifact revision (postArtifactId + postRepresentationRevisionId), the steps
  * around it read and write the artifact through the host's own primitives, and
  * it reaches no blog record at all. Nothing is created before the person
- * confirms, so the blog-record road's facts (a generation poll, the
+ * decides, so the blog-record road's facts (a generation poll, the
  * post.wordpressDrafts[] extraction, the delete-on-reject call) are
  * negative-asserted rather than required — they are what this pin removed.
+ *
+ * cinatra#4150: at this pin the pack asks nothing itself. Its `publish` node
+ * declares `publishes: true`, so the application holds the run in front of it
+ * on its own publish card; the pack's own screen and its HITL gate are gone.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { describe, it, expect } from "vitest";
 
+import { collectPublishingSteps, collectPublishRows } from "../oas-compiler";
 import {
   scanOasForLlmMetadata,
   scanOasForStartNodeInputsWithoutRequired,
@@ -74,12 +79,18 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
     expect(llm.capabilityRequired).toBeUndefined();
   });
 
-  it("Pin 4: hitlScreens has exactly one renderer key + toolboxes OMITTED", () => {
+  it("Pin 4: no screen of its own (hitlScreens OMITTED, the former id kept without a component) + toolboxes OMITTED (cinatra#4150)", () => {
     const meta = (oas.metadata as Record<string, unknown>).cinatra as Record<string, unknown>;
-    expect(meta.hitlScreens).toEqual([
-      "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm",
-    ]);
+    expect(meta.hitlScreens).toBeUndefined();
     expect(meta.toolboxes).toBeUndefined();
+    // The package ships no screen component either: the application's publish
+    // card replaces the pack's own confirmation screen. It keeps declaring the former
+    // screen's id, without a component, so a run that paused there before the
+    // upgrade still resolves to the host's schema floor and shows Continue.
+    const cinatra = pkg.cinatra as Record<string, unknown>;
+    expect(cinatra.fieldRenderers).toEqual([
+      { id: "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm", kind: "wordpress-draft-confirm", priority: 90, midRunHitl: true },
+    ]);
   });
 
   it("Pin 5: single ApiNode targeting templated /api/llm-bridge, agent_id, no skill_source_path", () => {
@@ -150,14 +161,49 @@ describe("blog-wordpress-publish-agent — inline instruction contract", () => {
     expect(skill).toContain("wordpress_site_tools_list");
     expect(skill).toContain("wordpress_site_tool_call");
     expect(skill).toContain("PUBLICLY VISIBLE");
-    // Nothing reaches the site before the confirmation, so a decline has
+    // Nothing reaches the site before the person decides, so a decline has
     // nothing to remove and the delete-on-reject call is gone.
-    expect(skill).toContain("Nothing was created, so there is nothing to remove.");
     expect(skill).not.toContain("blog_post_publish_wordpress_delete");
   });
 
-  it("declares the HITL renderer key explicitly", () => {
-    expect(skill).toContain("@cinatra-ai/blog-wordpress-publish-agent:draft-confirm");
+  it("asks nothing itself: the application asks on its own card before the step runs (cinatra#4150)", () => {
+    expect(skill).toContain("The application asks the person before this step runs");
+    expect(skill).toContain("Ask nothing of your own and never wait for a person.");
+    // Every post-gate envelope says the person approved; a failure shows in the address.
+    expect(skill).toContain("every envelope you return carries `approved: true`");
+    expect(skill).not.toContain("approved: false");
+    // The pack's own gate is gone: no renderer key, no INTERRUPT, no screen.
+    expect(skill).not.toContain(":draft-confirm");
+    expect(skill).not.toContain("x-renderer");
+    expect(skill).not.toContain("INTERRUPT");
+  });
+});
+
+// cinatra#4150: the publish step is the flow's one declared publishing step, so
+// the application stops the run in front of it until a person decides on the
+// publish card, and the card shows the words that go out. The write-back step
+// writes onto the artifact, not to the site, so it declares that it does not
+// publish.
+describe("blog-wordpress-publish-agent — the declared publishing step (cinatra#4150)", () => {
+  const components = () => oas.$referenced_components as Record<string, Record<string, unknown>>;
+  const cinatraOf = (node: Record<string, unknown>) =>
+    ((node.metadata as Record<string, unknown>).cinatra ?? {}) as Record<string, unknown>;
+
+  it("the publish node declares publishes: true and the write-back node publishes: false", () => {
+    expect(cinatraOf(components().publish).publishes).toBe(true);
+    expect(cinatraOf(components().write_address).publishes).toBe(false);
+  });
+
+  it("the compiler reads exactly one publishing step, the publish node", () => {
+    expect(collectPublishingSteps(oas)).toEqual({ ok: true, steps: ["publish"] });
+  });
+
+  it("the card shows one read-only row: the words that go out", () => {
+    const rows = collectPublishRows(oas, ["publish"]);
+    expect(rows.ok).toBe(true);
+    expect(rows.ok && { ...rows.rows }).toEqual({
+      publish: [{ label: "Post text", input: "postText" }],
+    });
   });
 });
 

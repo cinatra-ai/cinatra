@@ -157,6 +157,25 @@ export const WIDGET_LIFECYCLE_HITL_SCREEN_ROUTE_PATH =
   "/api/lifecycle-views/hitl-screen";
 
 /**
+ * The audience a widget PUBLISH-CARD read is served at (cinatra#4150). A fourth audience under the same
+ * `lifecycle.read` grant, for the hitl screen's reason: `publish_decision` is carried as a typed INTERRUPT, and a run
+ * stopped in front of its publishing step until you answer is work waiting on you. A token minted before this
+ * audience existed is refused here, fail-closed, until the next sign-in.
+ */
+export const WIDGET_LIFECYCLE_PUBLISH_DECISION_ROUTE_PATH =
+  "/api/lifecycle-views/publish-decision";
+
+/**
+ * Where a widget PUBLISH or DO NOT PUBLISH is submitted (cinatra#4150 part 7a-3b): a fourth audience under the
+ * EXISTING `lifecycle.decide` grant, separate from the read audience above for the hitl screen's reason (a token that
+ * may show the card does not thereby answer it). Whether this person may decide THIS run is still the decision's own
+ * rules, taken against their live standing; this audience only admits the surface. A token minted before it existed
+ * is refused here, fail-closed, until the next sign-in.
+ */
+export const WIDGET_LIFECYCLE_PUBLISH_DECISION_DECIDE_ROUTE_PATH =
+  "/api/lifecycle-views/publish-decision/decide";
+
+/**
  * Where a widget ANSWER to that question is submitted (cinatra#2930,
  * lifecycle-b W3) — the broker branch of the run's own HITL gate.
  *
@@ -658,6 +677,8 @@ export const WIDGET_EXTENSION_SCOPES = {
       // added under the same rule: the audience joins the grant WITH the
       // sentence below that admits to it, in the same edit.
       WIDGET_LIFECYCLE_HITL_SCREEN_ROUTE_PATH,
+      // cinatra#4150 -- the publish card's own read surface, under the same rule, with its sentence below.
+      WIDGET_LIFECYCLE_PUBLISH_DECISION_ROUTE_PATH,
     ] as readonly string[],
     /**
      * The sentence the hosted SIGN-IN screen shows for this grant. It states
@@ -670,7 +691,7 @@ export const WIDGET_EXTENSION_SCOPES = {
      * grant cannot join the set without gaining a sentence at the same time.
      */
     consentCopy:
-      "Show you work items that are waiting on you — reviews and their outcomes, the skills an agent wants to use before a run you started begins, and a question an agent has paused to ask you — using the same permissions you have in Cinatra.",
+      "Show you work items that are waiting on you — reviews and their outcomes, the skills an agent wants to use before a run you started begins, a question an agent has paused to ask you, and whether an agent may publish what it made — using the same permissions you have in Cinatra.",
   },
   [WIDGET_LIFECYCLE_DECIDE_SCOPE]: {
     audiences: [
@@ -685,6 +706,8 @@ export const WIDGET_EXTENSION_SCOPES = {
       // `lifecycle.read` shows the question; this one answers it, and the two are
       // deliberately not the same grant.
       WIDGET_LIFECYCLE_HITL_SCREEN_SUBMIT_ROUTE_PATH,
+      // cinatra#4150 -- Publish / Do not publish on the publish card, under the same rule, with its sentence below.
+      WIDGET_LIFECYCLE_PUBLISH_DECISION_DECIDE_ROUTE_PATH,
     ] as readonly string[],
     /**
      * The sentence the hosted SIGN-IN screen shows for this grant.
@@ -694,7 +717,7 @@ export const WIDGET_EXTENSION_SCOPES = {
      * there is none.
      */
     consentCopy:
-      "Let you approve, reject or comment on those work items from this site, confirm, adjust or skip the skills a run was about to use, and answer a question an agent has paused to ask you — the same decisions, with the same permissions, as inside Cinatra.",
+      "Let you approve, reject or comment on those work items from this site, confirm, adjust or skip the skills a run was about to use, answer a question an agent has paused to ask you, and decide whether an agent may publish what it made — the same decisions, with the same permissions, as inside Cinatra.",
   },
   [WIDGET_CONVERSATION_READ_SCOPE]: {
     audiences: [

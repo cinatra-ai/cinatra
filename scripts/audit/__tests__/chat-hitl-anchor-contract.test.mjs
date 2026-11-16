@@ -451,3 +451,23 @@ describe("an agent card's own controls are not anchors of this contract", () => 
     expect(contract().anchorsUnresolvedAtPin).toEqual([]);
   });
 });
+
+// THE SIXTH KIND (cinatra#4150). The publish card is drawn with its kind on all four hosts, so the alarm covers it the
+// way it covers the other five: its capture cells are digest inputs, on every host and in both states.
+describe("the sixth kind is covered by the same alarm", () => {
+  const KIND = "publish_decision";
+  const ROOT = '[data-lifecycle-card="publish_decision"]';
+  const APPROVE = '[data-action="approve-publish -> released"]';
+
+  it("is one of the ruled kinds, with a capture cell on every host in both states", () => {
+    expect([...ANCHOR_CONTRACT_KINDS]).toContain(KIND);
+    const anchors = captureAnchorExpectations();
+    for (const host of CAPTURE_HOSTS) {
+      for (const state of CAPTURE_STATES) {
+        expect(anchors[host][`${KIND}|${state}`], `${host} ${state}`).toContain(`${ROOT} frame present  canonical`);
+      }
+      expect(anchors[host][`${KIND}|pending`], host).toContain(`${APPROVE} root present ${ROOT} canonical`);
+      expect(anchors[host][`${KIND}|decided`], host).toContain(`${APPROVE} root absent ${ROOT} canonical`);
+    }
+  });
+});

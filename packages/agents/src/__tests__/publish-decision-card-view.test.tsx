@@ -7,11 +7,14 @@ import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react
 import type { LifecycleCardHost } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
 const stateMock = vi.fn();
+const decideActionMock = vi.fn();
 vi.mock("../publish-decision-card-actions", () => ({
   getPublishDecisionCardStateAction: (input: { runId: string }) => stateMock(input),
+  decidePublishDecisionAction: (input: unknown) => decideActionMock(input),
 }));
 
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
+import * as cardView from "../publish-decision-card-view";
 import { PublishDecisionCard, type PublishDecisionDecide } from "../publish-decision-card-view";
 
 const RUN_ID = "run-4150";
@@ -331,5 +334,109 @@ describe("the decide door", () => {
     expect(after.getAttribute("data-lifecycle-card-state")).toBe("pending");
     expect(after.querySelector<HTMLButtonElement>(DECLINE)?.disabled).toBe(false);
     expect(stateMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// cinatra#4150 part 7a-3a: the SESSION door and the host's own door. Red at the base: neither export exists.
+describe("the session door (part 7a-3a)", () => {
+  type Doors = {
+    decidePublishThroughSession: PublishDecisionDecide;
+    usePublishDecisionDoor: () => PublishDecisionDecide | undefined;
+  };
+  const doors = cardView as unknown as Doors;
+
+  function HostDoorCard() {
+    return <PublishDecisionCard runId={RUN_ID} decide={doors.usePublishDecisionDoor()} />;
+  }
+  function mountWithHostDoor(host: LifecycleCardHost) {
+    const auth = host === "site_widget" ? WIDGET_AUTH : undefined;
+    const frame = host === "site_widget" ? { assistant: "a", instanceId: "i" } : undefined;
+    return render(
+      <LifecycleCardSurfaceProvider host={host} auth={auth} frame={frame}>
+        <HostDoorCard />
+      </LifecycleCardSurfaceProvider>,
+    );
+  }
+
+  beforeEach(() => {
+    decideActionMock.mockReset();
+    decideActionMock.mockImplementation(async () => "decided");
+  });
+
+  it("the session door hands the input to the session action and answers what it answers", async () => {
+    decideActionMock.mockImplementation(async () => "not_open");
+    const input = { runId: RUN_ID, answer: "decline" as const, note: "Not ready yet." };
+    expect(await doors.decidePublishThroughSession(input)).toBe("not_open");
+    expect(decideActionMock).toHaveBeenCalledWith(input);
+  });
+
+  it.each(["chat_thread", "run_card", "page_gate_region"] as const)(
+    "%s: the host's door is the session door, so Do not publish sends the note through the session action",
+    async (host) => {
+      const root = await rootOf(mountWithHostDoor(host));
+      await settle();
+      expect(root.querySelector<HTMLButtonElement>(DECLINE)?.disabled).toBe(false);
+      fireEvent.change(root.querySelector("textarea")!, { target: { value: "Not ready yet." } });
+      await act(async () => {
+        fireEvent.click(root.querySelector(DECLINE)!);
+      });
+      await settle();
+      expect(decideActionMock).toHaveBeenCalledWith({ runId: RUN_ID, answer: "decline", note: "Not ready yet." });
+      cleanup();
+    },
+  );
+
+  // Part 7a-3b: the site widget's door is the BROKER decide route on its own credential (red at the 7a-3a tip: the
+  // widget had no door, so its controls were disabled and nothing was sent).
+  it("the site widget POSTs the answer to the broker decide route on its own credential, never the session action", async () => {
+    const mounted = mountWithHostDoor("site_widget");
+    const root = await rootOf(mounted);
+    await settle();
+    expect(root.querySelector<HTMLButtonElement>(DECLINE)?.disabled).toBe(false);
+    fireEvent.change(root.querySelector("textarea")!, { target: { value: "Not ready yet." } });
+    brokerAnswer = { status: 200, body: { outcome: "decided" } };
+    await act(async () => {
+      fireEvent.click(root.querySelector(DECLINE)!);
+    });
+    await settle();
+    const posts = requests.filter((r) => r.init.method === "POST");
+    expect(posts).toHaveLength(1);
+    expect(posts[0]!.url).toBe("/api/lifecycle-views/publish-decision/decide");
+    expect(posts[0]!.init.credentials).toBe("omit");
+    expect(posts[0]!.init.headers).toEqual({ "Content-Type": "application/json", Authorization: "Bearer cwu_site" });
+    expect(JSON.parse(String(posts[0]!.init.body))).toEqual({ runId: RUN_ID, answer: "decline", note: "Not ready yet." });
+    expect(decideActionMock).not.toHaveBeenCalled();
+  });
+
+  it("the broker's not_open is reported; a refusal, an error and an unknown answer leave the card as it was", async () => {
+    for (const [answer, expected] of [
+      [{ status: 200, body: { outcome: "not_open" } }, "no_longer_open"],
+      [{ status: 401, body: { error: "Unauthorized" } }, "pending"],
+      [{ status: 500, body: { error: "boom" } }, "pending"],
+      [{ status: 200, body: { outcome: "published" } }, "pending"],
+    ] as const) {
+      const mounted = mountWithHostDoor("site_widget");
+      const root = await rootOf(mounted);
+      await settle();
+      brokerAnswer = answer;
+      await act(async () => {
+        fireEvent.click(root.querySelector(APPROVE)!);
+      });
+      await settle();
+      expect((await rootOf(mounted)).getAttribute("data-lifecycle-card-state"), JSON.stringify(answer)).toBe(expected);
+      brokerAnswer = { status: 200, body: PENDING };
+      cleanup();
+    }
+    expect(decideActionMock).not.toHaveBeenCalled();
+  });
+
+  it("a session door passed on a host that declares a credential is never sent through", async () => {
+    expect(typeof doors.decidePublishThroughSession).toBe("function");
+    const root = await rootOf(mountOn("site_widget", doors.decidePublishThroughSession));
+    await settle();
+    expect(root.querySelector<HTMLButtonElement>(APPROVE)?.disabled).toBe(true);
+    fireEvent.click(root.querySelector(APPROVE)!);
+    await settle();
+    expect(decideActionMock).not.toHaveBeenCalled();
   });
 });

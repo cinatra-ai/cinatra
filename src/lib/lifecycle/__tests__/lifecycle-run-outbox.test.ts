@@ -111,6 +111,18 @@ describe("the injected part", () => {
     expect(buildInjectedLifecyclePart({ cardKind: "agent_hitl_screen", cardRef: "r" })).toBeNull();
   });
 
+  it("is refused for the publish card too: an interrupt kind every host mounts from run state (cinatra#4150)", () => {
+    // The publish moment feeds the outbox (part 7b), and this writer must still add nothing for it: a part beside the
+    // run's own mount would put the same question in the turn twice.
+    expect(buildInjectedLifecyclePart({ cardKind: "publish_decision", cardRef: "dec-1" })).toBeNull();
+    expect(
+      injectionForTurn(
+        { runId: RUN_ID, cardKind: "publish_decision", cardRef: "dec-1" },
+        { id: "turn-1", content: runTurn() },
+      ),
+    ).toBeNull();
+  });
+
   it("is refused without a server-checked reference, and for an oversized one", () => {
     expect(buildInjectedLifecyclePart({ cardKind: "artifact_review_gate", cardRef: null })).toBeNull();
     expect(buildInjectedLifecyclePart({ cardKind: "artifact_review_gate", cardRef: "" })).toBeNull();

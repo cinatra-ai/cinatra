@@ -9,18 +9,22 @@
 // (publish-decision-card-core.ts): a cookie host calls the session action, a host that declares a credential (the
 // site widget) reads the broker route with that credential. The read sends no decision. A read that fails keeps the
 // last authorized answer, and a card with no answer draws NO DOM, so a run with no open decision draws nothing.
-// The two controls send through the `decide` door a host passes; a host that passes none draws them disabled.
+// The two controls send through the `decide` door a host passes; a host that passes none draws them disabled. The
+// session door rides the reader's cookie, so the card never sends through it on a host that declares a credential;
+// such a host (the site widget) sends through the broker decide route on its own credential instead.
 // ---------------------------------------------------------------------------
 
-import { useEffect, useRef, useState, type ReactElement } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 
 import { Button } from "@/components/ui/button";
 import { StatusPill } from "@/components/ui/status-pill";
 import { Textarea } from "@/components/ui/textarea";
 
 import {
+  LIFECYCLE_PUBLISH_DECISION_DECIDE_PATH,
   LIFECYCLE_PUBLISH_DECISION_PATH,
   sendAcrossRenewal,
+  useCookieSessionSurface,
   useLifecycleCardAuth,
   useLifecycleCardHost,
   type LifecycleCardAuth,
@@ -30,7 +34,7 @@ import {
   parsePublishDecisionCardState,
   type PublishDecisionCardState,
 } from "./publish-decision-card";
-import { getPublishDecisionCardStateAction } from "./publish-decision-card-actions";
+import { decidePublishDecisionAction, getPublishDecisionCardStateAction } from "./publish-decision-card-actions";
 
 /** A decide door answers: the decision landed, the request was no longer open, or the send failed. */
 export type PublishDecisionDecide = (input: {
@@ -38,6 +42,42 @@ export type PublishDecisionDecide = (input: {
   answer: "approve" | "decline";
   note: string;
 }) => Promise<"decided" | "not_open" | "failed">;
+
+/** The SESSION decide door (part 7a-3a): Publish / Do not publish as the signed-in person of a cookie host. */
+export const decidePublishThroughSession: PublishDecisionDecide = (input) => decidePublishDecisionAction(input);
+
+/** The BROKER decide door (part 7a-3b): a POST of the answer on the host's own credential. A refusal, a failed send
+ *  and an answer the card does not know are "failed"; nothing is retried except across a credential renewal. */
+function decidePublishThroughBroker(auth: LifecycleCardAuth): PublishDecisionDecide {
+  return async ({ runId, answer, note }) => {
+    try {
+      const send = () =>
+        fetch(LIFECYCLE_PUBLISH_DECISION_DECIDE_PATH, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...auth.headers() },
+          body: JSON.stringify({ runId, answer, note }),
+          credentials: auth.credentials,
+        });
+      const response = await sendAcrossRenewal(auth, send);
+      if (response === null || !response.ok) return "failed";
+      const outcome = ((await response.json()) as { outcome?: unknown } | null)?.outcome;
+      return outcome === "decided" || outcome === "not_open" ? outcome : "failed";
+    } catch {
+      return "failed";
+    }
+  };
+}
+
+/** The decide door of the host this card is drawn on: the session door inside a well-formed cookie-session host
+ *  declaration; the broker door on a host that declares a credential (the site widget); none anywhere else. */
+export function usePublishDecisionDoor(): PublishDecisionDecide | undefined {
+  const cookieSession = useCookieSessionSurface();
+  const auth = useLifecycleCardAuth();
+  return useMemo(
+    () => (cookieSession ? decidePublishThroughSession : auth ? decidePublishThroughBroker(auth) : undefined),
+    [cookieSession, auth],
+  );
+}
 
 /** The BROKER read, for a host that proves itself with its own credential. A GET: it sends only the run id. */
 async function readPublishDecisionThroughBroker(
@@ -130,6 +170,7 @@ function settledMarker(state: PublishDecisionCardState): ReactElement | null {
 export function PublishDecisionCard({ runId, decide }: { runId: string; decide?: PublishDecisionDecide }): ReactElement | null {
   const host = useLifecycleCardHost();
   const auth = useLifecycleCardAuth();
+  const cookieSession = useCookieSessionSurface();
   const [reloadToken, setReloadToken] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [noLongerOpen, setNoLongerOpen] = useState(false);
@@ -142,16 +183,19 @@ export function PublishDecisionCard({ runId, decide }: { runId: string; decide?:
     reloadToken,
     onRead: () => setRefreshing(false),
   });
+  // The session door rides the ambient cookie: outside a cookie-session declaration (the widget frame is same-origin
+  // to the app) it would answer as whoever is signed in on this browser, so it is never sent there.
+  const door = decide === decidePublishThroughSession && !cookieSession ? undefined : decide;
 
   // No host declaration, no authorized answer yet, or no open decision: NO DOM at all.
   if (host === null || state === null || state.state === "none") return null;
 
   const reload = () => setReloadToken((n) => n + 1);
   const send = async (answer: "approve" | "decline") => {
-    if (!decide || sending) return;
+    if (!door || sending) return;
     setSending(true);
     const sentNote = answer === "decline" ? note : "";
-    const outcome = await decide({ runId: state.runId, answer, note: sentNote }).catch(() => "failed" as const);
+    const outcome = await door({ runId: state.runId, answer, note: sentNote }).catch(() => "failed" as const);
     setSending(false);
     // A late answer is never sent again: the request is no longer open, and the reader is told so.
     if (outcome === "not_open") setNoLongerOpen(true);
@@ -159,7 +203,7 @@ export function PublishDecisionCard({ runId, decide }: { runId: string; decide?:
   };
   const pending = state.state === "pending";
   const restricted = pending && !state.mayDecide;
-  const disabled = restricted || !decide || sending;
+  const disabled = restricted || !door || sending;
   const cardState = refreshing ? "loading" : noLongerOpen ? "no_longer_open" : restricted ? "restricted" : state.state;
 
   let body: ReactElement;

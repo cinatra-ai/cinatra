@@ -220,6 +220,7 @@ export const LIFECYCLE_CARD_KINDS = Object.freeze([
   "recommendation_hold",
   "trigger_schedule_proposal",
   "agent_hitl_screen",
+  "publish_decision",
 ]);
 
 /** How each kind reaches a surface. Mirrors `LIFECYCLE_CARD_CARRIAGE`. */
@@ -229,6 +230,7 @@ export const LIFECYCLE_CARD_CARRIAGE = Object.freeze({
   recommendation_hold: "interrupt",
   trigger_schedule_proposal: "data_part",
   agent_hitl_screen: "interrupt",
+  publish_decision: "interrupt",
 });
 
 /** The four hosts. Mirrors `LIFECYCLE_CARD_HOSTS`. */
@@ -1125,6 +1127,83 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
       hosts: ["chat_thread", "site_widget", "run_card", "page_gate_region"],
     },
   },
+  publish_decision: {
+    status: "DRAWN",
+    // DRAWN with its kind (cinatra#4150): the kind is registered in the same change that mounts its card on all four
+    // hosts, so it never stands as a placeholder and no host carries a gap.
+    design:
+      "the publish card in specs/app-lifecycle-cards.html at the pin: section XV (the question, the agent's rows, the note, Do not publish and Publish, and the three settled readings) and section IV.1 (pending, loading, restricted, no longer open)",
+    component: "PublishDecisionCard",
+    wireCarriage: "interrupt",
+    deliveries: ["platform_injected"],
+    owner: "packages/agents/src/publish-decision-card-view.tsx",
+    composes: [],
+    // A typed INTERRUPT like the hitl screen: no resolve envelope, so the owner reads the run's card through its own
+    // authorized read, the run access door first, and a failed read stays a failure.
+    body: {
+      validator: "usePublishDecisionCardState",
+      params: ["runId"],
+      fields: ["state", "agentName", "rows", "mayDecide"],
+    },
+    // The card's own conformance id and its two controls, verbatim from the drawing (XV): each control's value is
+    // the action and the outcome it records.
+    anchors: [
+      "publish-card",
+      '[data-action="decline-publish -> declined"]',
+      '[data-action="approve-publish -> released"]',
+    ],
+    openObligations: [],
+    hosts: {
+      chat_thread: [
+        {
+          module: "packages/chat/src/chat-messages-view.tsx",
+          adapter: "mount",
+          region: "transcript",
+          surface: "production",
+          why: "the dispatch turn: the card mounts on the run read off the `agent_run` tool result, at the hitl screen's place, as a sibling of the inline run card and not through the renderable-view registry, because the carriage is an interrupt",
+        },
+      ],
+      site_widget: [
+        {
+          module: "packages/chat/src/chat-messages-view.tsx",
+          adapter: "mount",
+          region: "transcript",
+          surface: "production",
+          why: "the same column on the widget arm draws the same card for the same `agent_run` part; the host declaration selects the broker read and the broker decide door, so both travel on the widget's own credential",
+        },
+      ],
+      run_card: [
+        {
+          module: "packages/agents/src/agentic-run-panel.tsx",
+          adapter: "mount",
+          region: "run_panel",
+          surface: "production",
+          why: "the run page's panel mounts the card keyed by the run under its own `run_card` declaration, and stands down inside a conversation host (`runCardOwnsLifecycleCopy`), where the column's card owns the run",
+        },
+      ],
+      page_gate_region: [
+        {
+          module:
+            "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
+          adapter: "mount",
+          region: "gate_region",
+          surface: "production",
+          why: "the review page mounts the card in its gate region, keyed by the run and nothing else; a run with no open publish decision draws nothing there",
+        },
+      ],
+    },
+    instanceRootSelector: '[data-lifecycle-card="publish_decision"]',
+    renderedProof: {
+      file: "packages/agents/src/__tests__/publish-decision-card-view.test.tsx",
+      testName:
+        "the root carries its identity, host and state, and draws the question, the rows and both controls",
+    },
+    instanceProof: {
+      file: "packages/agents/src/__tests__/publish-decision-card-view.test.tsx",
+      testName: "every host draws EXACTLY ONE publish card",
+      hosts: ["chat_thread", "site_widget", "run_card", "page_gate_region"],
+    },
+  },
 });
 
 /**
@@ -1458,7 +1537,7 @@ export const LIFECYCLE_MOUNT_REGIONS = Object.freeze([
 
 /** R3 — the JSX mounts that are lifecycle CARD mounts. */
 const CARD_MOUNT_RE =
-  /<\s*(ReviewGateCard|RecommendationHoldCard|LifecycleCard|VerificationSummaryCard|ScheduleProposalCard|AgentHitlScreenCard)\b/g;
+  /<\s*(ReviewGateCard|RecommendationHoldCard|LifecycleCard|VerificationSummaryCard|ScheduleProposalCard|AgentHitlScreenCard|PublishDecisionCard)\b/g;
 const HOST_PROVIDER_RE = /<\s*LifecycleCardSurfaceProvider\b/;
 
 /**

@@ -38,6 +38,9 @@ import {
   hitlFieldPresentationFor,
 } from "./agent-hitl-screen-card";
 import type { AgentRunMessageBody } from "./store";
+import { PublishDecisionCard, usePublishDecisionCardState } from "./publish-decision-card-view";
+// cinatra#4150 part 7a-3a: the run page is a cookie host, so its publish card sends through the session door.
+import { decidePublishThroughSession } from "./publish-decision-card-view";
 import { StatusPill } from "@/components/ui/status-pill";
 import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext } from "./field-renderer-registry";
@@ -904,6 +907,13 @@ export function AgenticRunPanel({
           !isAnsweredQuestion(streamQuestionOnFile),
       ) ||
       (hitlContext !== null && !isAnsweredQuestion(hitlContext)),
+  });
+  // THE RUN PAGE READS "Not published" (cinatra#4150): the publish card's own authorized read, asked only for a
+  // stopped run on the run page, where this header is the page's status reading.
+  const publishReading = usePublishDecisionCardState({
+    runId: panelMountsHitlScreenCard && status === "stopped" ? runId : "",
+    auth: null,
+    reloadToken: 0,
   });
   const error = resolveStreamFirst(streamEnabled, streamResult.error, pollError);
   const presentationHint = streamResult.presentationHint; // null when !streamEnabled
@@ -2893,7 +2903,7 @@ export function AgenticRunPanel({
             "pending approval", and the discriminator stays the interrupt
             itself, never the status. */}
         <StatusPill status={runStatusPillStatus(status)} glyph="dot">
-          {runStatusBadgeLabel(status, statedWaitDescriptor)}
+          {runStatusBadgeLabel(status, statedWaitDescriptor, publishReading?.state)}
         </StatusPill>
       </div>
       )}
@@ -2904,6 +2914,15 @@ export function AgenticRunPanel({
           draws no copy of it at any moment. The account of what stood here, and
           of what the panel still takes from that interaction, is above the
           review-screen mount. */}
+
+      {/* THE PUBLISH CARD (cinatra#4150), keyed by the run under this panel's own `run_card` declaration. It stands
+          down inside a conversation host for the hitl screen's reason, and draws nothing with no open decision. The run
+          page is a cookie host: its controls send through the session door. */}
+      {panelMountsHitlScreenCard ? (
+        <LifecycleCardSurfaceProvider host="run_card">
+          <PublishDecisionCard runId={runId} decide={decidePublishThroughSession} />
+        </LifecycleCardSurfaceProvider>
+      ) : null}
 
       {isPendingApproval &&
       effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID ? (

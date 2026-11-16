@@ -19,11 +19,14 @@ beforeAll(() => {
 
 describe("classifyMidRunHitl — strict-equality renderer IDs", () => {
   it.each([
-    "@cinatra-ai/blog-linkedin-publish-agent:draft-review",
-    "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm",
     // The context-selector renderer needs strict-set classification so the
     // stepper buffers selections instead of firing approveReviewTask per click.
     "@cinatra-ai/context-selection-agent:context-selector",
+    // cinatra#4150: the publish packs ask on the application's publish card now,
+    // but each keeps declaring its former screen id (midRunHitl, no component), so
+    // a run that paused there before the upgrade stays a mid-run step.
+    "@cinatra-ai/blog-linkedin-publish-agent:draft-review",
+    "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm",
   ])("returns true for exact renderer id %s", (id) => {
     expect(classifyMidRunHitl(id)).toBe(true);
   });

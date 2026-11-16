@@ -94,6 +94,8 @@ import {
   WIDGET_LIFECYCLE_RECOMMENDATION_DECIDE_ROUTE_PATH,
   WIDGET_LIFECYCLE_HITL_SCREEN_ROUTE_PATH,
   WIDGET_LIFECYCLE_HITL_SCREEN_SUBMIT_ROUTE_PATH,
+  WIDGET_LIFECYCLE_PUBLISH_DECISION_ROUTE_PATH,
+  WIDGET_LIFECYCLE_PUBLISH_DECISION_DECIDE_ROUTE_PATH,
   WIDGET_LIFECYCLE_RECOMMENDATION_READ_ROUTE_PATH,
   type WidgetExtensionScope,
 } from "@/lib/widget-lifecycle-scope";
@@ -190,6 +192,29 @@ export const WIDGET_HITL_SCREEN_READ_GRANT = {
   requiredScopes: [WIDGET_LIFECYCLE_READ_SCOPE],
   auditAuthorized: "widget_lifecycle_read_authorized",
   auditRejected: "widget_lifecycle_read_rejected",
+} as const;
+
+/**
+ * The PUBLISH-CARD READ grant (cinatra#4150). A READ grant, like the hitl screen's: it shows the card and sends no
+ * decision. Whether this person may see THIS run is still the run's own access door, taken against this actor.
+ */
+export const WIDGET_PUBLISH_DECISION_READ_GRANT = {
+  routePath: WIDGET_LIFECYCLE_PUBLISH_DECISION_ROUTE_PATH,
+  requiredScopes: [WIDGET_LIFECYCLE_READ_SCOPE],
+  auditAuthorized: "widget_lifecycle_read_authorized",
+  auditRejected: "widget_lifecycle_read_rejected",
+} as const;
+
+/**
+ * The PUBLISH-CARD DECIDE grant (cinatra#4150 part 7a-3b): the EXISTING `lifecycle.decide` scope at the publish
+ * card's own decide audience. It admits the surface only; the decision's own rules decide whether this person may
+ * answer THIS run's publish decision.
+ */
+export const WIDGET_PUBLISH_DECISION_DECIDE_GRANT = {
+  routePath: WIDGET_LIFECYCLE_PUBLISH_DECISION_DECIDE_ROUTE_PATH,
+  requiredScopes: [WIDGET_LIFECYCLE_DECIDE_SCOPE],
+  auditAuthorized: "widget_lifecycle_decide_authorized",
+  auditRejected: "widget_lifecycle_decide_rejected",
 } as const;
 
 /**
