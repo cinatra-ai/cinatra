@@ -17,6 +17,7 @@ import {
   Component as ReactComponent,
   createElement,
   useCallback,
+  useContext,
   useEffect,
   useRef,
   useState,
@@ -24,7 +25,7 @@ import {
   type ReactNode,
 } from "react";
 import type { FieldRendererProps } from "./field-renderer-registry";
-import { SchemaOnlyFloorRenderer } from "./schema-field-renderer";
+import { RendererFloorReportContext, SchemaOnlyFloorRenderer } from "./schema-field-renderer";
 import { loadFieldRendererComponent } from "./field-renderer-components";
 
 /** Render-time containment: an extension renderer that throws while rendering is
@@ -86,6 +87,17 @@ export function makeExtensionFieldRenderer(
       ComponentType<FieldRendererProps> | null
     >(null);
     const [degraded, setDegraded] = useState(false);
+    const [crashed, setCrashed] = useState(false);
+    // cinatra#3035: THIS instance tells the host that mounted it whether it settled
+    // on the floor (a degrade or a render-time throw), which commits no pick. The
+    // load window counts as not floored: the component may still mount. Nothing is
+    // shared by binding id, so a remount or a second instance of the id starts over.
+    const reportFloor = useContext(RendererFloorReportContext);
+    const floored = degraded || crashed;
+    useEffect(() => {
+      reportFloor?.(floored);
+    }, [floored, reportFloor]);
+    useEffect(() => () => reportFloor?.(false), [reportFloor]);
     // THE RESOLVED COMPONENT'S VALIDITY REPORTS (cinatra#3562). The host's
     // validity owner belongs to this wrapper, which stays on the screen when
     // the component inside it crashes into the floor. So the wrapper closes
@@ -179,6 +191,7 @@ export function makeExtensionFieldRenderer(
         fallback: floor,
         onCrash: () => {
           crashedRef.current = true;
+          setCrashed(true);
           if (lastReportRef.current === false) setHeldAtCrash(true);
         },
       },

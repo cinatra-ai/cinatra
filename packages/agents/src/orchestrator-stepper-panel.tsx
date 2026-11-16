@@ -102,7 +102,7 @@ import {
 } from "./review-gate-card";
 import { ensureOrCheckRunNameAction } from "./run-name-actions";
 import { approveReviewTask } from "./hitl-actions";
-import { GateContinueHoldContext } from "./schema-field-renderer";
+import { GateContinueHoldContext, RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
 // Wrap the legacy `userResponse` text with the WayFlow `user_envelope`
 // shape when paperclip attachments are pending. Refs persist attachments
 // captured at Suggest time; consumed at gate Continue.
@@ -775,6 +775,9 @@ function HitlApprovalCard({
   // only for non-null keys, so a transient null changes nothing.
   const bufferKey =
     interruptContext != null ? hitlGateIdentityKey(interruptContext) : null;
+  // cinatra#3035: the mounted gate renderer reports here when it settles on the
+  // floor, for this gate only: a later gate reads its own hold from its first frame.
+  const [rendererFloored, setRendererFloored] = useGateRendererFloor(bufferKey);
   const [prevBufferKey, setPrevBufferKey] = useState<string | null>(null);
   if (bufferKey !== null && bufferKey !== prevBufferKey) {
     setPrevBufferKey(bufferKey);
@@ -1455,6 +1458,7 @@ function HitlApprovalCard({
         {/* The renderer reports this gate's validity as its own. */}
         {RendererComponent && !isGenericObjectSchema && !fallbackGateIsMalformed ? (
           <GateContinueHoldContext.Provider value={fallbackGateAsksForFields}>
+          <RendererFloorReportContext.Provider value={setRendererFloored}>
           <GateValidityOwner
             renderer={RendererComponent}
             store={gateValidity}
@@ -1650,6 +1654,7 @@ function HitlApprovalCard({
                 : undefined
             }
           />
+          </RendererFloorReportContext.Provider>
           </GateContinueHoldContext.Provider>
         ) : !isGenericObjectSchema ? (
           <p className="text-sm text-muted-foreground">
@@ -1685,7 +1690,7 @@ function HitlApprovalCard({
                 isApproving ||
                 gateReportedInvalid ||
                 continueAwaitsRendererValue ||
-                continueAwaitsAPick(entry, bufferedHitlValue)
+                (!rendererFloored && continueAwaitsAPick(entry, bufferedHitlValue))
               }
               onClick={handleContinue}
               className="gap-1.5"

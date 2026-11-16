@@ -136,6 +136,7 @@ import {
 import { getAgentHitlScreenStateAction } from "./agent-hitl-screen-actions";
 import { continueAwaitsAPick, fieldRendererRegistry, type FieldRendererContext } from "./field-renderer-registry";
 import { hasMidRunHitlBinding } from "./orchestrator-mid-run-hitl";
+import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
 import { DispatchRenderer, type PresentationHint } from "./result-renderers";
 import { approveReviewTask } from "./hitl-actions";
 import { getFieldRendererContextForAgentBuilderAction } from "./server-actions";
@@ -1206,6 +1207,9 @@ export function AgentHitlScreenCard({
   // buffer whose key does not match the gate on screen is not this gate's
   // answer and is not read, and the check below drops it.
   const gateKey = gate === null ? null : hitlGateKey(gate);
+  // cinatra#3035: the mounted renderer reports here when it settles on the floor,
+  // for this gate only: a later gate reads its own hold from its first frame.
+  const [rendererFloored, setRendererFloored] = useGateRendererFloor(gateKey);
   // THE GATE ON SCREEN, AS OF THE LAST COMMIT (cinatra#3380). A write or a press
   // made for one gate can arrive after the next gate has been committed: a
   // flush that took its time, or a replaced renderer that still calls its
@@ -1473,6 +1477,7 @@ export function AgentHitlScreenCard({
       gateMountsAnAnsweringRenderer(runId, gate);
     return (
       <>
+        <RendererFloorReportContext.Provider value={setRendererFloored}>
         <AgentHitlScreenFields
           runId={runId}
           host={host}
@@ -1487,13 +1492,14 @@ export function AgentHitlScreenCard({
           registerFlush={cardOwnsSetupSend ? registerRendererFlush : undefined}
           gateKey={gateKey ?? ""}
         />
+        </RendererFloorReportContext.Provider>
         {isMidRun && !isGroupedSetup ? (
           <AgentHitlScreenContinue
             gate={gate}
             buffered={activeBuffered}
             submitting={submitting}
             blocked={(!cookieSession && auth === null) || withholdRenderer}
-            awaitsPick={continueAwaitsAPick(resolveHitlGateEntry(runId, gate), activeBuffered)}
+            awaitsPick={!rendererFloored && continueAwaitsAPick(resolveHitlGateEntry(runId, gate), activeBuffered)}
             onContinue={onContinue}
           />
         ) : cardOwnsSetupSend ? (
@@ -1523,6 +1529,8 @@ export function AgentHitlScreenCard({
     onSubmitBuffer,
     registerRendererFlush,
     stageSetupAnswer,
+    rendererFloored,
+    setRendererFloored,
   ]);
 
   // Nothing before an authorized read, and NO DOM AT ALL for `none` — the

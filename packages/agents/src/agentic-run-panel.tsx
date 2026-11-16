@@ -42,6 +42,7 @@ import {
 import type { AgentRunMessageBody } from "./store";
 import { StatusPill } from "@/components/ui/status-pill";
 import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
+import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
 import type { FieldRendererContext, FieldRendererProps } from "./field-renderer-registry";
 import { ArrowRight } from "lucide-react";
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
@@ -1723,6 +1724,9 @@ export function AgenticRunPanel({
   const bufferedHitlValueKey = effectiveHitlContext
     ? hitlGateIdentityKey(effectiveHitlContext)
     : null;
+  // cinatra#3035: the mounted gate renderer reports here when it settles on the
+  // floor, for this gate only: a later gate reads its own hold from its first frame.
+  const [rendererFloored, setRendererFloored] = useGateRendererFloor(bufferedHitlValueKey);
   const [prevBufferedHitlValueKey, setPrevBufferedHitlValueKey] = useState<string | null>(null);
   if (
     bufferedHitlValueKey !== null &&
@@ -2204,7 +2208,7 @@ export function AgenticRunPanel({
           isApproving ||
           activeGateReportedInvalid ||
           opts?.awaitingRendererValue === true ||
-          continueAwaitsAPick(hitlRendererEntry?.entry, bufferedHitlValue)
+          (!rendererFloored && continueAwaitsAPick(hitlRendererEntry?.entry, bufferedHitlValue))
         }
         className="gap-1.5"
         // THE HITL SCREEN'S ONE DECISION (cinatra#2930). Named on the row this
@@ -3211,6 +3215,7 @@ export function AgenticRunPanel({
                 // affordances are one resume path with two entrances, not two.
                 return (
                   <>
+                    <RendererFloorReportContext.Provider value={setRendererFloored}>
                     {/* The renderer reports this gate's validity as its own. */}
                     <GateValidityOwner
                       renderer={RendererComponent}
@@ -3372,6 +3377,7 @@ export function AgenticRunPanel({
                           : undefined
                       }
                     />
+                    </RendererFloorReportContext.Provider>
                     {/* Show the external Continue button only for non-grouped-setup midrun renderers.
                         cinatra#3380 — it stays unavailable while the gate declares a
                         value its renderer must produce and the renderer has written

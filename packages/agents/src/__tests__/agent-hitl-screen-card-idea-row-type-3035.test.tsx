@@ -43,21 +43,18 @@ vi.mock("../hitl-actions", () => ({
 
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 import { fieldRendererRegistry } from "../field-renderer-registry";
-import {
-  ensureDefaultFieldRenderersRegistered,
-  registerFieldRendererBindings,
-} from "../register-default-renderers";
+import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import { AgentHitlScreenCard } from "../agent-hitl-screen-card";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
 const GLOBAL_STYLESHEET = join(REPO_ROOT, "src", "app", "globals.css");
 
 const RUN_ID = "run-3035-row-type";
-const IDEA_RENDERER_ID = "@cinatra-test/idea-kind-3035:row-type";
+const IDEA_RENDERER_ID = "@cinatra-ai/blog-pipeline-agent:idea-selection";
 const FIELDS_REGION = '[data-conformance-id="hitl-screen-fields"]';
 const IDEAS = [
-  { title: "Row type idea one", summary: "The first detail line" },
-  { title: "Row type idea two", summary: "The second detail line" },
+  { artifactId: "idea-r1", representationRevisionId: "rev-idea-r1", title: "Row type idea one", summary: "The first detail line", text: "Row type idea one\nThe first detail line" },
+  { artifactId: "idea-r2", representationRevisionId: "rev-idea-r2", title: "Row type idea two", summary: "The second detail line", text: "Row type idea two\nThe second detail line" },
 ];
 
 const asking = {
@@ -102,9 +99,6 @@ let originalFetch: typeof globalThis.fetch;
 beforeEach(() => {
   fieldRendererRegistry.clear();
   ensureDefaultFieldRenderersRegistered();
-  registerFieldRendererBindings([
-    { id: IDEA_RENDERER_ID, kind: "blog-idea-selection", priority: 80, midRunHitl: true },
-  ]);
   screenStateMock.mockImplementation(async () => asking);
   originalFetch = globalThis.fetch;
   globalThis.fetch = (async () =>
