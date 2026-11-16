@@ -1399,9 +1399,9 @@ export async function withRunDecisionLock<T>(
  * them. Such an intent's last claim died after it took the attempt and before
  * it put the run back on its gate: the mark is still set, no lease is live, and
  * neither the claim nor the dead-letter pass takes it. A fresh lease token and
- * expiry are stamped, `attempts` is NOT incremented: the settle sends nothing,
- * it puts the run back (a release under this lease) and then dead-letters the
- * intent under the same lease. One winner per row (FOR UPDATE SKIP LOCKED); a
+ * expiry are stamped, `attempts` is NOT incremented: the settle sends nothing.
+ * It replays a recorded task and closes the intent, or it puts the run back (a
+ * release under this lease) and then dead-letters the intent under the same lease. One winner per row (FOR UPDATE SKIP LOCKED); a
  * settle that dies is leased again once its lease lapsed.
  */
 export async function leaseExhaustedResumeClaims(opts?: {

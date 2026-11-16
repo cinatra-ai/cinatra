@@ -495,15 +495,54 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
       expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
     });
 
-    it("S2 a settle of a recorded task replays nothing and moves nothing: the intent is dead-lettered for ops", async () => {
+    // No settle leaves a run `running` with a dead-lettered intent: no driver would
+    // take it, and the upgrade recovery reads only paused runs.
+    it("S2 a settle of a recorded task replays the handler from the record, bound to the run's gate, sends nothing and closes the intent", async () => {
       gateStoreMock.leaseExhaustedResumeClaims.mockResolvedValueOnce([exhausted()]);
       storeMock.readAgentRunById.mockResolvedValueOnce(runningRun());
       gateStoreMock.readResumeIntentClaim.mockResolvedValueOnce({ runClaimed: true, result: { id: "task-recorded" } });
-      await sweepArtifactReviewResumeIntents();
+      const summary = await sweepArtifactReviewResumeIntents();
+      expect(summary.failed).toBe(0);
+      expect(handleWayflowTaskStateSpy).toHaveBeenCalledTimes(1);
+      expect(handleWayflowTaskStateSpy).toHaveBeenCalledWith(expect.objectContaining({
+        runId: "run-1", fromStatus: "running", task: { id: "task-recorded" },
+        claimedGate: { a2aTaskId: "task-1", executionAttemptId: "attempt-A" },
+      }));
+      expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-1", "lease-settle");
       expect(claimSpy).not.toHaveBeenCalled();
-      expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
       expect(sendTaskSpy).not.toHaveBeenCalled();
-      expect(gateStoreMock.deadLetterResumeIntentUnderLease).toHaveBeenCalledWith("gate-1", "lease-settle", expect.stringContaining("for ops"));
+      expect(gateStoreMock.deadLetterResumeIntentUnderLease).not.toHaveBeenCalled();
+    });
+
+    it("S2 a settle whose replay throws puts the run back on its gate, then dead-letters the intent", async () => {
+      gateStoreMock.leaseExhaustedResumeClaims.mockResolvedValueOnce([exhausted()]);
+      storeMock.readAgentRunById.mockResolvedValueOnce(runningRun());
+      gateStoreMock.readResumeIntentClaim.mockResolvedValueOnce({ runClaimed: true, result: { id: "task-recorded" } });
+      handleWayflowTaskStateSpy.mockRejectedValueOnce(new Error("handler fault"));
+      const summary = await sweepArtifactReviewResumeIntents();
+      expect(summary.failed).toBe(0);
+      expect(claimSpy).toHaveBeenCalledTimes(1);
+      expect(claimSpy.mock.calls[0]!.slice(0, 3)).toEqual(["run-1", "running", "pending_approval"]);
+      expect(claimSpy.mock.calls[0]![3]).toMatchObject({
+        resumeIntentLease: { gateId: "gate-1", leaseToken: "lease-settle" },
+        resumeGate: { a2aTaskId: "task-1", executionAttemptId: "attempt-A" },
+      });
+      expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+      expect(gateStoreMock.deadLetterResumeIntentUnderLease).toHaveBeenCalledWith("gate-1", "lease-settle", expect.stringContaining("back on its gate"));
+      expect(claimSpy.mock.invocationCallOrder[0]).toBeLessThan(gateStoreMock.deadLetterResumeIntentUnderLease.mock.invocationCallOrder[0]!);
+      expect(sendTaskSpy).not.toHaveBeenCalled();
+    });
+
+    it("S2 a settle of a recorded task whose run names no gate task replays nothing unbound: the run goes back on the mark alone", async () => {
+      gateStoreMock.leaseExhaustedResumeClaims.mockResolvedValueOnce([exhausted()]);
+      storeMock.readAgentRunById.mockResolvedValueOnce(pausedRun({ status: "running", executionAttemptId: "attempt-A", a2aTaskId: null }));
+      gateStoreMock.readResumeIntentClaim.mockResolvedValueOnce({ runClaimed: true, result: { id: "task-recorded" } });
+      await sweepArtifactReviewResumeIntents();
+      expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+      expect(claimSpy).toHaveBeenCalledTimes(1);
+      expect(claimSpy.mock.calls[0]![3]).toEqual({ resumeIntentLease: { gateId: "gate-1", leaseToken: "lease-settle" } });
+      expect(gateStoreMock.deadLetterResumeIntentUnderLease).toHaveBeenCalledWith("gate-1", "lease-settle", expect.stringContaining("back on its gate"));
+      expect(sendTaskSpy).not.toHaveBeenCalled();
     });
 
     it("S3 a settle whose release finds the mark cleared or the lease gone dead-letters nothing", async () => {
