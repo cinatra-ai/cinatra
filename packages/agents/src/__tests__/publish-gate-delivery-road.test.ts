@@ -274,7 +274,7 @@ describe("the resume delivery on a publishing template", () => {
   it("claims the pause, reads the hold again under the claim, fences by its claim of the run, and hands running and its token to the task handler", async () => {
     expect(await deliverArtifactReviewResumeIntent(intent())).toBe("delivered");
     expect(moves()).toEqual([["run-1", "pending_approval", "running"]]);
-    expect(storeMock.transitionRunStatus.mock.calls[0]![3]).toMatchObject({ pauseFence: { token: "tok-fake", generation: 1 } });
+    expect((storeMock.transitionRunStatus.mock.calls[0] as unknown[])[3]).toMatchObject({ pauseFence: { token: "tok-fake", generation: 1 } });
     expect(decisions.readLatestDecisionForRun).toHaveBeenCalledTimes(2);
     expect(pauseClaimFake.claimPause.mock.invocationCallOrder[0]!).toBeLessThan(
       decisions.readLatestDecisionForRun.mock.invocationCallOrder[1]!,
