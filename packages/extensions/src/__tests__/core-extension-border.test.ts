@@ -118,7 +118,7 @@ describe("core/extension border — fixture detection per crossing class", () =>
 
   it("catches a pack's type id hard-coded in core", () => {
     const found = scan(
-      "packages/agents/src/blog-idea-selection-renderer.tsx",
+      "packages/agents/src/synthetic-core-binding-fixture.tsx",
       'const BINDING = "@cinatra-ai/blog-pipeline-agent:idea-selection";\n',
     );
     expect(found.map((f) => f.rule)).toEqual(["pack-type-id-in-core"]);
@@ -307,7 +307,6 @@ describe("core/extension border — the repository itself", () => {
     expect(keys).toContain("src/lib/blog");
     expect(keys).toContain("packages/agents/src/campaign-recipients-review-renderer.tsx");
     expect(keys).toContain("packages/agents/src/email-drafts-review-renderer.tsx");
-    expect(keys).toContain("packages/agents/src/blog-idea-selection-renderer.tsx");
   });
 
   it("fails closed when the committed locks are not there to read", () => {
