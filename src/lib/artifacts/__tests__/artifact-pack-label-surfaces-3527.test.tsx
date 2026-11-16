@@ -33,7 +33,6 @@ vi.mock("@/app/artifacts/[id]/renderer-dispatch", () => ({
 }));
 vi.mock("@/app/artifacts/[id]/review-surface-roads", () => ({ hostArtifactContentBuilder: () => async () => { throw new Error("unused content read"); }, SESSION_DATA_ROAD: { road: "session", apiUrl: "/api/dashboards/cubejs-api/v1" } }));
 vi.mock("@/app/artifacts/[id]/extension-renderer-mount", () => ({ ExtensionRendererMount: () => null }));
-vi.mock("@/app/artifacts/[id]/dashboard-pointer-detail", () => ({ DashboardPointerDetail: () => null, DashboardPointerLoading: () => null, DashboardPointerError: () => null }));
 vi.mock("@/lib/dashboards/dashboard-artifact-pointer-resolvers", () => ({ resolveDashboardArtifactPointer: () => { throw new Error("unused dashboard read"); } }));
 vi.mock("@/components/page-header-title-sync", () => ({ PageHeaderTitleSync: () => null }));
 vi.mock("next/navigation", () => ({
