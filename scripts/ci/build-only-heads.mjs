@@ -237,3 +237,6 @@ export function evaluateHeadCondition(text, head) {
 
 /** True when a head `{ headRef, headRepo, repository }` is a build-only head. */
 export const isBuildOnlyHead = (head) => !evaluateHeadCondition(BUILD_ONLY_HEAD_CONDITION, head);
+
+// red-first gate pilot (cinatra-ai/ci#132): a throwaway constant; this pull request is never merged.
+export const RED_FIRST_PILOT = 42;
