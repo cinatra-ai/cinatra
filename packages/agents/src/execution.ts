@@ -1924,10 +1924,11 @@ async function resolveWayflowXRenderer(
 //     where the run ACTUALLY is, and every edge it needs out of `running` — to
 //     `pending_approval` for the next gate, to `completed`, `failed` or
 //     `waiting_trigger` — the state machine already carries.
-//   - mcp/handlers resume          → "running" — cinatra#3745: that road claims
-//     the gate (claimGateForResume, bound to the gate's a2a task and execution
-//     attempt) before it records or sends, and passes that claim as
-//     `claimedGate`, so the answer is applied only while the run holds it.
+//   - mcp/handlers resume          → "running" — that road (run-resume-under-claim.ts)
+//     claims the pause and fences it (cinatra#4245), the fence bound to the
+//     gate's a2a task and execution attempt (cinatra#3745), before it records
+//     or sends, and passes the gate as `claimedGate` and its token as
+//     `pauseClaimToken`, so the answer is applied only while the run holds both.
 //
 // Same-status short-circuit: when fromStatus === target, return without
 // calling transitionRunStatus. The pair pending_approval -> pending_approval
@@ -1962,6 +1963,8 @@ export type HandleWayflowTaskStateArgs = {
   runId: string;
   run: AgentRunRecord;
   fromStatus: AgentRunStatus;
+  /** cinatra#4245: the claim token of a resume's send; see the resync below. */
+  pauseClaimToken?: string;
   /**
    * cinatra#1939 wave 2 (§2d) — the org-write authority grounding this handler's
    * internal transitions (→pending_approval / →failed / →completed). Each of the
@@ -2234,7 +2237,7 @@ export function declaredOutputsResponseText(
 }
 
 export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): Promise<void> {
-  const { runId, run, fromStatus, task, authority, claimedGate } = args;
+  const { runId, run, fromStatus, task, authority, pauseClaimToken, claimedGate } = args;
   const taskState = task.status?.state;
 
   // cinatra#3745: the run's a2a_task_id is the gate identity a resume claim binds
@@ -2279,24 +2282,41 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     history: (task as { history?: ReadonlyArray<{ role?: unknown; metadata?: unknown }> }).history,
   });
 
-  if (!claimedGate) {
-    // Defensive resync (idempotent if unchanged): persist task.id / contextId so
-    // the next resume's reverse-lookup by a2aTaskId still finds the run if
-    // WayFlow assigned a new task ID. updateAgentRunA2ATaskId is an unconditional
-    // overwrite and retries the transient collision itself.
+  // Defensive resync (idempotent if unchanged): persist task.id / contextId so
+  // the next resume's reverse-lookup by a2aTaskId still finds the run if
+  // WayFlow assigned a new task ID.
+  //
+  // cinatra#4245: a sender that holds a pause claim writes only under its own
+  // token, even an unchanged id, and in every state that write is awaited with
+  // no catch: a write that fails could not show that the token still holds the
+  // row, so the error leaves this handler before any output or transition, and
+  // the caller settles its lease as after a failed send. 0 rows means the token
+  // no longer holds the row (another claimer took the lease over, or a stop or
+  // another status change cleared it), so this handler makes no transition. On
+  // the MCP resume the claimed leg's write above (cinatra#3745) has already
+  // written the task and its context; this write then proves the token.
+  if (pauseClaimToken !== undefined) {
+    const { written } = await updateAgentRunA2ATaskId(runId, task.id, { pauseClaimToken });
+    if (!written) {
+      console.warn(`[wayflow] run=${runId} task=${task.id}: this sender's claim token no longer holds the run; no transition`);
+      return;
+    }
+    if (!claimedGate && task.contextId && task.contextId !== run.a2aContextId) {
+      await updateAgentRunA2AContextId(runId, task.contextId).catch(() => undefined);
+    }
+  } else if (!claimedGate) {
+    // Without a claim, updateAgentRunA2ATaskId is an unconditional overwrite and
+    // retries the transient collision itself. From `running` (the worker's own
+    // dispatch) it is awaited with no catch in every state, so at a pause a
+    // failure shows no gate (cinatra#4245) and no later edge parks the run under
+    // the earlier gate's id (cinatra#3745).
     if (task.id !== run.a2aTaskId) {
       if (fromStatus === "pending_approval") {
-        // The resume delivery (artifact-review-resume-delivery.ts) applies its
-        // answer from `pending_approval` with no claim. If a failed write
-        // stopped here, the run would stay parked under the earlier gate's id
-        // while WayFlow waits at this answer, the Redis latest-task map below
-        // would still name the earlier gate, and the re-claimed intent would
-        // pass both of the delivery's guards and send the earlier gate's
-        // decision again into this answer's context. So the write stays best
-        // effort on this road, as before: the answer is applied and the
-        // delivery closes its intent. The column can still name the earlier
-        // gate, where a stale claim of that gate would win; the delivery
-        // claims nothing yet.
+        // From `pending_approval` with no claim the write stays best effort
+        // (cinatra#3745): a failed write must not keep the run parked under the
+        // earlier gate's id while WayFlow waits at this answer. Every resume
+        // road holds a pause claim since cinatra#4245 (the resume delivery
+        // passes its token), so no product road reaches this branch now.
         await updateAgentRunA2ATaskId(runId, task.id).catch((err) => {
           console.warn(
             `[wayflow] run=${runId} task=${task.id} a2a_task_id write failed on the resume delivery ` +
@@ -2897,7 +2917,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         // winning is the only proof the run is really parked here.
         let parkedAtReview = false;
         try {
-          await transitionRunStatus(runId, fromStatus, "pending_approval", legFence, authority);
+          await transitionRunStatus(runId, fromStatus, "pending_approval", { pauseTaskId: task.id, ...legFence }, authority);
           parkedAtReview = true;
         } catch (e) {
           if (!(e instanceof RunTransitionError && e.code === "stale_from_status")) throw e;
@@ -2917,9 +2937,9 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // #839: Surface an InputMessageNode gate's declared DFE inputs — which the
     // WayFlow runtime propagates through task.metadata.pendingApproval
     // (interruptPayload) — to the renderer. blog-pipeline's idea_selection_gate
-    // needs its `ideas[]` render input present to show an idea chooser (see
-    // blog-idea-selection-renderer.tsx, the dedicated renderer the chooser
-    // relocated onto). Merged BELOW spreadFromOutput and the
+    // needs its `ideas[]` render input present to show an idea chooser (the
+    // pipeline pack's own component on the dedicated idea-selection binding).
+    // Merged BELOW spreadFromOutput and the
     // explicit stepNumber/output so history-derived output still WINS: data-review
     // gates that parse `output` are unaffected.
     //
@@ -3031,7 +3051,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         }),
       parkRun: async () => {
         try {
-          await transitionRunStatus(runId, fromStatus, "pending_approval", legFence, authority);
+          await transitionRunStatus(runId, fromStatus, "pending_approval", { pauseTaskId: task.id, ...legFence }, authority);
         } catch (e) {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
           throw e;

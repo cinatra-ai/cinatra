@@ -31,6 +31,15 @@ const storeMock = vi.hoisted(() => ({
   readAgentTemplateById: vi.fn(),
 }));
 vi.mock("../store", () => storeMock);
+// cinatra#4245: the worker's claim always wins here; its refusals have their own
+// test (artifact-review-resume-delivery-claim.test.ts).
+vi.mock("../run-pause-claim", () => ({
+  claimPause: vi.fn(async () => ({ kind: "claimed", token: "tok", generation: 1, expiresAt: new Date(0) })),
+  fencePauseInPlace: vi.fn(async () => "fenced"),
+  releasePauseClaim: vi.fn(async () => "released"),
+  settlePauseSend: vi.fn(async () => "settled"),
+  PauseClaimReleaseError: class extends Error {},
+}));
 
 // cinatra#3007 — the executor asks the produced-review question before every
 // terminal write. This suite is about the resume-outbox delivery sweep, drives the tail with no

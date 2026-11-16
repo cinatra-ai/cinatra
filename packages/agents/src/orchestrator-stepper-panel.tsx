@@ -99,7 +99,7 @@ import {
 } from "./review-gate-card";
 import { ensureOrCheckRunNameAction } from "./run-name-actions";
 import { approveReviewTask } from "./hitl-actions";
-import { GateContinueHoldContext } from "./schema-field-renderer";
+import { GateContinueHoldContext, RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
 // Wrap the legacy `userResponse` text with the WayFlow `user_envelope`
 // shape when paperclip attachments are pending. Refs persist attachments
 // captured at Suggest time; consumed at gate Continue.
@@ -732,6 +732,9 @@ function HitlApprovalCard({
   const [prevBufferKey, setPrevBufferKey] = useState<string | null>(null);
   const bufferKey =
     interruptContext != null ? hitlGateIdentityKey(interruptContext) : null;
+  // cinatra#3035: the mounted gate renderer reports here when it settles on the
+  // floor, for this gate only: a later gate reads its own hold from its first frame.
+  const [rendererFloored, setRendererFloored] = useGateRendererFloor(bufferKey);
   if (
     bufferKey !== null &&
     prevBufferKey !== null &&
@@ -1381,6 +1384,7 @@ function HitlApprovalCard({
     <>
         {RendererComponent && !isGenericObjectSchema && !fallbackGateIsMalformed ? (
           <GateContinueHoldContext.Provider value={fallbackGateAsksForFields}>
+          <RendererFloorReportContext.Provider value={setRendererFloored}>
           <RendererComponent
             // Keyed by xRenderer AND fieldName (#810): per-field setup gates
             // share one xRenderer, and the setup loop advances fields without
@@ -1560,6 +1564,7 @@ function HitlApprovalCard({
                 : undefined
             }
           />
+          </RendererFloorReportContext.Provider>
           </GateContinueHoldContext.Provider>
         ) : !isGenericObjectSchema ? (
           <p className="text-sm text-muted-foreground">
@@ -1592,7 +1597,7 @@ function HitlApprovalCard({
                 isApproving ||
                 continueHeldByRenderer(entry, interruptContext.values, bufferedHitlValue) ||
                 continueAwaitsRendererValue ||
-                continueAwaitsAPick(entry, bufferedHitlValue)
+                (!rendererFloored && continueAwaitsAPick(entry, bufferedHitlValue))
               }
               onClick={handleContinue}
               className="gap-1.5"

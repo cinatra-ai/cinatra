@@ -89,6 +89,9 @@ beforeAll(async () => {
   crStore = await import("../lifecycle-review-changes-requested-store");
   resumeDelivery = await import("../artifact-review-resume-delivery");
   dbMod = await import("../db");
+  // cinatra#4245: a resume takes the pause claim, an org-guarded write, so the run's
+  // organization exists, as it does for every real run.
+  await pool(`INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $1, $1, now()) ON CONFLICT (id) DO NOTHING`, [ORG]);
 }, 90_000);
 
 beforeEach(async () => {
@@ -1686,7 +1689,7 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — plan (b): the carrier of a declared r
     expectResumedWith(p, successorText);
   });
 
-  it("b3 — TWO CARRIERS COMMIT TOGETHER: two pictures' lineages go stale in two sessions that commit together; each inserts its own carrier, and the run is never stranded. Taken one after the other the second finds the run advanced; delivered at the same time both can send, at least once, as two legs decided at the same time do on main", async () => {
+  it("b3 — TWO CARRIERS COMMIT TOGETHER: two pictures' lineages go stale in two sessions that commit together; each inserts its own carrier, and the run is never stranded. Taken one after the other the second finds the run advanced; delivered at the same time the pause claim lets one send and keeps the other for the sweep, at least once, as two legs decided at the same time do on main's road", async () => {
     // A control on main's road: two legs decided at the same time, no lineage.
     const main = await pausedPipeline();
     await approve(main.runId, main.step);
@@ -1694,9 +1697,34 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — plan (b): the carrier of a declared r
     const legs = await gateStore.claimPendingResumeIntents({ limit: 50, leaseMs: 300_000 });
     const mainRows = legs.filter((c) => c.runId === main.runId);
     expect(mainRows).toHaveLength(2);
-    await Promise.all(mainRows.map((row) => resumeDelivery.deliverArtifactReviewResumeIntent(row)));
+    // cinatra#4245: each delivery takes the pause claim before it sends, so one pause
+    // takes one answer at a time. Of two deliveries at the same time one sends. The
+    // other meets the first one's live claim ("retryable": its intent stays leased,
+    // and the sweep claims it again when the lease ends), or read the pause before
+    // the first fence and finds it moved on ("already-advanced": done, no send), or
+    // starts after the first one settled and sends at the next generation.
+    const deliverTogether = async (rows: typeof mainRows) => {
+      const outcomes = await Promise.all(rows.map((row) => resumeDelivery.deliverArtifactReviewResumeIntent(row)));
+      expect(outcomes.every((o) => o === "delivered" || o === "retryable" || o === "already-advanced")).toBe(true);
+      expect(outcomes).toContain("delivered");
+      return outcomes;
+    };
+    const count = (outcomes: string[], outcome: string) => outcomes.filter((o) => o === outcome).length;
+    // The held intent's lease ends; the next sweep claims it again and sends.
+    const reclaimHeld = async (rows: typeof mainRows) => {
+      for (const row of rows) {
+        if ((await intentStatusOf(row.gateId)) === "delivering") {
+          await setIntent(row.gateId, "lease_expires_at = now() - interval '1 second'");
+        }
+      }
+      await sweep();
+    };
+    const firstMain = await deliverTogether(mainRows);
+    expect(resumesOf(main)).toHaveLength(count(firstMain, "delivered"));
+    await reclaimHeld(mainRows);
     const mainSends = resumesOf(main).length;
-    expect(mainSends).toBe(2);
+    expect(mainSends).toBe(count(firstMain, "delivered") + count(firstMain, "retryable"));
+    for (const row of mainRows) expect(await intentStatusOf(row.gateId)).toBe("done");
 
     const runOf = async (carriedSequentially: boolean) => {
       const p = await pausedPipeline(true, 2);
@@ -1734,8 +1762,11 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — plan (b): the carrier of a declared r
         const rows = (await gateStore.claimPendingResumeIntents({ limit: 50, leaseMs: 300_000 }))
           .filter((c) => c.runId === p.runId);
         expect(rows.map((r) => r.gateId).sort()).toEqual([a.pressed.settledGateId, b.pressed.settledGateId].sort());
-        await Promise.all(rows.map((row) => resumeDelivery.deliverArtifactReviewResumeIntent(row)));
-        expect(resumesOf(p)).toHaveLength(mainSends);
+        // The same claim rule as the control: one sends now, a held one after its lease.
+        const first = await deliverTogether(rows);
+        expect(resumesOf(p)).toHaveLength(count(first, "delivered"));
+        await reclaimHeld(rows);
+        expect(resumesOf(p)).toHaveLength(count(first, "delivered") + count(first, "retryable"));
         expect(resumesOf(p).every((r) => r.message.parts[0].text === text)).toBe(true);
       }
       expect(await intentStatusOf(a.pressed.settledGateId)).toBe("done");

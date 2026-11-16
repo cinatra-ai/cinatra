@@ -624,9 +624,9 @@ describe("the PIXEL Build steps run under the machine's design build lock", () =
   for (const [file, run] of [
     [
       "design-visual-verify.yml",
-      "bash scripts/ci/design-build-host-lock.sh bash -c 'pnpm build || bash scripts/ci/design-build-cache.sh rebuild \"$?\"'",
+      "bash scripts/ci/design-build-host-lock.sh bash scripts/ci/hosted-build-memory-cap.sh run bash -c 'pnpm build || bash scripts/ci/design-build-cache.sh rebuild \"$?\"'",
     ],
-    ["design-baselines-refresh.yml", "bash scripts/ci/design-build-host-lock.sh pnpm build"],
+    ["design-baselines-refresh.yml", "bash scripts/ci/design-build-host-lock.sh bash scripts/ci/hosted-build-memory-cap.sh run pnpm build"],
   ]) {
     it(`${file}: the Build step, and only it, goes through the script`, () => {
       const step = buildStep(file);
