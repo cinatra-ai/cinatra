@@ -416,6 +416,15 @@ export function createDashboardPrimitiveHandlers() {
   };
 }
 
+/**
+ * The one dashboards write the agent passthrough may make (cinatra#3092):
+ * `dashboards_create`, and nothing else of this factory. The create still goes
+ * through this module, so `createDashboard` keeps its one importer.
+ */
+export function createDashboardForRun(request: PrimitiveInvocationRequest<unknown>) {
+  return createDashboardPrimitiveHandlers().dashboards_create(request);
+}
+
 /** Convert a thrown mutation-service error into the MCP error envelope. */
 function mutationError(err: unknown): { error: { code: string; message: string } } {
   if (err instanceof DashboardForbiddenError) {

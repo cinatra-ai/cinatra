@@ -95,6 +95,15 @@ export const LLM_PURPOSE_INVENTORY: readonly LlmPurposeEntry[] = Object.freeze([
       "The assistant IS the product surface the operator configured a provider for. S6 AC: it uses exactly the stored provider and unavailability is a visible error (resolveBoundDefaultAdapter), never a silent hop.",
   },
   {
+    purpose: "assistant-tool-manifest-report",
+    file: "src/app/api/assistants/chat/tool-manifest/route.ts",
+    what:
+      "The read-only tool-manifest report of the assistant chat turn (GET /api/assistants/chat/tool-manifest).",
+    policy: "exact-default",
+    rationale:
+      "The report mirrors the assistant turn's provider selection (purpose assistant-runtime): it resolves the pinned or bound-default adapter exactly as runAssistantTurn does and reads only its provider and defaultModel to assemble the same tool set. It never invokes the adapter, and an unavailable stored provider answers 503 provider_unavailable, never a silent hop.",
+  },
+  {
     purpose: "llm-bridge-passthrough",
     file: "src/app/api/llm-bridge/route.ts",
     what: "Agent LLM calls through /api/llm-bridge that carry no metadata.cinatra.llm.preferredProvider.",
