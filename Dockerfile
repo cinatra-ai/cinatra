@@ -229,8 +229,9 @@ ARG CI=
 #
 # Both are EMPTY by default, and empty means unset everywhere downstream —
 # scripts/next-build.mjs passes no bundler flag and next.config.ts spreads in no
-# experimental value — so a bare `docker build` and build-image.yml get exactly
-# today's build. Forwarded inline on the RUN (like CI) rather than as ENV so
+# experimental value — so a bare `docker build` gets exactly today's build.
+# build-image.yml passes CINATRA_BUILD_CPUS=1 (one page-data worker on the
+# hosted runner). Forwarded inline on the RUN (like CI) rather than as ENV so
 # they scope to `pnpm build` alone.
 #
 #   CINATRA_BUILD_BUNDLER=turbopack|webpack     bundler for this build

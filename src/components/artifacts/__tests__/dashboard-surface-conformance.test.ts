@@ -15,7 +15,8 @@
  * component and its wiring stay until cinatra#4311: its done-when deletes
  * `src/app/artifacts/[id]/dashboard-pointer-detail.tsx` and leaves no
  * production source under `src` that names `DashboardPointerDetail`. The
- * routing test below holds that wiring until then.
+ * routing test below holds that wiring until then: the page draws the pointer
+ * only where its one display dispatch answered a floor for a dashboard row.
  * The repo runs vitest in node without @testing-library/react,
  * so server-component wiring is pinned via source assertions (the established
  * pattern — see `surface-conformance.test.ts`); the live bidirectional
@@ -90,23 +91,25 @@ describe("§VIII routing — library rows render as dashboard pointers, dual-aut
     expect(LIB).not.toMatch(/buildFacetOptions\(all\)/);
   });
 
-  it("the detail route opens a dashboard artifact as a POINTER, not the renderer", () => {
-    // The core pointer wiring the 0.12.0 drawing drew. Version 0.13.0 draws the
-    // dashboard extension's own display here instead. The done-when of
-    // cinatra#4311 deletes `src/app/artifacts/[id]/dashboard-pointer-detail.tsx`
-    // and leaves no production source under `src` that names
-    // `DashboardPointerDetail`, so the `<DashboardPointerDetail` assertion
-    // below cannot hold after that change.
-    expect(DETAIL).toMatch(/isDashboardArtifactType\(artifact\.objectType\)/);
-    expect(DETAIL).toMatch(/resolveDashboardArtifactPointer/);
-    expect(DETAIL).toMatch(/<DashboardPointerDetail/);
-    // The dashboard branch returns BEFORE the renderer-dispatch body runs — so
-    // a dashboard artifact never reaches `pickArtifactRenderer(...)` (the CALL,
-    // not the import).
-    const branchIdx = DETAIL.indexOf("isDashboardArtifactType(artifact.objectType)");
-    const dispatchCallIdx = DETAIL.indexOf("resolveArtifactDisplayMount(");
-    expect(branchIdx).toBeGreaterThan(-1);
-    expect(dispatchCallIdx).toBeGreaterThan(branchIdx);
+  it("the detail route dispatches every admitted row, and draws the pointer only where that dispatch floors", () => {
+    // cinatra#3092 acceptance 2: "the page's pre-dispatch interception of the
+    // dashboard row is gone". The page carries no branch on the type and no
+    // pointer resolver (the type's read gate holds both), so a dashboard row
+    // reaches `resolveArtifactDisplayMount(...)` (the CALL, not the import)
+    // like every other. The pointer wiring stays until cinatra#4311 deletes it,
+    // but only AFTER that call and only on a floor: where the dispatch answers a
+    // floor of any reason, an admitted dashboard keeps its Open dashboard
+    // affordance instead of the generic floor.
+    const code = DETAIL.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    expect(code).not.toMatch(/isDashboardArtifactType/);
+    expect(code).not.toMatch(/resolveDashboardArtifactPointer/);
+    const dispatchCallIdx = code.indexOf("resolveArtifactDisplayMount(");
+    const guardIdx = code.indexOf('if (mount.kind === "floor" && typeGate.dashboardPointer)');
+    const pointerIdx = code.indexOf("<DashboardPointerDetail");
+    expect(dispatchCallIdx).toBeGreaterThan(-1);
+    expect(guardIdx).toBeGreaterThan(dispatchCallIdx);
+    expect(pointerIdx).toBeGreaterThan(guardIdx);
+    expect(code.match(/<DashboardPointerDetail/g) ?? []).toHaveLength(1);
   });
 });
 

@@ -93,7 +93,9 @@ const SAMPLED_SMOKE = () =>
     (s) => SAMPLE_LOOP(s) && s.text.includes(SMOKE_CMD),
     "sampler-carrying smoke",
   );
-const BUILD_CMD = "pnpm build";
+// The build runs inside the hosted build memory cap (hosted-e2e-build-worker-cap.test.mjs);
+// the sampler stays outside it, in the step's own shell.
+const BUILD_CMD = "bash scripts/ci/hosted-build-memory-cap.sh run pnpm build";
 const REPORT = () =>
   step((s) => /Stop the memory sampler/i.test(s.name), "sampler-stop/report");
 const UPLOAD = () =>

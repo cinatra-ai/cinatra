@@ -8,23 +8,26 @@
 // used-in, skill-id and description cells of those rows are hard to read. The
 // light palette is fine.
 //
-// THE ZEBRA IS ONE UTILITY ON ONE SHARED PRIMITIVE. `TableBody` carries
-// "[&_tr:last-child]:border-0 [&_tr:nth-child(even)]:bg-stripe-light/50"
-// (src/components/ui/table.tsx:43, intent stated at :35-37), and the band
-// composites over the table frame's own ground, `bg-background`
-// (src/components/ui/paginated-table.tsx:116-120). No page overrides it and no
-// `dark:` variant of it exists anywhere in the product.
+// THE ZEBRA IS ONE PAIR OF UTILITIES ON ONE SHARED PRIMITIVE. Since
+// cinatra#4286 `TableBody` (src/components/ui/table.tsx) carries one flat band
+// per palette, as specs/app-components.html section "Table" draws it:
+// "[&_tr:nth-child(even)]:bg-surface-muted" for the light palette and
+// "dark:[&_tr:nth-child(even)]:bg-surface" for the dark one. The band lies
+// over the page ground, `bg-background`: PaginatedTable's frame lays it
+// (src/components/ui/paginated-table.tsx) and, in the dark palette, the
+// `Table` primitive lays it under its own rows, so a table mounted directly on
+// a --surface card keeps its band (table-flat-band-4286.test.tsx section 3
+// reads those mounts). No page overrides it.
 //
-// THE CAUSE IS THE TOKEN, NOT THE UTILITY. `--stripe-light: #e3e8ee` is
-// declared for the LIGHT palette only — src/app/globals.css:35 (`:root`) and
-// :204 (`.cinatra`), mirrored at packages/design/src/tokens.css:42 and :158 —
-// and AT THE BRANCH BASE neither `.dark` block declared it. So in the dark
-// palette the band inherited the light-palette literal from `:root` and painted
-// it at 50 percent over a near-black ground: a mid grey that sat ABOVE the page
-// it is meant to whisper against, carrying the muted cells at 1.71:1. Each
-// `.dark` block now declares the token as that palette's own surface step, and
-// the cases below read the declaration rather than a line number, because a
-// line range quoted in a comment goes stale the moment either sheet moves.
+// THE ORIGINAL DEFECT (cinatra#3552). The band used to be one utility,
+// `bg-stripe-light/50`, and `--stripe-light` was declared for the LIGHT
+// palette only, so in the dark palette the band inherited the light literal
+// from `:root` and painted a mid grey ABOVE the page, carrying the muted cells
+// at 1.71:1. The stripe tokens now fill media placeholders only; each `.dark`
+// block still declares `--stripe-light` as a dark surface step so no light
+// literal reaches the dark palette. The cases below read the declarations
+// rather than line numbers, because a line range quoted in a comment goes
+// stale the moment either sheet moves.
 //
 // WHY THIS READS THE STYLESHEET RATHER THAN A BROWSER. jsdom implements
 // neither Tailwind's utility generation nor custom-property substitution, so no
@@ -39,10 +42,11 @@
 // (src/lib/color-contrast.ts).
 //
 // ONE ADAPTATION OF THAT FILE'S `utility()` IS REQUIRED. It drops any class
-// matching /^(?:.*-)?\[/, and the band class IS such a class, so a verbatim
-// copy would silently read no utility at all (section 5 exercises exactly
-// that). `bandUtility` below takes the class by its arbitrary-variant prefix
-// and fails loudly when that prefix is absent or carried more than once.
+// matching /^(?:.*-)?\[/, and the band classes ARE such classes, so a verbatim
+// copy would silently read no utility at all (section 4 exercises exactly
+// that). `bandUtilities` below takes each class by its variant prefix and
+// fails loudly when a prefix is absent, carried more than once, or qualified
+// by anything but the dark variant.
 //
 //   pnpm exec vitest run \
 //     src/components/ui/__tests__/table-zebra-band-dark-3552.test.tsx --maxWorkers=2
@@ -222,35 +226,74 @@ type Utility = { token: string; alpha: number | null };
 
 /** The arbitrary variant the zebra is drawn through. */
 const BAND_VARIANT = "[&_tr:nth-child(even)]:";
+/** The only qualifier the band may carry ahead of it: the dark palette. */
+const DARK_PREFIX = "dark:";
 
-/** The band colour utility a `TableBody` class list carries, split into the
- *  colour name and its opacity modifier (`bg-stripe-light/50` → 50).
+/** The band colour utilities a `TableBody` class list carries, one per
+ *  palette, each split into the colour name and its opacity modifier
+ *  (`bg-surface` -> no modifier, `bg-stripe-light/50` -> 50).
  *
  *  This is `utility()` of schedule-card-chosen-row-indigo-3279.test.tsx with
  *  ONE required adaptation: that helper drops every class matching
- *  /^(?:.*-)?\[/ and the band class IS one, so a verbatim copy would read no
- *  utility at all. A missing prefix, a second carrier of it, or a
- *  variant-qualified sibling that would outrank the plain reading FAILS here
- *  rather than being ignored. */
-function bandUtility(className: string): Utility {
+ *  /^(?:.*-)?\[/ and the band classes ARE such classes, so a verbatim copy
+ *  would read no utility at all. A missing palette, a second carrier of one,
+ *  or a carrier qualified by anything but `dark:` FAILS here rather than being
+ *  ignored. */
+function bandUtilities(className: string): Record<Palette, Utility> {
   const classes = className.split(/\s+/).filter(Boolean);
   const carriers = classes.filter(
     (c) => c.includes("nth-child(even)") && /(?:^|:)bg-/.test(c),
   );
+  const plain = carriers.filter((c) => c.startsWith(BAND_VARIANT));
+  const dark = carriers.filter((c) => c.startsWith(DARK_PREFIX + BAND_VARIANT));
+  expect(
+    plain.length,
+    `expected exactly one light alternate-row background utility in: ${className}`,
+  ).toBe(1);
+  expect(
+    dark.length,
+    `expected exactly one dark alternate-row background utility in: ${className}`,
+  ).toBe(1);
   expect(
     carriers.length,
-    `expected exactly one alternate-row background utility in: ${className}`,
+    `an alternate-row background utility carries another qualifier in: ${className}`,
+  ).toBe(2);
+  const parse = (carrier: string, rest: string): Utility => {
+    expect(
+      rest.startsWith("bg-"),
+      `the alternate-row band is qualified after \`${BAND_VARIANT}\` in: ${carrier}`,
+    ).toBe(true);
+    const [name, mod] = rest.slice("bg-".length).split("/");
+    return { token: name!, alpha: mod === undefined ? null : Number(mod) };
+  };
+  return {
+    light: parse(plain[0]!, plain[0]!.slice(BAND_VARIANT.length)),
+    dark: parse(dark[0]!, dark[0]!.slice(DARK_PREFIX.length + BAND_VARIANT.length)),
+  };
+}
+
+/** The band utility the cascade applies to an even row of `palette`: in the
+ *  dark palette the dark-qualified carrier when the list carries one, else the
+ *  plain one, which then reaches the dark rows as well; in the light palette
+ *  the plain one. Unlike `bandUtilities` it demands no particular shape of the
+ *  class list, so a case that reads the painted band through it fails for its
+ *  own invariant (the colour, the contrast), not because a carrier is
+ *  missing. */
+function cascadeBand(className: string, palette: Palette): Utility {
+  const carriers = className
+    .split(/\s+/)
+    .filter((c) => c.includes("nth-child(even)") && /(?:^|:)bg-/.test(c));
+  const plain = carriers.filter((c) => c.startsWith(BAND_VARIANT));
+  const dark = carriers.filter((c) => c.startsWith(DARK_PREFIX + BAND_VARIANT));
+  const useDark = palette === "dark" && dark.length > 0;
+  const pick = useDark ? dark : plain;
+  const prefix = useDark ? DARK_PREFIX + BAND_VARIANT : BAND_VARIANT;
+  expect(
+    pick.length,
+    `expected exactly one alternate-row background utility reaching the ${palette} rows in: ${className}`,
   ).toBe(1);
-  const carrier = carriers[0]!;
-  expect(
-    carrier.startsWith(BAND_VARIANT),
-    `the alternate-row band carries a qualifier ahead of \`${BAND_VARIANT}\` in: ${carrier}`,
-  ).toBe(true);
-  const rest = carrier.slice(BAND_VARIANT.length);
-  expect(
-    rest.startsWith("bg-"),
-    `the alternate-row band is qualified after \`${BAND_VARIANT}\` in: ${carrier}`,
-  ).toBe(true);
+  const rest = pick[0]!.slice(prefix.length);
+  expect(rest.startsWith("bg-"), `not a background utility: ${pick[0]}`).toBe(true);
   const [name, mod] = rest.slice("bg-".length).split("/");
   return { token: name!, alpha: mod === undefined ? null : Number(mod) };
 }
@@ -275,19 +318,18 @@ function tableBody(): HTMLElement {
   return body!;
 }
 
-/** The band as a person sees it: the token at its opacity, composited over the
- *  table frame's own ground (`bg-background`, paginated-table.tsx:116-120). */
+/** The band as a person sees it: the palette's token at its opacity (a flat
+ *  band carries none), composited over the page ground (`bg-background`). */
 function paintedBand(
   palette: Palette,
   sheet: Sheet = "host",
 ): { band: Rgba; ground: Rgba; util: Utility } {
-  const util = bandUtility(tableBody().className);
-  expect(util.alpha, "the zebra band is painted at an opacity").not.toBeNull();
+  const util = cascadeBand(tableBody().className, palette);
   const tokens = SHEETS[sheet].palette[palette];
   const ground = colour(resolve(tokens, "--background", sheet));
   const ink = {
     ...colour(registered(util.token, palette, sheet)),
-    a: util.alpha! / 100,
+    a: (util.alpha ?? 100) / 100,
   };
   return { band: compositeOver(ink, ground), ground, util };
 }
@@ -310,12 +352,15 @@ const BODY_TEXT_FLOOR = 4.5;
 // 1. THE DARK PALETTE — the band the proof round graded false.
 // ---------------------------------------------------------------------------
 describe("the alternate-row band in the DARK palette", () => {
-  it("is declared for the dark palette at all, in BOTH token layers, with one declaration text", () => {
+  it("keeps the stripe token declared for the dark palette, in BOTH token layers, with one declaration text", () => {
+    // The band no longer paints the stripe token (cinatra#4286), but media
+    // placeholders do: the dark palette must still carry its own value rather
+    // than the light literal from :root.
     const inGlobals = PALETTE.dark.get("--stripe-light");
     const inTokens = TOKENS_PALETTE.dark.get("--stripe-light");
     expect(
       inGlobals,
-      "the `.dark` block of src/app/globals.css does not declare --stripe-light, so the band inherits the light literal from :root",
+      "the `.dark` block of src/app/globals.css does not declare --stripe-light, so it inherits the light literal from :root",
     ).toBeDefined();
     expect(
       inTokens,
@@ -327,7 +372,22 @@ describe("the alternate-row band in the DARK palette", () => {
     ).toBe(inGlobals);
   });
 
+  it("keeps the dark stripe value DARK in both token layers, never a light literal", () => {
+    // Identical declaration text (the case above) is not enough: both layers
+    // could carry the same light literal. A placeholder in the dark palette
+    // stays at or below the palette's own --surface-muted step.
+    for (const sheet of ["host", "portable"] as const) {
+      const tokens = SHEETS[sheet].palette.dark;
+      const stripe = relativeLuminance(colour(resolve(tokens, "--stripe-light", sheet)));
+      const surfaceMuted = relativeLuminance(colour(resolve(tokens, "--surface-muted", sheet)));
+      expect(stripe, `${sheet}: the dark --stripe-light is a light value`).toBeLessThanOrEqual(
+        surfaceMuted,
+      );
+    }
+  });
+
   it("draws a DARK band: below the palette's own --surface-muted step and above the un-banded ground", () => {
+    expect(bandUtilities(tableBody().className).dark.token).toBe("surface");
     const { band, ground } = paintedBand("dark");
     const surfaceMuted = relativeLuminance(
       colour(resolve(PALETTE.dark, "--surface-muted")),
@@ -336,8 +396,8 @@ describe("the alternate-row band in the DARK palette", () => {
     // --surface 0.0044, --surface-strong 0.0092, --surface-muted 0.0216.
     expect(surfaceMuted).toBeCloseTo(0.0216, 4);
     expect(relativeLuminance(ground)).toBeCloseTo(0.0021, 4);
-    // At the branch base this reads 0.1843 — a mid grey 4.50:1 ABOVE the page
-    // it is supposed to whisper against.
+    // The flat --surface band: one step above the page, 0.0044.
+    expect(relativeLuminance(band)).toBeCloseTo(0.0044, 4);
     expect(relativeLuminance(band)).toBeLessThan(surfaceMuted);
   });
 
@@ -348,7 +408,6 @@ describe("the alternate-row band in the DARK palette", () => {
 
   it("carries the muted cells — extension, used in, skill id, description — over the body-text floor", () => {
     const { band } = paintedBand("dark");
-    // At the branch base this reads 1.71:1.
     expect(contrastRatio(inks("dark").muted, band)).toBeGreaterThanOrEqual(
       BODY_TEXT_FLOOR,
     );
@@ -356,7 +415,6 @@ describe("the alternate-row band in the DARK palette", () => {
 
   it("carries the skill-name cell's body ink over the same floor", () => {
     const { band } = paintedBand("dark");
-    // At the branch base this reads 4.28:1.
     expect(contrastRatio(inks("dark").body, band)).toBeGreaterThanOrEqual(
       BODY_TEXT_FLOOR,
     );
@@ -387,10 +445,10 @@ describe("the alternate-row band in the DARK palette", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 2. THE LIGHT PALETTE IS UNCHANGED — the reading the proof round graded true.
+// 2. THE LIGHT PALETTE: the flat --surface-muted band (cinatra#4286).
 // ---------------------------------------------------------------------------
 describe("the alternate-row band in the LIGHT palette", () => {
-  it("keeps the fabric stripe literal in every light block of both token layers", () => {
+  it("keeps the fabric stripe literal in every light block of both token layers (media placeholders)", () => {
     for (const [where, tokens] of [
       ["globals.css :root", ROOT_TOKENS],
       ["globals.css .cinatra", PALETTE.light],
@@ -401,38 +459,38 @@ describe("the alternate-row band in the LIGHT palette", () => {
     }
   });
 
-  it("still composites to the same whisper over its own ground", () => {
+  it("lays the flat --surface-muted band, one step below its own ground", () => {
     const { band, ground } = paintedBand("light");
-    // #e3e8ee at 50 percent over #f1f1ed. The checklist quotes this band as
-    // rgb(234, 236, 238); the exact composite is (234, 236.5, 237.5) — the same
-    // colour, the checklist's triple truncating the green channel's half and
-    // carrying the blue channel's up.
-    expect(band.r).toBeCloseTo(234, 6);
-    expect(band.g).toBeCloseTo(236.5, 6);
-    expect(band.b).toBeCloseTo(237.5, 6);
-    expect(contrastRatio(band, ground)).toBeCloseTo(1.04, 2);
+    // --surface-muted #e8e8e3, opaque, over the page #f1f1ed.
+    expect(band.r).toBeCloseTo(232, 6);
+    expect(band.g).toBeCloseTo(232, 6);
+    expect(band.b).toBeCloseTo(227, 6);
+    expect(relativeLuminance(band)).toBeLessThan(relativeLuminance(ground));
+    expect(contrastRatio(band, ground)).toBeCloseTo(1.0856, 3);
   });
 
-  it("keeps its muted and body inks exactly where they read", () => {
+  it("keeps its muted and body inks over the body-text floor", () => {
     const { band } = paintedBand("light");
     const { muted, body } = inks("light");
-    expect(contrastRatio(muted, band)).toBeCloseTo(5.05, 2);
-    expect(contrastRatio(body, band)).toBeCloseTo(13.57, 2);
+    expect(contrastRatio(muted, band)).toBeCloseTo(4.85, 2);
+    expect(contrastRatio(body, band)).toBeCloseTo(13.035, 2);
+    expect(contrastRatio(muted, band)).toBeGreaterThanOrEqual(BODY_TEXT_FLOOR);
   });
 });
 
 // ---------------------------------------------------------------------------
-// 3. THE FIX IS IN THE TOKEN, NOT IN THE UTILITY.
+// 3. THE UTILITIES THE SHARED PRIMITIVE CARRIES (cinatra#4286).
 // ---------------------------------------------------------------------------
-describe("the utility the shared primitive carries", () => {
-  it("still names the stripe token at its own opacity", () => {
-    const util = bandUtility(tableBody().className);
-    expect(util.token).toBe("stripe-light");
-    expect(util.alpha).toBe(50);
+describe("the utilities the shared primitive carries", () => {
+  it("names one flat surface token per palette, with no opacity", () => {
+    const utils = bandUtilities(tableBody().className);
+    expect(utils.light).toEqual({ token: "surface-muted", alpha: null });
+    expect(utils.dark).toEqual({ token: "surface", alpha: null });
   });
 
-  it("still registers the stripe tokens as colour utilities, so the class emits a real rule", () => {
-    expect(THEME.get("--color-stripe-light")).toBe("var(--stripe-light)");
+  it("registers both surface tokens as colour utilities, so each class emits a real rule", () => {
+    expect(THEME.get("--color-surface-muted")).toBe("var(--surface-muted)");
+    expect(THEME.get("--color-surface")).toBe("var(--surface)");
   });
 });
 
@@ -445,7 +503,7 @@ describe("the reading itself", () => {
   it("would have read NOTHING through the helper it adapts, which is why it adapts it", () => {
     // `utility()` of schedule-card-chosen-row-indigo-3279.test.tsx drops any
     // class matching this pattern; the band class is exactly such a class.
-    expect(/^(?:.*-)?\[/.test(`${BAND_VARIANT}bg-stripe-light/50`)).toBe(true);
+    expect(/^(?:.*-)?\[/.test(`${BAND_VARIANT}bg-surface-muted`)).toBe(true);
   });
 
   it("sees a token re-declared by a GROUPED palette selector, through the reader itself", () => {
@@ -474,16 +532,31 @@ describe("the reading itself", () => {
     expect(resolveIn(root, dark, "--stripe-light")).toBe("#e3e8ee");
   });
 
-  it("refuses a dark-qualified band utility instead of ignoring it", () => {
+  it("refuses a class list with no dark band, which is the shape of the defect", () => {
+    expect(() => bandUtilities(`${BAND_VARIANT}bg-stripe-light/50`)).toThrow();
+  });
+
+  it("reads the band the cascade applies: the plain carrier reaches the dark rows when no dark one exists", () => {
+    const single = `${BAND_VARIANT}bg-stripe-light/50`;
+    expect(cascadeBand(single, "dark")).toEqual({ token: "stripe-light", alpha: 50 });
+    const pair = `${BAND_VARIANT}bg-surface-muted ${DARK_PREFIX}${BAND_VARIANT}bg-surface`;
+    expect(cascadeBand(pair, "dark")).toEqual({ token: "surface", alpha: null });
+    expect(cascadeBand(pair, "light")).toEqual({ token: "surface-muted", alpha: null });
+    expect(() => cascadeBand("[&_tr:last-child]:border-0", "light")).toThrow();
+  });
+
+  it("refuses a band utility qualified by anything but the dark variant", () => {
     expect(() =>
-      bandUtility(`${BAND_VARIANT}bg-stripe-light/50 dark:${BAND_VARIANT}bg-surface-muted`),
+      bandUtilities(
+        `${BAND_VARIANT}bg-surface-muted ${DARK_PREFIX}${BAND_VARIANT}bg-surface hover:${BAND_VARIANT}bg-surface`,
+      ),
     ).toThrow();
     expect(() =>
-      bandUtility(`${BAND_VARIANT}dark:bg-surface-muted`),
+      bandUtilities(`${BAND_VARIANT}bg-surface-muted ${BAND_VARIANT}dark:bg-surface`),
     ).toThrow();
   });
 
   it("refuses a class list that carries no band utility at all", () => {
-    expect(() => bandUtility("[&_tr:last-child]:border-0")).toThrow();
+    expect(() => bandUtilities("[&_tr:last-child]:border-0")).toThrow();
   });
 });

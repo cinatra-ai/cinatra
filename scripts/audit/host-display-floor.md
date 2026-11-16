@@ -163,8 +163,8 @@ it stays green when the host's own displays are gone.
 
 ## The one double reading
 
-The `topLevel` measure of `packages/agents/src/blog-idea-selection-renderer.tsx`,
-`campaign-recipients-review-renderer.tsx` and `email-drafts-review-renderer.tsx`
+The `topLevel` measure of `packages/agents/src/campaign-recipients-review-renderer.tsx`
+and `email-drafts-review-renderer.tsx`
 repeats the class 3 ceiling of the sibling leg of cinatra#3821 over those
 modules. A change that grows one is red in both gates with the same cause, and
 a ratchet of one is a ratchet of both. This gate reads no file of that leg, so

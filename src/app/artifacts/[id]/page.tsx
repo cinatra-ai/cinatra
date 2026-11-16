@@ -11,15 +11,18 @@
  * (the resolver and failure policy in `./renderer-resolution`, the mount in
  * `./artifact-display-mount`): the semantic winner's `detail` display, then
  * an installed representation provider, then the floor. Core draws no artifact
- * content on any of those roads — the floor is a host diagnostic.
+ * content on any of those roads — the floor is a host diagnostic. One exception
+ * stands until the pointer slice of cinatra#4311: a dashboard row that no
+ * installed display claims draws core's dashboard pointer in place of the floor
+ * (see the branch after the dispatch).
  *
  * `PageHeader.actions` carries the artifact-level actions:
- *   - "Open in source application" — only when `artifact.sourceUrl` is
- *     non-null (connector-ref artifacts; the service validates the URL to
- *     http/https before it ever reaches this href).
+ *   - "Open in source application" — only when the row as read carries a
+ *     `sourceUrl` (connector-ref artifacts; the service validates the URL to
+ *     http/https before it ever reaches this href). A dashboard's live address
+ *     goes to its display, never to this header (cinatra#4311).
  */
 import "server-only";
-import { Suspense } from "react";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { ExternalLink } from "lucide-react";
@@ -35,15 +38,21 @@ import {
   readArtifactForDetail,
   type ArtifactSummary,
 } from "@/lib/artifacts/artifact-service";
-import { resolveArtifactVersionForServe } from "@/lib/artifacts/artifact-read";
+import {
+  resolveArtifactVersionForServe,
+  resolveNonFileArtifactRevision,
+} from "@/lib/artifacts/artifact-read";
 import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
 import {
+  ARTIFACT_RENDERER_SESSION_DATA_ROAD,
   absentArtifactContent,
   buildArtifactRendererProps,
   grantArtifactEdit,
   readOnlyArtifactEdit,
 } from "@/lib/artifacts/artifact-renderer-props";
 import { hostArtifactContentBuilder } from "./review-surface-roads";
+import { readArtifactPageReviewReading } from "./artifact-page-review-reading";
+import { admittedDashboardLiveAddress, readArtifactTypeGate } from "./artifact-type-read-gate";
 import {
   artifactDisplayTitle,
   buildArtifactDetailHeader,
@@ -61,16 +70,9 @@ import {
   ARTIFACT_EDIT_TEXT_CAP_BYTES,
 } from "@cinatra-ai/sdk-extensions/artifact-edit-channel";
 
-import { isDashboardArtifactType } from "@/lib/dashboards/dashboard-artifact-surface";
-import { resolveDashboardArtifactPointer } from "@/lib/dashboards/dashboard-artifact-pointer-resolvers";
-
 import { ArtifactReadDeniedPanel } from "./read-denied-panel";
+import { DashboardPointerDetail } from "./dashboard-pointer-detail";
 import { ArtifactStructuredDataView } from "@/components/artifacts/artifact-structured-data-view";
-import {
-  DashboardPointerDetail,
-  DashboardPointerLoading,
-  DashboardPointerError,
-} from "./dashboard-pointer-detail";
 import { isSelectionPreparing } from "./renderer-dispatch";
 import { ArtifactDisplayMountPoint } from "./artifact-display-mount";
 import { resolveArtifactDisplayMount } from "./renderer-resolution";
@@ -97,31 +99,22 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
   if (access.kind === "not-found") notFound();
   if (access.kind === "denied") return <ArtifactReadDeniedPanel />;
   const artifact: ArtifactSummary = access.artifact;
+  // THE TYPE'S OWN READ GATE (cinatra#3092): a row that is the twin of a record
+  // with its own authorization (a dashboard) keeps it here. Not found hides the
+  // row, denied draws the not-authorized panel, and a gate that cannot be read,
+  // or that answers anything but those and ok, throws to the route's error
+  // boundary, which draws its own diagnostic and no artifact display or content.
+  const typeGate = await readArtifactTypeGate(artifact);
+  if (typeGate.access === "not-found") notFound();
+  if (typeGate.access === "denied") return <ArtifactReadDeniedPanel />;
 
-  // §VIII — a dashboard artifact opens as a POINTER, never an inline render
-  // (owner ruling 2026-07-20; spec app-artifacts.html §VIII, design@5daf862). It carries
-  // NO renderer dispatch and NO Download: the detail is a pointer surface that
-  // navigates to the dashboard's canonical surface. The dual authorization + the
-  // dashboard name/scope resolve inside the streamed boundary, so the loading /
-  // error / not-authorized states are the pointer surface's own frames.
-  if (isDashboardArtifactType(artifact.objectType)) {
-    return (
-      <Main className="min-h-screen">
-        <PageHeader
-          title={artifactDisplayTitle(artifact)}
-          description="A dashboard artifact — opens at its canonical surface."
-        />
-        <PageContent
-          className="flex flex-col gap-6 pb-8"
-          data-render-dispatch="dashboard-pointer"
-        >
-          <Suspense fallback={<DashboardPointerLoading />}>
-            <DashboardPointerBoundary artifactId={id} />
-          </Suspense>
-        </PageContent>
-      </Main>
-    );
-  }
+  // NO TYPE-SPECIFIC BRANCH STANDS BETWEEN THE TWO GATES ABOVE AND THE ONE
+  // DISPLAY DISPATCH BELOW (cinatra#3092): a row both gates admit goes on to it,
+  // whatever its type, unless a read on the way throws (the head revision or the
+  // content), which reaches the route's error boundary first. A type's own
+  // display draws the row. Where the dispatch answers a floor, of any reason, a
+  // dashboard row keeps its pointer (below) and every other row draws the
+  // generic floor.
 
   // THE EDITOR OPENS ON THE HEAD REVISION, read from the store.
   //
@@ -145,13 +138,29 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
   // Latest representation is required for any in-page rendering. Without
   // it (rare — artifact metadata without a materialized representation),
   // fall through to the fallback handler.
-  const resolved = revisionId
+  const fileRevision = revisionId
     ? resolveArtifactVersionForServe({
         orgId,
         artifactId: id,
         representationRevisionId: revisionId,
       })
     : null;
+  // A HEAD REVISION THAT IS NOT A FILE (cinatra#3092) is read exactly as the
+  // review binder reads it: through the non-file reader, which verifies the
+  // (organization, artifact, revision) tuple and answers the revision's recorded
+  // mime. It has no bytes, so it gets no preview or download address below —
+  // the review binder's own rule that "non-file props carry no preview or
+  // download address". A file revision reads exactly as before.
+  const nonFileRevision =
+    revisionId && !fileRevision
+      ? resolveNonFileArtifactRevision({
+          orgId,
+          artifactId: id,
+          representationRevisionId: revisionId,
+        })
+      : null;
+  const resolved: { mime: string; sizeBytes: number | null } | null =
+    fileRevision ?? (nonFileRevision ? { mime: nonFileRevision.mime, sizeBytes: null } : null);
 
   const mime = resolved?.mime ?? artifact.mime ?? "";
   // THE HEADER DESCRIBES THE REVISION UNDER IT, both halves of the sentence.
@@ -162,12 +171,14 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
   // The header model carries no size cell either — the drawing draws a size on
   // the per-kind download card (the drawing's V.2), not on this line, so the
   // page resolves none for the header and passes none to it.
-  const previewHref = revisionId
-    ? `/api/artifacts/${id}/versions/${revisionId}/preview`
-    : null;
-  const downloadHref = revisionId
-    ? `/api/artifacts/${id}/versions/${revisionId}/content`
-    : null;
+  const previewHref =
+    revisionId && !nonFileRevision
+      ? `/api/artifacts/${id}/versions/${revisionId}/preview`
+      : null;
+  const downloadHref =
+    revisionId && !nonFileRevision
+      ? `/api/artifacts/${id}/versions/${revisionId}/content`
+      : null;
 
   // Activation barrier (§III): selection (pin / add-to-context) requires a
   // settled binding; a catalog browse-only identity shows "Preparing" until it
@@ -273,15 +284,44 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
                 : "no-write-rights",
         );
 
+  // THE DASHBOARD'S LIVE ADDRESS (cinatra#4311). The drawing binds the display's
+  // "Open live dashboard" link to `artifact.sourceUrl`, and the service fills
+  // that field from a connector reference only, so a dashboard row reads null.
+  // The type's read gate above already authorized the dashboard and answers its
+  // canonical path, so the display's copy of the row carries that path. Where the
+  // gate admits the dashboard but rejects its path, the live address is null and
+  // so is the display's copy: a record address the row may still carry is never
+  // the dashboard's address, so it does not stand in. A dashboard draws no "Open
+  // in source application" in the header below either; every other row keeps its
+  // record's own address in both places. The gate module answers whether the
+  // row is an admitted dashboard, so this page names the pointer only where it
+  // draws it, after the dispatch below answered a floor.
+  const dashboardLive = admittedDashboardLiveAddress(typeGate);
+  const displayedArtifact: ArtifactSummary = dashboardLive
+    ? { ...artifact, sourceUrl: dashboardLive.liveAddress }
+    : artifact;
+  const sourceApplicationHref = dashboardLive ? null : artifact.sourceUrl;
+
+  // THE REVIEW READING (cinatra#3092). Read here, past the row's own read
+  // authorization and the type's own read gate above, so a reader the row is
+  // hidden from learns nothing of its reviews.
+  const review = await readArtifactPageReviewReading({ orgId, artifactId: id });
+
   // The normalized, serializable renderer props snapshot (AC-5) — supplied to an
   // extension-shipped renderer; the host context never crosses into it.
   const rendererProps = buildArtifactRendererProps({
-    artifact,
+    artifact: displayedArtifact,
     representation: revisionId ? { revisionId, mime } : null,
     previewHref,
     downloadHref,
     content,
     edit,
+    // THE DATA ROAD (props v3, cinatra#4311): this page is a cookie surface, so
+    // its displays read live series from the application's own route with the
+    // reader's session. An address, never a credential; the builder drops it
+    // for a display that declared a version below 3.
+    data: ARTIFACT_RENDERER_SESSION_DATA_ROAD,
+    review,
   });
 
   // THE NEVER-BLANK FLOOR, and the drawing says what stands in it. §III's third
@@ -297,8 +337,8 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
 
   // THE DISPLAY, resolved through the ONE primitive the lifecycle review also
   // resolves through, at the props version the snapshot above was built at.
-  // Read authorization is already enforced above — a row the viewer may not read
-  // never reaches here.
+  // Read authorization and the type's own read gate are already enforced above:
+  // a row the viewer may not read never reaches here.
   const mount = await resolveArtifactDisplayMount({
     orgId,
     baseType: artifact.objectType,
@@ -310,6 +350,33 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
     mime,
     propsApiVersion: rendererProps.propsApiVersion,
   });
+
+  // THE DASHBOARD POINTER STAYS WHERE THE DISPATCH ANSWERS A FLOOR (cinatra#4311).
+  // This is not an interception: the dispatch above has already run, and it
+  // answered a floor of some reason: no installed display claims this dashboard,
+  // or the display that claims it needs a rebuild. The page then draws the
+  // pointer it has drawn for a dashboard row since cinatra#1895 (its header and
+  // its Open dashboard affordance) instead of the generic floor, so an admitted
+  // dashboard keeps its way to its canonical surface. The pointer comes from the
+  // type's read gate, which already authorized it. Where the dispatch answers a
+  // display that mounts, this branch is not reached; the pointer slice of
+  // cinatra#4311 deletes it.
+  if (mount.kind === "floor" && typeGate.dashboardPointer) {
+    return (
+      <Main className="min-h-screen">
+        <PageHeader
+          title={artifactDisplayTitle(artifact)}
+          description="A dashboard artifact — opens at its canonical surface."
+        />
+        <PageContent
+          className="flex flex-col gap-6 pb-8"
+          data-render-dispatch="dashboard-pointer"
+        >
+          <DashboardPointerDetail pointer={typeGate.dashboardPointer} />
+        </PageContent>
+      </Main>
+    );
+  }
 
   return (
     <Main className="min-h-screen">
@@ -348,11 +415,14 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
         // download the drawing never draws — the fourth proof round measured it
         // on all twenty-two artifact frames. "Open in source application" is not
         // one: it is where a connector-referenced row came FROM, not its bytes.
+        // It reads the row's record address (a connector reference), never the
+        // display's copy, which carries a dashboard's live address, and a
+        // dashboard row draws none (cinatra#4311).
         actions={
-          artifact.sourceUrl ? (
+          sourceApplicationHref ? (
             <Button asChild variant="outline">
               <Link
-                href={artifact.sourceUrl}
+                href={sourceApplicationHref}
                 target="_blank"
                 rel="noopener noreferrer"
               >
@@ -405,24 +475,4 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
       </PageContent>
     </Main>
   );
-}
-
-/**
- * §VIII pointer boundary — streams the READY pointer behind the detail page's
- * Suspense (fallback = the loading frame). Applies the Phase-1 DUAL
- * AUTHORIZATION: `denied` routes to the not-authorized panel (the object.read
- * gate already passed above — this is the "may list but not read" case);
- * `not-found` 404s (existence stays hidden); a dashboards-source failure renders
- * the error frame rather than bubbling. NEVER renders the dashboard inline.
- */
-async function DashboardPointerBoundary({ artifactId }: { artifactId: string }) {
-  let resolved;
-  try {
-    resolved = await resolveDashboardArtifactPointer(artifactId);
-  } catch {
-    return <DashboardPointerError />;
-  }
-  if (resolved.access === "not-found") notFound();
-  if (resolved.access === "denied") return <ArtifactReadDeniedPanel />;
-  return <DashboardPointerDetail pointer={resolved.pointer} />;
 }

@@ -111,7 +111,11 @@ jobs:
       env:
         DESIGN_BUILD_LOCK_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         DESIGN_BUILD_LOCK_WAIT_SECONDS: '1200'
-      run: bash scripts/ci/design-build-host-lock.sh pnpm build
+        # One page-data worker: same cap and reason as the RBAC e2e build
+        # step in build-image.yml (a 3-worker build next to the service
+        # containers hung the runner until the job cap).
+        CINATRA_BUILD_CPUS: "1"
+      run: bash scripts/ci/design-build-host-lock.sh bash scripts/ci/hosted-build-memory-cap.sh run pnpm build
     - name: Derive CINATRA_CONFORMANCE_SEED_TOKEN (throwaway, per-run)
       run: |
         set -euo pipefail

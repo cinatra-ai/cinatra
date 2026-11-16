@@ -44,8 +44,10 @@ import {
 import {
   absentArtifactContent,
   buildArtifactRendererProps,
+  type ArtifactRendererDataRoad,
   type ArtifactRendererProps,
   readOnlyArtifactEdit,
+  type ArtifactRendererReviewReading,
 } from "@/lib/artifacts/artifact-renderer-props";
 import type { ArtifactContentProjection } from "@cinatra-ai/sdk-extensions/artifact-content-channel";
 // THE CHANNEL'S OWN READ STAYS THE DEFAULT OF THIS BINDER (enabler 0.3,
@@ -73,6 +75,7 @@ import { reviewTargetVersionPath } from "@cinatra-ai/agent-ui-protocol/renderabl
 import type {
   ArtifactContentBuilder,
   ArtifactByteUrlMinter,
+  DashboardLiveAddressReader,
 } from "./review-surface-roads";
 import {
   beginReviewTargetsCore,
@@ -126,6 +129,34 @@ export function bindArtifactReviewPorts(ctx: {
    * the browser fetch that dies inside a third-party application.
    */
   buildContent?: ArtifactContentBuilder;
+  /**
+   * WHERE THIS SURFACE'S DISPLAYS READ LIVE SERIES (props v3, cinatra#4311).
+   *
+   * Absent and the snapshot carries no data road, so a display draws its own
+   * no-series reading. Present (a cookie surface) and the builder writes it for
+   * a display that declared version 3 or later. The SURFACE's, like the two
+   * roads above: the island names none, because its reader holds no cookie.
+   */
+  dataRoad?: ArtifactRendererDataRoad;
+  /**
+   * THE READING OF THE REVIEW THIS SURFACE DRAWS (props v3, cinatra#3092):
+   * `continued` once the gate was resolved with the approve disposition, and
+   * `pending` for every other gate state. Handed to every target alike, with the
+   * live address the artifact record itself carries; the props builder writes
+   * none in the pending reading. Absent only outside a review.
+   */
+  reading?: ArtifactRendererReviewReading["reading"];
+  /**
+   * HOW THIS SURFACE READS A DASHBOARD TARGET'S LIVE ADDRESS (cinatra#4311).
+   *
+   * Present (a cookie surface) and, in the continued reading only, a dashboard
+   * target's live address is its canonical path, read through the dashboard's
+   * own read gate with the reader's session. Absent (the island's credential
+   * branch, whose reader holds no cookie, and every caller outside a surface)
+   * and no target reads a dashboard gate. The SURFACE's, like the roads above: this binder never
+   * loads the gate itself, because the locked routes reach this module.
+   */
+  dashboardLiveAddress?: DashboardLiveAddressReader;
 }): Pick<
   PrepareReviewPorts,
   | "readArtifact"
@@ -138,6 +169,8 @@ export function bindArtifactReviewPorts(ctx: {
   const { orgId, actor } = ctx;
   const byteMinter = ctx.byteMinter ?? null;
   const buildContent = ctx.buildContent ?? null;
+  const reading = ctx.reading;
+  const readLiveAddress = ctx.dashboardLiveAddress ?? null;
 
   const toOutcome = (access: ReturnType<typeof readArtifactForDetail>): ArtifactReadOutcome => {
     if (access.kind === "not-found") return { kind: "not-found" };
@@ -363,6 +396,23 @@ export function bindArtifactReviewPorts(ctx: {
     // href pointing at the byte routes would be a link that 404s from the moment
     // it is drawn — a dead end of exactly the kind this wave exists to remove.
     const { artifact, representationRevisionId, mime } = input;
+    // THE LIVE ADDRESS OF A DASHBOARD TARGET (cinatra#4311). The record carries
+    // a live address from a connector reference only, so a dashboard reads none,
+    // and its display draws "Open live dashboard" from `artifact.sourceUrl`. In
+    // the continued reading, and only there, the address is the dashboard's
+    // canonical path, read through the dashboard's own read gate with the
+    // reader's session: a reader the dashboard refuses, or a gate that cannot be
+    // read, gets no address. A pending reading carries no live link, so it reads
+    // nothing. A surface that named no reader (the island, which holds no
+    // session cookie) reads nothing either.
+    const ownReview = input.propsApiVersion >= 5 && input.review ? input.review : null;
+    const continued = (ownReview ? ownReview.reading : reading) === "continued";
+    const dashboardLive = continued && readLiveAddress ? await readLiveAddress(artifact) : null;
+    const shownArtifact: ArtifactSummary = dashboardLive
+      ? { ...artifact, sourceUrl: dashboardLive.liveAddress }
+      : artifact;
+    const shownReview =
+      ownReview && dashboardLive ? { ...ownReview, openLive: dashboardLive.liveAddress } : input.review;
     const fileBacked = isFileFormMember(input.member);
     const previewHref = fileBacked
       ? versionPinnedHref(artifact.artifactId, representationRevisionId, "preview")
@@ -452,7 +502,7 @@ export function bindArtifactReviewPorts(ctx: {
     });
 
     return buildArtifactRendererProps({
-      artifact,
+      artifact: shownArtifact,
       // THE REVIEW CARD IS READ-ONLY BY CONSTRUCTION (enabler 0.20): it mints a
       // NAMED REFUSAL rather than an edit capability, so the SAME display draws
       // there with no editing affordance and no save address — and "a review's
@@ -465,9 +515,18 @@ export function bindArtifactReviewPorts(ctx: {
       // THE NEGOTIATED VERSION (enabler 0.4) — the display's own, resolved
       // before this builder ran.
       propsApiVersion: input.propsApiVersion,
-      ...(input.propsApiVersion >= 5 && input.review ? { review: input.review } : {}),
+      ...(input.propsApiVersion >= 5 && input.review ? { review: shownReview } : {}),
+      // THE DATA ROAD the surface named (cinatra#4311); the builder drops it
+      // below version 3.
+      ...(ctx.dataRoad ? { data: ctx.dataRoad } : {}),
       content,
       bytes,
+      // THE REVIEW READING (props v3, cinatra#3092), the same for every target
+      // on this surface. The builder writes none below v3
+      // and writes no live address in the pending reading.
+      ...(reading && !(input.propsApiVersion >= 5 && input.review)
+        ? { review: { reading, openLive: shownArtifact.sourceUrl ?? null } }
+        : {}),
     });
   };
 
@@ -512,12 +571,24 @@ export async function prepareArtifactReviewTargets(args: {
   /** How this surface reads content (wave 3). Absent on a surface that has not
    *  named a road. */
   buildContent?: ArtifactContentBuilder;
+  /** Where this surface's displays read live series (cinatra#4311). Absent on
+   *  a surface that has not named one, and on the island. */
+  dataRoad?: ArtifactRendererDataRoad;
+  /** The reading of the review this surface draws (props v3). Absent outside
+   *  the surface loader. */
+  reading?: ArtifactRendererReviewReading["reading"];
+  /** How this surface reads a dashboard target's live address (cinatra#4311).
+   *  Absent on the island and on a surface that has not named one. */
+  dashboardLiveAddress?: DashboardLiveAddressReader;
 }): Promise<PrepareReviewResult> {
   const artifactPorts = bindArtifactReviewPorts({
     orgId: args.orgId,
     actor: args.actor,
     byteMinter: args.byteMinter,
     buildContent: args.buildContent,
+    dataRoad: args.dataRoad,
+    reading: args.reading,
+    dashboardLiveAddress: args.dashboardLiveAddress,
   });
   return prepareReviewTargetsCore(args.input, { ...artifactPorts, ...args.runGatePorts });
 }
@@ -539,6 +610,15 @@ export async function beginArtifactReviewTargets(args: {
   /** How this surface reads content (wave 3). Absent on a surface that has not
    *  named a road. */
   buildContent?: ArtifactContentBuilder;
+  /** Where this surface's displays read live series (cinatra#4311). Absent on
+   *  a surface that has not named one, and on the island. */
+  dataRoad?: ArtifactRendererDataRoad;
+  /** The reading of the review this surface draws (props v3). Absent outside
+   *  the surface loader. */
+  reading?: ArtifactRendererReviewReading["reading"];
+  /** How this surface reads a dashboard target's live address (cinatra#4311).
+   *  Absent on the island and on a surface that has not named one. */
+  dashboardLiveAddress?: DashboardLiveAddressReader;
 }): Promise<BeginReviewResult> {
   // THE ROADS TRAVEL THE STREAMING ARM TOO. The island is the one surface that
   // names a road and, since cinatra#3334, the one surface that enters through
@@ -549,6 +629,9 @@ export async function beginArtifactReviewTargets(args: {
     actor: args.actor,
     byteMinter: args.byteMinter,
     buildContent: args.buildContent,
+    dataRoad: args.dataRoad,
+    reading: args.reading,
+    dashboardLiveAddress: args.dashboardLiveAddress,
   });
   return beginReviewTargetsCore(args.input, { ...artifactPorts, ...args.runGatePorts });
 }
