@@ -181,17 +181,21 @@ export interface SeededReviewGate {
 }
 
 /**
- * Poll until the run-executor's marked-gate branch has minted the gate. Returns
- * the row; throws on timeout so a harness failure names the missing gate rather
- * than failing later on an empty card.
+ * Poll until the run-executor's marked-gate branch has minted the run's gates,
+ * and return EVERY gate row of the run. The executor mints a declared review as
+ * an atomic family of single-target gates, one per artifact
+ * (`emitDeclaredReviewGateFamily`), so a run of several targets holds several
+ * rows that become visible together; a single-row read would see only one leg.
+ * Rows come back in task order. Throws on timeout so a harness failure names
+ * the missing gate rather than failing later on an empty card.
  */
-export async function waitForMarkedReviewGate(
+export async function waitForMarkedReviewGates(
   runId: string,
   timeoutMs = 90_000,
-): Promise<SeededReviewGate> {
+): Promise<SeededReviewGate[]> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const row = await withPg(async (c) => {
+    const rows = await withPg(async (c) => {
       const r = await c.query<{
         id: string;
         run_id: string;
@@ -200,19 +204,20 @@ export async function waitForMarkedReviewGate(
         pinned_targets: FixtureReviewTarget[];
       }>(
         `SELECT id, run_id, review_task_id, status, pinned_targets
-           FROM ${SCHEMA}.artifact_review_gates WHERE run_id = $1 LIMIT 1`,
+           FROM ${SCHEMA}.artifact_review_gates WHERE run_id = $1
+          ORDER BY created_at, review_task_id`,
         [runId],
       );
-      return r.rows[0] ?? null;
+      return r.rows;
     });
-    if (row) {
-      return {
+    if (rows.length > 0) {
+      return rows.map((row) => ({
         gateId: row.id,
         runId: row.run_id,
         reviewTaskId: row.review_task_id,
         status: row.status,
         pinnedTargets: row.pinned_targets,
-      };
+      }));
     }
     if (Date.now() > deadline) {
       throw new Error(
