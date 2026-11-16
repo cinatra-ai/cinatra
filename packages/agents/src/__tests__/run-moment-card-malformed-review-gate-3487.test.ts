@@ -74,21 +74,25 @@ describe("3487 unit T (1): a malformed review gate given to parseRunMomentCard",
   );
 
   it("a malformed gate does not mask the rest of the row", () => {
-    const card = parseRunMomentCard({
+    const row = {
       id: "run-unit-t",
       status: "running",
       lifecycleMoment: "setup",
       lifecycleCard: { kind: "setup_form", ref: "card-ref" },
       reviewGate: { ref: 42, awaiting: "later" },
-    });
+    };
+    const card = parseRunMomentCard(row);
     expect(card).toEqual({
       status: "running",
       moment: "setup",
       kind: "setup_form",
       ref: "card-ref",
       reviewRef: null,
-      reviewAwaiting: false,
+      // A truthy flag that is not a boolean is read as the panel's slot
+      // reader reads it, so the container and the panel give one answer.
+      reviewAwaiting: true,
     });
+    expect(card!.reviewAwaiting).toBe(parseRunReviewSlot(row)!.awaiting);
   });
 
   it("a well-formed ref is still read when the awaiting flag beside it is malformed", () => {
