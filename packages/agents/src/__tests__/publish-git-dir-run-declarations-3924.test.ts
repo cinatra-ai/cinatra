@@ -34,6 +34,7 @@ vi.mock("../oas-compiler", () => ({
 }));
 
 import { publishAgentPackageFromGitDir } from "../verdaccio/client";
+import { compileOasAgentJson } from "../oas-compiler";
 
 const PACKAGE_NAME = "@cinatra-fixtures/tools-agent";
 const PACKAGE_VERSION = "0.1.5";
@@ -241,6 +242,13 @@ describe("publishAgentPackageFromGitDir carries the run-read declarations (cinat
   ])("refuses malformed declaredTables (%s) before any registry write", async (_label, declaredTables) => {
     const agentDir = await writeAgentDir({ declaredTables });
     await expect(publishAgentPackageFromGitDir({ agentDir }, CONFIG)).rejects.toThrow(/\[declared-tables\]/);
+    expect(puts).toHaveLength(0);
+  });
+
+  it("cinatra#4264: a failed compile refuses the publish before any registry write", async () => {
+    vi.mocked(compileOasAgentJson).mockResolvedValueOnce({ ok: false, error: "boom" } as never);
+    const agentDir = await writeAgentDir({});
+    await expect(publishAgentPackageFromGitDir({ agentDir }, CONFIG)).rejects.toThrow(/compile failed .*cinatra#4264/);
     expect(puts).toHaveLength(0);
   });
 });
