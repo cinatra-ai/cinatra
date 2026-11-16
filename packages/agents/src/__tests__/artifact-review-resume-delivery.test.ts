@@ -495,14 +495,18 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
       expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
     });
 
-    // No settle leaves a run `running` with a dead-lettered intent: no driver would
-    // take it, and the upgrade recovery reads only paused runs.
-    it("S2 a settle of a recorded task replays the handler from the record, bound to the run's gate, sends nothing and closes the intent", async () => {
+    // A settle never closes or dead-letters an intent while its run is still
+    // `running` under the claim mark: no driver would take that run, and the
+    // upgrade recovery reads only paused runs.
+    const recorded = { runClaimed: true, result: { id: "task-recorded" } };
+    it("S2 a settle of a recorded task renews its lease, replays the handler from the record, bound to the run's gate, sends nothing and closes the intent once the run left running", async () => {
       gateStoreMock.leaseExhaustedResumeClaims.mockResolvedValueOnce([exhausted()]);
-      storeMock.readAgentRunById.mockResolvedValueOnce(runningRun());
-      gateStoreMock.readResumeIntentClaim.mockResolvedValueOnce({ runClaimed: true, result: { id: "task-recorded" } });
+      storeMock.readAgentRunById.mockResolvedValueOnce(runningRun()).mockResolvedValueOnce(pausedRun({ status: "completed" }));
+      gateStoreMock.readResumeIntentClaim.mockResolvedValueOnce(recorded).mockResolvedValueOnce(recorded);
       const summary = await sweepArtifactReviewResumeIntents();
       expect(summary.failed).toBe(0);
+      expect(gateStoreMock.renewResumeIntentLease).toHaveBeenCalledWith("gate-1", "lease-settle", expect.any(Number));
+      expect(gateStoreMock.renewResumeIntentLease.mock.invocationCallOrder[0]).toBeLessThan(handleWayflowTaskStateSpy.mock.invocationCallOrder[0]!);
       expect(handleWayflowTaskStateSpy).toHaveBeenCalledTimes(1);
       expect(handleWayflowTaskStateSpy).toHaveBeenCalledWith(expect.objectContaining({
         runId: "run-1", fromStatus: "running", task: { id: "task-recorded" },
@@ -514,10 +518,23 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
       expect(gateStoreMock.deadLetterResumeIntentUnderLease).not.toHaveBeenCalled();
     });
 
-    it("S2 a settle whose replay throws puts the run back on its gate, then dead-letters the intent", async () => {
+    it("S2 a settle whose lease renewal is refused replays nothing and closes nothing", async () => {
       gateStoreMock.leaseExhaustedResumeClaims.mockResolvedValueOnce([exhausted()]);
       storeMock.readAgentRunById.mockResolvedValueOnce(runningRun());
-      gateStoreMock.readResumeIntentClaim.mockResolvedValueOnce({ runClaimed: true, result: { id: "task-recorded" } });
+      gateStoreMock.readResumeIntentClaim.mockResolvedValueOnce(recorded);
+      gateStoreMock.renewResumeIntentLease.mockResolvedValueOnce(false);
+      await sweepArtifactReviewResumeIntents();
+      expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
+      expect(claimSpy).not.toHaveBeenCalled();
+      expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+      expect(gateStoreMock.deadLetterResumeIntentUnderLease).not.toHaveBeenCalled();
+    });
+
+    it("S2 a settle whose replay throws after it bound the run puts the run back from a second read, then dead-letters the intent", async () => {
+      gateStoreMock.leaseExhaustedResumeClaims.mockResolvedValueOnce([exhausted()]);
+      storeMock.readAgentRunById.mockResolvedValueOnce(runningRun())
+        .mockResolvedValueOnce(pausedRun({ status: "running", executionAttemptId: "attempt-A", a2aTaskId: "task-bound" }));
+      gateStoreMock.readResumeIntentClaim.mockResolvedValueOnce(recorded).mockResolvedValueOnce(recorded);
       handleWayflowTaskStateSpy.mockRejectedValueOnce(new Error("handler fault"));
       const summary = await sweepArtifactReviewResumeIntents();
       expect(summary.failed).toBe(0);
@@ -525,12 +542,46 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
       expect(claimSpy.mock.calls[0]!.slice(0, 3)).toEqual(["run-1", "running", "pending_approval"]);
       expect(claimSpy.mock.calls[0]![3]).toMatchObject({
         resumeIntentLease: { gateId: "gate-1", leaseToken: "lease-settle" },
-        resumeGate: { a2aTaskId: "task-1", executionAttemptId: "attempt-A" },
+        resumeGate: { a2aTaskId: "task-bound", executionAttemptId: "attempt-A" },
       });
       expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
       expect(gateStoreMock.deadLetterResumeIntentUnderLease).toHaveBeenCalledWith("gate-1", "lease-settle", expect.stringContaining("back on its gate"));
       expect(claimSpy.mock.invocationCallOrder[0]).toBeLessThan(gateStoreMock.deadLetterResumeIntentUnderLease.mock.invocationCallOrder[0]!);
       expect(sendTaskSpy).not.toHaveBeenCalled();
+    });
+
+    it("S2 a replay that returns while the run is still running under the mark (its gate binding refused) closes nothing: the run is put back, then the intent is dead-lettered", async () => {
+      gateStoreMock.leaseExhaustedResumeClaims.mockResolvedValueOnce([exhausted()]);
+      storeMock.readAgentRunById.mockResolvedValueOnce(runningRun()).mockResolvedValueOnce(runningRun());
+      gateStoreMock.readResumeIntentClaim.mockResolvedValueOnce(recorded).mockResolvedValueOnce(recorded);
+      await sweepArtifactReviewResumeIntents();
+      expect(handleWayflowTaskStateSpy).toHaveBeenCalledTimes(1);
+      expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+      expect(claimSpy).toHaveBeenCalledTimes(1);
+      expect(claimSpy.mock.calls[0]!.slice(0, 3)).toEqual(["run-1", "running", "pending_approval"]);
+      expect(gateStoreMock.deadLetterResumeIntentUnderLease).toHaveBeenCalledWith("gate-1", "lease-settle", expect.stringContaining("back on its gate"));
+    });
+
+    it("S2 a replay that returns while another driver holds the run (mark cleared) closes the intent and puts nothing back", async () => {
+      gateStoreMock.leaseExhaustedResumeClaims.mockResolvedValueOnce([exhausted()]);
+      storeMock.readAgentRunById.mockResolvedValueOnce(runningRun()).mockResolvedValueOnce(runningRun());
+      gateStoreMock.readResumeIntentClaim.mockResolvedValueOnce(recorded).mockResolvedValueOnce({ runClaimed: false, result: { id: "task-recorded" } });
+      await sweepArtifactReviewResumeIntents();
+      expect(gateStoreMock.markResumeIntentDelivered).toHaveBeenCalledWith("gate-1", "lease-settle");
+      expect(claimSpy).not.toHaveBeenCalled();
+      expect(gateStoreMock.deadLetterResumeIntentUnderLease).not.toHaveBeenCalled();
+    });
+
+    it("S2 a settle whose release moved nothing while the run is still running under the mark dead-letters nothing: a later settle reads it again", async () => {
+      gateStoreMock.leaseExhaustedResumeClaims.mockResolvedValueOnce([exhausted()]);
+      storeMock.readAgentRunById.mockResolvedValueOnce(runningRun()).mockResolvedValueOnce(runningRun());
+      gateStoreMock.readResumeIntentClaim.mockResolvedValueOnce({ runClaimed: true, result: null }).mockResolvedValueOnce({ runClaimed: true, result: null });
+      claimSpy.mockImplementationOnce(async () => {
+        throw Object.assign(new Error("stale"), { code: "stale_from_status" });
+      });
+      await sweepArtifactReviewResumeIntents();
+      expect(claimSpy).toHaveBeenCalledTimes(1);
+      expect(gateStoreMock.deadLetterResumeIntentUnderLease).not.toHaveBeenCalled();
     });
 
     it("S2 a settle of a recorded task whose run names no gate task replays nothing unbound: the run goes back on the mark alone", async () => {

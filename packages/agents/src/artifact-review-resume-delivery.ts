@@ -891,30 +891,45 @@ async function putClaimedRunBack(
  * lease `leaseExhaustedResumeClaims` took (no attempt used, nothing sent). Its
  * last claim died before it put the run back, so no other pass takes it:
  *   running, mark, nothing recorded   put the run back on its gate, then dead-letter
- *   running, mark, recorded           sent; its handler did not finish: replay the handler
- *                                     from the record (no send), bound to the run's gate,
- *                                     and close the intent; a replay that throws, or a run
- *                                     that names no gate task, puts the run back, then dead-letter
+ *   running, mark, recorded           sent; its handler did not finish: renew the lease,
+ *                                     replay the handler from the record (no send), bound
+ *                                     to the run's gate, then read the run and the mark again
  *   any other state                   nothing of this gate to put back: dead-letter
- * No settle leaves a run `running` with a dead-lettered intent: no driver would
- * take it, and the upgrade recovery reads only paused runs. A release that moved
- * nothing because the run left the gate or attempt read here dead-letters too.
- * Any other release error leaves the intent: the lease lapses and a later settle
- * reads the run again.
+ * After a replay, whether it returned or threw, the intent closes only when the
+ * run left `running` or another driver's entry into `running` cleared the mark.
+ * A run still `running` with the mark set is put back from that second read (a
+ * replay can bind the run to the returned task before it throws), then the
+ * intent is dead-lettered. A run with no gate task is never replayed: it is put
+ * back on the mark alone. A release that moved nothing is read again: a run
+ * still `running` with the mark set is left for a later settle, any other is
+ * dead-lettered. A lost lease closes and dead-letters nothing; any other release
+ * error leaves the intent for a later settle.
  */
-async function settleExhaustedResumeClaim(intent: ResumeIntentRow): Promise<"delivered" | "dead-lettered" | "lease-lost" | "retryable"> {
+async function settleExhaustedResumeClaim(
+  intent: ResumeIntentRow,
+  leaseMs: number,
+): Promise<"delivered" | "dead-lettered" | "lease-lost" | "retryable"> {
   const { gateId, leaseToken } = intent;
   if (!leaseToken) return "lease-lost";
   const run = await readAgentRunById(intent.runId);
   const claim = await readResumeIntentClaim(gateId, leaseToken);
   if (!claim) return "lease-lost";
+  /** The run read again, and whether it is still `running` under this gate's claim mark. Null: the lease is gone. */
+  const readAgain = async (): Promise<{ run: AgentRunRecord | null; held: boolean } | null> => {
+    const now = await readAgentRunById(intent.runId);
+    const again = await readResumeIntentClaim(gateId, leaseToken);
+    if (!again) return null;
+    return { run: now, held: !!now && now.status === "running" && again.runClaimed };
+  };
   let why: string;
   if (run && run.status === "running" && claim.runClaimed) {
-    let replayError: string | null = null;
+    let replayed: string | null = null;
+    let current: AgentRunRecord = run;
     if (claim.result !== null && run.a2aTaskId) {
       // The last claim sent and recorded, then died before its handler moved the
       // run. Replay the record as the delivery does (no send), bound to the gate
-      // and execution attempt read here, and close the intent.
+      // and execution attempt read here, under a renewed lease.
+      if (!(await renewResumeIntentLease(gateId, leaseToken, leaseMs))) return "lease-lost";
       const replayGate: ResumeGateIdentity = { a2aTaskId: run.a2aTaskId, executionAttemptId: run.executionAttemptId ?? null };
       try {
         const { handleWayflowTaskState } = await import("./execution");
@@ -922,23 +937,34 @@ async function settleExhaustedResumeClaim(intent: ResumeIntentRow): Promise<"del
           runId: run.id, run, fromStatus: "running", task: claim.result as HandlerTask,
           authority: mintAgentRunExecutionAuthority(run.orgId), claimedGate: replayGate,
         });
+        replayed = "its recorded task was replayed";
+      } catch (err: unknown) {
+        replayed = `the replay of its recorded task threw (${errorLabel(err)})`;
+      }
+      const after = await readAgain();
+      if (after === null) return "lease-lost";
+      if (!after.held || !after.run) {
         const marked = await markResumeIntentDelivered(gateId, leaseToken);
         console.warn(
-          `[artifact-review-resume] gate=${gateId} run=${run.id} used its attempts after its resume was recorded: ` +
-            `REPLAYED the recorded task at settle; marked ${marked ? "done" : "LEASE-LOST"}`,
+          `[artifact-review-resume] gate=${gateId} run=${intent.runId} used its attempts after its resume was recorded: ` +
+            `${replayed}; the run left running or another driver holds it; marked ${marked ? "done" : "LEASE-LOST"}`,
         );
         return marked ? "delivered" : "lease-lost";
-      } catch (err: unknown) {
-        replayError = errorLabel(err);
       }
+      // Put back from this read: the replay may have bound the run to the returned task.
+      current = after.run;
     }
-    const released = await releaseClaimedRun(run, gateId, leaseToken, "to settle its exhausted intent");
+    const released = await releaseClaimedRun(current, gateId, leaseToken, "to settle its exhausted intent");
     if (released === "lease-lost") return "lease-lost";
     if (released === "failed") return "retryable";
-    const where = released === "released" ? "the run is back on its gate" : "the run left the gate or attempt this settle read";
-    why = claim.result === null
-      ? where
-      : `its recorded task was not replayed (${replayError ?? "the run names no gate task"}); ${where}`;
+    let where = "the run is back on its gate";
+    if (released === "moved") {
+      const again = await readAgain();
+      if (again === null) return "lease-lost";
+      if (again.held) return "retryable";
+      where = `the run left running (run ${again.run?.status ?? "gone"})`;
+    }
+    why = claim.result === null ? where : `${replayed ?? "its recorded task was not replayed: the run names no gate task"}; ${where}`;
   } else {
     why = run ? `nothing of this gate to put back (run ${run.status})` : "the run is gone";
   }
@@ -1213,7 +1239,7 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
     const settling = await leaseExhaustedResumeClaims({ limit: SETTLE_LIMIT, leaseMs: opts?.leaseMs ?? DEFAULT_LEASE_MS });
     for (const intent of settling) {
       try {
-        await settleExhaustedResumeClaim(intent);
+        await settleExhaustedResumeClaim(intent, opts?.leaseMs ?? DEFAULT_LEASE_MS);
       } catch (err) {
         summary.failed += 1;
         console.error(`[artifact-review-resume] settle failed for gate=${intent.gateId}; left for a later settle (${errorLabel(err)})`);
