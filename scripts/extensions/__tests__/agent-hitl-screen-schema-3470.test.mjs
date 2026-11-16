@@ -7,11 +7,23 @@
 // holds. The binding validator and the generator are pinned in
 // agent-binding-screen-3470.test.mjs.
 
-import { describe, it, expect } from "vitest";
-import {
-  validateHitlScreen,
-  MAX_HITL_SCREEN_BYTES,
-} from "../agent-hitl-screen-schema.mjs";
+import { beforeEach, describe, it, expect } from "vitest";
+
+// The schema module is new with this change. It is imported here, not by a
+// static import, so that without it the file still loads and every case
+// fails on the missing module (a static import fails the whole file instead).
+// red-first-expect: agent-hitl-screen-schema.mjs
+let validateHitlScreen;
+let MAX_HITL_SCREEN_BYTES;
+let schemaLoadError;
+try {
+  ({ validateHitlScreen, MAX_HITL_SCREEN_BYTES } = await import("../agent-hitl-screen-schema.mjs"));
+} catch (error) {
+  schemaLoadError = error;
+}
+beforeEach(() => {
+  if (schemaLoadError) throw schemaLoadError;
+});
 
 const CARD = {
   layout: "card",
@@ -281,7 +293,8 @@ describe("validateHitlScreen refuses by name", () => {
     expect(counter.get).toBe(0);
   });
 
-  it(`a screen over ${MAX_HITL_SCREEN_BYTES} bytes`, () => {
+  it("a screen over 8192 bytes", () => {
+    expect(MAX_HITL_SCREEN_BYTES).toBe(8192);
     const sections = Array.from({ length: 16 }, () => ({ type: "note", text: "\u00e9".repeat(300) }));
     expect(refused({ layout: "card", title: "x", sections })).toMatch(/<= 8192 bytes/);
   });
