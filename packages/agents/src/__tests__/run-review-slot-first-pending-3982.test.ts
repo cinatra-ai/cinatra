@@ -95,6 +95,22 @@ async function activeRailTask(): Promise<string | null> {
   expect(current).toHaveLength(gates.some(g => g.status === "pending") ? 1 : 0);
   return current[0]?.gate?.reviewTaskId ?? null;
 }
+// The rail's task-key tie order among gates raised at one instant (cinatra#3035):
+// the id before `#`, then the member number (an id without `#` is member 1, so
+// `#10` follows `#9`), then the whole id; ids compare by code units.
+function railTieOrder(a: string, b: string): number {
+  const units = (x: string, y: string) => (x < y ? -1 : x > y ? 1 : 0);
+  const split = (id: string) => {
+    const cut = id.indexOf("#");
+    if (cut === -1) return { base: id, member: 1 };
+    const member = Number(id.slice(cut + 1));
+    return { base: id.slice(0, cut), member: Number.isInteger(member) && member > 0 ? member : Number.MAX_SAFE_INTEGER };
+  };
+  const x = split(a), y = split(b);
+  if (x.base !== y.base) return units(x.base, y.base);
+  if (x.member !== y.member) return x.member - y.member;
+  return units(a, b);
+}
 beforeEach(() => { data.tables = { artifact_review_gates: [], artifact_produced_outbox: [], agent_runs: [] }; data.reads = []; seed(); });
 
 describe("detail and rail elect the first pending review in raise order", () => {
@@ -115,7 +131,7 @@ describe("detail and rail elect the first pending review in raise order", () => 
   it.each([false, true].flatMap(parked => [[parked, ["z-task", "a-task"]], [parked, ["task-Z", "task-a", "task-A"]], [parked, ["task_2", "task#2", "task.1", "task-1"]]] as const))("matches the rail task-key tie order, parked=%s keys=%j", async (parked, tasks) => {
     seed(parked); data.tables.artifact_review_gates = tasks.map(task => gate(task, 5));
     if (parked) link(...tasks);
-    const first = [...tasks].sort((a, b) => a.localeCompare(b))[0];
+    const first = [...tasks].sort(railTieOrder)[0];
     expect(await activeRailTask()).toBe(first);
     expect((await readRunReviewSlot("run")).reviewTaskId).toBe(first);
   });

@@ -288,10 +288,10 @@ function truncateLabel(text: string | null | undefined, fallback: string): strin
 }
 
 function gateTime(v: string | number | Date): number {
-  if (v instanceof Date) return v.getTime();
-  if (typeof v === "number") return v;
-  const parsed = Date.parse(v);
-  return Number.isNaN(parsed) ? 0 : parsed;
+  const t = v instanceof Date ? v.getTime() : typeof v === "number" ? v : Date.parse(v);
+  // A time that is not finite reads as 0, as an unparsable string always did,
+  // so no comparison below meets NaN (cinatra#3035).
+  return Number.isFinite(t) ? t : 0;
 }
 
 // A gate's creation time as a number, or null when it is not a time. The time
@@ -308,7 +308,8 @@ function readGateTime(v: string | number | Date): number | null {
 // One pause opens one gate per artifact as `<id>`, `<id>#2`, `<id>#3`, ... in
 // one transaction, so the family's rows share a creation time. Among equal times
 // the family keeps its own order, `#10` after `#9` (cinatra#3035): the base id,
-// then the member number (the base is 1), then the id.
+// then the member number (the base is 1), then the id. Ids compare by code
+// units, so the order is total and the election never depends on read order.
 function splitGateFamily(reviewTaskId: string): { base: string; member: number } {
   const cut = reviewTaskId.indexOf("#");
   if (cut === -1) return { base: reviewTaskId, member: 1 };
@@ -319,14 +320,21 @@ function splitGateFamily(reviewTaskId: string): { base: string; member: number }
   };
 }
 
+// Plain UTF-16 code-unit order. Unlike localeCompare it calls two strings equal
+// only when they are the same string (canonically equivalent spellings such as
+// a precomposed and a decomposed accent stay distinct), so it is a total order.
+function compareCodeUnits(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 function compareReviewGates(a: { createdAt: string | number | Date; reviewTaskId: string }, b: { createdAt: string | number | Date; reviewTaskId: string }): number {
   const time = gateTime(a.createdAt) - gateTime(b.createdAt);
   if (time !== 0) return time;
   const fa = splitGateFamily(a.reviewTaskId);
   const fb = splitGateFamily(b.reviewTaskId);
-  if (fa.base !== fb.base) return fa.base.localeCompare(fb.base);
+  if (fa.base !== fb.base) return compareCodeUnits(fa.base, fb.base);
   if (fa.member !== fb.member) return fa.member - fb.member;
-  return a.reviewTaskId.localeCompare(b.reviewTaskId);
+  return compareCodeUnits(a.reviewTaskId, b.reviewTaskId);
 }
 
 /** Approved app-artifact-review §I.3: the first pending gate in rail order. */
