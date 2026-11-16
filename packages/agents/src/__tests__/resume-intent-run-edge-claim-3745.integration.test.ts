@@ -31,6 +31,13 @@
  * The delivery that uses these writes comes in a later change; nothing on this
  * change's main calls them with a lease yet.
  *
+ * Since cinatra#4245 every `pending_approval -> running` edge lands only under a
+ * pause fence (run-transition.ts, pause claim rule 3), so each claim edge here
+ * first claims the seeded run's pause at its live generation (pauseFenceFor) and
+ * carries that fence beside the key it tests. A fence lost on the gate leaves that
+ * pause claim live (the rollback writes nothing), so the loser must give it back;
+ * the give-back is bound to the loser's token and never clears a winner's lease.
+ *
  * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided. Run with:
  *   CINATRA_TEST_DB_URL=postgres://user:pass@localhost:5432/db \
  *     pnpm --filter @cinatra-ai/agents test:integration resume-intent-run-edge-claim-3745
@@ -71,6 +78,7 @@ vi.mock("@cinatra-ai/agent-ui-protocol/server", () => ({ publishAgUiEvent: vi.fn
 let transitions: typeof import("../run-transition");
 let gateStore: typeof import("../artifact-review-gate-store");
 let dbMod: typeof import("../db");
+let pauseClaims: typeof import("../run-pause-claim");
 
 async function pool(text: string, values: unknown[] = []) {
   return dbMod.agentBuilderPool.query(text, values);
@@ -181,6 +189,19 @@ async function runState(runId: string): Promise<{ status: string; attempt: strin
   return { status: row.status, attempt: row.execution_attempt_id };
 }
 
+/**
+ * cinatra#4245: a `pending_approval -> running` edge lands only under a pause fence.
+ * Claims the run's pause at its live generation (run-pause-claim.ts) and returns the
+ * fence the edge carries; the key under test rides beside it.
+ */
+async function pauseFenceFor(runId: string): Promise<{ pauseFence: { token: string; generation: number } }> {
+  const r = await pool(`SELECT pause_generation FROM ${T("agent_runs")} WHERE id = $1`, [runId]);
+  const generation = Number((r.rows[0] as { pause_generation: number | string }).pause_generation);
+  const claim = await pauseClaims.claimPause({ runId, orgId: ORG, generation }, AUTHORITY as never);
+  if (claim.kind !== "claimed") throw new Error(`pauseFenceFor: the pause claim of ${runId} was refused (${claim.reason})`);
+  return { pauseFence: { token: claim.token, generation: claim.generation } };
+}
+
 beforeAll(async () => {
   if (!HAS_DB) return;
   process.env.SUPABASE_SCHEMA = TEST_SCHEMA;
@@ -211,6 +232,7 @@ beforeAll(async () => {
   transitions = await import("../run-transition");
   gateStore = await import("../artifact-review-gate-store");
   dbMod = await import("../db");
+  pauseClaims = await import("../run-pause-claim");
 }, 120_000);
 
 afterAll(async () => {
@@ -234,7 +256,8 @@ describe.skipIf(!HAS_DB)("a resume intent's run edges are fenced by its lease, i
   it("the claim sets the mark under the held lease and keeps the attempt; the release clears mark and record", async () => {
     const run = await seedRun("pending_approval");
     const gateId = await seedIntent(run, { status: "delivering", leaseToken: "L1" });
-    await transitions.transitionRunStatus(run.runId, "pending_approval", "running", lease(gateId, "L1"), AUTHORITY as never);
+    await transitions.transitionRunStatus(run.runId, "pending_approval", "running",
+      { ...(await pauseFenceFor(run.runId)), ...lease(gateId, "L1") }, AUTHORITY as never);
     expect(await runState(run.runId)).toEqual({ status: "running", attempt: run.attempt });
     expect(await intentState(gateId)).toMatchObject({ claimed: true, result: null, status: "delivering" });
     await pool(`UPDATE ${T("artifact_review_resume_outbox")} SET resume_task_result = '{"id":"t"}' WHERE gate_id = $1`, [gateId]);
@@ -258,7 +281,8 @@ describe.skipIf(!HAS_DB)("a resume intent's run edges are fenced by its lease, i
   it("a claim under a stolen lease throws resume_intent_lease_lost and rolls back the run CAS", async () => {
     const run = await seedRun("pending_approval");
     const gateId = await seedIntent(run, { status: "delivering", leaseToken: "other" });
-    await expect(transitions.transitionRunStatus(run.runId, "pending_approval", "running", lease(gateId, "L1"), AUTHORITY as never))
+    const fence = await pauseFenceFor(run.runId);
+    await expect(transitions.transitionRunStatus(run.runId, "pending_approval", "running", { ...fence, ...lease(gateId, "L1") }, AUTHORITY as never))
       .rejects.toMatchObject({ code: "resume_intent_lease_lost" });
     expect((await runState(run.runId)).status).toBe("pending_approval");
     expect((await intentState(gateId)).claimed).toBe(false);
@@ -268,7 +292,8 @@ describe.skipIf(!HAS_DB)("a resume intent's run edges are fenced by its lease, i
     const run = await seedRun("pending_approval");
     const otherRun = await seedRun("pending_approval");
     const otherGate = await seedIntent(otherRun, { status: "delivering", leaseToken: "L1" });
-    await expect(transitions.transitionRunStatus(run.runId, "pending_approval", "running", lease(otherGate, "L1"), AUTHORITY as never))
+    const fence = await pauseFenceFor(run.runId);
+    await expect(transitions.transitionRunStatus(run.runId, "pending_approval", "running", { ...fence, ...lease(otherGate, "L1") }, AUTHORITY as never))
       .rejects.toMatchObject({ code: "resume_intent_lease_lost" });
     expect((await runState(run.runId)).status).toBe("pending_approval");
     expect((await intentState(otherGate)).claimed).toBe(false);
@@ -307,14 +332,15 @@ describe.skipIf(!HAS_DB)("a resume intent's run edges are fenced by its lease, i
     const own = await seedIntent(run, { status: "delivering", leaseToken: "L1" });
     const otherRun = await seedRun("running");
     const otherRunIntent = await seedIntent(otherRun, { status: "delivering", leaseToken: "L2", runClaimed: true });
-    await transitions.transitionRunStatus(run.runId, "pending_approval", "running", lease(own, "L1"), AUTHORITY as never);
+    await transitions.transitionRunStatus(run.runId, "pending_approval", "running",
+      { ...(await pauseFenceFor(run.runId)), ...lease(own, "L1") }, AUTHORITY as never);
     expect(await intentState(own)).toMatchObject({ claimed: true, result: null });
     // The record stays: it witnesses that the earlier gate's resume was delivered.
     expect(await intentState(earlier)).toMatchObject({ claimed: false, result: { id: "t-old" }, status: "delivering", leaseToken: "L0" });
     // An entry with no lease (the human or MCP resume) clears every mark of the run, its own run only.
     await transitions.transitionRunStatus(run.runId, "running", "pending_approval", lease(own, "L1"), AUTHORITY as never);
     await pool(`UPDATE ${T("artifact_review_resume_outbox")} SET run_claimed_at = now() WHERE gate_id = $1`, [own]);
-    await transitions.transitionRunStatus(run.runId, "pending_approval", "running", undefined, AUTHORITY as never);
+    await transitions.transitionRunStatus(run.runId, "pending_approval", "running", await pauseFenceFor(run.runId), AUTHORITY as never);
     expect((await intentState(own)).claimed).toBe(false);
     expect((await intentState(otherRunIntent)).claimed).toBe(true);
   });
@@ -421,22 +447,37 @@ describe.skipIf(!HAS_DB)("a gate claim is bound to its gate, and its release put
 
   it("a claim of an answered gate loses once the run paused at its next gate, and the row is untouched", async () => {
     const run = await seedRun("pending_approval");
-    // Another resume answered gate A, sent, and the run paused at gate B.
+    // Another resume answered gate A, sent, and the run paused at gate B (the
+    // delivery worker re-emits gate B in place: no status change, so the pause
+    // generation stays the one read).
     const nextTask = `task-${randomUUID()}`;
     await pool(`UPDATE ${T("agent_runs")} SET a2a_task_id = $2 WHERE id = $1`, [run.runId, nextTask]);
-    await expect(transitions.transitionRunStatus(run.runId, "pending_approval", "running", gateOf(run), AUTHORITY as never))
+    const lost = await pauseFenceFor(run.runId);
+    await expect(transitions.transitionRunStatus(run.runId, "pending_approval", "running",
+      { ...lost, ...gateOf(run) }, AUTHORITY as never))
       .rejects.toMatchObject({ code: "stale_from_status" });
     expect(await parkState(run.runId)).toMatchObject({ status: "pending_approval", taskId: nextTask });
-    // The claim of the gate the run is at now wins.
+    // The lost fence wrote nothing, so the loser's pause claim is still live and
+    // every other resume of this pause is refused as `held` until it is given back
+    // (run-resume-under-claim.ts gives it back on a lost fence).
+    const generation = lost.pauseFence.generation;
+    expect(await pauseClaims.claimPause({ runId: run.runId, orgId: ORG, generation }, AUTHORITY as never))
+      .toMatchObject({ kind: "refused", reason: "held" });
+    const giveBack = () => pauseClaims.releasePauseClaim({ runId: run.runId, orgId: ORG, token: lost.pauseFence.token }, AUTHORITY as never);
+    expect(await giveBack()).toBe("released");
+    // The claim of the gate the run is at now wins, and a late give-back of the
+    // loser's token cannot clear the winner's lease.
+    const winner = await pauseFenceFor(run.runId);
+    expect(await giveBack()).toBe("lost");
     await transitions.transitionRunStatus(run.runId, "pending_approval", "running",
-      { resumeGate: { a2aTaskId: nextTask, executionAttemptId: run.attempt } }, AUTHORITY as never);
+      { ...winner, resumeGate: { a2aTaskId: nextTask, executionAttemptId: run.attempt } }, AUTHORITY as never);
     expect((await runState(run.runId)).status).toBe("running");
   });
 
   it("a claim of a gate of an earlier execution attempt loses", async () => {
     const run = await seedRun("pending_approval");
     await expect(transitions.transitionRunStatus(run.runId, "pending_approval", "running",
-      { resumeGate: { a2aTaskId: run.taskId, executionAttemptId: randomUUID() } }, AUTHORITY as never))
+      { ...(await pauseFenceFor(run.runId)), resumeGate: { a2aTaskId: run.taskId, executionAttemptId: randomUUID() } }, AUTHORITY as never))
       .rejects.toMatchObject({ code: "stale_from_status" });
     expect((await runState(run.runId)).status).toBe("pending_approval");
   });
@@ -456,7 +497,7 @@ describe.skipIf(!HAS_DB)("a gate claim is bound to its gate, and its release put
     await parkRun(run.runId);
     const cleared: ClearedProducedReviewPark[] = [];
     await transitions.transitionRunStatus(run.runId, "pending_approval", "running",
-      gateOf(run, { onParkCleared: (park) => cleared.push(park) }), AUTHORITY as never);
+      { ...(await pauseFenceFor(run.runId)), ...gateOf(run, { onParkCleared: (park) => cleared.push(park) }) }, AUTHORITY as never);
     expect(await parkState(run.runId)).toMatchObject({ status: "running", column: null, marker: null });
     expect(cleared).toEqual([{ producedReviewPark: PARK_COLUMN, withheldTerminal: { status: "completed" } }]);
     await transitions.transitionRunStatus(run.runId, "running", "pending_approval",
@@ -468,7 +509,7 @@ describe.skipIf(!HAS_DB)("a gate claim is bound to its gate, and its release put
     const run = await seedRun("pending_approval");
     const cleared: ClearedProducedReviewPark[] = [];
     await transitions.transitionRunStatus(run.runId, "pending_approval", "running",
-      gateOf(run, { onParkCleared: (park) => cleared.push(park) }), AUTHORITY as never);
+      { ...(await pauseFenceFor(run.runId)), ...gateOf(run, { onParkCleared: (park) => cleared.push(park) }) }, AUTHORITY as never);
     expect(cleared).toEqual([]);
   });
 
@@ -477,7 +518,12 @@ describe.skipIf(!HAS_DB)("a gate claim is bound to its gate, and its release put
     const run = await seedRun("pending_approval");
     await parkRun(run.runId);
     const mintError = new Error("mint failed");
-    await expect(claimGateForResume(transitions.transitionRunStatus as never, run.runId,
+    // cinatra#4245: the claim edge carries the run's pause fence; the release does not need one.
+    const fence = await pauseFenceFor(run.runId);
+    const fencedTransition = ((runId: string, from: string, to: string, meta: Record<string, unknown>, authority: unknown) =>
+      transitions.transitionRunStatus(runId, from as never, to as never,
+        (from === "pending_approval" ? { ...fence, ...meta } : meta) as never, authority as never)) as never;
+    await expect(claimGateForResume(fencedTransition, run.runId,
       { a2aTaskId: run.taskId, executionAttemptId: run.attempt }, AUTHORITY, async () => {
         throw mintError;
       })).rejects.toBe(mintError);

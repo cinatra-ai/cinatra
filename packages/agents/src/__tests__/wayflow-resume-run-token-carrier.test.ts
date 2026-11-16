@@ -163,7 +163,7 @@ describe("every WayFlow resume sendTask site is wired to the carrier", () => {
     "orchestrator-actions.ts",
     "review-task-actions.ts",
     "artifact-review-resume-delivery.ts",
-    "mcp/handlers.ts",
+    "run-resume-under-claim.ts",
   ];
 
   it.each(SITES)("%s mints resume metadata and attaches it", async (site) => {
@@ -172,8 +172,10 @@ describe("every WayFlow resume sendTask site is wired to the carrier", () => {
     const src = readFileSync(join(__dirname, "..", site), "utf8");
 
     expect(src).toContain("mintResumeRunTokenMetadata");
-    // The minted object must actually reach the message.
-    expect(src).toMatch(/metadata:\s*resumeMetadata/);
+    // The minted object must actually reach the message: by its own name where
+    // the site mints and sends in one place, or as the prepared leg's `metadata`
+    // where the mint runs ahead of the claim's fence (prepareWayflowResume).
+    expect(src).toMatch(/metadata:\s*(resumeMetadata|prepared\.metadata)/);
   });
 
   it("no resume sendTask site sends a message without metadata", async () => {

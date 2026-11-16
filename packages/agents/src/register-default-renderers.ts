@@ -35,7 +35,6 @@ import { ListPickerRenderer } from "./list-picker-renderer";
 import { ContextSelectorRenderer } from "./context-selector-renderer";
 import { CampaignRecipientsReviewRenderer } from "./campaign-recipients-review-renderer";
 import { EmailDraftsReviewRenderer } from "./email-drafts-review-renderer";
-import { BlogIdeaSelectionRenderer } from "./blog-idea-selection-renderer";
 import { CtaRenderer } from "./cta-renderer";
 import {
   PersonalSkillRenderer,
@@ -102,7 +101,7 @@ const RENDERER_KIND_TABLE: Record<
      * setup surface then draws the product's Continue beside the field.
      */
     drawsOwnSubmit?: true;
-    /** This kind's component commits a pick, so its gate's Continue waits for one; see `FieldRendererEntry.holdsContinueUntilPicked` (cinatra#3035). */
+    /** A component of this kind commits a pick, so its gate's Continue waits for one; see `FieldRendererEntry.holdsContinueUntilPicked` (cinatra#3035). The schema floor commits none, so a binding the floor draws never holds. */
     holdsContinueUntilPicked?: true;
     /**
      * Optional custom condition factory for kinds whose match logic goes
@@ -113,15 +112,20 @@ const RENDERER_KIND_TABLE: Record<
     makeCondition?: (matchIds: readonly string[]) => FieldRendererCondition;
   }
 > = {
-  // cinatra#1796: the DEDICATED idea-selection chooser for blog-pipeline's
-  // `idea_selection_gate`, activated by the binding id
-  // `@cinatra-ai/blog-pipeline-agent:idea-selection` (strict-id condition). The
-  // host ships this component (unlike the migrated *-review kinds below): the
-  // gate relocated OFF the shared reviewer-output binding onto this one
-  // (blog-pipeline-agent#40). Both the former inline chooser and the
-  // reviewer-output dispatcher it lived in are now gone (#1796 teardown); this
-  // dedicated binding is the only path to the chooser.
-  "blog-idea-selection": { renderer: BlogIdeaSelectionRenderer, credentialSafe: true, holdsContinueUntilPicked: true },
+  // MIGRATED (cinatra#3380): blog-pipeline's `idea_selection_gate` chooser is
+  // shipped by @cinatra-ai/blog-pipeline-agent itself, activated by the binding
+  // id `@cinatra-ai/blog-pipeline-agent:idea-selection`. The host's former
+  // chooser component is gone. The KIND stays in the table (the binding still
+  // declares it: kind-vocabulary set-equality), but a bundled binding resolves
+  // map-first to the extension wrapper (hasFieldRendererComponent ->
+  // makeExtensionFieldRenderer), and a not-in-build binding of this kind
+  // degrades to the SchemaFieldRenderer floor here (AC4 never-blank). Same
+  // shape as final-list-review / scrape-schema-review below.
+  // The kind still declares the pick hold (cinatra#3035): the extension branch
+  // of registerFieldRendererBindings reads it from this table, so the pack's
+  // chooser keeps the step's Continue held until a pick is made. The floor
+  // below commits no pick, so a binding it draws does not hold.
+  "blog-idea-selection": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true, drawsOwnSubmit: true, holdsContinueUntilPicked: true },
   "campaign-recipients-review": {
     renderer: CampaignRecipientsReviewRenderer,
     bareAliases: ["campaign-recipients-review"],
@@ -321,6 +325,7 @@ export function registerFieldRendererBindings(
         // slice's work, not a guess made on this one.
         drawsOwnSubmit: true,
         // The kind's hold travels with the binding whoever draws the step (cinatra#3035).
+        // A wrapper instance that settles on the floor tells its own host (RendererFloorReportContext).
         holdsContinueUntilPicked: RENDERER_KIND_TABLE[b.kind]?.holdsContinueUntilPicked === true,
         midRunHitl: b.midRunHitl === true,
       });
@@ -350,7 +355,8 @@ export function registerFieldRendererBindings(
       // declares its own (true) — see the note there.
       drawsOwnSubmit: kindEntry.drawsOwnSubmit === true,
       // The KIND's answer once more (cinatra#3035): a kind whose component commits a pick holds its gate's Continue until one is made.
-      holdsContinueUntilPicked: kindEntry.holdsContinueUntilPicked === true,
+      // The schema floor commits no pick, so a kind drawn by the floor never holds.
+      holdsContinueUntilPicked: kindEntry.holdsContinueUntilPicked === true && kindEntry.renderer !== SchemaOnlyFloorRenderer,
       midRunHitl: b.midRunHitl === true,
     });
   }

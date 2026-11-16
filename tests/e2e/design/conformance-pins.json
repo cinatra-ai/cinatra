@@ -34,8 +34,8 @@
       "id": "app-notifications",
       "file": "app-notifications.json",
       "source": "repo",
-      "manifestSha256": "c9eb7db8840ab84cb7032fadb73d4852d7e277f857b9857be2a20506c716be5f",
-      "specContentHash": "sha256:b9bc6af1b550bbf8b292a0aa32e59ffacb79b5bffd248b2a2047f061151eb08a"
+      "manifestSha256": "1769529688d866ab7e7bb4e3d5e88a6fc07bd33b78cb048c57427c994f8cffd1",
+      "specContentHash": "sha256:289d16be9b0eeea30c39b95357348d9d299f818ce16c6f47a8b2f7b361209b73"
     }
   ]
 }

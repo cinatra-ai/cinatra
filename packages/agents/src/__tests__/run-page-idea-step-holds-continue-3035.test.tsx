@@ -3,9 +3,14 @@
 // I.1, "the Continue stays unavailable until a row is picked".
 import React from "react";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 
-import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
+import { ensureDefaultFieldRenderersRegistered, registerFieldRendererBindings } from "../register-default-renderers";
+import {
+  FIELD_RENDERER_PROPS_API_VERSION,
+  __resetFieldRendererComponentMapForTests,
+  __setFieldRendererComponentMapForTests,
+} from "../field-renderer-components";
 import { OrchestratorStepperPanel } from "../orchestrator-stepper-panel";
 
 const stream = vi.hoisted(() => ({ interruptContext: null as unknown }));
@@ -164,5 +169,84 @@ describe("the run page's idea step opens with nothing picked and its Continue un
     for (const button of continueButtons()) {
       expect(button.disabled).toBe(false);
     }
+  });
+});
+
+/*
+ * THE FLOOR REPORT BELONGS TO ONE GATE (cinatra#3035, review 3 of #4429). The approval
+ * card stays mounted across gates and keeps the report of the renderer it mounts above
+ * the renderer's per-gate key. A gate A whose component failed to load settled on the
+ * floor; gate B of the same binding, still loading, must draw its Continue held from its
+ * first committed frame. The frames are read in the commit itself (the Profiler's
+ * onRender runs before the commit's passive effects).
+ */
+describe("the run page's floor report belongs to the gate whose renderer made it", () => {
+  const FLOOR_ID = "@example/ideas:stepper-gate-hold";
+  let loadFloorComponent: () => Promise<unknown> = () => new Promise(() => {});
+  let errorSpy: { mockRestore: () => void } | null = null;
+
+  afterEach(() => {
+    __resetFieldRendererComponentMapForTests();
+    loadFloorComponent = () => new Promise(() => {});
+    errorSpy?.mockRestore();
+    errorSpy = null;
+  });
+
+  function floorGate(reviewTaskId: string) {
+    return {
+      ...IDEA_GATE,
+      xRenderer: FLOOR_ID,
+      schema: { ...IDEA_GATE.schema, "x-renderer": FLOOR_ID },
+      reviewTaskId,
+    };
+  }
+
+  /** The card's own Continue is drawn after the renderer, so it is the last one. */
+  function cardContinue(): HTMLButtonElement | null {
+    return continueButtons().at(-1) ?? null;
+  }
+
+  it("U4: after gate A settled on the floor, gate B of the same binding draws its Continue held in every frame while it loads", async () => {
+    errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    __setFieldRendererComponentMapForTests({
+      [FLOOR_ID]: {
+        resolution: "guardedOptional",
+        packageName: "@example/ideas",
+        propsApiVersion: FIELD_RENDERER_PROPS_API_VERSION,
+        load: () => loadFloorComponent(),
+      },
+    });
+    registerFieldRendererBindings([{ id: FLOOR_ID, kind: "blog-idea-selection", priority: 80, midRunHitl: true }]);
+    loadFloorComponent = () => Promise.reject(new Error("chunk unavailable"));
+
+    const heldInFrame: boolean[] = [];
+    let recording = false;
+    const onRender = () => {
+      if (!recording) return;
+      const button = cardContinue();
+      if (button) heldInFrame.push(button.disabled);
+    };
+    const panel = () => (
+      <React.Profiler id="orchestrator-stepper-panel" onRender={onRender}>
+        <OrchestratorStepperPanel {...panelProps()} />
+      </React.Profiler>
+    );
+    stream.interruptContext = floorGate("gate-floor-3035-a");
+    const { rerender } = render(panel());
+    await waitFor(() => expect(cardContinue()).not.toBeNull());
+    // Gate A settled on its floor: the floor commits no pick, so its Continue is not held.
+    await waitFor(() => expect(cardContinue()!.disabled).toBe(false));
+
+    loadFloorComponent = () => new Promise(() => {});
+    stream.interruptContext = floorGate("gate-floor-3035-b");
+    recording = true;
+    rerender(panel());
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(heldInFrame.length).toBeGreaterThan(0);
+    // Held in every committed frame of gate B, the first one included.
+    expect(heldInFrame).not.toContain(false);
+    expect(cardContinue()!.disabled).toBe(true);
   });
 });
