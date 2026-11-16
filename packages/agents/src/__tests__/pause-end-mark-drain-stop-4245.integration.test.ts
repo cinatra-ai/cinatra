@@ -670,6 +670,7 @@ describe.skipIf(!HAS_DB)("the delivery worker after the end mark (G11, rev1 MF4)
     const outcome = await worker.deliverArtifactReviewResumeIntent({
       gateId: p.gateId, runId: p.runId, reviewTaskId: `wayflow-${task}`, kind: "approve", responseText: '{"approved":true}',
       status: "delivering", attempts: 1, leaseToken: lease, leaseExpiresAt: new Date(Date.now() + 60_000),
+      runClaimedAt: null, resumeTaskResult: null, // as the outbox row inserted above holds (cinatra#3745)
     });
     expect(outcome).toBe("already-advanced");
     expect(ctl.sent).toEqual([]);
