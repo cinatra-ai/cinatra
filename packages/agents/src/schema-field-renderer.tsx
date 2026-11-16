@@ -43,6 +43,44 @@ import { isInternalPlaceholderFieldName, resolveFieldLabel } from "./humanize-fi
  */
 export const GateContinueHoldContext = createContext<boolean>(false);
 
+/**
+ * WHERE A MOUNTED RENDERER REPORTS THAT IT SETTLED ON THE FLOOR (cinatra#3035).
+ * A host that mounts a gate's renderer and draws that gate's Continue provides
+ * the setter of useGateRendererFloor below (stable per gate). The extension
+ * wrapper reports `true` once its instance shows the schema floor in place of
+ * its component; it reports `false` from its mount (the load window, then a
+ * good load) and when it unmounts. The floor commits no pick, so the host does
+ * not hold its Continue for one while `true`. The state is the host's, so a
+ * report re-renders that host's Continue and no other. Here for the route-graph
+ * reason given above.
+ */
+export const RendererFloorReportContext = createContext<((floored: boolean) => void) | null>(null);
+
+/**
+ * THE HOST'S FLOOR STATE BELONGS TO ONE GATE (cinatra#3035). A host keeps the
+ * report above the renderer it remounts per gate, so a plain boolean would still
+ * read gate A's `true` in the first frame of gate B, before any effect of B's
+ * renderer has run, and B's Continue would be drawn without its hold. The state
+ * records WHICH gate's renderer reported the floor: a different gate reads
+ * `false` from its first render (its own hold applies) until its own renderer
+ * reports. A `false` report clears only its own gate's record, so a replaced
+ * renderer's unmount report never touches the next gate's. The returned setter
+ * is stable per gate; give it to RendererFloorReportContext.
+ */
+export function useGateRendererFloor(
+  gateKey: string | null,
+): readonly [boolean, (floored: boolean) => void] {
+  const [flooredGate, setFlooredGate] = useState<string | null>(null);
+  const report = useCallback(
+    (floored: boolean) => {
+      if (gateKey === null) return;
+      setFlooredGate((held) => (floored ? gateKey : held === gateKey ? null : held));
+    },
+    [gateKey],
+  );
+  return [gateKey !== null && flooredGate === gateKey, report] as const;
+}
+
 type Props = {
   fieldName: string;
   schema: Record<string, unknown>;

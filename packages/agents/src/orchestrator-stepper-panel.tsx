@@ -99,7 +99,7 @@ import {
 } from "./review-gate-card";
 import { ensureOrCheckRunNameAction } from "./run-name-actions";
 import { approveReviewTask } from "./hitl-actions";
-import { GateContinueHoldContext } from "./schema-field-renderer";
+import { GateContinueHoldContext, RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
 // Wrap the legacy `userResponse` text with the WayFlow `user_envelope`
 // shape when paperclip attachments are pending. Refs persist attachments
 // captured at Suggest time; consumed at gate Continue.
@@ -142,7 +142,7 @@ import {
 } from "./run-surface-status";
 import { useRunRowWatch } from "./use-run-row-watch";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
-import { fieldRendererRegistry } from "./field-renderer-registry";
+import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext } from "./field-renderer-registry";
 import {
   ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
@@ -718,9 +718,10 @@ function HitlApprovalCard({
   // sequential per-field setup gates all reuse the SAME xRenderer
   // (schema-field-fallback), so an xRenderer-only key never fires on a
   // field→field advance (postTitle → blogPostUrl) and field 1's buffered
-  // value bleeds into field 2. The review task is part of the key (cinatra#3380):
-  // a mid-run gate carries no fieldName and can repeat its renderer, and a value
-  // written for one gate must not read as the next gate's answer.
+  // value bleeds into field 2. The review task is part of the key (cinatra#3380,
+  // cinatra#3035): a mid-run gate carries no fieldName and can repeat its
+  // renderer, and a value written (or a pick made) for one gate must not read
+  // as the next gate's answer.
   //
   // THE RESET IS DONE IN RENDER, not after it (cinatra#3380). The next gate's
   // renderer can write its answer from a layout effect when it mounts (a list
@@ -729,6 +730,9 @@ function HitlApprovalCard({
   const [prevBufferKey, setPrevBufferKey] = useState<string | null>(null);
   const bufferKey =
     interruptContext != null ? hitlGateIdentityKey(interruptContext) : null;
+  // cinatra#3035: the mounted gate renderer reports here when it settles on the
+  // floor, for this gate only: a later gate reads its own hold from its first frame.
+  const [rendererFloored, setRendererFloored] = useGateRendererFloor(bufferKey);
   if (
     bufferKey !== null &&
     prevBufferKey !== null &&
@@ -1404,6 +1408,7 @@ function HitlApprovalCard({
     <>
         {RendererComponent && !isGenericObjectSchema && !fallbackGateIsMalformed ? (
           <GateContinueHoldContext.Provider value={fallbackGateAsksForFields}>
+          <RendererFloorReportContext.Provider value={setRendererFloored}>
           <RendererComponent
             // Keyed by xRenderer AND fieldName (#810): per-field setup gates
             // share one xRenderer, and the setup loop advances fields without
@@ -1412,7 +1417,8 @@ function HitlApprovalCard({
             // internal input state, e.g. SchemaFieldRenderer's localValue)
             // survives the field advance and the previous field's typed text
             // pre-fills the next field. The review task is in the key too
-            // (cinatra#3380): a mid-run gate can repeat its renderer.
+            // (cinatra#3380, cinatra#3035): a mid-run gate can repeat its
+            // renderer, and a later gate's renderer starts with no pick.
             key={hitlGateIdentityKey(interruptContext)}
             // The gate's REAL field identity (cinatra#2541). `fieldName` is what
             // the renderer labels itself from (resolveFieldLabel) and ids its
@@ -1582,6 +1588,7 @@ function HitlApprovalCard({
                 : undefined
             }
           />
+          </RendererFloorReportContext.Provider>
           </GateContinueHoldContext.Provider>
         ) : !isGenericObjectSchema ? (
           <p className="text-sm text-muted-foreground">
@@ -1604,9 +1611,15 @@ function HitlApprovalCard({
 
         {showContinueButton && (
           <div className="flex justify-end pt-2 border-t border-line">
+            {/* cinatra#3380: held while the gate's declared renderer value is unwritten.
+                cinatra#3035: held while a gate whose kind declares the hold has no pick. */}
             <Button
               size="sm"
-              disabled={isApproving || continueAwaitsRendererValue}
+              disabled={
+                isApproving ||
+                continueAwaitsRendererValue ||
+                (!rendererFloored && continueAwaitsAPick(entry, bufferedHitlValue))
+              }
               onClick={handleContinue}
               className="gap-1.5"
             >

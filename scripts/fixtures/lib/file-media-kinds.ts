@@ -78,16 +78,23 @@ export async function fileMediaKindSamples(
 /** The e2e harness the review run is seeded through (injectable for tests). */
 export interface ReviewGateHarness {
   seedMarkedReviewGateRun(input: { userId: string; orgId: string; targets: ReviewTarget[] }): Promise<string>;
-  waitForMarkedReviewGate(runId: string): Promise<{ reviewTaskId: string; status: string; pinnedTargets: ReviewTarget[] }>;
+  /** Every gate row of the run, not one of them. */
+  waitForMarkedReviewGates(runId: string): Promise<{ reviewTaskId: string; status: string; pinnedTargets: ReviewTarget[] }[]>;
 }
 
 const targetKey = (t: ReviewTarget) => `${t.artifactId}\u0000${t.representationRevisionId}`;
+/** The WayFlow task a leg belongs to: its id up to the first `#` (as
+ *  `baseReviewTaskId` in src/lib/artifacts/artifact-review-target.ts). */
+const baseTaskId = (id: string) => (id.includes("#") ? id.slice(0, id.indexOf("#")) : id);
 
 /**
  * Seed a run of the marked review gate fixture with the six filed revisions
- * and wait for its gate. Only run creation is seeded; WayFlow pauses the run
- * and the executor pins the targets. The gate must pin exactly the six filed
- * revisions, none missing, none foreign and none twice, or this fails.
+ * and wait for its gates. Only run creation is seeded; WayFlow pauses the run
+ * and the executor pins the targets as one family of six single-target gates,
+ * one per artifact, under one review task ("task", "task#2" ... "task#6"). The
+ * family must pin exactly the six filed revisions, none missing, none foreign
+ * and none twice, or this fails. The executor mints no new gate with several
+ * targets, so a single six-target gate fails here too.
  */
 export async function seedMediaKindReviewRun(
   input: { orgId: string; userId: string; filed: FiledMediaKind[] },
@@ -99,10 +106,18 @@ export async function seedMediaKindReviewRun(
   if (targets.length !== 6 || expected.size !== 6) throw new Error("A review run needs the six filed kinds, each once");
   const h = harness ?? await import("../../../tests/e2e/agents-run/review-gate-fixture.ts");
   const runId = await h.seedMarkedReviewGateRun({ orgId, userId, targets });
-  const gate = await h.waitForMarkedReviewGate(runId);
-  const pinned = gate.pinnedTargets.map(targetKey);
-  if (pinned.length !== expected.size || new Set(pinned).size !== pinned.length || !pinned.every((k) => expected.has(k))) {
-    throw new Error(`The gate of run ${runId} does not pin exactly the six filed revisions (it pins ${pinned.length})`);
+  const gates = await h.waitForMarkedReviewGates(runId);
+  const pinned = gates.flatMap((gate) => gate.pinnedTargets.map(targetKey));
+  const base = gates.find((gate) => baseTaskId(gate.reviewTaskId) === gate.reviewTaskId);
+  if (gates.length !== expected.size || !gates.every((gate) => gate.pinnedTargets.length === 1)) {
+    throw new Error(`The gates of run ${runId} are not six single-target gates (${gates.length} gates, ${pinned.length} pins)`);
   }
-  return { runId, reviewTaskId: gate.reviewTaskId, status: gate.status, pinned: pinned.length };
+  if (!base || !gates.every((gate) => baseTaskId(gate.reviewTaskId) === base.reviewTaskId) ||
+    new Set(gates.map((gate) => gate.reviewTaskId)).size !== gates.length) {
+    throw new Error(`The gates of run ${runId} are not one review family`);
+  }
+  if (new Set(pinned).size !== pinned.length || !pinned.every((k) => expected.has(k))) {
+    throw new Error(`The gates of run ${runId} do not pin exactly the six filed revisions (they pin ${pinned.length})`);
+  }
+  return { runId, reviewTaskId: base.reviewTaskId, status: base.status, pinned: pinned.length };
 }
