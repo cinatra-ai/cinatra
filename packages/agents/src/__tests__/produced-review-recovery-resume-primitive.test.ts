@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { pauseClaimFake } from "./pause-claim-test-fake";
 
 // cinatra#4150: every resume road reads the run's newest publish decision before it
 // sends. This suite is about another question, so no publish decision holds its run.
@@ -21,6 +22,11 @@ const authSessionMock = vi.hoisted(() => ({
   isPlatformAdmin: vi.fn(() => false),
   requireAuthSession: vi.fn(),
   resolveOrgRoleForUser: vi.fn(async () => "member"),
+}));
+// cinatra#4245: the resume road's pause claim always wins here.
+vi.mock("../run-pause-claim", async (orig) => ({
+  ...(await orig<typeof import("../run-pause-claim")>()),
+  ...(await import("./pause-claim-test-fake")).pauseClaimFake,
 }));
 vi.mock("@/lib/auth-session", () => authSessionMock);
 
@@ -65,7 +71,7 @@ const storeMock = vi.hoisted(() => ({
   resolveRunCoOwnerUserIds: vi.fn(async () => []),
   setAgentRunTokenHash: vi.fn(async () => {}),
   findSavedConnectionForAgentUrl: vi.fn(async () => null),
-  updateAgentRunA2ATaskId: vi.fn(async () => undefined),
+  updateAgentRunA2ATaskId: vi.fn(async () => ({ written: true })),
   updateAgentRunA2AContextId: vi.fn(async () => undefined),
 }));
 vi.mock("../store", () => storeMock);
@@ -297,8 +303,8 @@ describe("cinatra#3007 — an unrecordable hold inside the resume primitive", ()
       Buffer.byteLength(JSON.stringify(data.producedReviewHold) ?? "", "utf8"),
     ).toBeLessThanOrEqual(PRODUCED_REVIEW_RECOVERY_PAYLOAD_MAX_BYTES);
 
-    // The only transition is the resume's own claim of the gate before its send
-    // (cinatra#3745); no terminal status is written.
+    // The only transition is the resume's own fence before its send (cinatra#4245's
+    // pause claim, bound to the gate since cinatra#3745); no terminal status is written.
     const edges = (storeMock.transitionRunStatus.mock.calls as unknown as Array<[string, string, string]>)
       .map((c) => [c[1], c[2]]);
     expect(edges).toEqual([["pending_approval", "running"]]);
@@ -320,9 +326,10 @@ describe("cinatra#3007 — an unrecordable hold inside the resume primitive", ()
       park: data.producedReviewHoldPark as number,
     });
 
-    const calls = storeMock.transitionRunStatus.mock.calls as unknown as Array<
+    // cinatra#4245: leave the resume's fence out; this reads the convergence pass.
+    const calls = (storeMock.transitionRunStatus.mock.calls as unknown as Array<
       [string, string, string, Record<string, unknown> | undefined, unknown]
-    >;
+    >).filter((c) => c[2] !== "running");
     expect(calls).toHaveLength(1);
     expect([calls[0][1], calls[0][2]]).toEqual(["running", "completed"]);
     expect(calls[0][3]?.stepResults).toBeDefined();
@@ -333,7 +340,7 @@ describe("cinatra#3007 — an unrecordable hold inside the resume primitive", ()
   });
 });
 
-describe("cinatra#3745 — agent_run_resume claims the gate before it records or sends", () => {
+describe("cinatra#3745 — agent_run_resume claims the gate before it records or sends (under the pause claim, cinatra#4245)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     authSessionMock.getAuthSession.mockResolvedValue(null);
@@ -351,20 +358,68 @@ describe("cinatra#3745 — agent_run_resume claims the gate before it records or
     holdSpy.mockResolvedValue({ held: true, reason: "hold-unpersisted" });
   });
 
-  it("an already answered gate (the claim loses) returns an error naming gate and run; nothing is recorded or sent", async () => {
-    storeMock.transitionRunStatus.mockRejectedValueOnce(
-      Object.assign(new Error("stale_from_status"), { code: "stale_from_status" }),
+  // Since cinatra#4245 the claim is the pause claim (claimPause) and the one move to
+  // `running` is its fence, after the mint (run-resume-under-claim.ts); the fence carries
+  // the gate (cinatra#3745).
+  it("an already answered gate (the pause claim is refused: the run moved on) answers so; nothing is minted, fenced or sent", async () => {
+    pauseClaimFake.claimPause.mockResolvedValueOnce(
+      { kind: "refused", reason: "moved-on", status: "pending_approval", generation: 2 } as never,
     );
     const { mintResumeRunTokenMetadata } = await import("../wayflow-run-token-carrier");
     const result = (await resume()) as Record<string, unknown>;
-    expect(result.error).toBe("Run is not pending approval: gate task-1 on run run-1 was already answered.");
+    expect(result.error).toBe("Run moved on from the pause this resume read; nothing was sent.");
     expect(sendTaskSpy).not.toHaveBeenCalled();
-    expect(storeMock.writeHitlPrompt).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
     expect(mintResumeRunTokenMetadata).not.toHaveBeenCalled();
   });
 
-  it("a won claim comes before the mint and the send", async () => {
+  it("a fence that loses (stale_from_status: another gate or attempt) sends nothing, records nothing and gives the pause claim back", async () => {
+    const { RunTransitionError } = await import("../run-status");
+    storeMock.transitionRunStatus.mockRejectedValueOnce(
+      new RunTransitionError({ code: "stale_from_status", runId: "run-1", from: "pending_approval", to: "running" }),
+    );
+    const result = (await resume()) as Record<string, unknown>;
+    expect(result.error).toBe("This resume's claim on the pause expired before the send; nothing was sent. Resume again.");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(bindSpy).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).toHaveBeenCalledTimes(1);
+    // The rolled-back fence left this resume's claim in place (the run is at another
+    // gate at the same generation): it is given back under its own token only.
+    expect(pauseClaimFake.releasePauseClaim).toHaveBeenCalledTimes(1);
+    expect(pauseClaimFake.releasePauseClaim).toHaveBeenCalledWith(
+      { runId: "run-1", orgId: "org-1", token: "tok-fake" },
+      expect.anything(),
+    );
+    expect(pauseClaimFake.settlePauseSend).not.toHaveBeenCalled();
+  });
+
+  it("a lost fence whose release fails too still answers that nothing was sent, and logs no run or raw error", async () => {
+    const { RunTransitionError } = await import("../run-status");
+    storeMock.transitionRunStatus.mockRejectedValueOnce(
+      new RunTransitionError({ code: "stale_from_status", runId: "run-1", from: "pending_approval", to: "running" }),
+    );
+    pauseClaimFake.releasePauseClaim.mockRejectedValueOnce(new Error("db down: run-1") as never);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const result = (await resume()) as Record<string, unknown>;
+      expect(result.error).toBe("This resume's claim on the pause expired before the send; nothing was sent. Resume again.");
+      expect(sendTaskSpy).not.toHaveBeenCalled();
+      expect(pauseClaimFake.releasePauseClaim).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(
+        "[resumeWayflowUnderPauseClaim] could not give the claim back after a lost fence",
+        "Error",
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("a won claim comes before the mint, the mint before the fence, and the fence before the send", async () => {
     const order: string[] = [];
+    pauseClaimFake.claimPause.mockImplementationOnce((async () => {
+      order.push("claim");
+      return { kind: "claimed", token: "tok-fake", generation: 1, expiresAt: new Date(0) };
+    }) as never);
     storeMock.transitionRunStatus.mockImplementationOnce((async (_runId: string, from: string, to: string) => {
       order.push(`${from}->${to}`);
     }) as never);
@@ -378,7 +433,7 @@ describe("cinatra#3745 — agent_run_resume claims the gate before it records or
       return completedTask();
     });
     await resume().catch(() => undefined);
-    expect(order.slice(0, 3)).toEqual(["pending_approval->running", "mint", "send"]);
+    expect(order.slice(0, 4)).toEqual(["claim", "mint", "pending_approval->running", "send"]);
   });
 
   it("the claim is bound to the gate the handler read: its a2a task and its execution attempt", async () => {

@@ -148,19 +148,22 @@ describe("T6: every resume carries the node list through mintResumeRunTokenMetad
 
   it("each of the four resume callers sends that function's result as the message metadata", () => {
     const root = path.resolve(__dirname, "..");
-    // How each caller binds `resumeMetadata` to the function's result. agent_run_resume mints
-    // under its gate claim (cinatra#3745): the claim's value is the minted metadata.
-    const MINTED = /\bresumeMetadata = await mintResumeRunTokenMetadata\(/;
-    const binds: Record<string, RegExp[]> = {
-      "review-task-actions.ts": [MINTED],
-      "mcp/handlers.ts": [/return mintResumeRunTokenMetadata\(run\.id\);/, /const resumeMetadata = claim\.value;/],
-      "orchestrator-actions.ts": [MINTED],
-      "artifact-review-resume-delivery.ts": [MINTED],
+    // cinatra#4245: the paused-run resumes run under the pause claim. The WayFlow approve
+    // mints in prepareWayflowResume and sends prepared.metadata; the MCP resume mints in
+    // run-resume-under-claim.ts; the delivery mints before its fence and sends the result.
+    const roads: Record<string, RegExp[]> = {
+      "review-task-actions.ts": [/const metadata = await mintResumeRunTokenMetadata\(/, /metadata: prepared\.metadata/],
+      "run-resume-under-claim.ts": [/const resumeMetadata = await mintResumeRunTokenMetadata\(/, /metadata: resumeMetadata/],
+      "orchestrator-actions.ts": [/const resumeMetadata = await mintResumeRunTokenMetadata\(/, /metadata: resumeMetadata/],
+      "artifact-review-resume-delivery.ts": [
+        /const metadata = await mintResumeRunTokenMetadata\(/,
+        /resumeMetadata: metadata/,
+        /metadata: resumeMetadata/,
+      ],
     };
-    for (const [file, patterns] of Object.entries(binds)) {
+    for (const [file, pins] of Object.entries(roads)) {
       const source = readFileSync(path.join(root, file), "utf8");
-      for (const pattern of patterns) expect(source, file).toMatch(pattern);
-      expect(source, file).toMatch(/metadata: resumeMetadata/);
+      for (const pin of pins) expect(source, file).toMatch(pin);
     }
   });
 
