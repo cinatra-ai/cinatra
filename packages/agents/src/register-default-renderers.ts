@@ -102,6 +102,8 @@ const RENDERER_KIND_TABLE: Record<
      * setup surface then draws the product's Continue beside the field.
      */
     drawsOwnSubmit?: true;
+    /** This kind's component commits a pick, so its gate's Continue waits for one; see `FieldRendererEntry.holdsContinueUntilPicked` (cinatra#3035). */
+    holdsContinueUntilPicked?: true;
     /**
      * Optional custom condition factory for kinds whose match logic goes
      * beyond strict ID equality (e.g. gmail-sender's context gating +
@@ -119,7 +121,7 @@ const RENDERER_KIND_TABLE: Record<
   // (blog-pipeline-agent#40). Both the former inline chooser and the
   // reviewer-output dispatcher it lived in are now gone (#1796 teardown); this
   // dedicated binding is the only path to the chooser.
-  "blog-idea-selection": { renderer: BlogIdeaSelectionRenderer, credentialSafe: true },
+  "blog-idea-selection": { renderer: BlogIdeaSelectionRenderer, credentialSafe: true, holdsContinueUntilPicked: true },
   "campaign-recipients-review": {
     renderer: CampaignRecipientsReviewRenderer,
     bareAliases: ["campaign-recipients-review"],
@@ -318,6 +320,8 @@ export function registerFieldRendererBindings(
         // here, and a control-less extension-shipped setup renderer is the next
         // slice's work, not a guess made on this one.
         drawsOwnSubmit: true,
+        // The kind's hold travels with the binding whoever draws the step (cinatra#3035).
+        holdsContinueUntilPicked: RENDERER_KIND_TABLE[b.kind]?.holdsContinueUntilPicked === true,
         midRunHitl: b.midRunHitl === true,
       });
       continue;
@@ -345,6 +349,8 @@ export function registerFieldRendererBindings(
       // kind inherits its kind's declaration. The extension branch above
       // declares its own (true) — see the note there.
       drawsOwnSubmit: kindEntry.drawsOwnSubmit === true,
+      // The KIND's answer once more (cinatra#3035): a kind whose component commits a pick holds its gate's Continue until one is made.
+      holdsContinueUntilPicked: kindEntry.holdsContinueUntilPicked === true,
       midRunHitl: b.midRunHitl === true,
     });
   }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import type { FieldRendererProps } from "./field-renderer-registry";
 import { SchemaOnlyFloorRenderer } from "./schema-field-renderer";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -19,19 +19,18 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 // idea_selection_gate
 // InputMessageNode): the gate is an InputMessageNode whose one string output
 // (`selectedIdeaJson`) becomes the WayFlow resume text (`userResponse`). The
-// chosen idea is committed as JSON.stringify(idea) into BOTH keys. A default
-// selection (ideas[0]) is committed on mount so the buffered value is always a
-// valid, offered idea (the seam validates it by title) and the run can never
-// resume with an empty/placeholder selection. The user may change the pick
-// before pressing the panel's Continue.
+// chosen idea is committed as JSON.stringify(idea) into BOTH keys. Nothing is
+// selected or committed on mount (cinatra#3035, design app-artifact-review I.1):
+// the person picks a row, and the card's Continue waits for that pick (the kind
+// declares holdsContinueUntilPicked), so the run never resumes with no pick.
 
 /**
  * The idea-selection field renderer. Reads the generated ideas from
  * `props.value.ideas` (surfaced from the gate's pendingApproval render input).
- * With no offered ideas it degrades to the schema-driven floor
+ * An empty offered list draws the binding's declared empty-state message;
+ * otherwise, with no offered ideas, it degrades to the schema-driven floor
  * (SchemaOnlyFloorRenderer — the registry-bypass floor that never re-enters the
- * registry) so the HITL surface is never blank; this dedicated binding is only
- * ever emitted by idea_selection_gate, so that branch is defensive.
+ * registry) so the HITL surface is never blank.
  */
 export function BlogIdeaSelectionRenderer(props: FieldRendererProps) {
   const value = (props.value ?? {}) as {
@@ -43,7 +42,11 @@ export function BlogIdeaSelectionRenderer(props: FieldRendererProps) {
     ? (value.ideas as Array<Record<string, unknown>>)
     : null;
   if (!ideas || ideas.length === 0) {
-    // Never blank: no offered ideas -> schema-driven floor (no re-resolution).
+    // cinatra#3035 (design I.1): an empty list draws the agent's declared message as written and commits nothing (the Continue stays held).
+    const emptyMessage = props.bindingParams?.emptyStateMessage;
+    if (ideas && typeof emptyMessage === "string" && emptyMessage.trim() !== "") {
+      return <p className="text-sm text-muted-foreground">{emptyMessage}</p>;
+    }
     return <SchemaOnlyFloorRenderer {...props} />;
   }
   const summary =
@@ -79,21 +82,11 @@ function IdeaChooser({
   onChange: (next: unknown) => void;
   disabled?: boolean;
 }) {
-  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const commit = (idx: number) => {
     const json = JSON.stringify(ideas[idx]);
     void onChange({ selectedIdeaJson: json, userResponse: json });
   };
-  // Commit the default selection once on mount (an effect — never call the
-  // parent setter during render). Uses the mount-time `onChange`, which is
-  // valid; radio changes below re-commit via the current-render closure.
-  const onChangeRef = useRef(onChange);
-  onChangeRef.current = onChange;
-  useEffect(() => {
-    const json = JSON.stringify(ideas[0]);
-    void onChangeRef.current({ selectedIdeaJson: json, userResponse: json });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
   const ideaLabel = (idea: Record<string, unknown>, idx: number) =>
     typeof idea.title === "string" && idea.title.trim().length > 0
       ? idea.title
@@ -110,7 +103,7 @@ function IdeaChooser({
       </p>
       <RadioGroup
         aria-label="Select one blog idea to draft"
-        value={String(selectedIndex)}
+        value={selectedIndex === null ? "" : String(selectedIndex)}
         disabled={disabled}
         onValueChange={(v) => {
           const idx = Number(v);

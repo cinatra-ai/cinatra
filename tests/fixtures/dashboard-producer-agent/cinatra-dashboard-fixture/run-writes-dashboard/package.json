@@ -1,0 +1,7 @@
+{
+  "name": "@cinatra-dashboard-fixture/run-writes-dashboard",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "Deterministic no-LLM agent fixture that writes one dashboard as the run through the passthrough tool dashboards_create, so a dashboard an agent run produces has a credential-free producer for the e2e harness (cinatra#3092). Not a marketplace extension; never published. StartNode -> ApiNode (passthrough dashboards_create) -> EndNode."
+}

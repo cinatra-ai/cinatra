@@ -1394,7 +1394,7 @@ async function sweepReviewOrchestration() {
   return run();
 }
 
-describe.skipIf(!HAS_DB)("cinatra#4312 — the sweep's naming never closes a declared leg's lineage (review 6, finding 1)", () => {
+describe.skipIf(!HAS_DB)("cinatra#4312 — the sweep's naming on a declared leg's lineage (review 6, finding 1; since cinatra#4476 the chain check reads an old writer's attempt on the named gate)", () => {
   // As in the group above: `sweep()` claims every outstanding intent, so an intent an
   // earlier case left pending or delivering is set aside first.
   beforeEach(async () => {
@@ -1405,24 +1405,26 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — the sweep's naming never closes a dec
     );
   });
 
-  it("AN OLD WRITER'S ESCALATED NOTE, THEN THE NAMING: the sweep names the gate, but the declared-lineage check refuses it as a reopen, so the lineage reads malformed before and after and never reads closed; the post's intent stays as the worker left it, and the successor's decision is left for re-claim", async () => {
+  it("AN OLD WRITER'S ESCALATED NOTE, THEN THE NAMING (cinatra#4476): before the naming the lineage reads malformed; the sweep names the gate, the chain check reads the old writer's attempt on the named reopen gate of the declared lineage, so the lineage reads closed (attempt 2 escalated) and the naming carries the post's decision on that gate; the next sweep resumes the run once with it", async () => {
     const { p, pressed, successor, postGateId } = await parkedOnARegeneratedPicture();
+    const postText = (await intentOf(postGateId))!.response_text;
     const reopen = await oldWritersNoteOnTheReopenSlot(pressed.repairId, successor, p.runId, "escalated");
     await expect(repairStore.isRepairLineageOpen(pressed.settledGateId)).rejects.toMatchObject({ code: "malformed-lineage" });
 
     await sweepReviewOrchestration();
     expect(await reopenNameOf(successor.gateId)).toBe(reopen);
-    await expect(repairStore.isRepairLineageOpen(pressed.settledGateId)).rejects.toMatchObject({ code: "malformed-lineage" });
+    expect(await repairStore.isRepairLineageOpen(pressed.settledGateId)).toBe(false);
     expect(await intentStatusOf(postGateId)).toBe("done");
+    await expectCarrier(reopen, p.leg2, postText);
     await expectParked(p);
 
-    await approve(p.runId, successor.taskId);
-    const decided = await gateStore.readReviewGate(p.runId, successor.taskId);
-    await expectLeftForReclaim(await sweep(), decided!.id);
-    expect(await runStatus(p.runId)).toBe("pending_approval");
+    advanceRunsOnResume();
+    const summary = await sweep();
+    expect(summary.failed).toBe(0);
+    expectResumedWith(p, postText);
   });
 
-  it("DISPATCH ESCALATION BEFORE THE NAMING: the drain escalates an old writer's requested attempt 2 on the unnamed gate; the close reads the lineage malformed and carries nothing, before and after the naming, and the post's intent stays as the worker left it (an old binary's state)", async () => {
+  it("DISPATCH ESCALATION BEFORE THE NAMING (cinatra#4476): the drain escalates an old writer's requested attempt 2 on the unnamed gate; the close reads the lineage malformed and carries nothing; after the naming the lineage reads closed, the naming carries the post's decision on the reopen gate, and the next sweep resumes the run once", async () => {
     const { p, pressed, successor, postGateId } = await parkedOnARegeneratedPicture();
     const before = await intentOf(postGateId);
     const reopen = await oldWritersNoteOnTheReopenSlot(pressed.repairId, successor, p.runId, "requested");
@@ -1440,12 +1442,14 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — the sweep's naming never closes a dec
 
     await sweepReviewOrchestration();
     expect(await reopenNameOf(successor.gateId)).toBe(reopen);
-    await expect(repairStore.isRepairLineageOpen(pressed.settledGateId)).rejects.toMatchObject({ code: "malformed-lineage" });
-    expect(await intentOf(reopen)).toBeUndefined();
+    expect(await repairStore.isRepairLineageOpen(pressed.settledGateId)).toBe(false);
+    await expectCarrier(reopen, p.leg2, before!.response_text);
     expect(await intentOf(postGateId)).toEqual(before);
+    await expectParked(p);
+    advanceRunsOnResume();
     const summary = await sweep();
     expect(summary.failed).toBe(0);
-    await expectParked(p);
+    expectResumedWith(p, before!.response_text);
   });
 });
 // ---------------------------------------------------------------------------

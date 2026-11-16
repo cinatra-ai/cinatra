@@ -266,6 +266,9 @@ export type AgentTemplateRecord = {
   // take the list from a compile. OPTIONAL in the type so
   // legacy fixture objects in tests remain valid.
   publishingSteps?: string[] | null;
+  // The publish card's rows per declared node (cinatra#4150), from
+  // `metadata.cinatra.publishRows`; null = unknown, as publishingSteps.
+  publishRows?: Record<string, Array<{ label: string; input: string }>> | null;
   // template-level default AgentAuthPolicy. null = use
   // DEFAULT_AGENT_AUTH_POLICY from auth-policy.ts. Persisted as JSON-as-text
   // in agent_templates.agent_auth_policy.
@@ -348,6 +351,9 @@ export type CreateAgentTemplateInput = {
   // The nodes the compiled OAS declares `publishes: true` (cinatra#4150). null
   // clears it back to "unknown"; omit to leave the column unchanged.
   publishingSteps?: string[] | null;
+  // The publish card's rows per declared node (cinatra#4150). null clears it
+  // back to "unknown"; omit to leave the column unchanged.
+  publishRows?: Record<string, Array<{ label: string; input: string }>> | null;
   // template-level default policy; pass null or omit to leave unset
   // (resolves to DEFAULT_AGENT_AUTH_POLICY at read time).
   agentAuthPolicy?: AgentAuthPolicy | null;
@@ -892,6 +898,8 @@ export async function _runAgentTemplateUpdate(
   // cinatra#4150 — JSON-stringified like gatedSteps so the text column stays canonical.
   if (patch.publishingSteps !== undefined)
     updates.publishingSteps = patch.publishingSteps ? JSON.stringify(patch.publishingSteps) : null;
+  if (patch.publishRows !== undefined)
+    updates.publishRows = patch.publishRows ? JSON.stringify(patch.publishRows) : null;
   if (patch.gatedSteps !== undefined)
     updates.gatedSteps = patch.gatedSteps ? JSON.stringify(patch.gatedSteps) : null;
   // template-level AgentAuthPolicy patch handler. null clears the
