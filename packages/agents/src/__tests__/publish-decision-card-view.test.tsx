@@ -167,6 +167,8 @@ describe("the drawn card", () => {
   });
 
   // cinatra#4150 W4: a list row draws a compact table under its label, and says how many records it does not draw.
+  // Before the fix the card cannot read a list row, so it draws no card and the root lookup fails:
+  // red-first-expect: no card root
   it("a list row draws its columns and records as a table, with the count it does not draw", async () => {
     const list = { kind: "list", label: "Recipients", columns: ["Name", "Email"], items: [["Ada", "ada@example.test"], ["Bo", ""]], total: 7 };
     stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ROWS[0], list] }));
