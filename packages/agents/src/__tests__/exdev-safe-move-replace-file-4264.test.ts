@@ -20,6 +20,8 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true }).catch(() => undefined);
 });
 
+// Before the fix the helper does not exist, so every case fails at its call:
+// red-first-expect: replaceFileInSameDir) is not a function
 describe("replaceFileInSameDir", () => {
   it("replaces the target with the temp sibling whole, and the temp name is gone", async () => {
     const target = path.join(root, "oas.json");

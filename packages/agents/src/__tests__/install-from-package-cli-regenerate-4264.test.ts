@@ -60,6 +60,8 @@ beforeEach(() => {
   cleanup.mockClear();
 });
 
+// Before the fix the CLI install does not read the declaration, so it resolves with the installed row where these cases expect a refusal:
+// red-first-expect: promise resolved "{ templateId: 'tpl-cli'
 describe("cinatra#4264 A1b — the CLI install refuses a regenerate declaration", () => {
   it("a package declaring cinatra.lifecycle.regenerate is refused before any template row is written", async () => {
     extracted.manifest = manifest({
