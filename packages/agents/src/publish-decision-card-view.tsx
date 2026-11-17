@@ -14,6 +14,8 @@
 
 import { useEffect, useRef, useState, type ReactElement } from "react";
 
+import { reviewIslandAddressCredential } from "@cinatra-ai/agent-ui-protocol/renderable-views";
+
 import { Button } from "@/components/ui/button";
 import { StatusPill } from "@/components/ui/status-pill";
 import { Textarea } from "@/components/ui/textarea";
@@ -22,15 +24,23 @@ import {
   LIFECYCLE_PUBLISH_DECISION_PATH,
   sendAcrossRenewal,
   useLifecycleCardAuth,
+  useLifecycleCardColorScheme,
+  useLifecycleCardFrame,
   useLifecycleCardHost,
   type LifecycleCardAuth,
 } from "./lifecycle-card-runtime";
 import {
   PUBLISH_DECISION_CARD_NONE,
+  publishRowKind,
   parsePublishDecisionCardState,
+  type PublishDecisionCardArtifactsRow,
+  type PublishDecisionCardListRow,
+  type PublishDecisionCardRow,
+  type PublishDecisionCardTextRow,
   type PublishDecisionCardState,
 } from "./publish-decision-card";
 import { getPublishDecisionCardStateAction } from "./publish-decision-card-actions";
+import { ReviewTargetFrame, reviewTargetIslandSrc } from "./review-gate-card";
 
 /** A decide door answers: the decision landed, the request was no longer open, or the send failed. */
 export type PublishDecisionDecide = (input: {
@@ -106,6 +116,88 @@ const MARKERS = {
   declined: ["publish-card-declined", "idle", "Not published"],
   expired: ["publish-card-expired", "idle", "Expired"],
 } as const;
+
+/** One read-only row's value (cinatra#4150 W4): a text row's value, a list row's compact table, with a line that
+ * says how many records it does not draw (every cell is plain text), or an artifacts row's review-target island (C1b). */
+function rowValue(row: PublishDecisionCardRow, onRetry: () => void): ReactElement | null {
+  // Dispatch on the row's OWN kind, every value named: the parse admits only text, list and artifacts, and any other kind draws
+  // nothing here (never the text drawing). A kind added to publishRowKind fails the typecheck below until it is drawn.
+  const kind = publishRowKind(row);
+  switch (kind) {
+    case "text":
+      return <dd className="text-reading text-foreground">{(row as PublishDecisionCardTextRow).value}</dd>;
+    case "list":
+      return listRowValue(row as PublishDecisionCardListRow);
+    case "artifacts":
+      return <ArtifactsRowValue row={row as PublishDecisionCardArtifactsRow} onRetry={onRetry} />;
+    case null:
+      return null;
+    default: {
+      const unhandled: never = kind;
+      return unhandled;
+    }
+  }
+}
+
+function listRowValue(row: PublishDecisionCardListRow): ReactElement {
+  const more = row.total - row.items.length;
+  return (
+    <dd className="min-w-0" data-publish-row-kind="list">
+      <div className="mt-1 overflow-x-auto rounded-card border border-line">
+        <table className="w-full border-collapse text-left text-xs">
+          <thead>
+            <tr className="border-b border-line">
+              {row.columns.map((column, c) => (
+                <th key={`${c}-${column}`} scope="col" className={`px-2.5 py-1.5 font-normal ${KICK}`}>{column}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {row.items.map((cells, r) => (
+              <tr key={r} className="border-b border-line last:border-b-0">
+                {cells.map((cell, c) => (
+                  <td key={c} className="px-2.5 py-1.5 align-top text-foreground">{cell}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {more > 0 ? <p className="mt-1 text-xs text-muted-foreground" data-publish-row-more="">{more} more</p> : null}
+    </dd>
+  );
+}
+
+/**
+ * An artifacts row (cinatra#4150 W4 C1b): the surfaced revisions drawn by the SAME review-target island a review gate
+ * frames, through the review card's own frame (its loading, timeout and retry states and the height the island
+ * reports), read only. The island is addressed by the row's ref and loads the targets itself; a host that proves itself
+ * with its own credential frames the server-minted address its read carried, and only when that address names this
+ * row's ref. A row with no ref, or an address that cannot be composed, says the items could not be shown: the row
+ * never vanishes, so no one decides on content they were not shown. The retry re-reads the card for a fresh address.
+ */
+function ArtifactsRowValue({ row, onRetry }: { row: PublishDecisionCardArtifactsRow; onRetry: () => void }): ReactElement {
+  const frame = useLifecycleCardFrame();
+  const colorScheme = useLifecycleCardColorScheme();
+  const src = row.ref === null ? null : reviewTargetIslandSrc(row.ref, frame, row.islandSrc, colorScheme);
+  if (row.ref === null || src === null) {
+    return (
+      <dd className="text-xs text-muted-foreground" data-publish-row-kind="artifacts" data-publish-row-unavailable="">
+        These items could not be shown.
+      </dd>
+    );
+  }
+  return (
+    <dd className="mt-1 min-w-0" data-publish-row-kind="artifacts">
+      <ReviewTargetFrame
+        headers={null}
+        islandSrc={src}
+        islandCredentialed={reviewIslandAddressCredential(row.islandSrc, row.ref) !== null}
+        onRetryResolve={onRetry}
+      />
+    </dd>
+  );
+}
 
 /** The marker below a settled card: the only thing that differs between the three readings (XV). */
 function settledMarker(state: PublishDecisionCardState): ReactElement | null {
@@ -205,7 +297,7 @@ export function PublishDecisionCard({ runId, decide }: { runId: string; decide?:
               {state.rows.map((row, i) => (
                 <div key={`${i}-${row.label}`}>
                   <dt className={KICK}>{row.label}</dt>
-                  <dd className="text-reading text-foreground">{row.value}</dd>
+                  {rowValue(row, reload)}
                 </div>
               ))}
             </dl>

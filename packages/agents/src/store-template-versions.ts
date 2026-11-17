@@ -40,6 +40,13 @@ import type {
   ReadAgentTemplateVersionsOptions,
   AgentTemplateVersionListPage,
 } from "./store";
+import {
+  PUBLISH_ROW_COLUMNS_MAX,
+  PUBLISH_ROWS_MAX,
+  isPublishRowField,
+  isPublishRowLabel,
+  type PublishRowsMap,
+} from "./publish-decision-card";
 
 // ---------------------------------------------------------------------------
 // Serialization helpers (private)
@@ -539,7 +546,7 @@ function parsePublishingStepsColumn(text: string | null): string[] | null {
 // The same posture for the publish card's rows: null passes through, and a
 // stored value that is not { [nodeId]: [{ label, input }] } throws, naming the
 // column only.
-function parsePublishRowsColumn(text: string | null): Record<string, Array<{ label: string; input: string }>> | null {
+function parsePublishRowsColumn(text: string | null): PublishRowsMap | null {
   if (text === null) return null;
   const malformed = () => new Error("agent_templates.publish_rows is not a JSON map of node ids to rows");
   let value: unknown;
@@ -549,13 +556,28 @@ function parsePublishRowsColumn(text: string | null): Record<string, Array<{ lab
     throw malformed();
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) throw malformed();
-  const isRow = (row: unknown) =>
-    !!row && typeof row === "object" && !Array.isArray(row) && Object.keys(row).sort().join(",") === "input,label" &&
-    typeof (row as { label: unknown }).label === "string" && typeof (row as { input: unknown }).input === "string";
+  const isObject = (o: unknown): o is Record<string, unknown> => !!o && typeof o === "object" && !Array.isArray(o);
+  const keysAre = (o: object, keys: string) => Object.keys(o).sort().join(",") === keys;
+  // The shapes the compiler writes (oas-compiler.ts collectPublishRows), under the compiler's own caps: 1 to 4 rows
+  // per node, no input shown twice. A text row keeps the reading it has always had (two string keys). A list row
+  // (cinatra#4150 W4) has no older form, so it meets every compiler rule: its label and each column label, each field,
+  // 1 to 4 columns, no field shown twice.
+  const isColumns = (columns: unknown) =>
+    Array.isArray(columns) && columns.length >= 1 && columns.length <= PUBLISH_ROW_COLUMNS_MAX &&
+    columns.every((c: unknown) => isObject(c) && keysAre(c, "field,label") && isPublishRowLabel(c.label) && isPublishRowField(c.field)) &&
+    new Set(columns.map((c: { field: string }) => c.field)).size === columns.length;
+  // An artifacts row (C1b) has no older form either: exactly kind, label and input, under the label rule.
+  const isRow = (row: unknown) => {
+    if (!isObject(row) || typeof row.input !== "string" || typeof row.label !== "string") return false;
+    if (keysAre(row, "input,label")) return true;
+    if (keysAre(row, "input,kind,label")) return row.kind === "artifacts" && isPublishRowLabel(row.label);
+    return keysAre(row, "columns,input,kind,label") && row.kind === "list" && isPublishRowLabel(row.label) && isColumns(row.columns);
+  };
   for (const rows of Object.values(value)) {
-    if (!Array.isArray(rows) || !rows.every(isRow)) throw malformed();
+    if (!Array.isArray(rows) || rows.length < 1 || rows.length > PUBLISH_ROWS_MAX || !rows.every(isRow)) throw malformed();
+    if (new Set(rows.map((r: { input: string }) => r.input)).size !== rows.length) throw malformed();
   }
-  return value as Record<string, Array<{ label: string; input: string }>>;
+  return value as PublishRowsMap;
 }
 
 export function deserializeTemplate(row: typeof agentTemplates.$inferSelect): AgentTemplateRecord {

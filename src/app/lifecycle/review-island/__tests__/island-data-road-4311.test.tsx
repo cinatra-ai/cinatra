@@ -135,6 +135,7 @@ describe("the CREDENTIAL branch names no data road (no cookie; the sealed road i
       actorCtx: ACTOR,
       runId: "run-1",
       reviewTaskId: "task-1",
+      publishDecision: null,
       principal: PRINCIPAL,
     });
     await renderIsland({ ic: CREDENTIAL });
@@ -151,6 +152,7 @@ describe("the CREDENTIAL branch names no data road (no cookie; the sealed road i
       actorCtx: ACTOR,
       runId: "run-1",
       reviewTaskId: "task-1",
+      publishDecision: null,
       principal: PRINCIPAL,
     });
     await renderIsland({ ic: CREDENTIAL });
@@ -158,7 +160,7 @@ describe("the CREDENTIAL branch names no data road (no cookie; the sealed road i
   });
 
   it("a credential reader with no principal: no roads at all, so no data road", async () => {
-    resolveIslandCredentialReader.mockResolvedValue({ actorCtx: ACTOR, runId: "run-1", reviewTaskId: "task-1" });
+    resolveIslandCredentialReader.mockResolvedValue({ actorCtx: ACTOR, runId: "run-1", reviewTaskId: "task-1", publishDecision: null });
     await renderIsland({ ic: CREDENTIAL });
     expect(loaderRoads().present).toBe(false);
   });

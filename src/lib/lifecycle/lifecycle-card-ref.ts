@@ -32,7 +32,7 @@ import "server-only";
 //   unaffected.
 // ---------------------------------------------------------------------------
 
-import { createCipheriv, createDecipheriv, createHmac, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "node:crypto";
 
 /**
  * What a gate-scoped ref addresses. Both the review gate and the verification
@@ -320,4 +320,105 @@ export function decodeScheduleFormRef(ref: string): ScheduleFormRefPayload | nul
   } catch {
     return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// The PUBLISH-DECISION ISLAND ref (cinatra#4150 W4 C1b).
+//
+// The publish card's `artifacts` row draws the targets a publishing stop
+// surfaced through the same review-target island a review gate uses. A publish
+// decision has no gate, so the island is addressed by what the row IS: the run,
+// the decision the card shows, and the declared input the row reads. The
+// targets themselves are never in the ref: the island reads them from the
+// decision's frozen surfaced values and proves each one was made by the run.
+//
+// A FOURTH KEY LABEL, disjoint from the three families above by construction:
+// a gate ref does not decode here, and this ref does not decode as a gate ref,
+// so the island's two loaders cannot be handed each other's address.
+//
+// STILL NOT A CAPABILITY. It addresses one row and grants nothing: the island
+// re-runs the reader's run access and every check of its loader on each paint.
+// ---------------------------------------------------------------------------
+
+/** Key-derivation label for the publish-decision island ref. */
+const PUBLISH_DECISION_ISLAND_REF_KEY_INFO = "cinatra:lifecycle-publish-decision-island-ref:v1";
+
+function publishDecisionIslandRefKey(): Buffer | null {
+  const secret = process.env.BETTER_AUTH_SECRET;
+  if (!secret) return null;
+  return createHmac("sha256", secret).update(PUBLISH_DECISION_ISLAND_REF_KEY_INFO).digest();
+}
+
+/** What a publish-decision island ref addresses: one artifacts row of one decision. */
+export type PublishDecisionIslandRefPayload = { runId: string; decisionId: string; input: string };
+
+const boundedRefField = (value: unknown): value is string =>
+  typeof value === "string" && value.length > 0 && value.length <= REF_FIELD_MAX;
+
+/** Encode a publish-decision island ref. `null` when it cannot be expressed. */
+export function encodePublishDecisionIslandRef(payload: PublishDecisionIslandRefPayload): string | null {
+  const { runId, decisionId, input } = payload;
+  if (!boundedRefField(runId) || !boundedRefField(decisionId) || !boundedRefField(input)) return null;
+  const key = publishDecisionIslandRefKey();
+  if (!key) return null;
+  try {
+    const iv = randomBytes(IV_BYTES);
+    const cipher = createCipheriv("aes-256-gcm", key, iv);
+    const body = Buffer.concat([
+      cipher.update(JSON.stringify({ r: runId, d: decisionId, i: input }), "utf8"),
+      cipher.final(),
+    ]);
+    const ref = Buffer.concat([iv, body, cipher.getAuthTag()]).toString("base64url");
+    return ref.length <= REF_MAX ? ref : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Decode a publish-decision island ref. `null` for anything that is not one. */
+export function decodePublishDecisionIslandRef(ref: string): PublishDecisionIslandRefPayload | null {
+  if (typeof ref !== "string" || ref.length === 0 || ref.length > REF_MAX) return null;
+  if (!/^[A-Za-z0-9_-]+$/.test(ref)) return null;
+  const key = publishDecisionIslandRefKey();
+  if (!key) return null;
+  try {
+    const raw = Buffer.from(ref, "base64url");
+    if (raw.length <= IV_BYTES + TAG_BYTES) return null;
+    const iv = raw.subarray(0, IV_BYTES);
+    const tag = raw.subarray(raw.length - TAG_BYTES);
+    const body = raw.subarray(IV_BYTES, raw.length - TAG_BYTES);
+    const decipher = createDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAuthTag(tag);
+    const json = Buffer.concat([decipher.update(body), decipher.final()]).toString("utf8");
+    const parsed: unknown = JSON.parse(json);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    const { r, d, i } = parsed as { r?: unknown; d?: unknown; i?: unknown };
+    if (!boundedRefField(r) || !boundedRefField(d) || !boundedRefField(i)) return null;
+    return { runId: r, decisionId: d, input: i };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The SUBJECT a widget island credential is bound to when it paints a publish
+ * decision's row, in the slot a gate credential holds its review task id. A
+ * fixed prefix and a SHA-256 over an INJECTIVE serialization of the decision id
+ * and the input: each field as its length in UTF-16 code units (4 bytes, big
+ * endian) and then its code units (UTF-16LE). So no two distinct pairs hash the
+ * same input, a NUL inside a field cannot shift it into the other, and two lone
+ * surrogates (which UTF-8 would both turn into U+FFFD) stay distinct. 81
+ * characters, inside the credential's field bound whatever the ids are. The
+ * credential also seals that it is a publish subject, so this string is never
+ * compared with a gate's id.
+ */
+export function publishDecisionIslandSubjectKey(input: { decisionId: string; input: string }): string {
+  const hash = createHash("sha256");
+  for (const field of [input.decisionId, input.input]) {
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(field.length);
+    hash.update(length);
+    hash.update(Buffer.from(field, "utf16le"));
+  }
+  return `publish-decision:${hash.digest("hex")}`;
 }

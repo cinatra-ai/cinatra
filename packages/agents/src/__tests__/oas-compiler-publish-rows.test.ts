@@ -1,8 +1,8 @@
 /**
  * cinatra#4150 — the rows the publish card shows, declared by the pack.
  *
- * A declared publishing node may add `metadata.cinatra.publishRows`: one or
- * two rows, each `{ label, input }`, where `label` is the pack's own words and
+ * A declared publishing node may add `metadata.cinatra.publishRows`: one to
+ * four rows (W4), each `{ label, input }` or a list row, where `label` is the pack's own words and
  * `input` names one of the node's own inputs (the values the stop surfaces).
  * The compiler reads the key into `publishRows`, keyed by node id. The key is
  * valid only beside `publishes: true` on a top-level node; any other place or
@@ -16,16 +16,19 @@ import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import * as compiler from "../oas-compiler";
+import { publishRowKind, type PublishListRowDeclaration } from "../publish-decision-card";
 
 type Node = Record<string, unknown>;
-type Result = { ok: true; rows: Record<string, Array<{ label: string; input: string }>> } | { ok: false; error: string };
-const collect = (doc: Record<string, unknown>, steps: string[]): Result =>
-  (compiler as unknown as { collectPublishRows: (d: Record<string, unknown>, s: string[]) => Result }).collectPublishRows(doc, steps);
+// The compiler's own result type (text and list rows, readonly), never a narrower stand-in.
+type Result = ReturnType<typeof compiler.collectPublishRows>;
+const collect = (doc: Record<string, unknown>, steps: string[]): Result => compiler.collectPublishRows(doc, steps);
 
 const INPUTS = [
   { title: "content", type: "string" },
   { title: "destination", type: "string" },
   { title: "account_ref", type: "string" },
+  { title: "recipients", type: "array" },
+  { title: "count", type: "number" },
 ];
 const ROWS = [
   { label: "Post", input: "content" },
@@ -41,7 +44,7 @@ const flowWith = (refs: Record<string, Node>, listed = Object.keys(refs)) => ({
 });
 
 describe("cinatra#4150 — publishRows on a declared publishing node", () => {
-  it("reads one or two rows, in the declared order, keyed by node id", () => {
+  it("reads one or two text rows, in the declared order, keyed by node id (four rows: below)", () => {
     expect(collect(flowWith({ publish: publishNode({ publishes: true, publishRows: ROWS }) }), ["publish"])).toEqual({
       ok: true,
       rows: { publish: ROWS },
@@ -81,7 +84,7 @@ describe("cinatra#4150 — a malformed declaration refuses the compile", () => {
 
   for (const [label, value] of [
     ["an empty list", []],
-    ["three rows", [...ROWS, { label: "Account", input: "account_ref" }]],
+    ["five rows", [...ROWS, { label: "Account", input: "account_ref" }, { label: "To", input: "recipients" }, { label: "Count", input: "count" }]],
     ["an object", { label: "Post", input: "content" }],
     ["a string", "content"],
     ["null", null],
@@ -121,6 +124,139 @@ describe("cinatra#4150 — a malformed declaration refuses the compile", () => {
     for (const rows of [[{ label: SECRET, input: "content", x: 1 }], [{ label: "Post", input: SECRET }], [{ label: `${SECRET}\n`, input: "content" }]]) {
       const res = refused(rows);
       expect(res.ok).toBe(false);
+      expect((res as { error: string }).error).not.toContain("SECRET");
+    }
+  });
+});
+
+// cinatra#4150 W4: up to four rows, an explicit text kind, and the list row (a table over a surfaced list of records).
+const LIST = {
+  kind: "list",
+  label: "Recipients",
+  input: "recipients",
+  columns: [
+    { label: "Name", field: "name" },
+    { label: "Email", field: "email" },
+  ],
+};
+
+describe("cinatra#4150 W4 — four rows, the text kind and the list row", () => {
+  const read = (publishRows: unknown) => collect(flowWith({ publish: publishNode({ publishes: true, publishRows }) }), ["publish"]);
+
+  it("reads four rows, and says 1 to 4 when a step declares five", () => {
+    const four = [...ROWS, { label: "Account", input: "account_ref" }, { label: "Count", input: "count" }];
+    expect(read(four)).toEqual({ ok: true, rows: { publish: four } });
+    const five = [...four, { label: "To", input: "recipients" }];
+    expect(read(five)).toEqual({ ok: false, error: expect.stringMatching(/^PUBLISH_ROWS_MALFORMED: node "publish" .* 1 to 4 rows$/) });
+  });
+
+  it("a row with kind text compiles to exactly the row without a kind", () => {
+    expect(read([{ kind: "text", label: "Post", input: "content" }])).toEqual({ ok: true, rows: { publish: [ROWS[0]] } });
+  });
+
+  it("a list row compiles with its columns, frozen through", () => {
+    const res = read([ROWS[0], LIST]);
+    expect(res).toEqual({ ok: true, rows: { publish: [ROWS[0], LIST] } });
+    if (!res.ok) throw new Error("unreachable");
+    const row = res.rows.publish![1]!;
+    expect(publishRowKind(row)).toBe("list");
+    const list = row as PublishListRowDeclaration;
+    expect(Object.isFrozen(list)).toBe(true);
+    expect(Object.isFrozen(list.columns)).toBe(true);
+    expect(Object.isFrozen(list.columns[0])).toBe(true);
+  });
+
+  // pre-2 finding 5: the compiled rows are readonly in their TYPE as well as frozen at run time. Red at base 46f770fe in the
+  // typecheck (the column list was typed mutable there, so the expect-error below is unused) and at run time (publishRowKind
+  // does not exist there).
+  it("a compiled list row's columns cannot be pushed, by type or at run time", () => {
+    const res = read([LIST]);
+    if (!res.ok) throw new Error("unreachable");
+    const list = res.rows.publish![0] as PublishListRowDeclaration;
+    expect(publishRowKind(list)).toBe("list");
+    // @ts-expect-error a compiled column list is readonly
+    expect(() => list.columns.push({ label: "More", field: "more" })).toThrow(TypeError);
+  });
+
+  it("a kind the card cannot draw is refused, naming the field only", () => {
+    for (const kind of ["table", "Artifacts", 7, null]) {
+      expect(read([{ ...LIST, kind }])).toEqual({
+        ok: false,
+        error: "PUBLISH_ROWS_MALFORMED: node \"publish\" metadata.cinatra.publishRows[0].kind must be text, list or artifacts",
+      });
+    }
+  });
+
+  for (const [label, row, where] of [
+    ["a list row with no columns key", { kind: "list", label: "Recipients", input: "recipients" }, "\\[0\\] must be an object with exactly the keys kind"],
+    ["a text row with a columns key", { kind: "text", label: "Post", input: "content", columns: [] }, "\\[0\\] must be an object with exactly the keys label and input \\(and kind text\\)$"],
+    ["no columns", { ...LIST, columns: [] }, "\\[0\\]\\.columns must be a list of 1 to 4 columns"],
+    ["five columns", { ...LIST, columns: ["a", "b", "c", "d", "e"].map((f) => ({ label: f, field: f })) }, "\\[0\\]\\.columns must be a list of 1 to 4"],
+    ["columns not a list", { ...LIST, columns: { label: "Name", field: "name" } }, "\\[0\\]\\.columns must be a list"],
+    ["a column with an extra key", { ...LIST, columns: [{ label: "Name", field: "name", width: 2 }] }, "\\[0\\]\\.columns\\[0\\] must be an object with exactly the keys label and field"],
+    ["a column with an empty label", { ...LIST, columns: [{ label: "", field: "name" }] }, "\\[0\\]\\.columns\\[0\\]\\.label "],
+    ["a column with an empty field", { ...LIST, columns: [{ label: "Name", field: "" }] }, "\\[0\\]\\.columns\\[0\\]\\.field "],
+    ["a field over 64 characters", { ...LIST, columns: [{ label: "Name", field: "f".repeat(65) }] }, "\\[0\\]\\.columns\\[0\\]\\.field "],
+    ["a repeated field", { ...LIST, columns: [{ label: "Name", field: "name" }, { label: "Again", field: "name" }] }, "\\[0\\]\\.columns\\[1\\]\\.field repeats"],
+  ] as const) {
+    it(`${label} is refused`, () => {
+      expect(read([row])).toEqual({
+        ok: false,
+        error: expect.stringMatching(new RegExp(`^PUBLISH_ROWS_MALFORMED: node "publish" metadata\\.cinatra\\.publishRows${where}`)),
+      });
+    });
+  }
+
+  it("a list row over an input the node does not have is refused", () => {
+    expect(read([{ ...LIST, input: "people" }])).toEqual({
+      ok: false,
+      error: expect.stringMatching(/^PUBLISH_ROWS_UNKNOWN_INPUT: node "publish" metadata\.cinatra\.publishRows\[0\]\.input /),
+    });
+  });
+
+  // C1b: the artifacts row, drawn through the review-target island. Red at C1's head 2ea9dbd1, which refuses the kind.
+  const ARTIFACTS = { kind: "artifacts", label: "Proposed page", input: "recipients" };
+
+  it("an artifacts row compiles to exactly kind, label and input, frozen", () => {
+    const res = read([ROWS[0], ARTIFACTS]);
+    expect(res).toEqual({ ok: true, rows: { publish: [ROWS[0], ARTIFACTS] } });
+    if (!res.ok) throw new Error("unreachable");
+    const row = res.rows.publish![1]!;
+    expect(publishRowKind(row)).toBe("artifacts");
+    expect(Object.isFrozen(row)).toBe(true);
+  });
+
+  for (const [label, row, where] of [
+    ["an artifacts row with columns", { ...ARTIFACTS, columns: [{ label: "Name", field: "name" }] }, "\\[0\\] must be an object with exactly the keys kind, label and input$"],
+    ["an artifacts row with an extra key", { ...ARTIFACTS, targets: [] }, "\\[0\\] must be an object with exactly the keys kind, label and input$"],
+    ["an artifacts row with no label", { kind: "artifacts", input: "recipients" }, "\\[0\\] must be an object with exactly the keys kind, label and input$"],
+    ["an artifacts row with a two-line label", { ...ARTIFACTS, label: "Proposed\npage" }, "\\[0\\]\\.label must be one line"],
+  ] as const) {
+    it(`${label} is refused`, () => {
+      expect(read([row])).toEqual({
+        ok: false,
+        error: expect.stringMatching(new RegExp(`^PUBLISH_ROWS_MALFORMED: node "publish" metadata\\.cinatra\\.publishRows${where}`)),
+      });
+    });
+  }
+
+  it("an artifacts row over an input the node does not have, or one another row shows, is refused", () => {
+    expect(read([{ ...ARTIFACTS, input: "pages" }])).toEqual({
+      ok: false,
+      error: expect.stringMatching(/^PUBLISH_ROWS_UNKNOWN_INPUT: node "publish" metadata\.cinatra\.publishRows\[0\]\.input /),
+    });
+    expect(read([LIST, ARTIFACTS])).toEqual({
+      ok: false,
+      error: expect.stringMatching(/^PUBLISH_ROWS_MALFORMED: node "publish" metadata\.cinatra\.publishRows\[1\]\.input repeats/),
+    });
+  });
+
+  it("an error never quotes a column label or a field the pack wrote", () => {
+    const SECRET = "sk-live-SECRET-0123";
+    for (const columns of [[{ label: SECRET, field: "x", y: 1 }], [{ label: `${SECRET}\n`, field: "x" }], [{ label: "A", field: `${SECRET}\n` }]]) {
+      const res = read([{ ...LIST, columns }]);
+      expect(res.ok).toBe(false);
+      expect((res as { error: string }).error).toMatch(/publishRows\[0\]\.columns\[0\]/);
       expect((res as { error: string }).error).not.toContain("SECRET");
     }
   });

@@ -166,6 +166,32 @@ describe("the drawn card", () => {
     if (answer.state === "expired") expect(marker?.textContent).not.toContain(" by ");
   });
 
+  // cinatra#4150 W4: a list row draws a compact table under its label, and says how many records it does not draw.
+  it("a list row draws its columns and records as a table, with the count it does not draw", async () => {
+    const list = { kind: "list", label: "Recipients", columns: ["Name", "Email"], items: [["Ada", "ada@example.test"], ["Bo", ""]], total: 7 };
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ROWS[0], list] }));
+    const root = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    expect(Array.from(root.querySelectorAll("dt")).map((el) => el.textContent)).toEqual(["Title", "Recipients"]);
+    const value = root.querySelector('[data-publish-row-kind="list"]');
+    expect(value?.tagName).toBe("DD");
+    expect(Array.from(value!.querySelectorAll("th")).map((el) => el.textContent)).toEqual(["Name", "Email"]);
+    expect(Array.from(value!.querySelectorAll("tbody tr")).map((tr) => Array.from(tr.querySelectorAll("td")).map((td) => td.textContent))).toEqual([
+      ["Ada", "ada@example.test"],
+      ["Bo", ""],
+    ]);
+    expect(value!.querySelector("[data-publish-row-more]")?.textContent).toBe("5 more");
+  });
+
+  it("a list row that draws every record has no count line", async () => {
+    const list = { kind: "list", label: "Recipients", columns: ["Name"], items: [["Ada"]], total: 1 };
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [list] }));
+    const root = await rootOf(mountOn("run_card", okDoor()));
+    await settle();
+    expect(root.querySelectorAll("tbody tr")).toHaveLength(1);
+    expect(root.querySelector("[data-publish-row-more]")).toBeNull();
+  });
+
   it("a pending card with no rows draws no row list", async () => {
     stateMock.mockImplementation(async () => ({ ...PENDING, rows: [] }));
     const root = await rootOf(mountOn("run_card", okDoor()));
@@ -331,5 +357,66 @@ describe("the decide door", () => {
     expect(after.getAttribute("data-lifecycle-card-state")).toBe("pending");
     expect(after.querySelector<HTMLButtonElement>(DECLINE)?.disabled).toBe(false);
     expect(stateMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// C1b: an artifacts row draws the review-target island through the review card's own frame, addressed by the row's ref;
+// a credential host frames the server-minted address only when it names the row's ref. A row with no ref says the items
+// could not be shown. Red at C1's head 2ea9dbd1, where the transport refuses the kind (the card draws nothing).
+describe("the artifacts row (C1b)", () => {
+  const REF = "Abc_123-xyz";
+  const ARTIFACTS = { kind: "artifacts", label: "Proposed page", ref: REF, islandSrc: null };
+  const frameSrc = async (root: HTMLElement) => {
+    await waitFor(() => expect(root.querySelector("iframe")).not.toBeNull());
+    return new URL(root.querySelector("iframe")!.getAttribute("src")!, "https://app.example");
+  };
+
+  it("draws the island for the row's ref under its label, read only, beside the card's controls", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ROWS[0], ARTIFACTS] }));
+    const root = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    expect(Array.from(root.querySelectorAll("dt")).map((el) => el.textContent)).toEqual(["Title", "Proposed page"]);
+    const value = root.querySelector('[data-publish-row-kind="artifacts"]');
+    expect(value?.tagName).toBe("DD");
+    const src = await frameSrc(root);
+    expect(src.pathname).toBe("/lifecycle/review-island");
+    expect(src.searchParams.get("ref")).toBe(REF);
+    expect(src.searchParams.get("ic")).toBeNull();
+    // The controls stay the card's, outside the frame.
+    expect(root.querySelector(APPROVE)).not.toBeNull();
+    expect(value!.querySelector(APPROVE)).toBeNull();
+  });
+
+  it("a credential host frames the server-minted credential when its address names the row's ref", async () => {
+    const islandSrc = `/lifecycle/review-island?ref=${REF}&ic=sealed-credential`;
+    brokerAnswer = { status: 200, body: { ...PENDING, rows: [{ ...ARTIFACTS, islandSrc }] } };
+    const root = await rootOf(mountOn("site_widget", okDoor()));
+    await settle();
+    const src = await frameSrc(root);
+    expect(src.searchParams.get("ref")).toBe(REF);
+    expect(src.searchParams.get("ic")).toBe("sealed-credential");
+  });
+
+  // pre-1 MUST-FIX 3: on a widget host the credential is the only proof of the reader, so an address minted for another
+  // ref lends this row no credential and the review card's own guard frames NOTHING (no uncredentialed widget frame).
+  it("an address minted for another ref lends this row no credential, so a widget host frames nothing", async () => {
+    const islandSrc = "/lifecycle/review-island?ref=OtherRef&ic=sealed-credential";
+    brokerAnswer = { status: 200, body: { ...PENDING, rows: [{ ...ARTIFACTS, islandSrc }] } };
+    const root = await rootOf(mountOn("site_widget", okDoor()));
+    await settle();
+    const value = root.querySelector('[data-publish-row-kind="artifacts"]');
+    expect(value?.querySelector('[data-conformance-id="review-target-island"]')?.getAttribute("data-island-load-state")).toBe("empty");
+    expect(root.querySelector("iframe")).toBeNull();
+    expect(root.innerHTML).not.toContain("sealed-credential");
+  });
+
+  it("a row with no ref says the items could not be shown, and frames nothing", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [{ ...ARTIFACTS, ref: null }] }));
+    const root = await rootOf(mountOn("run_card", okDoor()));
+    await settle();
+    const value = root.querySelector('[data-publish-row-kind="artifacts"]');
+    expect(value?.hasAttribute("data-publish-row-unavailable")).toBe(true);
+    expect(value?.textContent).toBe("These items could not be shown.");
+    expect(root.querySelector("iframe")).toBeNull();
   });
 });
