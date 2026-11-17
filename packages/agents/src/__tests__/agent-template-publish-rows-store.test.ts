@@ -265,6 +265,48 @@ describe("cinatra#4150 — the column round-trips through serializeTemplate / de
     });
   }
 
+  // pre-2 findings 2 and 3: the stored reader holds the compiler's caps and rules, so a stored value cannot widen the card.
+  // Each case is accepted at base 46f770fe (red there).
+  const TEXT = (n: number) => ({ label: `Row ${n}`, input: `in${n}` });
+  const LISTROW = (over: Record<string, unknown> = {}) => ({
+    kind: "list",
+    label: "Recipients",
+    input: "people",
+    columns: [{ label: "Name", field: "name" }],
+    ...over,
+  });
+  const reads = (rows: unknown) =>
+    deserializeTemplate(asRow({ ...serializeTemplate(input(undefined)), publishRows: JSON.stringify({ publish: rows }) }));
+
+  it("four stored rows read; zero or five stored rows throw", () => {
+    const four = [TEXT(1), TEXT(2), TEXT(3), LISTROW()];
+    expect(field(reads(four))).toEqual({ publish: four });
+    expect(() => reads([...four, TEXT(5)])).toThrow(/^agent_templates\.publish_rows is not a JSON map of node ids to rows$/);
+    expect(() => reads([])).toThrow(/^agent_templates\.publish_rows is not a JSON map of node ids to rows$/);
+  });
+
+  it("two stored rows over the same input throw", () => {
+    expect(() => reads([TEXT(1), { label: "Again", input: "in1" }])).toThrow(/^agent_templates\.publish_rows is not/);
+    expect(() => reads([TEXT(1), LISTROW({ input: "in1" })])).toThrow(/^agent_templates\.publish_rows is not/);
+  });
+
+  for (const [label, row] of [
+    ["an empty list label", LISTROW({ label: "" })],
+    ["a list label with a line break", LISTROW({ label: "Re\ncipients" })],
+    ["a list label over 60 characters", LISTROW({ label: "x".repeat(61) })],
+    ["a list label with a leading space", LISTROW({ label: " Recipients" })],
+    ["an empty column label", LISTROW({ columns: [{ label: "", field: "name" }] })],
+    ["an empty field", LISTROW({ columns: [{ label: "Name", field: "" }] })],
+    ["a field with a trailing space", LISTROW({ columns: [{ label: "Name", field: "name " }] })],
+    ["a field over 64 characters", LISTROW({ columns: [{ label: "Name", field: "f".repeat(65) }] })],
+    ["a field with a control character", LISTROW({ columns: [{ label: "Name", field: "na\u0000me" }] })],
+    ["a repeated field", LISTROW({ columns: [{ label: "Name", field: "name" }, { label: "Again", field: "name" }] })],
+  ] as const) {
+    it(`a stored list row with ${label} throws, as the compiler refuses it`, () => {
+      expect(() => reads([row])).toThrow(/^agent_templates\.publish_rows is not a JSON map of node ids to rows$/);
+    });
+  }
+
   it("the error never quotes the stored text", () => {
     const values = { ...serializeTemplate(input(undefined)), publishRows: '{"publish":"sk-live-SECRET-0123"}' };
     let caught: unknown = null;

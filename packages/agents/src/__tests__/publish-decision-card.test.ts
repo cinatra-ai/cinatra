@@ -12,6 +12,8 @@ import {
   PUBLISH_ROWS_MAX,
   parsePublishDecisionCardState,
   publishDecisionCardRows,
+  publishRowKind,
+  type PublishRowDeclaration,
   type PublishDecisionCardState,
 } from "../publish-decision-card";
 
@@ -143,5 +145,36 @@ describe("the list row (W4)", () => {
     // Red first at the base: the base reads a list row as unreadable too, so the valid list row is pinned first.
     expect(parsePublishDecisionCardState({ ...COMMON, state: "expired", rows: [LIST_ROW] })).not.toBeNull();
     expect(parsePublishDecisionCardState({ ...COMMON, state: "expired", rows: [row] })).toBeNull();
+  });
+});
+
+// pre-2 findings 2 and 4: the transport holds the four-row cap, and every reader takes a row's kind from its OWN property
+// only, so an inherited kind or a kind no reader draws is never drawn as something else. Each case is red at base 46f770fe.
+describe("the row cap on the transport and the own-kind reading (pre-2)", () => {
+  const TEXT = { label: "Title", value: "x" };
+
+  it("four transported rows parse; five are unreadable", () => {
+    expect(parsePublishDecisionCardState({ ...COMMON, state: "expired", rows: [TEXT, TEXT, TEXT, LIST_ROW] })).not.toBeNull();
+    expect(parsePublishDecisionCardState({ ...COMMON, state: "expired", rows: [TEXT, TEXT, TEXT, TEXT, LIST_ROW] })).toBeNull();
+  });
+
+  it("publishRowKind reads only an own kind: none is text, own list is list, any other own kind is null", () => {
+    const inherited = Object.assign(Object.create({ kind: "list" }), { label: "Title", value: "x" }) as object;
+    expect(publishRowKind(inherited)).toBe("text");
+    expect(publishRowKind({ kind: "list" })).toBe("list");
+    for (const kind of ["artifacts", "text", undefined, null]) expect(publishRowKind({ kind })).toBeNull();
+  });
+
+  it("a declaration whose list kind is inherited projects as the text row it is", () => {
+    const proto = { kind: "list", columns: [{ label: "Name", field: "name" }] };
+    const decl = Object.assign(Object.create(proto), { label: "Title", input: "title" }) as PublishRowDeclaration;
+    expect(publishDecisionCardRows([decl], { title: "Autumn" })).toEqual([{ label: "Title", value: "Autumn" }]);
+  });
+
+  it("a declaration with an own kind no reader draws is dropped, never drawn as text", () => {
+    const decl = { kind: "artifacts", label: "Page", input: "page" } as unknown as PublishRowDeclaration;
+    expect(publishDecisionCardRows([decl, { label: "Title", input: "title" }], { page: "row-77", title: "Autumn" })).toEqual([
+      { label: "Title", value: "Autumn" },
+    ]);
   });
 });

@@ -60,10 +60,14 @@ import type { PersistedArtifactBindingDeclaration } from "./artifact-binding";
 import { readKeyList } from "./gate-keys-not-from-run-inputs";
 import {
   PUBLISH_ROW_COLUMNS_MAX,
+  PUBLISH_ROW_FIELD_MAX,
+  PUBLISH_ROW_LABEL_MAX,
   PUBLISH_ROWS_MAX,
-  type PublishListRowDeclaration,
+  isPublishRowField,
+  isPublishRowLabel,
   type PublishRowColumn,
   type PublishRowDeclaration,
+  type PublishRowsMap,
 } from "./publish-decision-card";
 
 // ---------------------------------------------------------------------------
@@ -1584,12 +1588,7 @@ export function collectPublishingSteps(
 // refuses the compile. Errors name the field and the node id only, never a
 // label, an input or a field the pack wrote.
 export type { PublishRowDeclaration } from "./publish-decision-card";
-export type PublishRows = Record<string, PublishRowDeclaration[]>;
-const PUBLISH_ROW_LABEL_MAX = 60;
-const PUBLISH_ROW_FIELD_MAX = 64;
-const isRowLabel = (label: unknown): label is string =>
-  typeof label === "string" && label.trim() !== "" && label === label.trim() && label.length <= PUBLISH_ROW_LABEL_MAX &&
-  !/[\p{Cc}\u2028\u2029]/u.test(label);
+export type PublishRows = PublishRowsMap;
 const keysAre = (o: object, keys: string) => Object.keys(o).sort().join(",") === keys;
 const hasOwn = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
 
@@ -1664,7 +1663,7 @@ export function collectPublishRows(
         };
       }
       const { label, input } = row as { label: unknown; input: unknown };
-      if (!isRowLabel(label)) {
+      if (!isPublishRowLabel(label)) {
         return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where}.label must be one line of 1 to ${PUBLISH_ROW_LABEL_MAX} characters with no leading or trailing space` };
       }
       if (typeof input !== "string" || !titles.has(input)) {
@@ -1688,10 +1687,10 @@ export function collectPublishRows(
           return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${at} must be an object with exactly the keys label and field` };
         }
         const { label: columnLabel, field } = column as { label: unknown; field: unknown };
-        if (!isRowLabel(columnLabel)) {
+        if (!isPublishRowLabel(columnLabel)) {
           return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${at}.label must be one line of 1 to ${PUBLISH_ROW_LABEL_MAX} characters with no leading or trailing space` };
         }
-        if (typeof field !== "string" || field.length < 1 || field.length > PUBLISH_ROW_FIELD_MAX || field !== field.trim() || /[\p{Cc}\u2028\u2029]/u.test(field)) {
+        if (!isPublishRowField(field)) {
           return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${at}.field must be one line of 1 to ${PUBLISH_ROW_FIELD_MAX} characters with no leading or trailing space` };
         }
         if (cols.some((x) => x.field === field)) {
@@ -1699,8 +1698,7 @@ export function collectPublishRows(
         }
         cols.push(Object.freeze({ label: columnLabel, field }));
       }
-      const listRow: PublishListRowDeclaration = { kind: "list", label, input, columns: Object.freeze(cols) as PublishRowColumn[] };
-      out.push(Object.freeze(listRow));
+      out.push(Object.freeze({ kind: "list" as const, label, input, columns: Object.freeze(cols) }));
     }
     // A defined own property, so a node id such as "__proto__" stays a plain key.
     Object.defineProperty(rows, step, { value: Object.freeze(out), enumerable: true });

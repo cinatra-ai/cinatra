@@ -46,6 +46,7 @@ export const PUBLISH_DECISION_TOO_LARGE = "publish_decision_too_large";
 /** The decision record's own cap (publish-decision-store.ts PUBLISH_DECISION_MAX_SURFACED_BYTES; a test pins the two
  *  equal). Read here as a literal so that no module that stubs the store reaches a missing export. */
 export const PUBLISH_SURFACED_VALUES_MAX_BYTES = 64 * 1024;
+const PUBLISH_DECISION_UNRECORDED_TEXT = "publish_decision_unrecorded: the publish decision could not be recorded";
 const PUBLISH_RESUME_FAILED = "publish_resume_failed";
 const EXPIRY_PAGE = 50;
 
@@ -205,7 +206,19 @@ export async function holdRunAtPublishGate(args: {
   const surfacedValues = surfacedValuesOf(task);
   // A stop that surfaced more than the record holds is refused by name, before any write. The text is fixed: it names
   // the cap, never a value, the step or the size the pack surfaced.
-  if (Buffer.byteLength(JSON.stringify(surfacedValues), "utf8") > PUBLISH_SURFACED_VALUES_MAX_BYTES) {
+  // The measure itself can fail (a structure nested past the serializer's depth): that stop cannot be recorded either, so
+  // it takes the unrecorded road below with its own fixed text, and nothing is thrown past this step.
+  let surfacedBytes: number | null;
+  try {
+    surfacedBytes = Buffer.byteLength(JSON.stringify(surfacedValues), "utf8");
+  } catch {
+    surfacedBytes = null;
+  }
+  if (surfacedBytes === null) {
+    await moveRun(run.id, fromStatus, "failed", { error: PUBLISH_DECISION_UNRECORDED_TEXT, completedAt: new Date() }, authority);
+    return true;
+  }
+  if (surfacedBytes > PUBLISH_SURFACED_VALUES_MAX_BYTES) {
     await moveRun(run.id, fromStatus, "failed", {
       error: `${PUBLISH_DECISION_TOO_LARGE}: the values this step surfaced for the decision are over ${PUBLISH_SURFACED_VALUES_MAX_BYTES} bytes, so no decision was recorded and the step did not run`,
       completedAt: new Date(),
@@ -223,7 +236,7 @@ export async function holdRunAtPublishGate(args: {
       surfacedValues,
     });
   } catch {
-    await moveRun(run.id, fromStatus, "failed", { error: "publish_decision_unrecorded: the publish decision could not be recorded", completedAt: new Date() }, authority);
+    await moveRun(run.id, fromStatus, "failed", { error: PUBLISH_DECISION_UNRECORDED_TEXT, completedAt: new Date() }, authority);
     return true;
   }
   // A stop this gate task already answered is closed; the newest-decision rule keeps it closed.

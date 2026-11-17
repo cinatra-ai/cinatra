@@ -10,28 +10,53 @@
 
 /** One declared row of a publishing step (cinatra#4150 W4): a text row (the label over one surfaced value, the shape a
  * row without `kind` has always had) or a list row (a table of up to four columns over a surfaced list of records). The
- * compiler writes these; the card reads them. This module owns the shape so the card, the store and the compiler agree. */
-export type PublishRowColumn = { label: string; field: string };
-export type PublishTextRowDeclaration = { label: string; input: string };
-export type PublishListRowDeclaration = { kind: "list"; label: string; input: string; columns: PublishRowColumn[] };
+ * compiler writes these; the card reads them. This module owns the shape so the card, the store and the compiler agree.
+ * Every member is readonly (the compiler freezes its output), and a text member carries NO kind, so a value with any other
+ * kind is no member of the union. */
+export type PublishRowColumn = { readonly label: string; readonly field: string };
+export type PublishTextRowDeclaration = { readonly label: string; readonly input: string; readonly kind?: never };
+export type PublishListRowDeclaration = {
+  readonly kind: "list";
+  readonly label: string;
+  readonly input: string;
+  readonly columns: readonly PublishRowColumn[];
+};
 export type PublishRowDeclaration = PublishTextRowDeclaration | PublishListRowDeclaration;
+/** The rows of every declared node, by node id: what the compiler writes and the store reads back. */
+export type PublishRowsMap = Readonly<Record<string, readonly PublishRowDeclaration[]>>;
 
 /** The most rows a step may declare, the most columns a list row may declare, and the most records a list row draws. */
 export const PUBLISH_ROWS_MAX = 4;
 export const PUBLISH_ROW_COLUMNS_MAX = 4;
 export const PUBLISH_LIST_ROW_ITEMS_MAX = 50;
+export const PUBLISH_ROW_LABEL_MAX = 60;
+export const PUBLISH_ROW_FIELD_MAX = 64;
+
+const ONE_LINE = /[\p{Cc}\u2028\u2029]/u;
+/** A row or column label: one line of 1 to 60 characters with no leading or trailing space. */
+export const isPublishRowLabel = (label: unknown): label is string =>
+  typeof label === "string" && label.trim() !== "" && label === label.trim() && label.length <= PUBLISH_ROW_LABEL_MAX &&
+  !ONE_LINE.test(label);
+/** A column field: one line of 1 to 64 characters with no leading or trailing space. */
+export const isPublishRowField = (field: unknown): field is string =>
+  typeof field === "string" && field.length >= 1 && field.length <= PUBLISH_ROW_FIELD_MAX && field === field.trim() &&
+  !ONE_LINE.test(field);
 
 /** One read-only row: the pack's own label over the value the stop surfaced. */
-export type PublishDecisionCardTextRow = { label: string; value: string };
+export type PublishDecisionCardTextRow = { label: string; value: string; kind?: never };
 /** A list row: the column labels, the first records' cells (scalar cells only, one string per column), and how many
  * records the stop surfaced in all, so the card can say how many it does not draw. */
 export type PublishDecisionCardListRow = { kind: "list"; label: string; columns: string[]; items: string[][]; total: number };
 export type PublishDecisionCardRow = PublishDecisionCardTextRow | PublishDecisionCardListRow;
 
-export const isListRowDeclaration = (row: PublishRowDeclaration): row is PublishListRowDeclaration =>
-  (row as { kind?: unknown }).kind === "list";
-export const isListCardRow = (row: PublishDecisionCardRow): row is PublishDecisionCardListRow =>
-  (row as { kind?: unknown }).kind === "list";
+const own = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
+
+/** The row's kind from its OWN property only (an inherited `kind` is not read): "text" for a row with no own kind, "list",
+ * or null for any other value, which no reader draws. */
+export function publishRowKind(row: object): "text" | "list" | null {
+  if (!own(row, "kind")) return "text";
+  return (row as { kind?: unknown }).kind === "list" ? "list" : null;
+}
 
 type PublishDecisionCardCommon = {
   runId: string;
@@ -54,8 +79,6 @@ const scalarText = (raw: unknown): string | null =>
   typeof raw === "string" ? raw : typeof raw === "boolean" || (typeof raw === "number" && Number.isFinite(raw)) ? String(raw) : null;
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
-const own = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
-
 /**
  * The declared rows over the surfaced values, in the declared order. A text row whose value is missing, empty or not a
  * plain value (an object, a list) is dropped: a row shows what a reader can judge, never a structure or an identifier.
@@ -69,17 +92,21 @@ export function publishDecisionCardRows(
 ): PublishDecisionCardRow[] {
   const rows: PublishDecisionCardRow[] = [];
   for (const row of declared) {
+    const kind = publishRowKind(row);
+    // A kind this build cannot draw is never drawn as text (the stored reader refuses it first).
+    if (kind === null) continue;
     const { label, input } = row;
     if (!own(surfaced, input)) continue;
     const raw = surfaced[input];
-    if (isListRowDeclaration(row)) {
+    if (kind === "list") {
+      const list = row as PublishListRowDeclaration;
       if (!Array.isArray(raw)) continue;
       const records = raw.filter(isRecord);
       if (records.length === 0) continue;
       const items = records
         .slice(0, PUBLISH_LIST_ROW_ITEMS_MAX)
-        .map((record) => row.columns.map(({ field }) => (own(record, field) ? (scalarText(record[field]) ?? "") : "")));
-      rows.push({ kind: "list", label, columns: row.columns.map((c) => c.label), items, total: records.length });
+        .map((record) => list.columns.map(({ field }) => (own(record, field) ? (scalarText(record[field]) ?? "") : "")));
+      rows.push({ kind: "list", label, columns: list.columns.map((c) => c.label), items, total: records.length });
       continue;
     }
     const value = scalarText(raw);
@@ -95,8 +122,9 @@ const isTextList = (value: unknown): value is string[] => Array.isArray(value) &
 /** A text row (no `kind`), or a list row this build can draw; any other kind is unreadable. */
 function parseRow(row: unknown): PublishDecisionCardRow | null {
   if (!isRecord(row)) return null;
-  if (own(row, "kind")) {
-    if (row.kind !== "list") return null;
+  const kind = publishRowKind(row);
+  if (kind === null) return null;
+  if (kind === "list") {
     const { label, columns, items, total } = row;
     if (!isText(label) || !isTextList(columns) || columns.length < 1 || columns.length > PUBLISH_ROW_COLUMNS_MAX) return null;
     if (!Array.isArray(items) || items.length < 1 || items.length > PUBLISH_LIST_ROW_ITEMS_MAX) return null;
@@ -118,6 +146,7 @@ export function parsePublishDecisionCardState(data: unknown): PublishDecisionCar
   if (d.state === "none") return PUBLISH_DECISION_CARD_NONE;
   if (!isText(d.runId) || d.runId.length === 0 || !isText(d.agentName) || !Array.isArray(d.rows)) return null;
   const rows: PublishDecisionCardRow[] = [];
+  if (d.rows.length > PUBLISH_ROWS_MAX) return null;
   for (const row of d.rows as unknown[]) {
     const parsed = parseRow(row);
     if (parsed === null) return null;

@@ -360,6 +360,27 @@ describe("a stop whose surfaced values are over the record's cap ends the run fa
   });
 });
 
+// pre-2 finding 1: surfaced values nested past the serializer's depth cannot be measured. At base 46f770fe the measure
+// threw out of the gate handling (red there); now the stop takes the unrecorded road with its fixed text.
+describe("surfaced values that cannot be measured end the run failed as unrecorded (pre-2)", () => {
+  it("a deeply nested value writes no record, offers nothing and fails the run publish_decision_unrecorded", async () => {
+    const depth = 200_000;
+    const text = `{"what":${"[".repeat(depth)}${"]".repeat(depth)}}`;
+    // The parse of the surfaced text is not what fails: the guard's own measure is.
+    expect(() => JSON.stringify(JSON.parse(text))).toThrow(RangeError);
+    const signed = pausedTask(sign(GATE));
+    const task = { ...signed, history: [{ ...signed.history[0]!, parts: [{ kind: "text", text }] }] };
+    const run = makeRun();
+    // At base the measure's RangeError escapes here and the case fails.
+    await handleWayflowTaskState({ authority: AUTHORITY, runId: run.id, run, fromStatus: "running", task });
+    expect(decisions.insertParkedDecision).not.toHaveBeenCalled();
+    expect(onInterruptSpy).not.toHaveBeenCalled();
+    expect(transitions()).toEqual([
+      { from: "running", to: "failed", error: "publish_decision_unrecorded: the publish decision could not be recorded" },
+    ]);
+  });
+});
+
 describe("a publish gate that cannot be held ends the run failed (A10)", () => {
   it("a decision record that cannot be written fails the run and offers nothing", async () => {
     decisions.insertParkedDecision.mockRejectedValue(new Error("db down"));

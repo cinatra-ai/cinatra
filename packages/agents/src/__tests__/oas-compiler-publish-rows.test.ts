@@ -16,11 +16,12 @@ import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import * as compiler from "../oas-compiler";
+import { publishRowKind, type PublishListRowDeclaration } from "../publish-decision-card";
 
 type Node = Record<string, unknown>;
-type Result = { ok: true; rows: Record<string, Array<{ label: string; input: string }>> } | { ok: false; error: string };
-const collect = (doc: Record<string, unknown>, steps: string[]): Result =>
-  (compiler as unknown as { collectPublishRows: (d: Record<string, unknown>, s: string[]) => Result }).collectPublishRows(doc, steps);
+// The compiler's own result type (text and list rows, readonly), never a narrower stand-in.
+type Result = ReturnType<typeof compiler.collectPublishRows>;
+const collect = (doc: Record<string, unknown>, steps: string[]): Result => compiler.collectPublishRows(doc, steps);
 
 const INPUTS = [
   { title: "content", type: "string" },
@@ -43,7 +44,7 @@ const flowWith = (refs: Record<string, Node>, listed = Object.keys(refs)) => ({
 });
 
 describe("cinatra#4150 — publishRows on a declared publishing node", () => {
-  it("reads one or two rows, in the declared order, keyed by node id", () => {
+  it("reads one or two text rows, in the declared order, keyed by node id (four rows: below)", () => {
     expect(collect(flowWith({ publish: publishNode({ publishes: true, publishRows: ROWS }) }), ["publish"])).toEqual({
       ok: true,
       rows: { publish: ROWS },
@@ -157,10 +158,24 @@ describe("cinatra#4150 W4 — four rows, the text kind and the list row", () => 
     const res = read([ROWS[0], LIST]);
     expect(res).toEqual({ ok: true, rows: { publish: [ROWS[0], LIST] } });
     if (!res.ok) throw new Error("unreachable");
-    const row = res.rows.publish![1] as unknown as typeof LIST;
-    expect(Object.isFrozen(row)).toBe(true);
-    expect(Object.isFrozen(row.columns)).toBe(true);
-    expect(Object.isFrozen(row.columns[0])).toBe(true);
+    const row = res.rows.publish![1]!;
+    expect(publishRowKind(row)).toBe("list");
+    const list = row as PublishListRowDeclaration;
+    expect(Object.isFrozen(list)).toBe(true);
+    expect(Object.isFrozen(list.columns)).toBe(true);
+    expect(Object.isFrozen(list.columns[0])).toBe(true);
+  });
+
+  // pre-2 finding 5: the compiled rows are readonly in their TYPE as well as frozen at run time. Red at base 46f770fe in the
+  // typecheck (the column list was typed mutable there, so the expect-error below is unused) and at run time (publishRowKind
+  // does not exist there).
+  it("a compiled list row's columns cannot be pushed, by type or at run time", () => {
+    const res = read([LIST]);
+    if (!res.ok) throw new Error("unreachable");
+    const list = res.rows.publish![0] as PublishListRowDeclaration;
+    expect(publishRowKind(list)).toBe("list");
+    // @ts-expect-error a compiled column list is readonly
+    expect(() => list.columns.push({ label: "More", field: "more" })).toThrow(TypeError);
   });
 
   it("a kind the card cannot draw is refused, artifacts included, naming the field only", () => {
