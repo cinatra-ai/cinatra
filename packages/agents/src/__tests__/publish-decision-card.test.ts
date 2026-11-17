@@ -225,6 +225,16 @@ describe("the artifacts row (C1b)", () => {
     ["an extra value field", { ...ARTIFACTS_ROW, value: "x" }],
     ["an inherited ref and islandSrc", Object.assign(Object.create({ ref: REF, islandSrc: null }), { kind: "artifacts", label: "Proposed page" })],
     ["an inherited label", Object.assign(Object.create({ label: "Proposed page" }), { kind: "artifacts", ref: REF, islandSrc: null })],
+    // pre-2 MUST-FIX 1: a key with a comma joins to the same text as two keys, so a key-text comparison is not exact.
+    [
+      "an own \"label,ref\" key over an inherited label and ref",
+      Object.assign(Object.create({ label: "Proposed page", ref: REF }), { kind: "artifacts", islandSrc: null, "label,ref": 1 }),
+    ],
+    [
+      "a hidden own label beside an extra field",
+      Object.defineProperty({ kind: "artifacts", ref: REF, islandSrc: null, targets: [] }, "label", { value: "Proposed page", enumerable: false }),
+    ],
+    ["an extra symbol key", { ...ARTIFACTS_ROW, [Symbol("targets")]: [] }],
   ])("refuses an artifacts row with %s", (_name, row) => {
     expect(parsePublishDecisionCardState({ ...COMMON, state: "expired", rows: [ARTIFACTS_ROW] })).not.toBeNull();
     expect(parsePublishDecisionCardState({ ...COMMON, state: "expired", rows: [row] })).toBeNull();

@@ -155,6 +155,11 @@ const isTextList = (value: unknown): value is string[] => Array.isArray(value) &
 const ISLAND_REF = /^[A-Za-z0-9_-]{1,512}$/;
 export const PUBLISH_ARTIFACTS_ISLAND_SRC_MAX = 2048;
 
+const ARTIFACTS_ROW_KEYS = ["islandSrc", "kind", "label", "ref"] as const;
+/** True only when `o`'s own keys (string, symbol, enumerable or not) are exactly `keys`, each one own. */
+const hasExactlyOwnKeys = (o: object, keys: readonly string[]): boolean =>
+  Reflect.ownKeys(o).length === keys.length && keys.every((k) => own(o, k));
+
 /** A text row (no `kind`), or a list or artifacts row this build can draw; any other kind is unreadable. */
 function parseRow(row: unknown): PublishDecisionCardRow | null {
   if (!isRecord(row)) return null;
@@ -162,9 +167,12 @@ function parseRow(row: unknown): PublishDecisionCardRow | null {
   if (kind === null) return null;
   if (kind === "artifacts") {
     // Exactly the four own keys, as the compiler and the stored reader hold their shapes: an extra field (a target
-    // list, a value) or an inherited one is not an answer this build understands.
-    if (Object.keys(row).sort().join(",") !== "islandSrc,kind,label,ref") return null;
-    const { label, ref, islandSrc } = row;
+    // list, a value, a symbol, a hidden one) or an inherited one is not an answer this build understands. Compared
+    // key by key, never as joined text (a key may itself hold a comma), and each value is read as an own property.
+    if (!hasExactlyOwnKeys(row, ARTIFACTS_ROW_KEYS)) return null;
+    const label = row.label;
+    const ref = row.ref;
+    const islandSrc = row.islandSrc;
     if (!isPublishRowLabel(label)) return null;
     if (ref !== null && !(isText(ref) && ISLAND_REF.test(ref))) return null;
     if (islandSrc !== null && !(isText(islandSrc) && islandSrc.length > 0 && islandSrc.length <= PUBLISH_ARTIFACTS_ISLAND_SRC_MAX)) {
