@@ -391,16 +391,21 @@ describe("a segment run is never resumed", () => {
     const refusal = body.indexOf("await refuseRegenerateSegmentResume(runId);");
     expect(refusal).toBeGreaterThan(0);
     expect(refusal).toBeLessThan(body.indexOf("mintRunToken()"));
+    // The MCP resume road (handlers.ts) resumes only through the shared resume-under-claim step since
+    // main's pause claim on every resume road (#4538): it sends no task itself, and that step mints.
+    const handlers = readFileSync(path.resolve(__dirname, "../mcp/handlers.ts"), "utf8");
+    expect(handlers).not.toContain("sendTask(");
+    expect(handlers).toContain("resumeWayflowUnderPauseClaim(");
     for (const file of [
       "../artifact-review-resume-delivery.ts",
-      "../mcp/handlers.ts",
+      "../run-resume-under-claim.ts",
       "../orchestrator-actions.ts",
       "../review-task-actions.ts",
     ]) {
       const source = readFileSync(path.resolve(__dirname, file), "utf8");
       const send = source.indexOf("sendTask({");
       // A road mints in its own body (await) or as the value of the gate claim's awaited callback
-      // (return): the MCP resume road since main's claim on resume (#4665).
+      // (return).
       const mint = Math.max(
         source.lastIndexOf("await mintResumeRunTokenMetadata(", send),
         source.lastIndexOf("return mintResumeRunTokenMetadata(", send),
