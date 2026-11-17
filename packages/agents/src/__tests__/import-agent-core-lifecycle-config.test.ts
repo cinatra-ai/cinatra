@@ -300,11 +300,14 @@ describe("cinatra#2044 GAP 2 — importAgentTemplateCore compiles cinatra.lifecy
     expect(upsertPatch()).toHaveProperty("lifecycleConfig", null);
   });
 
-  it("UPSERT: an UNPARSEABLE package.json leaves the column UNCHANGED (never a destructive clear)", async () => {
+  it("an UNPARSEABLE package.json carries no identity: it reaches no existing row and never projects a clear", async () => {
     // Corrupted bytes are not an authoritative declaration of absence. The
-    // identity fields fall through the same catch, so the column follows them:
-    // the patch omits the field rather than wiping a real declaration off the
-    // row on the strength of a truncated archive.
+    // identity fields fall through the same catch as the declaration, and the
+    // compile reads its package identity only from a readable sibling manifest
+    // (the honest compile mock above), so such an archive has no name, never
+    // resolves an existing row and so can never wipe a real declaration off it.
+    // The fresh create it takes carries the declaration as `undefined` (no
+    // manifest read), never as the explicit `null` of a "declares no block".
     readTemplate.mockResolvedValue({ id: "tpl-existing" });
     const files = [
       { name: "agent.json", content: OAS },
@@ -315,7 +318,10 @@ describe("cinatra#2044 GAP 2 — importAgentTemplateCore compiles cinatra.lifecy
       redirect: false,
       status: "published",
     });
-    expect(upsertPatch().lifecycleConfig).toBeUndefined();
+    expect(updateTemplate).not.toHaveBeenCalled();
+    expect(createTemplate).toHaveBeenCalledTimes(1);
+    expect(Object.prototype.hasOwnProperty.call(createInput(), "lifecycleConfig")).toBe(true);
+    expect(createInput().lifecycleConfig).toBeUndefined();
   });
 });
 
