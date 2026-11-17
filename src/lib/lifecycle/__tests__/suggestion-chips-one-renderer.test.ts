@@ -231,6 +231,55 @@ function entryImporters(files: { path: string; source: string }[], entries: stri
     .sort();
 }
 
+/**
+ * EVERY import edge that reaches a review decision entry, over any number of
+ * hops: `A -> B` where A is a non-test module and B (a module key) is an entry
+ * or a module that itself reaches one. The importer pin above reads one hop
+ * only, so a new page that imports the allowed scoped run routes would mount
+ * the review page through them unseen (pre-review 1 of #4571's forward). The
+ * allowed chains are pinned exactly: the scoped run pages -> the scoped run
+ * routes -> the review page. Nothing reaches the decide route.
+ */
+const ENTRY_CHAINS = [
+  "src/app/organizations/[id]/agents/[...launch]/page.tsx -> src/app/scoped-launch-routes",
+  "src/app/organizations/[id]/assistants/[...launch]/page.tsx -> src/app/scoped-launch-routes",
+  "src/app/personal/agents/[...launch]/page.tsx -> src/app/scoped-launch-routes",
+  "src/app/personal/assistants/[...launch]/page.tsx -> src/app/scoped-launch-routes",
+  "src/app/projects/[projectId]/agents/[...launch]/page.tsx -> src/app/scoped-launch-routes",
+  "src/app/projects/[projectId]/assistants/[...launch]/page.tsx -> src/app/scoped-launch-routes",
+  "src/app/scoped-launch-routes.tsx -> src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page",
+  "src/app/teams/[teamId]/agents/[...launch]/page.tsx -> src/app/scoped-launch-routes",
+  "src/app/teams/[teamId]/assistants/[...launch]/page.tsx -> src/app/scoped-launch-routes",
+  "src/app/workspace/agents/[...launch]/page.tsx -> src/app/scoped-launch-routes",
+  "src/app/workspace/assistants/[...launch]/page.tsx -> src/app/scoped-launch-routes",
+];
+
+/** The edges of the import graph that reach one of `entries`, transitively (fixpoint). */
+function entryChains(files: { path: string; source: string }[], entries: string[]): string[] {
+  const live = files.filter((f) => !TEST_FILE.test(f.path));
+  const reach = new Set(entries.map(moduleKey));
+  const edges = new Set<string>();
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const f of live) {
+      const own = moduleKey(f.path);
+      for (const key of namedModules(f.path, f.source)) {
+        if (key === own || !reach.has(key)) continue;
+        const edge = `${f.path} -> ${key}`;
+        if (!edges.has(edge)) {
+          edges.add(edge);
+          grew = true;
+        }
+        if (!reach.has(own)) {
+          reach.add(own);
+          grew = true;
+        }
+      }
+    }
+  }
+  return [...edges].sort();
+}
+
 describe("ONE decision path carries the marks", () => {
   it("the review page's route-bound action FORWARDS the partition", () => {
     const page = readFileSync(
@@ -319,6 +368,9 @@ describe("ONE decision path carries the marks", () => {
     expect(all.length).toBeGreaterThan(FILES.length);
     expect(entryImporters(all, REVIEW_DECISION_ENTRIES)).toEqual(ENTRY_IMPORTERS);
     expect(entryImporters(all, ["src/app/api/lifecycle-views/decide/route.ts"])).toEqual([]);
+    // ... and over the whole import graph: a second hop is a reach too.
+    expect(entryChains(all, REVIEW_DECISION_ENTRIES)).toEqual(ENTRY_CHAINS);
+    expect(entryChains(all, ["src/app/api/lifecycle-views/decide/route.ts"])).toEqual([]);
   });
 
   it("a module that delegates to a review decision entry is caught by the importer scan (fixture)", () => {
@@ -358,6 +410,36 @@ describe("ONE decision path carries the marks", () => {
       [delegate.path, aliased.path, sibling.path, mount.path].sort(),
     );
     expect(entryImporters([delegate, nearMiss, test], [decide])).toEqual([delegate.path]);
+    // A second hop (pre-review 1 of the forward): a new page that imports the
+    // allowed scoped run routes mounts the review page through them. One hop
+    // misses it; the chain scan names both edges.
+    const routes = {
+      path: "src/app/scoped-launch-routes.tsx",
+      source: 'import ReviewPage from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page";',
+    };
+    const duplicate = {
+      path: "src/app/duplicate/agents/[...launch]/page.tsx",
+      source: [
+        'import { ScopedAgentsRoute } from "@/app/scoped-launch-routes";',
+        "export default async function DuplicateAgents({",
+        "  params,",
+        "}: {",
+        "  params: Promise<{ launch?: string[] }>;",
+        "}) {",
+        "  const { launch } = await params;",
+        "  return ScopedAgentsRoute({",
+        '    scope: { kind: "workspace" },',
+        "    segments: launch,",
+        "  });",
+        "}",
+      ].join("\n"),
+    };
+    const viaTest = { path: "src/app/duplicate/page.test.tsx", source: duplicate.source };
+    expect(entryImporters([routes, duplicate], REVIEW_DECISION_ENTRIES)).toEqual([routes.path]);
+    expect(entryChains([routes, duplicate, viaTest, nearMiss], REVIEW_DECISION_ENTRIES)).toEqual(
+      [`${duplicate.path} -> src/app/scoped-launch-routes`, `${routes.path} -> src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page`].sort(),
+    );
+    expect(entryChains([routes, duplicate, delegate], [decide])).toEqual([`${delegate.path} -> ${decide.replace(/\.ts$/, "")}`]);
   });
 
   it("no route is named for per-item suggestion decisions", () => {
