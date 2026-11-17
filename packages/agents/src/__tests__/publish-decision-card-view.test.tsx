@@ -397,14 +397,17 @@ describe("the artifacts row (C1b)", () => {
     expect(src.searchParams.get("ic")).toBe("sealed-credential");
   });
 
-  it("an address minted for another ref lends this row no credential", async () => {
+  // pre-1 MUST-FIX 3: on a widget host the credential is the only proof of the reader, so an address minted for another
+  // ref lends this row no credential and the review card's own guard frames NOTHING (no uncredentialed widget frame).
+  it("an address minted for another ref lends this row no credential, so a widget host frames nothing", async () => {
     const islandSrc = "/lifecycle/review-island?ref=OtherRef&ic=sealed-credential";
     brokerAnswer = { status: 200, body: { ...PENDING, rows: [{ ...ARTIFACTS, islandSrc }] } };
     const root = await rootOf(mountOn("site_widget", okDoor()));
     await settle();
-    const src = await frameSrc(root);
-    expect(src.searchParams.get("ref")).toBe(REF);
-    expect(src.searchParams.get("ic")).toBeNull();
+    const value = root.querySelector('[data-publish-row-kind="artifacts"]');
+    expect(value?.querySelector('[data-conformance-id="review-target-island"]')?.getAttribute("data-island-load-state")).toBe("empty");
+    expect(root.querySelector("iframe")).toBeNull();
+    expect(root.innerHTML).not.toContain("sealed-credential");
   });
 
   it("a row with no ref says the items could not be shown, and frames nothing", async () => {

@@ -171,6 +171,26 @@ describe("the credential branch", () => {
     expect(loadReviewGateSurface).not.toHaveBeenCalled();
   });
 
+  // pre-1 MUST-FIX 4: the reader's kind is read, never presumed. A reader that names neither a gate (null) nor a
+  // publish row is not taken for a gate: it draws the one empty island. So a reader double without the field fails.
+  it.each([
+    ["no publishDecision field", {}],
+    ["an undefined publishDecision", { publishDecision: undefined }],
+    ["a publishDecision with no input", { publishDecision: { decisionId: "dec-1" } }],
+    ["a publishDecision that is a string", { publishDecision: "dec-1" }],
+  ])("a reader with %s draws the empty island, and no loader runs", async (_name, kind) => {
+    resolveIslandCredentialReader.mockResolvedValue({
+      actorCtx: ACTOR,
+      runId: "run-1",
+      reviewTaskId: "task-1",
+      principal: PRINCIPAL,
+      ...kind,
+    });
+    expect(isEmptyIsland(await renderIsland(GATE_REF, { ic: CREDENTIAL }))).toBe(true);
+    expect(loadReviewGateSurface).not.toHaveBeenCalled();
+    expect(loadPublishDecisionIslandSurface).not.toHaveBeenCalled();
+  });
+
   it("a gate credential reader (no publish row) keeps the gate loader and its sealed roads", async () => {
     resolveIslandCredentialReader.mockResolvedValue({
       actorCtx: ACTOR,

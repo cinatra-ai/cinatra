@@ -65,4 +65,16 @@ describe("the publish-decision island ref", () => {
       publishDecisionIslandSubjectKey({ decisionId: "a", input: "bc" }),
     );
   });
+
+  // pre-1 MUST-FIX 2: the key is injective over every string the ref admits. Two lone surrogates encode to the same
+  // UTF-8 replacement bytes, and a NUL inside a field could shift a NUL-joined pair; neither may collide.
+  it("distinct lone-surrogate inputs and NUL-shifted fields get distinct subject keys", () => {
+    const key = (decisionId: string, input: string) => publishDecisionIslandSubjectKey({ decisionId, input });
+    expect(key("dec-1", "\uD800")).not.toBe(key("dec-1", "\uD801"));
+    expect(key("dec-\uDC00", "x")).not.toBe(key("dec-\uDC01", "x"));
+    expect(key("a\u0000b", "c")).not.toBe(key("a", "b\u0000c"));
+    expect(key("dec-1", "\uD800")).toMatch(/^publish-decision:[0-9a-f]{64}$/);
+    // The ref itself keeps a lone surrogate exactly, so ref and key name the same input.
+    expect(decodePublishDecisionIslandRef(encodePublishDecisionIslandRef({ ...ROW, input: "\uD800" })!)?.input).toBe("\uD800");
+  });
 });

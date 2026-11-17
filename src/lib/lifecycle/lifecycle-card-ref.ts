@@ -403,11 +403,22 @@ export function decodePublishDecisionIslandRef(ref: string): PublishDecisionIsla
 /**
  * The SUBJECT a widget island credential is bound to when it paints a publish
  * decision's row, in the slot a gate credential holds its review task id. A
- * fixed prefix and a SHA-256 over the decision id and the input (NUL-joined, so
- * the two fields cannot be shifted into each other): 81 characters, inside the
- * credential's field bound whatever the ids are. The credential also seals that
- * it is a publish subject, so this string is never compared with a gate's id.
+ * fixed prefix and a SHA-256 over an INJECTIVE serialization of the decision id
+ * and the input: each field as its length in UTF-16 code units (4 bytes, big
+ * endian) and then its code units (UTF-16LE). So no two distinct pairs hash the
+ * same input, a NUL inside a field cannot shift it into the other, and two lone
+ * surrogates (which UTF-8 would both turn into U+FFFD) stay distinct. 81
+ * characters, inside the credential's field bound whatever the ids are. The
+ * credential also seals that it is a publish subject, so this string is never
+ * compared with a gate's id.
  */
 export function publishDecisionIslandSubjectKey(input: { decisionId: string; input: string }): string {
-  return `publish-decision:${createHash("sha256").update(`${input.decisionId}\u0000${input.input}`, "utf8").digest("hex")}`;
+  const hash = createHash("sha256");
+  for (const field of [input.decisionId, input.input]) {
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(field.length);
+    hash.update(length);
+    hash.update(Buffer.from(field, "utf16le"));
+  }
+  return `publish-decision:${hash.digest("hex")}`;
 }

@@ -220,6 +220,11 @@ describe("the artifacts row (C1b)", () => {
     ["an address over 2048 characters", { ...ARTIFACTS_ROW, islandSrc: "x".repeat(2049) }],
     ["an empty label", { ...ARTIFACTS_ROW, label: "" }],
     ["a label with a line break", { ...ARTIFACTS_ROW, label: "Pro\nposed" }],
+    // pre-1 MUST-FIX 1: exactly the four own keys, as the compiler and the stored reader hold their shapes.
+    ["an extra targets field", { ...ARTIFACTS_ROW, targets: [{ artifactId: "a", representationRevisionId: "r" }] }],
+    ["an extra value field", { ...ARTIFACTS_ROW, value: "x" }],
+    ["an inherited ref and islandSrc", Object.assign(Object.create({ ref: REF, islandSrc: null }), { kind: "artifacts", label: "Proposed page" })],
+    ["an inherited label", Object.assign(Object.create({ label: "Proposed page" }), { kind: "artifacts", ref: REF, islandSrc: null })],
   ])("refuses an artifacts row with %s", (_name, row) => {
     expect(parsePublishDecisionCardState({ ...COMMON, state: "expired", rows: [ARTIFACTS_ROW] })).not.toBeNull();
     expect(parsePublishDecisionCardState({ ...COMMON, state: "expired", rows: [row] })).toBeNull();

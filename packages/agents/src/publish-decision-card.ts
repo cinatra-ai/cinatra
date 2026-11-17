@@ -161,6 +161,9 @@ function parseRow(row: unknown): PublishDecisionCardRow | null {
   const kind = publishRowKind(row);
   if (kind === null) return null;
   if (kind === "artifacts") {
+    // Exactly the four own keys, as the compiler and the stored reader hold their shapes: an extra field (a target
+    // list, a value) or an inherited one is not an answer this build understands.
+    if (Object.keys(row).sort().join(",") !== "islandSrc,kind,label,ref") return null;
     const { label, ref, islandSrc } = row;
     if (!isPublishRowLabel(label)) return null;
     if (ref !== null && !(isText(ref) && ISLAND_REF.test(ref))) return null;

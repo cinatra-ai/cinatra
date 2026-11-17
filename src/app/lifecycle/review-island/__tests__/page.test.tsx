@@ -389,6 +389,7 @@ describe("a frame that presents an island credential", () => {
       actorCtx: ACTOR,
       runId: "run-1",
       reviewTaskId: "task-1",
+      publishDecision: null,
     });
     loadReviewGateSurface.mockResolvedValue({
       kind: "ready",
@@ -413,6 +414,7 @@ describe("a frame that presents an island credential", () => {
       actorCtx: ACTOR,
       runId: "run-1",
       reviewTaskId: "task-1",
+      publishDecision: null,
     });
     loadReviewGateSurface.mockResolvedValue({
       kind: "ready",
@@ -456,6 +458,7 @@ describe("a frame that presents an island credential", () => {
       actorCtx: ACTOR,
       runId: "run-1",
       reviewTaskId: "task-1",
+      publishDecision: null,
     });
     const targets = [target("a1"), target("a2")];
     loadReviewGateSurface.mockResolvedValue({

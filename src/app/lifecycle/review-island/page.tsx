@@ -253,6 +253,21 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
     // would be a place for them to stop being equal.
     runId = reader.runId;
     reviewTaskId = reader.reviewTaskId;
+    // THE READER NAMES ITS KIND (cinatra#4150 W4 C1b): `null` for a review
+    // gate, the row for a publish decision. A reader that names neither is not
+    // one this page reads, so it draws the one empty island rather than being
+    // taken for a gate.
+    const named: unknown = reader.publishDecision;
+    if (
+      named !== null &&
+      !(
+        typeof named === "object" &&
+        typeof (named as { decisionId?: unknown }).decisionId === "string" &&
+        typeof (named as { input?: unknown }).input === "string"
+      )
+    ) {
+      return empty;
+    }
     publishRow = reader.publishDecision;
     // The reader this resolver just proved, carried into the road. Every
     // address the surface below hands out is sealed to exactly these bindings

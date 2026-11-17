@@ -97,6 +97,11 @@ describe("readPublishDecisionIslandSubject", () => {
     expect(await readPublishDecisionIslandSubject(ASK)).toBeNull();
   });
 
+  it("a decision recorded with no organization is read under the run's organization", async () => {
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ orgId: null }));
+    expect(await readPublishDecisionIslandSubject(ASK)).toMatchObject({ orgId: "org-1", targets: TARGETS });
+  });
+
   it("a reader the run access door refuses reaches no decision", async () => {
     storeMock.readAgentRunById.mockResolvedValue(null);
     expect(await readPublishDecisionIslandSubject(ASK)).toBeNull();
