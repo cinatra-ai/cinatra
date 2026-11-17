@@ -11,13 +11,18 @@
 // its answer, and the host's one Continue beneath the card sends it, a
 // decline as a decline. That Continue is held (`declaredHitlScreenReady`)
 // until a declared choice is made and every required value holds text.
+//
+// Drawing (design#243 V.1): a read-only fact is its declared label over the
+// value as text, with no box; a decision is one answer row per declared
+// answer inside the card's fields (a radio and the declared label), never a
+// row of buttons, and the chosen row is marked.
 
-import { useState, type ComponentType, type ReactNode } from "react";
+import { useId, useState, type ComponentType, type ReactNode } from "react";
 import Link from "next/link";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import type { FieldRendererProps } from "./field-renderer-registry";
 
@@ -88,6 +93,7 @@ export function makeDeclaredHitlScreenRenderer(
         ? (value as Record<string, unknown>)
         : {};
     const [picked, setPicked] = useState<number | null>(null);
+    const idPrefix = useId();
     // A choice waits for the run values it requires. A field is never locked
     // by them: its own key may be required, and the person must type it.
     const ready = (screen.requires ?? []).every((k) => textOf(v, k).trim() !== "");
@@ -138,50 +144,71 @@ export function makeDeclaredHitlScreenRenderer(
           </div>
         );
       }
+      // A fact: the declared label over the value as text, with no box.
       const qualifier = s.qualifierKey ? textOf(v, s.qualifierKey).trim() : "";
       return (
-        <p key={i} className="text-sm text-muted-foreground">
-          <span className="text-foreground">
-            {qualifier ? `${s.label} (${qualifier}):` : `${s.label}:`}
-          </span>{" "}
-          {isWebAddress(text) ? (
-            <Link href={text} target="_blank" rel="noreferrer" className="underline underline-offset-4">
-              {text}
-            </Link>
-          ) : (
-            text
-          )}
-        </p>
+        <div key={i} className="grid gap-[3px]">
+          <span className="font-mono text-badge-2xs uppercase text-muted-foreground">
+            {qualifier ? `${s.label} (${qualifier})` : s.label}
+          </span>
+          <span className="whitespace-pre-wrap text-xs leading-normal text-foreground">
+            {isWebAddress(text) ? (
+              <Link href={text} target="_blank" rel="noreferrer" className="underline underline-offset-4">
+                {text}
+              </Link>
+            ) : (
+              text
+            )}
+          </span>
+        </div>
       );
     };
 
     const decisions = screen.decisions ?? [];
+    const titleId = `${idPrefix}-title`;
+    // The decision: one answer row per declared answer, in the fields region.
+    const answers =
+      decisions.length > 0 ? (
+        <RadioGroup
+          className="grid gap-2"
+          aria-labelledby={titleId}
+          value={picked === null ? "" : String(picked)}
+          disabled={choicesLocked}
+          onValueChange={(chosen) => {
+            const i = Number(chosen);
+            const d = decisions[i];
+            if (!Number.isInteger(i) || d === undefined) return;
+            setPicked(i);
+            onChange({ ...carried(), ...d.answer });
+          }}
+        >
+          {decisions.map((d, i) => {
+            const id = `${idPrefix}-answer-${i}`;
+            const chosen = picked === i;
+            return (
+              <label
+                key={i}
+                htmlFor={id}
+                className={`flex items-start gap-2.5 rounded-lg border px-3 py-2.5 ${
+                  chosen ? "border-primary bg-primary/5" : "border-line bg-surface-strong"
+                } ${choicesLocked ? "" : "cursor-pointer"}`}
+              >
+                <RadioGroupItem id={id} value={String(i)} className="mt-0.5" />
+                <span className="font-sans text-row-title font-bold text-foreground">{d.label}</span>
+              </label>
+            );
+          })}
+        </RadioGroup>
+      ) : null;
     return (
       <Card className="border-line bg-surface backdrop-blur-none">
         <CardHeader>
-          <CardTitle>{screen.title}</CardTitle>
+          <CardTitle id={titleId}>{screen.title}</CardTitle>
         </CardHeader>
-        <CardContent className="flex flex-col gap-3">{(screen.sections ?? []).map(section)}</CardContent>
-        {decisions.length > 0 ? (
-          <CardFooter className="flex justify-end gap-2">
-            {decisions.map((d, i) => (
-              <Button
-                key={i}
-                type="button"
-                variant={i === decisions.length - 1 ? "default" : "outline"}
-                aria-pressed={picked === i}
-                className={picked === i ? "ring-2 ring-ring ring-offset-2" : undefined}
-                disabled={choicesLocked}
-                onClick={() => {
-                  setPicked(i);
-                  onChange({ ...carried(), ...d.answer });
-                }}
-              >
-                {d.label}
-              </Button>
-            ))}
-          </CardFooter>
-        ) : null}
+        <CardContent className="flex flex-col gap-3">
+          {(screen.sections ?? []).map(section)}
+          {answers}
+        </CardContent>
       </Card>
     );
   }
