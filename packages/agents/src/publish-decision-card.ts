@@ -126,7 +126,9 @@ function parseRow(row: unknown): PublishDecisionCardRow | null {
   if (kind === null) return null;
   if (kind === "list") {
     const { label, columns, items, total } = row;
-    if (!isText(label) || !isTextList(columns) || columns.length < 1 || columns.length > PUBLISH_ROW_COLUMNS_MAX) return null;
+    // The compiler's label rule holds on the transport too: a row label and each column label.
+    if (!isPublishRowLabel(label) || !isTextList(columns) || columns.length < 1 || columns.length > PUBLISH_ROW_COLUMNS_MAX) return null;
+    if (!columns.every(isPublishRowLabel)) return null;
     if (!Array.isArray(items) || items.length < 1 || items.length > PUBLISH_LIST_ROW_ITEMS_MAX) return null;
     if (!items.every((cells) => isTextList(cells) && cells.length === columns.length)) return null;
     if (typeof total !== "number" || !Number.isInteger(total) || total < items.length) return null;

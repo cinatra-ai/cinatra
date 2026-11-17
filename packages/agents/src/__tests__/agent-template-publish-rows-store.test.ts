@@ -49,7 +49,7 @@ vi.mock("../publish-template", () => ({
 }));
 
 import { createLocalAgentTemplateVersion } from "../import-export-actions";
-import { collectPublishRows } from "../oas-compiler";
+import { collectPublishRows, type PublishRows } from "../oas-compiler";
 import { serializeTemplate, deserializeTemplate } from "../store-template-versions";
 import { _runAgentTemplateUpdate } from "../store";
 import type { CreateAgentTemplateInput } from "../store";
@@ -165,10 +165,18 @@ describe("cinatra#4150 — the compiler's map cannot be changed after it is retu
   });
 
   for (const [label, change] of [
-    ["a row's label and input are changed", (r: Record<string, Array<{ label: string; input: string }>>) => Object.assign(r.publish![0]!, FORGED.publish[0])],
-    ["a row is added to the list", (r: Record<string, Array<{ label: string; input: string }>>) => r.publish!.push(FORGED.publish[0]!)],
-    ["the node's list is replaced", (r: Record<string, Array<{ label: string; input: string }>>) => (r.publish = FORGED.publish)],
-    ["a node is added", (r: Record<string, Array<{ label: string; input: string }>>) => (r.other = FORGED.publish)],
+    // The compiler's own (readonly) map type: each change below is one the type already refuses, made anyway to prove the
+    // run-time freeze (Object.assign onto a row is not a type error, so it carries no directive).
+    ["a row's label and input are changed", (r: PublishRows) => Object.assign(r.publish![0]!, FORGED.publish[0])],
+    ["a row is added to the list", (r: PublishRows) =>
+      // @ts-expect-error a compiled rows list is readonly
+      r.publish!.push(FORGED.publish[0]!)],
+    ["the node's list is replaced", (r: PublishRows) =>
+      // @ts-expect-error a compiled map is readonly
+      (r.publish = FORGED.publish)],
+    ["a node is added", (r: PublishRows) =>
+      // @ts-expect-error a compiled map is readonly
+      (r.other = FORGED.publish)],
   ] as const) {
     it(`${label}: the change throws and the write carries the compiled rows`, async () => {
       const rows = compiledRows();

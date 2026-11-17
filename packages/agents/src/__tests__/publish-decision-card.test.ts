@@ -171,6 +171,18 @@ describe("the row cap on the transport and the own-kind reading (pre-2)", () => 
     expect(publishDecisionCardRows([decl], { title: "Autumn" })).toEqual([{ label: "Title", value: "Autumn" }]);
   });
 
+  // fold3 NOTE 3: a transported list row meets the compiler's label rule (red at f3722269: only "is text" was checked).
+  it.each([
+    ["an empty list label", { ...LIST_ROW, label: "" }],
+    ["a list label with a line break", { ...LIST_ROW, label: "Re\ncipients" }],
+    ["a list label over 60 characters", { ...LIST_ROW, label: "x".repeat(61) }],
+    ["an empty column label", { ...LIST_ROW, columns: ["", "Email"] }],
+    ["a column label with a leading space", { ...LIST_ROW, columns: [" Name", "Email"] }],
+  ])("a transported list row with %s is unreadable", (_name, row) => {
+    expect(parsePublishDecisionCardState({ ...COMMON, state: "expired", rows: [LIST_ROW] })).not.toBeNull();
+    expect(parsePublishDecisionCardState({ ...COMMON, state: "expired", rows: [row] })).toBeNull();
+  });
+
   it("a declaration with an own kind no reader draws is dropped, never drawn as text", () => {
     const decl = { kind: "artifacts", label: "Page", input: "page" } as unknown as PublishRowDeclaration;
     expect(publishDecisionCardRows([decl, { label: "Title", input: "title" }], { page: "row-77", title: "Autumn" })).toEqual([
