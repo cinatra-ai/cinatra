@@ -106,7 +106,13 @@
       "id": "screenshot-proof-start",
       "name": "start",
       "description": "",
-      "metadata": {},
+      "metadata": {
+        "cinatra": {
+          "required": [
+            "capture_url"
+          ]
+        }
+      },
       "inputs": [
         {
           "description": "The page URL to capture after this run completes.",

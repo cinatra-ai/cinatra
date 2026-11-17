@@ -35,17 +35,27 @@
 //
 // IDEMPOTENT: a package that already has a row is left completely alone (no
 // re-compile, no write) — this seeds what is missing, it does not reconcile what
-// is there.
+// is there. One exception (cinatra#4264 A1b): a row that stores a
+// `regenerate` list has it checked against the image's CURRENT flow. A list
+// that flow no longer honours is QUARANTINED: removed from the stored column
+// (every other lifecycle key kept), under the row's own claim, and the boot
+// reports the package. Nothing from the image is written onto the row.
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { parsePackageId } from "@cinatra-ai/registries";
 
-import { PLATFORM_IDENTITY_CLAIM, claimAgentTemplateIdentity } from "./agent-template-identity";
+import {
+  PLATFORM_IDENTITY_CLAIM,
+  claimAgentTemplateIdentity,
+  claimOfAuthorizedTemplate,
+} from "./agent-template-identity";
+import { assertStoredRegenerateHonoured } from "./retained-regenerate";
 import { buildAgentTemplateInstallSeed } from "./build-agent-template-seed";
 import { createLocalAgentTemplateVersion } from "./import-export-actions";
-import { readAgentTemplateByPackageName } from "./store";
+import { readAgentTemplateByPackageName, updateAgentTemplate } from "./store";
+import { normalizeLifecycle, serializeLifecycleConfig } from "@/lib/lifecycle/lifecycle-policy";
 import { parseAgentPackageManifestForInstall } from "./verdaccio/package-contract";
 
 /** What the seeder did for one package. Never a throw for "nothing to do". */
@@ -74,6 +84,44 @@ export function bundledAgentPackageDir(seedDir: string, packageName: string): st
   return join(seedDir, id.vendor, id.name);
 }
 
+/**
+ * Remove ONLY the `regenerate` key from an existing row's readable stored
+ * lifecycle column (cinatra#4264 A1b, review 2), under the row's own claim, so
+ * an ownership change in between refuses instead of writing a foreign row.
+ * Returns false when the text cannot be read (nothing is written). Throws when
+ * the write is refused or fails: the stale list then still stands, and the
+ * boot must report it as such.
+ */
+async function quarantineStaleRegenerate(existing: {
+  id: string;
+  orgId?: string | null;
+  lifecycleConfig?: string | null;
+}): Promise<boolean> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(existing.lifecycleConfig ?? "");
+  } catch {
+    return false;
+  }
+  const normalized = normalizeLifecycle(parsed);
+  if (!normalized) return false;
+  const { regenerate: _stale, ...rest } = normalized;
+  const text = serializeLifecycleConfig(rest);
+  const kept = text === "{}" ? null : text;
+  const updated = await updateAgentTemplate(
+    existing.id,
+    { lifecycleConfig: kept },
+    claimOfAuthorizedTemplate({ orgId: existing.orgId ?? null }),
+  );
+  if (!updated) {
+    throw new Error(
+      `[seed-bundled-agent-template] the stale regenerate list of row ${existing.id} could not be ` +
+        "quarantined: the row moved to another owner. It still stands.",
+    );
+  }
+  return true;
+}
+
 async function readJsonIfPresent(path: string): Promise<unknown | null> {
   try {
     return JSON.parse(await readFile(path, "utf8")) as unknown;
@@ -97,7 +145,35 @@ export async function ensureBundledAgentTemplateRecord(input: {
   seedDir: string;
 }): Promise<BundledAgentTemplateSeedOutcome> {
   const existing = await readAgentTemplateByPackageName(input.packageName);
-  if (existing) return { outcome: "exists" };
+  if (existing) {
+    // cinatra#4264 A1b (reviews 1 and 2): image v2 may reconcile new runtime
+    // bytes without a step the row's stored list (written from image v1)
+    // names. The row is never re-seeded from the image (a tenant row is never
+    // overwritten by this seeder), but a stale list is ENFORCED, not only
+    // logged: it is removed from the stored column (quarantined), so no
+    // regenerate path reads a list the mounted flow cannot honour, and the
+    // boot reports the package. Text that cannot be read refuses as is (every
+    // lifecycle reader already reads it as no declaration). Rows with a NULL
+    // column take the early return with no read.
+    if (existing.lifecycleConfig !== null && existing.lifecycleConfig !== undefined) {
+      const packageDir = bundledAgentPackageDir(input.seedDir, input.packageName);
+      const oas = packageDir === null ? null : await readJsonIfPresent(join(packageDir, "cinatra", "oas.json"));
+      const subject = `[seed-bundled-agent-template] ${input.packageName} (existing row, image flow)`;
+      try {
+        assertStoredRegenerateHonoured(existing.lifecycleConfig, oas ?? {}, subject);
+      } catch (err) {
+        const stale = await quarantineStaleRegenerate(existing);
+        if (stale) {
+          throw new Error(
+            `${err instanceof Error ? err.message : String(err)}. The stored regenerate list was removed ` +
+              "from the row (quarantined); reinstall the package to declare a list its flow honours.",
+          );
+        }
+        throw err;
+      }
+    }
+    return { outcome: "exists" };
+  }
 
   const packageDir = bundledAgentPackageDir(input.seedDir, input.packageName);
   if (packageDir === null) {

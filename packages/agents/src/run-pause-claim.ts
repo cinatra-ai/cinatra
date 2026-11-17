@@ -32,8 +32,9 @@ import { PAUSE_CLAIM_LEASE_SECONDS, PAUSE_SEND_LEASE_SECONDS } from "./run-statu
 //   2. claimPause at the generation read; a refusal answers the caller;
 //   3. the pre-send bookkeeping; on any failure, releasePauseClaim, then
 //      rethrow (or throw PauseClaimReleaseError when the release fails);
-//   4. the fence: the status seam's `pauseFence` (`pending_approval → running`)
-//      or fencePauseInPlace (the delivery worker, whose run stays
+//   4. the fence: the status seam's `pauseFence` (`pending_approval → running`;
+//      the resume delivery's claim of the run rides on it with its intent's
+//      lease, cinatra#3745) or fencePauseInPlace (a road whose run stays
 //      `pending_approval`); a lost fence sends nothing;
 //   5. the send; 6. its handling; 7. settlePauseSend in a `finally`.
 //
@@ -169,8 +170,9 @@ export async function claimPause(
 }
 
 /**
- * The delivery worker's fence: its run stays `pending_approval` while it sends,
- * so the fence is in place. Under the live `claimed` lease of this token at this
+ * The in-place fence, for a road whose run stays `pending_approval` while it
+ * sends (the resume delivery used it until cinatra#3745 moved its claim of the
+ * run onto the status seam's `pauseFence`; no product road calls it now). Under the live `claimed` lease of this token at this
  * generation it sets the phase `sending`, raises the generation by 1 and sets
  * the send lease; the token stays. `lost` when the lease is gone (expired and
  * taken, cleared by a status change, or never held).

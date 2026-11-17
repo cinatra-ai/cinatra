@@ -360,6 +360,10 @@ function assertDevSetupHostOnly(member: string): void {
   }
 }
 
+/** The connectors whose dev hook saves an instance through a bound dev writer
+ * (cinatra#4387 Drupal, cinatra#4720 WordPress). */
+type DevInstanceSaveConnector = "drupal-mcp" | "wordpress-mcp";
+
 /**
  * cinatra#4387: the install→org binding (cinatra#274) a dev-hook instance save
  * carries. The HOST binds it — the hook never sees a user id (the
@@ -400,13 +404,19 @@ function devInstallOwnerBinding(): { orgId: string; runBy: string } | undefined 
  * getter the copy would inherit (for example one defined on
  * `Object.prototype`) can drop the host's pair or put another pair in its
  * place. The result type holds for a plain-object input.
+ *
+ * cinatra#4720: the `wordpress-mcp` dev writers take the same binding. The
+ * refusal messages name the connector whose instance is being saved.
  */
-function withDevInstallOwnerBinding<T extends object>(input: T): Omit<T, "orgId" | "runBy"> & {
+function withDevInstallOwnerBinding<T extends object>(
+  connector: DevInstanceSaveConnector,
+  input: T,
+): Omit<T, "orgId" | "runBy"> & {
   orgId?: string;
   runBy?: string;
 } {
   if (nodeUtilTypes.isProxy(input)) {
-    throw new Error("A drupal-mcp dev instance save takes a plain object of data fields; a Proxy is refused.");
+    throw new Error(`A ${connector} dev instance save takes a plain object of data fields; a Proxy is refused.`);
   }
   const out: Record<PropertyKey, unknown> = {};
   for (const key of Reflect.ownKeys(input)) {
@@ -416,7 +426,7 @@ function withDevInstallOwnerBinding<T extends object>(input: T): Omit<T, "orgId"
     // An OWN `value` only: `in` would also find a `value` defined on Object.prototype.
     if (!Object.hasOwn(field, "value")) {
       throw new Error(
-        `A drupal-mcp dev instance save takes data fields only; the accessor field ${String(key)} is refused.`,
+        `A ${connector} dev instance save takes data fields only; the accessor field ${String(key)} is refused.`,
       );
     }
     Object.defineProperty(out, key, ownDataField(field.value));
@@ -1244,13 +1254,13 @@ export function registerHostConnectorServices(): void {
     devPersistLocalInstanceUnvalidated: async (input) => {
       assertDevSetupHostOnly("drupal-mcp.devPersistLocalInstanceUnvalidated");
       const persisted = await requireDrupalInstanceAdmin().devPersistLocalInstanceUnvalidated(
-        withDevInstallOwnerBinding(input),
+        withDevInstallOwnerBinding("drupal-mcp", input),
       );
       return { id: persisted.id };
     },
     devSaveInstance: async (input) => {
       assertDevSetupHostOnly("drupal-mcp.devSaveInstance");
-      return requireDrupalInstanceAdmin().saveInstance(withDevInstallOwnerBinding(input));
+      return requireDrupalInstanceAdmin().saveInstance(withDevInstallOwnerBinding("drupal-mcp", input));
     },
     devProbeWithBearer: probeDrupalMcpWithBearer,
     devInvalidateProbeCache: invalidateDrupalMcpProbeCache,
@@ -1322,15 +1332,23 @@ export function registerHostConnectorServices(): void {
     // strictly dev-gated `dev-auto-setup` shell. The dev-MODE guard is
     // host-side defense-in-depth; the relocated unvalidated persist keeps its
     // intrinsic loopback-only hard-gate.
+    // cinatra#4720: both dev writers bind the dev owner's org + user host-side
+    // exactly as the drupal-mcp ones do (cinatra#4387), so the agent-run
+    // instance binding (cinatra#4220) can admit a run by the dev owner on the
+    // hook-wired instance; the caller's own orgId/runBy are never read.
     devSaveInstance: async (input) => {
       assertDevSetupHostOnly("wordpress-mcp.devSaveInstance");
-      const saved = await requireWordPressInstanceAdmin().saveWordPressInstance(input);
+      const saved = await requireWordPressInstanceAdmin().saveWordPressInstance(
+        withDevInstallOwnerBinding("wordpress-mcp", input),
+      );
       return { id: saved.id, connectionId: saved.connectionId };
     },
     devPersistLocalInstanceUnvalidated: async (input) => {
       assertDevSetupHostOnly("wordpress-mcp.devPersistLocalInstanceUnvalidated");
       const persisted =
-        await requireWordPressInstanceAdmin().persistLocalDevWordPressInstanceUnvalidated(input);
+        await requireWordPressInstanceAdmin().persistLocalDevWordPressInstanceUnvalidated(
+          withDevInstallOwnerBinding("wordpress-mcp", input),
+        );
       return { id: persisted.id, connectionId: persisted.connectionId };
     },
     // Credential-rotate eviction (cinatra#2018 S3 §6 event 4): the dev
