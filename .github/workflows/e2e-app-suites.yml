@@ -291,7 +291,7 @@ jobs:
           # step in build-image.yml (a 3-worker build next to the service
           # containers hung the runner until the job cap).
           CINATRA_BUILD_CPUS: "1"
-        run: pnpm build
+        run: bash scripts/ci/hosted-build-memory-cap.sh run pnpm build
 
       - name: Start production server on port 3000
         # next.config sets output: "standalone", so run server.js exactly like the
@@ -525,7 +525,7 @@ jobs:
           # step in build-image.yml (a 3-worker build next to the service
           # containers hung the runner until the job cap).
           CINATRA_BUILD_CPUS: "1"
-        run: pnpm build
+        run: bash scripts/ci/hosted-build-memory-cap.sh run pnpm build
 
       - name: Start production server on port 3000
         run: |

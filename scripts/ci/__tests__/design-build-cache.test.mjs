@@ -115,9 +115,11 @@ describe("design-visual-verify.yml pixel-diff: the runner-local build cache", ()
       /^ {10}CINATRA_TURBOPACK_BUILD_FS_CACHE: \$\{\{ steps\.build-cache\.outputs\.fs-cache \}\}$/m,
     );
     // The build and its rebuild run under the machine's design build lock
-    // (design-build-host-lock.test.mjs), which these run cases leave unused.
+    // (design-build-host-lock.test.mjs), which these run cases leave unused,
+    // and inside the hosted build memory cap (hosted-e2e-build-worker-cap.test.mjs),
+    // which these run cases turn off.
     expect(runLine(BUILD)).toBe(
-      "bash scripts/ci/design-build-host-lock.sh bash -c 'pnpm build || bash scripts/ci/design-build-cache.sh rebuild \"$?\"'",
+      "bash scripts/ci/design-build-host-lock.sh bash scripts/ci/hosted-build-memory-cap.sh run bash -c 'pnpm build || bash scripts/ci/design-build-cache.sh rebuild \"$?\"'",
     );
   });
 
@@ -188,6 +190,10 @@ function makeRunner() {
     path.join(REPO_ROOT, "scripts", "ci", "design-build-host-lock.sh"),
     path.join(checkout, "scripts", "ci", "design-build-host-lock.sh"),
   );
+  copyFileSync(
+    path.join(REPO_ROOT, "scripts", "ci", "hosted-build-memory-cap.sh"),
+    path.join(checkout, "scripts", "ci", "hosted-build-memory-cap.sh"),
+  );
   writeFileSync(path.join(checkout, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
   writeFileSync(path.join(checkout, "next.config.ts"), "export default {};\n");
   writeFileSync(path.join(bin, "pnpm"), FAKE_PNPM);
@@ -215,6 +221,8 @@ function makeRunner() {
       FAKE_PNPM_LOG: log,
       // The disk these cases run on may be fuller than the default floor.
       DESIGN_BUILD_CACHE_MIN_FREE_PERCENT: "0",
+      // A CI job's own RUNNER_ENVIRONMENT must not cap the stand-in build.
+      CINATRA_BUILD_MEMORY_CAP: "0",
       ...env,
     };
     const run = (command, extra) =>

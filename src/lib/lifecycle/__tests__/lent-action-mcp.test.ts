@@ -327,6 +327,9 @@ describe("using the action IS pressing the button", () => {
       spent = new Set();
       setFrame(grantFor({ control, messageId: `msg-${control}` }));
       await handleLentAction({ ref: REF, control }, deps());
+      // The lent Comment is the prompt window's typed change request (design
+      // section VI), so it names that road; the decision bar's own Comment button
+      // passes no road and stays a non-terminal note (cinatra#4245 D2).
       expect(submitReviewDecision).toHaveBeenCalledWith(
         RUN,
         GATE,
@@ -335,6 +338,7 @@ describe("using the action IS pressing the button", () => {
         OWN_CREDENTIAL,
         null,
         null,
+        control === "comment" ? { typedChangeRequest: true } : undefined,
       );
     }
   });

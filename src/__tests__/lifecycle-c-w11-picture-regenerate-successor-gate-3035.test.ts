@@ -212,8 +212,9 @@ describe("#3035 picture regeneration — the decision action on a declared gate 
     expect(pending().map((g) => g.reviewTaskId)).toEqual([STEP, `${STEP}#2`]);
   });
 
-  // Fold 2 (C3 option B) REVERSES fold 1's case, which sent this note down the
-  // repair road: the post's own leg keeps main's plain annotation.
+  // Fold 2 (C3 option B) keeps main's plain annotation for the decision bar's
+  // Comment on the post's own leg; cinatra#4245 (D2, split) keeps that: the bar's
+  // Comment is a non-terminal note (design section VI) and never asks the store.
   it("keeps a note on the post's own leg a plain comment and never calls the repair road", async () => {
     const before = structuredClone(gate(`${STEP}#2`));
     const outcome = await submitReviewDecisionAction(RUN, STEP, "conversation-comment", "Tighten the intro");
@@ -224,6 +225,23 @@ describe("#3035 picture regeneration — the decision action on a declared gate 
     expect(p.decision.mock.calls[0][0].decision).toMatchObject({
       runId: RUN, reviewTaskId: STEP, disposition: "comment", comment: "Tighten the intro", reviewedTargets: [POST],
     });
+    expect(gate(STEP)).toMatchObject({ status: "pending", disposition: null });
+    expect(gate(`${STEP}#2`)).toEqual(before);
+  });
+
+  // cinatra#4245 (D2): the prompt window's typed change request on the post's own
+  // leg asks the store, which takes it only when the gate is eligible. While the
+  // picture's leg is pending it is not (another gate of the same review step is
+  // pending), and the store's refusal keeps the plain note.
+  it("keeps a typed change request on the post's own leg a plain note while the picture's leg is pending", async () => {
+    const before = structuredClone(gate(`${STEP}#2`));
+    p.changes.mockResolvedValueOnce({ ok: false, code: "declared-gate-not-eligible", error: "another gate of the same review step is pending" });
+    const outcome = await submitReviewDecisionAction(RUN, STEP, "comment", "Tighten the intro", undefined, null, null, { typedChangeRequest: true });
+
+    expect(outcome).toEqual({ kind: "annotated" });
+    expect(p.changes).toHaveBeenCalledTimes(1);
+    expect(p.changes.mock.calls[0][0]).toMatchObject({ runId: RUN, reviewTaskId: STEP, baseTarget: POST });
+    expect(p.decision).toHaveBeenCalledTimes(1);
     expect(gate(STEP)).toMatchObject({ status: "pending", disposition: null });
     expect(gate(`${STEP}#2`)).toEqual(before);
   });

@@ -15,6 +15,7 @@ import type {
 import {
   mapSubmitResultToOutcome,
   mapChangesRequestedToOutcome,
+  declaredCommentStaysANote,
   reviewBlockedCopy,
   reviewDecideDisabledReason,
   reviewSettledCopy,
@@ -278,6 +279,32 @@ describe("mapChangesRequestedToOutcome — lifecycle prompt-window path (§IV/§
       expect(outcome).toEqual({ kind: "error", message: sentence });
       expect(outcome).not.toEqual({ kind: "error", message: "The change request could not be recorded." });
     }
+  });
+
+  // cinatra#4245 (D2): the refusals of a change request that ends a declared pause.
+  it("M4245a a pause that is gone (moved on, not pending, another pause's gate) blocks as no-longer-pending", () => {
+    for (const code of ["pause-moved-on", "pause-not-pending", "pause-gate-mismatch"]) {
+      expect(mapChangesRequestedToOutcome(fail(code))).toMatchObject({ kind: "blocked", reason: "no-longer-pending" });
+    }
+  });
+
+  it("M4245b a pause held by a resume, unverifiable or not repairable is the retryable error", () => {
+    for (const code of ["pause-held", "pause-unverifiable", "pause-mode-conflict", "pause-not-repairable"]) {
+      expect(mapChangesRequestedToOutcome(fail(code))).toEqual({ kind: "error", message: "The change request could not be recorded." });
+    }
+  });
+
+  it("M4245c a deciding user who is no member of the gate's org is not permitted", () => {
+    expect(mapChangesRequestedToOutcome(fail("declared-gate-not-permitted"))).toMatchObject({ kind: "not-permitted" });
+  });
+
+  it("M4245d only the not-eligible refusal of a declared gate (and a leg the store reads as no lifecycle gate) stays a note", () => {
+    expect(declaredCommentStaysANote(fail("declared-gate-not-eligible"))).toBe(true);
+    expect(declaredCommentStaysANote(fail("not-a-lifecycle-gate"))).toBe(true);
+    for (const code of ["pause-held", "pause-moved-on", "pause-unverifiable", "gate-not-pending", "declared-gate-not-permitted"]) {
+      expect(declaredCommentStaysANote(fail(code))).toBe(false);
+    }
+    expect(declaredCommentStaysANote(ok())).toBe(false);
   });
 });
 

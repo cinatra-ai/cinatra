@@ -777,29 +777,98 @@ describe.skipIf(!HAS_DB)("cinatra#2040 — repair loop (real store)", () => {
     expect(gate!.status).toBe("pending");
   });
 
-  it("SURFACE: a NON-lifecycle (flow-authored wayflow-) gate is rejected — the composer only closes lifecycle gates", async () => {
-    const runId = `run-wf-${randomUUID()}`;
-    const artifactId = `art-${randomUUID()}`;
-    const rev = `rev-${randomUUID()}`;
-    await insertObject(artifactId, "document");
-    const wf = await gateStore.emitArtifactReviewGate({
-      runId,
-      orgId: ORG,
-      reviewTaskId: `wayflow-${randomUUID()}`,
-      targets: [{ artifactId, representationRevisionId: rev }],
-      expiresAt: null,
+  // cinatra#4245 (D2) replaces "SURFACE: a NON-lifecycle (flow-authored wayflow-) gate is
+  // rejected": the step's own `wayflow-` gate now takes a change request when it is
+  // eligible (declared-gate-change-request-4245.integration.test.ts); each case the
+  // issue names as not eligible keeps the plain note (the action maps the refusal
+  // back to the annotation) and writes nothing.
+  describe("SURFACE: a declared (flow-authored wayflow-) gate that is not eligible stays a note (cinatra#4245 Done-when 4)", () => {
+    type Declared = { runId: string; step: string; gateId: string; target: { artifactId: string; representationRevisionId: string } };
+
+    /** A declared step gate of a repair-capable producing run, pinning `targets` (the first is the reviewed one). */
+    async function declaredGate(opts: { targets?: number; repairCapable?: boolean } = {}): Promise<Declared> {
+      const runId = `run-wf-${randomUUID()}`;
+      await seedRepairCapableProducer(runId, opts.repairCapable ?? true);
+      const targets = Array.from({ length: opts.targets ?? 1 }, () => ({
+        artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}`,
+      }));
+      for (const t of targets) await insertObject(t.artifactId, "document");
+      // Inserted as minted (the public mint refuses a combined target set, #3944).
+      const step = `wayflow-${randomUUID()}`;
+      const gateId = randomUUID();
+      await pool(`INSERT INTO "${q(TEST_SCHEMA)}"."artifact_review_gates" (id, run_id, org_id, review_task_id, status, pinned_targets)
+        VALUES ($1,$2,$3,$4,'pending',$5::jsonb)`, [gateId, runId, ORG, step, JSON.stringify(targets)]);
+      return { runId, step, gateId, target: targets[0] };
+    }
+
+    /** The reviewed revision's produced event, naming `address`; marked processed so no sweep of this file takes it. */
+    async function producedNaming(d: Declared, address: string | null, over: Partial<ArtifactProducedEvent> = {}) {
+      const ev = mkEvent({ ...d.target, producerRunId: d.runId, continuationAddress: address, ...over });
+      await outboxStore.emitArtifactProduced(ev, dbMod.db);
+      await pool(`UPDATE "${q(TEST_SCHEMA)}"."artifact_produced_outbox" SET status='processed' WHERE event_id=$1`, [ev.eventId]);
+    }
+
+    async function commentOn(d: Declared, feedback = "please revise") {
+      return crStore.recordReviewSurfaceChangesRequested({
+        runId: d.runId,
+        reviewTaskId: d.step,
+        baseTarget: d.target,
+        currentBaseRevisionId: d.target.representationRevisionId,
+        feedback,
+      });
+    }
+
+    async function stillANote(d: Declared, cr: Awaited<ReturnType<typeof commentOn>>) {
+      expect(cr).toMatchObject({ ok: false, code: "declared-gate-not-eligible" });
+      expect(await gateStore.readReviewGate(d.runId, d.step)).toMatchObject({ status: "pending", disposition: null });
+      const repairs = await pool(`SELECT id FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE gate_id=$1`, [d.gateId]);
+      expect(repairs.rows).toEqual([]);
+    }
+
+    it("G2a an empty comment", async () => {
+      const d = await declaredGate();
+      await producedNaming(d, d.gateId);
+      await stillANote(d, await commentOn(d, "   "));
     });
-    expect(wf.gateId).toBeTruthy();
-    const cr = await crStore.recordReviewSurfaceChangesRequested({
-      runId,
-      reviewTaskId: (await gatesForRun(runId))[0].reviewTaskId,
-      baseTarget: { artifactId, representationRevisionId: rev },
-      currentBaseRevisionId: rev,
-      feedback: "please revise",
+
+    it("G2b a gate that pins two targets", async () => {
+      const d = await declaredGate({ targets: 2 });
+      await producedNaming(d, d.gateId);
+      await stillANote(d, await commentOn(d));
     });
-    expect(cr.ok).toBe(false);
-    if (cr.ok) return;
-    expect(cr.code).toBe("not-a-lifecycle-gate");
+
+    it("G2c another gate of the same review step of the run still pending", async () => {
+      const d = await declaredGate();
+      await producedNaming(d, d.gateId);
+      const sibling = { artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` };
+      await insertObject(sibling.artifactId, "image");
+      await gateStore.emitArtifactReviewGate({ runId: d.runId, orgId: ORG, reviewTaskId: `${d.step}#2`, targets: [sibling], expiresAt: null });
+      await stillANote(d, await commentOn(d));
+    });
+
+    it("G2d no produced event, or one that names no gate or another gate", async () => {
+      const none = await declaredGate();
+      await stillANote(none, await commentOn(none));
+      for (const address of [null, `gate-other-${randomUUID()}`]) {
+        const d = await declaredGate();
+        await producedNaming(d, address);
+        await stillANote(d, await commentOn(d));
+      }
+    });
+
+    it("G2e a produced event of another producing run or org, or on the checkpointed continuation", async () => {
+      for (const over of [{ producerRunId: `run-other-${randomUUID()}` }, { orgId: "org-2040-other" }, { continuationMode: "checkpointed" as const }]) {
+        const d = await declaredGate();
+        await producedNaming(d, d.gateId, over);
+        await stillANote(d, await commentOn(d));
+      }
+    });
+
+    it("G2f a producer that cannot repair", async () => {
+      const d = await declaredGate({ repairCapable: false });
+      await producedNaming(d, d.gateId);
+      await stillANote(d, await commentOn(d));
+    });
   });
 
   it("SURFACE: MULTI-CYCLE — a 2-round repair chain does NOT strand the held effect; approve of the final successor releases it (cinatra#2063 codex fix)", async () => {
@@ -1345,10 +1414,12 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — Regenerate on a declared review leg (
     expect(await gateStore.readReviewGate(f.runId, f.leg2)).toMatchObject({ status: "pending" });
   });
 
-  // C3 option B: the post's own leg keeps main's plain annotation. With a producer
-  // that is not repair-capable the store would otherwise settle the post's gate as
-  // escalated (recordChangesRequested's human route); it must stay pending instead.
-  it("a note on the post's own leg leaves the post gate pending and records no repair, repair-capable or not", async () => {
+  // cinatra#4245 (D2): the post's own leg takes the
+  // change request only when it is eligible; while the picture's leg is pending it
+  // is the issue's "another gate of the same review step is pending" case, and the
+  // note stays a note. With a producer that is not repair-capable the store would
+  // otherwise settle the post's gate as escalated; it must stay pending instead.
+  it("a note on the post's own leg while the picture's leg is pending leaves the post gate pending and records no repair, repair-capable or not", async () => {
     for (const repairCapable of [true, false]) {
       const f = await declaredFamily(repairCapable);
       const cr = await crStore.recordReviewSurfaceChangesRequested({
@@ -1358,7 +1429,7 @@ describe.skipIf(!HAS_DB)("cinatra#4312 — Regenerate on a declared review leg (
         currentBaseRevisionId: f.post.representationRevisionId,
         feedback: "Tighten the intro",
       });
-      expect(cr).toMatchObject({ ok: false, code: "not-a-lifecycle-gate" });
+      expect(cr).toMatchObject({ ok: false, code: "declared-gate-not-eligible" });
       const postGate = await gateStore.readReviewGate(f.runId, f.step);
       expect(postGate).toMatchObject({ status: "pending", disposition: null });
       expect(await gateStore.readReviewGate(f.runId, f.leg2)).toMatchObject({ status: "pending", disposition: null });

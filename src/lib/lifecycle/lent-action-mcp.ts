@@ -804,6 +804,12 @@ export async function handleLentAction(
       actorCtx,
       null,
       null, // A Regenerate carries NO prompt of its own: the typed words ARE the note.
+      // The lent Comment files the words typed to the run's assistant in the
+      // gate's prompt window (inside a conversation, the composer that stands in
+      // for it): design section VI's one channel for requesting changes, so it
+      // names that road (cinatra#4245 D2). The decision bar's Comment button
+      // never does.
+      disposition === "comment" ? { typedChangeRequest: true } : undefined,
     );
     return say({
       ok: outcome.kind === "decided" || outcome.kind === "annotated" || outcome.kind === "changes-requested",

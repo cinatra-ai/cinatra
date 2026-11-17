@@ -22,6 +22,7 @@ import {
   REGENERATE_MULTI_TARGET_REASON,
   REGENERATE_NOT_ON_THIS_REVIEW,
   type ReviewFloorSubmission,
+  declaredCommentStaysANote,
   type ReviewSubmitOutcome,
 } from "@/lib/artifacts/review-surface-model";
 import { isLifecycleReviewOrchestrationActive } from "@/lib/lifecycle/lifecycle-activation";
@@ -103,9 +104,24 @@ export async function submitReviewDecisionAction(
    * The recorded prompt a Regenerate sends back with the note (cinatra#3080 item
    * 5): the words in the Note when the review opened carrying the work's
    * recorded prompt. Passed to the change road as its own value; every other
-   * action ignores it. Deliberately the LAST parameter.
+   * action ignores it. Deliberately after every older parameter; only the
+   * comment road's `options` (cinatra#4245) follows it.
    */
   regeneratePrompt?: string | null,
+  /**
+   * WHICH ROAD a comment came by (cinatra#4245 D2, design section VI).
+   *
+   * `typedChangeRequest` is set ONLY by the run assistant's lent Comment
+   * (`src/lib/lifecycle/lent-action-mcp.ts`), which files the person's own words
+   * typed into the gate's prompt window (inside a conversation, the composer that
+   * stands in for it): section VI's one channel for requesting changes. The
+   * decision bar's Comment button (the page's bound action and the
+   * gate-scoped decide route) never passes it, so a client cannot set it. It
+   * matters only on the step's OWN declared gate, where a change request ends
+   * the run's pause: there the button's Comment stays the non-terminal note
+   * ("leaves the gate pending - nothing resumes, and the run stays paused").
+   */
+  options?: { readonly typedChangeRequest?: boolean },
 ): Promise<ReviewSubmitOutcome> {
   // WHAT WAS ASKED FOR, RESOLVED FIRST. A retired word is answered before an
   // actor is resolved, an access check runs or a gate is read: the refusal is a
@@ -198,6 +214,44 @@ export async function submitReviewDecisionAction(
     return mapChangesRequestedToOutcome(result);
   }
 
+  // THE PROMPT WINDOW'S TYPED CHANGE REQUEST on the step's OWN declared gate
+  // (cinatra#4245 D2, design section VI). A DECLARED review gate (a `wayflow-`
+  // task id, a step the flow declares in its own template) with no `#n` leg
+  // suffix: its change request ENDS the run's pause, and the repair drain stops
+  // the run before the repair run starts. Only the prompt window's typed change
+  // request takes it (the lent Comment, `options.typedChangeRequest`, which no
+  // client can set); the Note-field Comment and the conversation's comment stay
+  // the non-terminal note there. That change request is terminal for the run,
+  // so it also needs the access a terminal decision needs (`approveHitl`); a
+  // reviewer who may only respond keeps the plain annotation. This action does
+  // not read the gate's pin or event; the store decides. Only its not-eligible
+  // refusal falls back to the plain annotation below; every other answer, a
+  // pause refusal included, is mapped to its own outcome.
+  if (action === "comment" && !conversationComment && options?.typedChangeRequest === true) {
+    const endsPause =
+      isDeclaredReviewTaskId(reviewTaskId) && baseReviewTaskId(reviewTaskId) === reviewTaskId;
+    if (
+      endsPause &&
+      note.length > 0 &&
+      isLifecycleReviewOrchestrationActive() &&
+      pinnedTargets.length === 1 &&
+      (await enforceReviewDecisionAccess({ runId, op: "approveHitl", actorCtx })).ok
+    ) {
+      const result = await submitReviewSurfaceChangesRequested({
+        runId,
+        reviewTaskId,
+        baseTarget: pinnedTargets[0],
+        feedback: note,
+        // Named, never defaulted: an omitted origin is the floor's Regenerate.
+        origin: "typed",
+        actorCtx,
+      });
+      if (!declaredCommentStaysANote(result)) {
+        return mapChangesRequestedToOutcome(result);
+      }
+    }
+  }
+
   // THE CONVERSATION'S COMMENT keeps the LIFECYCLE prompt-window road
   // (cinatra#2063; #4339; its own submission since cinatra#3080). When
   // the review-orchestration fence is ON and this is a single-target LIFECYCLE
@@ -232,7 +286,7 @@ export async function submitReviewDecisionAction(
         origin: "typed",
         actorCtx,
       });
-      if (!(declaredGate && !result.ok && result.code === "not-a-lifecycle-gate")) {
+      if (!(declaredGate && declaredCommentStaysANote(result))) {
         return mapChangesRequestedToOutcome(result);
       }
     }

@@ -26,7 +26,7 @@ env:
   TRIAL_RUN_ID: ${{ github.run_id }}
   DOCKER_BUILD_RECORD_UPLOAD: "false"
 jobs:
-  # Source job SHA256: b01c415b1571cc8c2ca4531e11fa7c66f716d48274199c5d12daecf305e55fe2
+  # Source job SHA256: 3cbe893c35c633ad1375efb5a8ab10212aa8f550e70ad821793d1d5a09f1d323
   design:
     name: trial / design / ${{ inputs.cohort }}
     if: ${{ github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && inputs.workload == 'design' && (inputs.cohort == 'standard' || inputs.cohort == 'large') }}
@@ -375,7 +375,7 @@ jobs:
           # on a GitHub-hosted runner. The rebuild runs under the same lock.
           DESIGN_BUILD_LOCK_RUNNER_ENVIRONMENT: ${{ runner.environment }}
           DESIGN_BUILD_LOCK_WAIT_SECONDS: "2700"
-        run: bash scripts/ci/design-build-host-lock.sh bash -c 'pnpm build || bash scripts/ci/design-build-cache.sh rebuild "$?"'
+        run: bash scripts/ci/design-build-host-lock.sh bash scripts/ci/hosted-build-memory-cap.sh run bash -c 'pnpm build || bash scripts/ci/design-build-cache.sh rebuild "$?"'
 
       - name: Keep the design build cache for the next job (self-hosted only)
         # Keeps what the build just wrote for the next job on this runner
@@ -595,7 +595,7 @@ jobs:
           TRIAL_JOB_STATUS: ${{ job.status }}
         run: node scripts/ci/hosted-build-size-trial.mjs finish
 
-  # Source job SHA256: 103ddbd0ce573aa21a46b90b33696e2f1933a94e6adbfcdf86e0987a8b29d974
+  # Source job SHA256: fbb7895e8c735441aefc5179ac014009108e7befacd5d570c2ca562cff0e798f
   dashboard:
     name: trial / dashboard / ${{ inputs.cohort }}
     if: ${{ github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && inputs.workload == 'dashboard' && (inputs.cohort == 'standard' || inputs.cohort == 'large') }}
@@ -833,7 +833,7 @@ jobs:
           trap 'kill "$SAMPLER_PID" 2>/dev/null || true' EXIT
           echo "memory sampler launched as PID ${SAMPLER_PID} writing ${SAMPLE_FILE}"
 
-          pnpm build
+          bash scripts/ci/hosted-build-memory-cap.sh run pnpm build
 
           kill "$SAMPLER_PID" 2>/dev/null || true
 
@@ -961,7 +961,7 @@ jobs:
           TRIAL_JOB_STATUS: ${{ job.status }}
         run: node scripts/ci/hosted-build-size-trial.mjs finish
 
-  # Source job SHA256: 0e6489cff5074092160b76f924dccb6caf741fb1bbed9383545f894b62ae9176
+  # Source job SHA256: 82b67d8b3bb92936dd87daceb30be74c063466d5a4651a7e095dea4897fb158a
   image:
     name: trial / image / ${{ inputs.cohort }}
     if: ${{ github.event_name == 'workflow_dispatch' && github.run_attempt == 1 && inputs.workload == 'image' && (inputs.cohort == 'standard' || inputs.cohort == 'large') }}
@@ -1107,7 +1107,18 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # The buildkit container gets the memory cap of every hosted production
+      # build (scripts/ci/hosted-build-memory-cap.sh): the in-image `next build`
+      # may use the runner's RAM minus a reserve, so a memory squeeze stays
+      # inside the build and the runner keeps answering. Empty on a
+      # self-hosted runner (no cap there).
+      - name: Size the build memory cap (GitHub-hosted only)
+        id: memcap
+        run: bash scripts/ci/hosted-build-memory-cap.sh buildx-opts
+
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: ${{ steps.memcap.outputs.driver_opts }}
 
       # SELF-HOSTED CACHE BACKEND (cinatra#3267). The Actions cache service
       # behind `type=gha` is only served to GitHub-hosted runners: on the

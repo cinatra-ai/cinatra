@@ -228,18 +228,17 @@ describe("the page draws the model, and nothing of the old header survives", () 
 
   // cinatra#3092 (acceptance 2, "the page's pre-dispatch interception of the
   // dashboard row is gone"): no surface of this page returns before the display
-  // dispatch any more. The page draws two headers: the drawn model's, and the
-  // dashboard pointer's, which stands only where the dispatch answered a floor
-  // for a dashboard row (cinatra#4311 deletes it with the pointer). The
-  // Breadcrumb rule is over EVERY frame, so both are titled with the artifact's
-  // display name, never a kind word: the drawn header's title is the model's,
-  // the model is built before either header, and the model titles a row of any
-  // type with the artifact's display name.
-  it("titles every row, whatever its type, with the artifact's name on both headers", () => {
-    expect(source.match(/<PageHeader\b/g) ?? []).toHaveLength(2);
+  // dispatch any more. The page draws one header, the drawn model's: the
+  // dashboard pointer's own header went with the pointer (cinatra#4311). The
+  // Breadcrumb rule is over EVERY frame, so the header is titled with the
+  // artifact's display name, never a kind word: its title is the model's, the
+  // model is built before the header, and the model titles a row of any type
+  // with the artifact's display name.
+  it("titles every row, whatever its type, with the artifact's name on its one header", () => {
+    expect(source.match(/<PageHeader\b/g) ?? []).toHaveLength(1);
     expect(source).toMatch(/const title = header\.title;/);
     expect(source).toMatch(/<PageHeader\s+title=\{title\}/);
-    expect(source).toMatch(/<PageHeader\s+title=\{artifactDisplayTitle\(artifact\)\}/);
+    expect(source).not.toMatch(/<PageHeader\s+title=\{artifactDisplayTitle\(artifact\)\}/);
     const modelAt = source.indexOf("const header = buildArtifactDetailHeader(");
     expect(modelAt).toBeGreaterThan(-1);
     expect(modelAt).toBeLessThan(source.indexOf("<PageHeader"));

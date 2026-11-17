@@ -8,7 +8,9 @@
  * passing through unchanged, and the campaigns shape keeps being shaped.
  *
  * Drives the real route; the run store, the bridge auth, the run binding, the
- * actor builder and the primitive handlers are test doubles.
+ * actor builder and the primitive handlers are test doubles. The objects_save
+ * double returns the shape the real handler returns (`objectId`, not `id`);
+ * the type check below pins it to that handler's return type.
  *
  *   pnpm exec vitest run src/app/api/agents/passthrough/__tests__/passthrough-objects-save-shape-closed-3035.test.ts
  */
@@ -44,6 +46,19 @@ vi.mock("@cinatra-ai/llm/actor-context", () => ({
 }));
 
 import { POST } from "@/app/api/agents/passthrough/route";
+import type { createObjectsPrimitiveHandlers } from "@cinatra-ai/objects/mcp-handlers";
+
+// The real objects_save handler's return type. The double below must satisfy
+// it, so a double with an `id` key (a shape the handler never returns) or
+// without `objectId` fails the typecheck.
+type ObjectsSaveResult = Awaited<
+  ReturnType<ReturnType<typeof createObjectsPrimitiveHandlers>["objects_save"]>
+>;
+const SAVED = {
+  objectId: "obj-1",
+  type: "@cinatra-ai/campaigns:context",
+  isNew: true,
+} satisfies Partial<ObjectsSaveResult> & Pick<ObjectsSaveResult, "objectId">;
 
 const RUN = { id: "run-3035", orgId: "org-1", runBy: "user-1", oboCeiling: null };
 
@@ -65,7 +80,7 @@ function req(input: Record<string, unknown>) {
 
 beforeEach(() => {
   h.readAgentRunById.mockReset().mockResolvedValue(RUN);
-  h.objectsSave.mockReset().mockResolvedValue({ id: "obj-1" });
+  h.objectsSave.mockReset().mockResolvedValue(SAVED);
 });
 
 afterAll(() => {

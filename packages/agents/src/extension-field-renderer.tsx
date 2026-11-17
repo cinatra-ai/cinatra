@@ -16,20 +16,21 @@
 import {
   Component as ReactComponent,
   createElement,
+  useContext,
   useEffect,
   useState,
   type ComponentType,
   type ReactNode,
 } from "react";
 import type { FieldRendererProps } from "./field-renderer-registry";
-import { SchemaOnlyFloorRenderer } from "./schema-field-renderer";
+import { RendererFloorReportContext, SchemaOnlyFloorRenderer } from "./schema-field-renderer";
 import { loadFieldRendererComponent } from "./field-renderer-components";
 
 /** Render-time containment: an extension renderer that throws while rendering is
  * caught and replaced by the floor (the pre-render degrade classes are handled
  * by the loader; this covers the throw-during-render half). */
 class FieldRendererErrorBoundary extends ReactComponent<
-  { fallback: ReactNode; children?: ReactNode },
+  { fallback: ReactNode; onCrash?: () => void; children?: ReactNode },
   { crashed: boolean }
 > {
   state = { crashed: false };
@@ -44,6 +45,7 @@ class FieldRendererErrorBoundary extends ReactComponent<
       "[field-renderer] extension renderer threw during render; showing SchemaFieldRenderer floor",
       error,
     );
+    this.props.onCrash?.();
   }
 
   render(): ReactNode {
@@ -64,6 +66,17 @@ export function makeExtensionFieldRenderer(
       ComponentType<FieldRendererProps> | null
     >(null);
     const [degraded, setDegraded] = useState(false);
+    const [crashed, setCrashed] = useState(false);
+    // cinatra#3035: THIS instance tells the host that mounted it whether it settled
+    // on the floor (a degrade or a render-time throw), which commits no pick. The
+    // load window counts as not floored: the component may still mount. Nothing is
+    // shared by binding id, so a remount or a second instance of the id starts over.
+    const reportFloor = useContext(RendererFloorReportContext);
+    const floored = degraded || crashed;
+    useEffect(() => {
+      reportFloor?.(floored);
+    }, [floored, reportFloor]);
+    useEffect(() => () => reportFloor?.(false), [reportFloor]);
 
     useEffect(() => {
       let alive = true;
@@ -114,7 +127,7 @@ export function makeExtensionFieldRenderer(
     if (degraded || resolved === null) return floor;
     return createElement(
       FieldRendererErrorBoundary,
-      { fallback: floor },
+      { fallback: floor, onCrash: () => setCrashed(true) },
       createElement(resolved, props),
     );
   }

@@ -115,7 +115,7 @@ jobs:
         # step in build-image.yml (a 3-worker build next to the service
         # containers hung the runner until the job cap).
         CINATRA_BUILD_CPUS: "1"
-      run: bash scripts/ci/design-build-host-lock.sh pnpm build
+      run: bash scripts/ci/design-build-host-lock.sh bash scripts/ci/hosted-build-memory-cap.sh run pnpm build
     - name: Derive CINATRA_CONFORMANCE_SEED_TOKEN (throwaway, per-run)
       run: |
         set -euo pipefail
