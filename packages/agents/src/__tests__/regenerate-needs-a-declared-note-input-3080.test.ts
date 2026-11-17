@@ -147,37 +147,6 @@ const REGENERATE_ENTRY = { artifactNode: FILING_NODE, step: "image_flow", noteIn
 /** The ledger read of the reviewed revision's verified filing node. */
 const filedBy = (node: string | null) => [{ verifiedStepId: node }];
 
-/** Run the canonical operation's transaction on a fake `tx` that records every
- *  inserted value and stops at the `lifecycle_repair` insert (the one value
- *  that carries an `idempotencyKey`), so the test reads exactly what the
- *  repair row would have stored. */
-function captureRepairInsert(): unknown[] {
-  const inserted: unknown[] = [];
-  const chain = (result: unknown[]): Record<string, unknown> => {
-    const c: Record<string, unknown> = {};
-    for (const m of ["select", "from", "where", "for", "limit", "set", "innerJoin", "onConflictDoNothing", "orderBy"]) {
-      c[m] = () => c;
-    }
-    c.returning = async () => result;
-    c.then = (resolve: (rows: unknown[]) => unknown, reject: (err: unknown) => unknown) =>
-      Promise.resolve(result).then(resolve, reject);
-    return c;
-  };
-  const tx = {
-    select: () => chain([]),
-    update: () => chain([{ id: "gate-3080-mf2", orgId: "org-3080-mf2" }]),
-    insert: () => ({
-      values: (value: Record<string, unknown>) => {
-        inserted.push(value);
-        if ("idempotencyKey" in value) throw new Error("captured the lifecycle_repair insert");
-        return chain([]);
-      },
-    }),
-  };
-  ports.transaction.mockImplementationOnce((async (fn: (t: unknown) => Promise<unknown>) => fn(tx)) as never);
-  return inserted;
-}
-
 describe("cinatra#3080 — Regenerate needs the producing step's declared Note input", () => {
   it("REFUSES a repair-capable agent whose producing step declares no Note input, with the plain reason, and writes nothing", async () => {
     const result = await press("regenerate");
@@ -244,42 +213,49 @@ describe("cinatra#3080 — Regenerate needs the producing step's declared Note i
     expect(ports.reads).toEqual([]);
   });
 
-  it("2. ADMITS a regenerate-only declaration for the verified filing node, and the repair names that node", async () => {
+  it("2. a regenerate-only declaration for the verified filing node passes the declaration, and is REFUSED because no step road dispatches it: nothing written", async () => {
     ports.reads[1] = [{ lifecycleConfig: await compiledLifecycleText({ regenerate: [REGENERATE_ENTRY] }) }];
     // The base type read (none), then the ledger read of the filing node.
     ports.reads.splice(2, 0, [], filedBy(FILING_NODE));
-    ports.reads.push([{ id: "gate-3080-mf2", runId: RUN, reviewTaskId: TASK, orgId: "org-3080-mf2" }]);
-    const inserted = captureRepairInsert();
-    await press("regenerate");
+    const result = await press("regenerate");
 
-    expect(ports.transaction).toHaveBeenCalledTimes(1);
+    // THE STANDING REVIEW OF UNIT 4571-std-1117: a Regenerate recorded here was
+    // never dispatched (the drain does not run one), so the gate settled with no
+    // repair and no successor review. It is refused instead, with the step
+    // road's reason, not the missing-declaration one.
+    const { REGENERATE_NO_STEP_ROAD, REGENERATE_NO_NOTE_INPUT } = await import("@/lib/artifacts/review-surface-model");
+    expect(result).toEqual({ ok: false, code: "regenerate-unavailable", error: REGENERATE_NO_STEP_ROAD });
+    expect(REGENERATE_NO_STEP_ROAD).not.toBe(REGENERATE_NO_NOTE_INPUT);
+    expect(ports.transaction).not.toHaveBeenCalled();
+    expect(ports.write).not.toHaveBeenCalled();
     expect(ports.reads).toEqual([]);
-    const repair = inserted.find((v) => "idempotencyKey" in (v as object)) as Record<string, unknown>;
-    expect(repair).toBeDefined();
-    expect(repair.regenerateNodeId).toBe(FILING_NODE);
-    expect(repair.route).toBe("producer_repair");
-    expect(repair.status).toBe("requested");
   });
 
-  it("3. when both are declared and disagree, the regenerate entry decides: its node is recorded, and an unproven filing node refuses", async () => {
+  it("no step road dispatches a Regenerate at this head (the real answer, not replaced)", async () => {
+    const { regenerateStepRoadDispatches } = await import("../regenerate-step-road");
+    expect(regenerateStepRoadDispatches()).toBe(false);
+  });
+
+  it("3. when both are declared and disagree, the regenerate entry decides: its node passes to the step-road refusal, and an unproven filing node refuses as undeclared", async () => {
     const both = await compiledLifecycleText({
       repairCapable: true,
       repairFindingsInput: { input: "instructions" },
       regenerate: [REGENERATE_ENTRY],
     });
-    // (a) The verified filing node has the entry: admitted under THAT entry.
+    const { REGENERATE_NO_STEP_ROAD, REGENERATE_NO_NOTE_INPUT } = await import("@/lib/artifacts/review-surface-model");
+    // (a) The verified filing node has the entry: admitted under THAT entry, so
+    // the root findings input does not turn it into an ordinary repair. No step
+    // road: refused, nothing written.
     ports.reads[1] = [{ lifecycleConfig: both }];
     ports.reads.splice(2, 0, filedBy(FILING_NODE));
-    ports.reads.push([{ id: "gate-3080-mf2", runId: RUN, reviewTaskId: TASK, orgId: "org-3080-mf2" }]);
-    const inserted = captureRepairInsert();
-    await press("regenerate");
-    const repair = inserted.find((v) => "idempotencyKey" in (v as object)) as Record<string, unknown>;
-    expect(repair?.regenerateNodeId).toBe(FILING_NODE);
+    const admitted = await press("regenerate");
+    expect(admitted).toEqual({ ok: false, code: "regenerate-unavailable", error: REGENERATE_NO_STEP_ROAD });
+    expect(ports.transaction).not.toHaveBeenCalled();
+    expect(ports.write).not.toHaveBeenCalled();
     expect(ports.reads).toEqual([]);
 
     // (b) Another node filed the revision: the root findings input does not
-    // stand in for the missing entry. Refused, nothing written.
-    ports.transaction.mockClear();
+    // stand in for the missing entry. Refused as undeclared, nothing written.
     ports.reads = [
       [{ templateId: "tmpl-3080-mf2" }],
       [{ lifecycleConfig: both }],
@@ -288,9 +264,7 @@ describe("cinatra#3080 — Regenerate needs the producing step's declared Note i
       [{ status: "pending" }],
     ];
     const refused = await press("regenerate");
-    expect(refused.ok).toBe(false);
-    if (refused.ok) throw new Error("unreachable");
-    expect(refused.code).toBe("regenerate-unavailable");
+    expect(refused).toEqual({ ok: false, code: "regenerate-unavailable", error: REGENERATE_NO_NOTE_INPUT });
     expect(ports.transaction).not.toHaveBeenCalled();
     expect(ports.reads).toEqual([]);
   });

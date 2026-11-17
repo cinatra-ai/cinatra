@@ -742,6 +742,14 @@ export const REGENERATE_NOT_ON_THIS_REVIEW =
 export const REGENERATE_NO_NOTE_INPUT =
   "The step that made this work does not name an input for the note, so Regenerate is not available on this review. Comment or Continue instead.";
 
+/**
+ * The answer when the step DOES name its Note input, but this server cannot yet
+ * run that one step again (cinatra#4264's step road is not present). Nothing is
+ * recorded: the gate stays PENDING, and Comment and Continue work as usual.
+ */
+export const REGENERATE_NO_STEP_ROAD =
+  "Running the step that made this work again is not available yet, so Regenerate is not available on this review. Comment or Continue instead.";
+
 /** The same refusal, for a lineage that has already been remade as many times as
  *  a review allows; reaching the bound leaves the gate pending. */
 export const REGENERATE_BOUND_REACHED =

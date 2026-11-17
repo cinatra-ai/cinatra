@@ -28,7 +28,22 @@
  *   SUPABASE_DB_URL=postgres://…/cinatra_lane_3080 \
  *     pnpm exec vitest run --config vitest.integration.config.ts src/__tests__/review-floor-3080.integration.test.ts
  */
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+
+// THE STEP ROAD (cinatra#4264) IS THE ONE PORT SET HERE, and it is set openly.
+// At this head no step road dispatches a Regenerate, so the canonical operation
+// refuses every admitted Regenerate before any write (`regenerateStepRoadDispatches`
+// is false; its real answer is pinned in the unit file
+// regenerate-needs-a-declared-note-input-3080.test.ts, and the describe "no step
+// road" below proves that refusal on the real store). Item 4's record mechanics
+// (superseded, one lineage, idempotent, stale, the prompt as its own finding) are
+// what the step road dispatches once it lands, so they are proven here with the
+// road present. Nothing else is replaced: the declaration read, the ledger read
+// and the store are the real ones.
+const stepRoad = vi.hoisted(() => ({ dispatches: true }));
+vi.mock("../regenerate-step-road", () => ({
+  regenerateStepRoadDispatches: () => stepRoad.dispatches,
+}));
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 
@@ -424,6 +439,35 @@ describe.skipIf(!HAS_DB)("item 3 — Comment records the note and changes NOTHIN
     const after = await gateRow(runId, reviewTaskId);
     expect(after?.status).toBe("pending");
     expect(await repairRowsFor(after!.id)).toHaveLength(0);
+  });
+});
+
+// THE STANDING REVIEW OF UNIT 4571-std-1117: a Regenerate recorded at this head
+// was never dispatched (the ordinary drain does not run one), so the gate settled
+// with no repair dispatched and no successor review. With no step road, a fully
+// declared Regenerate on a verified filing node is refused before any write: the
+// gate stays pending, no repair row exists, and the drain has nothing to strand.
+describe.skipIf(!HAS_DB)("no step road — an admitted Regenerate is refused, and nothing is recorded", () => {
+  it("a declared Regenerate on the verified filing node is refused with the step road's reason; the gate stays pending, no repair row", async () => {
+    stepRoad.dispatches = false;
+    try {
+      const runId = await seedRun({ declaresRootFindingsInput: true });
+      const base = target();
+      const reviewTaskId = await emitLifecycleGate(runId, [base]);
+      const runBefore = await runStatus(runId);
+
+      const result = await regenerate(runId, reviewTaskId, base, "make the sky bluer");
+      const { REGENERATE_NO_STEP_ROAD } = await import("@/lib/artifacts/review-surface-model");
+      expect(result).toEqual({ ok: false, code: "regenerate-unavailable", error: REGENERATE_NO_STEP_ROAD });
+      const after = await gateRow(runId, reviewTaskId);
+      expect(after?.status).toBe("pending");
+      expect(after?.disposition ?? null).toBeNull();
+      expect(await repairRowsFor(after!.id)).toHaveLength(0);
+      expect(await gateRowsFor(runId)).toHaveLength(1);
+      expect(await runStatus(runId)).toBe(runBefore);
+    } finally {
+      stepRoad.dispatches = true;
+    }
   });
 });
 

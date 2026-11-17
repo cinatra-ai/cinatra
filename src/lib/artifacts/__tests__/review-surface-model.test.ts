@@ -25,6 +25,7 @@ import {
   REVIEW_DISPOSITIONS,
   REGENERATE_BOUND_REACHED,
   REGENERATE_NO_NOTE_INPUT,
+  REGENERATE_NO_STEP_ROAD,
 } from "../review-surface-model";
 import type { ReviewSettledOutcome } from "../review-surface-model";
 import { reviewTargetRowFacts } from "../review-target-row-facts";
@@ -268,11 +269,12 @@ describe("mapChangesRequestedToOutcome — lifecycle prompt-window path (§IV/§
   });
 
   // cinatra#3080 item 4: a Regenerate the store refused BEFORE any write (the
-  // producing step declares no Note input, or the lineage reached its repair bound). The
+  // producing step declares no Note input, no step road can rerun it, or the lineage
+  // reached its repair bound). The
   // gate is still pending, so it is NOT a block, and the person reads the
   // store's own sentence verbatim, never the generic retry line.
   it("a refused Regenerate (regenerate-unavailable) is an error carrying the store's sentence verbatim, never a block", () => {
-    for (const sentence of [REGENERATE_NO_NOTE_INPUT, REGENERATE_BOUND_REACHED]) {
+    for (const sentence of [REGENERATE_NO_NOTE_INPUT, REGENERATE_NO_STEP_ROAD, REGENERATE_BOUND_REACHED]) {
       expect(typeof sentence).toBe("string");
       expect(sentence.length).toBeGreaterThan(0);
       const outcome = mapChangesRequestedToOutcome({ ok: false, code: "regenerate-unavailable", error: sentence });

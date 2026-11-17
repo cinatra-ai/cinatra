@@ -92,7 +92,9 @@ import { createdAtMicrosSql, laterDeclaredPause } from "./declared-review-pause"
 import {
   REGENERATE_BOUND_REACHED,
   REGENERATE_NO_NOTE_INPUT,
+  REGENERATE_NO_STEP_ROAD,
 } from "@/lib/artifacts/review-surface-model";
+import { regenerateStepRoadDispatches } from "./regenerate-step-road";
 
 /** The store's executor: the pool, or the caller's open transaction. */
 type RepairStoreExecutor =
@@ -194,7 +196,9 @@ export interface RecordChangesRequestedInput {
    * the plain reason, before anything is written. A recorded Regenerate stores
    * the entry's `artifactNode` as the repair's `regenerate_node_id` (the
    * Regenerate intent), so its dispatch re-derives the same entry and never
-   * runs it as an ordinary repair. Ignored by the `typed` road.
+   * runs it as an ordinary repair. While no step road dispatches a Regenerate
+   * (`regenerateStepRoadDispatches`), an admitted Regenerate is refused before
+   * anything is written. Ignored by the `typed` road.
    */
   regenerateEntry?: { artifactNode: string; step: string; noteInput: string } | null;
   /**
@@ -511,6 +515,17 @@ export async function recordChangesRequested(
   const regenerateNodeId = regenerateEntry?.artifactNode.trim() ?? "";
   if (input.origin === "regenerate" && (declaredNoteInput.length === 0 || regenerateNodeId.length === 0)) {
     return { ok: false, code: "regenerate-unavailable", error: REGENERATE_NO_NOTE_INPUT };
+  }
+  // A REGENERATE THAT NOTHING CAN DISPATCH IS NOT RECORDED (cinatra#3080 on
+  // cinatra#4264). The step names its Note input, but only the step road reruns
+  // that one step with the Note there, and the ordinary drain never runs a
+  // Regenerate (it escalates one). Recording it would settle the gate with no
+  // repair dispatched and no successor review ever opened. So, while the step
+  // road is absent (`regenerateStepRoadDispatches`), it is refused here, before
+  // the lineage reads and the transaction: nothing is written and the gate is
+  // left pending with the plain reason on screen.
+  if (input.origin === "regenerate" && !regenerateStepRoadDispatches()) {
+    return { ok: false, code: "regenerate-unavailable", error: REGENERATE_NO_STEP_ROAD };
   }
 
   const derived = await deriveDecidedGateLineage(request.gateId);
