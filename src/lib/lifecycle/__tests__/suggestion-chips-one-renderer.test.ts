@@ -214,11 +214,20 @@ function moduleKey(path: string): string {
   return bare.endsWith("/index") ? bare.slice(0, -"/index".length) : bare;
 }
 
+/**
+ * The repository path a relative or `@/` specifier names (`@/` is `src/`),
+ * normalized as the resolver reads it: `.` and `..` segments folded and a
+ * trailing slash dropped, so `@/app/./x` is `src/app/x` (pre-review 2 of the
+ * forward of #4571).
+ */
+function specifierPath(path: string, specifier: string): string {
+  const joined = specifier.startsWith("@/") ? `src/${specifier.slice(2)}` : posix.join(posix.dirname(path), specifier);
+  return posix.normalize(joined).replace(/\/+$/, "");
+}
+
 /** The repository modules a file names by a relative or `@/` path (`@/` is `src/`). */
 function namedModules(path: string, source: string): string[] {
-  return [...source.matchAll(MODULE_PATH_LITERAL)].map((m) =>
-    moduleKey(m[1].startsWith("@/") ? `src/${m[1].slice(2)}` : posix.join(posix.dirname(path), m[1])),
-  );
+  return [...source.matchAll(MODULE_PATH_LITERAL)].map((m) => moduleKey(specifierPath(path, m[1])));
 }
 
 /** Every non-test module that names one of `entries` by its module path. */
@@ -232,46 +241,67 @@ function entryImporters(files: { path: string; source: string }[], entries: stri
 }
 
 /**
- * EVERY import edge that reaches a review decision entry, over any number of
- * hops: `A -> B` where A is a non-test module and B (a module key) is an entry
- * or a module that itself reaches one. The importer pin above reads one hop
- * only, so a new page that imports the allowed scoped run routes would mount
- * the review page through them unseen (pre-review 1 of #4571's forward). The
- * allowed chains are pinned exactly: the scoped run pages -> the scoped run
- * routes -> the review page. Nothing reaches the decide route.
+ * Every import edge, written as a relative or `@/` module path in a string
+ * literal, that reaches a review decision entry over any number of hops:
+ * `A -> B` where A is a non-test file and B is an entry FILE or a file that
+ * itself reaches one. The importer pin above reads one hop only, so a new page
+ * that imports the allowed scoped run routes would mount the review page
+ * through them unseen (pre-review 1 of #4571's forward). Modules are files:
+ * `x.tsx` and `x/index.ts` are two (pre-review 2). The allowed chains are
+ * pinned exactly: the scoped run pages -> the scoped run routes -> the review
+ * page. Nothing reaches the decide route. A bare package specifier and a path
+ * assembled at runtime are out of this scan's scope.
  */
 const ENTRY_CHAINS = [
-  "src/app/organizations/[id]/agents/[...launch]/page.tsx -> src/app/scoped-launch-routes",
-  "src/app/organizations/[id]/assistants/[...launch]/page.tsx -> src/app/scoped-launch-routes",
-  "src/app/personal/agents/[...launch]/page.tsx -> src/app/scoped-launch-routes",
-  "src/app/personal/assistants/[...launch]/page.tsx -> src/app/scoped-launch-routes",
-  "src/app/projects/[projectId]/agents/[...launch]/page.tsx -> src/app/scoped-launch-routes",
-  "src/app/projects/[projectId]/assistants/[...launch]/page.tsx -> src/app/scoped-launch-routes",
-  "src/app/scoped-launch-routes.tsx -> src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page",
-  "src/app/teams/[teamId]/agents/[...launch]/page.tsx -> src/app/scoped-launch-routes",
-  "src/app/teams/[teamId]/assistants/[...launch]/page.tsx -> src/app/scoped-launch-routes",
-  "src/app/workspace/agents/[...launch]/page.tsx -> src/app/scoped-launch-routes",
-  "src/app/workspace/assistants/[...launch]/page.tsx -> src/app/scoped-launch-routes",
+  "src/app/organizations/[id]/agents/[...launch]/page.tsx -> src/app/scoped-launch-routes.tsx",
+  "src/app/organizations/[id]/assistants/[...launch]/page.tsx -> src/app/scoped-launch-routes.tsx",
+  "src/app/personal/agents/[...launch]/page.tsx -> src/app/scoped-launch-routes.tsx",
+  "src/app/personal/assistants/[...launch]/page.tsx -> src/app/scoped-launch-routes.tsx",
+  "src/app/projects/[projectId]/agents/[...launch]/page.tsx -> src/app/scoped-launch-routes.tsx",
+  "src/app/projects/[projectId]/assistants/[...launch]/page.tsx -> src/app/scoped-launch-routes.tsx",
+  "src/app/scoped-launch-routes.tsx -> src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
+  "src/app/teams/[teamId]/agents/[...launch]/page.tsx -> src/app/scoped-launch-routes.tsx",
+  "src/app/teams/[teamId]/assistants/[...launch]/page.tsx -> src/app/scoped-launch-routes.tsx",
+  "src/app/workspace/agents/[...launch]/page.tsx -> src/app/scoped-launch-routes.tsx",
+  "src/app/workspace/assistants/[...launch]/page.tsx -> src/app/scoped-launch-routes.tsx",
 ];
 
-/** The edges of the import graph that reach one of `entries`, transitively (fixpoint). */
+/**
+ * The FILES a file names by a relative or `@/` path: every known file the
+ * specifier can resolve to (`x`, `x.ts`, `x.tsx`, `x.js`, `x/index.ts`, ...).
+ * Fail closed: when two files can answer one specifier, both are named.
+ */
+function namedFiles(path: string, source: string, byKey: Map<string, string[]>): string[] {
+  const out = new Set<string>();
+  for (const m of source.matchAll(MODULE_PATH_LITERAL)) {
+    for (const file of byKey.get(moduleKey(specifierPath(path, m[1]))) ?? []) out.add(file);
+  }
+  return [...out].sort();
+}
+
+/** The edges of the import graph, between FILES, that reach one of `entries`, transitively (fixpoint). */
 function entryChains(files: { path: string; source: string }[], entries: string[]): string[] {
   const live = files.filter((f) => !TEST_FILE.test(f.path));
-  const reach = new Set(entries.map(moduleKey));
+  const byKey = new Map<string, string[]>();
+  for (const file of new Set([...files.map((f) => f.path), ...entries])) {
+    const key = moduleKey(file);
+    byKey.set(key, [...(byKey.get(key) ?? []), file]);
+  }
+  const reach = new Set(entries);
   const edges = new Set<string>();
   for (let grew = true; grew; ) {
     grew = false;
     for (const f of live) {
-      const own = moduleKey(f.path);
-      for (const key of namedModules(f.path, f.source)) {
-        if (key === own || !reach.has(key)) continue;
-        const edge = `${f.path} -> ${key}`;
+      for (const file of namedFiles(f.path, f.source, byKey)) {
+        // Only a file naming ITSELF is no edge; two distinct files always are.
+        if (file === f.path || !reach.has(file)) continue;
+        const edge = `${f.path} -> ${file}`;
         if (!edges.has(edge)) {
           edges.add(edge);
           grew = true;
         }
-        if (!reach.has(own)) {
-          reach.add(own);
+        if (!reach.has(f.path)) {
+          reach.add(f.path);
           grew = true;
         }
       }
@@ -437,9 +467,28 @@ describe("ONE decision path carries the marks", () => {
     const viaTest = { path: "src/app/duplicate/page.test.tsx", source: duplicate.source };
     expect(entryImporters([routes, duplicate], REVIEW_DECISION_ENTRIES)).toEqual([routes.path]);
     expect(entryChains([routes, duplicate, viaTest, nearMiss], REVIEW_DECISION_ENTRIES)).toEqual(
-      [`${duplicate.path} -> src/app/scoped-launch-routes`, `${routes.path} -> src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page`].sort(),
+      [`${duplicate.path} -> ${routes.path}`, `${routes.path} -> src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx`].sort(),
     );
-    expect(entryChains([routes, duplicate, delegate], [decide])).toEqual([`${delegate.path} -> ${decide.replace(/\.ts$/, "")}`]);
+    expect(entryChains([routes, duplicate, delegate], [decide])).toEqual([`${delegate.path} -> ${decide}`]);
+    // The resolver's equivalents (pre-review 2 of the forward). A `.` segment in
+    // an `@/` path names the same routes file, so the page is named.
+    const dotted = {
+      path: "src/app/dotted/agents/[...launch]/page.tsx",
+      source: duplicate.source.replace('"@/app/scoped-launch-routes"', '"@/app/./scoped-launch-routes"'),
+    };
+    expect(dotted.source).toContain('from "@/app/./scoped-launch-routes";');
+    expect(entryChains([routes, dotted], REVIEW_DECISION_ENTRIES)).toEqual(
+      [`${dotted.path} -> ${routes.path}`, `${routes.path} -> src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx`].sort(),
+    );
+    // A folder `index` beside the routes file is a second module, not the
+    // routes themselves: its re-export of the routes file is an edge.
+    const folderIndex = {
+      path: "src/app/scoped-launch-routes/index.ts",
+      source: 'export { ScopedAgentsRoute } from "../scoped-launch-routes.tsx";',
+    };
+    expect(entryChains([routes, folderIndex], REVIEW_DECISION_ENTRIES)).toEqual(
+      [`${folderIndex.path} -> ${routes.path}`, `${routes.path} -> src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx`].sort(),
+    );
   });
 
   it("no route is named for per-item suggestion decisions", () => {
