@@ -60,11 +60,11 @@ describe("the loader's selected source, read before dispatch", () => {
  it("binds the loader's three digests and graph to the dispatch context", async () => {
   env();
   const f = answer({ label: "v/s", selectedSourceBinding: binding });
-  const p = await selectWayflowRunStepToolPolicy({ agentUrl: "http://wayflow.test:3010/agents/cinatra-ai/some-agent/", contextId: "ctx-1" }, f as unknown as typeof fetch);
+  const p = await selectWayflowRunStepToolPolicy({ agentUrl: "http://wayflow.test:3010/agents/cinatra-ai/blog-pipeline-agent/", contextId: "ctx-1" }, f as unknown as typeof fetch);
   expect(p).toEqual({ version: 1, contextId: "ctx-1", sourceSha256: binding.sourceSha256, executedSourceSha256: binding.executedSourceSha256, declarationSourceSha256: binding.declarationSourceSha256, source: graph });
   expect(Object.isFrozen(p)).toBe(true);
   const [url, init] = f.mock.calls[0]!;
-  expect(String(url)).toBe("http://wayflow.test:3010/.internal/composed-oas/cinatra-ai/some-agent");
+  expect(String(url)).toBe("http://wayflow.test:3010/.internal/composed-oas/cinatra-ai/blog-pipeline-agent");
   expect(init).toMatchObject({ headers: { "X-Cinatra-Bridge-Token": "bridge-test-value" }, redirect: "error", cache: "no-store" });
  });
 
