@@ -12,6 +12,9 @@
  *     declared answer); the card draws no send of its own, so the host's one
  *     Continue sends it (drawings: app-artifact-review I.4 and I.5,
  *     app-lifecycle-cards V.1);
+ *   - design#243 V.1 draws it: each fact is its declared label over the value
+ *     as text, with no box; the decision is one answer row per declared
+ *     answer inside the card's fields, never a footer of buttons;
  *   - only an http(s) run value is drawn as a link; a missing value draws no line;
  *   - the declaration is validated again at registration: an invalid screen,
  *     an unknown or inherited kind name, or a kind whose host entry is only
@@ -27,7 +30,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen as dom } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen as dom, within } from "@testing-library/react";
 
 import {
   fieldRendererRegistry,
@@ -146,9 +149,9 @@ describe("a declared card is drawn by the host (cinatra#3470)", () => {
   it("draws the declared title, facts, words, quote and note from the run value", () => {
     mount(VALUE);
     expect(dom.getByText("Send this fixture out?")).toBeTruthy();
-    expect(dom.getByText("Account:")).toBeTruthy();
-    expect(dom.getByText("Fixture Account", { exact: false })).toBeTruthy();
-    expect(dom.getByText("Destination (organization):")).toBeTruthy();
+    expect(dom.getByText("Account")).toBeTruthy();
+    expect(dom.getByText("Fixture Account")).toBeTruthy();
+    expect(dom.getByText("Destination (organization)")).toBeTruthy();
     expect(dom.getByText("The words that go out")).toBeTruthy();
     expect(dom.getByText(/Line one\.\s+Line two\./)).toBeTruthy();
     expect(dom.getByText("A fixture excerpt.")).toBeTruthy();
@@ -156,24 +159,74 @@ describe("a declared card is drawn by the host (cinatra#3470)", () => {
     const link = dom.getByRole("link", { name: "https://example.test/source" });
     expect(link.getAttribute("href")).toBe("https://example.test/source");
     // The card draws the declared decisions and no Continue of its own.
-    expect(dom.getByRole("button", { name: "Do not send" })).toBeTruthy();
-    expect(dom.getByRole("button", { name: "Send it" })).toBeTruthy();
+    expect(dom.getByRole("radio", { name: "Do not send" })).toBeTruthy();
+    expect(dom.getByRole("radio", { name: "Send it" })).toBeTruthy();
     expect(dom.queryByRole("button", { name: /continue/i })).toBeNull();
+  });
+
+  it("draws each fact as its declared label over the value as text, with no box (design#243 V.1)", () => {
+    mount(VALUE);
+    for (const [label, text] of [
+      ["Account", "Fixture Account"],
+      ["Destination (organization)", "Fixture Org"],
+      ["Source", "https://example.test/source"],
+    ]) {
+      const labelEl = dom.getByText(label);
+      const fact = labelEl.parentElement!;
+      // Two lines: the label first, the value beneath it, and nothing else.
+      expect(fact.children.length).toBe(2);
+      expect(fact.children[0]).toBe(labelEl);
+      expect(fact.children[1].textContent).toBe(text);
+      expect(fact.textContent).toBe(`${label}${text}`);
+      // Stacked, not run in one line after a colon.
+      expect(fact.className).toMatch(/\bgrid\b/);
+      // No box around it: nothing on the card suggests it can be changed.
+      for (const el of [fact, ...Array.from(fact.querySelectorAll("*"))]) {
+        expect(el.className.toString()).not.toMatch(/(^|\s)border(\s|$|-)/);
+        expect(el.tagName).not.toBe("INPUT");
+      }
+    }
+  });
+
+  it("draws one answer row per declared answer in the card's fields, never footer buttons (design#243 V.1)", () => {
+    mount(VALUE);
+    expect(document.querySelector('[data-slot="card-footer"]')).toBeNull();
+    expect(dom.queryByRole("button", { name: "Do not send" })).toBeNull();
+    expect(dom.queryByRole("button", { name: "Send it" })).toBeNull();
+    const group = dom.getByRole("radiogroup", { name: "Send this fixture out?" });
+    expect(group.closest('[data-slot="card-content"]')).not.toBeNull();
+    const rows = within(group).getAllByRole("radio");
+    expect(rows.map((r) => r.closest("label")?.textContent)).toEqual(["Do not send", "Send it"]);
+    // Nothing is chosen for the person.
+    expect(rows.map((r) => r.getAttribute("aria-checked"))).toEqual(["false", "false"]);
+    // Each row is one bordered line holding its radio and the declared label.
+    for (const r of rows) {
+      const row = r.closest("label")!;
+      expect(row.className).toMatch(/\bborder\b/);
+      expect(row.className).toMatch(/\brounded-lg\b/);
+    }
   });
 
   it("a decline stages the declared answer with the carried keys only, and sends nothing itself", () => {
     const onChange = mount(VALUE);
-    fireEvent.click(dom.getByRole("button", { name: "Do not send" }));
+    fireEvent.click(dom.getByRole("radio", { name: "Do not send" }));
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(onChange).toHaveBeenLastCalledWith({ itemId: "item-1", revisionId: "rev-1", approved: false });
-    expect(dom.getByRole("button", { name: "Do not send" }).getAttribute("aria-pressed")).toBe("true");
-    fireEvent.click(dom.getByRole("button", { name: "Send it" }));
+    const decline = dom.getByRole("radio", { name: "Do not send" });
+    expect(decline.getAttribute("aria-checked")).toBe("true");
+    // The chosen row is marked as chosen; the other row is not.
+    expect(decline.closest("label")!.className).toMatch(/\bborder-primary\b/);
+    expect(dom.getByRole("radio", { name: "Send it" }).closest("label")!.className).not.toMatch(/\bborder-primary\b/);
+    fireEvent.click(dom.getByRole("radio", { name: "Send it" }));
+    expect(onChange).toHaveBeenCalledTimes(2);
     expect(onChange).toHaveBeenLastCalledWith({ itemId: "item-1", revisionId: "rev-1", approved: true });
+    expect(dom.getByRole("radio", { name: "Send it" }).getAttribute("aria-checked")).toBe("true");
+    expect(dom.getByRole("radio", { name: "Do not send" }).getAttribute("aria-checked")).toBe("false");
   });
 
   it("holds the decisions while a required run value is blank", () => {
     const onChange = mount({ ...VALUE, revisionId: "  " });
-    const decline = dom.getByRole("button", { name: "Do not send" }) as HTMLButtonElement;
+    const decline = dom.getByRole("radio", { name: "Do not send" }) as HTMLButtonElement;
     expect(decline.disabled).toBe(true);
     fireEvent.click(decline);
     expect(onChange).not.toHaveBeenCalled();
@@ -181,7 +234,7 @@ describe("a declared card is drawn by the host (cinatra#3470)", () => {
 
   it("draws no line for a missing value, and never links a value that is not http(s)", () => {
     mount({ ...VALUE, accountName: undefined, sourceUrl: "javascript:alert(1)" });
-    expect(dom.queryByText("Account:")).toBeNull();
+    expect(dom.queryByText("Account")).toBeNull();
     expect(dom.queryByRole("link")).toBeNull();
     expect(dom.getByText("javascript:alert(1)", { exact: false })).toBeTruthy();
   });
@@ -197,7 +250,7 @@ describe("a declared card is drawn by the host (cinatra#3470)", () => {
       { id: ID, kind: "linkedin-draft-review", priority: 90, screen: withoutRequires },
     ]);
     const onChange = mount(value);
-    fireEvent.click(dom.getByRole("button", { name: "Send it" }));
+    fireEvent.click(dom.getByRole("radio", { name: "Send it" }));
     expect(onChange).toHaveBeenLastCalledWith({ itemId: "item-1", approved: true });
   });
 });

@@ -177,6 +177,12 @@ function button(container: HTMLElement, name: RegExp): HTMLButtonElement | undef
   );
 }
 
+/** A declared card's answer row: the radio inside the row whose text matches. */
+function answer(container: HTMLElement, name: RegExp): HTMLButtonElement | undefined {
+  const row = Array.from(container.querySelectorAll("label")).find((l) => name.test(l.textContent ?? ""));
+  return row?.querySelector<HTMLButtonElement>('[role="radio"]') ?? undefined;
+}
+
 async function pressContinue(container: HTMLElement) {
   await waitFor(() => expect(button(container, /^Continue/)).toBeDefined());
   fireEvent.click(button(container, /^Continue/)!);
@@ -217,8 +223,8 @@ describe("the HITL screen card's Continue (cinatra#3470)", () => {
     registerDeclaredPublishCard();
     const { container } = mount();
     await settle();
-    await waitFor(() => expect(button(container, /Fixture do not send/)).toBeDefined());
-    fireEvent.click(button(container, /Fixture do not send/)!);
+    await waitFor(() => expect(answer(container, /Fixture do not send/)).toBeDefined());
+    fireEvent.click(answer(container, /Fixture do not send/)!);
     await settle();
     expect(approveMock).not.toHaveBeenCalled();
     const payload = await pressContinue(container);
@@ -241,7 +247,7 @@ describe("a declared card holds the HITL screen card's Continue (cinatra#3470)",
     fireEvent.click(continueButton(container)!);
     await settle();
     expect(approveMock).not.toHaveBeenCalled();
-    fireEvent.click(button(container, /^Fixture send/)!);
+    fireEvent.click(answer(container, /^Fixture send/)!);
     await settle();
     expect(continueButton(container)!.disabled).toBe(false);
     const payload = await pressContinue(container);
@@ -299,9 +305,9 @@ describe("a declared card on the site widget (cinatra#3470)", () => {
     registerDeclaredPublishCard();
     const { container } = mountOnSiteWidget();
     await settle();
-    await waitFor(() => expect(button(container, /Fixture do not send/)).toBeDefined());
-    expect(button(container, /^Fixture send/)).toBeDefined();
-    fireEvent.click(button(container, /Fixture do not send/)!);
+    await waitFor(() => expect(answer(container, /Fixture do not send/)).toBeDefined());
+    expect(answer(container, /^Fixture send/)).toBeDefined();
+    fireEvent.click(answer(container, /Fixture do not send/)!);
     await settle();
     const go = container.querySelector<HTMLButtonElement>('[data-action="submit-hitl-screen"]');
     expect(go).not.toBeNull();
