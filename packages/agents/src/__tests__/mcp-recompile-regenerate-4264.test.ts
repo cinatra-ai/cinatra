@@ -139,6 +139,27 @@ vi.mock("@cinatra-ai/mcp-client", () => ({
   createInProcessPrimitiveTransport: vi.fn(),
   PrimitiveInvocationError: class extends Error {},
 }));
+// The source replace passes through to the real helper; it records each call
+// and can be made to fail once (exdev-rename gate road, see the last describe).
+const { replaceCalls, replaceFailure } = vi.hoisted(() => ({
+  replaceCalls: [] as Array<[string, string]>,
+  replaceFailure: { error: null as Error | null },
+}));
+vi.mock("../exdev-safe-move", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../exdev-safe-move")>();
+  return {
+    ...actual,
+    replaceFileInSameDir: async (tempPath: string, targetPath: string) => {
+      replaceCalls.push([tempPath, targetPath]);
+      const error = replaceFailure.error;
+      if (error) {
+        replaceFailure.error = null;
+        throw error;
+      }
+      return actual.replaceFileInSameDir(tempPath, targetPath);
+    },
+  };
+});
 
 import { createAgentBuilderPrimitiveHandlers } from "../mcp/handlers";
 
@@ -466,5 +487,52 @@ describe("cinatra#4264 A1b review 1 — agent_source_compile works on one snapsh
     expect(result.error).toMatch(/stored lifecycle declaration/);
     expect(mockCompile).not.toHaveBeenCalled();
     expect(mockSync).not.toHaveBeenCalled();
+  });
+});
+
+describe("cinatra#4264 A1b: the atomic source write goes through the same-directory replace", () => {
+  const okReading = { readable: true, lifecycle: { repairCapable: true } };
+
+  beforeEach(async () => {
+    tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "regen-recompile-"));
+    originalCwd = process.cwd();
+    process.chdir(tmpRoot);
+    mockCompile.mockReset();
+    mockCompile.mockResolvedValue({ ok: true, value: compiledValue, siblingLifecycle: okReading });
+    mockSync.mockReset();
+    mockSync.mockResolvedValue(undefined);
+    mockReadTemplate.mockReset();
+    mockReadTemplate.mockResolvedValue(null);
+    replaceCalls.length = 0;
+    replaceFailure.error = null;
+    await writeFixture();
+  });
+
+  afterEach(async () => {
+    process.chdir(originalCwd);
+    await fs.rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it("writes a temp sibling, then replaces the source with ONE same-directory replace", async () => {
+    const result = await runCompile();
+    expect(result.error).toBeUndefined();
+    expect(replaceCalls).toHaveLength(1);
+    const [tempPath, targetPath] = replaceCalls[0];
+    const dir = await fs.realpath(path.dirname(oasPath));
+    expect(await fs.realpath(path.dirname(path.resolve(tempPath)))).toBe(dir);
+    expect(await fs.realpath(path.resolve(targetPath))).toBe(await fs.realpath(oasPath));
+    expect(path.basename(tempPath)).toMatch(/^\.oas\.json\..+\.tmp$/);
+    expect(JSON.parse(await fs.readFile(oasPath, "utf-8"))).toEqual(OAS);
+    expect((await fs.readdir(path.dirname(oasPath))).sort()).toEqual(["oas.json"]);
+  });
+
+  it("a failed replace leaves the previous source whole and no temp file behind", async () => {
+    const before = await fs.readFile(oasPath, "utf-8");
+    replaceFailure.error = Object.assign(new Error("EIO: i/o error, rename"), { code: "EIO" });
+    const result = await runCompile();
+    expect(result.error).toMatch(/^Failed to write updated agent\.json: EIO/);
+    expect(replaceCalls).toHaveLength(1);
+    expect(await fs.readFile(oasPath, "utf-8")).toBe(before);
+    expect((await fs.readdir(path.dirname(oasPath))).sort()).toEqual(["oas.json"]);
   });
 });

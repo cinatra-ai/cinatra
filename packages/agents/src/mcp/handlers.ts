@@ -66,7 +66,7 @@ import {
 } from "../trigger-service";
 import { randomUUID, createHash } from "node:crypto";
 import { resumeWayflowUnderPauseClaim, stopRunRespectingPauseClaim } from "../run-resume-under-claim";
-import { readdir, readFile, writeFile, mkdir, rm, rename } from "node:fs/promises";
+import { readdir, readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { basename, dirname, join, relative, sep } from "node:path";
 import { resolveDevExtensionSourceRoot } from "../agent-runtime-mount";
@@ -143,6 +143,8 @@ import { publishAgentPackage, publishAgentPackageFromGitDir } from "../verdaccio
 import { installAgentFromPackage, syncCompiledTemplateToDb } from "../install-from-package";
 import { readStoredRegenerate } from "@/lib/lifecycle/lifecycle-policy";
 import { packageNameFromAgentLayout } from "../retained-regenerate";
+// The atomic source replace of agent_source_compile: one rename inside one directory.
+import { replaceFileInSameDir } from "../exdev-safe-move";
 // WayFlow reload after a successful publish + DB sync.
 import { triggerWayflowReload, type ReloadResult } from "../wayflow-reload-client";
 import {
@@ -3900,11 +3902,13 @@ async function handleAgentBuilderGitCompileAndWrite(
   // cinatra#4264 A1b (review 2): written ATOMICALLY, after the row: a temp file
   // in the same directory, then a rename over the source. A failure (ENOSPC,
   // EIO, ...) leaves the previous file whole, which holds the flow the row now
-  // describes, never a torn or empty source beside the updated row.
+  // describes, never a torn or empty source beside the updated row. The
+  // rename is replaceFileInSameDir: both names are in one directory, so it
+  // cannot cross a filesystem (exdev-rename gate).
   const tmpSourcePath = join(dirname(oasSourcePath), `.${basename(oasSourcePath)}.${randomUUID()}.tmp`);
   try {
     await writeFile(tmpSourcePath, updatedRaw, "utf8");
-    await rename(tmpSourcePath, oasSourcePath);
+    await replaceFileInSameDir(tmpSourcePath, oasSourcePath);
   } catch (err) {
     await rm(tmpSourcePath, { force: true }).catch(() => {});
     const message = err instanceof Error ? err.message : String(err);
