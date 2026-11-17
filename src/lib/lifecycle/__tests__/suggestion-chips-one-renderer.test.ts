@@ -34,7 +34,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, posix, relative } from "node:path";
 
 const REPO_ROOT = process.cwd();
 
@@ -189,6 +189,48 @@ function reachOfValidator(files: { path: string; source: string }[], names: stri
     .sort();
 }
 
+// ---- WHO MAY IMPORT A REVIEW DECISION ENTRY (pre-review 2 of #4571) ---------
+
+/**
+ * The ONLY module that may import a review decision entry: the scoped run
+ * routes mount the review PAGE's component under the scoped run addresses
+ * (cinatra#3693). Nothing imports the decide route. A module that imports an
+ * entry could take the partition through it without naming the validator at
+ * all, for example a new route whose `POST` only calls the decide route's `POST`.
+ */
+const ENTRY_IMPORTERS = ["src/app/scoped-launch-routes.tsx"];
+/**
+ * A relative or `@/` module path in a string literal: an import, a re-export, a
+ * dynamic import, a `require`, or a plain string handed to one. Fail closed: a
+ * string is enough. One alternation and one character class, no nested
+ * quantifier (the polynomial-backtracking shape this file avoids).
+ */
+const MODULE_PATH_LITERAL = /["'`]((?:\.{1,2}|@)\/[^"'`\n]*)["'`]/g;
+const MODULE_PATH_EXT = /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
+
+/** A module path without its extension, and a folder's `index` as the folder. */
+function moduleKey(path: string): string {
+  const bare = path.replace(MODULE_PATH_EXT, "");
+  return bare.endsWith("/index") ? bare.slice(0, -"/index".length) : bare;
+}
+
+/** The repository modules a file names by a relative or `@/` path (`@/` is `src/`). */
+function namedModules(path: string, source: string): string[] {
+  return [...source.matchAll(MODULE_PATH_LITERAL)].map((m) =>
+    moduleKey(m[1].startsWith("@/") ? `src/${m[1].slice(2)}` : posix.join(posix.dirname(path), m[1])),
+  );
+}
+
+/** Every non-test module that names one of `entries` by its module path. */
+function entryImporters(files: { path: string; source: string }[], entries: string[]): string[] {
+  const keys = new Set(entries.map(moduleKey));
+  return files
+    .filter((f) => !TEST_FILE.test(f.path))
+    .filter((f) => namedModules(f.path, f.source).some((k) => keys.has(k)))
+    .map((f) => f.path)
+    .sort();
+}
+
 describe("ONE decision path carries the marks", () => {
   it("the review page's route-bound action FORWARDS the partition", () => {
     const page = readFileSync(
@@ -261,6 +303,61 @@ describe("ONE decision path carries the marks", () => {
     };
     const test = { path: "src/app/api/review-floor/route.test.ts", source: thirdEntry.source };
     expect(reachOfValidator([thirdEntry, shim, test], names)).toEqual([thirdEntry.path, shim.path].sort());
+  });
+
+  it("nothing imports a review decision entry but the scoped run routes, which mount the review page", () => {
+    // The reach pin above reads who NAMES the validator. A module that imports
+    // an entry names nothing of the validator's and can still take the partition
+    // through it: a new route whose `POST` only calls the decide route's `POST`
+    // (pre-review 2 of #4571). So the entries' importers are pinned too, over the
+    // whole tree: only the scoped run routes, which mount the review page's
+    // component (cinatra#3693); nothing imports the decide route.
+    const all = SEARCH_ROOTS.flatMap((root) => walkAllCodeFiles(join(REPO_ROOT, root))).map((f) => ({
+      path: relPath(f),
+      source: readFileSync(f, "utf8"),
+    }));
+    expect(all.length).toBeGreaterThan(FILES.length);
+    expect(entryImporters(all, REVIEW_DECISION_ENTRIES)).toEqual(ENTRY_IMPORTERS);
+    expect(entryImporters(all, ["src/app/api/lifecycle-views/decide/route.ts"])).toEqual([]);
+  });
+
+  it("a module that delegates to a review decision entry is caught by the importer scan (fixture)", () => {
+    const decide = "src/app/api/lifecycle-views/decide/route.ts";
+    // The pre-review 2 input: an allowed route export that only delegates.
+    const delegate = {
+      path: "src/app/api/review-floor/route.ts",
+      source: [
+        'import { POST as decide } from "../lifecycle-views/decide/route";',
+        "export async function POST(request: Request): Promise<Response> {",
+        "  return decide(request);",
+        "}",
+      ].join("\n"),
+    };
+    // The same through the `@/` alias, with an extension, from a folder index.
+    const aliased = {
+      path: "src/lib/review/floor/index.ts",
+      source: 'export { POST as forward } from "@/app/api/lifecycle-views/decide/route.ts";',
+    };
+    // A helper beside the route, by a sibling path and a dynamic import.
+    const sibling = {
+      path: "src/app/api/lifecycle-views/decide/again.ts",
+      source: 'export const again = async () => (await import("./route")).POST;',
+    };
+    // A second mount of the review page, under __tests__, spelled as a plain string.
+    const mount = {
+      path: "src/app/__tests__/extra-mount.tsx",
+      source: 'const PAGE = "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page";',
+    };
+    // A near miss names another module, and a test file is no entry: both left out.
+    const nearMiss = {
+      path: "src/lib/review/router.ts",
+      source: 'import { x } from "@/app/api/lifecycle-views/decide/router";',
+    };
+    const test = { path: "src/app/api/review-floor/route.test.ts", source: delegate.source };
+    expect(entryImporters([delegate, aliased, sibling, mount, nearMiss, test], REVIEW_DECISION_ENTRIES)).toEqual(
+      [delegate.path, aliased.path, sibling.path, mount.path].sort(),
+    );
+    expect(entryImporters([delegate, nearMiss, test], [decide])).toEqual([delegate.path]);
   });
 
   it("no route is named for per-item suggestion decisions", () => {
