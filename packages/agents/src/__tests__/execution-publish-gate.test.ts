@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHmac } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 // cinatra#4150 (A4 without the moment, A10): the input-required branch classifies a
 // publish gate FIRST. A verified `cinatra_publish_gate__<node>` claim parks the run on
@@ -315,6 +317,46 @@ describe("a run that reaches a publish gate (A4 without the moment)", () => {
     await pause(sign(GATE));
     expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
     expect(onInterruptSpy).not.toHaveBeenCalled();
+  });
+});
+
+// cinatra#4150 W4: a stop that surfaces more than the decision record holds (rows over long lists) is refused by name,
+// before any record is written, with a fixed text that quotes no value.
+describe("a stop whose surfaced values are over the record's cap ends the run failed, by name (W4)", () => {
+  const withText = (text: string) => {
+    const signed = pausedTask(sign(GATE));
+    return { ...signed, history: [{ ...signed.history[0]!, parts: [{ kind: "text", text }] }] };
+  };
+  const drive = async (text: string) => {
+    const run = makeRun();
+    await handleWayflowTaskState({ authority: AUTHORITY, runId: run.id, run, fromStatus: "running", task: withText(text) });
+  };
+
+  it("the host's cap is the record's own cap", async () => {
+    const { PUBLISH_SURFACED_VALUES_MAX_BYTES } = await import("../publish-decision-actions");
+    expect(PUBLISH_SURFACED_VALUES_MAX_BYTES).toBe(64 * 1024);
+    const store = readFileSync(join(__dirname, "..", "publish-decision-store.ts"), "utf8");
+    expect(store).toContain("export const PUBLISH_DECISION_MAX_SURFACED_BYTES = 64 * 1024;");
+  });
+
+  it("at the cap the decision is recorded; one byte over writes no record and fails the run publish_decision_too_large", async () => {
+    const filler = 64 * 1024 - JSON.stringify({ what: "" }).length;
+    await drive(JSON.stringify({ what: "x".repeat(filler) }));
+    expect(decisions.insertParkedDecision).toHaveBeenCalledTimes(1);
+    expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
+    vi.clearAllMocks();
+
+    const SECRET = "sk-live-SECRET-0123";
+    await drive(JSON.stringify({ what: `${SECRET}${"x".repeat(filler + 1 - SECRET.length)}` }));
+    expect(decisions.insertParkedDecision).not.toHaveBeenCalled();
+    expect(onInterruptSpy).not.toHaveBeenCalled();
+    const moves = transitions();
+    expect(moves).toHaveLength(1);
+    expect(moves[0]!.to).toBe("failed");
+    expect(moves[0]!.error).toBe(
+      "publish_decision_too_large: the values this step surfaced for the decision are over 65536 bytes, so no decision was recorded and the step did not run",
+    );
+    expect(moves[0]!.error).not.toContain("SECRET");
   });
 });
 

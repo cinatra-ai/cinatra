@@ -58,6 +58,13 @@ import {
 } from "./artifact-binding";
 import type { PersistedArtifactBindingDeclaration } from "./artifact-binding";
 import { readKeyList } from "./gate-keys-not-from-run-inputs";
+import {
+  PUBLISH_ROW_COLUMNS_MAX,
+  PUBLISH_ROWS_MAX,
+  type PublishListRowDeclaration,
+  type PublishRowColumn,
+  type PublishRowDeclaration,
+} from "./publish-decision-card";
 
 // ---------------------------------------------------------------------------
 // OAS Flow compiler
@@ -1563,17 +1570,27 @@ export function collectPublishingSteps(
 }
 
 // cinatra#4150: the rows the publish card shows. A declared publishing node may
-// add `metadata.cinatra.publishRows: [{ label, input }]`: one or two rows, each
-// a label in the pack's own words over the value of one of the node's own
-// inputs (the values the stop surfaces). The rows are read only; the card
-// decides whether the content goes out, never what it says. The key is valid
-// only beside `publishes: true` on a top-level node; anywhere else, and in any
-// form but the one below, it refuses the compile. Errors name the field and the
-// node id only, never a label or an input the pack wrote.
-export type PublishRowDeclaration = { label: string; input: string };
+// add `metadata.cinatra.publishRows`: one to four rows, each over one of the
+// node's own inputs (the values the stop surfaces), with a label in the pack's
+// own words. A row is a TEXT row, `{ label, input }` (or the same with
+// `kind: "text"`, which compiles to exactly that), drawn as the label over one
+// plain value; or a LIST row (W4), `{ kind: "list", label, input, columns }`
+// with one to four `{ label, field }` columns, drawn as a table over a surfaced
+// list of records, `field` naming a key of each record. No other kind compiles:
+// a row the card cannot draw would leave a person deciding on content they
+// cannot see. The rows are read only; the card decides whether the change is
+// made, never what it holds. The key is valid only beside `publishes: true` on
+// a top-level node; anywhere else, and in any form but the ones above, it
+// refuses the compile. Errors name the field and the node id only, never a
+// label, an input or a field the pack wrote.
+export type { PublishRowDeclaration } from "./publish-decision-card";
 export type PublishRows = Record<string, PublishRowDeclaration[]>;
-const PUBLISH_ROWS_MAX = 2;
 const PUBLISH_ROW_LABEL_MAX = 60;
+const PUBLISH_ROW_FIELD_MAX = 64;
+const isRowLabel = (label: unknown): label is string =>
+  typeof label === "string" && label.trim() !== "" && label === label.trim() && label.length <= PUBLISH_ROW_LABEL_MAX &&
+  !/[\p{Cc}\u2028\u2029]/u.test(label);
+const keysAre = (o: object, keys: string) => Object.keys(o).sort().join(",") === keys;
 const hasOwn = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
 
 function declaredRowsOf(owner: unknown): { present: boolean; value?: unknown } {
@@ -1630,11 +1647,24 @@ export function collectPublishRows(
     const out: PublishRowDeclaration[] = [];
     for (const [index, row] of list.entries()) {
       const where = `${who} metadata.cinatra.publishRows[${index}]`;
-      if (!row || typeof row !== "object" || Array.isArray(row) || Object.keys(row).sort().join(",") !== "input,label") {
-        return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where} must be an object with exactly the keys label and input` };
+      if (!row || typeof row !== "object" || Array.isArray(row)) {
+        return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where} must be an object` };
+      }
+      const kind = hasOwn(row, "kind") ? (row as { kind: unknown }).kind : "text";
+      if (kind !== "text" && kind !== "list") {
+        return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where}.kind must be text or list` };
+      }
+      const keys = kind === "list" ? "columns,input,kind,label" : hasOwn(row, "kind") ? "input,kind,label" : "input,label";
+      if (!keysAre(row, keys)) {
+        return {
+          ok: false,
+          error: kind === "list"
+            ? `PUBLISH_ROWS_MALFORMED: ${where} must be an object with exactly the keys kind, label, input and columns`
+            : `PUBLISH_ROWS_MALFORMED: ${where} must be an object with exactly the keys label and input (and kind text)`,
+        };
       }
       const { label, input } = row as { label: unknown; input: unknown };
-      if (typeof label !== "string" || label.trim() === "" || label !== label.trim() || label.length > PUBLISH_ROW_LABEL_MAX || /[\p{Cc}\u2028\u2029]/u.test(label)) {
+      if (!isRowLabel(label)) {
         return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where}.label must be one line of 1 to ${PUBLISH_ROW_LABEL_MAX} characters with no leading or trailing space` };
       }
       if (typeof input !== "string" || !titles.has(input)) {
@@ -1643,7 +1673,34 @@ export function collectPublishRows(
       if (out.some((r) => r.input === input)) {
         return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where}.input repeats an input another row shows` };
       }
-      out.push(Object.freeze({ label, input }));
+      if (kind === "text") {
+        out.push(Object.freeze({ label, input }));
+        continue;
+      }
+      const columns = (row as { columns: unknown }).columns;
+      if (!Array.isArray(columns) || columns.length < 1 || columns.length > PUBLISH_ROW_COLUMNS_MAX) {
+        return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where}.columns must be a list of 1 to ${PUBLISH_ROW_COLUMNS_MAX} columns` };
+      }
+      const cols: PublishRowColumn[] = [];
+      for (const [c, column] of columns.entries()) {
+        const at = `${where}.columns[${c}]`;
+        if (!column || typeof column !== "object" || Array.isArray(column) || !keysAre(column, "field,label")) {
+          return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${at} must be an object with exactly the keys label and field` };
+        }
+        const { label: columnLabel, field } = column as { label: unknown; field: unknown };
+        if (!isRowLabel(columnLabel)) {
+          return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${at}.label must be one line of 1 to ${PUBLISH_ROW_LABEL_MAX} characters with no leading or trailing space` };
+        }
+        if (typeof field !== "string" || field.length < 1 || field.length > PUBLISH_ROW_FIELD_MAX || field !== field.trim() || /[\p{Cc}\u2028\u2029]/u.test(field)) {
+          return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${at}.field must be one line of 1 to ${PUBLISH_ROW_FIELD_MAX} characters with no leading or trailing space` };
+        }
+        if (cols.some((x) => x.field === field)) {
+          return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${at}.field repeats a field another column shows` };
+        }
+        cols.push(Object.freeze({ label: columnLabel, field }));
+      }
+      const listRow: PublishListRowDeclaration = { kind: "list", label, input, columns: Object.freeze(cols) as PublishRowColumn[] };
+      out.push(Object.freeze(listRow));
     }
     // A defined own property, so a node id such as "__proto__" stays a plain key.
     Object.defineProperty(rows, step, { value: Object.freeze(out), enumerable: true });

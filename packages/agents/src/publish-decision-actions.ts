@@ -39,6 +39,13 @@ export const PUBLISH_DECISION_REQUIRED = "publish_decision_required";
 export const PUBLISH_DECISION_NOT_OPEN = "publish_decision_not_open";
 export const PUBLISH_GATE_UNVERIFIED = "publish_gate_unverified";
 export const PUBLISH_DECISION_UNAVAILABLE = "publish_decision_unavailable";
+/** cinatra#4150 W4: the stop surfaced more than a decision record holds. The run ends failed with this fixed text,
+ *  before any record is written: nothing is decided, and the step and every step after it do not run. A pack keeps its
+ *  surfaced values small (bounded lists, artifact references, never whole bodies). */
+export const PUBLISH_DECISION_TOO_LARGE = "publish_decision_too_large";
+/** The decision record's own cap (publish-decision-store.ts PUBLISH_DECISION_MAX_SURFACED_BYTES; a test pins the two
+ *  equal). Read here as a literal so that no module that stubs the store reaches a missing export. */
+export const PUBLISH_SURFACED_VALUES_MAX_BYTES = 64 * 1024;
 const PUBLISH_RESUME_FAILED = "publish_resume_failed";
 const EXPIRY_PAGE = 50;
 
@@ -195,6 +202,16 @@ export async function holdRunAtPublishGate(args: {
   }
   if (!verified.startsWith(PUBLISH_GATE_NODE_PREFIX)) return false;
 
+  const surfacedValues = surfacedValuesOf(task);
+  // A stop that surfaced more than the record holds is refused by name, before any write. The text is fixed: it names
+  // the cap, never a value, the step or the size the pack surfaced.
+  if (Buffer.byteLength(JSON.stringify(surfacedValues), "utf8") > PUBLISH_SURFACED_VALUES_MAX_BYTES) {
+    await moveRun(run.id, fromStatus, "failed", {
+      error: `${PUBLISH_DECISION_TOO_LARGE}: the values this step surfaced for the decision are over ${PUBLISH_SURFACED_VALUES_MAX_BYTES} bytes, so no decision was recorded and the step did not run`,
+      completedAt: new Date(),
+    }, authority);
+    return true;
+  }
   let park: Awaited<ReturnType<typeof insertParkedDecision>>;
   try {
     park = await insertParkedDecision({
@@ -203,7 +220,7 @@ export async function holdRunAtPublishGate(args: {
       nodeId: verified.slice(PUBLISH_GATE_NODE_PREFIX.length),
       gateTaskId: task.id,
       a2aContextId: contextId ?? null,
-      surfacedValues: surfacedValuesOf(task),
+      surfacedValues,
     });
   } catch {
     await moveRun(run.id, fromStatus, "failed", { error: "publish_decision_unrecorded: the publish decision could not be recorded", completedAt: new Date() }, authority);

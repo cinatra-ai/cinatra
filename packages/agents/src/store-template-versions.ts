@@ -40,6 +40,7 @@ import type {
   ReadAgentTemplateVersionsOptions,
   AgentTemplateVersionListPage,
 } from "./store";
+import { PUBLISH_ROW_COLUMNS_MAX, type PublishRowDeclaration } from "./publish-decision-card";
 
 // ---------------------------------------------------------------------------
 // Serialization helpers (private)
@@ -539,7 +540,7 @@ function parsePublishingStepsColumn(text: string | null): string[] | null {
 // The same posture for the publish card's rows: null passes through, and a
 // stored value that is not { [nodeId]: [{ label, input }] } throws, naming the
 // column only.
-function parsePublishRowsColumn(text: string | null): Record<string, Array<{ label: string; input: string }>> | null {
+function parsePublishRowsColumn(text: string | null): Record<string, PublishRowDeclaration[]> | null {
   if (text === null) return null;
   const malformed = () => new Error("agent_templates.publish_rows is not a JSON map of node ids to rows");
   let value: unknown;
@@ -549,13 +550,20 @@ function parsePublishRowsColumn(text: string | null): Record<string, Array<{ lab
     throw malformed();
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) throw malformed();
+  const isObject = (o: unknown): o is Record<string, unknown> => !!o && typeof o === "object" && !Array.isArray(o);
+  const keysAre = (o: object, keys: string) => Object.keys(o).sort().join(",") === keys;
+  const isText = (v: unknown) => typeof v === "string";
+  // The two shapes the compiler writes (oas-compiler.ts collectPublishRows): a text row, and a list row (cinatra#4150 W4).
   const isRow = (row: unknown) =>
-    !!row && typeof row === "object" && !Array.isArray(row) && Object.keys(row).sort().join(",") === "input,label" &&
-    typeof (row as { label: unknown }).label === "string" && typeof (row as { input: unknown }).input === "string";
+    isObject(row) && isText(row.label) && isText(row.input) &&
+    (keysAre(row, "input,label") ||
+      (keysAre(row, "columns,input,kind,label") && row.kind === "list" && Array.isArray(row.columns) &&
+        row.columns.length >= 1 && row.columns.length <= PUBLISH_ROW_COLUMNS_MAX &&
+        row.columns.every((c: unknown) => isObject(c) && keysAre(c, "field,label") && isText(c.label) && isText(c.field))));
   for (const rows of Object.values(value)) {
     if (!Array.isArray(rows) || !rows.every(isRow)) throw malformed();
   }
-  return value as Record<string, Array<{ label: string; input: string }>>;
+  return value as Record<string, PublishRowDeclaration[]>;
 }
 
 export function deserializeTemplate(row: typeof agentTemplates.$inferSelect): AgentTemplateRecord {

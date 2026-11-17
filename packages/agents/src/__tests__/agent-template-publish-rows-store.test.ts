@@ -234,6 +234,37 @@ describe("cinatra#4150 — the column round-trips through serializeTemplate / de
     });
   }
 
+  // cinatra#4150 W4: the list row the compiler writes reads back; any other kind or a malformed list row throws.
+  it("a stored list row reads back beside a text row", () => {
+    const rows = {
+      publish: [
+        { label: "Post", input: "content" },
+        { kind: "list", label: "Recipients", input: "recipients", columns: [{ label: "Name", field: "name" }] },
+      ],
+    };
+    const values = { ...serializeTemplate(input(undefined)), publishRows: JSON.stringify(rows) };
+    expect(field(deserializeTemplate(asRow(values)))).toEqual(rows);
+  });
+
+  for (const [label, row] of [
+    ["an artifacts row", { kind: "artifacts", label: "Page", input: "targets" }],
+    ["a list row with no columns", { kind: "list", label: "R", input: "r", columns: [] }],
+    ["a list row with five columns", { kind: "list", label: "R", input: "r", columns: ["a", "b", "c", "d", "e"].map((f) => ({ label: f, field: f })) }],
+    ["a list row whose column has an extra key", { kind: "list", label: "R", input: "r", columns: [{ label: "N", field: "n", w: 1 }] }],
+    ["a list row whose field is not a string", { kind: "list", label: "R", input: "r", columns: [{ label: "N", field: 1 }] }],
+    ["a text row that carries a kind", { kind: "text", label: "Post", input: "content" }],
+  ] as const) {
+    it(`a stored ${label} throws, naming the column only`, () => {
+      // Red first at the base: a list row is a valid row only from W4 on, so the base throws on the valid list row above
+      // and this pins that each listed shape keeps throwing.
+      const valid = { kind: "list", label: "Recipients", input: "recipients", columns: [{ label: "Name", field: "name" }] };
+      const ok = { ...serializeTemplate(input(undefined)), publishRows: JSON.stringify({ publish: [valid] }) };
+      expect(() => deserializeTemplate(asRow(ok))).not.toThrow();
+      const values = { ...serializeTemplate(input(undefined)), publishRows: JSON.stringify({ publish: [row] }) };
+      expect(() => deserializeTemplate(asRow(values))).toThrow(/^agent_templates\.publish_rows is not a JSON map of node ids to rows$/);
+    });
+  }
+
   it("the error never quotes the stored text", () => {
     const values = { ...serializeTemplate(input(undefined)), publishRows: '{"publish":"sk-live-SECRET-0123"}' };
     let caught: unknown = null;

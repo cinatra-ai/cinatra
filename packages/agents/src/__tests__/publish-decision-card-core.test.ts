@@ -212,6 +212,29 @@ describe("the rows are the pack's words over the surfaced values", () => {
     expect(await read()).toMatchObject({ state: "pending", rows: [] });
   });
 
+  it("a declared list row reads the surfaced records into the card (W4)", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      ...TEMPLATE,
+      publishRows: {
+        post: [
+          { label: "Title", input: "title" },
+          { kind: "list", label: "Recipients", input: "people", columns: [{ label: "Name", field: "name" }] },
+        ],
+      },
+    });
+    decisions.readLatestDecisionForRun.mockResolvedValue(
+      decision({ surfacedValues: { title: "Autumn launch", people: [{ name: "Ada", id: "row-77" }, { name: "Bo" }] } }),
+    );
+    const state = await read();
+    expect(state).toMatchObject({
+      rows: [
+        { label: "Title", value: "Autumn launch" },
+        { kind: "list", label: "Recipients", columns: ["Name"], items: [["Ada"], ["Bo"]], total: 2 },
+      ],
+    });
+    expect(JSON.stringify(state)).not.toContain("row-77");
+  });
+
   it("a node id that names an Object.prototype member reads as no declaration", async () => {
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ nodeId: "constructor" }));
     expect(await read()).toMatchObject({ state: "pending", rows: [] });

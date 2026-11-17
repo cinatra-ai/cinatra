@@ -166,6 +166,32 @@ describe("the drawn card", () => {
     if (answer.state === "expired") expect(marker?.textContent).not.toContain(" by ");
   });
 
+  // cinatra#4150 W4: a list row draws a compact table under its label, and says how many records it does not draw.
+  it("a list row draws its columns and records as a table, with the count it does not draw", async () => {
+    const list = { kind: "list", label: "Recipients", columns: ["Name", "Email"], items: [["Ada", "ada@example.test"], ["Bo", ""]], total: 7 };
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ROWS[0], list] }));
+    const root = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    expect(Array.from(root.querySelectorAll("dt")).map((el) => el.textContent)).toEqual(["Title", "Recipients"]);
+    const value = root.querySelector('[data-publish-row-kind="list"]');
+    expect(value?.tagName).toBe("DD");
+    expect(Array.from(value!.querySelectorAll("th")).map((el) => el.textContent)).toEqual(["Name", "Email"]);
+    expect(Array.from(value!.querySelectorAll("tbody tr")).map((tr) => Array.from(tr.querySelectorAll("td")).map((td) => td.textContent))).toEqual([
+      ["Ada", "ada@example.test"],
+      ["Bo", ""],
+    ]);
+    expect(value!.querySelector("[data-publish-row-more]")?.textContent).toBe("5 more");
+  });
+
+  it("a list row that draws every record has no count line", async () => {
+    const list = { kind: "list", label: "Recipients", columns: ["Name"], items: [["Ada"]], total: 1 };
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [list] }));
+    const root = await rootOf(mountOn("run_card", okDoor()));
+    await settle();
+    expect(root.querySelectorAll("tbody tr")).toHaveLength(1);
+    expect(root.querySelector("[data-publish-row-more]")).toBeNull();
+  });
+
   it("a pending card with no rows draws no row list", async () => {
     stateMock.mockImplementation(async () => ({ ...PENDING, rows: [] }));
     const root = await rootOf(mountOn("run_card", okDoor()));
