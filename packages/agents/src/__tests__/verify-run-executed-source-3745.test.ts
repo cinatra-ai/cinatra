@@ -12,7 +12,13 @@ vi.mock("../db", () => ({ db: {
   select: () => ({ from() { return this; }, innerJoin() { return this; }, where: async () => (h.row ? [h.row] : []) }),
 } }));
 vi.mock("../org-write-run-seam", () => ({ guardedRunWrite: async () => { throw Error("not used"); } }));
-import { verifyRunExecutedSource } from "../run-step-tool-policy-store";
+// The module is new with cinatra#3745. It is loaded here, not by a static import, so that before the
+// change this file still loads and its first case fails by an assertion on the missing module.
+const storeModule = await import("../run-step-tool-policy-store").catch(() => undefined);
+const { verifyRunExecutedSource } = (storeModule ?? {}) as typeof import("../run-step-tool-policy-store");
+it("the run step tool policy store module exists (cinatra#3745)", () => {
+  expect(storeModule).toBeDefined();
+});
 
 const source = JSON.stringify({
   component_type: "Flow", id: "flow",

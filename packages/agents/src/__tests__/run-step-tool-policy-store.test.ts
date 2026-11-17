@@ -8,7 +8,11 @@ vi.mock("../org-write-run-seam",()=>({guardedRunWrite:async(authority:unknown,in
  const tx={select:()=>{const current=n++;return {from(){return this;},where(){return this;},for(){h.calls.push("row-fence");return Promise.resolve(current===0?[h.run]:h.bound?[h.bound]:[]);}};},insert:()=>({values:(value:unknown)=>({onConflictDoNothing:async()=>{h.calls.push("insert-once");h.bound??=value;}})}),
   update:()=>({set:(value:{executionAttemptId:string})=>({where:()=>({returning:async()=>{h.calls.push("move");if(!h.bound)return [];h.bound={...(h.bound as object),...value};return [{runId:"run"}];}})})})};return body(tx);
 }}));
-import { bindRunStepToolPolicy } from "../run-step-tool-policy-store";
+// The module is new with cinatra#3745. It is loaded here, not by a static import, so that before the
+// change this file still loads and its first case fails by an assertion on the missing module.
+const storeModule=await import("../run-step-tool-policy-store").catch(()=>undefined);
+const { bindRunStepToolPolicy }=(storeModule??{}) as typeof import("../run-step-tool-policy-store");
+it("the run step tool policy store module exists (cinatra#3745)",()=>{expect(storeModule).toBeDefined();});
 const source=JSON.stringify({flow:{id:"step"}});const hash=createHash("sha256").update(source).digest("hex");
 const policy={version:1,contextId:"ctx",sourceSha256:hash,executedSourceSha256:hash,declarationSourceSha256:hash,source} as const;
 const input=()=>({orgId:"org",runId:"run",executionAttemptId:"attempt",policy,authority:{} as never});

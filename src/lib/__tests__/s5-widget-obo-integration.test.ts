@@ -368,6 +368,35 @@ describe("S5 widget OBO — full chain (mint → verify → policy → frame →
     // T7: the install/single-tenant resolver is NEVER reached on the widget path.
     expect(resolveContentEditorIdentityForInstance).not.toHaveBeenCalled();
   });
+
+  // cinatra#3745: the end user's carrier run binds the loader's selected source before the send,
+  // and the message names the bound source's digests.
+  it("the end user's carrier run binds the loader's selected source before it sends (cinatra#3745)", async () => {
+    const actor = boundaryVerify(issueWidgetMcpActorToken(WIDGET_INPUT));
+    expect(actor).not.toBeNull();
+    await withWidgetFrame(actor!, async () => {
+      const frame = resolveWidgetActorFromFrame();
+      await dispatchContentEditorViaA2A({
+        agentUrl: "http://agent",
+        payload: { instanceId: frame!.instanceId, postId: 7 },
+        timeoutMs: 1000,
+        packageName: "@cinatra-ai/wordpress-agent",
+        actorOverride: { ...frame!, sourceType: "public_site_widget" },
+        preCreateAuthorize: async () => true,
+      });
+    });
+    const runId = (createCarrierRun.mock.calls.at(-1)![0] as { id: string }).id;
+    expect(bindSourcePolicy).toHaveBeenCalledTimes(1);
+    expect(bindSourcePolicy).toHaveBeenCalledWith(
+      expect.objectContaining({ runId, orgId: "org-9", executionAttemptId: "attempt" }),
+    );
+    expect(bindSourcePolicy.mock.invocationCallOrder[0]!).toBeLessThan(sendTask.mock.invocationCallOrder.at(-1)!);
+    expect(JSON.parse(lastSentText()).__cinatra_expected_source__).toEqual({
+      sourceSha256: "a".repeat(64),
+      executedSourceSha256: "b".repeat(64),
+      declarationSourceSha256: "c".repeat(64),
+    });
+  });
 });
 
 // ===========================================================================

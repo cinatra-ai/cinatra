@@ -200,6 +200,31 @@ describe("host content-editor dispatch — S5 delegated-widget", () => {
     expect(resolveContentEditorIdentityForInstance).not.toHaveBeenCalled();
   });
 
+  // cinatra#3745: the widget's carrier run binds the loader's selected source before the send,
+  // and the message names the bound source's digests.
+  it("binds the loader's selected source to the widget carrier run before it sends (cinatra#3745)", async () => {
+    frameActor = { delegation: "public_site_widget", runBy: "user-77", orgId: "org-9", instanceId: "site-1" };
+    await dispatchContentEditorViaA2A({
+      agentUrl: "http://agent",
+      payload: { instanceId: "site-1", postId: 7 },
+      timeoutMs: 1000,
+      packageName: "@cinatra-ai/wordpress-agent",
+      actorOverride: OVERRIDE,
+      preCreateAuthorize: async () => true,
+    });
+    const runId = (createCarrierRun.mock.calls.at(-1)![0] as { id: string }).id;
+    expect(bindSourcePolicy).toHaveBeenCalledTimes(1);
+    expect(bindSourcePolicy).toHaveBeenCalledWith(
+      expect.objectContaining({ runId, orgId: "org-9", executionAttemptId: "attempt" }),
+    );
+    expect(bindSourcePolicy.mock.invocationCallOrder[0]!).toBeLessThan(sendTask.mock.invocationCallOrder.at(-1)!);
+    expect(JSON.parse(lastSentText()).__cinatra_expected_source__).toEqual({
+      sourceSha256: "a".repeat(64),
+      executedSourceSha256: "b".repeat(64),
+      declarationSourceSha256: "c".repeat(64),
+    });
+  });
+
   it("G11 default re-assert: absent caller hook, a LIVE member proceeds", async () => {
     frameActor = { delegation: "public_site_widget", runBy: "user-77", orgId: "org-9", instanceId: "site-1" };
     resolveOrgRoleForUser.mockResolvedValue("org_admin");

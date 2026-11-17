@@ -239,6 +239,30 @@ describe("the widget's content-edit run", () => {
     });
   });
 
+  // cinatra#3745: the launched carrier run binds the loader's selected source before the send,
+  // and the message carries the context the bind recorded and the bound source's digests.
+  it("binds the loader's selected source to the launched run before it sends (cinatra#3745)", async () => {
+    await dispatchContentEditorViaA2A(input());
+    const runId = (launchAgentRun.mock.calls[0]![0] as { create: { input: { id: string } } })
+      .create.input.id;
+
+    expect(bindSourcePolicy).toHaveBeenCalledTimes(1);
+    expect(bindSourcePolicy).toHaveBeenCalledWith(
+      expect.objectContaining({ runId, orgId: ORG, executionAttemptId: "attempt" }),
+    );
+    expect(bindSourcePolicy.mock.invocationCallOrder[0]!).toBeLessThan(sendTask.mock.invocationCallOrder[0]!);
+    const contextId = (selectSourcePolicy.mock.calls[0]![0] as { contextId: string }).contextId;
+    const sent = sendTask.mock.calls[0]![0] as {
+      message: { contextId?: string; parts: Array<{ text: string }> };
+    };
+    expect(sent.message.contextId).toBe(contextId);
+    expect(JSON.parse(sent.message.parts[0]!.text).__cinatra_expected_source__).toEqual({
+      sourceSha256: "a".repeat(64),
+      executedSourceSha256: "b".repeat(64),
+      declarationSourceSha256: "c".repeat(64),
+    });
+  });
+
   it("a dispatch failure still lands the carrier, never leaving it queued with no job", async () => {
     sendTask.mockRejectedValue(new Error("peer unreachable"));
     await expect(dispatchContentEditorViaA2A(input())).rejects.toThrow("peer unreachable");

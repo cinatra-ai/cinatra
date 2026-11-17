@@ -19,6 +19,10 @@ const proof = () => ({
 });
 
 describe("parseVerifiedExecutedRunSource", () => {
+  it("is exported by the sdk's index (cinatra#3745)", () => {
+    expect(typeof parseVerifiedExecutedRunSource).toBe("function");
+  });
+
   it("returns a frozen copy of the six fields", () => {
     const input = proof();
     const parsed = parseVerifiedExecutedRunSource(input);

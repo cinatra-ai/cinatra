@@ -14,12 +14,16 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 
-import {
-  createRunStepToolPolicy,
-  parseRunStepToolPolicy,
-  readTrustedStepToolDeclaration,
-} from "../run-step-tool-policy";
 import * as declarationReaders from "../validate-oas-runtime-invariants";
+
+// The module is new with cinatra#3745. It is loaded here, not by a static import, so that before the
+// change this file still loads and its first case fails by an assertion on the missing module.
+const policyModule = await import("../run-step-tool-policy").catch(() => undefined);
+const { createRunStepToolPolicy, parseRunStepToolPolicy, readTrustedStepToolDeclaration } =
+  (policyModule ?? {}) as typeof import("../run-step-tool-policy");
+it("the run step tool policy module exists (cinatra#3745)", () => {
+  expect(policyModule).toBeDefined();
+});
 
 const STEP = "call_llm_bridge";
 const GRAPH: Record<string, unknown> = JSON.parse(
