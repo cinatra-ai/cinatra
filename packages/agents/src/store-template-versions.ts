@@ -558,7 +558,7 @@ function parsePublishRowsColumn(text: string | null): PublishRowsMap | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw malformed();
   const isObject = (o: unknown): o is Record<string, unknown> => !!o && typeof o === "object" && !Array.isArray(o);
   const keysAre = (o: object, keys: string) => Object.keys(o).sort().join(",") === keys;
-  // The two shapes the compiler writes (oas-compiler.ts collectPublishRows), under the compiler's own caps: 1 to 4 rows
+  // The shapes the compiler writes (oas-compiler.ts collectPublishRows), under the compiler's own caps: 1 to 4 rows
   // per node, no input shown twice. A text row keeps the reading it has always had (two string keys). A list row
   // (cinatra#4150 W4) has no older form, so it meets every compiler rule: its label and each column label, each field,
   // 1 to 4 columns, no field shown twice.
@@ -566,9 +566,11 @@ function parsePublishRowsColumn(text: string | null): PublishRowsMap | null {
     Array.isArray(columns) && columns.length >= 1 && columns.length <= PUBLISH_ROW_COLUMNS_MAX &&
     columns.every((c: unknown) => isObject(c) && keysAre(c, "field,label") && isPublishRowLabel(c.label) && isPublishRowField(c.field)) &&
     new Set(columns.map((c: { field: string }) => c.field)).size === columns.length;
+  // An artifacts row (C1b) has no older form either: exactly kind, label and input, under the label rule.
   const isRow = (row: unknown) => {
     if (!isObject(row) || typeof row.input !== "string" || typeof row.label !== "string") return false;
     if (keysAre(row, "input,label")) return true;
+    if (keysAre(row, "input,kind,label")) return row.kind === "artifacts" && isPublishRowLabel(row.label);
     return keysAre(row, "columns,input,kind,label") && row.kind === "list" && isPublishRowLabel(row.label) && isColumns(row.columns);
   };
   for (const rows of Object.values(value)) {

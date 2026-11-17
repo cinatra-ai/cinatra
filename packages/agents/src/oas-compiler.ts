@@ -1580,7 +1580,10 @@ export function collectPublishingSteps(
 // `kind: "text"`, which compiles to exactly that), drawn as the label over one
 // plain value; or a LIST row (W4), `{ kind: "list", label, input, columns }`
 // with one to four `{ label, field }` columns, drawn as a table over a surfaced
-// list of records, `field` naming a key of each record. No other kind compiles:
+// list of records, `field` naming a key of each record; or an ARTIFACTS row
+// (C1b), `{ kind: "artifacts", label, input }`, whose input holds the artifact
+// revisions the stop surfaced, drawn through the review-target island, which
+// reads them from the decision and proves the run made each one. No other kind compiles:
 // a row the card cannot draw would leave a person deciding on content they
 // cannot see. The rows are read only; the card decides whether the change is
 // made, never what it holds. The key is valid only beside `publishes: true` on
@@ -1650,8 +1653,8 @@ export function collectPublishRows(
         return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where} must be an object` };
       }
       const kind = hasOwn(row, "kind") ? (row as { kind: unknown }).kind : "text";
-      if (kind !== "text" && kind !== "list") {
-        return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where}.kind must be text or list` };
+      if (kind !== "text" && kind !== "list" && kind !== "artifacts") {
+        return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where}.kind must be text, list or artifacts` };
       }
       const keys = kind === "list" ? "columns,input,kind,label" : hasOwn(row, "kind") ? "input,kind,label" : "input,label";
       if (!keysAre(row, keys)) {
@@ -1659,7 +1662,9 @@ export function collectPublishRows(
           ok: false,
           error: kind === "list"
             ? `PUBLISH_ROWS_MALFORMED: ${where} must be an object with exactly the keys kind, label, input and columns`
-            : `PUBLISH_ROWS_MALFORMED: ${where} must be an object with exactly the keys label and input (and kind text)`,
+            : kind === "artifacts"
+              ? `PUBLISH_ROWS_MALFORMED: ${where} must be an object with exactly the keys kind, label and input`
+              : `PUBLISH_ROWS_MALFORMED: ${where} must be an object with exactly the keys label and input (and kind text)`,
         };
       }
       const { label, input } = row as { label: unknown; input: unknown };
@@ -1674,6 +1679,10 @@ export function collectPublishRows(
       }
       if (kind === "text") {
         out.push(Object.freeze({ label, input }));
+        continue;
+      }
+      if (kind === "artifacts") {
+        out.push(Object.freeze({ kind: "artifacts" as const, label, input }));
         continue;
       }
       const columns = (row as { columns: unknown }).columns;

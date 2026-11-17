@@ -10,6 +10,7 @@ import {
   PUBLISH_LIST_ROW_ITEMS_MAX,
   PUBLISH_ROW_COLUMNS_MAX,
   PUBLISH_ROWS_MAX,
+  declaredPublishRowsFor,
   parsePublishDecisionCardState,
   publishDecisionCardRows,
   publishRowKind,
@@ -133,7 +134,7 @@ describe("the list row (W4)", () => {
   });
 
   it.each([
-    ["an artifacts row", { kind: "artifacts", label: "Page", targets: [] }],
+    ["an artifacts row that carries targets and no ref", { kind: "artifacts", label: "Page", targets: [] }],
     ["a text row that carries a kind", { kind: "text", label: "Title", value: "x" }],
     ["a list row with no items", { ...LIST_ROW, items: [] }],
     ["a list row with five columns", { ...LIST_ROW, columns: ["a", "b", "c", "d", "e"], items: [["1", "2", "3", "4", "5"]] }],
@@ -158,11 +159,12 @@ describe("the row cap on the transport and the own-kind reading (pre-2)", () => 
     expect(parsePublishDecisionCardState({ ...COMMON, state: "expired", rows: [TEXT, TEXT, TEXT, TEXT, LIST_ROW] })).toBeNull();
   });
 
-  it("publishRowKind reads only an own kind: none is text, own list is list, any other own kind is null", () => {
+  it("publishRowKind reads only an own kind: none is text, own list is list, own artifacts is artifacts, any other is null", () => {
     const inherited = Object.assign(Object.create({ kind: "list" }), { label: "Title", value: "x" }) as object;
     expect(publishRowKind(inherited)).toBe("text");
     expect(publishRowKind({ kind: "list" })).toBe("list");
-    for (const kind of ["artifacts", "text", undefined, null]) expect(publishRowKind({ kind })).toBeNull();
+    expect(publishRowKind({ kind: "artifacts" })).toBe("artifacts");
+    for (const kind of ["Artifacts", "table", "text", undefined, null]) expect(publishRowKind({ kind })).toBeNull();
   });
 
   it("a declaration whose list kind is inherited projects as the text row it is", () => {
@@ -184,9 +186,74 @@ describe("the row cap on the transport and the own-kind reading (pre-2)", () => 
   });
 
   it("a declaration with an own kind no reader draws is dropped, never drawn as text", () => {
-    const decl = { kind: "artifacts", label: "Page", input: "page" } as unknown as PublishRowDeclaration;
+    const decl = { kind: "table", label: "Page", input: "page" } as unknown as PublishRowDeclaration;
     expect(publishDecisionCardRows([decl, { label: "Title", input: "title" }], { page: "row-77", title: "Autumn" })).toEqual([
       { label: "Title", value: "Autumn" },
     ]);
+  });
+});
+
+// C1b: the artifacts row. The card carries the island ref for the row (never a target id) and, for a credential host,
+// the server-minted island address. Every case is red at C1's head 2ea9dbd1, where the kind is unreadable.
+describe("the artifacts row (C1b)", () => {
+  const REF = "Abc_123-xyz";
+  const ARTIFACTS_ROW = { kind: "artifacts", label: "Proposed page", ref: REF, islandSrc: null };
+  const DECL = { kind: "artifacts", label: "Proposed page", input: "reviewTargets" } as const;
+
+  it.each([
+    ["a cookie host's row", ARTIFACTS_ROW],
+    ["a credential host's row", { ...ARTIFACTS_ROW, islandSrc: `/lifecycle/review-island?ref=${REF}&ic=sealed` }],
+    ["a row that could not be shown", { ...ARTIFACTS_ROW, ref: null }],
+  ])("round-trips %s beside a text row", (_name, row) => {
+    const state = { state: "pending", ...COMMON, rows: [...COMMON.rows, row], mayDecide: true };
+    expect(parsePublishDecisionCardState(JSON.parse(JSON.stringify(state)))).toEqual(state);
+  });
+
+  it.each([
+    ["no ref field", { kind: "artifacts", label: "Proposed page", islandSrc: null }],
+    ["no islandSrc field", { kind: "artifacts", label: "Proposed page", ref: REF }],
+    ["a ref that is not one base64url word", { ...ARTIFACTS_ROW, ref: "a b" }],
+    ["a ref over 512 characters", { ...ARTIFACTS_ROW, ref: "a".repeat(513) }],
+    ["an empty ref", { ...ARTIFACTS_ROW, ref: "" }],
+    ["an address with no ref", { ...ARTIFACTS_ROW, ref: null, islandSrc: "/lifecycle/review-island?ic=x" }],
+    ["an empty address", { ...ARTIFACTS_ROW, islandSrc: "" }],
+    ["an address over 2048 characters", { ...ARTIFACTS_ROW, islandSrc: "x".repeat(2049) }],
+    ["an empty label", { ...ARTIFACTS_ROW, label: "" }],
+    ["a label with a line break", { ...ARTIFACTS_ROW, label: "Pro\nposed" }],
+  ])("refuses an artifacts row with %s", (_name, row) => {
+    expect(parsePublishDecisionCardState({ ...COMMON, state: "expired", rows: [ARTIFACTS_ROW] })).not.toBeNull();
+    expect(parsePublishDecisionCardState({ ...COMMON, state: "expired", rows: [row] })).toBeNull();
+  });
+
+  it("the projection draws an artifacts row only through the server's drawer, in the declared order", () => {
+    const decls = [{ label: "Title", input: "title" }, DECL] as const;
+    const surfaced = { title: "About us", reviewTargets: [{ artifactId: "a", representationRevisionId: "r" }] };
+    // The pure module alone drops it: it cannot mint the row's ref.
+    expect(publishDecisionCardRows(decls, surfaced)).toEqual([{ label: "Title", value: "About us" }]);
+    const seen: unknown[] = [];
+    const rows = publishDecisionCardRows(decls, surfaced, (row, raw) => {
+      seen.push([row, raw]);
+      return { kind: "artifacts", label: row.label, ref: REF, islandSrc: null };
+    });
+    expect(rows).toEqual([{ label: "Title", value: "About us" }, ARTIFACTS_ROW]);
+    expect(seen).toEqual([[DECL, surfaced.reviewTargets]]);
+  });
+
+  it("an artifacts row whose input the stop did not surface is dropped before the drawer is asked", () => {
+    let asked = false;
+    expect(
+      publishDecisionCardRows([DECL], { title: "x" }, () => {
+        asked = true;
+        return ARTIFACTS_ROW as never;
+      }),
+    ).toEqual([]);
+    expect(asked).toBe(false);
+  });
+
+  it("declaredPublishRowsFor reads a node's rows by own key only", () => {
+    const byNode = { publish: [DECL] };
+    expect(declaredPublishRowsFor(byNode, "publish")).toEqual([DECL]);
+    expect(declaredPublishRowsFor(byNode, "constructor")).toEqual([]);
+    expect(declaredPublishRowsFor(null, "publish")).toEqual([]);
   });
 });

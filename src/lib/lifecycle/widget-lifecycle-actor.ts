@@ -109,6 +109,10 @@ import {
 // cinatra#2754 — the single-use ledger. A minted address is worth one paint, and
 // the grant that makes it worth one is written HERE, at the one mint site.
 import { recordIslandCredentialGrant } from "@/lib/lifecycle/review-island-grant-store";
+import {
+  decodePublishDecisionIslandRef,
+  publishDecisionIslandSubjectKey,
+} from "@/lib/lifecycle/lifecycle-card-ref";
 
 // Re-exported so every S8a import path still resolves here — the split is an
 // internal one, not a move of this module's public surface. The former
@@ -428,6 +432,57 @@ export function mintWidgetReviewIslandUrl(input: {
   runId: string;
   reviewTaskId: string;
 }): string | null {
+  return mintWidgetIslandUrl(input);
+}
+
+/**
+ * Mint the island URL for ONE `artifacts` row of a publish card on the widget
+ * (cinatra#4150 W4 C1b): the same credential, the same single-use grant and the
+ * same one-minute life as a review gate's, sealed as a publish-decision
+ * credential whose subject is the row (`publishDecisionIslandSubjectKey`).
+ *
+ * THE REF MUST NAME THE SAME ROW. The caller hands in the ref it minted for the
+ * row and the ids it minted it from; a ref that does not decode to exactly those
+ * ids gets no address, so a credential can never be minted for a row other than
+ * the one its frame will name.
+ *
+ * Its caller is the publish card's broker read, which has just consumed the
+ * `cwu_` and read the card for that reader. Like the gate mint it authorizes
+ * nothing: the island re-runs the reader's access and its loader's checks.
+ */
+export function mintWidgetPublishDecisionIslandUrl(input: {
+  claims: UserTokenClaims;
+  ref: string;
+  runId: string;
+  decisionId: string;
+  input: string;
+}): string | null {
+  const named = decodePublishDecisionIslandRef(input.ref);
+  if (
+    !named ||
+    named.runId !== input.runId ||
+    named.decisionId !== input.decisionId ||
+    named.input !== input.input
+  ) {
+    return null;
+  }
+  return mintWidgetIslandUrl({
+    claims: input.claims,
+    ref: input.ref,
+    runId: input.runId,
+    reviewTaskId: publishDecisionIslandSubjectKey(named),
+    subject: "publish-decision",
+  });
+}
+
+/** The one mint body both island kinds share: seal, record the grant, compose. */
+function mintWidgetIslandUrl(input: {
+  claims: UserTokenClaims;
+  ref: string;
+  runId: string;
+  reviewTaskId: string;
+  subject?: "publish-decision";
+}): string | null {
   const credential = mintReviewIslandCredential({
     orgId: input.claims.orgId,
     userId: input.claims.userId,
@@ -438,6 +493,7 @@ export function mintWidgetReviewIslandUrl(input: {
     agentSlug: input.claims.agentSlug,
     runId: input.runId,
     reviewTaskId: input.reviewTaskId,
+    ...(input.subject ? { subject: input.subject } : {}),
   });
   if (!credential) return null;
 

@@ -254,8 +254,23 @@ describe("cinatra#4150 — the column round-trips through serializeTemplate / de
     expect(field(deserializeTemplate(asRow(values)))).toEqual(rows);
   });
 
+  // C1b: the artifacts row the compiler writes reads back (red at C1's head 2ea9dbd1, whose reader throws on it).
+  it("a stored artifacts row reads back beside a text row", () => {
+    const rows = {
+      publish: [
+        { label: "Post", input: "content" },
+        { kind: "artifacts", label: "Proposed page", input: "targets" },
+      ],
+    };
+    const values = { ...serializeTemplate(input(undefined)), publishRows: JSON.stringify(rows) };
+    expect(field(deserializeTemplate(asRow(values)))).toEqual(rows);
+  });
+
   for (const [label, row] of [
-    ["an artifacts row", { kind: "artifacts", label: "Page", input: "targets" }],
+    ["an artifacts row with columns", { kind: "artifacts", label: "Page", input: "targets", columns: [{ label: "N", field: "n" }] }],
+    ["an artifacts row with an empty label", { kind: "artifacts", label: "", input: "targets" }],
+    ["an artifacts row whose label has a line break", { kind: "artifacts", label: "Pa\nge", input: "targets" }],
+    ["a row of an unknown kind", { kind: "table", label: "Page", input: "targets" }],
     ["a list row with no columns", { kind: "list", label: "R", input: "r", columns: [] }],
     ["a list row with five columns", { kind: "list", label: "R", input: "r", columns: ["a", "b", "c", "d", "e"].map((f) => ({ label: f, field: f })) }],
     ["a list row whose column has an extra key", { kind: "list", label: "R", input: "r", columns: [{ label: "N", field: "n", w: 1 }] }],

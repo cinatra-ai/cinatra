@@ -359,3 +359,61 @@ describe("the decide door", () => {
     expect(stateMock).toHaveBeenCalledTimes(1);
   });
 });
+
+// C1b: an artifacts row draws the review-target island through the review card's own frame, addressed by the row's ref;
+// a credential host frames the server-minted address only when it names the row's ref. A row with no ref says the items
+// could not be shown. Red at C1's head 2ea9dbd1, where the transport refuses the kind (the card draws nothing).
+describe("the artifacts row (C1b)", () => {
+  const REF = "Abc_123-xyz";
+  const ARTIFACTS = { kind: "artifacts", label: "Proposed page", ref: REF, islandSrc: null };
+  const frameSrc = async (root: HTMLElement) => {
+    await waitFor(() => expect(root.querySelector("iframe")).not.toBeNull());
+    return new URL(root.querySelector("iframe")!.getAttribute("src")!, "https://app.example");
+  };
+
+  it("draws the island for the row's ref under its label, read only, beside the card's controls", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ROWS[0], ARTIFACTS] }));
+    const root = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    expect(Array.from(root.querySelectorAll("dt")).map((el) => el.textContent)).toEqual(["Title", "Proposed page"]);
+    const value = root.querySelector('[data-publish-row-kind="artifacts"]');
+    expect(value?.tagName).toBe("DD");
+    const src = await frameSrc(root);
+    expect(src.pathname).toBe("/lifecycle/review-island");
+    expect(src.searchParams.get("ref")).toBe(REF);
+    expect(src.searchParams.get("ic")).toBeNull();
+    // The controls stay the card's, outside the frame.
+    expect(root.querySelector(APPROVE)).not.toBeNull();
+    expect(value!.querySelector(APPROVE)).toBeNull();
+  });
+
+  it("a credential host frames the server-minted credential when its address names the row's ref", async () => {
+    const islandSrc = `/lifecycle/review-island?ref=${REF}&ic=sealed-credential`;
+    brokerAnswer = { status: 200, body: { ...PENDING, rows: [{ ...ARTIFACTS, islandSrc }] } };
+    const root = await rootOf(mountOn("site_widget", okDoor()));
+    await settle();
+    const src = await frameSrc(root);
+    expect(src.searchParams.get("ref")).toBe(REF);
+    expect(src.searchParams.get("ic")).toBe("sealed-credential");
+  });
+
+  it("an address minted for another ref lends this row no credential", async () => {
+    const islandSrc = "/lifecycle/review-island?ref=OtherRef&ic=sealed-credential";
+    brokerAnswer = { status: 200, body: { ...PENDING, rows: [{ ...ARTIFACTS, islandSrc }] } };
+    const root = await rootOf(mountOn("site_widget", okDoor()));
+    await settle();
+    const src = await frameSrc(root);
+    expect(src.searchParams.get("ref")).toBe(REF);
+    expect(src.searchParams.get("ic")).toBeNull();
+  });
+
+  it("a row with no ref says the items could not be shown, and frames nothing", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [{ ...ARTIFACTS, ref: null }] }));
+    const root = await rootOf(mountOn("run_card", okDoor()));
+    await settle();
+    const value = root.querySelector('[data-publish-row-kind="artifacts"]');
+    expect(value?.hasAttribute("data-publish-row-unavailable")).toBe(true);
+    expect(value?.textContent).toBe("These items could not be shown.");
+    expect(root.querySelector("iframe")).toBeNull();
+  });
+});

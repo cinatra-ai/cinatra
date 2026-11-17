@@ -9,8 +9,9 @@
 // ---------------------------------------------------------------------------
 
 /** One declared row of a publishing step (cinatra#4150 W4): a text row (the label over one surfaced value, the shape a
- * row without `kind` has always had) or a list row (a table of up to four columns over a surfaced list of records). The
- * compiler writes these; the card reads them. This module owns the shape so the card, the store and the compiler agree.
+ * row without `kind` has always had), a list row (a table of up to four columns over a surfaced list of records), or an
+ * artifacts row (C1b: the surfaced artifact revisions, drawn through the review-target island). The compiler writes
+ * these; the card reads them. This module owns the shape so the card, the store and the compiler agree.
  * Every member is readonly (the compiler freezes its output), and a text member carries NO kind, so a value with any other
  * kind is no member of the union. */
 export type PublishRowColumn = { readonly label: string; readonly field: string };
@@ -21,7 +22,9 @@ export type PublishListRowDeclaration = {
   readonly input: string;
   readonly columns: readonly PublishRowColumn[];
 };
-export type PublishRowDeclaration = PublishTextRowDeclaration | PublishListRowDeclaration;
+/** An artifacts row: the input holds a list of `{artifactId, representationRevisionId}` (the shape a review gate pins). */
+export type PublishArtifactsRowDeclaration = { readonly kind: "artifacts"; readonly label: string; readonly input: string };
+export type PublishRowDeclaration = PublishTextRowDeclaration | PublishListRowDeclaration | PublishArtifactsRowDeclaration;
 /** The rows of every declared node, by node id: what the compiler writes and the store reads back. */
 export type PublishRowsMap = Readonly<Record<string, readonly PublishRowDeclaration[]>>;
 
@@ -47,16 +50,38 @@ export type PublishDecisionCardTextRow = { label: string; value: string; kind?: 
 /** A list row: the column labels, the first records' cells (scalar cells only, one string per column), and how many
  * records the stop surfaced in all, so the card can say how many it does not draw. */
 export type PublishDecisionCardListRow = { kind: "list"; label: string; columns: string[]; items: string[][]; total: number };
-export type PublishDecisionCardRow = PublishDecisionCardTextRow | PublishDecisionCardListRow;
+/** An artifacts row (C1b): the island ref that addresses this row (null when the surfaced value is not a target list or
+ * the ref cannot be minted: the card then says the items could not be shown), and the server-minted island address for a
+ * host that proves itself with its own credential (null on a cookie host). Neither carries a target id: the island
+ * reads the targets from the decision itself. */
+export type PublishDecisionCardArtifactsRow = { kind: "artifacts"; label: string; ref: string | null; islandSrc: string | null };
+export type PublishDecisionCardRow = PublishDecisionCardTextRow | PublishDecisionCardListRow | PublishDecisionCardArtifactsRow;
 
 const own = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
 
 /** The row's kind from its OWN property only (an inherited `kind` is not read): "text" for a row with no own kind, "list",
- * or null for any other value, which no reader draws. */
-export function publishRowKind(row: object): "text" | "list" | null {
+ * "artifacts", or null for any other value, which no reader draws. */
+export function publishRowKind(row: object): "text" | "list" | "artifacts" | null {
   if (!own(row, "kind")) return "text";
-  return (row as { kind?: unknown }).kind === "list" ? "list" : null;
+  const kind = (row as { kind?: unknown }).kind;
+  return kind === "list" || kind === "artifacts" ? kind : null;
 }
+
+/** The declared rows of a decision's node, read by OWN key only: a node id that names an Object.prototype member reads
+ * as no declaration. The card and the island read a decision's rows through this one function. */
+export function declaredPublishRowsFor(
+  byNode: PublishRowsMap | null | undefined,
+  nodeId: string,
+): readonly PublishRowDeclaration[] {
+  const map = byNode ?? {};
+  return own(map, nodeId) ? (map[nodeId] ?? []) : [];
+}
+
+/** How a server reader draws an artifacts row from its surfaced value, or null to drop it. */
+export type DrawPublishArtifactsRow = (
+  row: PublishArtifactsRowDeclaration,
+  surfaced: unknown,
+) => PublishDecisionCardArtifactsRow | null;
 
 type PublishDecisionCardCommon = {
   runId: string;
@@ -84,11 +109,14 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
  * plain value (an object, a list) is dropped: a row shows what a reader can judge, never a structure or an identifier.
  * A list row reads a surfaced list of records: each record gives one cell per column, the column's own field when it is
  * a plain value and an empty cell otherwise; an entry that is not a record is not drawn and not counted. A list with no
- * record is dropped. At most PUBLISH_LIST_ROW_ITEMS_MAX records are drawn; `total` counts them all.
+ * record is dropped. At most PUBLISH_LIST_ROW_ITEMS_MAX records are drawn; `total` counts them all. An artifacts row is
+ * drawn only by the caller's `drawArtifacts` (the server reader, which mints the row's island ref); without one it is
+ * dropped, never drawn as text.
  */
 export function publishDecisionCardRows(
   declared: ReadonlyArray<PublishRowDeclaration>,
   surfaced: Record<string, unknown>,
+  drawArtifacts?: DrawPublishArtifactsRow,
 ): PublishDecisionCardRow[] {
   const rows: PublishDecisionCardRow[] = [];
   for (const row of declared) {
@@ -98,6 +126,11 @@ export function publishDecisionCardRows(
     const { label, input } = row;
     if (!own(surfaced, input)) continue;
     const raw = surfaced[input];
+    if (kind === "artifacts") {
+      const drawn = drawArtifacts ? drawArtifacts(row as PublishArtifactsRowDeclaration, raw) : null;
+      if (drawn) rows.push(drawn);
+      continue;
+    }
     if (kind === "list") {
       const list = row as PublishListRowDeclaration;
       if (!Array.isArray(raw)) continue;
@@ -118,12 +151,26 @@ export function publishDecisionCardRows(
 const isText = (value: unknown): value is string => typeof value === "string";
 const isNameOrNull = (value: unknown): value is string | null => value === null || isText(value);
 const isTextList = (value: unknown): value is string[] => Array.isArray(value) && value.every(isText);
+/** An island ref on the transport: one base64url word inside the ref codec's 512-character bound. */
+const ISLAND_REF = /^[A-Za-z0-9_-]{1,512}$/;
+export const PUBLISH_ARTIFACTS_ISLAND_SRC_MAX = 2048;
 
-/** A text row (no `kind`), or a list row this build can draw; any other kind is unreadable. */
+/** A text row (no `kind`), or a list or artifacts row this build can draw; any other kind is unreadable. */
 function parseRow(row: unknown): PublishDecisionCardRow | null {
   if (!isRecord(row)) return null;
   const kind = publishRowKind(row);
   if (kind === null) return null;
+  if (kind === "artifacts") {
+    const { label, ref, islandSrc } = row;
+    if (!isPublishRowLabel(label)) return null;
+    if (ref !== null && !(isText(ref) && ISLAND_REF.test(ref))) return null;
+    if (islandSrc !== null && !(isText(islandSrc) && islandSrc.length > 0 && islandSrc.length <= PUBLISH_ARTIFACTS_ISLAND_SRC_MAX)) {
+      return null;
+    }
+    // An address with no ref to bind it to is not an answer this build understands.
+    if (ref === null && islandSrc !== null) return null;
+    return { kind: "artifacts", label, ref, islandSrc };
+  }
   if (kind === "list") {
     const { label, columns, items, total } = row;
     // The compiler's label rule holds on the transport too: a row label and each column label.

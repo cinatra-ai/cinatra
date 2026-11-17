@@ -178,11 +178,11 @@ describe("cinatra#4150 W4 — four rows, the text kind and the list row", () => 
     expect(() => list.columns.push({ label: "More", field: "more" })).toThrow(TypeError);
   });
 
-  it("a kind the card cannot draw is refused, artifacts included, naming the field only", () => {
-    for (const kind of ["artifacts", "table", 7, null]) {
+  it("a kind the card cannot draw is refused, naming the field only", () => {
+    for (const kind of ["table", "Artifacts", 7, null]) {
       expect(read([{ ...LIST, kind }])).toEqual({
         ok: false,
-        error: "PUBLISH_ROWS_MALFORMED: node \"publish\" metadata.cinatra.publishRows[0].kind must be text or list",
+        error: "PUBLISH_ROWS_MALFORMED: node \"publish\" metadata.cinatra.publishRows[0].kind must be text, list or artifacts",
       });
     }
   });
@@ -211,6 +211,43 @@ describe("cinatra#4150 W4 — four rows, the text kind and the list row", () => 
     expect(read([{ ...LIST, input: "people" }])).toEqual({
       ok: false,
       error: expect.stringMatching(/^PUBLISH_ROWS_UNKNOWN_INPUT: node "publish" metadata\.cinatra\.publishRows\[0\]\.input /),
+    });
+  });
+
+  // C1b: the artifacts row, drawn through the review-target island. Red at C1's head 2ea9dbd1, which refuses the kind.
+  const ARTIFACTS = { kind: "artifacts", label: "Proposed page", input: "recipients" };
+
+  it("an artifacts row compiles to exactly kind, label and input, frozen", () => {
+    const res = read([ROWS[0], ARTIFACTS]);
+    expect(res).toEqual({ ok: true, rows: { publish: [ROWS[0], ARTIFACTS] } });
+    if (!res.ok) throw new Error("unreachable");
+    const row = res.rows.publish![1]!;
+    expect(publishRowKind(row)).toBe("artifacts");
+    expect(Object.isFrozen(row)).toBe(true);
+  });
+
+  for (const [label, row, where] of [
+    ["an artifacts row with columns", { ...ARTIFACTS, columns: [{ label: "Name", field: "name" }] }, "\\[0\\] must be an object with exactly the keys kind, label and input$"],
+    ["an artifacts row with an extra key", { ...ARTIFACTS, targets: [] }, "\\[0\\] must be an object with exactly the keys kind, label and input$"],
+    ["an artifacts row with no label", { kind: "artifacts", input: "recipients" }, "\\[0\\] must be an object with exactly the keys kind, label and input$"],
+    ["an artifacts row with a two-line label", { ...ARTIFACTS, label: "Proposed\npage" }, "\\[0\\]\\.label must be one line"],
+  ] as const) {
+    it(`${label} is refused`, () => {
+      expect(read([row])).toEqual({
+        ok: false,
+        error: expect.stringMatching(new RegExp(`^PUBLISH_ROWS_MALFORMED: node "publish" metadata\\.cinatra\\.publishRows${where}`)),
+      });
+    });
+  }
+
+  it("an artifacts row over an input the node does not have, or one another row shows, is refused", () => {
+    expect(read([{ ...ARTIFACTS, input: "pages" }])).toEqual({
+      ok: false,
+      error: expect.stringMatching(/^PUBLISH_ROWS_UNKNOWN_INPUT: node "publish" metadata\.cinatra\.publishRows\[0\]\.input /),
+    });
+    expect(read([LIST, ARTIFACTS])).toEqual({
+      ok: false,
+      error: expect.stringMatching(/^PUBLISH_ROWS_MALFORMED: node "publish" metadata\.cinatra\.publishRows\[1\]\.input repeats/),
     });
   });
 
