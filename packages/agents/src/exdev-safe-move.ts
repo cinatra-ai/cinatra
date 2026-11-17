@@ -178,3 +178,38 @@ async function collectRelativeFiles(root: string): Promise<Set<string>> {
   await walk(root, "");
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Same-directory file replace (cinatra#4264 A1b)
+// ---------------------------------------------------------------------------
+//
+// A temp file written beside its target and renamed over it replaces the
+// target whole or not at all. Both names are in ONE directory, and a directory
+// lies on one filesystem, so this rename cannot throw EXDEV. The helper is that
+// one rename and refuses any other pair, so it cannot promote a file across
+// directories (a staged tree takes moveDirExdevSafe above).
+
+/** Injectable IO seam, as for moveDirExdevSafe. */
+export type ReplaceFileInSameDirDeps = {
+  rename?: (from: string, to: string) => Promise<void>;
+};
+
+/**
+ * Replace `targetPath` with `tempPath`: one `rename` inside one directory.
+ * Throws, renaming nothing, when the resolved parents differ or both name the
+ * same file. A failed rename propagates unchanged; the caller removes its temp
+ * file.
+ */
+export async function replaceFileInSameDir(
+  tempPath: string,
+  targetPath: string,
+  deps: ReplaceFileInSameDirDeps = {},
+): Promise<void> {
+  const from = path.resolve(tempPath);
+  const to = path.resolve(targetPath);
+  if (from === to || path.dirname(from) !== path.dirname(to)) {
+    throw new Error(`replaceFileInSameDir: ${tempPath} and ${targetPath} are not two files in one directory`);
+  }
+  const doRename = deps.rename ?? rename;
+  await doRename(tempPath, targetPath);
+}
