@@ -222,6 +222,7 @@ describe("the press reaches the one review entry", () => {
       ACTOR,
       null,
       null,
+      undefined, // the options argument: only a lent Comment names the typed change-request road (cinatra#4245 D2)
     );
     expect(out.structuredContent).toMatchObject({ ok: true });
   });

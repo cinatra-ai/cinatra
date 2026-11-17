@@ -230,6 +230,19 @@ function namedModules(path: string, source: string): string[] {
   return [...source.matchAll(MODULE_PATH_LITERAL)].map((m) => moduleKey(specifierPath(path, m[1])));
 }
 
+/**
+ * Whether a file names a TEST file by a relative or `@/` module path: the one
+ * exclusion of the chain scan (a test file is no module of the graph) stays
+ * closed only if no non-test file names one. A string is enough, whatever
+ * stands between a keyword and the quote (a bundler comment in a dynamic
+ * import, for example: review 3 of the forward of #4571).
+ */
+function namesATestFile(path: string, source: string): boolean {
+  return [...source.matchAll(MODULE_PATH_LITERAL)].some((m) =>
+    /\.(?:test|spec)(?:\.[cm]?[jt]sx?)?$/.test(specifierPath(path, m[1])),
+  );
+}
+
 /** Every non-test module that names one of `entries` by its module path. */
 function entryImporters(files: { path: string; source: string }[], entries: string[]): string[] {
   const keys = new Set(entries.map(moduleKey));
@@ -363,6 +376,8 @@ describe("ONE decision path carries the marks", () => {
     const importsATest =
       /(?:\bfrom|\bimport|\brequire)\s*(?:\(\s*)?["'`][^"'`\n]*\.(?:test|spec)(?:\.[cm]?[jt]sx?)?["'`]/;
     expect(all.filter((f) => !TEST_FILE.test(f.path) && importsATest.test(f.source)).map((f) => f.path)).toEqual([]);
+    // ... and by every module path in a string, not only right after a keyword.
+    expect(all.filter((f) => !TEST_FILE.test(f.path) && namesATestFile(f.path, f.source)).map((f) => f.path)).toEqual([]);
   });
 
   it("a third entry that reuses the validator is caught by the reach scan (fixture)", () => {
@@ -489,6 +504,27 @@ describe("ONE decision path carries the marks", () => {
     expect(entryChains([routes, folderIndex], REVIEW_DECISION_ENTRIES)).toEqual(
       [`${folderIndex.path} -> ${routes.path}`, `${routes.path} -> src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx`].sort(),
     );
+    // A test-named shim (review 3 of the forward): the chain scan leaves test
+    // files out, so a non-test page that names one mounts what the shim
+    // re-exports unseen. Naming a test file by a module path is refused on its
+    // own, also behind a bundler comment in a dynamic import.
+    const shim = {
+      path: "src/app/shadow/agents/[...launch]/review-shim.test.tsx",
+      source: 'export { default } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page";',
+    };
+    const shadow = {
+      path: "src/app/shadow/agents/[...launch]/page.tsx",
+      source: [
+        "export default async function Shadow(props: any) {",
+        '  const Review = (await import(/* webpackMode: "eager" */ "./review-shim.test")).default;',
+        "  return Review(props);",
+        "}",
+      ].join("\n"),
+    };
+    expect(entryChains([routes, shim, shadow], REVIEW_DECISION_ENTRIES)).toEqual([`${routes.path} -> src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx`]);
+    expect(namesATestFile(shadow.path, shadow.source)).toBe(true);
+    expect(namesATestFile(shadow.path, 'const x = import(/* c */ "@/lib/review/floor.spec.ts");')).toBe(true);
+    expect([routes, dotted, folderIndex, nearMiss, delegate].some((f) => namesATestFile(f.path, f.source))).toBe(false);
   });
 
   it("no route is named for per-item suggestion decisions", () => {

@@ -17,6 +17,8 @@
 // action's own tests use.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+// Before the fix `regenerate` is no grant control, so the mint returns null and the helper throws.
+// red-first-expect: mint failed
 
 process.env.BETTER_AUTH_SECRET ??= "test-secret-for-lent-review-authorize-first";
 
@@ -158,7 +160,8 @@ describe("a lent review press is authorized before its grant is spent (#4571 pre
     const comment = await pressBound(ref, "comment", bound);
     expect(comment.structuredContent).toMatchObject({ ok: true });
     expect(consume).toHaveBeenCalledTimes(1);
-    expect(submitReviewDecision).toHaveBeenCalledWith(RUN, AUTO_GATE, "comment", WORDS, ACTOR, null, null);
+    // The 8th argument is the options argument: only a lent Comment names the typed change-request road (cinatra#4245 D2).
+    expect(submitReviewDecision).toHaveBeenCalledWith(RUN, AUTO_GATE, "comment", WORDS, ACTOR, null, null, { typedChangeRequest: true });
   });
 
   it("a respond-only reviewer's Continue is refused without spending the grant", async () => {
@@ -208,6 +211,6 @@ describe("a lent review press is authorized before its grant is spent (#4571 pre
     expect(out.structuredContent).toMatchObject({ ok: true });
     expect(p.access).toEqual(["approveHitl"]);
     expect(consume).toHaveBeenCalledTimes(1);
-    expect(submitReviewDecision).toHaveBeenCalledWith(RUN, AUTO_GATE, "regenerate", WORDS, ACTOR, null, null);
+    expect(submitReviewDecision).toHaveBeenCalledWith(RUN, AUTO_GATE, "regenerate", WORDS, ACTOR, null, null, undefined);
   });
 });
