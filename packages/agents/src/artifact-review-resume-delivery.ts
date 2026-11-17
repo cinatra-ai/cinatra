@@ -968,7 +968,10 @@ async function settleExhaustedResumeClaim(
   } else {
     why = run ? `nothing of this gate to put back (run ${run.status})` : "the run is gone";
   }
-  const dead = await deadLetterResumeIntentUnderLease(gateId, leaseToken, `resume delivery attempts exhausted; ${why}`);
+  // The stored lastError is drawn as it is (the lifecycle-operations "Last error"
+  // column), so the settle stores the dead-letter pass's fixed text; its reason
+  // goes to the log below only.
+  const dead = await deadLetterResumeIntentUnderLease(gateId, leaseToken, RESUME_EXHAUSTED_LAST_ERROR);
   console.warn(
     `[artifact-review-resume] gate=${gateId} run=${intent.runId} used its attempts while its delivery held the run: ` +
       `${dead ? "dead-lettered" : "LEASE-LOST"}; ${why}`,
@@ -1004,6 +1007,9 @@ function refuseParkedRunClaim(): never {
 
 /** cinatra#3745: the claimed intents that used their attempts one sweep settles. */
 const SETTLE_LIMIT = 20;
+
+/** The lastError a settle stores: the same fixed text the dead-letter pass stores. */
+const RESUME_EXHAUSTED_LAST_ERROR = "resume delivery attempts exhausted";
 
 /** A log label for an error: its code or name, never its message. A driver error
  *  can carry the query's parameters (the lease token), a send error the message. */
