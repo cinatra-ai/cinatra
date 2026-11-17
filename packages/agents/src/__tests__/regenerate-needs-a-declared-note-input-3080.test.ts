@@ -11,10 +11,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // one; a chain awaited without `.limit()` reads as no rows), and
 // `db.transaction` is a spy, so "nothing was written" is a fact the test can
 // read. The declaration read is NOT replaced: its real answer is what is pinned.
-// The declaration is `cinatra.lifecycle.repairFindingsInput` (cinatra#4424) on
-// the producing run's template, compiled from a manifest whose lifecycle block
-// passed the strict `agentLifecycleDeclarationSchema` (pre-review 1 of #4571,
-// finding 2).
+// The declaration is the artifact-scoped `cinatra.lifecycle.regenerate` entry
+// (cinatra#4264) of the node that filed the reviewed revision, on the producing
+// run's template, compiled from a manifest whose lifecycle block passed the
+// strict `agentLifecycleDeclarationSchema` (pre-review 2 of unit
+// 4571-fwd16-1117). The template's root `repairFindingsInput` (cinatra#4424) is
+// not that declaration and never admits a Regenerate.
 
 const ports = vi.hoisted(() => ({
   reads: [] as unknown[][],
@@ -138,6 +140,44 @@ async function press(origin?: "typed" | "regenerate", reviewTaskId: string = TAS
   });
 }
 
+/** The filing node, step and Note input of the fixture's Regenerate entry. */
+const FILING_NODE = "file_image";
+const REGENERATE_ENTRY = { artifactNode: FILING_NODE, step: "image_flow", noteInput: "prompt" };
+
+/** The ledger read of the reviewed revision's verified filing node. */
+const filedBy = (node: string | null) => [{ verifiedStepId: node }];
+
+/** Run the canonical operation's transaction on a fake `tx` that records every
+ *  inserted value and stops at the `lifecycle_repair` insert (the one value
+ *  that carries an `idempotencyKey`), so the test reads exactly what the
+ *  repair row would have stored. */
+function captureRepairInsert(): unknown[] {
+  const inserted: unknown[] = [];
+  const chain = (result: unknown[]): Record<string, unknown> => {
+    const c: Record<string, unknown> = {};
+    for (const m of ["select", "from", "where", "for", "limit", "set", "innerJoin", "onConflictDoNothing", "orderBy"]) {
+      c[m] = () => c;
+    }
+    c.returning = async () => result;
+    c.then = (resolve: (rows: unknown[]) => unknown, reject: (err: unknown) => unknown) =>
+      Promise.resolve(result).then(resolve, reject);
+    return c;
+  };
+  const tx = {
+    select: () => chain([]),
+    update: () => chain([{ id: "gate-3080-mf2", orgId: "org-3080-mf2" }]),
+    insert: () => ({
+      values: (value: Record<string, unknown>) => {
+        inserted.push(value);
+        if ("idempotencyKey" in value) throw new Error("captured the lifecycle_repair insert");
+        return chain([]);
+      },
+    }),
+  };
+  ports.transaction.mockImplementationOnce((async (fn: (t: unknown) => Promise<unknown>) => fn(tx)) as never);
+  return inserted;
+}
+
 describe("cinatra#3080 — Regenerate needs the producing step's declared Note input", () => {
   it("REFUSES a repair-capable agent whose producing step declares no Note input, with the plain reason, and writes nothing", async () => {
     const result = await press("regenerate");
@@ -154,36 +194,104 @@ describe("cinatra#3080 — Regenerate needs the producing step's declared Note i
     });
   });
 
-  it("the real declaration read finds none on a template that declares no findings input", async () => {
+  it("the real declaration read finds none on a template that declares no regenerate entry", async () => {
     const { readProducingStepNoteInput } = await import("../lifecycle-repair-producer-registry");
-    expect(readProducingStepNoteInput(await compiledLifecycle({ repairCapable: true }))).toBeNull();
-    expect(readProducingStepNoteInput(null)).toBeNull();
+    expect(readProducingStepNoteInput(await compiledLifecycle({ repairCapable: true }), FILING_NODE)).toBeNull();
+    expect(readProducingStepNoteInput(null, FILING_NODE)).toBeNull();
   });
 
-  it("the real declaration read names the input a strict manifest declares through repairFindingsInput", async () => {
+  it("the real declaration read is the artifact-scoped regenerate entry of the filing node, never repairFindingsInput", async () => {
     const { readProducingStepNoteInput } = await import("../lifecycle-repair-producer-registry");
+    const both = await compiledLifecycle({
+      repairFindingsInput: { input: "instructions" },
+      regenerate: [REGENERATE_ENTRY],
+    });
+    expect(readProducingStepNoteInput(both, FILING_NODE)).toEqual(REGENERATE_ENTRY);
+    // Another filing node, or none proven: no entry, whatever the root input says.
+    expect(readProducingStepNoteInput(both, "file_draft")).toBeNull();
+    expect(readProducingStepNoteInput(both, null)).toBeNull();
+    // A root findings input alone is no Regenerate declaration.
     expect(
-      readProducingStepNoteInput(
-        await compiledLifecycle({ repairCapable: true, repairFindingsInput: { input: "instructions" } }),
-      ),
-    ).toBe("instructions");
+      readProducingStepNoteInput(await compiledLifecycle({ repairFindingsInput: { input: "instructions" } }), FILING_NODE),
+    ).toBeNull();
   });
 
-  it("ADMITS a Regenerate whose producing template declares repairFindingsInput: it goes on to the write", async () => {
-    // The producing template declares the findings input. After the gate-state
-    // read (pending) the canonical operation derives the lineage from the
-    // decided gate's own row and opens the transaction.
+  it("the filing node is proven by exactly one verified ledger row", async () => {
+    const { readVerifiedFilingNode } = await import("../lifecycle-repair-producer-registry");
+    expect(readVerifiedFilingNode([FILING_NODE])).toBe(FILING_NODE);
+    expect(readVerifiedFilingNode([])).toBeNull();
+    expect(readVerifiedFilingNode([null])).toBeNull();
+    expect(readVerifiedFilingNode([""])).toBeNull();
+    expect(readVerifiedFilingNode([FILING_NODE, FILING_NODE])).toBeNull();
+  });
+
+  // THE THREE FAILURES pre-review 2 of unit 4571-fwd16-1117 named
+  // (lifecycle-repair-producer-registry.ts:126 read `repairFindingsInput`).
+
+  it("1. REFUSES a template that declares only repairFindingsInput: no regenerate entry, nothing written", async () => {
+    // No `repairCapable`, so the composer reads the base artifact's type (none).
+    // No `regenerate` list, so it makes no ledger read.
     ports.reads[1] = [
       { lifecycleConfig: await compiledLifecycleText({ repairFindingsInput: { input: "instructions" } }) },
     ];
-    // This template does not declare `repairCapable`, so the composer also asks
-    // whether CORE repairs the base artifact's type: one read of that type,
-    // which finds none. Regenerate does not key on that answer; the declaration
-    // alone admits it.
     ports.reads.splice(2, 0, []);
+    const result = await press("regenerate");
+
+    const { REGENERATE_NO_NOTE_INPUT } = await import("@/lib/artifacts/review-surface-model");
+    expect(result).toEqual({ ok: false, code: "regenerate-unavailable", error: REGENERATE_NO_NOTE_INPUT });
+    expect(ports.transaction).not.toHaveBeenCalled();
+    expect(ports.write).not.toHaveBeenCalled();
+    expect(ports.reads).toEqual([]);
+  });
+
+  it("2. ADMITS a regenerate-only declaration for the verified filing node, and the repair names that node", async () => {
+    ports.reads[1] = [{ lifecycleConfig: await compiledLifecycleText({ regenerate: [REGENERATE_ENTRY] }) }];
+    // The base type read (none), then the ledger read of the filing node.
+    ports.reads.splice(2, 0, [], filedBy(FILING_NODE));
     ports.reads.push([{ id: "gate-3080-mf2", runId: RUN, reviewTaskId: TASK, orgId: "org-3080-mf2" }]);
+    const inserted = captureRepairInsert();
     await press("regenerate");
+
     expect(ports.transaction).toHaveBeenCalledTimes(1);
+    expect(ports.reads).toEqual([]);
+    const repair = inserted.find((v) => "idempotencyKey" in (v as object)) as Record<string, unknown>;
+    expect(repair).toBeDefined();
+    expect(repair.regenerateNodeId).toBe(FILING_NODE);
+    expect(repair.route).toBe("producer_repair");
+    expect(repair.status).toBe("requested");
+  });
+
+  it("3. when both are declared and disagree, the regenerate entry decides: its node is recorded, and an unproven filing node refuses", async () => {
+    const both = await compiledLifecycleText({
+      repairCapable: true,
+      repairFindingsInput: { input: "instructions" },
+      regenerate: [REGENERATE_ENTRY],
+    });
+    // (a) The verified filing node has the entry: admitted under THAT entry.
+    ports.reads[1] = [{ lifecycleConfig: both }];
+    ports.reads.splice(2, 0, filedBy(FILING_NODE));
+    ports.reads.push([{ id: "gate-3080-mf2", runId: RUN, reviewTaskId: TASK, orgId: "org-3080-mf2" }]);
+    const inserted = captureRepairInsert();
+    await press("regenerate");
+    const repair = inserted.find((v) => "idempotencyKey" in (v as object)) as Record<string, unknown>;
+    expect(repair?.regenerateNodeId).toBe(FILING_NODE);
+    expect(ports.reads).toEqual([]);
+
+    // (b) Another node filed the revision: the root findings input does not
+    // stand in for the missing entry. Refused, nothing written.
+    ports.transaction.mockClear();
+    ports.reads = [
+      [{ templateId: "tmpl-3080-mf2" }],
+      [{ lifecycleConfig: both }],
+      filedBy("file_draft"),
+      [],
+      [{ status: "pending" }],
+    ];
+    const refused = await press("regenerate");
+    expect(refused.ok).toBe(false);
+    if (refused.ok) throw new Error("unreachable");
+    expect(refused.code).toBe("regenerate-unavailable");
+    expect(ports.transaction).not.toHaveBeenCalled();
     expect(ports.reads).toEqual([]);
   });
 
@@ -210,7 +318,7 @@ describe("cinatra#3080 — a Regenerate on a RESOLVED gate is blocked, not refus
   it("answers gate-not-pending on a gate a Continue already resolved, with the real declaration read, and writes nothing", async () => {
     gateAlreadyResolved();
     const { readProducingStepNoteInput } = await import("../lifecycle-repair-producer-registry");
-    expect(readProducingStepNoteInput(await compiledLifecycle({ repairCapable: true }))).toBeNull();
+    expect(readProducingStepNoteInput(await compiledLifecycle({ repairCapable: true }), FILING_NODE)).toBeNull();
 
     const result = await press("regenerate");
 

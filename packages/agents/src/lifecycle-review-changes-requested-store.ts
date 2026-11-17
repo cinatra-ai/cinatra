@@ -37,7 +37,7 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import { createHash } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 import { pgSchema, text } from "drizzle-orm/pg-core";
 
@@ -46,7 +46,9 @@ import { agentRuns, agentTemplates } from "./schema";
 import {
   coreRepairsObjectType,
   readProducingStepNoteInput,
+  readVerifiedFilingNode,
   type CoreRepairableProducedRole,
+  type ProducingStepNoteInput,
 } from "./lifecycle-repair-producer-registry";
 import { listReviewGatesForRun, readReviewGate } from "./artifact-review-gate-store";
 import { readProducedEvent } from "./lifecycle-produced-outbox-store";
@@ -154,6 +156,53 @@ const objectsTypeRef = appSchemaRef.table("objects", {
   type: text("type").notNull(),
 });
 
+// A minimal read-only projection of the materialization ledger: which step the
+// runtime verified for a write (cinatra#4264, core__0128). Same posture as
+// `objectsTypeRef` above. Nothing here writes it.
+const materializationLedgerRef = appSchemaRef.table("artifact_materializations", {
+  id: text("id").primaryKey(),
+  orgId: text("org_id"),
+  runId: text("run_id"),
+  artifactId: text("artifact_id"),
+  representationRevisionId: text("representation_revision_id"),
+  path: text("path"),
+  phase: text("phase"),
+  verifiedStepId: text("verified_step_id"),
+});
+
+/**
+ * The node that filed the reviewed revision (cinatra#3080 on cinatra#4264): the
+ * runtime's signed step id on the one finalized `materialize_tool` ledger row of
+ * (org, producing run, artifact, revision), read through the pure
+ * `readVerifiedFilingNode`. Fail-soft toward refusal: no row, an unverified row,
+ * two rows or a read fault all yield NULL, and Regenerate is then refused.
+ */
+async function resolveVerifiedFilingNode(
+  orgId: string,
+  producerRunId: string,
+  target: { artifactId: string; representationRevisionId: string },
+): Promise<string | null> {
+  try {
+    const rows = await db
+      .select({ verifiedStepId: materializationLedgerRef.verifiedStepId })
+      .from(materializationLedgerRef)
+      .where(
+        and(
+          eq(materializationLedgerRef.orgId, orgId),
+          eq(materializationLedgerRef.runId, producerRunId),
+          eq(materializationLedgerRef.artifactId, target.artifactId),
+          eq(materializationLedgerRef.representationRevisionId, target.representationRevisionId),
+          eq(materializationLedgerRef.path, "materialize_tool"),
+          eq(materializationLedgerRef.phase, "finalized"),
+        ),
+      )
+      .limit(2);
+    return readVerifiedFilingNode(rows.map((row) => row.verifiedStepId ?? null));
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Does CORE implement the repair for the artifact under review (cinatra#2047
  * D-1)? Core's repair capability is keyed on the produced-artifact ROLE it
@@ -186,8 +235,8 @@ async function resolveCoreRepairCapable(artifactId: string): Promise<boolean> {
  * Resolve the producing run's template's compiled manifest lifecycle
  * (`agent_templates.lifecycle_config`, JSON-as-text). Both facts the change road
  * keys on come from it: the agent's `repairCapable` declaration (the typed
- * road) and the input it declares for the reviewer's words,
- * `repairFindingsInput` (Regenerate, through `readProducingStepNoteInput`).
+ * road) and its artifact-scoped `regenerate` list (Regenerate, through
+ * `readProducingStepNoteInput` for the verified filing node).
  * Best-effort + fail-soft: any missing link (orphan run, no template, absent/
  * malformed config) yields NULL, which reads as no `repairCapable` and no
  * declared input; the entry point then routes a typed request to a human / org
@@ -318,13 +367,18 @@ export async function recordReviewSurfaceChangesRequested(
     (await resolveCoreRepairCapable(baseTarget.artifactId));
   const origin = input.origin ?? "typed";
   // FOR A REGENERATE, THE STEP'S OWN DECLARATION decides (cinatra#3080, the
-  // 2026-10-13 decision), never `repairCapable` above: the operation refuses a
-  // Regenerate whose producing step names no Note input. The declaration is the
-  // producing template's `repairFindingsInput` (cinatra#4424), the input the
-  // repair's dispatch puts the reviewer's words into. The typed road is
-  // unchanged.
-  const producingStepNoteInput =
-    origin === "regenerate" ? readProducingStepNoteInput(producerLifecycle) : null;
+  // 2026-10-13 decision), never `repairCapable` above and never the template's
+  // root `repairFindingsInput`: the operation refuses a Regenerate whose
+  // producing step names no Note input. The declaration is the producing
+  // template's artifact-scoped `regenerate` entry (cinatra#4264) for the node
+  // that filed the reviewed revision, as the runtime verified it on the
+  // materialization ledger. The ledger is read only when the template declares
+  // a `regenerate` list at all. The typed road is unchanged.
+  let regenerateEntry: ProducingStepNoteInput | null = null;
+  if (origin === "regenerate" && (producerLifecycle?.regenerate?.length ?? 0) > 0) {
+    const filingNode = await resolveVerifiedFilingNode(gate.orgId, producerRunId, baseTarget);
+    regenerateEntry = readProducingStepNoteInput(producerLifecycle, filingNode);
+  }
   // An escalated repair is never drained, so the run would wait at an ended pause.
   if (declaredStep && !repairCapable) return notEligible("the producer cannot repair");
 
@@ -391,7 +445,7 @@ export async function recordReviewSurfaceChangesRequested(
       currentBaseRevisionId,
       decidedBy: input.decidedBy ?? null,
       origin,
-      producingStepNoteInput,
+      regenerateEntry,
       ...(declaredPause ? { declaredPause } : {}),
     });
   } catch (err) {

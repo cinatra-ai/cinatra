@@ -3,12 +3,12 @@
  * (cinatra#3080).
  *
  * The sibling suite `review-floor-3080.integration.test.ts` answers the
- * runs on templates that DECLARE the Note input (`repairFindingsInput`,
- * cinatra#4424) by default. Its Regenerate-after-Continue case therefore never
- * met the refusal for a step that declares nothing. This file seeds a template
- * that declares no findings input, and the declaration read
- * (`readProducingStepNoteInput`, over the template's compiled lifecycle) is the
- * real one: it finds none.
+ * runs on templates that DECLARE the Note input (an artifact-scoped
+ * `regenerate` entry, cinatra#4264, for the verified filing node) by default.
+ * Its Regenerate-after-Continue case therefore never met the refusal for a step
+ * that declares nothing. This file seeds a template that declares no regenerate
+ * entry, and the declaration read (`readProducingStepNoteInput`, over the
+ * template's compiled lifecycle) is the real one: it finds none.
  *
  * The rule pinned here: a Regenerate on a gate that a Continue already
  * resolved is BLOCKED (`gate-not-pending`), and the first decision stands. It
@@ -47,7 +47,7 @@ const target = (): Target => ({
 
 /** A real run on a real template whose agent DECLARES `repairCapable: true`.
  *  The producing step declares no Note input: the compiled lifecycle carries no
- *  `repairFindingsInput`, so the real read finds none. */
+ *  `regenerate` entry, so the real read finds none. */
 async function seedRun(): Promise<string> {
   const runId = `run-${randomUUID()}`;
   const templateId = `tmpl-${randomUUID()}`;
@@ -192,6 +192,7 @@ describe.skipIf(!HAS_DB)("cinatra#3080 — Regenerate after Continue, with the r
     expect(
       readProducingStepNoteInput(
         parseLifecycleConfigText((rows[0] as { lifecycle_config: string | null }).lifecycle_config),
+        "file_image",
       ),
     ).toBeNull();
   });

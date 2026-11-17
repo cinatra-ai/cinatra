@@ -33,18 +33,21 @@ import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 
 // NOTHING HERE STANDS IN FOR THE DECLARATION READ (pre-review 1 of #4571,
-// finding 2). Regenerate is available exactly when the producing step declares
-// the input the reviewer's words go into (the 2026-10-13 decision). The real,
-// strict-schema declaration of that input is `cinatra.lifecycle.
-// repairFindingsInput` (cinatra#4424). Each run here is seeded on a template
-// whose `lifecycle_config` is compiled the way an install compiles it
-// (`readManifestLifecycle` then `serializeLifecycleConfig`, as
+// finding 2; pre-review 2 of unit 4571-fwd16-1117). Regenerate is available
+// exactly when the producing step declares the input the reviewer's words go
+// into (the 2026-10-13 decision). The real, strict-schema declaration of that
+// input is the artifact-scoped `cinatra.lifecycle.regenerate` entry
+// (cinatra#4264) of the node that filed the reviewed revision. Each run here is
+// seeded on a template whose `lifecycle_config` is compiled the way an install
+// compiles it (`readManifestLifecycle` then `serializeLifecycleConfig`, as
 // `build-agent-template-seed.ts` does) from a manifest whose lifecycle block
-// first passed the STRICT `agentLifecycleDeclarationSchema`. A run whose
-// manifest declares no findings input is the refusal arm, read by the same
-// real read.
+// first passed the STRICT `agentLifecycleDeclarationSchema`, and each pressed
+// revision has the materialization ledger row that names its verified filing
+// node. A run whose manifest declares no regenerate entry is the refusal arm,
+// read by the same real read.
 import { agentLifecycleDeclarationSchema } from "../verdaccio/package-contract";
 import {
+  buildRepairFindingsText,
   parseLifecycleConfigText,
   projectRepairFindingsInput,
   readManifestLifecycle,
@@ -55,8 +58,12 @@ import {
 import type { ReviewDecisionCommitPlan } from "@/lib/artifacts/artifact-review-decision";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
-/** The template root input the fixture manifest names for the reviewer's words. */
-const DECLARED_INPUT = "instructions";
+/** The fixture's Regenerate entry: the node that files the reviewed revision,
+ *  the step a Regenerate reruns, and that step's Note input. */
+const FILING_NODE = "file_image";
+const REGENERATE_ENTRY = { artifactNode: FILING_NODE, step: "image_flow", noteInput: "prompt" };
+/** A template ROOT findings input (cinatra#4424): never a Regenerate declaration. */
+const ROOT_FINDINGS_INPUT = "instructions";
 
 /** The `lifecycle_config` text an install writes for this lifecycle block, after
  *  the strict manifest parse (which throws on any key the contract lacks). */
@@ -91,6 +98,8 @@ async function seedRun(opts?: {
   repairCapable?: boolean;
   /** Whether the producing step declares the Note input (default: it does). */
   declaresNoteInput?: boolean;
+  /** Whether the template also declares a root findings input (default: no). */
+  declaresRootFindingsInput?: boolean;
 }): Promise<string> {
   const runId = `run-${randomUUID()}`;
   const templateId = `tmpl-${randomUUID()}`;
@@ -101,12 +110,14 @@ async function seedRun(opts?: {
   // counted repair rows rather than asking whether anything could ever answer
   // them. The template is seeded now, and what it DECLARES is which arm the test
   // is on: a step that can make the work again, or nothing that can.
-  // For a Regenerate the arm is set by the STEP'S Note-input declaration
-  // (`repairFindingsInput`), not by the agent-level `repairCapable` flag; the
-  // flag still sets the typed road's arm.
+  // For a Regenerate the arm is set by the STEP'S Note-input declaration (the
+  // artifact-scoped `regenerate` entry), not by the agent-level `repairCapable`
+  // flag and not by a root `repairFindingsInput`; the flag still sets the typed
+  // road's arm.
   const lifecycleConfig = compiledLifecycleConfig({
     repairCapable: opts?.repairCapable ?? true,
-    ...((opts?.declaresNoteInput ?? true) ? { repairFindingsInput: { input: DECLARED_INPUT } } : {}),
+    ...((opts?.declaresNoteInput ?? true) ? { regenerate: [REGENERATE_ENTRY] } : {}),
+    ...(opts?.declaresRootFindingsInput ? { repairFindingsInput: { input: ROOT_FINDINGS_INPUT } } : {}),
   });
   await client.query(
     `INSERT INTO "${q(TEST_SCHEMA)}"."agent_templates"
@@ -209,6 +220,19 @@ function continuePlan(
   };
 }
 
+/** The ledger row of the write that filed `base` on `runId`, naming the filing
+ *  node the runtime verified (`verified_step_id`, cinatra#4264). Idempotent. */
+async function seedFiling(runId: string, base: Target, node: string | null = FILING_NODE): Promise<void> {
+  await client.query(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_materializations"
+       (id, org_id, run_id, output_id, node_id, path, extension, content_hash,
+        artifact_id, representation_revision_id, phase, verified_step_id)
+     VALUES ($1, $2, $3, $4, $4, 'materialize_tool', '@cinatra-ai/review-floor-fixture', $5, $6, $5, 'finalized', $7)
+     ON CONFLICT DO NOTHING`,
+    [`mat-${randomUUID()}`, ORG, runId, node ?? FILING_NODE, base.representationRevisionId, base.artifactId, node],
+  );
+}
+
 async function regenerate(
   runId: string,
   reviewTaskId: string,
@@ -216,6 +240,8 @@ async function regenerate(
   note: string,
   prompt?: string,
 ) {
+  // The reviewed revision was filed by the fixture's filing node, verified.
+  await seedFiling(runId, base);
   return changesRequested.recordReviewSurfaceChangesRequested({
     runId,
     reviewTaskId,
@@ -243,7 +269,7 @@ async function gateRow(runId: string, reviewTaskId: string) {
 
 async function repairRowsFor(gateId: string) {
   const { rows } = await client.query(
-    `SELECT id, attempt, findings, idempotency_key, route, status FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE gate_id = $1`,
+    `SELECT id, attempt, findings, idempotency_key, route, status, regenerate_node_id FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE gate_id = $1`,
     [gateId],
   );
   return rows as Array<{
@@ -253,6 +279,7 @@ async function repairRowsFor(gateId: string) {
     idempotency_key: string;
     route: string;
     status: string;
+    regenerate_node_id: string | null;
   }>;
 }
 
@@ -550,13 +577,15 @@ describe.skipIf(!HAS_DB)("item 4 — Regenerate rides the change road's canonica
     expect(result.route.kind).toBe("producer_repair");
   });
 
-  // WHERE THE REVIEWER'S WORDS GO (finding 2 of pre-review 1, #4571). The
-  // repair this Regenerate opens is answered by the dispatch drain, which puts
-  // the findings text into exactly the declared input
-  // (`projectRepairFindingsInput`, cinatra#4424). Read from the stored repair
-  // and the stored template: the input is the declared one, and its text is the
-  // #4424 lead line, a blank line, then the note as finding 1.
-  it("the note reaches the declared input as the #4424 lead line plus the note as finding 1", async () => {
+  // WHERE THE REVIEWER'S WORDS GO (pre-review 2 of unit 4571-fwd16-1117). The
+  // repair this Regenerate opens names the node whose `regenerate` entry
+  // admitted it (`regenerate_node_id`, the Regenerate intent): the step road
+  // (cinatra#4264) re-derives that entry and puts the note into the step's
+  // `noteInput`, and the ordinary drain never runs it through a root findings
+  // input. Read from the stored repair: the node is the verified filing node,
+  // and the note text is the #4424 lead line, a blank line, then the note as
+  // finding 1.
+  it("the repair names the filing node's entry, and the note text is the #4424 lead line plus the note as finding 1", async () => {
     const runId = await seedRun();
     const base = target();
     const reviewTaskId = await emitLifecycleGate(runId, [base]);
@@ -565,12 +594,13 @@ describe.skipIf(!HAS_DB)("item 4 — Regenerate rides the change road's canonica
     expect(result.ok).toBe(true);
     const after = await gateRow(runId, reviewTaskId);
     const [repair] = await repairRowsFor(after!.id);
-    expect(projectRepairFindingsInput(await templateLifecycle(runId), repair.findings)).toEqual({
-      [DECLARED_INPUT]: `${REPAIR_FINDINGS_TEXT_LEAD}\n\n1. make the sky bluer`,
-    });
+    expect(repair.regenerate_node_id).toBe(FILING_NODE);
+    expect(buildRepairFindingsText(repair.findings as never)).toBe(
+      `${REPAIR_FINDINGS_TEXT_LEAD}\n\n1. make the sky bluer`,
+    );
   });
 
-  it("a picture's prompt follows the note as finding 2 in the same declared input", async () => {
+  it("a picture's prompt follows the note as finding 2 in the same note text", async () => {
     const runId = await seedRun();
     const base = target();
     const reviewTaskId = await emitLifecycleGate(runId, [base]);
@@ -579,9 +609,64 @@ describe.skipIf(!HAS_DB)("item 4 — Regenerate rides the change road's canonica
     expect(result.ok).toBe(true);
     const after = await gateRow(runId, reviewTaskId);
     const [repair] = await repairRowsFor(after!.id);
-    expect(projectRepairFindingsInput(await templateLifecycle(runId), repair.findings)).toEqual({
-      [DECLARED_INPUT]: `${REPAIR_FINDINGS_TEXT_LEAD}\n\n1. warmer light\n2. a red bicycle at golden hour`,
-    });
+    expect(repair.regenerate_node_id).toBe(FILING_NODE);
+    expect(buildRepairFindingsText(repair.findings as never)).toBe(
+      `${REPAIR_FINDINGS_TEXT_LEAD}\n\n1. warmer light\n2. a red bicycle at golden hour`,
+    );
+  });
+
+  // THE THREE FAILURES pre-review 2 of unit 4571-fwd16-1117 named, on the real
+  // store and the real declaration read.
+  it("a template that declares only a root repairFindingsInput is refused, and the gate stays pending", async () => {
+    const runId = await seedRun({ declaresNoteInput: false, declaresRootFindingsInput: true });
+    const base = target();
+    const reviewTaskId = await emitLifecycleGate(runId, [base]);
+
+    const result = await regenerate(runId, reviewTaskId, base, "make the sky bluer");
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.code).toBe("regenerate-unavailable");
+    const after = await gateRow(runId, reviewTaskId);
+    expect(after?.status).toBe("pending");
+    expect(await repairRowsFor(after!.id)).toHaveLength(0);
+  });
+
+  it("a template that declares both regenerates under the entry: the repair names the node, not the root input", async () => {
+    const runId = await seedRun({ declaresRootFindingsInput: true });
+    const base = target();
+    const reviewTaskId = await emitLifecycleGate(runId, [base]);
+
+    const result = await regenerate(runId, reviewTaskId, base, "make the sky bluer");
+    expect(result.ok).toBe(true);
+    const after = await gateRow(runId, reviewTaskId);
+    const [repair] = await repairRowsFor(after!.id);
+    expect(repair.regenerate_node_id).toBe(FILING_NODE);
+    // The root input still exists on the template; the Regenerate does not use it.
+    expect(projectRepairFindingsInput(await templateLifecycle(runId), repair.findings)).not.toBeNull();
+  });
+
+  it("a revision whose filing node the runtime did not verify, or another node filed, is refused", async () => {
+    for (const node of [null, "file_draft"]) {
+      const runId = await seedRun({ declaresRootFindingsInput: true });
+      const base = target();
+      const reviewTaskId = await emitLifecycleGate(runId, [base]);
+      await seedFiling(runId, base, node);
+      const result = await changesRequested.recordReviewSurfaceChangesRequested({
+        runId,
+        reviewTaskId,
+        baseTarget: base,
+        currentBaseRevisionId: base.representationRevisionId,
+        feedback: "make the sky bluer",
+        decidedBy: OWNER_ID,
+        origin: "regenerate",
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("unreachable");
+      expect(result.code).toBe("regenerate-unavailable");
+      const after = await gateRow(runId, reviewTaskId);
+      expect(after?.status).toBe("pending");
+      expect(await repairRowsFor(after!.id)).toHaveLength(0);
+    }
   });
 
   it("refuses an EMPTY note with a reason, and writes nothing at all", async () => {
@@ -736,12 +821,13 @@ describe.skipIf(!HAS_DB)("item 5 — the note and the picture's prompt are two v
 
 // NO STAND-IN FLAG (the 2026-10-13 decision stands). The strict lifecycle block
 // refuses any step-level key the contract lacks, so the only way a manifest can
-// name the input is `repairFindingsInput`. Pure: runs without a database.
+// name the step's Note input is the artifact-scoped `regenerate` entry
+// (cinatra#4264). Pure: runs without a database.
 describe("finding 2 of #4571: the declaration is the strict contract's own field", () => {
-  it("a manifest naming the input through repairFindingsInput compiles onto lifecycle_config", () => {
-    expect(
-      parseLifecycleConfigText(compiledLifecycleConfig({ repairFindingsInput: { input: DECLARED_INPUT } })),
-    ).toEqual({ repairFindingsInput: { input: DECLARED_INPUT } });
+  it("a manifest naming the Note input through a regenerate entry compiles onto lifecycle_config", () => {
+    expect(parseLifecycleConfigText(compiledLifecycleConfig({ regenerate: [REGENERATE_ENTRY] }))).toEqual({
+      regenerate: [REGENERATE_ENTRY],
+    });
   });
 
   it("the strict schema refuses an invented step-level key", () => {

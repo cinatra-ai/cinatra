@@ -185,14 +185,18 @@ export interface RecordChangesRequestedInput {
   origin?: "typed" | "regenerate";
   /**
    * THE PRODUCING STEP'S DECLARED NOTE INPUT (cinatra#3080, the 2026-10-13
-   * decision): the name of the one text input the reviewer's Note fills, or
-   * null when the step declares none. Read ONLY for `origin: "regenerate"`,
-   * where it REPLACES `repairCapable`: a Regenerate is available exactly when
-   * the producing step declares this input, whatever the agent-level flag says.
-   * Absent or null ⇒ the Regenerate is refused with the plain reason, before
-   * anything is written. Ignored by the `typed` road.
+   * decision): the producing template's artifact-scoped `regenerate` entry
+   * (cinatra#4264) for the node that filed the reviewed revision, or null when
+   * there is none. Read ONLY for `origin: "regenerate"`, where it REPLACES
+   * `repairCapable`: a Regenerate is available exactly when that step declares
+   * its Note input, whatever the agent-level flag or the template's root
+   * `repairFindingsInput` says. Absent or null ⇒ the Regenerate is refused with
+   * the plain reason, before anything is written. A recorded Regenerate stores
+   * the entry's `artifactNode` as the repair's `regenerate_node_id` (the
+   * Regenerate intent), so its dispatch re-derives the same entry and never
+   * runs it as an ordinary repair. Ignored by the `typed` road.
    */
-  producingStepNoteInput?: string | null;
+  regenerateEntry?: { artifactNode: string; step: string; noteInput: string } | null;
   /**
    * cinatra#4245: the change request ENDS the pause of `runId` at a review step
    * the flow declares itself (`pauseTaskId` is the A2A task of that pause). Only
@@ -502,9 +506,10 @@ export async function recordChangesRequested(
       };
     }
   }
-  const declaredNoteInput =
-    input.origin === "regenerate" ? (input.producingStepNoteInput?.trim() ?? "") : "";
-  if (input.origin === "regenerate" && declaredNoteInput.length === 0) {
+  const regenerateEntry = input.origin === "regenerate" ? (input.regenerateEntry ?? null) : null;
+  const declaredNoteInput = regenerateEntry?.noteInput.trim() ?? "";
+  const regenerateNodeId = regenerateEntry?.artifactNode.trim() ?? "";
+  if (input.origin === "regenerate" && (declaredNoteInput.length === 0 || regenerateNodeId.length === 0)) {
     return { ok: false, code: "regenerate-unavailable", error: REGENERATE_NO_NOTE_INPUT };
   }
 
@@ -639,6 +644,9 @@ export async function recordChangesRequested(
         status,
         idempotencyKey: request.idempotencyKey,
         pausedRunGeneration: ended?.generation ?? null,
+        // cinatra#3080 on cinatra#4264: a Regenerate names the node whose entry
+        // it was admitted under; NULL keeps every other repair ordinary.
+        regenerateNodeId: input.origin === "regenerate" ? regenerateNodeId : null,
       })
       .onConflictDoNothing({ target: [lifecycleRepair.gateId] })
       .returning();
