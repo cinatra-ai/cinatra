@@ -406,12 +406,22 @@ describe("cinatra#2926 row 25 — a markdown draft is resolved, drawn and record
 });
 
 describe("cinatra#2926 row 25 — the fixture tells a drawn draft from a fallback", () => {
-  // THE CONTROL. The same markdown draft, with no pack installed that draws it,
-  // is the case the floor gate counts. If the recording did not follow the
-  // resolution (always build-map, or always a fixed package) the cases above
+  // THE CONTROL. A markdown draft can never be the floor on this road: the
+  // markdown pack is a build-time SYSTEM extension (its build-map entry is
+  // `resolution: "required"`), and the host binds every system base's
+  // representation provider for every org each time it resolves, with the
+  // installed fleet registered or not. So "no installed pack" cannot turn a
+  // markdown draft into a floor, and a control that asked for that would be
+  // asserting something the product rightly never does. What the floor gate
+  // counts is a draft NOTHING draws: the row the dispatch matrix pins, an untyped
+  // row whose media type no system base binds a provider for
+  // (`application/octet-stream` is not a safe-transport form). It resolves to a
+  // floor that names the package its type names. If the recording did not follow
+  // the resolution (always build-map, or always a fixed package) the cases above
   // would pass for the wrong reason, and this one would not.
-  it("a markdown draft no installed pack draws is recorded as a floor, and is not the extension's display", async () => {
-    const artifact = draft("@acme/x:row", NO_WINNER, "text/markdown");
+  it("a draft nothing draws is recorded as a floor, and is not the markdown extension's display", async () => {
+    registerFleet();
+    const artifact = draft("@acme/x:row", NO_WINNER, "application/octet-stream");
     seedDraft(artifact);
 
     const mount = await reviewRoadMount(artifact);
@@ -421,8 +431,11 @@ describe("cinatra#2926 row 25 — the fixture tells a drawn draft from a fallbac
     expect(result.ok).toBe(true);
 
     const [row] = committedPlan().auditRows;
-    expect(row!.rendererProvenance.kind).toBe("floor");
-    expect(row!.rendererProvenance.digest).toBeNull();
+    expect(row!.rendererProvenance).toStrictEqual({
+      kind: "floor",
+      packageName: "@acme/x",
+      digest: null,
+    });
     expect(row!.rendererProvenance.packageName).not.toBe(MARKDOWN_PACKAGE);
   });
 });
