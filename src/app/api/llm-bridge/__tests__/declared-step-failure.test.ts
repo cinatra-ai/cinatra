@@ -17,6 +17,8 @@
  * completed.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 const modelAnswer = vi.hoisted(() => ({
   text: null as string | null,
@@ -305,6 +307,38 @@ describe("/api/llm-bridge ends a step failed on a failure it answered", () => {
     const body = (await res.json()) as { stepErrorCode?: string; message?: string };
     expect(body.stepErrorCode).toBe("c".repeat(200));
     expect(body.message).toBe("m".repeat(1000));
+  });
+
+  it("answers the 422 as one JSON body whose four members stand in a fixed order", async () => {
+    modelAnswer.text = JSON.stringify({
+      title: "",
+      error: { code: "read-failed", message: "The page could not be read." },
+    });
+    const res = await POST(stepCall());
+    expect(res.status).toBe(422);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect(await res.text()).toBe(
+      '{"error":"The step answered a failure","code":"STEP_DECLARED_FAILURE",' +
+        '"stepErrorCode":"read-failed","message":"The page could not be read."}',
+    );
+  });
+
+  it("names NextResponse only as NextResponse.json(: the failure helper hands back a plain body", () => {
+    const src = readFileSync(join(__dirname, "..", "route.ts"), "utf8");
+    const other = src
+      .split("\n")
+      .filter((line) => /\bNextResponse\b/.test(line) && !line.includes("NextResponse.json("));
+    // The import is the one other line: no helper is typed as a response and
+    // no response travels from a helper to a branch as a value.
+    expect(other).toEqual(['import { NextResponse } from "next/server";']);
+  });
+
+  it("answers the declared failure at each of the three model branches with NextResponse.json(body, { status: 422 })", () => {
+    const src = readFileSync(join(__dirname, "..", "route.ts"), "utf8");
+    // The text path, the YouTube link and the fetched file each return the
+    // helper's plain body as the 422 answer.
+    const answers = src.match(/return NextResponse\.json\(\w+Failure, \{ status: 422 \}\);/g);
+    expect(answers).toHaveLength(3);
   });
 
   it("logs the caller's agent id cut at 120 characters as one JSON-escaped token", async () => {

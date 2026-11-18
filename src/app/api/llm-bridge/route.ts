@@ -842,21 +842,34 @@ function readDeclaredStepFailure(
   return { code: shown, message: said };
 }
 
+/** The body of the 422 STEP_DECLARED_FAILURE answer, members in this order. */
+type DeclaredStepFailureBody = {
+  error: string;
+  code: string;
+  stepErrorCode: string;
+  message: string;
+};
+
 /**
  * The ONE outcome rule for a model's answer, read at EVERY branch of this route
- * that calls a model (the text path and both media-input paths): the 422
- * STEP_DECLARED_FAILURE answer when the answer `text` is a JSON object whose
- * top-level `error` declares a failure the step does not list as completed
- * (readDeclaredStepFailure), else null and the branch answers as before.
- * Text that is not JSON (a transcript, prose) is never a declared failure.
- * The log line names the bounded code and the caller's agent label, each as
- * one cut, JSON-escaped token (logToken); it never names the model's message.
+ * that calls a model (the text path and both media-input paths): the body of
+ * the 422 STEP_DECLARED_FAILURE answer when the answer `text` is a JSON object
+ * whose top-level `error` declares a failure the step does not list as
+ * completed (readDeclaredStepFailure), else null and the branch answers as
+ * before. Text that is not JSON (a transcript, prose) is never a declared
+ * failure. The log line names the bounded code and the caller's agent label,
+ * each as one cut, JSON-escaped token (logToken); it never names the model's
+ * message.
+ *
+ * The helper hands back a plain body, never a response: each branch returns it
+ * itself as NextResponse.json(body, { status: 422 }), so every answer of this
+ * route is built at the place that returns it.
  */
-function declaredStepFailureResponse(
+function declaredStepFailureBody(
   text: string,
   completedCodes: readonly string[] | undefined,
   agentLabel: string,
-): NextResponse | null {
+): DeclaredStepFailureBody | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -872,15 +885,12 @@ function declaredStepFailureResponse(
       `its data does not list the code ` +
       `as completed, so the step ends failed (422 ${STEP_DECLARED_FAILURE}).`,
   );
-  return NextResponse.json(
-    {
-      error: "The step answered a failure",
-      code: STEP_DECLARED_FAILURE,
-      stepErrorCode: declaredFailure.code,
-      message: declaredFailure.message,
-    },
-    { status: 422 },
-  );
+  return {
+    error: "The step answered a failure",
+    code: STEP_DECLARED_FAILURE,
+    stepErrorCode: declaredFailure.code,
+    message: declaredFailure.message,
+  };
 }
 
 function toPersonalDelta(
@@ -1237,12 +1247,12 @@ export async function POST(req: Request): Promise<Response> {
         }),
       );
       const youTubeText = result.text ?? "";
-      const youTubeFailure = declaredStepFailureResponse(
+      const youTubeFailure = declaredStepFailureBody(
         youTubeText,
         body.completed_error_codes,
         body.agent_id ?? "media-transcript-agent",
       );
-      if (youTubeFailure) return youTubeFailure;
+      if (youTubeFailure) return NextResponse.json(youTubeFailure, { status: 422 });
       return NextResponse.json({ text: youTubeText });
     }
 
@@ -1366,12 +1376,12 @@ export async function POST(req: Request): Promise<Response> {
         }),
       );
       const fileText = result.text ?? "";
-      const fileFailure = declaredStepFailureResponse(
+      const fileFailure = declaredStepFailureBody(
         fileText,
         body.completed_error_codes,
         body.agent_id ?? "media-transcript-agent",
       );
-      if (fileFailure) return fileFailure;
+      if (fileFailure) return NextResponse.json(fileFailure, { status: 422 });
       return NextResponse.json({ text: fileText });
     } finally {
       if (adapter.deleteFile) {
@@ -2238,12 +2248,12 @@ export async function POST(req: Request): Promise<Response> {
       );
     }
 
-    const declaredFailure = declaredStepFailureResponse(
+    const declaredFailure = declaredStepFailureBody(
       text,
       body.completed_error_codes,
       body.agent_id ?? "wayflow",
     );
-    if (declaredFailure) return declaredFailure;
+    if (declaredFailure) return NextResponse.json(declaredFailure, { status: 422 });
 
     try {
       const parsed = JSON.parse(text);
