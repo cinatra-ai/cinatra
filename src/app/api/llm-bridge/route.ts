@@ -794,6 +794,23 @@ export function buildAgentRunInjectionPorts(
 const STEP_DECLARED_FAILURE = "STEP_DECLARED_FAILURE";
 const STEP_FAILURE_CODE_MAX = 200;
 const STEP_FAILURE_MESSAGE_MAX = 1000;
+// The caller's agent id is only a label in the log line, cut at this length.
+const STEP_FAILURE_LOG_LABEL_MAX = 120;
+
+/**
+ * A caller-given value as it may stand in a log line: cut at `max` characters
+ * and JSON-escaped, so it stays ONE bounded quoted token on ONE line and can
+ * neither flood the log nor forge another entry. JSON.stringify escapes the
+ * quote, the backslash, every control character below U+0020 and a lone
+ * surrogate; the DEL and C1 controls and the separators U+2028 and U+2029,
+ * which it leaves raw, are escaped here as well.
+ */
+function logToken(value: string, max: number): string {
+  return JSON.stringify(value.slice(0, max)).replace(
+    /[\u007f-\u009f\u2028\u2029]/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
 
 /**
  * A step's answer that ends the step FAILED, or null.
@@ -832,6 +849,8 @@ function readDeclaredStepFailure(
  * top-level `error` declares a failure the step does not list as completed
  * (readDeclaredStepFailure), else null and the branch answers as before.
  * Text that is not JSON (a transcript, prose) is never a declared failure.
+ * The log line names the bounded code and the caller's agent label, each as
+ * one cut, JSON-escaped token (logToken); it never names the model's message.
  */
 function declaredStepFailureResponse(
   text: string,
@@ -847,8 +866,10 @@ function declaredStepFailureResponse(
   const declaredFailure = readDeclaredStepFailure(parsed, completedCodes);
   if (!declaredFailure) return null;
   console.warn(
-    `[llm-bridge] step answered the error code ${JSON.stringify(declaredFailure.code)} ` +
-      `(agent=${agentLabel}); its data does not list the code ` +
+    `[llm-bridge] step answered the error code ` +
+      `${logToken(declaredFailure.code, STEP_FAILURE_CODE_MAX)} ` +
+      `(agent=${logToken(agentLabel, STEP_FAILURE_LOG_LABEL_MAX)}); ` +
+      `its data does not list the code ` +
       `as completed, so the step ends failed (422 ${STEP_DECLARED_FAILURE}).`,
   );
   return NextResponse.json(

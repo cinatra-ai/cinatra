@@ -307,6 +307,24 @@ describe("/api/llm-bridge ends a step failed on a failure it answered", () => {
     expect(body.message).toBe("m".repeat(1000));
   });
 
+  it("logs the caller's agent id cut at 120 characters as one JSON-escaped token", async () => {
+    modelAnswer.text = JSON.stringify({ error: { code: "read-failed", message: "m" } });
+    const forged =
+      'page-reader\n[llm-bridge] step answered the error code "ok" (agent=forged)\r\n' +
+      "p".repeat(120) +
+      "FLOOD".repeat(2000);
+    const res = await POST(stepCall({ agent_id: forged }));
+    expect(res.status).toBe(422);
+    const lines = vi
+      .mocked(console.warn)
+      .mock.calls.map((call) => String(call[0]))
+      .filter((line) => line.includes("step answered the error code"));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).not.toMatch(/[\r\n]/);
+    expect(lines[0]).toContain(`(agent=${JSON.stringify(forged.slice(0, 120))})`);
+    expect(lines[0]).not.toContain("FLOOD");
+  });
+
   it.each([
     ["a message that is not a string", 42],
     ["a blank message", "   "],
