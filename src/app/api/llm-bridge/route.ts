@@ -792,12 +792,30 @@ export function buildAgentRunInjectionPorts(
 // fails the step at once, without the retries it gives other non-2xx answers
 // (docker/wayflow/agent_loader.py, _patch_api_call_step_bridge_token).
 const STEP_DECLARED_FAILURE = "STEP_DECLARED_FAILURE";
+// The step's code is cut at this many Unicode code points (the loader's count).
 const STEP_FAILURE_CODE_MAX = 200;
-// The caller's agent id is only a label in the log line, cut at this length.
+// The caller's agent id is only a label in the log line, cut at this length
+// (in code points).
 const STEP_FAILURE_LOG_LABEL_MAX = 120;
 
 /**
- * A caller-given value as it may stand in a log line: cut at `max` characters
+ * `value` cut after `max` Unicode code points. The runtime's loader counts code
+ * points (python slices a string by code point), but `String.prototype.slice`
+ * counts UTF-16 code units, so a cut that falls inside a character outside the
+ * BMP would leave a lone high surrogate. A surrogate pair counts as ONE code
+ * point and a lone surrogate counts as one, as python counts the same text once
+ * it is decoded from JSON.
+ */
+function cutCodePoints(value: string, max: number): string {
+  let end = 0;
+  for (let counted = 0; counted < max && end < value.length; counted += 1) {
+    end += (value.codePointAt(end) ?? 0) > 0xffff ? 2 : 1;
+  }
+  return value.slice(0, end);
+}
+
+/**
+ * A caller-given value as it may stand in a log line: cut at `max` code points
  * and JSON-escaped, so it stays ONE bounded quoted token on ONE line and can
  * neither flood the log nor forge another entry. JSON.stringify escapes the
  * quote, the backslash, every control character below U+0020 and a lone
@@ -805,7 +823,7 @@ const STEP_FAILURE_LOG_LABEL_MAX = 120;
  * which it leaves raw, are escaped here as well.
  */
 function logToken(value: string, max: number): string {
-  return JSON.stringify(value.slice(0, max)).replace(
+  return JSON.stringify(cutCodePoints(value, max)).replace(
     /[\u007f-\u009f\u2028\u2029]/g,
     (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
   );
@@ -822,7 +840,8 @@ function logToken(value: string, max: number): string {
  * answers `error: { code: "", message: "" }`). Only the TOP-LEVEL `error` of an
  * object answer is read: an `error` nested in another output, and every answer
  * that is not a JSON object, are passed on unchanged as before. Only the code is
- * read, cut at STEP_FAILURE_CODE_MAX: the model's `message` is never read.
+ * read, cut at STEP_FAILURE_CODE_MAX code points: the model's `message` is never
+ * read.
  */
 function readDeclaredStepFailure(
   parsed: unknown,
@@ -834,7 +853,7 @@ function readDeclaredStepFailure(
   const { code } = error as { code?: unknown };
   if (typeof code !== "string" || code.trim() === "") return null;
   if (completedCodes?.includes(code)) return null;
-  return { code: code.slice(0, STEP_FAILURE_CODE_MAX) };
+  return { code: cutCodePoints(code, STEP_FAILURE_CODE_MAX) };
 }
 
 /**
@@ -842,7 +861,10 @@ function readDeclaredStepFailure(
  * and every character outside printable ASCII written as a \uXXXX escape, so
  * it is ONE line of printable ASCII. This is the escape the runtime's loader
  * gives the code (docker/wayflow/agent_loader.py, StepDeclaredFailureError:
- * json.dumps, then DEL); the caller cuts the code first, as the loader does.
+ * json.dumps, then DEL), for every string: a character outside the BMP is
+ * written as the escapes of its surrogate pair, a lone surrogate as its own
+ * escape, and U+2028 and U+2029 as escapes. The caller cuts the code first, by
+ * code points, as the loader does (cutCodePoints).
  */
 function stepCodeText(code: string): string {
   return JSON.stringify(code)

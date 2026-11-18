@@ -20,8 +20,13 @@ own ``httpx.AsyncClient`` gets a transport that counts the requests it receives:
     the URL ends in /api/llm-bridge), on any host; a call to another path is
     not;
   - nothing on the step bypasses the stop: a request with an auth of its own
-    keeps that auth and still stops, and so does a step that takes bad
-    answers itself (``ignore_bad_http_requests``);
+    keeps that auth and still stops (an httpx auth, a user and password pair,
+    a callable, ``USE_CLIENT_DEFAULT``, a flow with a challenge round, on the
+    async and the sync client; a flow that throws reaches the caller and a flow
+    the stop ends is closed), and so does a step that takes bad answers itself
+    (``ignore_bad_http_requests``);
+  - the bridge token decides only the auth header: the stop is installed whether
+    or not ``CINATRA_BRIDGE_TOKEN`` is set;
   - the error's text, and so every log line of the task runner, names only the
     escaped error code: the model's sentence reaches no log.
 """
@@ -31,7 +36,7 @@ from __future__ import annotations
 import asyncio
 import json
 import warnings
-from typing import Any, Dict, Iterator, List
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import pytest
 
@@ -43,10 +48,20 @@ BRIDGE_TOKEN = "declared-failure-test-token"
 FAILURE_MESSAGE = "The page could not be read: the site answered 404."
 APP_BASE_URL = "http://cinatra-app.test:3000"
 OTHER_BASE_URL = "http://cinatra-app.test:3001"
+OWN_AUTH_ERROR = "own-auth-flow-failed-4737"  # a marker the tests search for
+DECLARED_FAILURE = {
+    "error": "The step answered a failure",
+    "code": "STEP_DECLARED_FAILURE",
+    "stepErrorCode": "read-failed",
+}
+STOPPED_TEXT = "The step answered the error code read-failed."
 
 
 class _CountingBridge:
     """Stands in for the app: answers one fixed status and JSON body, counts.
+
+    A test may set ``script`` instead: the answers in order, the last one
+    repeating (an own auth's challenge round reads two answers).
 
     ``ApiCallStep`` builds its own ``httpx.AsyncClient()``; the fixture hands
     that client this transport, so the step's real client, auth hook and retry
@@ -56,12 +71,16 @@ class _CountingBridge:
     def __init__(self) -> None:
         self.status = 200
         self.body: Dict[str, Any] = {}
+        self.script: List[Tuple[int, Dict[str, Any]]] = []
         self.requests: List[httpx.Request] = []
         self.transport = httpx.MockTransport(self._answer)
 
     def _answer(self, request: httpx.Request) -> httpx.Response:
         request.read()
         self.requests.append(request)
+        if self.script:
+            status, body = self.script[min(len(self.requests), len(self.script)) - 1]
+            return httpx.Response(status, json=body)
         return httpx.Response(self.status, json=self.body)
 
 
@@ -78,8 +97,15 @@ def bridge(monkeypatch: pytest.MonkeyPatch) -> Iterator[_CountingBridge]:
     yield counting
 
 
-def _patch_loader(monkeypatch: pytest.MonkeyPatch, base_url: str) -> Any:
-    """Apply the loader's ApiCallStep patch afresh against ``base_url``."""
+def _patch_loader(
+    monkeypatch: pytest.MonkeyPatch,
+    base_url: str,
+    token: Optional[str] = BRIDGE_TOKEN,
+) -> Any:
+    """Apply the loader's ApiCallStep patch afresh against ``base_url``.
+
+    ``token`` is the bridge token of the container's env; None leaves it unset.
+    """
     from wayflowcore.steps import ApiCallStep
 
     import agent_loader
@@ -90,7 +116,10 @@ def _patch_loader(monkeypatch: pytest.MonkeyPatch, base_url: str) -> Any:
     # monkeypatch restores whatever the class held before this test.
     monkeypatch.setattr(ApiCallStep, "_execute_request", pristine)
 
-    monkeypatch.setenv("CINATRA_BRIDGE_TOKEN", BRIDGE_TOKEN)
+    if token is None:
+        monkeypatch.delenv("CINATRA_BRIDGE_TOKEN", raising=False)
+    else:
+        monkeypatch.setenv("CINATRA_BRIDGE_TOKEN", token)
     monkeypatch.setenv("CINATRA_BASE_URL", base_url)
     monkeypatch.delenv("CINATRA_CONTEXT_ATTEST_KEY", raising=False)
 
@@ -99,13 +128,13 @@ def _patch_loader(monkeypatch: pytest.MonkeyPatch, base_url: str) -> Any:
     return ApiCallStep
 
 
-def _run_step(
+def _make_step(
     api_call_step: Any,
     path: str = "/api/llm-bridge",
     base_url: str = APP_BASE_URL,
     **step_kwargs: Any,
 ) -> Any:
-    step = api_call_step(
+    return api_call_step(
         url=f"{base_url}{path}",
         method="POST",
         data={
@@ -117,6 +146,15 @@ def _run_step(
         store_response=True,
         **step_kwargs,
     )
+
+
+def _run_step(
+    api_call_step: Any,
+    path: str = "/api/llm-bridge",
+    base_url: str = APP_BASE_URL,
+    **step_kwargs: Any,
+) -> Any:
+    step = _make_step(api_call_step, path, base_url, **step_kwargs)
     with warnings.catch_warnings():
         # WayFlow warns about allow_insecure_http; the test host is plain http.
         warnings.simplefilter("ignore")
@@ -320,6 +358,363 @@ def test_an_own_auth_of_another_kind_is_refused_before_it_is_sent(
 
     assert bridge.requests == []
     assert "refused before it is sent" in str(raised.value)
+
+
+@pytest.mark.parametrize("auth", [httpx.USE_CLIENT_DEFAULT, None], ids=["USE_CLIENT_DEFAULT", "None"])
+def test_a_request_with_no_own_auth_in_either_spelling_still_stops(
+    monkeypatch: pytest.MonkeyPatch, bridge: _CountingBridge, auth: Any
+) -> None:
+    bridge.status = 422
+    bridge.body = dict(DECLARED_FAILURE)
+    step_class = _patch_loader(monkeypatch, APP_BASE_URL)
+    _own_auth_first(monkeypatch, step_class, auth)
+
+    with pytest.raises(RuntimeError) as raised:
+        _run_step(step_class)
+
+    assert len(bridge.requests) == 1
+    assert "Authorization" not in bridge.requests[0].headers
+    assert str(raised.value) == STOPPED_TEXT
+
+
+class _ChallengeAuth(httpx.Auth):
+    """An own auth with a challenge round: a 401 answer gets a SECOND request, a copy
+    that carries the credential (the first request object stays as it was sent)."""
+
+    def auth_flow(self, request: httpx.Request) -> Iterator[httpx.Request]:
+        response = yield request
+        if response.status_code == 401:
+            second = httpx.Request(
+                request.method, request.url, headers=request.headers, content=request.content
+            )
+            second.headers["Authorization"] = "Bearer second"
+            yield second
+
+
+def test_an_own_auth_challenge_round_sends_both_requests_and_the_stop_reads_the_second_answer(
+    monkeypatch: pytest.MonkeyPatch, bridge: _CountingBridge
+) -> None:
+    bridge.script = [(401, {"error": "Unauthorized"}), (422, dict(DECLARED_FAILURE))]
+    step_class = _patch_loader(monkeypatch, APP_BASE_URL)
+    _own_auth_first(monkeypatch, step_class, _ChallengeAuth())
+
+    with pytest.raises(RuntimeError) as raised:
+        _run_step(step_class)
+
+    assert len(bridge.requests) == 2
+    assert "Authorization" not in bridge.requests[0].headers
+    assert bridge.requests[1].headers.get("Authorization") == "Bearer second"
+    assert str(raised.value) == STOPPED_TEXT
+
+
+def test_an_own_auth_challenge_round_that_succeeds_returns_the_answer(
+    monkeypatch: pytest.MonkeyPatch, bridge: _CountingBridge
+) -> None:
+    bridge.script = [(401, {"error": "Unauthorized"}), (200, {"title": "Hello"})]
+    step_class = _patch_loader(monkeypatch, APP_BASE_URL)
+    _own_auth_first(monkeypatch, step_class, _ChallengeAuth())
+
+    result = _run_step(step_class)
+
+    assert len(bridge.requests) == 2
+    assert bridge.requests[1].headers.get("Authorization") == "Bearer second"
+    assert json.loads(result.outputs[step_class.HTTP_RESPONSE]) == {"title": "Hello"}
+
+
+class _BrokenAuth(httpx.Auth):
+    """An own auth whose flow throws, before its first request or after its first answer."""
+
+    def __init__(self, after_first_answer: bool) -> None:
+        self.after_first_answer = after_first_answer
+
+    def auth_flow(self, request: httpx.Request) -> Iterator[httpx.Request]:
+        if not self.after_first_answer:
+            raise RuntimeError(OWN_AUTH_ERROR)
+        yield request
+        raise RuntimeError(OWN_AUTH_ERROR)
+
+
+@pytest.mark.parametrize(
+    ("after_first_answer", "sent"),
+    [(False, 0), (True, 1)],
+    ids=["before the first request", "after the first answer"],
+)
+def test_an_own_auth_flow_that_throws_reaches_the_caller_and_is_no_declared_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    bridge: _CountingBridge,
+    after_first_answer: bool,
+    sent: int,
+) -> None:
+    bridge.status = 200
+    bridge.body = {"title": "Hello"}
+    step_class = _patch_loader(monkeypatch, APP_BASE_URL)
+    _own_auth_first(monkeypatch, step_class, _BrokenAuth(after_first_answer))
+
+    with pytest.raises(Exception) as raised:
+        _run_step(step_class)
+
+    import agent_loader
+
+    assert OWN_AUTH_ERROR in str(raised.value)
+    assert not isinstance(raised.value, agent_loader.StepDeclaredFailureError)
+    assert len(bridge.requests) == sent
+
+
+class _TrackedAuth(httpx.Auth):
+    """An own auth that records that its flow ended, so a closed flow can be read."""
+
+    def __init__(self) -> None:
+        self.ended: List[str] = []
+
+    def sync_auth_flow(self, request: httpx.Request) -> Iterator[httpx.Request]:
+        try:
+            yield request
+        finally:
+            self.ended.append("sync")
+
+    async def async_auth_flow(self, request: httpx.Request) -> Any:
+        try:
+            yield request
+        finally:
+            self.ended.append("async")
+
+
+def test_an_own_auth_flow_is_closed_when_the_stop_ends_the_step(
+    monkeypatch: pytest.MonkeyPatch, bridge: _CountingBridge
+) -> None:
+    bridge.status = 422
+    bridge.body = dict(DECLARED_FAILURE)
+    step_class = _patch_loader(monkeypatch, APP_BASE_URL)
+    own = _TrackedAuth()
+    _own_auth_first(monkeypatch, step_class, own)
+    step = _make_step(step_class)
+
+    async def drive() -> List[str]:
+        # Read the own flow INSIDE the loop, as the step's error leaves it: a flow
+        # left to the garbage collector would still be open here (its cleanup would
+        # run only when the loop shuts down its async generators).
+        try:
+            await step._invoke_step_async({}, None)
+        except RuntimeError as failure:
+            assert str(failure) == STOPPED_TEXT
+            return list(own.ended)
+        raise AssertionError("the step did not fail")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        assert asyncio.run(drive()) == ["async"]
+    assert len(bridge.requests) == 1
+
+
+# ---------------------------------------------------------------------------
+# The sync client. The hook serves both clients: httpx calls sync_auth_flow on
+# an httpx.Client. These tests build the hook as the loader does and drive a
+# real httpx.Client over the same counting transport (no ApiCallStep needed).
+# ---------------------------------------------------------------------------
+
+
+def _sync_call(bridge: _CountingBridge, own_auth: Any) -> httpx.Response:
+    import agent_loader
+
+    hook = agent_loader._step_declared_failure_auth(own_auth)
+    with httpx.Client(transport=bridge.transport) as client:
+        return client.post(f"{APP_BASE_URL}/api/llm-bridge", json={}, auth=hook)
+
+
+def test_the_sync_flow_stops_at_a_declared_failure(bridge: _CountingBridge) -> None:
+    import agent_loader
+
+    bridge.status = 422
+    bridge.body = dict(DECLARED_FAILURE)
+
+    with pytest.raises(agent_loader._StepDeclaredFailureAnswer) as raised:
+        _sync_call(bridge, None)
+
+    assert len(bridge.requests) == 1
+    assert isinstance(raised.value.failure, agent_loader.StepDeclaredFailureError)
+    assert str(raised.value.failure) == STOPPED_TEXT
+
+
+def test_the_sync_flow_passes_another_answer_on(bridge: _CountingBridge) -> None:
+    bridge.status = 422
+    bridge.body = {"error": "Invalid request body"}
+
+    response = _sync_call(bridge, None)
+
+    assert response.status_code == 422
+    assert len(bridge.requests) == 1
+
+
+@pytest.mark.parametrize(
+    ("auth", "header", "value"),
+    [
+        (httpx.BasicAuth("user", "pass"), "Authorization", "Basic dXNlcjpwYXNz"),
+        (("user", "pass"), "Authorization", "Basic dXNlcjpwYXNz"),
+        (_set_header, "X-Own-Auth", "callable"),
+    ],
+)
+def test_the_sync_flow_keeps_an_own_auth_and_still_stops(
+    bridge: _CountingBridge, auth: Any, header: str, value: str
+) -> None:
+    import agent_loader
+
+    bridge.status = 200
+    bridge.body = {"title": "Hello"}
+    assert _sync_call(bridge, auth).status_code == 200
+    assert bridge.requests[0].headers.get(header) == value
+
+    bridge.requests.clear()
+    bridge.status = 422
+    bridge.body = dict(DECLARED_FAILURE)
+    with pytest.raises(agent_loader._StepDeclaredFailureAnswer):
+        _sync_call(bridge, auth)
+    assert len(bridge.requests) == 1
+    assert bridge.requests[0].headers.get(header) == value
+
+
+def test_the_sync_flow_runs_an_own_auth_challenge_round_and_stops_at_the_second_answer(
+    bridge: _CountingBridge,
+) -> None:
+    import agent_loader
+
+    bridge.script = [(401, {"error": "Unauthorized"}), (422, dict(DECLARED_FAILURE))]
+
+    with pytest.raises(agent_loader._StepDeclaredFailureAnswer):
+        _sync_call(bridge, _ChallengeAuth())
+
+    assert len(bridge.requests) == 2
+    assert bridge.requests[1].headers.get("Authorization") == "Bearer second"
+
+
+@pytest.mark.parametrize(
+    ("after_first_answer", "sent"),
+    [(False, 0), (True, 1)],
+    ids=["before the first request", "after the first answer"],
+)
+def test_the_sync_flow_lets_an_own_auth_error_through_unchanged(
+    bridge: _CountingBridge, after_first_answer: bool, sent: int
+) -> None:
+    bridge.status = 200
+    bridge.body = {"title": "Hello"}
+
+    with pytest.raises(RuntimeError, match=OWN_AUTH_ERROR):
+        _sync_call(bridge, _BrokenAuth(after_first_answer))
+
+    assert len(bridge.requests) == sent
+
+
+def test_the_sync_flow_closes_an_own_auth_flow_when_it_stops(bridge: _CountingBridge) -> None:
+    import agent_loader
+
+    bridge.status = 422
+    bridge.body = dict(DECLARED_FAILURE)
+    own = _TrackedAuth()
+
+    try:
+        _sync_call(bridge, own)
+    except agent_loader._StepDeclaredFailureAnswer:
+        # Read as the stop's error leaves the client call: a flow left to the
+        # garbage collector would still be open while the error is in flight.
+        ended_with_the_error_in_flight = list(own.ended)
+    else:
+        raise AssertionError("the call did not stop")
+
+    assert ended_with_the_error_in_flight == ["sync"]
+
+
+# ---------------------------------------------------------------------------
+# The bridge token decides only the auth header the wrapper adds: the stop is
+# installed whether or not CINATRA_BRIDGE_TOKEN is set.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("base_url", [APP_BASE_URL, OTHER_BASE_URL], ids=["app host", "another host"])
+def test_the_stop_holds_when_no_bridge_token_is_set(
+    monkeypatch: pytest.MonkeyPatch, bridge: _CountingBridge, base_url: str
+) -> None:
+    bridge.status = 422
+    bridge.body = dict(DECLARED_FAILURE)
+    step_class = _patch_loader(monkeypatch, APP_BASE_URL, token=None)
+
+    with pytest.raises(RuntimeError) as raised:
+        _run_step(step_class, base_url=base_url)
+
+    assert len(bridge.requests) == 1
+    # No token, so the wrapper adds no auth header (or any other X-Cinatra-* one).
+    assert not [h for h in bridge.requests[0].headers if h.lower().startswith("x-cinatra-")]
+    assert str(raised.value) == STOPPED_TEXT
+
+
+def test_with_no_bridge_token_an_own_auth_is_kept_and_the_stop_holds(
+    monkeypatch: pytest.MonkeyPatch, bridge: _CountingBridge
+) -> None:
+    bridge.status = 422
+    bridge.body = dict(DECLARED_FAILURE)
+    step_class = _patch_loader(monkeypatch, APP_BASE_URL, token=None)
+    _own_auth_first(monkeypatch, step_class, httpx.BasicAuth("user", "pass"))
+
+    with pytest.raises(RuntimeError) as raised:
+        _run_step(step_class)
+
+    assert len(bridge.requests) == 1
+    assert bridge.requests[0].headers.get("Authorization") == "Basic dXNlcjpwYXNz"
+    assert str(raised.value) == STOPPED_TEXT
+
+
+def test_with_no_bridge_token_a_call_the_compiler_does_not_read_as_a_bridge_call_keeps_three_tries(
+    monkeypatch: pytest.MonkeyPatch, bridge: _CountingBridge
+) -> None:
+    bridge.status = 422
+    bridge.body = dict(DECLARED_FAILURE)
+    step_class = _patch_loader(monkeypatch, APP_BASE_URL, token=None)
+
+    with pytest.raises(RuntimeError) as raised:
+        _run_step(step_class, "/api/llm-bridge-shadow")
+
+    assert len(bridge.requests) == 3
+    assert str(raised.value).startswith("error executing POST request to ")
+
+
+def test_with_no_bridge_token_a_successful_answer_is_unchanged(
+    monkeypatch: pytest.MonkeyPatch, bridge: _CountingBridge
+) -> None:
+    bridge.status = 200
+    bridge.body = {"title": "Hello", "error": {"code": "", "message": ""}}
+    step_class = _patch_loader(monkeypatch, APP_BASE_URL, token=None)
+
+    result = _run_step(step_class)
+
+    assert len(bridge.requests) == 1
+    assert json.loads(result.outputs[step_class.HTTP_RESPONSE]) == bridge.body
+
+
+def test_a_patch_made_with_no_token_gives_way_to_a_later_patch_with_the_token(
+    monkeypatch: pytest.MonkeyPatch, bridge: _CountingBridge
+) -> None:
+    import agent_loader
+
+    bridge.status = 422
+    bridge.body = dict(DECLARED_FAILURE)
+    step_class = _patch_loader(monkeypatch, APP_BASE_URL, token=None)
+    without_token = step_class._execute_request
+
+    monkeypatch.setenv("CINATRA_BRIDGE_TOKEN", BRIDGE_TOKEN)
+    agent_loader._patch_api_call_step_bridge_token()
+    with_token = step_class._execute_request
+
+    # Replaced over the same original, not chained on top of the first wrapper.
+    assert with_token is not without_token
+    assert with_token.__wrapped__ is without_token.__wrapped__
+    with pytest.raises(RuntimeError) as raised:
+        _run_step(step_class)
+    assert len(bridge.requests) == 1
+    assert bridge.requests[0].headers.get("X-Cinatra-Bridge-Token") == BRIDGE_TOKEN
+    assert str(raised.value) == STOPPED_TEXT
+
+    # A later call with the token unset leaves the wrapper that holds the token alone.
+    monkeypatch.delenv("CINATRA_BRIDGE_TOKEN")
+    agent_loader._patch_api_call_step_bridge_token()
+    assert step_class._execute_request is with_token
 
 
 def test_the_model_sentence_reaches_no_log_line(

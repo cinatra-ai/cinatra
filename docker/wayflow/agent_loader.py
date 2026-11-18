@@ -981,18 +981,24 @@ def _patch_api_call_step_bridge_token() -> None:
 
     Wraps ApiCallStep._execute_request to add the header before delegating.
     The token is read once at patch time (env vars don't change at runtime).
-    No-op when the env var is unset; logs a one-line warning.
+
+    The token decides only the auth headers the wrapper adds. The wrapper is
+    installed whether or not the token is set: it puts the declared-failure stop
+    (cinatra#4220, #4737) on every bridge call and keeps its other behaviour (the
+    default timeout, the capability message) either way. When the env var is
+    unset the wrapper adds no X-Cinatra-* header (as before) and the patch logs a
+    one-line warning.
     """
-    token = os.environ.get("CINATRA_BRIDGE_TOKEN")
-    if not token:
+    token: Optional[str] = os.environ.get("CINATRA_BRIDGE_TOKEN") or None
+    if token is None:
         print(
             "[agent_loader] CINATRA_BRIDGE_TOKEN unset — X-Cinatra-Bridge-Token "
             "header NOT injected on ApiCallStep calls. Cinatra rejects requests "
             "with HTTP 403 when the token is missing or wrong "
             "(no BYPASS / XFF fallback). Set CINATRA_BRIDGE_TOKEN in this "
-            "container's env to restore connectivity."
+            "container's env to restore connectivity. The declared-failure stop "
+            "is installed all the same."
         )
-        return
 
     # #907: dedicated per-node context-callback signing key. DISTINCT from the
     # bridge token so a caller holding only the run's shared bridge auth cannot
@@ -1001,7 +1007,7 @@ def _patch_api_call_step_bridge_token() -> None:
     # path (context resolution for composed children stops working until it is
     # provisioned), so this is loud-by-consequence, not silent.
     attest_key = os.environ.get("CINATRA_CONTEXT_ATTEST_KEY")
-    if not attest_key:
+    if token is not None and not attest_key:
         print(
             "[agent_loader] CINATRA_CONTEXT_ATTEST_KEY unset — per-node context "
             "attestation NOT injected. Composed-child context resolution "
@@ -1018,7 +1024,7 @@ def _patch_api_call_step_bridge_token() -> None:
         "CINATRA_BASE_URL", "http://host.docker.internal:3000"
     )
     proxy_host, proxy_port = _effective_host_port(base_url)
-    if proxy_host is None:
+    if token is not None and proxy_host is None:
         print(
             f"[agent_loader] WARNING: CINATRA_BASE_URL is unparseable ({base_url!r}) "
             "— host-anchored ApiNode credential/attestation injection will match NO "
@@ -1031,10 +1037,16 @@ def _patch_api_call_step_bridge_token() -> None:
         print(f"[agent_loader] WARNING: bridge token patch import failed: {exc}")
         return
 
-    if getattr(ApiCallStep._execute_request, "__cinatra_patched__", False):
-        return  # idempotent
-
-    _original = ApiCallStep._execute_request
+    _current = ApiCallStep._execute_request
+    if getattr(_current, "__cinatra_patched__", False):
+        # Idempotent. The one exception: a wrapper made while the token was
+        # unset adds no header, so the wrapper of a later call with the token
+        # set replaces it (over the same original; nothing is chained).
+        if token is None or getattr(_current, "__cinatra_bridge_token_set__", True):
+            return
+        _original = _current.__wrapped__  # type: ignore[attr-defined]
+    else:
+        _original = _current
 
     async def _patched(self: Any, request: Dict[str, Any]) -> Any:
         # request["headers"] may be absent when the ApiNode declares no
@@ -1049,8 +1061,10 @@ def _patch_api_call_step_bridge_token() -> None:
         # internal → nothing injected (fail closed). Mirrors the sibling
         # httpx.AsyncClient.send patch's host gate.
         _req_host, _req_port = _effective_host_port(_ctx_url)
+        # An unset token adds no header at all (token is None: never internal).
         _is_internal = (
-            proxy_host is not None
+            token is not None
+            and proxy_host is not None
             and _req_host is not None
             and _req_host == proxy_host
             and _req_port == proxy_port
@@ -1255,11 +1269,16 @@ def _patch_api_call_step_bridge_token() -> None:
         return resp
 
     _patched.__cinatra_patched__ = True  # type: ignore[attr-defined]
+    _patched.__cinatra_bridge_token_set__ = token is not None  # type: ignore[attr-defined]
     _patched.__wrapped__ = _original  # type: ignore[attr-defined]
     ApiCallStep._execute_request = _patched  # type: ignore[method-assign]
     print(
         "[agent_loader] ApiCallStep._execute_request patched "
-        "(X-Cinatra-Bridge-Token injection enabled)"
+        + (
+            "(X-Cinatra-Bridge-Token injection enabled)"
+            if token is not None
+            else "(declared-failure stop only: no bridge token to inject)"
+        )
     )
 
 

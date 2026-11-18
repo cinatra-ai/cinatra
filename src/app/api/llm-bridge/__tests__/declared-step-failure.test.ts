@@ -347,6 +347,80 @@ describe("/api/llm-bridge ends a step failed on a failure it answered", () => {
     expect(body.stepErrorCode).toMatch(/^[\x20-\x7e]*$/);
   });
 
+  it.each([
+    [
+      "an astral character that ends exactly at the cut",
+      "a".repeat(199) + "\u{1f600}" + "tail",
+      "a".repeat(199) + "\\ud83d\\ude00",
+    ],
+    [
+      "an astral character that starts past the cut",
+      "a".repeat(200) + "\u{1f600}",
+      "a".repeat(200),
+    ],
+    [
+      "150 astral characters and a tail, all under the cut",
+      "\u{1f600}".repeat(150) + "tail",
+      "\\ud83d\\ude00".repeat(150) + "tail",
+    ],
+    [
+      "250 astral characters",
+      "\u{1f600}".repeat(250),
+      "\\ud83d\\ude00".repeat(200),
+    ],
+    [
+      "a lone high surrogate before an astral character at the cut",
+      "a".repeat(198) + "\ud800" + "\u{1f600}" + "x",
+      "a".repeat(198) + "\\ud800" + "\\ud83d\\ude00",
+    ],
+    [
+      "a lone high surrogate that ends at the cut",
+      "a".repeat(199) + "\ud83d" + "b",
+      "a".repeat(199) + "\\ud83d",
+    ],
+    [
+      "a lone low surrogate and a lone high surrogate, then more",
+      "\udc00\ud800" + "a".repeat(250),
+      "\\udc00\\ud800" + "a".repeat(198),
+    ],
+  ])("cuts the step code at 200 code points, never inside a surrogate pair, as the loader does: %s", async (_label, code, expected) => {
+    modelAnswer.text = JSON.stringify({ error: { code, message: "m" } });
+    const res = await POST(stepCall());
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { stepErrorCode?: string };
+    expect(body.stepErrorCode).toBe(expected);
+    expect(body.stepErrorCode).toMatch(/^[\x20-\x7e]*$/);
+  });
+
+  it("escapes a lone surrogate, U+2028 and U+2029 as the runtime loader does", async () => {
+    const code = "a\ud800b\udc00c d e";
+    modelAnswer.text = JSON.stringify({ error: { code, message: "m" } });
+    const res = await POST(stepCall());
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { stepErrorCode?: string };
+    expect(body.stepErrorCode).toBe("a\\ud800b\\udc00c\\u2028d\\u2029e");
+    expect(body.stepErrorCode).toMatch(/^[\x20-\x7e]*$/);
+  });
+
+  it("logs the step code and the agent label cut at code points, never inside a surrogate pair", async () => {
+    modelAnswer.text = JSON.stringify({
+      error: { code: "a".repeat(199) + "\u{1f600}" + "tail", message: "m" },
+    });
+    const res = await POST(stepCall({ agent_id: "p".repeat(119) + "\u{1f600}" + "tail" }));
+    expect(res.status).toBe(422);
+    const lines = vi
+      .mocked(console.warn)
+      .mock.calls.map((call) => String(call[0]))
+      .filter((line) => line.includes("step answered the error code"));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(
+      `the error code ${JSON.stringify("a".repeat(199) + "\u{1f600}")} ` +
+        `(agent=${JSON.stringify("p".repeat(119) + "\u{1f600}")});`,
+    );
+    expect(lines[0]).not.toContain("\\ud83d");
+    expect(lines[0]).not.toContain("tail");
+  });
+
   it("names NextResponse only as NextResponse.json(: the failure helper hands back a plain body", () => {
     const src = readFileSync(join(__dirname, "..", "route.ts"), "utf8");
     const other = src
