@@ -1172,6 +1172,38 @@ function scriptedStringArrayMember(propertyName: string, n: number): string {
 }
 
 /**
+ * Whether the empty string conforms to the declaration of a top-level error's
+ * `code`, read in the order scriptedValueForSchema answers that node: past the
+ * depth cap the scripted value is a string whatever the declaration, so the
+ * empty one is no worse; a non-empty `enum` allows it only as a member and a
+ * `const` only as its value; a union reads its FIRST member, as the answer
+ * does; any other node allows it unless its `minLength` is above 0 or its
+ * `pattern` does not match "" (a pattern that does not compile here refuses).
+ */
+function scriptedEmptyCodeAllowed(schema: unknown, depth: number): boolean {
+  if (depth > SCRIPTED_SCHEMA_MAX_DEPTH) return true;
+  const node = (schema ?? {}) as Record<string, unknown>;
+  if (typeof node !== "object") return false;
+  const enumValues = Array.isArray(node.enum) ? node.enum : null;
+  if (enumValues && enumValues.length > 0) return enumValues.includes("");
+  if ("const" in node) return node.const === "";
+  const union = ["oneOf", "anyOf", "allOf"].find((k) => Array.isArray(node[k]));
+  if (union) {
+    const members = node[union] as unknown[];
+    if (members.length > 0) return scriptedEmptyCodeAllowed(members[0], depth + 1);
+  }
+  if (typeof node.minLength === "number" && node.minLength > 0) return false;
+  if (typeof node.pattern === "string") {
+    try {
+      return new RegExp(node.pattern, "u").test("");
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
  * A deterministic value for one JSON-schema node — CONFORMING BY TYPE, not by
  * constraint.
  *
@@ -1182,7 +1214,13 @@ function scriptedStringArrayMember(propertyName: string, n: number): string {
  * value is recognisable wherever it surfaces and can never be mistaken for a
  * model's own words. ONE exception: the `code` of a top-level `error` output is
  * the empty string, because a non-empty one is a step's failure answer and the
- * bridge ends the step failed on it. "Top-level" is the answer's LOGICAL shape:
+ * bridge ends the step failed on it. The exception holds only where the code's
+ * own declaration allows the empty string (scriptedEmptyCodeAllowed): a `const`
+ * or `enum` code keeps its declared value unless "" is that const or an enum
+ * member, and a
+ * `minLength` above 0 or a `pattern` that refuses "" keeps the scripted string,
+ * so the answer never leaves the caller's schema to reach the empty code.
+ * "Top-level" is the answer's LOGICAL shape:
  * a `oneOf` / `anyOf` / `allOf` wrapper (around the root or around the `error`
  * member) adds no object level, so `objectDepth` counts only the objects and
  * arrays entered, apart from the recursion `depth` the cap reads.
@@ -1290,7 +1328,16 @@ function scriptedValueForSchema(
       // sentinel, which would fail every scripted run of such a step.
       // `objectDepth === 1` is a member of the root object, whatever union
       // wrappers stand around the root or around the member.
-      if (objectDepth === 1 && propertyName === "error" && typeof out.code === "string") {
+      // The empty string replaces the scripted code only where the code's own
+      // declaration allows it: a `const` or `enum` code keeps its declared
+      // value (unless the enum lists ""), so the answer stays inside the
+      // caller's schema (scriptedEmptyCodeAllowed).
+      if (
+        objectDepth === 1 &&
+        propertyName === "error" &&
+        typeof out.code === "string" &&
+        scriptedEmptyCodeAllowed(properties.code, depth + 1)
+      ) {
         out.code = "";
       }
       return out;

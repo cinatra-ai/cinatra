@@ -11,6 +11,8 @@
  *
  * Only that one leaf changes: the error's other members, an `error` member
  * nested below the top level, and a `code` outside `error` keep the sentinel.
+ * And it changes only where the code's own declaration allows "": a `const`
+ * or `enum` code keeps its declared value.
  * "Top-level" is logical: a `oneOf` / `anyOf` / `allOf` wrapper around the root
  * or around the `error` member adds no level.
  */
@@ -117,5 +119,59 @@ describe("runScriptedBridgeCompletion and a step's error output", () => {
     expect(String(nested.code)).toContain(UAT_SENTINEL);
     const item = (out.pages as Array<{ error: { code: unknown } }>)[0].error;
     expect(String(item.code)).toContain(UAT_SENTINEL);
+  });
+});
+
+// The empty code is written only where the code's own declaration allows "":
+// a code declared with a `const` or an `enum`, or with a bound the empty
+// string fails, keeps the value the scripted completion gave it, so the
+// answer never leaves the caller's schema.
+describe("runScriptedBridgeCompletion keeps an error code its schema pins", () => {
+  function errorCode(code: Record<string, unknown>): unknown {
+    const out = answer({
+      type: "object",
+      required: ["error"],
+      properties: {
+        error: {
+          type: "object",
+          required: ["code", "message"],
+          properties: { code, message: { type: "string" } },
+        },
+      },
+    });
+    return (out.error as { code?: unknown }).code;
+  }
+
+  it("keeps a const code", () => {
+    expect(errorCode({ type: "string", const: "page_unreadable" })).toBe("page_unreadable");
+  });
+
+  it("keeps the first member of an enum code", () => {
+    expect(errorCode({ type: "string", enum: ["page_unreadable", "page_missing"] })).toBe(
+      "page_unreadable",
+    );
+  });
+
+  it("keeps a const code behind a union wrapper", () => {
+    expect(errorCode({ anyOf: [{ const: "page_unreadable" }, { type: "string" }] })).toBe(
+      "page_unreadable",
+    );
+  });
+
+  it("keeps the scripted code when minLength or pattern refuses the empty string", () => {
+    expect(String(errorCode({ type: "string", minLength: 1 }))).toContain(UAT_SENTINEL);
+    expect(String(errorCode({ type: "string", pattern: "^[a-z_]+$" }))).toContain(UAT_SENTINEL);
+  });
+
+  it("answers the empty code when the declaration allows it", () => {
+    expect(errorCode({ type: "string", enum: ["page_unreadable", ""] })).toBe("");
+    expect(errorCode({ const: "" })).toBe("");
+    expect(errorCode({ type: "string", minLength: 0, pattern: "^[a-z_]*$" })).toBe("");
+    expect(errorCode({ type: ["string", "null"] })).toBe("");
+  });
+
+  it("leaves a code that is not a string as declared", () => {
+    expect(errorCode({ type: "integer" })).toBe(0);
+    expect(errorCode({ const: 404 })).toBe(404);
   });
 });

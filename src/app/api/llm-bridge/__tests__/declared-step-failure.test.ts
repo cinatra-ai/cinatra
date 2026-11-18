@@ -252,6 +252,45 @@ describe("/api/llm-bridge ends a step failed on a failure it answered", () => {
     expect(body.error).toBe("Invalid request body");
   });
 
+  it.each([
+    ["51 codes (the list holds at most 50)", Array.from({ length: 51 }, (_, i) => `code_${i}`)],
+    ["a list with a member that is not a string", ["reread_failed", 404]],
+  ])("refuses a completed_error_codes with %s with 400, before any model call", async (_label, codes) => {
+    modelAnswer.text = JSON.stringify({ title: "Home" });
+    const res = await POST(stepCall({ completed_error_codes: codes }));
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: string };
+    expect(body.error).toBe("Invalid request body");
+  });
+
+  it("accepts 50 completed codes and passes a listed code on", async () => {
+    const answer = { title: "Home", error: { code: "code_49", message: "" } };
+    modelAnswer.text = JSON.stringify(answer);
+    const codes = Array.from({ length: 50 }, (_, i) => `code_${i}`);
+    const res = await POST(stepCall({ completed_error_codes: codes }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(answer);
+  });
+
+  it("matches a listed code exactly: blanks around the answered code end the step failed", async () => {
+    modelAnswer.text = JSON.stringify({ error: { code: " reread_failed ", message: "m" } });
+    const res = await POST(stepCall({ completed_error_codes: ["reread_failed"] }));
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { stepErrorCode?: string };
+    expect(body.stepErrorCode).toBe(" reread_failed ");
+  });
+
+  it("bounds the code and the message it answers", async () => {
+    modelAnswer.text = JSON.stringify({
+      error: { code: "c".repeat(250), message: `  ${"m".repeat(1500)}  ` },
+    });
+    const res = await POST(stepCall());
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { stepErrorCode?: string; message?: string };
+    expect(body.stepErrorCode).toBe("c".repeat(200));
+    expect(body.message).toBe("m".repeat(1000));
+  });
+
   it("a SCRIPTED run of a step declaring an error output ends completed (empty scripted code)", async () => {
     // No answer set: the real scripted completion answers in the declared shape.
     const res = await POST(stepCall({ output_schema: READ_OUTPUT_SCHEMA }));
