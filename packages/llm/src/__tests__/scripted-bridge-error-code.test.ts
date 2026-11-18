@@ -34,6 +34,8 @@ const ERROR_OUTPUT = {
 
 function answer(outputSchema: Record<string, unknown>): Record<string, unknown> {
   const response = runScriptedBridgeCompletion({ user: "read the page", outputSchema }, DEV_ENV);
+  // LlmResponse.text is `string | null`; the scripted completion always answers text.
+  if (response.text === null) throw new Error("the scripted completion answered no text");
   return JSON.parse(response.text) as Record<string, unknown>;
 }
 
@@ -217,6 +219,20 @@ describe("runScriptedBridgeCompletion reads every constraint on an error code", 
     expect(String(errorCode({ oneOf: [{ type: "string" }, { maxLength: 5 }] }))).toContain(
       UAT_SENTINEL,
     );
+  });
+
+  // oneOf is false as soon as two KNOWN members match, whatever an unreadable
+  // member (`format`) reads; with at most one known match it stays unknown.
+  it("settles oneOf false on two known matches although another member cannot be read", () => {
+    const wrap = (oneOf: Array<Record<string, unknown>>) => ({ type: "string", not: { oneOf } });
+    const email = { format: "email" };
+    expect(errorCode(wrap([{ type: "string" }, { maxLength: 0 }, email]))).toBe("");
+    expect(errorCode(wrap([email, { type: "string" }, { maxLength: 0 }]))).toBe("");
+    // One known match and an unreadable member: still unknown, the scripted code stays.
+    expect(String(errorCode(wrap([{ type: "string" }, email])))).toContain(UAT_SENTINEL);
+    // oneOf itself over two known matches is false: the scripted code stays too.
+    const direct = errorCode({ oneOf: [{ type: "string" }, { maxLength: 5 }, email] });
+    expect(String(direct)).toContain(UAT_SENTINEL);
   });
 
   it("keeps the scripted code when not refuses the empty string", () => {

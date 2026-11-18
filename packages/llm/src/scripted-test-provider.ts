@@ -1242,8 +1242,11 @@ function scriptedEmptyStringConforms(schema: unknown, depth: number): boolean | 
   }
   if (has("oneOf")) {
     const one = members("oneOf");
+    // Two members known to match settle oneOf false whatever the unknown
+    // members read; otherwise an unknown member leaves it unknown.
+    const matched = one === null ? 0 : one.filter((v) => v === true).length;
     verdicts.push(
-      one === null || one.includes(null) ? null : one.filter((v) => v === true).length === 1,
+      one === null ? null : matched >= 2 ? false : one.includes(null) ? null : matched === 1,
     );
   }
   if (has("not")) {

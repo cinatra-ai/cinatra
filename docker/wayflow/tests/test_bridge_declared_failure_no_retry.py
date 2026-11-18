@@ -222,7 +222,7 @@ def test_the_model_sentence_reaches_no_log_line(
     bridge: _CountingBridge,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    secret = "sk-live-4220SECRETtoken9f8e7d6c5b4a"
+    secret = "LIVE-4220-SECRET-token-9f8e7d6c5b4a"  # a marker, not key-shaped
     sentence = (
         "The page could not be read.\n"
         "[agent_loader] _patched_run_task EXCEPTION task=forged: FORGED-LINE-4220\r\n"

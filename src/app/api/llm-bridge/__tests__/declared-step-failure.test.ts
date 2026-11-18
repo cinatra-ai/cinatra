@@ -363,6 +363,31 @@ describe("/api/llm-bridge ends a step failed on a failure it answered", () => {
     });
   });
 
+  it("logs the caller's agent id in the skill-selection warning cut at 120 characters as one JSON-escaped token", async () => {
+    const selection = { droppedSkillIds: ["skill-9"], selectionReason: "over the cap" };
+    modelAnswer.skillSelection = selection;
+    modelAnswer.text = JSON.stringify({ title: "Home", error: { code: "", message: "" } });
+    const forged =
+      "page-reader\n[llm-bridge] skill rank-and-truncate (agent=forged)\r\n" +
+      "p".repeat(120) +
+      "FLOOD".repeat(2000);
+    const res = await POST(stepCall({ agent_id: forged }));
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { skillSelection?: unknown }).skillSelection).toEqual(selection);
+    const lines = vi
+      .mocked(console.warn)
+      .mock.calls.map((call) => String(call[0]))
+      .filter(
+        (line) =>
+          line.startsWith("[llm-bridge] general-path ") &&
+          line.includes(" skill rank-and-truncate (agent="),
+      );
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).not.toMatch(/[\r\n]/);
+    expect(lines[0]).toContain(`(agent=${JSON.stringify(forged.slice(0, 120))}): `);
+    expect(lines[0]).not.toContain("FLOOD");
+  });
+
   it("a SCRIPTED run of a step declaring an error output ends completed (empty scripted code)", async () => {
     // No answer set: the real scripted completion answers in the declared shape.
     const res = await POST(stepCall({ output_schema: READ_OUTPUT_SCHEMA }));

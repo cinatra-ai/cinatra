@@ -2232,7 +2232,7 @@ export async function POST(req: Request): Promise<Response> {
     if (skillSelection) {
       console.warn(
         `[llm-bridge] general-path Anthropic skill rank-and-truncate ` +
-          `(agent=${body.agent_id ?? "wayflow"}): ` +
+          `(agent=${logToken(body.agent_id ?? "wayflow", STEP_FAILURE_LOG_LABEL_MAX)}): ` +
           `dropped=[${skillSelection.droppedSkillIds.join(",")}] — ` +
           `${skillSelection.selectionReason}`,
       );
