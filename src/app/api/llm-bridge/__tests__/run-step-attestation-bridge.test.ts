@@ -15,8 +15,9 @@
  * context-id header naming that run, and the run store must prove the run is
  * bound to that source under that attempt, its running one; the
  * step is then the proof's. Otherwise the call is refused (403
- * `run_source_mismatch`, a fixed sentence) before any model call. A call with no
- * resolved run has no run to bind a source to and is served as before.
+ * `run_source_mismatch`, a fixed sentence) before any model call. A call with
+ * source headers and no resolved run (no run token, or a run token that resolves
+ * no run) is refused the same way, as on the passthrough road.
  * The module doubles follow run-token-mcp-actor.test.ts; the route, the run
  * token verifier and the step verifiers are real; the run store's source check
  * is a double (its refusals are pinned in packages/agents).
@@ -483,11 +484,23 @@ describe("the model bridge verifies the executing source of a run-bound call", (
   });
 
   // (b8)
-  it("a call without a resolved run is served as before: its source headers give no step and read no source check", async () => {
-    const res = await POST(makeReq({ user: "hi" }, { "x-cinatra-a2a-context-id": CTX, ...sourceHeaders() }));
-    expect(res.status).toBe(200);
-    expect(runResolvedSkillAwareDeterministicLlmTaskMock).toHaveBeenCalledTimes(1);
-    expect(verifyRunExecutedSourceMock).not.toHaveBeenCalled();
+  it("a call with source headers and without a resolved run is refused the same way before any model call", async () => {
+    const valid = sourceHeaders();
+    const cases: Array<{ name: string; headers: Record<string, string>; probe: typeof PROBE | null }> = [
+      { name: "no run token, a context id that names a run", headers: { "x-cinatra-a2a-context-id": CTX, ...valid }, probe: PROBE },
+      { name: "no run token, no context id", headers: { ...valid }, probe: PROBE },
+      { name: "no run token, the attempt header alone", headers: { "x-cinatra-a2a-context-id": CTX, "x-cinatra-execution-attempt": ATTEMPT }, probe: PROBE },
+      { name: "a run token that resolves no run", headers: { ...RUN_BOUND, ...valid }, probe: null },
+    ];
+    for (const c of cases) {
+      vi.clearAllMocks();
+      readAgentRunByTokenHashMock.mockResolvedValue(c.probe);
+      const res = await POST(makeReq({ user: "hi" }, c.headers));
+      expect(res.status, c.name).toBe(403);
+      expect(await res.json(), c.name).toEqual(REFUSED);
+      expect(runResolvedSkillAwareDeterministicLlmTaskMock, c.name).not.toHaveBeenCalled();
+      expect(verifyRunExecutedSourceMock, c.name).not.toHaveBeenCalled();
+    }
   });
 
   // (b10) cinatra#4154: a blank key is no key, on the bridge as on the passthrough road.

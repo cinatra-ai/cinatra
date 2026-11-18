@@ -1005,14 +1005,17 @@ export async function POST(req: Request): Promise<Response> {
   // run, and only from the runtime's signed pair, verified with that context
   // id. The body and every other header are never read for a step. Without
   // source headers, an absent or unverified `s1` pair gives no step and changes
-  // nothing else. A call whose run token resolved a run and that carries any
-  // source header (the attempt header included) must present an `s2` pair over
-  // the step, the attempt the calling task was sent under and the executing
-  // source that verifies, with the context id naming that run, and the run must
-  // be running under that attempt, the one that source is bound to; otherwise it is
-  // refused (403 `run_source_mismatch`, a fixed sentence) before any provider
-  // is reached, and the step is the proof's. A call without a resolved run has
-  // no run to bind a source to: its source headers give no step, as before.
+  // nothing else. A call that carries any source header (the attempt header
+  // included) must have a run token that resolved a run and must present an
+  // `s2` pair over the step, the attempt the calling task was sent under and
+  // the executing source that verifies, with the context id naming that run,
+  // and the run must be running under that attempt, the one that source is
+  // bound to; otherwise it is refused (403 `run_source_mismatch`, a fixed
+  // sentence) before any provider is reached, and the step is the proof's. A
+  // call with source headers and without a resolved run (no run token, a run
+  // token that resolves no run, or a bearer caller) is refused the same way:
+  // the runtime sends source headers only with the run token, as on the
+  // passthrough road, where every source-header call is verified.
   // A blank key is no key (cinatra#4154), for `s1` and `s2`, as on the passthrough road.
   const attestKey = process.env.CINATRA_CONTEXT_ATTEST_KEY;
   const stepAttestKey = attestKey && attestKey.trim() !== "" ? attestKey : null;
@@ -1027,8 +1030,8 @@ export async function POST(req: Request): Promise<Response> {
       : undefined;
 
   let verifiedExecutedSource: VerifiedExecutedRunSource | undefined;
-  if (runFromToken && (req.headers.get(RUN_RAW_SOURCE_HEADER) !== null || req.headers.get(RUN_EXECUTED_SOURCE_HEADER) !== null ||
-      req.headers.get(RUN_DECLARATION_SOURCE_HEADER) !== null || req.headers.get(RUN_EXECUTION_ATTEMPT_HEADER) !== null)) {
+  if (req.headers.get(RUN_RAW_SOURCE_HEADER) !== null || req.headers.get(RUN_EXECUTED_SOURCE_HEADER) !== null ||
+      req.headers.get(RUN_DECLARATION_SOURCE_HEADER) !== null || req.headers.get(RUN_EXECUTION_ATTEMPT_HEADER) !== null) {
     const sourceAttestation = verifySourceBoundRunStep({ key: stepAttestKey,
       contextId: a2aContextId, node: req.headers.get(RUN_STEP_NODE_HEADER),
       executionAttemptId: req.headers.get(RUN_EXECUTION_ATTEMPT_HEADER),
@@ -1037,7 +1040,7 @@ export async function POST(req: Request): Promise<Response> {
       executedSourceSha256: req.headers.get(RUN_EXECUTED_SOURCE_HEADER),
       declarationSourceSha256: req.headers.get(RUN_DECLARATION_SOURCE_HEADER) });
     try {
-      if (!sourceAttestation || !runFromToken.orgId || runFromContextId?.id !== runFromToken.id) throw new Error("source_binding_invalid");
+      if (!runFromToken || !sourceAttestation || !runFromToken.orgId || runFromContextId?.id !== runFromToken.id) throw new Error("source_binding_invalid");
       verifiedExecutedSource = await verifyRunExecutedSource(runFromToken.id, runFromToken.orgId, sourceAttestation);
       verifiedStepId = verifiedExecutedSource.stepId;
     } catch {
