@@ -769,30 +769,25 @@ def _effective_host_port(url: str) -> Tuple[Optional[str], Optional[int]]:
 # ---------------------------------------------------------------------------
 
 
-# The bridge's own path. The no-retry stop applies to this EXACT path of the
-# internal host only (cinatra#4220): a same-host call to another path, even one
-# whose text contains it (``/api/llm-bridge-shadow``, ``/x?next=/api/llm-bridge``,
-# ``/api/llm-bridge/more``), keeps WayFlow's handling. The path itself is
-# ``_LLM_BRIDGE_PATH``, defined once further down (read at call time).
-# The bridge bounds its answer to these lengths (src/app/api/llm-bridge/route.ts,
-# STEP_FAILURE_CODE_MAX / STEP_FAILURE_MESSAGE_MAX); the loader bounds them again.
+# The no-retry stop applies to EVERY call the host compiler reads as a bridge
+# call (cinatra#4220, cinatra#4737): the rule is ``_targets_llm_bridge``, the
+# one rule of ``targetsLlmBridge`` in packages/agents/src/oas-compiler.ts,
+# defined once further down (read at call time). A call to another path, even
+# one whose text contains it (``/api/llm-bridge-shadow``,
+# ``/api/llm-bridge/more``), keeps WayFlow's handling.
+# The bridge bounds the step's code to this length (src/app/api/llm-bridge/
+# route.ts, STEP_FAILURE_CODE_MAX); the loader bounds it again, and bounds a
+# sentence that another answer may still carry.
 _STEP_FAILURE_CODE_MAX = 200
 _STEP_FAILURE_SENTENCE_MAX = 1000
-
-
-def _url_path(url: str) -> Optional[str]:
-    """The path of ``url`` (no query, no fragment), or None when unparseable."""
-    try:
-        return _urlparse.urlparse(url).path
-    except (ValueError, TypeError):
-        return None
 
 
 class StepDeclaredFailureError(RuntimeError):
     """A bridge step ended FAILED because its model answered a failure.
 
-    The failure sentence is MODEL TEXT: it can carry newlines, control
-    characters or text the model copied from its input. It is kept as DATA
+    The bridge's answer carries no model text, but the failure sentence is
+    read as if it could: a 422 answer that carries a ``message`` may hold
+    newlines, control characters or copied input. It is kept as DATA
     (``sentence``, bounded) for whatever hands the step's failure on, and it
     never enters ``str()`` / ``repr()``: those, and so every log line and
     traceback that prints this error (``_print_task_exception``), show only the
@@ -864,29 +859,121 @@ def _step_declared_failure_answer(
 _STEP_DECLARED_FAILURE_AUTH_CLASS: Any = None
 
 
-def _step_declared_failure_auth() -> Any:
+def _one_request(request: Any) -> Any:
+    """The auth flow of a request without an auth of its own: send it once."""
+    yield request
+
+
+async def _one_request_async(request: Any) -> Any:
+    """``_one_request`` for the async client."""
+    yield request
+
+
+def _step_declared_failure_auth(own_auth: Any = None) -> Any:
     """An httpx auth hook that stops the step at a STEP_DECLARED_FAILURE answer.
 
     httpx calls the hook with each response inside ``client.request``, so it
-    raises before WayFlow's retry loop looks at the status. The class is built
-    on first use: httpx comes with wayflowcore, which is imported lazily too.
+    raises before WayFlow's retry loop looks at the status, and before WayFlow
+    reads ``ignore_bad_http_requests``. ``own_auth`` is the request's own auth
+    (None when it has none), in any form httpx takes (an ``httpx.Auth``, a
+    (user, password) pair, or a callable): the hook WRAPS it, so the request
+    still authenticates as its step declared and the declared failure still
+    stops the step. An own auth of another kind refuses the call before
+    anything is sent. The class is built on first use: httpx comes with
+    wayflowcore, which is imported lazily too.
     """
     global _STEP_DECLARED_FAILURE_AUTH_CLASS
     if _STEP_DECLARED_FAILURE_AUTH_CLASS is None:
         import httpx
 
-        class _StepDeclaredFailureStop(httpx.Auth):
-            # The hook reads the answer's body, so httpx loads it first.
-            requires_response_body = True
+        def _stop_at(response: Any) -> None:
+            answer = _step_declared_failure_answer(response)
+            if answer is not None:
+                raise _StepDeclaredFailureAnswer(*answer)
+
+        class _CallableAuth(httpx.Auth):
+            # httpx's own reading of a callable auth: it rewrites the request.
+            def __init__(self, func: Any) -> None:
+                self._func = func
 
             def auth_flow(self, request: Any) -> Any:
-                response = yield request
-                answer = _step_declared_failure_answer(response)
-                if answer is not None:
-                    raise _StepDeclaredFailureAnswer(*answer)
+                yield self._func(request)
+
+        class _StepDeclaredFailureStop(httpx.Auth):
+            def __init__(self, own: Any) -> None:
+                if own is None or own is getattr(httpx, "USE_CLIENT_DEFAULT", None):
+                    own = None
+                elif isinstance(own, httpx.Auth):
+                    pass
+                elif isinstance(own, tuple) and len(own) == 2:
+                    own = httpx.BasicAuth(*own)
+                elif callable(own):
+                    own = _CallableAuth(own)
+                else:
+                    raise RuntimeError(
+                        "A bridge call carries an auth of a kind httpx does not "
+                        "take; the call is refused before it is sent."
+                    )
+                self._own = own
+
+            def sync_auth_flow(self, request: Any) -> Any:
+                flow = (
+                    _one_request(request)
+                    if self._own is None
+                    else self._own.sync_auth_flow(request)
+                )
+                try:
+                    request = next(flow)
+                    while True:
+                        response = yield request
+                        if response.status_code == 422:
+                            response.read()
+                            _stop_at(response)
+                        try:
+                            request = flow.send(response)
+                        except StopIteration:
+                            return
+                finally:
+                    flow.close()
+
+            async def async_auth_flow(self, request: Any) -> Any:
+                flow = (
+                    _one_request_async(request)
+                    if self._own is None
+                    else self._own.async_auth_flow(request)
+                )
+                try:
+                    request = await flow.__anext__()
+                    while True:
+                        response = yield request
+                        if response.status_code == 422:
+                            await response.aread()
+                            _stop_at(response)
+                        try:
+                            request = await flow.asend(response)
+                        except StopAsyncIteration:
+                            return
+                finally:
+                    await flow.aclose()
 
         _STEP_DECLARED_FAILURE_AUTH_CLASS = _StepDeclaredFailureStop
-    return _STEP_DECLARED_FAILURE_AUTH_CLASS()
+    return _STEP_DECLARED_FAILURE_AUTH_CLASS(own_auth)
+
+
+def _install_step_declared_failure_stop(request: Dict[str, Any]) -> None:
+    """Put the declared-failure stop on a bridge call (cinatra#4220, #4737).
+
+    EVERY call the host compiler reads as a bridge call gets it, whatever its
+    host: the rule is ``_targets_llm_bridge``, the one rule of
+    ``targetsLlmBridge`` in packages/agents/src/oas-compiler.ts. Nothing on
+    the step bypasses it: an auth of the request's own stays inside the hook
+    (``_step_declared_failure_auth``), and a step that takes bad answers
+    itself (``ignore_bad_http_requests``) still stops, because the hook raises
+    inside the client. The hook adds nothing to the request and reads only a
+    422 answer. Every other call is left as it is.
+    """
+    if _targets_llm_bridge(str(request.get("url", ""))):
+        request["auth"] = _step_declared_failure_auth(request.get("auth"))
 
 
 def _patch_api_call_step_bridge_token() -> None:
@@ -1100,8 +1187,9 @@ def _patch_api_call_step_bridge_token() -> None:
         #
         # When a bridge step's model answers a non-empty `error.code` that the
         # step does not list in `completed_error_codes`, /api/llm-bridge returns
-        # HTTP 422 with body {code:"STEP_DECLARED_FAILURE", stepErrorCode,
-        # message}. That answer is final: asking the model again repeats a model
+        # HTTP 422 with body {error, code:"STEP_DECLARED_FAILURE",
+        # stepErrorCode}: a fixed sentence and the step's escaped code, no model
+        # text. That answer is final: asking the model again repeats a model
         # call that already ran (and may already have acted). But `_original`'s
         # legacy loop sends every non-2xx answer up to 3 times, and a retry
         # policy retries by status too. Stop it at the FIRST such answer: an
@@ -1109,22 +1197,14 @@ def _patch_api_call_step_bridge_token() -> None:
         # loop decides to retry) raises a private exception, which is not an
         # httpx.TransportError, so it leaves the loop at once; it is turned
         # into a StepDeclaredFailureError (a RuntimeError), so the step ends
-        # failed. The error carries the bridge's bounded sentence as DATA
-        # (`.sentence`); its str()/repr() — what the task runner's logs print —
-        # name only the escaped error code, never the model's text.
+        # failed. Its str()/repr() — the run's error text and what the task
+        # runner's logs print — name only the escaped error code.
         #
-        # Strictly scoped: ONLY the internal bridge (host-anchored above, and
-        # the URL's path EXACTLY the bridge path), ONLY when the request carries
-        # no auth of its own and the step does not take bad answers itself
-        # (ignore_bad_http_requests), and ONLY that exact status and code.
-        # Every other answer keeps WayFlow's handling as before.
-        if (
-            _is_internal
-            and _url_path(_ctx_url) == _LLM_BRIDGE_PATH
-            and "auth" not in request
-            and not getattr(self, "ignore_bad_http_requests", False)
-        ):
-            request["auth"] = _step_declared_failure_auth()
+        # Scoped by the compiler's own rule: EVERY bridge call, and nothing
+        # on the step bypasses it (_install_step_declared_failure_stop). Only
+        # that exact status and code stop; every other answer keeps WayFlow's
+        # handling as before.
+        _install_step_declared_failure_stop(request)
         try:
             resp = await _original(self, request)
         except _StepDeclaredFailureAnswer as stop:
@@ -3793,6 +3873,8 @@ def _read_bridge_token() -> Optional[str]:
 #: The host route the derivation applies to. Mirrors `targetsLlmBridge` in
 #: `packages/agents/src/oas-compiler.ts`: the bare path, the authored
 #: `{{CINATRA_BASE_URL}}` template form, or any absolute URL ending in it.
+#: The declared-failure stop reads the same rule at call time
+#: (`_install_step_declared_failure_stop`).
 _LLM_BRIDGE_PATH = "/api/llm-bridge"
 
 

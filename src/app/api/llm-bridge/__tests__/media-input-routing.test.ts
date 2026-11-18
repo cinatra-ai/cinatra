@@ -765,8 +765,8 @@ describe("/api/llm-bridge media-input branch: a declared failure ends the step f
   const FAILURE_RESPONSE = {
     error: "The step answered a failure",
     code: "STEP_DECLARED_FAILURE",
+    // No model text: the answer's message is not part of the body.
     stepErrorCode: "read_failed",
-    message: "The media could not be read.",
   };
 
   function modelResult(text: string) {

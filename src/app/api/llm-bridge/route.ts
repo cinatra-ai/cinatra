@@ -793,7 +793,6 @@ export function buildAgentRunInjectionPorts(
 // (docker/wayflow/agent_loader.py, _patch_api_call_step_bridge_token).
 const STEP_DECLARED_FAILURE = "STEP_DECLARED_FAILURE";
 const STEP_FAILURE_CODE_MAX = 200;
-const STEP_FAILURE_MESSAGE_MAX = 1000;
 // The caller's agent id is only a label in the log line, cut at this length.
 const STEP_FAILURE_LOG_LABEL_MAX = 120;
 
@@ -822,32 +821,44 @@ function logToken(value: string, max: number): string {
  * structured-output schema makes every declared output appear, so a success
  * answers `error: { code: "", message: "" }`). Only the TOP-LEVEL `error` of an
  * object answer is read: an `error` nested in another output, and every answer
- * that is not a JSON object, are passed on unchanged as before.
+ * that is not a JSON object, are passed on unchanged as before. Only the code is
+ * read, cut at STEP_FAILURE_CODE_MAX: the model's `message` is never read.
  */
 function readDeclaredStepFailure(
   parsed: unknown,
   completedCodes: readonly string[] | undefined,
-): { code: string; message: string } | null {
+): { code: string } | null {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
   const error = (parsed as { error?: unknown }).error;
   if (!error || typeof error !== "object" || Array.isArray(error)) return null;
-  const { code, message } = error as { code?: unknown; message?: unknown };
+  const { code } = error as { code?: unknown };
   if (typeof code !== "string" || code.trim() === "") return null;
   if (completedCodes?.includes(code)) return null;
-  const shown = code.slice(0, STEP_FAILURE_CODE_MAX);
-  const said =
-    typeof message === "string" && message.trim() !== ""
-      ? message.trim().slice(0, STEP_FAILURE_MESSAGE_MAX)
-      : `The step answered the error code ${shown}.`;
-  return { code: shown, message: said };
+  return { code: code.slice(0, STEP_FAILURE_CODE_MAX) };
 }
 
-/** The body of the 422 STEP_DECLARED_FAILURE answer, members in this order. */
+/**
+ * The step's code as the 422 body carries it: JSON-escaped without the quotes,
+ * and every character outside printable ASCII written as a \uXXXX escape, so
+ * it is ONE line of printable ASCII. This is the escape the runtime's loader
+ * gives the code (docker/wayflow/agent_loader.py, StepDeclaredFailureError:
+ * json.dumps, then DEL); the caller cuts the code first, as the loader does.
+ */
+function stepCodeText(code: string): string {
+  return JSON.stringify(code)
+    .slice(1, -1)
+    .replace(/[^\x20-\x7e]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
+/**
+ * The body of the 422 STEP_DECLARED_FAILURE answer, members in this order. It
+ * holds NO model text: a fixed sentence, the fixed code and the step's own code
+ * (cut and escaped by stepCodeText). The model's message is never part of it.
+ */
 type DeclaredStepFailureBody = {
   error: string;
   code: string;
   stepErrorCode: string;
-  message: string;
 };
 
 /**
@@ -858,8 +869,8 @@ type DeclaredStepFailureBody = {
  * completed (readDeclaredStepFailure), else null and the branch answers as
  * before. Text that is not JSON (a transcript, prose) is never a declared
  * failure. The log line names the bounded code and the caller's agent label,
- * each as one cut, JSON-escaped token (logToken); it never names the model's
- * message.
+ * each as one cut, JSON-escaped token (logToken). Neither the log line nor the
+ * body names the model's message.
  *
  * The helper hands back a plain body, never a response: each branch returns it
  * itself as NextResponse.json(body, { status: 422 }), so every answer of this
@@ -888,8 +899,7 @@ function declaredStepFailureBody(
   return {
     error: "The step answered a failure",
     code: STEP_DECLARED_FAILURE,
-    stepErrorCode: declaredFailure.code,
-    message: declaredFailure.message,
+    stepErrorCode: stepCodeText(declaredFailure.code),
   };
 }
 

@@ -205,17 +205,18 @@ describe("/api/llm-bridge ends a step failed on a failure it answered", () => {
       error: "The step answered a failure",
       code: "STEP_DECLARED_FAILURE",
       stepErrorCode: "read-failed",
-      message: "The page could not be read.",
     });
   });
 
-  it("says the code when the failure carries no message", async () => {
+  it("answers the code when the failure carries no message", async () => {
     modelAnswer.text = JSON.stringify({ error: { code: "call_failed" } });
     const res = await POST(stepCall({ completed_error_codes: ["reread_failed"] }));
     expect(res.status).toBe(422);
-    const body = (await res.json()) as { stepErrorCode?: string; message?: string };
-    expect(body.stepErrorCode).toBe("call_failed");
-    expect(body.message).toBe("The step answered the error code call_failed.");
+    expect(await res.json()).toEqual({
+      error: "The step answered a failure",
+      code: "STEP_DECLARED_FAILURE",
+      stepErrorCode: "call_failed",
+    });
   });
 
   it("passes the answer on unchanged when the step lists the code as completed", async () => {
@@ -298,18 +299,18 @@ describe("/api/llm-bridge ends a step failed on a failure it answered", () => {
     expect(body.stepErrorCode).toBe(" reread_failed ");
   });
 
-  it("bounds the code and the message it answers", async () => {
+  it("bounds the code it answers and answers no message", async () => {
     modelAnswer.text = JSON.stringify({
       error: { code: "c".repeat(250), message: `  ${"m".repeat(1500)}  ` },
     });
     const res = await POST(stepCall());
     expect(res.status).toBe(422);
-    const body = (await res.json()) as { stepErrorCode?: string; message?: string };
+    const body = (await res.json()) as { stepErrorCode?: string };
     expect(body.stepErrorCode).toBe("c".repeat(200));
-    expect(body.message).toBe("m".repeat(1000));
+    expect(body).not.toHaveProperty("message");
   });
 
-  it("answers the 422 as one JSON body whose four members stand in a fixed order", async () => {
+  it("answers the 422 as one JSON body whose three members stand in a fixed order", async () => {
     modelAnswer.text = JSON.stringify({
       title: "",
       error: { code: "read-failed", message: "The page could not be read." },
@@ -319,8 +320,31 @@ describe("/api/llm-bridge ends a step failed on a failure it answered", () => {
     expect(res.headers.get("content-type")).toContain("application/json");
     expect(await res.text()).toBe(
       '{"error":"The step answered a failure","code":"STEP_DECLARED_FAILURE",' +
-        '"stepErrorCode":"read-failed","message":"The page could not be read."}',
+        '"stepErrorCode":"read-failed"}',
     );
+  });
+
+  it("carries no model text in the 422 body: the fixed sentence, the code and the step code only", async () => {
+    const said = "MODEL-TEXT-4737 The page could not be read.\nforged line";
+    modelAnswer.text = JSON.stringify({ title: said, error: { code: "read-failed", message: said } });
+    const res = await POST(stepCall());
+    expect(res.status).toBe(422);
+    const text = await res.text();
+    expect(text).not.toContain("MODEL-TEXT-4737");
+    expect(text).not.toContain("could not be read");
+    expect(Object.keys(JSON.parse(text) as object)).toEqual(["error", "code", "stepErrorCode"]);
+  });
+
+  it("escapes the step code to one line of printable ASCII, as the runtime loader does", async () => {
+    const code = "read-failed\r\n\u001b\u007f\u0085\u2028\u00e9\u{1f600}\"q\\";
+    modelAnswer.text = JSON.stringify({ error: { code, message: "m" } });
+    const res = await POST(stepCall());
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { stepErrorCode?: string };
+    expect(body.stepErrorCode).toBe(
+      "read-failed\\r\\n\\u001b\\u007f\\u0085\\u2028\\u00e9\\ud83d\\ude00\\\"q\\\\",
+    );
+    expect(body.stepErrorCode).toMatch(/^[\x20-\x7e]*$/);
   });
 
   it("names NextResponse only as NextResponse.json(: the failure helper hands back a plain body", () => {
@@ -362,13 +386,15 @@ describe("/api/llm-bridge ends a step failed on a failure it answered", () => {
   it.each([
     ["a message that is not a string", 42],
     ["a blank message", "   "],
-  ])("says the code when the failure carries %s", async (_label, message) => {
+  ])("answers the code when the failure carries %s", async (_label, message) => {
     modelAnswer.text = JSON.stringify({ error: { code: "read-failed", message } });
     const res = await POST(stepCall());
     expect(res.status).toBe(422);
-    const body = (await res.json()) as { stepErrorCode?: string; message?: string };
-    expect(body.stepErrorCode).toBe("read-failed");
-    expect(body.message).toBe("The step answered the error code read-failed.");
+    expect(await res.json()).toEqual({
+      error: "The step answered a failure",
+      code: "STEP_DECLARED_FAILURE",
+      stepErrorCode: "read-failed",
+    });
   });
 
   it("ends the step failed when the executor also returns a skill selection, without the selection", async () => {
@@ -380,7 +406,6 @@ describe("/api/llm-bridge ends a step failed on a failure it answered", () => {
       error: "The step answered a failure",
       code: "STEP_DECLARED_FAILURE",
       stepErrorCode: "read-failed",
-      message: "m",
     });
   });
 

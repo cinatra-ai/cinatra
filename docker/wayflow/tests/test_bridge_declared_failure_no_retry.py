@@ -2,7 +2,8 @@
 
 When a bridge step's model answers a failure (a non-empty ``error.code`` the
 step does not list in ``completed_error_codes``), /api/llm-bridge answers HTTP
-422 with ``{"code": "STEP_DECLARED_FAILURE", "stepErrorCode", "message"}``.
+422 with ``{"error", "code": "STEP_DECLARED_FAILURE", "stepErrorCode"}`` (no
+model text).
 That answer is final. The pinned WayFlow ``ApiCallStep`` sends every non-2xx
 answer up to three times, so without the loader's stop a failed step would ask
 the model three times and only then fail, with the raw
@@ -15,8 +16,12 @@ own ``httpx.AsyncClient`` gets a transport that counts the requests it receives:
   - a STEP_DECLARED_FAILURE answer is requested once and ends the step with a
     StepDeclaredFailureError that carries the bridge's own sentence as data;
   - every other non-2xx answer (another 422, a 500) keeps WayFlow's three tries;
-  - the same answer from a host other than CINATRA_BASE_URL, or from another
-    path of that host, is not stopped;
+  - EVERY call the host compiler reads as a bridge call is stopped (its rule:
+    the URL ends in /api/llm-bridge), on any host; a call to another path is
+    not;
+  - nothing on the step bypasses the stop: a request with an auth of its own
+    keeps that auth and still stops, and so does a step that takes bad
+    answers itself (``ignore_bad_http_requests``);
   - the error's text, and so every log line of the task runner, names only the
     escaped error code: the model's sentence reaches no log.
 """
@@ -94,9 +99,14 @@ def _patch_loader(monkeypatch: pytest.MonkeyPatch, base_url: str) -> Any:
     return ApiCallStep
 
 
-def _run_step(api_call_step: Any, path: str = "/api/llm-bridge") -> Any:
+def _run_step(
+    api_call_step: Any,
+    path: str = "/api/llm-bridge",
+    base_url: str = APP_BASE_URL,
+    **step_kwargs: Any,
+) -> Any:
     step = api_call_step(
-        url=f"{APP_BASE_URL}{path}",
+        url=f"{base_url}{path}",
         method="POST",
         data={
             "system": "Read the page.",
@@ -105,6 +115,7 @@ def _run_step(api_call_step: Any, path: str = "/api/llm-bridge") -> Any:
         },
         allow_insecure_http=True,
         store_response=True,
+        **step_kwargs,
     )
     with warnings.catch_warnings():
         # WayFlow warns about allow_insecure_http; the test host is plain http.
@@ -178,36 +189,58 @@ def test_every_other_failed_answer_keeps_three_tries(
     assert str(raised.value).startswith("error executing POST request to ")
 
 
-def test_the_stop_covers_the_internal_bridge_only(
+def test_the_stop_covers_a_bridge_call_to_any_host(
     monkeypatch: pytest.MonkeyPatch, bridge: _CountingBridge
 ) -> None:
     bridge.status = 422
-    bridge.body = {"code": "STEP_DECLARED_FAILURE", "message": FAILURE_MESSAGE}
-    # CINATRA_BASE_URL names another port, so this answer is NOT the app's.
+    bridge.body = {"code": "STEP_DECLARED_FAILURE", "stepErrorCode": "read-failed"}
+    # CINATRA_BASE_URL names another port: the call gets no bridge token, but
+    # the compiler reads it as a bridge call, so the stop still holds.
     step_class = _patch_loader(monkeypatch, OTHER_BASE_URL)
 
     with pytest.raises(RuntimeError) as raised:
         _run_step(step_class)
 
-    assert len(bridge.requests) == 3
+    assert len(bridge.requests) == 1
     assert "X-Cinatra-Bridge-Token" not in bridge.requests[0].headers
-    assert str(raised.value).startswith("error executing POST request to ")
+    assert str(raised.value) == "The step answered the error code read-failed."
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/prefix/api/llm-bridge",
+        "/other?next=/api/llm-bridge",
+    ],
+)
+def test_the_stop_covers_every_url_the_compiler_reads_as_a_bridge_call(
+    monkeypatch: pytest.MonkeyPatch, bridge: _CountingBridge, path: str
+) -> None:
+    bridge.status = 422
+    bridge.body = {"code": "STEP_DECLARED_FAILURE", "stepErrorCode": "read-failed"}
+    # Not the exact bridge path, but the URL ends in it: the compiler's rule.
+    step_class = _patch_loader(monkeypatch, APP_BASE_URL)
+
+    with pytest.raises(RuntimeError) as raised:
+        _run_step(step_class, path)
+
+    assert len(bridge.requests) == 1
+    assert str(raised.value) == "The step answered the error code read-failed."
 
 
 @pytest.mark.parametrize(
     "path",
     [
         "/api/llm-bridge-shadow",
-        "/other?next=/api/llm-bridge",
         "/api/llm-bridge/more",
+        "/api/llm-bridge?step=1",
     ],
 )
-def test_the_stop_covers_the_exact_bridge_path_only(
+def test_a_url_the_compiler_does_not_read_as_a_bridge_call_keeps_three_tries(
     monkeypatch: pytest.MonkeyPatch, bridge: _CountingBridge, path: str
 ) -> None:
     bridge.status = 422
-    bridge.body = {"code": "STEP_DECLARED_FAILURE", "message": FAILURE_MESSAGE}
-    # The app's own host and port, but not the bridge's path.
+    bridge.body = {"code": "STEP_DECLARED_FAILURE", "stepErrorCode": "read-failed"}
     step_class = _patch_loader(monkeypatch, APP_BASE_URL)
 
     with pytest.raises(RuntimeError) as raised:
@@ -215,6 +248,78 @@ def test_the_stop_covers_the_exact_bridge_path_only(
 
     assert len(bridge.requests) == 3
     assert str(raised.value).startswith("error executing POST request to ")
+
+
+def test_a_step_that_takes_bad_answers_itself_still_stops(
+    monkeypatch: pytest.MonkeyPatch, bridge: _CountingBridge
+) -> None:
+    bridge.status = 422
+    bridge.body = {"code": "STEP_DECLARED_FAILURE", "stepErrorCode": "read-failed"}
+    step_class = _patch_loader(monkeypatch, APP_BASE_URL)
+
+    with pytest.raises(RuntimeError) as raised:
+        _run_step(step_class, ignore_bad_http_requests=True)
+
+    assert len(bridge.requests) == 1
+    assert str(raised.value) == "The step answered the error code read-failed."
+
+
+def _own_auth_first(monkeypatch: pytest.MonkeyPatch, step_class: Any, auth: Any) -> None:
+    """Hand the patched call a request that carries an auth of its own."""
+    patched = step_class._execute_request
+
+    async def with_own_auth(self: Any, request: Dict[str, Any]) -> Any:
+        request["auth"] = auth
+        return await patched(self, request)
+
+    monkeypatch.setattr(step_class, "_execute_request", with_own_auth)
+
+
+def _set_header(request: httpx.Request) -> httpx.Request:
+    request.headers["X-Own-Auth"] = "callable"
+    return request
+
+
+@pytest.mark.parametrize(
+    ("auth", "header", "value"),
+    [
+        (httpx.BasicAuth("user", "pass"), "Authorization", "Basic dXNlcjpwYXNz"),
+        (("user", "pass"), "Authorization", "Basic dXNlcjpwYXNz"),
+        (_set_header, "X-Own-Auth", "callable"),
+    ],
+)
+def test_a_request_with_its_own_auth_keeps_it_and_still_stops(
+    monkeypatch: pytest.MonkeyPatch,
+    bridge: _CountingBridge,
+    auth: Any,
+    header: str,
+    value: str,
+) -> None:
+    bridge.status = 422
+    bridge.body = {"code": "STEP_DECLARED_FAILURE", "stepErrorCode": "read-failed"}
+    step_class = _patch_loader(monkeypatch, APP_BASE_URL)
+    _own_auth_first(monkeypatch, step_class, auth)
+
+    with pytest.raises(RuntimeError) as raised:
+        _run_step(step_class)
+
+    assert len(bridge.requests) == 1
+    assert bridge.requests[0].headers.get(header) == value
+    assert str(raised.value) == "The step answered the error code read-failed."
+
+
+def test_an_own_auth_of_another_kind_is_refused_before_it_is_sent(
+    monkeypatch: pytest.MonkeyPatch, bridge: _CountingBridge
+) -> None:
+    bridge.status = 200
+    step_class = _patch_loader(monkeypatch, APP_BASE_URL)
+    _own_auth_first(monkeypatch, step_class, 42)
+
+    with pytest.raises(RuntimeError) as raised:
+        _run_step(step_class)
+
+    assert bridge.requests == []
+    assert "refused before it is sent" in str(raised.value)
 
 
 def test_the_model_sentence_reaches_no_log_line(
