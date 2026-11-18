@@ -527,7 +527,7 @@ import { getOrAddWayflowRendererGateIndex, rememberWayflowGateTask, rememberLate
 // host-side caller injects the live `email-send` providers so sender-alias
 // enums resolve registration-driven.
 import { resolveEmailSendProviders } from "@/lib/email-send-providers";
-import { mintRunToken } from "@/lib/agent-run-token";
+import { mintRunToken, CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY } from "@/lib/agent-run-token";
 import { holdRunAtPublishGate } from "./publish-decision-actions";
 // cinatra#2566 — the lifecycle card REF CODEC only (node:crypto + the app
 // secret). Deliberately NOT the refetch resolver: importing that here would pull
@@ -5087,7 +5087,7 @@ async function runAgentBuilderExecutionJobInner(
       });
       // cinatra#4264: the nodes whose inputs the runtime records, from the
       // template's stored `regenerate` declaration. No declaration, or a repair
-      // run: {} and the message carries no metadata, exactly as before.
+      // run: {} (the message metadata then names only the attempt, below).
       const snapshotMetadata = snapshotNodesMetadata({
         runId: run.id,
         sourceType: run.sourceType,
@@ -5116,6 +5116,10 @@ async function runAgentBuilderExecutionJobInner(
       if (!currentDispatchRun?.executionAttemptId) throw new Error("step_tool_dispatch_attempt_missing");
       await bindRunStepToolPolicy({ runId, orgId: run.orgId,
         executionAttemptId: currentDispatchRun.executionAttemptId, policy, authority: executionAuthority });
+      // cinatra#3745: the task's message names the attempt just bound (metadata, never
+      // the flow's text input); the runtime signs it in its `s2` pair, so a task of an
+      // earlier attempt of this run cannot sign for this one.
+      const dispatchMetadata = { ...snapshotMetadata, [CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY]: currentDispatchRun.executionAttemptId };
       const task = await client.sendTask({
         message: {
           role: "user",
@@ -5123,7 +5127,7 @@ async function runAgentBuilderExecutionJobInner(
           messageId: randomUUID(),
           contextId: dispatchContextId,
           parts: [{ kind: "text", text: JSON.stringify(initialMessagePayload) }],
-          ...(Object.keys(snapshotMetadata).length > 0 ? { metadata: snapshotMetadata } : {}),
+          metadata: dispatchMetadata,
         },
         configuration: { acceptedOutputModes: ["text"] },
       });
