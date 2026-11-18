@@ -326,6 +326,21 @@ describe("source-bound step verification (s2)", () => {
     expect(verify({ ...input(), executionAttemptId: "attempt-b", attestation: signed({ attempt: "attempt-b" }) }))
       .toMatchObject({ executionAttemptId: "attempt-b" });
   });
+
+  // (s8)
+  it("accepts a signed context id, step id or attempt of 512 characters and refuses one of 513, as the run-source proof does", () => {
+    const expiry = NOW_S + 300;
+    const at = (field: "contextId" | "node" | "executionAttemptId", length: number): SourceVerifyInput => {
+      const v = { contextId: CTX, node: NODE, executionAttemptId: ATTEMPT, [field]: "x".repeat(length) };
+      return { ...input(), ...v,
+        attestation: `s2:${expiry}:${hmacHex(KEY, `s2\n${v.contextId}\n${v.node}\n${v.executionAttemptId}\n${RAW}\n${EXECUTED}\n${DECLARATION}\n${expiry}`)}` };
+    };
+    for (const field of ["contextId", "node", "executionAttemptId"] as const) {
+      expect(verify(at(field, 512)), `${field} 512`).not.toBeNull();
+      // Correctly signed, so the null comes from the length refusal alone.
+      expect(verify(at(field, 513)), `${field} 513`).toBeNull();
+    }
+  });
 });
 
 // Leave the module registry as this file found it.

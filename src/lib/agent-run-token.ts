@@ -265,11 +265,20 @@ export const RUN_EXECUTION_ATTEMPT_HEADER = "x-cinatra-execution-attempt";
 export const CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY = "__cinatra_execution_attempt__";
 
 /**
+ * The longest context id, node or attempt a source-bound pair may carry: the
+ * length every field of the run-source proof may have (the shape check of that
+ * proof refuses a longer one), so a pair is never accepted here and refused there.
+ * The loader in docker/wayflow/agent_loader.py signs no longer value.
+ */
+const RUN_SOURCE_PROOF_FIELD_MAX_CHARS = 512;
+
+/**
  * Verify the runtime's source-bound step pair for one call. Answers the frozen
  * `{ stepId, contextId, executionAttemptId, sourceSha256, executedSourceSha256, declarationSourceSha256 }`
  * or null when the key (a blank key is no key, cinatra#4154), the context id, the
  * node or the attempt is missing, the context id, the node or the attempt holds a
- * line break, the attempt is longer than 512 characters, a digest is not 64
+ * line break, the context id, the node or the attempt is longer than 512
+ * characters (the length every field of the run-source proof may have), a digest is not 64
  * lower-case hex characters, the attestation is not an `s2` value with a
  * 64-character lower-case hex signature, the signature does not verify over all
  * seven values, or the expiry lies more than 60 seconds in the past or more than
@@ -284,7 +293,8 @@ export function verifySourceBoundRunStep(input: {
 }): { stepId: string; contextId: string; executionAttemptId: string; sourceSha256: string; executedSourceSha256: string; declarationSourceSha256: string } | null {
   const { key, contextId, node, executionAttemptId, attestation, sourceSha256, executedSourceSha256, declarationSourceSha256 } = input;
   if (typeof key !== "string" || key.trim() === "" || !contextId || !node ||
-      typeof executionAttemptId !== "string" || !executionAttemptId || executionAttemptId.length > 512 ||
+      typeof executionAttemptId !== "string" || !executionAttemptId ||
+      [contextId, node, executionAttemptId].some((v) => v.length > RUN_SOURCE_PROOF_FIELD_MAX_CHARS) ||
       /[\r\n]/.test(contextId + node + executionAttemptId) ||
       ![sourceSha256, executedSourceSha256, declarationSourceSha256].every((v) => typeof v === "string" && /^[a-f0-9]{64}$/.test(v))) return null;
   const m = /^s2:([0-9]+):([a-f0-9]{64})$/.exec(attestation ?? "");

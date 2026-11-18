@@ -323,6 +323,31 @@ def test_no_step_or_source_pair_when_the_context_or_step_id_holds_a_line_break(m
         assert _signed_names(req["headers"]) == [], repr(node)
 
 
+# (py8b) cinatra#3745 standing review: the runtime signs no context id, step
+# id or attempt longer than the 512 characters the application accepts.
+def test_no_step_or_source_pair_when_the_context_step_id_or_attempt_is_longer_than_512(monkeypatch):
+    url = f"{INTERNAL_HOST}/api/llm-bridge"
+    forged = {"x-cinatra-step-node": "forged", "x-cinatra-execution-attempt": "forged"}
+    FakeApiCallStep, loader = _install(monkeypatch, attest_key=ATTEST_KEY, node_id=NODE_ID)
+    # Control: 512 characters each are signed.
+    before = int(time.time())
+    req = _drive(loader, FakeApiCallStep, url, ctx_id=CTX_ID, attempt="a" * 512)
+    after = int(time.time())
+    _assert_signed_step(loader, req["headers"], before, after, attempt="a" * 512)
+    req = _drive(loader, FakeApiCallStep, url, ctx_id="c" * 512)
+    assert _signed_names(req["headers"]) == sorted(SIGNED_NAMES)
+    req = _drive(loader, FakeApiCallStep, url, ctx_id="c" * 513, headers=forged)
+    assert _signed_names(req["headers"]) == [], "context id 513"
+    req = _drive(loader, FakeApiCallStep, url, ctx_id=CTX_ID, attempt="a" * 513, headers=forged)
+    assert _signed_names(req["headers"]) == [], "attempt 513"
+    FakeApiCallStep, loader = _install(monkeypatch, attest_key=ATTEST_KEY, node_id="n" * 512)
+    req = _drive(loader, FakeApiCallStep, url, ctx_id=CTX_ID)
+    assert req["headers"][STEP_NODE] == "n" * 512
+    FakeApiCallStep, loader = _install(monkeypatch, attest_key=ATTEST_KEY, node_id="n" * 513)
+    req = _drive(loader, FakeApiCallStep, url, ctx_id=CTX_ID, headers=forged)
+    assert _signed_names(req["headers"]) == [], "step id 513"
+
+
 # (py9)
 def test_each_call_signs_the_binding_of_its_own_task(monkeypatch):
     FakeApiCallStep, loader = _install(monkeypatch, attest_key=ATTEST_KEY, node_id=NODE_ID)

@@ -159,6 +159,12 @@ CINATRA_RUN_TOKEN_MESSAGE_KEY = "__cinatra_run_token__"
 #: equal CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY in src/lib/agent-run-token.ts.
 CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY = "__cinatra_execution_attempt__"
 
+#: cinatra#3745: the longest context id, step id or attempt the runtime signs in
+#: an ``s2`` pair. MUST equal RUN_SOURCE_PROOF_FIELD_MAX_CHARS in
+#: src/lib/agent-run-token.ts: the application refuses a longer value, so the
+#: runtime signs none.
+_RUN_SOURCE_PROOF_FIELD_MAX_CHARS = 512
+
 
 def _execution_attempt_from_message(message: Any) -> str:
     """The execution attempt a task's A2A message names in its metadata, or "".
@@ -177,7 +183,7 @@ def _execution_attempt_from_message(message: Any) -> str:
     if (
         not isinstance(attempt, str)
         or not attempt
-        or len(attempt) > 512
+        or len(attempt) > _RUN_SOURCE_PROOF_FIELD_MAX_CHARS
         or "\n" in attempt
         or "\r" in attempt
     ):
@@ -990,7 +996,8 @@ def _patch_api_call_step_bridge_token() -> None:
             # source declared on an internal call are replaced by the runtime's
             # values (or dropped when the runtime has no key, context id, step
             # id, attempt or mount binding, or the context id, the step id or
-            # the attempt holds a line break).
+            # the attempt holds a line break or is longer than 512 characters,
+            # the length the application's verifier accepts).
             if "llm-bridge" in _ctx_url or "/agents/passthrough" in _ctx_url:
                 for _hname in list(request["headers"].keys()):
                     if str(_hname).lower() in (
@@ -1006,7 +1013,18 @@ def _patch_api_call_step_bridge_token() -> None:
                 _loaded = _WAYFLOW_EXECUTED_SOURCE.get()
                 _attempt = _WAYFLOW_EXECUTION_ATTEMPT.get()
                 _signed_ids = _ctx_id + _step_id + _attempt
-                if attest_key and _ctx_id and _step_id and _attempt and _loaded and "\n" not in _signed_ids and "\r" not in _signed_ids:
+                if (
+                    attest_key
+                    and _ctx_id
+                    and _step_id
+                    and _attempt
+                    and _loaded
+                    and "\n" not in _signed_ids
+                    and "\r" not in _signed_ids
+                    and len(_ctx_id) <= _RUN_SOURCE_PROOF_FIELD_MAX_CHARS
+                    and len(_step_id) <= _RUN_SOURCE_PROOF_FIELD_MAX_CHARS
+                    and len(_attempt) <= _RUN_SOURCE_PROOF_FIELD_MAX_CHARS
+                ):
                     _step_expiry = (
                         int(time.time()) + _CONTEXT_ATTESTATION_TTL_SECONDS
                     )
