@@ -63,6 +63,8 @@ import datetime as _datetime
 import hashlib
 import hmac
 import inspect
+from types import MappingProxyType
+from collections.abc import Mapping
 import json
 import os
 import re
@@ -368,6 +370,73 @@ def _extract_and_scrub_run_token(
         )
         return "", message
     return (metadata_token or text_token), message
+
+
+#: cinatra#3745 dispatch fence: the reserved initial-message key under which the
+#: host names the source binding it selected and bound to the run before its
+#: send. MUST equal CINATRA_EXPECTED_SOURCE_MESSAGE_KEY in
+#: packages/agents/src/agent-run-serde.ts (a cross-language ABI, no shared import).
+CINATRA_EXPECTED_SOURCE_MESSAGE_KEY = "__cinatra_expected_source__"
+_EXPECTED_SOURCE_FIELDS = ("sourceSha256", "executedSourceSha256", "declarationSourceSha256")
+
+
+def _take_expected_source(
+    message: Optional[Dict[str, Any]], assistant: Any
+) -> Optional[Dict[str, Any]]:
+    """cinatra#3745 dispatch fence: run a bound first task only on the mount whose
+    source the host bound.
+
+    The host reads the loader's source binding on the composed-OAS route, binds it
+    to the run, then sends the first task, naming the bound source in the first
+    text part's JSON under ``CINATRA_EXPECTED_SOURCE_MESSAGE_KEY``. A reload
+    between the read and the send can route the send to another mount of the same
+    agent, and during a reload the registry can name the new mount while the
+    router still serves the prior one. So the mount that receives the task
+    (``assistant``, the worker's own) compares the named source with its frozen
+    mount binding here, before any conversation is loaded or started: equal, the
+    key is removed and the task runs; anything else raises, and the task fails
+    with no step run.
+
+    A message without the key is returned unchanged (a resume, or a dispatch that
+    bound nothing). A key that is not exactly the three digests of this mount's
+    binding, or a mount without its read-only binding, raises. The caller's
+    message is never changed in place.
+    """
+    if not isinstance(message, dict):
+        return message
+    parts = message.get("parts")
+    if not isinstance(parts, list) or not parts:
+        return message
+    p0 = parts[0]
+    if not (
+        isinstance(p0, dict)
+        and p0.get("kind") == "text"
+        and isinstance(p0.get("text"), str)
+    ):
+        return message
+    try:
+        parsed = json.loads(p0["text"])
+    except (ValueError, TypeError):
+        return message
+    if not isinstance(parsed, dict) or CINATRA_EXPECTED_SOURCE_MESSAGE_KEY not in parsed:
+        return message
+    expected = parsed.pop(CINATRA_EXPECTED_SOURCE_MESSAGE_KEY)
+    binding = getattr(assistant, "_cinatra_executed_source", None)
+    if (
+        not isinstance(binding, MappingProxyType)
+        or not isinstance(expected, dict)
+        or set(expected.keys()) != set(_EXPECTED_SOURCE_FIELDS)
+        or any(
+            not isinstance(expected[k], str) or expected[k] != binding.get(k)
+            for k in _EXPECTED_SOURCE_FIELDS
+        )
+    ):
+        raise ValueError("executed_source_mismatch")
+    new_p0 = dict(p0)
+    new_p0["text"] = json.dumps(parsed)
+    new_message = dict(message)
+    new_message["parts"] = [new_p0, *parts[1:]]
+    return new_message
 
 
 def _scrub_run_token_from_message_for_storage(
@@ -1244,6 +1313,12 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
             if _scrubbed_message is not None:
                 params["message"] = _scrubbed_message
             _rt_token = _WAYFLOW_RUN_TOKEN.set(_run_token or "")
+            # cinatra#3745 dispatch fence: a bound first task runs only on the
+            # mount whose source the host bound; otherwise it fails here, before
+            # any conversation is loaded or started.
+            _fenced_message = _take_expected_source(params.get("message"), self.assistant)
+            if _fenced_message is not None:
+                params["message"] = _fenced_message
 
             # Propagate context_id to ApiCallStep via ContextVar so
             # X-Cinatra-A2A-Context-Id is injected on llm-bridge calls.
@@ -3408,6 +3483,7 @@ class MountedAgent:
         "composed_oas",
         "composed_sha256",
         "context_injection",
+        "selected_source_binding",
     )
 
     def __init__(
@@ -3422,6 +3498,7 @@ class MountedAgent:
         composed_oas: Optional[Dict[str, Any]] = None,
         composed_sha256: Optional[str] = None,
         context_injection: Optional[List[Dict[str, Any]]] = None,
+        selected_source_binding: Optional[Mapping[str, str]] = None,
     ) -> None:
         self.label = f"{vendor}/{slug}"
         self.vendor = vendor
@@ -3432,6 +3509,7 @@ class MountedAgent:
         self.sub_app = sub_app
         self.stack: Optional[contextlib.AsyncExitStack] = None
         self.mount = mount
+        self.selected_source_binding = selected_source_binding
         # cinatra#1194 — mount-time context-subflow injection sidecar. When the
         # loader injected declared slots, `composed_oas` holds the PRE-
         # placeholder-substitution composed document (what actually executes,
@@ -4498,6 +4576,17 @@ def _mount_one_sync(
 
     substituted = _substitute_placeholders(raw_text)
     agent = loader.load_json(substituted)
+    source_binding = MappingProxyType({
+        "sourceSha256": fingerprint,
+        "executedSourceSha256": hashlib.sha256(substituted.encode("utf-8")).hexdigest(),
+        "declarationSourceSha256": hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
+        "declarationSource": raw_text,
+    })
+    # Frozen host-only selection snapshot; a failed attachment
+    # refuses the mount rather than minting step-only authority.
+    setattr(agent, "_cinatra_executed_source", source_binding)
+    if getattr(agent, "_cinatra_executed_source", None) is not source_binding:
+        raise ValueError("executed_source_sidecar_unavailable")
 
     if injection_report:
         # Per-run template-version logging needs the injection info at
@@ -4546,6 +4635,7 @@ def _mount_one_sync(
         composed_oas=composed_oas,
         composed_sha256=composed_sha256,
         context_injection=injection_report or None,
+        selected_source_binding=source_binding,
     )
 
 
@@ -5070,6 +5160,10 @@ def _build_composed_oas_handler(
                 "injectedSlots": agent.context_injection or [],
                 "composedSha256": agent.composed_sha256,
                 "composedOas": agent.composed_oas,
+                # The host reads this before a run's first dispatch and binds it
+                # to the run (cinatra#3745); a later part proves which assistant
+                # ran. The substituted text is never returned, only its digest.
+                "selectedSourceBinding": dict(agent.selected_source_binding) if agent.selected_source_binding is not None else None,
             }
         )
 

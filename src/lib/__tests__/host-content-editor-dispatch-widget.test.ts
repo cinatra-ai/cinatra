@@ -67,6 +67,22 @@ vi.mock("@cinatra-ai/agents", () => ({
   transitionRunStatus: (...a: unknown[]) => transitionRunStatus(...a),
 }));
 
+// #3745 explicit storage/selected-source ports: no operational PostgreSQL or loader request.
+// The policy reader's real missing-ABI refusal is separately exercised by run-step-tool-policy.test.ts.
+const readSourceRun = vi.fn(async () => {
+  const input=createCarrierRun.mock.calls.at(-1)?.[0] as {orgId?:string}|undefined;
+  return {orgId:input?.orgId,executionAttemptId:"attempt",a2aContextId:null as string|null};
+});
+const selectSourcePolicy=vi.fn(async (input:{contextId:string})=>({version:1,contextId:input.contextId,source:"{}",sourceSha256:"a".repeat(64),executedSourceSha256:"b".repeat(64),declarationSourceSha256:"c".repeat(64)}));
+const bindSourcePolicy=vi.fn(async (input:unknown)=>{void input;});
+vi.mock("@cinatra-ai/agents/store",()=>({
+ readAgentRunById:()=>readSourceRun(),
+ updateAgentRunA2AContextId:vi.fn(),
+ selectWayflowRunStepToolPolicy:(input:{contextId:string})=>selectSourcePolicy(input),
+ bindRunStepToolPolicy:(input:unknown)=>bindSourcePolicy(input),
+ CINATRA_EXPECTED_SOURCE_MESSAGE_KEY:"__cinatra_expected_source__",
+}));
+
 // The per-install identity resolver MUST NOT be reached on the widget path.
 const resolveContentEditorIdentityForInstance = vi.fn();
 vi.mock("@/lib/content-editor-run-identity", () => ({
@@ -123,7 +139,10 @@ beforeEach(() => {
   readAgentTemplateByPackageName.mockResolvedValue({ id: "tmpl_wp" });
   readLatestAgentVersionIdForTemplate.mockResolvedValue("ver_1");
   createCarrierRun.mockImplementation(async (input: { id: string }) => ({ id: input.id, inputParams: {} }));
+  // A completed Task: a carrier run completes only for one (cinatra#3745).
   sendTask.mockResolvedValue({
+    kind: "task",
+    status: { state: "completed" },
     history: [{ role: "agent", parts: [{ kind: "text", text: '{"postId":"7"}' }] }],
   });
   resolveOrgRoleForUser.mockResolvedValue("member");
@@ -179,6 +198,31 @@ describe("host content-editor dispatch — S5 delegated-widget", () => {
     expect(lastSentText()).toContain("cinatra_run_id");
     // NEVER the install/single-tenant resolver on the widget path (no downgrade).
     expect(resolveContentEditorIdentityForInstance).not.toHaveBeenCalled();
+  });
+
+  // cinatra#3745: the widget's carrier run binds the loader's selected source before the send,
+  // and the message names the bound source's digests.
+  it("binds the loader's selected source to the widget carrier run before it sends (cinatra#3745)", async () => {
+    frameActor = { delegation: "public_site_widget", runBy: "user-77", orgId: "org-9", instanceId: "site-1" };
+    await dispatchContentEditorViaA2A({
+      agentUrl: "http://agent",
+      payload: { instanceId: "site-1", postId: 7 },
+      timeoutMs: 1000,
+      packageName: "@cinatra-ai/wordpress-agent",
+      actorOverride: OVERRIDE,
+      preCreateAuthorize: async () => true,
+    });
+    const runId = (createCarrierRun.mock.calls.at(-1)![0] as { id: string }).id;
+    expect(bindSourcePolicy).toHaveBeenCalledTimes(1);
+    expect(bindSourcePolicy).toHaveBeenCalledWith(
+      expect.objectContaining({ runId, orgId: "org-9", executionAttemptId: "attempt" }),
+    );
+    expect(bindSourcePolicy.mock.invocationCallOrder[0]!).toBeLessThan(sendTask.mock.invocationCallOrder.at(-1)!);
+    expect(JSON.parse(lastSentText()).__cinatra_expected_source__).toEqual({
+      sourceSha256: "a".repeat(64),
+      executedSourceSha256: "b".repeat(64),
+      declarationSourceSha256: "c".repeat(64),
+    });
   });
 
   it("G11 default re-assert: absent caller hook, a LIVE member proceeds", async () => {

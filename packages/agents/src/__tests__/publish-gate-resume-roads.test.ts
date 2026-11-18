@@ -152,11 +152,20 @@ describe("the road list equals the product sendTask call sites", () => {
     expect(fence).toBeLessThan(send);
   });
 
-  it("the content-editor send carries no context id", () => {
+  it("the content-editor send carries no existing context id, only the one its dispatch minted", () => {
     const src = read("src/lib/host-content-editor-dispatch.ts");
     const send = at(src, ".sendTask(");
     const message = src.slice(send, at(src, "configuration:", send));
-    expect(message).not.toContain("contextId");
+    // The one context id the message may name is the local value minted in this call (cinatra#3745);
+    // never a run's stored a2aContextId, so no message is sent into a context that already exists.
+    const named = [...message.matchAll(/contextId\s*:\s*([A-Za-z_$][\w$.]*)/g)].map((m) => m[1]);
+    expect(named).toEqual(["mintedContextId"]);
+    expect(message).not.toContain("a2aContextId");
+    const dispatch = src.slice(at(src, "let mintedContextId"), send);
+    const refused = at(dispatch, 'if (run.a2aContextId) throw new Error("step_tool_dispatch_context_present");');
+    const minted = at(dispatch, "mintedContextId = randomUUID();");
+    expect(refused).toBeLessThan(minted);
+    expect(dispatch.match(/mintedContextId\s*=[^=]/g)).toHaveLength(1);
   });
 });
 

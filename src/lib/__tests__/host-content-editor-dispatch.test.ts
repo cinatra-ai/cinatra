@@ -69,6 +69,24 @@ vi.mock("@cinatra-ai/agents", () => ({
   transitionRunStatus: (...a: unknown[]) => transitionRunStatus(...a),
 }));
 
+// #3745 explicit storage/selected-source ports: no operational PostgreSQL or loader request.
+// The policy reader's real missing-ABI refusal is separately exercised by run-step-tool-policy.test.ts.
+const readSourceRun = vi.fn(async () => {
+  const input=createCarrierRun.mock.calls.at(-1)?.[0] as {orgId?:string}|undefined;
+  // A carrier run the dispatch just created names no context yet (cinatra#4150).
+  return {orgId:input?.orgId,executionAttemptId:"attempt",a2aContextId:null as string|null};
+});
+const selectSourcePolicy=vi.fn(async (input:{contextId:string})=>({version:1,contextId:input.contextId,source:"{}",sourceSha256:"a".repeat(64),executedSourceSha256:"b".repeat(64),declarationSourceSha256:"c".repeat(64)}));
+const bindSourcePolicy=vi.fn(async (input:unknown)=>{void input;});
+const updateRunContextId=vi.fn(async (runId:string,contextId:string)=>{void runId;void contextId;});
+vi.mock("@cinatra-ai/agents/store",()=>({
+ readAgentRunById:()=>readSourceRun(),
+ updateAgentRunA2AContextId:(runId:string,contextId:string)=>updateRunContextId(runId,contextId),
+ selectWayflowRunStepToolPolicy:(input:{contextId:string})=>selectSourcePolicy(input),
+ bindRunStepToolPolicy:(input:unknown)=>bindSourcePolicy(input),
+ CINATRA_EXPECTED_SOURCE_MESSAGE_KEY:"__cinatra_expected_source__",
+}));
+
 // --- per-instance (cinatra#274) identity resolver ----------------------------
 // The dispatcher resolves identity through the per-install resolver, which
 // internally falls back to single-tenant. We mock the per-install resolver and
@@ -114,7 +132,10 @@ beforeEach(() => {
     id: input.id,
     inputParams: {},
   }));
+  // A completed Task: a carrier run completes only for one (cinatra#3745).
   sendTask.mockResolvedValue({
+    kind: "task",
+    status: { state: "completed" },
     history: [{ role: "agent", parts: [{ kind: "text", text: '{"postId":"7"}' }] }],
   });
 });
@@ -535,4 +556,85 @@ describe("dispatchContentEditorViaA2A — archived-org typed refusal (cinatra#19
     expect(authority).toBeDefined();
     expect(authority?.orgId).toBe("org_1");
   });
+});
+
+
+describe("#3745 selected-source binding before content-editor effects",()=>{
+ const input=()=>({agentUrl:"http://agent",packageName:"@cinatra-ai/wordpress-agent",payload:{postId:"7"},timeoutMs:1000});
+ it("binds exact carrier attempt/org/context under real minted authority before sending",async()=>{
+  await dispatchContentEditorViaA2A(input());
+  const run=createCarrierRun.mock.calls.at(-1)![0];
+  // The dispatch mints the context id in this call and records it on the run before it binds.
+  expect(updateRunContextId).toHaveBeenCalledTimes(1);
+  const [contextRunId,minted]=updateRunContextId.mock.calls[0];
+  expect(contextRunId).toBe(run.id);
+  expect(minted).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  expect(updateRunContextId.mock.invocationCallOrder[0]).toBeLessThan(bindSourcePolicy.mock.invocationCallOrder.at(-1)!);
+  expect(bindSourcePolicy).toHaveBeenCalledWith(expect.objectContaining({runId:run.id,orgId:"org_1",executionAttemptId:"attempt",policy:expect.objectContaining({contextId:minted}),authority:expect.anything()}));
+  expect(bindSourcePolicy.mock.invocationCallOrder.at(-1)!).toBeLessThan(sendTask.mock.invocationCallOrder.at(-1)!);
+  expect(sendTask.mock.calls.at(-1)?.[0]).toMatchObject({message:{contextId:minted}});
+ });
+ it("refuses a carrier run that already names a context before any bind or send (cinatra#4150)",async()=>{
+  readSourceRun.mockResolvedValueOnce({orgId:"org_1",executionAttemptId:"attempt",a2aContextId:"existing-context"});
+  await expect(dispatchContentEditorViaA2A(input())).rejects.toThrow("step_tool_dispatch_context_present");
+  expect(sendTask).toHaveBeenCalledTimes(0);
+  expect(bindSourcePolicy).not.toHaveBeenCalled();
+  expect(selectSourcePolicy).not.toHaveBeenCalled();
+  expect(updateRunContextId).not.toHaveBeenCalled();
+ });
+ it("refuses an absent durable attempt before any external task effect",async()=>{
+  readSourceRun.mockResolvedValueOnce({orgId:"org_1",executionAttemptId:"",a2aContextId:null});
+  await expect(dispatchContentEditorViaA2A(input())).rejects.toThrow("step_tool_dispatch_attempt_missing");
+  expect(sendTask).not.toHaveBeenCalled();expect(bindSourcePolicy).not.toHaveBeenCalled();
+ });
+ it("does not send when the trusted declaration ABI or immutable binding refuses",async()=>{
+  selectSourcePolicy.mockRejectedValueOnce(Error("step_tool_reader_unavailable"));
+  await expect(dispatchContentEditorViaA2A(input())).rejects.toThrow("step_tool_reader_unavailable");expect(sendTask).not.toHaveBeenCalled();
+  bindSourcePolicy.mockRejectedValueOnce(Error("step_tool_dispatch_rebind_refused"));
+  await expect(dispatchContentEditorViaA2A(input())).rejects.toThrow("step_tool_dispatch_rebind_refused");expect(sendTask).not.toHaveBeenCalled();
+ });
+ // cinatra#3745 dispatch fence: the loader's mount that receives the task runs it only for the source bound here.
+ it("names the bound source's three digests in the message it sends",async()=>{
+  await dispatchContentEditorViaA2A(input());
+  const sent=JSON.parse(lastSentText());
+  expect(sent.__cinatra_expected_source__).toEqual({sourceSha256:"a".repeat(64),executedSourceSha256:"b".repeat(64),declarationSourceSha256:"c".repeat(64)});
+  expect(sent.postId).toBe("7");
+ });
+ it("a queued -> running claim that fails sends nothing and fails the still-queued carrier run",async()=>{
+  transitionRunStatus.mockImplementation(async (...a:unknown[])=>{if(a[1]==="queued"&&a[2]==="running")throw Error("claim_failed_before_commit");});
+  try{
+   await expect(dispatchContentEditorViaA2A(input())).rejects.toThrow("claim_failed_before_commit");
+   const run=createCarrierRun.mock.calls.at(-1)![0];
+   expect(sendTask).not.toHaveBeenCalled();
+   expect(selectSourcePolicy).not.toHaveBeenCalled();
+   expect(bindSourcePolicy).not.toHaveBeenCalled();
+   expect(transitionRunStatus).toHaveBeenCalledWith(run.id,"queued","failed",expect.objectContaining({error:"claim_failed_before_commit"}),expect.anything());
+   expect(transitionRunStatus).not.toHaveBeenCalledWith(run.id,"running","failed",expect.anything(),expect.anything());
+  }finally{transitionRunStatus.mockImplementation(async()=>{});}
+ });
+ // cinatra#3745: sendTask resolves a failed Task (the loader's mount refuses a task whose bound source is not its own,
+ // before any step runs), so the carrier run completes only for a completed Task and fails for any other state.
+ const resolvedTask=(state:string|undefined)=>({kind:"task",id:"task-1",contextId:"ctx-1",...(state===undefined?{}:{status:{state}}),
+  history:[{role:"agent",parts:[{kind:"text",text:'{"postId":"7"}'}]}]});
+ it.each(["failed","input-required","canceled","working",undefined])("a resolved Task in state %s fails the carrier run running -> failed and never completes it",async(state)=>{
+  sendTask.mockResolvedValueOnce(resolvedTask(state));
+  await expect(dispatchContentEditorViaA2A(input())).rejects.toThrow("content_editor_task_not_completed");
+  const run=createCarrierRun.mock.calls.at(-1)![0];
+  expect(sendTask).toHaveBeenCalledTimes(1);
+  expect(transitionRunStatus).toHaveBeenCalledWith(run.id,"running","failed",expect.objectContaining({error:expect.stringContaining("content_editor_task_not_completed")}),expect.anything());
+  expect(transitionRunStatus).not.toHaveBeenCalledWith(run.id,"running","completed",expect.anything(),expect.anything());
+ });
+ it("a resolved completed Task completes the carrier run and returns the agent's reply",async()=>{
+  sendTask.mockResolvedValueOnce(resolvedTask("completed"));
+  await expect(dispatchContentEditorViaA2A(input())).resolves.toBe('{"postId":"7"}');
+  const run=createCarrierRun.mock.calls.at(-1)![0];
+  expect(transitionRunStatus).toHaveBeenCalledWith(run.id,"running","completed",expect.anything(),expect.anything());
+  expect(transitionRunStatus).not.toHaveBeenCalledWith(run.id,"running","failed",expect.anything(),expect.anything());
+ });
+ it("an anonymous dispatch (no carrier run) keeps returning the reply of a resolved Task in any state",async()=>{
+  sendTask.mockResolvedValueOnce(resolvedTask("failed"));
+  await expect(dispatchContentEditorViaA2A({agentUrl:"http://agent",payload:{postId:"7"},timeoutMs:1000})).resolves.toBe('{"postId":"7"}');
+  expect(createCarrierRun).not.toHaveBeenCalled();
+  expect(transitionRunStatus).not.toHaveBeenCalled();
+ });
 });
