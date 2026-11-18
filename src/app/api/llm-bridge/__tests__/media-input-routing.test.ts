@@ -15,6 +15,11 @@
  *  10. CAPABILITY-MISMATCH-IGNORES-MEDIA — non-media_input capability silently
  *      drops body.media; text dispatch runs.
  *
+ * And the declared-failure outcome rule on both media paths: a model answer
+ * that is a JSON object whose top-level `error.code` the step does not list
+ * in `completed_error_codes` ends the step failed (422 STEP_DECLARED_FAILURE),
+ * as on the text path (declared-step-failure.test.ts).
+ *
  * Mock topology mirrors cinatra-llm-routing.test.ts:
  *   - vi.hoisted handles for every entry point the route imports.
  *   - vi.mock("@cinatra-ai/llm", ...) provides the 5 functions the
@@ -746,6 +751,102 @@ describe("/api/llm-bridge media-input branch", () => {
       expect(adapterMock.generateFromMediaFile).not.toHaveBeenCalled();
       expect(adapterMock.generate).not.toHaveBeenCalled();
       expect(emitUsageEventMock).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+});
+
+describe("/api/llm-bridge media-input branch: a declared failure ends the step failed", () => {
+  const FAILURE_ANSWER = JSON.stringify({
+    transcript: "",
+    error: { code: "read_failed", message: "The media could not be read." },
+  });
+  const FAILURE_RESPONSE = {
+    error: "The step answered a failure",
+    code: "STEP_DECLARED_FAILURE",
+    stepErrorCode: "read_failed",
+    message: "The media could not be read.",
+  };
+
+  function modelResult(text: string) {
+    return {
+      text,
+      status: "completed",
+      incompleteReason: null,
+      rawBody: "{}",
+      usage: {
+        inputTokens: 10,
+        outputTokens: 5,
+        cachedInputTokens: 0,
+        reasoningOutputTokens: 0,
+      },
+    };
+  }
+
+  function mediaReq(url: string, extra: Record<string, unknown> = {}): Request {
+    return makeReq({
+      user: "transcribe",
+      cinatra_llm: { preferredProvider: "gemini", capabilityRequired: "media_input" },
+      media: { url },
+      agent_id: "media-transcript-agent",
+      ...extra,
+    });
+  }
+
+  it("YOUTUBE-PATH: answers 422 STEP_DECLARED_FAILURE on an unlisted error.code", async () => {
+    adapterMock.generate.mockResolvedValueOnce(modelResult(FAILURE_ANSWER));
+    const res = await POST(mediaReq("https://www.youtube.com/watch?v=abc"));
+    expect(res.status).toBe(422);
+    expect(await res.json()).toEqual(FAILURE_RESPONSE);
+    expect(adapterMock.generate).toHaveBeenCalledTimes(1);
+  });
+
+  it("YOUTUBE-PATH: passes the answer on as text when the step lists the code", async () => {
+    adapterMock.generate.mockResolvedValueOnce(modelResult(FAILURE_ANSWER));
+    const res = await POST(
+      mediaReq("https://www.youtube.com/watch?v=abc", { completed_error_codes: ["read_failed"] }),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ text: FAILURE_ANSWER });
+  });
+
+  it("YOUTUBE-PATH: passes an empty code on as text", async () => {
+    const success = JSON.stringify({ transcript: "hello", error: { code: "", message: "" } });
+    adapterMock.generate.mockResolvedValueOnce(modelResult(success));
+    const res = await POST(mediaReq("https://www.youtube.com/watch?v=abc"));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ text: success });
+  });
+
+  it("AUDIO-FILE-PATH: answers 422 STEP_DECLARED_FAILURE on an unlisted error.code and still deletes the file", async () => {
+    adapterMock.generateFromMediaFile.mockResolvedValueOnce(modelResult(FAILURE_ANSWER));
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      streamingResponse([512, 512], { "content-type": "audio/mpeg" }),
+    );
+    try {
+      const res = await POST(mediaReq("https://example.com/clip.mp3"));
+      expect(res.status).toBe(422);
+      expect(await res.json()).toEqual(FAILURE_RESPONSE);
+      expect(adapterMock.generateFromMediaFile).toHaveBeenCalledTimes(1);
+      await flushPromises();
+      expect(adapterMock.deleteFile).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it("AUDIO-FILE-PATH: passes the answer on as text when the step lists the code", async () => {
+    adapterMock.generateFromMediaFile.mockResolvedValueOnce(modelResult(FAILURE_ANSWER));
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      streamingResponse([512], { "content-type": "audio/mpeg" }),
+    );
+    try {
+      const res = await POST(
+        mediaReq("https://example.com/clip.mp3", { completed_error_codes: ["read_failed"] }),
+      );
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ text: FAILURE_ANSWER });
     } finally {
       fetchSpy.mockRestore();
     }

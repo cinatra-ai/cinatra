@@ -18,7 +18,11 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-const modelAnswer = vi.hoisted(() => ({ text: null as string | null }));
+const modelAnswer = vi.hoisted(() => ({
+  text: null as string | null,
+  // The general-path skill rank-and-truncate note the executor may return.
+  skillSelection: null as { droppedSkillIds: string[]; selectionReason: string } | null,
+}));
 
 vi.mock("server-only", () => ({}));
 
@@ -38,7 +42,12 @@ vi.mock("@cinatra-ai/llm", async () => {
         // The answer a test sets stands in for the model's own words; with
         // none set, the REAL scripted completion answers.
         if (modelAnswer.text !== null) {
-          return { text: modelAnswer.text, status: "completed", incompleteReason: null };
+          return {
+            text: modelAnswer.text,
+            status: "completed",
+            incompleteReason: null,
+            ...(modelAnswer.skillSelection ? { skillSelection: modelAnswer.skillSelection } : {}),
+          };
         }
         if (scripted.isScriptedLlmRuntime(input.runtime)) {
           return scripted.runScriptedBridgeCompletion({
@@ -122,6 +131,7 @@ vi.mock("@cinatra-ai/agents", async () => {
 });
 
 import { UAT_SENTINEL } from "@cinatra-ai/llm/scripted-test-provider";
+import { runResolvedSkillAwareDeterministicLlmTask } from "@cinatra-ai/llm";
 
 const BRIDGE_TOKEN = "declared-failure-token-32chars-AAA";
 
@@ -163,6 +173,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   vi.spyOn(console, "warn").mockImplementation(() => {});
   modelAnswer.text = null;
+  modelAnswer.skillSelection = null;
   process.env.CINATRA_BRIDGE_TOKEN = BRIDGE_TOKEN;
   process.env.CINATRA_TEST_LLM_PROVIDER = "scripted";
   process.env.CINATRA_RUNTIME_MODE = "development";
@@ -225,6 +236,9 @@ describe("/api/llm-bridge ends a step failed on a failure it answered", () => {
     ["a code that is not a string", { title: "Home", error: { code: 404 } }],
     ["an error that is a string", { title: "Home", error: "read-failed" }],
     ["an error nested in another output", { page: { error: { code: "read-failed" } } }],
+    ["an error that is a list", { title: "Home", error: [{ code: "read-failed" }] }],
+    ["a code that is an object", { title: "Home", error: { code: { id: "read-failed" } } }],
+    ["a code that is null", { title: "Home", error: { code: null, message: "m" } }],
   ])("passes a success on unchanged: %s", async (_label, answer) => {
     modelAnswer.text = JSON.stringify(answer);
     const res = await POST(stepCall());
@@ -250,6 +264,7 @@ describe("/api/llm-bridge ends a step failed on a failure it answered", () => {
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error?: string };
     expect(body.error).toBe("Invalid request body");
+    expect(vi.mocked(runResolvedSkillAwareDeterministicLlmTask)).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -261,6 +276,7 @@ describe("/api/llm-bridge ends a step failed on a failure it answered", () => {
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error?: string };
     expect(body.error).toBe("Invalid request body");
+    expect(vi.mocked(runResolvedSkillAwareDeterministicLlmTask)).not.toHaveBeenCalled();
   });
 
   it("accepts 50 completed codes and passes a listed code on", async () => {
@@ -289,6 +305,44 @@ describe("/api/llm-bridge ends a step failed on a failure it answered", () => {
     const body = (await res.json()) as { stepErrorCode?: string; message?: string };
     expect(body.stepErrorCode).toBe("c".repeat(200));
     expect(body.message).toBe("m".repeat(1000));
+  });
+
+  it.each([
+    ["a message that is not a string", 42],
+    ["a blank message", "   "],
+  ])("says the code when the failure carries %s", async (_label, message) => {
+    modelAnswer.text = JSON.stringify({ error: { code: "read-failed", message } });
+    const res = await POST(stepCall());
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as { stepErrorCode?: string; message?: string };
+    expect(body.stepErrorCode).toBe("read-failed");
+    expect(body.message).toBe("The step answered the error code read-failed.");
+  });
+
+  it("ends the step failed when the executor also returns a skill selection, without the selection", async () => {
+    modelAnswer.skillSelection = { droppedSkillIds: ["skill-9"], selectionReason: "over the cap" };
+    modelAnswer.text = JSON.stringify({ title: "", error: { code: "read-failed", message: "m" } });
+    const res = await POST(stepCall());
+    expect(res.status).toBe(422);
+    expect(await res.json()).toEqual({
+      error: "The step answered a failure",
+      code: "STEP_DECLARED_FAILURE",
+      stepErrorCode: "read-failed",
+      message: "m",
+    });
+  });
+
+  it("passes a success on with the skill selection the executor returned", async () => {
+    const selection = { droppedSkillIds: ["skill-9"], selectionReason: "over the cap" };
+    modelAnswer.skillSelection = selection;
+    modelAnswer.text = JSON.stringify({ title: "Home", error: { code: "", message: "" } });
+    const res = await POST(stepCall());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      title: "Home",
+      error: { code: "", message: "" },
+      skillSelection: selection,
+    });
   });
 
   it("a SCRIPTED run of a step declaring an error output ends completed (empty scripted code)", async () => {

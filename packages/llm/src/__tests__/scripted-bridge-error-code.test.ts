@@ -175,3 +175,69 @@ describe("runScriptedBridgeCompletion keeps an error code its schema pins", () =
     expect(errorCode({ const: 404 })).toBe(404);
   });
 });
+
+// Every constraint the code's declaration states applies TOGETHER: "" replaces
+// the scripted code only when it satisfies all of them. A keyword this
+// provider cannot read for "" (`format`, `$ref`, a pattern that does not
+// compile, a nesting past the depth cap) keeps the scripted value.
+describe("runScriptedBridgeCompletion reads every constraint on an error code", () => {
+  function errorCode(code: Record<string, unknown>): unknown {
+    const out = answer({
+      type: "object",
+      required: ["error"],
+      properties: {
+        error: {
+          type: "object",
+          required: ["code", "message"],
+          properties: { code, message: { type: "string" } },
+        },
+      },
+    });
+    return (out.error as { code?: unknown }).code;
+  }
+
+  function nestedAllOf(levels: number, inner: Record<string, unknown>): Record<string, unknown> {
+    let node = inner;
+    for (let i = 0; i < levels; i++) node = { allOf: [node] };
+    return node;
+  }
+
+  it("keeps the scripted code when a later allOf member refuses the empty string", () => {
+    expect(String(errorCode({ allOf: [{ type: "string" }, { minLength: 1 }] }))).toContain(
+      UAT_SENTINEL,
+    );
+  });
+
+  it("keeps the enum's first member when minLength or pattern refuses the empty member", () => {
+    expect(errorCode({ type: "string", enum: ["ok", ""], minLength: 1 })).toBe("ok");
+    expect(errorCode({ type: "string", enum: ["ok", ""], pattern: "^[a-z]+$" })).toBe("ok");
+  });
+
+  it("keeps the scripted code when oneOf matches the empty string twice", () => {
+    expect(String(errorCode({ oneOf: [{ type: "string" }, { maxLength: 5 }] }))).toContain(
+      UAT_SENTINEL,
+    );
+  });
+
+  it("keeps the scripted code when not refuses the empty string", () => {
+    expect(String(errorCode({ type: "string", not: { const: "" } }))).toContain(UAT_SENTINEL);
+  });
+
+  it("keeps the scripted code when format, $ref or a bad pattern cannot be read for it", () => {
+    expect(String(errorCode({ type: "string", format: "email" }))).toContain(UAT_SENTINEL);
+    expect(String(errorCode({ $ref: "#/$defs/code" }))).toContain(UAT_SENTINEL);
+    expect(String(errorCode({ type: "string", pattern: "(" }))).toContain(UAT_SENTINEL);
+  });
+
+  it("keeps the scripted code when its declaration nests past the depth cap", () => {
+    expect(String(errorCode(nestedAllOf(8, { type: "string" })))).toContain(UAT_SENTINEL);
+  });
+
+  it("answers the empty code when every constraint accepts it", () => {
+    expect(errorCode({ allOf: [{ type: "string" }, { maxLength: 64 }] })).toBe("");
+    expect(errorCode({ type: "string", enum: ["", "ok"], pattern: "^[a-z]*$" })).toBe("");
+    expect(errorCode({ anyOf: [{ type: "string" }, { const: "ok" }] })).toBe("");
+    expect(errorCode({ type: "string", not: { const: "ok" } })).toBe("");
+    expect(errorCode(nestedAllOf(3, { type: "string", maxLength: 10 }))).toBe("");
+  });
+});

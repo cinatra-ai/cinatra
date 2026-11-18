@@ -825,6 +825,43 @@ function readDeclaredStepFailure(
   return { code: shown, message: said };
 }
 
+/**
+ * The ONE outcome rule for a model's answer, read at EVERY branch of this route
+ * that calls a model (the text path and both media-input paths): the 422
+ * STEP_DECLARED_FAILURE answer when the answer `text` is a JSON object whose
+ * top-level `error` declares a failure the step does not list as completed
+ * (readDeclaredStepFailure), else null and the branch answers as before.
+ * Text that is not JSON (a transcript, prose) is never a declared failure.
+ */
+function declaredStepFailureResponse(
+  text: string,
+  completedCodes: readonly string[] | undefined,
+  agentLabel: string,
+): NextResponse | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const declaredFailure = readDeclaredStepFailure(parsed, completedCodes);
+  if (!declaredFailure) return null;
+  console.warn(
+    `[llm-bridge] step answered the error code ${JSON.stringify(declaredFailure.code)} ` +
+      `(agent=${agentLabel}); its data does not list the code ` +
+      `as completed, so the step ends failed (422 ${STEP_DECLARED_FAILURE}).`,
+  );
+  return NextResponse.json(
+    {
+      error: "The step answered a failure",
+      code: STEP_DECLARED_FAILURE,
+      stepErrorCode: declaredFailure.code,
+      message: declaredFailure.message,
+    },
+    { status: 422 },
+  );
+}
+
 function toPersonalDelta(
   skill: unknown,
   isDeliverable?: (skillId: string) => boolean,
@@ -1178,7 +1215,14 @@ export async function POST(req: Request): Promise<Response> {
           maxSteps: 1,
         }),
       );
-      return NextResponse.json({ text: result.text ?? "" });
+      const youTubeText = result.text ?? "";
+      const youTubeFailure = declaredStepFailureResponse(
+        youTubeText,
+        body.completed_error_codes,
+        body.agent_id ?? "media-transcript-agent",
+      );
+      if (youTubeFailure) return youTubeFailure;
+      return NextResponse.json({ text: youTubeText });
     }
 
     // Non-YouTube file branch — fetch + stream-count + upload + transcribe.
@@ -1300,7 +1344,14 @@ export async function POST(req: Request): Promise<Response> {
           logLabel: body.agent_id ?? "media-transcript-agent",
         }),
       );
-      return NextResponse.json({ text: result.text ?? "" });
+      const fileText = result.text ?? "";
+      const fileFailure = declaredStepFailureResponse(
+        fileText,
+        body.completed_error_codes,
+        body.agent_id ?? "media-transcript-agent",
+      );
+      if (fileFailure) return fileFailure;
+      return NextResponse.json({ text: fileText });
     } finally {
       if (adapter.deleteFile) {
         adapter
@@ -2166,25 +2217,15 @@ export async function POST(req: Request): Promise<Response> {
       );
     }
 
+    const declaredFailure = declaredStepFailureResponse(
+      text,
+      body.completed_error_codes,
+      body.agent_id ?? "wayflow",
+    );
+    if (declaredFailure) return declaredFailure;
+
     try {
       const parsed = JSON.parse(text);
-      const declaredFailure = readDeclaredStepFailure(parsed, body.completed_error_codes);
-      if (declaredFailure) {
-        console.warn(
-          `[llm-bridge] step answered the error code ${JSON.stringify(declaredFailure.code)} ` +
-            `(agent=${body.agent_id ?? "wayflow"}); its data does not list the code ` +
-            `as completed, so the step ends failed (422 ${STEP_DECLARED_FAILURE}).`,
-        );
-        return NextResponse.json(
-          {
-            error: "The step answered a failure",
-            code: STEP_DECLARED_FAILURE,
-            stepErrorCode: declaredFailure.code,
-            message: declaredFailure.message,
-          },
-          { status: 422 },
-        );
-      }
       return NextResponse.json(
         skillSelection && parsed && typeof parsed === "object" && !Array.isArray(parsed)
           ? { ...parsed, skillSelection }

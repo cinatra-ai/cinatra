@@ -1172,15 +1172,111 @@ function scriptedStringArrayMember(propertyName: string, n: number): string {
 }
 
 /**
- * Whether the empty string conforms to the declaration of a top-level error's
- * `code`, read in the order scriptedValueForSchema answers that node: past the
- * depth cap the scripted value is a string whatever the declaration, so the
- * empty one is no worse; a non-empty `enum` allows it only as a member and a
- * `const` only as its value; a union reads its FIRST member, as the answer
- * does; any other node allows it unless its `minLength` is above 0 or its
- * `pattern` does not match "" (a pattern that does not compile here refuses).
+ * Whether the empty string conforms to a JSON-schema node, as far as the
+ * string keywords read here can tell: true (it conforms), false (it does not)
+ * or null (this reading cannot tell). EVERY keyword that applies to a string
+ * is read and all must accept "": `type`, `enum`, `const`, `minLength`,
+ * `maxLength`, `pattern`, and the combinators `allOf` (every member),
+ * `anyOf` (some member), `oneOf` (exactly one member) and `not`. A keyword
+ * this reading does not evaluate is null, never true: `format`, `$ref` /
+ * `$dynamicRef` / `$recursiveRef`, `if`, a pattern that does not compile here,
+ * a malformed keyword value, an empty combinator, and any node nested more
+ * than `SCRIPTED_SCHEMA_MAX_DEPTH` combinators below the code. Keywords that
+ * do not apply to a string (numeric, object and array keywords) are ignored,
+ * as a validator ignores them for a string instance.
+ */
+function scriptedEmptyStringConforms(schema: unknown, depth: number): boolean | null {
+  if (depth > SCRIPTED_SCHEMA_MAX_DEPTH) return null;
+  if (schema === true || schema === undefined || schema === null) return true;
+  if (schema === false) return false;
+  if (typeof schema !== "object" || Array.isArray(schema)) return null;
+  const node = schema as Record<string, unknown>;
+  const verdicts: Array<boolean | null> = [];
+  const has = (k: string) => Object.prototype.hasOwnProperty.call(node, k);
+  const members = (k: string): Array<boolean | null> | null => {
+    const list = node[k];
+    if (!Array.isArray(list) || list.length === 0) return null;
+    return list.map((m) => scriptedEmptyStringConforms(m, depth + 1));
+  };
+
+  if (has("type")) {
+    const t = node.type;
+    const types = typeof t === "string" ? [t] : Array.isArray(t) ? t : null;
+    verdicts.push(
+      types && types.every((x) => typeof x === "string") ? types.includes("string") : null,
+    );
+  }
+  if (has("enum")) verdicts.push(Array.isArray(node.enum) ? node.enum.includes("") : null);
+  if (has("const")) verdicts.push(node.const === "");
+  if (has("minLength")) {
+    verdicts.push(typeof node.minLength === "number" ? node.minLength <= 0 : null);
+  }
+  if (has("maxLength")) {
+    verdicts.push(typeof node.maxLength === "number" ? node.maxLength >= 0 : null);
+  }
+  if (has("pattern")) {
+    let v: boolean | null = null;
+    if (typeof node.pattern === "string") {
+      try {
+        v = new RegExp(node.pattern, "u").test("");
+      } catch {
+        v = null;
+      }
+    }
+    verdicts.push(v);
+  }
+  for (const k of ["format", "$ref", "$dynamicRef", "$recursiveRef", "if"]) {
+    if (has(k)) verdicts.push(null);
+  }
+  if (has("allOf")) {
+    const all = members("allOf");
+    verdicts.push(
+      all === null ? null : all.includes(false) ? false : all.includes(null) ? null : true,
+    );
+  }
+  if (has("anyOf")) {
+    const any = members("anyOf");
+    verdicts.push(
+      any === null ? null : any.includes(true) ? true : any.includes(null) ? null : false,
+    );
+  }
+  if (has("oneOf")) {
+    const one = members("oneOf");
+    verdicts.push(
+      one === null || one.includes(null) ? null : one.filter((v) => v === true).length === 1,
+    );
+  }
+  if (has("not")) {
+    const v = scriptedEmptyStringConforms(node.not, depth + 1);
+    verdicts.push(v === null ? null : !v);
+  }
+  if (verdicts.includes(false)) return false;
+  if (verdicts.includes(null)) return null;
+  return true;
+}
+
+/**
+ * Whether the empty string may replace the scripted `code` of a top-level
+ * error. BOTH must hold:
+ *  1. the value the answer follows admits it, read in the order
+ *     scriptedValueForSchema answers the node: past the depth cap the answer
+ *     is a string whatever the declaration; a non-empty `enum` admits "" only
+ *     as a member and a `const` only as its value; a union follows its FIRST
+ *     member, as the answer does (so a code whose first union member pins a
+ *     value keeps that value even where a later member would allow "");
+ *  2. "" conforms to EVERY constraint the code's declaration states
+ *     (scriptedEmptyStringConforms is true): all `allOf` members together,
+ *     an `enum` together with a `minLength` or `pattern`, and so on. Where
+ *     that reading cannot tell, the scripted value is kept.
  */
 function scriptedEmptyCodeAllowed(schema: unknown, depth: number): boolean {
+  return (
+    scriptedEmptyCodeFollowsAnswer(schema, depth) &&
+    scriptedEmptyStringConforms(schema, 0) === true
+  );
+}
+
+function scriptedEmptyCodeFollowsAnswer(schema: unknown, depth: number): boolean {
   if (depth > SCRIPTED_SCHEMA_MAX_DEPTH) return true;
   const node = (schema ?? {}) as Record<string, unknown>;
   if (typeof node !== "object") return false;
@@ -1189,15 +1285,9 @@ function scriptedEmptyCodeAllowed(schema: unknown, depth: number): boolean {
   if ("const" in node) return node.const === "";
   const union = ["oneOf", "anyOf", "allOf"].find((k) => Array.isArray(node[k]));
   if (union) {
-    const members = node[union] as unknown[];
-    if (members.length > 0) return scriptedEmptyCodeAllowed(members[0], depth + 1);
-  }
-  if (typeof node.minLength === "number" && node.minLength > 0) return false;
-  if (typeof node.pattern === "string") {
-    try {
-      return new RegExp(node.pattern, "u").test("");
-    } catch {
-      return false;
+    const unionMembers = node[union] as unknown[];
+    if (unionMembers.length > 0) {
+      return scriptedEmptyCodeFollowsAnswer(unionMembers[0], depth + 1);
     }
   }
   return true;
@@ -1217,9 +1307,11 @@ function scriptedEmptyCodeAllowed(schema: unknown, depth: number): boolean {
  * bridge ends the step failed on it. The exception holds only where the code's
  * own declaration allows the empty string (scriptedEmptyCodeAllowed): a `const`
  * or `enum` code keeps its declared value unless "" is that const or an enum
- * member, and a
- * `minLength` above 0 or a `pattern` that refuses "" keeps the scripted string,
- * so the answer never leaves the caller's schema to reach the empty code.
+ * member, and "" must satisfy EVERY constraint the declaration states together
+ * (all `allOf` members, an `enum` with a `minLength` or `pattern`, `oneOf`,
+ * `not`, ...); where that cannot be read (`format`, `$ref`, a pattern that
+ * does not compile) the scripted value is kept, so the answer never leaves the
+ * caller's schema to reach the empty code.
  * "Top-level" is the answer's LOGICAL shape:
  * a `oneOf` / `anyOf` / `allOf` wrapper (around the root or around the `error`
  * member) adds no object level, so `objectDepth` counts only the objects and
@@ -1330,8 +1422,9 @@ function scriptedValueForSchema(
       // wrappers stand around the root or around the member.
       // The empty string replaces the scripted code only where the code's own
       // declaration allows it: a `const` or `enum` code keeps its declared
-      // value (unless the enum lists ""), so the answer stays inside the
-      // caller's schema (scriptedEmptyCodeAllowed).
+      // value (unless the enum lists ""), and "" must satisfy every
+      // constraint the declaration states together, so the answer stays
+      // inside the caller's schema (scriptedEmptyCodeAllowed).
       if (
         objectDepth === 1 &&
         propertyName === "error" &&
