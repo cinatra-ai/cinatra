@@ -209,6 +209,25 @@ describe("input data cannot become repair authorization", () => {
     expect(result.escalated).toBe(1); expect(ports.created).toHaveLength(0); expect(ports.queued).not.toHaveBeenCalled();
   });
 
+  // cinatra#3080: a Regenerate (a repair naming `regenerate_node_id`) is never
+  // run as an ordinary repair through the root findings input, and never left
+  // `requested` with nothing to take it: it is escalated, with no run and no job.
+  // A blank node id is still a Regenerate intent.
+  for (const regenerateNodeId of ["file_image", ""]) {
+    it(`escalates a Regenerate repair (regenerate_node_id ${JSON.stringify(regenerateNodeId)}) instead of dispatching it or leaving it requested`, async () => {
+      arrangeProducer({ custom: "retained" }, {}, JSON.stringify({ repairFindingsInput: { input: "instructions" } }));
+      ports.reads[0] = [pendingRepair({ regenerateNodeId })];
+      const result = await dispatchPendingProducerRepairs();
+      expect(result).toMatchObject({ scanned: 1, escalated: 1, dispatched: 0, failed: 0 });
+      expect(ports.created).toHaveLength(0); expect(ports.queued).not.toHaveBeenCalled();
+      // The producer, its template and the existing-run reads are never made.
+      expect(ports.reads).toHaveLength(3);
+      expect(ports.writes).toHaveLength(1);
+      expect(ports.writes[0].values.status).toBe("escalated");
+      expect(String(ports.writes[0].values.changeSummary)).toContain("a Regenerate reruns one declared step");
+    });
+  }
+
   it("does not create a second run when the deterministic repair already exists", async () => {
     arrangeProducer({ custom: "retained" }); ports.reads[3] = [{ id: repairRunId("repair-current") }];
     const result = await dispatchPendingProducerRepairs();

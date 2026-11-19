@@ -87,6 +87,7 @@ JSON-as-text — the same compiled-config column shape `trigger_mode` /
 | `producedTypes` | array of strings | The artifact types the producer declares it creates. The lattice does not branch on it. |
 | `repairCapable` | boolean | Whether this producer implements the typed repair round-trip (§4). |
 | `repairFindingsInput` | object `{ "input": "<name>" }` | The input of this producer's template that a dispatched repair run gets the reviewer's findings in (§4). `input` is an identifier, and is never `lifecycleRepairRequest` or a property name of `Object.prototype`. |
+| `regenerate` | array of `{ "artifactNode", "step", "noteInput" }` | Per node that files a reviewed artifact, the producing step a Regenerate reruns and the step input the reviewer's note goes into (section 4). Stored; no run reads it yet. |
 
 **Reading is tolerant.** Neither reader throws on a malformed value: an absent,
 empty or non-object value yields no declarations, and the producer gets pure core
@@ -218,6 +219,80 @@ nor the run start checks that the declared name is an input of the template: a
 name the template does not read adds an input that no prompt reads, and a name the
 template types as `object` fails the run at start with a message that names the
 input.
+
+### Declaring a step for Regenerate
+
+A producer whose reviewed artifacts can be made again by one step declares, per
+filing node, that step and the step input the reviewer's note goes into
+(cinatra#4264):
+
+```json
+{
+  "regenerate": [
+    { "artifactNode": "file_image", "step": "image_flow", "noteInput": "prompt" },
+    { "artifactNode": "write_draft", "step": "draft_flow", "noteInput": "note" }
+  ]
+}
+```
+
+The list holds 1 to 16 entries, unique by `artifactNode`; `noteInput` follows the
+`repairFindingsInput` name rule. The compile (`checkRegenerateDeclaration`,
+`packages/agents/src/verdaccio/package-contract.ts`) refuses the package with
+`REGENERATE_DECLARATION_INVALID` unless, for every entry:
+
+- `step` and `artifactNode` are top-level nodes of the flow; `step` is an
+  `ApiNode`, `AgentNode` or `FlowNode`, and `artifactNode` is an `ApiNode`;
+- a data edge runs from `step` to `artifactNode`, or the two are the same node;
+- the step has exactly one input `{ "title": <noteInput>, "type": "string" }`
+  (for a `FlowNode`, on the StartNode of its subflow, and on its own `inputs`
+  when it lists them); the `inputs` and `outputs` of the step and of those
+  StartNodes, when present, are lists of port objects;
+- exactly one edge ends at that input; it starts at the flow's StartNode on a
+  `string` output that the root `inputs` declare, and that output feeds no other
+  input.
+
+The step's other inputs may come from any node. Entries may share one `step`
+with different note inputs.
+
+The list is stored on `lifecycle_config` after `repairFindingsInput`, sorted by
+`artifactNode`. Every road that writes the column applies one rule:
+
+- a readable manifest that declares a lifecycle block re-projects it (the
+  compile has already checked its list);
+- a readable manifest without a block clears the column;
+- with no readable manifest (none in the archive, an unparseable one, or the
+  git-file loader's synthesis without a sibling manifest) the column is kept,
+  but a stored list is first checked against the new flow, and the write is
+  refused when the flow no longer honours it.
+
+The registry install seed and the archive import (and the boot loaders that go
+through it) follow this rule, and so does the MCP recompile
+(`agent_source_compile`): it passes the stored list to the compile as
+`retainedRegenerate` and writes the column from the compile's own sibling read,
+before it writes the source file, which it then replaces atomically (a temp
+file and a rename). That recompile works on one snapshot: a `package.json` that
+exists but does not parse, a compile reading that differs from the handler's own
+(readability, name or lifecycle block), a `package.json` or source file changed
+during the compile refuses, and a failed column write refuses too instead of
+reporting success. With no manifest name it finds the row by the OAS's own
+`metadata.cinatra.packageName`, else by the name the layout gives
+(`@<vendor>/<slug>`), never by the bare slug; the git-file loader does the same.
+
+Stored text that cannot be read counts as a stored list that cannot be checked:
+every road above refuses on it. The roads that keep a row without writing it
+check the stored list too: the git-file loader before its same-version skip and
+before its unreadable-sibling skip (a watcher reloads the flow on disk after
+either), and the bundled-agent boot seeder for a row that already exists. That
+seeder never re-seeds the row from the image, but it quarantines a stale list:
+it removes only the `regenerate` key from the stored column, under the row's own
+claim, and the boot reports the package. Stored text that is empty counts as
+unreadable. When an import or a registry install (fresh or reinstall) fails
+after its row write and the runtime files roll back, the lifecycle column is
+written back with them (cleared on a fresh row). The CLI install road runs no compile, so it
+refuses a package that declares `regenerate`; install such a package through the
+registry install road. `readRegenerateEntry`
+(`src/lib/lifecycle/lifecycle-policy.ts`) returns the entry of one filing node.
+No run reads the declaration yet.
 
 ### The round-trip a repair-capable producer must satisfy
 

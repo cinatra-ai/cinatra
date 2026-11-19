@@ -286,6 +286,25 @@ export async function dispatchPendingProducerRepairs(opts?: {
         continue;
       }
 
+      if (row.regenerateNodeId !== null && row.regenerateNodeId !== undefined) {
+        // cinatra#3080: a Regenerate (its repair names `regenerate_node_id`)
+        // reruns the declared step with the Note in that step's `noteInput`
+        // (cinatra#4264's step road). This drain runs the whole template with
+        // the findings in its root `repairFindingsInput`, which is not that
+        // input, so it never runs a Regenerate as an ordinary repair. The
+        // canonical operation records no Regenerate while that road is absent
+        // (`regenerateStepRoadDispatches`); a row that names one anyway is
+        // escalated to a person here, never left `requested` with nothing to
+        // take it.
+        const escalated = await escalateRepair(
+          row.id,
+          "a Regenerate reruns one declared step, which this drain does not implement",
+        );
+        if (escalated) summary.escalated += 1;
+        else summary.raced += 1;
+        continue;
+      }
+
       const producer = await resolveProducingTemplate(row.producerRunId, row.orgId);
       if (!producer) {
         // No producing run/template to deliver to. Escalate rather than leaving the

@@ -586,6 +586,11 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   // the RUNTIME per-instance USE gate the invoker runs (B2). Ship-dark: delegated
   // chat/widget deny-by-default keeps them off every live perimeter until S7.
   wordpress_site_tool_call:        { resourceType: "connector_instance", action: "execute", status: "enforced" },
+  // cinatra#3745: the connector splits the proxy. `wordpress_site_tool_call`
+  // forwards reads only; every other ability goes through the write tool,
+  // classified the same way. Its registration declares `outward`, so on an
+  // agent run's frame the boundary holds it for the person's recorded decision.
+  wordpress_site_tool_write:       { resourceType: "connector_instance", action: "execute", status: "enforced" },
   wordpress_site_tools_list:       { resourceType: "connector_instance", action: "execute", status: "enforced" },
   wordpress_status:                { resourceType: "connector_instance", action: "read",    status: "enforced" },
 };

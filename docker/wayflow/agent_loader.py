@@ -63,6 +63,8 @@ import datetime as _datetime
 import hashlib
 import hmac
 import inspect
+from types import MappingProxyType
+from collections.abc import Mapping
 import json
 import os
 import re
@@ -106,6 +108,26 @@ except Exception:  # pragma: no cover — host-side typecheck fallback
 # ApiCallStep._execute_request so it can inject X-Cinatra-A2A-Context-Id.
 # ---------------------------------------------------------------------------
 
+#: cinatra#3745: the source binding of the assistant that executes the current
+#: task (set per task in the patched run_task, read when a step is signed).
+_WAYFLOW_EXECUTED_SOURCE: contextvars.ContextVar[Optional[Mapping[str, str]]] = contextvars.ContextVar("_WAYFLOW_EXECUTED_SOURCE", default=None)
+
+
+def _set_executed_source_for(assistant: Any) -> "contextvars.Token[Optional[Mapping[str, str]]]":
+    """Set the executing assistant's frozen mount binding for this task. Only
+    the read-only snapshot the mount attached counts; anything else gives none."""
+    binding = getattr(assistant, "_cinatra_executed_source", None)
+    return _WAYFLOW_EXECUTED_SOURCE.set(binding if isinstance(binding, MappingProxyType) else None)
+
+
+#: cinatra#3745: the execution attempt the current task's own A2A message named
+#: (message metadata CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY), set per task in the
+#: patched run_task and signed in the step pair, so a task of an earlier attempt
+#: of the run cannot sign for a later one. "" when the message names none.
+_WAYFLOW_EXECUTION_ATTEMPT: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "_WAYFLOW_EXECUTION_ATTEMPT", default=""
+)
+
 #: Stores the fasta2a context_id for the task currently executing in this
 #: asyncio task / coroutine chain. Reset to "" between tasks.
 _WAYFLOW_CONTEXT_ID: contextvars.ContextVar[str] = contextvars.ContextVar(
@@ -135,6 +157,42 @@ _STEP_SNAPSHOT_RECORDER: contextvars.ContextVar[Any] = contextvars.ContextVar(
 #: RAW per-run token. MUST equal CINATRA_RUN_TOKEN_MESSAGE_KEY in
 #: src/lib/agent-run-token.ts — a cross-language ABI with no shared import.
 CINATRA_RUN_TOKEN_MESSAGE_KEY = "__cinatra_run_token__"
+
+#: cinatra#3745: the reserved A2A ``message.metadata`` key under which every
+#: dispatch and resume names the execution attempt its task runs under. MUST
+#: equal CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY in src/lib/agent-run-token.ts.
+CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY = "__cinatra_execution_attempt__"
+
+#: cinatra#3745: the longest context id, step id or attempt the runtime signs in
+#: an ``s2`` pair. MUST equal RUN_SOURCE_PROOF_FIELD_MAX_CHARS in
+#: src/lib/agent-run-token.ts: the application refuses a longer value, so the
+#: runtime signs none.
+_RUN_SOURCE_PROOF_FIELD_MAX_CHARS = 512
+
+
+def _execution_attempt_from_message(message: Any) -> str:
+    """The execution attempt a task's A2A message names in its metadata, or "".
+
+    Read only from ``message["metadata"]`` (the flow's text input is never
+    read): a string of 1 to 512 characters without a line break, as the
+    application's verifier accepts it. Any other shape names no attempt, and
+    the task then signs no step pair.
+    """
+    if not isinstance(message, dict):
+        return ""
+    metadata = message.get("metadata")
+    if not isinstance(metadata, dict):
+        return ""
+    attempt = metadata.get(CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY)
+    if (
+        not isinstance(attempt, str)
+        or not attempt
+        or len(attempt) > _RUN_SOURCE_PROOF_FIELD_MAX_CHARS
+        or "\n" in attempt
+        or "\r" in attempt
+    ):
+        return ""
+    return attempt
 
 #: Default HTTP timeout (in seconds) applied to any ApiNode call that does
 #: not declare its own. 24 hours — matches the OpenAI batch API SLA upper
@@ -372,6 +430,73 @@ def _extract_and_scrub_run_token(
         )
         return "", message
     return (metadata_token or text_token), message
+
+
+#: cinatra#3745 dispatch fence: the reserved initial-message key under which the
+#: host names the source binding it selected and bound to the run before its
+#: send. MUST equal CINATRA_EXPECTED_SOURCE_MESSAGE_KEY in
+#: packages/agents/src/agent-run-serde.ts (a cross-language ABI, no shared import).
+CINATRA_EXPECTED_SOURCE_MESSAGE_KEY = "__cinatra_expected_source__"
+_EXPECTED_SOURCE_FIELDS = ("sourceSha256", "executedSourceSha256", "declarationSourceSha256")
+
+
+def _take_expected_source(
+    message: Optional[Dict[str, Any]], assistant: Any
+) -> Optional[Dict[str, Any]]:
+    """cinatra#3745 dispatch fence: run a bound first task only on the mount whose
+    source the host bound.
+
+    The host reads the loader's source binding on the composed-OAS route, binds it
+    to the run, then sends the first task, naming the bound source in the first
+    text part's JSON under ``CINATRA_EXPECTED_SOURCE_MESSAGE_KEY``. A reload
+    between the read and the send can route the send to another mount of the same
+    agent, and during a reload the registry can name the new mount while the
+    router still serves the prior one. So the mount that receives the task
+    (``assistant``, the worker's own) compares the named source with its frozen
+    mount binding here, before any conversation is loaded or started: equal, the
+    key is removed and the task runs; anything else raises, and the task fails
+    with no step run.
+
+    A message without the key is returned unchanged (a resume, or a dispatch that
+    bound nothing). A key that is not exactly the three digests of this mount's
+    binding, or a mount without its read-only binding, raises. The caller's
+    message is never changed in place.
+    """
+    if not isinstance(message, dict):
+        return message
+    parts = message.get("parts")
+    if not isinstance(parts, list) or not parts:
+        return message
+    p0 = parts[0]
+    if not (
+        isinstance(p0, dict)
+        and p0.get("kind") == "text"
+        and isinstance(p0.get("text"), str)
+    ):
+        return message
+    try:
+        parsed = json.loads(p0["text"])
+    except (ValueError, TypeError):
+        return message
+    if not isinstance(parsed, dict) or CINATRA_EXPECTED_SOURCE_MESSAGE_KEY not in parsed:
+        return message
+    expected = parsed.pop(CINATRA_EXPECTED_SOURCE_MESSAGE_KEY)
+    binding = getattr(assistant, "_cinatra_executed_source", None)
+    if (
+        not isinstance(binding, MappingProxyType)
+        or not isinstance(expected, dict)
+        or set(expected.keys()) != set(_EXPECTED_SOURCE_FIELDS)
+        or any(
+            not isinstance(expected[k], str) or expected[k] != binding.get(k)
+            for k in _EXPECTED_SOURCE_FIELDS
+        )
+    ):
+        raise ValueError("executed_source_mismatch")
+    new_p0 = dict(p0)
+    new_p0["text"] = json.dumps(parsed)
+    new_message = dict(message)
+    new_message["parts"] = [new_p0, *parts[1:]]
+    return new_message
 
 
 def _scrub_run_token_from_message_for_storage(
@@ -868,36 +993,63 @@ def _patch_api_call_step_bridge_token() -> None:
                     request["headers"]["X-Cinatra-Context-Attestation"] = (
                         f"v2:{_expiry}:{_sig}"
                     )
-            # cinatra#3745: sign the identity of the executing step on the
-            # model-bridge and passthrough calls, so the application learns
-            # which step of the run makes each call. `self.id` is the executing
-            # compiled step's own id; the material `s1\n<ctx>\n<node>\n<expiry>`
+            # cinatra#3745: sign the identity of the executing step, the
+            # execution attempt the task's own message named, and the source of
+            # the assistant that executes it on the model-bridge and passthrough
+            # calls. `self.id` is the executing compiled step's own id; the
+            # three digests are the executing mount's frozen binding. The
+            # material `s2\n<ctx>\n<node>\n<attempt>\n<raw>\n<executed>\n<declaration>\n<expiry>`
             # carries a prefix of its own, distinct from the context pair's.
-            # Step headers of these names that the flow's source declared on
-            # an internal call are replaced by the runtime's values (or
-            # dropped when the runtime has no key, context id or step id).
+            # Step, attempt and source headers of these names that the flow's
+            # source declared on an internal call are replaced by the runtime's
+            # values (or dropped when the runtime has no key, context id, step
+            # id, attempt or mount binding, or the context id, the step id or
+            # the attempt holds a line break or is longer than 512 characters,
+            # the length the application's verifier accepts).
             if "llm-bridge" in _ctx_url or "/agents/passthrough" in _ctx_url:
                 for _hname in list(request["headers"].keys()):
                     if str(_hname).lower() in (
                         "x-cinatra-step-node",
                         "x-cinatra-step-attestation",
+                        "x-cinatra-executed-source",
+                        "x-cinatra-declaration-source",
+                        "x-cinatra-raw-source",
+                        "x-cinatra-execution-attempt",
                     ):
                         del request["headers"][_hname]
                 _step_id = getattr(self, "id", "") or ""
-                if attest_key and _ctx_id and _step_id:
+                _loaded = _WAYFLOW_EXECUTED_SOURCE.get()
+                _attempt = _WAYFLOW_EXECUTION_ATTEMPT.get()
+                _signed_ids = _ctx_id + _step_id + _attempt
+                if (
+                    attest_key
+                    and _ctx_id
+                    and _step_id
+                    and _attempt
+                    and _loaded
+                    and "\n" not in _signed_ids
+                    and "\r" not in _signed_ids
+                    and len(_ctx_id) <= _RUN_SOURCE_PROOF_FIELD_MAX_CHARS
+                    and len(_step_id) <= _RUN_SOURCE_PROOF_FIELD_MAX_CHARS
+                    and len(_attempt) <= _RUN_SOURCE_PROOF_FIELD_MAX_CHARS
+                ):
                     _step_expiry = (
                         int(time.time()) + _CONTEXT_ATTESTATION_TTL_SECONDS
                     )
                     _step_sig = hmac.new(
                         attest_key.encode("utf-8"),
-                        f"s1\n{_ctx_id}\n{_step_id}\n{_step_expiry}".encode(
+                        f"s2\n{_ctx_id}\n{_step_id}\n{_attempt}\n{_loaded['sourceSha256']}\n{_loaded['executedSourceSha256']}\n{_loaded['declarationSourceSha256']}\n{_step_expiry}".encode(
                             "utf-8"
                         ),
                         hashlib.sha256,
                     ).hexdigest()
+                    request["headers"]["X-Cinatra-Execution-Attempt"] = _attempt
+                    request["headers"]["X-Cinatra-Raw-Source"] = _loaded["sourceSha256"]
+                    request["headers"]["X-Cinatra-Executed-Source"] = _loaded["executedSourceSha256"]
+                    request["headers"]["X-Cinatra-Declaration-Source"] = _loaded["declarationSourceSha256"]
                     request["headers"]["X-Cinatra-Step-Node"] = _step_id
                     request["headers"]["X-Cinatra-Step-Attestation"] = (
-                        f"s1:{_step_expiry}:{_step_sig}"
+                        f"s2:{_step_expiry}:{_step_sig}"
                     )
         # ApiNode timeout policy — aligned for batch LLM workloads.
         #
@@ -1219,6 +1371,8 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
         _ctx_token = None
         _rt_token = None
         _snap_token = None
+        _source_token = None
+        _attempt_token = None
 
         try:
             task = await self.storage.load_task(params["id"])
@@ -1252,10 +1406,22 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
             if _scrubbed_message is not None:
                 params["message"] = _scrubbed_message
             _rt_token = _WAYFLOW_RUN_TOKEN.set(_run_token or "")
+            # cinatra#3745 dispatch fence: a bound first task runs only on the
+            # mount whose source the host bound; otherwise it fails here, before
+            # any conversation is loaded or started.
+            _fenced_message = _take_expected_source(params.get("message"), self.assistant)
+            if _fenced_message is not None:
+                params["message"] = _fenced_message
 
             # Propagate context_id to ApiCallStep via ContextVar so
             # X-Cinatra-A2A-Context-Id is injected on llm-bridge calls.
             _ctx_token = _WAYFLOW_CONTEXT_ID.set(task.get("context_id", "") or "")
+            # cinatra#3745: the assistant that executes THIS task, never the active registry.
+            _source_token = _set_executed_source_for(self.assistant)
+            # cinatra#3745: the execution attempt THIS task's own message named.
+            _attempt_token = _WAYFLOW_EXECUTION_ATTEMPT.set(
+                _execution_attempt_from_message(params.get("message"))
+            )
 
             # cinatra#1194 — template-version-per-run: what executes is no
             # longer byte-identical to the published spec for agents with
@@ -1542,6 +1708,10 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
             # capture never performed. Reset the run token first (LIFO wrt set).
             if _snap_token is not None:
                 _STEP_SNAPSHOT_RECORDER.reset(_snap_token)
+            if _attempt_token is not None:
+                _WAYFLOW_EXECUTION_ATTEMPT.reset(_attempt_token)
+            if _source_token is not None:
+                _WAYFLOW_EXECUTED_SOURCE.reset(_source_token)
             if _rt_token is not None:
                 _WAYFLOW_RUN_TOKEN.reset(_rt_token)
             if _ctx_token is not None:
@@ -3508,6 +3678,7 @@ class MountedAgent:
         "composed_oas",
         "composed_sha256",
         "context_injection",
+        "selected_source_binding",
     )
 
     def __init__(
@@ -3522,6 +3693,7 @@ class MountedAgent:
         composed_oas: Optional[Dict[str, Any]] = None,
         composed_sha256: Optional[str] = None,
         context_injection: Optional[List[Dict[str, Any]]] = None,
+        selected_source_binding: Optional[Mapping[str, str]] = None,
     ) -> None:
         self.label = f"{vendor}/{slug}"
         self.vendor = vendor
@@ -3532,6 +3704,7 @@ class MountedAgent:
         self.sub_app = sub_app
         self.stack: Optional[contextlib.AsyncExitStack] = None
         self.mount = mount
+        self.selected_source_binding = selected_source_binding
         # cinatra#1194 — mount-time context-subflow injection sidecar. When the
         # loader injected declared slots, `composed_oas` holds the PRE-
         # placeholder-substitution composed document (what actually executes,
@@ -4598,6 +4771,17 @@ def _mount_one_sync(
 
     substituted = _substitute_placeholders(raw_text)
     agent = loader.load_json(substituted)
+    source_binding = MappingProxyType({
+        "sourceSha256": fingerprint,
+        "executedSourceSha256": hashlib.sha256(substituted.encode("utf-8")).hexdigest(),
+        "declarationSourceSha256": hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
+        "declarationSource": raw_text,
+    })
+    # Frozen host-only selection snapshot; a failed attachment
+    # refuses the mount rather than minting step-only authority.
+    setattr(agent, "_cinatra_executed_source", source_binding)
+    if getattr(agent, "_cinatra_executed_source", None) is not source_binding:
+        raise ValueError("executed_source_sidecar_unavailable")
 
     if injection_report:
         # Per-run template-version logging needs the injection info at
@@ -4659,6 +4843,7 @@ def _mount_one_sync(
         composed_oas=composed_oas,
         composed_sha256=composed_sha256,
         context_injection=injection_report or None,
+        selected_source_binding=source_binding,
     )
 
 
@@ -5187,6 +5372,10 @@ def _build_composed_oas_handler(
                 "injectedSlots": agent.context_injection or [],
                 "composedSha256": agent.composed_sha256,
                 "composedOas": agent.composed_oas,
+                # The host reads this before a run's first dispatch and binds it
+                # to the run (cinatra#3745); each step's s2 signature proves which
+                # assistant ran. The substituted text is never returned, only its digest.
+                "selectedSourceBinding": dict(agent.selected_source_binding) if agent.selected_source_binding is not None else None,
             }
         )
 

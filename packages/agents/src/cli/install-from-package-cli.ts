@@ -81,6 +81,21 @@ export async function installAgentFromPackage(
         `Unsupported manifest version: ${extracted.manifest.cinatra.manifestVersion}`,
       );
     }
+    // cinatra#4264 A1b: this road runs no OAS compile and writes no lifecycle
+    // column, so it can neither check a `regenerate` declaration against the
+    // flow nor store it. Refused before any template row is written.
+    const lifecycle = (extracted.manifest.cinatra as { lifecycle?: unknown }).lifecycle;
+    if (
+      lifecycle !== null &&
+      typeof lifecycle === "object" &&
+      (lifecycle as { regenerate?: unknown }).regenerate !== undefined
+    ) {
+      throw new Error(
+        `${extracted.packageName} declares cinatra.lifecycle.regenerate, which the CLI install ` +
+          "cannot check or store. Install this package through the registry install road " +
+          "of the running app, which compiles the flow and stores the declaration.",
+      );
+    }
 
     const rawDeps = (extracted.manifest.cinatra as Record<string, unknown>).agentDependencies;
     const agentDependencies = sanitizeAgentDependencies(rawDeps);

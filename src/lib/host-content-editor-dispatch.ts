@@ -1,8 +1,11 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
+// cinatra#3745: the carrier run binds the loader's selected source before its first send.
+import { readAgentRunById, updateAgentRunA2AContextId, selectWayflowRunStepToolPolicy, bindRunStepToolPolicy, CINATRA_EXPECTED_SOURCE_MESSAGE_KEY } from "@cinatra-ai/agents/store";
 import { buildA2aBearerToken } from "@cinatra-ai/llm";
 import { createExternalA2AClient, type Task } from "@cinatra-ai/a2a";
+import { CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY } from "@/lib/agent-run-token";
 import {
   buildInitialMessagePayloadWithRunToken,
   readAgentTemplateByPackageName,
@@ -555,7 +558,9 @@ export async function dispatchContentEditorViaA2A(
   // run exists and is recorded even when that card fetch fails (cinatra#246). The
   // try/catch below then transitions that recorded run queued→failed so the
   // failure can never leave it orphaned in `queued`.
-  const { text, runId, orgId } = await prepareDispatch(input);
+  const { text: preparedText, runId, orgId } = await prepareDispatch(input);
+  // The message text; a bound dispatch adds the dispatch fence to it (cinatra#3745, below).
+  let text = preparedText;
   // D-HOST: one SYSTEM dispatch authority for the carrier run's whole lifecycle.
   // runId present ⟺ a real OBO-carrier run was created ⟺ orgId present, so the
   // authority is non-null exactly when the transitions below run.
@@ -594,8 +599,12 @@ export async function dispatchContentEditorViaA2A(
 
   // Drive the OBO-carrier run's lifecycle inline. queued→running before the
   // blocking dispatch; →completed on success, →failed on dispatch error. This
-  // keeps the synthetic run off "stuck queued run" surfaces. Transition errors
-  // are non-fatal — the run row is auxiliary to the actual dispatch.
+  // keeps the synthetic run off "stuck queued run" surfaces. The completion's
+  // transition errors are non-fatal — the run row is auxiliary to the reply.
+  // The claim's are not (cinatra#3745): the bind below needs the run `running`
+  // under the attempt this claim mints, so a failed claim sends nothing, fails
+  // the still-queued carrier run (or, when the claim did commit, the running
+  // one) and rethrows.
   if (runId && dispatchAuthority) {
     try {
       await transitionRunStatus(runId, "queued", "running", {
@@ -603,21 +612,59 @@ export async function dispatchContentEditorViaA2A(
         dispatch: { attemptId: randomUUID() },
       }, dispatchAuthority);
     } catch (err) {
-      console.warn(`[content-editor-dispatch] run ${runId} queued→running failed:`, err);
+      const failed = { error: err instanceof Error ? err.message : String(err), completedAt: new Date() };
+      await transitionRunStatus(runId, "queued", "failed", failed, dispatchAuthority)
+        .catch(() => transitionRunStatus(runId, "running", "failed", failed, dispatchAuthority))
+        .catch((txErr) => console.warn(`[content-editor-dispatch] run ${runId} failed claim not recorded:`, txErr));
+      throw err;
     }
   }
 
   let task: Task;
   try {
+    let mintedContextId: string | undefined;
+    let dispatchMetadata: Record<string, string> | undefined;
+    if (runId) {
+      if (!dispatchAuthority) throw new Error("step_tool_dispatch_authority_missing");
+      const run = await readAgentRunById(runId);
+      if (!run?.orgId || !run.executionAttemptId) throw new Error("step_tool_dispatch_attempt_missing");
+      // cinatra#4150: never send into a context that already exists. The carrier run was created
+      // above and names no context; one that does is refused before any bind or send.
+      if (run.a2aContextId) throw new Error("step_tool_dispatch_context_present");
+      // The send carries only the id minted here, recorded on the run and bound in its policy first.
+      mintedContextId = randomUUID();
+      await updateAgentRunA2AContextId(runId, mintedContextId);
+      const policy = await selectWayflowRunStepToolPolicy({ agentUrl: input.agentUrl, contextId: mintedContextId });
+      // cinatra#3745 dispatch fence: the message names the selected source, which the bind below binds or refuses;
+      // the loader's mount runs the task only when that source is its own, so a reload between the select and the
+      // send fails the task.
+      text = JSON.stringify({ ...(JSON.parse(text) as Record<string, unknown>), [CINATRA_EXPECTED_SOURCE_MESSAGE_KEY]: {
+        sourceSha256: policy.sourceSha256, executedSourceSha256: policy.executedSourceSha256,
+        declarationSourceSha256: policy.declarationSourceSha256 } });
+      await bindRunStepToolPolicy({ runId, orgId: run.orgId, executionAttemptId: run.executionAttemptId,
+        policy, authority: dispatchAuthority });
+      // cinatra#3745: the task's message names the attempt just bound; the runtime signs it.
+      dispatchMetadata = { [CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY]: run.executionAttemptId };
+    }
     task = await client.sendTask({
       message: {
         role: "user",
         kind: "message",
         messageId: randomUUID(),
+        ...(mintedContextId ? { contextId: mintedContextId } : {}),
         parts: [{ kind: "text", text }],
+        ...(dispatchMetadata ? { metadata: dispatchMetadata } : {}),
       },
       configuration: { acceptedOutputModes: ["text"] },
     });
+    // cinatra#3745: sendTask resolves a failed Task too (the loader's mount refuses a task whose bound source is not
+    // its own, before any step runs). A carrier run completes only for a completed Task; any other state throws here,
+    // so the catch below records running -> failed.
+    const state: unknown = task.status?.state;
+    if (runId && state !== "completed") {
+      const named = typeof state === "string" && /^[a-z-]{1,32}$/.test(state) ? state : "unknown";
+      throw new Error(`content_editor_task_not_completed (state: ${named})`);
+    }
   } catch (err) {
     if (runId && dispatchAuthority) {
       try {

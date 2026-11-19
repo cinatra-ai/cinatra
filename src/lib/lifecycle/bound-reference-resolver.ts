@@ -714,7 +714,9 @@ async function resolveScheduleProposal(
  * pure and separate from the resolve so the lending rule can be read on its own
  * and cannot drift into a store call.
  *
- *   · a REVIEW lends its own three buttons — Comment, Approve, Reject;
+ *   · a REVIEW lends its own three buttons — Comment, Regenerate and Continue
+ *     (cinatra#3080). Continue's control id is `approve`, the disposition it
+ *     stores; Reject is retired and no card draws it, so a review lends none;
  *   · the SCHEDULER FORM lends Fill ALONE (cinatra#2934, repaired after the
  *     picture leg): the assistant fills the form's own rows and "the person
  *     presses the form's own button", so no grant can name a press on it;
@@ -740,7 +742,7 @@ async function resolveScheduleProposal(
 export function controlsLentBy(
   resolution: BoundReferenceResolution,
 ): readonly LentCardControl[] {
-  if (resolution.kind === "review") return ["comment", "approve", "reject"];
+  if (resolution.kind === "review") return ["comment", "regenerate", "approve"];
   if (resolution.kind === "hitl_screen") return ["fill", "submit"];
   if (resolution.kind === "schedule_form") return ["fill"];
   if (resolution.kind === "recommendation_hold") return ["confirm", "skip"];
@@ -770,11 +772,16 @@ export function controlsLentBy(
  * OWN buttons (cinatra#2853). Each was added with the card that draws it, so
  * this union stays what it says it is — the buttons the product's lifecycle
  * cards actually have — and a control no card draws still cannot be named.
+ *
+ * `regenerate` TAKES `reject`'S PLACE (cinatra#3080). The review card draws
+ * Comment · Regenerate · Continue: `regenerate` is the card's Regenerate,
+ * `approve` stays the id behind Continue, and `reject` left this union with the
+ * button that drew it.
  */
 export type LentCardControl =
   | "comment"
   | "approve"
-  | "reject"
+  | "regenerate"
   | "submit"
   | "fill"
   | "confirm"

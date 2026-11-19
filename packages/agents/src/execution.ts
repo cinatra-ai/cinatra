@@ -3,6 +3,9 @@ import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
 import semver from "semver";
 import {
   readAgentRunById,
+  selectWayflowRunStepToolPolicy,
+  bindRunStepToolPolicy,
+  CINATRA_EXPECTED_SOURCE_MESSAGE_KEY,
   readAgentTemplateById,
   readAgentTemplates,
   readAgentTemplateVersionBySemver,
@@ -524,7 +527,7 @@ import { getOrAddWayflowRendererGateIndex, rememberWayflowGateTask, rememberLate
 // host-side caller injects the live `email-send` providers so sender-alias
 // enums resolve registration-driven.
 import { resolveEmailSendProviders } from "@/lib/email-send-providers";
-import { mintRunToken } from "@/lib/agent-run-token";
+import { mintRunToken, CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY } from "@/lib/agent-run-token";
 import { holdRunAtPublishGate } from "./publish-decision-actions";
 // cinatra#2566 — the lifecycle card REF CODEC only (node:crypto + the app
 // secret). Deliberately NOT the refetch resolver: importing that here would pull
@@ -5174,7 +5177,7 @@ async function runAgentBuilderExecutionJobInner(
       });
       // cinatra#4264: the nodes whose inputs the runtime records, from the
       // template's stored `regenerate` declaration. No declaration, or a repair
-      // run: {} and the message carries no metadata, exactly as before.
+      // run: {} (the message metadata then names only the attempt, below).
       // cinatra#4264 B1b: a segment run carries the segment instead (a repair
       // run never records snapshots, so the two never meet).
       const snapshotMetadata = segmentPlan
@@ -5197,6 +5200,20 @@ async function runAgentBuilderExecutionJobInner(
       if (dispatchContextId !== run.a2aContextId) {
         await updateAgentRunA2AContextId(runId, dispatchContextId);
       }
+      const policy = await selectWayflowRunStepToolPolicy({ agentUrl: wayflowUrl, contextId: dispatchContextId });
+      // cinatra#3745 dispatch fence: the first message names the selected source, which the bind below binds or
+      // refuses; the loader's mount runs the task only when that source is its own, so a reload between the select
+      // and the send fails the task and never runs another graph. Set after the inputs, so no input can replace it.
+      initialMessagePayload[CINATRA_EXPECTED_SOURCE_MESSAGE_KEY] = { sourceSha256: policy.sourceSha256,
+        executedSourceSha256: policy.executedSourceSha256, declarationSourceSha256: policy.declarationSourceSha256 };
+      const currentDispatchRun = await readAgentRunById(runId);
+      if (!currentDispatchRun?.executionAttemptId) throw new Error("step_tool_dispatch_attempt_missing");
+      await bindRunStepToolPolicy({ runId, orgId: run.orgId,
+        executionAttemptId: currentDispatchRun.executionAttemptId, policy, authority: executionAuthority });
+      // cinatra#3745: the task's message names the attempt just bound (metadata, never
+      // the flow's text input); the runtime signs it in its `s2` pair, so a task of an
+      // earlier attempt of this run cannot sign for this one.
+      const dispatchMetadata = { ...snapshotMetadata, [CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY]: currentDispatchRun.executionAttemptId };
       const task = await client.sendTask({
         message: {
           role: "user",
@@ -5204,7 +5221,7 @@ async function runAgentBuilderExecutionJobInner(
           messageId: randomUUID(),
           contextId: dispatchContextId,
           parts: [{ kind: "text", text: JSON.stringify(initialMessagePayload) }],
-          ...(Object.keys(snapshotMetadata).length > 0 ? { metadata: snapshotMetadata } : {}),
+          metadata: dispatchMetadata,
         },
         configuration: { acceptedOutputModes: ["text"] },
       });

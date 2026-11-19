@@ -2,9 +2,11 @@
 // decision. The intent stays pending ("retryable"); nothing is sent into the held
 // context and nothing is marked delivered. The harness is the one of
 // artifact-review-resume-delivery.test.ts. Since cinatra#4245 the worker takes the pause
-// claim and fences in place (the run stays pending_approval while it sends); the hold is
-// read before the claim and, on a publishing template or for a run with a decision, again
-// under the claim and before the fence.
+// claim, and since cinatra#3745 its fence is its claim of the run (`pending_approval ->
+// running`, so the run is `running` while it sends); the hold is read before the claim
+// and, on a publishing template or for a run with a decision, again under the claim and
+// before the fence. A run this gate's delivery already claimed goes back on its gate
+// before any hold read, so a refusal never leaves it `running`.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { pauseClaimFake } from "./pause-claim-test-fake";
 
@@ -45,8 +47,15 @@ const gateStoreMock = vi.hoisted(() => ({
   claimPendingResumeIntents: vi.fn(),
   listReviewGatesForRun: vi.fn(async (): Promise<unknown[]> => []),
   markResumeIntentDelivered: vi.fn(async () => true),
+  // cinatra#3745: the delivery's claim row, its lease keeper, its task record and its deferral.
+  readResumeIntentClaim: vi.fn(async (): Promise<unknown> => ({ runClaimed: false, result: null })),
+  renewResumeIntentLease: vi.fn(async () => true),
+  recordResumeTaskResult: vi.fn(async () => true),
+  deferResumeIntent: vi.fn(async () => true),
 }));
 vi.mock("../artifact-review-gate-store", () => gateStoreMock);
+// cinatra#3745: the delivery moves the run through ./run-transition; the moves are read from the store mock.
+vi.mock("../run-transition", () => ({ transitionRunStatus: storeMock.transitionRunStatus }));
 
 const decisions = vi.hoisted(() => ({
   readLatestDecisionForRun: vi.fn(async (): Promise<unknown> => null),
@@ -111,6 +120,10 @@ beforeEach(() => {
     sourceType: "internal",
   });
   gateStoreMock.markResumeIntentDelivered.mockResolvedValue(true);
+  gateStoreMock.readResumeIntentClaim.mockResolvedValue({ runClaimed: false, result: null });
+  gateStoreMock.renewResumeIntentLease.mockResolvedValue(true);
+  gateStoreMock.recordResumeTaskResult.mockResolvedValue(true);
+  gateStoreMock.deferResumeIntent.mockResolvedValue(true);
   gateStoreMock.listReviewGatesForRun.mockResolvedValue([
     { runId: "run-1", orgId: "org-1", reviewTaskId: "wayflow-task-1", status: "resolved",
       pinnedTargets: [{ artifactId: "post", representationRevisionId: "r1" }] },
@@ -153,6 +166,33 @@ describe("the resume delivery and a publish decision", () => {
     } finally {
       warn.mockRestore();
     }
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["parked", { id: "d1", runId: "run-1", status: "parked" }],
+    ["unreadable", new Error("db down: run-1")],
+  ] as const)("RED F1 a claimed run with nothing recorded whose hold is %s goes back on its gate before the refusal: never left running", async (_case, hold) => {
+    storeMock.readAgentRunByTaskId
+      .mockResolvedValueOnce({ id: "run-1", templateId: "tmpl-1", status: "running", a2aTaskId: "task-1", a2aContextId: "ctx-1", orgId: "org-1", executionAttemptId: "att-1" })
+      .mockResolvedValue({ id: "run-1", templateId: "tmpl-1", status: "pending_approval", a2aTaskId: "task-1", a2aContextId: "ctx-1", orgId: "org-1", executionAttemptId: "att-1" });
+    gateStoreMock.readResumeIntentClaim.mockResolvedValueOnce({ runClaimed: true, result: null });
+    if (hold instanceof Error) decisions.readLatestDecisionForRun.mockRejectedValue(hold);
+    else decisions.readLatestDecisionForRun.mockResolvedValue(hold);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(await deliverArtifactReviewResumeIntent(intent())).toBe("retryable");
+    } finally {
+      warn.mockRestore();
+    }
+    expect(storeMock.transitionRunStatus.mock.calls.map((c) => (c as unknown[]).slice(0, 3))).toEqual([["run-1", "running", "pending_approval"]]);
+    expect((storeMock.transitionRunStatus.mock.calls[0] as unknown[])[3]).toEqual({
+      resumeIntentLease: { gateId: "gate-1", leaseToken: "lease-abc" },
+      resumeGate: { a2aTaskId: "task-1", executionAttemptId: "att-1" },
+    });
+    expect(storeMock.transitionRunStatus.mock.invocationCallOrder[0]!).toBeLessThan(decisions.readLatestDecisionForRun.mock.invocationCallOrder[0]!);
+    expect(pauseClaimFake.claimPause).not.toHaveBeenCalled();
     expect(sendTaskSpy).not.toHaveBeenCalled();
     expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
   });
@@ -210,9 +250,10 @@ describe("the publish-decision expiry pass of the resume-delivery loop", () => {
 });
 
 // cinatra#4150 PR 3a, pre-review 2 finding 3, settled with cinatra#4245: on a template that lists publishing steps the
-// delivery takes the pause claim, reads the hold again under it, and only then fences in place and sends, so a decision
-// another resume parked after the first read refuses the send and gives the claim back. A send that fails after the fence
-// is settled, not given back (finding 2); the run stays where the in-place fence left it.
+// delivery takes the pause claim, reads the hold again under it, and only then fences and sends, so a decision another
+// resume parked after the first read refuses the send and gives the claim back. cinatra#3745: the fence is the
+// delivery's claim of the run (pending_approval -> running, the intent's lease on the same edge); a send that fails
+// after it puts the gate back under the intent's lease, and the re-claim re-sends.
 describe("the resume delivery on a publishing template", () => {
   const moves = () => storeMock.transitionRunStatus.mock.calls.map((c) => (c as unknown[]).slice(0, 3));
 
@@ -230,19 +271,20 @@ describe("the resume delivery on a publishing template", () => {
     });
   });
 
-  it("claims the pause, reads the hold again under the claim, fences in place, and hands pending_approval and its token to the task handler", async () => {
+  it("claims the pause, reads the hold again under the claim, fences by its claim of the run, and hands running and its token to the task handler", async () => {
     expect(await deliverArtifactReviewResumeIntent(intent())).toBe("delivered");
-    expect(moves()).toEqual([]);
+    expect(moves()).toEqual([["run-1", "pending_approval", "running"]]);
+    expect((storeMock.transitionRunStatus.mock.calls[0] as unknown[])[3]).toMatchObject({ pauseFence: { token: "tok-fake", generation: 1 } });
     expect(decisions.readLatestDecisionForRun).toHaveBeenCalledTimes(2);
     expect(pauseClaimFake.claimPause.mock.invocationCallOrder[0]!).toBeLessThan(
       decisions.readLatestDecisionForRun.mock.invocationCallOrder[1]!,
     );
     expect(decisions.readLatestDecisionForRun.mock.invocationCallOrder[1]!).toBeLessThan(
-      pauseClaimFake.fencePauseInPlace.mock.invocationCallOrder.at(-1)!,
+      storeMock.transitionRunStatus.mock.invocationCallOrder[0]!,
     );
-    expect(pauseClaimFake.fencePauseInPlace.mock.invocationCallOrder.at(-1)!).toBeLessThan(sendTaskSpy.mock.invocationCallOrder.at(-1)!);
+    expect(storeMock.transitionRunStatus.mock.invocationCallOrder[0]!).toBeLessThan(sendTaskSpy.mock.invocationCallOrder.at(-1)!);
     expect(handleWayflowTaskStateSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ fromStatus: "pending_approval", pauseClaimToken: "tok-fake" }),
+      expect.objectContaining({ fromStatus: "running", pauseClaimToken: "tok-fake" }),
     );
   });
 
@@ -286,10 +328,10 @@ describe("the resume delivery on a publishing template", () => {
     expect(decisions.readLatestDecisionForRun).toHaveBeenCalledTimes(1);
   });
 
-  it("a send that fails after the fence is settled, not given back", async () => {
+  it("a send that fails after the fence puts the gate back under the intent's lease (cinatra#3745)", async () => {
     sendTaskSpy.mockRejectedValueOnce(new Error("socket hang up"));
     await expect(deliverArtifactReviewResumeIntent(intent())).rejects.toThrow("socket hang up");
-    expect(moves()).toEqual([]);
+    expect(moves()).toEqual([["run-1", "pending_approval", "running"], ["run-1", "running", "pending_approval"]]);
     expect(pauseClaimFake.releasePauseClaim).not.toHaveBeenCalled();
     expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
   });
@@ -323,18 +365,18 @@ describe("the resume delivery on a template that lists no publishing step, for a
     expect(pauseClaimFake.releasePauseClaim).toHaveBeenCalledTimes(1);
   });
 
-  it("a released decision that is still the newest: the hold is read again under the claim and the run is handed over from pending_approval", async () => {
+  it("a released decision that is still the newest: the hold is read again under the claim and the run is claimed and handed over from running", async () => {
     decisions.readLatestDecisionForRun.mockResolvedValue({ id: "d1", runId: "run-1", status: "released" });
     expect(await deliverArtifactReviewResumeIntent(intent())).toBe("delivered");
     expect(decisions.readLatestDecisionForRun).toHaveBeenCalledTimes(2);
-    expect(moves()).toEqual([]);
-    expect(handleWayflowTaskStateSpy).toHaveBeenCalledWith(expect.objectContaining({ fromStatus: "pending_approval" }));
+    expect(moves()).toEqual([["run-1", "pending_approval", "running"]]);
+    expect(handleWayflowTaskStateSpy).toHaveBeenCalledWith(expect.objectContaining({ fromStatus: "running" }));
   });
 
-  it("a run with no decision reads the hold once and is delivered from pending_approval, as on main", async () => {
+  it("a run with no decision reads the hold once and is claimed (cinatra#3745: every delivery claims the run)", async () => {
     expect(await deliverArtifactReviewResumeIntent(intent())).toBe("delivered");
     expect(decisions.readLatestDecisionForRun).toHaveBeenCalledTimes(1);
-    expect(moves()).toEqual([]);
-    expect(handleWayflowTaskStateSpy).toHaveBeenCalledWith(expect.objectContaining({ fromStatus: "pending_approval" }));
+    expect(moves()).toEqual([["run-1", "pending_approval", "running"]]);
+    expect(handleWayflowTaskStateSpy).toHaveBeenCalledWith(expect.objectContaining({ fromStatus: "running" }));
   });
 });

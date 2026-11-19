@@ -215,18 +215,20 @@ describe("the known decision writers", () => {
         return readFileSync(join(REPO_ROOT, real), "utf8");
       },
     });
-    // The gate store owns 16 sites (8 from the #2047 annex + the two
+    // The gate store owns 18 sites (8 from the #2047 annex + the two
     // cinatra#2571 suggestion writes that ride the same CAS transaction + the
     // cinatra#4476 upgrade recovery's re-arm of an exhausted resume intent + the
     // cinatra#3745 resume intent's lease renewal, task record and deferral + the
     // two cinatra#3745 run-edge writes: the lease fence and the clear of the
-    // other claims), the repair store 4 (the gate CAS and its audit row, the
+    // other claims + the two cinatra#3745 settle writes: the lease of an
+    // exhausted claim and its dead letter under that lease), the repair store
+    // 4 (the gate CAS and its audit row, the
     // cinatra#4312 resume intent a lineage's close inserts to carry a declared
     // review's latest decision, and the cinatra#4476 upgrade recovery's carrier
     // insert), the orchestration store 2, and the S6b delivery arm 5 (claim,
     // applied-stamp, done, terminal dead-letter, exhausted dead-letter):
-    // 16 + 4 + 2 + 5 = 27.
-    expect(violations.length).toBe(27);
+    // 18 + 4 + 2 + 5 = 29.
+    expect(violations.length).toBe(29);
   });
 
   it("keeps the run edges' resume-intent writes in the gate store, not in the run transition (cinatra#3745)", () => {

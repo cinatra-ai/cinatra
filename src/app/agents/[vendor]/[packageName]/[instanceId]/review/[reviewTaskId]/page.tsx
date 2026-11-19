@@ -53,11 +53,8 @@ import {
   loadReviewGateSurface,
 } from "@/app/artifacts/[id]/review-gate-ports";
 import { firstPartyReviewSurfaceRoads } from "@/app/artifacts/[id]/review-surface-roads";
-import type {
-  ReviewDisposition,
-  SuggestionDecisionPartition,
-} from "@/lib/artifacts/artifact-review-decision";
-import type { ReviewSubmitOutcome } from "@/lib/artifacts/review-surface-model";
+import type { SuggestionDecisionPartition } from "@/lib/artifacts/artifact-review-decision";
+import type { ReviewFloorSubmission, ReviewSubmitOutcome } from "@/lib/artifacts/review-surface-model";
 
 import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { LifecycleCardSurfaceProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
@@ -77,6 +74,11 @@ import {
 
 import { resolveReviewActorContext } from "./review-actor";
 import { submitReviewDecisionAction } from "./actions";
+import {
+  REVIEW_FLOOR_SUBMISSION_INVALID,
+  partitionFromFloorSubmissionInput,
+  reviewFloorSubmissionInputSchema,
+} from "./floor-submission-input";
 import { ReviewGateBlocked } from "./review-gate-states";
 import { ReviewRunSteps, type ReviewRunStep } from "./review-run-steps";
 import { RunNotAuthorizedPanel } from "@cinatra-ai/agents/run-not-authorized-panel";
@@ -359,12 +361,14 @@ export default async function AgentRunReviewPage({
 
   // The whole-gate decision action, bound to THIS gate's route params (never a
   // client-supplied gate id). Passed to the client decision bar AND the prompt
-  // window (both route through the same server helper; the prompt window is the
-  // Comment path — the changes-request channel — not a fourth decision).
+  // window (both route through the same server helper; the conversation's
+  // comment is its own submission — the changes-request channel — not a fourth
+  // floor action).
   async function submitAction(input: {
-    disposition: ReviewDisposition;
+    disposition: ReviewFloorSubmission;
     comment: string | null;
     suggestionDecisions?: SuggestionDecisionPartition | null;
+    regeneratePrompt?: string | null;
   }): Promise<ReviewSubmitOutcome> {
     "use server";
     // The per-item SUGGESTION partition (cinatra#2572, epic #2564 S6c) rides the
@@ -377,13 +381,24 @@ export default async function AgentRunReviewPage({
     // before any store is touched. Passing it through here rather than minting a
     // page-local per-item action is what keeps the page and the card on ONE
     // decision path (#2047 row 8).
+    //
+    // THE SAME BOUNDS AS THE DECIDE ROUTE (cinatra#3080). This action is a second
+    // client-reachable entry to the one decision helper, so its input is parsed
+    // by the ONE validator the route spreads into its body - never trusted for
+    // its declared type, and never bounded by a number of its own. A refused
+    // input gets the outcome the card shows for a refused decide request.
+    const checked = reviewFloorSubmissionInputSchema.safeParse(input);
+    if (!checked.success) {
+      return { kind: "not-permitted", message: REVIEW_FLOOR_SUBMISSION_INVALID };
+    }
     return submitReviewDecisionAction(
       runId,
       reviewTaskId,
-      input.disposition,
-      input.comment,
+      checked.data.disposition,
+      checked.data.comment ?? null,
       undefined,
-      input.suggestionDecisions ?? null,
+      partitionFromFloorSubmissionInput(checked.data),
+      checked.data.regeneratePrompt ?? null,
     );
   }
 
