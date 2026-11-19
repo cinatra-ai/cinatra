@@ -91,6 +91,10 @@ from context_subflow_injection import (
 # to this file in the image; see step_snapshot.py for the contract).
 import step_snapshot as _step_snapshot
 
+# cinatra#4264 B1b — the Regenerate segment run (pure module next to this file
+# in the image; see regenerate_segment.py for the contract).
+import regenerate_segment as _regenerate_segment
+
 try:  # pragma: no cover — exercised inside the Docker image only
     from wayflowcore.agentserver import A2AServer  # type: ignore[import-not-found]
     from wayflowcore.agentspec import AgentSpecLoader  # type: ignore[import-not-found]
@@ -103,6 +107,26 @@ except Exception:  # pragma: no cover — host-side typecheck fallback
 # ContextVar for propagating the current WayFlow task context_id to
 # ApiCallStep._execute_request so it can inject X-Cinatra-A2A-Context-Id.
 # ---------------------------------------------------------------------------
+
+#: cinatra#3745: the source binding of the assistant that executes the current
+#: task (set per task in the patched run_task, read when a step is signed).
+_WAYFLOW_EXECUTED_SOURCE: contextvars.ContextVar[Optional[Mapping[str, str]]] = contextvars.ContextVar("_WAYFLOW_EXECUTED_SOURCE", default=None)
+
+
+def _set_executed_source_for(assistant: Any) -> "contextvars.Token[Optional[Mapping[str, str]]]":
+    """Set the executing assistant's frozen mount binding for this task. Only
+    the read-only snapshot the mount attached counts; anything else gives none."""
+    binding = getattr(assistant, "_cinatra_executed_source", None)
+    return _WAYFLOW_EXECUTED_SOURCE.set(binding if isinstance(binding, MappingProxyType) else None)
+
+
+#: cinatra#3745: the execution attempt the current task's own A2A message named
+#: (message metadata CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY), set per task in the
+#: patched run_task and signed in the step pair, so a task of an earlier attempt
+#: of the run cannot sign for a later one. "" when the message names none.
+_WAYFLOW_EXECUTION_ATTEMPT: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "_WAYFLOW_EXECUTION_ATTEMPT", default=""
+)
 
 #: Stores the fasta2a context_id for the task currently executing in this
 #: asyncio task / coroutine chain. Reset to "" between tasks.
@@ -133,6 +157,42 @@ _STEP_SNAPSHOT_RECORDER: contextvars.ContextVar[Any] = contextvars.ContextVar(
 #: RAW per-run token. MUST equal CINATRA_RUN_TOKEN_MESSAGE_KEY in
 #: src/lib/agent-run-token.ts — a cross-language ABI with no shared import.
 CINATRA_RUN_TOKEN_MESSAGE_KEY = "__cinatra_run_token__"
+
+#: cinatra#3745: the reserved A2A ``message.metadata`` key under which every
+#: dispatch and resume names the execution attempt its task runs under. MUST
+#: equal CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY in src/lib/agent-run-token.ts.
+CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY = "__cinatra_execution_attempt__"
+
+#: cinatra#3745: the longest context id, step id or attempt the runtime signs in
+#: an ``s2`` pair. MUST equal RUN_SOURCE_PROOF_FIELD_MAX_CHARS in
+#: src/lib/agent-run-token.ts: the application refuses a longer value, so the
+#: runtime signs none.
+_RUN_SOURCE_PROOF_FIELD_MAX_CHARS = 512
+
+
+def _execution_attempt_from_message(message: Any) -> str:
+    """The execution attempt a task's A2A message names in its metadata, or "".
+
+    Read only from ``message["metadata"]`` (the flow's text input is never
+    read): a string of 1 to 512 characters without a line break, as the
+    application's verifier accepts it. Any other shape names no attempt, and
+    the task then signs no step pair.
+    """
+    if not isinstance(message, dict):
+        return ""
+    metadata = message.get("metadata")
+    if not isinstance(metadata, dict):
+        return ""
+    attempt = metadata.get(CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY)
+    if (
+        not isinstance(attempt, str)
+        or not attempt
+        or len(attempt) > _RUN_SOURCE_PROOF_FIELD_MAX_CHARS
+        or "\n" in attempt
+        or "\r" in attempt
+    ):
+        return ""
+    return attempt
 
 #: Default HTTP timeout (in seconds) applied to any ApiNode call that does
 #: not declare its own. 24 hours — matches the OpenAI batch API SLA upper
@@ -469,14 +529,18 @@ def _scrub_run_token_from_message_for_storage(
     if not isinstance(message, dict):
         return message
     _, scrubbed = _extract_and_scrub_run_token(message)
-    if scrubbed is message:
-        return message  # no carrier present — nothing was copied or removed
-    parts = scrubbed.get("parts")
-    if isinstance(parts, list) and parts is message.get("parts"):
-        # Only the metadata carrier was scrubbed, so the text-part pop returned
-        # the SAME list. Detach it so storage and the broker share nothing.
-        scrubbed["parts"] = list(parts)
-    return scrubbed
+    if scrubbed is not message:
+        parts = scrubbed.get("parts")
+        if isinstance(parts, list) and parts is message.get("parts"):
+            # Only the metadata carrier was scrubbed, so the text-part pop
+            # returned the SAME list. Detach it so storage and the broker
+            # share nothing.
+            scrubbed["parts"] = list(parts)
+    # cinatra#4264 B1b: a Regenerate segment request is stored with each
+    # snapshot's node and sha256 only, never the snapshot's values (a copy;
+    # the broker's message keeps the full request for the worker). No carrier
+    # and no request: the message itself comes back (identity-equal).
+    return _regenerate_segment.redact_segment_request(scrubbed)
 
 
 # Surface EndNode declared outputs as a structured A2A DataPart so the Cinatra
@@ -1150,36 +1214,63 @@ def _patch_api_call_step_bridge_token() -> None:
                     request["headers"]["X-Cinatra-Context-Attestation"] = (
                         f"v2:{_expiry}:{_sig}"
                     )
-            # cinatra#3745: sign the identity of the executing step on the
-            # model-bridge and passthrough calls, so the application learns
-            # which step of the run makes each call. `self.id` is the executing
-            # compiled step's own id; the material `s1\n<ctx>\n<node>\n<expiry>`
+            # cinatra#3745: sign the identity of the executing step, the
+            # execution attempt the task's own message named, and the source of
+            # the assistant that executes it on the model-bridge and passthrough
+            # calls. `self.id` is the executing compiled step's own id; the
+            # three digests are the executing mount's frozen binding. The
+            # material `s2\n<ctx>\n<node>\n<attempt>\n<raw>\n<executed>\n<declaration>\n<expiry>`
             # carries a prefix of its own, distinct from the context pair's.
-            # Step headers of these names that the flow's source declared on
-            # an internal call are replaced by the runtime's values (or
-            # dropped when the runtime has no key, context id or step id).
+            # Step, attempt and source headers of these names that the flow's
+            # source declared on an internal call are replaced by the runtime's
+            # values (or dropped when the runtime has no key, context id, step
+            # id, attempt or mount binding, or the context id, the step id or
+            # the attempt holds a line break or is longer than 512 characters,
+            # the length the application's verifier accepts).
             if "llm-bridge" in _ctx_url or "/agents/passthrough" in _ctx_url:
                 for _hname in list(request["headers"].keys()):
                     if str(_hname).lower() in (
                         "x-cinatra-step-node",
                         "x-cinatra-step-attestation",
+                        "x-cinatra-executed-source",
+                        "x-cinatra-declaration-source",
+                        "x-cinatra-raw-source",
+                        "x-cinatra-execution-attempt",
                     ):
                         del request["headers"][_hname]
                 _step_id = getattr(self, "id", "") or ""
-                if attest_key and _ctx_id and _step_id:
+                _loaded = _WAYFLOW_EXECUTED_SOURCE.get()
+                _attempt = _WAYFLOW_EXECUTION_ATTEMPT.get()
+                _signed_ids = _ctx_id + _step_id + _attempt
+                if (
+                    attest_key
+                    and _ctx_id
+                    and _step_id
+                    and _attempt
+                    and _loaded
+                    and "\n" not in _signed_ids
+                    and "\r" not in _signed_ids
+                    and len(_ctx_id) <= _RUN_SOURCE_PROOF_FIELD_MAX_CHARS
+                    and len(_step_id) <= _RUN_SOURCE_PROOF_FIELD_MAX_CHARS
+                    and len(_attempt) <= _RUN_SOURCE_PROOF_FIELD_MAX_CHARS
+                ):
                     _step_expiry = (
                         int(time.time()) + _CONTEXT_ATTESTATION_TTL_SECONDS
                     )
                     _step_sig = hmac.new(
                         attest_key.encode("utf-8"),
-                        f"s1\n{_ctx_id}\n{_step_id}\n{_step_expiry}".encode(
+                        f"s2\n{_ctx_id}\n{_step_id}\n{_attempt}\n{_loaded['sourceSha256']}\n{_loaded['executedSourceSha256']}\n{_loaded['declarationSourceSha256']}\n{_step_expiry}".encode(
                             "utf-8"
                         ),
                         hashlib.sha256,
                     ).hexdigest()
+                    request["headers"]["X-Cinatra-Execution-Attempt"] = _attempt
+                    request["headers"]["X-Cinatra-Raw-Source"] = _loaded["sourceSha256"]
+                    request["headers"]["X-Cinatra-Executed-Source"] = _loaded["executedSourceSha256"]
+                    request["headers"]["X-Cinatra-Declaration-Source"] = _loaded["declarationSourceSha256"]
                     request["headers"]["X-Cinatra-Step-Node"] = _step_id
                     request["headers"]["X-Cinatra-Step-Attestation"] = (
-                        f"s1:{_step_expiry}:{_step_sig}"
+                        f"s2:{_step_expiry}:{_step_sig}"
                     )
         # ApiNode timeout policy — aligned for batch LLM workloads.
         #
@@ -1546,6 +1637,8 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
         _ctx_token = None
         _rt_token = None
         _snap_token = None
+        _source_token = None
+        _attempt_token = None
 
         try:
             task = await self.storage.load_task(params["id"])
@@ -1589,6 +1682,12 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
             # Propagate context_id to ApiCallStep via ContextVar so
             # X-Cinatra-A2A-Context-Id is injected on llm-bridge calls.
             _ctx_token = _WAYFLOW_CONTEXT_ID.set(task.get("context_id", "") or "")
+            # cinatra#3745: the assistant that executes THIS task, never the active registry.
+            _source_token = _set_executed_source_for(self.assistant)
+            # cinatra#3745: the execution attempt THIS task's own message named.
+            _attempt_token = _WAYFLOW_EXECUTION_ATTEMPT.set(
+                _execution_attempt_from_message(params.get("message"))
+            )
 
             # cinatra#1194 — template-version-per-run: what executes is no
             # longer byte-identical to the published spec for agents with
@@ -1604,9 +1703,27 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
                     f"slots={_ctx_inj.get('slots')}"
                 )
 
+            # cinatra#4264 B1b: a Regenerate segment run executes only the
+            # declared step and its filing node, of the flow version that
+            # produced the reviewed revision. Everything that can refuse it
+            # (the flow version first, then the snapshot bytes, the derivation
+            # and the inputs) runs HERE, before any conversation or step; a
+            # refusal raises into the outer handler, which fails the task.
+            _segment_request = _regenerate_segment.read_segment_request(
+                params.get("message")
+            )
+            _segment_run_id = None
+
             prioritize_task = params.get("metadata", {}).get("prioritize_task", False)
             tools_dict = self.assistant._referenced_tools_dict()
-            if prioritize_task:
+            if _segment_request is not None:
+                conversation, _segment_run_id = _start_segment_conversation(
+                    self.assistant, params.get("message"), _segment_request
+                )
+                # The snapshot values are read; the conversation and the
+                # stored task history get the message without them.
+                params["message"] = _regenerate_segment.redact_segment_request(params.get("message"))
+            elif prioritize_task:
                 conversation = await self.storage.load_task_conversation(
                     task_id=task["id"],
                     tools_dict=tools_dict,
@@ -1617,8 +1734,9 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
                     tools_dict=tools_dict,
                 )
 
-            needs_new_conv = conversation is None or not isinstance(
-                conversation.status, UserMessageRequestStatus
+            needs_new_conv = _segment_request is None and (
+                conversation is None
+                or not isinstance(conversation.status, UserMessageRequestStatus)
             )
 
             if needs_new_conv:
@@ -1720,6 +1838,14 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
                 await self.storage.update_task(task["id"], state="failed")
                 raise
             else:
+                # cinatra#4264 B1b: a segment that did not finish fails here,
+                # before its outcome is stored (no input-required state and no
+                # conversation; the task's working state already exists); it
+                # is never parked for a resume
+                # (a resumed leg carries no request, so it would sign no
+                # receipt and pass no capability check).
+                if _segment_request is not None:
+                    _regenerate_segment.require_segment_finished(isinstance(status, FinishedStatus))
                 if isinstance(status, UserMessageRequestStatus) or isinstance(
                     status, ToolRequestStatus
                 ):
@@ -1783,21 +1909,34 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
                 else:
                     task_state = "completed"
 
+                # cinatra#4264 B1b: a finished segment carries its signed
+                # receipt; the application refiles the write only with it.
+                if _segment_request is not None and isinstance(status, FinishedStatus):
+                    _regenerate_segment.attach_segment_receipt(
+                        new_a2a_messages,
+                        _regenerate_segment.segment_receipt(
+                            os.environ.get("CINATRA_CONTEXT_ATTEST_KEY"),
+                            _segment_run_id,
+                            _segment_request,
+                        ),
+                        str(task["id"]),
+                    )
+
                 # cinatra#4264: the leg's step snapshots ride its last message.
                 if _snap_recorder is not None:
                     _step_snapshot.attach_step_snapshots(
                         new_a2a_messages, _snap_recorder.snapshots(), str(task["id"])
                     )
 
-                await self.storage.update_task(
-                    task["id"],
+                # cinatra#4264 B1b: a segment's conversation holds the
+                # snapshot values as start inputs; it is not stored.
+                await _regenerate_segment.store_task_outcome(
+                    self.storage,
+                    task,
                     state=task_state,
                     new_messages=new_a2a_messages,
-                )
-                await self.storage.update_task_conversation(
-                    context_id=task["context_id"],
-                    task_id=task["id"],
-                    conv=conversation,
+                    conversation=conversation,
+                    segment=_segment_request is not None,
                 )
         except Exception as _outer_exc:
             # CINATRA HANG FIX: a raise from BEFORE the inner try-block (e.g.
@@ -1828,6 +1967,10 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
             # capture never performed. Reset the run token first (LIFO wrt set).
             if _snap_token is not None:
                 _STEP_SNAPSHOT_RECORDER.reset(_snap_token)
+            if _attempt_token is not None:
+                _WAYFLOW_EXECUTION_ATTEMPT.reset(_attempt_token)
+            if _source_token is not None:
+                _WAYFLOW_EXECUTED_SOURCE.reset(_source_token)
             if _rt_token is not None:
                 _WAYFLOW_RUN_TOKEN.reset(_rt_token)
             if _ctx_token is not None:
@@ -1856,6 +1999,58 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
 
 
 # ---------------------------------------------------------------------------
+
+
+def _start_segment_conversation(
+    assistant: Any, message: Any, request: Dict[str, Any]
+) -> Tuple[Any, Optional[str]]:
+    """cinatra#4264 B1b: the conversation of a Regenerate segment run, and the
+    run id its receipt is signed for.
+
+    In order, before any step: the mounted flow version against the request
+    (``REGENERATE_FLOW_CHANGED``), each snapshot's sha256 over its bytes, the
+    segment derived from the mounted pre-substitution document (cached per
+    flow version and entry), the segment's start inputs. The segment document
+    is loaded by the same loader and placeholder substitution as the mount,
+    and cached on the mounted agent per (flowSha256, step, artifactNode,
+    noteInput). Every refusal raises RegenerateSegmentError.
+    """
+    message_inputs = _extract_start_inputs(message) or {}
+    derivation, inputs = _regenerate_segment.prepare_segment_run(
+        request,
+        mounted_flow_sha256=getattr(assistant, "_cinatra_flow_sha256", "") or "",
+        working_doc=getattr(assistant, "_cinatra_working_doc", None),
+        message_inputs=message_inputs,
+    )
+    key = (
+        request["flowSha256"],
+        request["step"],
+        request["artifactNode"],
+        request["noteInput"],
+    )
+    cache = getattr(assistant, "_cinatra_segment_flows", None)
+    if not isinstance(cache, dict):
+        cache = {}
+        try:
+            setattr(assistant, "_cinatra_segment_flows", cache)
+        except Exception:
+            pass
+    flow = cache.get(key)
+    if flow is None:
+        loader = getattr(assistant, "_cinatra_spec_loader", None)
+        if loader is None:
+            raise _regenerate_segment.RegenerateSegmentError(
+                _regenerate_segment.REGENERATE_SEGMENT_INVALID,
+                "the mounted agent has no loader for its segment",
+            )
+        flow = loader.load_json(_substitute_placeholders(json.dumps(derivation["doc"])))
+        cache[key] = flow
+    print(
+        f"[agent_loader] regenerate segment step={request['step']} "
+        f"artifactNode={request['artifactNode']} flow={request['flowSha256'][:12]}"
+    )
+    run_id = inputs.get("cinatra_run_id") or message_inputs.get("cinatra_run_id")
+    return flow.start_conversation(inputs=inputs), run_id if isinstance(run_id, str) else None
 
 
 def _is_apinode_only_flow(agent: Any) -> bool:
@@ -4879,6 +5074,19 @@ def _mount_one_sync(
     except Exception:
         print(f"[agent_loader] WARNING: {label}: flow sha not attached; step snapshots unavailable")
 
+    # cinatra#4264 B1b: a Regenerate segment is derived from the document this
+    # mount executes (pre-substitution, after every pass above) and loaded by
+    # the same loader. Without them a segment run is refused, never guessed.
+    try:
+        setattr(
+            agent,
+            "_cinatra_working_doc",
+            composed_oas if composed_oas is not None else parsed_doc,
+        )
+        setattr(agent, "_cinatra_spec_loader", loader)
+    except Exception:
+        print(f"[agent_loader] WARNING: {label}: segment source not attached; Regenerate segments unavailable")
+
     server = A2AServer()
     mount_url = f"{base_url}/agents/{vendor}/{slug}/"
     server.serve_agent(agent, url=mount_url)
@@ -5313,6 +5521,10 @@ class MountedAgentRegistry:
             "failed": len(failed),
             "failed_agents": failed,
             "last_reload_at": self._last_reload_at,
+            # cinatra#4264 B1b: what this runtime can run beyond a whole flow;
+            # the application dispatches a Regenerate segment only when it
+            # reads `regenerate_segment/1` here.
+            "capabilities": list(_regenerate_segment.RUNTIME_CAPABILITIES),
         }
 
     def find(self, label: str) -> Optional[MountedAgent]:
@@ -5422,8 +5634,8 @@ def _build_composed_oas_handler(
                 "composedSha256": agent.composed_sha256,
                 "composedOas": agent.composed_oas,
                 # The host reads this before a run's first dispatch and binds it
-                # to the run (cinatra#3745); a later part proves which assistant
-                # ran. The substituted text is never returned, only its digest.
+                # to the run (cinatra#3745); each step's s2 signature proves which
+                # assistant ran. The substituted text is never returned, only its digest.
                 "selectedSourceBinding": dict(agent.selected_source_binding) if agent.selected_source_binding is not None else None,
             }
         )

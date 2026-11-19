@@ -69,7 +69,7 @@
 // WORDS, read out of the spent row rather than supplied by the model. And the
 // MENU on the grant is now cut from those same words on the send path, before
 // any model reads anything: a control the person's own message never named is
-// not on it, so an induced call cannot reach Approve, Reject, a skills Confirm
+// not on it, so an induced call cannot reach Continue, a skills Confirm
 // or a schedule Confirm on a message that never named one. The two keys are
 // deliberately held apart: the person supplies the words, the assistant supplies
 // the reading, and one without the other presses nothing.
@@ -77,11 +77,11 @@
 // WHAT AN INDUCED CALL CAN STILL DO, stated exactly rather than rounded down
 // (convergence round 1, findings 1 and 3):
 //
-//   · file the person's own words as a comment on a review. That is NOT
-//     harmless — on an active single-target lifecycle review the card's own path
-//     files a comment as CHANGES REQUESTED and the gate resolves — but it is
-//     byte-for-byte what the review page's own box does with any typed sentence
-//     today, with no model in the path at all, and this slice does not widen it;
+//   · file the person's own words as a comment on a review, which decides
+//     nothing (cinatra#3080), or send them back as a Regenerate. A Regenerate is
+//     NOT harmless — the gate settles and the producing step runs again — but it
+//     is what the review page's own box did with any typed sentence before
+//     cinatra#3080, with no model in the path at all, and it is not widened here;
 //   · re-draw a schedule card's rows, which writes nothing and arms nothing;
 //   · confirm a different subset of the skills THIS card offered.
 //
@@ -140,6 +140,142 @@ async function loadSubmitReviewDecision(): Promise<SubmitReviewDecisionAction> {
 async function loadApproveScreen(): Promise<ApproveReviewTaskInternal> {
   const mod = await import("@cinatra-ai/agents/review-task-actions");
   return mod.approveReviewTaskInternal;
+}
+
+// ---------------------------------------------------------------------------
+// THE LENT REVIEW PRESS'S PRE-SPEND DECISION (cinatra#3080; pre-review 1 of
+// #4571, finding 1). WHAT A LENT REVIEW PRESS MUST KNOW BEFORE IT SPENDS ITS
+// GRANT.
+//
+// The grant a typed message carries is single-use and its spend is
+// irreversible. A refusal that comes after the spend costs the person their one
+// press: a read/respond-only reviewer whose menu carries Regenerate would lose
+// the grant to the decision right's denial and could no longer press Comment.
+// So every refusal the press can know before it acts is answered here, before
+// the spend:
+//
+//   - the run-access right the pressed control needs, the same right the review
+//     entry asks for it (`floorActionRunAccessOp`): Continue (`approve`) and
+//     Regenerate settle the gate -> `approveHitl`; Comment -> `respondToHitl`;
+//   - for a Regenerate, the review's own eligibility, the same tests the review
+//     entry applies: the review-orchestration fence on, an automatic lifecycle
+//     gate, not a batch gate, exactly one pinned target.
+//
+// Nothing here authorizes anything. The review entry repeats every check after
+// the spend, against the live gate, and it alone decides. This only moves the
+// refusals it can already state in front of the irreversible step.
+//
+// Kept IN this module, with no import of its own: a module of its own would be
+// one more first-party module on every locked route that reaches this one (the
+// route-graph ratchet counts dynamic imports too). The run-access read, the
+// fence and the task-id tests are ports the caller supplies, so the decision is
+// testable without a database.
+// ---------------------------------------------------------------------------
+
+/** The review controls a grant can press. */
+export type LentReviewControl = "comment" | "regenerate" | "approve";
+
+export type LentReviewAccessOp = "approveHitl" | "respondToHitl";
+
+/** The refusal as the review entry would have answered it. */
+export type LentReviewPressRefusal =
+  | { kind: "not-permitted"; message: string }
+  | { kind: "error"; message: string };
+
+export interface LentReviewPressPorts {
+  /** Does this actor hold `op` on the run? Read live. */
+  readonly authorize: (op: LentReviewAccessOp) => Promise<boolean>;
+  readonly fenceActive: () => boolean;
+  readonly isAutoReviewTaskId: (reviewTaskId: string) => boolean;
+  readonly isBatchAutoReviewTaskId: (reviewTaskId: string) => boolean;
+  /** The review entry's own sentences, passed in so they stay one source. */
+  readonly messages: {
+    readonly notOnThisReview: string;
+    readonly multiTarget: string;
+  };
+}
+
+/** The review entry's own sentence for a denied run-access check. */
+export const LENT_REVIEW_NOT_PERMITTED =
+  "You do not have the run access this decision needs — a terminal decision requires the run's decision access, a comment requires respond access.";
+
+/** The right a lent press of `control` needs: the review entry's own mapping. */
+export function lentReviewPressAccessOp(control: LentReviewControl): LentReviewAccessOp {
+  return control === "comment" ? "respondToHitl" : "approveHitl";
+}
+
+/**
+ * Null when the press may spend its grant; otherwise the refusal to answer with
+ * the grant left whole.
+ */
+export async function lentReviewPressRefusal(
+  press: {
+    readonly control: LentReviewControl;
+    readonly reviewTaskId: string;
+    readonly pinnedTargetCount: number;
+  },
+  ports: LentReviewPressPorts,
+): Promise<LentReviewPressRefusal | null> {
+  // The right first: no gate fact is stated to a caller who holds no right.
+  const allowed = await ports.authorize(lentReviewPressAccessOp(press.control));
+  if (!allowed) return { kind: "not-permitted", message: LENT_REVIEW_NOT_PERMITTED };
+
+  if (press.control === "regenerate") {
+    if (
+      !ports.fenceActive() ||
+      !ports.isAutoReviewTaskId(press.reviewTaskId) ||
+      ports.isBatchAutoReviewTaskId(press.reviewTaskId)
+    ) {
+      return { kind: "error", message: ports.messages.notOnThisReview };
+    }
+    if (press.pinnedTargetCount !== 1) {
+      return { kind: "error", message: ports.messages.multiTarget };
+    }
+  }
+  return null;
+}
+
+/**
+ * THE REVIEW PRESS'S PRE-SPEND CHECKS (cinatra#3080; pre-review 1 of #4571,
+ * finding 1). Null when the press may spend its grant, otherwise the outcome to
+ * answer with the grant left whole. The decision is `lentReviewPressRefusal`
+ * above; its ports are deferred for the same route-graph reason as the review
+ * entry itself: the run-access port and the fence load only when a person's
+ * bound message presses a review control. Each of these modules is one the
+ * review entry (`loadSubmitReviewDecision`) already reaches.
+ */
+type PreflightReviewPress = (args: {
+  runId: string;
+  reviewTaskId: string;
+  pinnedTargetCount: number;
+  control: LentReviewControl;
+  actorCtx: NonNullable<Awaited<ReturnType<typeof resolveBoundTurnActor>>>;
+}) => Promise<LentReviewPressRefusal | null>;
+
+async function loadPreflightReviewPress(): Promise<PreflightReviewPress> {
+  const [ports, model, activation, orchestration] = await Promise.all([
+    import("@/app/artifacts/[id]/review-gate-ports"),
+    import("@/lib/artifacts/review-surface-model"),
+    import("@/lib/lifecycle/lifecycle-activation"),
+    import("@/lib/lifecycle/lifecycle-orchestration"),
+  ]);
+  return ({ runId, reviewTaskId, pinnedTargetCount, control, actorCtx }) =>
+    lentReviewPressRefusal(
+      { control, reviewTaskId, pinnedTargetCount },
+      {
+        authorize: async (op) => {
+          const access = await ports.enforceReviewDecisionAccess({ runId, op, actorCtx });
+          return access.ok === true;
+        },
+        fenceActive: () => activation.isLifecycleReviewOrchestrationActive(),
+        isAutoReviewTaskId: orchestration.isAutoReviewTaskId,
+        isBatchAutoReviewTaskId: orchestration.isBatchAutoReviewTaskId,
+        messages: {
+          notOnThisReview: model.REGENERATE_NOT_ON_THIS_REVIEW,
+          multiTarget: model.REGENERATE_MULTI_TARGET_REASON,
+        },
+      },
+    );
 }
 
 // THE SKILLS CARD'S AND THE SCHEDULE CARD'S OWN ENTRIES (cinatra#2853), lazy for
@@ -304,10 +440,10 @@ export function reviewOutcomeSentence(
     case "decided": {
       const head =
         outcome.disposition === "approve"
-          ? "Approved. The gate is resolved and the run has been released to continue."
-          : outcome.disposition === "reject"
-            ? "Rejected. The gate is resolved and the reviewed work has been turned back."
-            : "Your comment was recorded with the decision.";
+          ? "Continued. The gate is resolved and the run has been released to continue."
+          : // No Rejected branch (cinatra#3080): the one entry refuses `reject`
+            // before it decides anything, so a decided review is never one.
+            "Your comment was recorded with the decision.";
       return outcome.idempotent ? `${head} (This decision had already been recorded.)` : head;
     }
     case "blocked":
@@ -387,7 +523,7 @@ const inputSchema = z
      *
      * OMITTED NOW MEANS "the control this message was granted", which is the
      * only control it could ever have pressed. A call that NAMES a different one
-     * is refused exactly as before — asking for Reject on a comment grant is
+     * is refused exactly as before — asking for Continue on a comment grant is
      * still an authority this turn does not hold, and gate 3 still says so.
      */
     control: z.enum(LENT_ACTION_CONTROLS).optional(),
@@ -464,6 +600,8 @@ export async function handleLentAction(
     readonly consume?: typeof consumeLentActionGrant;
     readonly resolveActor?: typeof resolveBoundTurnActor;
     readonly submitReviewDecision?: SubmitReviewDecisionAction;
+    /** The review press's pre-spend checks (cinatra#4571 pre-1 finding 1). */
+    readonly preflightReviewPress?: PreflightReviewPress;
     readonly approveScreen?: ApproveReviewTaskInternal;
     /** The skills card's and the schedule card's own entries (cinatra#2853). */
     readonly confirmHold?: ConfirmRecommendationForActor;
@@ -583,6 +721,31 @@ export async function handleLentAction(
     });
   }
 
+  // AND, FOR A REVIEW, THE RIGHT AND THE ELIGIBILITY, ASKED BEFORE THE SPEND
+  // (cinatra#3080; pre-review 1 of #4571, finding 1). The review entry checks
+  // the run-access right the control needs (Continue and Regenerate settle the
+  // gate -> approveHitl; Comment -> respondToHitl) and refuses a Regenerate the
+  // review cannot take. Asked only after the spend, a denial cost the person
+  // their one press: a respond-only reviewer whose menu carried Regenerate lost
+  // the grant and could no longer press Comment. The same checks are asked
+  // here first, so a refusal leaves the grant whole; the entry repeats every one
+  // of them after the spend, and it alone decides.
+  if (bound.kind === "review") {
+    const reviewControl = reviewDisposition(control);
+    if (!reviewControl) return refuseCardUnavailable();
+    const preflight = deps.preflightReviewPress ?? (await loadPreflightReviewPress());
+    const refusal = await preflight({
+      runId: bound.runId,
+      reviewTaskId: bound.reviewTaskId,
+      pinnedTargetCount: bound.pinnedTargets.length,
+      control: reviewControl,
+      actorCtx,
+    });
+    if (refusal) {
+      return say({ ok: false, outcome: refusal, message: reviewOutcomeSentence(refusal) });
+    }
+  }
+
   // GATE 6 — spend the grant. Before the effect, atomically, once.
   //
   // THE SPEND IS ALSO WHERE THE PERSON'S WORDS COME FROM (convergence round 1,
@@ -637,10 +800,10 @@ export async function handleLentAction(
       bound.reviewTaskId,
       disposition,
       text,
-      // ONE actor context for the resolve above and the decision-op check
-      // inside — the decision route's own rule, for the same reason.
+      // ONE actor context for the resolve above and the decision-op check inside.
       actorCtx,
       null,
+      null, // A Regenerate carries NO prompt of its own: the typed words ARE the note.
       // The lent Comment files the words typed to the run's assistant in the
       // gate's prompt window (inside a conversation, the composer that stands in
       // for it): design section VI's one channel for requesting changes, so it
@@ -1162,12 +1325,12 @@ export async function buildScreenSubmitValues(input: {
   return payload;
 }
 
-/** The review card's three buttons, as the decision core names them. */
+/** The floor's three buttons as the one entry names them; `approve` is Continue. */
 function reviewDisposition(
   control: LentActionControl,
-): "approve" | "reject" | "comment" | null {
+): "approve" | "regenerate" | "comment" | null {
   if (control === "approve") return "approve";
-  if (control === "reject") return "reject";
+  if (control === "regenerate") return "regenerate";
   if (control === "comment") return "comment";
   return null;
 }

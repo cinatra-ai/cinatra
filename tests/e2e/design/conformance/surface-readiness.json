@@ -48,7 +48,11 @@
           "action": "continue-review",
           "outcome": "resolved",
           "awaits": 3100,
-          "why": "No first-party module carries a control for this action. The review floor's Continue is landing on pull request 3100, which ships the attribute for exactly this action-and-outcome pair, so the wave after that landing drives this surface rather than approximating it through another control."
+          "shippedBy": [
+            "packages/agents/src/review-decision-bar.tsx",
+            "src/lib/lifecycle/held-turn-card-contract.ts"
+          ],
+          "why": "Shipped, drive proof owed: the review floor's Continue now ships the attribute for this action-and-outcome pair at packages/agents/src/review-decision-bar.tsx:290 and its anchor at src/lib/lifecycle/held-turn-card-contract.ts:524, the two files named in shippedBy. What keeps the surface undriven is the reason its other entries give: the card for this artifact kind is not drawn at all, so there is nothing for the floor to sit under. The wave's drive proof is owed to pull request 3100; until then this entry pins WHERE the control lives, and goes red if it moves, spreads or disappears."
         },
         {
           "surface": "review-card-email-body",
@@ -77,7 +81,11 @@
           "action": "continue-review",
           "outcome": "resolved",
           "awaits": 3100,
-          "why": "No first-party module carries a control for this action. The review floor's Continue is landing on pull request 3100, which ships the attribute for exactly this action-and-outcome pair, so the wave after that landing drives this surface rather than approximating it through another control."
+          "shippedBy": [
+            "packages/agents/src/review-decision-bar.tsx",
+            "src/lib/lifecycle/held-turn-card-contract.ts"
+          ],
+          "why": "Shipped, drive proof owed: the review floor's Continue now ships the attribute for this action-and-outcome pair at packages/agents/src/review-decision-bar.tsx:290 and its anchor at src/lib/lifecycle/held-turn-card-contract.ts:524, the two files named in shippedBy. What keeps the surface undriven is the reason its other entries give: the card for this artifact kind is not drawn at all, so there is nothing for the floor to sit under. The wave's drive proof is owed to pull request 3100; until then this entry pins WHERE the control lives, and goes red if it moves, spreads or disappears."
         },
         {
           "surface": "review-card-mixed-kind",
@@ -106,7 +114,11 @@
           "action": "continue-review",
           "outcome": "resolved",
           "awaits": 3100,
-          "why": "No first-party module carries a control for this action. The review floor's Continue is landing on pull request 3100, which ships the attribute for exactly this action-and-outcome pair, so the wave after that landing drives this surface rather than approximating it through another control."
+          "shippedBy": [
+            "packages/agents/src/review-decision-bar.tsx",
+            "src/lib/lifecycle/held-turn-card-contract.ts"
+          ],
+          "why": "Shipped, drive proof owed: the review floor's Continue now ships the attribute for this action-and-outcome pair at packages/agents/src/review-decision-bar.tsx:290 and its anchor at src/lib/lifecycle/held-turn-card-contract.ts:524, the two files named in shippedBy. What keeps the surface undriven is the reason its other entries give: the card for this artifact kind is not drawn at all, so there is nothing for the floor to sit under. The wave's drive proof is owed to pull request 3100; until then this entry pins WHERE the control lives, and goes red if it moves, spreads or disappears."
         },
         {
           "surface": "review-card-screenshot",
@@ -126,7 +138,11 @@
           "action": "continue-review",
           "outcome": "resolved",
           "awaits": 3100,
-          "why": "No first-party module carries a control for this action. The review floor's Continue is landing on pull request 3100, which ships the attribute for exactly this action-and-outcome pair, so the wave after that landing drives this surface rather than approximating it through another control."
+          "shippedBy": [
+            "packages/agents/src/review-decision-bar.tsx",
+            "src/lib/lifecycle/held-turn-card-contract.ts"
+          ],
+          "why": "Shipped, drive proof owed: the review floor's Continue now ships the attribute for this action-and-outcome pair at packages/agents/src/review-decision-bar.tsx:290 and its anchor at src/lib/lifecycle/held-turn-card-contract.ts:524, the two files named in shippedBy. What keeps the surface undriven is the reason its other entries give: the card for this artifact kind is not drawn at all, so there is nothing for the floor to sit under. The wave's drive proof is owed to pull request 3100; until then this entry pins WHERE the control lives, and goes red if it moves, spreads or disappears."
         },
         {
           "surface": "review-card-slide-deck",
@@ -155,7 +171,11 @@
           "action": "continue-review",
           "outcome": "resolved",
           "awaits": 3100,
-          "why": "No first-party module carries a control for this action. The review floor's Continue is landing on pull request 3100, which ships the attribute for exactly this action-and-outcome pair, so the wave after that landing drives this surface rather than approximating it through another control."
+          "shippedBy": [
+            "packages/agents/src/review-decision-bar.tsx",
+            "src/lib/lifecycle/held-turn-card-contract.ts"
+          ],
+          "why": "Shipped, drive proof owed: the review floor's Continue now ships the attribute for this action-and-outcome pair at packages/agents/src/review-decision-bar.tsx:290 and its anchor at src/lib/lifecycle/held-turn-card-contract.ts:524, the two files named in shippedBy. What keeps the surface undriven is the reason its other entries give: the card for this artifact kind is not drawn at all, so there is nothing for the floor to sit under. The wave's drive proof is owed to pull request 3100; until then this entry pins WHERE the control lives, and goes red if it moves, spreads or disappears."
         },
         {
           "surface": "review-card-dashboard",
@@ -184,7 +204,11 @@
           "action": "continue-review",
           "outcome": "resolved",
           "awaits": 3100,
-          "why": "No first-party module carries a control for this action. The review floor's Continue is landing on pull request 3100, which ships the attribute for exactly this action-and-outcome pair, so the wave after that landing drives this surface rather than approximating it through another control."
+          "shippedBy": [
+            "packages/agents/src/review-decision-bar.tsx",
+            "src/lib/lifecycle/held-turn-card-contract.ts"
+          ],
+          "why": "Shipped, drive proof owed: the review floor's Continue now ships the attribute for this action-and-outcome pair at packages/agents/src/review-decision-bar.tsx:290 and its anchor at src/lib/lifecycle/held-turn-card-contract.ts:524, the two files named in shippedBy. What keeps the surface undriven is the reason its other entries give: the card for this artifact kind is not drawn at all, so there is nothing for the floor to sit under. The wave's drive proof is owed to pull request 3100; until then this entry pins WHERE the control lives, and goes red if it moves, spreads or disappears."
         },
         {
           "surface": "review-card-portlet",

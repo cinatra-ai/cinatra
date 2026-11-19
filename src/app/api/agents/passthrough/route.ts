@@ -1,3 +1,5 @@
+import type { VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
+import { verifyRunExecutedSource } from "@cinatra-ai/agents/store";
 import "server-only";
 import { NextResponse } from "next/server";
 
@@ -7,6 +9,8 @@ import { isAuthorizedBridgeRequest } from "@/lib/wayflow-bridge-auth";
 import { bindBridgeRunId } from "@/lib/authz/bridge-run-binding";
 import {
   verifyRunStepAttestation,
+  verifySourceBoundRunStep,
+  RUN_RAW_SOURCE_HEADER, RUN_EXECUTED_SOURCE_HEADER, RUN_DECLARATION_SOURCE_HEADER, RUN_EXECUTION_ATTEMPT_HEADER,
   RUN_STEP_NODE_HEADER,
   RUN_STEP_ATTESTATION_HEADER,
 } from "@/lib/agent-run-token";
@@ -428,17 +432,39 @@ export async function POST(req: Request): Promise<Response> {
   // cinatra#3745 — the verified step of the calling flow step. The flow runtime
   // signs the executing step's id over the run's context id; it is verified
   // here with the context id the run binding above proved, and stamped on the
-  // run-scoped frame below. An absent or unverified pair gives no step.
+  // run-scoped frame below. Without source headers, an absent or unverified
+  // `s1` pair gives no step. With any source header (the attempt header
+  // included), the `s2` pair over the step, the attempt the calling task was
+  // sent under and the executing source must verify AND the run must be running
+  // under that attempt, the one that source is bound to; otherwise the call is refused
+  // (403, a fixed sentence) before any tool runs, and the step is the proof's.
   // A blank key is no key (cinatra#4154): the runtime refuses to boot on one,
-  // and a pair signed under whitespace proves nothing.
+  // and a pair signed under whitespace proves nothing (for `s1` and `s2`).
   const attestKey = process.env.CINATRA_CONTEXT_ATTEST_KEY;
-  const verifiedStepId =
+  let verifiedStepId =
     verifyRunStepAttestation({
       key: attestKey && attestKey.trim() !== "" ? attestKey : null,
       contextId: req.headers.get("x-cinatra-a2a-context-id"),
       node: req.headers.get(RUN_STEP_NODE_HEADER),
       attestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER),
     }) ?? undefined;
+
+  let verifiedExecutedSource: VerifiedExecutedRunSource | undefined;
+  if (req.headers.get(RUN_RAW_SOURCE_HEADER) !== null || req.headers.get(RUN_EXECUTED_SOURCE_HEADER) !== null ||
+      req.headers.get(RUN_DECLARATION_SOURCE_HEADER) !== null || req.headers.get(RUN_EXECUTION_ATTEMPT_HEADER) !== null) {
+    const attestation = verifySourceBoundRunStep({ key: attestKey && attestKey.trim() !== "" ? attestKey : null,
+      contextId: req.headers.get("x-cinatra-a2a-context-id"), node: req.headers.get(RUN_STEP_NODE_HEADER),
+      executionAttemptId: req.headers.get(RUN_EXECUTION_ATTEMPT_HEADER),
+      attestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER), sourceSha256: req.headers.get(RUN_RAW_SOURCE_HEADER),
+      executedSourceSha256: req.headers.get(RUN_EXECUTED_SOURCE_HEADER),
+      declarationSourceSha256: req.headers.get(RUN_DECLARATION_SOURCE_HEADER) });
+    try {
+      const sourceRun = await readAgentRunById(agentRunId);
+      if (!attestation || !sourceRun?.orgId) throw new Error("source_binding_invalid");
+      verifiedExecutedSource = await verifyRunExecutedSource(agentRunId, sourceRun.orgId, attestation);
+      verifiedStepId = verifiedExecutedSource.stepId;
+    } catch { return NextResponse.json({ error: "Executing source could not be verified" }, { status: 403 }); }
+  }
 
   const shaper = TOOL_INPUT_SHAPERS[tool];
   let input: Record<string, unknown>;

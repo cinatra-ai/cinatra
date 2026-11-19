@@ -179,7 +179,7 @@ export const REVIEW_DECISION_FLOOR: Readonly<
     states: [],
     awaitingPullRequest: 3100,
     readiness:
-      "the bar ships and carries this anchor, and one of its three affordances ships under the drawing's own name (comment-review to annotated); the other two do not — the default branch draws reject-review and approve-review where the drawing draws Regenerate and Continue, and those two land with open pull request 3100. The mount is refused for a second reason that does not expire with that landing: the repository's one-card gate bans composing the decision bar anywhere but the card and the bar's own module, and a conformance harness is exactly such a second place — the foundational wave of this epic moved its own proof off the floor for that reason",
+      "the bar ships and carries this anchor, and its three affordances — the ones pull request 3100 set out to land — ship under the drawing's own names. The mount is refused for the reason that does not expire with that landing: the repository's one-card gate bans composing the decision bar anywhere but the card and the bar's own module, and a conformance harness is exactly such a second place — the foundational wave of this epic moved its own proof off the floor for that reason",
   },
   "review-prompt-window": {
     surface: "review-prompt-window",

@@ -27,7 +27,7 @@
 // one source of truth without a consumer having to load the implementation.
 // ---------------------------------------------------------------------------
 
-import type { CompiledManifestLifecycle } from "@/lib/lifecycle/lifecycle-policy";
+import { readRegenerateEntry, type CompiledManifestLifecycle } from "@/lib/lifecycle/lifecycle-policy";
 
 /** The produced-artifact ROLES core itself implements a typed repair for. A role
  * here means: "when a reviewer requests changes on an artifact of this role's
@@ -80,4 +80,80 @@ export function coreRepairsObjectType(
     if (claimant && claimant === claimingPackage) return true;
   }
   return false;
+}
+
+// ---------------------------------------------------------------------------
+// readProducingStepNoteInput (cinatra#3080, acceptance item 4)
+//
+// Kept in this pure module, which the review store already imports. It reads
+// a compiled declaration the caller has already loaded; it does no I/O.
+//
+// THE ONE QUESTION REGENERATE ASKS of the revision under review: which step
+// produced it, and which text input of that step does the reviewer's Note
+// fill? The decision of 2026-10-13 settles the answer's shape. A step may
+// declare, optionally, the one text input that the Note fills (for a picture,
+// its prompt). Regenerate re-runs that step with the Note in exactly that
+// input. A review whose producing step declares no such input refuses
+// Regenerate with a plain reason. Comment and Continue work as usual.
+//
+// THE DECLARATION IS THE ARTIFACT-SCOPED REGENERATE ENTRY (cinatra#4264, the
+// strict `cinatra.lifecycle.regenerate` field of `agentLifecycleDeclarationSchema`
+// in `verdaccio/package-contract.ts`, compiled onto
+// `agent_templates.lifecycle_config` and read with `readRegenerateEntry`). Per
+// artifact-filing node it names the producing `step` and that step's
+// `noteInput`; the compile check proves the step feeds the node and that the
+// note input is fed by one start output and nothing else. The entry is chosen by
+// the node that FILED the reviewed revision (`readVerifiedFilingNode` below,
+// the runtime's signed step id on the materialization ledger), the same
+// re-derivation the Regenerate dispatch makes, so a Regenerate this read admits
+// is one that dispatch can run.
+//
+// Nothing else counts. Not `repairFindingsInput` (cinatra#4424): that names the
+// ROOT input a dispatched repair run gets the findings in, for the whole
+// template, and says nothing about which step made this revision. Not the
+// agent-level `repairCapable` boolean: that flag says the agent can answer a
+// typed repair request, not which input the Note goes into. Reading either as if
+// it did is the proxy the decision rules out.
+// ---------------------------------------------------------------------------
+
+/** The Regenerate declaration of the node that filed the reviewed revision. */
+export interface ProducingStepNoteInput {
+  /** The node that filed the reviewed revision (the entry's key). */
+  artifactNode: string;
+  /** The producing step a Regenerate reruns. */
+  step: string;
+  /** The text input of that step the reviewer's Note fills. */
+  noteInput: string;
+}
+
+/**
+ * The Regenerate entry the producing template declares for the node that filed
+ * the reviewed revision, or null when there is none. `lifecycle` is the
+ * producing run's template's compiled lifecycle declaration
+ * (`agent_templates.lifecycle_config`, read fail-soft; its `regenerate` list is
+ * read all-or-nothing); `artifactNode` is the verified filing node
+ * (`readVerifiedFilingNode`), null when it is not proven. Callers treat null as
+ * "Regenerate is not available on this review".
+ */
+export function readProducingStepNoteInput(
+  lifecycle: Pick<CompiledManifestLifecycle, "regenerate"> | null | undefined,
+  artifactNode: string | null | undefined,
+): ProducingStepNoteInput | null {
+  if (typeof artifactNode !== "string" || artifactNode.length === 0) return null;
+  const entry = readRegenerateEntry(lifecycle, artifactNode);
+  if (!entry) return null;
+  return { artifactNode, step: entry.step, noteInput: entry.noteInput };
+}
+
+/**
+ * The node that filed a revision, from the `verified_step_id` values of the
+ * finalized `materialize_tool` ledger rows of (org, producing run, artifact,
+ * revision): exactly one row carrying a non-empty id, else null. No row, a row
+ * whose filing step the runtime did not verify, or two rows (read with a limit
+ * of 2) are all "not proven", and Regenerate is refused.
+ */
+export function readVerifiedFilingNode(verifiedSteps: ReadonlyArray<string | null | undefined>): string | null {
+  if (verifiedSteps.length !== 1) return null;
+  const node = verifiedSteps[0];
+  return typeof node === "string" && node.length > 0 ? node : null;
 }

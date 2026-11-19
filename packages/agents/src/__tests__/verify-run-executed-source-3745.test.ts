@@ -30,7 +30,7 @@ const source = JSON.stringify({
 });
 const sha = (t: string) => createHash("sha256").update(t).digest("hex");
 const policy = { version: 1, contextId: "ctx", sourceSha256: "a".repeat(64), executedSourceSha256: "b".repeat(64), declarationSourceSha256: sha(source), source };
-const claim = (stepId = "step-1") => ({ contextId: "ctx", stepId, sourceSha256: policy.sourceSha256,
+const claim = (stepId = "step-1") => ({ contextId: "ctx", stepId, executionAttemptId: "attempt", sourceSha256: policy.sourceSha256,
   executedSourceSha256: policy.executedSourceSha256, declarationSourceSha256: policy.declarationSourceSha256 });
 beforeEach(() => {
   h.row = { run: { id: "run", orgId: "org", status: "running", executionAttemptId: "attempt", a2aContextId: "ctx" },
@@ -73,5 +73,35 @@ describe("verifyRunExecutedSource: the proof holds the values it compared", () =
     } });
     await expect(verifyRunExecutedSource("run", "org", attestation)).resolves.toEqual({ ...base, executionAttemptId: "attempt" });
     expect(seen.get("contextId")).toBe(1);
+  });
+});
+
+// A run that moved to a newer attempt carries its binding forward unchanged, so the binding and the run both name the newer attempt
+// while a task of the earlier attempt still holds its signed claim. The claimed attempt is the caller's value and the check must
+// compare it with the run's running attempt, never fill it in from the run (cinatra#3745).
+describe("verifyRunExecutedSource: the claimed attempt is the run's running attempt", () => {
+  const runsUnder = (attempt: string) => {
+    h.row = { run: { id: "run", orgId: "org", status: "running", executionAttemptId: attempt, a2aContextId: "ctx" },
+      binding: { runId: "run", orgId: "org", executionAttemptId: attempt, policy } };
+  };
+  const outcome = (attestation: unknown) =>
+    verifyRunExecutedSource("run", "org", attestation as never).then(() => "served", (error: { message?: string }) => error.message);
+
+  it("refuses a claim of an earlier attempt after the run moved to a newer one and carried its binding forward", async () => {
+    runsUnder("attempt-2");
+    expect(claim().executionAttemptId).toBe("attempt");
+    expect(await outcome(claim())).toBe("step_tool_run_source_inactive");
+  });
+
+  it("refuses a claim that names no attempt", async () => {
+    const unnamed: Record<string, unknown> = { ...claim() };
+    delete unnamed.executionAttemptId;
+    expect(await outcome(unnamed)).toBe("step_tool_run_source_inactive");
+  });
+
+  it("proves a claim of the attempt the run runs under after the move", async () => {
+    runsUnder("attempt-2");
+    const claimed = { ...claim(), executionAttemptId: "attempt-2" };
+    await expect(verifyRunExecutedSource("run", "org", claimed)).resolves.toEqual(claimed);
   });
 });

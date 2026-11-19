@@ -2,9 +2,10 @@
  * cinatra#3745 — CENSUS: every direct first-task send to WayFlow binds the
  * executed source first.
  *
- * A later part of the stack checks a run's callbacks against the source bound
- * to the run. A first task sent without that binding would leave them nothing
- * to be checked against, so each first-task send selects the loader's
+ * The model bridge and the passthrough road check a run's source-bound callbacks
+ * against the source bound to the run, and refuse them without a binding. A first
+ * task sent without that binding would have every such callback refused, so each
+ * first-task send selects the loader's
  * source (`selectWayflowRunStepToolPolicy`) and binds it to the run's attempt
  * (`bindRunStepToolPolicy`) before its `sendTask`.
  *
@@ -87,6 +88,22 @@ describe("T-P1a-census: every direct first-task send to WayFlow binds the execut
       expect(bind, "the send's function awaits the bind").toBeGreaterThan(select);
       // Nothing between the bind and the send skips the bind: no early send.
       expect(prefix.slice(bind).match(SITE)).toBeNull();
+    });
+  }
+
+  // cinatra#3745 pre-1 finding 1: the runtime signs the attempt its task's message names,
+  // so a first task names, in its message metadata, the attempt it just bound.
+  for (const file of FIRST_TASK_SENDS) {
+    it(`${file}: names the attempt it bound in the message metadata it sends`, () => {
+      const text = read(file);
+      const [send] = sends(text);
+      const prefix = functionPrefix(text, send!);
+      const bind = prefix.lastIndexOf("await bindRunStepToolPolicy(");
+      const named = /\[CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY\]: (\w+)\.executionAttemptId/.exec(prefix.slice(bind));
+      expect(named, "the metadata names the attempt after the bind").not.toBeNull();
+      const bindCall = prefix.slice(bind, prefix.indexOf(");", bind));
+      expect(bindCall).toMatch(new RegExp(`executionAttemptId: ${named![1]}\\.executionAttemptId`));
+      expect(code(text).slice(send!, send! + 600)).toMatch(/metadata: dispatchMetadata/);
     });
   }
 
