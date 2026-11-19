@@ -92,7 +92,7 @@ import { agentRuns, agentTemplates, artifactReviewGates, lifecycleRepair } from 
 import { advanceAgentRun, clearRunLifecycleMomentOrThrow, launchAgentRun } from "./lifecycle-coordinator";
 import { carryDeclaredReviewDecision, markRepairDispatched } from "./lifecycle-repair-store";
 import { RunTransitionError, TERMINAL_RUN_STATUSES, type AgentRunStatus } from "./run-status";
-import { transitionRunStatus } from "./store";
+import { stopRunRespectingPauseClaim } from "./run-resume-under-claim";
 
 import type { OboCeilingChain } from "@cinatra-ai/mcp-server/obo-ceiling";
 
@@ -779,35 +779,42 @@ async function escalateRepairBeforeRunRead(
   return escalateRepair(row.id, reason);
 }
 
-const REPAIR_RUN_STOP_ATTEMPTS = 3;
-
 /**
- * Stop the repair run with this id when it exists and is not terminal: the
- * same `-> stopped` compare-and-set `agent_run_stop` makes, under the system
- * dispatch authority this drain mints (its `run.complete` covers a terminal
- * edge), then the strict moment clear (as `stopRunAtEndedPause`). A lost
- * compare-and-set reads the run again and tries from its live status, at most
- * 3 attempts; any other failure throws.
+ * Stop the repair run with this id when it exists and is not terminal, through
+ * `agent_run_stop`'s own compare-and-set (`stopRunRespectingPauseClaim`, the
+ * writer's guarded caller), under the system dispatch authority this drain
+ * mints (its `run.complete` covers a terminal edge), then the strict moment
+ * clear (as `stopRunAtEndedPause`). A lost compare-and-set reads the run again
+ * and tries from its live status, at most 3 attempts. A run that is gone or
+ * terminal on a read needs no stop; every other run left unstopped throws, as
+ * does any other failure.
  */
 async function stopExistingRepairRun(runId: string, orgId: string): Promise<void> {
   const authority = mintLifecycleRepairDispatchAuthority(orgId);
-  for (let attempt = 0; attempt < REPAIR_RUN_STOP_ATTEMPTS; attempt += 1) {
+  let gone = false;
+  const readRun = async () => {
     const [run] = await db
       .select({ status: agentRuns.status })
       .from(agentRuns)
       .where(and(eq(agentRuns.id, runId), eq(agentRuns.orgId, orgId)))
       .limit(1);
-    if (!run || TERMINAL_RUN_STATUSES.has(run.status as AgentRunStatus)) return;
-    try {
-      await transitionRunStatus(runId, run.status as AgentRunStatus, "stopped", undefined, authority);
-    } catch (err) {
-      if (err instanceof RunTransitionError && err.code === "stale_from_status") continue;
-      throw err;
-    }
+    gone = !run;
+    return run;
+  };
+  const run = await readRun();
+  if (!run || TERMINAL_RUN_STATUSES.has(run.status as AgentRunStatus)) return;
+  const notStopped = await stopRunRespectingPauseClaim({
+    runId,
+    fromStatus: run.status as AgentRunStatus,
+    authority,
+    readRun,
+  });
+  if (notStopped === null) {
     await clearRunLifecycleMomentOrThrow(runId, authority);
     return;
   }
-  throw new Error(`the repair run ${runId} kept changing status and was not stopped`);
+  if (gone || !("error" in notStopped)) return;
+  throw new Error(`the repair run ${runId} was not stopped: ${String(notStopped.error)}`);
 }
 
 /** CAS a `requested` repair to `escalated`, recording WHY on `change_summary`

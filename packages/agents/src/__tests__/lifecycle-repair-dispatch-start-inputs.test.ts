@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PgDialect } from "drizzle-orm/pg-core";
+import type { AgentRunStatus } from "../run-status";
 
 // Only external persistence, queue and identity-reading ports are replaced.
 // The real dispatcher, coordinator, system authority mint, ActorContext
@@ -140,7 +141,7 @@ vi.mock("../store", () => ({
     if (ports.raceTo) { ports.run.status = ports.raceTo; ports.raceTo = null; }
     if (ports.run.status !== from) {
       const { RunTransitionError } = await import("../run-status");
-      throw new RunTransitionError({ code: "stale_from_status", runId, from, to });
+      throw new RunTransitionError({ code: "stale_from_status", runId, from: from as AgentRunStatus, to: to as AgentRunStatus });
     }
     ports.run.status = to;
   },
@@ -571,6 +572,7 @@ describe("input data cannot become repair authorization", () => {
 
   it("two drains on one Regenerate: a drain that selected the repair before the other drain marked it dispatched reads it again under the claim and leaves it alone", async () => {
     await firstPassCreatesTheRunButNoJob();
+    ports.claimEvents = []; // the first pass's own claim and release
     arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG); ports.role = undefined;
     ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
     ports.reads[3] = [{ status: "queued" }]; // what a drain acting without the claim would read and stop
