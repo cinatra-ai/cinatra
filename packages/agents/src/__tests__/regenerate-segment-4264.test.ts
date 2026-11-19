@@ -873,8 +873,11 @@ describe("a blank non-NULL intent is refused, never run as an ordinary repair (r
 
   it("the dispatch drain plans every non-NULL intent, blank included", () => {
     const source = readFileSync(path.resolve(__dirname, "../lifecycle-repair-dispatch-store.ts"), "utf8");
-    const gate = source.indexOf("if (hasRegenerateIntent(row.regenerateNodeId)) {");
-    expect(gate).toBeGreaterThan(0);
+    // The deterministic-run read comes first; only a repair with no run is planned.
+    const runRead = source.indexOf("const [already] = await db");
+    const gate = source.indexOf("if (!already && hasRegenerateIntent(row.regenerateNodeId)) {");
+    expect(runRead).toBeGreaterThan(0);
+    expect(gate).toBeGreaterThan(runRead);
     expect(source.indexOf("await planSegmentDispatch(", gate)).toBeGreaterThan(gate);
     expect(source).not.toContain("if (row.regenerateNodeId) {");
   });

@@ -213,46 +213,45 @@ describe("cinatra#3080 — Regenerate needs the producing step's declared Note i
     expect(ports.reads).toEqual([]);
   });
 
-  it("2. a regenerate-only declaration for the verified filing node passes the declaration, and is REFUSED because no step road dispatches it: nothing written", async () => {
+  it("2. a regenerate-only declaration for the verified filing node passes the declaration and, with the step road present, goes on to record the Regenerate", async () => {
     ports.reads[1] = [{ lifecycleConfig: await compiledLifecycleText({ regenerate: [REGENERATE_ENTRY] }) }];
     // The base type read (none), then the ledger read of the filing node.
     ports.reads.splice(2, 0, [], filedBy(FILING_NODE));
-    const result = await press("regenerate");
+    // After the gate-state read, the canonical operation derives the lineage
+    // from the decided gate's own row (a fresh lineage for this task id).
+    ports.reads.push([{ id: "gate-3080-mf2", runId: RUN, reviewTaskId: TASK, orgId: "org-3080-mf2" }]);
+    await press("regenerate");
 
-    // THE STANDING REVIEW OF UNIT 4571-std-1117: a Regenerate recorded here was
-    // never dispatched (the drain does not run one), so the gate settled with no
-    // repair and no successor review. It is refused instead, with the step
-    // road's reason, not the missing-declaration one.
-    const { REGENERATE_NO_STEP_ROAD, REGENERATE_NO_NOTE_INPUT } = await import("@/lib/artifacts/review-surface-model");
-    expect(result).toEqual({ ok: false, code: "regenerate-unavailable", error: REGENERATE_NO_STEP_ROAD });
-    expect(REGENERATE_NO_STEP_ROAD).not.toBe(REGENERATE_NO_NOTE_INPUT);
-    expect(ports.transaction).not.toHaveBeenCalled();
-    expect(ports.write).not.toHaveBeenCalled();
+    // THE STANDING REVIEW OF UNIT 4571-std-1117 refused this press while no
+    // step road dispatched a Regenerate (REGENERATE_NO_STEP_ROAD). The step road
+    // of cinatra#4264 is now the drain's segment plan, so the declared
+    // Regenerate reaches the write, like the typed road below.
+    expect(ports.transaction).toHaveBeenCalledTimes(1);
     expect(ports.reads).toEqual([]);
   });
 
-  it("no step road dispatches a Regenerate at this head (the real answer, not replaced)", async () => {
+  it("the step road dispatches a Regenerate at this head (the real answer, not replaced)", async () => {
     const { regenerateStepRoadDispatches } = await import("../regenerate-step-road");
-    expect(regenerateStepRoadDispatches()).toBe(false);
+    expect(regenerateStepRoadDispatches()).toBe(true);
   });
 
-  it("3. when both are declared and disagree, the regenerate entry decides: its node passes to the step-road refusal, and an unproven filing node refuses as undeclared", async () => {
+  it("3. when both are declared and disagree, the regenerate entry decides: its node goes on to the write, and an unproven filing node refuses as undeclared", async () => {
     const both = await compiledLifecycleText({
       repairCapable: true,
       repairFindingsInput: { input: "instructions" },
       regenerate: [REGENERATE_ENTRY],
     });
-    const { REGENERATE_NO_STEP_ROAD, REGENERATE_NO_NOTE_INPUT } = await import("@/lib/artifacts/review-surface-model");
+    const { REGENERATE_NO_NOTE_INPUT } = await import("@/lib/artifacts/review-surface-model");
     // (a) The verified filing node has the entry: admitted under THAT entry, so
-    // the root findings input does not turn it into an ordinary repair. No step
-    // road: refused, nothing written.
+    // the root findings input does not turn it into an ordinary repair. The
+    // step road is present: it goes on to the write.
     ports.reads[1] = [{ lifecycleConfig: both }];
     ports.reads.splice(2, 0, filedBy(FILING_NODE));
-    const admitted = await press("regenerate");
-    expect(admitted).toEqual({ ok: false, code: "regenerate-unavailable", error: REGENERATE_NO_STEP_ROAD });
-    expect(ports.transaction).not.toHaveBeenCalled();
-    expect(ports.write).not.toHaveBeenCalled();
+    ports.reads.push([{ id: "gate-3080-mf2", runId: RUN, reviewTaskId: TASK, orgId: "org-3080-mf2" }]);
+    await press("regenerate");
+    expect(ports.transaction).toHaveBeenCalledTimes(1);
     expect(ports.reads).toEqual([]);
+    ports.transaction.mockClear();
 
     // (b) Another node filed the revision: the root findings input does not
     // stand in for the missing entry. Refused as undeclared, nothing written.

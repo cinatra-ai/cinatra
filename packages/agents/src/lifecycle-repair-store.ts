@@ -518,10 +518,11 @@ export async function recordChangesRequested(
   }
   // A REGENERATE THAT NOTHING CAN DISPATCH IS NOT RECORDED (cinatra#3080 on
   // cinatra#4264). The step names its Note input, but only the step road reruns
-  // that one step with the Note there, and the ordinary drain never runs a
-  // Regenerate (it escalates one). Recording it would settle the gate with no
-  // repair dispatched and no successor review ever opened. So, while the step
-  // road is absent (`regenerateStepRoadDispatches`), it is refused here, before
+  // that one step with the Note there, and the drain's ordinary road never runs
+  // a Regenerate (with the step road off, the drain escalates one). Recording
+  // it would then settle the gate with no repair dispatched and no successor
+  // review ever opened. So, while the step road is off
+  // (`regenerateStepRoadDispatches`), it is refused here, before
   // the lineage reads and the transaction: nothing is written and the gate is
   // left pending with the plain reason on screen.
   if (input.origin === "regenerate" && !regenerateStepRoadDispatches()) {
