@@ -117,20 +117,32 @@ describe('clause: "icon-led"', () => {
 });
 
 describe('clause: "destructive = red"', () => {
-  it("colours the destructive alert's type, icon and stroke from the destructive token", () => {
+  it("keeps ordinary body ink while the destructive icon and stroke retain their status role", () => {
     const { alert } = renderAlert("destructive");
     const cls = alert.className;
-    expect(cls).toContain("text-destructive");
+    // The status belongs to the icon, ground and stroke; the worked anatomy
+    // keeps the title in ordinary ink and the description muted.
+    expect(cls.split(/\s+/)).toContain("text-foreground");
+    expect(cls.split(/\s+/)).not.toContain("text-destructive");
     expect(cls).toContain("[&>svg]:text-destructive");
     expect(cls).toContain("border-destructive/30");
   });
 });
 
 describe('clause: "the destructive variant (red) for terminal failures, warning (mustard) for cautions, info (indigo) for neutral notices."', () => {
-  it("names all three roles the sentence asks for, each on its own colour", () => {
-    for (const variant of ["destructive", "warning", "info"] as const) {
+  it("keeps the title and description in their ordinary roles across all status variants", () => {
+    for (const variant of ["destructive", "warning", "success", "info"] as const) {
       const { alert } = renderAlert(variant);
-      expect(alert.className).toContain(`text-${variant}`);
+      const title = alert.querySelector('[data-slot="alert-title"]') as HTMLElement;
+      const description = alert.querySelector('[data-slot="alert-description"]') as HTMLElement;
+      expect(title.textContent).toBe("Approval expired.");
+      expect(description.textContent).toBe("The hold window closed at 15:30.");
+      expect(alert.className.split(/\s+/)).toContain("text-foreground");
+      expect(description.className.split(/\s+/)).toContain("text-muted-foreground");
+      // No status selector may override the description's ordinary role.
+      expect(alert.className).not.toContain(`*:data-[slot=alert-description]:text-${variant}`);
+      expect(alert.className).toContain(`[&>svg]:text-${variant}`);
+      expect(alert.className).toContain(`border-${variant}/30`);
     }
   });
 
