@@ -833,23 +833,236 @@ def _effective_host_port(url: str) -> Tuple[Optional[str], Optional[int]]:
 # ---------------------------------------------------------------------------
 
 
+# The no-retry stop applies to EVERY call the host compiler reads as a bridge
+# call (cinatra#4220, cinatra#4737): the rule is ``_targets_llm_bridge``, the
+# one rule of ``targetsLlmBridge`` in packages/agents/src/oas-compiler.ts,
+# defined once further down (read at call time). A call to another path, even
+# one whose text contains it (``/api/llm-bridge-shadow``,
+# ``/api/llm-bridge/more``), keeps WayFlow's handling.
+# The bridge bounds the step's code to this length (src/app/api/llm-bridge/
+# route.ts, STEP_FAILURE_CODE_MAX); the loader bounds it again, and bounds a
+# sentence that another answer may still carry.
+_STEP_FAILURE_CODE_MAX = 200
+_STEP_FAILURE_SENTENCE_MAX = 1000
+
+
+class StepDeclaredFailureError(RuntimeError):
+    """A bridge step ended FAILED because its model answered a failure.
+
+    The bridge's answer carries no model text, but the failure sentence is
+    read as if it could: a 422 answer that carries a ``message`` may hold
+    newlines, control characters or copied input. It is kept as DATA
+    (``sentence``, bounded) for whatever hands the step's failure on, and it
+    never enters ``str()`` / ``repr()``: those, and so every log line and
+    traceback that prints this error (``_print_task_exception``), show only the
+    step's error code, JSON-escaped (printable ASCII, no newline), and bounded.
+    """
+
+    def __init__(self, step_error_code: Optional[str], sentence: str) -> None:
+        self.step_error_code = (
+            step_error_code[:_STEP_FAILURE_CODE_MAX] if step_error_code else None
+        )
+        self.sentence = sentence[:_STEP_FAILURE_SENTENCE_MAX]
+        super().__init__(self._log_text())
+
+    def _log_text(self) -> str:
+        if self.step_error_code:
+            # JSON escaping leaves DEL (0x7f) as is; escape it too.
+            shown = _json_escape(self.step_error_code).replace("\x7f", "\\u007f")
+            return f"The step answered the error code {shown}."
+        return "The step answered a failure."
+
+    def __str__(self) -> str:
+        return self._log_text()
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}({self._log_text()!r})"
+
+
+class _StepDeclaredFailureAnswer(Exception):
+    """The bridge answered 422 STEP_DECLARED_FAILURE: the step ended failed.
+
+    Private: raised inside the httpx client and turned into
+    ``StepDeclaredFailureError`` at once. Its text is the code only too.
+    """
+
+    def __init__(self, step_error_code: Optional[str], sentence: str) -> None:
+        self.failure = StepDeclaredFailureError(step_error_code, sentence)
+        super().__init__(str(self.failure))
+
+
+def _step_declared_failure_answer(
+    response: Any,
+) -> Optional[Tuple[Optional[str], str]]:
+    """(step error code, failure sentence) of a 422 STEP_DECLARED_FAILURE answer.
+
+    None for every other answer.
+    """
+    if getattr(response, "status_code", None) != 422:
+        return None
+    try:
+        body = response.json()
+    except Exception:  # noqa: BLE001 — any decode/parse error → not that answer
+        return None
+    if not isinstance(body, dict) or body.get("code") != "STEP_DECLARED_FAILURE":
+        return None
+    step_code = body.get("stepErrorCode")
+    code = (
+        step_code.strip()[:_STEP_FAILURE_CODE_MAX]
+        if isinstance(step_code, str) and step_code.strip()
+        else None
+    )
+    message = body.get("message")
+    if isinstance(message, str) and message.strip():
+        return (code, message.strip()[:_STEP_FAILURE_SENTENCE_MAX])
+    if code is not None:
+        return (code, f"The step answered the error code {code}.")
+    return (None, "The step answered a failure.")
+
+
+_STEP_DECLARED_FAILURE_AUTH_CLASS: Any = None
+
+
+def _one_request(request: Any) -> Any:
+    """The auth flow of a request without an auth of its own: send it once."""
+    yield request
+
+
+async def _one_request_async(request: Any) -> Any:
+    """``_one_request`` for the async client."""
+    yield request
+
+
+def _step_declared_failure_auth(own_auth: Any = None) -> Any:
+    """An httpx auth hook that stops the step at a STEP_DECLARED_FAILURE answer.
+
+    httpx calls the hook with each response inside ``client.request``, so it
+    raises before WayFlow's retry loop looks at the status, and before WayFlow
+    reads ``ignore_bad_http_requests``. ``own_auth`` is the request's own auth
+    (None when it has none), in any form httpx takes (an ``httpx.Auth``, a
+    (user, password) pair, or a callable): the hook WRAPS it, so the request
+    still authenticates as its step declared and the declared failure still
+    stops the step. An own auth of another kind refuses the call before
+    anything is sent. The class is built on first use: httpx comes with
+    wayflowcore, which is imported lazily too.
+    """
+    global _STEP_DECLARED_FAILURE_AUTH_CLASS
+    if _STEP_DECLARED_FAILURE_AUTH_CLASS is None:
+        import httpx
+
+        def _stop_at(response: Any) -> None:
+            answer = _step_declared_failure_answer(response)
+            if answer is not None:
+                raise _StepDeclaredFailureAnswer(*answer)
+
+        class _CallableAuth(httpx.Auth):
+            # httpx's own reading of a callable auth: it rewrites the request.
+            def __init__(self, func: Any) -> None:
+                self._func = func
+
+            def auth_flow(self, request: Any) -> Any:
+                yield self._func(request)
+
+        class _StepDeclaredFailureStop(httpx.Auth):
+            def __init__(self, own: Any) -> None:
+                if own is None or own is getattr(httpx, "USE_CLIENT_DEFAULT", None):
+                    own = None
+                elif isinstance(own, httpx.Auth):
+                    pass
+                elif isinstance(own, tuple) and len(own) == 2:
+                    own = httpx.BasicAuth(*own)
+                elif callable(own):
+                    own = _CallableAuth(own)
+                else:
+                    raise RuntimeError(
+                        "A bridge call carries an auth of a kind httpx does not "
+                        "take; the call is refused before it is sent."
+                    )
+                self._own = own
+
+            def sync_auth_flow(self, request: Any) -> Any:
+                flow = (
+                    _one_request(request)
+                    if self._own is None
+                    else self._own.sync_auth_flow(request)
+                )
+                try:
+                    request = next(flow)
+                    while True:
+                        response = yield request
+                        if response.status_code == 422:
+                            response.read()
+                            _stop_at(response)
+                        try:
+                            request = flow.send(response)
+                        except StopIteration:
+                            return
+                finally:
+                    flow.close()
+
+            async def async_auth_flow(self, request: Any) -> Any:
+                flow = (
+                    _one_request_async(request)
+                    if self._own is None
+                    else self._own.async_auth_flow(request)
+                )
+                try:
+                    request = await flow.__anext__()
+                    while True:
+                        response = yield request
+                        if response.status_code == 422:
+                            await response.aread()
+                            _stop_at(response)
+                        try:
+                            request = await flow.asend(response)
+                        except StopAsyncIteration:
+                            return
+                finally:
+                    await flow.aclose()
+
+        _STEP_DECLARED_FAILURE_AUTH_CLASS = _StepDeclaredFailureStop
+    return _STEP_DECLARED_FAILURE_AUTH_CLASS(own_auth)
+
+
+def _install_step_declared_failure_stop(request: Dict[str, Any]) -> None:
+    """Put the declared-failure stop on a bridge call (cinatra#4220, #4737).
+
+    EVERY call the host compiler reads as a bridge call gets it, whatever its
+    host: the rule is ``_targets_llm_bridge``, the one rule of
+    ``targetsLlmBridge`` in packages/agents/src/oas-compiler.ts. Nothing on
+    the step bypasses it: an auth of the request's own stays inside the hook
+    (``_step_declared_failure_auth``), and a step that takes bad answers
+    itself (``ignore_bad_http_requests``) still stops, because the hook raises
+    inside the client. The hook adds nothing to the request and reads only a
+    422 answer. Every other call is left as it is.
+    """
+    if _targets_llm_bridge(str(request.get("url", ""))):
+        request["auth"] = _step_declared_failure_auth(request.get("auth"))
+
+
 def _patch_api_call_step_bridge_token() -> None:
     """Inject X-Cinatra-Bridge-Token on every outbound ApiNode HTTP call.
 
     Wraps ApiCallStep._execute_request to add the header before delegating.
     The token is read once at patch time (env vars don't change at runtime).
-    No-op when the env var is unset; logs a one-line warning.
+
+    The token decides only the auth headers the wrapper adds. The wrapper is
+    installed whether or not the token is set: it puts the declared-failure stop
+    (cinatra#4220, #4737) on every bridge call and keeps its other behaviour (the
+    default timeout, the capability message) either way. When the env var is
+    unset the wrapper adds no X-Cinatra-* header (as before) and the patch logs a
+    one-line warning.
     """
-    token = os.environ.get("CINATRA_BRIDGE_TOKEN")
-    if not token:
+    token: Optional[str] = os.environ.get("CINATRA_BRIDGE_TOKEN") or None
+    if token is None:
         print(
             "[agent_loader] CINATRA_BRIDGE_TOKEN unset — X-Cinatra-Bridge-Token "
             "header NOT injected on ApiCallStep calls. Cinatra rejects requests "
             "with HTTP 403 when the token is missing or wrong "
             "(no BYPASS / XFF fallback). Set CINATRA_BRIDGE_TOKEN in this "
-            "container's env to restore connectivity."
+            "container's env to restore connectivity. The declared-failure stop "
+            "is installed all the same."
         )
-        return
 
     # #907: dedicated per-node context-callback signing key. DISTINCT from the
     # bridge token so a caller holding only the run's shared bridge auth cannot
@@ -858,7 +1071,7 @@ def _patch_api_call_step_bridge_token() -> None:
     # path (context resolution for composed children stops working until it is
     # provisioned), so this is loud-by-consequence, not silent.
     attest_key = os.environ.get("CINATRA_CONTEXT_ATTEST_KEY")
-    if not attest_key:
+    if token is not None and not attest_key:
         print(
             "[agent_loader] CINATRA_CONTEXT_ATTEST_KEY unset — per-node context "
             "attestation NOT injected. Composed-child context resolution "
@@ -875,7 +1088,7 @@ def _patch_api_call_step_bridge_token() -> None:
         "CINATRA_BASE_URL", "http://host.docker.internal:3000"
     )
     proxy_host, proxy_port = _effective_host_port(base_url)
-    if proxy_host is None:
+    if token is not None and proxy_host is None:
         print(
             f"[agent_loader] WARNING: CINATRA_BASE_URL is unparseable ({base_url!r}) "
             "— host-anchored ApiNode credential/attestation injection will match NO "
@@ -888,10 +1101,16 @@ def _patch_api_call_step_bridge_token() -> None:
         print(f"[agent_loader] WARNING: bridge token patch import failed: {exc}")
         return
 
-    if getattr(ApiCallStep._execute_request, "__cinatra_patched__", False):
-        return  # idempotent
-
-    _original = ApiCallStep._execute_request
+    _current = ApiCallStep._execute_request
+    if getattr(_current, "__cinatra_patched__", False):
+        # Idempotent. The one exception: a wrapper made while the token was
+        # unset adds no header, so the wrapper of a later call with the token
+        # set replaces it (over the same original; nothing is chained).
+        if token is None or getattr(_current, "__cinatra_bridge_token_set__", True):
+            return
+        _original = _current.__wrapped__  # type: ignore[attr-defined]
+    else:
+        _original = _current
 
     async def _patched(self: Any, request: Dict[str, Any]) -> Any:
         # request["headers"] may be absent when the ApiNode declares no
@@ -906,8 +1125,10 @@ def _patch_api_call_step_bridge_token() -> None:
         # internal → nothing injected (fail closed). Mirrors the sibling
         # httpx.AsyncClient.send patch's host gate.
         _req_host, _req_port = _effective_host_port(_ctx_url)
+        # An unset token adds no header at all (token is None: never internal).
         _is_internal = (
-            proxy_host is not None
+            token is not None
+            and proxy_host is not None
             and _req_host is not None
             and _req_host == proxy_host
             and _req_port == proxy_port
@@ -1066,7 +1287,33 @@ def _patch_api_call_step_bridge_token() -> None:
         # declare it explicitly on the ApiNode in the OAS — `setdefault`
         # honors any caller-declared timeout.
         request.setdefault("timeout", _DEFAULT_APINODE_TIMEOUT_SECONDS)
-        resp = await _original(self, request)
+
+        # A model step that answered a failure (cinatra#4220).
+        #
+        # When a bridge step's model answers a non-empty `error.code` that the
+        # step does not list in `completed_error_codes`, /api/llm-bridge returns
+        # HTTP 422 with body {error, code:"STEP_DECLARED_FAILURE",
+        # stepErrorCode}: a fixed sentence and the step's escaped code, no model
+        # text. That answer is final: asking the model again repeats a model
+        # call that already ran (and may already have acted). But `_original`'s
+        # legacy loop sends every non-2xx answer up to 3 times, and a retry
+        # policy retries by status too. Stop it at the FIRST such answer: an
+        # httpx auth hook (it sees each response inside the client, before the
+        # loop decides to retry) raises a private exception, which is not an
+        # httpx.TransportError, so it leaves the loop at once; it is turned
+        # into a StepDeclaredFailureError (a RuntimeError), so the step ends
+        # failed. Its str()/repr() — the run's error text and what the task
+        # runner's logs print — name only the escaped error code.
+        #
+        # Scoped by the compiler's own rule: EVERY bridge call, and nothing
+        # on the step bypasses it (_install_step_declared_failure_stop). Only
+        # that exact status and code stop; every other answer keeps WayFlow's
+        # handling as before.
+        _install_step_declared_failure_stop(request)
+        try:
+            resp = await _original(self, request)
+        except _StepDeclaredFailureAnswer as stop:
+            raise stop.failure from None
 
         # Actionable capability errors (engineering#417).
         #
@@ -1113,11 +1360,16 @@ def _patch_api_call_step_bridge_token() -> None:
         return resp
 
     _patched.__cinatra_patched__ = True  # type: ignore[attr-defined]
+    _patched.__cinatra_bridge_token_set__ = token is not None  # type: ignore[attr-defined]
     _patched.__wrapped__ = _original  # type: ignore[attr-defined]
     ApiCallStep._execute_request = _patched  # type: ignore[method-assign]
     print(
         "[agent_loader] ApiCallStep._execute_request patched "
-        "(X-Cinatra-Bridge-Token injection enabled)"
+        + (
+            "(X-Cinatra-Bridge-Token injection enabled)"
+            if token is not None
+            else "(declared-failure stop only: no bridge token to inject)"
+        )
     )
 
 
@@ -1300,6 +1552,20 @@ def _patch_a2a_agent_no_shared_conversation() -> None:
         "[agent_loader] A2AAgent.start_conversation patched "
         "(no shared conversation — init messages skipped)"
     )
+
+
+def _print_task_exception(label: str, task_id: Any, exc: BaseException) -> None:
+    """Log a task's exception and its traceback (the task runner's two sites).
+
+    Prints ``str(exc)`` and the formatted traceback, as before. The traceback
+    shows each exception through its ``str()``, so a StepDeclaredFailureError
+    (cinatra#4220) logs only its escaped error code: the model's failure
+    sentence, with any newline or control character in it, reaches no log.
+    """
+    import traceback as _tb
+
+    print(f"[agent_loader] _patched_run_task {label} task={task_id}: {exc}")
+    print("".join(_tb.format_exception(type(exc), exc, exc.__traceback__)))
 
 
 def _patch_wayflow_flow_skip_pre_execute() -> None:
@@ -1568,9 +1834,7 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
                     new_wayflow_messages
                 )
             except Exception as _exc:
-                import traceback as _tb
-                print(f"[agent_loader] _patched_run_task EXCEPTION task={task['id']}: {_exc}")
-                print(_tb.format_exc())
+                _print_task_exception("EXCEPTION", task["id"], _exc)
                 await self.storage.update_task(task["id"], state="failed")
                 raise
             else:
@@ -1685,12 +1949,7 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
             # `notifier.wait_for(task_id, timeout=86400)` never wakes up.
             # Mark the task failed defensively, then re-raise. The outer
             # `finally` block guarantees `notify` runs on any exit path.
-            import traceback as _tb_outer
-            print(
-                f"[agent_loader] _patched_run_task OUTER EXCEPTION "
-                f"task={_task_id_for_notify}: {_outer_exc}"
-            )
-            print(_tb_outer.format_exc())
+            _print_task_exception("OUTER EXCEPTION", _task_id_for_notify, _outer_exc)
             try:
                 await self.storage.update_task(_task_id_for_notify, state="failed")
             except Exception as _store_exc:
@@ -3828,6 +4087,8 @@ def _read_bridge_token() -> Optional[str]:
 #: The host route the derivation applies to. Mirrors `targetsLlmBridge` in
 #: `packages/agents/src/oas-compiler.ts`: the bare path, the authored
 #: `{{CINATRA_BASE_URL}}` template form, or any absolute URL ending in it.
+#: The declared-failure stop reads the same rule at call time
+#: (`_install_step_declared_failure_stop`).
 _LLM_BRIDGE_PATH = "/api/llm-bridge"
 
 

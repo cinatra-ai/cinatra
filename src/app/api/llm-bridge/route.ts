@@ -195,6 +195,12 @@ const RequestSchema = z.object({
   toolbox_ids: z.array(z.string()).optional(),
   // Structured output schema — passed through to the orchestration layer.
   output_schema: z.record(z.string(), z.unknown()).optional(),
+  // The error codes that still end this step as COMPLETED. A step answers a
+  // failure with a non-empty top-level `error.code`; the bridge ends the step
+  // failed on such an answer (422 STEP_DECLARED_FAILURE, see
+  // readDeclaredStepFailure) unless the step's own data lists the code here —
+  // e.g. a write step whose update was saved and only its re-read failed.
+  completed_error_codes: z.array(z.string()).max(50).optional(),
   // Explicit SKILL.md path on the host filesystem. Must be under an allowed skill root
   // and end with SKILL.md (path traversal guard). When absent, the route
   // auto-discovers from agents/<agent_id>/skills/<agent_id>/SKILL.md.
@@ -785,6 +791,144 @@ export function buildAgentRunInjectionPorts(
   };
 }
 
+// The bridge's answer to a step that answered a failure. WayFlow's ApiCallStep
+// fails a step on any non-2xx answer; the runtime's loader reads this code and
+// fails the step at once, without the retries it gives other non-2xx answers
+// (docker/wayflow/agent_loader.py, _patch_api_call_step_bridge_token).
+const STEP_DECLARED_FAILURE = "STEP_DECLARED_FAILURE";
+// The step's code is cut at this many Unicode code points (the loader's count).
+const STEP_FAILURE_CODE_MAX = 200;
+// The caller's agent id is only a label in the log line, cut at this length
+// (in code points).
+const STEP_FAILURE_LOG_LABEL_MAX = 120;
+
+/**
+ * `value` cut after `max` Unicode code points. The runtime's loader counts code
+ * points (python slices a string by code point), but `String.prototype.slice`
+ * counts UTF-16 code units, so a cut that falls inside a character outside the
+ * BMP would leave a lone high surrogate. A surrogate pair counts as ONE code
+ * point and a lone surrogate counts as one, as python counts the same text once
+ * it is decoded from JSON.
+ */
+function cutCodePoints(value: string, max: number): string {
+  let end = 0;
+  for (let counted = 0; counted < max && end < value.length; counted += 1) {
+    end += (value.codePointAt(end) ?? 0) > 0xffff ? 2 : 1;
+  }
+  return value.slice(0, end);
+}
+
+/**
+ * A caller-given value as it may stand in a log line: cut at `max` code points
+ * and JSON-escaped, so it stays ONE bounded quoted token on ONE line and can
+ * neither flood the log nor forge another entry. JSON.stringify escapes the
+ * quote, the backslash, every control character below U+0020 and a lone
+ * surrogate; the DEL and C1 controls and the separators U+2028 and U+2029,
+ * which it leaves raw, are escaped here as well.
+ */
+function logToken(value: string, max: number): string {
+  return JSON.stringify(cutCodePoints(value, max)).replace(
+    /[\u007f-\u009f\u2028\u2029]/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+/**
+ * A step's answer that ends the step FAILED, or null.
+ *
+ * A bridge step answers a failure in its own declared `error` output: an object
+ * whose `code` is a non-empty string. That answer ends the step failed unless
+ * the step's data lists the code in `completed_error_codes`. A successful answer
+ * carries no `error`, a null one, or one with an empty `code` (a strict
+ * structured-output schema makes every declared output appear, so a success
+ * answers `error: { code: "", message: "" }`). Only the TOP-LEVEL `error` of an
+ * object answer is read: an `error` nested in another output, and every answer
+ * that is not a JSON object, are passed on unchanged as before. Only the code is
+ * read, cut at STEP_FAILURE_CODE_MAX code points: the model's `message` is never
+ * read.
+ */
+function readDeclaredStepFailure(
+  parsed: unknown,
+  completedCodes: readonly string[] | undefined,
+): { code: string } | null {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const error = (parsed as { error?: unknown }).error;
+  if (!error || typeof error !== "object" || Array.isArray(error)) return null;
+  const { code } = error as { code?: unknown };
+  if (typeof code !== "string" || code.trim() === "") return null;
+  if (completedCodes?.includes(code)) return null;
+  return { code: cutCodePoints(code, STEP_FAILURE_CODE_MAX) };
+}
+
+/**
+ * The step's code as the 422 body carries it: JSON-escaped without the quotes,
+ * and every character outside printable ASCII written as a \uXXXX escape, so
+ * it is ONE line of printable ASCII. This is the escape the runtime's loader
+ * gives the code (docker/wayflow/agent_loader.py, StepDeclaredFailureError:
+ * json.dumps, then DEL), for every string: a character outside the BMP is
+ * written as the escapes of its surrogate pair, a lone surrogate as its own
+ * escape, and U+2028 and U+2029 as escapes. The caller cuts the code first, by
+ * code points, as the loader does (cutCodePoints).
+ */
+function stepCodeText(code: string): string {
+  return JSON.stringify(code)
+    .slice(1, -1)
+    .replace(/[^\x20-\x7e]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
+/**
+ * The body of the 422 STEP_DECLARED_FAILURE answer, members in this order. It
+ * holds NO model text: a fixed sentence, the fixed code and the step's own code
+ * (cut and escaped by stepCodeText). The model's message is never part of it.
+ */
+type DeclaredStepFailureBody = {
+  error: string;
+  code: string;
+  stepErrorCode: string;
+};
+
+/**
+ * The ONE outcome rule for a model's answer, read at EVERY branch of this route
+ * that calls a model (the text path and both media-input paths): the body of
+ * the 422 STEP_DECLARED_FAILURE answer when the answer `text` is a JSON object
+ * whose top-level `error` declares a failure the step does not list as
+ * completed (readDeclaredStepFailure), else null and the branch answers as
+ * before. Text that is not JSON (a transcript, prose) is never a declared
+ * failure. The log line names the bounded code and the caller's agent label,
+ * each as one cut, JSON-escaped token (logToken). Neither the log line nor the
+ * body names the model's message.
+ *
+ * The helper hands back a plain body, never a response: each branch returns it
+ * itself as NextResponse.json(body, { status: 422 }), so every answer of this
+ * route is built at the place that returns it.
+ */
+function declaredStepFailureBody(
+  text: string,
+  completedCodes: readonly string[] | undefined,
+  agentLabel: string,
+): DeclaredStepFailureBody | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const declaredFailure = readDeclaredStepFailure(parsed, completedCodes);
+  if (!declaredFailure) return null;
+  console.warn(
+    `[llm-bridge] step answered the error code ` +
+      `${logToken(declaredFailure.code, STEP_FAILURE_CODE_MAX)} ` +
+      `(agent=${logToken(agentLabel, STEP_FAILURE_LOG_LABEL_MAX)}); ` +
+      `its data does not list the code ` +
+      `as completed, so the step ends failed (422 ${STEP_DECLARED_FAILURE}).`,
+  );
+  return {
+    error: "The step answered a failure",
+    code: STEP_DECLARED_FAILURE,
+    stepErrorCode: stepCodeText(declaredFailure.code),
+  };
+}
+
 function toPersonalDelta(
   skill: unknown,
   isDeliverable?: (skillId: string) => boolean,
@@ -1171,7 +1315,14 @@ export async function POST(req: Request): Promise<Response> {
           maxSteps: 1,
         }),
       );
-      return NextResponse.json({ text: result.text ?? "" });
+      const youTubeText = result.text ?? "";
+      const youTubeFailure = declaredStepFailureBody(
+        youTubeText,
+        body.completed_error_codes,
+        body.agent_id ?? "media-transcript-agent",
+      );
+      if (youTubeFailure) return NextResponse.json(youTubeFailure, { status: 422 });
+      return NextResponse.json({ text: youTubeText });
     }
 
     // Non-YouTube file branch — fetch + stream-count + upload + transcribe.
@@ -1293,7 +1444,14 @@ export async function POST(req: Request): Promise<Response> {
           logLabel: body.agent_id ?? "media-transcript-agent",
         }),
       );
-      return NextResponse.json({ text: result.text ?? "" });
+      const fileText = result.text ?? "";
+      const fileFailure = declaredStepFailureBody(
+        fileText,
+        body.completed_error_codes,
+        body.agent_id ?? "media-transcript-agent",
+      );
+      if (fileFailure) return NextResponse.json(fileFailure, { status: 422 });
+      return NextResponse.json({ text: fileText });
     } finally {
       if (adapter.deleteFile) {
         adapter
@@ -2153,11 +2311,18 @@ export async function POST(req: Request): Promise<Response> {
     if (skillSelection) {
       console.warn(
         `[llm-bridge] general-path Anthropic skill rank-and-truncate ` +
-          `(agent=${body.agent_id ?? "wayflow"}): ` +
+          `(agent=${logToken(body.agent_id ?? "wayflow", STEP_FAILURE_LOG_LABEL_MAX)}): ` +
           `dropped=[${skillSelection.droppedSkillIds.join(",")}] — ` +
           `${skillSelection.selectionReason}`,
       );
     }
+
+    const declaredFailure = declaredStepFailureBody(
+      text,
+      body.completed_error_codes,
+      body.agent_id ?? "wayflow",
+    );
+    if (declaredFailure) return NextResponse.json(declaredFailure, { status: 422 });
 
     try {
       const parsed = JSON.parse(text);
