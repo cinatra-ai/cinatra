@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PgDialect } from "drizzle-orm/pg-core";
+import type { AgentRunStatus } from "../run-status";
 
 // Only external persistence, queue and identity-reading ports are replaced.
 // The real dispatcher, coordinator, system authority mint, ActorContext
@@ -15,6 +16,23 @@ const ports = vi.hoisted(() => ({
   role: "member" as "member" | undefined,
   createFailure: null as Error | null,
   queued: vi.fn(),
+  // The one repair run's status, moved only by the transition fake (a
+  // compare-and-set on `from`); null when no case expects a transition.
+  run: null as { status: string } | null,
+  transitions: [] as { runId: string; from: string; to: string; authority: unknown }[],
+  transitionFailure: null as Error | null,
+  raceTo: null as string | null,
+  clears: [] as string[],
+  events: [] as string[],
+  // cinatra#4264 B1b: the repair claims (advisory lock keys) another drain
+  // holds, what the claim fake did, the pooled clients it released, the rows
+  // the last pending read selected, and what a claimed re-read of a repair
+  // finds now (by id; absent = the selected row unchanged).
+  claims: new Set<string>(),
+  claimEvents: [] as string[],
+  clientsReleased: 0,
+  selected: [] as { id: string }[],
+  repairNow: new Map<string, unknown[]>(),
 }));
 vi.mock("server-only", () => ({}));
 // cinatra#4312 — an escalation CASes the repair and, in ONE transaction, carries a
@@ -26,19 +44,51 @@ vi.mock("../lifecycle-repair-store", async (orig) => ({
   carryDeclaredReviewDecision: async () => null,
 }));
 vi.mock("../db", () => ({
+  // The claim of a Regenerate repair: a pooled client's advisory lock. A key in
+  // `ports.claims` is held by another drain.
+  agentBuilderPool: {
+    connect: async () => ({
+      query: async (text: string, params: unknown[]) => {
+        const key = String(params[0]);
+        if (text === "SELECT pg_try_advisory_lock(hashtext($1)) AS locked") {
+          const locked = !ports.claims.has(key);
+          if (locked) ports.claims.add(key);
+          ports.claimEvents.push(locked ? `claim ${key}` : `held elsewhere ${key}`);
+          return { rows: [{ locked }] };
+        }
+        if (text === "SELECT pg_advisory_unlock(hashtext($1))") {
+          ports.claims.delete(key);
+          ports.claimEvents.push(`release ${key}`);
+          return { rows: [{}] };
+        }
+        throw new Error(`Unexpected pooled query: ${text}`);
+      },
+      release: () => { ports.clientsReleased += 1; },
+    }),
+  },
   db: {
     async transaction(this: unknown, fn: (tx: unknown) => Promise<unknown>) { return fn(this); },
     select: () => {
-      const result = ports.reads.shift();
-      if (!result) throw new Error("Unexpected database read");
+      let table: unknown = null;
+      let ordered = false;
       const query = {
-        from: () => query,
+        from: (t: unknown) => { table = t; return query; },
         where: (condition: unknown) => { ports.readConditions.push(condition); return query; },
-        orderBy: () => query,
+        orderBy: () => { ordered = true; return query; },
         limit: async () => {
-          const row = result[0] as { orgId?: string } | undefined;
           const condition = ports.readConditions.at(-1) as Parameters<PgDialect["sqlToQuery"]>[0];
           const params = new PgDialect().sqlToQuery(condition).params;
+          // The claimed re-read of ONE repair (lifecycle_repair, no order): the
+          // selected row, or what `ports.repairNow` says it is now.
+          if (!ordered && (table as Record<symbol, unknown> | null)?.[Symbol.for("drizzle:Name")] === "lifecycle_repair") {
+            const id = ports.selected.map((r) => r.id).find((candidate) => params.includes(candidate));
+            if (!id) throw new Error("Unexpected repair read");
+            return ports.repairNow.get(id) ?? ports.selected.filter((r) => r.id === id);
+          }
+          const result = ports.reads.shift();
+          if (!result) throw new Error("Unexpected database read");
+          if (ordered) ports.selected = result as { id: string }[];
+          const row = result[0] as { orgId?: string } | undefined;
           return row?.orgId && params.includes("repair-org") && row.orgId !== "repair-org" ? [] : result;
         },
       };
@@ -48,6 +98,7 @@ vi.mock("../db", () => ({
       const query = {
         set: (values: Record<string, unknown>) => {
           ports.writes.push({ values });
+          ports.events.push(`write ${String(values.status)}`);
           return query;
         },
         where: (condition: unknown) => {
@@ -75,9 +126,25 @@ vi.mock("../store", () => ({
     return { id: input.id, orgId: input.orgId, runBy: input.runBy, status: input.initialStatus };
   },
   createAgentRunPendingInput: () => { throw new Error("Unexpected pending-input creation"); },
-  readAgentRunById: () => { throw new Error("Unexpected run read-back"); },
+  // Read only by the strict moment clear after a stop: the repair run states no moment.
+  readAgentRunById: async (id: string) => {
+    if (!ports.run) throw new Error("Unexpected run read-back");
+    ports.clears.push(id);
+    return { id, orgId: "repair-org", lifecycleMoment: null };
+  },
   recordRunLifecycleMoment: () => { throw new Error("Unexpected moment write"); },
-  transitionRunStatus: () => { throw new Error("Unexpected transition"); },
+  transitionRunStatus: async (runId: string, from: string, to: string, _meta: unknown, authority: unknown) => {
+    if (!ports.run) throw new Error("Unexpected transition");
+    ports.transitions.push({ runId, from, to, authority });
+    ports.events.push(`transition ${from}->${to}`);
+    if (ports.transitionFailure) throw ports.transitionFailure;
+    if (ports.raceTo) { ports.run.status = ports.raceTo; ports.raceTo = null; }
+    if (ports.run.status !== from) {
+      const { RunTransitionError } = await import("../run-status");
+      throw new RunTransitionError({ code: "stale_from_status", runId, from: from as AgentRunStatus, to: to as AgentRunStatus });
+    }
+    ports.run.status = to;
+  },
   RunTransitionError: class extends Error {},
 }));
 vi.mock("@/lib/auth-session", () => ({
@@ -91,6 +158,28 @@ vi.mock("@/lib/better-auth-db", () => ({
 vi.mock("@/lib/agent-run-enqueue", () => ({
   enqueueAgentRun: ports.queued,
 }));
+// cinatra#4264 B1b on cinatra#3080: the step road's switch, and the segment
+// plan as a spy. The spy runs the REAL plan unless a case sets its answer (the
+// real plan reads the provenance ledger and the installed flow, which are
+// external ports here).
+const stepRoad = vi.hoisted(() => ({ dispatches: true }));
+vi.mock("../regenerate-step-road", () => ({
+  regenerateStepRoadDispatches: () => stepRoad.dispatches,
+}));
+const segmentPlan = vi.hoisted(() => ({
+  calls: [] as Record<string, unknown>[],
+  answer: null as null | { kind: "segment"; parentRunId: string; inputParams: Record<string, unknown> } | { kind: "refused"; reason: string },
+}));
+vi.mock("../regenerate-segment", async (orig) => {
+  const actual = await orig<typeof import("../regenerate-segment")>();
+  return {
+    ...actual,
+    planSegmentDispatch: async (...args: Parameters<typeof actual.planSegmentDispatch>) => {
+      segmentPlan.calls.push(args[0] as unknown as Record<string, unknown>);
+      return segmentPlan.answer ?? actual.planSegmentDispatch(...args);
+    },
+  };
+});
 
 import { dispatchPendingProducerRepairs, repairRunId } from "../lifecycle-repair-dispatch-store";
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
@@ -121,6 +210,9 @@ function inputParams() {
 beforeEach(() => {
   ports.reads = []; ports.readConditions = []; ports.updateResults = []; ports.writes = []; ports.created = [];
   ports.role = "member"; ports.createFailure = null;
+  ports.run = null; ports.transitions = []; ports.transitionFailure = null; ports.raceTo = null; ports.clears = []; ports.events = [];
+  ports.claims = new Set(); ports.claimEvents = []; ports.clientsReleased = 0; ports.selected = []; ports.repairNow = new Map();
+  stepRoad.dispatches = true; segmentPlan.calls = []; segmentPlan.answer = null;
   vi.clearAllMocks();
 });
 
@@ -209,16 +301,338 @@ describe("input data cannot become repair authorization", () => {
     expect(result.escalated).toBe(1); expect(ports.created).toHaveLength(0); expect(ports.queued).not.toHaveBeenCalled();
   });
 
-  // cinatra#3080: a Regenerate (a repair naming `regenerate_node_id`) is never
-  // run as an ordinary repair through the root findings input, and never left
-  // `requested` with nothing to take it: it is escalated, with no run and no job.
-  // A blank node id is still a Regenerate intent.
-  for (const regenerateNodeId of ["file_image", ""]) {
-    it(`escalates a Regenerate repair (regenerate_node_id ${JSON.stringify(regenerateNodeId)}) instead of dispatching it or leaving it requested`, async () => {
-      arrangeProducer({ custom: "retained" }, {}, JSON.stringify({ repairFindingsInput: { input: "instructions" } }));
+  // cinatra#3080 on cinatra#4264 B1b: a Regenerate (a repair naming
+  // `regenerate_node_id`) is never run as an ordinary repair through the root
+  // findings input, and never left `requested` with nothing to take it. With
+  // the step road on, it reaches the segment plan: a planned segment is
+  // dispatched on the provenance run with the segment's inputs only; a refused
+  // plan is escalated with the plan's reason. A blank node id is still a
+  // Regenerate intent (the real plan refuses it).
+  const REGENERATE_CONFIG = JSON.stringify({
+    repairFindingsInput: { input: "instructions" },
+    regenerate: [{ artifactNode: "write_draft", step: "draft_flow", noteInput: "brief" }],
+  });
+
+  it("a requested Regenerate (regenerate_node_id \"write_draft\") reaches the segment plan and is dispatched on the provenance run with the segment's inputs only", async () => {
+    arrangeProducer({ custom: "not-inherited" }, {}, REGENERATE_CONFIG);
+    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
+    const segmentInputs = { draftNote: "the note", lifecycleRepairRequest: { repairId: "repair-current" } };
+    segmentPlan.answer = { kind: "segment", parentRunId: "provenance-run", inputParams: segmentInputs };
+    const result = await dispatchPendingProducerRepairs();
+    expect(result).toMatchObject({ scanned: 1, dispatched: 1, escalated: 0, failed: 0 });
+    expect(segmentPlan.calls).toHaveLength(1);
+    expect(segmentPlan.calls[0]).toMatchObject({
+      repair: { id: "repair-current", orgId: "repair-org", regenerateNodeId: "write_draft",
+        baseArtifactId: "artifact-base", baseRepresentationRevisionId: "revision-base" },
+      templateId: "template-producing", packageName: "@any-vendor/repair-producer", lifecycleConfig: REGENERATE_CONFIG,
+      request: { repairId: "repair-current", findings: [currentFinding] },
+    });
+    expect(String(segmentPlan.calls[0].note)).toContain(currentFinding.message);
+    expect(ports.created).toHaveLength(1);
+    expect(ports.created[0].input).toMatchObject({ parentRunId: "provenance-run", runBy: "human-origin", orgId: "repair-org" });
+    expect(inputParams()).toEqual(segmentInputs);
+    expect(ports.queued).toHaveBeenCalledOnce();
+    expect(ports.writes).toHaveLength(1);
+    expect(ports.writes[0].values.status).toBe("dispatched");
+  });
+
+  it("a Regenerate whose segment plan refuses is escalated with the plan's reason: no run, no job", async () => {
+    arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG);
+    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
+    segmentPlan.answer = { kind: "refused", reason: "Regenerate refused: the agent declares no Regenerate entry for that step" };
+    const result = await dispatchPendingProducerRepairs();
+    expect(result).toMatchObject({ scanned: 1, escalated: 1, dispatched: 0, failed: 0 });
+    expect(segmentPlan.calls).toHaveLength(1);
+    expect(ports.created).toHaveLength(0); expect(ports.queued).not.toHaveBeenCalled();
+    // The existing-run read is made BEFORE the plan, and it finds no run.
+    expect(ports.reads).toHaveLength(0);
+    expect(ports.writes).toHaveLength(1);
+    expect(ports.writes[0].values.status).toBe("escalated");
+    expect(String(ports.writes[0].values.changeSummary)).toContain("declares no Regenerate entry for that step");
+  });
+
+  it("a blank regenerate_node_id is a Regenerate intent: the real plan refuses it and the repair is escalated, never dispatched as an ordinary repair", async () => {
+    arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG);
+    ports.reads[0] = [pendingRepair({ regenerateNodeId: "" })];
+    const result = await dispatchPendingProducerRepairs();
+    expect(result).toMatchObject({ scanned: 1, escalated: 1, dispatched: 0, failed: 0 });
+    expect(segmentPlan.calls).toHaveLength(1);
+    expect(ports.created).toHaveLength(0); expect(ports.queued).not.toHaveBeenCalled();
+    expect(ports.reads).toHaveLength(0);
+    expect(ports.writes[0].values.status).toBe("escalated");
+    expect(String(ports.writes[0].values.changeSummary)).toContain("the Regenerate intent names no node");
+  });
+
+  // A retry of a Regenerate reads the deterministic run BEFORE any plan. The
+  // reviewer's sequence: a "write_draft" dispatch created and enqueued its
+  // segment run, then stopped before the repair was marked dispatched; the
+  // template then lost its Regenerate entry, so a new plan would refuse. The
+  // retry must not escalate a repair whose run and job are live: it carries
+  // the existing run to the mark, as the ordinary retry does.
+  it("a Regenerate retry whose run already exists is carried to dispatched with no new plan, no second create and the same job id, even when a new plan would refuse", async () => {
+    arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG);
+    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
+    segmentPlan.answer = { kind: "segment", parentRunId: "provenance-run", inputParams: { draftNote: "the note" } };
+    ports.updateResults = []; // the pass stops before the dispatched mark
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await dispatchPendingProducerRepairs()).toMatchObject({ dispatched: 0, escalated: 0, failed: 1 });
+    } finally { error.mockRestore(); }
+    expect(ports.created).toHaveLength(1);
+    expect(ports.queued).toHaveBeenCalledOnce();
+    const firstJobId = ports.queued.mock.calls[0][1].jobId;
+
+    arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG);
+    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
+    ports.reads[3] = [{ id: repairRunId("repair-current") }];
+    segmentPlan.answer = { kind: "refused", reason: "Regenerate refused: the agent declares no Regenerate entry for that step" };
+    const result = await dispatchPendingProducerRepairs();
+    expect(result).toMatchObject({ scanned: 1, dispatched: 1, escalated: 0, failed: 0 });
+    expect(segmentPlan.calls).toHaveLength(1);
+    expect(ports.created).toHaveLength(1);
+    expect(ports.queued).toHaveBeenCalledTimes(2);
+    expect(ports.queued.mock.calls[1][0].runId).toBe(repairRunId("repair-current"));
+    expect(ports.queued.mock.calls[1][1].jobId).toBe(firstJobId);
+    expect(ports.writes.map((w) => w.values.status)).not.toContain("escalated");
+    expect(ports.writes.at(-1)!.values.status).toBe("dispatched");
+  });
+
+  it("a Regenerate retry that finds no run and whose new plan refuses is escalated with the plan's reason, as before", async () => {
+    arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG);
+    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
+    segmentPlan.answer = { kind: "segment", parentRunId: "provenance-run", inputParams: { draftNote: "the note" } };
+    ports.createFailure = new Error("The pass stops before the run is created");
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await dispatchPendingProducerRepairs()).toMatchObject({ dispatched: 0, escalated: 0, failed: 1 });
+    } finally { error.mockRestore(); }
+    expect(ports.created).toHaveLength(0); expect(ports.queued).not.toHaveBeenCalled();
+
+    arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG);
+    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
+    segmentPlan.answer = { kind: "refused", reason: "Regenerate refused: the agent declares no Regenerate entry for that step" };
+    const result = await dispatchPendingProducerRepairs();
+    expect(result).toMatchObject({ scanned: 1, escalated: 1, dispatched: 0, failed: 0 });
+    expect(segmentPlan.calls).toHaveLength(2);
+    expect(ports.reads).toHaveLength(0);
+    expect(ports.created).toHaveLength(0); expect(ports.queued).not.toHaveBeenCalled();
+    expect(ports.writes.at(-1)!.values.status).toBe("escalated");
+    expect(String(ports.writes.at(-1)!.values.changeSummary)).toContain("declares no Regenerate entry for that step");
+  });
+
+  // The cases the drain refused for a reason other than the missing step road
+  // still escalate a Regenerate before any plan: a checkpointed delivery and a
+  // revoked originating human.
+  it("a checkpointed Regenerate keeps the checkpointed escalation; the plan is never made", async () => {
+    ports.reads = [[pendingRepair({ continuationMode: "checkpointed", regenerateNodeId: "write_draft" })]];
+    ports.updateResults = [[{ id: "repair-current" }]];
+    const result = await dispatchPendingProducerRepairs();
+    expect(result).toMatchObject({ escalated: 1, dispatched: 0 });
+    expect(segmentPlan.calls).toHaveLength(0);
+    expect(String(ports.writes[0].values.changeSummary)).toContain("checkpointed repair delivery is a resume");
+  });
+
+  it("a Regenerate whose originating human is revoked is escalated before any plan, run or job", async () => {
+    arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG); ports.role = undefined;
+    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
+    const result = await dispatchPendingProducerRepairs();
+    expect(result).toMatchObject({ escalated: 1, dispatched: 0 });
+    expect(segmentPlan.calls).toHaveLength(0);
+    expect(ports.created).toHaveLength(0); expect(ports.queued).not.toHaveBeenCalled();
+    expect(String(ports.writes[0].values.changeSummary)).toContain("no longer a verified member");
+  });
+
+  // R117 root fix (cinatra#4264 B1b): a check that escalates a Regenerate BEFORE
+  // the deterministic-run read (ended pause, no producer, no human runBy,
+  // revoked member) can meet a retry whose run an earlier pass created. That run
+  // is stopped FIRST, then the repair is escalated: never enqueued for a member
+  // who no longer qualifies, never left queued with no job.
+  const RUN = repairRunId("repair-current");
+  async function firstPassCreatesTheRunButNoJob() {
+    arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG);
+    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
+    segmentPlan.answer = { kind: "segment", parentRunId: "provenance-run", inputParams: { draftNote: "the note" } };
+    ports.queued.mockRejectedValueOnce(new Error("The pass stops before the enqueue"));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await dispatchPendingProducerRepairs()).toMatchObject({ dispatched: 0, escalated: 0, failed: 1 });
+    } finally { error.mockRestore(); }
+    expect(ports.created).toHaveLength(1);
+    ports.run = { status: "queued" }; ports.events = [];
+  }
+  function expectStoppedThenEscalated(result: unknown, from: string, reason: string) {
+    expect(result).toMatchObject({ scanned: 1, escalated: 1, dispatched: 0, failed: 0 });
+    expect(ports.run).toEqual({ status: "stopped" });
+    expect(ports.transitions.map((t) => [t.runId, t.from, t.to])).toEqual([[RUN, from, "stopped"]]);
+    const authority = ports.transitions[0].authority as { orgId: string; can: (capability: string) => boolean };
+    expect(authority.orgId).toBe("repair-org");
+    expect(authority.can("run.complete")).toBe(true);
+    expect(ports.clears).toEqual([RUN]);
+    expect(ports.events).toEqual([`transition ${from}->stopped`, "write escalated"]);
+    expect(ports.created).toHaveLength(1);
+    expect(String(ports.writes.at(-1)!.values.changeSummary)).toContain(reason);
+  }
+
+  it("a Regenerate retry after a crash before the enqueue and a revoked originating member stops the queued run, then escalates: no job, no second create", async () => {
+    await firstPassCreatesTheRunButNoJob();
+    arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG); ports.role = undefined;
+    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
+    ports.reads[3] = [{ status: "queued" }];
+    const result = await dispatchPendingProducerRepairs();
+    expectStoppedThenEscalated(result, "queued", "no longer a verified member");
+    expect(ports.queued).toHaveBeenCalledOnce(); // the first pass's failed call only
+    expect(segmentPlan.calls).toHaveLength(1);
+  });
+
+  it("a Regenerate retry whose ended pause is no longer held stops the existing run, then escalates", async () => {
+    await firstPassCreatesTheRunButNoJob();
+    ports.reads = [[pendingRepair({ regenerateNodeId: "write_draft", pausedRunGeneration: 3 })], [], [{ status: "queued" }]];
+    ports.updateResults = [[{ id: "repair-current" }]];
+    const result = await dispatchPendingProducerRepairs();
+    expectStoppedThenEscalated(result, "queued", "no longer at that pause");
+  });
+
+  it("a Regenerate retry whose producing run is gone stops the existing run, then escalates", async () => {
+    await firstPassCreatesTheRunButNoJob();
+    ports.reads = [[pendingRepair({ regenerateNodeId: "write_draft" })], [], [{ status: "queued" }]];
+    ports.updateResults = [[{ id: "repair-current" }]];
+    const result = await dispatchPendingProducerRepairs();
+    expectStoppedThenEscalated(result, "queued", "no resolvable producing run");
+  });
+
+  it("a Regenerate retry whose producing run carries no human runBy stops the existing run, then escalates", async () => {
+    await firstPassCreatesTheRunButNoJob();
+    arrangeProducer({ custom: "retained" }, { runBy: null }, REGENERATE_CONFIG);
+    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
+    ports.reads[3] = [{ status: "queued" }];
+    const result = await dispatchPendingProducerRepairs();
+    expectStoppedThenEscalated(result, "queued", "carries no human runBy");
+  });
+
+  it("a stop that loses its compare-and-set reads the run again and stops it from its live status", async () => {
+    await firstPassCreatesTheRunButNoJob();
+    arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG); ports.role = undefined;
+    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
+    ports.reads[3] = [{ status: "queued" }]; ports.reads.push([{ status: "running" }]); ports.raceTo = "running";
+    const result = await dispatchPendingProducerRepairs();
+    expect(result).toMatchObject({ escalated: 1, failed: 0 });
+    expect(ports.transitions.map((t) => `${t.from}->${t.to}`)).toEqual(["queued->stopped", "running->stopped"]);
+    expect(ports.run).toEqual({ status: "stopped" });
+    expect(ports.reads).toHaveLength(0);
+  });
+
+  it("a stop that fails keeps the Regenerate requested for the next pass: no escalation is written", async () => {
+    await firstPassCreatesTheRunButNoJob();
+    arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG); ports.role = undefined;
+    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
+    ports.reads[3] = [{ status: "queued" }]; ports.transitionFailure = new Error("The status write failed");
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await dispatchPendingProducerRepairs()).toMatchObject({ escalated: 0, failed: 1 });
+    } finally { error.mockRestore(); }
+    expect(ports.writes.map((w) => w.values.status)).not.toContain("escalated");
+  });
+
+  it("a Regenerate retry whose run is already terminal moves nothing and escalates", async () => {
+    await firstPassCreatesTheRunButNoJob(); ports.run = { status: "failed" };
+    arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG); ports.role = undefined;
+    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
+    ports.reads[3] = [{ status: "failed" }];
+    const result = await dispatchPendingProducerRepairs();
+    expect(result).toMatchObject({ escalated: 1, failed: 0 });
+    expect(ports.reads).toHaveLength(0); // the run was read
+    expect(ports.transitions).toHaveLength(0); expect(ports.clears).toHaveLength(0);
+  });
+
+  // R117 root fix of the class (cinatra#4264 B1b): every decision on a
+  // Regenerate repair is taken under ONE claim of that repair, so a drain never
+  // stops, escalates or marks a Regenerate another drain is delivering.
+  const CLAIM = "lifecycle-repair-dispatch::repair-current";
+
+  it("two drains on one Regenerate: a drain that meets the other drain's claim stops nothing, escalates nothing and marks nothing", async () => {
+    // Drain A holds the claim: it created and enqueued the run and has not
+    // marked the repair dispatched yet. Drain B's check would escalate now
+    // (the originating member was revoked in between).
+    await firstPassCreatesTheRunButNoJob();
+    ports.claims.add(CLAIM); ports.claimEvents = []; ports.clientsReleased = 0;
+    arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG); ports.role = undefined;
+    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
+    ports.reads[3] = [{ status: "queued" }]; // what a drain acting without the claim would read and stop
+    const result = await dispatchPendingProducerRepairs();
+    expect(result).toMatchObject({ scanned: 1, raced: 1, escalated: 0, dispatched: 0, failed: 0 });
+    expect(ports.transitions).toHaveLength(0);
+    expect(ports.run).toEqual({ status: "queued" });
+    expect(ports.writes).toHaveLength(0);
+    expect(ports.created).toHaveLength(1); expect(ports.queued).toHaveBeenCalledOnce();
+    expect(ports.reads).toHaveLength(3); // only the pending read was made
+    expect(ports.claimEvents).toEqual([`held elsewhere ${CLAIM}`]);
+    expect(ports.claims.has(CLAIM)).toBe(true); // still drain A's
+    expect(ports.clientsReleased).toBe(1);
+  });
+
+  it("two drains on one Regenerate: a drain that selected the repair before the other drain marked it dispatched reads it again under the claim and leaves it alone", async () => {
+    await firstPassCreatesTheRunButNoJob();
+    ports.claimEvents = []; // the first pass's own claim and release
+    arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG); ports.role = undefined;
+    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
+    ports.reads[3] = [{ status: "queued" }]; // what a drain acting without the claim would read and stop
+    ports.repairNow.set("repair-current", []); // no longer requested: the other drain marked it
+    const result = await dispatchPendingProducerRepairs();
+    expect(result).toMatchObject({ scanned: 1, raced: 1, escalated: 0, dispatched: 0, failed: 0 });
+    expect(ports.transitions).toHaveLength(0);
+    expect(ports.run).toEqual({ status: "queued" });
+    expect(ports.writes).toHaveLength(0);
+    expect(ports.reads).toHaveLength(3); // the producer was never read
+    expect(ports.claimEvents).toEqual([`claim ${CLAIM}`, `release ${CLAIM}`]);
+  });
+
+  it("a crash after the stop and before the escalation, then the check passes again: the stopped run is never enqueued or marked; the repair is escalated", async () => {
+    await firstPassCreatesTheRunButNoJob();
+    // Pass 2: the member is revoked; the run is stopped, then the pass dies
+    // before the escalation write.
+    arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG); ports.role = undefined;
+    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
+    ports.reads[3] = [{ status: "queued" }];
+    ports.updateResults = [];
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await dispatchPendingProducerRepairs()).toMatchObject({ escalated: 0, failed: 1 });
+    } finally { error.mockRestore(); }
+    expect(ports.run).toEqual({ status: "stopped" });
+    // Pass 3: the member is restored, so every check before the run read passes.
+    ports.role = "member";
+    arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG);
+    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
+    ports.reads[3] = [{ id: RUN, status: "stopped" }];
+    const result = await dispatchPendingProducerRepairs();
+    expect(result).toMatchObject({ scanned: 1, escalated: 1, dispatched: 0, failed: 0 });
+    expect(ports.queued).toHaveBeenCalledOnce(); // the first pass's failed call only
+    expect(ports.writes.map((w) => w.values.status)).not.toContain("dispatched");
+    expect(ports.writes.at(-1)!.values.status).toBe("escalated");
+    expect(String(ports.writes.at(-1)!.values.changeSummary)).toContain("already stopped");
+    expect(segmentPlan.calls).toHaveLength(1);
+  });
+
+  it("the claim is released on every road, a Regenerate failure included; an ordinary repair takes no claim", async () => {
+    await firstPassCreatesTheRunButNoJob();
+    expect(ports.claimEvents).toEqual([`claim ${CLAIM}`, `release ${CLAIM}`]);
+    expect(ports.claims.size).toBe(0); expect(ports.clientsReleased).toBe(1);
+    ports.claimEvents = []; ports.clientsReleased = 0;
+    arrangeProducer({ custom: "retained" });
+    expect(await dispatchPendingProducerRepairs()).toMatchObject({ dispatched: 1 });
+    expect(ports.claimEvents).toEqual([]); expect(ports.clientsReleased).toBe(0);
+  });
+
+  // With the step road OFF (`regenerateStepRoadDispatches` false), the drain
+  // escalates every Regenerate intent before the producer reads, as before.
+  for (const regenerateNodeId of ["write_draft", ""]) {
+    it(`with the step road off, escalates a Regenerate repair (regenerate_node_id ${JSON.stringify(regenerateNodeId)}) instead of dispatching it or leaving it requested`, async () => {
+      stepRoad.dispatches = false;
+      arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG);
       ports.reads[0] = [pendingRepair({ regenerateNodeId })];
       const result = await dispatchPendingProducerRepairs();
       expect(result).toMatchObject({ scanned: 1, escalated: 1, dispatched: 0, failed: 0 });
+      expect(segmentPlan.calls).toHaveLength(0);
       expect(ports.created).toHaveLength(0); expect(ports.queued).not.toHaveBeenCalled();
       // The producer, its template and the existing-run reads are never made.
       expect(ports.reads).toHaveLength(3);

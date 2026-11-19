@@ -518,10 +518,11 @@ export async function recordChangesRequested(
   }
   // A REGENERATE THAT NOTHING CAN DISPATCH IS NOT RECORDED (cinatra#3080 on
   // cinatra#4264). The step names its Note input, but only the step road reruns
-  // that one step with the Note there, and the ordinary drain never runs a
-  // Regenerate (it escalates one). Recording it would settle the gate with no
-  // repair dispatched and no successor review ever opened. So, while the step
-  // road is absent (`regenerateStepRoadDispatches`), it is refused here, before
+  // that one step with the Note there, and the drain's ordinary road never runs
+  // a Regenerate (with the step road off, the drain escalates one). Recording
+  // it would then settle the gate with no repair dispatched and no successor
+  // review ever opened. So, while the step road is off
+  // (`regenerateStepRoadDispatches`), it is refused here, before
   // the lineage reads and the transaction: nothing is written and the gate is
   // left pending with the plain reason on screen.
   if (input.origin === "regenerate" && !regenerateStepRoadDispatches()) {
@@ -860,6 +861,15 @@ export interface SubmitRepairResponseInput {
   reauthorized: boolean;
   /** Gate TTL for the successor gate (optional). */
   expiresAt?: Date | null;
+  /**
+   * cinatra#4264 B1b: the revision a Regenerate segment run wrote before it
+   * was re-filed onto the reviewed artifact. Written in the SAME update that
+   * sets `repaired` and the successor, so a crash leaves both or neither; the
+   * review orchestration then settles that revision's produced event under
+   * the successor gate (`successor-gated`) instead of gating it a second time.
+   * Ordinary repairs pass none.
+   */
+  sourceTarget?: { artifactId: string; representationRevisionId: string } | null;
 }
 
 export type SubmitRepairResponseResult =
@@ -1078,6 +1088,12 @@ export async function submitRepairResponse(
           successorGateId,
           successorArtifactId: input.response.successorTarget.artifactId,
           successorRepresentationRevisionId: input.response.successorTarget.representationRevisionId,
+          ...(input.sourceTarget
+            ? {
+                sourceArtifactId: input.sourceTarget.artifactId,
+                sourceRepresentationRevisionId: input.sourceTarget.representationRevisionId,
+              }
+            : {}),
           findingOutcomes: input.response.findingOutcomes as unknown,
           changeSummary: input.response.changeSummary,
           updatedAt: sql`now()`,
@@ -1191,6 +1207,12 @@ export interface RepairRow {
   successorRepresentationRevisionId: string | null;
   findingOutcomes: RepairFindingOutcome[] | null;
   changeSummary: string | null;
+  /** cinatra#4264 B1b: the Regenerate intent (NULL = an ordinary repair).
+   *  Optional in the type only, for rows built by hand; `readRepair` sets it. */
+  regenerateNodeId?: string | null;
+  /** cinatra#4264 B1b: the segment run's own write, re-filed as the successor. */
+  sourceArtifactId?: string | null;
+  sourceRepresentationRevisionId?: string | null;
 }
 
 export async function readRepair(repairId: string): Promise<RepairRow | null> {
@@ -1633,6 +1655,9 @@ function toRepairRow(r: typeof lifecycleRepair.$inferSelect): RepairRow {
     successorRepresentationRevisionId: r.successorRepresentationRevisionId,
     findingOutcomes: (r.findingOutcomes as RepairFindingOutcome[] | null) ?? null,
     changeSummary: r.changeSummary,
+    regenerateNodeId: r.regenerateNodeId ?? null,
+    sourceArtifactId: r.sourceArtifactId ?? null,
+    sourceRepresentationRevisionId: r.sourceRepresentationRevisionId ?? null,
   };
 }
 

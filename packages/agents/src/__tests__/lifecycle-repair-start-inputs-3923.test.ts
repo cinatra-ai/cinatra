@@ -15,6 +15,12 @@ const ports = vi.hoisted(() => ({
   role: "member" as "member" | undefined,
   createFailure: null as Error | null,
   queued: vi.fn(),
+  // cinatra#4264 B1b: the drain delivers a Regenerate repair under ONE claim of
+  // its repair row (a pooled client's advisory lock): the keys another drain
+  // holds, what the claim fake did, and the pooled clients it released.
+  claims: new Set<string>(),
+  claimEvents: [] as string[],
+  clientsReleased: 0,
 }));
 vi.mock("server-only", () => ({}));
 // cinatra#4312 — an escalation CASes the repair and, in ONE transaction, carries a
@@ -26,6 +32,28 @@ vi.mock("../lifecycle-repair-store", async (orig) => ({
   carryDeclaredReviewDecision: async () => null,
 }));
 vi.mock("../db", () => ({
+  // The claim of a Regenerate repair: a pooled client's advisory lock. A key in
+  // `ports.claims` is held by another drain.
+  agentBuilderPool: {
+    connect: async () => ({
+      query: async (text: string, params: unknown[]) => {
+        const key = String(params[0]);
+        if (text === "SELECT pg_try_advisory_lock(hashtext($1)) AS locked") {
+          const locked = !ports.claims.has(key);
+          if (locked) ports.claims.add(key);
+          ports.claimEvents.push(locked ? `claim ${key}` : `held elsewhere ${key}`);
+          return { rows: [{ locked }] };
+        }
+        if (text === "SELECT pg_advisory_unlock(hashtext($1))") {
+          ports.claims.delete(key);
+          ports.claimEvents.push(`release ${key}`);
+          return { rows: [{}] };
+        }
+        throw new Error(`Unexpected pooled query: ${text}`);
+      },
+      release: () => { ports.clientsReleased += 1; },
+    }),
+  },
   db: {
     async transaction(this: unknown, fn: (tx: unknown) => Promise<unknown>) { return fn(this); },
     select: () => {
@@ -217,6 +245,7 @@ function schemaForRoot(contract: typeof producerContracts[number]) {
 beforeEach(() => {
   ports.reads = []; ports.updateResults = []; ports.writes = []; ports.created = [];
   ports.role = "member"; ports.createFailure = null;
+  ports.claims = new Set(); ports.claimEvents = []; ports.clientsReleased = 0;
   vi.clearAllMocks();
 });
 
@@ -372,6 +401,23 @@ describe("input data cannot become repair authorization", () => {
     ports.updateResults = [[{ id: "repair-current" }]];
     const result = await dispatchPendingProducerRepairs();
     expect(result.escalated).toBe(1); expect(ports.created).toHaveLength(0); expect(ports.queued).not.toHaveBeenCalled();
+  });
+
+  it("a Regenerate repair is delivered under its claim through this mock: claimed, read again, escalated, released", async () => {
+    const row = pendingRepair({ continuationMode: "checkpointed", regenerateNodeId: "write_draft" });
+    // The pending select, then the claimed re-read of the same repair.
+    ports.reads = [[row], [row]];
+    ports.updateResults = [[{ lineageId: "lineage-current" }]];
+    const result = await dispatchPendingProducerRepairs();
+    expect(result).toMatchObject({ escalated: 1, dispatched: 0, failed: 0, raced: 0 });
+    expect(ports.claimEvents).toEqual([
+      "claim lifecycle-repair-dispatch::repair-current",
+      "release lifecycle-repair-dispatch::repair-current",
+    ]);
+    expect(ports.clientsReleased).toBe(1);
+    expect(ports.reads).toHaveLength(0);
+    expect(ports.writes.map((write) => write.values.status)).toEqual(["escalated"]);
+    expect(ports.created).toHaveLength(0); expect(ports.queued).not.toHaveBeenCalled();
   });
 
   it("does not create a second run when the deterministic repair already exists", async () => {
