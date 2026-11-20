@@ -61,6 +61,13 @@ export type ArtifactRendererLoadResult =
        * that version".
        */
       negotiatedPropsApiVersion: number;
+      /**
+       * The loaded module itself, the one `Component` is its default export
+       * of. A surface that reads optional named exports of the display it
+       * mounts (the artifact page's identity line, cinatra#4366) reads them
+       * here, from the same load, instead of loading the module again.
+       */
+      module: unknown;
     }
   | { ok: false; failureClass: ArtifactRendererFailureClass };
 
@@ -183,5 +190,6 @@ export async function loadArtifactRenderer(args: {
     Component: Component as ComponentType<ArtifactRendererProps>,
     entry,
     negotiatedPropsApiVersion: negotiated.version,
+    module: mod,
   };
 }
