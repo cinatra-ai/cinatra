@@ -120,7 +120,7 @@
     {
       "packageName": "@cinatra-ai/cms-snapshot-artifact",
       "repo": "cinatra-ai/cms-snapshot-artifact",
-      "resolvedSha": "a274228f6de9bb9c31cc476bf0663d06eb33a27b"
+      "resolvedSha": "e2709bb7ab1486dcb2570e33c1942605a105b577"
     },
     {
       "packageName": "@cinatra-ai/company-discovery-agent",
@@ -420,7 +420,7 @@
     {
       "packageName": "@cinatra-ai/website-artifacts",
       "repo": "cinatra-ai/website-artifacts",
-      "resolvedSha": "86aeea92f768c85acceeed67e8e5af9dae334c23"
+      "resolvedSha": "ef02c3ea7e931943df4a81b2d78f01516c1b6732"
     },
     {
       "packageName": "@cinatra-ai/wordpress-agent",
