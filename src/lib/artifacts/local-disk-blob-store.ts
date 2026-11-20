@@ -211,6 +211,24 @@ function isValidUtf8Window(headWindow: Uint8Array): boolean {
   }
 }
 
+/** A structured-syntax JSON media type (RFC 6839 section 3.1): a declared
+ *  `application/<subtype>+json`, already canonicalized (no parameters, lower
+ *  case). The subtype characters are the ones the fallback's well-formed check
+ *  admits. */
+const STRUCTURED_JSON_MIME = /^application\/[\w.+-]+\+json$/;
+
+/** Does this text window open a JSON object or array? Skips the JSON whitespace
+ *  of RFC 8259 (space, tab, line feed, carriage return) and reads the first
+ *  other byte. The window is a PREFIX of the file, so this reads how the bytes
+ *  start; it does not parse the whole document. */
+function opensJsonContainer(headWindow: Uint8Array): boolean {
+  for (const byte of headWindow) {
+    if (byte === 0x20 || byte === 0x09 || byte === 0x0a || byte === 0x0d) continue;
+    return byte === 0x7b || byte === 0x5b;
+  }
+  return false;
+}
+
 // Minimal dependency-free magic-byte sniff (no new deps per repo constraint).
 // Common types only; unknown → declaredMime (if safe) → octet-stream.
 //
@@ -333,6 +351,13 @@ export function sniffMime(head: Uint8Array, declaredRaw?: string): string {
   // declaration when it is a well-formed media type, the binary base otherwise.
   if (b.length > 0 && !b.includes(0) && isValidUtf8Window(b)) {
     if (declared && /^text\/|application\/(json|markdown|xml|csv)/.test(declared))
+      return declared;
+    // A declared structured-syntax JSON type (for example the CMS fields
+    // snapshot's `application/vnd.cinatra.cms-fields+json`) is kept when the
+    // window opens a JSON object or array. Without this, the type's own MIME
+    // became text/plain and the write boundary's accepts check refused every
+    // such snapshot. Any other text stays text/plain.
+    if (declared && STRUCTURED_JSON_MIME.test(declared) && opensJsonContainer(b))
       return declared;
     return "text/plain";
   }
