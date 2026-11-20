@@ -21,6 +21,7 @@
  *   pnpm --filter @cinatra-ai/agents exec vitest run \
  *     src/__tests__/orchestrator-stepper-panel-second-gate-of-one-pause-3035.test.tsx
  */
+// red-first-expect: the image gate drew no decision bar with its terminal control
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
