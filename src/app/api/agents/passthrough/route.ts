@@ -160,9 +160,12 @@ const ALLOWED_TOOLS = new Set([
 // Tools that must execute inside an mcpRequestContextStorage frame carrying the
 // VERIFIED run id (from bindBridgeRunId), so the primitive derives its run scope
 // from the invocation context — never from the request body. The generic path
-// (objects_save, trigger_config_set, …) resolves identity from the actor alone
-// and does not need (or want) an ambient run id, so we scope this to the
-// run-scoped primitives only.
+// (objects_save, trigger_config_set, …) resolves identity from the actor alone;
+// since cinatra#3745 it runs inside the run's frame too (run id, owner, org,
+// the verified step and, for a source-bound call, the proof and the run-write
+// authority), so a generic handler that reads the frame's run id sees the
+// proven run. This set names the primitives that additionally get the
+// run-scoped frame (verifiedRunScopeId and the submission id).
 const RUN_SCOPED_CONTEXT_TOOLS = new Set<string>([
   "agent_run_hitl_prompts_list",
   "agent_run_hitl_prompts_exclude",
@@ -559,6 +562,26 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   try {
+    const { mintRunWriteAuthorityForMcp } = await import("@/lib/org-write/run-authority-mint");
+    const orgWriteAuthority = verifiedExecutedSource
+      ? await mintRunWriteAuthorityForMcp({ runId: run.id, orgId: run.orgId,
+          executionAttemptId: verifiedExecutedSource.executionAttemptId }) : undefined;
+    // cinatra#3745: the mint matches the proof's attempt against the run's
+    // CURRENT attempt. A refused mint means the run moved on after the source
+    // check above (or the authority could not be read): the proof is no longer
+    // current, so the call is refused before any tool runs, never served with
+    // the stale proof and no authority.
+    if (verifiedExecutedSource && !orgWriteAuthority) {
+      return NextResponse.json({ error: "Executing source could not be verified" }, { status: 403 });
+    }
+    return await mcpRequestContextStorage.run({ runId: binding.runId,
+      userId: run.runBy ?? undefined, orgId: run.orgId,
+      ...(run.oboCeiling ? { oboCeiling: run.oboCeiling } : {}),
+      ...(verifiedStepId ? { verifiedStepId } : {}),
+      ...(verifiedExecutedSource ? { verifiedExecutedSource } : {}),
+      ...(orgWriteAuthority ? { orgWriteAuthority } : {}),
+    }, async () => {
+    // Every deterministic branch shares the verified executing-source frame.
     let result: unknown;
     if (tool === "artifact_materialize") {
       // Deterministic artifact materialization (cinatra#925) — NOT an MCP
@@ -895,10 +918,12 @@ export async function POST(req: Request): Promise<Response> {
       result = RUN_SCOPED_CONTEXT_TOOLS.has(tool)
         ? await mcpRequestContextStorage.run(
             {
+              ...mcpRequestContextStorage.getStore(),
               runId: binding.runId,
               verifiedRunScopeId: binding.runId,
               ...(verifiedSubmissionId ? { verifiedSubmissionId } : {}),
               ...(verifiedStepId ? { verifiedStepId } : {}),
+              ...(verifiedExecutedSource ? { verifiedExecutedSource } : {}),
               userId: run.runBy ?? undefined,
               orgId: run.orgId,
               ...(run.oboCeiling ? { oboCeiling: run.oboCeiling } : {}),
@@ -1033,6 +1058,7 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     return NextResponse.json(result);
+    });
   } catch (err) {
     // cinatra#4223, cinatra#4465: an error with the zod marker answers its
     // issues, and a primitive's stated refusal without it keeps its text when

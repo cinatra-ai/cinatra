@@ -21,6 +21,14 @@
  * The module doubles follow run-token-mcp-actor.test.ts; the route, the run
  * token verifier and the step verifiers are real; the run store's source check
  * is a double (its refusals are pinned in packages/agents).
+ *
+ * A source-bound call gets the cinatra tool only through the on-behalf-of
+ * token, which carries the proof itself. It never gets a machine bearer: that
+ * bearer outlives its durable binding, and once the binding is cleared or
+ * expires the tool server reads the bearer as an ordinary caller without the
+ * proof. So when the on-behalf-of road is unavailable the tool is withheld,
+ * and no machine bearer is minted or bound. A call without a verified source
+ * keeps the best-effort machine fallback.
  */
 import { afterAll, describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createHmac } from "node:crypto";
@@ -61,7 +69,7 @@ const {
   ),
   buildLlmMcpServerToolForAgentRunMock: vi.fn(() => ({ type: "mcp-tool" })),
   buildLlmMcpServerToolMock: vi.fn(
-    async (): Promise<{ type: string; headers: { Authorization: string } } | null> => ({
+    async (): Promise<{ type: string; headers?: { Authorization?: string } } | null> => ({
       type: "mcp",
       headers: { Authorization: "Bearer machine-token-abc" },
     }),
@@ -529,6 +537,91 @@ describe("the model bridge verifies the executing source of a run-bound call", (
     await invokeOverride();
     expect(mintedActor().verifiedStepId).toBe(NODE);
     expect(verifyRunExecutedSourceMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("a source-bound call never gets a machine bearer", () => {
+  const RUN_BOUND = { "x-cinatra-run-token": RUN_TOKEN, "x-cinatra-a2a-context-id": CTX };
+
+  // (b10) At the parent the bridge minted the machine bearer, bound it with the
+  // proof and offered it; the bearer then outlived its binding.
+  it.each(["no on-behalf-of actor", "no on-behalf-of tool"])(
+    "withholds the cinatra tool and mints no machine bearer when there is %s",
+    async (reason) => {
+      if (reason === "no on-behalf-of actor") resolveAgentRunMcpActorMock.mockResolvedValue(null);
+      else buildLlmMcpServerToolForAgentRunMock.mockReturnValueOnce(null as never);
+      readAgentRunTokenHashByIdMock.mockResolvedValue("a".repeat(64));
+      const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...sourceHeaders() }));
+      expect(res.status).toBe(200);
+      expect(verifyRunExecutedSourceMock).toHaveBeenCalledTimes(1);
+      expect(await invokeOverride()).toBeNull();
+      expect(buildLlmMcpServerToolMock).not.toHaveBeenCalled();
+      expect(readAgentRunTokenHashByIdMock).not.toHaveBeenCalled();
+      expect(writeDurableRunContextBindingMock).not.toHaveBeenCalled();
+    },
+  );
+
+  // (b15)
+  it("carries the proof in the on-behalf-of token and writes no machine binding", async () => {
+    const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...sourceHeaders() }));
+    expect(res.status).toBe(200);
+    expect(await invokeOverride()).toEqual({ type: "mcp-tool" });
+    expect(mintedActor()).toMatchObject({ runId: RUN.id, verifiedStepId: NODE, verifiedExecutedSource: VERIFIED_SOURCE });
+    expect(buildLlmMcpServerToolMock).not.toHaveBeenCalled();
+    expect(writeDurableRunContextBindingMock).not.toHaveBeenCalled();
+  });
+
+  // (b16)
+  it.each(["missing hash", "missing bearer", "binding refusal"])(
+    "keeps the best-effort machine fallback of a call without a verified source (%s)",
+    async (missing) => {
+      resolveAgentRunMcpActorMock.mockResolvedValue(null);
+      if (missing !== "missing hash") readAgentRunTokenHashByIdMock.mockResolvedValue("a".repeat(64));
+      if (missing === "missing bearer") buildLlmMcpServerToolMock.mockResolvedValue({ type: "mcp", headers: {} });
+      if (missing === "binding refusal") writeDurableRunContextBindingMock.mockResolvedValue(null);
+      const res = await POST(makeReq({ user: "hi" }, RUN_BOUND));
+      expect(res.status).toBe(200);
+      expect(await invokeOverride()).toEqual(await buildLlmMcpServerToolMock.mock.results[0]!.value);
+      expect(verifyRunExecutedSourceMock).not.toHaveBeenCalled();
+    },
+  );
+
+  // (b10a) At the parent an actor-less run (runBy null) got NO override, so the
+  // orchestration minted its own machine bearer for a source-bound step: that
+  // bearer carried neither the proof nor a binding, and the tool server served
+  // it with the machine caller's authority.
+  it("installs an authoritative override for an actor-less source-bound run that withholds the cinatra tool", async () => {
+    const actorless = { ...RUN, runBy: null };
+    readAgentRunByTokenHashMock.mockResolvedValue({ ...PROBE, runBy: null });
+    readAgentRunByIdMock.mockResolvedValue(actorless);
+    readAgentRunByContextIdMock.mockImplementation(async (ctx: string) => (ctx === CTX ? actorless : null));
+    readAgentRunTokenHashByIdMock.mockResolvedValue("a".repeat(64));
+    const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...sourceHeaders() }));
+    expect(res.status).toBe(200);
+    expect(verifyRunExecutedSourceMock).toHaveBeenCalledTimes(1);
+    const arg = runResolvedSkillAwareDeterministicLlmTaskMock.mock.calls[0]![0] as {
+      cinatraMcpToolOverride?: () => Promise<unknown>;
+    };
+    expect(typeof arg.cinatraMcpToolOverride).toBe("function");
+    expect(await arg.cinatraMcpToolOverride!()).toBeNull();
+    expect(resolveAgentRunMcpActorMock).not.toHaveBeenCalled();
+    expect(buildLlmMcpServerToolForAgentRunMock).not.toHaveBeenCalled();
+    expect(buildLlmMcpServerToolMock).not.toHaveBeenCalled();
+    expect(writeDurableRunContextBindingMock).not.toHaveBeenCalled();
+  });
+
+  // (b10b) Compatibility: an actor-less run without a source keeps main's road,
+  // no override, so the orchestration's own machine fallback serves it.
+  it("leaves an actor-less run without a source on the orchestration's machine fallback", async () => {
+    const actorless = { ...RUN, runBy: null };
+    readAgentRunByTokenHashMock.mockResolvedValue({ ...PROBE, runBy: null });
+    readAgentRunByIdMock.mockResolvedValue(actorless);
+    readAgentRunByContextIdMock.mockImplementation(async (ctx: string) => (ctx === CTX ? actorless : null));
+    const res = await POST(makeReq({ user: "hi" }, RUN_BOUND));
+    expect(res.status).toBe(200);
+    expect(verifyRunExecutedSourceMock).not.toHaveBeenCalled();
+    const arg = runResolvedSkillAwareDeterministicLlmTaskMock.mock.calls[0]![0] as Record<string, unknown>;
+    expect(arg).not.toHaveProperty("cinatraMcpToolOverride");
   });
 });
 
