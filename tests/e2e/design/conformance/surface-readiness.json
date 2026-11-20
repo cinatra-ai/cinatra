@@ -229,33 +229,15 @@
         },
         {
           "surface": "drupal-pointer-never-a-review-target",
-          "aspect": "field",
-          "field": "target",
-          "source": "representation.node-id",
-          "reason": "display-not-registered",
-          "package": "@cinatra-ai/drupal-artifacts",
-          "awaits": null,
-          "why": "The pointer kind registers no artifact display on the default branch. The surface's own claim — that a pointer is never what a decision binds — IS shipped and is pinned elsewhere: the pointer type declares itself unpinnable with external mutability, the platform refuses any other disposition for an external pointer, and a decision binds the immutable snapshot record instead. What the drawing adds and the product does not have is a card that SAYS so where a reader can see it."
-        },
-        {
-          "surface": "drupal-pointer-never-a-review-target",
-          "aspect": "action",
-          "action": "open-in-cms",
-          "outcome": "cms-opened",
-          "awaits": null,
-          "why": "No first-party module carries a control for this action, and none of the open pull requests read while grounding this wave adds one. It is not awaiting a landing; it is awaiting the work."
-        },
-        {
-          "surface": "drupal-pointer-never-a-review-target",
           "aspect": "state",
           "states": [
             "error",
-            "kind:artifact",
-            "loading"
+            "kind:artifact"
           ],
-          "reason": "surface-not-drawn",
+          "reason": "display-not-registered",
+          "package": "@cinatra-ai/drupal-artifacts",
           "awaits": null,
-          "why": "No first-party module draws a card for this artifact kind at all: the surface's conformance anchor appears in the manifest and nowhere else in the tree. Until something draws the surface, its readings have nothing to be states of."
+          "why": "Since design@94d892de the drawing draws the pointer as the generic floor: its two readings, error and kind:artifact, are the floor's notice over the read-only data of its row. The pointer kind registers no artifact display on the default branch, which is why the floor is what it draws, and the surface's own claim, that a pointer is never what a decision binds, IS shipped: the pointer type declares itself unpinnable with external mutability and a decision binds the immutable snapshot record instead. No review card ever carries a pointer, so no card mount draws its floor where a reader can see it."
         }
       ]
     }
