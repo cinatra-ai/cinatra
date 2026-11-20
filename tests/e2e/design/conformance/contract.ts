@@ -2932,9 +2932,10 @@ const SCOPE_DASHBOARDS_TAB_DRIVER: SurfaceDriver = awaitingMount("scope-dashboar
 // pretend otherwise. Grounded by reading the shipped tree, not assumed: seven of
 // the twelve belong to extensions that declare a type and ship no renderer at
 // all; the WordPress and the Drupal page draw through ONE renderer the drawing
-// names (@cinatra-ai/website-artifacts:page-diff) which no package in the tree
-// ships; the Drupal pointer draws the product's generic floor, which no harness
-// mount draws over a pointer row (a pointer is never a review target);
+// names (@cinatra-ai/website-artifacts:page-diff), which the pinned website pack
+// ships as an extension renderer the conformance harness may not mount; the
+// Drupal pointer draws the product's generic floor, which no harness mount
+// draws over a pointer row (a pointer is never a review target);
 // the shipped markdown display draws its two readings SIDE BY SIDE, which the
 // drawing forbids in those words; and the download card, which IS shipped and
 // does draw what §V.2 describes, carries none of the conformance anchors this

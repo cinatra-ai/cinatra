@@ -187,7 +187,7 @@ export const ARTIFACT_KIND_DISPLAYS: Readonly<
     action: { name: "open-in-cms", outcome: "cms-opened" },
     states: ["error", "kind:artifact", "loading"],
     readiness:
-      "@cinatra-ai/website-artifacts:page-diff, the one page display the drawing names, is not in the tree: the website-artifacts pack is not pinned here and the Drupal agent does not file its pages as @cinatra-ai/website-artifacts:page-snapshot yet, so nothing draws a Drupal page as the page snapshot",
+      "@cinatra-ai/website-artifacts:page-diff, the one page display the drawing names, ships in the tree now (the website-artifacts pack is pinned here and the Drupal agent files its pages as @cinatra-ai/website-artifacts:page-snapshot), but it is an extension renderer the conformance harness may not mount, which the core/extension instance-coupling ban exists to stop, so no harness mount draws a Drupal page as the page snapshot",
   },
   "cms-page-display": {
     surface: "cms-page-display",
@@ -197,7 +197,7 @@ export const ARTIFACT_KIND_DISPLAYS: Readonly<
     action: { name: "open-in-cms", outcome: "cms-opened" },
     states: ["error", "kind:artifact", "loading"],
     readiness:
-      "@cinatra-ai/website-artifacts:page-diff — the one renderer both CMS extensions draw through — is not in the tree; the snapshot renderer that IS shipped draws a read-only list of reviewed FIELDS with a scope chip row, which is a different display: no page embedded in a frame, no diff of the changed excerpts, and no Open in the CMS",
+      "@cinatra-ai/website-artifacts:page-diff, the one renderer both CMS extensions draw through, ships in the tree now (the website-artifacts pack is pinned here and the WordPress agent files its pages as @cinatra-ai/website-artifacts:page-snapshot), but it is an extension renderer the conformance harness may not mount, which the core/extension instance-coupling ban exists to stop, so no harness mount draws the page embedded in its frame, the diff of the changed excerpts or the Open in the CMS link",
   },
   "markdown-display-tabs": {
     surface: "markdown-display-tabs",
