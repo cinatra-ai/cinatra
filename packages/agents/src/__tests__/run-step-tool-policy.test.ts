@@ -141,7 +141,7 @@ describe("the step's declared tools, asserted for one call", () => {
   let caught: unknown;
   try { assertRunStepToolAllowed(call(policy(),"wordpress_publish"),readers); } catch (e) { caught = e; }
   expect(caught).toBeInstanceOf(RunStepToolPolicyRefusal);
-  expect((caught as RunStepToolPolicyRefusal).name).toBe("RunStepToolPolicyRefusal");
-  expect((caught as RunStepToolPolicyRefusal).code).toBe("step_tool_not_declared");
+  expect((caught as InstanceType<typeof RunStepToolPolicyRefusal>).name).toBe("RunStepToolPolicyRefusal");
+  expect((caught as InstanceType<typeof RunStepToolPolicyRefusal>).code).toBe("step_tool_not_declared");
  });
 });
