@@ -274,10 +274,42 @@ describe("the mono MIME label is drawn on upload rows only", () => {
     expect(html).not.toContain("application/json");
   });
 
-  it("draws no label on a non-upload row that stores application/octet-stream", async () => {
+  it("draws no label on a non-upload pack-typed row that stores text/plain", async () => {
+    // A concrete (non-octet-stream) MIME: isFileMime is true for it, so only the
+    // upload-type gate drops the label (the pre-gate condition drew it).
     uploadBase.types = [PDF_BASE];
-    const html = await renderRow(summaryOf({ mime: "application/octet-stream" }), "Acme Corp");
+    const html = await renderRow(
+      summaryOf({
+        objectType: "@cinatra-ai/assets:blog-idea",
+        title: "Blog idea notes",
+        mime: "text/plain",
+        originKind: "agent",
+      }),
+      "Acme Corp",
+    );
+    expect(html).toContain("Blog idea notes");
+    expect(mimeLabel(html, "text/plain")).toBe(false);
     expect(html).not.toContain("font-mono");
-    expect(html).not.toContain("application/octet-stream");
+  });
+
+  it("keeps the unchanged octet-stream rule: an upload base row that stores application/octet-stream draws no label", async () => {
+    // Not the type gate: the row IS typed by a required upload base type, and
+    // isFileMime alone refuses application/octet-stream.
+    uploadBase.types = [PDF_BASE];
+    const html = await renderRow(
+      summaryOf({
+        objectType: PDF_BASE,
+        title: "unknown-blob.bin",
+        mime: "application/octet-stream",
+        originKind: "upload",
+        primaryExtension: "@fixture/pdf-base",
+        effectiveIdentity: { kind: "extension", extension: "@fixture/pdf-base" },
+        presentationIdentity: { kind: "extension", extension: "@fixture/pdf-base" },
+      }),
+      "Acme Corp",
+    );
+    expect(html).toContain("unknown-blob.bin");
+    expect(mimeLabel(html, "application/octet-stream")).toBe(false);
+    expect(html).not.toContain("font-mono");
   });
 });
