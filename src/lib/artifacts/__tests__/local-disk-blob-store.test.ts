@@ -701,6 +701,11 @@ describe("createLocalDiskBlobStore", () => {
     expect(await sniffOfBytes(small, "application/vnd.cinatra.cms-fields")).toBe("text/plain");
     expect(await sniffOfBytes(small, "application/x-json-ish")).toBe("text/plain");
     expect(await sniffOfBytes(small, "image/svg+json")).toBe("text/plain");
+    // A subtype that does not start with a letter or a digit is not a media type (RFC 6838 section 4.2).
+    expect(await sniffOfBytes(small, "application/.+json")).toBe("text/plain");
+    expect(await sniffOfBytes(small, "application/-x+json")).toBe("text/plain");
+    expect(await sniffOfBytes(small, "application/++json")).toBe("text/plain");
+    expect(await sniffOfBytes(small, "application/_x+json")).toBe("text/plain");
     // No declaration: JSON text stays text/plain.
     expect(await sniffOfBytes(small)).toBe("text/plain");
   });
