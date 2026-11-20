@@ -314,6 +314,14 @@ export const __LEGAL_TRANSITIONS__: ReadonlySet<string> = LEGAL_TRANSITIONS;
  *                              LEGAL_TRANSITIONS. Do NOT catch and swallow.
  *   - "stale_from_status"   — race; the DB row changed between read and CAS.
  *                              Usually benign (another worker won); log + continue.
+ *   - "pause_resume_in_flight" — a `→stopped` edge met a live `sending` pause
+ *                              claim (cinatra#4245): a resumed answer is on the
+ *                              wire, so the stop did not land. Not a stale read;
+ *                              a caller that tolerates only "stale_from_status"
+ *                              propagates it (fail-closed).
+ *   - "resume_intent_lease_lost" — cinatra#3745: an edge that carries a resume
+ *                              intent's lease found no row under that lease; the
+ *                              CAS rolled back with it. The delivery stops.
  */
 /**
  * thrown when ownership reassignment is attempted on a template
@@ -335,14 +343,42 @@ export class CannotReassignAfterFirstRun extends Error {
   }
 }
 
+export type RunTransitionErrorCode =
+  | "illegal_transition"
+  | "stale_from_status"
+  | "pause_resume_in_flight"
+  | "resume_intent_lease_lost";
+
+// ---------------------------------------------------------------------------
+// THE PAUSE CLAIM (cinatra#4245): the lease constants and the two control
+// fields of the status seam. The claim lives on the run row (core__0126); its
+// writers are packages/agents/src/run-pause-claim.ts and the seam rules in
+// run-transition.ts. Every expiry is compared with the database clock.
+// ---------------------------------------------------------------------------
+
+/** Claim to fence: one prompt insert, two Redis writes and one token mint. */
+export const PAUSE_CLAIM_LEASE_SECONDS = 120;
+/** A fenced send: the blocking sendTask cannot outlive WAYFLOW_A2A_TIMEOUT_MS
+ *  (wayflow-url.ts, 86 400 000 ms); five minutes more cover the handling of its
+ *  answer. Written as a number so this module stays dependency-free; a unit test
+ *  pins it to WAYFLOW_A2A_TIMEOUT_MS / 1000 + 300. */
+export const PAUSE_SEND_LEASE_SECONDS = 86_700;
+
+/** `pending_approval → running` under a live `claimed` lease of this token at
+ *  this generation (seam rule 3). */
+export type PauseFence = { readonly token: string; readonly generation: number };
+/** `→ stopped` only while the pause carries the change-request end mark at this
+ *  generation (seam rule 5). */
+export type PauseEndMark = { readonly generation: number };
+
 export class RunTransitionError extends Error {
-  readonly code: "illegal_transition" | "stale_from_status";
+  readonly code: RunTransitionErrorCode;
   readonly runId: string;
   readonly from: AgentRunStatus;
   readonly to: AgentRunStatus;
 
   constructor(args: {
-    code: "illegal_transition" | "stale_from_status";
+    code: RunTransitionErrorCode;
     runId: string;
     from: AgentRunStatus;
     to: AgentRunStatus;
@@ -357,6 +393,70 @@ export class RunTransitionError extends Error {
     this.runId = args.runId;
     this.from = args.from;
     this.to = args.to;
+  }
+}
+
+/** The gate a resume read: the A2A task the run paused on, in its execution attempt. */
+export type GateClaimIdentity = { a2aTaskId: string; executionAttemptId: string | null };
+
+/**
+ * The run-status writer (transitionRunStatus), passed in by a caller already
+ * inside the org-write perimeter. `P` is the produced-review park the claim
+ * clears; this leaf only carries it from the claim to the release.
+ */
+type GateTransition<A, P> = (
+  runId: string,
+  from: "pending_approval" | "running",
+  to: "running" | "pending_approval",
+  meta: { resumeGate: GateClaimIdentity & { onParkCleared?: (park: P) => void; restorePark?: P | null } },
+  authority: A,
+) => Promise<unknown>;
+
+/**
+ * Claims a paused run's gate for one resume before anything is recorded or
+ * dispatched (cinatra#3745).
+ *
+ * One conditional write moves the run `pending_approval -> running` — the
+ * resume edge, which keeps the execution attempt its step-tool policy is bound
+ * to — so the resumed leg's callbacks find the run running under that attempt.
+ * The write is bound to the gate the caller read (`gate`: the run's
+ * `a2a_task_id` and `execution_attempt_id`), so a gate that was answered, and a
+ * run that has since paused at a later gate, is a lost claim
+ * (`stale_from_status`): `{ claimed: false }`, nothing recorded or sent.
+ * `prepare` (minting the leg's run token) runs only after a won claim. If it
+ * fails, the release (`running -> pending_approval`, bound to the same gate)
+ * puts back the produced-review park the claim cleared, and the error is
+ * rethrown; a release that fails is logged, and the run then stays `running`
+ * with nothing sent (`agent_run_stop` is the operator road). A failure of the
+ * dispatch itself is the caller's and does not release the claim (WayFlow may
+ * already have taken the message).
+ */
+export async function claimGateForResume<A, T, P>(
+  transitionRunStatus: GateTransition<A, P>,
+  runId: string,
+  gate: GateClaimIdentity,
+  authority: A,
+  prepare: () => Promise<T>,
+): Promise<{ claimed: false } | { claimed: true; value: T }> {
+  const cleared: { park: P | null } = { park: null };
+  const identity: GateClaimIdentity = { a2aTaskId: gate.a2aTaskId, executionAttemptId: gate.executionAttemptId };
+  try {
+    await transitionRunStatus(runId, "pending_approval", "running", {
+      resumeGate: { ...identity, onParkCleared: (park) => { cleared.park = park; } },
+    }, authority);
+  } catch (claimErr) {
+    if ((claimErr as { code?: string } | null)?.code === "stale_from_status") return { claimed: false };
+    throw claimErr;
+  }
+  try {
+    return { claimed: true, value: await prepare() };
+  } catch (prepareErr) {
+    await transitionRunStatus(runId, "running", "pending_approval", {
+      resumeGate: { ...identity, restorePark: cleared.park },
+    }, authority).catch((releaseErr) => {
+      console.warn(`[claimGateForResume] could not release the gate claim run=${runId}`, releaseErr);
+    });
+    throw prepareErr;
   }
 }
 

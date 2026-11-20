@@ -396,7 +396,7 @@ jobs:
           trap 'kill "$SAMPLER_PID" 2>/dev/null || true' EXIT
           echo "memory sampler launched as PID ${SAMPLER_PID} writing ${SAMPLE_FILE}"
 
-          pnpm build
+          bash scripts/ci/hosted-build-memory-cap.sh run pnpm build
 
           kill "$SAMPLER_PID" 2>/dev/null || true
 

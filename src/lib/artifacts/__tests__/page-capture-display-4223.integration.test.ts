@@ -168,7 +168,7 @@ let BLOB_ROOT = "";
 let runPostgresQueriesAsync: typeof import("@/lib/postgres-async").runPostgresQueriesAsync;
 let getPostgresConnectionString: typeof import("@/lib/postgres-config").getPostgresConnectionString;
 let tool: typeof import("@/lib/artifact-page-capture-tool");
-let capture: typeof import("@/lib/artifacts/cms-preview-capture");
+let capture: typeof import("@/lib/artifacts/registered-page-render");
 let pageCapture: typeof import("@/lib/artifacts/registered-page-capture");
 let pageMod: typeof import("@/app/artifacts/[id]/page");
 let mountMod: typeof import("@/app/artifacts/[id]/artifact-display-mount");
@@ -272,7 +272,7 @@ beforeAll(async () => {
   ({ runPostgresQueriesAsync } = await import("@/lib/postgres-async"));
   ({ getPostgresConnectionString } = await import("@/lib/postgres-config"));
   tool = await import("@/lib/artifact-page-capture-tool");
-  capture = await import("@/lib/artifacts/cms-preview-capture");
+  capture = await import("@/lib/artifacts/registered-page-render");
   pageCapture = await import("@/lib/artifacts/registered-page-capture");
   pageMod = await import("@/app/artifacts/[id]/page");
   mountMod = await import("@/app/artifacts/[id]/artifact-display-mount");

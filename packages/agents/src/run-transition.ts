@@ -16,7 +16,8 @@
 // erased at build) — there is no runtime import of ./store, so no module-init
 // cycle. Every other dependency is imported from its SOURCE module.
 // ---------------------------------------------------------------------------
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql, type SQL } from "drizzle-orm";
+import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
 import { expireRunStream } from "@cinatra-ai/a2a";
 import type { OrgWriteAuthority, OrgWriteCapability, OrgWriteDb, OrgWriteTx } from "@cinatra-ai/org-write-kernel";
 // cinatra#1940 P1 (Decision 4): the per-run, epoch-agnostic lease-settle shape,
@@ -38,8 +39,8 @@ import { mintLeaseExpiryFinalizerAuthority } from "@/lib/org-write/lease-expiry-
 import { db } from "./db";
 import { agentRuns } from "./schema";
 import { dispatchRunWaitTransition } from "./run-wait-notifier"; // #1559/E9: zero-dep leaf seam
-import { LEGAL_TRANSITIONS, TERMINAL_RUN_STATUSES, RunTransitionError } from "./run-status";
-import type { AgentRunStatus } from "./run-status";
+import { LEGAL_TRANSITIONS, TERMINAL_RUN_STATUSES, RunTransitionError, PAUSE_SEND_LEASE_SECONDS } from "./run-status";
+import type { AgentRunStatus, PauseFence, PauseEndMark } from "./run-status";
 // cinatra#1939 wave 2 — the agent-run org-write seam. transitionRunStatus runs
 // its CAS + delegated meta write inside guardOrgMutation's org-locked
 // transaction; the required `authority` param is the compile-time ratchet that
@@ -52,6 +53,7 @@ import { transitionRunToCompletedWithDerivationOutbox, type DerivationOutboxCapt
 // The AgentRunRecord shape stays in ./store (the persistence hub); imported as a
 // TYPE only (erased) for updateAgentRunStatus's `patch` — no runtime ./store dep.
 import type { AgentRunRecord } from "./store";
+import type { WithheldTerminal } from "./run-produced-review-hold";
 
 export async function updateAgentRunStatus(
   id: string,
@@ -127,7 +129,7 @@ async function clearProducedReviewParkOnExit(
   tx: GuardedRunTx,
   runId: string,
   orgId: string,
-): Promise<void> {
+): Promise<ClearedProducedReviewPark | null> {
   // Dynamic, and deliberately: run-produced-review-hold imports this module for
   // `transitionRunStatus`, so a static edge back would close a module-init
   // cycle. Same posture as the `./agent-run-serde` dispatch-guard import above.
@@ -140,7 +142,7 @@ async function clearProducedReviewParkOnExit(
     .from(agentRuns)
     .where(and(eq(agentRuns.id, runId), eq(agentRuns.orgId, orgId)))
     .limit(1);
-  if (!row) return;
+  if (!row) return null;
   const updates: Partial<typeof agentRuns.$inferInsert> = {};
   if (row.producedReviewPark !== null && row.producedReviewPark !== undefined) {
     updates.producedReviewPark = null;
@@ -157,11 +159,75 @@ async function clearProducedReviewParkOnExit(
         }
       })()
     : row.stepResults;
-  if (Array.isArray(parsedSteps) && readWithheldTerminal(parsedSteps) !== null) {
+  const withheldTerminal = Array.isArray(parsedSteps) ? readWithheldTerminal(parsedSteps) : null;
+  if (withheldTerminal !== null) {
     updates.stepResults = JSON.stringify(stripWithheldTerminal(parsedSteps));
   }
   // Nothing to clear is the common case — an ordinary approval that was never a
   // park pays one read and no write.
+  if (Object.keys(updates).length === 0) return null;
+  await dtx
+    .update(agentRuns)
+    .set(updates)
+    .where(and(eq(agentRuns.id, runId), eq(agentRuns.orgId, orgId)));
+  // What this exit cleared, so a gate claim that is put back can restore it
+  // (cinatra#3745, restoreProducedReviewParkInTx).
+  return {
+    producedReviewPark: updates.producedReviewPark === null ? (row.producedReviewPark as string) : null,
+    withheldTerminal,
+  };
+}
+
+/** The produced-review park one exit from `pending_approval` cleared (cinatra#3745). */
+export type ClearedProducedReviewPark = {
+  /** The park's own column as it was (JSON-as-text), or null when the row had none. */
+  producedReviewPark: string | null;
+  /** The legacy marker stripped from `step_results`, or null when the row had none. */
+  withheldTerminal: WithheldTerminal | null;
+};
+
+/**
+ * PUT BACK A PARK THAT A RELEASED GATE CLAIM CLEARED (cinatra#3745).
+ *
+ * A gate claim (`pending_approval -> running`) is an exit from the parked status,
+ * so it clears the produced-review park above. When the claim is then released
+ * (`running -> pending_approval`, nothing was sent), the gate goes back the way it
+ * was found: in the release's own transaction, the column is written back and
+ * the marker is attached again, each only when the row does not carry one now (a
+ * park written since then is kept: first writer wins, as in the hold).
+ */
+async function restoreProducedReviewParkInTx(
+  tx: GuardedRunTx,
+  runId: string,
+  orgId: string,
+  park: ClearedProducedReviewPark,
+): Promise<void> {
+  const { attachWithheldTerminal, readWithheldTerminal } = await import("./run-produced-review-hold");
+  const dtx = tx as unknown as typeof db;
+  const [row] = await dtx
+    .select({ stepResults: agentRuns.stepResults, producedReviewPark: agentRuns.producedReviewPark })
+    .from(agentRuns)
+    .where(and(eq(agentRuns.id, runId), eq(agentRuns.orgId, orgId)))
+    .limit(1);
+  if (!row) return;
+  const updates: Partial<typeof agentRuns.$inferInsert> = {};
+  if (park.producedReviewPark !== null && (row.producedReviewPark === null || row.producedReviewPark === undefined)) {
+    updates.producedReviewPark = park.producedReviewPark;
+  }
+  if (park.withheldTerminal !== null) {
+    let steps: unknown = row.stepResults;
+    if (typeof steps === "string") {
+      try {
+        steps = JSON.parse(steps);
+      } catch {
+        steps = null;
+      }
+    }
+    const current = Array.isArray(steps) ? steps : [];
+    if (readWithheldTerminal(current) === null) {
+      updates.stepResults = JSON.stringify(attachWithheldTerminal(current, park.withheldTerminal));
+    }
+  }
   if (Object.keys(updates).length === 0) return;
   await dtx
     .update(agentRuns)
@@ -185,7 +251,14 @@ export async function updateAgentRunStatusConditional(
   dispatch: AgentRunDispatchFields | undefined,
   orgId: string,
   tx: GuardedRunTx,
+  pause?: PauseSeamFields,
+  gate?: ResumeGateIdentity,
+  runningAttempt?: string,
 ): Promise<boolean> {
+  assertPauseSeamFields(id, expectedStatus, nextStatus, pause);
+  if (expectedStatus === "pending_approval" && nextStatus === "running" && pause?.pauseFence === undefined) {
+    throw new Error(`updateAgentRunStatusConditional: pending_approval→running requires pauseFence on run ${id}`);
+  }
   // cinatra#1937: a queued→running CAS IS a dispatch — it stamps per-dispatch
   // bookkeeping ATOMICALLY with the status flip at the deepest layer, so no
   // caller can bypass it and `running` rows never carry stale attempt ids.
@@ -239,16 +312,179 @@ export async function updateAgentRunStatusConditional(
       ...(nextStatus === "pending_approval"
         ? { humanWaitAttemptId: expectedStatus === "running" ? sql`${agentRuns.executionAttemptId}` : null }
         : {}),
+      ...pauseClaimSet(nextStatus, pause),
     })
-    .where(and(eq(agentRuns.id, id), eq(agentRuns.status, expectedStatus), eq(agentRuns.orgId, orgId)))
+    .where(
+      and(
+        eq(agentRuns.id, id),
+        eq(agentRuns.status, expectedStatus),
+        eq(agentRuns.orgId, orgId),
+        ...pauseClaimWhere(nextStatus, pause),
+        // cinatra#3745: a gate claim or release is bound to the gate its caller read
+        // (the A2A task the run paused on, in its execution attempt), and an edge of
+        // a claimed resume leg to that leg, not only to the status. A later gate
+        // differs because handleWayflowTaskState writes each answer's task id
+        // before the run can park at that answer and, from `running`, stops when
+        // that write fails. On the resume delivery (from `pending_approval`, no
+        // claim) the write stays best effort: a failed write leaves the earlier
+        // gate's id on a run parked at the later gate, and a claim of it wins.
+        ...(gate
+          ? [
+              eq(agentRuns.a2aTaskId, gate.a2aTaskId),
+              gate.executionAttemptId === null
+                ? isNull(agentRuns.executionAttemptId)
+                : eq(agentRuns.executionAttemptId, gate.executionAttemptId),
+            ]
+          : []),
+        // cinatra#3745: an edge out of `running` bound to one execution attempt.
+        ...(runningAttempt !== undefined ? [eq(agentRuns.executionAttemptId, runningAttempt)] : []),
+      ),
+    )
     .returning({ id: agentRuns.id });
   return result.length === 1;
+}
+
+// ---------------------------------------------------------------------------
+// THE PAUSE CLAIM RULES OF THE STATUS SEAM (cinatra#4245)
+// ---------------------------------------------------------------------------
+//
+// A run paused at `pending_approval` carries a generation-stamped lease on its
+// own row (core__0126; the claim writers are ./run-pause-claim). The rules sit in
+// the ONE status compare-and-set, so no status writer that goes through it can
+// skip them:
+//   1. every status change clears the claim (token, phase, expiry), except the
+//      fence (rule 3);
+//   2. every entry into `pending_approval` raises `pause_generation` by 1, and
+//      writes `a2a_task_id` when the caller names the pause's task;
+//   3. the fence: `pending_approval → running` requires `pauseFence` and lands
+//      only under the live `claimed` lease of that token at that generation; it
+//      sets the phase `sending`, raises the generation by 1, keeps the token
+//      and sets the send lease;
+//   4. no `→ stopped` edge lands while a live `sending` lease holds the row
+//      (transitionRunStatus then throws `pause_resume_in_flight`);
+//   5. `pauseEndMark` on `→ stopped` lands only while the pause carries the
+//      change-request end mark at that generation.
+// Every expiry is compared with the database clock (`now()`). The other inline
+// status writers (the setup resume, the derivation-outbox delegate) apply rule
+// 1 themselves.
+
+/** The control fields of the pause claim rules. None is a column. */
+export type PauseSeamFields = {
+  /** Rule 3: legal only on `pending_approval → running`. */
+  readonly pauseFence?: PauseFence;
+  /** Rule 5: legal only on `→ stopped`. */
+  readonly pauseEndMark?: PauseEndMark;
+  /** Rule 2: the pause's A2A task id, legal only on `→ pending_approval`. */
+  readonly pauseTaskId?: string;
+};
+
+/** A misplaced control field is a programmer error, as the dispatch guard's. */
+function assertPauseSeamFields(
+  id: string,
+  expectedStatus: string,
+  nextStatus: string,
+  pause: PauseSeamFields | undefined,
+): void {
+  if (!pause) return;
+  if (pause.pauseFence !== undefined) {
+    if (!(expectedStatus === "pending_approval" && nextStatus === "running")) {
+      throw new Error(
+        `updateAgentRunStatusConditional: pauseFence supplied for ${expectedStatus}→${nextStatus} on run ${id}; it is legal only on pending_approval→running`,
+      );
+    }
+    const { token, generation } = pause.pauseFence;
+    if (typeof token !== "string" || token.length === 0 || !Number.isSafeInteger(generation) || generation < 0) {
+      throw new Error(`updateAgentRunStatusConditional: malformed pauseFence on run ${id}`);
+    }
+  }
+  if (pause.pauseEndMark !== undefined) {
+    if (nextStatus !== "stopped") {
+      throw new Error(
+        `updateAgentRunStatusConditional: pauseEndMark supplied for ${expectedStatus}→${nextStatus} on run ${id}; it is legal only on a →stopped edge`,
+      );
+    }
+    const { generation } = pause.pauseEndMark;
+    if (!Number.isSafeInteger(generation) || generation < 0) {
+      throw new Error(`updateAgentRunStatusConditional: malformed pauseEndMark on run ${id}`);
+    }
+  }
+  if (pause.pauseTaskId !== undefined) {
+    if (nextStatus !== "pending_approval") {
+      throw new Error(
+        `updateAgentRunStatusConditional: pauseTaskId supplied for ${expectedStatus}→${nextStatus} on run ${id}; it is legal only on a →pending_approval edge`,
+      );
+    }
+    if (typeof pause.pauseTaskId !== "string" || pause.pauseTaskId.length === 0) {
+      throw new Error(`updateAgentRunStatusConditional: empty pauseTaskId on run ${id}`);
+    }
+  }
+}
+
+/** Rules 1-3: the claim and generation columns the compare-and-set writes. */
+function pauseClaimSet(
+  nextStatus: string,
+  pause: PauseSeamFields | undefined,
+): PgUpdateSetSource<typeof agentRuns> {
+  if (pause?.pauseFence) {
+    return {
+      pauseClaimPhase: "sending",
+      pauseGeneration: sql`${agentRuns.pauseGeneration} + 1`,
+      pauseClaimExpiresAt: sql`now() + make_interval(secs => ${sql.raw(String(PAUSE_SEND_LEASE_SECONDS))})`,
+    };
+  }
+  return {
+    pauseClaimToken: null,
+    pauseClaimPhase: null,
+    pauseClaimExpiresAt: null,
+    ...(nextStatus === "pending_approval"
+      ? {
+          pauseGeneration: sql`${agentRuns.pauseGeneration} + 1`,
+          ...(pause?.pauseTaskId !== undefined ? { a2aTaskId: pause.pauseTaskId } : {}),
+        }
+      : {}),
+  };
+}
+
+/** Rules 3-5: the claim predicates the compare-and-set adds to its WHERE. */
+function pauseClaimWhere(nextStatus: string, pause: PauseSeamFields | undefined): SQL[] {
+  const where: SQL[] = [];
+  if (pause?.pauseFence) {
+    where.push(
+      sql`${agentRuns.pauseClaimToken} = ${pause.pauseFence.token}`,
+      sql`${agentRuns.pauseClaimPhase} = 'claimed'`,
+      sql`${agentRuns.pauseGeneration} = ${pause.pauseFence.generation}`,
+      sql`${agentRuns.pauseClaimExpiresAt} > now()`,
+    );
+  }
+  if (nextStatus === "stopped") {
+    // NULL-safe: a row with no claim has phase NULL, and `NOT (NULL AND x)`
+    // would be NULL and refuse every ordinary stop.
+    where.push(sql`(${agentRuns.pauseClaimPhase} IS DISTINCT FROM 'sending' OR ${agentRuns.pauseClaimExpiresAt} <= now())`);
+  }
+  if (pause?.pauseEndMark) {
+    where.push(
+      sql`${agentRuns.pauseClaimPhase} = 'changes_requested'`,
+      sql`${agentRuns.pauseGeneration} = ${pause.pauseEndMark.generation}`,
+    );
+  }
+  return where;
+}
+
+/** After a lost `→ stopped` compare-and-set, inside the same transaction: does a
+ *  live `sending` lease hold the row (rule 4)? Any other state is a stale read. */
+async function heldBySend(tx: GuardedRunTx, runId: string, orgId: string): Promise<boolean> {
+  const result = await tx.execute(
+    sql`SELECT (${agentRuns.pauseClaimPhase} = 'sending' AND ${agentRuns.pauseClaimExpiresAt} > now()) AS live FROM ${agentRuns} WHERE ${agentRuns.id} = ${runId} AND ${agentRuns.orgId} = ${orgId}`,
+  );
+  return rowsOf(result)[0]?.live === true;
 }
 
 /** Per-dispatch bookkeeping stamped by the queued→running CAS (cinatra#1937). */
 export type AgentRunDispatchFields = {
   /** Fresh per-dispatch id — mint with crypto.randomUUID() at each dispatch. */
   attemptId: string;
+  /** cinatra#3745: a resume's dispatch carries the run's bound step-tool graph to `attemptId` in THIS transaction (carryRunStepToolPolicyInTx). */
+  carryBoundStepToolPolicy?: true;
 };
 
 /**
@@ -281,6 +517,257 @@ async function settleLeaseInTx(
 }
 
 // ---------------------------------------------------------------------------
+// cinatra#3745 — the resume delivery's run edges, fenced by its intent's lease
+// ---------------------------------------------------------------------------
+//
+// When the caller passes `resumeIntentLease`, the intent row is updated under the
+// held lease (its token; the expiry time is not read) in the run's own guarded
+// transaction, right after the CAS, so a run
+// edge the delivery writes (its claim, its release, its scope-refusal failure)
+// lands only while the worker still holds the gate's lease, and the claim mark
+// moves with the edge:
+//
+//   pending_approval -> running   claim:   run_claimed_at = now(), resume_task_result = NULL
+//   running -> pending_approval   release: run_claimed_at = NULL,  resume_task_result = NULL
+//   pending_approval -> failed    fence only
+//   running -> failed             fence only
+//
+// No row under the lease throws `resume_intent_lease_lost`, which rolls the run
+// CAS back with it. The outbox table is not on the org axis.
+//
+// Every edge INTO `running` also clears the claim marks of the run's OTHER
+// intents: from then on another driver advances the run, so an earlier delivery
+// whose handler moved the run on and died before its mark-done closes on its
+// recorded task, which the clear keeps as the witness of a delivered resume, and
+// never replays it into that run (a replay needs the mark).
+
+export type ResumeIntentLease = { gateId: string; leaseToken: string };
+
+const RESUME_LEASED_EDGES = new Set([
+  "pending_approval->running",
+  "running->pending_approval",
+  "pending_approval->failed",
+  "running->failed",
+]);
+
+/** Pre-guard: the lease key is legal only on the four delivery edges. */
+function assertResumeIntentLeaseEdge(runId: string, from: AgentRunStatus, to: AgentRunStatus): void {
+  if (!RESUME_LEASED_EDGES.has(`${from}->${to}`)) {
+    throw new RunTransitionError({
+      code: "illegal_transition",
+      runId,
+      from,
+      to,
+      message: `transitionRunStatus(${runId}) illegal_transition: resumeIntentLease is not legal on ${from} → ${to}`,
+    });
+  }
+}
+
+// The intent writes themselves live in the gate store, which owns every write to
+// the resume outbox. It is imported at the call (as ./agent-run-serde is below):
+// the store imports ./store, which imports this module.
+async function fenceResumeIntentLeaseInTx(
+  tx: GuardedRunTx,
+  input: { runId: string; from: AgentRunStatus; to: AgentRunStatus; lease: ResumeIntentLease },
+): Promise<void> {
+  const { runId, from, to, lease } = input;
+  const claimMark =
+    from === "pending_approval" && to === "running"
+      ? "claim"
+      : from === "running" && to === "pending_approval"
+        ? "release"
+        : "none";
+  const { fenceResumeIntentLeaseInRunTx } = await import("./artifact-review-gate-store");
+  const fenced = await fenceResumeIntentLeaseInRunTx(tx, {
+    runId,
+    gateId: lease.gateId,
+    leaseToken: lease.leaseToken,
+    claimMark,
+  });
+  if (!fenced) {
+    throw new RunTransitionError({
+      code: "resume_intent_lease_lost",
+      runId,
+      from,
+      to,
+      message: `transitionRunStatus(${runId}) resume_intent_lease_lost: gate ${lease.gateId} is not under this lease`,
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// cinatra#3745 — a gate claim and its release are bound to the gate
+// ---------------------------------------------------------------------------
+//
+// A resume that claims a paused run's gate (`pending_approval -> running`) read
+// the gate first. The status alone does not name it: between the read and the
+// claim another resume can answer that gate, send, and see the run park at its
+// NEXT gate, back in `pending_approval`. So the claim names the gate it read (the
+// run's `a2a_task_id`, in its `execution_attempt_id`) in the CAS itself, and a
+// later gate is a lost claim (`stale_from_status`). The release of a claim
+// (`running -> pending_approval`, the preparation failed and nothing was sent)
+// is bound the same way, so it never moves a newer execution of the run back,
+// and it puts back the produced-review park the claim cleared.
+
+/** The gate a claim or a release is bound to. */
+export type ResumeGateIdentity = { a2aTaskId: string; executionAttemptId: string | null };
+
+export type ResumeGate = ResumeGateIdentity & {
+  /** Claim only: receives the produced-review park the claim cleared, if any. */
+  onParkCleared?: (park: ClearedProducedReviewPark) => void;
+  /** Release only: the park the claim cleared, put back in the release's transaction. */
+  restorePark?: ClearedProducedReviewPark | null;
+};
+
+/** Pre-guard: the gate key is legal only on the claim and its release. */
+function assertResumeGateEdge(runId: string, from: AgentRunStatus, to: AgentRunStatus, gate: ResumeGate): void {
+  const claim = from === "pending_approval" && to === "running";
+  const release = from === "running" && to === "pending_approval";
+  const why =
+    !claim && !release
+      ? `resumeGate is not legal on ${from} → ${to}`
+      : claim && gate.restorePark !== undefined
+        ? "restorePark is legal only on the release"
+        : release && gate.onParkCleared !== undefined
+          ? "onParkCleared is legal only on the claim"
+          : null;
+  if (why !== null) {
+    throw new RunTransitionError({
+      code: "illegal_transition",
+      runId,
+      from,
+      to,
+      message: `transitionRunStatus(${runId}) illegal_transition: ${why}`,
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// cinatra#3745 — the response of a claimed resume leg answers only its claim
+// ---------------------------------------------------------------------------
+//
+// After a won gate claim the resume sends and then hands WayFlow's answer to
+// `handleWayflowTaskState`. The send can block for a long time; meanwhile the
+// run can be stopped, queued and dispatched again under a fresh execution
+// attempt. So the answer is bound to the claim: `bindResumeLegToTask` first
+// writes the answer's task (the next gate's identity) only while the row is
+// still `running` at the claimed gate in the claimed attempt, and every edge the
+// handler then writes carries `resumeLeg` (that task, that attempt) in its CAS.
+// An old answer finds no row and changes nothing.
+
+/** Pre-guard: the attempt key is legal only on an edge out of `running`, with a named attempt, alone among the CAS keys. */
+function assertRunningAttemptEdge(
+  runId: string,
+  from: AgentRunStatus,
+  to: AgentRunStatus,
+  meta: { runningAttempt?: unknown; resumeGate?: unknown; resumeLeg?: unknown; derivationOutbox?: unknown },
+): void {
+  const why =
+    from !== "running"
+      ? `runningAttempt is not legal on ${from} → ${to}`
+      : typeof meta.runningAttempt !== "string" || meta.runningAttempt === ""
+        ? "runningAttempt must name an attempt"
+        : meta.resumeGate !== undefined || meta.resumeLeg !== undefined || meta.derivationOutbox !== undefined
+          ? "runningAttempt is not legal with resumeGate, resumeLeg or derivationOutbox"
+          : null;
+  if (why !== null) {
+    throw new RunTransitionError({
+      code: "illegal_transition",
+      runId,
+      from,
+      to,
+      message: `transitionRunStatus(${runId}) illegal_transition: ${why}`,
+    });
+  }
+}
+
+/** Pre-guard: the leg key is legal only on an edge out of `running`, alone among the CAS keys. */
+function assertResumeLegEdge(
+  runId: string,
+  from: AgentRunStatus,
+  to: AgentRunStatus,
+  meta: { resumeGate?: unknown; derivationOutbox?: unknown },
+): void {
+  const why =
+    from !== "running"
+      ? `resumeLeg is not legal on ${from} → ${to}`
+      : meta.resumeGate !== undefined
+        ? "resumeLeg and resumeGate are not legal together"
+        : meta.derivationOutbox !== undefined
+          ? "resumeLeg is not legal with derivationOutbox"
+          : null;
+  if (why !== null) {
+    throw new RunTransitionError({
+      code: "illegal_transition",
+      runId,
+      from,
+      to,
+      message: `transitionRunStatus(${runId}) illegal_transition: ${why}`,
+    });
+  }
+}
+
+/**
+ * Binds the answer of a claimed resume leg to its claim (cinatra#3745). One
+ * conditional write: the run's `a2a_task_id` (and `a2a_context_id`, when the
+ * answer names one) take the answer's values only while the row is `running` at
+ * the claimed gate's task in the claimed execution attempt. `false`: the run
+ * left that claim (stopped, failed, retried under a fresh attempt, or moved on
+ * by another driver), and nothing was written. A database error is thrown: the
+ * caller writes nothing more, and the run stays `running`.
+ */
+export async function bindResumeLegToTask(input: {
+  runId: string;
+  orgId: string;
+  claimed: ResumeGateIdentity;
+  taskId: string;
+  contextId?: string | null;
+}): Promise<boolean> {
+  const { runId, orgId, claimed, taskId } = input;
+  if (!runId || !taskId) throw new Error("bindResumeLegToTask: runId and taskId are required");
+  const MAX_ATTEMPTS = 3;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const rows = await db
+        .update(agentRuns)
+        .set({ a2aTaskId: taskId, ...(input.contextId ? { a2aContextId: input.contextId } : {}) })
+        .where(
+          and(
+            eq(agentRuns.id, runId),
+            eq(agentRuns.orgId, orgId),
+            eq(agentRuns.status, "running"),
+            eq(agentRuns.a2aTaskId, claimed.a2aTaskId),
+            claimed.executionAttemptId === null
+              ? isNull(agentRuns.executionAttemptId)
+              : eq(agentRuns.executionAttemptId, claimed.executionAttemptId),
+          ),
+        )
+        .returning({ id: agentRuns.id });
+      return rows.length === 1;
+    } catch (err) {
+      // The same transient collision updateAgentRunA2ATaskId retries (store.ts).
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes("tuple concurrently updated") || attempt === MAX_ATTEMPTS) throw err;
+      await new Promise((r) => setTimeout(r, 25 * attempt + Math.random() * 25));
+    }
+  }
+}
+
+/**
+ * On every edge whose target is `running`, after the CAS and the lease fence.
+ * `keepGateId` is the delivery's own gate on its claim (null on any other
+ * entry). One statement on the tx's `execute` surface, so the run writes of the
+ * CAS and the meta patch stay exactly as they were.
+ */
+async function clearOtherResumeClaimsInTx(
+  tx: GuardedRunTx,
+  input: { runId: string; keepGateId: string | null },
+): Promise<void> {
+  const { clearOtherResumeClaimsInRunTx } = await import("./artifact-review-gate-store");
+  await clearOtherResumeClaimsInRunTx(tx, input);
+}
+
+// ---------------------------------------------------------------------------
 // canonical run-status transition primitive
 // ---------------------------------------------------------------------------
 //
@@ -302,6 +789,26 @@ async function settleLeaseInTx(
 // DO NOT call updateAgentRunStatus for status CHANGES from any other file —
 // use transitionRunStatus. updateAgentRunStatus is still the correct call for
 // the narrow meta-only case handled by updateAgentRunMeta below (now tx-scoped).
+
+/**
+ * The CONTROL keys of transitionRunStatus's meta: `dispatch` and `pauseTaskId`
+ * are written BY the status compare-and-set, `pauseFence` and `pauseEndMark`
+ * only guard it, and `humanWaitGate` only feeds the wait notifier. The
+ * cinatra#3745 keys `resumeIntentLease`, `resumeGate` and `resumeLeg` guard the
+ * compare-and-set and its transaction. None is a meta column, so the delegated
+ * meta write never receives them.
+ */
+const CONTROL_META_KEYS = [
+  "dispatch",
+  "humanWaitGate",
+  "pauseFence",
+  "pauseEndMark",
+  "pauseTaskId",
+  "resumeIntentLease",
+  "resumeGate",
+  "resumeLeg",
+  "runningAttempt",
+] as const;
 
 /**
  * single canonical entry point for agent_runs.status changes.
@@ -329,6 +836,20 @@ export async function transitionRunStatus(
         dispatch?: AgentRunDispatchFields;
         /** cinatra#1893 (epic #1883 A5): when present, delegate to transitionRunToCompletedWithDerivationOutbox — terminal CAS + final-output snapshot + derivation-outbox INSERT in ONE transaction (legal ONLY for `to === "completed"`). Absent for every other caller — the historical two-write path is unchanged. */
         derivationOutbox?: DerivationOutboxCapture;
+        /** cinatra#4245 pause claim rule 3 (see PauseSeamFields): `pending_approval → running` only under this live `claimed` lease. Not a DB column. */
+        pauseFence?: PauseFence;
+        /** cinatra#4245 pause claim rule 5: `→ stopped` only while the pause carries the change-request end mark at this generation. Not a DB column. */
+        pauseEndMark?: PauseEndMark;
+        /** cinatra#4245 pause claim rule 2: the pause's A2A task id, written with a `→ pending_approval` edge. Written by the CAS, stripped from the meta write. */
+        pauseTaskId?: string;
+        /** cinatra#3745: the resume delivery's lease. The edge lands only while the intent row is `delivering` under this token, in the same transaction (fenceResumeIntentLeaseInTx); legal only on the delivery's four edges. Not a DB column. */
+        resumeIntentLease?: ResumeIntentLease;
+        /** cinatra#3745: the gate a resume claim (`pending_approval -> running`) or its release (`running -> pending_approval`) is bound to, in the CAS; the claim reports the park it cleared and the release puts it back. Legal only on those two edges. Not a DB column. */
+        resumeGate?: ResumeGate;
+        /** cinatra#3745: the claimed resume leg an edge out of `running` belongs to (the task its answer named, in the claim's execution attempt), in the CAS, so an old answer never moves a newer execution. Legal only on an edge out of `running`, not with `resumeGate` or `derivationOutbox`. Not a DB column. */
+        resumeLeg?: ResumeGateIdentity;
+        /** cinatra#3745: the edge out of `running` lands only while the run runs under this execution attempt, in the CAS, so the compensation of one dispatch claim never moves a newer one. Legal only on an edge out of `running`, alone among the CAS keys. Not a DB column. */
+        runningAttempt?: string;
       }
     | undefined,
   // cinatra#1939 wave 2 — REQUIRED host-minted authority (the compile-time
@@ -354,6 +875,10 @@ export async function transitionRunStatus(
   if (!LEGAL_TRANSITIONS.has(`${from}->${to}` as const)) {
     throw new RunTransitionError({ code: "illegal_transition", runId, from, to });
   }
+  if (meta?.resumeIntentLease) assertResumeIntentLeaseEdge(runId, from, to);
+  if (meta?.resumeGate) assertResumeGateEdge(runId, from, to, meta.resumeGate);
+  if (meta?.resumeLeg) assertResumeLegEdge(runId, from, to, meta);
+  if (meta?.runningAttempt !== undefined) assertRunningAttemptEdge(runId, from, to, meta);
   // (2) Fail-closed: every status transition requires a host-minted authority.
   // The org (lock + CAS scope) is the authority's org — a wrong-org authority
   // fails closed as `stale_from_status` via the §1d org-scoped CAS.
@@ -393,6 +918,13 @@ export async function transitionRunStatus(
   // the CAS + final-output snapshot + derivation-outbox INSERT commit as ONE
   // guarded transaction on the guarded tx (org-scoped inside the delegate).
   if (meta?.derivationOutbox) {
+    // cinatra#4245: the pause claim control fields ride only the plain CAS
+    // below; the outbox delegate (→completed) clears the claim itself (rule 1).
+    if (meta.pauseFence || meta.pauseEndMark || meta.pauseTaskId !== undefined) {
+      throw new Error(
+        `transitionRunStatus: pause claim fields supplied with derivationOutbox for ${from}→${to} on run ${runId}`,
+      );
+    }
     const derivationOutbox = meta.derivationOutbox;
     await guardedRunWrite(authority, { orgId, runId, capability }, async (guardedTx) => {
       await transitionRunToCompletedWithDerivationOutbox(
@@ -424,19 +956,50 @@ export async function transitionRunStatus(
   }
 
   await guardedRunWrite(authority, { orgId, runId, capability }, async (guardedTx) => {
-    const won = await updateAgentRunStatusConditional(runId, from, to, meta?.dispatch, orgId, guardedTx);
+    // cinatra#3745: the binding moves with the dispatch CAS or not at all;
+    // the prior attempt is the run row locked inside, never a caller value.
+    if (meta?.dispatch?.carryBoundStepToolPolicy && from === "queued" && to === "running") {
+      const { carryRunStepToolPolicyInTx } = await import("./agent-run-serde");
+      await carryRunStepToolPolicyInTx(guardedTx, { orgId, runId, executionAttemptId: meta.dispatch.attemptId });
+    }
+    const resumeGate = meta?.resumeGate;
+    const casGate = resumeGate ?? meta?.resumeLeg;
+    const won = await updateAgentRunStatusConditional(
+      runId, from, to, meta?.dispatch, orgId, guardedTx,
+      {
+        pauseFence: meta?.pauseFence,
+        pauseEndMark: meta?.pauseEndMark,
+        pauseTaskId: meta?.pauseTaskId,
+      },
+      casGate ? { a2aTaskId: casGate.a2aTaskId, executionAttemptId: casGate.executionAttemptId } : undefined,
+      meta?.runningAttempt,
+    );
     if (!won) {
       // Rolls back the guarded tx; the meta write below never runs and the
       // post-commit side-effects never fire (codex #2 — the transition did not
-      // commit, so no waiter wakeup / stream expiry).
+      // commit, so no waiter wakeup / stream expiry). cinatra#4245 rule 4: a stop
+      // refused by a live send says so; every other lost CAS is a stale read.
+      if (to === "stopped" && (await heldBySend(guardedTx, runId, orgId))) {
+        throw new RunTransitionError({ code: "pause_resume_in_flight", runId, from, to });
+      }
       throw new RunTransitionError({ code: "stale_from_status", runId, from, to });
+    }
+    // cinatra#3745: no lease, no edge — a lost lease rolls the CAS back with it.
+    if (meta?.resumeIntentLease) {
+      await fenceResumeIntentLeaseInTx(guardedTx, { runId, from, to, lease: meta.resumeIntentLease });
+    }
+    if (to === "running") {
+      await clearOtherResumeClaimsInTx(guardedTx, { runId, keepGateId: meta?.resumeIntentLease?.gateId ?? null });
     }
     // Delegate the meta patch to updateAgentRunStatus on the SAME guarded tx. The
     // CAS already wrote the status column; re-writing it is a no-op that still
     // runs the meta-patch logic. The CONTROL keys (`dispatch` — written BY the
     // CAS — and `humanWaitGate` — not a DB column) are stripped first: only
-    // genuine DB meta reaches the delegated write.
-    const { dispatch: _dispatch, humanWaitGate: _humanWaitGate, ...dbMeta } = meta ?? {};
+    // genuine DB meta reaches the delegated write (cinatra#4245 adds the three
+    // pause keys: the CAS reads or writes them, none is a meta column;
+    // cinatra#3745 adds `resumeIntentLease`, `resumeGate`, `resumeLeg` and `runningAttempt`).
+    const dbMeta: NonNullable<typeof meta> = { ...(meta ?? {}) };
+    for (const key of CONTROL_META_KEYS) delete dbMeta[key];
     const hasDelegatedMeta =
       dbMeta.error !== undefined ||
       dbMeta.startedAt !== undefined ||
@@ -450,7 +1013,13 @@ export async function transitionRunStatus(
     // parked status. A no-op when the release has already cleared both halves
     // in this same transaction.
     if (leavingProducedReviewPark) {
-      await clearProducedReviewParkOnExit(guardedTx, runId, orgId);
+      const cleared = await clearProducedReviewParkOnExit(guardedTx, runId, orgId);
+      // cinatra#3745: a gate claim keeps what it cleared, so its release can put it back.
+      if (cleared && resumeGate?.onParkCleared) resumeGate.onParkCleared(cleared);
+    }
+    // cinatra#3745: the release of a gate claim puts back the park the claim cleared.
+    if (resumeGate?.restorePark) {
+      await restoreProducedReviewParkInTx(guardedTx, runId, orgId, resumeGate.restorePark);
     }
     // cinatra#1940 P1 fold (Decision 4): a terminal landing settles the run's
     // lease in the SAME guarded tx as the CAS + meta — status and lease

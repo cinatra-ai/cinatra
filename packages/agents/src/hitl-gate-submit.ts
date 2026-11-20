@@ -43,6 +43,23 @@ export function isSetupGateTaskId(reviewTaskId: string): boolean {
 }
 
 /**
+ * The identity of one gate: its review task, its renderer and the field it
+ * names. Injective (a JSON list, no chosen separator), because all three parts
+ * are unconstrained strings from a run's own row. Each surface keys what belongs
+ * to one gate on it: the buffer and the mounted renderer (cinatra#3380), and the
+ * renderer's validity report, the staged draft and answer, the registered flush
+ * and the answered marker (cinatra#3562). It is the one gate key of every run
+ * surface. A missing field is the `null` field, and it is not the empty field.
+ */
+export function hitlGateIdentityKey(gate: {
+  reviewTaskId: string;
+  xRenderer: string;
+  fieldName?: string | null;
+}): string {
+  return JSON.stringify([gate.reviewTaskId, gate.xRenderer, gate.fieldName ?? null]);
+}
+
+/**
  * Grouped-setup form classification. Both panels match the base renderer
  * id and its `<id>:` prefixed variants; the orchestrator stepper
  * additionally treats `:setup-form` suffixed renderers as grouped-setup
@@ -345,11 +362,43 @@ export function withContextSelectorEnvelope(
 // ---------------------------------------------------------------------------
 
 /**
+ * THE RUN PANEL'S MID-RUN LIST STEP (cinatra#3562): a `:list-picker` gate that
+ * is not a setup gate. The run panel draws it as a mid-run gate (its picks
+ * buffer for the outer Continue) and lifts its picks into the approval note;
+ * the same reading decides both, so they cannot disagree. On a setup gate the
+ * list step stays on the setup road, where its answer is sent under the gate's
+ * field name.
+ */
+export function isMidRunListStepGate(xRenderer: string, reviewTaskId: string): boolean {
+  return xRenderer.endsWith(":list-picker") && !isSetupGateTaskId(reviewTaskId);
+}
+
+/** A list id that names a pick: a string that is not blank (whitespace only). */
+function isUsableListId(id: unknown): id is string {
+  return typeof id === "string" && id.trim().length > 0;
+}
+
+/**
+ * Whether a list step's buffer holds a pick (cinatra#3562): a usable id in
+ * `listIds`, or a usable `listId`. A buffer without one would resume the run
+ * with an empty snapshot (`listId: ""`), so the run panel's Continue sends
+ * nothing for it.
+ */
+export function hasUsableListPick(buffered: Record<string, unknown> | null | undefined): boolean {
+  if (!buffered) return false;
+  const { listIds, listId } = buffered as { listIds?: unknown; listId?: unknown };
+  return (Array.isArray(listIds) && listIds.some(isUsableListId)) || isUsableListId(listId);
+}
+
+/**
  * Lift renderer-buffered values into a structured `approvalNote` snapshot
  * for the gates whose downstream continuation re-reads exactly what was
  * approved. Returns `{ approvalNote }` to merge into the resume payload,
  * or `null` when the renderer has no lift. The client-side fields are
- * advisory, not trusted — the server re-resolves (e.g. via crm_list_get).
+ * advisory, not trusted. The cinatra server does not re-resolve them:
+ * `approveReviewTaskInternal` (review-task-actions.ts) forwards the note as
+ * the resume text. Resolving each id (e.g. via crm_list_get) is left to the
+ * later workflow step that reads the note.
  *
  * `now` is injectable for tests; defaults to the current time.
  */
@@ -359,8 +408,35 @@ export function liftRendererApprovalNote(
   now: string = new Date().toISOString(),
 ): { approvalNote: string } | null {
   if (xRenderer.endsWith(":list-picker")) {
+    // SEVERAL PICKS (cinatra#3562): a list step declared to take several picks
+    // buffers `listIds` (and `listNames`, in the same order). The snapshot then
+    // carries every ticked id in the order ticked, each once, with its name.
+    // An id that is not a string, or is blank (whitespace only), is no pick.
+    // A name is advisory: resolving each id is the later workflow step's job.
+    const ticked = (buffered as { listIds?: unknown }).listIds;
+    if (Array.isArray(ticked)) {
+      const names = (buffered as { listNames?: unknown }).listNames;
+      const listIds: string[] = [];
+      const listNames: string[] = [];
+      ticked.forEach((id, index) => {
+        if (!isUsableListId(id) || listIds.includes(id)) return;
+        listIds.push(id);
+        const name = Array.isArray(names) ? names[index] : undefined;
+        listNames.push(typeof name === "string" ? name : "");
+      });
+      if (listIds.length > 0) {
+        return {
+          approvalNote: JSON.stringify({
+            type: "list" as const,
+            listIds,
+            listNames,
+            snapshotAt: now,
+          }),
+        };
+      }
+    }
     // Snapshot the selected list at approval time so downstream stages can
-    // reference it; the server re-resolves via crm_list_get.
+    // reference it; resolving it is the later workflow step's job.
     const { listId, listName, memberCount } = buffered as {
       listId?: string;
       listName?: string;
@@ -431,6 +507,30 @@ export function liftRendererApprovalNote(
     };
   }
   return null;
+}
+
+/**
+ * Merge a renderer's lifted `approvalNote` into the resume payload
+ * (cinatra#3562). For a list step, the note is what the run receives.
+ * `approveReviewTaskInternal` (review-task-actions.ts) sends a nonblank
+ * `userResponse` as the resume text before it reads `approvalNote`. A
+ * `userResponse` in the buffer of a list step would therefore replace the
+ * snapshot of the picks, and the run would never receive the picked lists. So
+ * a lifted list-step note removes `userResponse` from the payload. The
+ * attachment envelope applied after this reads the note
+ * (`applyAttachmentEnvelope`, pickLegacyResumeText). Every other lift is
+ * merged as before. With no lift, the payload is returned unchanged.
+ */
+export function applyRendererApprovalNote(
+  xRenderer: string,
+  payload: Record<string, unknown>,
+  lift: { approvalNote: string } | null,
+): Record<string, unknown> {
+  if (!lift) return payload;
+  const merged: Record<string, unknown> = { ...payload, ...lift };
+  if (!xRenderer.endsWith(":list-picker")) return merged;
+  delete merged.userResponse;
+  return merged;
 }
 
 // ---------------------------------------------------------------------------
@@ -532,7 +632,9 @@ export function buildChatGateSubmitPayload(args: {
  * The two panels' precedence divergence is pre-existing behavior; unifying
  * it would change the WayFlow resume text for AgenticRunPanel gates whose
  * renderer buffered an approvalNote without a userResponse. Keep them
- * distinct until that alignment is decided deliberately.
+ * distinct until that alignment is decided deliberately. The one exception
+ * is the run panel's list step (cinatra#3562): its lifted note is the resume
+ * text, so its Continue wraps with `applyAttachmentEnvelope`.
  */
 export function applyAttachmentEnvelopeUserResponseOnly(
   payload: Record<string, unknown>,
@@ -545,4 +647,549 @@ export function applyAttachmentEnvelopeUserResponseOnly(
       : "[Approved by operator]";
   const wrapped = wrapUserResponseWithAttachments(existing, attachments);
   return { ...payload, userResponse: wrapped.userResponse };
+}
+
+// ---------------------------------------------------------------------------
+// The renderer's own reading of its value (cinatra#3562)
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a run surface keeps what its field renderers reported through
+ * `onValidityChange`. Each drawn renderer reports under an owner of its own and
+ * keeps one report, its latest, made on the gate it is drawn for. While any
+ * report on the gate on screen is anything but `true`, the Continue drawn for
+ * that gate is unavailable and a press sends nothing.
+ *
+ * Only the report of an attached owner counts. Each surface attaches the owner
+ * while its renderer is on the screen and releases it when the renderer leaves
+ * or another renderer takes its place. The release drops that owner's report
+ * and no other, so a renderer that never reports blocks nothing (cinatra#3532)
+ * even where an earlier one reported `false`. A report made while the owner is
+ * not attached, before the attach or after the release, holds nothing; the
+ * owner keeps it, and it counts when the same owner is attached again (as
+ * StrictMode and a hidden subtree that is shown again do). A surface attaches a
+ * new owner for each renderer, so a report that arrives after its renderer has
+ * left the screen never holds a gate again.
+ */
+export type GateValidityStore = {
+  /** The renderer drawn under `owner` is on the screen: its report counts from now on. */
+  attach: (owner: object) => void;
+  /** The renderer drawn under `owner`, on gate `key` (`hitlGateIdentityKey`), reports whether its value may be sent. */
+  report: (owner: object, key: string, valid: boolean) => void;
+  /** The renderer drawn under `owner` has left the screen: its report goes, and no other. */
+  release: (owner: object) => void;
+  /** True while any report of an attached owner on `key` is anything but `true`. */
+  isHeld: (key: string | null) => boolean;
+  subscribe: (listener: () => void) => () => void;
+};
+
+type GateValidityReport = { key: string; valid: boolean };
+
+export function createGateValidityStore(): GateValidityStore {
+  /** The reports of the attached owners: only these hold a gate. */
+  const reports = new Map<object, GateValidityReport>();
+  const attached = new WeakSet<object>();
+  /** The latest report of an owner that is not attached; it holds nothing. */
+  const kept = new WeakMap<object, GateValidityReport>();
+  const listeners = new Set<() => void>();
+  const changed = () => {
+    for (const listener of listeners) listener();
+  };
+  return {
+    attach: (owner) => {
+      if (attached.has(owner)) return;
+      attached.add(owner);
+      const last = kept.get(owner);
+      if (last === undefined) return;
+      kept.delete(owner);
+      reports.set(owner, last);
+      changed();
+    },
+    report: (owner, key, valid) => {
+      const next = { key, valid: valid === true };
+      if (!attached.has(owner)) {
+        kept.set(owner, next);
+        return;
+      }
+      const last = reports.get(owner);
+      if (last !== undefined && last.key === next.key && last.valid === next.valid) return;
+      reports.set(owner, next);
+      changed();
+    },
+    release: (owner) => {
+      if (!attached.has(owner)) return;
+      attached.delete(owner);
+      const last = reports.get(owner);
+      if (last === undefined) return;
+      reports.delete(owner);
+      kept.set(owner, last);
+      changed();
+    },
+    isHeld: (key) =>
+      key !== null && [...reports.values()].some((r) => r.key === key && !r.valid),
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The renderer value a mid-run gate's Continue waits for (cinatra#3380)
+// ---------------------------------------------------------------------------
+//
+// Kept in this module, not a module of its own: the run panel, the stepper and
+// the conversation card already import this one, so a route that reaches them
+// reaches no new module (the route-graph ratchet, scripts/audit/route-graph-ratchet.mjs).
+
+/**
+ * DOES A MID-RUN GATE'S CONTINUE STILL WAIT FOR ITS RENDERER? (cinatra#3380.)
+ *
+ * A mid-run gate's field renderer writes its answer into the surface's buffer
+ * through `onChange`, and the surface's own Continue sends that buffer. A
+ * renderer that offers a choice (a list the person picks one row of) writes
+ * nothing until the person picks, and nothing is picked for them. A Continue
+ * that is available before the pick resumes the run with no answer at all.
+ *
+ * THE DECLARATION IS THE GATE'S, IN THE SCHEMA'S OWN `x-` NAMESPACE. A gate
+ * property whose schema carries `"x-required": true` is a value the gate's
+ * renderer must produce before the Continue may send. This is the same hint the
+ * setup road already writes on a required field's own schema and the schema
+ * field renderer already reads (cinatra#3582); here it is read on the
+ * properties of a mid-run gate's schema. Both input-schema roads copy `x-` keys
+ * verbatim, so a pack declares it in its step's `inputMessageSchema` and no
+ * other place has to change.
+ *
+ * The object-level `required` list is NOT read. Three mid-run gates of the
+ * email packs declare `required: ["decision"]`, and no renderer of theirs writes
+ * `decision` (the drafts and recipients reviews write `userResponse`, the send
+ * confirmation writes `campaignId`). The Continue's payload carries `approved`
+ * and `approvedAt` beside what the renderer wrote, so a rule over that list
+ * would hold those gates with a Continue that never comes back.
+ *
+ * The same reading of "nothing" as the setup road (`isBlankSubValue` in
+ * schema-field-renderer.tsx, `isBlankSetupValue` in review-task-actions.ts):
+ * absent, null, a string that trims to empty, or an empty list. `0` and `false`
+ * are answers. A property that declares a `default` is answered by that default
+ * (cinatra#3452) and holds nothing.
+ *
+ * Only the answer counts — for the Continue the buffer the renderer wrote, for
+ * the published submit that buffer with the caller's own value over it, read
+ * before the host adds approved, approvedAt and userResponse — never the
+ * gate's own current values: those are what the run handed the screen, not an
+ * answer the person gave on it. What released the Continue is also what is
+ * sent: `withDeclaredRendererValues` puts each declared key of that answer back
+ * over the host's fields.
+ *
+ * Generic by construction: it reads a schema and a buffer, never a renderer id
+ * or an agent name. A gate that declares nothing is held by nothing.
+ *
+ * A gate that carries a PRESENTATION HINT (`currentValues.presentation`, an
+ * object with a string `type`) is out of the rule on the run panel, the card and
+ * the published submit (the stepper draws no presentation-hint branch): such a gate
+ * is drawn through the generic dispatch renderer, which writes nothing into the
+ * buffer, so a hold would never be released. `gateCarriesPresentationHint` is
+ * that reading; the run panel and the card apply identical inline copies of it
+ * to choose that branch.
+ */
+
+function isBlankRendererValue(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (typeof value === "string") return value.trim() === "";
+  if (Array.isArray(value)) return value.length === 0;
+  return false;
+}
+
+/** The property keys a gate's schema declares its renderer must produce. */
+export function gateRequiredRendererKeys(
+  schema: Record<string, unknown> | null | undefined,
+): string[] {
+  if (!schema || typeof schema !== "object") return [];
+  const properties = (schema as { properties?: unknown }).properties;
+  if (!properties || typeof properties !== "object" || Array.isArray(properties)) {
+    return [];
+  }
+  const keys: string[] = [];
+  for (const [key, declared] of Object.entries(properties as Record<string, unknown>)) {
+    if (!declared || typeof declared !== "object" || Array.isArray(declared)) continue;
+    const property = declared as Record<string, unknown>;
+    if (property["x-required"] !== true) continue;
+    if (Object.prototype.hasOwnProperty.call(property, "default")) continue;
+    keys.push(key);
+  }
+  return keys;
+}
+
+/**
+ * `true` while the gate declares a value its renderer must produce and the
+ * renderer has not yet written one into `buffered`.
+ */
+export function gateAwaitsRendererValue(
+  schema: Record<string, unknown> | null | undefined,
+  buffered: Record<string, unknown> | null | undefined,
+): boolean {
+  const keys = gateRequiredRendererKeys(schema);
+  if (keys.length === 0) return false;
+  const written = buffered ?? {};
+  return keys.some((key) =>
+    isBlankRendererValue(
+      Object.prototype.hasOwnProperty.call(written, key) ? written[key] : undefined,
+    ),
+  );
+}
+
+/**
+ * THE RENDERER'S OWN VALUE OF A DECLARED KEY IS SENT AS IT WROTE IT
+ * (cinatra#3380). Each surface builds its payload with host fields beside the
+ * renderer's buffer: `approved` and `approvedAt`, and on the published submit a
+ * `userResponse` of its own. A gate may declare one of those names as a value
+ * its renderer must produce, and then the renderer's write is what released the
+ * Continue. So each declared key that `written` holds with a value that is not
+ * blank is put back over the built payload, after every host field. A declared
+ * key that `written` does not hold keeps what the host built. A gate that
+ * declares nothing gets the same payload object back.
+ */
+export function withDeclaredRendererValues(
+  schema: Record<string, unknown> | null | undefined,
+  written: Record<string, unknown> | null | undefined,
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  const keys = gateRequiredRendererKeys(schema);
+  if (keys.length === 0 || !written) return payload;
+  let sent = payload;
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(written, key)) continue;
+    const value = written[key];
+    if (isBlankRendererValue(value)) continue;
+    if (sent === payload) sent = { ...payload };
+    sent[key] = value;
+  }
+  return sent;
+}
+
+/**
+ * `true` when a gate's current values carry a presentation hint: an object
+ * `presentation` with a string `type`. Such a gate is out of the rule above.
+ */
+export function gateCarriesPresentationHint(currentValues: unknown): boolean {
+  if (!currentValues || typeof currentValues !== "object") return false;
+  const candidate = (currentValues as { presentation?: unknown }).presentation;
+  return (
+    candidate !== null &&
+    typeof candidate === "object" &&
+    !Array.isArray(candidate) &&
+    typeof (candidate as { type?: unknown }).type === "string"
+  );
+}
+
+// ---------------------------------------------------------------------------
+// A schema-drawn gate that asks for fields of its own (cinatra#4244)
+// ---------------------------------------------------------------------------
+
+/** Keys every approval payload carries; a schema naming only these asks nothing. */
+const APPROVAL_BOOKKEEPING_KEYS: ReadonlySet<string> = new Set(["approved", "approvedAt"]);
+
+function isPlainSchemaObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * What an object-typed gate schema on the schema-field fallback asks for
+ * (cinatra#4244).
+ *
+ *  - `not-object`: the schema is not an object schema; this reading does not
+ *    apply and the gate keeps the road it had.
+ *  - `bare`: a well-formed object schema that declares no visible field other
+ *    than the `approved` / `approvedAt` bookkeeping keys. It is a step
+ *    confirmation: nothing to fill, a Continue alone.
+ *  - `fields`: a well-formed object schema that declares visible fields - a
+ *    WayFlow InputMessageNode such as "Pick the brand voice" declaring
+ *    `brandVoice`. `fields` lists them in declaration order. `renderSchema` is
+ *    the schema the fallback draws: without the bookkeeping keys (they are
+ *    never the reader's to fill) and without `x-renderer`, with `required`
+ *    holding every declared-required visible field that declares no
+ *    `default` - from the schema's `required` list and from a field's own
+ *    `x-required: true` - so the drawn form holds its Continue until those
+ *    values are written (design V.1). A value with a default is answered by it
+ *    and never held.
+ *  - `malformed`: an object schema whose declaration cannot be read safely,
+ *    at ANY depth (`isWellFormedFieldSchema`) - `properties` present but not
+ *    a map, a property or array `items` that is not a schema object,
+ *    `required` present but not a list of names, a non-boolean `x-hidden` /
+ *    `x-required`, nesting deeper than `MAX_SCHEMA_DEPTH` - and a gate schema
+ *    with no `properties` whose `required` list names any value (the card has
+ *    no field to write it into), or whose `required` list names anything that
+ *    is not a declared property (a nested object's `required` must name a
+ *    visible declared property). It is refused: it is neither a bare
+ *    confirmation (that would send an approval for a gate nobody could read)
+ *    nor drawable (a property that is not a schema cannot be drawn).
+ *
+ * Field names are agent-declared, so the maps built here have no prototype:
+ * a field named `__proto__` stays an own field and is never the prototype
+ * setter.
+ */
+export type SchemaFieldGateReading =
+  | { kind: "not-object" }
+  | { kind: "bare" }
+  | { kind: "malformed" }
+  | { kind: "fields"; fields: string[]; renderSchema: Record<string, unknown> };
+
+/** Deeper nesting than this is refused as malformed (fail closed, no unbounded walk). */
+const MAX_SCHEMA_DEPTH = 16;
+
+/**
+ * Whether a declared field schema can be read safely, at every depth: a plain
+ * object; `properties`, when present, a map whose members are all
+ * well-formed; `items`, when present, a well-formed schema; `required`, when
+ * present, a list of names; `x-hidden` / `x-required`, when present, booleans.
+ */
+function isWellFormedFieldSchema(sub: unknown, depth: number): boolean {
+  if (depth > MAX_SCHEMA_DEPTH || !isPlainSchemaObject(sub)) return false;
+  const hidden = sub["x-hidden"];
+  const xReq = sub["x-required"];
+  if (hidden !== undefined && typeof hidden !== "boolean") return false;
+  if (xReq !== undefined && typeof xReq !== "boolean") return false;
+  const required = sub.required;
+  if (required !== undefined && (!Array.isArray(required) || !required.every((n) => typeof n === "string"))) {
+    return false;
+  }
+  const properties = sub.properties;
+  if (properties !== undefined) {
+    if (!isPlainSchemaObject(properties)) return false;
+    for (const member of Object.values(properties)) {
+      if (!isWellFormedFieldSchema(member, depth + 1)) return false;
+    }
+    // A nested required name must name a VISIBLE declared property: the drawn
+    // object checks it on the press, and a name no field can write would hold
+    // the gate forever (cinatra#4244).
+    for (const name of (required as string[] | undefined) ?? []) {
+      if (!Object.prototype.hasOwnProperty.call(properties, name)) return false;
+      if ((properties[name] as Record<string, unknown>)["x-hidden"] === true) return false;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(sub, "items") && !isWellFormedFieldSchema(sub.items, depth + 1)) {
+    return false;
+  }
+  return true;
+}
+
+/** An own-property read: a plain `obj[key]` reads the prototype for `__proto__`. */
+function ownValue(obj: Record<string, unknown>, key: string): unknown {
+  return Object.prototype.hasOwnProperty.call(obj, key) ? obj[key] : undefined;
+}
+
+/** An own-property write: a plain `obj[key] = v` calls the prototype setter for `__proto__`. */
+function setOwn(obj: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(obj, key, { value, enumerable: true, writable: true, configurable: true });
+}
+
+/** Thrown when an answer holds a number JSON cannot carry (it would reach the flow as null). */
+export class NonFiniteAnswerError extends Error {
+  constructor(field: string) {
+    super(`The answer to "${field}" is not a finite number.`);
+    this.name = "NonFiniteAnswerError";
+  }
+}
+
+function holdsNonFiniteNumber(value: unknown, depth = 0): boolean {
+  if (typeof value === "number") return !Number.isFinite(value);
+  // Too deep to read is refused, never waved through.
+  if (depth > MAX_SCHEMA_DEPTH) return true;
+  if (Array.isArray(value)) return value.some((v) => holdsNonFiniteNumber(v, depth + 1));
+  if (isPlainSchemaObject(value)) {
+    return Object.values(value).some((v) => holdsNonFiniteNumber(v, depth + 1));
+  }
+  return false;
+}
+
+export function readSchemaFieldGate(schema: unknown): SchemaFieldGateReading {
+  if (!isPlainSchemaObject(schema) || schema.type !== "object") return { kind: "not-object" };
+  const { properties, required } = schema;
+  if (properties === undefined) {
+    if (required === undefined) return { kind: "bare" };
+    return Array.isArray(required) && required.length === 0
+      ? { kind: "bare" }
+      : { kind: "malformed" };
+  }
+  if (!isPlainSchemaObject(properties)) return { kind: "malformed" };
+  if (
+    required !== undefined &&
+    (!Array.isArray(required) || !required.every((n) => typeof n === "string"))
+  ) {
+    return { kind: "malformed" };
+  }
+  for (const name of (required as string[] | undefined) ?? []) {
+    if (!Object.prototype.hasOwnProperty.call(properties, name)) return { kind: "malformed" };
+  }
+  const kept = Object.create(null) as Record<string, Record<string, unknown>>;
+  const fields: string[] = [];
+  const xRequired: string[] = [];
+  for (const [name, sub] of Object.entries(properties)) {
+    if (!isWellFormedFieldSchema(sub, 1)) return { kind: "malformed" };
+    const member = sub as Record<string, unknown>;
+    const hidden = member["x-hidden"];
+    const xReq = member["x-required"];
+    if (APPROVAL_BOOKKEEPING_KEYS.has(name)) continue;
+    setOwn(kept, name, member);
+    if (hidden === true) continue;
+    fields.push(name);
+    if (xReq === true) xRequired.push(name);
+  }
+  if (fields.length === 0) return { kind: "bare" };
+  const held = (name: string) =>
+    fields.includes(name) &&
+    !Object.prototype.hasOwnProperty.call(ownValue(kept, name) as object, "default");
+  const requiredNames: string[] = [];
+  for (const name of [...((required as string[] | undefined) ?? []), ...xRequired]) {
+    if (held(name) && !requiredNames.includes(name)) requiredNames.push(name);
+  }
+  const { "x-renderer": _xr, properties: _p, required: _r, ...rest } = schema;
+  void _xr;
+  void _p;
+  void _r;
+  return {
+    kind: "fields",
+    fields,
+    renderSchema: { ...rest, type: "object", properties: kept, required: requiredNames },
+  };
+}
+
+/**
+ * The approval payload for a non-setup gate whose fields the schema-field
+ * fallback draws (cinatra#4244).
+ *
+ * `next` is what the drawn object field submits: the object of its declared
+ * fields (blank optional values left out), or `undefined`.
+ *
+ *  - The approval is `{ ...answer, approved: true, approvedAt }`; the
+ *    bookkeeping keys are always the approval's own.
+ *  - EVERY declared answer reaches the flow. The server forwards
+ *    `userResponse` to the paused WayFlow node as its resume text, and without
+ *    it the node is handed "[Approved by operator]" in place of the answer.
+ *    When the gate asks for exactly one field, declared as a string, and the
+ *    answer is a string, that text is the resume text verbatim (the
+ *    convention the idea-selection renderer follows for its one output), JSON-
+ *    looking or not, and `userResponseFieldName` names the field so the
+ *    server records the answer under it (`readWayflowSubmittedValues`). Any
+ *    other answer - a list, a number, a boolean, an object, or several
+ *    fields - is sent as one JSON object of the declared fields that were
+ *    answered (a blank text or an empty list is not an answer), the
+ *    structured round-trip the server parses back into the submitted values.
+ *  - A number that is not finite cannot travel as JSON (it would reach the
+ *    flow as `null`): the payload is refused with `NonFiniteAnswerError`.
+ *  - No declared field answered: no resume text, so the flow receives the
+ *    approval marker, as the Continue-only card sent for this gate.
+ *  - A `userResponse` the answer already carries is kept as it is.
+ *  - A schema that is not read as `fields` adds no resume text.
+ */
+export function buildSchemaFieldGatePayload(args: {
+  schema: unknown;
+  next: unknown;
+  now?: string;
+}): Record<string, unknown> {
+  const answer = isPlainSchemaObject(args.next) ? args.next : {};
+  const payload: Record<string, unknown> = {
+    ...answer,
+    approved: true,
+    approvedAt: args.now ?? new Date().toISOString(),
+  };
+  if (typeof answer.userResponse === "string") return payload;
+  const reading = readSchemaFieldGate(args.schema);
+  if (reading.kind !== "fields") return payload;
+  const answered = Object.create(null) as Record<string, unknown>;
+  for (const name of reading.fields) {
+    const value = ownValue(answer, name);
+    if (value === undefined || value === null) continue;
+    if (typeof value === "string" && value.trim() === "") continue;
+    if (Array.isArray(value) && value.length === 0) continue;
+    if (holdsNonFiniteNumber(value)) throw new NonFiniteAnswerError(name);
+    setOwn(answered, name, value);
+  }
+  const names = Object.keys(answered);
+  if (names.length === 0) return payload;
+  if (reading.fields.length === 1) {
+    const only = reading.fields[0]!;
+    const declared = ownValue(reading.renderSchema.properties as Record<string, unknown>, only) as
+      | { type?: unknown }
+      | undefined;
+    const value = ownValue(answered, only);
+    if (declared?.type === "string" && typeof value === "string") {
+      payload.userResponse = value;
+      payload.userResponseFieldName = only;
+      return payload;
+    }
+  }
+  payload.userResponse = JSON.stringify(answered);
+  return payload;
+}
+
+// ---------------------------------------------------------------------------
+// The values the WayFlow continue road records (cinatra#4244)
+// ---------------------------------------------------------------------------
+
+/**
+ * What the WayFlow continue road records as the submitted values of a gate
+ * answer (cinatra#4244). The resume text itself (`userResponse`) goes to the
+ * flow verbatim; this reading only decides what is recorded beside it.
+ *
+ *  1. A NAMED SINGLE TEXT ANSWER. A schema-drawn gate that asks for one text
+ *     field sends that text verbatim as `userResponse` and names its field in
+ *     `userResponseFieldName`. When the values carry that field as an own key
+ *     whose value IS the resume text, the answer is recorded under that field
+ *     alone - even when the text reads as JSON (`42`, `{"tone":"warm"}`), which
+ *     the reading below would otherwise take for the submitted values. A name
+ *     whose value is not the resume text is not believed.
+ *  2. Otherwise, as before: a `userResponse` that parses as a JSON object is the
+ *     submitted values; one that is not JSON leaves the values without
+ *     `userResponse`; no `userResponse` leaves the values themselves; nothing
+ *     left is `null`.
+ *
+ * It lives here, beside `buildSchemaFieldGatePayload` that names the field, and
+ * not in a module of its own: a new module would add a first-party module to
+ * every locked route of the route-graph ratchet. The server imports it from
+ * this pure module.
+ */
+export function readWayflowSubmittedValues(values: unknown): Record<string, unknown> | null {
+  const valuesObj =
+    values !== null && typeof values === "object" && !Array.isArray(values)
+      ? (values as Record<string, unknown>)
+      : null;
+  if (!valuesObj) return null;
+  const own = (key: string): unknown =>
+    Object.prototype.hasOwnProperty.call(valuesObj, key) ? valuesObj[key] : undefined;
+  const userResponseRaw = own("userResponse");
+  if (typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0) {
+    const fieldName = own("userResponseFieldName");
+    if (
+      typeof fieldName === "string" &&
+      fieldName !== "userResponse" &&
+      fieldName !== "userResponseFieldName" &&
+      own(fieldName) === userResponseRaw
+    ) {
+      const recorded: Record<string, unknown> = {};
+      Object.defineProperty(recorded, fieldName, {
+        value: userResponseRaw,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+      return recorded;
+    }
+    try {
+      const parsed = JSON.parse(userResponseRaw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+      return null;
+    } catch {
+      const { userResponse: _u, ...rest } = valuesObj;
+      void _u;
+      return Object.keys(rest).length > 0 ? rest : null;
+    }
+  }
+  const { userResponse: _u, ...rest } = valuesObj;
+  void _u;
+  return Object.keys(rest).length > 0 ? rest : null;
 }

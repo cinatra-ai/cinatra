@@ -27,6 +27,7 @@ vi.mock("server-only", () => ({}));
 vi.mock("@cinatra-ai/agents", () => ({
   readAgentRunById: h.readAgentRunById,
   readAgentRunByContextId: h.readAgentRunByContextId,
+  publishCallAllowed: async () => true, // cinatra#4150: no publish decision holds this run
 }));
 vi.mock("@cinatra-ai/a2a", () => ({
   resolveLatestWayflowGateTaskId: h.resolveLatestWayflowGateTaskId,

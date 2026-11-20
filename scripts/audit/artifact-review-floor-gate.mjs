@@ -90,7 +90,10 @@
 // floor set must EQUAL the committed baseline (a new floor type fails; a stale
 // entry fails and must be deleted), and the committed baseline may only shrink
 // against the base branch. So the gate "lands immediately as no new fallbacks"
-// and can only ever "finish at none".
+// and can only ever "finish at none". The one admitted exception is a
+// DECLARED one-for-one rename (the baseline's `renames` list, cinatra#4366):
+// the old id stands on the base floor and leaves, the new id keeps its package
+// and form, so the count cannot grow (see `readDeclaredRenames`).
 //
 // Usage:
 //   node scripts/audit/artifact-review-floor-gate.mjs [--json]
@@ -508,10 +511,72 @@ export function diffAgainstBaseline(floorTypes, baseline) {
   };
 }
 
-/** The committed baseline may only SHRINK against the base branch's. */
-export function baselineGrowth(committed, base) {
+const RENAME_KEYS = Object.freeze(["from", "reason", "to"]);
+const nonEmpty = (v) => typeof v === "string" && v.trim().length > 0;
+
+/**
+ * The committed baseline's DECLARED one-for-one renames (cinatra#4366), read
+ * FAIL-CLOSED. A pack that renames a floor type's id moves ONE entry: the old
+ * id leaves and the new id arrives. Without a declaration the new id is growth
+ * and the shrink-only guard refuses it; `renames` is the one way to state the
+ * move, as `[{ from, to, reason }]`.
+ *
+ * Read without the base branch, so a malformed list fails on every run: each
+ * entry carries exactly `from`, `to` and `reason` (non-empty strings),
+ * `from !== to`, no `from` and no `to` repeats (one-for-one, so the count can
+ * never grow), every `to` is a committed floor type and no `from` is. A list
+ * whose renamed type has since left the floor must lose its entry with it.
+ * An absent list is the empty list.
+ */
+export function readDeclaredRenames(committed) {
+  const renames = committed?.renames;
+  if (renames === undefined) return [];
+  if (!Array.isArray(renames)) throw new InfraError("baseline `renames` must be a list of { from, to, reason }");
+  const floor = baselineTypeIds(committed);
+  const froms = new Set();
+  const tos = new Set();
+  for (const r of renames) {
+    const keys = r && typeof r === "object" && !Array.isArray(r) ? Object.keys(r).sort() : null;
+    if (!keys || keys.join(",") !== RENAME_KEYS.join(",") || !RENAME_KEYS.every((k) => nonEmpty(r[k]))) {
+      throw new InfraError(`baseline rename ${JSON.stringify(r)} must carry exactly non-empty from, to and reason`);
+    }
+    if (r.from === r.to) throw new InfraError(`baseline rename ${r.from} names the same id twice`);
+    if (froms.has(r.from) || tos.has(r.to)) {
+      throw new InfraError(`baseline rename ${r.from} -> ${r.to} is not one-for-one (an id is renamed twice)`);
+    }
+    froms.add(r.from);
+    tos.add(r.to);
+    if (!floor.has(r.to)) throw new InfraError(`baseline rename target ${r.to} is not a committed floor type (stale rename)`);
+    if (floor.has(r.from)) throw new InfraError(`baseline rename source ${r.from} is still a committed floor type`);
+  }
+  return renames;
+}
+
+const sameDisposition = (a, b) =>
+  a != null && b != null && a.package === b.package && (a.mime ?? null) === (b.mime ?? null);
+
+/**
+ * The committed baseline may only SHRINK against the base branch's. The one
+ * admitted exception is a DECLARED one-for-one rename (`readDeclaredRenames`):
+ * a new id is not growth when its rename's old id stands on the BASE floor,
+ * and the new id INHERITS the old entry's floor disposition, its package and
+ * form, in the committed entry and (when `live` is given) in the live floor
+ * entry too. Anything else new is growth, exactly as before.
+ */
+export function baselineGrowth(committed, base, live = null) {
   const b = baselineTypeIds(base);
-  return [...baselineTypeIds(committed)].filter((t) => !b.has(t)).sort();
+  const baseEntries = new Map((base?.floorTypes ?? []).map((e) => [e.type, e]));
+  const committedEntries = new Map((committed?.floorTypes ?? []).map((e) => [e.type, e]));
+  const liveEntries = live ? new Map(live.map((e) => [e.type, e])) : null;
+  const renameTo = new Map(readDeclaredRenames(committed).map((r) => [r.to, r]));
+  const admitted = (t) => {
+    const r = renameTo.get(t);
+    if (!r || !b.has(r.from)) return false;
+    const old = baseEntries.get(r.from);
+    if (!sameDisposition(old, committedEntries.get(t))) return false;
+    return liveEntries ? sameDisposition(old, liveEntries.get(t)) : true;
+  };
+  return [...baselineTypeIds(committed)].filter((t) => !b.has(t) && !admitted(t)).sort();
 }
 
 /**
@@ -609,10 +674,12 @@ export function main(argv = process.argv.slice(2)) {
       throw new InfraError(`unreadable baseline: ${baselineRel}`);
     }
 
+    // A malformed rename list fails on every run, with or without a base ref.
+    readDeclaredRenames(baseline);
     const baseRef = process.env.ARTIFACT_REVIEW_FLOOR_BASE;
     if (baseRef) {
       const base = readBaseBaseline(repoRoot, baseRef, baselineRel);
-      if (base) grew = baselineGrowth(baseline, base);
+      if (base) grew = baselineGrowth(baseline, base, result.floorTypes);
     }
   } catch (err) {
     if (err instanceof InfraError) {
@@ -675,6 +742,11 @@ export function main(argv = process.argv.slice(2)) {
       `[artifact-review-floor] FAIL — committed baseline GREW vs the base branch (regenerate-to-pass bypass):`,
     );
     for (const t of grew) console.error(`  + ${t}`);
+    console.error(
+      `\n  A pack that only RENAMED a floor type declares it in the baseline's \`renames\` list\n` +
+        `  ({ from, to, reason }): the old id must stand on the base floor and leave, and the\n` +
+        `  new id must keep its package and form. Any other new floor type stays refused.`,
+    );
   }
   process.exit(1);
 }

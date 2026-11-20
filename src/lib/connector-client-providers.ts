@@ -140,12 +140,16 @@ export type WordPressInstanceAdminClient = {
     providerConfigKey: string;
     connectionId: string;
   }): Promise<unknown>;
+  /** `orgId`/`runBy`: the dev owner's binding the host's dev member passes
+   * (cinatra#4720, as for Drupal in cinatra#4387). */
   persistLocalDevWordPressInstanceUnvalidated(input: {
     id?: string;
     siteUrl: string;
     username: string;
     applicationPassword: string;
     name?: string;
+    orgId?: string;
+    runBy?: string;
   }): Promise<WordPressInstanceRow>;
   setWordPressInstanceBlogConnector(instanceId: string, connectorId: string): void;
   saveWordPressLoggingSettings(enabled: boolean): Promise<void>;

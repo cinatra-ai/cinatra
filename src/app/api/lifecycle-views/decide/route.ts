@@ -7,12 +7,12 @@ import { proposedScheduleSchema } from "@cinatra-ai/agent-ui-protocol/renderable
 import { enforceReviewRunAccess } from "@cinatra-ai/agents/artifact-review-gate-store";
 import { decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import { decideTriggerScheduleProposal } from "@/lib/lifecycle/trigger-schedule-proposal-card";
-import {
-  MAX_SUGGESTION_ID_CHARS,
-  MAX_SUGGESTION_PARTITION_IDS,
-} from "@/lib/artifacts/artifact-review-decision";
 import { submitReviewDecisionAction } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/actions";
 import { resolveReviewActorContext } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-actor";
+import {
+  REVIEW_FLOOR_SUBMISSION_FIELDS,
+  partitionFromFloorSubmissionInput,
+} from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/floor-submission-input";
 import { resolveAssistantWidgetBinding } from "@/lib/assistant-widget-handles";
 import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
 import {
@@ -105,25 +105,10 @@ const reviewRequestSchema = z
      *  not is the review shape, which is what it has always been. */
     kind: z.literal("artifact_review_gate").optional(),
     ref: z.string().min(1).max(LIFECYCLE_VIEW_REF_MAX_LENGTH),
-    // Continue keeps approve persistence; older callers retain the approve alias.
-    disposition: z.enum(["approve", "reject", "comment", "continue"]),
-    // The rationale (§IV) — optional on approve, expected on reject, and the
-    // substance of a comment. Bounded so a card cannot post an essay.
-    comment: z.string().max(10_000).nullable().optional(),
-    // The reviewer's per-item SUGGESTION choices (cinatra#2571, epic #2564 S6b),
-    // carried ON the one terminal decision — there is deliberately no per-item
-    // endpoint (#2047 row 8). Bounded here on SHAPE only: which ids are legitimate
-    // is decided against the gate's PINNED snapshot inside the decision core, not
-    // by this schema, and a card that sends more ids than a snapshot can hold is
-    // rejected before any store is touched.
-    suggestionDecisions: z
-      .object({
-        accepted: z.array(z.string().min(1).max(MAX_SUGGESTION_ID_CHARS)).max(MAX_SUGGESTION_PARTITION_IDS).optional(),
-        dismissed: z.array(z.string().min(1).max(MAX_SUGGESTION_ID_CHARS)).max(MAX_SUGGESTION_PARTITION_IDS).optional(),
-      })
-      .strict()
-      .nullable()
-      .optional(),
+    // The submission's own fields - disposition, note, Regenerate prompt and
+    // suggestion partition - from the ONE validator the review page's server
+    // action parses too (cinatra#3080). Neither entry carries a bound of its own.
+    ...REVIEW_FLOOR_SUBMISSION_FIELDS,
   })
   .strict();
 
@@ -190,7 +175,7 @@ const requestSchema = z.union([reviewRequestSchema, scheduleRequestSchema]);
 const UNIFORM_REFUSAL = {
   kind: "not-permitted" as const,
   message:
-    "You do not have the run access this decision needs — a terminal decision requires approve access, a comment requires respond access.",
+    "You do not have the run access this decision needs — a terminal decision requires the run's decision access, a comment requires respond access.",
 };
 
 /** The `cwu_` proof header — the discriminant for the widget branch. */
@@ -310,7 +295,6 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const comment = parsed.data.comment ?? null;
-  const partition = parsed.data.suggestionDecisions ?? null;
   const outcome = await submitReviewDecisionAction(
     payload.runId,
     payload.reviewTaskId,
@@ -323,9 +307,8 @@ export async function POST(request: Request): Promise<Response> {
     // Forwarded UNVALIDATED beyond its shape: the ONE decision path normalizes it
     // and checks it against the gate's pinned snapshot before the CAS. This route
     // deciding which suggestions are real would be a second place that knows.
-    partition
-      ? { accepted: partition.accepted ?? [], dismissed: partition.dismissed ?? [] }
-      : null,
+    partitionFromFloorSubmissionInput(parsed.data),
+    parsed.data.regeneratePrompt ?? null,
   );
 
   return Response.json({ outcome }, { headers: { "Cache-Control": "no-store" } });

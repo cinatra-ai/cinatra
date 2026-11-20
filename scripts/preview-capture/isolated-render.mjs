@@ -6,7 +6,7 @@
 // #2044 requires the capture to be produced by "isolated server-side capture
 // execution", with no scripts, event handlers, or live remote documents ever
 // entering cinatra's realm. This script IS that isolation boundary: it runs in
-// its own OS process, is spawned by `src/lib/artifacts/cms-preview-capture.ts`,
+// its own OS process, is spawned by `src/lib/artifacts/registered-page-render.ts`,
 // and is the ONLY place a browser is ever launched on the capture path.
 //
 // Why a subprocess rather than an in-process `import("playwright")`:

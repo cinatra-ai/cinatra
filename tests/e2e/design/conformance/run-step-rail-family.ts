@@ -426,14 +426,12 @@ export const RUN_STEP_RAIL_ROWS_BY_SURFACE: Readonly<
     unshippedAspects: [],
     evidence: {
       absentAnchors: ["run-review-step-post"],
-      absentActions: [
-        { name: "continue-review", outcome: "resolved" },
-      ],
+      absentActions: [],
       shippedFiles: ["packages/agents/src/review-gate-card.tsx"],
       unexportedModules: [],
     },
     readiness:
-      "the review gate card IS shipped (packages/agents/src/review-gate-card.tsx, with the review-target, review-decision-bar and review-prompt-window anchors), but this surface is that card HOSTED ON THE RUN PAGE'S REVIEW STEP, which the harness cannot mount: the card resolves its target through a review task behind a session. The floor it ships declares approve-review to resolved, reject-review to resolved and request-changes to changes-requested; continue-review to resolved — the pair the drawing binds on the run page's review step — is a literal in no file under src/ or packages/",
+      "the review gate card IS shipped (packages/agents/src/review-gate-card.tsx, with the review-target, review-decision-bar and review-prompt-window anchors), but this surface is that card HOSTED ON THE RUN PAGE'S REVIEW STEP, which the harness cannot mount: the card resolves its target through a review task behind a session",
   },
   "run-review-step-picture": {
     surface: "run-review-step-picture",
@@ -450,14 +448,12 @@ export const RUN_STEP_RAIL_ROWS_BY_SURFACE: Readonly<
     unshippedAspects: [],
     evidence: {
       absentAnchors: ["run-review-step-picture"],
-      absentActions: [
-        { name: "regenerate-review", outcome: "successor-gate-opened" },
-      ],
+      absentActions: [],
       shippedFiles: ["packages/agents/src/review-gate-card.tsx"],
       unexportedModules: [],
     },
     readiness:
-      "the featured image's review is the second of the two readings of the same frame, so it waits on the same host as the post's; and the two things that make it ITS reading — the Note field opening carrying prompt from picture.prompt, and regenerate-review to successor-gate-opened minting a fresh review entry beneath the settled one — are literals in no file under src/ or packages/",
+      "the featured image's review is the second of the two readings of the same frame, so it waits on the same host as the post's; and the review step that hosts it is the run page's, which the harness cannot mount (the floor's regenerate-review to successor-gate-opened ships in the one review card)",
   },
   "run-chip-row": {
     surface: "run-chip-row",
