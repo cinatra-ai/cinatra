@@ -24,6 +24,14 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+// The required upload base roster the row reads (registry by provenance, not
+// this test's subject): each case names the base type ids it wants installed.
+const uploadBase = vi.hoisted(() => ({ types: [] as string[] }));
+vi.mock("@/lib/artifacts/upload-artifact-type-map", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/artifacts/upload-artifact-type-map")>()),
+  readSystemBaseUploadCandidates: () =>
+    uploadBase.types.map((objectTypeId) => ({ objectTypeId, acceptMimes: ["application/pdf"] })),
+}));
 vi.mock("@/lib/generated/artifact-renderers", () => ({ GENERATED_ARTIFACT_RENDERERS: {} }));
 vi.mock("@/lib/artifacts/artifact-service", () => ({ listArtifacts: () => [] }));
 vi.mock("@/lib/better-auth-db", () => ({
@@ -92,6 +100,7 @@ async function renderRow(
 }
 
 afterEach(() => {
+  uploadBase.types = [];
   semanticRendererRegistry._clearForTests();
   representationProviderRegistry._clearForTests(true);
   _resetFirstPartySeedForTests();
@@ -216,5 +225,59 @@ describe("the library row's glyph follows the artifact's kind, not one icon for 
     const fallbackHtml = await renderRow(fallback, "Acme Corp");
     expect(typedHtml).toContain("Organization: Acme Corp");
     expect(fallbackHtml).toContain("Organization: Acme Corp");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE MONO MIME LABEL — a file-form artifact (an upload) only (#4366).
+// `specs/app-artifacts.html` §II: "A file-form artifact (an upload) shows its
+// MIME type in a mono label"; the same file after promotion to a pack type
+// shows none (app-artifact-review XI.10). The row draws it only when its type is
+// one of the required upload base types, whatever MIME the row stores.
+// ---------------------------------------------------------------------------
+
+describe("the mono MIME label is drawn on upload rows only", () => {
+  const PDF_BASE = "@fixture/pdf-base:pdf";
+  const mimeLabel = (html: string, mime: string) =>
+    new RegExp(`font-mono[^>]*>${mime.replace("/", "\\/")}<`).test(html);
+
+  it("keeps the label on a row typed by a required upload base type", async () => {
+    uploadBase.types = [PDF_BASE];
+    const html = await renderRow(
+      summaryOf({
+        objectType: PDF_BASE,
+        title: "2026 pricing sheet.pdf",
+        mime: "application/pdf",
+        originKind: "upload",
+        primaryExtension: "@fixture/pdf-base",
+        effectiveIdentity: { kind: "extension", extension: "@fixture/pdf-base" },
+        presentationIdentity: { kind: "extension", extension: "@fixture/pdf-base" },
+      }),
+      "Acme Corp",
+    );
+    expect(mimeLabel(html, "application/pdf")).toBe(true);
+  });
+
+  it("draws no label on a pack-typed row that stores application/json", async () => {
+    uploadBase.types = [PDF_BASE];
+    const html = await renderRow(
+      summaryOf({
+        objectType: "@cinatra-ai/website-artifacts:page-snapshot",
+        title: "Pricing page snapshot",
+        mime: "application/json",
+        originKind: "agent",
+      }),
+      "Acme Corp",
+    );
+    expect(html).toContain("Pricing page snapshot");
+    expect(html).not.toContain("font-mono");
+    expect(html).not.toContain("application/json");
+  });
+
+  it("draws no label on a non-upload row that stores application/octet-stream", async () => {
+    uploadBase.types = [PDF_BASE];
+    const html = await renderRow(summaryOf({ mime: "application/octet-stream" }), "Acme Corp");
+    expect(html).not.toContain("font-mono");
+    expect(html).not.toContain("application/octet-stream");
   });
 });
