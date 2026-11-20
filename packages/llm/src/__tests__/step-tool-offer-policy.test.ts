@@ -27,10 +27,44 @@ describe("provider-independent declared-tool ceiling",()=>{
  // cinatra#3745: a declared step's offer is the intersection, never the whole toolbox.
  it("keeps only the declared tools of a mixed offer, and a declared MCP server only with its declared names",()=>{
   const offered=[{type:"function",name:"mail_send"},{type:"function",name:"wordpress_publish"},
-   {type:"mcp",serverUrl:"https://example.test",serverLabel:"s",allowedTools:["mail_send","objects_save"]}];
-  expect(restrictStepToolOffers(offered as never,{kind:"declared",tools:["mail_send"]})).toEqual([
+   {type:"mcp",serverUrl:"https://example.test",serverLabel:"s",allowedTools:["objects_save","objects_read"]}];
+  expect(restrictStepToolOffers(offered as never,{kind:"declared",tools:["mail_send","objects_save"]})).toEqual([
    {type:"function",name:"mail_send"},
-   {type:"mcp",serverUrl:"https://example.test",serverLabel:"s",allowedTools:["mail_send"]},
+   {type:"mcp",serverUrl:"https://example.test",serverLabel:"s",allowedTools:["objects_save"]},
+  ]);
+ });
+ // cinatra#3745: a declared name selects one handler. A name that more than one offered tool carries,
+ // across a function and an MCP server or across two MCP servers, is ambiguous: no tool keeps it.
+ const DECLARED={kind:"declared",tools:["mail_send","objects_save"]} as const;
+ it("drops a declared name that a function and an MCP server both carry, and keeps the server's other names",()=>{
+  const offered=[{type:"function",name:"mail_send"},
+   {type:"mcp",serverUrl:"https://example.test",serverLabel:"s",allowedTools:["mail_send","objects_save"]}];
+  expect(restrictStepToolOffers(offered as never,DECLARED)).toEqual([
+   {type:"mcp",serverUrl:"https://example.test",serverLabel:"s",allowedTools:["objects_save"]},
+  ]);
+  expect(restrictStepToolOffers([{type:"function",name:"mail_send"},
+   {type:"mcp",serverUrl:"https://example.test",serverLabel:"s",allowedTools:["mail_send"]}] as never,DECLARED)).toBeUndefined();
+ });
+ it("drops a declared name that two MCP servers both carry",()=>{
+  const offered=[{type:"mcp",serverUrl:"https://a.test",serverLabel:"a",allowedTools:["mail_send"]},
+   {type:"mcp",serverUrl:"https://b.test",serverLabel:"b",allowedTools:["mail_send","objects_save"]}];
+  expect(restrictStepToolOffers(offered as never,DECLARED)).toEqual([
+   {type:"mcp",serverUrl:"https://b.test",serverLabel:"b",allowedTools:["objects_save"]},
+  ]);
+ });
+ it("a name duplicated within one kind is also no longer offered by another kind",()=>{
+  const offered=[{type:"function",name:"mail_send"},{type:"function",name:"mail_send"},
+   {type:"mcp",serverUrl:"https://example.test",serverLabel:"s",allowedTools:["mail_send","objects_save"]}];
+  expect(restrictStepToolOffers(offered as never,DECLARED)).toEqual([
+   {type:"mcp",serverUrl:"https://example.test",serverLabel:"s",allowedTools:["objects_save"]},
+  ]);
+ });
+ it("a name the step does not declare never makes a declared name ambiguous",()=>{
+  const offered=[{type:"function",name:"wordpress_publish"},{type:"function",name:"mail_send"},
+   {type:"mcp",serverUrl:"https://example.test",serverLabel:"s",allowedTools:["wordpress_publish","objects_save"]}];
+  expect(restrictStepToolOffers(offered as never,DECLARED)).toEqual([
+   {type:"function",name:"mail_send"},
+   {type:"mcp",serverUrl:"https://example.test",serverLabel:"s",allowedTools:["objects_save"]},
   ]);
  });
  // cinatra#3745: the auditor's fixed host ceiling (src/app/api/auditor/run-skills/route.ts) admits the
