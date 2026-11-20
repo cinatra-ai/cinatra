@@ -2210,18 +2210,22 @@ export function restrictStepToolOffers(tools: readonly LlmTool[] | undefined,
   // Validate even a zero-tool input; malformed policy must not be ignored.
   intersectStepToolNames([], policy);
   const offered = new Map<string, LlmTool>(); const ambiguous = new Set<string>();
+  // How many retained tools carry each name, over every kind and every MCP server.
+  const carriers = new Map<string, number>();
+  const carry = (name: string) => carriers.set(name, (carriers.get(name) ?? 0) + 1);
   for (const tool of tools ?? []) {
     let retained: LlmTool | null = null; let key: string;
     if (tool.type === "mcp") {
       // No trustworthy catalog ceiling => suppress the server, never unrestricted [].
       retained = restrictMcpServerOffer(tool, tool.allowedTools ?? null, policy);
       key = `mcp:${tool.serverUrl}:${tool.serverLabel}`;
+      if (retained?.type === "mcp") for (const name of retained.allowedTools ?? []) carry(name);
     } else {
       const name = "name" in tool && typeof tool.name === "string" ? tool.name : tool.type;
       const builtin = tool.type !== undefined && STEP_BUILTIN_TOOL_TYPES.includes(tool.type) &&
         policy.builtinTools?.includes(tool.type as StepBuiltinToolType) === true;
       if (!name || !(builtin || intersectStepToolNames([name], policy).length)) continue;
-      retained = tool; key = `tool:${name}`;
+      retained = tool; key = `tool:${name}`; carry(name);
     }
     if (!retained || ambiguous.has(key)) continue;
     if (offered.has(key)) {
@@ -2229,6 +2233,15 @@ export function restrictStepToolOffers(tools: readonly LlmTool[] | undefined,
       offered.delete(key); ambiguous.add(key);
     } else offered.set(key, retained);
   }
-  const result = [...offered.values()];
+  // cinatra#3745: a declared name selects one handler. A name that more than one retained tool
+  // carries (a function and an MCP server, two MCP servers, or two tools of one kind) is ambiguous:
+  // no tool keeps it, and a server left with no name is not offered. Never pick one of them.
+  const result: LlmTool[] = [];
+  for (const [key, tool] of offered) {
+    if (tool.type === "mcp") {
+      const names = (tool.allowedTools ?? []).filter((name) => carriers.get(name) === 1);
+      if (names.length) result.push({ ...tool, allowedTools: names });
+    } else if (carriers.get(key.slice("tool:".length)) === 1) result.push(tool);
+  }
   return result.length ? result : undefined;
 }
