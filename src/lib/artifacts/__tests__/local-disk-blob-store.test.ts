@@ -706,6 +706,12 @@ describe("createLocalDiskBlobStore", () => {
     expect(await sniffOfBytes(small, "application/-x+json")).toBe("text/plain");
     expect(await sniffOfBytes(small, "application/++json")).toBe("text/plain");
     expect(await sniffOfBytes(small, "application/_x+json")).toBe("text/plain");
+    // A subtype longer than 127 characters (RFC 6838 section 4.2), the +json suffix included, is not kept;
+    // one of exactly 127 characters is.
+    expect(await sniffOfBytes(small, `application/${"a".repeat(123)}+json`)).toBe("text/plain");
+    expect(await sniffOfBytes(small, `application/${"a".repeat(122)}+json`)).toBe(`application/${"a".repeat(122)}+json`);
+    // A subtype may start with a digit.
+    expect(await sniffOfBytes(small, "application/3gpp-ims+json")).toBe("application/3gpp-ims+json");
     // No declaration: JSON text stays text/plain.
     expect(await sniffOfBytes(small)).toBe("text/plain");
   });

@@ -213,10 +213,12 @@ function isValidUtf8Window(headWindow: Uint8Array): boolean {
 
 /** A structured-syntax JSON media type (RFC 6839 section 3.1): a declared
  *  `application/<subtype>+json`, already canonicalized (no parameters, lower
- *  case). The subtype starts with a lower-case letter or a digit (RFC 6838
- *  section 4.2); its other characters are a subset of the ones the fallback's
- *  well-formed check admits. */
-const STRUCTURED_JSON_MIME = /^application\/[a-z0-9][a-z0-9_.+-]*\+json$/;
+ *  case). The subtype is an RFC 6838 section 4.2 restricted-name: it starts
+ *  with a lower-case letter or a digit, its other characters are a subset of
+ *  the restricted-name characters (and of the ones the fallback's well-formed
+ *  check admits), and it is at most 127 characters long, the +json suffix
+ *  included (so at most 122 before the suffix). */
+const STRUCTURED_JSON_MIME = /^application\/[a-z0-9][a-z0-9_.+-]{0,121}\+json$/;
 
 /** Does this text window open a JSON object or array? Skips the JSON whitespace
  *  of RFC 8259 (space, tab, line feed, carriage return) and reads the first
