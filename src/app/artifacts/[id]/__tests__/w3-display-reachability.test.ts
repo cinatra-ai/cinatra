@@ -27,6 +27,7 @@
 // without depending on any pack shipping a violation for it to catch.
 import { afterEach, describe, expect, it } from "vitest";
 
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { registerArtifactExtensionDir } from "@cinatra-ai/objects/register-artifact-extensions";
@@ -259,4 +260,73 @@ describe("the CMS snapshot display is reached by its fields form, not by a type 
     expect(preview?.representations).toEqual([CMS_FIELDS]);
     expect(Object.hasOwn(GENERATED_ARTIFACT_RENDERERS, CMS + "::listRow")).toBe(false);
   });
+});
+
+// THE PAGE SNAPSHOT IS THE WEBSITE PACK'S OWN TYPE, DRAWN BY ITS ONE PAGE
+// DISPLAY (cinatra#4366). The approved drawing files a page a run changes,
+// whichever system holds it, as `@cinatra-ai/website-artifacts:page-snapshot`
+// and draws it through one renderer, `@cinatra-ai/website-artifacts:page-diff`.
+// So the pack owns that type, ships its detail and its list row, and both
+// content agents file their pages as that type. Each fact is read off the
+// registry, the generated map or the agents' own manifests, never assumed.
+describe("the page snapshot is the website pack's own type, drawn by its page display (#4366)", () => {
+  const WEB = "@cinatra-ai/website-artifacts";
+  const PAGE = WEB + ":page-snapshot";
+  const WEB_DIR = resolve(REPO_ROOT, "extensions/cinatra-ai/website-artifacts");
+
+  afterEach(() => {
+    objectTypeRegistry.removeByPackage(WEB);
+    semanticRendererRegistry.removeByPackage(WEB);
+    matcherManifestRegistry.removeByPackage(WEB);
+  });
+
+  it("the pack registers the page snapshot type and no other", () => {
+    expect(registerArtifactExtensionDir(WEB_DIR)).toBe(true);
+    expect(objectTypeRegistry.getTypesForPackage(WEB)).toEqual([PAGE]);
+    expect(objectTypeRegistry.getRegisteringPackage(PAGE)).toBe(WEB);
+  });
+
+  it("its display is the detail and the list row of that type", () => {
+    registerArtifactExtensionDir(WEB_DIR);
+    expect(semanticRendererRegistry.listByPackage(WEB)).toEqual([
+      { objectTypeId: PAGE, packageName: WEB, slot: "detail", generatedKey: WEB + "::detail" },
+      { objectTypeId: PAGE, packageName: WEB, slot: "listRow", generatedKey: WEB + "::listRow" },
+    ]);
+  });
+
+  // The pack's detail declares no representation: a page snapshot reaches it
+  // by its type (the semantic arm, read below), and a pack that is not a system
+  // base may not claim application/json, which the JSON display already holds.
+  it("the generated map carries its detail at props version 5 and its list row, reached by the type alone", () => {
+    const detail = GENERATED_ARTIFACT_RENDERERS[WEB + "::detail"];
+    expect(detail?.propsApiVersion).toBe(5);
+    expect(detail?.representations).toEqual([]);
+    expect(GENERATED_ARTIFACT_RENDERERS[WEB + "::listRow"]?.propsApiVersion).toBe(1);
+    expect(Object.hasOwn(GENERATED_ARTIFACT_RENDERERS, WEB + "::preview")).toBe(false);
+  });
+
+  it("a page snapshot row reaches the pack's own detail display", () => {
+    registerArtifactExtensionDir(WEB_DIR);
+    const dispatch = pickArtifactRenderer(
+      resolveArtifactDispatchInputs({
+        orgId: ORG,
+        baseType: PAGE,
+        identity: winner(WEB),
+        mime: "application/json",
+      }),
+    );
+    expect(dispatch).toEqual({ kind: "semantic", packageName: WEB, generatedKey: WEB + "::detail" });
+  });
+
+  it.each(["wordpress-agent", "drupal-agent"])(
+    "the %s files its pages as the page snapshot, and the pack owns that type",
+    (slug) => {
+      registerArtifactExtensionDir(WEB_DIR);
+      const manifest = JSON.parse(
+        readFileSync(resolve(REPO_ROOT, "extensions/cinatra-ai", slug, "package.json"), "utf8"),
+      );
+      expect(manifest?.cinatra?.produces).toEqual([{ extension: WEB, objectTypeId: PAGE }]);
+      expect(objectTypeRegistry.getRegisteringPackage(PAGE)).toBe(WEB);
+    },
+  );
 });
