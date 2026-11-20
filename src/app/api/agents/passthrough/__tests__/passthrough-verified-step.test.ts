@@ -15,9 +15,17 @@
  * then the proof's. Otherwise the call is refused with a fixed 403 sentence
  * before any tool runs.
  *
+ * Every tool the road serves runs inside the run's frame, which carries the
+ * verified step and, for a source-bound call, the verified executing source
+ * and the run-write authority minted for the proof's attempt. A source-bound
+ * call whose mint is refused (the run moved to another attempt after the
+ * source check) is refused with the same fixed 403 sentence before any tool
+ * runs. The run-scoped frame a run-scoped tool gets keeps every field of that
+ * frame.
+ *
  * Drives the real route and the real run binding; the run store (with its
- * source check), the handler registry, the bridge-auth check and the actor
- * builder are test doubles.
+ * source check), the handler registry, the bridge-auth check, the actor
+ * builder and the run-authority mint are test doubles.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHmac } from "node:crypto";
@@ -27,6 +35,7 @@ const h = vi.hoisted(() => ({
   readAgentRunByContextId: vi.fn(),
   resolveLatestWayflowGateTaskId: vi.fn(async () => null as string | null),
   verifyRunExecutedSource: vi.fn(),
+  mintRunWriteAuthorityForMcp: vi.fn(),
   observed: [] as Array<{ tool: string; frame: unknown }>,
 }));
 
@@ -39,6 +48,10 @@ vi.mock("@cinatra-ai/agents", () => ({
 // The run store's source check (its own refusals are pinned in packages/agents).
 vi.mock("@cinatra-ai/agents/store", () => ({
   verifyRunExecutedSource: h.verifyRunExecutedSource,
+}));
+// The run-write authority the road mints for a verified source's attempt.
+vi.mock("@/lib/org-write/run-authority-mint", () => ({
+  mintRunWriteAuthorityForMcp: h.mintRunWriteAuthorityForMcp,
 }));
 vi.mock("@cinatra-ai/a2a", () => ({
   resolveLatestWayflowGateTaskId: h.resolveLatestWayflowGateTaskId,
@@ -107,6 +120,7 @@ const SOURCE = {
 const ATTEMPT = "attempt-1";
 const VERIFIED_SOURCE = Object.freeze({ contextId: CTX, stepId: NODE, executionAttemptId: ATTEMPT, ...SOURCE });
 const REFUSED = { error: "Executing source could not be verified" };
+const AUTHORITY = Object.freeze({ authority: "run-authority-under-test" });
 
 /** The source-bound pair the runtime signs over the step, its task's attempt and the executing source. */
 function sourceHeaders(opts: { ctx?: string; node?: string; key?: string; source?: typeof SOURCE; attempt?: string } = {}) {
@@ -158,6 +172,7 @@ beforeEach(() => {
   );
   h.resolveLatestWayflowGateTaskId.mockReset().mockResolvedValue(null);
   h.verifyRunExecutedSource.mockReset().mockResolvedValue(VERIFIED_SOURCE);
+  h.mintRunWriteAuthorityForMcp.mockReset().mockResolvedValue(AUTHORITY);
   process.env.CINATRA_CONTEXT_ATTEST_KEY = ATTEST_KEY;
 });
 
@@ -203,12 +218,13 @@ describe("the passthrough road's verified step", () => {
   });
 
   // (t3)
-  it("a tool served without a frame is invoked as before and no frame is opened", async () => {
+  it("a tool served without a run-scoped frame runs in the run's frame, which carries the step", async () => {
     const res = await POST(makeReq(FRAMELESS_TOOL, stepHeaders()));
     expect(res.status).toBe(200);
     expect(h.observed).toHaveLength(1);
     expect(h.observed[0]!.tool).toBe(FRAMELESS_TOOL);
-    expect(h.observed[0]!.frame).toBeUndefined();
+    expect(h.observed[0]!.frame).toEqual({ runId: RUN.id, userId: RUN.runBy, orgId: RUN.orgId, verifiedStepId: NODE });
+    expect(h.mintRunWriteAuthorityForMcp).not.toHaveBeenCalled();
   });
 });
 
@@ -223,7 +239,10 @@ describe("the passthrough road's source-bound step", () => {
     expect(h.observed).toHaveLength(1);
     const frame = h.observed[0]!.frame as Record<string, unknown>;
     expect(frame).toEqual({ runId: RUN.id, verifiedRunScopeId: RUN.id, userId: RUN.runBy, orgId: RUN.orgId,
-      verifiedStepId: NODE });
+      verifiedStepId: NODE, verifiedExecutedSource: VERIFIED_SOURCE, orgWriteAuthority: AUTHORITY });
+    expect(h.mintRunWriteAuthorityForMcp).toHaveBeenCalledWith({
+      runId: RUN.id, orgId: RUN.orgId, executionAttemptId: VERIFIED_SOURCE.executionAttemptId,
+    });
   });
 
   // (t5)
@@ -287,11 +306,54 @@ describe("the passthrough road's source-bound step", () => {
   });
 });
 
+describe("the passthrough road carries the verified executing source", () => {
+  // (t9)
+  it("a tool served without a run-scoped frame runs in the verified source frame", async () => {
+    const res = await POST(makeReq(FRAMELESS_TOOL, sourceHeaders()));
+    expect(res.status).toBe(200);
+    expect(h.observed).toHaveLength(1);
+    expect(h.observed[0]!.frame).toEqual({ runId: RUN.id, userId: RUN.runBy, orgId: RUN.orgId,
+      verifiedStepId: NODE, verifiedExecutedSource: VERIFIED_SOURCE, orgWriteAuthority: AUTHORITY });
+    expect(h.mintRunWriteAuthorityForMcp).toHaveBeenCalledWith({
+      runId: RUN.id, orgId: RUN.orgId, executionAttemptId: VERIFIED_SOURCE.executionAttemptId,
+    });
+  });
+
+  // (t10) At the parent the tool ran with the stale proof and no authority.
+  it("a refused run-authority mint refuses a source-bound call before any tool runs", async () => {
+    h.mintRunWriteAuthorityForMcp.mockResolvedValue(undefined);
+    for (const tool of [RUN_SCOPED_TOOL, FRAMELESS_TOOL]) {
+      h.observed.length = 0;
+      const res = await POST(makeReq(tool, sourceHeaders()));
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual(REFUSED);
+      expect(h.observed).toHaveLength(0);
+    }
+    expect(h.mintRunWriteAuthorityForMcp).toHaveBeenCalledWith({
+      runId: RUN.id, orgId: RUN.orgId, executionAttemptId: VERIFIED_SOURCE.executionAttemptId,
+    });
+  });
+
+  // (t11)
+  it("a call without a verified source carries no source and mints no authority", async () => {
+    for (const headers of [stepHeaders(), {}]) {
+      h.observed.length = 0;
+      const res = await POST(makeReq(RUN_SCOPED_TOOL, headers));
+      expect(res.status).toBe(200);
+      const frame = h.observed[0]!.frame as Record<string, unknown>;
+      expect(frame).not.toHaveProperty("verifiedExecutedSource");
+      expect(frame).not.toHaveProperty("orgWriteAuthority");
+    }
+    expect(h.mintRunWriteAuthorityForMcp).not.toHaveBeenCalled();
+  });
+});
+
 // Leave the module registry as this file found it.
 afterAll(() => {
   vi.doUnmock("server-only");
   vi.doUnmock("@cinatra-ai/agents");
   vi.doUnmock("@cinatra-ai/agents/store");
+  vi.doUnmock("@/lib/org-write/run-authority-mint");
   vi.doUnmock("@cinatra-ai/a2a");
   vi.doUnmock("@cinatra-ai/mcp-server");
   vi.doUnmock("@cinatra-ai/llm/actor-context");

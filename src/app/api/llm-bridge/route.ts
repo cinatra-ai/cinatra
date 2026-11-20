@@ -1905,13 +1905,15 @@ export async function POST(req: Request): Promise<Response> {
         });
       }
       // Build the cinatra-mcp delegated-token override ONLY when the
-      // bridge has resolved a real agent_run row with both an `orgId`
-      // and a `runBy`. The resolver does a LIVE platform-role +
-      // membership check at mint time — a demoted user gets `null` and
-      // the override falls back to the machine `client_credentials`
-      // Bearer it now mints itself (same authz outcome as pre-fix, will
-      // fail at `enforceMcpBoundary` with `not_org_member`, never an
-      // elevation).
+      // bridge has resolved a real agent_run row with an `orgId` and
+      // either a `runBy` or a verified executing source (cinatra#3745: a
+      // source proof alone installs the override, which answers null when
+      // no on-behalf-of actor is possible). The resolver does a LIVE
+      // platform-role + membership check at mint time — a demoted user
+      // gets `null` and, without a source, the override falls back to the
+      // machine `client_credentials` Bearer it now mints itself (same authz
+      // outcome as pre-fix, will fail at `enforceMcpBoundary` with
+      // `not_org_member`, never an elevation).
       //
       // The provider gate keys on the provider the task actually RUNS on
       // (#1195 codex round-1): a `cinatra_llm` dispatch overrides the
@@ -1927,7 +1929,7 @@ export async function POST(req: Request): Promise<Response> {
           : resolvedRuntimeProvider;
       const cinatraMcpToolOverride =
         runForPorts?.orgId &&
-        runForPorts?.runBy &&
+        (runForPorts?.runBy || verifiedExecutedSource) &&
         runForPorts?.id &&
         // cinatra#2910: no effective PROVIDER (the scripted test runtime) ⇒ no
         // native-MCP OBO mint. Nothing is elevated and nothing is skipped that
@@ -1956,7 +1958,17 @@ export async function POST(req: Request): Promise<Response> {
               // NO run attribution (an unattributed write, never a misattributed
               // one; a forged x-cinatra-run-id claim is refused at the MCP
               // transport).
+              //
+              // cinatra#3745: a source-bound step NEVER gets a machine bearer.
+              // The bearer outlives its binding (cleared at the end of this
+              // request, 300s TTL), and once the binding is gone the MCP reader
+              // can only read the bearer as an ordinary caller without the
+              // proof. Such a step gets the cinatra tool only through the
+              // on-behalf-of token, which carries the proof itself; when that
+              // road is unavailable the tool is withheld (null is authoritative:
+              // nothing falls back underneath).
               const buildMachineToolWithDurableBinding = async () => {
+                if (verifiedExecutedSource) return null;
                 // Byte-equivalence with the orchestration fallback this
                 // replaces requires the EFFECTIVE provider (the gate above
                 // already keys on it): registry.ts would have minted the
@@ -1998,6 +2010,9 @@ export async function POST(req: Request): Promise<Response> {
                 }
                 return machineTool;
               };
+              // cinatra#3745: an actor-less run is here only with a verified
+              // source; it has no on-behalf-of actor, so the tool is withheld.
+              if (!runForPorts.runBy) return buildMachineToolWithDurableBinding();
               const actor = await resolveAgentRunMcpActor({
                 runId: runForPorts.id,
                 runBy: runForPorts.runBy!,
@@ -2084,6 +2099,7 @@ export async function POST(req: Request): Promise<Response> {
                   ...(runForPorts.connectorInstanceBinding
                     ? { connectorInstancePin: runForPorts.connectorInstanceBinding }
                     : {}),
+                  ...(verifiedExecutedSource ? { verifiedExecutedSource } : {}),
                 },
                 issueAgentRunMcpActorToken,
                 cinatraMcpAllowedTools,
@@ -2093,7 +2109,12 @@ export async function POST(req: Request): Promise<Response> {
               if (oboTool) return oboTool;
               return buildMachineToolWithDurableBinding();
             }
-          : undefined;
+          : // cinatra#3745: a source-bound step on a provider without the
+            // on-behalf-of road still gets an authoritative override, so the
+            // orchestration never mints its own machine bearer for it.
+            verifiedExecutedSource
+            ? async () => null
+            : undefined;
 
       // exec-plane S3 A2 (cinatra#1708 §1.1): resolve the run's DECLARED L1
       // environment into a mountable layer + broker executor, or REFUSE a
