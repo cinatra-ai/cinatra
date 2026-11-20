@@ -2436,7 +2436,9 @@ async function reviewTicketStillPending(
  *
  * `initial` is the answer the MOUNT was handed (the run screen reads it
  * server-side; the chat card gets it on its seed), so a run that already has a
- * review draws it on the first paint with no tick of placeholder in front.
+ * review draws it on the first paint with no tick of placeholder in front. A
+ * later `initial` that names ANOTHER gate (the next gate of the same pause) is
+ * adopted in the render it arrives; one that names the same gate changes nothing.
  *
  * FRESHNESS IS KEYED TO THE RUN'S STATUS, AND IT IS ADJUSTED DURING RENDER. An
  * answer read while the run was `running` says nothing about the run once it is
@@ -2649,6 +2651,23 @@ export function useRunReviewSlot({
   // because it must never itself re-key the schedule. Cleared by an answer that
   // keeps the flag, and by every re-key below.
   const parkFlagDropsRef = useRef(0);
+  // WHICH ADOPTION OF THE SERVER'S GATE A LOOK BEGAN UNDER (cinatra#3035). It
+  // moves each time the render below takes a later `initial` as the slot. A
+  // look records it when it starts; an answer that comes back under another
+  // value was asked before the server named the gate now on the screen, so it
+  // is dropped and never overwrites that gate or what the card holds for it.
+  const adoptionRef = useRef(0);
+  // AND WHETHER THE READER OWES AN IMMEDIATE REREAD (cinatra#3035). A dropped
+  // answer is never the end of a read: the server's newest state is read again
+  // at once, ahead of the cadence, in both orders of a render and a look. The
+  // ask is a count, moved by one when this render takes the server's gate as the
+  // slot and by one when a look's answer is dropped for having begun under an
+  // older adoption. It is state, because it has to rebuild the schedule below
+  // in the frame it moves. `rereadServedRef` is the ask a look began under, so
+  // the two differ exactly while a reread is owed, and any number of asks that
+  // pile up behind one look are served by the one look that follows.
+  const [rereadAsk, setRereadAsk] = useState(0);
+  const rereadServedRef = useRef(0);
   // A LOOK THAT NEVER SETTLES MUST NOT BE ABLE TO STOP THE READER either, which
   // is the failure mode of every guard like the one above. The deadline aborts
   // a read at SLOT_READ_TIMEOUT_MS; past that plus a margin the guard lets go
@@ -2661,7 +2680,8 @@ export function useRunReviewSlot({
     },
     [],
   );
-  if (seenStatus !== status || seenRunId !== runId || seenAuth !== auth) {
+  const rekeyed = seenStatus !== status || seenRunId !== runId || seenAuth !== auth;
+  if (rekeyed) {
     setSeenStatus(status);
     setSeenRunId(runId);
     setSeenAuth(auth);
@@ -2674,6 +2694,75 @@ export function useRunReviewSlot({
     // keeps the re-key's own immediate look immediate.
     lookEpochRef.current += 1;
     inFlightRef.current = false;
+  }
+  // THE SERVER'S ANSWER WINS WHEN ITS GATE CHANGES (cinatra#3035). `initial` is
+  // read once, at mount, and a pause can raise more than one review gate: the
+  // person decides the first, the run stays in the SAME status, and the server
+  // render that follows hands this surface the next gate as a new `initial`.
+  // Nothing above sees that edge - the status, the run and the credential did
+  // not move - so the slot kept the gate that was just decided and drew its
+  // settled card, with no decision bar and no prompt window, until a look of
+  // this reader (two to ten seconds on) found the next one. The run rail takes
+  // the same server answer by the same shape: it adopts it when it CHANGES.
+  //
+  // Adjusted during render against the last gate this hook was handed, for the
+  // reason the status reset above is: the corrected card has to paint in the
+  // frame the answer arrives. It is the GATE that is compared, never the
+  // object and never its ticket: every server render mints a fresh ticket for
+  // the gate it already drew, and a card handed a new ticket for the same gate
+  // would lose what it holds for that gate, a decision in flight included.
+  //
+  // WHAT IS ADOPTED, AND WHAT IS NOT. Only a gate that has a ticket and a task
+  // identity, over a slot that does not already hold that gate: when this
+  // reader's own look has delivered the same gate its ticket stands. Never in
+  // the render that re-keys the reader, which empties the slot and looks again
+  // on its own, and never as a withdrawal: an `initial` that names no gate
+  // takes nothing off the screen.
+  //
+  // THE LOOK IN FLIGHT IS LEFT TO FINISH, BUT ITS ANSWER IS NOT TAKEN. A look
+  // that began before the adoption asked about the gate the server has just
+  // moved past: were it taken, it would put the decided gate back over the
+  // adopted one, and the card would lose the decision it has in flight on the
+  // adopted gate for another two to ten seconds, the very window this block
+  // exists to close. So each adoption moves `adoptionRef`, every look records
+  // it when it starts, and an answer that comes back under another value is
+  // dropped (see the look below). The look still counts as a read, so the
+  // reader's cadence moves on and its next look finds the row as it stands.
+  //
+  // AND NO ORDER OF A RENDER AND A LOOK IS ASSUMED (cinatra#3035). The counter
+  // alone takes an adopted render to be newer than every look begun before it
+  // arrived, and a delayed render is not: the server can raise a third gate
+  // after it computed the render and before a look began, and then the look
+  // holds the newest answer and the render the older one. So each adoption also
+  // asks for one immediate reread of the row, and so does each dropped answer
+  // (see `rereadAsk` above): a fresh look, begun under the counter as it stands,
+  // ahead of the cadence. Whichever of the two arrived last, the surface shows
+  // what the server holds one round trip on.
+  const initialGateId =
+    initial != null &&
+    initial.ref !== null &&
+    typeof initial.reviewTaskId === "string" &&
+    initial.reviewTaskId.trim().length > 0
+      ? initial.reviewTaskId
+      : null;
+  const [seenInitialGateId, setSeenInitialGateId] = useState(initialGateId);
+  if (seenInitialGateId !== initialGateId) {
+    setSeenInitialGateId(initialGateId);
+    if (
+      initial != null &&
+      initialGateId !== null &&
+      !rekeyed &&
+      slot.reviewTaskId !== initialGateId
+    ) {
+      lastAnswerRef.current = initial;
+      setSlot(initial);
+      setProbe((prev) =>
+        prev.answered && prev.parkLooks === 0 ? prev : { ...prev, answered: true, parkLooks: 0 },
+      );
+      parkFlagDropsRef.current = 0;
+      adoptionRef.current += 1;
+      setRereadAsk((n) => n + 1);
+    }
   }
   // AND THE OTHER EDGE, WHICH THE STATUS COLUMN CANNOT SHOW (fix leg 8). See
   // `stepOnFile` above: the measured run shape parks onto a row that is already
@@ -2800,6 +2889,12 @@ export function useRunReviewSlot({
     // the run is still working there is nothing to find and the placeholder is
     // already the right drawing.
     if (status !== "completed" && !parkedStatus) return;
+    // AN IMMEDIATE REREAD IS OWED while the ask is ahead of the ask the last
+    // look began under (cinatra#3035; see `rereadAsk`). It is owed ONCE per ask,
+    // never again for the look that serves it, so it cannot spin the reader: the
+    // look that serves it records the ask when it starts, and only a later
+    // adoption, or a look dropped for having begun before one, asks again.
+    const rereadOwed = rereadAsk !== rereadServedRef.current;
     // Answered under this status, with nothing further owed. A run parked on its
     // PRODUCED OUTPUT'S review always owes another look (cinatra#3046): its gate
     // can be minted or repaired while the run's status does not move at all, and
@@ -2834,7 +2929,12 @@ export function useRunReviewSlot({
     // looking on its own backing-off cadence. It is not a second poller: the
     // cadence widens to ten seconds, and the surface that mounts this reader is
     // already reading the same run every two to five seconds for its status.
-    if (answered && !slot.awaiting && !isProducedReviewPark && !parkedStatus) return;
+    //
+    // A REREAD THAT IS OWED IS NOT THE ANSWER'S TO CANCEL (cinatra#3035). A
+    // dropped answer can leave a settled slot behind it, and a settled slot is
+    // exactly the one this line would stop for good; the one look that is owed
+    // goes out first, and this line stops the reader after it as before.
+    if (!rereadOwed && answered && !slot.awaiting && !isProducedReviewPark && !parkedStatus) return;
     // THE BELT IS THE COMPLETED SETTLE WINDOW'S, and only its (cinatra#3007). It
     // exists so a dead transport cannot hold a spinner in front of a FINISHED run
     // for minutes — a window worth about 210 s of looking. A park is not that
@@ -2844,7 +2944,9 @@ export function useRunReviewSlot({
     // of two of them. What ends the looking here is the run LEAVING the status,
     // which is the event every surface is waiting for anyway; the per-look
     // deadline beside it still stops any one look from pinning the loop.
-    if (!parkedStatus && probe.reads >= SLOT_READ_LIMIT) return;
+    // The one look that is owed goes out past the belt too (cinatra#3035): it is
+    // a single look, and the belt stops the reader after it as before.
+    if (!rereadOwed && !parkedStatus && probe.reads >= SLOT_READ_LIMIT) return;
     // AND THE PARK HAS BELTS OF ITS OWN, because "not the completed window's
     // belt" is not the same as "no belt" (cinatra#3007). The ceiling ends a row
     // that keeps saying parked while no gate ever arrives - a held condition the
@@ -2974,6 +3076,14 @@ export function useRunReviewSlot({
           // the signal it was taken against travels with it: a bump that has
           // already been answered by a look must not shorten the next one.
           const epoch = lookEpochRef.current;
+          // The adoption of the server's gate this look begins under
+          // (cinatra#3035); an answer under another one is dropped below.
+          const adoption = adoptionRef.current;
+          // The ask this look serves: every reread asked up to the render this
+          // schedule was built in is answered by THIS look, however many piled
+          // up. An ask that comes after it is owed again, and is served by the
+          // look that follows (cinatra#3035).
+          rereadServedRef.current = rereadAsk;
           inFlightRef.current = true;
           inFlightEpochRef.current = epoch;
           lastLookAtRef.current = Date.now();
@@ -2990,6 +3100,27 @@ export function useRunReviewSlot({
             // STALE ONLY IF THIS READER WAS RE-KEYED. A rebuild of the effect
             // is not a re-key and no longer discards this answer.
             if (lookEpochRef.current !== epoch) return;
+            // A LOOK ASKED BEFORE THE SERVER NAMED THE GATE ON THE SCREEN
+            // SAYS NOTHING ABOUT IT (cinatra#3035). The render that adopted
+            // `initial` moved `adoptionRef` after this look began, so its
+            // answer may be the gate that was just decided. It is dropped,
+            // whole: it neither replaces the adopted gate nor moves the last
+            // answer or the park flag count. The transport did answer, so the
+            // look counts as a read (and spends one of the ceiling's looks, as
+            // an answer that said nothing new does) and the schedule goes on;
+            // the next look is asked under the adopted gate.
+            //
+            // AND A DROPPED ANSWER IS NEVER THE END OF A READ (cinatra#3035).
+            // The counter takes the adopted render to be newer than the look,
+            // and a delayed render is not: this answer can be the server's
+            // newest gate, raised after the render was computed. So the drop
+            // asks for one immediate reread, a fresh look under the counter as
+            // it stands, instead of leaving the screen to the cadence.
+            if (adoptionRef.current !== adoption) {
+              landed = next != null;
+              setRereadAsk((n) => n + 1);
+              return;
+            }
             if (next) {
               // DID THIS LOOK SAY ANYTHING NEW? Read against the slot this
               // effect was scheduled with, which is the last answer the surface
@@ -3143,6 +3274,14 @@ export function useRunReviewSlot({
                   (await reviewTicketStillPending(last.ref as string, auth, abort.signal)) !==
                     "withdrawn";
                 if (lookEpochRef.current !== epoch) return;
+                // The ticket reading above is a second wait: the server's gate
+                // can be adopted while it is open (cinatra#3035). The drop asks
+                // for the same one immediate reread as the drop above.
+                if (adoptionRef.current !== adoption) {
+                  landed = true;
+                  setRereadAsk((n) => n + 1);
+                  return;
+                }
                 if (!keepTheTicketOnFile) {
                   changed =
                     merged.ref !== last.ref ||
@@ -3193,7 +3332,9 @@ export function useRunReviewSlot({
       // already open by the time the run reports done. The look after a
       // renewal wait keeps the cadence (cinatra#4217 fold 3), so a renewal
       // reading that settles at once cannot make this reader spin.
-      probe.reads === 0 && probe.renewalWaits === 0 ? 0 : Math.max(0, dueAt - now),
+      // A reread that is owed is immediate too (cinatra#3035), and keeps the
+      // renewal wait above: it is asked once the renewal has settled.
+      rereadOwed || (probe.reads === 0 && probe.renewalWaits === 0) ? 0 : Math.max(0, dueAt - now),
     );
     return () => {
       stopped = true;
@@ -3210,6 +3351,9 @@ export function useRunReviewSlot({
     read,
     auth,
     isProducedReviewPark,
+    // The ask for an immediate reread (cinatra#3035): moving it rebuilds the
+    // schedule so the owed look is scheduled in the frame it is asked.
+    rereadAsk,
     // SAFE ONLY BECAUSE THE DELAY IS AN ELAPSED-TIME BUDGET (fix leg 8). The
     // caller bumps this every two to five seconds, so on the previous schedule
     // — a fresh countdown per re-run — adding it here would have guaranteed the
