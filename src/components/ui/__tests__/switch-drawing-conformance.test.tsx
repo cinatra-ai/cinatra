@@ -20,8 +20,8 @@
 // and retires the record: the assertion is unchanged, not relaxed, and now
 // runs as a plain regression test that fails on leg 1's head. See the
 // `FIXED IN LEG 2` block, which keeps leg 1's measured reading verbatim.
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render } from "@testing-library/react";
 
 import { Switch } from "@/components/ui/switch";
 
@@ -100,10 +100,80 @@ describe('FIXED IN LEG 2: clause "control 16-18px"', () => {
     expect(root.className).toMatch(/(^|\s)h-(4|\[1\.125rem\])(\s|$)/);
   });
 
-  it("keeps the thumb at the band's floor", () => {
-    // Passes today and is the pin that keeps the fix above from being taken by
-    // shrinking the thumb instead of the track.
+  it("gives the thumb the approved example's own 14px size", () => {
+    // The 16–18px band names the CONTROL. The same approved example draws a
+    // 32×18px track and a 14×14px thumb with a 2px inset; applying the band's
+    // floor to the thumb was unsupported. This is the emitted utility
+    // contract only: the real browser spec separately reads actual geometry.
     const { thumb } = renderSwitch();
-    expect(thumb.className).toContain("size-4");
+    expect(thumb.className).toContain("size-[14px]");
+    expect(thumb.className.split(/\s+/)).not.toContain("size-4");
+  });
+});
+
+
+describe("the approved Switch thumb inset preserves both directions and control behavior", () => {
+  it.each(["ltr", "rtl"] as const)("emits the 2px inset witness for checked and unchecked %s states", (direction) => {
+    for (const checked of [false, true]) {
+      const { container, unmount } = render(
+        <Switch dir={direction} checked={checked} onCheckedChange={() => {}} aria-label="Live" />,
+      );
+      const root = container.querySelector('[data-slot="switch"]') as HTMLElement;
+      const thumb = container.querySelector('[data-slot="switch-thumb"]') as HTMLElement;
+      expect(root.getAttribute("dir")).toBe(direction);
+      expect(root.getAttribute("aria-checked")).toBe(String(checked));
+      expect(thumb.getAttribute("data-state")).toBe(checked ? "checked" : "unchecked");
+      // The unchanged root has a 1px border, so its flex content starts at 1.
+      // In LTR, a 14px thumb translated 1/15 gives left/right inset 2 in the
+      // unchecked/checked state. RTL starts at the right and reflects it.
+      // These are recipe witnesses, not native layout or painted-pixel proof.
+      expect(thumb.className).toContain(direction === "ltr"
+        ? "data-[state=unchecked]:translate-x-px"
+        : "rtl:data-[state=unchecked]:-translate-x-px");
+      expect(thumb.className).toContain(direction === "ltr"
+        ? "data-[state=checked]:translate-x-[15px]"
+        : "rtl:data-[state=checked]:-translate-x-[15px]");
+      expect(root.className).toContain("h-[1.125rem]");
+      expect(root.className).toContain("w-8");
+      expect(root.className).toContain("border-transparent");
+      unmount();
+    }
+  });
+
+  it("keeps immediate controlled callbacks and leaves the value with the caller", () => {
+    const changed = vi.fn();
+    const { container, rerender } = render(<Switch checked={false} onCheckedChange={changed} aria-label="Live" />);
+    const root = container.querySelector('[data-slot="switch"]') as HTMLElement;
+    fireEvent.click(root);
+    expect(changed).toHaveBeenCalledExactlyOnceWith(true);
+    expect(root.getAttribute("aria-checked")).toBe("false");
+    rerender(<Switch checked onCheckedChange={changed} aria-label="Live" />);
+    expect(root.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(root);
+    expect(changed).toHaveBeenLastCalledWith(false);
+  });
+
+  it("keeps disabled controls inert", () => {
+    const changed = vi.fn();
+    const { container } = render(<Switch disabled defaultChecked onCheckedChange={changed} aria-label="Live" />);
+    const root = container.querySelector('[data-slot="switch"]') as HTMLButtonElement;
+    fireEvent.click(root);
+    expect(root.disabled).toBe(true);
+    expect(root.getAttribute("aria-checked")).toBe("true");
+    expect(changed).not.toHaveBeenCalled();
+  });
+
+  it("retains caller root-class precedence and forwarded attributes", () => {
+    const { container } = render(<Switch id="live-setting" name="live" className="h-6 w-12 border-2" aria-label="Custom live setting" />);
+    const root = container.querySelector('[data-slot="switch"]') as HTMLElement;
+    expect(root.id).toBe("live-setting");
+    expect(root.getAttribute("aria-label")).toBe("Custom live setting");
+    const classes = root.className.split(/\s+/);
+    expect(classes).toContain("h-6");
+    expect(classes).toContain("w-12");
+    expect(classes).toContain("border-2");
+    expect(classes).not.toContain("h-[1.125rem]");
+    expect(classes).not.toContain("w-8");
+    expect(classes).not.toContain("border");
   });
 });
