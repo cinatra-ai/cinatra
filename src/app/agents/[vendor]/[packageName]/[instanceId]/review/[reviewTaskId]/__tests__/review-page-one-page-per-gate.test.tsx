@@ -115,6 +115,11 @@ vi.mock("@cinatra-ai/agents/run-recommendation-chip-row", () => ({
 vi.mock("@cinatra-ai/agents/agent-hitl-screen-card", () => ({
   AgentHitlScreenCard: () => <div data-lifecycle-card="agent_hitl_screen" />,
 }));
+// cinatra#4150: the page also mounts the publish card beside the hitl screen card. This suite mocks the card
+// runtime whole, so the card is stubbed the same way; with no open decision the real card draws nothing.
+vi.mock("@cinatra-ai/agents/publish-decision-card-view", () => ({
+  PublishDecisionCard: () => null,
+}));
 vi.mock("@cinatra-ai/agents/lifecycle-card-runtime", () => ({
   LifecycleCardSurfaceProvider: ({ host, children }: { host: string; children: ReactNode }) => (
     <div data-lifecycle-card-host={host}>{children}</div>
