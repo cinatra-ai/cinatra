@@ -30,6 +30,7 @@ import {
   RunTransitionError,
   clearAgentRunFailureMetadata,
   readAllHitlPromptsForRun,
+  readReviewGateTimesForRun,
 } from "./store";
 import {
   deriveProducedOutputTitle,
@@ -680,8 +681,15 @@ export async function buildSubmissionMapByStepIndex(
     hitlOwnedBy?: string;
     xRenderer?: string;
     firesRendererGate?: boolean;
+    artifactReviewTargetsInput?: string;
   }>,
   hitlSteps: ReadonlyArray<{ index: number; stepNumber: number }>,
+  // cinatra#3035: when the walk stops because it cannot prove whose answer is
+  // next (see below), it writes the policy step number it stopped at here. The
+  // run page's rail reads it: from that step on, a marked step without an
+  // answer may have fallen back and been answered, so the rail ties no gate to
+  // a marked step by position. A run still in progress stops without a mark.
+  walkReport?: { stoppedAtStepNumber?: number },
 ): Promise<SubmissionMapEntries> {
   // This server action is exposed as a browser-callable RPC by the top-of-file
   // "use server" directive, so it must not return submittedValues for
@@ -713,7 +721,7 @@ export async function buildSubmissionMapByStepIndex(
   const allPrompts = await readAllHitlPromptsForRun(runId, agentId); // capturedAt asc
   // #824: context-selection gate approvals are persisted as prompt rows, but a
   // context step carries NO xRenderer so `gatedSteps` (below) excludes it. If we
-  // kept those rows the promptCursor would advance for a step the walk never
+  // kept those rows the promptIndex would advance for a step the walk never
   // visits, shifting every subsequent prompt→step mapping by one. Drop context
   // submissions here — mirrors the interrupt-side shape detection in execution.ts
   // (a context submission's userResponse is the {slotId,resolutionMode,selectedRefs}
@@ -753,22 +761,108 @@ export async function buildSubmissionMapByStepIndex(
   // instance-screens.tsx via the shared stepFiresRendererGate helper. Write
   // paths only fire on user-visible HITL gates (steps with an xRenderer that
   // are NOT #839 metadata-only phantom gateSteps), so widening here would
-  // advance the promptCursor for steps that hitlSteps does NOT include,
+  // advance the promptIndex for steps that hitlSteps does NOT include,
   // silently shifting every subsequent mapping by one slot. Keeping all three
   // renderer-gate walks identical guarantees the gateCount cursor and the
   // stepper-index lookup stay in lockstep.
   const gatedSteps = policySteps.filter(stepFiresRendererGate);
 
+  // cinatra#3035: A MARKED REVIEW STEP IS DECIDED THROUGH ITS GATE, OR FALLS
+  // BACK TO THE ORDINARY HUMAN GATE. A step whose policy names
+  // `artifactReviewTargetsInput` opens a review gate `wayflow-<task id>` (with
+  // `#2`, `#3`, ... for every further artifact of the same pause) and stores no
+  // answer through that gate's own road; only when the review core declines
+  // does it pause as an ordinary gate and store its answer here. The answer's
+  // keys cannot tell the two apart (the stored envelope adds
+  // `approved`/`approvedAt`, an attachment answer stores `{text, attachments}`,
+  // a bare approval stores nothing), so the walk reads two things:
+  //   * IDENTITY first. An answer row's `stepKey` is the task id of the pause it
+  //     answered, the same id the pause's gate group carries after `wayflow-`.
+  //     An answer stored for a gate pause (the run resume road accepts one while
+  //     the gate is open) belongs to that pause: the gate group and the answer
+  //     are consumed together, and the gate stays the step's entry.
+  //   * TIME otherwise, and only where it proves the order. The readers return
+  //     millisecond times of microsecond columns (the parse can lose one more
+  //     millisecond), so two times are ordered only when they lie at least
+  //     REVIEW_ORDER_MARGIN_MS apart; the rail reads gate times the same way
+  //     (run-step-rail.ts).
+  // Where the order is not proven (equal or near times, an unreadable gate list
+  // or time, an answer tied to another gate group) the walk STOPS: the pauses
+  // from there on show no answer rather than another pause's answer. Every pass
+  // of the inner loop consumes a gate group or an answer, or stops, so the walk
+  // ends however large `gateCount` is.
+  const REVIEW_ORDER_MARGIN_MS = 2;
+  const isMarked = (step: (typeof gatedSteps)[number]): boolean =>
+    typeof step.artifactReviewTargetsInput === "string" &&
+    step.artifactReviewTargetsInput.length > 0;
+  const taskIdOf = (id: string): string => {
+    const cut = id.indexOf("#");
+    return cut === -1 ? id : id.slice(0, cut);
+  };
+  // null: the gate list could not be read, so no marked pause can be told apart.
+  let gateGroups: Array<{ taskId: string; time: number }> | null = [];
+  if (gatedSteps.some(isMarked)) {
+    try {
+      const earliestByTask = new Map<string, number>();
+      for (const gate of await readReviewGateTimesForRun(runId)) {
+        if (!gate.reviewTaskId.startsWith("wayflow-")) continue;
+        const taskId = taskIdOf(gate.reviewTaskId.slice("wayflow-".length));
+        const time = new Date(gate.createdAt).getTime();
+        if (!Number.isFinite(time)) throw new Error("a review gate time is not a time");
+        const seen = earliestByTask.get(taskId);
+        if (seen === undefined || time < seen) earliestByTask.set(taskId, time);
+      }
+      gateGroups = [...earliestByTask]
+        .map(([taskId, time]) => ({ taskId, time }))
+        .sort((a, b) => a.time - b.time);
+    } catch {
+      gateGroups = null;
+    }
+  }
+  const groupIndexByTaskId = new Map((gateGroups ?? []).map((group, i) => [group.taskId, i]));
+  let gateGroupIndex = 0;
+
   const entries: SubmissionMapEntries = [];
-  let promptCursor = 0;
+  let promptIndex = 0;
 
   for (const step of gatedSteps) {
     const gateCount =
       typeof step.gateCount === "number" && step.gateCount > 0
         ? step.gateCount
         : 1;
+    const marked = isMarked(step);
+    const stopUnproven = (): SubmissionMapEntries => {
+      if (walkReport) walkReport.stoppedAtStepNumber = step.stepNumber;
+      return entries;
+    };
     for (let g = 0; g < gateCount; g++) {
-      if (promptCursor >= prompts.length) return entries; // run still in progress — stop walking
+      if (promptIndex >= prompts.length) return entries; // run still in progress — stop walking
+      const prompt = prompts[promptIndex];
+      const linkedGroup = groupIndexByTaskId.get(taskIdOf(prompt.stepKey));
+      if (marked && gateGroups === null) return stopUnproven();
+      if (marked && gateGroups !== null && gateGroupIndex < gateGroups.length) {
+        if (linkedGroup === gateGroupIndex) {
+          gateGroupIndex++; // the answer was stored for this gate pause; the gate is its entry
+          promptIndex++;
+          continue;
+        }
+        // An answer tied to an EARLIER group than the next one, or to none
+        // that is left, is out of order; one tied to a LATER group can only
+        // follow the next group, which the time below must still prove.
+        if (linkedGroup !== undefined && linkedGroup < gateGroupIndex) return stopUnproven();
+        const answeredAt = new Date(prompt.capturedAt).getTime();
+        if (!Number.isFinite(answeredAt)) return stopUnproven();
+        const gateAt = gateGroups[gateGroupIndex].time;
+        if (gateAt + REVIEW_ORDER_MARGIN_MS <= answeredAt) {
+          gateGroupIndex++; // decided through this gate group; the answer is a later pause's
+          continue;
+        }
+        if (linkedGroup !== undefined) return stopUnproven(); // a later group's answer is never this pause's
+        if (answeredAt + REVIEW_ORDER_MARGIN_MS > gateAt) return stopUnproven(); // order not proven
+        // The answer came first: this pause fell back and the answer is its own.
+      } else if (linkedGroup !== undefined) {
+        return stopUnproven(); // an answer tied to a gate pause is never another step's
+      }
       const stepperEntry = hitlSteps.find(
         (h) => h.stepNumber === step.stepNumber,
       );
@@ -776,12 +870,12 @@ export async function buildSubmissionMapByStepIndex(
       // only the last gate's data is kept in the map.
       if (stepperEntry) {
         entries.push([stepperEntry.index, {
-          submittedValues: prompts[promptCursor].submittedValues,
-          schemaSnapshot: prompts[promptCursor].schemaSnapshot ?? null,
-          stepKey: prompts[promptCursor].stepKey,
+          submittedValues: prompts[promptIndex].submittedValues,
+          schemaSnapshot: prompts[promptIndex].schemaSnapshot ?? null,
+          stepKey: prompts[promptIndex].stepKey,
         }]);
       }
-      promptCursor++;
+      promptIndex++;
     }
   }
   return entries;

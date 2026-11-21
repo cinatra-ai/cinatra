@@ -40,5 +40,6 @@ export const GENERATED_ARTIFACT_KIND_LABELS: Readonly<Record<string, string>> = 
   "@cinatra-ai/slide-deck-artifact": "Slide Deck",
   "@cinatra-ai/text-artifact": "Text",
   "@cinatra-ai/video-artifact": "Video",
+  "@cinatra-ai/website-artifacts": "CMS page",
   "@cinatra-ai/zip-artifact": "Archive",
 };
