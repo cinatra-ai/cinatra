@@ -1640,7 +1640,7 @@ export function createNonDefaultVersionHostContext(
 import type { ActionJson } from "@cinatra-ai/sdk-extensions";
 import { parseVerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server/request-context";
-import { assertRunStepToolAllowed, readCurrentRunStepToolPolicy } from "@cinatra-ai/agents/store";
+import { assertRunStepToolAllowed, readCurrentRunStepToolPolicy, RunStepToolPolicyRefusal } from "@cinatra-ai/agents/store";
 import { isProxy } from "node:util/types";
 
 export class ArtifactActionCheckRefusal extends Error {
@@ -1693,6 +1693,24 @@ export function immutableActionJson(value: unknown): ActionJson {
 }
 export class OutwardActionRefusal extends Error {
   constructor(readonly code: string) { super(code); this.name = "OutwardActionRefusal"; }
+}
+
+/** cinatra#3745: the code of an error of one of the three classes that refuse a
+ * run's tool call (the outward-action and action-check refusals here, the
+ * step-tool policy refusal of the run store), matched by identity; null for
+ * every other value and for a refusal without a nonempty code. It reads no
+ * marker and loads nothing: `@/lib/run-action-refusal` asks it after its zod
+ * precedence check, and the in-process host invoker asks it to keep a refusal
+ * thrown by the preparation above unwrapped. Never a throw. */
+export function runActionRefusalClassCode(err: unknown): string | null {
+  try {
+    if (!(err instanceof OutwardActionRefusal) && !(err instanceof ArtifactActionCheckRefusal) &&
+        !(err instanceof RunStepToolPolicyRefusal)) return null;
+    const code = (err as { code?: unknown }).code;
+    return typeof code === "string" && code.length > 0 ? code : null;
+  } catch {
+    return null;
+  }
 }
 
 /** A legacy session has no run declaration. A run frame requires actual signed

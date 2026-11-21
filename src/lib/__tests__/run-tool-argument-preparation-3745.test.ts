@@ -39,9 +39,11 @@ vi.mock("@cinatra-ai/agents/store", () => ({
   RunStepToolPolicyRefusal: h.RunStepToolPolicyRefusal,
 }));
 import {
+  ArtifactActionCheckRefusal,
   immutableActionJson,
   OutwardActionRefusal,
   prepareDeclaredRunToolArguments,
+  runActionRefusalClassCode,
 } from "@/lib/extension-host-context";
 
 const SOURCE = {
@@ -111,5 +113,24 @@ describe("the argument copy refuses what it cannot copy as plain JSON", () => {
   it("keeps a null argument null on a run frame; absent arguments are the empty object", async () => {
     expect(await prepare(null)).toBeNull();
     expect(await prepare(undefined)).toEqual({});
+  });
+});
+
+// (3) The identity reading of the three refusal classes that the roads and the
+//     in-process host invoker ask: the code of an instance of one of them, else null.
+describe("the refusal classes of a run's tool call are read by identity", () => {
+  it("answers the code of an instance of each of the three classes", () => {
+    expect(runActionRefusalClassCode(new OutwardActionRefusal("action_executed_source_missing_or_stale")))
+      .toBe("action_executed_source_missing_or_stale");
+    expect(runActionRefusalClassCode(new ArtifactActionCheckRefusal("action_json_invalid"))).toBe("action_json_invalid");
+    expect(runActionRefusalClassCode(new h.RunStepToolPolicyRefusal("step_tool_not_declared"))).toBe("step_tool_not_declared");
+  });
+
+  it("answers null for a lookalike, an ordinary error, a refusal without a code and a value that is no error", () => {
+    expect(runActionRefusalClassCode(Object.assign(new Error("x"), { name: "OutwardActionRefusal", code: "x" }))).toBeNull();
+    expect(runActionRefusalClassCode(new Error("step_tool_not_declared"))).toBeNull();
+    expect(runActionRefusalClassCode(new OutwardActionRefusal(""))).toBeNull();
+    expect(runActionRefusalClassCode("step_tool_not_declared")).toBeNull();
+    expect(runActionRefusalClassCode(null)).toBeNull();
   });
 });

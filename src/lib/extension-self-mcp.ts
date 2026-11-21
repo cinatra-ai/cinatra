@@ -301,9 +301,12 @@ export async function callHostPrimitive(
       });
     } catch (err) {
       // cinatra#3745: a refused run call keeps its refusal class and code (its
-      // message is that code only), so the caller answers it with the fixed 403.
-      const refusal = await import("@/lib/run-action-refusal")
-        .then(({ runActionRefusalCode }) => runActionRefusalCode(err)).catch(() => null);
+      // message is that code only), so the caller answers it with the fixed 403
+      // (its own road's reading, `@/lib/run-action-refusal`, keeps the zod
+      // precedence). The class is read from the preparation's module, which this
+      // invoker already loads for a run frame.
+      const refusal = await import("@/lib/extension-host-context")
+        .then(({ runActionRefusalClassCode }) => runActionRefusalClassCode(err)).catch(() => null);
       if (refusal) throw err;
       throw new Error(
         `[extension-self-mcp] authorization unavailable for "${primitiveName}" (boundary_error): ` +

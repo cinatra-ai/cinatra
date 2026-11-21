@@ -10,9 +10,11 @@
  * outcome with the fixed failure sentence (cinatra#4223), never their
  * message. The scope's own refusals keep their 403 and their message.
  *
- * The run's extension context, the table operation and the three refusal
- * classes' modules are test doubles; the dispatch and its error mapping are
- * the real ones.
+ * The run's extension context, the table operation and the host's argument
+ * preparation module (the three refusal classes and its identity reading of
+ * them, which run-tool-argument-preparation-3745.test.ts pins on the real
+ * module) are test doubles; the dispatch and its error mapping are the real
+ * ones.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -30,6 +32,13 @@ const h = vi.hoisted(() => {
     OutwardActionRefusal,
     ArtifactActionCheckRefusal,
     RunStepToolPolicyRefusal,
+    // The host's reading: the code of an instance of one of the three classes, else null.
+    runActionRefusalClassCode: (err: unknown): string | null => {
+      if (!(err instanceof OutwardActionRefusal) && !(err instanceof ArtifactActionCheckRefusal) &&
+          !(err instanceof RunStepToolPolicyRefusal)) return null;
+      const code = (err as { code?: unknown }).code;
+      return typeof code === "string" && code.length > 0 ? code : null;
+    },
     runOperation: vi.fn(),
   };
 });
@@ -65,13 +74,12 @@ vi.mock("@/lib/extension-data-tool", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/extension-data-tool")>()),
   runExtensionDataOperation: (...args: unknown[]) => h.runOperation(...args),
 }));
-// The three refusal classes, from the modules that own them.
+// The three refusal classes and the identity reading of them, from the host's
+// argument preparation module (it names the run store's class itself).
 vi.mock("@/lib/extension-host-context", () => ({
   OutwardActionRefusal: h.OutwardActionRefusal,
   ArtifactActionCheckRefusal: h.ArtifactActionCheckRefusal,
-}));
-vi.mock("@cinatra-ai/agents/store", () => ({
-  RunStepToolPolicyRefusal: h.RunStepToolPolicyRefusal,
+  runActionRefusalClassCode: h.runActionRefusalClassCode,
 }));
 
 import { dispatchExtensionScopedTool } from "@/lib/extension-scoped-tools";
@@ -162,6 +170,5 @@ afterAll(() => {
   vi.doUnmock("@cinatra-ai/sdk-extensions/manifest");
   vi.doUnmock("@/lib/extension-data-tool");
   vi.doUnmock("@/lib/extension-host-context");
-  vi.doUnmock("@cinatra-ai/agents/store");
   vi.resetModules();
 });
