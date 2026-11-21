@@ -715,6 +715,82 @@ describe("the model bridge offers a run-bound step only the tools it declares", 
   });
 });
 
+// The Gemini media roads reach the provider without the text road's
+// orchestration. Each provider call of a run (the YouTube generate, the file
+// upload and the file generate) is preceded by the same current-source read:
+// a run re-dispatched since the entry check is refused with the fixed 403.
+describe("the model bridge's media roads read the current source before each provider call", () => {
+  const RUN_BOUND = { "x-cinatra-run-token": RUN_TOKEN, "x-cinatra-a2a-context-id": CTX };
+  const MEDIA = { preferredProvider: "gemini", capabilityRequired: "media_input" };
+  const gemini = {
+    provider: "gemini",
+    generate: vi.fn(async () => ({ text: "transcript" })),
+    uploadFile: vi.fn(async () => ({ id: "files/abc" })),
+    generateFromMediaFile: vi.fn(async () => ({ text: "transcript" })),
+    deleteFile: vi.fn(async () => undefined),
+  };
+  const STALE = () => Object.assign(new Error("step_tool_run_source_inactive"), { code: "step_tool_run_source_inactive" });
+  let fetchSpy: ReturnType<typeof vi.spyOn> | undefined;
+  beforeEach(() => {
+    resolveProviderAdapterMock.mockImplementation((async () => gemini) as never);
+    fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(new Uint8Array(64), { status: 200, headers: { "content-type": "audio/mpeg" } }));
+  });
+  afterEach(() => {
+    fetchSpy?.mockRestore();
+    resolveProviderAdapterMock.mockImplementation(async (provider: LlmProviderId) => ({ provider }));
+  });
+
+  // (b23)
+  it("a YouTube call of a run whose source is no longer current is refused with the fixed 403 before the provider", async () => {
+    readCurrentRunStepToolPolicyMock.mockRejectedValue(STALE());
+    const res = await POST(makeReq({ user: "t", cinatra_llm: MEDIA, media: { url: "https://www.youtube.com/watch?v=abc" } },
+      { ...RUN_BOUND, ...sourceHeaders() }));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(REFUSED);
+    expect(readCurrentRunStepToolPolicyMock).toHaveBeenCalledWith(RUN.id, RUN.orgId, VERIFIED_SOURCE);
+    expect(gemini.generate).not.toHaveBeenCalled();
+  });
+
+  // (b24)
+  it("a file call of a run whose source is no longer current is refused before the upload", async () => {
+    readCurrentRunStepToolPolicyMock.mockRejectedValue(STALE());
+    const res = await POST(makeReq({ user: "t", cinatra_llm: MEDIA, media: { url: "https://example.com/clip.mp3" } },
+      { ...RUN_BOUND, ...sourceHeaders() }));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(REFUSED);
+    expect(gemini.uploadFile).not.toHaveBeenCalled();
+    expect(gemini.generateFromMediaFile).not.toHaveBeenCalled();
+  });
+
+  // (b25)
+  it("a file call whose run is re-dispatched after the upload is refused before the provider transcribes it", async () => {
+    readCurrentRunStepToolPolicyMock.mockResolvedValueOnce({ source: "bound-source-under-test" }).mockRejectedValueOnce(STALE());
+    const res = await POST(makeReq({ user: "t", cinatra_llm: MEDIA, media: { url: "https://example.com/clip.mp3" } },
+      { ...RUN_BOUND, ...sourceHeaders() }));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(REFUSED);
+    expect(gemini.uploadFile).toHaveBeenCalledTimes(1);
+    expect(gemini.generateFromMediaFile).not.toHaveBeenCalled();
+    expect(gemini.deleteFile).toHaveBeenCalledTimes(1);
+  });
+
+  // (b26)
+  it("a media call of a run whose source stays current reaches the provider after each read", async () => {
+    const yt = await POST(makeReq({ user: "t", cinatra_llm: MEDIA, media: { url: "https://www.youtube.com/watch?v=abc" } },
+      { ...RUN_BOUND, ...sourceHeaders() }));
+    expect(yt.status).toBe(200);
+    expect(gemini.generate).toHaveBeenCalledTimes(1);
+    expect(readCurrentRunStepToolPolicyMock).toHaveBeenCalledTimes(1);
+    vi.clearAllMocks();
+    const file = await POST(makeReq({ user: "t", cinatra_llm: MEDIA, media: { url: "https://example.com/clip.mp3" } },
+      { ...RUN_BOUND, ...sourceHeaders() }));
+    expect(file.status).toBe(200);
+    expect(gemini.generateFromMediaFile).toHaveBeenCalledTimes(1);
+    expect(readCurrentRunStepToolPolicyMock).toHaveBeenCalledTimes(2);
+  });
+});
+
 // Leave the module registry as this file found it.
 afterAll(() => {
   vi.doUnmock("server-only");
