@@ -52,12 +52,6 @@ vi.mock("@/components/artifacts/library-row-glyph", () => ({
   LibraryRowGlyph: () => null,
 }));
 
-/** The upload base roster the row's MIME label reads (registry by provenance):
- *  not this fixture's subject, so it is stood in for like the glyph above. */
-vi.mock("@/lib/artifacts/upload-artifact-type-map", () => ({
-  readSystemBaseUploadCandidates: () => [],
-}));
-
 vi.mock("@/lib/artifacts/artifact-kind-label", () => ({
   artifactKindLabelFor: (extension: string) => extension,
 }));
