@@ -1,5 +1,6 @@
 import type { VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
-import { verifyRunExecutedSource } from "@cinatra-ai/agents/store";
+import { verifyRunExecutedSource, readCurrentRunStepToolPolicy, readTrustedStepToolDeclaration } from "@cinatra-ai/agents/store";
+import type { StepToolReading } from "@cinatra-ai/agents/store";
 import "server-only";
 
 import * as path from "node:path";
@@ -947,6 +948,31 @@ function toPersonalDelta(
 }
 
 
+/**
+ * cinatra#3745: the source and step-tool policy read that comes before EVERY
+ * provider call of a run (the text road and each media road). A run-bound
+ * call with a verified executing source gets its step's declared policy, read
+ * in the same statement that proves that source still current: a run
+ * re-dispatched since the entry check is refused, and any failure of that read
+ * (a refusal, a malformed declaration, a store error) answers the entry
+ * check's fixed 403 `run_source_mismatch`, never its text. A run-bound call
+ * without a verified executing source is offered no tool; a call with no
+ * resolved run is not restricted.
+ */
+async function readRunPolicyBeforeProvider(
+  run: { id: string; orgId?: string | null } | null,
+  verifiedExecutedSource: VerifiedExecutedRunSource | undefined,
+): Promise<{ refused: Response; stepToolPolicy?: undefined } | { refused: null; stepToolPolicy: StepToolReading | undefined }> {
+  if (!run) return { refused: null, stepToolPolicy: undefined };
+  if (!verifiedExecutedSource) return { refused: null, stepToolPolicy: { kind: "declared", tools: [] } };
+  try {
+    return { refused: null, stepToolPolicy: readTrustedStepToolDeclaration((await readCurrentRunStepToolPolicy(run.id,
+      run.orgId!, verifiedExecutedSource)).source, verifiedExecutedSource.stepId) };
+  } catch {
+    return { refused: NextResponse.json({ error: "Executing source could not be verified", code: "run_source_mismatch" }, { status: 403 }) };
+  }
+}
+
 export async function POST(req: Request): Promise<Response> {
   // Dual auth: bridge token (WayFlow TS) OR Bearer JWT (Python containers).
   let bridgeActorContext: ActorContext | undefined;
@@ -1307,6 +1333,8 @@ export async function POST(req: Request): Promise<Response> {
           { status: 503 },
         );
       }
+      const youTubeRead = await readRunPolicyBeforeProvider(runFromToken, verifiedExecutedSource);
+      if (youTubeRead.refused) return youTubeRead.refused;
       const result = await withUsageAttribution(mediaUsageAttribution, () =>
         adapter.generate({
           system: combinedSystem,
@@ -1426,6 +1454,8 @@ export async function POST(req: Request): Promise<Response> {
     }
     const filename =
       body.media.url.split("/").pop()?.split("?")[0] || "media-input";
+    const uploadRead = await readRunPolicyBeforeProvider(runFromToken, verifiedExecutedSource);
+    if (uploadRead.refused) return uploadRead.refused;
     const fileRef = await adapter.uploadFile({
       content: streamResult.bytes,
       filename,
@@ -1435,6 +1465,8 @@ export async function POST(req: Request): Promise<Response> {
     try {
       // uploadResult.id is the Gemini File resource path "files/abc";
       // the Gemini SDK accepts this resource-path form as a fileUri.
+      const fileRead = await readRunPolicyBeforeProvider(runFromToken, verifiedExecutedSource);
+      if (fileRead.refused) return fileRead.refused;
       const result = await withUsageAttribution(mediaUsageAttribution, () =>
         adapter.generateFromMediaFile!({
           system: combinedSystem,
@@ -1823,13 +1855,21 @@ export async function POST(req: Request): Promise<Response> {
     // preferredProvider. When kind === "passthrough", we pass NO
     // preferredProvider / preferredModel so the orchestration helper takes
     // the backward-compatible path.
+    // cinatra#3745: a run-bound model call is offered only the tools its step
+    // declares in the run's bound source, read here, just before the provider
+    // is reached (readRunPolicyBeforeProvider; the media roads above read it
+    // the same way before each of their provider calls).
+    const policyRead = await readRunPolicyBeforeProvider(runForPorts, verifiedExecutedSource);
+    if (policyRead.refused) return policyRead.refused;
+    const stepToolPolicy = policyRead.stepToolPolicy;
     const dispatchOverrides =
       dispatch.kind === "dispatch"
         ? {
+            ...(stepToolPolicy ? { stepToolPolicy } : {}),
             preferredProvider: dispatch.effectiveProvider,
             preferredModel: dispatch.preferredModel,
           }
-        : {};
+        : { ...(stepToolPolicy ? { stepToolPolicy } : {}) };
 
     // Telemetry only. requested_provider captures what
     // metadata.cinatra.llm.preferredProvider asked for (NULL when no

@@ -54,6 +54,7 @@ import {
   passthroughFixedFailureText,
 } from "@/lib/passthrough-refusal";
 import { logFixedLine } from "@/lib/failure-log";
+import { RUN_ACTION_REFUSED, runActionRefusalCode } from "@/lib/run-action-refusal";
 
 /** The names W7 adds to the passthrough allowlist, each scoped below. */
 export const EXTENSION_SCOPED_TOOLS = new Set<string>([
@@ -87,7 +88,7 @@ export type ExtensionScopedToolRun = {
 
 export type ExtensionScopedToolOutcome =
   | { ok: true; result: unknown }
-  | { ok: false; status: number; error: string };
+  | { ok: false; status: number; error: string; code?: string };
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -149,6 +150,11 @@ export async function dispatchExtensionScopedTool(input: {
       return { ok: false, status: 500, error: PASSTHROUGH_UNEXPECTED_ERROR };
     }
     if (stated !== null) return stated;
+    // cinatra#3745: a refused run tool call answers 403 with one fixed sentence
+    // and the refusal's code, never with exception text (a read that throws is
+    // no refusal: the fixed failure below answers it).
+    const refusal = await runActionRefusalCode(e).catch(() => null);
+    if (refusal) return { ok: false, status: 403, error: RUN_ACTION_REFUSED, code: refusal };
     return {
       ok: false,
       status: 500,
