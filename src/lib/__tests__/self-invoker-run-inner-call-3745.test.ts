@@ -43,7 +43,15 @@ vi.mock("@cinatra-ai/agents/store", () => ({
   RunStepToolPolicyRefusal: h.RunStepToolPolicyRefusal,
 }));
 import { callHostPrimitive, __resetHostSelfPrimitiveHandlers } from "@/lib/extension-self-mcp";
-import { runActionRefusalCode } from "@/lib/run-action-refusal";
+import type * as RunActionRefusal from "@/lib/run-action-refusal";
+// The module the fix adds is loaded inside each test, not at the top of the
+// file: before the fix the file still loads and each test fails on the
+// missing module.
+// red-first-expect: Cannot find package '@/lib/run-action-refusal'
+let runActionRefusalCode!: typeof RunActionRefusal.runActionRefusalCode;
+async function loadRunActionRefusal(): Promise<void> {
+  ({ runActionRefusalCode } = await import("@/lib/run-action-refusal"));
+}
 
 const SOURCE = {
   contextId: "ctx-1", stepId: "step-1", executionAttemptId: "attempt-1",
@@ -72,6 +80,7 @@ afterAll(() => {
 
 describe("the self-invoker's call on a run frame is the admitted tool's inner call", () => {
   it("proves the run source and serves the frozen input without checking its own name against the step's offer", async () => {
+    await loadRunActionRefusal();
     expect(await callNested()).toEqual({ ok: true });
     expect(h.readCurrent).toHaveBeenCalledWith("run-1", "org-1", SOURCE);
     expect(h.assert).not.toHaveBeenCalled();
@@ -81,6 +90,7 @@ describe("the self-invoker's call on a run frame is the admitted tool's inner ca
   });
 
   it("refuses a stale source with its refusal class and code, which the run-call refusal map reads", async () => {
+    await loadRunActionRefusal();
     h.readCurrent.mockRejectedValue(new h.RunStepToolPolicyRefusal("step_tool_run_source_inactive"));
     h.olderCurrent.mockResolvedValue(false);
     const refused = await callNested().catch((e: unknown) => e);
