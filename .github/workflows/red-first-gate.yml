@@ -22,9 +22,9 @@ concurrency:
 jobs:
   red-first-gate:
     if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
-    uses: cinatra-ai/ci/.github/workflows/red-first-gate.yml@77dd2271d330e37f78eef9f373b09d8bef4b18fb # v0.1.4-next.77dd227
+    uses: cinatra-ai/ci/.github/workflows/red-first-gate.yml@c97ddefbf21a3c94f074b07844163f2159205f35 # v0.1.4-next.c97ddef
     with:
-      ref: "77dd2271d330e37f78eef9f373b09d8bef4b18fb" # same SHA as the workflow @ref (quoted: a SHA of digits only is a YAML number)
+      ref: "c97ddefbf21a3c94f074b07844163f2159205f35" # same SHA as the workflow @ref (quoted: a SHA of digits only is a YAML number)
       setup_pnpm: true
       install: node scripts/ci/sync-dev-extensions.mjs --pinned --shallow && pnpm install --frozen-lockfile
       vitest: pnpm exec vitest run --no-coverage --maxWorkers=3
