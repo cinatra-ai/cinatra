@@ -24,7 +24,7 @@ import {
   resolveExtensionToolOrigin,
   type ExtensionToolOriginDeps,
   type ExtensionToolOriginRun,
-} from "@/lib/extension-tool-origin";
+} from "../extension-tool-origin";
 
 const ORG = "org-fixture";
 const PARENT = "@fixture-scope/fixture-parent-agent";
