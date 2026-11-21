@@ -167,8 +167,12 @@ function Combobox({
           // `rounded-md` token this used to take is derived from a `--radius`
           // the two palettes set differently, so the pair rounded 6px in one
           // and 8px in the other where the drawing draws one number.
+          // `pl-3 pr-2.5 py-0`: the padding the Example writes out in full,
+          // `padding: 0 10px 0 12px` - 12px before the value, the Input's
+          // own 10px after the chevron, and 0 above and below: the 32px
+          // height alone sets the block size and the row centres on it.
           className={cn(
-            "flex h-8 w-fit items-center justify-between gap-2 rounded-[7px] border border-input bg-surface-strong px-3 py-1 text-sm font-normal whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-muted-foreground data-[join=bottom]:rounded-b-none data-[join=top]:rounded-t-none dark:bg-input-fill/30 dark:hover:bg-input-fill/50",
+            "flex h-8 w-fit items-center justify-between gap-2 rounded-[7px] border border-input bg-surface-strong pl-3 pr-2.5 py-0 text-sm font-normal whitespace-nowrap shadow-xs transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 data-[placeholder]:text-muted-foreground data-[join=bottom]:rounded-b-none data-[join=top]:rounded-t-none dark:bg-input-fill/30 dark:hover:bg-input-fill/50",
             className,
           )}
         >
@@ -178,7 +182,10 @@ function Combobox({
           >
             {label ?? placeholder}
           </span>
-          <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground opacity-50" />
+          {/* The Example draws the chevron at 14px in the full muted ink
+              ("width:14px;height:14px;color:var(--muted)"), not at 16px
+              dimmed to half opacity. */}
+          <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
         </button>
       </PopoverTrigger>
       <PopoverContent
@@ -217,7 +224,7 @@ function Combobox({
           // the drawing draws exactly one, and it runs straight along the
           // seam the border-top is dropped to open — putting back the very
           // low-alpha line that made the list read as a separate object.
-          "w-(--radix-popover-trigger-width) min-w-[12rem] border-input p-0 ring-0",
+          "w-(--radix-popover-trigger-width) border-input p-0 ring-0",
           // The outer radius and the drop shadow the drawing declares on this
           // list in full — `border-radius: 0 0 7px 7px` and
           // `box-shadow: 0 10px 26px -10px rgba(21,33,58,0.22)`, the "slightly
@@ -270,7 +277,13 @@ function Combobox({
           // above them.
           className="rounded-none! bg-transparent p-0"
         >
-          <CommandInput chrome="flush" placeholder={searchPlaceholder} />
+          {/* The Example sets the search text at 12.5px
+              ("font: 12.5px var(--font-sans)"). */}
+          <CommandInput
+            chrome="flush"
+            className="text-[12.5px]"
+            placeholder={searchPlaceholder}
+          />
           <CommandList className="p-[5px]">
             <CommandEmpty>{emptyText}</CommandEmpty>
             {options.map((option) => {
@@ -312,6 +325,16 @@ function Combobox({
                   className={cn(
                     "data-selected:bg-transparent data-[selected=true]:bg-indigo-ink/[0.06]!",
                     "data-[checked=true]:[&_svg]:text-indigo-ink!",
+                    // The Example's row and check, written out in full: rows
+                    // at "padding: 7px 9px; border-radius: 5px" in 13px type,
+                    // and a 13px check at stroke 2.4. The shared row's 8px x
+                    // 6px inset, its `rounded-sm` (derived from a `--radius`
+                    // the two palettes set differently), its 14px type and
+                    // its 16px icon size are replaced here, for this list
+                    // only; the size variant repeats the shared one so that
+                    // tailwind-merge drops the 16px rule.
+                    "rounded-[5px] px-[9px] py-[7px] text-[13px]",
+                    "[&_svg:not([class*='size-'])]:size-[13px] [&_svg]:[stroke-width:2.4]",
                   )}
                   onSelect={() => {
                     onValueChange?.(option.value)
