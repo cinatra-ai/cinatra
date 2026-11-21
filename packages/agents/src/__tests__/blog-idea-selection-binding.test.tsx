@@ -214,11 +214,19 @@ describe("the floor commits no pick, so a floor-drawn idea step does not hold it
     const card = src("agent-hitl-screen-card.tsx");
     expect(card).toMatch(/<RendererFloorReportContext\.Provider value=\{setRendererFloored\}>\s*<AgentHitlScreenFields\b/);
     expect(card).toContain("awaitsPick={!rendererFloored && continueAwaitsAPick(resolveHitlGateEntry(runId, gate), activeBuffered)}");
+    // The run panel and the stepper mount their renderer through its validity
+    // owner (cinatra#3562). The floor report wraps that owner, and the owner
+    // draws the renderer as its own child, so the renderer still reports its floor.
+    const floorWrapsOwner =
+      /<RendererFloorReportContext\.Provider value=\{setRendererFloored\}>\s*(?:\{\/\*[^*]*\*\/\}\s*)?<GateValidityOwner\s+renderer=\{RendererComponent\}/;
+    const ownerDrawsRenderer = "return <Renderer {...props} onValidityChange=";
     const panel = src("agentic-run-panel.tsx");
-    expect(panel).toMatch(/<RendererFloorReportContext\.Provider value=\{setRendererFloored\}>\s*<RendererComponent\b/);
+    expect(panel).toMatch(floorWrapsOwner);
+    expect(panel).toContain(ownerDrawsRenderer);
     expect(panel).toContain("(!rendererFloored && continueAwaitsAPick(hitlRendererEntry?.entry, bufferedHitlValue))");
     const stepper = src("orchestrator-stepper-panel.tsx");
-    expect(stepper).toMatch(/<RendererFloorReportContext\.Provider value=\{setRendererFloored\}>\s*<RendererComponent\b/);
+    expect(stepper).toMatch(floorWrapsOwner);
+    expect(stepper).toContain(ownerDrawsRenderer);
     expect(stepper).toContain("(!rendererFloored && continueAwaitsAPick(entry, bufferedHitlValue))");
     // No state is kept by binding id any more.
     expect(src("extension-field-renderer.tsx")).not.toMatch(/new Set<string>\(\)/);

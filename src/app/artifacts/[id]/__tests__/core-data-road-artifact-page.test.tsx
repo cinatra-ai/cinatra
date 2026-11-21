@@ -413,10 +413,10 @@ describe("the dashboard's own read gate on the artifact page (cinatra#3092)", ()
     expect(html).not.toContain('data-render-dispatch="dashboard-pointer"');
   });
 
-  // cinatra#4311: where the dispatch answers a floor for an admitted dashboard,
-  // whatever the floor's reason, the page keeps the pointer, so the dashboard
-  // keeps its Open dashboard affordance.
-  it("a dashboard the gate admits and no installed display claims keeps its pointer, never the generic floor", async () => {
+  // cinatra#4311 deleted the pointer: where the dispatch answers a floor for an
+  // admitted dashboard, whatever the floor's reason, the page draws the generic
+  // floor through the mount, as it does for every other row.
+  it("a dashboard the gate admits and no installed display claims draws the generic floor, never a pointer", async () => {
     dashboardRow();
     mocks.resolveDashboardArtifactPointer.mockResolvedValue({ access: "ok", pointer: POINTER });
     mocks.resolveArtifactDisplayMount.mockResolvedValue({
@@ -428,16 +428,15 @@ describe("the dashboard's own read gate on the artifact page (cinatra#3092)", ()
     });
     const html = await renderPage();
     expect(mocks.resolveArtifactDisplayMount).toHaveBeenCalledTimes(1);
-    expect(html).toContain('data-render-dispatch="dashboard-pointer"');
-    expect(html).toContain('data-testid="artifact-dashboard-pointer"');
-    expect(html).toContain('href="/dashboards/a-1"');
-    expect(html).toContain("Open dashboard");
-    expect(mocks.mounted).toHaveLength(0);
+    expect(html).not.toContain('data-render-dispatch="dashboard-pointer"');
+    expect(html).not.toContain('data-testid="artifact-dashboard-pointer"');
+    expect(html).not.toContain("Open dashboard");
+    expect(mocks.mounted).toHaveLength(1);
   });
 
   // An installed display that claims the dashboard but needs a rebuild is a
-  // floor too, so the page draws the pointer there as well.
-  it("a dashboard whose claiming display needs a rebuild keeps its pointer too", async () => {
+  // floor too, so the page draws the generic floor there as well.
+  it("a dashboard whose claiming display needs a rebuild draws the generic floor too", async () => {
     dashboardRow();
     mocks.resolveDashboardArtifactPointer.mockResolvedValue({ access: "ok", pointer: POINTER });
     mocks.resolveArtifactDisplayMount.mockResolvedValue({
@@ -448,9 +447,9 @@ describe("the dashboard's own read gate on the artifact page (cinatra#3092)", ()
       reason: "requires-rebuild",
     });
     const html = await renderPage();
-    expect(html).toContain('data-render-dispatch="dashboard-pointer"');
-    expect(html).toContain("Open dashboard");
-    expect(mocks.mounted).toHaveLength(0);
+    expect(html).not.toContain('data-render-dispatch="dashboard-pointer"');
+    expect(html).not.toContain("Open dashboard");
+    expect(mocks.mounted).toHaveLength(1);
   });
 
   it("a row of another type that no installed display claims still draws the generic floor through the mount", async () => {

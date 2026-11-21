@@ -168,6 +168,8 @@ const WP_SUB = {
 // The relocated WordPress client the wordpress-mcp-connector registers under
 // `@cinatra-ai/host:wordpress-mcp` (cinatra#975 Wave 3) — the host publication
 // DELEGATES its client-backed members here (owner-pinned, fail-loud).
+// cinatra#4720: further rows the connector would hold (empty unless a case adds one).
+const wordpressRows: Array<Record<string, unknown> & { id: string }> = [];
 const wordpressConnectorClient = {
   listInstances: () => [] as unknown[],
   getAPIStatus: () => ({
@@ -175,7 +177,8 @@ const wordpressConnectorClient = {
     detail: "1 WordPress instance is configured.",
   }),
   getAPISettings: () => ({ instances: [], loggingEnabled: true }),
-  readInstanceById: (id: string) => (id === WP_ROW.id ? WP_ROW : null),
+  readInstanceById: (id: string) =>
+    id === WP_ROW.id ? WP_ROW : (wordpressRows.find((row) => row.id === id) ?? null),
   deleteInstance: async (...args: unknown[]) => {
     wordpressApiCalls.delete.push(args);
   },
@@ -1788,5 +1791,243 @@ describe("drupal-mcp dev writers bind the dev owner host-side (cinatra#4387)", (
       { owner: false, save: "resolved", persist: "resolved", handed: [unbound, unbound] },
     ]);
     expect(polluterRuns.n).toBe(0);
+  });
+});
+
+describe("wordpress-mcp dev writers bind the dev owner host-side (cinatra#4720)", () => {
+  const DEV_OWNER = { userId: "dev-admin-1", organizationId: "dev-org-1" };
+  const PREVIEW_ENV = ["CINATRA_RUNTIME_MODE", "CINATRA_INSTALL_PROFILE"] as const;
+  const savedEnv: Record<string, string | undefined> = {};
+  // What the WordPress dev hook hands on its first wire: id, site, user and
+  // application password only (it never sees a user id).
+  const HOOK_INPUT = {
+    id: "dev-wp-row",
+    siteUrl: "http://localhost:8081",
+    username: "admin",
+    applicationPassword: "abcd efgh ijkl mnop",
+  };
+  const BOUND = { ...HOOK_INPUT, orgId: "dev-org-1", runBy: "dev-admin-1" };
+
+  function wordpress(): HostWordPressMcpService {
+    return resolveSingle<HostWordPressMcpService>(HOST_CONNECTOR_SERVICE_CAPABILITIES.wordpressMcp);
+  }
+  function devBoot(owner: { userId: string; organizationId: string } | null) {
+    devBootState.dev = true;
+    devBootState.owner = owner;
+  }
+  function previewBoot(owner: typeof DEV_OWNER | null) {
+    devBootState.dev = false;
+    devBootState.owner = owner;
+    for (const k of PREVIEW_ENV) savedEnv[k] = process.env[k];
+    process.env.CINATRA_RUNTIME_MODE = "production";
+    process.env.CINATRA_INSTALL_PROFILE = "preview";
+  }
+  const settle = (p: Promise<unknown>) =>
+    p.then(
+      () => "resolved",
+      (e: unknown) => `rejected: ${e instanceof Error ? e.message : String(e)}`,
+    );
+
+  afterEach(() => {
+    devBootState.dev = false;
+    devBootState.owner = null;
+    devBootState.orgRole = undefined;
+    wordpressRows.length = 0;
+    for (const k of PREVIEW_ENV) {
+      if (k in savedEnv) {
+        if (savedEnv[k] === undefined) delete process.env[k];
+        else process.env[k] = savedEnv[k];
+        delete savedEnv[k];
+      }
+    }
+    vi.restoreAllMocks();
+  });
+
+  it("dev boot with an owner: devSaveInstance and the unvalidated persist hand the connector the owner's orgId and runBy", async () => {
+    devBoot(DEV_OWNER);
+    await expect(wordpress().devSaveInstance!({ ...HOOK_INPUT })).resolves.toEqual({
+      id: "wp-1",
+      connectionId: "nango-wp-1",
+    });
+    expect(wordpressApiCalls.save.at(-1)).toEqual([BOUND]);
+    await expect(wordpress().devPersistLocalInstanceUnvalidated!({ ...HOOK_INPUT })).resolves.toEqual({
+      id: "wp-1",
+      connectionId: "nango-wp-1",
+    });
+    expect(wordpressApiCalls.devPersist.at(-1)).toEqual([BOUND]);
+  });
+
+  it("preview boot with an owner: both dev writers hand the same binding", async () => {
+    previewBoot(DEV_OWNER);
+    await wordpress().devSaveInstance!({ ...HOOK_INPUT });
+    expect(wordpressApiCalls.save.at(-1)).toEqual([BOUND]);
+    await wordpress().devPersistLocalInstanceUnvalidated!({ ...HOOK_INPUT });
+    expect(wordpressApiCalls.devPersist.at(-1)).toEqual([BOUND]);
+  });
+
+  it("no owner, or an owner holder with only one id: no orgId and no runBy reach the connector (both own and undefined on a new object)", async () => {
+    const holders = [
+      null,
+      { userId: "dev-admin-1", organizationId: "" },
+      { userId: "", organizationId: "dev-org-1" },
+      { userId: "  ", organizationId: "\t " },
+    ];
+    for (const holder of holders) {
+      devBoot(holder);
+      const input = { ...HOOK_INPUT };
+      await wordpress().devSaveInstance!(input);
+      await wordpress().devPersistLocalInstanceUnvalidated!(input);
+      for (const call of [wordpressApiCalls.save.at(-1)!, wordpressApiCalls.devPersist.at(-1)!]) {
+        expect(call).toEqual([HOOK_INPUT]);
+        const handed = call[0] as Record<string, unknown>;
+        expect(handed).not.toBe(input);
+        expect(Object.getOwnPropertyDescriptor(handed, "orgId")).toEqual({
+          value: undefined,
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
+        expect(Object.getOwnPropertyDescriptor(handed, "runBy")).toEqual({
+          value: undefined,
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
+      }
+    }
+  });
+
+  it("production boot: both dev writers refuse and nothing reaches the connector", async () => {
+    for (const k of PREVIEW_ENV) savedEnv[k] = process.env[k];
+    for (const profile of [undefined, "demo"]) {
+      devBootState.dev = false;
+      devBootState.owner = DEV_OWNER;
+      process.env.CINATRA_RUNTIME_MODE = "production";
+      if (profile === undefined) delete process.env.CINATRA_INSTALL_PROFILE;
+      else process.env.CINATRA_INSTALL_PROFILE = profile;
+      const saves = wordpressApiCalls.save.length;
+      const persists = wordpressApiCalls.devPersist.length;
+      await expect(wordpress().devSaveInstance!({ ...HOOK_INPUT })).rejects.toThrow(
+        /wordpress-mcp\.devSaveInstance is a dev-only devSetup provisioning member/,
+      );
+      await expect(wordpress().devPersistLocalInstanceUnvalidated!({ ...HOOK_INPUT })).rejects.toThrow(
+        /wordpress-mcp\.devPersistLocalInstanceUnvalidated is a dev-only devSetup provisioning member/,
+      );
+      expect(wordpressApiCalls.save).toHaveLength(saves);
+      expect(wordpressApiCalls.devPersist).toHaveLength(persists);
+    }
+  });
+
+  it("a caller-supplied orgId and runBy never reach the connector, and the caller's object is unchanged", async () => {
+    const forged = { ...HOOK_INPUT, orgId: "evil-org", runBy: "evil-user" };
+    const before = { ...forged };
+    devBoot(DEV_OWNER);
+    await wordpress().devSaveInstance!(forged as never);
+    expect(wordpressApiCalls.save.at(-1)).toEqual([BOUND]);
+    await wordpress().devPersistLocalInstanceUnvalidated!(forged as never);
+    expect(wordpressApiCalls.devPersist.at(-1)).toEqual([BOUND]);
+    devBoot(null);
+    await wordpress().devSaveInstance!(forged as never);
+    expect(wordpressApiCalls.save.at(-1)).toEqual([HOOK_INPUT]);
+    await wordpress().devPersistLocalInstanceUnvalidated!(forged as never);
+    expect(wordpressApiCalls.devPersist.at(-1)).toEqual([HOOK_INPUT]);
+    expect(forged).toEqual(before);
+  });
+
+  it("the refusals name wordpress-mcp: an accessor field or a Proxy input is refused before it runs, and nothing reaches the connector", async () => {
+    let getterRuns = 0;
+    const accessor = {
+      id: "dev-wp-row",
+      siteUrl: "http://localhost:8081",
+      get username() {
+        getterRuns += 1;
+        return "admin";
+      },
+      applicationPassword: "abcd efgh ijkl mnop",
+    };
+    const trapped: string[] = [];
+    const proxy = new Proxy(
+      { ...HOOK_INPUT },
+      {
+        ownKeys(target) {
+          trapped.push("ownKeys");
+          return Reflect.ownKeys(target);
+        },
+        getOwnPropertyDescriptor(target, key) {
+          trapped.push("getOwnPropertyDescriptor");
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+        get(target, key, receiver) {
+          trapped.push("get");
+          return Reflect.get(target, key, receiver);
+        },
+      },
+    );
+    const outcomes: Array<{ owner: boolean; results: string[]; saves: number; persists: number }> = [];
+    for (const owner of [DEV_OWNER, null]) {
+      devBoot(owner);
+      const saves = wordpressApiCalls.save.length;
+      const persists = wordpressApiCalls.devPersist.length;
+      const results = [
+        await settle(wordpress().devSaveInstance!(accessor)),
+        await settle(wordpress().devPersistLocalInstanceUnvalidated!(accessor)),
+        await settle(wordpress().devSaveInstance!(proxy)),
+        await settle(wordpress().devPersistLocalInstanceUnvalidated!(proxy)),
+      ];
+      outcomes.push({
+        owner: owner !== null,
+        results,
+        saves: wordpressApiCalls.save.length - saves,
+        persists: wordpressApiCalls.devPersist.length - persists,
+      });
+    }
+    const accessorRefused =
+      "rejected: A wordpress-mcp dev instance save takes data fields only; the accessor field username is refused.";
+    const proxyRefused =
+      "rejected: A wordpress-mcp dev instance save takes a plain object of data fields; a Proxy is refused.";
+    const refused = [accessorRefused, accessorRefused, proxyRefused, proxyRefused];
+    expect(outcomes).toEqual([
+      { owner: true, results: refused, saves: 0, persists: 0 },
+      { owner: false, results: refused, saves: 0, persists: 0 },
+    ]);
+    expect(getterRuns).toBe(0);
+    expect(trapped).toEqual([]);
+  });
+
+  it("deriveAgentRunConnectorInstanceBinding admits the row devSaveInstance saved for a run by the dev owner; the same row unbound is denied instance_unbound", async () => {
+    const { deriveAgentRunConnectorInstanceBinding } = await import("@/lib/connector-instance-write-authority");
+    devBoot(DEV_OWNER);
+    await wordpress().devSaveInstance!({ ...HOOK_INPUT });
+    // The connector's validated save keeps a complete supplied pair
+    // (wordpress-mcp-connector saveWordPressInstance); the row holds what it was handed.
+    const handed = wordpressApiCalls.save.at(-1)![0] as Record<string, unknown> & { id: string };
+    const stamps = { createdAt: "2026-11-17T00:00:00Z", updatedAt: "2026-11-17T00:00:00Z" };
+    wordpressRows.push({ ...handed, ...stamps });
+
+    vi.spyOn(auditModule, "logAuditEvent").mockResolvedValue(undefined);
+    const authority = vi.spyOn(authorityModule, "requireConnectorAuthority").mockResolvedValue({ allowed: true } as never);
+    devBootState.orgRole = "owner";
+    const run = {
+      runId: "run-4720",
+      runBy: DEV_OWNER.userId,
+      orgId: DEV_OWNER.organizationId,
+      inputParams: { instanceId: HOOK_INPUT.id },
+    };
+
+    await expect(deriveAgentRunConnectorInstanceBinding(run)).resolves.toEqual({
+      connectorKey: "wordpress",
+      instanceId: HOOK_INPUT.id,
+    });
+    expect(authority).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ principalId: DEV_OWNER.userId, organizationId: DEV_OWNER.organizationId }),
+      expect.objectContaining({ instanceId: HOOK_INPUT.id }),
+    );
+
+    // The same row without the binding (what the member handed before cinatra#4720).
+    wordpressRows.length = 0;
+    const { orgId: _o, runBy: _r, ...unbound } = handed;
+    wordpressRows.push({ ...unbound, ...stamps });
+    await expect(deriveAgentRunConnectorInstanceBinding(run)).rejects.toMatchObject({ reason: "instance_unbound" });
   });
 });

@@ -6,9 +6,11 @@
  * returns (cinatra#4312). The claim leaves out an intent that used them, and the
  * dead-letter pass takes it for ops. This file reads the predicates and the
  * write the real gate store builds, through a double of the database, and
- * proves that none of them makes an exception for an intent whose delivery
- * claimed the run (`run_claimed_at`), and that a deferral does not give its
- * attempt back. The same rules against Postgres:
+ * proves that the claim makes no exception for an intent whose delivery
+ * claimed the run (`run_claimed_at`), that a deferral does not give its
+ * attempt back, and that such an intent, once it used its attempts with its
+ * mark still set, is settled under its own lease (the run goes back on its
+ * gate first) instead of a bare dead letter. The same rules against Postgres:
  * resume-intent-run-edge-claim-3745.integration.test.ts and
  * resume-delivery-claim-3745.integration.test.ts.
  */
@@ -23,6 +25,8 @@ const rec = vi.hoisted(() => ({
   sets: [] as Array<Record<string, unknown>>,
   /** The rows an UPDATE ... RETURNING answers. */
   updated: [] as unknown[],
+  /** The candidate rows a locking read (`FOR UPDATE SKIP LOCKED`) answers. */
+  candidates: [] as unknown[],
 }));
 
 vi.mock("../db", () => {
@@ -36,8 +40,8 @@ vi.mock("../db", () => {
       },
       orderBy: () => chain,
       limit: () => chain,
-      // The claim's candidates: none, so the claim writes nothing.
-      for: async () => [],
+      // The candidates of a locking read: none unless a case names them.
+      for: async () => rec.candidates,
     });
     return chain;
   };
@@ -65,8 +69,10 @@ vi.mock("../auth-policy", () => ({ enforceRunAccess: () => { throw new Error("no
 import {
   claimPendingResumeIntents,
   deadLetterExhaustedResumeIntents,
+  deadLetterResumeIntentUnderLease,
   deferResumeIntent,
   fenceResumeIntentLeaseInRunTx,
+  leaseExhaustedResumeClaims,
 } from "../artifact-review-gate-store";
 import { db } from "../db";
 
@@ -84,6 +90,7 @@ beforeEach(() => {
   rec.wheres.length = 0;
   rec.sets.length = 0;
   rec.updated = [];
+  rec.candidates = [];
 });
 
 describe("cinatra#3745: a claimed resume intent keeps the cinatra#4312 attempt bound", () => {
@@ -95,13 +102,15 @@ describe("cinatra#3745: a claimed resume intent keeps the cinatra#4312 attempt b
     expect(where).not.toMatch(CLAIM_MARK);
   });
 
-  it("the dead-letter pass takes every intent that used its attempts, a claimed one included", async () => {
+  it("S1 the dead-letter pass takes every intent that used its attempts, but one whose delivery still holds the run", async () => {
     expect(await deadLetterExhaustedResumeIntents()).toBe(0);
     // The eligibility predicate: the candidate read's, then the same one under the UPDATE.
     expect(rec.wheres).toHaveLength(2);
-    const eligible = rendered(rec.wheres[0]);
-    expect(eligible).toMatch(ATTEMPTS_USED);
-    expect(eligible).not.toMatch(CLAIM_MARK);
+    for (const where of rec.wheres.map(rendered)) {
+      expect(where).toMatch(ATTEMPTS_USED);
+      // The settle leases a claimed one and dead-letters it after it put the run back.
+      expect(where).toMatch(/"run_claimed_at" is null/);
+    }
   });
 
   it("a deferral keeps the claim's attempt used: it writes no attempt count", async () => {
@@ -136,5 +145,39 @@ describe("cinatra#3745: a release under the lease needs the claim mark still set
     expect(release).toMatch(/"lease_token" = \$\d+/);
     expect(claim).not.toMatch(CLAIM_MARK);
     expect(none).not.toMatch(CLAIM_MARK);
+  });
+});
+
+describe("cinatra#3745: a claimed intent that used its attempts is settled under its own lease", () => {
+  const ROW = {
+    gateId: "gate-1", runId: "run-1", reviewTaskId: "wayflow-task-1", kind: "approve", responseText: "{}",
+    status: "delivering", attempts: 20, maxAttempts: 20, leaseToken: "lease-new", leaseExpiresAt: new Date(),
+    runClaimedAt: new Date(), resumeTaskResult: null,
+  };
+
+  it("S1 the settle lease takes only a claimed, exhausted, delivering intent with no live lease, and uses no attempt", async () => {
+    rec.candidates = [{ gateId: "gate-1" }];
+    rec.updated = [ROW];
+    const rows = await leaseExhaustedResumeClaims({ limit: 5, leaseMs: 60_000 });
+    expect(rows.map((r) => [r.gateId, r.leaseToken, r.finalAttempt])).toEqual([["gate-1", "lease-new", true]]);
+    const where = rendered(rec.wheres[0]);
+    expect(where).toMatch(/"run_claimed_at" is not null/);
+    expect(where).toMatch(ATTEMPTS_USED);
+    expect(where).toMatch(/"dead_lettered_at" is null/);
+    expect(where).toMatch(/"status" = \$\d+/);
+    expect(where).toMatch(/"lease_expires_at" is null or .*"lease_expires_at" <= now\(\)/);
+    expect(rec.sets).toHaveLength(1);
+    expect(Object.keys(rec.sets[0]!).sort()).toEqual(["leaseExpiresAt", "leaseToken", "updatedAt"]);
+  });
+
+  it("S1 the settle's dead letter writes only under the held lease", async () => {
+    rec.updated = [{ gateId: "gate-1" }];
+    expect(await deadLetterResumeIntentUnderLease("gate-1", "lease-1", "why")).toBe(true);
+    expect(Object.keys(rec.sets[0]!).sort()).toEqual(["deadLetteredAt", "lastError", "updatedAt"]);
+    const where = rendered(rec.wheres[0]);
+    expect(where).toMatch(/"lease_token" = \$\d+/);
+    expect(where).toMatch(/"dead_lettered_at" is null/);
+    rec.updated = [];
+    expect(await deadLetterResumeIntentUnderLease("gate-1", "lease-gone", "why")).toBe(false);
   });
 });

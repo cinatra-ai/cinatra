@@ -747,6 +747,17 @@ export const CHECKBOX_CALL_SITE_READINGS: FileReading[] = [
     sites: [{ anchor: "createRedactingPacote(pacoteImpl)", tag: "pacoteImpl", drawn: "no checkbox", effect: "none", reading: SERVER_MODULE, tagIncludes: [], fileIncludes: ['import * as pacoteImpl from "pacote";'] }],
   },
   {
+    file: "packages/agents/src/regenerate-segment.ts",
+    tokens: 0,
+    sites: [],
+    loads: {
+      count: 1,
+      modules: "drizzle-orm",
+      reading:
+        "the database query library loaded beside the run store's modules for its and, eq and inArray operators, read by name in one snapshot query: it draws nothing",
+    },
+  },
+  {
     file: "packages/agents/src/trigger-service.ts",
     tokens: 0,
     sites: [

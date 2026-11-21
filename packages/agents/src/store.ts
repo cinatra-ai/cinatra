@@ -4021,6 +4021,9 @@ export async function purgeAgentTemplateAtomic(
   return result;
 }
 
+// #3745 dispatch fence: the first message's key naming the bound source (the loader's key).
+export { CINATRA_EXPECTED_SOURCE_MESSAGE_KEY } from "./agent-run-serde";
+
 // origin JSONB helpers MOVED to ./agent-template-identity (cinatra#2616): they
 // are package-name-keyed writers of a globally unique identity, so they now
 // carry the claim. Re-exported so `./store` importers are unchanged.
@@ -4029,3 +4032,8 @@ export {
   updateAgentTemplateOrigin,
   updateAgentTemplateVisibility,
 } from "./agent-template-identity";
+
+// #3745 public package subpath remains ./store; no held export-map edit.
+export { bindRunStepToolPolicy, readRunStepToolPolicy, verifyRunExecutedSource, isRunExecutedSourceCurrent, withRunActionPolicyTransaction } from "./agent-run-serde";
+export { selectWayflowRunStepToolPolicy, createRunStepToolPolicy, parseRunStepToolPolicy, readTrustedStepToolDeclaration, RunStepToolPolicyRefusal } from "./agent-run-serde";
+export type { RunStepToolPolicy, StepToolReading } from "./agent-run-serde";

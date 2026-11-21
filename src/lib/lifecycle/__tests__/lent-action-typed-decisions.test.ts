@@ -14,6 +14,8 @@
 // pressed, whatever the model calls with.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+// Before the fix `regenerate` is no grant control, so the mint returns null and the helper throws.
+// red-first-expect: mint failed
 
 process.env.BETTER_AUTH_SECRET ??= "test-secret-for-typed-decisions";
 
@@ -101,6 +103,9 @@ function deps(bound: unknown, over: Record<string, unknown> = {}) {
       return { outcome: "consumed" as const, messageText: personWords };
     }),
     submitReviewDecision,
+    // The pre-spend review preflight (cinatra#4571 pre-1 finding 1) is proven in
+    // lent-review-press-authorize-first-4571.test.ts; here it admits every press.
+    preflightReviewPress: async () => null,
     confirmHold,
     skipHold,
     writeSelection,
@@ -173,11 +178,13 @@ describe("the review card's three buttons, typed", () => {
     expect(d.consume.mock.calls[0]![0]).toMatchObject({ control: "comment" });
   });
 
-  it("a typed reject presses the same action with the reject disposition", async () => {
-    personWords = "reject it, the numbers are wrong";
-    setFrame(grantFor({ controls: ["comment", "reject"] }));
-    await handleLentAction({ ref: REF, control: "reject" }, deps(REVIEW));
-    expect(submitReviewDecision.mock.calls[0]![2]).toBe("reject");
+  // AMENDED for cinatra#3080: Regenerate took Reject's place on the card and in
+  // the arm, so the third typed button is a Regenerate.
+  it("a typed regenerate presses the same action with the regenerate disposition", async () => {
+    personWords = "the numbers are wrong, make them again";
+    setFrame(grantFor({ controls: ["comment", "regenerate"] }));
+    await handleLentAction({ ref: REF, control: "regenerate" }, deps(REVIEW));
+    expect(submitReviewDecision.mock.calls[0]![2]).toBe("regenerate");
   });
 
   it("relays the card's own refusal rather than writing one of its own", async () => {

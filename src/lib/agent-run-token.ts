@@ -128,16 +128,26 @@ export async function verifyRunToken(
 //   X-Cinatra-Step-Attestation: s1:<expiryEpochSeconds>:<hex>
 //   hex = HMAC-SHA256(key, "s1\n<contextId>\n<nodeId>\n<expiryEpochSeconds>")
 //
+// A runtime that executes a mounted assistant with its frozen mount binding
+// signs `s2` instead, over the step AND the three source digests of the
+// assistant that executes the call, sent in their own headers:
+//
+//   X-Cinatra-Raw-Source / -Executed-Source / -Declaration-Source: <sha256 hex>
+//   X-Cinatra-Step-Attestation: s2:<expiryEpochSeconds>:<hex>
+//   hex = HMAC-SHA256(key, "s2\n<contextId>\n<nodeId>\n<attempt>\n<raw>\n<executed>\n<declaration>\n<expiryEpochSeconds>"), <attempt> = X-Cinatra-Execution-Attempt
+//
 // When a run pauses for a review the runtime records the pausing step as a
 // claim `{ node, attestation: "g1:<hex>" }` over
 // "g1\n<contextId>\n<taskId>\n<nodeId>" on the pause's last message.
 //
-// The version prefixes (`s1`, `g1`) are distinct from the context-resolution
+// The version prefixes (`s1`, `s2`, `g1`) are distinct from the context-resolution
 // pair's (`v1`, `v2`), so material signed for one purpose never verifies for
-// another. The model never holds, sees or chooses the step: only these two
-// verifiers turn a signed value into a step id, and each answers the verified
-// node id or null. A null is "no step"; the caller serves the call as it does
-// without a step.
+// another. The model never holds, sees or chooses the step: only these three
+// verifiers turn a signed value into a step id. The `s1` and `g1` verifiers
+// answer the verified node id or null, and a null is "no step": the caller
+// serves the call as it does without a step. The `s2` verifier answers the
+// signed step and digests or null; each route states what a null means for a
+// call that carries source headers.
 // ---------------------------------------------------------------------------
 
 /** The runtime's step-node header (lower-case; `Headers.get` is case-insensitive). */
@@ -233,4 +243,64 @@ export function verifyGateNodeClaim(input: {
   if (!match) return null;
   const expected = hmacHex(key, `g1\n${contextId}\n${taskId}\n${node}`);
   return hexEquals(match[1]!, expected) ? node : null;
+}
+
+// cinatra#3745: the s2 pair binds the step to the source of the assistant that
+// ACTUALLY executes it (the loader's frozen mount binding of that task), never
+// to a re-read of the active mount, and to the execution attempt the task's own
+// A2A message named, so a task of an earlier attempt (one still running after a
+// stop, or a replay of its headers) cannot sign for the run's current attempt.
+export const RUN_EXECUTED_SOURCE_HEADER = "x-cinatra-executed-source";
+export const RUN_DECLARATION_SOURCE_HEADER = "x-cinatra-declaration-source";
+export const RUN_RAW_SOURCE_HEADER = "x-cinatra-raw-source";
+/** The execution attempt the runtime signed (`s2`), as its task's message named it. */
+export const RUN_EXECUTION_ATTEMPT_HEADER = "x-cinatra-execution-attempt";
+/**
+ * The reserved A2A `message.metadata` key under which every dispatch and resume
+ * names the execution attempt its task runs under. The loader reads it per task
+ * and signs it in the `s2` pair. MUST equal CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY
+ * in docker/wayflow/agent_loader.py (a cross-language ABI with no shared import).
+ * Not a credential: the attempt id is only what the pair is bound to.
+ */
+export const CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY = "__cinatra_execution_attempt__";
+
+/**
+ * The longest context id, node or attempt a source-bound pair may carry: the
+ * length every field of the run-source proof may have (the shape check of that
+ * proof refuses a longer one), so a pair is never accepted here and refused there.
+ * The loader in docker/wayflow/agent_loader.py signs no longer value.
+ */
+const RUN_SOURCE_PROOF_FIELD_MAX_CHARS = 512;
+
+/**
+ * Verify the runtime's source-bound step pair for one call. Answers the frozen
+ * `{ stepId, contextId, executionAttemptId, sourceSha256, executedSourceSha256, declarationSourceSha256 }`
+ * or null when the key (a blank key is no key, cinatra#4154), the context id, the
+ * node or the attempt is missing, the context id, the node or the attempt holds a
+ * line break, the context id, the node or the attempt is longer than 512
+ * characters (the length every field of the run-source proof may have), a digest is not 64
+ * lower-case hex characters, the attestation is not an `s2` value with a
+ * 64-character lower-case hex signature, the signature does not verify over all
+ * seven values, or the expiry lies more than 60 seconds in the past or more than
+ * 600 seconds ahead. It proves what the runtime signed; whether the run is bound
+ * to that source under that attempt, its running one, is the caller's check.
+ */
+export function verifySourceBoundRunStep(input: {
+  key?: string | null; contextId?: string | null; node?: string | null;
+  executionAttemptId?: string | null;
+  attestation?: string | null; sourceSha256?: string | null;
+  executedSourceSha256?: string | null; declarationSourceSha256?: string | null; nowMs?: number;
+}): { stepId: string; contextId: string; executionAttemptId: string; sourceSha256: string; executedSourceSha256: string; declarationSourceSha256: string } | null {
+  const { key, contextId, node, executionAttemptId, attestation, sourceSha256, executedSourceSha256, declarationSourceSha256 } = input;
+  if (typeof key !== "string" || key.trim() === "" || !contextId || !node ||
+      typeof executionAttemptId !== "string" || !executionAttemptId ||
+      [contextId, node, executionAttemptId].some((v) => v.length > RUN_SOURCE_PROOF_FIELD_MAX_CHARS) ||
+      /[\r\n]/.test(contextId + node + executionAttemptId) ||
+      ![sourceSha256, executedSourceSha256, declarationSourceSha256].every((v) => typeof v === "string" && /^[a-f0-9]{64}$/.test(v))) return null;
+  const m = /^s2:([0-9]+):([a-f0-9]{64})$/.exec(attestation ?? "");
+  if (!m || !Number.isSafeInteger(Number(m[1]))) return null;
+  const expiry = Number(m[1]); const now = input.nowMs ?? Date.now();
+  if (now > expiry * 1000 + RUN_STEP_ATTESTATION_SKEW_MS || expiry * 1000 > now + RUN_STEP_ATTESTATION_MAX_FUTURE_MS) return null;
+  if (!hexEquals(m[2]!, hmacHex(key, `s2\n${contextId}\n${node}\n${executionAttemptId}\n${sourceSha256}\n${executedSourceSha256}\n${declarationSourceSha256}\n${expiry}`))) return null;
+  return Object.freeze({ stepId: node, contextId, executionAttemptId, sourceSha256: sourceSha256!, executedSourceSha256: executedSourceSha256!, declarationSourceSha256: declarationSourceSha256! });
 }

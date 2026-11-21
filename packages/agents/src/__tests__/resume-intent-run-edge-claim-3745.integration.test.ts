@@ -409,17 +409,36 @@ describe.skipIf(!HAS_DB)("the delivery's in-flight writes need the held lease", 
 });
 
 describe.skipIf(!HAS_DB)("a claimed intent is bounded by its attempts like any other (cinatra#4312)", () => {
-  it("a claimed intent that used its attempts is dead-lettered once its lease lapsed, as an unclaimed one is", async () => {
+  it("S1 an unclaimed intent that used its attempts is dead-lettered once its lease lapsed; a claimed one is left to its settle", async () => {
     const claimedRun = await seedRun("running");
     const claimedGate = await seedIntent(claimedRun, { status: "delivering", leaseExpired: true, runClaimed: true, attempts: 20, maxAttempts: 20 });
     const freeRun = await seedRun("pending_approval");
     const freeGate = await seedIntent(freeRun, { status: "delivering", leaseExpired: true, attempts: 20, maxAttempts: 20 });
     await gateStore.deadLetterExhaustedResumeIntents();
-    expect((await intentState(claimedGate)).deadLettered).toBe(true);
+    expect((await intentState(claimedGate)).deadLettered).toBe(false);
     expect((await intentState(freeGate)).deadLettered).toBe(true);
     const reclaimed = await gateStore.claimPendingResumeIntents({ limit: 200, leaseMs: 60_000 });
     expect(reclaimed.map((r) => r.gateId)).not.toContain(claimedGate);
     expect(reclaimed.map((r) => r.gateId)).not.toContain(freeGate);
+    // The settle lease takes the claimed one, uses no attempt, and its dead letter is fenced by that lease.
+    const settling = await gateStore.leaseExhaustedResumeClaims({ limit: 200, leaseMs: 60_000 });
+    const mine = settling.find((r) => r.gateId === claimedGate);
+    expect(mine).toMatchObject({ attempts: 20, finalAttempt: true });
+    expect(settling.map((r) => r.gateId)).not.toContain(freeGate);
+    expect(await intentState(claimedGate)).toMatchObject({ attempts: 20, leaseLive: true, claimed: true });
+    expect(await gateStore.deadLetterResumeIntentUnderLease(claimedGate, "not-the-lease", "x")).toBe(false);
+    expect(await gateStore.deadLetterResumeIntentUnderLease(claimedGate, mine!.leaseToken!, "x")).toBe(true);
+    expect((await intentState(claimedGate)).deadLettered).toBe(true);
+  });
+
+  it("S1 the settle lease leaves out a claimed intent under a live lease, one with attempts left, and an unclaimed one", async () => {
+    const live = await seedIntent(await seedRun("running"), { status: "delivering", runClaimed: true, attempts: 20, maxAttempts: 20 });
+    const left = await seedIntent(await seedRun("running"), { status: "delivering", leaseExpired: true, runClaimed: true, attempts: 19, maxAttempts: 20 });
+    const free = await seedIntent(await seedRun("running"), { status: "delivering", leaseExpired: true, attempts: 20, maxAttempts: 20 });
+    const settling = (await gateStore.leaseExhaustedResumeClaims({ limit: 200, leaseMs: 60_000 })).map((r) => r.gateId);
+    expect(settling).not.toContain(live);
+    expect(settling).not.toContain(left);
+    expect(settling).not.toContain(free);
   });
 
   it("a claimed intent under a live lease is not dead-lettered, even when it used its attempts", async () => {
