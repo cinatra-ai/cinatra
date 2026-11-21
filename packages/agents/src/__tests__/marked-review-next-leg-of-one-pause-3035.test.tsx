@@ -155,6 +155,11 @@ vi.mock("../use-runtime-field-renderer-bindings", () => ({
   useRuntimeFieldRendererBindings: () => ({ bindings: {}, loading: false }),
 }));
 
+// THE PAGE OWNS THE WINDOW (cinatra#3487): the run detail registers the gate's
+// prompt window with the run page's chrome, which draws it. The panel is
+// mounted under the chrome, as the run page mounts it.
+import { RunPageChrome } from "../run-page-chrome";
+
 const RUN_ID = "run-3035-legs";
 // One pause, two artifacts: the leg ids the gate planner mints.
 const POST_TASK = "wf-task-3035";
@@ -290,6 +295,7 @@ function stepperProps(overrides: Partial<StepperProps> = {}): StepperProps {
 const SETTLED = '[data-conformance-id="review-gate-settled"]';
 const DECISION_BAR = '[data-conformance-id="review-decision-bar"]';
 const PROMPT_WINDOW = '[data-conformance-id="review-prompt-window"]';
+const CHROME_PROMPT_WINDOW = `[data-run-window-host="page-chrome"] ${PROMPT_WINDOW}`;
 
 /** The bar's terminal affirmative control, however the floor names it. */
 function terminalControl(root: ParentNode): HTMLButtonElement | null {
@@ -312,7 +318,7 @@ async function expectTheImageFloor(container: HTMLElement) {
     { timeout: 15_000 },
   );
   expect(terminalControl(container)!.disabled).toBe(false);
-  expect(container.querySelector(PROMPT_WINDOW), "the image gate drew no prompt window").not.toBeNull();
+  expect(container.querySelector(CHROME_PROMPT_WINDOW), "the image gate drew no prompt window").not.toBeNull();
   expect(container.querySelector(SETTLED), "the decided post gate is still drawn").toBeNull();
   expect(resolvedRefs).toContain(IMAGE_REF);
 }
@@ -321,7 +327,7 @@ describe("the run detail (OrchestratorStepperPanel): the next gate of one marked
   it("draws the image gate's floor once the slot reader finds it, though the interrupt still names the post", async () => {
     stubFetch(IMAGE_SLOT);
     const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
-    const { container } = render(<OrchestratorStepperPanel {...stepperProps({ initialReviewGate: POST_SLOT })} />);
+    const { container } = render(<RunPageChrome><OrchestratorStepperPanel {...stepperProps({ initialReviewGate: POST_SLOT })} /></RunPageChrome>);
     await expectTheImageFloor(container);
   }, 60_000);
 
@@ -329,7 +335,7 @@ describe("the run detail (OrchestratorStepperPanel): the next gate of one marked
     stubFetch(null);
     const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
     const { container, rerender } = render(
-      <OrchestratorStepperPanel {...stepperProps({ initialReviewGate: POST_SLOT })} />,
+      <RunPageChrome><OrchestratorStepperPanel {...stepperProps({ initialReviewGate: POST_SLOT })} /></RunPageChrome>,
     );
     // The post's gate, decided: a settled card, and nothing to press.
     await waitFor(
@@ -340,7 +346,7 @@ describe("the run detail (OrchestratorStepperPanel): the next gate of one marked
     );
     expect(container.querySelector(DECISION_BAR)).toBeNull();
 
-    rerender(<OrchestratorStepperPanel {...stepperProps({ initialReviewGate: IMAGE_SLOT })} />);
+    rerender(<RunPageChrome><OrchestratorStepperPanel {...stepperProps({ initialReviewGate: IMAGE_SLOT })} /></RunPageChrome>);
     await expectTheImageFloor(container);
   }, 60_000);
 
@@ -366,7 +372,7 @@ describe("the run detail (OrchestratorStepperPanel): the next gate of one marked
       }),
     );
     const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
-    const { container } = render(<OrchestratorStepperPanel {...stepperProps({ initialReviewGate: OTHER_SLOT })} />);
+    const { container } = render(<RunPageChrome><OrchestratorStepperPanel {...stepperProps({ initialReviewGate: OTHER_SLOT })} /></RunPageChrome>);
     await waitFor(
       () => {
         if (!terminalControl(container)) throw new Error("the post gate drew no decision bar");
@@ -386,7 +392,7 @@ describe("the run detail (OrchestratorStepperPanel): the next gate of one marked
     streamState.interruptContext = IMAGE_INTERRUPT;
     stubFetch(null);
     const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
-    const { container } = render(<OrchestratorStepperPanel {...stepperProps({ initialReviewGate: POST_SLOT })} />);
+    const { container } = render(<RunPageChrome><OrchestratorStepperPanel {...stepperProps({ initialReviewGate: POST_SLOT })} /></RunPageChrome>);
     await expectTheImageFloor(container);
     expect(resolvedRefs).not.toContain(POST_REF);
   }, 60_000);
@@ -410,7 +416,7 @@ describe("the run detail (OrchestratorStepperPanel): the next gate of one marked
       },
     ];
     const { container } = render(
-      <OrchestratorStepperPanel {...stepperProps({ initialReviewGate: imageSlotOddShape, railExtras })} />,
+      <RunPageChrome><OrchestratorStepperPanel {...stepperProps({ initialReviewGate: imageSlotOddShape, railExtras })} /></RunPageChrome>,
     );
     await expectTheImageFloor(container);
   }, 60_000);

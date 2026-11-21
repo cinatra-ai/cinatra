@@ -431,7 +431,7 @@ export const RUN_STEP_RAIL_ROWS_BY_SURFACE: Readonly<
       unexportedModules: [],
     },
     readiness:
-      "the review gate card IS shipped (packages/agents/src/review-gate-card.tsx, with the review-target, review-decision-bar and review-prompt-window anchors), but this surface is that card HOSTED ON THE RUN PAGE'S REVIEW STEP, which the harness cannot mount: the card resolves its target through a review task behind a session",
+      "the review gate card IS shipped (packages/agents/src/review-gate-card.tsx, with the review-target and review-decision-bar anchors; the prompt window is the run page chrome's since cinatra#3487 and carries the drawing's own review-prompt-window anchor there), but this surface is that card HOSTED ON THE RUN PAGE'S REVIEW STEP, which the harness cannot mount: the card resolves its target through a review task behind a session",
   },
   "run-review-step-picture": {
     surface: "run-review-step-picture",
