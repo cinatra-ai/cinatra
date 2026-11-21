@@ -702,9 +702,9 @@ export function suggestionChipDriver(fixture: LifecycleSuggestionChipFixture): S
 //     wave does not build and a src this wave will not invent.
 //
 // THE ONE SURFACE OF THIS WAVE THE FAMILY DOES NOT TAKE.
-// `drupal-pointer-never-a-review-target` is drawn as a page and never as a
-// review: "It is not pinnable and it is never a review target: no gate opens on
-// it and no floor is ever drawn beneath it." Its drawn identity line carries
+// `drupal-pointer-never-a-review-target` is drawn as the generic floor and never
+// as a review (design@94d892de): "It is never a review target: no gate opens on
+// it and no review control is ever drawn beneath it." Its drawn identity line carries
 // `not pinnable` exactly where every other kind's carries `revision … · pinned`,
 // and the shipped header has no such reading — it draws the pinned marker
 // unconditionally. Putting the pointer through this family would therefore assert
@@ -2915,7 +2915,7 @@ const SCOPE_DASHBOARDS_TAB_DRIVER: SurfaceDriver = awaitingMount("scope-dashboar
 // The ARTIFACT-KIND DISPLAY family, STANDALONE (cinatra#3158, epic #3155 W2)
 // ---------------------------------------------------------------------------
 //
-// The eleven artifact-kind display surfaces of the artifact-review drawing: the
+// The twelve artifact-kind display surfaces of the artifact-review drawing: the
 // displays the fleet adds, one per type, drawn on the artifact's own page and —
 // unchanged — on the review step of the run page. This is the standalone reading
 // of the same family W1 drives in a conversation.
@@ -2924,14 +2924,17 @@ const SCOPE_DASHBOARDS_TAB_DRIVER: SurfaceDriver = awaitingMount("scope-dashboar
 // manifest surface id, and the map below is built FROM them: being listed is
 // being mapped, so there is no second place a surface could be forgotten. The
 // three surfaces whose per-kind display shape is the whole of what the drawing
-// gives them ride the factory alone; the eight that carry a drawn structure of
+// gives them ride the factory alone; the nine that carry a drawn structure of
 // their own extend it.
 //
 // NONE OF THESE DISPLAYS IS ON THE DEFAULT BRANCH, and this wave does not
 // pretend otherwise. Grounded by reading the shipped tree, not assumed: seven of
-// the eleven belong to extensions that declare a type and ship no renderer at
-// all; the pointer and the page draw through ONE renderer the drawing names
-// (@cinatra-ai/website-artifacts:page-diff) which no package in the tree ships;
+// the twelve belong to extensions that declare a type and ship no renderer at
+// all; the WordPress and the Drupal page draw through ONE renderer the drawing
+// names (@cinatra-ai/website-artifacts:page-diff), which the pinned website pack
+// ships as an extension renderer the conformance harness may not mount; the
+// Drupal pointer draws the product's generic floor, which no harness mount
+// draws over a pointer row (a pointer is never a review target);
 // the shipped markdown display draws its two readings SIDE BY SIDE, which the
 // drawing forbids in those words; and the download card, which IS shipped and
 // does draw what §V.2 describes, carries none of the conformance anchors this
@@ -3007,7 +3010,7 @@ function kindDisplayKindState(surface: string, kind: string): StateAssert {
  * The shared per-kind display factory.
  *
  * What every display in this family owes the drawing, and therefore what this
- * factory asserts for all eleven:
+ * factory asserts for all twelve:
  *
  *   - §XI: "A display draws the work and nothing about itself — no renderer chip
  *     and no provenance line"; §V says the same for the slot, and the
@@ -3157,14 +3160,14 @@ function openLiveDashboardOnceContinued(
 }
 
 /**
- * What each of the eight displays that carry a drawn structure of their own adds
+ * What each of the nine displays that carry a drawn structure of their own adds
  * to the family shape. Keyed by the surface union, so a row without an entry is
  * a deliberate omission (the three factory-only surfaces) rather than a typo.
  */
 /**
- * The eight surfaces that carry a drawn structure of their own — the union
+ * The nine surfaces that carry a drawn structure of their own — the union
  * minus the three the wave rides on the factory alone. The extras map below is
- * typed over THIS union and is NOT Partial, so dropping one of the eight is a
+ * typed over THIS union and is NOT Partial, so dropping one of the nine is a
  * compile error rather than a silently thinner driver.
  */
 type ArtifactKindDisplayExtraSurfaceId = Exclude<
@@ -3281,22 +3284,70 @@ const ARTIFACT_KIND_DISPLAY_EXTRAS: Record<
     },
   }),
 
-  // §XI.7 — the pointer draws through the page display, and "a pointer is still
-  // never a review target": "the identity line reads not pinnable where a target
-  // reads its revision, and no decision floor is drawn anywhere the pointer
-  // appears".
+  // §XI.7 (design@94d892de) — the pointer draws the generic floor of §V: "the
+  // one-line notice above the record's data, read only". Its package ships no
+  // display, so the product's floor (review-target-mount.tsx) names the package,
+  // the detail slot and the reason no-display, over the read-only data of the
+  // pointer's row. "A pointer is never a review target": the identity line reads
+  // not pinnable, nothing of a page is drawn, and no decision floor and no
+  // settled marker is drawn anywhere the pointer appears.
   "drupal-pointer-display": (base) => ({
     ...base,
     present: async (page, root) => {
       await base.present(page, root);
       await expectOneView(root, "drupal-pointer-display");
       const display = kindDisplayPanel(root, "drupal-pointer-display");
-      await expect(display.locator('[data-conformance-id="page-embed"]')).toBeVisible();
-      await expect(display.locator('[data-conformance-id="changed-excerpts"]')).toBeVisible();
+      const floor = display.locator('[data-review-target-floor="no-display"]');
+      await expect(floor).toHaveCount(1);
+      await expect(floor).toHaveAttribute(
+        "data-review-floor-package", "@cinatra-ai/drupal-artifacts",
+      );
+      await expect(floor).toHaveAttribute("data-review-floor-slot", "detail");
+      await expect(floor.locator('[role="status"]')).toHaveText(
+        'review target unavailable — package "@cinatra-ai/drupal-artifacts", slot "detail", reason "no-display"',
+      );
       await expect(display.locator('[data-conformance-id="pointer-identity"]')).toContainText(
         "not pinnable",
       );
+      await expect(display.locator('[data-conformance-id="page-embed"]')).toHaveCount(0);
+      await expect(display.locator('[data-conformance-id="changed-excerpts"]')).toHaveCount(0);
+      await expect(display.locator('[data-action="open-in-cms -> cms-opened"]')).toHaveCount(0);
+      await expect(root.locator('[data-conformance-id="settled-marker"]')).toHaveCount(0);
       await expect(root.locator('[data-conformance-id="review-decision-bar"]')).toHaveCount(0);
+    },
+    // The floor IS the pointer's error reading, drawn on the open mount: the
+    // notice says why there is no display, as a status line over the row,
+    // never an alert and never a blank. The factory's display-state reading
+    // forbids a floor inside a display, so it is replaced here, not kept.
+    states: {
+      ...base.states,
+      error: async (page) => {
+        const mount = page.locator(kindDisplayMount("drupal-pointer-display", "populated"));
+        await expect(mount).toHaveCount(1);
+        const display = kindDisplayPanel(mount, "drupal-pointer-display");
+        const floor = display.locator('[data-review-target-floor="no-display"]');
+        await expect(floor.locator('[role="status"]')).toHaveCount(1);
+        await expect(floor).not.toHaveText(/^\s*$/);
+        await expect(display.locator('[role="alert"]')).toHaveCount(0);
+      },
+    },
+  }),
+
+  // §XI.7 (design@94d892de) — "A page is a page, whichever system holds it":
+  // the Drupal page a run changes is the page snapshot, drawn by the same one
+  // view as the WordPress page of §XI.8, the page embedded live in a frame, the
+  // changed excerpts beneath it and Open in the CMS under them.
+  "drupal-page-display": (base) => ({
+    ...base,
+    present: async (page, root) => {
+      await base.present(page, root);
+      await expectOneView(root, "drupal-page-display");
+      const display = kindDisplayPanel(root, "drupal-page-display");
+      await expect(display.locator('[data-conformance-id="page-embed"]')).toBeVisible();
+      await expect(display.locator('[data-conformance-id="changed-excerpts"]')).toBeVisible();
+      await expect(
+        display.locator('[data-action="open-in-cms -> cms-opened"]'),
+      ).toBeVisible();
     },
   }),
 
@@ -3327,7 +3378,7 @@ function artifactKindDisplayReadiness(row: ArtifactKindDisplay): string {
   );
 }
 
-/** The eleven drivers, built from the one row list. */
+/** The twelve drivers, built from the one row list. */
 const ARTIFACT_KIND_DISPLAY_DRIVERS: Record<string, SurfaceDriver> = Object.fromEntries(
   ARTIFACT_KIND_DISPLAY_ROWS.map((row) => {
     const base = artifactKindDisplayDriver(row);

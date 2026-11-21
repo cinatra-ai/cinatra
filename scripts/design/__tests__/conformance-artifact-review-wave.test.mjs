@@ -18,7 +18,7 @@
 //      source or drops a state goes red HERE, in the wave that claimed to cover
 //      it, instead of silently reducing what the drivers assert.
 //   2. The three surfaces the wave rides on one shared factory are exactly the
-//      three the wave names, and the other eight are not folded into it.
+//      three the wave names, and the other nine are not folded into it.
 //   3. contract.ts builds its driver map FROM the row list, so being listed is
 //      being mapped — there is no second place a surface could be forgotten.
 //   4. The ratchet gains nothing: no allowlist entry names one of these surfaces,
@@ -79,11 +79,38 @@ function unreadableFieldNames(rows) {
 const FACTORY_ONLY = ["markdown-display-tabs", "binary-download-card", "chart-display-only"];
 
 describe("the wave covers the artifact-kind display surfaces of the staged drawing", () => {
-  it("lists exactly eleven surfaces, with no repeat", () => {
+  it("lists exactly twelve surfaces, with no repeat", () => {
     expect(new Set(ARTIFACT_KIND_DISPLAY_SURFACES).size).toBe(
       ARTIFACT_KIND_DISPLAY_SURFACES.length,
     );
-    expect(ARTIFACT_KIND_DISPLAY_SURFACES.length).toBe(11);
+    expect(ARTIFACT_KIND_DISPLAY_SURFACES.length).toBe(12);
+  });
+
+  // design@94d892de (design#253, cinatra#4366): the Drupal pointer is drawn as
+  // the generic floor, "the one-line notice above the record's data, read
+  // only", and the Drupal page a run changes is drawn as the page snapshot, the
+  // same display as the WordPress page.
+  it("records the Drupal pointer as the generic floor: no field, no action, error and kind:artifact", () => {
+    const row = ARTIFACT_KIND_DISPLAY_ROWS.find((r) => r.surface === "drupal-pointer-display");
+    expect(row, "the wave no longer lists drupal-pointer-display").toBeDefined();
+    expect(
+      { fields: row.fields, action: row.action, states: [...row.states].sort() },
+      "drupal-pointer-display: the drawing draws the pointer as the generic floor over its row, so it binds no field, declares no action and reads only error and kind:artifact.",
+    ).toEqual({ fields: [], action: null, states: ["error", "kind:artifact"] });
+  });
+
+  it("records the Drupal page as the page snapshot, declared as the WordPress page is", () => {
+    const byId = new Map(ARTIFACT_KIND_DISPLAY_ROWS.map((r) => [r.surface, r]));
+    const drupal = byId.get("drupal-page-display");
+    const wordpress = byId.get("cms-page-display");
+    expect(drupal, "the wave does not list drupal-page-display").toBeDefined();
+    expect(drupal.section).toBe("XI.7");
+    expect(drupal.factoryOnly).toBe(false);
+    expect({ fields: drupal.fields, action: drupal.action, states: drupal.states }).toEqual({
+      fields: wordpress.fields,
+      action: wordpress.action,
+      states: wordpress.states,
+    });
   });
 
   it("names only surfaces the staged manifest declares", () => {
@@ -432,7 +459,7 @@ describe("the driver map is built from the row list", () => {
     ).toEqual([]);
   });
 
-  it("extends exactly the eight non-factory surfaces, exhaustively by type", () => {
+  it("extends exactly the nine non-factory surfaces, exhaustively by type", () => {
     const extrasBlock = contract.slice(
       contract.indexOf("const ARTIFACT_KIND_DISPLAY_EXTRAS"),
       contract.indexOf("function artifactKindDisplayReadiness"),
@@ -450,7 +477,7 @@ describe("the driver map is built from the row list", () => {
     );
     expect(
       /const ARTIFACT_KIND_DISPLAY_EXTRAS: Record</.test(contract),
-      "the extras map must be a total Record over the eight non-factory-only surfaces (not Partial), so dropping one is a compile error rather than a silently thinner driver.",
+      "the extras map must be a total Record over the nine non-factory-only surfaces (not Partial), so dropping one is a compile error rather than a silently thinner driver.",
     ).toBe(true);
   });
 });
@@ -467,6 +494,25 @@ describe("the family assertions cannot pass vacuously", () => {
       helper.includes('kindDisplayMount(surface, "populated")'),
       "the open reading's mount must be asserted present before its missing way-out is read as evidence — on an absent mount a zero count proves nothing.",
     ).toBe(true);
+  });
+
+  it("drives the Drupal pointer as the floor it is drawn as, never as a page", () => {
+    const start = contract.indexOf('"drupal-pointer-display": (base) => ({');
+    expect(start, "contract.ts carries no extra for drupal-pointer-display").toBeGreaterThan(-1);
+    const extra = contract.slice(start, contract.indexOf('"drupal-page-display": (base) => ({'));
+    // The product's floor, with the package and the reason the drawing names.
+    expect(extra).toContain('[data-review-target-floor="no-display"]');
+    expect(extra).toContain('data-review-floor-package", "@cinatra-ai/drupal-artifacts"');
+    expect(extra).toContain('reason "no-display"');
+    expect(extra).toContain('"not pinnable"');
+    // Nothing of a page: the embed, the excerpts and Open in the CMS are absent.
+    for (const absent of ["page-embed", "changed-excerpts", "settled-marker", "review-decision-bar"]) {
+      expect(extra).toContain(`[data-conformance-id="${absent}"]')).toHaveCount(0)`);
+    }
+    expect(extra).toContain(`[data-action="open-in-cms -> cms-opened"]')).toHaveCount(0)`);
+    // The floor IS the pointer's error reading, so the factory's display-state
+    // assertion (which forbids a floor inside a display) is replaced, not kept.
+    expect(extra).toMatch(/states: \{\n\s+\.\.\.base\.states,\n\s+error: /);
   });
 
   it("forbids a failure line inside any reading of the display", () => {
@@ -501,7 +547,7 @@ describe("the shrink-only ratchet gains nothing from this wave", () => {
     const pins = readJson(path.join(CONF_DIR, "..", "conformance-pins.json"));
     expect(
       pins.manifests.some((m) => m.file === "app-artifact-review.json"),
-      "the pin lands once EVERY wave for this drawing is green (epic cinatra#3155, independent pinning) — W2 covers eleven of its forty surfaces, so it must not pin it.",
+      "the pin lands once EVERY wave for this drawing is green (epic cinatra#3155, independent pinning) — W2 covers twelve of its fifty-nine surfaces, so it must not pin it.",
     ).toBe(false);
   });
 });

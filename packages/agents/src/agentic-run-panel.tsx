@@ -53,6 +53,7 @@ import {
   runCardOwnsLifecycleCopy,
   defaultRunReviewSlotReader,
   lifecycleRequestCredential,
+  markedReviewGateCard,
   parseRunReviewSlot,
   useComposerFocusStore,
   useComposerTarget,
@@ -1522,11 +1523,21 @@ export function AgenticRunPanel({
   // assembles one from ids it happens to hold, because a card ref is minted (and
   // authenticated-encrypted) at gate emission and every surface that draws a
   // card must be addressing the same server-issued ticket.
-  const reviewGateCardRef =
-    typeof effectiveHitlContext?.currentValues?.lifecycleCardRef === "string" &&
-    effectiveHitlContext.currentValues.lifecycleCardRef.length > 0
-      ? (effectiveHitlContext.currentValues.lifecycleCardRef as string)
-      : null;
+  //
+  // AND IT IS THE GATE THE RUN WAITS ON NOW (cinatra#3035): one pause of a marked
+  // step announces one gate context for all of its per-artifact gates, so of the
+  // context's gate and the slot's gate of the same pause the card is the one not
+  // known to be resolved (`markedReviewGateCard`); this panel draws no run rail,
+  // so the two answers' own elections are its whole resolution reading.
+  const reviewGateCardRef = markedReviewGateCard({
+    interruptRef:
+      typeof effectiveHitlContext?.currentValues?.lifecycleCardRef === "string" &&
+      effectiveHitlContext.currentValues.lifecycleCardRef.length > 0
+        ? (effectiveHitlContext.currentValues.lifecycleCardRef as string)
+        : null,
+    interruptReviewTaskId: effectiveHitlContext?.reviewTaskId,
+    slot: reviewSlot,
+  }).ref;
 
   // cinatra#2566's COMPOSER FOCUS. The store is the surface's, not the panel's:
   // the review CARD registers the gate (only the card knows the server's
