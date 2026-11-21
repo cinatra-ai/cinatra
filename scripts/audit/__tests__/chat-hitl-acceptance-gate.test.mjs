@@ -740,9 +740,19 @@ describe("the REAL manifest", () => {
     // The drift record and the contract's newest re-ratification entry both
     // say that no recorded anchor changed rather than leaving a reader to
     // infer it.
-    const contractNote = JSON.parse(
+    const contract = JSON.parse(
       readFileSync(join(REPO_ROOT, "scripts", "audit", "chat-hitl-anchor-contract.json"), "utf8"),
-    ).note;
+    );
+    // The note is one long line and is not edited again: from 2026-11-21 on,
+    // each entry is appended to `noteContinued`, one entry per element, so a
+    // pin move no longer rewrites that line. The note and then `noteContinued`
+    // are read in that order as the one record of the re-ratifications.
+    expect(contract.note).not.toContain("RE-RATIFIED 2026-11-21 (");
+    expect(Array.isArray(contract.noteContinued)).toBe(true);
+    expect(contract.noteContinued.every((entry) => /^RE-RATIFIED \d{4}-\d{2}-\d{2} \(/.test(entry))).toBe(true);
+    expect(contract.noteContinued[0].startsWith("RE-RATIFIED 2026-11-21 (")).toBe(true);
+    expect(contract.noteContinuedWhy).toContain("`noteContinued`");
+    const contractNote = [contract.note, ...contract.noteContinued].join(" ");
     expect(m.specCommitDrift.differs).toMatch(/No recorded anchor changed/);
     const entry1121 = noteEntry(contractNote, "RE-RATIFIED 2026-11-21 (");
     expect(entry1121).toMatch(/NO RECORDED ANCHOR CHANGED/);
