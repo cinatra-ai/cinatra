@@ -586,3 +586,34 @@ describe("fail-closed", () => {
     expect(container.textContent).toBe("");
   });
 });
+
+// ---------------------------------------------------------------------------
+// The heading text (cinatra#3189, clause V1)
+// ---------------------------------------------------------------------------
+
+describe("§VII — the Core analysis heading with its outcome pill (cinatra#3189 V1)", () => {
+  // The drawing: "the turn may carry a verification card: the Core analysis
+  // heading with its outcome pill", and every example draws "Core analysis".
+  // The anchor attribute alone was pinned before; the heading TEXT read
+  // "Audit". This reads the words a person sees, on every host.
+  for (const host of HOSTS) {
+    it(`heads the card "Core analysis" on ${host}, followed by the outcome pill`, async () => {
+      mockResolve({ state: "advisory" });
+      const { container } = renderOn(host);
+      await waitFor(() =>
+        expect(container.querySelector('[data-conformance-id="verification-card"]')).not.toBeNull(),
+      );
+      const root = container.querySelector<HTMLElement>(
+        '[data-conformance-id="verification-card"]',
+      )!;
+      const firstRow = root.firstElementChild as HTMLElement;
+      const heading = firstRow.querySelector<HTMLElement>("[data-verification-chrome]");
+      expect(heading).not.toBeNull();
+      expect(heading!.textContent).toBe("Core analysis");
+      // The pill follows the heading in the same first row.
+      expect(heading!.nextElementSibling?.hasAttribute("data-verification-outcome")).toBe(true);
+      // The fixture's own comment body may say "Audit"; the heading row may not.
+      expect(firstRow.textContent).not.toContain("Audit");
+    });
+  }
+});
