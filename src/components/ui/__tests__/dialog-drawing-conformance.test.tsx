@@ -40,6 +40,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { AppDialog } from "../../../../packages/sdk-ui/src/app-dialog";
+import {
+  Dialog as SdkDialog,
+  DialogContent as SdkDialogContent,
+  DialogTitle as SdkDialogTitle,
+} from "../../../../packages/sdk-ui/src/ui/dialog";
+import { compileHostSheet, type CompiledSheet } from "./compiled-utilities";
 
 afterEach(cleanup);
 
@@ -246,5 +253,73 @@ describe("specs/app-components.html#Dialog: the inner dialog has 8px corners", (
     fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape", code: "Escape" });
     expect(onOpenChange).toHaveBeenCalledWith(false);
     await waitFor(() => expect(document.querySelector('[data-slot="dialog-content"]')).toBeNull());
+  });
+});
+
+// The portable sdk-ui dialog draws the paper ground the host dialog draws, in
+// the light and the dark palette, and a caller's own ground still wins over it:
+// graded on the compiled rules of the shipped stylesheet that match the
+// rendered content, not on its class string.
+describe("the portable sdk-ui dialog, on the compiled rules of the shipped stylesheet", () => {
+  let sheet: CompiledSheet;
+  let paper: Record<"cinatra" | "dark", string>;
+  beforeAll(async () => {
+    sheet = await compileHostSheet();
+    const globals = await readFile(resolve(process.cwd(), "src/app/globals.css"), "utf8");
+    paper = { cinatra: "", dark: "" };
+    for (const palette of ["cinatra", "dark"] as const) {
+      const block = globals.match(new RegExp(`\\.${palette}\\s*\\{([^}]+)\\}`))?.[1];
+      const ground = block?.match(/--background:\s*([^;]+);/)?.[1]?.trim();
+      if (!ground) throw new Error(`Missing actual ${palette} --background`);
+      paper[palette] = ground;
+    }
+    // The drawing's --paper, in the light palette.
+    expect(paper.cinatra).toBe("#f1f1ed");
+  });
+  afterEach(() => {
+    document.documentElement.className = "";
+  });
+
+  function ground(content: HTMLElement) {
+    const winner = sheet.winning(content, "background-color");
+    return winner ? { value: winner.value, resolved: sheet.resolve(content, winner.value) } : undefined;
+  }
+
+  function sdkContent() {
+    const all = document.querySelectorAll<HTMLElement>('[data-slot="dialog-content"]');
+    expect(all).toHaveLength(1);
+    return all[0];
+  }
+
+  it('clause: "Modal dialogs use --paper" — the portable sdk-ui DialogContent draws the same ground as the host', () => {
+    for (const palette of ["cinatra", "dark"] as const) {
+      document.documentElement.className = palette;
+      render(
+        <AppDialog open onOpenChange={() => {}} title="Approve drafts.">
+          <p>Twelve drafts pending your read.</p>
+        </AppDialog>,
+      );
+      expect(ground(sdkContent())).toEqual({ value: "var(--background)", resolved: paper[palette] });
+      cleanup();
+      render(
+        <SdkDialog open>
+          <SdkDialogContent>
+            <SdkDialogTitle>Approve drafts.</SdkDialogTitle>
+          </SdkDialogContent>
+        </SdkDialog>,
+      );
+      expect(ground(sdkContent())).toEqual({ value: "var(--background)", resolved: paper[palette] });
+      cleanup();
+    }
+    // A caller's own ground still wins over it.
+    document.documentElement.className = "cinatra";
+    render(
+      <SdkDialog open>
+        <SdkDialogContent className="bg-card">
+          <SdkDialogTitle>Ground override</SdkDialogTitle>
+        </SdkDialogContent>
+      </SdkDialog>,
+    );
+    expect(ground(sdkContent())?.value).toBe("var(--card)");
   });
 });
