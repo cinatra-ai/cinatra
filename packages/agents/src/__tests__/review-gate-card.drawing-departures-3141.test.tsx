@@ -28,6 +28,8 @@
 
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+// Before the fix the review floor draws no Continue, so the query for it throws.
+// red-first-expect: Unable to find role="button" and name "Continue"
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import type { LifecycleCardState } from "@cinatra-ai/agent-ui-protocol/renderable-views";
@@ -1568,7 +1570,7 @@ describe("cinatra#4129 — a pending gate that pins several targets draws each h
     await waitFor(() => expect(pairs(container)).toHaveLength(2));
     const addresses = watchFrameAddresses(container);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     await waitFor(() => expect(resolves()).toBe(2));
     await waitFor(() => expect(settledMarker(container)).not.toBeNull());
 
@@ -1613,7 +1615,7 @@ describe("cinatra#4129 — a pending gate that pins several targets draws each h
     await waitFor(() => expect(pairs(container)).toHaveLength(2));
     const addresses = watchFrameAddresses(container);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     await waitFor(() => expect(resolves()).toBe(2));
     await waitFor(() => expect(settledMarker(container)).not.toBeNull());
     await act(async () => {
@@ -1656,7 +1658,7 @@ describe("cinatra#4129 — a pending gate that pins several targets draws each h
     const painted = container.querySelector("iframe")!;
     expect(frameQuery(painted).get("ic")).toBe("ic-gate");
 
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     await waitFor(() => expect(resolves()).toBe(2));
     await waitFor(() => expect(settledMarker(container)).not.toBeNull());
     // The same frame, at the same grant, through the settle.
@@ -1682,7 +1684,7 @@ describe("cinatra#4129 — a pending gate that pins several targets draws each h
     const { container } = renderOn("run_card");
     await waitFor(() => expect(pairs(container)).toHaveLength(2));
 
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     await waitFor(() => expect(resolves()).toBe(2));
     await waitFor(() => expect(settledMarker(container)).not.toBeNull());
     // The settled reading's one island, at the reader's cookie, before any answer.
@@ -1754,7 +1756,7 @@ describe("cinatra#4129 — a pending gate that pins several targets draws each h
     expect(container.querySelectorAll("iframe")).toHaveLength(0);
     const addresses = watchFrameAddresses(container);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     await waitFor(() => expect(resolves()).toBe(2));
     await settledAnswerDrawn(container);
     return { container, addresses, resolves };
@@ -1796,7 +1798,7 @@ describe("cinatra#4129 — a pending gate that pins several targets draws each h
       );
       const { container } = renderOn("run_card");
       await waitFor(() => expect(pairs(container)).toHaveLength(2));
-      fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
       await waitFor(() => expect(resolves()).toBe(2));
       await settledAnswerDrawn(container);
 
@@ -2702,11 +2704,11 @@ describe("the held island address follows one transition table on one mounted ca
               break;
             case "decide":
               server.answer = step.answer;
-              fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+              fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
               break;
             case "refused":
               server.blocked = true;
-              fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+              fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
               await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(expect.stringMatching(/\/decide$/), expect.anything()));
               break;
             case "arrive": {

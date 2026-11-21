@@ -30,6 +30,7 @@ import {
   type AgentRunStatus,
 } from "./store";
 import { resolveWayflowUrl } from "./wayflow-url";
+import { claimPause, releasePauseClaim, settlePauseSend } from "./run-pause-claim";
 
 /** The id prefix of the gate the flow runtime inserts in front of a publishing step. The
  *  compiler reserves the same prefix (oas-compiler.ts, PUBLISH_GATE_ID_PREFIX). */
@@ -317,16 +318,20 @@ const PUBLISH_RESUME_TEXT = "[Publish approved]";
  * "Publish" (its surface is the decision card, a later part). The decider and the authority are those of
  * enforcePublishDecisionAccess, then the agent's install scope for that person, as the generic approve asks it. The run
  * must hold a WayFlow context of an internal template. Its decision is the open (parked) one, or else a released one (a
- * resume that failed before its send). The run is claimed first (pending_approval -> running): only the claim holder
- * releases or resumes, so a run that is not waiting (another Publish holds it, or it went on or ended) gets no release
- * ({ ok: true, resumed: false } when its newest decision is released, else publish_decision_not_open). Under the claim,
- * the run's current gate visit must be the decision's own gate task; then ONE decision write (parked -> released, with
- * that person) and ONE message sent into the held context. A run at another gate, or whose gate cannot be read, gives the
- * claim back and resumes nothing. A late answer is publish_decision_not_open with the current status. A resume that
- * fails before its send gives the claim back; after its send the run stays where the send left it. Its fault is
- * publish_resume_failed, with a fixed text. A claim given back is put back to pending_approval; when that write faults,
- * the run ends failed (terminal, so no released decision waits on a run no road can claim); when that write faults too,
- * the fault surfaces as publish_decision_unavailable. A fault of a read of the authority check or of the install-scope
+ * resume that failed before its send). The run's pause is claimed first (claimPause, cinatra#4245, the claim every
+ * resume road takes; the run stays pending_approval): only the claim holder releases or resumes, so a run that is not
+ * waiting (another resume holds it, or it went on or ended) gets no release ({ ok: true, resumed: false } when its
+ * newest decision is released, else publish_decision_not_open). Under the claim, the run's current gate visit must be
+ * the decision's own gate task; then ONE decision write (parked -> released, with that person), the steps that can fail
+ * before the send (the client, the credential, the message id), the fence (the one move pending_approval -> running,
+ * under the claim) and ONE message sent into the held context. A run at another gate, or whose gate cannot be read,
+ * gives the claim back and resumes nothing. A late answer is publish_decision_not_open with the current status. A resume
+ * that fails before its fence gives the claim back; a fence lost to a stop or to another claimer sends nothing; after the
+ * fence the run stays where the send left it and the send's lease is settled (when that settle write fails, it is logged
+ * and the lease stays until it expires). Its fault is publish_resume_failed, with a fixed text. When the give-back faults,
+ * the run is moved pending_approval -> failed (terminal, so no released decision waits on a run no road can claim); that
+ * move lands only while the run is still pending_approval, so a stop that landed first leaves the run stopped. When that
+ * write faults too, the fault surfaces as publish_decision_unavailable. A fault of a read of the authority check or of the install-scope
  * check surfaces as publish_decision_unavailable with a fixed text, as in Do not publish; access and store refusals
  * pass, and a scope refusal is answered as before.
  */
@@ -346,8 +351,9 @@ export async function approvePublishDecision(input: DecideInput): Promise<Publis
   });
   let agentUrl: string;
   let contextId: string;
-  const giveBack = () => moveRun(run.id, "running", "pending_approval", undefined, authority).catch(() =>
-    moveRun(run.id, "running", "failed", { error: `${PUBLISH_RESUME_FAILED}: the run could not be put back`, completedAt: new Date() }, authority));
+  let claim: Extract<Awaited<ReturnType<typeof claimPause>>, { kind: "claimed" }>;
+  const giveBack = () => releasePauseClaim({ runId: run.id, orgId: run.orgId, token: claim.token }, authority).catch(() =>
+    moveRun(run.id, "pending_approval", "failed", { error: `${PUBLISH_RESUME_FAILED}: the run could not be put back`, completedAt: new Date() }, authority));
   try {
     const template = await readAgentTemplateById(run.templateId);
     if (!run.a2aContextId || !template?.packageName || template.sourceType !== "internal") throw new Error("not resumable");
@@ -356,10 +362,13 @@ export async function approvePublishDecision(input: DecideInput): Promise<Publis
     const open = await readOpenDecisionForRun(run.id);
     const target = open ?? (await readLatestDecisionForRun(run.id));
     if (!target || (!open && target.status !== "released")) return { ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: target?.status ?? null };
-    if (!(await moveRun(run.id, "pending_approval", "running", undefined, authority))) {
+    // claimPause refuses a generation that cannot be read.
+    const claimed = await claimPause({ runId: run.id, orgId: run.orgId, generation: run.pauseGeneration as number }, authority);
+    if (claimed.kind === "refused") {
       const latest = await readLatestDecisionForRun(run.id);
       return latest?.status === "released" ? { ok: true, resumed: false } : { ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: latest?.status ?? null };
     }
+    claim = claimed;
     try {
       const { resolveLatestWayflowGateTaskId } = await import("@cinatra-ai/a2a");
       const answer = (await resolveLatestWayflowGateTaskId(run.id)) !== target.gateTaskId ? null
@@ -375,15 +384,32 @@ export async function approvePublishDecision(input: DecideInput): Promise<Publis
   } catch (err) {
     throw opaque(err);
   }
-  let sent = false;
+  // cinatra#4245: everything that can fail before the send comes before the fence and gives the claim back; past the
+  // fence every failure counts as possibly sent, so the send's lease is settled and nothing is given back.
+  let stage: "before-fence" | "fence-lost" | "fenced" = "before-fence";
+  const settle = () => settlePauseSend({ runId: run.id, orgId: run.orgId, token: claim.token }, authority).then(() => undefined, (err: unknown) => {
+    // The lease frees itself when it ends.
+    console.warn(`[publish-decision] the claim of a sent publish could not be settled: ${nameOf(err)}`);
+  });
   try {
-    const { sendWayflowResume } = await import("./review-task-actions");
-    await sendWayflowResume({ run, contextId, agentUrl, text: PUBLISH_RESUME_TEXT, authority, onDispatch: () => { sent = true; } });
+    const { prepareWayflowResume, sendWayflowResume } = await import("./review-task-actions");
+    const prepared = await prepareWayflowResume(run.id, agentUrl);
+    try {
+      await transitionRunStatus(run.id, "pending_approval", "running", { pauseFence: { token: claim.token, generation: claim.generation } }, authority);
+    } catch (err) {
+      // A stop or another claimer since the claim: the lease is no longer this Publish's, and nothing is sent.
+      if (isStale(err)) stage = "fence-lost";
+      throw err;
+    }
+    stage = "fenced";
+    await sendWayflowResume({ run, contextId, text: PUBLISH_RESUME_TEXT, authority, prepared, pauseClaimToken: claim.token });
   } catch (err) {
     console.warn(`[publish-decision] a released publish could not resume its run: ${nameOf(err)}`);
-    if (!sent) await giveBack().catch((fault: unknown) => { throw opaque(fault); });
+    if (stage === "before-fence") await giveBack().catch((fault: unknown) => { throw opaque(fault); });
+    else if (stage === "fenced") await settle();
     throw Object.assign(new Error("The publish is approved, but the run could not go on."), { code: PUBLISH_RESUME_FAILED });
   }
+  await settle();
   return { ok: true, resumed: true };
 }
 

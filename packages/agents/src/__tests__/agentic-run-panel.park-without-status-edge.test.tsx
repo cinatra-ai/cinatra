@@ -352,7 +352,13 @@ describe("a park written onto a row that is already parked on a question", () =>
         "the answered setup ask is still published as a live gate",
       ).toBeNull();
       expect(document.querySelector("#field-idea")).toBeNull();
-      expect(screen.queryByRole("button", { name: /Continue/i })).toBeNull();
+      // The review floor's own Continue (cinatra#3080) is the card's decision,
+      // not the run's resume: only a run-level Continue is refused here.
+      expect(
+        screen
+          .queryAllByRole("button", { name: /Continue/i })
+          .filter((button) => !button.closest('[data-conformance-id="review-decision-bar"]')),
+      ).toEqual([]);
     },
     60_000,
   );

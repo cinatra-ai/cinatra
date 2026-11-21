@@ -4,6 +4,8 @@ import {
   isInAdminCmsMcpToolAllowed,
   resolveAgentRunCinatraMcpAllowedTools,
 } from "../in-admin-cms-tool-policy";
+import { isCoreDelegatedChatAdmitted } from "../core-delegated-chat-surface";
+import { isDelegatedWidgetMcpToolAllowed } from "../delegated-widget-tool-policy";
 
 // #1214 boundary gap: the in-admin CMS content-editor agents must reach the CMS
 // ONLY via the MCP integration. This policy pins their cinatra self-MCP access
@@ -16,9 +18,13 @@ describe("in-admin CMS tool policy — allowlist membership", () => {
     // WordPress: the generic, governed connector-instance invoker primitives
     // (cinatra-ai/cinatra#2022 S7 deleted the old named per-operation tools —
     // wordpress_post_get/wordpress_post_update no longer exist in any form).
+    // The WordPress site tool proxy is split in two (cinatra#3745): the
+    // content editor reads through wordpress_site_tool_call and writes
+    // through wordpress_site_tool_write, which declares outward.
     // Drupal: drupal-agent's full tool set, all via drupal/mcp_tools.
     const expected = [
       "wordpress_site_tool_call",
+      "wordpress_site_tool_write",
       "wordpress_site_tools_list",
       "drupal_node_get",
       "drupal_node_create_draft_revision",
@@ -58,6 +64,7 @@ describe("in-admin CMS tool policy — allowlist membership", () => {
       "objects_list",
       "permissions_grant",
       "wordpress_site_tool_call_v2",
+      "wordpress_site_tool_write_v2",
       "drupal_node_delete",
       "",
       "WORDPRESS_SITE_TOOL_CALL", // case-sensitive: not the registered tool name
@@ -88,5 +95,24 @@ describe("resolveAgentRunCinatraMcpAllowedTools", () => {
     expect(a).not.toBe(b);
     a!.push("mutated");
     expect(resolveAgentRunCinatraMcpAllowedTools(true)).not.toContain("mutated");
+  });
+});
+
+// cinatra#3745: the connector splits the proxy, and every ability other than a
+// read moves to `wordpress_site_tool_write`. "write" is a denied verb token on
+// the chat perimeter and the host declares no chat class for it, so the write
+// tool stays off chat and off the widget perimeter. It reaches the in-admin
+// content editor's agent run only, where its outward declaration holds it.
+const WRITE = "wordpress_site_tool_write";
+
+describe("the write tool of the split proxy stays off every delegated perimeter (cinatra#3745)", () => {
+  it("delegated-chat perimeter denies it", () => {
+    expect(isCoreDelegatedChatAdmitted(WRITE)).toBe(false);
+  });
+
+  it("delegated-widget perimeter (both kinds) denies it", () => {
+    for (const kind of ["wordpress", "drupal"] as const) {
+      expect(isDelegatedWidgetMcpToolAllowed(kind, WRITE), kind).toBe(false);
+    }
   });
 });

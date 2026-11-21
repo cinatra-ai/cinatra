@@ -56,10 +56,11 @@ describe("one open card binds on its own", () => {
       resolve: resolverOver({ a: review("a") }),
     });
     expect(out).toMatchObject({ kind: "bound", ref: "a" });
+    // AMENDED for cinatra#3080: a review lends Comment, Regenerate and Continue.
     expect((out as unknown as { controls: string[] }).controls).toEqual([
       "comment",
+      "regenerate",
       "approve",
-      "reject",
     ]);
   });
 });

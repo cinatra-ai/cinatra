@@ -40,10 +40,23 @@ const storeMock = vi.hoisted(() => ({
     }
   },
   findSavedConnectionForAgentUrl: vi.fn(async () => null),
-  updateAgentRunA2ATaskId: vi.fn(async () => undefined),
+  updateAgentRunA2ATaskId: vi.fn(async () => ({ written: true })),
   updateAgentRunA2AContextId: vi.fn(async () => undefined),
 }));
+// cinatra#4245: the resume road's pause claim always wins here.
+vi.mock("../run-pause-claim", async (orig) => ({
+  ...(await orig<typeof import("../run-pause-claim")>()),
+  ...(await import("./pause-claim-test-fake")).pauseClaimFake,
+}));
 vi.mock("../store", () => storeMock);
+// cinatra#3745: the delivery's own pending_approval -> running claim before its
+// send. Kept apart from the store's transition, which carries the terminal write.
+// The handler applies the answer only while the run holds the claimed gate
+// (`claimedGate`); here the run always does.
+vi.mock("../run-transition", () => ({
+  transitionRunStatus: vi.fn(async () => undefined),
+  bindResumeLegToTask: vi.fn(async () => true),
+}));
 
 const holdSpy = vi.hoisted(() =>
   vi.fn(async () => ({ held: true, reason: "hold-unpersisted" }) as {
@@ -110,6 +123,10 @@ vi.mock("../wayflow-run-token-carrier", () => ({
 const gateStoreMock = vi.hoisted(() => ({
   claimPendingResumeIntents: vi.fn(async () => []),
   markResumeIntentDelivered: vi.fn(async () => true),
+  // cinatra#3745: an unclaimed intent, a live lease and an accepted task record.
+  readResumeIntentClaim: vi.fn(async () => ({ runClaimed: false, result: null })),
+  renewResumeIntentLease: vi.fn(async () => true),
+  recordResumeTaskResult: vi.fn(async () => true),
   // This delivery follows the resolved legacy gate; its complete inventory
   // must authorize the resume before this suite exercises terminal recovery.
   listReviewGatesForRun: vi.fn(async () => [{
@@ -260,6 +277,34 @@ describe("cinatra#3007 — an unrecordable hold inside the gate delivery sweep",
     // The run is NOT terminal, and the intent is not marked done — the sweep
     // redelivers it, which is the at-least-once contract it already has.
     expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
+  });
+
+  it("cinatra#3745: the delivery claims the run before it sends, under its intent's lease and bound to the gate, so the hold is raised on a run this delivery holds", async () => {
+    await deliverArtifactReviewResumeIntent(intent()).catch(() => undefined);
+
+    // The delivery's own edge (the mocked ../run-transition), never the store's
+    // transition, which carries the terminal write.
+    const { transitionRunStatus: runEdge } = await import("../run-transition");
+    const edges = vi.mocked(runEdge).mock.calls as unknown as Array<
+      [string, string, string, Record<string, unknown> | undefined, unknown]
+    >;
+    const claims = edges.filter((c) => c[1] === "pending_approval" && c[2] === "running");
+    expect(claims).toHaveLength(1);
+    expect(claims[0][0]).toBe("run-1");
+    // The claim is the pause fence, rides this intent's lease and names the gate
+    // task the run waits at.
+    expect(claims[0][3]).toMatchObject({
+      pauseFence: { token: "tok-fake", generation: 1 },
+      resumeIntentLease: { gateId: "gate-1", leaseToken: "lease-abc" },
+      resumeGate: { a2aTaskId: "task-1", executionAttemptId: null },
+    });
+    // The claim comes first: the message leaves only once the run is this delivery's.
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runEdge).mock.invocationCallOrder[0]).toBeLessThan(sendTaskSpy.mock.invocationCallOrder[0]!);
+    // The hold was raised after that claim, and nothing gave the run back: the
+    // claimed intent stays for its next lease, which reads the durable row.
+    expect(edges.filter((c) => c[1] === "running" && c[2] === "pending_approval")).toHaveLength(0);
     expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();
   });
 

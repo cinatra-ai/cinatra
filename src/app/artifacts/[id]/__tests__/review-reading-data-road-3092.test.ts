@@ -420,16 +420,15 @@ describe("(f) the artifact page dispatches every admitted row and hands every di
   const PAGE = readFileSync(path.join(__dirname, "..", "page.tsx"), "utf8");
   const CODE = PAGE.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
 
-  it("carries no type check, no pointer resolver and no pointer boundary, and nothing of the pointer before the dispatch", () => {
+  it("carries no type check, no pointer resolver, no pointer boundary and no pointer at all", () => {
     expect(CODE).not.toMatch(/isDashboardArtifactType/);
     expect(CODE).not.toMatch(/resolveDashboardArtifactPointer/);
     expect(CODE).not.toMatch(/DashboardPointerBoundary/);
     expect(CODE).not.toMatch(/DashboardPointerLoading|DashboardPointerError/);
-    const dispatchAt = CODE.indexOf("resolveArtifactDisplayMount(");
-    expect(dispatchAt).toBeGreaterThan(-1);
-    // The pointer (cinatra#4311 deletes it) is drawn only after the dispatch, on its floor.
-    for (const pointer of ["<DashboardPointerDetail", '"dashboard-pointer"', "typeGate.dashboardPointer"]) {
-      expect(CODE.indexOf(pointer), pointer).toBeGreaterThan(dispatchAt);
+    expect(CODE.indexOf("resolveArtifactDisplayMount(")).toBeGreaterThan(-1);
+    // cinatra#4311 deleted the pointer: the page draws it on no road.
+    for (const pointer of ["DashboardPointerDetail", '"dashboard-pointer"', "typeGate.dashboardPointer"]) {
+      expect(CODE, pointer).not.toContain(pointer);
     }
   });
 

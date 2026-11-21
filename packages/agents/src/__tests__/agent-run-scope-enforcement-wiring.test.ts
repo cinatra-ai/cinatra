@@ -388,8 +388,10 @@ describe("layer 2: shared dispatch guard", () => {
     const guardAt = src.indexOf("assertAgentRunDispatchAuthorized");
     expect(guardAt).toBeGreaterThan(-1);
     expect(windowAround(src, guardAt, 900)).toContain("actingUserId: actor.userId");
-    // Before writeHitlPrompt / sendTask — the first irreversible resume steps.
-    expect(guardAt).toBeLessThan(src.indexOf("client.sendTask("));
+    // Before the claim, the prompt write and sendTask (run-resume-under-claim.ts,
+    // cinatra#4245) — the first irreversible resume steps.
+    expect(src.indexOf("resumeWayflowUnderPauseClaim({")).toBeGreaterThan(-1);
+    expect(guardAt).toBeLessThan(src.indexOf("resumeWayflowUnderPauseClaim({"));
     // The refusal must not distinguish itself from the run-access denial.
     expect(src.slice(guardAt, guardAt + 1200)).toContain('"Run access denied."');
     // Recognized by CODE, not `instanceof` — a refusal must survive a bundle /
@@ -506,6 +508,8 @@ const GUARDED_SEAMS = [
   "createAgentRunPendingInput",
   "enqueueAgentRun",
   "transitionRunStatus",
+  // cinatra#4245: agent_run_stop's transitionRunStatus, moved for the size ratchet.
+  "stopRunRespectingPauseClaim",
 ];
 
 describe.each([

@@ -61,7 +61,11 @@ import {
   type LentActionGrantControl,
 } from "@/lib/lifecycle/lent-action-grant";
 import { resolveBoundTurnActor } from "@/lib/lifecycle/bound-turn-actor";
-import { controlsNamedByThePerson } from "@/lib/lifecycle/typed-decision-words";
+import {
+  controlsNamedByThePerson,
+  wordsNameControl,
+} from "@/lib/lifecycle/typed-decision-words";
+import { REVIEW_REJECT_RETIRED_REASON } from "@/lib/artifacts/review-surface-model";
 import {
   recordLentActionGrant,
   sweepExpiredLentActionGrants,
@@ -447,25 +451,26 @@ export async function resolveBoundCard(input: {
 // control is pressed per message, as before. What changed is that the menu can
 // hold Approve — but only for a message whose author wrote it.
 //
-// WHAT A LENT COMMENT ACTUALLY DOES, said exactly (convergence round 2). On an active
-// single-target LIFECYCLE review, a non-empty comment is not an annotation: the
-// card's own path files it as CHANGES REQUESTED — the gate resolves and the work
-// goes back for repair (`submitReviewSurfaceChangesRequested`). That is not
-// something this slice introduces; it is precisely what the review page's box
-// does with any typed sentence TODAY, with no model in the path at all, and the
-// plan opens on it as the defect being repaired. What changes here is that the
-// filing now goes through the conversation's assistant, so a turn that is
-// plainly a question can end without one — and what changes with cinatra#2853 is
-// that telling a question from a request for changes becomes a decision the
-// product makes rather than an accident of the box being typed in.
+// WHAT A LENT COMMENT AND A LENT REGENERATE ACTUALLY DO, said exactly
+// (cinatra#3080). Until this slice a non-empty comment on an active single-target
+// LIFECYCLE review was not an annotation: the card's own path filed it as
+// CHANGES REQUESTED, the gate resolved and the work went back for repair. That
+// overload is gone. A comment now records the note and DECIDES NOTHING; sending
+// the words back to the producing step is the card's own Regenerate, a control
+// of its own, and it is the one that settles the gate. So which of the two a
+// sentence reaches is a choice the turn is TOLD about (the review's paragraph at
+// the end of this file names the two roads apart), not an accident of the box
+// being typed in.
 //
-// THE RESIDUAL, NAMED, AS IT STANDS AFTER #2853. A model that calls the tool on
-// a turn that was not asking still files the person's own words as a change
-// request — that residual is W5a's and is unchanged, and it is strictly narrower
-// than what the review page's own box does with a typed sentence today. What
-// #2853 removes is the WIDER version of it: a terminal Approve or Reject can no
-// longer be reached at all unless the person's own message named that act, so an
-// induced call can at worst do what an ordinary typed sentence already does.
+// THE RESIDUAL, NAMED, AS IT STANDS AFTER #3080. A model that calls the tool on a
+// turn that was not asking can still press `regenerate`, because Regenerate is
+// on every review menu (`typed-decision-words.ts` says why: the review page's own
+// box regenerated on any typed sentence before this change, so gating it on a
+// word would narrow a road this slice is not narrowing). That is the W5a
+// residual, carried over unchanged. What #2853 removed stays removed: Continue
+// cannot be reached at all unless the person's own message named it, so an
+// induced call can at worst do what an ordinary typed sentence already did. And
+// Reject cannot be reached at all, because no card lends it.
 //
 // AND THE WORDS ARE NOT THE MODEL'S EITHER. The person's message is stored with
 // the grant and read back at the spend, so what lands on the card is what they
@@ -726,6 +731,31 @@ export async function issueTurnLentActionGrant(input: {
     };
   }
 
+  // A REJECT IS ANSWERED, NEVER FILED AS SOMETHING ELSE (cinatra#3080). No card
+  // draws Reject any more, so a review lends no `reject` and the menu below could
+  // never hold one. Left to the menu, a message asking for it would quietly
+  // become a Comment or a Regenerate, which is not what the person asked for. So
+  // the binding checks first, and mints NO grant: the assistant could not act
+  // even if it tried, and it is given the platform's own sentence to say back,
+  // in the same shape as the ambiguous refusal above.
+  //
+  // WORD PRESENCE, exactly as on the rest of this road (`typed-decision-words.ts`):
+  // a message that only MENTIONS rejecting gets the same answer. That costs the
+  // person nothing, because the answer is true and nothing is decided.
+  if (
+    binding.resolution.kind === "review" &&
+    wordsNameControl("reject", input.messageText)
+  ) {
+    return {
+      grant: null,
+      systemContext:
+        "\n\nBOUND CARD — NO GRANT, AND THE PLATFORM HAS ANSWERED. " +
+        `Say this back to the person, word for word, and add nothing to it: "${REVIEW_REJECT_RETIRED_REASON}" ` +
+        "You hold no authority to operate any card this turn; do not attempt one, and do not " +
+        "offer to Regenerate or Continue on their behalf.",
+    };
+  }
+
   // THE MENU IS READ FROM THE PERSON'S OWN WORDS (cinatra#2853), and an empty
   // one lends nothing: a message that asked a skills card a question names no
   // button on it, so the turn is ordinary conversation and the tool does
@@ -983,7 +1013,17 @@ export async function issueTurnLentActionGrant(input: {
       `You may press exactly ONE control on it, ONCE, by calling \`lifecycle_bound_card_decide\` ` +
       `with ref "${binding.ref}". This message may press: ${menu.join(", ")} — name the one the ` +
       `person asked for in \`control\`, or omit it for ${control}. A control that is not on that ` +
-      `list is refused by the server, so a decision the person did not state is not yours to take. ` +
+      `list is refused by the server, so a decision the person did not state is not yours to take.\n` +
+      // THE TWO ROADS FOR WORDS, NAMED APART (cinatra#3080). A comment decides
+      // nothing and a Regenerate settles the review, so which one a sentence
+      // reaches is the whole question, and the turn is told the difference.
+      `· A REQUEST TO CHANGE THE WORK — the person describes something to be made different — ` +
+      `presses \`regenerate\`: their words go back to the step that made the work, the review ` +
+      `closes and a new revision is made.\n` +
+      `· A NOTE THAT ASKS FOR NO CHANGE presses \`comment\`: their words are recorded on the ` +
+      `review, nothing is decided and the review stays open.\n` +
+      `· A PLAIN GO-AHEAD presses \`approve\`, which is the card's Continue: the run goes on with ` +
+      `the work as it is. It is on the list only when their own message named it.\n` +
       "You supply NO text: what lands on " +
       "the card is the person's own message, held on the server. Do this only when the person " +
       "is asking for it; a question about the card is answered as a question and presses " +

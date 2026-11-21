@@ -204,6 +204,29 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
     }
   });
 
+  it("cinatra#4245: an importer allowlisted for a pause claim writer really imports it", () => {
+    // The same ratchet for the five writers of run-pause-claim.ts: the release and
+    // the settle moved into run-resume-under-claim.ts, so a road that no longer
+    // imports one of them must not stay allowed to (a direct import there would
+    // pass the import ban unseen). Only the import specifiers from the claim module
+    // count, never a mention in prose.
+    const CLAIM_MODULE = "packages/agents/src/run-pause-claim.ts";
+    const rows = ORG_WRITE_REGISTRY.filter((r) => r.module === CLAIM_MODULE);
+    expect(rows.map((r) => r.exportName).sort()).toEqual(["claimPause", "fencePauseInPlace", "markPauseChangesRequestedInTx", "releasePauseClaim", "settlePauseSend"]);
+    for (const r of rows) {
+      for (const f of r.allowedImporters ?? []) {
+        const imported = new Set<string>();
+        for (const m of readFileSync(f, "utf-8").matchAll(/\bimport\s*(?:type\s+)?\{([^}]*)\}\s*from\s*["']\.\/run-pause-claim["']/g)) {
+          for (const spec of m[1].split(",")) {
+            const name = spec.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0].trim();
+            if (name) imported.add(name);
+          }
+        }
+        expect(imported.has(r.exportName), `${r.exportName} allowlists ${f}, which does not import it from run-pause-claim`).toBe(true);
+      }
+    }
+  });
+
   it("the exception ledger is EXACTLY the workflows-extension + Stage-D-deferred + edge-family-sweep rows (#1940 P3 flipped the new-run rows out)", () => {
     // COMBINED truth after the #2201 merge:
     // - cinatra#1940 P3 (Decision 2): the two new-run creation rows
@@ -314,6 +337,8 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
       // the pause claim writers of run-pause-claim.ts (cinatra#4245 A2 — banned
       // from day one to the resume roads that take the claim)
       "claimPause", "fencePauseInPlace", "releasePauseClaim", "settlePauseSend",
+      // the change request's end mark (cinatra#4245 D1), banned to its one caller
+      "markPauseChangesRequestedInTx",
     ]) {
       expect(banned.has(w), `${w} must be import-banned`).toBe(true);
     }
@@ -334,8 +359,9 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
     // frame's token renewal, banned from day one to its one route);
     // cinatra#4245 A2 added 4 (the pause claim writers claimPause,
     // fencePauseInPlace, releasePauseClaim and settlePauseSend, enumerated
-    // above). 20 + 8 + 2 + 3 + 3 + 3 + 1 + 4 = 44.
-    expect(banned.size).toBe(44);
+    // above); cinatra#4245 D1 added 1 (the change request's end mark
+    // markPauseChangesRequestedInTx). 20 + 8 + 2 + 3 + 3 + 3 + 1 + 4 + 1 = 45.
+    expect(banned.size).toBe(45);
   });
 });
 

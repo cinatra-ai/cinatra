@@ -17,6 +17,9 @@
 // WordPress in-admin call now goes through the two generic, already-governed
 // primitives, `wordpress_site_tool_call` / `wordpress_site_tools_list`, which
 // forward to whatever ability the connected site's own MCP catalog exposes.
+// The connector later split the forwarding primitive (cinatra#3745):
+// `wordpress_site_tool_call` forwards reads only, and the outward-declared
+// `wordpress_site_tool_write` forwards every other ability.
 // Drupal's two in-admin editing primitives went through one stage
 // (`drupal_node_*` via `drupal/mcp_tools` — connector #64) and were never
 // renamed or deleted. In both cases the dispatched content-editor agent gets
@@ -64,8 +67,12 @@
  * WordPress (wordpress-agent — its full tool set, since cinatra-ai/cinatra#2022
  * S7 deleted the old named per-operation tools; every WordPress in-admin call
  * now goes through the governed connector-instance invoker):
- *   - `wordpress_site_tool_call`  → forwards to the connected site's own MCP
- *     catalog ability (e.g. `ewpa/get-post` / `ewpa/get-page` / `ewpa/update-post`)
+ *   - `wordpress_site_tool_call`  → forwards a READ ability of the connected
+ *     site's own MCP catalog (e.g. `ewpa/get-post` / `ewpa/get-page`)
+ *   - `wordpress_site_tool_write` → forwards every other ability (e.g.
+ *     `ewpa/update-post`); its registration declares `outward`, so on the
+ *     content editor's agent run the boundary holds the call for the person's
+ *     recorded decision (cinatra#3745)
  *   - `wordpress_site_tools_list` → discovers that catalog; declared optional
  *     by the agent's manifest, unused by its current flow
  *
@@ -93,6 +100,7 @@
 export const IN_ADMIN_CMS_MCP_ALLOWED_TOOLS: readonly string[] = [
   // WordPress — the generic, governed connector-instance invoker primitives.
   "wordpress_site_tool_call",
+  "wordpress_site_tool_write",
   "wordpress_site_tools_list",
   // Drupal — all already route through drupal/mcp_tools.
   "drupal_node_get",

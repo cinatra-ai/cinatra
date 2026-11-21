@@ -320,6 +320,11 @@ function toSummary(
     presentationIdentity: presentation?.identity ?? effective,
     presentationSuggestions: presentation?.suggestions ?? [],
     sourceUrl: connectorRefSourceUrl(rec.data),
+    // NO PRODUCER PROMPT HERE (cinatra#3080). This summary is what
+    // `artifacts_list` / `artifacts_get` hand every caller, a type-admitted
+    // extension included; the prompt a row records it was made from is producer
+    // input and stays off it. The review screen reads the prompt from the
+    // authorized frozen revision ledger (`readReviewGateRecordedPrompt`).
   };
 }
 
