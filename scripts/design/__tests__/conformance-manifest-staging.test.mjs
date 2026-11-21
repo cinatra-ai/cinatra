@@ -54,12 +54,14 @@ const STAGED = {
   // (design@67ecd66d, cinatra#4388): the dashboard's artifact page draws the dashboard
   // extension's own display, so the two surfaces of the core pointer (the pointer detail
   // and its scope chips) are no longer declared.
+  // Re-copied verbatim again at version 0.14.0 (design@104eaf3c, cinatra#4476): section XI draws
+  // the Lifecycle operations page; nine surfaces are added and none is changed or removed.
   // Unpinned because only one of its surfaces is in scope for that adoption; it
   // joins the pin gate when every surface of the drawing has a driver.
   "app-artifacts.json": {
     spec: "specs/app-artifacts.html",
-    manifestSha256: "9be0560000ad449b9c75167c726ca44c51efcd5e6eea1497cdb8691b34e1f05b",
-    contentHash: "sha256:dd0eeaf1e9aaeede212214e7711e57a7c76fa3d000a501c13266da971a0e70c6",
+    manifestSha256: "37c230220c838855fcc25e17392ca42af0cb7bd6b6b65d7cf1bb4cfe7629d05b",
+    contentHash: "sha256:c4aac5f31aa873714c63891d69ecd41d3b92e387a8b5161798390d7840ddd9b3",
   },
   // The lifecycle-cards drawing, staged by cinatra#3156 (the suggestion-chip wave).
   // Re-copied verbatim at design@f77ea323 (cinatra#3978): the copy carries the
@@ -72,10 +74,14 @@ const STAGED = {
   // bytes, so only the embedded contentHash moves. No surface changes.
   // Re-copied verbatim at design@3beff055 (design#247): the brand gold moved to #9c7434
   // in the drawing, so only the embedded contentHash moves. No surface changes.
+  // Re-copied verbatim at design@94d892de (design#253, cinatra#4366): the Drupal pointer
+  // is drawn as the generic floor, so drupal-pointer-never-a-review-target binds no field
+  // and no action and declares only error and kind:artifact. The copy also carries the
+  // nine publish-card surfaces the drawing gained at design#237; no wave drives them yet.
   "app-lifecycle-cards.json": {
     spec: "specs/app-lifecycle-cards.html",
-    manifestSha256: "9289120d2a0ff812dce2af37b8f1c73d20d52c13dd9a02d74f9263ad2a2bb355",
-    contentHash: "sha256:234c532f2301b049026211df7b548903bc7eff7b67837a018e18c4195246574c",
+    manifestSha256: "bd6c1d1dac41d36fb32af2c77468e6dca4b361117ef5bccfc2d15c06e137305a",
+    contentHash: "sha256:46f0ba32fa6cf1276b819549c7e27d48a6fc2f7027f1675a49fbabaca66847b6",
   },
   // The artifact-review drawing, staged by cinatra#3158 (the artifact-kind
   // display wave). First-time adoption: the drawing has never been committed
@@ -88,10 +94,16 @@ const STAGED = {
   // bytes, so only the embedded contentHash moves. No surface changes.
   // Re-copied verbatim at design@3beff055 (design#247): the brand gold moved to #9c7434
   // in the drawing, so only the embedded contentHash moves. No surface changes.
+  // Re-copied verbatim at design@94d892de (design#253, cinatra#4366): drupal-pointer-display
+  // is the generic floor (no field, no action, error and kind:artifact), the Drupal page is
+  // drawn as the page snapshot (drupal-page-display and drupal-page-continued-reading replace
+  // drupal-pointer-continued-reading). The copy also carries what the drawing changed at
+  // design#208 (run-list-step-loading, run-list-step-error) and design#237 (the three
+  // publish steps leave the run page); no wave drives any of those surfaces.
   "app-artifact-review.json": {
     spec: "specs/app-artifact-review.html",
-    manifestSha256: "0eb04b2a30858e5f383559d90852ca2e3e74cca8c8a5e9d6c3cc497a14540465",
-    contentHash: "sha256:54d23e9cfae4ee2078901b8e64d60b9dab6ce82190e38ebdf745a86e730533ec",
+    manifestSha256: "1453349335ba92261a63c4405785d638fd052baece58db9333f6cc4f3cf94211",
+    contentHash: "sha256:1ab8f7739088b1ce78a171144f0d30d91ec2e9ad950bc863ed12df39d2bd07c8",
   },
 };
 

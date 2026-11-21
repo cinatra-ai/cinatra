@@ -78,6 +78,7 @@ import {
   updateHitlPromptExcluded,
   readHitlPromptsForRun,
   readAllHitlPromptsForRun,
+  readReviewGateTimesForRun,
   updateHitlPromptsExcludedForRunAgent,
   readNonExcludedAgentIdsForRun,
 } from "./agent-run-hitl-prompts";
@@ -86,6 +87,7 @@ export {
   updateHitlPromptExcluded,
   readHitlPromptsForRun,
   readAllHitlPromptsForRun,
+  readReviewGateTimesForRun,
   updateHitlPromptsExcludedForRunAgent,
   readNonExcludedAgentIdsForRun,
 };
@@ -266,6 +268,9 @@ export type AgentTemplateRecord = {
   // take the list from a compile. OPTIONAL in the type so
   // legacy fixture objects in tests remain valid.
   publishingSteps?: string[] | null;
+  // The publish card's rows per declared node (cinatra#4150), from
+  // `metadata.cinatra.publishRows`; null = unknown, as publishingSteps.
+  publishRows?: Record<string, Array<{ label: string; input: string }>> | null;
   // template-level default AgentAuthPolicy. null = use
   // DEFAULT_AGENT_AUTH_POLICY from auth-policy.ts. Persisted as JSON-as-text
   // in agent_templates.agent_auth_policy.
@@ -348,6 +353,9 @@ export type CreateAgentTemplateInput = {
   // The nodes the compiled OAS declares `publishes: true` (cinatra#4150). null
   // clears it back to "unknown"; omit to leave the column unchanged.
   publishingSteps?: string[] | null;
+  // The publish card's rows per declared node (cinatra#4150). null clears it
+  // back to "unknown"; omit to leave the column unchanged.
+  publishRows?: Record<string, Array<{ label: string; input: string }>> | null;
   // template-level default policy; pass null or omit to leave unset
   // (resolves to DEFAULT_AGENT_AUTH_POLICY at read time).
   agentAuthPolicy?: AgentAuthPolicy | null;
@@ -892,6 +900,8 @@ export async function _runAgentTemplateUpdate(
   // cinatra#4150 — JSON-stringified like gatedSteps so the text column stays canonical.
   if (patch.publishingSteps !== undefined)
     updates.publishingSteps = patch.publishingSteps ? JSON.stringify(patch.publishingSteps) : null;
+  if (patch.publishRows !== undefined)
+    updates.publishRows = patch.publishRows ? JSON.stringify(patch.publishRows) : null;
   if (patch.gatedSteps !== undefined)
     updates.gatedSteps = patch.gatedSteps ? JSON.stringify(patch.gatedSteps) : null;
   // template-level AgentAuthPolicy patch handler. null clears the
@@ -2037,6 +2047,8 @@ export async function readAgentRuns(
 export type BulkStopResult = {
   stopped: number;
   alreadyTerminal: number;
+  /** cinatra#4245: runs not stopped because a live send holds them. `total` is the sum of the three. */
+  resuming: number;
   total: number;
 };
 
@@ -2066,13 +2078,14 @@ const BULK_STOPPABLE_STATUSES: AgentRunStatus[] = [
 async function stopRunOrSwallowStale(
   row: { id: string; status: string },
   authority: OrgWriteAuthority | undefined,
-): Promise<boolean> {
+): Promise<"stopped" | "alreadyTerminal" | "resuming"> {
   let from = row.status;
   for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
       await transitionRunStatus(row.id, from as AgentRunStatus, "stopped", undefined, authority);
-      return true;
+      return "stopped";
     } catch (err) {
+      if (err instanceof RunTransitionError && err.code === "pause_resume_in_flight") return "resuming";
       if (!(err instanceof RunTransitionError && err.code === "stale_from_status")) throw err;
       const [cur] = await db
         .select({ status: agentRuns.status, orgId: agentRuns.orgId })
@@ -2086,12 +2099,12 @@ async function stopRunOrSwallowStale(
         cur.orgId !== authority?.orgId ||
         !BULK_STOPPABLE_STATUSES.includes(cur.status as AgentRunStatus)
       ) {
-        return false;
+        return "alreadyTerminal";
       }
       from = cur.status;
     }
   }
-  return false;
+  return "alreadyTerminal";
 }
 
 /**
@@ -2105,19 +2118,15 @@ export async function bulkStopAgentRuns(
   runIds: string[],
   authority: OrgWriteAuthority | undefined,
 ): Promise<BulkStopResult> {
-  if (runIds.length === 0) return { stopped: 0, alreadyTerminal: 0, total: 0 };
+  if (runIds.length === 0) return { stopped: 0, alreadyTerminal: 0, resuming: 0, total: 0 };
   const rows = await db
     .select({ id: agentRuns.id, status: agentRuns.status, orgId: agentRuns.orgId })
     .from(agentRuns)
     .where(inArray(agentRuns.id, runIds));
   const toStop = rows.filter((r) => BULK_STOPPABLE_STATUSES.includes(r.status as AgentRunStatus));
-  let stopped = 0;
-  let alreadyTerminal = rows.length - toStop.length;
-  for (const row of toStop) {
-    if (await stopRunOrSwallowStale(row, authority)) stopped += 1;
-    else alreadyTerminal += 1;
-  }
-  return { stopped, alreadyTerminal, total: rows.length };
+  const counts = { stopped: 0, alreadyTerminal: rows.length - toStop.length, resuming: 0 };
+  for (const row of toStop) counts[await stopRunOrSwallowStale(row, authority)] += 1;
+  return { ...counts, total: rows.length };
 }
 
 /**
@@ -2132,14 +2141,9 @@ export async function bulkStopAgentRunsByTemplate(
     .select({ id: agentRuns.id, status: agentRuns.status, orgId: agentRuns.orgId })
     .from(agentRuns)
     .where(and(eq(agentRuns.templateId, templateId), inArray(agentRuns.status, BULK_STOPPABLE_STATUSES)));
-  if (rows.length === 0) return { stopped: 0, alreadyTerminal: 0, total: 0 };
-  let stopped = 0;
-  let alreadyTerminal = 0;
-  for (const row of rows) {
-    if (await stopRunOrSwallowStale(row, authority)) stopped += 1;
-    else alreadyTerminal += 1;
-  }
-  return { stopped, alreadyTerminal, total: rows.length };
+  const counts = { stopped: 0, alreadyTerminal: 0, resuming: 0 };
+  for (const row of rows) counts[await stopRunOrSwallowStale(row, authority)] += 1;
+  return { ...counts, total: rows.length };
 }
 
 /**
@@ -2179,7 +2183,9 @@ export async function readAgentRunsByParent(
 export async function updateAgentRunA2ATaskId(
   runId: string,
   taskId: string,
-): Promise<void> {
+  /** cinatra#4245: write only while this claim token holds the row. */
+  opts?: { pauseClaimToken: string },
+): Promise<{ written: boolean }> {
   if (!runId || !taskId) {
     throw new Error("updateAgentRunA2ATaskId: runId and taskId are required");
   }
@@ -2197,11 +2203,12 @@ export async function updateAgentRunA2ATaskId(
   const MAX_ATTEMPTS = 4;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      await db
+      const rows = await db
         .update(agentRuns)
         .set({ a2aTaskId: taskId })
-        .where(eq(agentRuns.id, runId));
-      return;
+        .where(opts ? and(eq(agentRuns.id, runId), eq(agentRuns.pauseClaimToken, opts.pauseClaimToken)) : eq(agentRuns.id, runId))
+        .returning({ id: agentRuns.id });
+      return { written: rows.length > 0 };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const isConcurrentUpdate = msg.includes("tuple concurrently updated");
@@ -2210,6 +2217,7 @@ export async function updateAgentRunA2ATaskId(
       await new Promise((r) => setTimeout(r, 25 * attempt + Math.random() * 25));
     }
   }
+  throw new Error("updateAgentRunA2ATaskId: unreachable");
 }
 
 /**
@@ -4015,6 +4023,9 @@ export async function purgeAgentTemplateAtomic(
   return result;
 }
 
+// #3745 dispatch fence: the first message's key naming the bound source (the loader's key).
+export { CINATRA_EXPECTED_SOURCE_MESSAGE_KEY } from "./agent-run-serde";
+
 // origin JSONB helpers MOVED to ./agent-template-identity (cinatra#2616): they
 // are package-name-keyed writers of a globally unique identity, so they now
 // carry the claim. Re-exported so `./store` importers are unchanged.
@@ -4023,3 +4034,8 @@ export {
   updateAgentTemplateOrigin,
   updateAgentTemplateVisibility,
 } from "./agent-template-identity";
+
+// #3745 public package subpath remains ./store; no held export-map edit.
+export { bindRunStepToolPolicy, readRunStepToolPolicy, verifyRunExecutedSource, isRunExecutedSourceCurrent, withRunActionPolicyTransaction } from "./agent-run-serde";
+export { selectWayflowRunStepToolPolicy, createRunStepToolPolicy, parseRunStepToolPolicy, readTrustedStepToolDeclaration, RunStepToolPolicyRefusal } from "./agent-run-serde";
+export type { RunStepToolPolicy, StepToolReading } from "./agent-run-serde";

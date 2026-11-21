@@ -349,7 +349,13 @@ describe("the swap happens on its own while the stream stays mute", () => {
       // NOTHING WAS PRESSED AND NO QUESTION WAS REDRAWN — the answered gate the
       // row still carries is not a live control, here or in the prompt window.
       expect(document.querySelector("#field-idea")).toBeNull();
-      expect(screen.queryByRole("button", { name: /Continue/i })).toBeNull();
+      // The review floor's own Continue (cinatra#3080) is the card's decision,
+      // not the run's resume: only a run-level Continue is refused here.
+      expect(
+        screen
+          .queryAllByRole("button", { name: /Continue/i })
+          .filter((button) => !button.closest('[data-conformance-id="review-decision-bar"]')),
+      ).toEqual([]);
       expect(published.every((g) => g === null)).toBe(true);
       expect(screen.queryByRole("heading", { name: /Agentic Run Progress/i })).toBeNull();
     },
@@ -464,7 +470,13 @@ describe("the swap happens on its own while the stream stays mute", () => {
     // The answered question the row still carries is not redrawn with a live
     // control on this transport either.
     expect(document.querySelector("#field-idea")).toBeNull();
-    expect(screen.queryByRole("button", { name: /Continue/i })).toBeNull();
+    // The review floor's own Continue (cinatra#3080) is the card's decision,
+    // not the run's resume: only a run-level Continue is refused here.
+    expect(
+      screen
+        .queryAllByRole("button", { name: /Continue/i })
+        .filter((button) => !button.closest('[data-conformance-id="review-decision-bar"]')),
+    ).toEqual([]);
   }, 45_000);
 
   // -------------------------------------------------------------------------

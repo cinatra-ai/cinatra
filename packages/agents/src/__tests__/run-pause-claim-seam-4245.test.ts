@@ -247,11 +247,12 @@ describe("rule 3: the fence", () => {
     expect(setValue(set, "pauseClaimExpiresAt")).toBe(`now() + make_interval(secs => ${PAUSE_SEND_LEASE_SECONDS})`);
   });
 
-  it("without a fence the edge stays the status-only compare-and-set, and clears the claim", async () => {
+  it("without a fence the edge is refused before any write", async () => {
     const { tx, rec } = casTx();
-    await updateAgentRunStatusConditional(RUN, "pending_approval", "running", undefined, ORG, tx);
-    expect(render(rec.where[0]).sql).not.toContain("pause_claim_token");
-    expect(rec.set[0]).toMatchObject({ pauseClaimToken: null, pauseClaimPhase: null, pauseClaimExpiresAt: null });
+    await expect(updateAgentRunStatusConditional(RUN, "pending_approval", "running", undefined, ORG, tx)).rejects.toThrow(
+      /pending_approval→running requires pauseFence/,
+    );
+    expect(rec.set).toEqual([]);
   });
 
   it("refuses a fence on another edge and a malformed fence, before any write", async () => {

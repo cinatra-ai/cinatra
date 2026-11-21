@@ -43,6 +43,9 @@ export type FirstArtifactFilingRun = {
   readonly runId: string;
   readonly nodeId: string;
   readonly extension: string;
+  /** cinatra#4264: the runtime's signed step of the call, when it verified; the
+   *  ledger records it as the filing step only when it equals nodeId. */
+  readonly verifiedStepId?: string;
 };
 
 export type FirstArtifactFilingInput<S> = {
@@ -93,6 +96,7 @@ export async function fileFirstArtifactWrite<S>(input: FirstArtifactFilingInput<
     path: "materialize_tool",
     extension: run.extension,
     contentHash: createHash("sha256").update(input.bytes).digest("hex"),
+    ...(run.verifiedStepId !== undefined ? { verifiedStepId: run.verifiedStepId } : {}),
   });
   if (claim.path !== undefined && claim.path !== "materialize_tool") {
     return { kind: "refused", reason: "write_refused", error: input.texts.pathCollision(claim.path) };

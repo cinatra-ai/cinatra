@@ -178,6 +178,26 @@ export const CHECKBOX_CALL_SITE_READINGS: FileReading[] = [
     ],
   },
   {
+    file: "src/components/extensions/schema-config-connector-form.tsx",
+    tokens: 3,
+    sites: [
+      {
+        anchor: "id={boxId}",
+        tag: "Checkbox",
+        drawn: "checkbox",
+        effect: "confirmed",
+        reading:
+          "an on / off row of an extension's settings form (BooleanRow): a change only sets local state and the hidden input's value, and only one of the form's own action buttons writes it, by reading the form's named inputs (collectFormInputs) and posting them to the extension's action",
+        tagIncludes: ["onCheckedChange={(next) => setChecked(next === true)}"],
+        fileIncludes: [
+          '<Input type="hidden" name={field.key} value={checked ? "true" : "false"} readOnly />',
+          "onClick={(e) => void run(e.currentTarget)}",
+          "const r = await invokeAction(installId, field.actionId, collectFormInputs(origin));",
+        ],
+      },
+    ],
+  },
+  {
     file: "src/app/configuration/development/page.tsx",
     tokens: 3,
     sites: [
@@ -711,6 +731,17 @@ export const CHECKBOX_CALL_SITE_READINGS: FileReading[] = [
     sites: [{ anchor: "createRedactingPacote(pacoteImpl)", tag: "pacoteImpl", drawn: "no checkbox", effect: "none", reading: SERVER_MODULE, tagIncludes: [], fileIncludes: ['import * as pacoteImpl from "pacote";'] }],
   },
   {
+    file: "packages/agents/src/regenerate-segment.ts",
+    tokens: 0,
+    sites: [],
+    loads: {
+      count: 1,
+      modules: "drizzle-orm",
+      reading:
+        "the database query library loaded beside the run store's modules for its and, eq and inArray operators, read by name in one snapshot query: it draws nothing",
+    },
+  },
+  {
     file: "packages/agents/src/trigger-service.ts",
     tokens: 0,
     sites: [
@@ -776,7 +807,7 @@ export const CHECKBOX_CALL_SITE_READINGS: FileReading[] = [
   { file: "src/lib/better-auth-org-hooks.ts", tokens: 0, sites: [], loads: { count: 1, modules: "drizzle-orm", reading: "the database query library loaded beside the auth database for its eq operator, read by name: it draws nothing" } },
   { file: "src/lib/organization-archive-guard.ts", tokens: 0, sites: [], loads: { count: 1, modules: "drizzle-orm", reading: "the database query library loaded beside the auth database for its eq operator, read by name: it draws nothing" } },
   { file: "src/lib/organization-dispatch-policy.ts", tokens: 0, sites: [], loads: { count: 3, modules: "drizzle-orm", reading: "the database query library loaded beside the auth database for its sql template tag, read by name in three queries: it draws nothing" } },
-  { file: "src/lib/generated/artifact-renderers.ts", tokens: 0, sites: [], loads: { count: 36, modules: "@cinatra-ai/[a-z0-9-]+-artifacts?/src/renderers/[a-z-]+", reading: EXTENSION_LOADS } },
+  { file: "src/lib/generated/artifact-renderers.ts", tokens: 0, sites: [], loads: { count: 38, modules: "@cinatra-ai/[a-z0-9-]+-artifacts?/src/renderers/[a-z-]+", reading: EXTENSION_LOADS } },
   { file: "src/lib/generated/chat-views.ts", tokens: 0, sites: [], loads: { count: 1, modules: "@cinatra-ai/[a-z0-9-]+-artifact/src/views/[a-z-]+", reading: EXTENSION_LOADS } },
   { file: "src/lib/generated/connector-setup-pages.ts", tokens: 0, sites: [], loads: { count: 23, modules: "@cinatra-ai/[a-z0-9-]+-connector/(?:setup|settings)-page", reading: EXTENSION_LOADS } },
   { file: "src/lib/generated/extensions.server.ts", tokens: 0, sites: [], loads: { count: 89, modules: "@cinatra-ai/[a-z0-9-]+(?:/[a-z0-9-]+)*", reading: EXTENSION_LOADS } },

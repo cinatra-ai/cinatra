@@ -15,6 +15,7 @@ import type {
 import {
   mapSubmitResultToOutcome,
   mapChangesRequestedToOutcome,
+  declaredCommentStaysANote,
   reviewBlockedCopy,
   reviewDecideDisabledReason,
   reviewSettledCopy,
@@ -22,6 +23,9 @@ import {
   reviewProvenanceLabel,
   reviewRevisionMarker,
   REVIEW_DISPOSITIONS,
+  REGENERATE_BOUND_REACHED,
+  REGENERATE_NO_NOTE_INPUT,
+  REGENERATE_NO_STEP_ROAD,
 } from "../review-surface-model";
 import type { ReviewSettledOutcome } from "../review-surface-model";
 import { reviewTargetRowFacts } from "../review-target-row-facts";
@@ -92,13 +96,13 @@ describe("§V — permission copy + blocked copy", () => {
   it("no disabled reason when the reviewer may decide", () => {
     expect(reviewDecideDisabledReason({ canDecide: true, canComment: true })).toBeNull();
   });
-  it("a comment-only reviewer sees the terminal-needs-approve reason", () => {
+  it("a comment-only reviewer sees the terminal-needs-decision-access reason", () => {
     const reason = reviewDecideDisabledReason({ canDecide: false, canComment: true });
-    expect(reason).toMatch(/approve access/);
+    expect(reason).toMatch(/decision access/);
     expect(reason).toMatch(/Comment/);
   });
-  it("a reviewer with neither sees the no-approve-access reason", () => {
-    expect(reviewDecideDisabledReason({ canDecide: false, canComment: false })).toMatch(/approve access/);
+  it("a reviewer with neither sees the no-decision-access reason", () => {
+    expect(reviewDecideDisabledReason({ canDecide: false, canComment: false })).toMatch(/decision access/);
   });
   it("blocked copy covers every closed reason", () => {
     expect(reviewBlockedCopy("no-longer-pending").title).toMatch(/no longer open/);
@@ -108,8 +112,8 @@ describe("§V — permission copy + blocked copy", () => {
 });
 
 describe("§IV — the disposition set is exactly three (no 'request changes')", () => {
-  it("approve / reject / comment only", () => {
-    expect([...REVIEW_DISPOSITIONS].sort()).toEqual(["approve", "comment", "reject"]);
+  it("approve (Continue) / comment only - Reject is retired", () => {
+    expect([...REVIEW_DISPOSITIONS].sort()).toEqual(["approve", "comment"]);
   });
 });
 
@@ -262,6 +266,47 @@ describe("mapChangesRequestedToOutcome — lifecycle prompt-window path (§IV/§
     for (const code of ["invalid-request", "idempotency-key-reuse", "empty-feedback"]) {
       expect(mapChangesRequestedToOutcome(fail(code))).toMatchObject({ kind: "error" });
     }
+  });
+
+  // cinatra#3080 item 4: a Regenerate the store refused BEFORE any write (the
+  // producing step declares no Note input, no step road can rerun it, or the lineage
+  // reached its repair bound). The
+  // gate is still pending, so it is NOT a block, and the person reads the
+  // store's own sentence verbatim, never the generic retry line.
+  it("a refused Regenerate (regenerate-unavailable) is an error carrying the store's sentence verbatim, never a block", () => {
+    for (const sentence of [REGENERATE_NO_NOTE_INPUT, REGENERATE_NO_STEP_ROAD, REGENERATE_BOUND_REACHED]) {
+      expect(typeof sentence).toBe("string");
+      expect(sentence.length).toBeGreaterThan(0);
+      const outcome = mapChangesRequestedToOutcome({ ok: false, code: "regenerate-unavailable", error: sentence });
+      expect(outcome).toEqual({ kind: "error", message: sentence });
+      expect(outcome).not.toEqual({ kind: "error", message: "The change request could not be recorded." });
+    }
+  });
+
+  // cinatra#4245 (D2): the refusals of a change request that ends a declared pause.
+  it("M4245a a pause that is gone (moved on, not pending, another pause's gate) blocks as no-longer-pending", () => {
+    for (const code of ["pause-moved-on", "pause-not-pending", "pause-gate-mismatch"]) {
+      expect(mapChangesRequestedToOutcome(fail(code))).toMatchObject({ kind: "blocked", reason: "no-longer-pending" });
+    }
+  });
+
+  it("M4245b a pause held by a resume, unverifiable or not repairable is the retryable error", () => {
+    for (const code of ["pause-held", "pause-unverifiable", "pause-mode-conflict", "pause-not-repairable"]) {
+      expect(mapChangesRequestedToOutcome(fail(code))).toEqual({ kind: "error", message: "The change request could not be recorded." });
+    }
+  });
+
+  it("M4245c a deciding user who is no member of the gate's org is not permitted", () => {
+    expect(mapChangesRequestedToOutcome(fail("declared-gate-not-permitted"))).toMatchObject({ kind: "not-permitted" });
+  });
+
+  it("M4245d only the not-eligible refusal of a declared gate (and a leg the store reads as no lifecycle gate) stays a note", () => {
+    expect(declaredCommentStaysANote(fail("declared-gate-not-eligible"))).toBe(true);
+    expect(declaredCommentStaysANote(fail("not-a-lifecycle-gate"))).toBe(true);
+    for (const code of ["pause-held", "pause-moved-on", "pause-unverifiable", "gate-not-pending", "declared-gate-not-permitted"]) {
+      expect(declaredCommentStaysANote(fail(code))).toBe(false);
+    }
+    expect(declaredCommentStaysANote(ok())).toBe(false);
   });
 });
 
@@ -486,5 +531,27 @@ describe("each scope by its type and its name, named once (cinatra#3443, §IV)",
     const row = { ownerLevel: "team", ownerName: "Growth", visibility: "private", mime: "text/html", updatedAt: UPDATED };
     reviewTargetRowFacts(row, NOW);
     expect(row).toEqual({ ownerLevel: "team", ownerName: "Growth", visibility: "private", mime: "text/html", updatedAt: UPDATED });
+  });
+});
+
+// cinatra#3080: the conversation's comment is its own
+// submission. It is a Comment (the floor stays three actions, and it needs the
+// reader's respond right), marked as the conversation's, so the one entry can
+// keep its change road apart from the Note-field Comment, which only annotates.
+describe("the conversation's comment resolves to a marked Comment, never a fourth floor action", () => {
+  it("resolves `conversation-comment` to Comment, marked as the conversation's", async () => {
+    const { resolveReviewFloorSubmission, REVIEW_FLOOR_ACTIONS, floorActionRunAccessOp } = await import("../review-surface-model");
+    expect(resolveReviewFloorSubmission("conversation-comment")).toEqual({ kind: "action", action: "comment", alias: false, conversation: true });
+    expect(REVIEW_FLOOR_ACTIONS).toEqual(["comment", "regenerate", "continue"]);
+    expect(floorActionRunAccessOp("comment")).toBe("respondToHitl");
+  });
+
+  it("marks no other word as the conversation's", async () => {
+    const { resolveReviewFloorSubmission } = await import("../review-surface-model");
+    expect(resolveReviewFloorSubmission("comment")).toEqual({ kind: "action", action: "comment", alias: false, conversation: false });
+    expect(resolveReviewFloorSubmission("regenerate")).toEqual({ kind: "action", action: "regenerate", alias: false, conversation: false });
+    expect(resolveReviewFloorSubmission("continue")).toEqual({ kind: "action", action: "continue", alias: false, conversation: false });
+    expect(resolveReviewFloorSubmission("approve")).toEqual({ kind: "action", action: "continue", alias: true, conversation: false });
+    expect(resolveReviewFloorSubmission("reject").kind).toBe("retired");
   });
 });

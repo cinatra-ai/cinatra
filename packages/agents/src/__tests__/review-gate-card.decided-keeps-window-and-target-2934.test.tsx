@@ -87,6 +87,10 @@ vi.mock("../run-window-actions", () => ({
 
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 import { REVIEW_TARGET_ISLAND_PATH, ReviewGateCard } from "../review-gate-card";
+// THE PAGE OWNS THE WINDOW (cinatra#3487): the card registers its pending window
+// with the run page's chrome, which draws it; the settled exchange stays the
+// card's own, read-only.
+import { RunPageChrome } from "../run-page-chrome";
 
 const REF = "ref-2934-decided";
 const VIEW = { viewType: "artifact_review_gate" as const, schemaVersion: 1, ref: REF };
@@ -138,17 +142,24 @@ function armTypedRequest(settledIslandSrc: string | null): void {
 
 function renderRunPageCard() {
   return render(
-    <LifecycleCardSurfaceProvider host="run_card">
-      <ReviewGateCard view={VIEW} runId={RUN} />
-    </LifecycleCardSurfaceProvider>,
+    <RunPageChrome>
+      <LifecycleCardSurfaceProvider host="run_card">
+        <ReviewGateCard view={VIEW} runId={RUN} />
+      </LifecycleCardSurfaceProvider>
+    </RunPageChrome>,
   );
 }
 
+/** The widget host draws no window (cinatra#3487); the chrome here is only the
+ *  TRIGGER of the typed settle. What R2c pins is the island address across that
+ *  settle, and the trigger does not touch it. */
 function renderWidgetCard() {
   return render(
-    <LifecycleCardSurfaceProvider host="site_widget" auth={WIDGET_AUTH} frame={FRAME}>
-      <ReviewGateCard view={VIEW} runId={RUN} />
-    </LifecycleCardSurfaceProvider>,
+    <RunPageChrome>
+      <LifecycleCardSurfaceProvider host="site_widget" auth={WIDGET_AUTH} frame={FRAME}>
+        <ReviewGateCard view={VIEW} runId={RUN} />
+      </LifecycleCardSurfaceProvider>
+    </RunPageChrome>,
   );
 }
 
@@ -261,7 +272,11 @@ describe("R1b — what the read-only exchange must not change", () => {
     await waitForPending(container);
 
     const card = container.querySelector('[data-conformance-id="review-gate-card"]')!;
-    const promptWindow = card.querySelector('[data-conformance-id="review-prompt-window"]');
+    // In the page's chrome, never inside the card (cinatra#3487).
+    expect(card.querySelector('[data-conformance-id="review-prompt-window"]')).toBeNull();
+    const promptWindow = container.querySelector(
+      '[data-run-window-host="page-chrome"] [data-conformance-id="review-prompt-window"]',
+    );
     expect(promptWindow).not.toBeNull();
     expect(promptWindow!.querySelectorAll("textarea")).toHaveLength(1);
     expect(sendControls(promptWindow!)).toHaveLength(1);
@@ -339,9 +354,11 @@ describe("R1c — the settled exchange stands at its newest turn", () => {
     area.scrollTop = 0;
     fireEvent.scroll(area);
     view.rerender(
-      <LifecycleCardSurfaceProvider host="run_card">
-        <ReviewGateCard view={VIEW} runId={RUN} />
-      </LifecycleCardSurfaceProvider>,
+      <RunPageChrome>
+        <LifecycleCardSurfaceProvider host="run_card">
+          <ReviewGateCard view={VIEW} runId={RUN} />
+        </LifecycleCardSurfaceProvider>
+      </RunPageChrome>,
     );
     await act(async () => {});
     expect(card.querySelector("[data-review-settled-exchange] .overflow-y-auto")).toBe(area);

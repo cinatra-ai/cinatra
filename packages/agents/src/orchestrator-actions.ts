@@ -310,6 +310,28 @@ export async function resumeStoppedOrchestratorAction(
     return { ok: false, error: "resume failed" };
   }
 
+  // THE RESUME CLAIMS THE RUN AND BINDS ITS ATTEMPT BEFORE IT DISPATCHES
+  // (cinatra#3745). The model bridge and the passthrough road admit the resumed leg's
+  // source-bound callbacks only while the run is `running` under the attempt its step policy is bound to. So the dispatch
+  // edge `queued -> running` (which mints the fresh attempt) is taken BEFORE the
+  // send, and in that SAME transaction the run's one bound graph is carried forward
+  // to the attempt (`carryBoundStepToolPolicy`). The prior attempt is the locked run
+  // row's, so a binding held by any other attempt is refused. A failure here
+  // commits nothing and sends nothing; a run still `queued` is put back to `stopped`.
+  const attemptId = randomUUID();
+  try {
+    await transitionRunStatus(runId, "queued", "running", {
+      dispatch: { attemptId, carryBoundStepToolPolicy: true },
+    }, authority);
+  } catch (err) {
+    await transitionRunStatus(runId, "queued", "stopped", undefined, authority).catch(() => undefined);
+    if (err instanceof RunTransitionError && err.code === "stale_from_status") {
+      return { ok: false, error: "race condition — run status changed" };
+    }
+    console.error("[resumeStoppedOrchestratorAction] dispatch claim failed for run", runId, err);
+    return { ok: false, error: "resume failed" };
+  }
+
   try {
     // #1193 resume carrier: mint this leg's per-run credential and persist its
     // hash BEFORE the blocking sendTask (dispatch's race-free ordering), then
@@ -317,7 +339,9 @@ export async function resumeStoppedOrchestratorAction(
     // task attaches no X-Cinatra-Run-Token and every run-identity resolution in
     // the resumed leg fails closed. Metadata (not text) because the message text
     // is what the gate's InputMessageNode yields to the flow.
-    const resumeMetadata = await mintResumeRunTokenMetadata(runId);
+    // cinatra#3745: the message names the attempt THIS claim minted, and the mint
+    // refuses when the run no longer runs under it (stopped and resumed again).
+    const resumeMetadata = await mintResumeRunTokenMetadata(runId, { executionAttemptId: attemptId });
     // Send into the existing context so fasta2a routes to the paused conversation.
     // Resume MUST reuse run.a2aContextId; a fresh contextId
     // would start a new conversation and the flow would retry from the beginning.
@@ -333,9 +357,11 @@ export async function resumeStoppedOrchestratorAction(
       configuration: { acceptedOutputModes: ["text"] },
     });
   } catch (err) {
-    await transitionRunStatus(runId, "queued", "stopped", undefined, authority).catch((revertErr) => {
+    // cinatra#3745: only this claim's attempt is put back; a run stopped and resumed
+    // again meanwhile runs under a newer attempt and is left as it is.
+    await transitionRunStatus(runId, "running", "stopped", { runningAttempt: attemptId }, authority).catch((revertErr) => {
       if (revertErr instanceof RunTransitionError && revertErr.code === "stale_from_status") {
-        console.warn(`[resumeStoppedOrchestratorAction] compensation no-op for ${runId}: status already advanced`);
+        console.warn(`[resumeStoppedOrchestratorAction] compensation no-op for ${runId}: status or attempt already advanced`);
         return;
       }
       console.error("[resumeStoppedOrchestratorAction] compensation revert failed for run", runId, revertErr);
@@ -343,15 +369,6 @@ export async function resumeStoppedOrchestratorAction(
     console.error("[resumeStoppedOrchestratorAction] WayFlow A2A resume failed for run", runId, err);
     return { ok: false, error: "resume failed" };
   }
-
-  // sendTask succeeded — best-effort transition only, never revert.
-  await transitionRunStatus(runId, "queued", "running", {
-    dispatch: { attemptId: randomUUID() },
-  }, authority).catch((e) => {
-    if (!(e instanceof RunTransitionError && e.code === "stale_from_status")) {
-      console.error("[resumeStoppedOrchestratorAction] post-send transition failed", runId, e);
-    }
-  });
 
   // Publish RUN_STARTED so SSE-bound UI (useAgUiRunStream) flips status from
   // "stopped" back to "running". Without this the orchestrator-stepper-panel

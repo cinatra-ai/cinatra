@@ -81,6 +81,7 @@ const ORG = "org-1796-review-gate";
 const RUN_OWNER = "user-owner-1796";
 
 let gateStore: typeof import("../artifact-review-gate-store");
+let openReviewRead: typeof import("../artifact-open-review-read");
 let store: typeof import("../store");
 let dbMod: typeof import("../db");
 let client: Client;
@@ -89,6 +90,23 @@ type Target = { artifactId: string; representationRevisionId: string };
 
 function freshGateIds(): { runId: string; reviewTaskId: string } {
   return { runId: `run-${randomUUID()}`, reviewTaskId: `wayflow-${randomUUID()}` };
+}
+
+// The rail's task-key tie order among gates raised at one instant (cinatra#3035):
+// the id before `#`, then the member number (an id without `#` is member 1, so
+// `#10` follows `#9`), then the whole id; ids compare by code units.
+function railTieOrder(a: string, b: string): number {
+  const units = (x: string, y: string) => (x < y ? -1 : x > y ? 1 : 0);
+  const split = (id: string) => {
+    const cut = id.indexOf("#");
+    if (cut === -1) return { base: id, member: 1 };
+    const member = Number(id.slice(cut + 1));
+    return { base: id.slice(0, cut), member: Number.isInteger(member) && member > 0 ? member : Number.MAX_SAFE_INTEGER };
+  };
+  const x = split(a), y = split(b);
+  if (x.base !== y.base) return units(x.base, y.base);
+  if (x.member !== y.member) return x.member - y.member;
+  return units(a, b);
 }
 
 /** A decision-core port harness over the REAL store commit + gate state. The
@@ -224,6 +242,7 @@ beforeAll(async () => {
   (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized = true;
 
   gateStore = await import("../artifact-review-gate-store");
+  openReviewRead = await import("../artifact-open-review-read");
   store = await import("../store");
   dbMod = await import("../db");
   client = new Client({ connectionString: DB_URL });
@@ -304,6 +323,31 @@ afterAll(async () => {
     expect(pinned.status).toBe("pending");
     const state = await gateStore.readReviewGateState(runId, reviewTaskId);
     expect(state.status).toBe("pending");
+  });
+
+  it("OPEN READ: an artifact reads as under review only while a gate of its organization is open on it", async () => {
+    const { runId, reviewTaskId } = freshGateIds();
+    const artifactId = `art-${randomUUID()}`;
+    const read = (orgId: string, id: string) => openReviewRead.isArtifactUnderOpenReview({ orgId, artifactId: id });
+    expect(await read(ORG, artifactId)).toBe(false);
+    await gateStore.emitArtifactReviewGate({
+      runId,
+      orgId: ORG,
+      reviewTaskId,
+      targets: [{ artifactId, representationRevisionId: "rev-1" }],
+    });
+    expect(await read(ORG, artifactId)).toBe(true);
+    expect(await read("org-another", artifactId)).toBe(false);
+    expect(await read(ORG, `art-${randomUUID()}`)).toBe(false);
+    // An id that is a prefix of the pinned id is another artifact.
+    expect(await read(ORG, artifactId.slice(0, -1))).toBe(false);
+    await client.query(
+      `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates"
+          SET status = 'resolved', disposition = 'approve', fingerprint = 'f', resolved_at = now()
+        WHERE run_id = $1 AND review_task_id = $2`,
+      [runId, reviewTaskId],
+    );
+    expect(await read(ORG, artifactId)).toBe(false);
   });
 
   it("PIN: refuses a new combined gate without storing a partial singleton", async () => {
@@ -1025,7 +1069,7 @@ afterAll(async () => {
       `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates"
           SET created_at = timestamptz '2026-10-01 00:00:00+00' WHERE run_id = $1`, [runId],
     );
-    expect((await gateStore.readRunReviewSlot(runId)).reviewTaskId).toBe([...tasks].sort((a, b) => a.localeCompare(b))[0]);
+    expect((await gateStore.readRunReviewSlot(runId)).reviewTaskId).toBe([...tasks].sort(railTieOrder)[0]);
   });
 
   it("SLOT: another run's gate is never this run's answer", async () => {

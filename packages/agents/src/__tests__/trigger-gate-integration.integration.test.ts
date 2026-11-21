@@ -42,6 +42,10 @@ const hoisted = vi.hoisted(() => ({
   transitionRunStatus: vi.fn(),
   templateOverride: null as null | Record<string, unknown>,
   runOverride: null as null | Record<string, unknown>,
+  // cinatra#3745: the first dispatch selects the loader's source and binds it
+  // to the run's attempt before the send (explicit ports: no loader request).
+  selectRunStepToolPolicy: vi.fn(),
+  bindRunStepToolPolicy: vi.fn(),
 }));
 
 // Mock store.ts — replace template + run getters and transitions.
@@ -64,6 +68,8 @@ vi.mock("../store", async () => {
     findSavedConnectionForAgentUrl: vi.fn(() => null),
     updateAgentRunA2ATaskId: vi.fn(async () => undefined),
     updateAgentRunA2AContextId: vi.fn(async () => undefined),
+    selectWayflowRunStepToolPolicy: hoisted.selectRunStepToolPolicy,
+    bindRunStepToolPolicy: hoisted.bindRunStepToolPolicy,
   };
 });
 
@@ -129,6 +135,7 @@ function makeRun(overrides: Partial<Record<string, unknown>> = {}): Record<strin
     a2aTaskId: null,
     parentRunId: null,
     timeoutSeconds: null,
+    executionAttemptId: "attempt-test-1",
     ...overrides,
   };
 }
@@ -178,6 +185,13 @@ beforeEach(() => {
   hoisted.sendTask.mockResolvedValue({ id: "task-1", status: { state: "completed" } });
   hoisted.templateOverride = null;
   hoisted.runOverride = null;
+  hoisted.selectRunStepToolPolicy.mockReset();
+  hoisted.selectRunStepToolPolicy.mockImplementation(async (input: { contextId: string }) => ({
+    version: 1, contextId: input.contextId, source: "{}",
+    sourceSha256: "a".repeat(64), executedSourceSha256: "b".repeat(64), declarationSourceSha256: "c".repeat(64),
+  }));
+  hoisted.bindRunStepToolPolicy.mockReset();
+  hoisted.bindRunStepToolPolicy.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -344,3 +358,7 @@ describe("runAgentBuilderExecutionJob — side-effects gate", () => {
     expect(e.delayMs).toBe(30_000);
   });
 });
+
+// cinatra#3745: the canonical first dispatch's source binding and its fence key are pinned in
+// execution-first-dispatch-binds-source-3745.test.ts, whose mocks reach the send without a database.
+// This file does not reach it: the fire-time scope recheck reads agent_templates first.

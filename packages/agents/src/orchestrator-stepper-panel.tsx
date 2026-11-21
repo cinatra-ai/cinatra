@@ -25,10 +25,14 @@
 import {
   useCallback,
   useEffect,
+  useInsertionEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   useTransition,
+  type ComponentType,
   type ReactElement,
   type ReactNode,
 } from "react";
@@ -68,7 +72,7 @@ import { LoadingSpinner } from "@cinatra-ai/sdk-ui";
 
 import { classifyMidRunHitl } from "./orchestrator-mid-run-hitl";
 import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
-import { HitlConversationPanel } from "./hitl-conversation-panel";
+import { useRunWindowScreen } from "./run-window-screen-context";
 import { useRunWindowConversation } from "./use-run-window-conversation";
 import { useAgUiRunStream } from "./use-ag-ui-run-stream";
 import {
@@ -80,6 +84,7 @@ import { RunCompletionCard } from "./run-completion-affordances";
 import {
   LifecycleCardSurfaceProvider,
   defaultRunReviewSlotReader,
+  markedReviewGateCard,
   useRunReviewSlot,
   useRunReviewRailRefresh,
   type RunReviewSlot,
@@ -98,6 +103,7 @@ import {
 } from "./review-gate-card";
 import { ensureOrCheckRunNameAction } from "./run-name-actions";
 import { approveReviewTask } from "./hitl-actions";
+import { GateContinueHoldContext, RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
 // Wrap the legacy `userResponse` text with the WayFlow `user_envelope`
 // shape when paperclip attachments are pending. Refs persist attachments
 // captured at Suggest time; consumed at gate Continue.
@@ -107,15 +113,23 @@ import { applyAttachmentEnvelope } from "./attachment-envelope-payload";
 // #817 context-selector envelope synthesis are shared with
 // agentic-run-panel so both surfaces submit byte-identical payloads.
 import {
+  applyRendererApprovalNote,
+  createGateValidityStore,
+  buildSchemaFieldGatePayload,
+  gateAwaitsRendererValue,
   hitlRendererFieldName,
   isAlreadyResolvedError,
+  hitlGateIdentityKey,
   isGroupedSetupRenderer,
   isSetupGateTaskId,
   liftRendererApprovalNote,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
+  withDeclaredRendererValues,
   wrapPrimitiveSetupPayload,
+  type GateValidityStore,
+  readSchemaFieldGate,
 } from "./hitl-gate-submit";
 // `resolveFieldLabel` joins it for cinatra#3532 fix leg 3: the answered step
 // reads back under the SAME label the field was asked under, and it comes from
@@ -135,8 +149,8 @@ import {
 } from "./run-surface-status";
 import { useRunRowWatch } from "./use-run-row-watch";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
-import { fieldRendererRegistry } from "./field-renderer-registry";
-import type { FieldRendererContext } from "./field-renderer-registry";
+import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
+import type { FieldRendererContext, FieldRendererProps } from "./field-renderer-registry";
 import {
   ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
@@ -151,6 +165,7 @@ import {
   RUN_PAGE_RAIL_ROW_CLASS,
   RUN_PAGE_RAIL_SEP_CLASS,
   RUN_PAGE_RAIL_TITLE_COLOUR_CLASS,
+  splitRailExtrasAtSpine,
   useRunSurfaceRailFrame,
 } from "./run-step-rail-extra-entry";
 
@@ -490,19 +505,48 @@ function ReviewGateStepCard({
   );
 }
 
+/**
+ * Draws a gate's renderer so that its validity reports (cinatra#3562, see
+ * `GateValidityStore`) are its own: the renderer reports under an owner that
+ * lives as long as it does, and the release drops only that owner's report.
+ * Another renderer in its place gets a new owner. The owner is attached and
+ * released in a layout effect: a renderer's own layout effects run first, so a
+ * report it makes at mount is kept and counts at the attach, in the same commit.
+ */
+function GateValidityOwner({
+  renderer: Renderer,
+  store,
+  gateKey,
+  ...props
+}: FieldRendererProps & {
+  renderer: ComponentType<FieldRendererProps>;
+  store: GateValidityStore;
+  gateKey: string;
+}): ReactElement {
+  const [owner, setOwner] = useState(() => ({ renderer: Renderer }));
+  if (owner.renderer !== Renderer) setOwner({ renderer: Renderer });
+  useLayoutEffect(() => {
+    store.attach(owner);
+    return () => store.release(owner);
+  }, [store, owner]);
+  return <Renderer {...props} onValidityChange={(valid) => store.report(owner, gateKey, valid)} />;
+}
+
 // THE IDENTITY OF ONE SETUP GATE (cinatra#3532). Sequential setup gates share
 // one xRenderer and arrive with no frame between them, so the renderer alone
 // cannot tell one question from the next: the identity is the review task, the
 // renderer and the field together. Defined once here because BOTH halves of the
 // press road read it — the card, which stages and sends an answer for exactly
 // one gate, and the panel, which holds the answered gate while it re-reads the
-// run (fix leg 3).
+// run (fix leg 3). The encoding is `hitlGateIdentityKey`, the one gate key of
+// every run surface, which is injective (cinatra#3380, cinatra#3562): a
+// separator join let two gates share one identity.
 function setupGateIdentity(gate: {
   reviewTaskId: string;
   xRenderer: string;
   fieldName?: string;
 }): string {
-  return [gate.reviewTaskId, gate.xRenderer, gate.fieldName ?? ""].join("::");
+  return hitlGateIdentityKey(gate);
 }
 
 // ---------------------------------------------------------------------------
@@ -523,6 +567,7 @@ function setupGateIdentity(gate: {
 function SetupFieldContinue({
   submitting,
   alreadySent,
+  blocked,
   onContinue,
 }: {
   submitting: boolean;
@@ -530,6 +575,7 @@ function SetupFieldContinue({
   // The control stays drawn until the stream advances the card, but it is dead:
   // a second press must never send the same approval twice.
   alreadySent: boolean;
+  blocked: boolean;
   onContinue: () => Promise<void>;
 }): ReactElement {
   // ONE PRESS IS ONE DRAWN STATE (cinatra#3532, fix leg 3). The control was
@@ -544,7 +590,7 @@ function SetupFieldContinue({
         size="sm"
         className="gap-1.5"
         data-action="submit-hitl-screen"
-        disabled={busy}
+        disabled={busy || blocked}
         onClick={() => void onContinue()}
       >
         {busy ? "Continuing…" : "Continue"}
@@ -711,32 +757,57 @@ function HitlApprovalCard({
   // sequential per-field setup gates all reuse the SAME xRenderer
   // (schema-field-fallback), so an xRenderer-only key never fires on a
   // field→field advance (postTitle → blogPostUrl) and field 1's buffered
-  // value bleeds into field 2. fieldName is undefined outside the setup loop,
-  // so non-setup gate transitions keep their existing xRenderer-only behavior.
-  const prevBufferKeyRef = useRef<string | null>(null);
+  // value bleeds into field 2. A pick made for one gate must not read as the
+  // next gate's answer either (cinatra#3035).
+  //
+  // The key is the gate's identity, `hitlGateIdentityKey` (the one gate key of
+  // this panel; `setupGateIdentity` reads it too). The review task is part of
+  // it (cinatra#3380, cinatra#3562): a mid-run gate carries no fieldName and
+  // can repeat its renderer, and a gate of another review task with the same
+  // renderer and field (a mid-run list step has no field) starts with an empty
+  // buffer, so its Continue never approves it with the earlier task's pick.
+  //
+  // THE RESET IS DONE IN RENDER, not after it (cinatra#3380, cinatra#3562): a
+  // state update of this component during its own render. The next gate's
+  // renderer can write its answer from a layout effect when it mounts (a list
+  // with nothing to pick answers with a no-pick value), and a reset after the
+  // commit would wipe that write and hold the Continue with nothing to press;
+  // a renderer also seeds its own state from the first `value` it is given, so
+  // a reset after that render would come too late. The previous key is kept
+  // only for non-null keys, so a transient null changes nothing.
   const bufferKey =
-    interruptContext != null
-      ? `${interruptContext.xRenderer}::${interruptContext.fieldName ?? ""}`
-      : null;
-  if (
-    bufferKey !== null &&
-    prevBufferKeyRef.current !== null &&
-    prevBufferKeyRef.current !== bufferKey
-  ) {
+    interruptContext != null ? hitlGateIdentityKey(interruptContext) : null;
+  // cinatra#3035: the mounted gate renderer reports here when it settles on the
+  // floor, for this gate only: a later gate reads its own hold from its first frame.
+  const [rendererFloored, setRendererFloored] = useGateRendererFloor(bufferKey);
+  const [prevBufferKey, setPrevBufferKey] = useState<string | null>(null);
+  if (bufferKey !== null && bufferKey !== prevBufferKey) {
+    setPrevBufferKey(bufferKey);
     // Real gate→gate transition — clear the previous gate's buffer.
-    if (Object.keys(bufferedHitlValue).length > 0) {
-      queueMicrotask(() => setBufferedHitlValue({}));
+    if (prevBufferKey !== null && Object.keys(bufferedHitlValue).length > 0) {
+      setBufferedHitlValue({});
     }
   }
-  // Advance the ref only on non-null keys so a transient null doesn't
-  // poison the next real comparison.
-  if (bufferKey !== null) {
-    prevBufferKeyRef.current = bufferKey;
-  }
+  // THE GATE ON SCREEN, AS OF THE LAST COMMIT (cinatra#3380). A renderer that has
+  // been replaced can still call its `onChange` after an await, and the buffer is
+  // the gate on screen's: such a write is no answer to it. Each renderer's
+  // `onChange` carries the gate it was drawn for and is compared with this. It is
+  // set in an insertion effect, which runs in the commit before every layout
+  // effect, so the next gate's renderer, writing from its own layout effect when
+  // it mounts, already reads its own gate here. A null flicker does not move it,
+  // for the reason above.
+  const liveBufferKeyRef = useRef<string | null>(bufferKey);
+  useInsertionEffect(() => {
+    if (bufferKey !== null) liveBufferKeyRef.current = bufferKey;
+  }, [bufferKey]);
+  const isGateOnScreen = useCallback(
+    (forGate: string) => liveBufferKeyRef.current === forGate,
+    [],
+  );
 
   // The block belongs to ONE gate, so it is released on GATE IDENTITY — the
-  // review-task id — and not on the buffer key above (cinatra#3219 convergence).
-  // The buffer key is `xRenderer::fieldName`, which a following gate can repeat
+  // review-task id alone (cinatra#3219 convergence). An
+  // `xRenderer::fieldName` key is one a following gate can repeat
   // exactly: a mid-run WayFlow gate carries no fieldName and often reuses its
   // renderer, so a blocked panel keyed that way would cover a gate that is
   // genuinely open, with no way back but a full reload.
@@ -794,7 +865,6 @@ function HitlApprovalCard({
   // drawing puts it under the step's own work, in the same column, so the target
   // is a node rendered exactly there: the composition
   // `schedule-prompt-window.tsx` already uses.
-  const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
   // Stable suggestion payload threaded into the renderer so it can sync local
   // state via useEffect([aiSuggestions]). Only changes when the user submits
   // the bottom prompt — not on every poll tick.
@@ -873,6 +943,14 @@ function HitlApprovalCard({
   const isGroupedSetup = isGroupedSetupRenderer(interruptContext.xRenderer, {
     includeSetupFormSuffix: true,
   });
+  // cinatra#3380 — a mid-run gate that declares a value its renderer must
+  // produce (`hitl-gate-submit.ts`) keeps its outer Continue unavailable
+  // until the renderer has written one. A gate that declares none is held by
+  // nothing.
+  const continueAwaitsRendererValue =
+    isMidRunHitl && gateAwaitsRendererValue(renderSchema, bufferedHitlValue);
+  // The gate this card's renderer is drawn for (cinatra#3380).
+  const rendererGateKey = hitlGateIdentityKey(interruptContext);
 
   // Bottom-of-page prompt handler. Sends the message on the ONE ROAD and applies
   // the fill that comes back to the
@@ -941,8 +1019,39 @@ function HitlApprovalCard({
     return true;
   };
 
+  // THE GATE A STAGED ANSWER BELONGS TO, and to no other. Sequential setup
+  // gates share one xRenderer and arrive with no frame between them (the same
+  // reason the renderer's remount key carries the field name, #810), so an
+  // answer staged for one field must never be sent for the next question.
+  const setupGateKey = setupGateIdentity(interruptContext);
+  // THE RENDERER'S OWN READING OF ITS VALUE (cinatra#3562). A renderer may
+  // report through `onValidityChange` that what it holds may not be sent (a
+  // list step with nothing ticked); each renderer's latest report is kept with
+  // its gate, by the gate's identity. While a report for the gate on screen is
+  // `false`, the Continue drawn for it (the setup field's or the mid-run one)
+  // is unavailable and a press sends nothing. A renderer that never reports
+  // blocks nothing, so no undeclared reason ever stops a reader (cinatra#3532).
+  // A report is released with the renderer that made it (`GateValidityOwner`).
+  // The drawn control subscribes to the store; the press reads it in the same
+  // turn, and every send reads it again after the last thing it awaits (the
+  // run-name check, a renderer flush) and right before it sends, so a report
+  // made while the press waited stops the send too. A renderer's own submit
+  // and a grouped form's submit are held the same way.
+  const [gateValidity] = useState(createGateValidityStore);
+  const gateReportedInvalid = useSyncExternalStore(
+    gateValidity.subscribe,
+    () => gateValidity.isHeld(setupGateKey),
+    () => false,
+  );
+
   const handleContinue = async () => {
+    // Reported unsendable (see `gateValidity`): the press sends nothing, before
+    // the run-name check and the optimistic spinner below.
+    if (gateValidity.isHeld(setupGateKey)) return;
     if (!(await checkRunName())) return;
+    // …and again after the run-name check: a report made while it was pending
+    // holds this press too. Nothing below awaits before the send.
+    if (gateValidity.isHeld(setupGateKey)) return;
     // Optimistically switch to SpinnerCard right away — before the API call starts.
     // onApproveRejected rolls back if the call fails.
     onApproved?.();
@@ -960,13 +1069,19 @@ function HitlApprovalCard({
     // scrape-schema-review / final-list-review) — snapshot exactly what was
     // approved at this gate for the downstream continuation. Shared with
     // agentic-run-panel via ./hitl-gate-submit.
+    // A lifted list-step note is the resume text (cinatra#3562): the server
+    // sends a nonblank `userResponse` before the note, so the list step's
+    // lift removes any `userResponse` from the payload. The attachment
+    // envelope below wraps the note (`applyAttachmentEnvelope`).
     const approvalNoteLift = liftRendererApprovalNote(
       interruptContext.xRenderer,
       bufferedHitlValue,
     );
-    if (approvalNoteLift) {
-      nextBuffered = { ...nextBuffered, ...approvalNoteLift };
-    }
+    nextBuffered = applyRendererApprovalNote(
+      interruptContext.xRenderer,
+      nextBuffered,
+      approvalNoteLift,
+    );
     // #817: context-selector gate — synthesize the selection envelope when the
     // renderer emitted none (zero-candidate slot; /api/context-finalize would
     // 422 on the non-JSON value). A real toggle already set
@@ -993,6 +1108,12 @@ function HitlApprovalCard({
         nextBuffered,
         pendingAttachmentsRef.current,
       );
+    }
+    // cinatra#3380 — on a mid-run gate, a key the gate declares and the renderer
+    // wrote is sent as the renderer wrote it, over approved, approvedAt and every
+    // lift and wrap above.
+    if (isMidRunHitl) {
+      nextBuffered = withDeclaredRendererValues(renderSchema, bufferedHitlValue, nextBuffered);
     }
     let didApprove = false;
     try {
@@ -1050,10 +1171,34 @@ function HitlApprovalCard({
   // JSON box) and emits a REAL object, and suppressing it would leave an
   // object-typed setup field with no input at all, so the loop would re-emit
   // the same gate forever. Scope the guard to non-setup gates.
+  //
+  // AND NOT A GATE THAT DECLARES FIELDS OF ITS OWN (cinatra#4244). A WayFlow
+  // InputMessageNode with no renderer of its own reaches this card on the same
+  // fallback id with an object schema, but its schema DECLARES the fields it
+  // asks for ("Pick the brand voice" declares `brandVoice`). Read as a bare
+  // confirmation, its fields were never drawn: the card showed a Continue with
+  // nothing to fill in after a Continue (by reading, after a reload too) while
+  // the run waited for the answer. `readSchemaFieldGate` tells the three
+  // apart. Only a well-formed schema that declares no visible field is the
+  // bare confirmation. A gate that declares fields is drawn by the fallback
+  // from the reading's `renderSchema`, which owns its one Continue and holds it
+  // until the declared required values are written (design V.1), and it
+  // submits through `submitSchemaFieldGate` below. A MALFORMED schema fails
+  // closed: no renderer and no Continue, only the "no renderer configured"
+  // paragraph - an approval is never sent for a gate nobody could read.
+  const gateReading = readSchemaFieldGate(interruptContext.schema);
+  const onNonSetupFallbackGate =
+    interruptContext.xRenderer === SCHEMA_FIELD_FALLBACK_RENDERER_ID &&
+    !isSetupGateTaskId(interruptContext.reviewTaskId);
   const isGenericObjectSchema =
     interruptContext.xRenderer === SCHEMA_FIELD_FALLBACK_RENDERER_ID &&
     (interruptContext.schema as { type?: string })?.type === "object" &&
-    !isSetupGateTaskId(interruptContext.reviewTaskId);
+    !isSetupGateTaskId(interruptContext.reviewTaskId) &&
+    gateReading.kind === "bare";
+  const fallbackGateAsksForFields = onNonSetupFallbackGate && gateReading.kind === "fields";
+  const fallbackGateIsMalformed = onNonSetupFallbackGate && gateReading.kind === "malformed";
+  const fallbackGateRenderSchema =
+    fallbackGateAsksForFields && gateReading.kind === "fields" ? gateReading.renderSchema : null;
   // Keep the outer Continue button for last-step gates whose renderer doesn't
   // own a button, including the text-envelope branch in ReviewerAgentOutputRenderer
   // and schema-field-fallback when no renderer matches. The outer Continue is
@@ -1093,11 +1238,6 @@ function HitlApprovalCard({
     !isMidRunHitl &&
     !isGroupedSetup &&
     entry?.drawsOwnSubmit !== true;
-  // THE GATE A STAGED ANSWER BELONGS TO, and to no other. Sequential setup
-  // gates share one xRenderer and arrive with no frame between them (the same
-  // reason the renderer's remount key carries the field name, #810), so an
-  // answer staged for one field must never be sent for the next question.
-  const setupGateKey = setupGateIdentity(interruptContext);
   // WHAT THE FIELD SHOWS WHILE ITS ANSWER IS STAGED. A field renderer is
   // CONTROLLED by the `value` prop — CtaRenderer's textarea reads it and keeps
   // no state of its own — so a staging path that changed nothing here would
@@ -1177,10 +1317,53 @@ function HitlApprovalCard({
     }
   };
 
+  // THE SEND OF A NON-SETUP GATE WHOSE FIELDS THE FALLBACK DRAWS (cinatra#4244).
+  // The drawn object field owns the gate's one Continue and hands its answer
+  // here. The press is the same press the Continue-only card made for this
+  // gate: the run-name check, the parent's spinner while the run takes the
+  // answer, and the spinner released when the send is refused or fails. A
+  // failed send is told the way that card told it (a toast), because the
+  // field that pressed was unmounted behind the spinner. The payload is the
+  // approval with every declared answer in it (`buildSchemaFieldGatePayload`).
+  // ONE SEND PER GATE AT A TIME: the field sets its own `submitting` only after
+  // its flush, so two presses in one tick both reach here; the ref (keyed by
+  // the gate, so the next gate on this mounted card is never refused) turns
+  // the second away synchronously, as the setup press guard does.
+  const schemaGateSendRef = useRef<string | null>(null);
+  const submitSchemaFieldGate = async (next: unknown): Promise<void> => {
+    const gateKey = interruptContext.reviewTaskId;
+    if (schemaGateSendRef.current === gateKey) return;
+    schemaGateSendRef.current = gateKey;
+    try {
+      // Built BEFORE the press is taken: an answer JSON cannot carry (a number
+      // that is not finite) is refused here, the card stays, nothing is sent.
+      let gatePayload: Record<string, unknown>;
+      try {
+        gatePayload = buildSchemaFieldGatePayload({ schema: interruptContext.schema, next });
+      } catch {
+        toast.error("Could not continue this run.");
+        return;
+      }
+      if (!(await checkRunName())) return;
+      onApproved?.();
+      try {
+        const outcome = await submitSetupFieldPayload(gatePayload, undefined);
+        if (outcome === "blocked") onApproveRejected?.();
+      } catch {
+        onApproveRejected?.();
+        toast.error("Could not continue this run.");
+      }
+    } finally {
+      if (schemaGateSendRef.current === gateKey) schemaGateSendRef.current = null;
+    }
+  };
+
   // THE PRODUCT'S CONTINUE, PRESSED (cinatra#3532). It asks the field for its
   // value the way the renderer's own button would, then submits what the change
   // road staged — nothing more.
   const submitStagedSetupAnswer = async (key: string): Promise<void> => {
+    // Reported unsendable (see `gateValidity`): the press sends nothing.
+    if (gateValidity.isHeld(key)) return;
     // ONE PRESS AT A TIME, on a ref rather than the rendered `disabled` alone:
     // the flush is asynchronous and `isApproving` is React state, so two presses
     // in one tick would both reach the submit core.
@@ -1215,6 +1398,9 @@ function HitlApprovalCard({
       // resume on a submission that records nothing.)
       const staged = setupAnswerRef.current;
       if (staged === null || staged.key !== key) return;
+      // HELD AGAIN AFTER THE FLUSH (cinatra#3562): a report the renderer made
+      // while the flush above was awaited holds this press; nothing is sent.
+      if (gateValidity.isHeld(key)) return;
       try {
         const outcome = await submitSetupFieldPayload(
           staged.payload,
@@ -1268,19 +1454,57 @@ function HitlApprovalCard({
     }
   };
 
+  // THE SCREEN REGISTERS; THE PAGE OWNS THE WINDOW (cinatra#3487).
+  //
+  // The ruling of 2026-09-14: "every step screen, the review route and every
+  // lifecycle card stop mounting one". The step-by-step screen used to render a
+  // mount of its own below its card; it publishes instead, and the page's chrome
+  // draws the one window below this screen.
+  //
+  // REGISTERED ABOVE THE BLOCKED READING'S RETURN, which is what keeps this an
+  // unconditional hook — and the blocked reading is exactly a screen with
+  // nothing to manipulate, so it publishes `false` and the page draws no window.
+  useRunWindowScreen({
+    surface: "step-by-step",
+    runId: runId ?? null,
+    stepId: interruptContext.xRenderer ?? null,
+    gateRef: interruptContext.reviewTaskId ?? null,
+    canManipulate:
+      !gateBlocked &&
+      !isGenericObjectSchema &&
+      // cinatra#2933 — the run's access decides who sees the box.
+      canRespondInWindow !== false &&
+      !!templateId,
+    storageKey: `cinatra_hitl_assist_${templateId}_${interruptContext.xRenderer}`,
+    conversation: runWindow.entries,
+    promptPending: promptPending || runWindow.pending,
+    onSubmit: handlePromptSubmit,
+  });
+
   const cardBody = (
     <>
-        {RendererComponent && !isGenericObjectSchema ? (
-          <RendererComponent
+        {/* The renderer reports this gate's validity as its own. */}
+        {RendererComponent && !isGenericObjectSchema && !fallbackGateIsMalformed ? (
+          <GateContinueHoldContext.Provider value={fallbackGateAsksForFields}>
+          <RendererFloorReportContext.Provider value={setRendererFloored}>
+          <GateValidityOwner
+            renderer={RendererComponent}
+            store={gateValidity}
+            gateKey={setupGateKey}
             // Keyed by xRenderer AND fieldName (#810): per-field setup gates
             // share one xRenderer, and the setup loop advances fields without
             // any RUN_STARTED/RESUME frame in between, so the card never
             // unmounts. Without fieldName in the key the renderer (and its
             // internal input state, e.g. SchemaFieldRenderer's localValue)
             // survives the field advance and the previous field's typed text
-            // pre-fills the next field. fieldName is undefined for non-setup
-            // interrupts, so those keep the existing xRenderer-keyed identity.
-            key={`${interruptContext.xRenderer}::${interruptContext.fieldName ?? ""}`}
+            // pre-fills the next field. The key is the gate's identity,
+            // `hitlGateIdentityKey`, through `setupGateIdentity`: the review
+            // task is in it (cinatra#3380, a mid-run gate can repeat its
+            // renderer; cinatra#3035, a later gate's renderer starts with no
+            // pick; cinatra#3562, a gate of another review task with the
+            // same renderer and field gets a new renderer and a new validity
+            // owner, never the one that reported on the gate before it).
+            key={setupGateKey}
             // The gate's REAL field identity (cinatra#2541). `fieldName` is what
             // the renderer labels itself from (resolveFieldLabel) and ids its
             // input with, so the hardcoded placeholder that used to sit here
@@ -1290,7 +1514,9 @@ function HitlApprovalCard({
             // through hitlRendererFieldName, which falls back to the placeholder
             // only for interrupts that genuinely carry no field name.
             fieldName={hitlRendererFieldName(interruptContext.fieldName)}
-            schema={renderSchema}
+            // A gate that declares fields is drawn from its reading's schema
+            // (cinatra#4244): no bookkeeping keys, required values folded in.
+            schema={fallbackGateRenderSchema ?? renderSchema}
             // An OBJECT-typed setup field gets its OWN value, not the whole
             // values envelope (cinatra#2484) — see setupFieldRendererValue.
             // The staged draft is this field's own reading while it waits for
@@ -1318,10 +1544,20 @@ function HitlApprovalCard({
                     if (next && typeof next === "object" && !Array.isArray(next)) {
                       const newValues = next as Record<string, unknown>;
                       nextBuffered = { ...bufferedHitlValue, ...newValues };
-                      setBufferedHitlValue(nextBuffered); // visual update
+                      // A renderer that has been replaced writes for a gate that
+                      // is gone (cinatra#3380): the buffer is the gate on
+                      // screen's, so that write does not reach it.
+                      if (isGateOnScreen(rendererGateKey)) {
+                        setBufferedHitlValue(nextBuffered); // visual update
+                      }
                     }
                     if (isGroupedSetup) {
+                      // Held (cinatra#3562): the form's own submit sends
+                      // nothing while its report is `false`, read before and
+                      // again after the run-name check.
+                      if (gateValidity.isHeld(setupGateKey)) return;
                       if (!(await checkRunName())) return;
+                      if (gateValidity.isHeld(setupGateKey)) return;
                       onApproved?.();
                       try {
                         let approvalPayload: Record<string, unknown> = {
@@ -1366,6 +1602,13 @@ function HitlApprovalCard({
                     }
                   }
                 : async (next: unknown) => {
+                    // cinatra#4244 - a non-setup gate whose declared fields the
+                    // fallback draws is answered as an approval, never through
+                    // the setup-loop wrap below.
+                    if (fallbackGateAsksForFields) {
+                      await submitSchemaFieldGate(next);
+                      return;
+                    }
                     // Setup-loop fallback path. The SchemaFieldRenderer for
                     // primitive types (string, number, array, boolean) emits
                     // onChange(primitive). The approveReviewTask handler's
@@ -1402,12 +1645,20 @@ function HitlApprovalCard({
                       setSetupDraft({ key: setupGateKey, value: next });
                       return;
                     }
+                    // A renderer that draws its own submit, or a grouped form
+                    // (cinatra#3562): its own press sends nothing while its
+                    // report is `false`.
+                    if (gateValidity.isHeld(setupGateKey)) return;
                     await submitSetupFieldPayload(payload, payloadFieldName);
                   }
             }
             context={context}
             mode="edit"
-            onApply={handleApply}
+            // A suggestion applied by a replaced renderer is no answer to the
+            // gate on screen either (cinatra#3380).
+            onApply={(suggestions: Record<string, unknown>) => {
+              if (isGateOnScreen(rendererGateKey)) handleApply(suggestions);
+            }}
             aiSuggestions={aiSuggestions}
             onHitlContextChange={handleHitlContextChange}
             // cinatra#3532 — where the product owns the send, the renderer's own
@@ -1431,6 +1682,8 @@ function HitlApprovalCard({
                 : undefined
             }
           />
+          </RendererFloorReportContext.Provider>
+          </GateContinueHoldContext.Provider>
         ) : !isGenericObjectSchema ? (
           <p className="text-sm text-muted-foreground">
             Waiting for input — no renderer configured for this step.
@@ -1446,13 +1699,30 @@ function HitlApprovalCard({
           <SetupFieldContinue
             submitting={isApproving}
             alreadySent={setupSentKey === setupGateKey}
+            blocked={gateReportedInvalid}
             onContinue={() => submitStagedSetupAnswer(setupGateKey)}
           />
         ) : null}
 
         {showContinueButton && (
           <div className="flex justify-end pt-2 border-t border-line">
-            <Button size="sm" disabled={isApproving} onClick={handleContinue} className="gap-1.5">
+            {/* cinatra#3380: held while the gate's declared renderer value is unwritten.
+                cinatra#3035: held while a gate whose kind declares the hold has no pick. */}
+            <Button
+              size="sm"
+              // Unavailable while the gate's renderer reports its value
+              // unsendable (cinatra#3562), while the gate's declared renderer
+              // value is unwritten (cinatra#3380), or while a gate whose kind
+              // declares the hold has no pick (cinatra#3035).
+              disabled={
+                isApproving ||
+                gateReportedInvalid ||
+                continueAwaitsRendererValue ||
+                (!rendererFloored && continueAwaitsAPick(entry, bufferedHitlValue))
+              }
+              onClick={handleContinue}
+              className="gap-1.5"
+            >
               {isApproving ? "Continuing…" : "Continue"}
               <ArrowRight className="h-3.5 w-3.5" />
             </Button>
@@ -1478,40 +1748,9 @@ function HitlApprovalCard({
     <Card data-hitl-output={isOutputHitl ? "true" : undefined}>
       <CardContent className="flex flex-col gap-4 p-6">{cardBody}</CardContent>
     </Card>
-    {/* The AI-assist conversation panel, drawn into its own mount below the
-        step's work rather than across the foot of the frame. Delegates to the
-        shared HitlConversationPanel. resetSignal is intentionally omitted —
-        orchestrator-stepper-panel never had a renderer-change reset (no
-        equivalent of agentic-run-panel.tsx:329). */}
-    <div data-run-prompt-window-mount="" ref={setPortalTarget}>
-    <HitlConversationPanel
-      portalTarget={portalTarget}
-      // WHICH READING OF THE ONE WINDOW THIS IS (design `458fb7ffce6c`,
-      // `app-artifact-review.html` §X): the mount names its surface and the
-      // window reads the drawing's own sentence for it.
-      surface="step-by-step"
-      visible={
-        !isGenericObjectSchema &&
-        // cinatra#2933 — the run's access decides who sees the box.
-        canRespondInWindow !== false &&
-        !!templateId &&
-        !!portalTarget
-      }
-      conversation={runWindow.entries}
-      promptPending={promptPending || runWindow.pending}
-      // THE KEY DOES NOT MOVE (cinatra#2934). The field-assist route it was
-      // named for is gone, but this string is where every reader's half-typed
-      // message is kept: renaming it would silently throw away the draft the
-      // plan requires to survive a reload.
-      storageKey={`cinatra_hitl_assist_${templateId}_${interruptContext.xRenderer}`}
-      onSubmit={handlePromptSubmit}
-      // NO LEADING CONTROL, ON ANY READING (cinatra#3222). The ratified
-      // drawing's §X names the window's parts — the panel, the field, the send
-      // control, the placement, the access rule — and a leading control is not
-      // among them: "Nothing else about the window changes from one reading to
-      // the next." This mount used to opt the field into one; no reading does.
-    />
-    </div>
+    {/* NO WINDOW HERE (cinatra#3487): the page's chrome draws the one window
+        below this screen; this screen registered what it is and what it lends
+        above. */}
     </>
   );
 }
@@ -1705,6 +1944,10 @@ function StepperColumn({
   // a second `data-run-step-rail` in the DOM — the very defect this closes.
   if (stepperSteps.length === 0 && railExtras.length === 0) return null;
 
+  // A review gate that stands in a declared step's place is drawn THERE, with
+  // its verification after it; only the rest trail the spine (cinatra#3035).
+  const { onSpine, trailing } = splitRailExtrasAtSpine(railExtras);
+
   return (
     <TooltipProvider>
       <div
@@ -1724,7 +1967,42 @@ function StepperColumn({
               const isActive = s.index === activeStep;
               const isCompleted = s.index < activeStep;
               const isLoading = isActive && (isLoadingStatus || isResuming);
-              const isLast = i === stepperSteps.length - 1 && railExtras.length === 0;
+              const isLast = i === stepperSteps.length - 1 && trailing.length === 0;
+              const inPlace = onSpine.filter((entry) => entry.onStep === s.stepNumber);
+              if (inPlace.length > 0) {
+                // ONE LIVE ROW PER STEP (cinatra#3035). Several gates may stand
+                // in one step's place (one pause opens one gate per artifact,
+                // all pending at first). Only the step's first unsettled entry
+                // takes the step's own value, so it alone can be the active row,
+                // as on the run-frame rail; every other entry takes a value of
+                // its own a fraction past the step, so no two rows share a
+                // value, and the one the run is past reads completed and the one
+                // still to come reads inactive.
+                const current = inPlace.findIndex(
+                  (entry) => entry.status !== "resolved" && entry.status !== "completed",
+                );
+                return inPlace.map((entry, j) => (
+                  <StepperItem
+                    key={entry.key}
+                    step={j === current ? s.index : s.index + (j + 1) / (inPlace.length + 1)}
+                    completed={
+                      entry.status === "resolved" ||
+                      entry.status === "completed" ||
+                      s.index < activeStep
+                    }
+                    className="items-start !flex-none"
+                  >
+                    <RailExtraEntry
+                      entry={entry}
+                      reviewHrefBase={reviewHrefBase}
+                      displayStep={s.index}
+                    />
+                    {!(isLast && j === inPlace.length - 1) && (
+                      <StepperSeparator className={RUN_PAGE_RAIL_SEP_CLASS} />
+                    )}
+                  </StepperItem>
+                ));
+              }
               const showPauseIcon = isPaused && !isCompleted && !isResuming;
               // The replay affordance this row actually carries — asserted by
               // the single-rail regression test (cinatra#2739).
@@ -1820,9 +2098,9 @@ function StepperColumn({
                 render here through the shared `RailExtraEntry`, which is why
                 retiring that second mount loses nothing. They trail the spine
                 in the exact order `buildRunStepRail` sorted them into. */}
-            {railExtras.map((entry, i) => {
+            {trailing.map((entry, i) => {
               const displayStep = stepperSteps.length + i + 1;
-              const isLast = i === railExtras.length - 1;
+              const isLast = i === trailing.length - 1;
               return (
                 <StepperItem
                   key={entry.key}
@@ -2258,7 +2536,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   // the last frame left, which is the gate that was just answered.
   //
   // THE ROAD IS THE ONE `agentic-run-panel.tsx` ALREADY TAKES, mirrored here:
-  // that surface holds the answered gate (`justSubmittedXRendererRef`, armed by
+  // that surface holds the answered gate (`answeredGateLedgerRef`, armed by
   // its own gate submit) and re-reads the run on a tick (`refetchDerivedContext`
   // on its 5s pending-approval schedule), through the run's own read whose
   // `hitlContext` is the shared `HitlGateContext` shape.
@@ -2571,13 +2849,20 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     // the trailing rows below — is the one highlighted entry, and a rail with
     // nothing pending highlights none. The display indices are the rail's own:
     // the spine takes 1..N and the trailing rows continue from N+1.
+    // A gate standing in a spine step's place (cinatra#3035) is elected as that
+    // step; only the rest are trailing rows.
+    const { onSpine, trailing } = splitRailExtrasAtSpine(railExtras);
     return electRunRailActiveStep({
       status,
       currentStepNumber,
       awaitingNextStep,
       highestStepNumber: highestStepNumberRef.current,
       spine: stepperSteps,
-      railExtras,
+      railExtras: trailing,
+      spineGates: onSpine.flatMap((entry) => {
+        const step = stepperSteps.find((s) => s.stepNumber === entry.onStep);
+        return entry.kind === "gate" && step ? [{ index: step.index, status: entry.status }] : [];
+      }),
     });
   })();
 
@@ -2783,6 +3068,39 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   const parkedOnProducedReview =
     status === "pending_approval" &&
     (rowProducedReviewPark || reviewSlot.producedReviewPark === true);
+  // A MARKED GATE'S CARD, and its identity (cinatra#3035): of the interrupt's
+  // gate and the slot's gate of the same pause, the one not known to be resolved
+  // (`markedReviewGateCard`). The pause announced one interrupt for all of its
+  // gates, so after the gate it names is decided the interrupt names a decided
+  // gate while the run waits on the next; and the slot, a read on its own
+  // schedule, can be the older answer. The run rail's own resolved gates are the
+  // resolution this panel already reads, so the rule reads them too.
+  const railResolvedReviewTaskIds = useMemo(
+    () =>
+      new Set(
+        railExtras.flatMap((entry) =>
+          entry.kind === "gate" && entry.gate?.resolved === true ? [entry.gate.reviewTaskId] : [],
+        ),
+      ),
+    [railExtras],
+  );
+  const markedInterruptValues =
+    effectiveInterruptContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID
+      ? (effectiveInterruptContext.values ?? {})
+      : null;
+  const markedGate =
+    markedInterruptValues !== null
+      ? markedReviewGateCard({
+          interruptRef:
+            typeof markedInterruptValues.lifecycleCardRef === "string" &&
+            markedInterruptValues.lifecycleCardRef.length > 0
+              ? markedInterruptValues.lifecycleCardRef
+              : null,
+          interruptReviewTaskId: markedInterruptValues.reviewTaskId,
+          slot: reviewSlot,
+          resolvedReviewTaskIds: railResolvedReviewTaskIds,
+        })
+      : null;
   // Follow the card branch: the produced-output park wins over its spent
   // interrupt, and only a discovered card carries a stable rail identity.
   const reviewTaskId = parkedOnProducedReview
@@ -2791,10 +3109,8 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
       : null
     : status === "pending_approval" &&
     !awaitingNextStep &&
-    effectiveInterruptContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID
-      ? typeof effectiveInterruptContext.values?.reviewTaskId === "string"
-        ? effectiveInterruptContext.values.reviewTaskId
-        : null
+    markedGate !== null
+      ? markedGate.reviewTaskId
       : status === "completed"
         ? reviewSlot.reviewTaskId
         : null;
@@ -2805,6 +3121,29 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     railCurrentReviewTaskId: initialReviewGate?.railCurrentReviewTaskId,
     refresh: embedMode ? undefined : router.refresh,
   });
+
+  // cinatra#3035: INSIDE THE RUN FRAME THE RAIL IS SERVER-RENDERED, so a live
+  // advance to a gate this panel has not shown yet asks for one server render.
+  // The first gate a run shows here is the one the server drew, so it only
+  // seeds the set; the set is the run's own and starts again for another run.
+  // A review gate's refresh is the hook's above (#3942), which reads the
+  // server's own rail list; this asks only for the gates that hook does not
+  // read, so one advance asks for at most one render.
+  const liveGateTaskId = effectiveInterruptContext?.reviewTaskId ?? null;
+  const gatesShownRef = useRef<{ runId: string; shown: Set<string> | null }>({ runId, shown: null });
+  useEffect(() => {
+    if (gatesShownRef.current.runId !== runId) gatesShownRef.current = { runId, shown: null };
+    if (!railFrameDrawsTheRail || liveGateTaskId === null) return;
+    const seen = gatesShownRef.current;
+    if (seen.shown === null) {
+      seen.shown = new Set([liveGateTaskId]);
+      return;
+    }
+    if (seen.shown.has(liveGateTaskId)) return;
+    seen.shown.add(liveGateTaskId);
+    if (reviewTaskId != null) return;
+    router.refresh();
+  }, [railFrameDrawsTheRail, liveGateTaskId, reviewTaskId, router, runId]);
 
 
   // -------------------------------------------------------------------------
@@ -2940,11 +3279,8 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     // approval-form state, hook or submit path is constructed for a gate that
     // has no fields to fill.
     const reviewValues = effectiveInterruptContext.values ?? {};
-    const cardRef =
-      typeof reviewValues.lifecycleCardRef === "string" &&
-      reviewValues.lifecycleCardRef.length > 0
-        ? reviewValues.lifecycleCardRef
-        : null;
+    // The gate the run waits on now (cinatra#3035; `markedGate` above).
+    const cardRef = markedGate?.ref ?? null;
     const reviewSurfaceUrl =
       typeof reviewValues.reviewSurfaceUrl === "string" &&
       reviewValues.reviewSurfaceUrl.startsWith("/")

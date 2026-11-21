@@ -1,0 +1,290 @@
+{
+  "component_type": "Flow",
+  "id": "run-writes-dashboard-run-writes-dashboard",
+  "name": "run-writes-dashboard",
+  "description": "Deterministic no-LLM flow whose one step writes a dashboard through the passthrough as the run.",
+  "metadata": {
+    "cinatra": {
+      "packageName": "@cinatra-dashboard-fixture/run-writes-dashboard",
+      "packageVersion": "0.0.0",
+      "description": "Writes one dashboard as the run, so the dashboard names the run as its producer.",
+      "type": "flow"
+    }
+  },
+  "inputs": [
+    {
+      "description": "The run id the dispatcher injects.",
+      "title": "cinatra_run_id",
+      "type": "string",
+      "default": ""
+    },
+    {
+      "description": "The name of the dashboard the run writes.",
+      "title": "title",
+      "type": "string",
+      "default": "Run dashboard"
+    }
+  ],
+  "outputs": [
+    {
+      "description": "The id of the dashboard the run wrote.",
+      "title": "dashboardId",
+      "type": "string"
+    }
+  ],
+  "start_node": {
+    "$component_ref": "run-writes-dashboard-start"
+  },
+  "nodes": [
+    {
+      "$component_ref": "run-writes-dashboard-start"
+    },
+    {
+      "$component_ref": "run-writes-dashboard-write"
+    },
+    {
+      "$component_ref": "run-writes-dashboard-end"
+    }
+  ],
+  "control_flow_connections": [
+    {
+      "component_type": "ControlFlowEdge",
+      "id": "run-writes-dashboard-start->write",
+      "name": "start->write",
+      "description": "",
+      "metadata": {},
+      "from_node": {
+        "$component_ref": "run-writes-dashboard-start"
+      },
+      "from_branch": null,
+      "to_node": {
+        "$component_ref": "run-writes-dashboard-write"
+      }
+    },
+    {
+      "component_type": "ControlFlowEdge",
+      "id": "run-writes-dashboard-write->end",
+      "name": "write->end",
+      "description": "",
+      "metadata": {},
+      "from_node": {
+        "$component_ref": "run-writes-dashboard-write"
+      },
+      "from_branch": null,
+      "to_node": {
+        "$component_ref": "run-writes-dashboard-end"
+      }
+    }
+  ],
+  "data_flow_connections": [
+    {
+      "component_type": "DataFlowEdge",
+      "id": "run-writes-dashboard-run:start->write",
+      "name": "run:start->write",
+      "description": "",
+      "metadata": {},
+      "source_node": {
+        "$component_ref": "run-writes-dashboard-start"
+      },
+      "source_output": "cinatra_run_id",
+      "destination_node": {
+        "$component_ref": "run-writes-dashboard-write"
+      },
+      "destination_input": "agent_run_id"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "id": "run-writes-dashboard-title:start->write",
+      "name": "title:start->write",
+      "description": "",
+      "metadata": {},
+      "source_node": {
+        "$component_ref": "run-writes-dashboard-start"
+      },
+      "source_output": "title",
+      "destination_node": {
+        "$component_ref": "run-writes-dashboard-write"
+      },
+      "destination_input": "title"
+    },
+    {
+      "component_type": "DataFlowEdge",
+      "id": "run-writes-dashboard-dashboard:write->end",
+      "name": "dashboard:write->end",
+      "description": "",
+      "metadata": {},
+      "source_node": {
+        "$component_ref": "run-writes-dashboard-write"
+      },
+      "source_output": "dashboardId",
+      "destination_node": {
+        "$component_ref": "run-writes-dashboard-end"
+      },
+      "destination_input": "dashboardId"
+    }
+  ],
+  "$referenced_components": {
+    "run-writes-dashboard-start": {
+      "component_type": "StartNode",
+      "id": "run-writes-dashboard-start",
+      "name": "start",
+      "description": null,
+      "metadata": {
+        "cinatra": {
+          "required": [],
+          "hidden": [
+            "cinatra_run_id"
+          ]
+        }
+      },
+      "inputs": [
+        {
+          "description": "The run id the dispatcher injects.",
+          "title": "cinatra_run_id",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "description": "The name of the dashboard the run writes.",
+          "title": "title",
+          "type": "string",
+          "default": "Run dashboard"
+        }
+      ],
+      "outputs": [
+        {
+          "description": "The run id the dispatcher injects.",
+          "title": "cinatra_run_id",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "description": "The name of the dashboard the run writes.",
+          "title": "title",
+          "type": "string",
+          "default": "Run dashboard"
+        }
+      ],
+      "branches": [
+        "next"
+      ]
+    },
+    "run-writes-dashboard-write": {
+      "component_type": "ApiNode",
+      "id": "run-writes-dashboard-write",
+      "name": "write_dashboard",
+      "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+      "http_method": "POST",
+      "data": {
+        "tool": "dashboards_create",
+        "input": {
+          "name": "{{ title }}",
+          "ownerLevel": "user",
+          "ownerId": "me",
+          "config": {
+            "portlets": [
+              {
+                "id": "runs-by-agent",
+                "title": "Runs by agent",
+                "w": 6,
+                "h": 8,
+                "x": 0,
+                "y": 0,
+                "analysisConfig": {
+                  "version": 1,
+                  "analysisType": "query",
+                  "activeView": "chart",
+                  "charts": {
+                    "query": {
+                      "chartType": "bar",
+                      "chartConfig": {
+                        "xAxis": [
+                          "agent_runs.agent_name"
+                        ],
+                        "yAxis": [
+                          "agent_runs.count"
+                        ]
+                      },
+                      "displayConfig": {}
+                    }
+                  },
+                  "query": {
+                    "measures": [
+                      "agent_runs.count"
+                    ],
+                    "dimensions": [
+                      "agent_runs.agent_name"
+                    ],
+                    "order": {
+                      "agent_runs.count": "desc"
+                    },
+                    "limit": 5
+                  }
+                }
+              }
+            ],
+            "layoutMode": "grid",
+            "grid": {
+              "cols": 12,
+              "rowHeight": 50,
+              "minW": 3,
+              "minH": 4
+            }
+          }
+        },
+        "agent_run_id": "{{ agent_run_id }}"
+      },
+      "inputs": [
+        {
+          "title": "title",
+          "type": "string",
+          "default": ""
+        },
+        {
+          "title": "agent_run_id",
+          "type": "string",
+          "default": ""
+        }
+      ],
+      "outputs": [
+        {
+          "description": "The id of the dashboard the run wrote.",
+          "title": "dashboardId",
+          "type": "string"
+        }
+      ],
+      "metadata": {
+        "cinatra": {
+          "riskClass": "write",
+          "requiresApproval": false,
+          "packageName": "@cinatra-dashboard-fixture/run-writes-dashboard",
+          "description": "Writes one personal dashboard of the run's owner through the passthrough tool dashboards_create, as the run."
+        }
+      }
+    },
+    "run-writes-dashboard-end": {
+      "component_type": "EndNode",
+      "id": "run-writes-dashboard-end",
+      "name": "end",
+      "description": null,
+      "metadata": {},
+      "inputs": [
+        {
+          "description": "The id of the dashboard the run wrote.",
+          "title": "dashboardId",
+          "type": "string"
+        }
+      ],
+      "outputs": [
+        {
+          "description": "The id of the dashboard the run wrote.",
+          "title": "dashboardId",
+          "type": "string"
+        }
+      ],
+      "branches": [],
+      "branch_name": "next"
+    }
+  },
+  "agentspec_version": "26.1.0"
+}

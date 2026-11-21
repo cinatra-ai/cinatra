@@ -11,17 +11,16 @@
  * assertion below. Since version 0.13.0 (design@67ecd66d, cinatra#4388) the
  * dashboard's artifact page draws the dashboard extension's own display, so the
  * drawing no longer declares the two surfaces of the core pointer (the pointer
- * detail and its scope chips), and nothing below asserts them. The core pointer
- * component and its wiring stay until cinatra#4311: its done-when deletes
- * `src/app/artifacts/[id]/dashboard-pointer-detail.tsx` and leaves no
- * production source under `src` that names `DashboardPointerDetail`. The
- * routing test below holds that wiring until then.
+ * detail and its scope chips), and nothing below asserts them. cinatra#4311
+ * deletes the core pointer: `src/app/artifacts/[id]/dashboard-pointer-detail.tsx`
+ * is gone, no production source under `src` names `DashboardPointerDetail`, and
+ * the routing test below holds that the page draws no pointer on any road.
  * The repo runs vitest in node without @testing-library/react,
  * so server-component wiring is pinned via source assertions (the established
  * pattern — see `surface-conformance.test.ts`); the live bidirectional
  * Playwright walk on a production-equivalent build is the proof-at-close.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -90,23 +89,38 @@ describe("§VIII routing — library rows render as dashboard pointers, dual-aut
     expect(LIB).not.toMatch(/buildFacetOptions\(all\)/);
   });
 
-  it("the detail route opens a dashboard artifact as a POINTER, not the renderer", () => {
-    // The core pointer wiring the 0.12.0 drawing drew. Version 0.13.0 draws the
-    // dashboard extension's own display here instead. The done-when of
-    // cinatra#4311 deletes `src/app/artifacts/[id]/dashboard-pointer-detail.tsx`
-    // and leaves no production source under `src` that names
-    // `DashboardPointerDetail`, so the `<DashboardPointerDetail` assertion
-    // below cannot hold after that change.
-    expect(DETAIL).toMatch(/isDashboardArtifactType\(artifact\.objectType\)/);
-    expect(DETAIL).toMatch(/resolveDashboardArtifactPointer/);
-    expect(DETAIL).toMatch(/<DashboardPointerDetail/);
-    // The dashboard branch returns BEFORE the renderer-dispatch body runs — so
-    // a dashboard artifact never reaches `pickArtifactRenderer(...)` (the CALL,
-    // not the import).
-    const branchIdx = DETAIL.indexOf("isDashboardArtifactType(artifact.objectType)");
-    const dispatchCallIdx = DETAIL.indexOf("resolveArtifactDisplayMount(");
-    expect(branchIdx).toBeGreaterThan(-1);
-    expect(dispatchCallIdx).toBeGreaterThan(branchIdx);
+  it("the detail route dispatches every admitted row and draws no pointer on any road", () => {
+    // cinatra#3092 acceptance 2: "the page's pre-dispatch interception of the
+    // dashboard row is gone". The page carries no branch on the type and no
+    // pointer resolver (the type's read gate holds both), so a dashboard row
+    // reaches `resolveArtifactDisplayMount(...)` (the CALL, not the import)
+    // like every other. cinatra#4311 deletes the pointer: where the dispatch
+    // answers a floor, a dashboard row draws the generic floor like every other.
+    const code = DETAIL.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+    expect(code).not.toMatch(/isDashboardArtifactType/);
+    expect(code).not.toMatch(/resolveDashboardArtifactPointer/);
+    expect(code.indexOf("resolveArtifactDisplayMount(")).toBeGreaterThan(-1);
+    expect(code).not.toMatch(/dashboard-pointer-detail/);
+    expect(code).not.toMatch(/DashboardPointerDetail/);
+    expect(code).not.toMatch(/typeGate\.dashboardPointer/);
+    expect(code).not.toContain('"dashboard-pointer"');
+  });
+
+  it("the core pointer detail is deleted and no production source under src names it (cinatra#4311)", () => {
+    expect(existsSync(path.join(ROOT, "src/app/artifacts/[id]/dashboard-pointer-detail.tsx"))).toBe(false);
+    const naming: string[] = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name !== "__tests__" && entry.name !== "node_modules") walk(full);
+        } else if (/\.(ts|tsx|js|jsx|mjs|cjs)$/.test(entry.name) && !/\.(test|spec)\.[a-z]+$/.test(entry.name)) {
+          if (readFileSync(full, "utf8").includes("DashboardPointerDetail")) naming.push(path.relative(ROOT, full));
+        }
+      }
+    };
+    walk(path.join(ROOT, "src"));
+    expect(naming).toEqual([]);
   });
 });
 
