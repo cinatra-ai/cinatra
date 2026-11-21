@@ -144,10 +144,19 @@ vi.mock("@/components/page-header-title-sync", () => ({ PageHeaderTitleSync: () 
 vi.mock("@/components/crumb-contributions", () => ({ CrumbContributions: () => null }));
 
 import AgentRunReviewPage from "../page";
-import {
-  assertRunWindowOwnership,
-  readRunWindowOwnership,
-} from "../../../../../../../../../tests/e2e/design/conformance/run-window-ownership";
+import type * as RunWindowOwnershipModule from "../../../../../../../../../tests/e2e/design/conformance/run-window-ownership";
+// The module the fix adds is loaded inside the tests that use it, through a
+// specifier the transform does not resolve when it loads this file: before the
+// fix the file still loads and those tests fail on the missing module.
+// red-first-expect: Cannot find module '/tests/e2e/design/conformance/run-window-ownership'
+const RUN_WINDOW_OWNERSHIP = "../../../../../../../../../tests/e2e/design/conformance/run-window-ownership";
+let assertRunWindowOwnership!: typeof RunWindowOwnershipModule.assertRunWindowOwnership;
+let readRunWindowOwnership!: typeof RunWindowOwnershipModule.readRunWindowOwnership;
+async function loadRunWindowOwnership(): Promise<void> {
+  ({ assertRunWindowOwnership, readRunWindowOwnership } = (await import(
+    /* @vite-ignore */ RUN_WINDOW_OWNERSHIP
+  )) as typeof RunWindowOwnershipModule);
+}
 
 const READY = {
   kind: "ready",
@@ -232,6 +241,7 @@ describe("a run with no gate step keeps the window in the detail column (cinatra
 // the page carries no second window.
 describe("the design-conformance reading of the real review page (cinatra#3487 item 3)", () => {
   it("one run-window anchor, in the page chrome, none in a card, and no second window", async () => {
+    await loadRunWindowOwnership();
     const { container } = await mountPage();
     await settle();
 

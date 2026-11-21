@@ -470,15 +470,12 @@ describe("useLifecycleCardResolve across the renewal (pre-3 MUST-FIX 2)", () => 
 // The run-moment watch (pre-3 MUST-FIX 1 and 4)
 // ---------------------------------------------------------------------------
 
-// No review on either reading: the run is working, or at its schedule moment.
-const WORKING: RunMomentCard = { status: "running", moment: null, kind: null, ref: null, reviewRef: null, reviewAwaiting: false };
+const WORKING: RunMomentCard = { status: "running", moment: null, kind: null, ref: null };
 const AT_SCHEDULE: RunMomentCard = {
   status: "pending_trigger",
   moment: "schedule",
   kind: "trigger_schedule_proposal",
   ref: "sched-ref-4217",
-  reviewRef: null,
-  reviewAwaiting: false,
 };
 
 /**

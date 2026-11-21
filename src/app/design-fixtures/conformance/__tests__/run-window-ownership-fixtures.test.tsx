@@ -40,14 +40,36 @@ vi.mock("@/lib/mcp-server-write-actions", () => ({}));
 vi.mock("@/lib/generated/extensions.server", () => ({
   get STATIC_EXTENSION_MANIFEST() { throw new Error("Unexpected runtime install catalog read in static ownership fixture"); },
 }));
-import { RunWindowOwnershipFixture } from "../run-window-ownership-fixtures";
-import { OWNERSHIP_INPUT, OWNERSHIP_REVIEW_ANSWER, OWNERSHIP_REVIEW_VIEW } from "../run-window-ownership-fixture-data";
+import type * as OwnershipFixturesModule from "../run-window-ownership-fixtures";
+import type * as OwnershipDataModule from "../run-window-ownership-fixture-data";
 import { ConversationColumn, CHAT_THREAD_HOST } from "@cinatra-ai/chat/conversation-column";
 import type { PromptFieldHandle } from "@cinatra-ai/sdk-ui/prompt-field";
 import type { WidgetSubmitHandle } from "@cinatra-ai/sdk-ui/widget";
 import { createChatWidgetRuntime } from "../../../../../packages/chat/src/widget-runtime";
-import { readRunWindowOwnership, assertRunWindowOwnership } from "../../../../../tests/e2e/design/conformance/run-window-ownership";
+import type * as RunWindowOwnershipModule from "../../../../../tests/e2e/design/conformance/run-window-ownership";
 import { sendRunWindowTurn } from "../../../../../packages/agents/src/run-window-actions";
+// The modules the fix adds are loaded inside the tests that use them, through a
+// specifier the transform does not resolve when it loads this file: before the
+// fix the file still loads and those tests fail on the first missing module.
+// red-first-expect: Cannot find module '/src/app/design-fixtures/conformance/run-window-ownership-fixtures'
+const OWNERSHIP_FIXTURES = "../run-window-ownership-fixtures";
+const OWNERSHIP_DATA = "../run-window-ownership-fixture-data";
+const RUN_WINDOW_OWNERSHIP = "../../../../../tests/e2e/design/conformance/run-window-ownership";
+let RunWindowOwnershipFixture!: typeof OwnershipFixturesModule.RunWindowOwnershipFixture;
+let OWNERSHIP_INPUT!: typeof OwnershipDataModule.OWNERSHIP_INPUT;
+let OWNERSHIP_REVIEW_ANSWER!: typeof OwnershipDataModule.OWNERSHIP_REVIEW_ANSWER;
+let OWNERSHIP_REVIEW_VIEW!: typeof OwnershipDataModule.OWNERSHIP_REVIEW_VIEW;
+let readRunWindowOwnership!: typeof RunWindowOwnershipModule.readRunWindowOwnership;
+let assertRunWindowOwnership!: typeof RunWindowOwnershipModule.assertRunWindowOwnership;
+async function loadOwnership(): Promise<void> {
+  ({ RunWindowOwnershipFixture } = (await import(/* @vite-ignore */ OWNERSHIP_FIXTURES)) as typeof OwnershipFixturesModule);
+  ({ OWNERSHIP_INPUT, OWNERSHIP_REVIEW_ANSWER, OWNERSHIP_REVIEW_VIEW } = (await import(
+    /* @vite-ignore */ OWNERSHIP_DATA
+  )) as typeof OwnershipDataModule);
+  ({ readRunWindowOwnership, assertRunWindowOwnership } = (await import(
+    /* @vite-ignore */ RUN_WINDOW_OWNERSHIP
+  )) as typeof RunWindowOwnershipModule);
+}
 
 beforeEach(() => {
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
@@ -62,6 +84,7 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
 describe("#3487 required static fixtures mount the shipped hosts", () => {
   it.each(["run", "review", "chat"] as const)("%s owns exactly one page input and no card prompt", async (host) => {
+    await loadOwnership();
     const { container } = render(<RunWindowOwnershipFixture host={host} />);
     const root = container.querySelector<HTMLElement>('[data-run-window-ownership-host="' + host + '"]');
     if (root === null) throw new Error('Missing mounted ownership fixture root');
@@ -104,6 +127,7 @@ function ChatEditing() {
 }
 describe("#3487 the real chat message editor", () => {
   it("is drawn under its declared anchor, and chat's reading stays clean", async () => {
+    await loadOwnership();
     const { container } = render(<ChatEditing />);
     const root = container.querySelector<HTMLElement>('[data-run-window-ownership-host="chat"]')!;
     await waitFor(() => expect(root.querySelector("textarea[class*='resize-none']")).not.toBeNull(), { timeout: 10000 });
@@ -120,6 +144,7 @@ function fixtureNodes(node: React.ReactNode): React.ReactElement[] {
 }
 describe("the existing conformance route's query seam", () => {
   it.each(["run", "review", "chat"] as const)("the actual page selects the %s ownership mount", async (host) => {
+    await loadOwnership();
     const { default: page } = await import("../page");
     const result = await page({ searchParams: Promise.resolve({ runWindowHost: host }) });
     const mounts = fixtureNodes(result);
@@ -127,6 +152,7 @@ describe("the existing conformance route's query seam", () => {
     expect(mounts[0].props).toMatchObject({ host });
   });
   it("keeps the full default route for absent, invalid and multi-value queries", async () => {
+    await loadOwnership();
     const { default: page } = await import("../page");
     for (const value of [undefined, "unknown", ["run", "review"]]) {
       const result = await page({ searchParams: Promise.resolve({ runWindowHost: value }) });

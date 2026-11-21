@@ -55,7 +55,11 @@ const RUN_GATE_NOTIFICATION = readRepo("src/lib/agent-run-wait-notifications.ts"
 // keeps it and only its render site changes — the panel the chrome mounts, with
 // the card that used to carry it read for the road instead.
 const RUN_WINDOW_PANEL = readRepo("packages/agents/src/hitl-conversation-panel.tsx");
-const RUN_WINDOW_CHROME = readRepo("packages/agents/src/run-page-chrome.tsx");
+// The file the fix adds is read inside the tests that use it, not when this
+// file loads: before the fix the file still loads and those tests fail on the
+// missing file.
+// red-first-expect: no such file or directory, open
+const runWindowChrome = () => readRepo("packages/agents/src/run-page-chrome.tsx");
 const REVIEW_PROMPT_WINDOW = readRepo("packages/agents/src/review-gate-card.tsx");
 
 // cinatra#2566 (epic #2564 S2) — the decision bar, the gate states, and the
@@ -615,7 +619,7 @@ describe("§I–III — run-embedded anchors: the revised spec's closed set is r
   };
 
   it('spec→render: the spent schedule\'s disabled window carries the "run-window" anchor in the chrome (spec §I.6)', () => {
-    expect(RUN_WINDOW_CHROME.includes('data-conformance-id="run-window"')).toBe(true);
+    expect(runWindowChrome().includes('data-conformance-id="run-window"')).toBe(true);
   });
 
   for (const [id, src] of Object.entries(RUN_EMBEDDED_DOM_ANCHORS)) {
@@ -674,7 +678,7 @@ describe("§I–III — run-embedded anchors: the revised spec's closed set is r
       [RUN_STEP_RAIL, closed],
       [RUN_CHIP_ROW, closed],
       [RUN_WINDOW_PANEL, closed],
-      [RUN_WINDOW_CHROME, new Set<string>([...closed, ...SCHEDULE_WINDOW_IDS])],
+      [runWindowChrome(), new Set<string>([...closed, ...SCHEDULE_WINDOW_IDS])],
     ];
     for (const [src, allowed] of SITES) {
       for (const foundId of conformanceIdsIn(src)) {

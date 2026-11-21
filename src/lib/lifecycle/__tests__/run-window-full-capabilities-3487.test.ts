@@ -26,6 +26,19 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// Each test here pins what the composer and the run window share on the server,
+// which the fix keeps (it changes no server file): every one passes before the
+// fix and with it, so each is declared for the red-first check.
+// red-first-pin: the chat composer's own turn is the baseline
+// red-first-pin: run-page: the same tool exposure and capability set
+// red-first-pin: step-by-step: the same tool exposure and capability set
+// red-first-pin: schedule: the same tool exposure and capability set
+// red-first-pin: armed-trigger: the same tool exposure and capability set
+// red-first-pin: review: the same tool exposure and capability set
+// red-first-pin: a review screen with a bound card changes the world not at all
+// red-first-pin: the screen's context is ADDITIVE and nothing in the turn narrows the world
+// red-first-pin: every screen hands the runtime the same argument shape apart from the claim
+
 const RUN_ROW = {
   id: "run-3487",
   templateId: "t-1",

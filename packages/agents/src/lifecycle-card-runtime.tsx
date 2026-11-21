@@ -1737,7 +1737,7 @@ export type RunMomentCard = {
    * again: this is the same response, parsed once more, so no surface pays a
    * second request for an answer it already has.
    */
-  reviewRef: string | null;
+  reviewRef?: string | null;
   /**
    * AND WHETHER ONE IS STILL ON ITS WAY (convergence finding, cinatra#3080).
    *
@@ -1749,8 +1749,12 @@ export type RunMomentCard = {
    * moment later, and nothing asks this row again. Reading the run's OWN
    * "a review is still owed here" off the same answer is what keeps that road
    * from falling back into the defect.
+   *
+   * Both review fields are optional: a reading built without them (a card
+   * from before cinatra#3080, a test's fixed reading) draws no review, read
+   * fail-closed by `runMomentCardDrawsAReview`.
    */
-  reviewAwaiting: boolean;
+  reviewAwaiting?: boolean;
 };
 
 export const RUN_MOMENT_UNREAD: RunMomentCard = Object.freeze({
@@ -1888,7 +1892,7 @@ export function runMomentCardDrawsAReview(
 ): boolean {
   void ambientHost;
   return (
-    card.status === "completed" && (card.reviewRef !== null || card.reviewAwaiting)
+    card.status === "completed" && ((card.reviewRef ?? null) !== null || card.reviewAwaiting === true)
   );
 }
 
