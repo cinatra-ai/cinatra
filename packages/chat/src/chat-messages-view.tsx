@@ -76,6 +76,8 @@ import {
   AgentHitlScreenCard,
   type AgentHitlScreenCarry,
 } from "@cinatra-ai/agents/agent-hitl-screen-card";
+// The ONE renderer of `publish_decision` (cinatra#4150), by its own subpath for the same reason.
+import { PublishDecisionCard } from "@cinatra-ai/agents/publish-decision-card-view";
 // The turn's own register for the settled schedule card (cinatra#3174), reached
 // by the same subpath the host declaration is.
 import { SettledScheduleRegisterProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
@@ -771,6 +773,9 @@ function AgentRunTurnSlot({
   const hitlScreen = (
     <AgentHitlScreenCard runId={runId} wireRef={gateSignal} carrier={screenCarrier} />
   );
+  // THE PUBLISH CARD (cinatra#4150), an INTERRUPT like the screen above and mounted beside it, in the same placement:
+  // keyed by the run alone, it self-gates, so a run with no open publish decision draws nothing here.
+  const publishCard = <PublishDecisionCard runId={runId} />;
 
   // THE RUN-PROGRESS PANEL, written once for the same reason.
   const runPanel = (
@@ -907,6 +912,7 @@ function AgentRunTurnSlot({
           construction above for why the person's half-typed answer travels
           with it rather than living inside the instance that moves. */}
       {turnCarriesSettledSchedule ? null : hitlScreen}
+      {turnCarriesSettledSchedule ? null : publishCard}
       {/* THE RUN-PROGRESS PANEL IS NOT DRAWN FOR A SETTLED SCHEDULE CARD - AND
           IS NOT UNMOUNTED EITHER (cinatra#3174, criterion 1, as converged).
 
@@ -1031,7 +1037,7 @@ function AgentRunTurnSlot({
   if (!turnCarriesSettledSchedule) return turn;
   if (turnLevelSettledSchedule && scheduleTurn?.screenContainer) {
     return <>{turn}{createPortal(
-      <div data-agent-run-screen-slot={runId}>{hitlScreen}</div>,
+      <div data-agent-run-screen-slot={runId}>{hitlScreen}{publishCard}</div>,
       scheduleTurn.screenContainer,
       runId,
     )}</>;
@@ -1039,7 +1045,7 @@ function AgentRunTurnSlot({
   return (
     <>
       {turn}
-      <div data-agent-run-screen-slot={runId}>{hitlScreen}</div>
+      <div data-agent-run-screen-slot={runId}>{hitlScreen}{publishCard}</div>
     </>
   );
 }

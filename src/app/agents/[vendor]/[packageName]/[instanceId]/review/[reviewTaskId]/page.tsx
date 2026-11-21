@@ -60,6 +60,7 @@ import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/ren
 import { LifecycleCardSurfaceProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
 import { ReviewGateCard } from "@cinatra-ai/agents/review-gate-card";
 import { AgentHitlScreenCard } from "@cinatra-ai/agents/agent-hitl-screen-card";
+import { PublishDecisionCard } from "@cinatra-ai/agents/publish-decision-card-view";
 import { readRunTriggerByRunId } from "@cinatra-ai/agents/trigger-store";
 import { readRecommendationParkForRun } from "@cinatra-ai/agents/recommendation-hold";
 import { recommendationDecidedForRun } from "@cinatra-ai/agents/run-recommendation-core";
@@ -529,6 +530,9 @@ export default async function AgentRunReviewPage({
                   buys is that a reviewer who arrives while the run IS waiting
                   sees the question rather than a page that looks stalled. */}
               <AgentHitlScreenCard runId={runId} />
+              {/* THE PUBLISH CARD (cinatra#4150), on the same host by the same rule: keyed by the run alone, and a run
+                  with no open publish decision renders NOTHING here. */}
+              <PublishDecisionCard runId={runId} />
               {gateCardRef ? (
                 <ReviewGateCard
                   view={{

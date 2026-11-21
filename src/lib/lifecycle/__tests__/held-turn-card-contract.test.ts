@@ -308,7 +308,8 @@ describe("the per-kind table", () => {
     // `agent_hitl_screen` (cinatra#2928) parks it mid-flight while the agent
     // asks. Every other kind is a fire-and-forget DATA_PART with no tool of its
     // own to bind to.
-    const INTERRUPT_KINDS = ["recommendation_hold", "agent_hitl_screen"];
+    // `publish_decision` (cinatra#4150) stops it in front of a step it declares as publishing.
+    const INTERRUPT_KINDS = ["recommendation_hold", "agent_hitl_screen", "publish_decision"];
     for (const row of CHAT_THREAD_CARRIAGE_CONTRACT) {
       if (INTERRUPT_KINDS.includes(row.kind)) {
         expect(row.carriage).toBe("interrupt");

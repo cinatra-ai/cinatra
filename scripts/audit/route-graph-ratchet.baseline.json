@@ -3,7 +3,7 @@
   "routes": {
     "/sign-in": 165,
     "/api/mcp": 1331,
-    "/chat": 1436,
+    "/chat": 1441,
     "/api/a2a": 1339,
     "/api/llm-bridge": 1349
   },
@@ -27,10 +27,10 @@
       "pr": 4639
     },
     "/chat": {
-      "from": 1432,
-      "to": 1436,
-      "reason": "Issue 4264 slice B1b adds four core modules to this route: packages/agents/src/regenerate-segment.ts (the Regenerate segment planner, receipt and fence, imported by packages/agents/src/execution.ts, lifecycle-repair-dispatch-store.ts and wayflow-run-token-carrier.ts), and, reached only through its dynamic imports, packages/agents/src/installed-oas-path.ts, src/lib/install-profile.ts (imported by installed-oas-path.ts) and src/lib/artifacts/regenerate-provenance.ts. The other modules regenerate-segment.ts imports are already on the route (step-snapshots, platform-supplied-flow-inputs, lifecycle-repair-store, db, schema, agent-runtime-mount). Measured by the ratchet gate of this pull request at c05bd2372 with the extensions cloned: the route read +4 over the ceiling of main 03518eab8; the module names are read from the added import edges. Carried onto main after pull request 4538, whose ceiling for this route is 1430 (pull request 4538 added packages/agents/src/run-pause-claim.ts and packages/agents/src/run-resume-under-claim.ts, which import none of these four modules and which none of them imports): the same four modules raise it to 1434. Carried by the forward onto main after issue 4264 slice A1b (pull request 4637 on its record, merged as pull request 4732), whose ceiling for this route is 1432 (slice A1b added packages/agents/src/retained-regenerate.ts and packages/agents/src/mcp/agent-source-review-checks.ts, which import none of these four modules and which none of them imports): the same four modules raise it to 1436. Inferred from the disjoint import edges, not measured on the merged tree; the ratchet gate of this pull request at the forwarded head checks that count.",
-      "pr": 4639
+      "from": 1436,
+      "to": 1441,
+      "reason": "Issue 4150 (the publish card) mounts the card in the shared chat column beside the hitl screen, which adds five core modules to this route: the card (packages/agents/src/publish-decision-card-view.tsx), its state shape (publish-decision-card.ts), its session read action (publish-decision-card-actions.ts), the read it calls (publish-decision-card-core.ts) and the settled-outcome helper that read uses (src/lib/lifecycle/lifecycle-settled-outcome.ts). The card is the route's own surface, so the growth is accepted; it is additive and no module leaves the route. Measured with scripts/route-graph.mjs on the change's earlier base: that base read 1430 and the change read 1435. Carried onto main after pull request 4723 (issue 4264 slice B1b), whose ceiling for this route is 1436: the same five modules raise it to at most 1441. Not re-measured on the merged tree; the ceiling is an upper bound, and the ratchet gate of this pull request at its head checks the count.",
+      "pr": 0
     },
     "/sign-in": {
       "from": 164,

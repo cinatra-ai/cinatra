@@ -403,6 +403,16 @@ export const CARD_KINDS = {
         "recorded, not a photograph of it.",
     },
   },
+  // THE SIXTH KIND (cinatra#4150): the publish card, XV. It is drawn on every host, so every host is capturable. A
+  // pending card draws BOTH controls (disabled where the reader may not decide), and a settled card keeps its rows
+  // and drops both, with its marker below: a drawn reading, not an absence.
+  publish_decision: {
+    cellTokens: ["publish-card", "publish-decision"],
+    root: '[data-lifecycle-card="publish_decision"]',
+    decisionControls: ['[data-action="decline-publish -> declined"]', '[data-action="approve-publish -> released"]'],
+    // ALL OF THEM, not any one: a pending card that shows one control lost the other.
+    decisionControlsAllOf: true,
+  },
 };
 
 /**
@@ -660,6 +670,7 @@ export const KIND_CAPTURE_STATES = Object.freeze({
   // grading every kind. What is unusual about this kind is its settled
   // READING, not its settled state: `settledIsAbsence` above.
   agent_hitl_screen: CANONICAL_CAPTURE_STATES,
+  publish_decision: CANONICAL_CAPTURE_STATES,
   verification_summary: Object.freeze(["advisory"]),
 });
 
@@ -785,9 +796,12 @@ export function requiredAssertionsFor({ host, kind, state, cell = null }) {
        * differently. Every one of the 26 records on file observes all three, so
        * naming all three costs no truthful picture.
        */
+      // A kind that draws every control at once (`decisionControlsAllOf`) owes each
+      // one on its own, like a pre-redraw cell; any other kind keeps its any-of group.
+      const allOf = preRedraw || spec.decisionControlsAllOf === true;
       for (const sel of controls) {
         required.push(
-          preRedraw ? { selector: sel, scope: "root" } : { selector: sel, scope: "root", any: controls },
+          allOf ? { selector: sel, scope: "root" } : { selector: sel, scope: "root", any: controls },
         );
       }
     }

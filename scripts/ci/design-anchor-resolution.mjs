@@ -19,7 +19,7 @@
 // scripts/audit/lib/anchor-contract.mjs — the same third digest input the
 // acceptance gate recomputes, so a requirement that changed is a requirement
 // this check re-reads.
-// Eleven decided passive capture markers are accounted for separately: they
+// Twelve decided passive capture markers are accounted for separately: they
 // stay capture requirements, but make no claim about a drawn part. Every owner
 // anchor and every other capture selector still goes through the drawing check.
 //
@@ -75,7 +75,7 @@
 // No drawing text, no drawing path, no revision: the report is about this
 // repository's own recorded claims, and the drawings are not public.
 //
-// WHAT IT READS GREEN ON (cinatra#3677): all five recorded owner anchors
+// WHAT IT READS GREEN ON (cinatra#3677): all six recorded owner anchors
 // resolve at the pin the contract names. The four capture-origin controls that
 // stayed unresolved were a card's own buttons that no governed drawing draws
 // under the recorded value: the per-skill Confirm, Adjust and Skip, which the
@@ -335,7 +335,7 @@ export function resolvesIn(index, selector) {
 // The recorded anchors
 // ---------------------------------------------------------------------------
 
-// These eleven selectors identify where a capture reads, not a drawn part.
+// These twelve selectors identify where a capture reads, not a drawn part.
 // Their capture requirements remain in the recorder and in the anchor digest.
 // A visible card, field or control is never classified by a prefix: only the
 // decided marker forms, originating in the capture requirements, belong here.
@@ -351,6 +351,7 @@ const PASSIVE_CAPTURE_HOOKS = new Map([
   ['[data-lifecycle-card="agent_hitl_screen"]', "the input card's kind marker"],
   ['[data-lifecycle-card="artifact_review_gate"]', "the review card's kind marker"],
   ['[data-lifecycle-card="recommendation_hold"]', "the skills card's kind marker"],
+  ['[data-lifecycle-card="publish_decision"]', "the publish card's kind marker"],
 ]);
 
 /** Read the existing serialized selector/scope/expect/within/tier format.
