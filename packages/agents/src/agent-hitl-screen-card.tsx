@@ -147,6 +147,8 @@ import {
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
+  continueApprovalFlag,
+  continueHeldByRenderer,
   isSetupGateTaskId,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
@@ -921,7 +923,9 @@ function HitlContinueControl({
 }: {
   submitting: boolean;
   blocked: boolean;
-  /** The gate's renderer reports its value unsendable: inert, with no credential title. */
+  /** The gate's renderer reports its value unsendable, or holds the Continue
+   *  until its answer is complete (`FieldRendererEntry.continueReady`): drawn,
+   *  inert, with no credential title. */
   held?: boolean;
   awaitsPick?: boolean; // cinatra#3035: the gate's kind holds its Continue until a pick, as on the run page
   /** cinatra#3380 — the gate declares a value its renderer must produce and the
@@ -957,12 +961,16 @@ export function AgentHitlScreenContinue({
   buffered,
   submitting,
   blocked,
+  held = false,
   awaitsPick,
   onContinue,
 }: {
   gate: AgentHitlScreenGate;
   buffered: Record<string, unknown>;
   submitting: boolean;
+  /** The renderer's answer is not complete yet (a declared card with no
+   *  choice made, or a required value blank). */
+  held?: boolean;
   awaitsPick?: boolean;
   /** This host has NO identity to answer with — neither a cookie session nor a
    *  declared credential. The control is drawn and inert rather than firing a
@@ -974,6 +982,7 @@ export function AgentHitlScreenContinue({
     <HitlContinueControl
       submitting={submitting}
       blocked={blocked}
+      held={held}
       awaitsPick={awaitsPick}
       // cinatra#3380 — the same rule the run panel and the stepper apply to
       // their mid-run Continue (`hitl-gate-submit.ts`): a gate that declares
@@ -986,7 +995,7 @@ export function AgentHitlScreenContinue({
       onPress={async () => {
         let payload: Record<string, unknown> = {
           ...buffered,
-          approved: true,
+          approved: continueApprovalFlag(buffered),
           approvedAt: new Date().toISOString(),
         };
         if (!isSetupGateTaskId(gate.reviewTaskId)) {
@@ -1498,6 +1507,11 @@ export function AgentHitlScreenCard({
             gate={gate}
             buffered={activeBuffered}
             submitting={submitting}
+            held={continueHeldByRenderer(
+              resolveHitlGateEntry(runId, gate),
+              gate.currentValues,
+              activeBuffered,
+            )}
             blocked={(!cookieSession && auth === null) || withholdRenderer}
             awaitsPick={!rendererFloored && continueAwaitsAPick(resolveHitlGateEntry(runId, gate), activeBuffered)}
             onContinue={onContinue}

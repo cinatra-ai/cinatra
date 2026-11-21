@@ -120,6 +120,8 @@ import {
   isAlreadyResolvedError,
   hitlGateIdentityKey,
   isGroupedSetupRenderer,
+  continueApprovalFlag,
+  continueHeldByRenderer,
   isSetupGateTaskId,
   liftRendererApprovalNote,
   midRunBooleanFieldHidesSubmit,
@@ -1061,7 +1063,7 @@ function HitlApprovalCard({
     // so no setState is needed here — just capture the merged object as a local.
     let nextBuffered: Record<string, unknown> = {
       ...bufferedHitlValue,
-      approved: true,
+      approved: continueApprovalFlag(bufferedHitlValue),
       approvedAt: new Date().toISOString(),
     };
     // Renderer-specific approvalNote lifts (list-picker / setup-form /
@@ -1686,9 +1688,12 @@ function HitlApprovalCard({
               // unsendable (cinatra#3562), while the gate's declared renderer
               // value is unwritten (cinatra#3380), or while a gate whose kind
               // declares the hold has no pick (cinatra#3035).
+              // cinatra#3470: a declared card holds the Continue until a choice
+              // is made and every required value holds text.
               disabled={
                 isApproving ||
                 gateReportedInvalid ||
+                continueHeldByRenderer(entry, interruptContext.values, bufferedHitlValue) ||
                 continueAwaitsRendererValue ||
                 (!rendererFloored && continueAwaitsAPick(entry, bufferedHitlValue))
               }

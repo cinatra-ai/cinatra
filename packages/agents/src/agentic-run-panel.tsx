@@ -90,6 +90,8 @@ import {
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
+  continueApprovalFlag,
+  continueHeldByRenderer,
   hitlGateIdentityKey,
   isMidRunListStepGate,
   isSetupGateTaskId,
@@ -2204,9 +2206,18 @@ export function AgenticRunPanel({
         // cinatra#3562), while the gate's declared renderer value is unwritten
         // (cinatra#3380), or while a gate whose kind declares the hold has no
         // pick (cinatra#3035).
+        // cinatra#3470: a declared card holds the screen's Continue until a
+        // choice is made and every required value holds text. Never the
+        // bare-gate row (the tool-call banner with its Reject).
         disabled={
           isApproving ||
           activeGateReportedInvalid ||
+          (!opts?.withReject &&
+            continueHeldByRenderer(
+              hitlRendererEntry?.entry,
+              effectiveHitlContext.currentValues,
+              bufferedHitlValue,
+            )) ||
           opts?.awaitingRendererValue === true ||
           (!rendererFloored && continueAwaitsAPick(hitlRendererEntry?.entry, bufferedHitlValue))
         }
@@ -2242,7 +2253,7 @@ export function AgenticRunPanel({
           // Compute payload synchronously from current state to avoid a setState read race.
           let nextBuffered: Record<string, unknown> = {
             ...bufferedHitlValue,
-            approved: true,
+            approved: continueApprovalFlag(bufferedHitlValue),
             approvedAt: new Date().toISOString(),
           };
           // The list step's approvalNote lift (cinatra#3562): snapshot the

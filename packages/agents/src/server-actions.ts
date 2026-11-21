@@ -122,13 +122,14 @@ export async function getRuntimeFieldRendererBindingsAction(): Promise<
     // registration order.
     return collectInstalledFieldRendererBindings()
       .filter((b) => !generatedIds.has(b.id))
-      .map(({ id, kind, priority, midRunHitl, a2uiTranslator, params }) => ({
+      .map(({ id, kind, priority, midRunHitl, a2uiTranslator, params, screen }) => ({
         id,
         kind,
         priority,
         ...(midRunHitl === true ? { midRunHitl: true } : {}),
         ...(a2uiTranslator !== undefined ? { a2uiTranslator } : {}),
         ...(params !== undefined ? { params } : {}),
+        ...(screen !== undefined ? { screen } : {}),
       }));
   } catch {
     return [];
