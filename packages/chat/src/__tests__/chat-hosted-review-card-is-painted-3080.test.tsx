@@ -3,10 +3,10 @@
  * THE CHAT-HOSTED REVIEW CARD IS PAINTED, IN ITS PENDING STATE (cinatra#3080).
  *
  * CARRIED INTO THIS PULL REQUEST for the chat half of what cinatra#3487
- * enforces, its floor expectations following this branch's own floor names
- * because the pull request that renames the floor carries its own copy of this
- * file - the number in this file name is a cross-reference to the pull request
- * the hunk was written on, not a claim about the issue this one answers.
+ * enforces, its floor expectations following the floor names that are on main
+ * (#4571, which renames the floor) - the number in this file name is a
+ * cross-reference to the pull request the hunk was written on, not a claim
+ * about the issue this one answers.
  *
  * The fifth proof round of this issue read the card in the thread and could not
  * photograph it:
@@ -310,23 +310,24 @@ describe("the chat-hosted review card in its pending state is painted", () => {
     // 1. NOTHING HIDES IT. No ancestor of the card is taken out of the picture.
     expect(describeNode(firstHidingAncestor(card))).toBeNull();
 
-    // 2. AND ITS FLOOR IS IN THE LAYOUT: the three decision actions this
-    //    branch's floor draws, each of them reachable by a reader.
+    // 2. AND ITS FLOOR IS IN THE LAYOUT: the three decision actions the
+    //    shipped floor draws, each of them reachable by a reader.
     //
-    //    ADAPTED ON CARRY. This file was written on the branch that renames the
-    //    floor's two decisions, where they read `regenerate-review ->
-    //    changes-requested` and `continue-review -> resolved`. The floor here
-    //    draws `reject-review -> resolved` and `approve-review -> resolved`
-    //    (`review-decision-bar.tsx`), so the changes-requested decision is read
-    //    as `reject-review` and the continue decision as `approve-review`. The
-    //    mapping is one control to one control, and no name this floor does not
-    //    draw is asserted.
+    //    THE FLOOR'S NAMES. Since #4571 (cinatra#3080) is on main, every review
+    //    floor draws Comment, Regenerate and Continue: `comment-review ->
+    //    annotated`, `regenerate-review -> successor-gate-opened` and
+    //    `continue-review -> resolved` (`review-decision-bar.tsx`), and neither
+    //    Reject nor Approve, as the proof round quoted above reads. This file
+    //    was carried in when this branch's floor still drew `reject-review ->
+    //    resolved` and `approve-review -> resolved`; each of those is read as
+    //    the control that replaces it, one control to one control, and no name
+    //    the floor does not draw is asserted.
     const floor = card.querySelector('[data-conformance-id="review-decision-bar"]');
     expect(floor).not.toBeNull();
     for (const action of [
       "comment-review -> annotated",
-      "reject-review -> resolved",
-      "approve-review -> resolved",
+      "regenerate-review -> successor-gate-opened",
+      "continue-review -> resolved",
     ]) {
       const control = floor!.querySelector(`[data-action="${action}"]`);
       expect(control, `the floor draws ${action}`).not.toBeNull();
