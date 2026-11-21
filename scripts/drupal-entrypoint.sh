@@ -287,7 +287,9 @@ install_mcp_tools() {
     log "Installing drupal/mcp_tools (files or DB state missing)..."
     composer config minimum-stability dev --no-interaction
     composer config prefer-stable true --no-interaction
-    composer require drupal/tool drupal/mcp_tools:^1.0 --no-interaction
+    # Pinned to 1.0.0-beta18 like docker/drupal/Dockerfile: 1.0.0-beta19
+    # fails the enable below ('Class "Drupal\mcp_tools\Mcp\Sdk" not found').
+    composer require drupal/tool drupal/mcp_tools:1.0.0-beta18 --no-interaction
     # cinatra#3196: `update` is enabled explicitly and idempotently BEFORE the
     # dependent install, so a pre-existing update.settings can no longer abort
     # the bootstrap from inside the mcp_tools enable.
