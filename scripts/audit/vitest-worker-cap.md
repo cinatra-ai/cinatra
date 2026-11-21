@@ -99,8 +99,8 @@ the cap's effect on that hosted job is unmeasured here.
 ## The inventory
 
 18 workflow files carry a test-runner step;
-11 of them are governed. 141 invocations:
-97 governed, 15 hosted-pinned,
+11 of them are governed. 142 invocations:
+98 governed, 15 hosted-pinned,
 20 node:test, 8 playwright,
 1 extension-suite-gate.
 
@@ -183,6 +183,7 @@ workflow-level one unless a job-level or step-level assignment narrows it, and
 | build-image.yml | perpetual-core | name%3AVendor-token%20core%20gate%20tests | 2161 | CI_RUNNER_POOL | vitest | governed | 3 |
 | build-image.yml | perpetual-core | name%3AIdentity-surface%20coupling%20gate%20tests | 2176 | CI_RUNNER_POOL | vitest | governed | 3 |
 | build-image.yml | perpetual-core | name%3ASelf-rendering%20extensions%20border%20gate%20tests | 2202 | CI_RUNNER_POOL | vitest | governed | 3 |
+| build-image.yml | perpetual-core | name%3AAgent%20HITL%20renders-nothing%20gate%20tests | 2221 | CI_RUNNER_POOL | vitest | governed | 3 |
 | build-image.yml | perpetual-core | name%3ARequired-extensions%20cover%20host%20imports%20gate%20tests | 2227 | CI_RUNNER_POOL | vitest | governed | 3 |
 | build-image.yml | perpetual-core | name%3ASkill-store%20canonicality%20gate%20tests | 2244 | CI_RUNNER_POOL | vitest | governed | 3 |
 | build-image.yml | perpetual-core | name%3ARoute-graph%20ratchet%20gate%20tests | 2267 | CI_RUNNER_POOL | node:test | node:test | 3 |

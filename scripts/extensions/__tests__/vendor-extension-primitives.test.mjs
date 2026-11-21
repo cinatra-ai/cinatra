@@ -140,6 +140,16 @@ describe("provenance — vendored files match registry source modulo rewrite", (
     ).map((entry) => entry.extensionDir);
     expect(retired).toEqual([]);
   });
+
+  // cinatra#3470 item 3: an agent DECLARES its HITL screens and the product
+  // draws them, so an agent package has no design-registry primitive to copy
+  // and the provenance check never blocks a product primitive change on one.
+  it("vendors no kind:agent package (cinatra#3470)", () => {
+    const agents = VENDOR_MANIFEST.filter((entry) => kindOf(entry.extensionDir) === "agent").map(
+      (entry) => entry.extensionDir,
+    );
+    expect(agents).toEqual([]);
+  });
 });
 
 // Every vendored file is copied byte-for-byte into ~20 extension repositories,

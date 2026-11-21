@@ -75,6 +75,12 @@ export const COMPONENT_ENTRY_RE = /^(\.\/)?[A-Za-z0-9_][A-Za-z0-9_./-]*$/;
 // must be a small plain-JSON object and MUST NOT carry secrets.
 export const MAX_PARAMS_JSON_BYTES = 2048;
 
+// The issue that owns the agent clause of the three-kind rule: "Connectors
+// render the setup page themselves. Artifacts render the artifact view
+// themselves. Agents do NOT render the HITL view themselves." Named in the
+// refusal below and in scripts/extensions/agent-hitl-renders-nothing-gate.mjs.
+export const AGENT_HITL_RULE_ISSUE = "cinatra#3470";
+
 function isPlainObject(v) {
   return v !== null && typeof v === "object" && !Array.isArray(v);
 }
@@ -84,8 +90,14 @@ function isPlainObject(v) {
  * `{ entries: [...normalized], errors: [...strings] }`. Callers decide the
  * failure posture (generator: any error -> throw; runtime collector: any
  * error -> skip entry + warn).
+ *
+ * `options.kind` is the declaring package's `cinatra.kind`. A package of kind
+ * agent declares its HITL screens and never renders them (cinatra#3470), so
+ * a `component` from it is refused outright; there is no baseline. Callers
+ * that cannot read the kind omit it and keep the shape-only check.
  */
-export function validateFieldRendererDeclarations(packageName, raw) {
+export function validateFieldRendererDeclarations(packageName, raw, options = {}) {
+  const packageKind = isPlainObject(options) ? options.kind : undefined;
   const errors = [];
   const entries = [];
   if (raw === undefined || raw === null) return { entries, errors };
@@ -153,6 +165,14 @@ export function validateFieldRendererDeclarations(packageName, raw) {
     // component the claiming extension ships for THIS binding id. Shape-only
     // here (fs-free shared validator); the generator resolves the subpath.
     let normalizedComponent;
+    if (component !== undefined && packageKind === "agent") {
+      errors.push(
+        `${where}: ${AGENT_HITL_RULE_ISSUE}: agents do not render the HITL view themselves; ` +
+          `a kind "agent" package may not declare a component for ${id}. ` +
+          "Declare the screen and let the product draw it.",
+      );
+      return;
+    }
     if (component !== undefined) {
       if (!isPlainObject(component)) {
         errors.push(`${where}: component must be a plain object when present`);

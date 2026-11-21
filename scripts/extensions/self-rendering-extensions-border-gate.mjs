@@ -44,7 +44,8 @@
 //       read would pass.
 //
 // kind:agent packages are OUT OF SCOPE here — the agent border has its own gate
-// (cinatra-ai/cinatra#3470).
+// (cinatra-ai/cinatra#3470, scripts/extensions/agent-hitl-renders-nothing-gate.mjs),
+// which reads the same census with its own kinds.
 //
 // The baseline is the ONLY record of the remaining copies: the vendoring
 // manifest in scripts/extensions/vendor-extension-primitives.mjs no longer
@@ -297,9 +298,18 @@ function readManifest(manifestPath, io) {
  * every file-system call goes through `io`. Undeclared directories under the
  * scope are still scanned, and read with the same allow-list. The declared
  * set defaults to the one beside `extRoot`; only an in-process caller passes
- * `declaredRoot`. Returns `{ packages, copies, coupling, refusals }`.
+ * `declaredRoot`. `kinds` names the package kinds walked for copies and direct
+ * reaches (default: the self-rendering kinds); the agent gate of cinatra#3470
+ * (scripts/extensions/agent-hitl-renders-nothing-gate.mjs) passes its own.
+ * Every declared package is read and refused by name whatever `kinds` is.
+ * Returns `{ packages, copies, coupling, refusals }`.
  */
-export function scanBorder({ extRoot = EXT_ROOT, declaredRoot = declaredRootOf(extRoot), io = DEFAULT_IO } = {}) {
+export function scanBorder({
+  extRoot = EXT_ROOT,
+  declaredRoot = declaredRootOf(extRoot),
+  io = DEFAULT_IO,
+  kinds = SELF_RENDERING_KINDS,
+} = {}) {
   const refusals = [];
   const declared = readDeclaredSet(declaredRoot, io, refusals);
   const scopeDir = join(extRoot, SCOPE_DIR);
@@ -351,7 +361,7 @@ export function scanBorder({ extRoot = EXT_ROOT, declaredRoot = declaredRootOf(e
       refusals.push(`${REFUSED} ${name} has an unknown cinatra.kind ${JSON.stringify(kind)}`);
       continue;
     }
-    if (SELF_RENDERING_KINDS.has(kind)) packages.push({ name: dir, dir: pkgDir, kind });
+    if (kinds.has(kind)) packages.push({ name: dir, dir: pkgDir, kind });
   }
 
   // Undeclared directories under the scope (a stale clone-back leftover, a
@@ -387,7 +397,7 @@ export function scanBorder({ extRoot = EXT_ROOT, declaredRoot = declaredRootOf(e
       refusals.push(`${REFUSED} ${where} is not declared and has an unknown cinatra.kind ${JSON.stringify(kind)}`);
       continue;
     }
-    if (SELF_RENDERING_KINDS.has(kind)) packages.push({ name: dir, dir: pkgDir, kind });
+    if (kinds.has(kind)) packages.push({ name: dir, dir: pkgDir, kind });
   }
   packages.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 

@@ -80,7 +80,7 @@ export function collectInstalledFieldRendererBindings(): CollectedBinding[] {
     for (const dir of dirs) {
       let pkg: {
         name?: unknown;
-        cinatra?: { fieldRenderers?: unknown };
+        cinatra?: { fieldRenderers?: unknown; kind?: unknown };
       };
       try {
         pkg = JSON.parse(
@@ -92,9 +92,13 @@ export function collectInstalledFieldRendererBindings(): CollectedBinding[] {
       const packageName = typeof pkg.name === "string" ? pkg.name : null;
       const declared = pkg.cinatra?.fieldRenderers;
       if (!packageName || declared === undefined) continue;
+      // The package kind carries the agent clause of the three-kind rule
+      // (cinatra#3470): an agent's component declaration is skipped with a
+      // warning here, as the generator refuses it at build time.
       const { entries, errors } = validateFieldRendererDeclarations(
         packageName,
         declared,
+        { kind: pkg.cinatra?.kind },
       ) as { entries: CollectedBinding[]; errors: string[] };
       for (const err of errors) {
         console.warn(`[field-renderer-bindings] skipped invalid declaration: ${err}`);
