@@ -25,6 +25,7 @@
   --color-line: var(--line);
   --color-line-strong: var(--line-strong);
   --color-accent-soft: var(--accent-soft);
+  --color-indigo-ink: var(--indigo-ink);
   /* Fabric stripe utility tokens. */
   --color-stripe-mid: var(--stripe-mid);
   --color-stripe-light: var(--stripe-light);
