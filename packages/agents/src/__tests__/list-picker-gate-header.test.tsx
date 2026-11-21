@@ -16,8 +16,8 @@
  *
  * An absent or blank declared question never leaves an empty band: no element
  * of the renderer carries empty text or only the required mark. Everything
- * else of the list step (the helper sentence, the search field, the link, the
- * rows) reads as it did.
+ * else of the list step (the helper sentence, the search field, the rows)
+ * reads as it did; the link out of the step is gone (cinatra#3562).
  */
 import React from "react";
 import {
@@ -367,7 +367,7 @@ describe("list-picker gate header — the declared question (cinatra#3720)", () 
 });
 
 describe("list-picker gate header — nothing else of the list step changes (cinatra#3720)", () => {
-  it("keeps the helper sentence, the search field and the 'Build a list with AI' link", async () => {
+  it("keeps the helper sentence and the search field, and draws no link out of the step (cinatra#3562)", async () => {
     const { container } = render(
       <ListPickerRenderer {...baseProps({ mode: "edit" })} />,
     );
@@ -377,11 +377,8 @@ describe("list-picker gate header — nothing else of the list step changes (cin
     const search = screen.getByPlaceholderText("Search lists by name");
     expect(search.getAttribute("aria-label")).toBe("Search lists by name");
     expect(search.getAttribute("type")).toBe("search");
-    const cta = screen.getByTestId("build-list-with-ai-cta");
-    expect(cta.getAttribute("href")).toBe(
-      "/agents/cinatra-ai/list-curator-agent/new?onComplete=list-picker",
-    );
-    expect(cta.textContent).toBe("Build a list with AI");
+    expect(screen.queryByTestId("build-list-with-ai-cta")).toBeNull();
+    expect(container.querySelector("a[href]")).toBeNull();
     expect(container.querySelector("[data-conformance-id]")).toBeNull();
   });
 

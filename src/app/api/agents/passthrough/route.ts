@@ -1,3 +1,5 @@
+import type { VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
+import { verifyRunExecutedSource } from "@cinatra-ai/agents/store";
 import "server-only";
 import { NextResponse } from "next/server";
 
@@ -7,6 +9,8 @@ import { isAuthorizedBridgeRequest } from "@/lib/wayflow-bridge-auth";
 import { bindBridgeRunId } from "@/lib/authz/bridge-run-binding";
 import {
   verifyRunStepAttestation,
+  verifySourceBoundRunStep,
+  RUN_RAW_SOURCE_HEADER, RUN_EXECUTED_SOURCE_HEADER, RUN_DECLARATION_SOURCE_HEADER, RUN_EXECUTION_ATTEMPT_HEADER,
   RUN_STEP_NODE_HEADER,
   RUN_STEP_ATTESTATION_HEADER,
 } from "@/lib/agent-run-token";
@@ -156,9 +160,12 @@ const ALLOWED_TOOLS = new Set([
 // Tools that must execute inside an mcpRequestContextStorage frame carrying the
 // VERIFIED run id (from bindBridgeRunId), so the primitive derives its run scope
 // from the invocation context — never from the request body. The generic path
-// (objects_save, trigger_config_set, …) resolves identity from the actor alone
-// and does not need (or want) an ambient run id, so we scope this to the
-// run-scoped primitives only.
+// (objects_save, trigger_config_set, …) resolves identity from the actor alone;
+// since cinatra#3745 it runs inside the run's frame too (run id, owner, org,
+// the verified step and, for a source-bound call, the proof and the run-write
+// authority), so a generic handler that reads the frame's run id sees the
+// proven run. This set names the primitives that additionally get the
+// run-scoped frame (verifiedRunScopeId and the submission id).
 const RUN_SCOPED_CONTEXT_TOOLS = new Set<string>([
   "agent_run_hitl_prompts_list",
   "agent_run_hitl_prompts_exclude",
@@ -428,17 +435,39 @@ export async function POST(req: Request): Promise<Response> {
   // cinatra#3745 — the verified step of the calling flow step. The flow runtime
   // signs the executing step's id over the run's context id; it is verified
   // here with the context id the run binding above proved, and stamped on the
-  // run-scoped frame below. An absent or unverified pair gives no step.
+  // run-scoped frame below. Without source headers, an absent or unverified
+  // `s1` pair gives no step. With any source header (the attempt header
+  // included), the `s2` pair over the step, the attempt the calling task was
+  // sent under and the executing source must verify AND the run must be running
+  // under that attempt, the one that source is bound to; otherwise the call is refused
+  // (403, a fixed sentence) before any tool runs, and the step is the proof's.
   // A blank key is no key (cinatra#4154): the runtime refuses to boot on one,
-  // and a pair signed under whitespace proves nothing.
+  // and a pair signed under whitespace proves nothing (for `s1` and `s2`).
   const attestKey = process.env.CINATRA_CONTEXT_ATTEST_KEY;
-  const verifiedStepId =
+  let verifiedStepId =
     verifyRunStepAttestation({
       key: attestKey && attestKey.trim() !== "" ? attestKey : null,
       contextId: req.headers.get("x-cinatra-a2a-context-id"),
       node: req.headers.get(RUN_STEP_NODE_HEADER),
       attestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER),
     }) ?? undefined;
+
+  let verifiedExecutedSource: VerifiedExecutedRunSource | undefined;
+  if (req.headers.get(RUN_RAW_SOURCE_HEADER) !== null || req.headers.get(RUN_EXECUTED_SOURCE_HEADER) !== null ||
+      req.headers.get(RUN_DECLARATION_SOURCE_HEADER) !== null || req.headers.get(RUN_EXECUTION_ATTEMPT_HEADER) !== null) {
+    const attestation = verifySourceBoundRunStep({ key: attestKey && attestKey.trim() !== "" ? attestKey : null,
+      contextId: req.headers.get("x-cinatra-a2a-context-id"), node: req.headers.get(RUN_STEP_NODE_HEADER),
+      executionAttemptId: req.headers.get(RUN_EXECUTION_ATTEMPT_HEADER),
+      attestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER), sourceSha256: req.headers.get(RUN_RAW_SOURCE_HEADER),
+      executedSourceSha256: req.headers.get(RUN_EXECUTED_SOURCE_HEADER),
+      declarationSourceSha256: req.headers.get(RUN_DECLARATION_SOURCE_HEADER) });
+    try {
+      const sourceRun = await readAgentRunById(agentRunId);
+      if (!attestation || !sourceRun?.orgId) throw new Error("source_binding_invalid");
+      verifiedExecutedSource = await verifyRunExecutedSource(agentRunId, sourceRun.orgId, attestation);
+      verifiedStepId = verifiedExecutedSource.stepId;
+    } catch { return NextResponse.json({ error: "Executing source could not be verified" }, { status: 403 }); }
+  }
 
   const shaper = TOOL_INPUT_SHAPERS[tool];
   let input: Record<string, unknown>;
@@ -533,6 +562,26 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   try {
+    const { mintRunWriteAuthorityForMcp } = await import("@/lib/org-write/run-authority-mint");
+    const orgWriteAuthority = verifiedExecutedSource
+      ? await mintRunWriteAuthorityForMcp({ runId: run.id, orgId: run.orgId,
+          executionAttemptId: verifiedExecutedSource.executionAttemptId }) : undefined;
+    // cinatra#3745: the mint matches the proof's attempt against the run's
+    // CURRENT attempt. A refused mint means the run moved on after the source
+    // check above (or the authority could not be read): the proof is no longer
+    // current, so the call is refused before any tool runs, never served with
+    // the stale proof and no authority.
+    if (verifiedExecutedSource && !orgWriteAuthority) {
+      return NextResponse.json({ error: "Executing source could not be verified" }, { status: 403 });
+    }
+    return await mcpRequestContextStorage.run({ runId: binding.runId,
+      userId: run.runBy ?? undefined, orgId: run.orgId,
+      ...(run.oboCeiling ? { oboCeiling: run.oboCeiling } : {}),
+      ...(verifiedStepId ? { verifiedStepId } : {}),
+      ...(verifiedExecutedSource ? { verifiedExecutedSource } : {}),
+      ...(orgWriteAuthority ? { orgWriteAuthority } : {}),
+    }, async () => {
+    // Every deterministic branch shares the verified executing-source frame.
     let result: unknown;
     if (tool === "artifact_materialize") {
       // Deterministic artifact materialization (cinatra#925) — NOT an MCP
@@ -869,10 +918,12 @@ export async function POST(req: Request): Promise<Response> {
       result = RUN_SCOPED_CONTEXT_TOOLS.has(tool)
         ? await mcpRequestContextStorage.run(
             {
+              ...mcpRequestContextStorage.getStore(),
               runId: binding.runId,
               verifiedRunScopeId: binding.runId,
               ...(verifiedSubmissionId ? { verifiedSubmissionId } : {}),
               ...(verifiedStepId ? { verifiedStepId } : {}),
+              ...(verifiedExecutedSource ? { verifiedExecutedSource } : {}),
               userId: run.runBy ?? undefined,
               orgId: run.orgId,
               ...(run.oboCeiling ? { oboCeiling: run.oboCeiling } : {}),
@@ -1007,6 +1058,7 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     return NextResponse.json(result);
+    });
   } catch (err) {
     // cinatra#4223, cinatra#4465: an error with the zod marker answers its
     // issues, and a primitive's stated refusal without it keeps its text when

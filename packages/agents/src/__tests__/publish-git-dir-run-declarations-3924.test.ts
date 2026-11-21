@@ -28,11 +28,13 @@ vi.mock("pacote", () => {
   return { packument: vi.fn(notFound), tarball: vi.fn(notFound), extract: vi.fn(notFound) };
 });
 
+// cinatra#4264: the publisher refuses a failed compile, so the mock compiles.
 vi.mock("../oas-compiler", () => ({
-  compileOasAgentJson: vi.fn(async () => ({ ok: false })),
+  compileOasAgentJson: vi.fn(async () => ({ ok: true, value: {} })),
 }));
 
 import { publishAgentPackageFromGitDir } from "../verdaccio/client";
+import { compileOasAgentJson } from "../oas-compiler";
 
 const PACKAGE_NAME = "@cinatra-fixtures/tools-agent";
 const PACKAGE_VERSION = "0.1.5";
@@ -240,6 +242,19 @@ describe("publishAgentPackageFromGitDir carries the run-read declarations (cinat
   ])("refuses malformed declaredTables (%s) before any registry write", async (_label, declaredTables) => {
     const agentDir = await writeAgentDir({ declaredTables });
     await expect(publishAgentPackageFromGitDir({ agentDir }, CONFIG)).rejects.toThrow(/\[declared-tables\]/);
+    expect(puts).toHaveLength(0);
+  });
+
+  // Before the fix the publish resolves, so the first assertion of this case
+  // fails with its own message, which no other case of this file carries:
+  // red-first-expect: a failed compile must refuse the publish
+  it("cinatra#4264: a failed compile refuses the publish before any registry write", async () => {
+    vi.mocked(compileOasAgentJson).mockResolvedValueOnce({ ok: false, error: "boom" } as never);
+    const agentDir = await writeAgentDir({});
+    const publish = publishAgentPackageFromGitDir({ agentDir }, CONFIG);
+    const refused = await publish.then(() => false, () => true);
+    expect(refused, "a failed compile must refuse the publish").toBe(true);
+    await expect(publish).rejects.toThrow(/compile failed .*cinatra#4264/);
     expect(puts).toHaveLength(0);
   });
 });

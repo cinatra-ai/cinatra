@@ -1444,8 +1444,8 @@
             "data-conformance-id=\"review-decision-bar\"",
             "data-conformance-id=\"review-decision-disabled\"",
             "data-action=\"comment-review -> annotated\"",
-            "data-action=\"approve-review -> resolved\"",
-            "data-action=\"reject-review -> resolved\""
+            "data-action=\"regenerate-review -> successor-gate-opened\"",
+            "data-action=\"continue-review -> resolved\""
           ]
         }
       ]

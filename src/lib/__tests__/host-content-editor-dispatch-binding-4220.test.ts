@@ -53,6 +53,27 @@ vi.mock("@cinatra-ai/agents", () => ({
     setAgentRunConnectorInstanceBinding(runId, binding),
 }));
 
+// cinatra#3745: a carrier run binds the loader's selected source before its first send. Explicit
+// storage and selected-source ports, as in the other content-editor dispatch suites: no
+// PostgreSQL and no loader request.
+const readSourceRun = vi.fn(async () => {
+  const input = createCarrierRun.mock.calls.at(-1)?.[0] as unknown as { orgId?: string } | undefined;
+  return { orgId: input?.orgId ?? "org-from-run", executionAttemptId: "attempt", a2aContextId: null as string | null };
+});
+const bindSourcePolicy = vi.fn(async (input: unknown) => {
+  void input;
+});
+vi.mock("@cinatra-ai/agents/store", () => ({
+  readAgentRunById: () => readSourceRun(),
+  updateAgentRunA2AContextId: vi.fn(async () => undefined),
+  selectWayflowRunStepToolPolicy: async (input: { contextId: string }) => ({
+    version: 1, contextId: input.contextId, source: "{}",
+    sourceSha256: "a".repeat(64), executedSourceSha256: "b".repeat(64), declarationSourceSha256: "c".repeat(64),
+  }),
+  bindRunStepToolPolicy: (input: unknown) => bindSourcePolicy(input),
+  CINATRA_EXPECTED_SOURCE_MESSAGE_KEY: "__cinatra_expected_source__",
+}));
+
 // --- the host derivation (its gates are pinned by agent-run-connector-instance-pin-4220.test.ts)
 const deriveAgentRunConnectorInstanceBinding = vi.fn<(input: unknown) => Promise<unknown>>();
 vi.mock("@/lib/connector-instance-write-authority", () => ({
@@ -104,7 +125,10 @@ beforeEach(() => {
   readAgentTemplateByPackageName.mockResolvedValue({ id: "tmpl_wp" });
   readLatestAgentVersionIdForTemplate.mockResolvedValue("ver_1");
   createCarrierRun.mockImplementation(async (input: { id: string }) => ({ id: input.id, inputParams: {} }));
+  // A completed Task: a carrier run completes only for one (cinatra#3745).
   sendTask.mockResolvedValue({
+    kind: "task",
+    status: { state: "completed" },
     history: [{ role: "agent", parts: [{ kind: "text", text: '{"postId":"7"}' }] }],
   });
 });
@@ -135,6 +159,24 @@ describe("cinatra#4220 — carrier runs carry their connector-instance binding",
       expect(recordedAt).toBeLessThan(buildInitialMessagePayloadWithRunToken.mock.invocationCallOrder[0]);
       expect(recordedAt).toBeLessThan(createExternalA2AClient.mock.invocationCallOrder[0]);
       expect(recordedAt).toBeLessThan(sendTask.mock.invocationCallOrder[0]);
+    });
+
+    // cinatra#3745: after the instance binding, the carrier run binds the loader's selected source,
+    // and only then is the task sent.
+    it(`${k.kind}: records the instance binding, then binds the loader's selected source, before the send (cinatra#3745)`, async () => {
+      const payload = { instanceId: k.instanceId, postId: "7" };
+      deriveAgentRunConnectorInstanceBinding.mockResolvedValue({ connectorKey: "wordpress", instanceId: k.instanceId });
+
+      await dispatchFor(k.kind, payload);
+
+      const runId = createdRunId();
+      expect(bindSourcePolicy).toHaveBeenCalledTimes(1);
+      expect(bindSourcePolicy).toHaveBeenCalledWith(
+        expect.objectContaining({ runId, orgId: k.orgId, executionAttemptId: "attempt" }),
+      );
+      const boundAt = bindSourcePolicy.mock.invocationCallOrder[0]!;
+      expect(setAgentRunConnectorInstanceBinding.mock.invocationCallOrder[0]!).toBeLessThan(boundAt);
+      expect(boundAt).toBeLessThan(sendTask.mock.invocationCallOrder[0]!);
     });
 
     it(`${k.kind}: a refused derivation fails the queued carrier run with the gate's reason and sends nothing`, async () => {

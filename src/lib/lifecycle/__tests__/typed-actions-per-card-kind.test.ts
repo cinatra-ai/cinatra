@@ -133,18 +133,23 @@ describe("what each card kind lends", () => {
 // -------------------------------------------------------------------------
 
 describe("the typed menu is the card's own controls, narrowed by the person's words", () => {
-  it("a review card with a plain request for changes offers COMMENT only", () => {
+  // AMENDED for cinatra#3080: a review lends Comment, Regenerate and Continue
+  // (control id `approve`). Comment and Regenerate are on every review menu, so
+  // a plain request for changes reaches Regenerate, and Continue still needs
+  // the person's own word.
+  it("a review card with a plain request for changes offers COMMENT and REGENERATE only", () => {
     expect(typedControlMenuFor(review, "the second paragraph overstates the result")).toEqual([
       "comment",
+      "regenerate",
     ]);
   });
 
-  it("a review card with 'approve it' offers comment AND approve", () => {
-    expect(typedControlMenuFor(review, "approve it")).toEqual(["comment", "approve"]);
+  it("a review card with 'approve it' offers comment, regenerate AND approve", () => {
+    expect(typedControlMenuFor(review, "approve it")).toEqual(["comment", "regenerate", "approve"]);
   });
 
-  it("a review card with 'reject it' offers comment AND reject", () => {
-    expect(typedControlMenuFor(review, "reject it")).toEqual(["comment", "reject"]);
+  it("a review card with 'reject it' offers no reject - the always-on comment and regenerate only", () => {
+    expect(typedControlMenuFor(review, "reject it")).toEqual(["comment", "regenerate"]);
   });
 
   it("a skills card offers confirm ONLY when the person asked to confirm", () => {
@@ -200,16 +205,18 @@ describe("the grant carries only what the person's own message named", () => {
     return out;
   }
 
+  // AMENDED for cinatra#3080: Regenerate is on every review menu; Continue
+  // (control id `approve`) still only when the person's own message named it.
   it("mints approve for a message that asked to approve", async () => {
     const out = await grantFor(review, "approve it");
     const claims = verifyLentActionGrant(out.grant!);
-    expect(claims?.controls).toEqual(["comment", "approve"]);
+    expect(claims?.controls).toEqual(["comment", "regenerate", "approve"]);
   });
 
   it("mints NO approve for a message that did not ask for one", async () => {
     const out = await grantFor(review, "the second paragraph overstates the result");
     const claims = verifyLentActionGrant(out.grant!);
-    expect(claims?.controls).toEqual(["comment"]);
+    expect(claims?.controls).toEqual(["comment", "regenerate"]);
     expect(claims?.control).toBe("comment");
   });
 

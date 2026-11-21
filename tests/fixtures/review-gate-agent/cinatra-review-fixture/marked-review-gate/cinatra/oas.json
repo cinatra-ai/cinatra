@@ -95,7 +95,13 @@
       "id": "marked-review-gate-start",
       "name": "start",
       "description": null,
-      "metadata": {},
+      "metadata": {
+        "cinatra": {
+          "required": [
+            "review_targets"
+          ]
+        }
+      },
       "inputs": [
         {
           "description": "The immutable review targets this run pins at its gate.",

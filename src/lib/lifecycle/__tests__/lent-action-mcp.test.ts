@@ -96,6 +96,9 @@ function deps(over: Record<string, unknown> = {}) {
       return { outcome: "consumed" as const, messageText: PERSON_WORDS };
     }),
     submitReviewDecision,
+    // The pre-spend review preflight (cinatra#4571 pre-1 finding 1) is proven in
+    // lent-review-press-authorize-first-4571.test.ts; here it admits every press.
+    preflightReviewPress: async () => null,
     approveScreen,
     ...over,
   } as never;
@@ -311,16 +314,22 @@ describe("GATE 6 — consumed by its first use, and at most once per message", (
 });
 
 describe("using the action IS pressing the button", () => {
+  // AMENDED for cinatra#3080: the three buttons are Comment, Continue (control
+  // id `approve`) and Regenerate, which took Reject's place. A press carries no
+  // regenerate prompt of its own, so the entry's last argument is null.
   it("the review card's three buttons run the card's OWN decision path", async () => {
     for (const [control, disposition] of [
       ["comment", "comment"],
       ["approve", "approve"],
-      ["reject", "reject"],
+      ["regenerate", "regenerate"],
     ] as const) {
       submitReviewDecision = vi.fn(async () => ({ kind: "decided", disposition, idempotent: false }));
       spent = new Set();
       setFrame(grantFor({ control, messageId: `msg-${control}` }));
       await handleLentAction({ ref: REF, control }, deps());
+      // The lent Comment is the prompt window's typed change request (design
+      // section VI), so it names that road; the decision bar's own Comment button
+      // passes no road and stays a non-terminal note (cinatra#4245 D2).
       expect(submitReviewDecision).toHaveBeenCalledWith(
         RUN,
         GATE,
@@ -328,6 +337,8 @@ describe("using the action IS pressing the button", () => {
         PERSON_WORDS,
         OWN_CREDENTIAL,
         null,
+        null,
+        control === "comment" ? { typedChangeRequest: true } : undefined,
       );
     }
   });
@@ -404,13 +415,15 @@ describe("using the action IS pressing the button", () => {
         { kind: "decided", disposition: "comment", idempotent: false },
         "Your comment was recorded with the decision.",
       ],
+      // AMENDED for cinatra#3080: Approve is Continue, and there is no Reject
+      // decision left to report, so the already-recorded suffix rides a Continue.
       [
         { kind: "decided", disposition: "approve", idempotent: false },
-        "Approved. The gate is resolved and the run has been released to continue.",
+        "Continued. The gate is resolved and the run has been released to continue.",
       ],
       [
-        { kind: "decided", disposition: "reject", idempotent: true },
-        "Rejected. The gate is resolved and the reviewed work has been turned back. (This decision had already been recorded.)",
+        { kind: "decided", disposition: "approve", idempotent: true },
+        "Continued. The gate is resolved and the run has been released to continue. (This decision had already been recorded.)",
       ],
       [
         { kind: "blocked", reason: "no-longer-pending" },
