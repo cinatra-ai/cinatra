@@ -32,6 +32,7 @@ import { LifecycleComposerFixtures } from "./lifecycle-composer-fixtures";
 import { LifecycleRecommendationFixtures } from "./lifecycle-recommendation-fixtures";
 import { LifecycleScheduleCardFixtures } from "./lifecycle-schedule-card-fixtures";
 import { RunStepRailConformanceFixture } from "./run-step-rail-conformance-fixtures";
+import { CalendarConformanceFixtures } from "./calendar-fixtures";
 import { ToastConformanceFixture } from "./toast-fixture";
 import { ReviewGateStateConformanceFixtures } from "./review-gate-state-fixtures";
 import { EmailGateConformanceFixtures } from "./gate-field-fixtures";
@@ -306,6 +307,20 @@ export default function ConformanceHarnessPage() {
                 primary chat box. The harness holds only which open review the
                 reader chose; the shipped resolver decides every reading. */}
             <LifecycleComposerFixtures />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>Calendar and date picker (range and single-day modes)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {/* cinatra#3189: the REAL host Calendar and DatePicker with local day
+                keys and a fixed "today". Mounted in THIS already-admitted
+                harness rather than a new standalone route, so no
+                src/lib/auth-route-guard.ts admission is needed. Covered by
+                tests/e2e/design/conformance/calendar.spec.ts (assertion-based). */}
+            <CalendarConformanceFixtures />
           </CardContent>
         </Card>
 
