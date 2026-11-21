@@ -145,7 +145,7 @@ describe("§I — the note field carries the subordinate treatment (#2865)", () 
     const { container } = renderBar();
     const label = container.querySelector("label[for='review-rationale']")!;
     expect(label.textContent).toBe(
-      "Decision rationale (optional on approve, expected on reject)",
+      "Note (optional on Continue · the words a Regenerate works from)",
     );
     // The drawing's mono, 9px, wide-tracked, uppercase label — unchanged.
     const labelClasses = classesOf(label);
@@ -153,13 +153,13 @@ describe("§I — the note field carries the subordinate treatment (#2865)", () 
       expect(labelClasses).toContain(cls);
     }
     expect(noteField().getAttribute("placeholder")).toBe(
-      "Add a note for the run and the audit trail…",
+      "Add a note, or say what to change before Regenerate…",
     );
   });
 
   it("DISABLED/SETTLED — keeps the same dashed rule at the platform's standard disabled opacity", async () => {
     renderBar({ kind: "decided", disposition: "approve", idempotent: false });
-    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
     await waitFor(() =>
       expect((noteField() as HTMLTextAreaElement).disabled).toBe(true),
@@ -203,13 +203,13 @@ describe("§I — the rationale plumbing is untouched (#2865 acceptance 4)", () 
 
 
 describe("§VI authorized producer prefill is not a reader annotation", () => {
-  for (const action of ["Comment", "Approve"] as const) {
+  for (const action of ["Comment", "Continue"] as const) {
     it(`does not sign untouched producer words as the reader's ${action}`, async () => {
       const submitAction = vi.fn(async (): Promise<ReviewSubmitOutcome> => ({ kind: "annotated" }));
       render(<ReviewDecisionBar permissions={{ canDecide: true, canComment: true }} submitAction={submitAction} recordedPrompt="a red fox in snow" />);
       expect((noteField() as HTMLTextAreaElement).value).toBe("a red fox in snow");
       fireEvent.click(screen.getByRole("button", { name: action }));
-      await waitFor(() => expect(submitAction).toHaveBeenCalledWith({ disposition: action === "Approve" ? "approve" : "comment", comment: null }));
+      await waitFor(() => expect(submitAction).toHaveBeenCalledWith({ disposition: action === "Continue" ? "continue" : "comment", comment: null }));
     });
   }
   it("preserves an explicitly edited reader note without changing the visible floor", async () => {
@@ -218,7 +218,7 @@ describe("§VI authorized producer prefill is not a reader annotation", () => {
     fireEvent.change(noteField(), { target: { value: "  actual reader words  " } });
     fireEvent.click(screen.getByRole("button", { name: "Comment" }));
     await waitFor(() => expect(submitAction).toHaveBeenCalledWith({ disposition: "comment", comment: "actual reader words" }));
-    expect(screen.getAllByRole("button").map((button) => button.textContent?.trim())).toEqual(["Comment", "Reject", "Approve"]);
+    expect(screen.getAllByRole("button").map((button) => button.textContent?.trim())).toEqual(["Comment", "Regenerate", "Continue"]);
   });
 });
 
@@ -305,8 +305,8 @@ describe("§I / §VI — Note hierarchy follows the actual surface (App654)", ()
         expect(declaredPrimaryValue(field, "background-color")).toBe("var(--surface)");
         }
         expect(container.querySelectorAll("textarea")).toHaveLength(1);
-        expect(field.getAttribute("placeholder")).toBe("Add a note for the run and the audit trail…");
-        expect(screen.getAllByRole("button").map((button) => button.textContent?.trim())).toEqual(["Comment", "Reject", "Approve"]);
+        expect(field.getAttribute("placeholder")).toBe("Add a note, or say what to change before Regenerate…");
+        expect(screen.getAllByRole("button").map((button) => button.textContent?.trim())).toEqual(["Comment", "Regenerate", "Continue"]);
       });
     }
     it(`${palette} refused widget declaration: no semantic conversation or chatbox is inferred`, () => {

@@ -26,6 +26,12 @@
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
+import type * as RunPageChromeModule from "@cinatra-ai/agents/run-page-chrome";
+// The package entry the fix adds is loaded inside the tests that use it, through a
+// specifier the transform does not resolve when it loads this file: before the
+// fix the file still loads and those tests fail on the missing module.
+// red-first-expect: "./run-page-chrome" is not exported
+const RUN_PAGE_CHROME_ENTRY = "@cinatra-ai/agents/run-page-chrome";
 
 /**
  * §X's OWN SENTENCE FOR THIS READING (design `458fb7ffce6c`,
@@ -77,17 +83,20 @@ afterEach(() => {
 
 async function mount(canComment: boolean) {
   const { ReviewGatePromptWindow } = await import("@cinatra-ai/agents/review-gate-card");
+  const { RunPageChrome } = (await import(/* @vite-ignore */ RUN_PAGE_CHROME_ENTRY)) as typeof RunPageChromeModule;
+  // THE PAGE OWNS THE WINDOW (cinatra#3487). The review screen registers what it
+  // is and what it lends; the run page's chrome draws the one window beneath it.
+  // What this suite reads — the window is there for a reader who may comment,
+  // absent for one who may not, and carries §X's own sentence — is unchanged.
   return render(
-    <ReviewGatePromptWindow
-      // NO `submitAction` (cinatra#2934, lifecycle-b W5c): the window does not
-      // take the review's decision action any more. What is typed here reaches
-      // the assistant, and a request for changes is filed through the card's
-      // OWN Comment control — so there is no action for this mount to hold.
-      storageKey="cinatra_review_window_run-2933"
-      canComment={canComment}
-      runId="run-2933"
-      boundCardRef="gate-ref-2933"
-    />,
+    <RunPageChrome>
+      <ReviewGatePromptWindow
+        storageKey="cinatra_review_window_run-2933"
+        canComment={canComment}
+        runId="run-2933"
+        boundCardRef="gate-ref-2933"
+      />
+    </RunPageChrome>,
   );
 }
 

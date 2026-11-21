@@ -1,21 +1,25 @@
 /**
- * cinatra#3745 — A RESUMED ORCHESTRATOR LEG KEEPS ITS RUN-SOURCE BINDING, ON A REAL DATABASE.
+ * cinatra#3745 — A RESUMED LEG KEEPS ITS RUN-SOURCE BINDING, ON A REAL DATABASE.
  *
  * A run's step-tool policy is bound to the execution attempt that dispatched it
  * (`bindRunStepToolPolicy`, at the first dispatch). The source checks
  * (`verifyRunExecutedSource`, `isRunExecutedSourceCurrent`) admit a callback only
- * while the run is `running` under that bound attempt. A stopped orchestrator
- * resumes under a FRESH attempt, so its resume must carry the binding to that
- * attempt in the same transaction as its `queued -> running` claim, or refuse.
- * This file drives that resume through its REAL status transitions (no mocked
+ * while the run is `running` under that bound attempt; the model bridge and the
+ * passthrough road refuse a run's source-bound callback that the check does not
+ * admit. This file
+ * drives the three resume roads through their REAL status transitions (no mocked
  * "running") and reads the source checks at the moment the resumed leg calls back
  * (inside `sendTask`):
  *
- *   the stopped-orchestrator resume (stopped -> queued -> running, fresh attempt).
+ *   (a) the artifact-review resume delivery (pending_approval -> running, same attempt),
+ *   (b) the MCP `agent_run_resume` primitive (pending_approval -> running, same attempt),
+ *   (c) the stopped-orchestrator resume (stopped -> queued -> running, fresh attempt):
+ *       its resume must carry the binding to that attempt in the same transaction
+ *       as its `queued -> running` claim, or refuse.
  *
- * And that a stale or foreign attempt is still refused, and nothing is sent.
- * Nothing in the request path calls the source checks yet; this file reads them
- * directly, the way the callbacks will.
+ * And, per road, that a stale or foreign attempt is still refused. The routes'
+ * own use of the check is pinned in their unit tests; this file reads the check
+ * directly, the way the routes do.
  *
  * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided. Run with:
  *   CINATRA_TEST_DB_URL=postgres://user:pass@localhost:5432/db \
@@ -58,6 +62,12 @@ const h = vi.hoisted(() => ({
   onSend: null as null | (() => Promise<unknown>),
   sendError: null as null | Error,
   sends: 0,
+  // The attempt each sent message named (cinatra#3745), null when it named none.
+  sentAttempts: [] as Array<unknown>,
+  // Runs once inside the next carrier call, before the carrier builds its metadata.
+  onMint: null as null | (() => Promise<void>),
+  // The real carrier (real token store and run read) instead of the fixed token.
+  realMint: false,
   staleRead: null as unknown,
   mintError: null as null | Error,
   createError: null as null | Error,
@@ -68,8 +78,9 @@ vi.mock("@cinatra-ai/a2a", () => ({
   createExternalA2AClient: vi.fn(async () => {
     if (h.createError) throw h.createError;
     return {
-      sendTask: vi.fn(async () => {
+      sendTask: vi.fn(async (params?: { message?: { metadata?: Record<string, unknown> } }) => {
         h.sends++;
+        h.sentAttempts.push(params?.message?.metadata?.["__cinatra_execution_attempt__"] ?? null);
         if (h.onSend) h.callbacks.push(await h.onSend());
         if (h.sendError) throw h.sendError;
         return { id: `task-next-${randomUUID()}`, contextId: h.contextId, status: { state: "completed" } };
@@ -86,12 +97,18 @@ vi.mock("../execution", () => ({
     h.handled.push({ fromStatus: input.fromStatus });
   }),
 }));
-vi.mock("../wayflow-run-token-carrier", () => ({
-  mintResumeRunTokenMetadata: vi.fn(async () => {
-    if (h.mintError) throw h.mintError;
-    return { cinatra_run_token: "token" };
-  }),
-}));
+vi.mock("../wayflow-run-token-carrier", async (orig) => {
+  const actual = await orig<typeof import("../wayflow-run-token-carrier")>();
+  return {
+    mintResumeRunTokenMetadata: vi.fn(async (...args: Parameters<typeof actual.mintResumeRunTokenMetadata>) => {
+      if (h.mintError) throw h.mintError;
+      const stall = h.onMint;
+      h.onMint = null;
+      if (stall) await stall();
+      return h.realMint ? actual.mintResumeRunTokenMetadata(...args) : { cinatra_run_token: "token" };
+    }),
+  };
+});
 vi.mock("../wayflow-url", () => ({
   WAYFLOW_UNDICI_TIMEOUT_MS: 60_000,
   WAYFLOW_A2A_TIMEOUT_MS: 86_400_000,
@@ -207,11 +224,14 @@ async function rows() {
 
 /** THE RESUMED LEG CALLS BACK: the llm-bridge's own gate (a refusal there is the
  *  route's 403 `run_source_mismatch`), then the declared-tool currency check, and
- *  the three fields the reviewed-action run fence reads. */
-async function callback(): Promise<Callback> {
+ *  the three fields the reviewed-action run fence reads. The leg signs the attempt
+ *  its own message named: the run's attempt when it was sent (`signedAttempt`,
+ *  default the run's attempt now). */
+async function callback(signedAttempt?: string | null): Promise<Callback> {
   const state = await rows();
   try {
-    const proof = await serde.verifyRunExecutedSource(h.runId, ORG, attestation().attestation);
+    const proof = await serde.verifyRunExecutedSource(h.runId, ORG,
+      { ...attestation().attestation, executionAttemptId: signedAttempt ?? state.runAttempt ?? "" });
     const current = await serde.isRunExecutedSourceCurrent(h.runId, ORG, proof);
     return { admitted: true, current, ...state };
   } catch (err) {
@@ -246,6 +266,49 @@ async function rebindToForeignAttempt() {
     [h.runId, foreign],
   );
   return foreign;
+}
+
+/** A resolved gate and its intent, leased to this worker: the delivery reads its
+ *  claim columns and writes under that lease (cinatra#3745). */
+async function approveIntent() {
+  const gateId = `gate-${randomUUID()}`;
+  const reviewTaskId = `wayflow-${h.taskId}`;
+  const responseText = JSON.stringify({ approved: true });
+  await pool(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_review_gates"
+       (id, run_id, org_id, review_task_id, status, pinned_targets, disposition, fingerprint, resolved_at)
+     VALUES ($1, $2, $3, $4, 'resolved', '[{"artifactId":"post","representationRevisionId":"r1"}]'::jsonb, 'approve', $5, now())`,
+    [gateId, h.runId, ORG, reviewTaskId, `fp-${gateId}`],
+  );
+  await pool(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_review_resume_outbox"
+       (gate_id, run_id, review_task_id, kind, response_text, status, attempts, lease_token, lease_expires_at)
+     VALUES ($1, $2, $3, 'approve', $4, 'delivering', 1, 'lease-3745', now() + interval '5 minutes')`,
+    [gateId, h.runId, reviewTaskId, responseText],
+  );
+  return {
+    gateId,
+    runId: h.runId,
+    reviewTaskId,
+    kind: "approve" as const,
+    responseText,
+    status: "delivering" as const,
+    attempts: 1,
+    leaseToken: "lease-3745",
+    leaseExpiresAt: new Date(Date.now() + 300_000),
+    runClaimedAt: null,
+    resumeTaskResult: null,
+  };
+}
+
+async function resumeByMcp() {
+  const { createAgentBuilderPrimitiveHandlers } = await import("../mcp/handlers");
+  return (await createAgentBuilderPrimitiveHandlers().agent_run_resume({
+    primitiveName: "agent_run_resume",
+    input: { runId: h.runId, userResponse: JSON.stringify({ approved: true }) },
+    actor: { actorType: "user", source: "mcp", userId: USER },
+    mode: "deterministic",
+  })) as Record<string, unknown>;
 }
 
 beforeAll(async () => {
@@ -292,10 +355,52 @@ beforeEach(() => {
   h.onSend = callback;
   h.sendError = null;
   h.sends = 0;
+  h.sentAttempts = [];
+  h.onMint = null;
+  h.realMint = false;
   h.staleRead = null;
   h.mintError = null;
   h.createError = null;
   h.runPatch = null;
+});
+
+describe.skipIf(!HAS_DB)("(a) the artifact-review resume delivery", () => {
+  it("resumes the run under its bound attempt, so the approved callback is admitted", async () => {
+    const attemptA = await seedDispatchedRun("pending_approval");
+    const { deliverArtifactReviewResumeIntent } = await import("../artifact-review-resume-delivery");
+    expect(await deliverArtifactReviewResumeIntent((await approveIntent()) as never)).toBe("delivered");
+    expect(h.callbacks).toEqual([{ admitted: true, current: true, status: "running", runAttempt: attemptA, boundAttempt: attemptA }]);
+    expect(h.handled).toEqual([{ fromStatus: "running" }]);
+  });
+
+  it("still refuses the callback when the binding belongs to a stale or foreign attempt", async () => {
+    await seedDispatchedRun("pending_approval");
+    const foreign = await rebindToForeignAttempt();
+    const { deliverArtifactReviewResumeIntent } = await import("../artifact-review-resume-delivery");
+    await deliverArtifactReviewResumeIntent((await approveIntent()) as never);
+    expect(h.callbacks).toHaveLength(1);
+    expect(h.callbacks[0]).toMatchObject({ admitted: false, code: "run_source_mismatch",
+      cause: "step_tool_run_source_inactive", boundAttempt: foreign });
+  });
+});
+
+describe.skipIf(!HAS_DB)("(b) the MCP agent_run_resume primitive", () => {
+  it("resumes the run under its bound attempt, so the approved callback is admitted", async () => {
+    const attemptA = await seedDispatchedRun("pending_approval");
+    const result = await resumeByMcp();
+    expect(result).not.toHaveProperty("error");
+    expect(h.callbacks).toEqual([{ admitted: true, current: true, status: "running", runAttempt: attemptA, boundAttempt: attemptA }]);
+    expect(h.handled).toEqual([{ fromStatus: "running" }]);
+  });
+
+  it("still refuses the callback when the binding belongs to a stale or foreign attempt", async () => {
+    await seedDispatchedRun("pending_approval");
+    const foreign = await rebindToForeignAttempt();
+    await resumeByMcp();
+    expect(h.callbacks).toHaveLength(1);
+    expect(h.callbacks[0]).toMatchObject({ admitted: false, code: "run_source_mismatch",
+      cause: "step_tool_run_source_inactive", boundAttempt: foreign });
+  });
 });
 
 describe.skipIf(!HAS_DB)("(c) the stopped-orchestrator resume", () => {
@@ -317,6 +422,68 @@ describe.skipIf(!HAS_DB)("(c) the stopped-orchestrator resume", () => {
     const { resumeStoppedOrchestratorAction } = await import("../orchestrator-actions");
     await resumeStoppedOrchestratorAction(h.runId);
     expect(await serde.isRunExecutedSourceCurrent(h.runId, ORG, oldProof)).toBe(false);
+  });
+
+  // cinatra#3745 pre-1 finding 1: a task of the old attempt still running after the stop
+  // signs its old attempt; after the resume moved the run and its binding to a fresh
+  // attempt, that callback is refused, though the binding and the digests match.
+  it("refuses a callback that the task of the old attempt signs after the resume", async () => {
+    const attemptA = await seedDispatchedRun("stopped");
+    const { resumeStoppedOrchestratorAction } = await import("../orchestrator-actions");
+    expect(await resumeStoppedOrchestratorAction(h.runId)).toEqual({ ok: true });
+    const state = await rows();
+    expect(state.runAttempt).not.toBe(attemptA);
+    expect(state.boundAttempt).toBe(state.runAttempt);
+    expect(await callback(attemptA)).toMatchObject({ admitted: false, code: "run_source_mismatch",
+      cause: "step_tool_run_source_inactive" });
+    expect(await callback()).toMatchObject({ admitted: true, current: true });
+  });
+
+  // cinatra#3745 pre-2 finding 1: resume R1 claims attempt B and stalls before its message is built; the
+  // run is stopped and resume R2 claims attempt C, carrying the binding to C. R1's task must never go out
+  // labeled C (its run credential stays valid, so a C label would be admitted), and R1's failure must not
+  // move the run that R2 now runs.
+  it("a delayed resume never labels its task with the attempt of a later resume", async () => {
+    await seedDispatchedRun("stopped");
+    h.realMint = true;
+    h.onSend = () => callback((h.sentAttempts.at(-1) as string | null) ?? "");
+    const { resumeStoppedOrchestratorAction } = await import("../orchestrator-actions");
+    let attemptB: string | null = null;
+    let second: unknown;
+    h.onMint = async () => {
+      attemptB = (await rows()).runAttempt;
+      await transitions.transitionRunStatus(h.runId, "running", "stopped", undefined, AUTHORITY as never);
+      second = await resumeStoppedOrchestratorAction(h.runId);
+    };
+    expect(await resumeStoppedOrchestratorAction(h.runId)).toEqual({ ok: false, error: "resume failed" });
+    expect(second).toEqual({ ok: true });
+    const after = await rows();
+    expect(after.status).toBe("running");
+    expect(after.runAttempt).not.toBe(attemptB);
+    expect(after.boundAttempt).toBe(after.runAttempt);
+    // Only R2 sent, labeled with its own attempt, and only its callback is admitted.
+    expect(h.sends).toBe(1);
+    expect(h.sentAttempts).toEqual([after.runAttempt]);
+    expect(h.callbacks).toEqual([{ admitted: true, current: true, ...after }]);
+  });
+
+  it("a delayed resume whose send fails never stops the attempt of a later resume", async () => {
+    await seedDispatchedRun("stopped");
+    const { resumeStoppedOrchestratorAction } = await import("../orchestrator-actions");
+    let second: unknown;
+    // R1's send is in flight: the run is stopped and resumed again (R2), then R1's send fails.
+    h.onSend = async () => {
+      h.onSend = callback;
+      await transitions.transitionRunStatus(h.runId, "running", "stopped", undefined, AUTHORITY as never);
+      second = await resumeStoppedOrchestratorAction(h.runId);
+      h.sendError = new Error("wayflow unreachable");
+      return "r1-send";
+    };
+    expect(await resumeStoppedOrchestratorAction(h.runId)).toEqual({ ok: false, error: "resume failed" });
+    expect(second).toEqual({ ok: true });
+    const after = await rows();
+    expect(after).toEqual({ status: "running", runAttempt: after.runAttempt, boundAttempt: after.runAttempt });
+    expect(h.callbacks).toEqual([{ admitted: true, current: true, ...after }, "r1-send"]);
   });
 
   it("never admits a callback under a binding held by a foreign attempt", async () => {

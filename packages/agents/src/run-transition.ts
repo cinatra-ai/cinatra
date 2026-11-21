@@ -253,6 +253,7 @@ export async function updateAgentRunStatusConditional(
   tx: GuardedRunTx,
   pause?: PauseSeamFields,
   gate?: ResumeGateIdentity,
+  runningAttempt?: string,
 ): Promise<boolean> {
   assertPauseSeamFields(id, expectedStatus, nextStatus, pause);
   if (expectedStatus === "pending_approval" && nextStatus === "running" && pause?.pauseFence === undefined) {
@@ -335,6 +336,8 @@ export async function updateAgentRunStatusConditional(
                 : eq(agentRuns.executionAttemptId, gate.executionAttemptId),
             ]
           : []),
+        // cinatra#3745: an edge out of `running` bound to one execution attempt.
+        ...(runningAttempt !== undefined ? [eq(agentRuns.executionAttemptId, runningAttempt)] : []),
       ),
     )
     .returning({ id: agentRuns.id });
@@ -652,6 +655,32 @@ function assertResumeGateEdge(runId: string, from: AgentRunStatus, to: AgentRunS
 // handler then writes carries `resumeLeg` (that task, that attempt) in its CAS.
 // An old answer finds no row and changes nothing.
 
+/** Pre-guard: the attempt key is legal only on an edge out of `running`, with a named attempt, alone among the CAS keys. */
+function assertRunningAttemptEdge(
+  runId: string,
+  from: AgentRunStatus,
+  to: AgentRunStatus,
+  meta: { runningAttempt?: unknown; resumeGate?: unknown; resumeLeg?: unknown; derivationOutbox?: unknown },
+): void {
+  const why =
+    from !== "running"
+      ? `runningAttempt is not legal on ${from} → ${to}`
+      : typeof meta.runningAttempt !== "string" || meta.runningAttempt === ""
+        ? "runningAttempt must name an attempt"
+        : meta.resumeGate !== undefined || meta.resumeLeg !== undefined || meta.derivationOutbox !== undefined
+          ? "runningAttempt is not legal with resumeGate, resumeLeg or derivationOutbox"
+          : null;
+  if (why !== null) {
+    throw new RunTransitionError({
+      code: "illegal_transition",
+      runId,
+      from,
+      to,
+      message: `transitionRunStatus(${runId}) illegal_transition: ${why}`,
+    });
+  }
+}
+
 /** Pre-guard: the leg key is legal only on an edge out of `running`, alone among the CAS keys. */
 function assertResumeLegEdge(
   runId: string,
@@ -778,6 +807,7 @@ const CONTROL_META_KEYS = [
   "resumeIntentLease",
   "resumeGate",
   "resumeLeg",
+  "runningAttempt",
 ] as const;
 
 /**
@@ -818,6 +848,8 @@ export async function transitionRunStatus(
         resumeGate?: ResumeGate;
         /** cinatra#3745: the claimed resume leg an edge out of `running` belongs to (the task its answer named, in the claim's execution attempt), in the CAS, so an old answer never moves a newer execution. Legal only on an edge out of `running`, not with `resumeGate` or `derivationOutbox`. Not a DB column. */
         resumeLeg?: ResumeGateIdentity;
+        /** cinatra#3745: the edge out of `running` lands only while the run runs under this execution attempt, in the CAS, so the compensation of one dispatch claim never moves a newer one. Legal only on an edge out of `running`, alone among the CAS keys. Not a DB column. */
+        runningAttempt?: string;
       }
     | undefined,
   // cinatra#1939 wave 2 — REQUIRED host-minted authority (the compile-time
@@ -846,6 +878,7 @@ export async function transitionRunStatus(
   if (meta?.resumeIntentLease) assertResumeIntentLeaseEdge(runId, from, to);
   if (meta?.resumeGate) assertResumeGateEdge(runId, from, to, meta.resumeGate);
   if (meta?.resumeLeg) assertResumeLegEdge(runId, from, to, meta);
+  if (meta?.runningAttempt !== undefined) assertRunningAttemptEdge(runId, from, to, meta);
   // (2) Fail-closed: every status transition requires a host-minted authority.
   // The org (lock + CAS scope) is the authority's org — a wrong-org authority
   // fails closed as `stale_from_status` via the §1d org-scoped CAS.
@@ -939,6 +972,7 @@ export async function transitionRunStatus(
         pauseTaskId: meta?.pauseTaskId,
       },
       casGate ? { a2aTaskId: casGate.a2aTaskId, executionAttemptId: casGate.executionAttemptId } : undefined,
+      meta?.runningAttempt,
     );
     if (!won) {
       // Rolls back the guarded tx; the meta write below never runs and the
@@ -963,7 +997,7 @@ export async function transitionRunStatus(
     // CAS — and `humanWaitGate` — not a DB column) are stripped first: only
     // genuine DB meta reaches the delegated write (cinatra#4245 adds the three
     // pause keys: the CAS reads or writes them, none is a meta column;
-    // cinatra#3745 adds `resumeIntentLease`, `resumeGate` and `resumeLeg`).
+    // cinatra#3745 adds `resumeIntentLease`, `resumeGate`, `resumeLeg` and `runningAttempt`).
     const dbMeta: NonNullable<typeof meta> = { ...(meta ?? {}) };
     for (const key of CONTROL_META_KEYS) delete dbMeta[key];
     const hasDelegatedMeta =

@@ -825,7 +825,7 @@
     {
       "primitiveName": "lifecycle_bound_card_decide",
       "file": "src/lib/lifecycle/lent-action-mcp.ts",
-      "line": 1184
+      "line": 1347
     },
     {
       "primitiveName": "lifecycle_bound_screen_fill",
@@ -1283,9 +1283,14 @@
       "line": 32
     },
     {
-      "primitiveName": "wordpress_site_tools_list",
+      "primitiveName": "wordpress_site_tool_write",
       "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
       "line": 37
+    },
+    {
+      "primitiveName": "wordpress_site_tools_list",
+      "file": "extensions/cinatra-ai/wordpress-mcp-connector/src/mcp/registry.ts",
+      "line": 42
     }
   ]
 }

@@ -360,6 +360,13 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
           surface: "production",
           why: "the review page mounts the card in its gate region; the page composes no floor of its own",
         },
+        {
+          module: "src/app/design-fixtures/conformance/run-window-ownership-fixtures.tsx",
+          adapter: "mount",
+          region: "gate_region",
+          surface: "dev_preview",
+          why: "the design-conformance harness mount of the run-window ownership reading (cinatra#3487): the fixtures route draws the SAME card under the page_gate_region declaration inside the run page chrome, so the suite reads that the one window stands in the chrome and never in the card. Enumerated because it is a real callsite, and marked dev_preview because the route is dev-only and sessionless — it claims no host mount anybody ships",
+        },
       ],
     },
     // Where two adapters serve ONE host, exclusivity is a property somebody can

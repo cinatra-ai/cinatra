@@ -94,7 +94,11 @@ describe("the menu is a NECESSARY condition, never a sufficient one", () => {
 
   it("but a message that never names the act cannot reach it at all", () => {
     const words = "can you summarise what changed since the last revision?";
-    expect(controlsNamedByThePerson(["comment", "approve", "reject"], words)).toEqual(["comment"]);
+    // AMENDED for cinatra#3080: the lent set is the review's present one.
+    expect(controlsNamedByThePerson(["comment", "regenerate", "approve"], words)).toEqual([
+      "comment",
+      "regenerate",
+    ]);
     expect(controlsNamedByThePerson(["confirm", "skip"], words)).toEqual([]);
   });
 });
@@ -102,21 +106,27 @@ describe("the menu is a NECESSARY condition, never a sufficient one", () => {
 describe("the menu, narrowed from the card's own lent set", () => {
   it("keeps the always-corroborated controls and drops the unnamed decisions", () => {
     expect(
+      // AMENDED for cinatra#3080: the lent set is the review's present one, and
+      // Regenerate is always corroborated (the words ARE the request).
       controlsNamedByThePerson(
-        ["comment", "approve", "reject"],
+        ["comment", "regenerate", "approve"],
         "the second paragraph overstates the result",
       ),
-    ).toEqual(["comment"]);
+    ).toEqual(["comment", "regenerate"]);
   });
 
   it("adds the decision the person named, and only that one", () => {
-    expect(controlsNamedByThePerson(["comment", "approve", "reject"], "approve it")).toEqual([
+    // AMENDED for cinatra#3080: the lent set is the review's present one.
+    expect(controlsNamedByThePerson(["comment", "regenerate", "approve"], "approve it")).toEqual([
       "comment",
+      "regenerate",
       "approve",
     ]);
-    expect(controlsNamedByThePerson(["comment", "approve", "reject"], "reject it")).toEqual([
+    // A review lends no reject any more: 'reject it' names no lent decision, so
+    // the always-on controls stand alone (the binding answers the word itself).
+    expect(controlsNamedByThePerson(["comment", "regenerate", "approve"], "reject it")).toEqual([
       "comment",
-      "reject",
+      "regenerate",
     ]);
   });
 

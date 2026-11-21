@@ -16,8 +16,10 @@
 import {
   Component as ReactComponent,
   createElement,
+  useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ComponentType,
   type ReactNode,
@@ -37,6 +39,25 @@ class FieldRendererErrorBoundary extends ReactComponent<
 
   static getDerivedStateFromError(): { crashed: boolean } {
     return { crashed: true };
+  }
+
+  // THE CRASH IS MARKED IN THE COMMIT ONLY (cinatra#3562), never in a render:
+  // React can run a render and then throw it away (a transition that is
+  // interrupted or waits for data, for example), and a mark set in such a
+  // render would close the road of a component that is still drawn and
+  // working. `getSnapshotBeforeUpdate` runs in the commit that swaps in the
+  // floor, before that commit removes the crashed component, so a report the
+  // component makes while it is removed (a layout-effect cleanup) already
+  // finds the mark. A component that crashes in its first render was never
+  // drawn and makes no such report: `componentDidCatch` marks it.
+  getSnapshotBeforeUpdate(): null {
+    if (this.state.crashed) this.props.onCrash?.();
+    return null;
+  }
+
+  componentDidUpdate(): void {
+    // React wants `componentDidUpdate` beside `getSnapshotBeforeUpdate` (it
+    // warns otherwise); there is nothing more to do in it.
   }
 
   componentDidCatch(error: unknown): void {
@@ -77,6 +98,40 @@ export function makeExtensionFieldRenderer(
       reportFloor?.(floored);
     }, [floored, reportFloor]);
     useEffect(() => () => reportFloor?.(false), [reportFloor]);
+    // THE RESOLVED COMPONENT'S VALIDITY REPORTS (cinatra#3562). The host's
+    // validity owner belongs to this wrapper, which stays on the screen when
+    // the component inside it crashes into the floor. So the wrapper closes
+    // the component's reporting road at the crash: what the component reported
+    // before it crashed stands (a `false` keeps the gate held, which is
+    // fail-closed), and a report that arrives later, `false` or `true`, changes
+    // nothing. The floor itself never reports. The mark is set by the
+    // boundary in the commit that swaps in the floor, before that commit
+    // removes the crashed component, so every report from that commit on is
+    // dropped, the crashed component's own layout-effect cleanup included; a
+    // report the component made before that commit (in the render that threw
+    // too) counts as its last. A render that React throws away sets no mark.
+    // It is read only when a report arrives. The guarded report keeps one
+    // identity for as long as the host's own report does, so a component that
+    // reports in an effect keyed on it does not report again on every render.
+    const crashedRef = useRef(false);
+    // THE FLOOR OF A HELD CRASH IS UNAVAILABLE (cinatra#3562 with cinatra#4310).
+    // The component's last report before the crash stands with the gate, and
+    // nothing can change it. When that report is `false`, the floor is drawn
+    // `disabled`: a control the floor draws itself (the Continue of a per-field
+    // boolean, string or number question on a setup gate whose entry declares
+    // `drawsOwnSubmit`) would otherwise look available on a gate whose sends
+    // all send nothing.
+    const lastReportRef = useRef<boolean | null>(null);
+    const [heldAtCrash, setHeldAtCrash] = useState(false);
+    const reportValidity = props.onValidityChange;
+    const guardedReport = useCallback(
+      (valid: boolean) => {
+        if (crashedRef.current) return;
+        lastReportRef.current = valid === true;
+        reportValidity?.(valid);
+      },
+      [reportValidity],
+    );
 
     useEffect(() => {
       let alive = true;
@@ -114,6 +169,7 @@ export function makeExtensionFieldRenderer(
       props.schema as { "x-renderer"?: unknown } & Record<string, unknown>;
     const floorProps: FieldRendererProps = {
       ...props,
+      ...(heldAtCrash ? { disabled: true } : {}),
       schema: floorSchema,
       context: {
         ...props.context,
@@ -125,10 +181,21 @@ export function makeExtensionFieldRenderer(
     };
     const floor = createElement(SchemaOnlyFloorRenderer, floorProps);
     if (degraded || resolved === null) return floor;
+    const resolvedProps: FieldRendererProps =
+      reportValidity === undefined
+        ? props
+        : { ...props, onValidityChange: guardedReport };
     return createElement(
       FieldRendererErrorBoundary,
-      { fallback: floor, onCrash: () => setCrashed(true) },
-      createElement(resolved, props),
+      {
+        fallback: floor,
+        onCrash: () => {
+          crashedRef.current = true;
+          setCrashed(true);
+          if (lastReportRef.current === false) setHeldAtCrash(true);
+        },
+      },
+      createElement(resolved, resolvedProps),
     );
   }
   ExtensionFieldRenderer.displayName = `ExtensionFieldRenderer(${bindingId})`;

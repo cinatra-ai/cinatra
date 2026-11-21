@@ -47,7 +47,7 @@ beforeEach(() => {
 
 /** The prompt window's typed change request: the lent Comment names the road. */
 async function commentOnStep(note = "Say it in plain words") {
-  return submitReviewDecisionAction(RUN, STEP, "comment", note, undefined, null, { typedChangeRequest: true });
+  return submitReviewDecisionAction(RUN, STEP, "comment", note, undefined, null, null, { typedChangeRequest: true });
 }
 
 /** The decision bar's Comment button: the page's bound action passes no road. */
@@ -82,7 +82,7 @@ describe("a typed change request on the step's own declared gate (cinatra#4245 D
 
   it("H4 an eligible comment is a change request: the store is asked with the step's gate and its one target", async () => {
     const outcome = await commentOnStep("  Say it in plain words  ");
-    expect(p.changes).toHaveBeenCalledWith({ runId: RUN, reviewTaskId: STEP, baseTarget: TARGET, feedback: "Say it in plain words", actorCtx: actor });
+    expect(p.changes).toHaveBeenCalledWith({ runId: RUN, reviewTaskId: STEP, baseTarget: TARGET, feedback: "Say it in plain words", origin: "typed", actorCtx: actor });
     expect(outcome).toEqual({ kind: "changes-requested", status: "requested", idempotent: false });
     expect(p.decision).not.toHaveBeenCalled();
   });
@@ -128,7 +128,7 @@ describe("a typed change request on the step's own declared gate (cinatra#4245 D
     p.fence = false;
     expect(await commentOnStep()).toEqual({ kind: "annotated" });
     p.fence = true;
-    expect(await submitReviewDecisionAction(RUN, STEP, "comment", "   ", undefined, null, { typedChangeRequest: true })).toEqual({ kind: "annotated" });
+    expect(await submitReviewDecisionAction(RUN, STEP, "comment", "   ", undefined, null, null, { typedChangeRequest: true })).toEqual({ kind: "annotated" });
     p.pinned.mockResolvedValue([TARGET, { artifactId: "art-img", representationRevisionId: "rev-img-1" }]);
     expect(await commentOnStep()).toEqual({ kind: "annotated" });
     expect(p.changes).not.toHaveBeenCalled();
@@ -148,8 +148,8 @@ describe("the decision bar's Comment button on the step's own declared gate (des
     });
   });
 
-  it("H11 guard (green at base): a picture leg (`#n`) keeps its change request from the button too; the run stays paused there", async () => {
-    await submitReviewDecisionAction(RUN, `${STEP}#2`, "comment", "Make the sky darker");
+  it("H11 guard (green at base): a picture leg (`#n`) keeps its change request from the conversation's comment (cinatra#3080); the run stays paused there", async () => {
+    await submitReviewDecisionAction(RUN, `${STEP}#2`, "conversation-comment", "Make the sky darker");
     expect(p.changes).toHaveBeenCalledTimes(1);
     expect(p.changes.mock.calls[0][0]).toMatchObject({ runId: RUN, reviewTaskId: `${STEP}#2`, baseTarget: TARGET });
     expect(p.enforce).not.toHaveBeenCalledWith({ runId: RUN, op: "approveHitl", actorCtx: actor });

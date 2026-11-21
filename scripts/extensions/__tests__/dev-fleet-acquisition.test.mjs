@@ -241,7 +241,8 @@ describe("readDevFleetLock — the committed lock", () => {
     // The counts an image build is measured against: required-only, and the
     // union a dev-fleet build carries.
     expect(requiredNames.size).toBe(28);
-    expect(dev.packages.length).toBe(88);
+    // 89 since @cinatra-ai/website-artifacts joined the dev lock (cinatra#4366).
+    expect(dev.packages.length).toBe(89);
   });
 
   it("rejects a lock entry without a 40-hex commit SHA", () => {
