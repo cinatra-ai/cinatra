@@ -13,6 +13,7 @@ export {
 export {
   ReadOnlyComposedDashboard,
   ReadOnlySinglePortlet,
+  type ReadOnlyCompositionDataRoad,
   type ReadOnlyComposedDashboardProps,
   type ReadOnlySinglePortletProps,
 } from "./read-only-composition";
