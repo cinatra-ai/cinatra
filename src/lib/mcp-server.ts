@@ -1,3 +1,4 @@
+import { isRunExecutedSourceCurrent } from "@cinatra-ai/agents/store";
 import "@/lib/extensions"; // initialises extensionRegistry side effects
 import "@/lib/register-test-delivery-send-port"; // wires the run-scoped test-delivery send PORT (#1625)
 import { admitToolInputSchema, createMcpRuntimeServer, createMcpServerAuthPlugins, createMcpServerMount, type McpServerSettings, type McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
@@ -681,12 +682,18 @@ export const mcpServerMount = createMcpServerMount({
   // binding through the ONE run-token seam (readAgentRunByTokenHash — the run
   // row stays the source of truth). App-wired because packages/mcp-server
   // cannot import the app layer. The resolver classifies its own failures
-  // (transport ⇒ absent, present-but-unresolvable ⇒ invalid) and never throws.
+  // (a failed read or a present-but-unresolvable binding is invalid) and never
+  // throws. A binding that carries an executing-source proof is re-checked
+  // against the run store (cinatra#3745).
   // The in-process `getRunContext` registry callback that used to sit here was
   // DELETED with the registry (#1195 flip): this is the only run-context
   // channel the app wires besides the signed OBO token.
   resolveDurableRunContext: (rawBearerToken: string) =>
-    resolveDurableRunContext(rawBearerToken, readAgentRunByTokenHash),
+    resolveDurableRunContext(rawBearerToken, readAgentRunByTokenHash, undefined, isRunExecutedSourceCurrent),
+  // cinatra#3745: the same run-store check for an on-behalf-of token's signed
+  // executing-source proof, run by the transport on every request (a token of
+  // an earlier attempt is refused after a re-dispatch).
+  isRunExecutedSourceCurrent,
   // #1195 metric — counts which channel attributed each MCP request. It once
   // gated the registry removal; the removal has LANDED, so it now records the
   // surviving channels (obo / durable / header / none) as ongoing observability.

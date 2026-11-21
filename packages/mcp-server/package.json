@@ -32,6 +32,7 @@
   },
   "dependencies": {
     "@better-auth/oauth-provider": "^1.6.23",
+    "@cinatra-ai/sdk-extensions": "workspace:*",
     "@daveyplate/better-auth-ui": "^3.4.0",
     "@modelcontextprotocol/server": "2.0.0",
     "better-auth": "^1.6.23",
