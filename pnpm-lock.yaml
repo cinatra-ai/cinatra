@@ -761,10 +761,6 @@ importers:
         version: 2.1.9(@types/node@22.20.1)(jsdom@30.0.0(@noble/hashes@2.2.0))(lightningcss@1.32.0)(terser@5.48.0)
 
   extensions/cinatra-ai/cms-snapshot-artifact:
-    dependencies:
-      lucide-react:
-        specifier: ^1.20.0
-        version: 1.20.0(react@19.2.7)
     devDependencies:
       '@types/node':
         specifier: ^22.10.0
@@ -1997,6 +1993,34 @@ importers:
       vitest:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@24.13.5)(jsdom@25.0.1)(lightningcss@1.32.0)(terser@5.48.0)
+
+  extensions/cinatra-ai/website-artifacts:
+    dependencies:
+      lucide-react:
+        specifier: ^1.20.0
+        version: 1.20.0(react@19.2.7)
+    devDependencies:
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.1
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      '@types/react-dom':
+        specifier: ^19.0.0
+        version: 19.2.3(@types/react@19.2.17)
+      react:
+        specifier: 19.2.7
+        version: 19.2.7
+      react-dom:
+        specifier: 19.2.7
+        version: 19.2.7(react@19.2.7)
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
+        version: 2.1.9(@types/node@22.20.1)(jsdom@30.0.0(@noble/hashes@2.2.0))(lightningcss@1.32.0)(terser@5.48.0)
 
   extensions/cinatra-ai/wordpress-assistant-connector:
     dependencies:

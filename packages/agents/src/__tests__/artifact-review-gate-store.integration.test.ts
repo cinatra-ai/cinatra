@@ -92,6 +92,23 @@ function freshGateIds(): { runId: string; reviewTaskId: string } {
   return { runId: `run-${randomUUID()}`, reviewTaskId: `wayflow-${randomUUID()}` };
 }
 
+// The rail's task-key tie order among gates raised at one instant (cinatra#3035):
+// the id before `#`, then the member number (an id without `#` is member 1, so
+// `#10` follows `#9`), then the whole id; ids compare by code units.
+function railTieOrder(a: string, b: string): number {
+  const units = (x: string, y: string) => (x < y ? -1 : x > y ? 1 : 0);
+  const split = (id: string) => {
+    const cut = id.indexOf("#");
+    if (cut === -1) return { base: id, member: 1 };
+    const member = Number(id.slice(cut + 1));
+    return { base: id.slice(0, cut), member: Number.isInteger(member) && member > 0 ? member : Number.MAX_SAFE_INTEGER };
+  };
+  const x = split(a), y = split(b);
+  if (x.base !== y.base) return units(x.base, y.base);
+  if (x.member !== y.member) return x.member - y.member;
+  return units(a, b);
+}
+
 /** A decision-core port harness over the REAL store commit + gate state. The
  *  artifact-side ports (verifyRunAccess / revisionMember / deriveProvenance) are
  *  faked — this suite proves the STORE (CAS + audit + outbox), not the #1807
@@ -1052,7 +1069,7 @@ afterAll(async () => {
       `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates"
           SET created_at = timestamptz '2026-10-01 00:00:00+00' WHERE run_id = $1`, [runId],
     );
-    expect((await gateStore.readRunReviewSlot(runId)).reviewTaskId).toBe([...tasks].sort((a, b) => a.localeCompare(b))[0]);
+    expect((await gateStore.readRunReviewSlot(runId)).reviewTaskId).toBe([...tasks].sort(railTieOrder)[0]);
   });
 
   it("SLOT: another run's gate is never this run's answer", async () => {

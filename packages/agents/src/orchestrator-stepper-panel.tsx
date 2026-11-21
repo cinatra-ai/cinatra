@@ -72,7 +72,7 @@ import { LoadingSpinner } from "@cinatra-ai/sdk-ui";
 
 import { classifyMidRunHitl } from "./orchestrator-mid-run-hitl";
 import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
-import { HitlConversationPanel } from "./hitl-conversation-panel";
+import { useRunWindowScreen } from "./run-window-screen-context";
 import { useRunWindowConversation } from "./use-run-window-conversation";
 import { useAgUiRunStream } from "./use-ag-ui-run-stream";
 import {
@@ -84,6 +84,7 @@ import { RunCompletionCard } from "./run-completion-affordances";
 import {
   LifecycleCardSurfaceProvider,
   defaultRunReviewSlotReader,
+  markedReviewGateCard,
   useRunReviewSlot,
   useRunReviewRailRefresh,
   type RunReviewSlot,
@@ -164,6 +165,7 @@ import {
   RUN_PAGE_RAIL_ROW_CLASS,
   RUN_PAGE_RAIL_SEP_CLASS,
   RUN_PAGE_RAIL_TITLE_COLOUR_CLASS,
+  splitRailExtrasAtSpine,
   useRunSurfaceRailFrame,
 } from "./run-step-rail-extra-entry";
 
@@ -863,7 +865,6 @@ function HitlApprovalCard({
   // drawing puts it under the step's own work, in the same column, so the target
   // is a node rendered exactly there: the composition
   // `schedule-prompt-window.tsx` already uses.
-  const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
   // Stable suggestion payload threaded into the renderer so it can sync local
   // state via useEffect([aiSuggestions]). Only changes when the user submits
   // the bottom prompt — not on every poll tick.
@@ -1453,6 +1454,33 @@ function HitlApprovalCard({
     }
   };
 
+  // THE SCREEN REGISTERS; THE PAGE OWNS THE WINDOW (cinatra#3487).
+  //
+  // The ruling of 2026-09-14: "every step screen, the review route and every
+  // lifecycle card stop mounting one". The step-by-step screen used to render a
+  // mount of its own below its card; it publishes instead, and the page's chrome
+  // draws the one window below this screen.
+  //
+  // REGISTERED ABOVE THE BLOCKED READING'S RETURN, which is what keeps this an
+  // unconditional hook — and the blocked reading is exactly a screen with
+  // nothing to manipulate, so it publishes `false` and the page draws no window.
+  useRunWindowScreen({
+    surface: "step-by-step",
+    runId: runId ?? null,
+    stepId: interruptContext.xRenderer ?? null,
+    gateRef: interruptContext.reviewTaskId ?? null,
+    canManipulate:
+      !gateBlocked &&
+      !isGenericObjectSchema &&
+      // cinatra#2933 — the run's access decides who sees the box.
+      canRespondInWindow !== false &&
+      !!templateId,
+    storageKey: `cinatra_hitl_assist_${templateId}_${interruptContext.xRenderer}`,
+    conversation: runWindow.entries,
+    promptPending: promptPending || runWindow.pending,
+    onSubmit: handlePromptSubmit,
+  });
+
   const cardBody = (
     <>
         {/* The renderer reports this gate's validity as its own. */}
@@ -1720,40 +1748,9 @@ function HitlApprovalCard({
     <Card data-hitl-output={isOutputHitl ? "true" : undefined}>
       <CardContent className="flex flex-col gap-4 p-6">{cardBody}</CardContent>
     </Card>
-    {/* The AI-assist conversation panel, drawn into its own mount below the
-        step's work rather than across the foot of the frame. Delegates to the
-        shared HitlConversationPanel. resetSignal is intentionally omitted —
-        orchestrator-stepper-panel never had a renderer-change reset (no
-        equivalent of agentic-run-panel.tsx:329). */}
-    <div data-run-prompt-window-mount="" ref={setPortalTarget}>
-    <HitlConversationPanel
-      portalTarget={portalTarget}
-      // WHICH READING OF THE ONE WINDOW THIS IS (design `458fb7ffce6c`,
-      // `app-artifact-review.html` §X): the mount names its surface and the
-      // window reads the drawing's own sentence for it.
-      surface="step-by-step"
-      visible={
-        !isGenericObjectSchema &&
-        // cinatra#2933 — the run's access decides who sees the box.
-        canRespondInWindow !== false &&
-        !!templateId &&
-        !!portalTarget
-      }
-      conversation={runWindow.entries}
-      promptPending={promptPending || runWindow.pending}
-      // THE KEY DOES NOT MOVE (cinatra#2934). The field-assist route it was
-      // named for is gone, but this string is where every reader's half-typed
-      // message is kept: renaming it would silently throw away the draft the
-      // plan requires to survive a reload.
-      storageKey={`cinatra_hitl_assist_${templateId}_${interruptContext.xRenderer}`}
-      onSubmit={handlePromptSubmit}
-      // NO LEADING CONTROL, ON ANY READING (cinatra#3222). The ratified
-      // drawing's §X names the window's parts — the panel, the field, the send
-      // control, the placement, the access rule — and a leading control is not
-      // among them: "Nothing else about the window changes from one reading to
-      // the next." This mount used to opt the field into one; no reading does.
-    />
-    </div>
+    {/* NO WINDOW HERE (cinatra#3487): the page's chrome draws the one window
+        below this screen; this screen registered what it is and what it lends
+        above. */}
     </>
   );
 }
@@ -1947,6 +1944,10 @@ function StepperColumn({
   // a second `data-run-step-rail` in the DOM — the very defect this closes.
   if (stepperSteps.length === 0 && railExtras.length === 0) return null;
 
+  // A review gate that stands in a declared step's place is drawn THERE, with
+  // its verification after it; only the rest trail the spine (cinatra#3035).
+  const { onSpine, trailing } = splitRailExtrasAtSpine(railExtras);
+
   return (
     <TooltipProvider>
       <div
@@ -1966,7 +1967,42 @@ function StepperColumn({
               const isActive = s.index === activeStep;
               const isCompleted = s.index < activeStep;
               const isLoading = isActive && (isLoadingStatus || isResuming);
-              const isLast = i === stepperSteps.length - 1 && railExtras.length === 0;
+              const isLast = i === stepperSteps.length - 1 && trailing.length === 0;
+              const inPlace = onSpine.filter((entry) => entry.onStep === s.stepNumber);
+              if (inPlace.length > 0) {
+                // ONE LIVE ROW PER STEP (cinatra#3035). Several gates may stand
+                // in one step's place (one pause opens one gate per artifact,
+                // all pending at first). Only the step's first unsettled entry
+                // takes the step's own value, so it alone can be the active row,
+                // as on the run-frame rail; every other entry takes a value of
+                // its own a fraction past the step, so no two rows share a
+                // value, and the one the run is past reads completed and the one
+                // still to come reads inactive.
+                const current = inPlace.findIndex(
+                  (entry) => entry.status !== "resolved" && entry.status !== "completed",
+                );
+                return inPlace.map((entry, j) => (
+                  <StepperItem
+                    key={entry.key}
+                    step={j === current ? s.index : s.index + (j + 1) / (inPlace.length + 1)}
+                    completed={
+                      entry.status === "resolved" ||
+                      entry.status === "completed" ||
+                      s.index < activeStep
+                    }
+                    className="items-start !flex-none"
+                  >
+                    <RailExtraEntry
+                      entry={entry}
+                      reviewHrefBase={reviewHrefBase}
+                      displayStep={s.index}
+                    />
+                    {!(isLast && j === inPlace.length - 1) && (
+                      <StepperSeparator className={RUN_PAGE_RAIL_SEP_CLASS} />
+                    )}
+                  </StepperItem>
+                ));
+              }
               const showPauseIcon = isPaused && !isCompleted && !isResuming;
               // The replay affordance this row actually carries — asserted by
               // the single-rail regression test (cinatra#2739).
@@ -2062,9 +2098,9 @@ function StepperColumn({
                 render here through the shared `RailExtraEntry`, which is why
                 retiring that second mount loses nothing. They trail the spine
                 in the exact order `buildRunStepRail` sorted them into. */}
-            {railExtras.map((entry, i) => {
+            {trailing.map((entry, i) => {
               const displayStep = stepperSteps.length + i + 1;
-              const isLast = i === railExtras.length - 1;
+              const isLast = i === trailing.length - 1;
               return (
                 <StepperItem
                   key={entry.key}
@@ -2813,13 +2849,20 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     // the trailing rows below — is the one highlighted entry, and a rail with
     // nothing pending highlights none. The display indices are the rail's own:
     // the spine takes 1..N and the trailing rows continue from N+1.
+    // A gate standing in a spine step's place (cinatra#3035) is elected as that
+    // step; only the rest are trailing rows.
+    const { onSpine, trailing } = splitRailExtrasAtSpine(railExtras);
     return electRunRailActiveStep({
       status,
       currentStepNumber,
       awaitingNextStep,
       highestStepNumber: highestStepNumberRef.current,
       spine: stepperSteps,
-      railExtras,
+      railExtras: trailing,
+      spineGates: onSpine.flatMap((entry) => {
+        const step = stepperSteps.find((s) => s.stepNumber === entry.onStep);
+        return entry.kind === "gate" && step ? [{ index: step.index, status: entry.status }] : [];
+      }),
     });
   })();
 
@@ -3025,6 +3068,39 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   const parkedOnProducedReview =
     status === "pending_approval" &&
     (rowProducedReviewPark || reviewSlot.producedReviewPark === true);
+  // A MARKED GATE'S CARD, and its identity (cinatra#3035): of the interrupt's
+  // gate and the slot's gate of the same pause, the one not known to be resolved
+  // (`markedReviewGateCard`). The pause announced one interrupt for all of its
+  // gates, so after the gate it names is decided the interrupt names a decided
+  // gate while the run waits on the next; and the slot, a read on its own
+  // schedule, can be the older answer. The run rail's own resolved gates are the
+  // resolution this panel already reads, so the rule reads them too.
+  const railResolvedReviewTaskIds = useMemo(
+    () =>
+      new Set(
+        railExtras.flatMap((entry) =>
+          entry.kind === "gate" && entry.gate?.resolved === true ? [entry.gate.reviewTaskId] : [],
+        ),
+      ),
+    [railExtras],
+  );
+  const markedInterruptValues =
+    effectiveInterruptContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID
+      ? (effectiveInterruptContext.values ?? {})
+      : null;
+  const markedGate =
+    markedInterruptValues !== null
+      ? markedReviewGateCard({
+          interruptRef:
+            typeof markedInterruptValues.lifecycleCardRef === "string" &&
+            markedInterruptValues.lifecycleCardRef.length > 0
+              ? markedInterruptValues.lifecycleCardRef
+              : null,
+          interruptReviewTaskId: markedInterruptValues.reviewTaskId,
+          slot: reviewSlot,
+          resolvedReviewTaskIds: railResolvedReviewTaskIds,
+        })
+      : null;
   // Follow the card branch: the produced-output park wins over its spent
   // interrupt, and only a discovered card carries a stable rail identity.
   const reviewTaskId = parkedOnProducedReview
@@ -3033,10 +3109,8 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
       : null
     : status === "pending_approval" &&
     !awaitingNextStep &&
-    effectiveInterruptContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID
-      ? typeof effectiveInterruptContext.values?.reviewTaskId === "string"
-        ? effectiveInterruptContext.values.reviewTaskId
-        : null
+    markedGate !== null
+      ? markedGate.reviewTaskId
       : status === "completed"
         ? reviewSlot.reviewTaskId
         : null;
@@ -3047,6 +3121,29 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     railCurrentReviewTaskId: initialReviewGate?.railCurrentReviewTaskId,
     refresh: embedMode ? undefined : router.refresh,
   });
+
+  // cinatra#3035: INSIDE THE RUN FRAME THE RAIL IS SERVER-RENDERED, so a live
+  // advance to a gate this panel has not shown yet asks for one server render.
+  // The first gate a run shows here is the one the server drew, so it only
+  // seeds the set; the set is the run's own and starts again for another run.
+  // A review gate's refresh is the hook's above (#3942), which reads the
+  // server's own rail list; this asks only for the gates that hook does not
+  // read, so one advance asks for at most one render.
+  const liveGateTaskId = effectiveInterruptContext?.reviewTaskId ?? null;
+  const gatesShownRef = useRef<{ runId: string; shown: Set<string> | null }>({ runId, shown: null });
+  useEffect(() => {
+    if (gatesShownRef.current.runId !== runId) gatesShownRef.current = { runId, shown: null };
+    if (!railFrameDrawsTheRail || liveGateTaskId === null) return;
+    const seen = gatesShownRef.current;
+    if (seen.shown === null) {
+      seen.shown = new Set([liveGateTaskId]);
+      return;
+    }
+    if (seen.shown.has(liveGateTaskId)) return;
+    seen.shown.add(liveGateTaskId);
+    if (reviewTaskId != null) return;
+    router.refresh();
+  }, [railFrameDrawsTheRail, liveGateTaskId, reviewTaskId, router, runId]);
 
 
   // -------------------------------------------------------------------------
@@ -3182,11 +3279,8 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     // approval-form state, hook or submit path is constructed for a gate that
     // has no fields to fill.
     const reviewValues = effectiveInterruptContext.values ?? {};
-    const cardRef =
-      typeof reviewValues.lifecycleCardRef === "string" &&
-      reviewValues.lifecycleCardRef.length > 0
-        ? reviewValues.lifecycleCardRef
-        : null;
+    // The gate the run waits on now (cinatra#3035; `markedGate` above).
+    const cardRef = markedGate?.ref ?? null;
     const reviewSurfaceUrl =
       typeof reviewValues.reviewSurfaceUrl === "string" &&
       reviewValues.reviewSurfaceUrl.startsWith("/")

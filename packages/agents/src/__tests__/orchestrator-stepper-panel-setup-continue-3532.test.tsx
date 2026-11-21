@@ -54,6 +54,7 @@ import { ensureDefaultFieldRenderersRegistered } from "../register-default-rende
 import { fieldRendererRegistry } from "../field-renderer-registry";
 import type { FieldRendererProps } from "../field-renderer-registry";
 import { ensureOrCheckRunNameAction } from "../run-name-actions";
+import { RunPageChrome } from "../run-page-chrome";
 
 // --- Panel mount harness (mirrors orchestrator-stepper-hitl-field-label) ---
 
@@ -118,9 +119,10 @@ vi.mock("../hitl-actions", () => hitlActions);
 /**
  * THE CONVERSATION PANEL, PASSED THROUGH. The stepper draws it without its
  * paperclip, so no case here can attach a file from the screen; the one case
- * that needs the card's attachment road calls the `onSubmit` the card hands
- * the panel, which is the road the paperclip takes. The panel itself is the
- * real one, drawn with the same props.
+ * that needs the card's attachment road calls the `onSubmit` the panel is
+ * handed, which is the road the paperclip takes. Since cinatra#3487 the run
+ * page's chrome draws the panel and hands it the submit the card lent the
+ * chrome. The panel itself is the real one, drawn with the same props.
  */
 const conversation = vi.hoisted(() => ({
   onSubmit: null as null | ((prompt: string, attachments?: unknown[]) => Promise<void>),
@@ -262,6 +264,12 @@ async function mountGate(args: {
   reviewTaskId?: string;
   /** Draw the panel under React.StrictMode. */
   strict?: boolean;
+  /**
+   * Draw the panel inside the run page's chrome, which owns the one prompt
+   * window (cinatra#3487): the panel registers with it and the chrome draws
+   * the window below the panel.
+   */
+  chrome?: boolean;
   /** The interrupt's values; `{ stepNumber: 0 }` makes it the run's first step. */
   values?: Record<string, unknown>;
 }) {
@@ -273,8 +281,10 @@ async function mountGate(args: {
     fieldName: args.fieldName,
   };
   const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
-  const draw = (element: React.ReactElement) =>
-    args.strict === true ? <React.StrictMode>{element}</React.StrictMode> : element;
+  const draw = (panel: React.ReactElement) => {
+    const element = args.chrome === true ? <RunPageChrome>{panel}</RunPageChrome> : panel;
+    return args.strict === true ? <React.StrictMode>{element}</React.StrictMode> : element;
+  };
   const view = render(draw(<OrchestratorStepperPanel {...baseProps()} />));
   /** Advance the live gate under the mounted panel, as the setup loop does. */
   const advanceTo = (next: { xRenderer: string; fieldName: string; reviewTaskId?: string }) => {
@@ -1249,10 +1259,14 @@ describe("OrchestratorStepperPanel — a renderer that reports its value unsenda
       ok: false,
       blocked: "no-longer-pending",
     } as never);
+    // THE PAGE OWNS THE WINDOW (cinatra#3487): the card hands its submit to
+    // the run page's chrome, which draws the one window, so the case mounts the
+    // panel in that chrome.
     const view = await mountGate({
       xRenderer: MID_RUN_RENDERER_ID,
       fieldName: "callToAction",
       reviewTaskId: "review-run-3562-attach-a",
+      chrome: true,
     });
 
     await waitFor(() => expect(outerContinue()).not.toBeNull());

@@ -136,7 +136,29 @@ export type ArtifactSummary = {
   // `connectorRefSourceUrl` (http/https only). Null for every artifact
   // without a connector-ref pointer — i.e. all blob/dashboard artifacts.
   sourceUrl: string | null;
+  // The published page address a publish run wrote back onto this artifact
+  // (cinatra#4313): the three keys the WordPress publish run merges into
+  // `objects.data` through `objects_update`, projected by `publishedAddressOf`.
+  // Each key is present only when the row holds it as a non-empty string, and
+  // the URL only when it is an absolute http/https URL. A row without them has
+  // none of these keys, so its summary keeps the shape it had before.
+  wordpressPublishedUrl?: string;
+  wordpressPublishedExternalId?: string;
+  wordpressPublishedRevisionId?: string;
 };
+
+/** An absolute http/https URL as its canonical parsed `URL.href`, else null. */
+function safeHttpHref(raw: unknown): string | null {
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  return parsed.href;
+}
 
 /**
  * Typed connector-ref accessor: extract the safe external "open in source
@@ -151,16 +173,37 @@ export function connectorRefSourceUrl(data: unknown): string | null {
   if (typeof data !== "object" || data === null) return null;
   const ref = (data as { connectorRef?: unknown }).connectorRef;
   if (typeof ref !== "object" || ref === null) return null;
-  const raw = (ref as { url?: unknown }).url;
-  if (typeof raw !== "string" || raw.length === 0) return null;
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    return null;
+  return safeHttpHref((ref as { url?: unknown }).url);
+}
+
+export type PublishedAddress = Pick<
+  ArtifactSummary,
+  "wordpressPublishedUrl" | "wordpressPublishedExternalId" | "wordpressPublishedRevisionId"
+>;
+
+/**
+ * The published page address read from a raw `objects.data` value
+ * (cinatra#4313). `objects.data` is org-supplied JSONB, so each key is
+ * projected only when it is a non-empty string; the URL passes only as an
+ * absolute http/https URL and is returned as its canonical parsed href, the
+ * same check as `connectorRefSourceUrl`. A missing or invalid key is left
+ * out, never set to null.
+ */
+export function publishedAddressOf(data: unknown): PublishedAddress {
+  if (typeof data !== "object" || data === null) return {};
+  const d = data as Record<string, unknown>;
+  const out: PublishedAddress = {};
+  const url = safeHttpHref(d.wordpressPublishedUrl);
+  if (url !== null) out.wordpressPublishedUrl = url;
+  const externalId = d.wordpressPublishedExternalId;
+  if (typeof externalId === "string" && externalId.length > 0) {
+    out.wordpressPublishedExternalId = externalId;
   }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
-  return parsed.href;
+  const revisionId = d.wordpressPublishedRevisionId;
+  if (typeof revisionId === "string" && revisionId.length > 0) {
+    out.wordpressPublishedRevisionId = revisionId;
+  }
+  return out;
 }
 
 // The admissible artifact object-type id set. Three sources, unioned:
@@ -320,6 +363,7 @@ function toSummary(
     presentationIdentity: presentation?.identity ?? effective,
     presentationSuggestions: presentation?.suggestions ?? [],
     sourceUrl: connectorRefSourceUrl(rec.data),
+    ...publishedAddressOf(rec.data),
     // NO PRODUCER PROMPT HERE (cinatra#3080). This summary is what
     // `artifacts_list` / `artifacts_get` hand every caller, a type-admitted
     // extension included; the prompt a row records it was made from is producer
