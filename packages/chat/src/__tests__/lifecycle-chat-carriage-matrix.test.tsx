@@ -622,6 +622,11 @@ describe("the five-kind chat_thread carriage matrix, in the REAL view", () => {
     );
   });
 
+  // cinatra#4150: the matrix's ref map names the sixth kind, so the closed set it is read against must hold it too.
+  it("keys its ref map by exactly the protocol's closed kind set, the publish decision included", () => {
+    expect(Object.keys(REF_BY_KIND).sort()).toEqual([...LIFECYCLE_CARD_KINDS].sort());
+  });
+
   it.each([...LIFECYCLE_CARD_KINDS])(
     "%s: the kind's real owner draws at its producing slot, or its ratchet stands",
     async (kind) => {

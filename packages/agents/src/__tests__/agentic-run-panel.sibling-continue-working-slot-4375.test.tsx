@@ -97,9 +97,6 @@ const { getAgentHitlScreenStateAction } = vi.hoisted(() => ({
   getAgentHitlScreenStateAction: vi.fn(),
 }));
 vi.mock("../agent-hitl-screen-actions", () => ({ getAgentHitlScreenStateAction }));
-vi.mock("../publish-decision-card-actions", () => ({
-  getPublishDecisionCardStateAction: async () => ({ state: "none" }),
-}));
 
 /**
  * THE STREAM, as it reads through the working moment: its last word is the

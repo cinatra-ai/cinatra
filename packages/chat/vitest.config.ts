@@ -218,6 +218,8 @@ export default defineConfig({
     testTimeout: 30_000,
     hookTimeout: 30_000,
     environment: "node",
+    // cinatra#4150 -- the publish card's read answers "no open decision" in every suite that does not mock it itself.
+    setupFiles: ["./src/__tests__/publish-card-read.setup.ts"],
     include: ["src/**/__tests__/**/*.test.ts", "src/**/__tests__/**/*.test.tsx"],
     // @ts-ignore — environmentMatchGlobs is a valid vitest option but missing from InlineConfig types
     environmentMatchGlobs: [["src/**/__tests__/**/*.test.tsx", "jsdom"]],

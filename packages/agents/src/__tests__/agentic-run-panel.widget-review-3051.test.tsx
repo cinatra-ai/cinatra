@@ -54,9 +54,6 @@ vi.mock("../../../chat/src/pending-call-actions", () => ({
 vi.mock("../../../chat/src/undo-actions", () => ({ recentUndoableChangeSetForRunAction: async () => ({ changeSetId: null }) }));
 vi.mock("@/components/data-safety/undo-toast", () => ({ undoDeepLink: (id: string) => `/objects?undo=${id}` }));
 vi.mock("../agent-hitl-screen-actions", () => ({ getAgentHitlScreenStateAction: async () => ({ state: "none" }) }));
-vi.mock("../publish-decision-card-actions", () => ({
-  getPublishDecisionCardStateAction: async () => ({ state: "none" }),
-}));
 import { ChatMessagesView } from "../../../chat/src/chat-messages-view";
 import { createChatWidgetRuntime } from "../../../chat/src/widget-runtime";
 import type { UiMessage } from "../../../chat/src/types";

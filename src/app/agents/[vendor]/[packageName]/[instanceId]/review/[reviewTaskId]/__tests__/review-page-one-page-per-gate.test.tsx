@@ -116,8 +116,9 @@ vi.mock("@cinatra-ai/agents/agent-hitl-screen-card", () => ({
   AgentHitlScreenCard: () => <div data-lifecycle-card="agent_hitl_screen" />,
 }));
 // cinatra#4150: the page also mounts the publish card beside the hitl screen card. This suite mocks the card
-// runtime whole, so the card is stubbed the same way; with no open decision the real card draws nothing.
-vi.mock("@cinatra-ai/agents/publish-decision-card-view", () => ({
+// runtime whole, so the card is stubbed the same way; with no open decision the real card draws nothing. The stub
+// names the card's file, which the page's package subpath resolves to, so this file also loads before that subpath.
+vi.mock("../../../../../../../../../packages/agents/src/publish-decision-card-view", () => ({
   PublishDecisionCard: () => null,
 }));
 vi.mock("@cinatra-ai/agents/lifecycle-card-runtime", () => ({
