@@ -123,6 +123,56 @@ describe("provider-independent declared-tool ceiling",()=>{
    sandbox,{type:"function",name:"mail_send"},
   ]);
  });
+ // cinatra#3745: the provider adapters translate built-ins under names other than their kind. OpenAI sends a
+ // skill shell without the sandbox as the function "skill_file_read"; the connector with container skills sends
+ // it as "bash" and container skills as "code_execution". The filter does not know the provider, so it counts every built-in under every
+ // such name: a function or an MCP tool of one of them makes the name ambiguous and neither is offered.
+ const mail={type:"function",name:"mail_send"};
+ const skillShell={type:"shell",skills:[{name:"a",description:"a",path:"/skills/a"}]};
+ const containerSkills={type:"container_skills",skills:[]};
+ it("drops the skill shell and a function both offered to OpenAI as skill_file_read",()=>{
+  const policy={kind:"declared",tools:["skill_file_read","mail_send"],builtinTools:["shell"]} as const;
+  expect(restrictStepToolOffers([skillShell,{type:"function",name:"skill_file_read"},mail] as never,policy)).toEqual([mail]);
+ });
+ it("drops the skill shell and a function both offered as bash",()=>{
+  const policy={kind:"declared",tools:["bash","mail_send"],builtinTools:["shell"]} as const;
+  expect(restrictStepToolOffers([skillShell,{type:"function",name:"bash"},mail] as never,policy)).toEqual([mail]);
+ });
+ it("drops the skill shell and an MCP server's tool both offered as bash, and keeps the server's other names",()=>{
+  const policy={kind:"declared",tools:["bash","mail_send"],builtinTools:["shell"]} as const;
+  expect(restrictStepToolOffers([skillShell,
+   {type:"mcp",serverUrl:"https://example.test",serverLabel:"s",allowedTools:["bash","mail_send"]}] as never,policy)).toEqual([
+   {type:"mcp",serverUrl:"https://example.test",serverLabel:"s",allowedTools:["mail_send"]},
+  ]);
+ });
+ it("drops container skills and a function or an MCP tool offered as code_execution",()=>{
+  const policy={kind:"declared",tools:["code_execution","mail_send"],builtinTools:["container_skills"]} as const;
+  expect(restrictStepToolOffers([containerSkills,{type:"function",name:"code_execution"},mail] as never,policy)).toEqual([mail]);
+  expect(restrictStepToolOffers([containerSkills,
+   {type:"mcp",serverUrl:"https://example.test",serverLabel:"s",allowedTools:["code_execution"]}] as never,policy)).toBeUndefined();
+ });
+ it("drops the skill shell and an MCP tool offered to OpenAI as skill_file_read",()=>{
+  const policy={kind:"declared",tools:["skill_file_read"],builtinTools:["shell"]} as const;
+  expect(restrictStepToolOffers([{type:"mcp",serverUrl:"https://example.test",serverLabel:"s",allowedTools:["skill_file_read"]},
+   skillShell] as never,policy)).toBeUndefined();
+ });
+ it("keeps built-ins of different kinds that share a provider-facing name in the union (each adapter separates them)",()=>{
+  const sandbox={type:"sandbox_execution",toolName:"sandbox_execute",description:"d"};
+  const policy={kind:"declared",tools:[],builtinTools:["shell","sandbox_execution","container_skills","web_search"]} as const;
+  const web={type:"web_search"};
+  expect(restrictStepToolOffers([skillShell,sandbox,containerSkills,web] as never,policy)).toEqual([skillShell,sandbox,containerSkills,web]);
+ });
+ it("names every provider-facing name of each built-in kind in one table",async()=>{
+  const { BUILTIN_TOOL_MODEL_FACING_NAMES } = await import("../index");
+  const { SKILL_FILE_READ_TOOL_NAME } = await import("../tools/skill-read-tool");
+  expect(BUILTIN_TOOL_MODEL_FACING_NAMES).toEqual({
+   shell:["shell",SKILL_FILE_READ_TOOL_NAME,"bash"],
+   container_skills:["container_skills","code_execution","bash_code_execution","text_editor_code_execution"],
+   web_search:["web_search"],
+   sandbox_execution:["sandbox_execution","sandbox_execute","shell"],
+  });
+  expect(Object.isFrozen(BUILTIN_TOOL_MODEL_FACING_NAMES)).toBe(true);
+ });
  it("offers nothing to a step that declares no tool",()=>{
   expect(restrictStepToolOffers([{type:"function",name:"a"}] as never,{kind:"declared",tools:[]})).toBeUndefined();
  });

@@ -2157,6 +2157,8 @@ export async function resolveConfiguredLlmRuntime(input?: {
 }
 
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server/request-context";
+import { SKILL_FILE_READ_TOOL_NAME as SKILL_READ_FACING_NAME } from "./tools/skill-read-tool";
+import { SANDBOX_EXECUTE_TOOL_NAME as SANDBOX_FACING_NAME } from "./execution-plane";
 
 /** Provider built-in tool kinds; never a function tool or an MCP server. */
 export type StepBuiltinToolType = "shell" | "container_skills" | "web_search" | "sandbox_execution";
@@ -2203,11 +2205,38 @@ export function resolveStepToolPolicy(policy: StepToolOfferPolicy | undefined): 
   if (policy != null) return policy;
   return mcpRequestContextStorage.getStore()?.runId ? RUN_FRAME_WITHOUT_POLICY : undefined;
 }
-/** The name a non-MCP tool is offered to the model under: a function tool's name, the sandbox
- * built-in's fixed toolName, otherwise the built-in kind. */
-function modelFacingToolName(tool: LlmTool): string | undefined {
-  if (tool.type === "sandbox_execution") return typeof tool.toolName === "string" ? tool.toolName : undefined;
-  return "name" in tool && typeof tool.name === "string" ? tool.name : tool.type;
+/** cinatra#3745: every name a provider adapter offers a built-in tool to the model under. The adapters
+ * live in the provider connectors and translate each kind themselves; they cannot be imported here,
+ * and the offer filter does not know the target provider. So this one table holds the UNION of the
+ * names the connectors' translateTools give each kind (connector pins of
+ * cinatra-required-extensions.lock.json and cinatra-dev-extensions.lock.json), and the filter counts a
+ * built-in under every one of them (fail closed):
+ * - shell: the restricted function "skill_file_read" (OpenAI, without the sandbox or without the
+ *   native shell), the function "bash" (the connector with container skills), the function "shell"
+ *   (Gemini).
+ * - container_skills: the code-execution entry "code_execution", whose server tools the model calls
+ *   "bash_code_execution" and "text_editor_code_execution"; OpenAI and Gemini skip the kind.
+ * - web_search: the native "web_search"; Gemini skips the kind.
+ * - sandbox_execution: the function "sandbox_execute" (every connector; OpenAI without the native
+ *   shell) and OpenAI's native "shell".
+ * The neutral kind is always counted too. A connector that gives a kind a new name must add it here. */
+export const BUILTIN_TOOL_MODEL_FACING_NAMES: Readonly<Record<StepBuiltinToolType, readonly string[]>> = Object.freeze({
+  shell: Object.freeze(["shell", SKILL_READ_FACING_NAME, "bash"]),
+  container_skills: Object.freeze(["container_skills", "code_execution", "bash_code_execution", "text_editor_code_execution"]),
+  web_search: Object.freeze(["web_search"]),
+  sandbox_execution: Object.freeze(["sandbox_execution", SANDBOX_FACING_NAME, "shell"]),
+});
+/** The names a non-MCP tool is offered to the model under: a function tool's own name; for a
+ * built-in, every name of BUILTIN_TOOL_MODEL_FACING_NAMES (and the sandbox's own toolName). */
+function modelFacingToolNames(tool: LlmTool): string[] {
+  const kind = tool.type;
+  if (kind !== undefined && STEP_BUILTIN_TOOL_TYPES.includes(kind)) {
+    const names = new Set(BUILTIN_TOOL_MODEL_FACING_NAMES[kind as StepBuiltinToolType]);
+    if (kind === "sandbox_execution" && typeof tool.toolName === "string") names.add(tool.toolName);
+    return [...names];
+  }
+  const name = "name" in tool && typeof tool.name === "string" ? tool.name : kind;
+  return name ? [name] : [];
 }
 /** Last filter AFTER every toolbox, skill and execution injection, for every adapter. */
 export function restrictStepToolOffers(tools: readonly LlmTool[] | undefined,
@@ -2216,9 +2245,25 @@ export function restrictStepToolOffers(tools: readonly LlmTool[] | undefined,
   // Validate even a zero-tool input; malformed policy must not be ignored.
   intersectStepToolNames([], policy);
   const offered = new Map<string, LlmTool>(); const ambiguous = new Set<string>();
-  // How many retained tools carry each name, over every kind and every MCP server.
-  const carriers = new Map<string, number>();
-  const carry = (name: string) => carriers.set(name, (carriers.get(name) ?? 0) + 1);
+  // Which retained tools carry each model-facing name: function and MCP tools, and built-ins by kind.
+  const carriers = new Map<string, { other: number; builtinKinds: Map<string, number> }>();
+  const carry = (name: string, builtinKind?: string) => {
+    const c = carriers.get(name) ?? { other: 0, builtinKinds: new Map<string, number>() };
+    if (builtinKind === undefined) c.other += 1;
+    else c.builtinKinds.set(builtinKind, (c.builtinKinds.get(builtinKind) ?? 0) + 1);
+    carriers.set(name, c);
+  };
+  // A name selects one handler when one retained tool carries it. Built-ins of DIFFERENT kinds may
+  // share a name of the table: each adapter translates them under distinct names (OpenAI merges the
+  // skill shell into the sandbox's native shell), so only the union above makes them meet.
+  const selectsOne = (name: string) => {
+    const c = carriers.get(name);
+    if (!c) return false;
+    const builtins = [...c.builtinKinds.values()];
+    const total = c.other + builtins.reduce((a, b) => a + b, 0);
+    return total === 1 || (c.other === 0 && builtins.every((n) => n === 1));
+  };
+  const facingNames = new Map<LlmTool, string[]>();
   for (const tool of tools ?? []) {
     let retained: LlmTool | null = null; let key: string;
     if (tool.type === "mcp") {
@@ -2228,13 +2273,16 @@ export function restrictStepToolOffers(tools: readonly LlmTool[] | undefined,
       if (retained?.type === "mcp") for (const name of retained.allowedTools ?? []) carry(name);
     } else {
       const name = "name" in tool && typeof tool.name === "string" ? tool.name : tool.type;
-      const builtin = tool.type !== undefined && STEP_BUILTIN_TOOL_TYPES.includes(tool.type) &&
-        policy.builtinTools?.includes(tool.type as StepBuiltinToolType) === true;
+      const isBuiltin = tool.type !== undefined && STEP_BUILTIN_TOOL_TYPES.includes(tool.type);
+      const builtin = isBuiltin && policy.builtinTools?.includes(tool.type as StepBuiltinToolType) === true;
       if (!name || !(builtin || intersectStepToolNames([name], policy).length)) continue;
-      // Count the tool under the name the MODEL calls it by: the sandbox built-in is offered as
-      // "sandbox_execute", so a function of that name collides with it.
-      const facing = modelFacingToolName(tool) ?? name;
-      retained = tool; key = `tool:${facing}`; carry(facing);
+      // Count the tool under EVERY name a provider adapter offers it to the MODEL under (OpenAI sends
+      // the skill shell as "skill_file_read", another as "bash", the sandbox is "sandbox_execute"),
+      // so a function or an MCP tool of any such name collides with it.
+      const facing = modelFacingToolNames(tool);
+      facingNames.set(tool, facing);
+      for (const n of facing) carry(n, isBuiltin ? tool.type : undefined);
+      retained = tool; key = isBuiltin ? `builtin:${tool.type}` : `tool:${name}`;
     }
     if (!retained || ambiguous.has(key)) continue;
     if (offered.has(key)) {
@@ -2243,14 +2291,15 @@ export function restrictStepToolOffers(tools: readonly LlmTool[] | undefined,
     } else offered.set(key, retained);
   }
   // cinatra#3745: a declared name selects one handler. A name that more than one retained tool
-  // carries (a function and an MCP server, two MCP servers, or two tools of one kind) is ambiguous:
-  // no tool keeps it, and a server left with no name is not offered. Never pick one of them.
+  // carries (a function and an MCP server, two MCP servers, a built-in and a function or an MCP tool
+  // of one of its model-facing names, or two tools of one kind) is ambiguous: no tool keeps it, and a
+  // server left with no name is not offered. Never pick one of them.
   const result: LlmTool[] = [];
-  for (const [key, tool] of offered) {
+  for (const tool of offered.values()) {
     if (tool.type === "mcp") {
-      const names = (tool.allowedTools ?? []).filter((name) => carriers.get(name) === 1);
+      const names = (tool.allowedTools ?? []).filter(selectsOne);
       if (names.length) result.push({ ...tool, allowedTools: names });
-    } else if (carriers.get(key.slice("tool:".length)) === 1) result.push(tool);
+    } else if ((facingNames.get(tool) ?? []).every(selectsOne)) result.push(tool);
   }
   return result.length ? result : undefined;
 }
