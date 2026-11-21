@@ -85,11 +85,17 @@ import {
   NO_DISPLAY_IDENTITY,
   type ArtifactDisplayIdentity,
 } from "../artifact-detail-header";
-import {
-  displayIdentityFromModule,
-  readArtifactDisplayIdentity,
-} from "../artifact-display-identity";
+import type * as DisplayIdentityModule from "../artifact-display-identity";
 import { ExtensionRendererSlot } from "../extension-renderer-slot";
+// The module the fix adds is loaded inside each test, not at the top of the
+// file: before the fix the file still loads and each test fails on the
+// missing module.
+// red-first-expect: Cannot find module '/src/app/artifacts/[id]/artifact-display-identity'
+let displayIdentityFromModule!: typeof DisplayIdentityModule.displayIdentityFromModule;
+let readArtifactDisplayIdentity!: typeof DisplayIdentityModule.readArtifactDisplayIdentity;
+async function loadDisplayIdentity(): Promise<void> {
+  ({ displayIdentityFromModule, readArtifactDisplayIdentity } = await import("../artifact-display-identity"));
+}
 
 const NOW = new Date("2026-09-02T18:00:00.000Z");
 const PAGE_CONTENT = { kind: "text", text: "page" };
@@ -135,25 +141,29 @@ const TODAY =
   "@fixture/pages:page-snapshot · revision rev_c410… · Team: Growth · Private · application/json · updated 8 minutes ago";
 
 describe("a display that declares nothing draws the line it always drew, byte for byte", () => {
-  it("with no display identity handed at all", () => {
+  it("with no display identity handed at all", async () => {
+    await loadDisplayIdentity();
     expect(line()).toBe(TODAY);
   });
 
-  it("with the declared-nothing identity", () => {
+  it("with the declared-nothing identity", async () => {
+    await loadDisplayIdentity();
     expect(line(NO_DISPLAY_IDENTITY)).toBe(TODAY);
     expect(line({ drawnBy: null, facts: null })).toBe(TODAY);
   });
 });
 
 describe("a display that declares itself draws the §XI.8 line on its own page", () => {
-  it("names the renderer after the type, the platform after the revision, and closes on the address", () => {
+  it("names the renderer after the type, the platform after the revision, and closes on the address", async () => {
+    await loadDisplayIdentity();
     expect(line({ drawnBy: RENDERER, facts: FACTS })).toBe(
       "@fixture/pages:page-snapshot · drawn by @fixture/pages:page-diff · revision rev_c410… · " +
         "WordPress · Team: Growth · Private · acme.example/pricing",
     );
   });
 
-  it("drops the MIME and the updated time only where the display gives the closing cells", () => {
+  it("drops the MIME and the updated time only where the display gives the closing cells", async () => {
+    await loadDisplayIdentity();
     expect(line({ drawnBy: RENDERER, facts: null })).toBe(
       "@fixture/pages:page-snapshot · drawn by @fixture/pages:page-diff · revision rev_c410… · " +
         "Team: Growth · Private · application/json · updated 8 minutes ago",
@@ -164,7 +174,8 @@ describe("a display that declares itself draws the §XI.8 line on its own page",
     );
   });
 
-  it("keeps the order with no revision to draw", () => {
+  it("keeps the order with no revision to draw", async () => {
+    await loadDisplayIdentity();
     const cells = buildArtifactDetailHeader({
       artifact: row(),
       mime: "application/json",
@@ -185,12 +196,14 @@ describe("a display that declares itself draws the §XI.8 line on its own page",
 });
 
 describe("the module's two optional exports are read generically and strictly", () => {
-  it("reads both from a module that declares them", () => {
+  it("reads both from a module that declares them", async () => {
+    await loadDisplayIdentity();
     expect(displayIdentityFromModule(pageModule, PAGE_CONTENT)).toEqual({ drawnBy: RENDERER, facts: FACTS });
     expect(displayIdentityFromModule(pageModule, { kind: "none" })).toEqual({ drawnBy: RENDERER, facts: null });
   });
 
-  it("declares nothing for a module without them, or for no module", () => {
+  it("declares nothing for a module without them, or for no module", async () => {
+    await loadDisplayIdentity();
     for (const mod of [{ default: () => null }, null, undefined, "module", 7]) {
       expect(displayIdentityFromModule(mod, PAGE_CONTENT)).toEqual(NO_DISPLAY_IDENTITY);
     }
@@ -199,7 +212,8 @@ describe("the module's two optional exports are read generically and strictly", 
   // A "use client" module reaches a server as client references: its string
   // export arrives as a function, and its function export throws when called.
   // Either reads as declared nothing, never as a broken page.
-  it("reads a client reference as declared nothing", () => {
+  it("reads a client reference as declared nothing", async () => {
+    await loadDisplayIdentity();
     const clientReference = Object.assign(
       () => {
         throw new Error("Attempted to call identityFacts() from the server");
@@ -211,14 +225,16 @@ describe("the module's two optional exports are read generically and strictly", 
     ).toEqual(NO_DISPLAY_IDENTITY);
   });
 
-  it("takes no renderer name that is not one clean cell", () => {
+  it("takes no renderer name that is not one clean cell", async () => {
+    await loadDisplayIdentity();
     for (const rendererName of [42, "", " padded", "two\nlines", "a · b", "x".repeat(201), "tab\there", " "]) {
       expect(displayIdentityFromModule({ rendererName }, PAGE_CONTENT).drawnBy, JSON.stringify(rendererName)).toBeNull();
     }
     expect(displayIdentityFromModule({ rendererName: "x".repeat(200) }, PAGE_CONTENT).drawnBy).toBe("x".repeat(200));
   });
 
-  it("takes no facts that are not two short lists of clean cells", () => {
+  it("takes no facts that are not two short lists of clean cells", async () => {
+    await loadDisplayIdentity();
     const answers: unknown[] = [
       null,
       "WordPress",
@@ -241,6 +257,7 @@ describe("the module's two optional exports are read generically and strictly", 
   });
 
   it("survives an export that throws, a getter that throws, and a promise", async () => {
+    await loadDisplayIdentity();
     const rejected = Promise.reject(new Error("later"));
     const hostile = {
       get rendererName(): never {
@@ -253,7 +270,8 @@ describe("the module's two optional exports are read generically and strictly", 
     await Promise.resolve();
   });
 
-  it("hands the export the content the page hands the display, and nothing else", () => {
+  it("hands the export the content the page hands the display, and nothing else", async () => {
+    await loadDisplayIdentity();
     const seen: unknown[][] = [];
     displayIdentityFromModule({ identityFacts: (...args: unknown[]) => { seen.push(args); return null; } }, PAGE_CONTENT);
     expect(seen).toEqual([[PAGE_CONTENT]]);
@@ -296,14 +314,17 @@ describe("the identity is read from the page's one load decision, the one the sl
     });
 
   it("reads the decided module's declaration", async () => {
+    await loadDisplayIdentity();
     expect(await read(decide("@fixture/pages::detail"))).toEqual({ drawnBy: RENDERER, facts: FACTS });
   });
 
   it("declares nothing for a module that declares nothing", async () => {
+    await loadDisplayIdentity();
     expect(await read(decide("@fixture/plain::detail"))).toEqual(NO_DISPLAY_IDENTITY);
   });
 
   it("declares nothing for every decision the slot does not mount", async () => {
+    await loadDisplayIdentity();
     quarantine("@fixture/quarantined::detail");
     for (const key of [
       "@fixture/not-in-this-build::detail",
@@ -321,6 +342,7 @@ describe("the identity is read from the page's one load decision, the one the sl
   });
 
   it("declares nothing for no decision (a runtime mount or a floor), and loads nothing", async () => {
+    await loadDisplayIdentity();
     expect(await read(null)).toEqual(NO_DISPLAY_IDENTITY);
     expect(mocks.loads).toBe(0);
   });
@@ -329,6 +351,7 @@ describe("the identity is read from the page's one load decision, the one the sl
   // the key AFTER the header was read. The slot mounts from the same decision,
   // so it draws the very module the header named, and nothing loads twice.
   it("names the renderer exactly where the slot mounts it, even when the key is quarantined in between", async () => {
+    await loadDisplayIdentity();
     const key = "@fixture/pages::detail";
     const decision = decide(key);
     const identity = await read(decision);
@@ -340,6 +363,7 @@ describe("the identity is read from the page's one load decision, the one the sl
   });
 
   it("names nothing where the slot floors the same decision", async () => {
+    await loadDisplayIdentity();
     const key = "@fixture/pages::detail";
     quarantine(key);
     const decision = decide(key);
@@ -350,6 +374,7 @@ describe("the identity is read from the page's one load decision, the one the sl
   });
 
   it("answers a broken module quietly while the slot, on the same decision, still fails loud", async () => {
+    await loadDisplayIdentity();
     for (const key of ["@fixture/throws::detail", "@fixture/default-getter-throws::detail"]) {
       const decision = decide(key);
       expect(await read(decision), key).toEqual(NO_DISPLAY_IDENTITY);
@@ -362,28 +387,32 @@ describe("the identity is read from the page's one load decision, the one the sl
 describe("a cell cannot reorder the line: bidirectional and isolate controls, and every control, are no cell", () => {
   const BIDI = [0x061c, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2066, 0x2067, 0x2068, 0x2069];
 
-  it("takes no renderer name that carries one", () => {
+  it("takes no renderer name that carries one", async () => {
+    await loadDisplayIdentity();
     for (const code of BIDI) {
       const name = `safe${String.fromCodePoint(code)}evil`;
       expect(displayIdentityFromModule({ rendererName: name }, PAGE_CONTENT).drawnBy, code.toString(16)).toBeNull();
     }
   });
 
-  it("takes no facts with a cell that carries one", () => {
+  it("takes no facts with a cell that carries one", async () => {
+    await loadDisplayIdentity();
     for (const code of BIDI) {
       const answer = { revision: ["WordPress"], closing: [`acme.example${String.fromCodePoint(code)}/pricing`] };
       expect(displayIdentityFromModule({ identityFacts: () => answer }, PAGE_CONTENT).facts, code.toString(16)).toBeNull();
     }
   });
 
-  it("takes no cell with a C1 control, DEL, or a line or paragraph separator", () => {
+  it("takes no cell with a C1 control, DEL, or a line or paragraph separator", async () => {
+    await loadDisplayIdentity();
     for (const code of [0x7f, 0x80, 0x85, 0x9f, 0x2028, 0x2029]) {
       const name = `a${String.fromCodePoint(code)}b`;
       expect(displayIdentityFromModule({ rendererName: name }, PAGE_CONTENT).drawnBy, code.toString(16)).toBeNull();
     }
   });
 
-  it("still takes the clean neighbours of those ranges", () => {
+  it("still takes the clean neighbours of those ranges", async () => {
+    await loadDisplayIdentity();
     for (const code of [0x061b, 0x200d, 0x2010, 0x202f, 0x2065, 0x206a]) {
       const name = `a${String.fromCodePoint(code)}b`;
       expect(displayIdentityFromModule({ rendererName: name }, PAGE_CONTENT).drawnBy, code.toString(16)).toBe(name);
@@ -392,7 +421,8 @@ describe("a cell cannot reorder the line: bidirectional and isolate controls, an
 });
 
 describe("each export is read apart, and every throw declares nothing of its own part", () => {
-  it("reads facts from a module that names no renderer, and draws them without the name", () => {
+  it("reads facts from a module that names no renderer, and draws them without the name", async () => {
+    await loadDisplayIdentity();
     const declared = displayIdentityFromModule({ default: () => null, identityFacts: () => FACTS }, PAGE_CONTENT);
     expect(declared).toEqual({ drawnBy: null, facts: FACTS });
     expect(line(declared)).toBe(
@@ -400,7 +430,8 @@ describe("each export is read apart, and every throw declares nothing of its own
     );
   });
 
-  it("keeps the name when the facts export's getter throws", () => {
+  it("keeps the name when the facts export's getter throws", async () => {
+    await loadDisplayIdentity();
     const mod = {
       rendererName: RENDERER,
       get identityFacts(): never {
@@ -410,7 +441,8 @@ describe("each export is read apart, and every throw declares nothing of its own
     expect(displayIdentityFromModule(mod, PAGE_CONTENT)).toEqual({ drawnBy: RENDERER, facts: null });
   });
 
-  it("keeps the name when the answer's then getter, or a later getter on it, throws", () => {
+  it("keeps the name when the answer's then getter, or a later getter on it, throws", async () => {
+    await loadDisplayIdentity();
     const thenThrows = {
       revision: ["WordPress"],
       closing: [],
