@@ -49,7 +49,7 @@ vi.mock("../publish-template", () => ({
 }));
 
 import { createLocalAgentTemplateVersion } from "../import-export-actions";
-import { collectPublishRows } from "../oas-compiler";
+import { collectPublishRows, type PublishRows } from "../oas-compiler";
 import { serializeTemplate, deserializeTemplate } from "../store-template-versions";
 import { _runAgentTemplateUpdate } from "../store";
 import type { CreateAgentTemplateInput } from "../store";
@@ -165,10 +165,18 @@ describe("cinatra#4150 — the compiler's map cannot be changed after it is retu
   });
 
   for (const [label, change] of [
-    ["a row's label and input are changed", (r: Record<string, Array<{ label: string; input: string }>>) => Object.assign(r.publish![0]!, FORGED.publish[0])],
-    ["a row is added to the list", (r: Record<string, Array<{ label: string; input: string }>>) => r.publish!.push(FORGED.publish[0]!)],
-    ["the node's list is replaced", (r: Record<string, Array<{ label: string; input: string }>>) => (r.publish = FORGED.publish)],
-    ["a node is added", (r: Record<string, Array<{ label: string; input: string }>>) => (r.other = FORGED.publish)],
+    // The compiler's own (readonly) map type: each change below is one the type already refuses, made anyway to prove the
+    // run-time freeze (Object.assign onto a row is not a type error, so it carries no directive).
+    ["a row's label and input are changed", (r: PublishRows) => Object.assign(r.publish![0]!, FORGED.publish[0])],
+    ["a row is added to the list", (r: PublishRows) =>
+      // @ts-expect-error a compiled rows list is readonly
+      r.publish!.push(FORGED.publish[0]!)],
+    ["the node's list is replaced", (r: PublishRows) =>
+      // @ts-expect-error a compiled map is readonly
+      (r.publish = FORGED.publish)],
+    ["a node is added", (r: PublishRows) =>
+      // @ts-expect-error a compiled map is readonly
+      (r.other = FORGED.publish)],
   ] as const) {
     it(`${label}: the change throws and the write carries the compiled rows`, async () => {
       const rows = compiledRows();
@@ -231,6 +239,79 @@ describe("cinatra#4150 — the column round-trips through serializeTemplate / de
     it(`a stored value that is ${label} throws, naming the column only`, () => {
       const values = { ...serializeTemplate(input(undefined)), publishRows: stored };
       expect(() => deserializeTemplate(asRow(values))).toThrow(/^agent_templates\.publish_rows is not a JSON map of node ids to rows$/);
+    });
+  }
+
+  // cinatra#4150 W4: the list row the compiler writes reads back; any other kind or a malformed list row throws.
+  it("a stored list row reads back beside a text row", () => {
+    const rows = {
+      publish: [
+        { label: "Post", input: "content" },
+        { kind: "list", label: "Recipients", input: "recipients", columns: [{ label: "Name", field: "name" }] },
+      ],
+    };
+    const values = { ...serializeTemplate(input(undefined)), publishRows: JSON.stringify(rows) };
+    expect(field(deserializeTemplate(asRow(values)))).toEqual(rows);
+  });
+
+  for (const [label, row] of [
+    ["an artifacts row", { kind: "artifacts", label: "Page", input: "targets" }],
+    ["a list row with no columns", { kind: "list", label: "R", input: "r", columns: [] }],
+    ["a list row with five columns", { kind: "list", label: "R", input: "r", columns: ["a", "b", "c", "d", "e"].map((f) => ({ label: f, field: f })) }],
+    ["a list row whose column has an extra key", { kind: "list", label: "R", input: "r", columns: [{ label: "N", field: "n", w: 1 }] }],
+    ["a list row whose field is not a string", { kind: "list", label: "R", input: "r", columns: [{ label: "N", field: 1 }] }],
+    ["a text row that carries a kind", { kind: "text", label: "Post", input: "content" }],
+  ] as const) {
+    it(`a stored ${label} throws, naming the column only`, () => {
+      // Red first at the base: a list row is a valid row only from W4 on, so the base throws on the valid list row above
+      // and this pins that each listed shape keeps throwing.
+      const valid = { kind: "list", label: "Recipients", input: "recipients", columns: [{ label: "Name", field: "name" }] };
+      const ok = { ...serializeTemplate(input(undefined)), publishRows: JSON.stringify({ publish: [valid] }) };
+      expect(() => deserializeTemplate(asRow(ok))).not.toThrow();
+      const values = { ...serializeTemplate(input(undefined)), publishRows: JSON.stringify({ publish: [row] }) };
+      expect(() => deserializeTemplate(asRow(values))).toThrow(/^agent_templates\.publish_rows is not a JSON map of node ids to rows$/);
+    });
+  }
+
+  // pre-2 findings 2 and 3: the stored reader holds the compiler's caps and rules, so a stored value cannot widen the card.
+  // Each case is accepted at base 46f770fe (red there).
+  const TEXT = (n: number) => ({ label: `Row ${n}`, input: `in${n}` });
+  const LISTROW = (over: Record<string, unknown> = {}) => ({
+    kind: "list",
+    label: "Recipients",
+    input: "people",
+    columns: [{ label: "Name", field: "name" }],
+    ...over,
+  });
+  const reads = (rows: unknown) =>
+    deserializeTemplate(asRow({ ...serializeTemplate(input(undefined)), publishRows: JSON.stringify({ publish: rows }) }));
+
+  it("four stored rows read; zero or five stored rows throw", () => {
+    const four = [TEXT(1), TEXT(2), TEXT(3), LISTROW()];
+    expect(field(reads(four))).toEqual({ publish: four });
+    expect(() => reads([...four, TEXT(5)])).toThrow(/^agent_templates\.publish_rows is not a JSON map of node ids to rows$/);
+    expect(() => reads([])).toThrow(/^agent_templates\.publish_rows is not a JSON map of node ids to rows$/);
+  });
+
+  it("two stored rows over the same input throw", () => {
+    expect(() => reads([TEXT(1), { label: "Again", input: "in1" }])).toThrow(/^agent_templates\.publish_rows is not/);
+    expect(() => reads([TEXT(1), LISTROW({ input: "in1" })])).toThrow(/^agent_templates\.publish_rows is not/);
+  });
+
+  for (const [label, row] of [
+    ["an empty list label", LISTROW({ label: "" })],
+    ["a list label with a line break", LISTROW({ label: "Re\ncipients" })],
+    ["a list label over 60 characters", LISTROW({ label: "x".repeat(61) })],
+    ["a list label with a leading space", LISTROW({ label: " Recipients" })],
+    ["an empty column label", LISTROW({ columns: [{ label: "", field: "name" }] })],
+    ["an empty field", LISTROW({ columns: [{ label: "Name", field: "" }] })],
+    ["a field with a trailing space", LISTROW({ columns: [{ label: "Name", field: "name " }] })],
+    ["a field over 64 characters", LISTROW({ columns: [{ label: "Name", field: "f".repeat(65) }] })],
+    ["a field with a control character", LISTROW({ columns: [{ label: "Name", field: "na\u0000me" }] })],
+    ["a repeated field", LISTROW({ columns: [{ label: "Name", field: "name" }, { label: "Again", field: "name" }] })],
+  ] as const) {
+    it(`a stored list row with ${label} throws, as the compiler refuses it`, () => {
+      expect(() => reads([row])).toThrow(/^agent_templates\.publish_rows is not a JSON map of node ids to rows$/);
     });
   }
 

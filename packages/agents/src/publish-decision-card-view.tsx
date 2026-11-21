@@ -27,7 +27,11 @@ import {
 } from "./lifecycle-card-runtime";
 import {
   PUBLISH_DECISION_CARD_NONE,
+  publishRowKind,
   parsePublishDecisionCardState,
+  type PublishDecisionCardListRow,
+  type PublishDecisionCardRow,
+  type PublishDecisionCardTextRow,
   type PublishDecisionCardState,
 } from "./publish-decision-card";
 import { getPublishDecisionCardStateAction } from "./publish-decision-card-actions";
@@ -106,6 +110,55 @@ const MARKERS = {
   declined: ["publish-card-declined", "idle", "Not published"],
   expired: ["publish-card-expired", "idle", "Expired"],
 } as const;
+
+/** One read-only row's value (cinatra#4150 W4): a text row's value, or a list row's compact table, with a line that
+ * says how many records it does not draw. Every cell is plain text. */
+function rowValue(row: PublishDecisionCardRow): ReactElement | null {
+  // Dispatch on the row's OWN kind, every value named: the parse admits only text and list, and any other kind draws
+  // nothing here (never the text drawing). A kind added to publishRowKind fails the typecheck below until it is drawn.
+  const kind = publishRowKind(row);
+  switch (kind) {
+    case "text":
+      return <dd className="text-reading text-foreground">{(row as PublishDecisionCardTextRow).value}</dd>;
+    case "list":
+      return listRowValue(row as PublishDecisionCardListRow);
+    case null:
+      return null;
+    default: {
+      const unhandled: never = kind;
+      return unhandled;
+    }
+  }
+}
+
+function listRowValue(row: PublishDecisionCardListRow): ReactElement {
+  const more = row.total - row.items.length;
+  return (
+    <dd className="min-w-0" data-publish-row-kind="list">
+      <div className="mt-1 overflow-x-auto rounded-card border border-line">
+        <table className="w-full border-collapse text-left text-xs">
+          <thead>
+            <tr className="border-b border-line">
+              {row.columns.map((column, c) => (
+                <th key={`${c}-${column}`} scope="col" className={`px-2.5 py-1.5 font-normal ${KICK}`}>{column}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {row.items.map((cells, r) => (
+              <tr key={r} className="border-b border-line last:border-b-0">
+                {cells.map((cell, c) => (
+                  <td key={c} className="px-2.5 py-1.5 align-top text-foreground">{cell}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {more > 0 ? <p className="mt-1 text-xs text-muted-foreground" data-publish-row-more="">{more} more</p> : null}
+    </dd>
+  );
+}
 
 /** The marker below a settled card: the only thing that differs between the three readings (XV). */
 function settledMarker(state: PublishDecisionCardState): ReactElement | null {
@@ -205,7 +258,7 @@ export function PublishDecisionCard({ runId, decide }: { runId: string; decide?:
               {state.rows.map((row, i) => (
                 <div key={`${i}-${row.label}`}>
                   <dt className={KICK}>{row.label}</dt>
-                  <dd className="text-reading text-foreground">{row.value}</dd>
+                  {rowValue(row)}
                 </div>
               ))}
             </dl>
