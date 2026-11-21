@@ -7,6 +7,10 @@
 // (`@cinatra-ai/sdk-extensions/read-only-compositions`), and the host's own
 // read-only dashboard surfaces import the same two components from it.
 export {
+  KPI_VALUE_FALLBACK_ATTRIBUTE,
+  kpiValueFallbackAttributes,
+} from "./kpi-value-fallback";
+export {
   narrowToSinglePortlet,
   type NarrowableDashboardConfig,
 } from "./narrow-to-single-portlet";
