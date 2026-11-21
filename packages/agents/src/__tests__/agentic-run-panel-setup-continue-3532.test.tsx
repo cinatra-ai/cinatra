@@ -35,6 +35,7 @@ import {
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
 } from "../agent-builder-ids";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
+import { RunPageChrome } from "../run-page-chrome";
 import { fieldRendererRegistry } from "../field-renderer-registry";
 import type { FieldRendererProps } from "../field-renderer-registry";
 import { makeExtensionFieldRenderer } from "../extension-field-renderer";
@@ -84,6 +85,12 @@ vi.mock("../hitl-actions", () => hitlActions);
  * argument. The run page draws the window without its paperclip, so a test
  * that needs a waiting file adds one send control beside the real window, and
  * only while `windowFiles.attachments` is set.
+ *
+ * THE MESSAGE IS EMPTY (cinatra#3487). The window is the run page chrome's,
+ * and the chrome hands a message to the screen only while the screen has
+ * something to manipulate, which needs the run's template. An empty message
+ * still hands the files to the screen, and the run window sends nothing for an
+ * empty message, so no turn goes to the run's conversation.
  */
 const windowFiles = vi.hoisted(() => ({ attachments: null as null | unknown[] }));
 vi.mock("../hitl-conversation-panel", async (importOriginal) => {
@@ -98,7 +105,7 @@ vi.mock("../hitl-conversation-panel", async (importOriginal) => {
             type="button"
             onClick={() =>
               void props.onSubmit(
-                "see attached",
+                "",
                 windowFiles.attachments as Parameters<typeof props.onSubmit>[1],
               )
             }
@@ -1552,11 +1559,16 @@ describe("AgenticRunPanel — one gate's state and answer stay with that gate (c
     ];
     try {
       await setGate(REPLY_LIST_ID, "accountScope", { type: "object" }, "review-run-3562");
-      // Without a template the window's message stops in the panel after it
-      // keeps the files: nothing goes to the run's conversation.
-      const propsWithoutTemplate = { ...PANEL_PROPS, templateId: undefined };
+      // THE PAGE OWNS THE WINDOW (cinatra#3487): the panel registers what it
+      // is and the run page's chrome draws the one window, so the case mounts
+      // the panel in that chrome. The window's message is empty: the panel
+      // keeps the files and nothing goes to the run's conversation.
       const { AgenticRunPanel } = await import("../agentic-run-panel");
-      const view = render(<AgenticRunPanel {...propsWithoutTemplate} />);
+      const view = render(
+        <RunPageChrome>
+          <AgenticRunPanel {...PANEL_PROPS} />
+        </RunPageChrome>,
+      );
 
       await view.findByRole("button", { name: "Pick with a reply" });
       fireEvent.click(view.getByRole("button", { name: "Pick with a reply" }));

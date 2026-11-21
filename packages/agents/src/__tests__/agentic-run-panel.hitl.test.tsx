@@ -18,6 +18,7 @@ import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
+import { RunPageChrome } from "../run-page-chrome";
 
 // ---------------------------------------------------------------------------
 // Dependency mocks — the real modules touch DB / server / sdk-ui that jsdom
@@ -287,16 +288,21 @@ describe("AgenticRunPanel field-assist prompt surface gate (cinatra#767)", () =>
     (useAgUiRunStream as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
       hookResultWithoutPresentation,
     );
+    // THE PAGE OWNS THE WINDOW (cinatra#3487): the panel registers what it is
+    // and the run page's chrome draws the one window. The surface gate this
+    // helper exists for is unchanged — it is read off the chrome's window now.
     return render(
-      <AgenticRunPanel
-        runId="run-1"
-        initialStatus="pending_approval"
-        initialError={null}
-        initialMessages={[]}
-        agUiEnabled={true}
-        templateId="tmpl-1"
-        {...(surface ? { surface } : {})}
-      />,
+      <RunPageChrome>
+        <AgenticRunPanel
+          runId="run-1"
+          initialStatus="pending_approval"
+          initialError={null}
+          initialMessages={[]}
+          agUiEnabled={true}
+          templateId="tmpl-1"
+          {...(surface ? { surface } : {})}
+        />
+      </RunPageChrome>,
     );
   }
 

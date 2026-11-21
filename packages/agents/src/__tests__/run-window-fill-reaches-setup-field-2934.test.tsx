@@ -36,6 +36,12 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
+import type * as RunPageChromeModule from "../run-page-chrome";
+// The module the fix adds is loaded inside the tests that use it, through a
+// specifier the transform does not resolve when it loads this file: before the
+// fix the file still loads and those tests fail on the missing module.
+// red-first-expect: Cannot find module '/src/run-page-chrome'
+const RUN_PAGE_CHROME = "../run-page-chrome";
 
 /** The round's own words. */
 const W = "Why self-hosted upgrades take longer than planned";
@@ -165,7 +171,14 @@ const PANEL_PROPS = {
 
 async function renderRunPage() {
   const { AgenticRunPanel } = await import("../agentic-run-panel");
-  render(<AgenticRunPanel {...PANEL_PROPS} surface="agent-detail" />);
+  // THE PAGE OWNS THE WINDOW (cinatra#3487): the screen registers with the run
+  // page's chrome, which is what draws the window the fill is typed into.
+  const { RunPageChrome } = (await import(/* @vite-ignore */ RUN_PAGE_CHROME)) as typeof RunPageChromeModule;
+  render(
+    <RunPageChrome>
+      <AgenticRunPanel {...PANEL_PROPS} surface="agent-detail" />
+    </RunPageChrome>,
+  );
   await waitFor(() => expect(document.querySelector("#field-idea")).not.toBeNull());
   await waitFor(() => expect(screen.queryByTestId("prompt-field")).not.toBeNull());
 }
