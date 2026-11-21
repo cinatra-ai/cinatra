@@ -574,16 +574,19 @@ afterAll(async () => {
     expect((await gateStore.readReviewGate(runId, reviewTaskId))?.status).toBe("resolved");
   });
 
-  // cinatra#2931 (epic #2926 W4) — the FORM RUNG's provenance is a real,
-  // committable value. The card now includes the host's own renderer for a
-  // declared text form, and records a target it rendered that way as
-  // `first-party` rather than as a floor. `renderer_kind` carries a CHECK: until
-  // W4 widened it, this exact commit raised on the audit INSERT and — because
-  // the audit write happens after the CAS inside ONE transaction — rolled the
-  // whole decision back, so a markdown draft the reviewer had read in full could
-  // not be approved, rejected or commented on. This asserts the row COMMITS and
-  // reads back as first-party, against the real bootstrap DDL.
-  it("APPROVE: a form-rendered target commits its FIRST-PARTY provenance (never a floor)", async () => {
+  // cinatra#2931 (epic #2926 W4) — a HISTORICAL provenance stays committable.
+  // W4 gave the card the host's own renderer for a declared text form and
+  // recorded a target drawn that way as `first-party` rather than as a floor.
+  // That rung retired with the core content arms (cinatra#3319): nothing writes
+  // this kind now, and the live mapper (`provenanceFromResolvedMount`) cannot
+  // return it. The kind stays in the audit table's vocabulary because rows
+  // written before the retirement carry it. `renderer_kind` carries a CHECK, and
+  // the audit write follows the CAS inside ONE transaction, so a refused kind
+  // would roll the whole decision back. This asserts such a row still COMMITS and
+  // reads back as first-party, against the real bootstrap DDL. It proves the
+  // table's vocabulary, NOT what a markdown draft is recorded as today: that is
+  // the next test.
+  it("APPROVE: a historical form-rendered row's FIRST-PARTY provenance still commits (never a floor)", async () => {
     const { runId, reviewTaskId } = freshGateIds();
     const aForm = `art-${randomUUID()}`;
     const targets: Target[] = [{ artifactId: aForm, representationRevisionId: "rev-md" }];
@@ -591,8 +594,8 @@ afterAll(async () => {
 
     const ports = makeDecidePorts({
       provenance: {
-        // Exactly what `provenanceFromResolvedMount` returns for a form mount:
-        // no package name (the host rendered it) and no digest.
+        // A historical row's shape: no package name (the host rendered it) and
+        // no digest. The live mapper no longer returns this kind.
         [aForm]: { kind: "first-party", packageName: null, digest: null },
       },
     });
@@ -612,6 +615,47 @@ afterAll(async () => {
     expect(audit[0].rendererPackage).toBeNull();
     expect(audit[0].rendererDigest).toBeNull();
     expect(audit[0].representationRevisionId).toBe("rev-md");
+  });
+
+  // cinatra#2926 (plan section 6 row 25) — what a markdown draft is recorded as
+  // TODAY. A markdown draft resolves to the markdown extension's own display, so
+  // the provenance the live mapper (`provenanceFromResolvedMount`) returns for it
+  // is `build-map`, naming the package, with no digest: rendered, never a floor.
+  // This commits exactly that shape against the real bootstrap DDL and reads the
+  // audit row back. That the mapper really returns it for a resolved markdown
+  // draft is pinned without a database by
+  // src/app/artifacts/[id]/__tests__/review-gate-ports-provenance.test.ts (the
+  // mapper) and review-markdown-draft-recorded-as-rendered-2926.test.ts (a real
+  // resolution through the decision core).
+  it("APPROVE: a markdown draft drawn by its extension commits BUILD-MAP provenance naming the package (recorded as rendered, never a floor)", async () => {
+    const { runId, reviewTaskId } = freshGateIds();
+    const aDraft = `art-${randomUUID()}`;
+    const targets: Target[] = [{ artifactId: aDraft, representationRevisionId: "rev-md-draft" }];
+    const emit = await gateStore.emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId, targets });
+
+    const ports = makeDecidePorts({
+      provenance: {
+        [aDraft]: { kind: "build-map", packageName: "@cinatra-ai/markdown-artifact", digest: null },
+      },
+    });
+    const res = await submitReviewDecisionCore(
+      mkDecision({ runId, reviewTaskId, disposition: "approve", targets }),
+      ports,
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+
+    // The gate resolved: the audit row committed with it, no rollback.
+    expect((await gateStore.readReviewGate(runId, reviewTaskId))?.status).toBe("resolved");
+
+    const audit = await gateStore.readGateAuditRows(emit.gateId);
+    expect(audit).toHaveLength(1);
+    expect(audit[0].rendererKind).toBe("build-map");
+    expect(audit[0].rendererPackage).toBe("@cinatra-ai/markdown-artifact");
+    expect(audit[0].rendererDigest).toBeNull();
+    expect(audit[0].representationRevisionId).toBe("rev-md-draft");
+    // Rendered, never a fallback: the floor gate counts floor rows, and there is none.
+    expect(audit.filter((r) => r.rendererKind === "floor")).toHaveLength(0);
   });
 
   it("ROLLBACK: a mid-transaction persistence failure rolls back the CAS too (zero partial commit)", async () => {
