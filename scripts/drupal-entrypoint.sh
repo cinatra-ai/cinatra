@@ -287,14 +287,21 @@ install_mcp_tools() {
     log "Installing drupal/mcp_tools (files or DB state missing)..."
     composer config minimum-stability dev --no-interaction
     composer config prefer-stable true --no-interaction
-    # Pinned to 1.0.0-beta18 like docker/drupal/Dockerfile: 1.0.0-beta19
-    # fails the enable below ('Class "Drupal\mcp_tools\Mcp\Sdk" not found').
-    composer require drupal/tool drupal/mcp_tools:1.0.0-beta18 --no-interaction
+    # The same exact version as docker/drupal/Dockerfile (the reason is there).
+    composer require drupal/tool drupal/mcp_tools:1.0.0-beta19 --no-interaction
     # cinatra#3196: `update` is enabled explicitly and idempotently BEFORE the
     # dependent install, so a pre-existing update.settings can no longer abort
     # the bootstrap from inside the mcp_tools enable.
     ensure_update_module
-    drush_en mcp_tools mcp_tools_remote mcp_tools_content
+    # mcp_tools is enabled in its own drush call, before its submodules. In
+    # 1.0.0-beta19, mcp_tools_remote_requirements() calls
+    # Drupal\mcp_tools\Mcp\Sdk, a class of mcp_tools. `drush en` checks the
+    # install requirements of all modules of the call before it installs any
+    # of them, and the classes of a module that is not installed cannot be
+    # loaded yet. One call for the three modules therefore fails with
+    # 'Class "Drupal\mcp_tools\Mcp\Sdk" not found'.
+    drush_en mcp_tools
+    drush_en mcp_tools_remote mcp_tools_content
     # TODO: upstream issue — drupal/mcp_tools ships with remote endpoint disabled
     # (enabled=false, uid=0) by default. No setup wizard exists; these three config:set
     # calls are required to activate the MCP HTTP endpoint. Filed/tracked at:

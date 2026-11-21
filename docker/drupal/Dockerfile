@@ -71,18 +71,19 @@ RUN set -eux; \
 # means `composer require` is a no-op on first boot and the modules are always
 # present even after `docker compose up --force-recreate`. Constraints match the
 # entrypoint's own install_paragraphs/install_mcp_tools fallbacks.
-# drupal/mcp_tools is pinned to 1.0.0-beta18, the last good release:
-# 1.0.0-beta19 (2026-11-21) calls Drupal\mcp_tools\Mcp\Sdk in
-# mcp_tools_remote_requirements() at install time, before mcp_tools is
-# installed, so `drush en mcp_tools mcp_tools_remote ...` fails with
-# 'Class "Drupal\mcp_tools\Mcp\Sdk" not found'.
+# drupal/mcp_tools is pinned to the exact version 1.0.0-beta19, so that a new
+# release changes the image only through a reviewed change. 1.0.0-beta18 is
+# not an option: it requires enshrined/svg-sanitize ^0.22, whose only release
+# (0.22.0) has security advisories, and Composer refuses to install it.
+# 1.0.0-beta19 needs mcp_tools enabled before mcp_tools_remote; the
+# entrypoint's install_mcp_tools() does that.
 RUN set -eux; \
     composer config minimum-stability dev --no-interaction; \
     composer config prefer-stable true --no-interaction; \
     composer require \
         drupal/paragraphs \
         drupal/tool \
-        "drupal/mcp_tools:1.0.0-beta18" \
+        "drupal/mcp_tools:1.0.0-beta19" \
         --no-interaction 2>&1 | tail -5; \
     chown -R www-data:www-data web/sites web/modules web/themes
 

@@ -26,6 +26,16 @@
 //      job's own step log carries the cause instead of only an uploaded
 //      compose-log artifact.
 //
+// cinatra#4755 adds a third rule: mcp_tools is enabled in its OWN drush call,
+// before mcp_tools_remote and mcp_tools_content. drupal/mcp_tools 1.0.0-beta19
+// calls Drupal\mcp_tools\Mcp\Sdk (a class of mcp_tools) in
+// mcp_tools_remote_requirements(); `drush en` checks the install requirements
+// of every module of the call before it installs any of them, so in one call
+// for all three the class cannot be loaded yet:
+//
+//   Error: Class "Drupal\mcp_tools\Mcp\Sdk" not found in
+//   mcp_tools_remote_requirements() (line 19 of .../mcp_tools_remote.install)
+//
 // Like the sibling wordpress-entrypoint test, these `source` the script (with
 // main() neutered) and stub drush/composer on PATH, so no container, no
 // database and no network are needed. Acceptance item 2 (ten consecutive fresh
@@ -65,6 +75,11 @@ const PREEXISTING_CONFIG_STDERR = `In PreExistingConfigException.php line 65:
    active configuration
 `;
 
+// The failure of a drupal/mcp_tools 1.0.0-beta19 enable of mcp_tools_remote
+// in the same drush call as mcp_tools (cinatra#4755), on stderr.
+const SDK_CLASS_NOT_FOUND_STDERR = `Error: Class "Drupal\\mcp_tools\\Mcp\\Sdk" not found in mcp_tools_remote_requirements() (line 19 of modules/contrib/mcp_tools/modules/mcp_tools_remote/mcp_tools_remote.install).
+`;
+
 // A stub drush backed by a tiny file-based site state:
 //   $STATE_DIR/enabled                 — one enabled module name per line
 //   $STATE_DIR/stray-update-settings   — present ⇔ update.settings sits in
@@ -75,6 +90,9 @@ const PREEXISTING_CONFIG_STDERR = `In PreExistingConfigException.php line 65:
 // object exists — exactly the real ConfigInstaller behaviour.
 // `drush config:delete update.settings` clears the stray object (and fails when
 // $STUB_CONFIG_DELETE_FAILS=1, to exercise the unrecoverable path).
+// `drush en mcp_tools_remote` throws the 1.0.0-beta19 "Class ... Sdk not found"
+// error unless mcp_tools was ALREADY enabled before that call: drush checks the
+// install requirements of all modules of a call before it installs any of them.
 function makeHarness({ enabled = [], stray = false }) {
   const dir = mkdtempSync(path.join(tmpdir(), "drupal-entrypoint-test-"));
   const bin = path.join(dir, "bin");
@@ -103,6 +121,12 @@ ${PREEXISTING_CONFIG_STDERR}STUBEOF
   exit 1
 }
 
+fail_sdk_class() {
+  cat >&2 <<'STUBEOF'
+${SDK_CLASS_NOT_FOUND_STDERR}STUBEOF
+  exit 1
+}
+
 case "\${args[0]:-}" in
   pm:list)
     cat "$STATE_DIR/enabled" 2>/dev/null || true
@@ -112,6 +136,12 @@ case "\${args[0]:-}" in
     mods=()
     for m in "\${args[@]:1}"; do
       case "$m" in -y|--*) ;; *) mods+=("$m") ;; esac
+    done
+    for m in "\${mods[@]}"; do
+      if [ "$m" = "mcp_tools_remote" ] \\
+         && ! grep -qx mcp_tools "$STATE_DIR/enabled" 2>/dev/null; then
+        fail_sdk_class
+      fi
     done
     for m in "\${mods[@]}"; do
       # core's \`update\` is a transitive dependency of mcp_tools, so enabling
@@ -228,7 +258,8 @@ describe("install_mcp_tools() — deterministic module-install order (#3196 item
     const ens = r.calls.filter(enCall);
     expect(ens).toEqual([
       "drush en update -y",
-      "drush en mcp_tools mcp_tools_remote mcp_tools_content -y",
+      "drush en mcp_tools -y",
+      "drush en mcp_tools_remote mcp_tools_content -y",
     ]);
   });
 
@@ -236,7 +267,8 @@ describe("install_mcp_tools() — deterministic module-install order (#3196 item
     const r = runInstallMcpTools({ enabled: ["node", "system", "update"] });
     expect(r.status, `${r.stdout}\n${r.stderr}`).toBe(0);
     expect(r.calls.filter(enCall)).toEqual([
-      "drush en mcp_tools mcp_tools_remote mcp_tools_content -y",
+      "drush en mcp_tools -y",
+      "drush en mcp_tools_remote mcp_tools_content -y",
     ]);
   });
 
@@ -248,6 +280,34 @@ describe("install_mcp_tools() — deterministic module-install order (#3196 item
     expect(r.status, `${r.stdout}\n${r.stderr}`).toBe(0);
     expect(r.calls.filter(enCall)).toEqual([]);
     expect(r.stdout).toContain("mcp_tools already enabled");
+  });
+});
+
+describe("install_mcp_tools(): enables mcp_tools before its submodules (#4755)", () => {
+  it("enables mcp_tools in its own drush call, then mcp_tools_remote and mcp_tools_content", () => {
+    const r = runInstallMcpTools({ enabled: ["node", "system", "update"] });
+    expect(r.status, `${r.stdout}\n${r.stderr}`).toBe(0);
+    expect(r.stdout).not.toContain("Mcp\\Sdk");
+    const ens = r.calls.filter(enCall);
+    expect(ens.indexOf("drush en mcp_tools -y")).toBeGreaterThanOrEqual(0);
+    expect(ens.indexOf("drush en mcp_tools -y")).toBeLessThan(
+      ens.findIndex((l) => l.includes(" mcp_tools_remote")),
+    );
+    expect(r.enabledAfter).toEqual(
+      expect.arrayContaining(["mcp_tools", "mcp_tools_remote", "mcp_tools_content"]),
+    );
+  });
+
+  it("enables mcp_tools before its submodules on a first boot with baked module files", () => {
+    const r = runInstallMcpTools({
+      enabled: ["node", "system", "update"],
+      filesPresent: true,
+    });
+    expect(r.status, `${r.stdout}\n${r.stderr}`).toBe(0);
+    expect(r.calls.filter(enCall)).toEqual([
+      "drush en mcp_tools -y",
+      "drush en mcp_tools_remote mcp_tools_content -y",
+    ]);
   });
 });
 
@@ -263,7 +323,8 @@ describe("install_mcp_tools() — survives a pre-existing update.settings (#3196
     expect(r.calls.filter(enCall)).toEqual([
       "drush en update -y",
       "drush en update -y",
-      "drush en mcp_tools mcp_tools_remote mcp_tools_content -y",
+      "drush en mcp_tools -y",
+      "drush en mcp_tools_remote mcp_tools_content -y",
     ]);
     expect(r.strayLeft).toBe(false);
     expect(r.enabledAfter).toContain("update");
