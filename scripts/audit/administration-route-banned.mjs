@@ -153,6 +153,12 @@ const ALLOWLISTED_FILES = new Set([
   // which the gate walks, so it needs a name here rather than a code change in
   // a repo this one only pins.
   "extensions/cinatra-ai/tailscale-connector/src/__tests__/tailscale-token-howto-dedup.test.ts",
+  // cinatra#4366 (dev-lock pin -> website-artifacts): the page form rules test
+  // feeds the form EXTERNAL site URLs it must refuse (a private-address
+  // `/admin?delete=1` and an `admin.localhost` host). They are rejected inputs,
+  // not Cinatra UI routes; same materialized-companion-tree rationale as the
+  // vendor console entry above.
+  "extensions/cinatra-ai/website-artifacts/tests/page-form-rules.test.tsx",
 ]);
 
 function shouldSkipDir(name) {

@@ -57,6 +57,7 @@ import { LibraryToolbar } from "./library-toolbar";
 import { isFileMime, LibraryRowGlyph } from "./library-row-glyph";
 import { DashboardLibraryRow } from "./dashboard-library-row";
 import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
+import { readSystemBaseUploadCandidates } from "@/lib/artifacts/upload-artifact-type-map";
 import { artifactRowMetaLine } from "@/lib/artifacts/artifact-owner-label";
 import {
   artifactOwnerNameFor,
@@ -348,6 +349,17 @@ function buildFacetOptions(
 // ---------------------------------------------------------------------------
 
 /**
+ * Whether a row's type is one of the REQUIRED upload base types (the roster
+ * the upload route maps a MIME onto). The spec draws the mono MIME label on a
+ * file-form artifact (an upload) only; a row typed by any other package, or by
+ * no upload base at all, draws none whatever its stored MIME (#4366). The roster
+ * is read from the registry by provenance, so core names no package here.
+ */
+function isUploadBaseRowType(objectType: string): boolean {
+  return readSystemBaseUploadCandidates().some((c) => c.objectTypeId === objectType);
+}
+
+/**
  * One artifact row. ASYNC because the row's leading glyph is resolved through
  * the renderer-dispatch spine (§III) — the row awaits its own glyph so the whole
  * row, meta line included, is one rendered unit a test can read.
@@ -390,7 +402,7 @@ export async function LibraryRow({
             {name}
           </span>
           <ClaimChip identity={id} />
-          {isFileMime(summary.mime) ? (
+          {isFileMime(summary.mime) && isUploadBaseRowType(summary.objectType) ? (
             <span className="rounded-full border border-line bg-surface-muted px-2 py-0.5 font-mono text-badge-xs tracking-tight text-foreground">
               {summary.mime}
             </span>
