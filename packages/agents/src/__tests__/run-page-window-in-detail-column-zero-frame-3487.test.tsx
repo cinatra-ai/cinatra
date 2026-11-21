@@ -293,7 +293,23 @@ vi.mock("../run-recommendation-core", () => ({
 
 import { SetupScreen } from "../instance-screens";
 import { RUN_WINDOW_HOST_ATTRIBUTE, RUN_WINDOW_HOST_VALUE } from "../run-page-chrome";
-import { assertRunWindowOwnership, readRunWindowOwnership } from "../../../../tests/e2e/design/conformance/run-window-ownership";
+import { fileURLToPath } from "node:url";
+import type * as RunWindowOwnershipModule from "../../../../tests/e2e/design/conformance/run-window-ownership";
+// The conformance reader this change adds is loaded inside the tests that use
+// it, by an absolute path built from this file's own address (this package's
+// vitest root is packages/agents) out of a variable, so no transform resolves
+// it when it loads this file. Before the fix the file then fails to load only
+// on the run page chrome module, which the fix adds, and not on whichever of
+// two missing modules the transform happens to report first.
+const RUN_WINDOW_OWNERSHIP_PATH = "../../../../tests/e2e/design/conformance/run-window-ownership.ts";
+const RUN_WINDOW_OWNERSHIP = fileURLToPath(new URL(RUN_WINDOW_OWNERSHIP_PATH, import.meta.url));
+let assertRunWindowOwnership!: typeof RunWindowOwnershipModule.assertRunWindowOwnership;
+let readRunWindowOwnership!: typeof RunWindowOwnershipModule.readRunWindowOwnership;
+async function loadRunWindowOwnership(): Promise<void> {
+  ({ assertRunWindowOwnership, readRunWindowOwnership } = (await import(
+    /* @vite-ignore */ RUN_WINDOW_OWNERSHIP
+  )) as typeof RunWindowOwnershipModule);
+}
 
 /** The run page's own event stream, stubbed and taken away again. */
 class StubEventSource {
@@ -382,6 +398,7 @@ describe("cinatra#3487 -- a run page with no rail frame keeps its window in the 
 // never of `[data-lifecycle-card-host]`, and the page carries no second window.
 describe("cinatra#3487 item 3 -- the design-conformance reading of the real run page", () => {
   it("one run-window anchor, in the page chrome, none in a card, and no second window", async () => {
+    await loadRunWindowOwnership();
     const { container } = render(await serverTree());
     await waitFor(() => {
       expect(container.querySelector(`${HOST} [data-run-window-field] [role="textbox"]`)).not.toBeNull();
@@ -422,6 +439,7 @@ describe("cinatra#3487 item 3 -- the design-conformance reading of the real run 
     ["an unanchored field with its send control", '<div data-run-window-field><button aria-label="Apply AI suggestion"></button></div>', { windows: 2, unownedPrompts: 1 }],
     ["a bare textarea", '<textarea></textarea>', { windows: 2, unownedPrompts: 1 }],
   ])("refuses the real page plus %s outside every card", async (_name, sibling, counts) => {
+    await loadRunWindowOwnership();
     const { container } = render(await serverTree());
     await waitFor(() => {
       expect(container.querySelector(`${HOST} [data-run-window-field]`)).not.toBeNull();

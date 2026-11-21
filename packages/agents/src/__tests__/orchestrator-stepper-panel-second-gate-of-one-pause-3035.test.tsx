@@ -112,6 +112,11 @@ vi.mock("../use-runtime-field-renderer-bindings", () => ({
   useRuntimeFieldRendererBindings: () => ({ bindings: {}, loading: false }),
 }));
 
+// THE PAGE OWNS THE WINDOW (cinatra#3487): the panel registers the gate's
+// prompt window with the run page's chrome, which draws it. The panel is
+// mounted under the chrome, as the run page mounts it.
+import { RunPageChrome } from "../run-page-chrome";
+
 const POST_REF = "lcr-3035-post-gate";
 const IMAGE_REF = "lcr-3035-image-gate";
 const POST_GATE = {
@@ -203,6 +208,7 @@ function baseProps(overrides: Partial<PanelProps> = {}): PanelProps {
 const SETTLED = '[data-conformance-id="review-gate-settled"]';
 const DECISION_BAR = '[data-conformance-id="review-decision-bar"]';
 const PROMPT_WINDOW = '[data-conformance-id="review-prompt-window"]';
+const CHROME_PROMPT_WINDOW = `[data-run-window-host="page-chrome"] ${PROMPT_WINDOW}`;
 
 /** The bar's terminal affirmative control, however the floor names it. */
 function terminalControl(root: ParentNode): HTMLButtonElement | null {
@@ -220,7 +226,9 @@ describe("OrchestratorStepperPanel: the second gate of one pause", () => {
     streamState.interruptContext = SPENT_SETUP_INTERRUPT;
     const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
     const { container, rerender } = render(
-      <OrchestratorStepperPanel {...baseProps({ initialReviewGate: POST_GATE })} />,
+      <RunPageChrome>
+        <OrchestratorStepperPanel {...baseProps({ initialReviewGate: POST_GATE })} />
+      </RunPageChrome>,
     );
 
     // The post's gate, decided: a settled card, and nothing to press.
@@ -236,7 +244,11 @@ describe("OrchestratorStepperPanel: the second gate of one pause", () => {
     // THE POST IS APPROVED. The run stays `pending_approval` and the server
     // render that follows names the image gate; the status, the run and the
     // credential do not move.
-    rerender(<OrchestratorStepperPanel {...baseProps({ initialReviewGate: IMAGE_GATE })} />);
+    rerender(
+      <RunPageChrome>
+        <OrchestratorStepperPanel {...baseProps({ initialReviewGate: IMAGE_GATE })} />
+      </RunPageChrome>,
+    );
 
     await waitFor(
       () => {
@@ -247,7 +259,7 @@ describe("OrchestratorStepperPanel: the second gate of one pause", () => {
       { timeout: 10_000 },
     );
     expect(terminalControl(container)!.disabled).toBe(false);
-    expect(container.querySelector(PROMPT_WINDOW), "the image gate drew no prompt window").not.toBeNull();
+    expect(container.querySelector(CHROME_PROMPT_WINDOW), "the image gate drew no prompt window").not.toBeNull();
     expect(container.querySelector(SETTLED), "the decided post gate is still drawn").toBeNull();
     expect(resolvedRefs).toContain(IMAGE_REF);
   }, 60_000);

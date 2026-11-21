@@ -26,7 +26,23 @@ import {
   type RunWindowScreenRegistration,
 } from "../run-window-screen-context";
 
-import { assertRunWindowOwnership, readRunWindowOwnership } from "../../../../tests/e2e/design/conformance/run-window-ownership";
+import { fileURLToPath } from "node:url";
+import type * as RunWindowOwnershipModule from "../../../../tests/e2e/design/conformance/run-window-ownership";
+// The conformance reader this change adds is loaded inside the tests that use
+// it, by an absolute path built from this file's own address (this package's
+// vitest root is packages/agents) out of a variable, so no transform resolves
+// it when it loads this file. Before the fix the file then fails to load only
+// on the run page chrome module, which the fix adds, and not on whichever of
+// two missing modules the transform happens to report first.
+const RUN_WINDOW_OWNERSHIP_PATH = "../../../../tests/e2e/design/conformance/run-window-ownership.ts";
+const RUN_WINDOW_OWNERSHIP = fileURLToPath(new URL(RUN_WINDOW_OWNERSHIP_PATH, import.meta.url));
+let assertRunWindowOwnership!: typeof RunWindowOwnershipModule.assertRunWindowOwnership;
+let readRunWindowOwnership!: typeof RunWindowOwnershipModule.readRunWindowOwnership;
+async function loadRunWindowOwnership(): Promise<void> {
+  ({ assertRunWindowOwnership, readRunWindowOwnership } = (await import(
+    /* @vite-ignore */ RUN_WINDOW_OWNERSHIP
+  )) as typeof RunWindowOwnershipModule);
+}
 afterEach(cleanup);
 beforeEach(() => {
   ports.submit = null;
@@ -113,6 +129,7 @@ describe("3487 — the page owns the existing disabled schedule notice", () => {
   });
 
   it("draws the spent window's run-window anchor on the window node, and the reader's run assertion passes", async () => {
+    await loadRunWindowOwnership();
     const { container } = render(<RunPageChrome>
       <section data-lifecycle-card-host="run_card">
         <SchedulePromptWindow {...scheduleProps} readOnly />
