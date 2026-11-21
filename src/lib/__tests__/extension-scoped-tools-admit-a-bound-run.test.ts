@@ -57,6 +57,13 @@ vi.mock("@/lib/extension-tool-module-loader", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/extension-tool-module-loader")>()),
   loadDeclaredToolModule: (...args: unknown[]) => loadDeclaredToolModule(...args),
 }));
+// THE ORIGIN IS STUBBED to the run package's own road (cinatra#4154): every step is
+// re-anchored in the exact parent installation's flow, which extension-tool-origin.test.ts
+// pins; this suite reads what the dispatch does on that road.
+vi.mock("@/lib/extension-tool-origin", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/extension-tool-origin")>()),
+  resolveExtensionToolOrigin: async () => ({ kind: "parent" }),
+}));
 
 /** The run row as the passthrough hands it over, pinned to its own version. */
 const RUN = {
