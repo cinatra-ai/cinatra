@@ -138,6 +138,12 @@ vi.mock("@cinatra-ai/agents/agent-hitl-screen-card", () => ({
     </div>
   ),
 }));
+// THE PUBLISH CARD (cinatra#4150) mounts beside the screen above and self-gates on its own read. That read is a
+// session server action, so it is answered here with the reading of a run with no open publish decision: the real
+// card then draws nothing and every count below is unchanged.
+vi.mock("../../../agents/src/publish-decision-card-actions", () => ({
+  getPublishDecisionCardStateAction: async () => ({ state: "none" }),
+}));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn(), prefetch: vi.fn() }),
