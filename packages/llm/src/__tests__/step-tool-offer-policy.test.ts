@@ -101,6 +101,28 @@ describe("provider-independent declared-tool ceiling",()=>{
     .toThrow("step_tool_offer_policy_invalid");
   }
  });
+ // cinatra#3745: a tool is counted under the name the model calls it by. The sandbox built-in is offered
+ // as "sandbox_execute", so a function or an MCP tool of that name makes the name ambiguous: neither is offered.
+ const SANDBOX_AND_NAME={kind:"declared",tools:["sandbox_execute","mail_send"],builtinTools:["sandbox_execution"]} as const;
+ it("drops the sandbox built-in and a function that carry the same model-facing name",()=>{
+  const sandbox={type:"sandbox_execution",toolName:"sandbox_execute",description:"d"};
+  const mail={type:"function",name:"mail_send"};
+  expect(restrictStepToolOffers([sandbox,{type:"function",name:"sandbox_execute"},mail] as never,SANDBOX_AND_NAME)).toEqual([mail]);
+  expect(restrictStepToolOffers([{type:"function",name:"sandbox_execute"},sandbox] as never,SANDBOX_AND_NAME)).toBeUndefined();
+ });
+ it("drops the sandbox built-in and an MCP server's tool that carry the same model-facing name",()=>{
+  const sandbox={type:"sandbox_execution",toolName:"sandbox_execute",description:"d"};
+  expect(restrictStepToolOffers([sandbox,
+   {type:"mcp",serverUrl:"https://example.test",serverLabel:"s",allowedTools:["sandbox_execute","mail_send"]}] as never,SANDBOX_AND_NAME)).toEqual([
+   {type:"mcp",serverUrl:"https://example.test",serverLabel:"s",allowedTools:["mail_send"]},
+  ]);
+ });
+ it("keeps the sandbox built-in when no other offered tool carries its model-facing name",()=>{
+  const sandbox={type:"sandbox_execution",toolName:"sandbox_execute",description:"d"};
+  expect(restrictStepToolOffers([sandbox,{type:"function",name:"mail_send"}] as never,SANDBOX_AND_NAME)).toEqual([
+   sandbox,{type:"function",name:"mail_send"},
+  ]);
+ });
  it("offers nothing to a step that declares no tool",()=>{
   expect(restrictStepToolOffers([{type:"function",name:"a"}] as never,{kind:"declared",tools:[]})).toBeUndefined();
  });

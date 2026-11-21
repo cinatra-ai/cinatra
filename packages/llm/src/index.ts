@@ -2203,6 +2203,12 @@ export function resolveStepToolPolicy(policy: StepToolOfferPolicy | undefined): 
   if (policy != null) return policy;
   return mcpRequestContextStorage.getStore()?.runId ? RUN_FRAME_WITHOUT_POLICY : undefined;
 }
+/** The name a non-MCP tool is offered to the model under: a function tool's name, the sandbox
+ * built-in's fixed toolName, otherwise the built-in kind. */
+function modelFacingToolName(tool: LlmTool): string | undefined {
+  if (tool.type === "sandbox_execution") return typeof tool.toolName === "string" ? tool.toolName : undefined;
+  return "name" in tool && typeof tool.name === "string" ? tool.name : tool.type;
+}
 /** Last filter AFTER every toolbox, skill and execution injection, for every adapter. */
 export function restrictStepToolOffers(tools: readonly LlmTool[] | undefined,
   policy: StepToolOfferPolicy | undefined): LlmTool[] | undefined {
@@ -2225,7 +2231,10 @@ export function restrictStepToolOffers(tools: readonly LlmTool[] | undefined,
       const builtin = tool.type !== undefined && STEP_BUILTIN_TOOL_TYPES.includes(tool.type) &&
         policy.builtinTools?.includes(tool.type as StepBuiltinToolType) === true;
       if (!name || !(builtin || intersectStepToolNames([name], policy).length)) continue;
-      retained = tool; key = `tool:${name}`; carry(name);
+      // Count the tool under the name the MODEL calls it by: the sandbox built-in is offered as
+      // "sandbox_execute", so a function of that name collides with it.
+      const facing = modelFacingToolName(tool) ?? name;
+      retained = tool; key = `tool:${facing}`; carry(facing);
     }
     if (!retained || ambiguous.has(key)) continue;
     if (offered.has(key)) {
