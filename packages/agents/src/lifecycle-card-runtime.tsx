@@ -60,6 +60,9 @@ import {
   TERMINAL_RUN_STATUSES,
   type AgentRunStatus,
 } from "./run-status";
+// The pause a review gate belongs to (its id before the leg suffix): a pure
+// leaf module with no imports of its own.
+import { baseReviewTaskId } from "@/lib/artifacts/artifact-review-target";
 
 /** The server route that re-authorizes a ref and answers with the card envelope. */
 export const LIFECYCLE_VIEW_RESOLVE_PATH = "/api/lifecycle-views/resolve";
@@ -2339,6 +2342,99 @@ function slotReadDelay(reads: number, failures = 0): number {
  * signal on a surface whose transport has stopped answering.
  */
 const SLOT_LIVE_LOOK_SPACING_MS = 2000;
+
+/**
+ * The position of a review gate in its pause: 1 for the base id, `n` for a
+ * `<task>#n` leg (n of 2 or more, written in plain digits), and `null` for any
+ * other shape, whose position this surface cannot read.
+ */
+export function reviewGateLegNumber(reviewTaskId: string): number | null {
+  const cut = reviewTaskId.indexOf("#");
+  if (cut === -1) return reviewTaskId.length > 0 ? 1 : null;
+  const suffix = reviewTaskId.slice(cut + 1);
+  if (!/^[1-9][0-9]*$/.test(suffix)) return null;
+  const leg = Number(suffix);
+  return Number.isSafeInteger(leg) && leg >= 2 ? leg : null;
+}
+
+/**
+ * THE CARD A MARKED REVIEW GATE DRAWS (cinatra#3035). One pause of a marked
+ * review step opens one gate per artifact (`<task>`, `<task>#2`, ...) but
+ * announces ONE interrupt, naming the first leg that is not yet resolved when it
+ * is sent. Deciding that gate does not resume the run while a later one is open,
+ * so no new interrupt arrives and the one on file names a decided gate. The
+ * run's review slot is the server's election of the gate the run waits on (the
+ * first pending gate in raise order), but it is a second read on its own
+ * schedule, so it can also be the older of the two answers: the slot can still
+ * hold a gate that was decided since, while a replayed or retried interrupt
+ * already names the next leg.
+ *
+ * ONE RULE: of the gates of one pause, the card shows a gate that is NOT KNOWN
+ * TO BE RESOLVED. Between the interrupt's gate and the slot's gate (only when
+ * the slot names ANOTHER gate of the SAME pause; any other slot answer leaves
+ * the interrupt's gate), a gate is known to be resolved from two readings this
+ * surface already holds, and from nothing else:
+ *   - `resolvedReviewTaskIds`: the gates the surface's own server-built run rail
+ *     marks resolved (a resolved gate never opens again, so this reading cannot
+ *     be wrong by being old);
+ *   - the other answer's own election: both the interrupt (`nextUnresolvedLeg`
+ *     over the planned legs) and the slot (the first pending gate in raise
+ *     order) name the FIRST leg that is open at the moment they are made, so an
+ *     answer naming leg n says every earlier leg of the pause was already
+ *     closed. Of two answers naming different legs, the one naming the earlier
+ *     leg is therefore known to be resolved, whichever of them arrived last.
+ * Then:
+ *   - only the interrupt's gate is known resolved: the slot's gate;
+ *   - only the slot's gate is known resolved: the interrupt's gate;
+ *   - neither: the interrupt's gate. It is the gate the run itself announced
+ *     and the one its gate context (prompt window, composer binding) was issued
+ *     for, while the slot answer may be of any age; and both leg readings above
+ *     always mark one of two comparable legs, so this arm is reached only by ids
+ *     whose position cannot be read, where the interrupt's gate is the reading
+ *     from before this rule;
+ *   - both: the slot's gate, as before this rule (nothing open is lost: the
+ *     pause is about to resume).
+ * Both run panels take a marked gate's card here.
+ */
+export function markedReviewGateCard(input: {
+  interruptRef: string | null;
+  interruptReviewTaskId: unknown;
+  slot: Pick<RunReviewSlot, "ref" | "reviewTaskId">;
+  /** Gate ids this surface already reads as resolved (the run rail's). Only a
+   *  positive reading counts; an absent id says nothing about its gate. */
+  resolvedReviewTaskIds?: ReadonlySet<string> | null;
+}): { ref: string | null; reviewTaskId: string | null } {
+  const { interruptRef, interruptReviewTaskId, slot, resolvedReviewTaskIds } = input;
+  const own = {
+    ref: interruptRef,
+    reviewTaskId: typeof interruptReviewTaskId === "string" ? interruptReviewTaskId : null,
+  };
+  if (
+    slot.ref === null ||
+    slot.ref.length === 0 ||
+    typeof slot.reviewTaskId !== "string" ||
+    slot.reviewTaskId.length === 0 ||
+    own.reviewTaskId === null ||
+    own.reviewTaskId.length === 0 ||
+    slot.reviewTaskId === own.reviewTaskId ||
+    baseReviewTaskId(slot.reviewTaskId) !== baseReviewTaskId(own.reviewTaskId)
+  ) {
+    return own;
+  }
+  const slotGate = { ref: slot.ref, reviewTaskId: slot.reviewTaskId };
+  const ownLeg = reviewGateLegNumber(own.reviewTaskId);
+  const slotLeg = reviewGateLegNumber(slot.reviewTaskId);
+  const ownResolved =
+    resolvedReviewTaskIds?.has(own.reviewTaskId) === true ||
+    (ownLeg !== null && slotLeg !== null && slotLeg > ownLeg);
+  const slotResolved =
+    resolvedReviewTaskIds?.has(slot.reviewTaskId) === true ||
+    (ownLeg !== null && slotLeg !== null && ownLeg > slotLeg);
+  if (ownResolved && !slotResolved) return slotGate;
+  if (slotResolved && !ownResolved) return own;
+  if (!ownResolved && !slotResolved) return own;
+  return slotGate;
+}
 
 /** Parse the seed route's answer into a slot. Shared by every reader so a
  *  surface cannot invent a shape the route does not send. */

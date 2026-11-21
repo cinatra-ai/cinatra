@@ -84,6 +84,7 @@ import { RunCompletionCard } from "./run-completion-affordances";
 import {
   LifecycleCardSurfaceProvider,
   defaultRunReviewSlotReader,
+  markedReviewGateCard,
   useRunReviewSlot,
   useRunReviewRailRefresh,
   type RunReviewSlot,
@@ -3072,6 +3073,39 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   const parkedOnProducedReview =
     status === "pending_approval" &&
     (rowProducedReviewPark || reviewSlot.producedReviewPark === true);
+  // A MARKED GATE'S CARD, and its identity (cinatra#3035): of the interrupt's
+  // gate and the slot's gate of the same pause, the one not known to be resolved
+  // (`markedReviewGateCard`). The pause announced one interrupt for all of its
+  // gates, so after the gate it names is decided the interrupt names a decided
+  // gate while the run waits on the next; and the slot, a read on its own
+  // schedule, can be the older answer. The run rail's own resolved gates are the
+  // resolution this panel already reads, so the rule reads them too.
+  const railResolvedReviewTaskIds = useMemo(
+    () =>
+      new Set(
+        railExtras.flatMap((entry) =>
+          entry.kind === "gate" && entry.gate?.resolved === true ? [entry.gate.reviewTaskId] : [],
+        ),
+      ),
+    [railExtras],
+  );
+  const markedInterruptValues =
+    effectiveInterruptContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID
+      ? (effectiveInterruptContext.values ?? {})
+      : null;
+  const markedGate =
+    markedInterruptValues !== null
+      ? markedReviewGateCard({
+          interruptRef:
+            typeof markedInterruptValues.lifecycleCardRef === "string" &&
+            markedInterruptValues.lifecycleCardRef.length > 0
+              ? markedInterruptValues.lifecycleCardRef
+              : null,
+          interruptReviewTaskId: markedInterruptValues.reviewTaskId,
+          slot: reviewSlot,
+          resolvedReviewTaskIds: railResolvedReviewTaskIds,
+        })
+      : null;
   // Follow the card branch: the produced-output park wins over its spent
   // interrupt, and only a discovered card carries a stable rail identity.
   const reviewTaskId = parkedOnProducedReview
@@ -3080,10 +3114,8 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
       : null
     : status === "pending_approval" &&
     !awaitingNextStep &&
-    effectiveInterruptContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID
-      ? typeof effectiveInterruptContext.values?.reviewTaskId === "string"
-        ? effectiveInterruptContext.values.reviewTaskId
-        : null
+    markedGate !== null
+      ? markedGate.reviewTaskId
       : status === "completed"
         ? reviewSlot.reviewTaskId
         : null;
@@ -3252,11 +3284,8 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     // approval-form state, hook or submit path is constructed for a gate that
     // has no fields to fill.
     const reviewValues = effectiveInterruptContext.values ?? {};
-    const cardRef =
-      typeof reviewValues.lifecycleCardRef === "string" &&
-      reviewValues.lifecycleCardRef.length > 0
-        ? reviewValues.lifecycleCardRef
-        : null;
+    // The gate the run waits on now (cinatra#3035; `markedGate` above).
+    const cardRef = markedGate?.ref ?? null;
     const reviewSurfaceUrl =
       typeof reviewValues.reviewSurfaceUrl === "string" &&
       reviewValues.reviewSurfaceUrl.startsWith("/")
