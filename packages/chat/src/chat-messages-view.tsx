@@ -77,7 +77,7 @@ import {
   type AgentHitlScreenCarry,
 } from "@cinatra-ai/agents/agent-hitl-screen-card";
 // The ONE renderer of `publish_decision` (cinatra#4150), by its own subpath for the same reason.
-import { PublishDecisionCard } from "@cinatra-ai/agents/publish-decision-card-view";
+import { PublishDecisionCard, usePublishDecisionCardRead } from "@cinatra-ai/agents/publish-decision-card-view";
 // The turn's own register for the settled schedule card (cinatra#3174), reached
 // by the same subpath the host declaration is.
 import { SettledScheduleRegisterProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
@@ -90,6 +90,7 @@ import {
   ScheduleReadingReport,
   useRunMomentCard,
   useLifecycleCardHost,
+  useLifecycleCardAuth,
   runMomentCardDrawsAReview,
   type RunMomentCardReader,
   type ScheduleCardReading,
@@ -655,6 +656,7 @@ function AgentRunTurnSlot({
   // site widget included, whose run card draws the review in its own slot
   // (cinatra#3051).
   const ambientLifecycleHost = useLifecycleCardHost();
+  const ambientLifecycleAuth = useLifecycleCardAuth();
   const runCardDrawsAReview = runMomentCardDrawsAReview(
     momentCard,
     ambientLifecycleHost,
@@ -814,7 +816,14 @@ function AgentRunTurnSlot({
     },
     [runId],
   );
-  const publishCard = <PublishDecisionCard runId={runId} wireRef={runStatusSignal} />;
+  // ONE READ for the turn: the card draws it and the run panel decides its approval banner from it, so the two can
+  // never disagree (see the panel's failure rule).
+  const publishRead = usePublishDecisionCardRead({
+    runId: ambientLifecycleHost === null ? "" : runId,
+    auth: ambientLifecycleAuth,
+    wireRef: runStatusSignal,
+  });
+  const publishCard = <PublishDecisionCard runId={runId} read={publishRead} />;
 
   // THE RUN-PROGRESS PANEL, written once for the same reason.
   const runPanel = (
@@ -823,6 +832,7 @@ function AgentRunTurnSlot({
       onActiveGateChange={onGateChange}
       onReviewReadingChange={onPanelReviewReadingChange}
       onRunStatusChange={onRunStatusChange}
+      publishRead={publishRead}
       recommendationDecided={decided}
     />
   );

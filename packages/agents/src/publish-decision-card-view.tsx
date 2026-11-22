@@ -12,7 +12,7 @@
 // The two controls send through the `decide` door a host passes; a host that passes none draws them disabled.
 // ---------------------------------------------------------------------------
 
-import { useEffect, useRef, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 
 import { Button } from "@/components/ui/button";
 import { StatusPill } from "@/components/ui/status-pill";
@@ -104,6 +104,45 @@ export function usePublishDecisionCardState(params: {
   return resolved && resolved.runId === runId ? resolved.state : null;
 }
 
+/** One resolved read of a run's publish card: the state, whether a re-read the reader asked for is running, and the
+ * re-read itself. A host that also decides something else from the same state (the run panel's approval banner, the
+ * conversation turn's panel) reads ONCE and hands this to the card, so the two decisions cannot disagree. */
+export type PublishDecisionCardRead = {
+  state: PublishDecisionCardState | null;
+  refreshing: boolean;
+  reload: (showLoading?: boolean) => void;
+};
+
+/** The ONE read behind a publish card: `usePublishDecisionCardState` with its reload and its loading reading. An empty
+ * `runId` reads nothing. */
+export function usePublishDecisionCardRead(params: {
+  runId: string;
+  auth: LifecycleCardAuth | null;
+  wireRef?: string | null;
+}): PublishDecisionCardRead {
+  const [reloadToken, setReloadToken] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  // Loading ends when the re-read ENDS, landed or failed: a failed re-read keeps the last answer on screen (IV.1).
+  const state = usePublishDecisionCardState({
+    runId: params.runId,
+    auth: params.auth,
+    reloadToken,
+    wireRef: params.wireRef,
+    onRead: () => setRefreshing(false),
+  });
+  const reload = useCallback((showLoading = false) => {
+    if (showLoading) setRefreshing(true);
+    setReloadToken((n) => n + 1);
+  }, []);
+  return { state, refreshing, reload };
+}
+
+/** The publish gate is OPEN for this read only when the read positively answered `pending`. A read that has not
+ * landed or failed with no earlier answer is not a publish gate, so a host keeps its own approval surface. */
+export function publishGateIsOpen(read: PublishDecisionCardRead): boolean {
+  return read.state?.state === "pending";
+}
+
 const FRAME = "w-full min-w-0 overflow-hidden rounded-card border border-line bg-surface-strong";
 const KICK = "font-mono text-badge-2xs uppercase tracking-kicker text-muted-foreground";
 const MARKERS = {
@@ -136,32 +175,27 @@ export function PublishDecisionCard({
   runId,
   decide,
   wireRef,
+  read,
 }: {
   runId: string;
   decide?: PublishDecisionDecide;
   /** The host's change signal for this run (its status): a change re-reads the card. See the hook above. */
   wireRef?: string | null;
+  /** A read the HOST already resolved (`usePublishDecisionCardRead`). Given, the card reads nothing itself and draws
+   * exactly that state, so the host's other decisions and this card stand on one answer. */
+  read?: PublishDecisionCardRead;
 }): ReactElement | null {
   const host = useLifecycleCardHost();
   const auth = useLifecycleCardAuth();
-  const [reloadToken, setReloadToken] = useState(0);
-  const [refreshing, setRefreshing] = useState(false);
   const [noLongerOpen, setNoLongerOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [note, setNote] = useState("");
-  // Loading ends when the re-read ENDS, landed or failed: a failed re-read keeps the last answer on screen (IV.1).
-  const state = usePublishDecisionCardState({
-    runId: host === null ? "" : runId,
-    auth,
-    reloadToken,
-    wireRef,
-    onRead: () => setRefreshing(false),
-  });
+  const own = usePublishDecisionCardRead({ runId: host === null || read ? "" : runId, auth, wireRef });
+  const { state, refreshing, reload } = read ?? own;
 
   // No host declaration, no authorized answer yet, or no open decision: NO DOM at all.
   if (host === null || state === null || state.state === "none") return null;
 
-  const reload = () => setReloadToken((n) => n + 1);
   const send = async (answer: "approve" | "decline") => {
     if (!decide || sending) return;
     setSending(true);
@@ -190,8 +224,7 @@ export function PublishDecisionCard({
   } else if (noLongerOpen) {
     const refresh = () => {
       setNoLongerOpen(false);
-      setRefreshing(true);
-      reload();
+      reload(true);
     };
     body = (
       <div className={`${FRAME} px-4 py-4 text-center`} data-conformance-id="publish-state-no-longer-open">

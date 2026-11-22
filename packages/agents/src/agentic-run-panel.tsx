@@ -40,7 +40,12 @@ import {
   hitlFieldPresentationFor,
 } from "./agent-hitl-screen-card";
 import type { AgentRunMessageBody } from "./store";
-import { PublishDecisionCard, usePublishDecisionCardState } from "./publish-decision-card-view";
+import {
+  PublishDecisionCard,
+  publishGateIsOpen,
+  usePublishDecisionCardRead,
+  type PublishDecisionCardRead,
+} from "./publish-decision-card-view";
 import { StatusPill } from "@/components/ui/status-pill";
 import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
 import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
@@ -342,6 +347,12 @@ export type AgenticRunPanelProps = {
    * change signal, so the card re-reads when the run moves. Absent on a host that does not ask.
    */
   onRunStatusChange?: (runId: string, status: string) => void;
+  /**
+   * The run's publish card read the HOST already resolved (cinatra#4150): the conversation turn reads once and hands
+   * the same answer to its own card and to this panel, so the approval banner here and the card there cannot
+   * disagree. Absent, the panel reads once itself and hands that answer to the card it mounts.
+   */
+  publishRead?: PublishDecisionCardRead;
 };
 
 export type ChatGateField = {
@@ -575,6 +586,7 @@ export function AgenticRunPanel({
   readReviewSlot,
   onReviewReadingChange,
   onRunStatusChange,
+  publishRead: hostPublishRead,
   inputStepInRail = false,
   railDrawsTheFrame = false,
 }: AgenticRunPanelProps) {
@@ -1979,17 +1991,23 @@ export function AgenticRunPanel({
   }, [refetchDerivedContext]);
 
   // A PUBLISH GATE IS NOT A GENERIC APPROVAL (cinatra#4150). A run parked at a publish gate is `pending_approval` with
-  // no gate context and no generic review task (publish-decision-actions.ts, `holdRunAtPublishGate`), so without
-  // this read the generic approval branch below drew its "Review approval" link, its loading line and its Re-check
-  // beside the publish card. Read only while the run is paused with no gate context, keyed on the run's status.
-  const publishGateState = usePublishDecisionCardState({
-    runId: isPendingApproval && !effectiveHitlContext ? runId : "",
+  // no gate context and no generic review task (publish-decision-actions.ts, `holdRunAtPublishGate`), so the generic
+  // approval branch below would draw its "Review approval" link, its loading line and its Re-check beside the card.
+  //
+  // ONE READ DECIDES BOTH. The banner's stand-down and the card's drawing come from the SAME resolved read: the
+  // host's (a conversation turn), or else this panel's own, which it also hands to the card it mounts, so that card
+  // reads nothing itself. Two reads could disagree (a transient fault reads as `none` on one), and then either both
+  // surfaces drew or neither did. THE FAILURE RULE: the banner stands down only when the read POSITIVELY answers
+  // `pending`, and that same answer draws the card. A read that has not landed, failed with no earlier answer, or
+  // answered `none` keeps today's banner and draws no card, so a paused run always shows exactly one surface. A
+  // failed re-read keeps the last answer for both.
+  const ownPublishRead = usePublishDecisionCardRead({
+    runId: hostPublishRead ? "" : runId,
     auth: ambientLifecycleAuth,
-    reloadToken: 0,
     wireRef: status,
   });
-  const parkedAtPublishGate =
-    isPendingApproval && !effectiveHitlContext && publishGateState?.state === "pending";
+  const publishRead = hostPublishRead ?? ownPublishRead;
+  const parkedAtPublishGate = isPendingApproval && !effectiveHitlContext && publishGateIsOpen(publishRead);
   const onRunStatusChangeRef = useRef(onRunStatusChange);
   onRunStatusChangeRef.current = onRunStatusChange;
   useEffect(() => {
@@ -3068,7 +3086,7 @@ export function AgenticRunPanel({
           down inside a conversation host for the hitl screen's reason, and draws nothing with no open decision. */}
       {panelMountsHitlScreenCard ? (
         <LifecycleCardSurfaceProvider host="run_card">
-          <PublishDecisionCard runId={runId} wireRef={status} />
+          <PublishDecisionCard runId={runId} read={publishRead} />
         </LifecycleCardSurfaceProvider>
       ) : null}
 

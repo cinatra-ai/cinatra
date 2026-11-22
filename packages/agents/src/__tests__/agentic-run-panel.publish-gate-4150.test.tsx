@@ -128,4 +128,41 @@ describe("AgenticRunPanel at a publish gate (cinatra#4150)", () => {
     expect(await screen.findByRole("link", { name: "Review approval" })).not.toBeNull();
     expect(mounted.container.querySelector('[data-testid="hitl-recovery-state"]')).not.toBeNull();
   });
+
+  // ONE READ DECIDES BOTH SURFACES. Successive reads disagree here (a transient fault reads as `none`), and every
+  // later read fails, which keeps the last answer. Whatever the first answer is, exactly one surface draws.
+  const surfaces = (container: HTMLElement) => ({
+    card: container.querySelectorAll('[data-lifecycle-card="publish_decision"]').length,
+    banner: screen.queryAllByRole("link", { name: "Review approval" }).length,
+  });
+
+  it("reads pending then none: the card draws and the banner does not", async () => {
+    publishStateMock
+      .mockImplementationOnce(async () => PENDING)
+      .mockImplementationOnce(async () => ({ state: "none" }))
+      .mockImplementation(async () => {
+        throw new Error("transient");
+      });
+    const mounted = await mountPanel();
+    expect(surfaces(mounted.container)).toEqual({ card: 1, banner: 0 });
+  });
+
+  it("reads none then pending: the banner draws and the card does not", async () => {
+    publishStateMock
+      .mockImplementationOnce(async () => ({ state: "none" }))
+      .mockImplementationOnce(async () => PENDING)
+      .mockImplementation(async () => {
+        throw new Error("transient");
+      });
+    const mounted = await mountPanel();
+    expect(surfaces(mounted.container)).toEqual({ card: 0, banner: 1 });
+  });
+
+  it("a FAILED read with no earlier answer keeps the generic banner: never neither surface", async () => {
+    publishStateMock.mockImplementation(async () => {
+      throw new Error("transient");
+    });
+    const mounted = await mountPanel();
+    expect(surfaces(mounted.container)).toEqual({ card: 0, banner: 1 });
+  });
 });

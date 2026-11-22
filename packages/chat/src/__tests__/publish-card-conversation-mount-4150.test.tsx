@@ -78,15 +78,19 @@ vi.mock("@/components/data-safety/undo-toast", () => ({
 // card found inside it is still recognisable as a run-card mount rather than a
 // conversation one. It keeps the run-status report the column hands the shipped panel, so a suite can move the run.
 const statusReporters = vi.hoisted(() => new Map<string, (runId: string, status: string) => void>());
+const panelReads = vi.hoisted(() => new Map<string, { state: { state: string } | null } | undefined>());
 vi.mock("../inline-agent-run-card", () => ({
   InlineAgentRunCard: ({
     runId,
     onRunStatusChange,
+    publishRead,
   }: {
     runId: string;
     onRunStatusChange?: (runId: string, status: string) => void;
+    publishRead?: { state: { state: string } | null };
   }) => {
     if (onRunStatusChange) statusReporters.set(runId, onRunStatusChange);
+    panelReads.set(runId, publishRead);
     return <div data-lifecycle-card-host="run_card" data-inline-run-card={runId} />;
   },
 }));
@@ -151,6 +155,7 @@ beforeEach(() => {
 
 afterEach(() => {
   statusReporters.clear();
+  panelReads.clear();
   cleanup();
   stub?.restore();
   stub = null;
@@ -208,6 +213,8 @@ describe("the publish card on the conversation hosts (cinatra#4150)", () => {
       const cards = root.querySelectorAll<HTMLElement>(CARD);
       expect(cards).toHaveLength(1);
       expect(cards[0]!.getAttribute("data-lifecycle-card-state")).toBe("pending");
+      // The panel decides its approval banner from the SAME read the card drew, so the two cannot disagree.
+      expect(panelReads.get(HELD_RUN_ID)?.state?.state).toBe("pending");
     },
   );
 

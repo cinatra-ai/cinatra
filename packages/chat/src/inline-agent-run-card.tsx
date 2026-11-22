@@ -28,6 +28,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { sendAcrossRenewal } from "@cinatra-ai/agents/lifecycle-card-runtime";
+import type { PublishDecisionCardRead } from "@cinatra-ai/agents/publish-decision-card-view";
 import {
   AgenticRunPanel,
   type SerializedAgentRunMessage,
@@ -235,6 +236,7 @@ export function InlineAgentRunCard({
   onActiveGateChange,
   onReviewReadingChange,
   onRunStatusChange,
+  publishRead,
   recommendationDecided,
 }: {
   runId: string;
@@ -271,6 +273,8 @@ export function InlineAgentRunCard({
   onReviewReadingChange?: (runId: string, drawsReview: boolean) => void;
   /** Forwarded to AgenticRunPanel: the run's status on every change, the publish card's change signal (cinatra#4150). */
   onRunStatusChange?: (runId: string, status: string) => void;
+  /** Forwarded to AgenticRunPanel: the turn's ONE publish card read, shared with the turn's card (cinatra#4150). */
+  publishRead?: PublishDecisionCardRead;
 }) {
   const [seed, setSeed] = useState<SeedData | null>(null);
   const [loadError, setLoadError] = useState<LoadFailureReason | null>(null);
@@ -438,6 +442,7 @@ export function InlineAgentRunCard({
         onActiveGateChange={onActiveGateChange}
         onReviewReadingChange={onReviewReadingChange}
         onRunStatusChange={onRunStatusChange}
+        publishRead={publishRead}
         recommendationDecided={recommendationDecided}
         surface="chat"
         initialReviewGate={seed.reviewGate ?? null}
