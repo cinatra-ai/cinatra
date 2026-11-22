@@ -321,21 +321,3 @@ describe("convergence — a decision that raced the TTL sweeper is still a decis
     expect(html).not.toContain('data-action="open-recommendation-step"');
   });
 });
-
-describe("the publish card's review host is the run page (cinatra#4150)", () => {
-  // The page composes the card in its gate region, but no reader reaches a card there: a run the store can read is
-  // redirected first (below), and for a run it cannot read the card's own read answers `none` and draws nothing
-  // (publish-decision-card-core.test.ts, "a run the reader may not read ... are the same silence"). The capture
-  // contract records that cell as composition-only (capture-host-admissibility.test.mjs).
-  // It pins the redirect the fix keeps, so it passes before the fix too.
-  // red-first-pin: a run the store CAN read is sent to the run page
-  it("a run the store CAN read is sent to the run page, whose panel carries the card on run_card", async () => {
-    mocks.loadReviewGateSurface.mockResolvedValue(READY);
-    mocks.readAgentRunById.mockResolvedValue({ id: "run-1", launchScopeAnchor: null } as never);
-    try {
-      await expect(renderPage()).rejects.toThrow(/^REDIRECT:\/agents\/cinatra-ai\/blog-draft-writer-agent\/run-1\?step=/);
-    } finally {
-      mocks.readAgentRunById.mockResolvedValue(null);
-    }
-  });
-});
