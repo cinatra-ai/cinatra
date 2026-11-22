@@ -581,12 +581,9 @@ describe("the REAL manifest", () => {
   it("the design pin is the ratified drawing, and the drift is recorded rather than overwritten", () => {
     const m = manifest();
     // The pin was adopted onto the newest revision of the drawings' main line,
-    // design#243, taking in the three revisions of the governed drawings it had
-    // not adopted: the Drupal pointer as the generic floor and the Drupal page
-    // as a page snapshot, which design#253 drew in both drawings; the CMS
-    // fields snapshot display, which design#267 drew in the artifact review
-    // drawing; and three further kinds of the agent's input card, which
-    // design#243 drew in the lifecycle cards drawing. Every pin the rows
+    // design#264, taking in the one revision of the governed drawings it had
+    // not adopted: the publish card worded for every external write, with its
+    // rows drawn, in the lifecycle cards drawing. Every pin the rows
     // were read against before this move is still here: the previous head
     // becomes `previousPin`, and the head before THAT is APPENDED to
     // `priorPins` rather than replacing what was already in it. The whole point
@@ -597,14 +594,14 @@ describe("the REAL manifest", () => {
     // The approved revision governs both drawings; the canonical parser keeps
     // the immutable revision and exact sibling set strict.
     expect(parseSpecCommit(m.specCommit)).toEqual({
-      revision: "0c0ef636f63d77601eb502bab2d8b4b013117d07",
+      revision: "615ed095b8e878dd070033a76be4e671270f7a25",
       paths: ["specs/app-lifecycle-cards.html", "specs/app-artifact-review.html"],
     });
     // The displaced pin governed both drawings, so it is recorded with both:
     // the canonical parser reads it exactly as it read the pin when it stood.
     // It is the pin the main line stood at before the move.
     expect(parseSpecCommit(m.specCommitDrift.previousPin)).toEqual({
-      revision: "635da0077d169c5e682a082e691f0182b21bcc7c",
+      revision: "0c0ef636f63d77601eb502bab2d8b4b013117d07",
       paths: ["specs/app-lifecycle-cards.html", "specs/app-artifact-review.html"],
     });
     // An earlier move took two steps on a branch that was squashed into one
@@ -634,6 +631,7 @@ describe("the REAL manifest", () => {
       "4d75cb4c8e01157986b0e3b303107356cfeba256",
       "3beff055c4cb88797fdd8b87e396386b02080922",
       "9d4d53c26193dfe1064abdc521072d25278e1199",
+      "635da0077d169c5e682a082e691f0182b21bcc7c",
     ]) {
       expect(m.specCommitDrift.priorPins.join("\n"), prior).toContain(prior);
     }
@@ -658,30 +656,30 @@ describe("the REAL manifest", () => {
     // It governed both drawings, and the canonical parser reads it with both
     // once its date label is taken off.
     const undated = (entry) => entry.replace(/ \(until \d{4}-\d{2}-\d{2}\)$/, "");
-    expect(m.specCommitDrift.priorPins.at(-1)).toContain("9d4d53c26193dfe1064abdc521072d25278e1199");
+    expect(m.specCommitDrift.priorPins.at(-1)).toContain("635da0077d169c5e682a082e691f0182b21bcc7c");
     expect(parseSpecCommit(undated(m.specCommitDrift.priorPins.at(-1)))).toEqual({
-      revision: "9d4d53c26193dfe1064abdc521072d25278e1199",
+      revision: "635da0077d169c5e682a082e691f0182b21bcc7c",
       paths: ["specs/app-lifecycle-cards.html", "specs/app-artifact-review.html"],
     });
-    expect(m.specCommitDrift.priorPins.at(-1)).toMatch(/\(until 2026-11-14\)$/);
+    expect(m.specCommitDrift.priorPins.at(-1)).toMatch(/\(until 2026-11-21\)$/);
     // The entries before it keep what they recorded: appending never rewrites
     // what is already on the trail.
     expect(parseSpecCommit(undated(m.specCommitDrift.priorPins.at(-2)))).toEqual({
+      revision: "9d4d53c26193dfe1064abdc521072d25278e1199",
+      paths: ["specs/app-lifecycle-cards.html", "specs/app-artifact-review.html"],
+    });
+    expect(m.specCommitDrift.priorPins.at(-2)).toMatch(/\(until 2026-11-14\)$/);
+    expect(parseSpecCommit(undated(m.specCommitDrift.priorPins.at(-3)))).toEqual({
       revision: "3beff055c4cb88797fdd8b87e396386b02080922",
       paths: ["specs/app-lifecycle-cards.html", "specs/app-artifact-review.html"],
     });
-    expect(m.specCommitDrift.priorPins.at(-2)).toMatch(/\(until 2026-11-13\)$/);
-    expect(parseSpecCommit(undated(m.specCommitDrift.priorPins.at(-3)))).toEqual({
+    expect(m.specCommitDrift.priorPins.at(-3)).toMatch(/\(until 2026-11-13\)$/);
+    expect(parseSpecCommit(undated(m.specCommitDrift.priorPins.at(-4)))).toEqual({
       revision: "4d75cb4c8e01157986b0e3b303107356cfeba256",
       paths: ["specs/app-lifecycle-cards.html", "specs/app-artifact-review.html"],
     });
-    expect(m.specCommitDrift.priorPins.at(-3)).toMatch(/\(until 2026-11-11\)$/);
-    expect(parseSpecCommit(undated(m.specCommitDrift.priorPins.at(-4)))).toEqual({
-      revision: "9eb5aaf1974f2a80f0d41c7320d0b514c7380c0e",
-      paths: ["specs/app-lifecycle-cards.html", "specs/app-artifact-review.html"],
-    });
-    expect(m.specCommitDrift.priorPins.at(-4)).toMatch(/\(until 2026-11-10\)$/);
-    expect(m.specCommitDrift.movedOn).toBe("2026-11-21");
+    expect(m.specCommitDrift.priorPins.at(-4)).toMatch(/\(until 2026-11-11\)$/);
+    expect(m.specCommitDrift.movedOn).toBe("2026-11-22");
     // No pin is ever its own predecessor: a "move" that recorded the same commit
     // on both sides would satisfy every check above and record nothing.
     expect(m.specCommitDrift.previousPin).not.toBe(m.specCommit);
@@ -689,52 +687,36 @@ describe("the REAL manifest", () => {
     // The move says what CHANGED between the two documents, not merely that one
     // happened, and it does not claim an approval it cannot see.
     expect(m.specCommitDrift.differs.length).toBeGreaterThan(120);
-    // Seven first-parent revisions stand in the range. Three touch a governed
-    // drawing, design#253, design#267 and the pin itself, design#243, and each
-    // of the three carries a `Reviewed-by:` trailer naming the maintainer at
-    // tier maintainer. Of the four that touch no governed drawing, three carry
-    // no such trailer. The record names all seven and says exactly that.
-    expect(m.specCommitDrift.whoRatified).toMatch(/ratified on 2026-11-20 by a\s+maintainer review/);
-    expect(m.specCommitDrift.whoRatified).toContain("Seven first-parent revisions stand between");
-    expect(m.specCommitDrift.whoRatified).toContain("Three of the seven touch a drawing this pin governs");
+    // One first-parent revision stands in the range, design#264, the pin
+    // itself. It touches a governed drawing and carries a `Reviewed-by:`
+    // trailer naming the maintainer at tier maintainer. The record names it and
+    // says exactly that.
+    expect(m.specCommitDrift.whoRatified).toMatch(/ratified on 2026-11-22 by a\s+maintainer review/);
+    expect(m.specCommitDrift.whoRatified).toContain("One first-parent revision stands between");
     expect(m.specCommitDrift.whoRatified).toContain(
-      "Each of the three carries a `Reviewed-by:` trailer naming the maintainer at tier maintainer",
+      "carries a `Reviewed-by:` trailer naming the maintainer at tier maintainer",
     );
-    expect(m.specCommitDrift.whoRatified).toContain("bc9ed92e, 8569f619 and f37b726e carry none");
     expect(m.specCommitDrift.whoRatified).toContain("claims no review of the cinatra change that moves the pin");
-    for (const revision of [
-      "bc9ed92eaa8ffabefb70a0a816161386848e9249",
-      "8569f6192baa82b86d91b01eace1eb7c464cabc7",
-      "bbfa1c01295b7e60553931abe6286339160f2ff6",
-      "f37b726eb0d074c5afea7f5f4eebc39b2c0b883c",
-      "94d892de2b2ec893c473a534885893fa64465c6f",
-      "8c269850274148198aa8af73a6aeff35238d7d96",
-      "0c0ef636f63d77601eb502bab2d8b4b013117d07",
-    ]) {
-      expect(m.specCommitDrift.whoRatified, revision).toContain(revision);
-    }
-    // The move is not a hash-only re-pin: both governed drawings changed, and
-    // the record names the blob of each at each pin.
+    expect(m.specCommitDrift.whoRatified).toContain("615ed095b8e878dd070033a76be4e671270f7a25");
+    // The move is not a hash-only re-pin: the lifecycle cards drawing changed,
+    // and the record names its blob at each pin, and the blob of the artifact
+    // review drawing, which is the same at both.
     for (const blob of [
-      "db3c0aca3340ab8735958f9e168600b7b436fe17",
       "d02f2299e3a7a9dcc2d3dc7919802fea1debc61b",
-      "dcca796d2299f50b6a302e598936d2bd45796eba",
       "a7dcda12b94cd3d2521040ce39ad788f0bc3eabb",
+      "edd2467686d579ed197df54f0011d90ab433c01d",
     ]) {
       expect(m.specCommitDrift.why, blob).toContain(blob);
     }
-    // design#253 redraws the Drupal pointer and adds the Drupal page;
-    // design#267 adds the CMS fields snapshot display; design#243 adds the
-    // declared facts, rows and decision of the input card. The record gives the
-    // line and hunk count of each drawing, names the added and the removed
-    // values, and says that none of them is a recorded anchor.
-    expect(m.specCommitDrift.differs).toContain("takes 78 inserted lines and 6 deleted, in 4 hunks");
-    expect(m.specCommitDrift.differs).toContain("takes 24 inserted lines and 8 deleted, in 3 hunks");
-    expect(m.specCommitDrift.differs).toContain("`hitl-declared-decision`");
-    expect(m.specCommitDrift.differs).toContain("`choose-answer -> answer-chosen`");
-    expect(m.specCommitDrift.differs).toContain("`drupal-page-display`");
-    expect(m.specCommitDrift.differs).toContain("`drupal-pointer-continued-reading`");
-    expect(m.specCommitDrift.differs).toContain("`cms-fields-display`");
+    // design#264 words the publish card for every external write and draws its
+    // rows. The record gives the line and hunk count of the changed drawing,
+    // names the added values, and says that none of them is a recorded anchor.
+    expect(m.specCommitDrift.differs).toContain("takes 96 inserted lines and 33 deleted, in 6 hunks");
+    expect(m.specCommitDrift.differs).toContain("is unchanged");
+    expect(m.specCommitDrift.differs).toContain("`publish-card-rows`");
+    expect(m.specCommitDrift.differs).toContain("`publish-row-items-refused`");
+    expect(m.specCommitDrift.differs).toContain("`row-items=declaration.row.input`");
+    expect(m.specCommitDrift.differs).toContain("`approve-publish -> released`");
     expect(m.specCommitDrift.differs).toContain("adds or removes no recorded anchor attribute");
     expect(m.specCommitDrift.differs).not.toMatch(/adds or removes no attribute/);
     // The drift record and the contract's newest re-ratification entry both
@@ -754,6 +736,20 @@ describe("the REAL manifest", () => {
     expect(contract.noteContinuedWhy).toContain("`noteContinued`");
     const contractNote = [contract.note, ...contract.noteContinued].join(" ");
     expect(m.specCommitDrift.differs).toMatch(/No recorded anchor changed/);
+    expect(contract.noteContinued.at(-1).startsWith("RE-RATIFIED 2026-11-22 (")).toBe(true);
+    const entry1122 = noteEntry(contractNote, "RE-RATIFIED 2026-11-22 (");
+    expect(entry1122).toMatch(/NO RECORDED ANCHOR CHANGED/);
+    expect(entry1122).toContain("`anchorsUnresolvedAtPin` STAYS EMPTY");
+    expect(entry1122).toContain("the two reports are the same byte for byte");
+    expect(entry1122).toContain("design@615ed095");
+    expect(entry1122).toContain("design@0c0ef636");
+    expect(entry1122).toContain("all ten selectors behind the 12 drawing anchors");
+    expect(entry1122).toContain("`publish-card-rows`");
+    expect(entry1122).toContain("`approve-publish -> released`");
+    expect(entry1122).toContain("adds or removes no recorded anchor attribute");
+    expect(entry1122).not.toMatch(/adds or removes no attribute/);
+    // The entry of 2026-11-21 stays on file with the claim it made about the
+    // Drupal pointer, the CMS fields snapshot and the input card.
     const entry1121 = noteEntry(contractNote, "RE-RATIFIED 2026-11-21 (");
     expect(entry1121).toMatch(/NO RECORDED ANCHOR CHANGED/);
     expect(entry1121).toContain("`anchorsUnresolvedAtPin` STAYS EMPTY");
@@ -851,6 +847,9 @@ describe("the REAL manifest", () => {
     // after the entries of 2026-11-14, 2026-11-13, 2026-11-11, 2026-11-10,
     // 2026-11-09 and 2026-11-05, which stand after the entry of 2026-10-28,
     // which moved no pin.
+    expect(contractNote.lastIndexOf("RE-RATIFIED 2026-11-22 (")).toBeGreaterThan(
+      contractNote.lastIndexOf("RE-RATIFIED 2026-11-21 ("),
+    );
     expect(contractNote.lastIndexOf("RE-RATIFIED 2026-11-21 (")).toBeGreaterThan(
       contractNote.lastIndexOf("RE-RATIFIED 2026-11-14 ("),
     );
@@ -922,6 +921,7 @@ describe("the REAL manifest", () => {
       "RE-RATIFIED 2026-11-11 (",
       "RE-RATIFIED 2026-11-13 (",
       "RE-RATIFIED 2026-11-14 (",
+      "RE-RATIFIED 2026-11-21 (",
     ]) {
       const entry = noteEntry(contractNote, head);
       const mutant = contractNote.replace(entry, entry.replaceAll("NO RECORDED ANCHOR CHANGED", "(phrase removed)"));
@@ -934,7 +934,7 @@ describe("the REAL manifest", () => {
     // note, and with the phrase removed nothing from its head to the end of the
     // note carries it.
     {
-      const head = "RE-RATIFIED 2026-11-21 (";
+      const head = "RE-RATIFIED 2026-11-22 (";
       const entry = noteEntry(contractNote, head);
       expect(contractNote.endsWith(entry), head).toBe(true);
       const mutant = contractNote.replace(entry, entry.replaceAll("NO RECORDED ANCHOR CHANGED", "(phrase removed)"));
@@ -951,7 +951,9 @@ describe("the REAL manifest", () => {
     // because design#237 adds two drawn controls to the lifecycle cards drawing
     // and removes three from the artifact review drawing. The entry of
     // 2026-11-21 names the same count at both pins and says that the elements
-    // differ: in each drawing one control leaves and one arrives.
+    // differ: in each drawing one control leaves and one arrives. The entry of
+    // 2026-11-22 names the same count at both pins and says that the elements
+    // are the same.
     const recordedCaptureSelectors = new Set(
       Object.values(captureAnchorExpectations())
         .flatMap((cells) => Object.values(cells).flat())
@@ -976,6 +978,10 @@ describe("the REAL manifest", () => {
     expect(entry1121).toContain("the bare capture selector `[data-action]`, which names no value");
     expect(entry1121).toContain(
       "48 elements of `specs/app-lifecycle-cards.html` and 49 of `specs/app-artifact-review.html` at both pins, but not the same elements",
+    );
+    expect(entry1122).toContain("the bare capture selector `[data-action]`");
+    expect(entry1122).toContain(
+      "the same 48 elements of `specs/app-lifecycle-cards.html` and the same 49 of `specs/app-artifact-review.html` at both pins",
     );
   });
 
