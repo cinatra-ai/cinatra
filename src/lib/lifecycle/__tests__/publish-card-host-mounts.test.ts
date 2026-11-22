@@ -63,15 +63,25 @@ describe("the publish card's mounts (cinatra#4150)", () => {
   it("the column mounts the card beside the hitl screen in every placement, with no decide door", () => {
     const source = read(COLUMN);
     expect(source).toContain('import { PublishDecisionCard, usePublishDecisionCardRead } from "@cinatra-ai/agents/publish-decision-card-view";');
-    // The turn reads ONCE, keyed on the run's status as the panel reports it, and hands that read to its card and
-    // to the panel, so the card and the panel's approval banner stand on one answer.
+    // The turn reads ONCE, keyed on the change signal the panel reports (status, gate, readings at a pause with no gate
+    // context), and hands that read to its card and to the panel, so the card and the banner stand on one answer.
     expect(cardElements(source)).toEqual(["<PublishDecisionCard runId={runId} read={publishRead} />"]);
-    expect(source).toContain("wireRef: runStatusSignal,");
-    expect(source).toContain("onRunStatusChange={onRunStatusChange}");
+    expect(source).toContain("wireRef: runChangeSignal,");
+    expect(source).toContain("onRunChangeSignal={onRunChangeSignal}");
     expect(source).toContain("publishRead={publishRead}");
     // The turn's own placement and both moved placements draw it, exactly where they draw the hitl screen.
     expect(source).toContain("{turnCarriesSettledSchedule ? null : publishCard}");
     expect(source.match(/<div data-agent-run-screen-slot=\{runId\}>\{hitlScreen\}\{publishCard\}<\/div>/g)).toHaveLength(2);
+  });
+
+  it("the run panel keys its publish read on the gate, not on the status alone, and reports that signal", () => {
+    // A run can move between two pauses with no status change any reading sees, so a status-keyed read keeps its
+    // earlier answer. The panel's own read and the signal it hands the column are the SAME per-gate value.
+    const source = read(PANEL);
+    expect(source).not.toMatch(/wireRef: status,/);
+    expect(source).toContain("wireRef: publishReadSignal,");
+    expect(source).toContain("onRunChangeSignalRef.current?.(runId, publishReadSignal);");
+    expect(source).toMatch(/`\$\{status\}:no-gate:\$\{heardFromRun\}`/);
   });
 
   it("no mount passes a decide door: the card's controls stay disabled until one is built", () => {

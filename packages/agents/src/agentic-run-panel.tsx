@@ -342,11 +342,13 @@ export type AgenticRunPanelProps = {
    */
   onReviewReadingChange?: (runId: string, drawsReview: boolean) => void;
   /**
-   * The run's status as this panel reads it (stream or poll), reported on every change (cinatra#4150). A host that
-   * mounts a run-keyed card OUTSIDE this panel (the conversation column's publish card) folds it into that card's
-   * change signal, so the card re-reads when the run moves. Absent on a host that does not ask.
+   * The publish card read's CHANGE SIGNAL as this panel computes it (cinatra#4150), reported on every change: the
+   * run's status, the gate it waits at, and, while it waits with no gate context, each reading of the run (see
+   * `publishReadSignal`). A host that mounts a run-keyed card OUTSIDE this panel (the conversation column's publish
+   * card) uses it as that card's `wireRef`, so the card re-reads when the run moves, including to another gate under
+   * the same status. Absent on a host that does not ask.
    */
-  onRunStatusChange?: (runId: string, status: string) => void;
+  onRunChangeSignal?: (runId: string, signal: string) => void;
   /**
    * The run's publish card read the HOST already resolved (cinatra#4150): the conversation turn reads once and hands
    * the same answer to its own card and to this panel, so the approval banner here and the card there cannot
@@ -585,7 +587,7 @@ export function AgenticRunPanel({
   refreshReviewRail,
   readReviewSlot,
   onReviewReadingChange,
-  onRunStatusChange,
+  onRunChangeSignal,
   publishRead: hostPublishRead,
   inputStepInRail = false,
   railDrawsTheFrame = false,
@@ -2001,18 +2003,34 @@ export function AgenticRunPanel({
   // `pending`, and that same answer draws the card. A read that has not landed, failed with no earlier answer, or
   // answered `none` keeps today's banner and draws no card, so a paused run always shows exactly one surface. A
   // failed re-read keeps the last answer for both.
+  //
+  // THE READ'S CHANGE SIGNAL IS PER GATE, NOT PER STATUS. A run can move from one pause to another with no status
+  // change any reading sees: it resumes from an ordinary approval gate (or from a settled publish gate) and parks at
+  // its publish gate before a poll observes the running state between them. Keyed on the status alone, the read kept
+  // its earlier answer (`none`, or the settled gate's) and the wrong surface stood until a focus or a reload. So the
+  // signal names the gate the run waits at, and a pause with NO gate context, the publish gate's own shape (it has no
+  // gate context and no task id this panel can see), moves with every reading of the run, so the card's state
+  // follows the run at the panel's existing cadence. A run parked on its produced output's review is a known pause
+  // that is not a publish gate, so it does not tick.
+  const publishReadSignal = !isPendingApproval
+    ? status
+    : effectiveHitlContext
+      ? `${status}:gate:${effectiveHitlContext.reviewTaskId ?? ""}:${effectiveHitlContext.xRenderer}:${effectiveHitlContext.fieldName ?? ""}`
+      : parkedOnProducedReview
+        ? `${status}:produced-review`
+        : `${status}:no-gate:${heardFromRun}`;
   const ownPublishRead = usePublishDecisionCardRead({
     runId: hostPublishRead ? "" : runId,
     auth: ambientLifecycleAuth,
-    wireRef: status,
+    wireRef: publishReadSignal,
   });
   const publishRead = hostPublishRead ?? ownPublishRead;
   const parkedAtPublishGate = isPendingApproval && !effectiveHitlContext && publishGateIsOpen(publishRead);
-  const onRunStatusChangeRef = useRef(onRunStatusChange);
-  onRunStatusChangeRef.current = onRunStatusChange;
+  const onRunChangeSignalRef = useRef(onRunChangeSignal);
+  onRunChangeSignalRef.current = onRunChangeSignal;
   useEffect(() => {
-    onRunStatusChangeRef.current?.(runId, status);
-  }, [runId, status]);
+    onRunChangeSignalRef.current?.(runId, publishReadSignal);
+  }, [runId, publishReadSignal]);
 
   // Is this paused run degraded (no usable gate context) rather than merely
   // hydrating? Bounded — see hitl-recovery-state.ts.

@@ -807,12 +807,14 @@ function AgentRunTurnSlot({
   );
   // THE PUBLISH CARD (cinatra#4150), an INTERRUPT like the screen above and mounted beside it, in the same placement:
   // keyed by the run alone, it self-gates, so a run with no open publish decision draws nothing here. A publish gate
-  // has no gate context, so the gate signal above stays quiet for it; the run's status, as the panel reads it, is
-  // this card's change signal instead, so a decision opened after the first read draws without a reload or focus.
-  const [runStatusSignal, setRunStatusSignal] = useState<string | null>(null);
-  const onRunStatusChange = useCallback(
-    (changedRunId: string, status: string) => {
-      if (changedRunId === runId) setRunStatusSignal(status);
+  // has no gate context, so the gate signal above stays quiet for it; the panel's publish-read signal (the run's
+  // status, the gate it waits at and, at a pause with no gate context, each reading of the run) is this card's change
+  // signal instead, so a decision opened after the first read draws without a reload or focus, also when the run
+  // reaches it from another gate under the same status.
+  const [runChangeSignal, setRunChangeSignal] = useState<string | null>(null);
+  const onRunChangeSignal = useCallback(
+    (changedRunId: string, signal: string) => {
+      if (changedRunId === runId) setRunChangeSignal(signal);
     },
     [runId],
   );
@@ -821,7 +823,7 @@ function AgentRunTurnSlot({
   const publishRead = usePublishDecisionCardRead({
     runId: ambientLifecycleHost === null ? "" : runId,
     auth: ambientLifecycleAuth,
-    wireRef: runStatusSignal,
+    wireRef: runChangeSignal,
   });
   const publishCard = <PublishDecisionCard runId={runId} read={publishRead} />;
 
@@ -831,7 +833,7 @@ function AgentRunTurnSlot({
       runId={runId}
       onActiveGateChange={onGateChange}
       onReviewReadingChange={onPanelReviewReadingChange}
-      onRunStatusChange={onRunStatusChange}
+      onRunChangeSignal={onRunChangeSignal}
       publishRead={publishRead}
       recommendationDecided={decided}
     />

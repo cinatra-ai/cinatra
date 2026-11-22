@@ -76,20 +76,21 @@ vi.mock("@/components/data-safety/undo-toast", () => ({
 // The inline run card is the AG-UI run panel, whose graph reaches the server
 // runtime. The stand-in declares the SAME host the shipped panel declares, so a
 // card found inside it is still recognisable as a run-card mount rather than a
-// conversation one. It keeps the run-status report the column hands the shipped panel, so a suite can move the run.
-const statusReporters = vi.hoisted(() => new Map<string, (runId: string, status: string) => void>());
+// conversation one. It keeps the change-signal report the column hands the shipped panel, so a suite can move the run
+// exactly as the panel reports it (the panel's own suite pins how the panel computes that signal).
+const statusReporters = vi.hoisted(() => new Map<string, (runId: string, signal: string) => void>());
 const panelReads = vi.hoisted(() => new Map<string, { state: { state: string } | null } | undefined>());
 vi.mock("../inline-agent-run-card", () => ({
   InlineAgentRunCard: ({
     runId,
-    onRunStatusChange,
+    onRunChangeSignal,
     publishRead,
   }: {
     runId: string;
-    onRunStatusChange?: (runId: string, status: string) => void;
+    onRunChangeSignal?: (runId: string, signal: string) => void;
     publishRead?: { state: { state: string } | null };
   }) => {
-    if (onRunStatusChange) statusReporters.set(runId, onRunStatusChange);
+    if (onRunChangeSignal) statusReporters.set(runId, onRunChangeSignal);
     panelReads.set(runId, publishRead);
     return <div data-lifecycle-card-host="run_card" data-inline-run-card={runId} />;
   },
@@ -203,7 +204,7 @@ describe("the publish card on the conversation hosts (cinatra#4150)", () => {
       stub?.restore();
       stub = installWidgetServiceStub({ publishDecision: () => PENDING, ...NO_HOLD });
       const report = statusReporters.get(HELD_RUN_ID);
-      expect(report, "the column hands the run panel its run-status report").toBeTypeOf("function");
+      expect(report, "the column hands the run panel its change-signal report").toBeTypeOf("function");
       await act(async () => {
         report!(HELD_RUN_ID, "running");
         report!(HELD_RUN_ID, "pending_approval");
@@ -214,6 +215,36 @@ describe("the publish card on the conversation hosts (cinatra#4150)", () => {
       expect(cards).toHaveLength(1);
       expect(cards[0]!.getAttribute("data-lifecycle-card-state")).toBe("pending");
       // The panel decides its approval banner from the SAME read the card drew, so the two cannot disagree.
+      expect(panelReads.get(HELD_RUN_ID)?.state?.state).toBe("pending");
+    },
+  );
+
+  it.each(["chat", "widget"] as const)(
+    "%s: a publish gate the run reaches from an ORDINARY approval gate, under the SAME status, re-reads and draws the card",
+    async (surface) => {
+      const root = await mountArm(surface, false, true);
+      const report = statusReporters.get(HELD_RUN_ID);
+      expect(report, "the column hands the run panel its change-signal report").toBeTypeOf("function");
+      // The run waits at an ordinary approval gate: `pending_approval`, and the card reads `none`.
+      await act(async () => {
+        report!(HELD_RUN_ID, "pending_approval:gate:task-ordinary::");
+        await Promise.resolve();
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      expect(root.querySelector(CARD)).toBeNull();
+      // It resumes and parks at its publish gate before any reading sees it running: still `pending_approval`, now
+      // with no gate context, which is what the panel reports for that pause.
+      publishStateMock.mockImplementation(async () => PENDING);
+      stub?.restore();
+      stub = installWidgetServiceStub({ publishDecision: () => PENDING, ...NO_HOLD });
+      await act(async () => {
+        report!(HELD_RUN_ID, "pending_approval:no-gate:1");
+        await Promise.resolve();
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      const cards = root.querySelectorAll<HTMLElement>(CARD);
+      expect(cards).toHaveLength(1);
+      expect(cards[0]!.getAttribute("data-lifecycle-card-state")).toBe("pending");
       expect(panelReads.get(HELD_RUN_ID)?.state?.state).toBe("pending");
     },
   );

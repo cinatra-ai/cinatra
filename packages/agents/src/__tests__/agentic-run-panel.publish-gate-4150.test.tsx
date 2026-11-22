@@ -70,39 +70,50 @@ const PENDING = {
   mayDecide: true,
 };
 
+// The stream's reading, mutable so a suite can move the run to another gate WITHOUT a status change.
+const streamState = vi.hoisted(() => ({
+  interruptContext: null as null | Record<string, unknown>,
+}));
 vi.mock("../use-ag-ui-run-stream", () => ({
   useAgUiRunStream: vi.fn(() => ({
     status: "pending_approval",
     error: null,
     presentationHint: null,
     isLive: true,
-    interruptContext: null,
+    interruptContext: streamState.interruptContext,
     streamedText: "",
   })),
 }));
 
-async function mountPanel() {
+async function flush() {
+  await act(async () => {
+    await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 0));
+    await Promise.resolve();
+  });
+}
+
+async function mountPanel(onRunChangeSignal?: (runId: string, signal: string) => void) {
   const { AgenticRunPanel } = await import("../agentic-run-panel");
-  const mounted = render(
+  const element = () => (
     <AgenticRunPanel
       runId={RUN_ID}
       initialStatus="pending_approval"
       initialError={null}
       initialMessages={[]}
       agUiEnabled={true}
-    />,
+      onRunChangeSignal={onRunChangeSignal}
+    />
   );
-  await act(async () => {
-    await Promise.resolve();
-    await new Promise((r) => setTimeout(r, 0));
-    await Promise.resolve();
-  });
-  return mounted;
+  const mounted = render(element());
+  await flush();
+  return { ...mounted, rerenderPanel: async () => { mounted.rerender(element()); await flush(); } };
 }
 
 beforeEach(() => {
   cleanup();
   publishStateMock.mockReset();
+  streamState.interruptContext = null;
 });
 afterEach(() => {
   cleanup();
@@ -134,6 +145,52 @@ describe("AgenticRunPanel at a publish gate (cinatra#4150)", () => {
   const surfaces = (container: HTMLElement) => ({
     card: container.querySelectorAll('[data-lifecycle-card="publish_decision"]').length,
     banner: screen.queryAllByRole("link", { name: "Review approval" }).length,
+  });
+
+  it("a publish gate reached from an ORDINARY approval gate with NO status change re-reads and draws the card", async () => {
+    // The run resumes from an ordinary approval gate and parks at its publish gate before any reading sees the
+    // running state between them: the status is `pending_approval` both times. The card's read must still move.
+    streamState.interruptContext = { schema: {}, xRenderer: "", values: {}, reviewTaskId: "task-ordinary-gate" };
+    publishStateMock.mockImplementation(async () => ({ state: "none" }));
+    const signals: string[] = [];
+    const mounted = await mountPanel((_runId, signal) => signals.push(signal));
+    expect(surfaces(mounted.container).card).toBe(0);
+    const before = signals.at(-1);
+
+    streamState.interruptContext = null;
+    publishStateMock.mockImplementation(async () => PENDING);
+    await mounted.rerenderPanel();
+    expect(surfaces(mounted.container)).toEqual({ card: 1, banner: 0 });
+    // The host is told too, so a host that owns the read (a conversation turn) re-reads on the same move.
+    expect(signals.at(-1)).not.toBe(before);
+  });
+
+  it("a SECOND publish gate after a settled one, with no status change between them, re-reads on the run's next reading", async () => {
+    // Gate 1 is approved and the card reads `approved`; the run resumes and parks at gate 2 before any reading sees it
+    // running, and no gate context marks either pause. The run's next reading must re-read the card.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const fetchMock = vi.fn(async () =>
+      new Response(JSON.stringify({ status: "pending_approval", hitlContext: null, messages: [] }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      publishStateMock.mockImplementation(async () => ({ ...PENDING, state: "approved", deciderName: "Ana" }));
+      const mounted = await mountPanel();
+      expect(mounted.container.querySelector('[data-conformance-id="publish-card-approved"]')).not.toBeNull();
+
+      publishStateMock.mockImplementation(async () => PENDING);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_100);
+      });
+      await flush();
+      expect(fetchMock).toHaveBeenCalled();
+      const card = mounted.container.querySelector('[data-lifecycle-card="publish_decision"]');
+      expect(card?.getAttribute("data-lifecycle-card-state")).toBe("pending");
+      expect(surfaces(mounted.container)).toEqual({ card: 1, banner: 0 });
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
   });
 
   it("reads pending then none: the card draws and the banner does not", async () => {

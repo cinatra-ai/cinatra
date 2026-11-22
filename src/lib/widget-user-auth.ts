@@ -17,12 +17,12 @@ import {
 } from "@/lib/widget-stream-auth";
 import { normalizeOriginStrict } from "@/lib/widget-token-broker";
 import {
-  formatTokenSet,
+  formatGrantedScopesRecord,
   grantedExtensionScopesFromScopeColumn,
+  grantedScopesRecordBindsCurrentConsent,
   isKnownWidgetExtensionScope,
   mintWidgetTokenAudience,
   mintWidgetTokenScope,
-  normalizeExtensionScopes,
   tokenAudienceAdmits,
   tokenSetHas,
   WIDGET_SIGNIN_SCREEN_UNCLASSIFIED,
@@ -826,7 +826,8 @@ export function issueUserAuthCode(input: {
           String(txn.agent_slug ?? ""),
           String(txn.instance_id ?? ""),
           String(txn.code_challenge ?? ""),
-          formatTokenSet(normalizeExtensionScopes(input.grantedScopes)),
+          // cinatra#4150 -- with the consent member for this set, so a later build can tell what was consented to.
+          formatGrantedScopesRecord(input.grantedScopes),
           authSessionId,
           CODE_TTL_SECONDS,
         ],
@@ -953,6 +954,12 @@ export function redeemUserAuthCode(input: {
   // a scope column meaning something other than what it says (codex round 0,
   // finding 3), so the mint refuses instead — generically, like every other
   // redeem failure.
+  // cinatra#4150 -- the grant must also bind the CONSENT this build would grant on it. A code an older node issued
+  // records the same names over an older audience mapping and sentence; deriving the current audiences from it would
+  // widen what its person consented to. Refused generically; the widget asks the person to sign in again.
+  if (!grantedScopesRecordBindsCurrentConsent(row.granted_scopes)) {
+    return { ok: false, reason: "invalid_grant" };
+  }
   const scope = mintWidgetTokenScope(agentSlug, grantedScopes);
   if (!scope) return { ok: false, reason: "invalid_grant" };
   const aud = mintWidgetTokenAudience(grantedScopes);

@@ -235,7 +235,7 @@ export function InlineAgentRunCard({
   runId,
   onActiveGateChange,
   onReviewReadingChange,
-  onRunStatusChange,
+  onRunChangeSignal,
   publishRead,
   recommendationDecided,
 }: {
@@ -271,8 +271,8 @@ export function InlineAgentRunCard({
    * reading is the review screen, and `false` for every other one.
    */
   onReviewReadingChange?: (runId: string, drawsReview: boolean) => void;
-  /** Forwarded to AgenticRunPanel: the run's status on every change, the publish card's change signal (cinatra#4150). */
-  onRunStatusChange?: (runId: string, status: string) => void;
+  /** Forwarded to AgenticRunPanel: the publish card read's change signal (status, gate, readings), cinatra#4150. */
+  onRunChangeSignal?: (runId: string, signal: string) => void;
   /** Forwarded to AgenticRunPanel: the turn's ONE publish card read, shared with the turn's card (cinatra#4150). */
   publishRead?: PublishDecisionCardRead;
 }) {
@@ -441,7 +441,7 @@ export function InlineAgentRunCard({
         initialHitlContext={seed.hitlContext ?? null}
         onActiveGateChange={onActiveGateChange}
         onReviewReadingChange={onReviewReadingChange}
-        onRunStatusChange={onRunStatusChange}
+        onRunChangeSignal={onRunChangeSignal}
         publishRead={publishRead}
         recommendationDecided={recommendationDecided}
         surface="chat"
