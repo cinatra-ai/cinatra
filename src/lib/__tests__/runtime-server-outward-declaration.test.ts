@@ -12,6 +12,13 @@
  * the classification reader and the extension-registry reader are test
  * doubles; every double is restored after each case. The server's lazy import
  * of the boundary resolves in this root tier.
+ *
+ * Before the boundary, the wrapper prepares a run frame's call: the frame's
+ * verified executing source must still be current and the step must declare
+ * the tool. The run store's answers are doubles here (their own refusals are
+ * pinned in packages/agents); the preparation itself is the real one. A run
+ * frame without a verified source, or a step that does not declare the tool,
+ * is refused before the boundary and the tool's handler is not invoked.
  */
 import "server-only";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -38,8 +45,38 @@ const TOOL = "example_outward_tool";
 
 const FIXTURE_CLASSIFICATION = { resourceType: "agent_run", action: "execute", status: "enforced" } as const;
 
+// cinatra#3745: the run store's answers for a run frame's verified source and
+// the step's declared tools.
+const runStore = vi.hoisted(() => ({
+  current: vi.fn(async () => true),
+  assert: vi.fn((): unknown => ({ kind: "undeclared" })),
+}));
+vi.mock("@cinatra-ai/agents/store", () => ({
+  isRunExecutedSourceCurrent: (...args: unknown[]) => runStore.current(...(args as [])),
+  readRunStepToolPolicy: async () => ({ source: "bound-source-under-test" }),
+  // cinatra#3745: the one read that proves the source current and returns the
+  // step's bound policy; it answers as the currency check above does.
+  readCurrentRunStepToolPolicy: async (...args: unknown[]) => {
+    if (!(await runStore.current(...(args as [])))) throw new Error("step_tool_run_source_inactive");
+    return { source: "bound-source-under-test" };
+  },
+  assertRunStepToolAllowed: (...args: unknown[]) => runStore.assert(...(args as [])),
+}));
+const executedSource = {
+  contextId: "ctx-1", stepId: "step-1", executionAttemptId: "attempt-1",
+  sourceSha256: "a".repeat(64), executedSourceSha256: "b".repeat(64), declarationSourceSha256: "c".repeat(64),
+};
+
+beforeEach(() => {
+  runStore.current.mockReset().mockResolvedValue(true);
+  runStore.assert.mockReset().mockReturnValue({ kind: "undeclared" });
+});
+
 const runMemberFrame = (): McpRequestContext =>
-  ({ orgId: "org-1", userId: "user-1", runId: "run-1" }) as McpRequestContext;
+  ({
+    orgId: "org-1", userId: "user-1", runId: "run-1",
+    verifiedStepId: "step-1", verifiedExecutedSource: executedSource,
+  }) as McpRequestContext;
 
 type ToolResult = { content?: Array<{ type?: string; text?: string }>; isError?: boolean };
 
@@ -297,5 +334,65 @@ describe("a ctx.mcp.registerTool registration's outward declaration rides the re
     expect(result.isError).not.toBe(true);
     expect(result.content?.[0]?.text).toBe("served");
     expect(replayed.handled).toEqual([TOOL]);
+  });
+});
+
+describe("the runtime server prepares a run frame's call against its verified source and the step's declared tools", () => {
+  let auditSpy: ReturnType<typeof vi.spyOn>;
+  let classificationSpy: ReturnType<typeof vi.spyOn>;
+  let extensionSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    const realLookup = augmentModule.lookupPrimitiveClassification;
+    auditSpy = vi.spyOn(auditModule, "logAuditEvent").mockResolvedValue(undefined);
+    classificationSpy = vi
+      .spyOn(augmentModule, "lookupPrimitiveClassification")
+      .mockImplementation((name: string) => (name === TOOL ? { ...FIXTURE_CLASSIFICATION } : realLookup(name)));
+    extensionSpy = vi.spyOn(extensionRegistryModule, "getEffectiveExtensionMcpTool").mockReturnValue(undefined);
+  });
+
+  afterEach(() => {
+    auditSpy.mockRestore();
+    classificationSpy.mockRestore();
+    extensionSpy.mockRestore();
+  });
+
+  const plainConfig = { title: TOOL, description: TOOL } satisfies ExtensionMcpToolConfig;
+
+  it("refuses a call on a run's frame that carries no verified executing source, without invoking the handler", async () => {
+    const built = await buildOneTool(plainConfig);
+    const result = await built.call({ orgId: "org-1", userId: "user-1", runId: "run-1" } as McpRequestContext);
+    expect(result.isError).toBe(true);
+    expect(built.handled).toEqual([]);
+    expect(runStore.current).not.toHaveBeenCalled();
+  });
+
+  it("refuses a call whose verified source the run store no longer reads as current", async () => {
+    runStore.current.mockResolvedValue(false);
+    const built = await buildOneTool(plainConfig);
+    const result = await built.call(runMemberFrame());
+    expect(result.isError).toBe(true);
+    expect(built.handled).toEqual([]);
+  });
+
+  it("refuses a tool the step does not declare, without invoking the handler", async () => {
+    runStore.assert.mockImplementation(() => {
+      throw Object.assign(new Error("step_tool_not_declared"), { code: "step_tool_not_declared" });
+    });
+    const built = await buildOneTool(plainConfig);
+    const result = await built.call(runMemberFrame());
+    expect(result.isError).toBe(true);
+    expect(built.handled).toEqual([]);
+    expect(runStore.assert).toHaveBeenCalledWith(expect.objectContaining({
+      contextId: executedSource.contextId, executedSourceSha256: executedSource.executedSourceSha256,
+      stepId: "step-1", toolName: TOOL,
+    }));
+  });
+
+  it("never reads the run store for a frame without a run id", async () => {
+    const built = await buildOneTool(plainConfig);
+    await built.call({ orgId: "org-1", userId: "user-1" } as McpRequestContext);
+    expect(runStore.current).not.toHaveBeenCalled();
+    expect(runStore.assert).not.toHaveBeenCalled();
   });
 });

@@ -137,6 +137,10 @@ export async function classifyObject(
     maxSteps: 1,
     maxOutputTokens: 4096,
     logLabel: "objects-classify",
+    // cinatra#3745: a classifier is offered no tool. Its callers include run-bound
+    // code with no run request frame (the unbound-output deriver classifies a
+    // run's terminal output), so the empty ceiling is explicit, never inferred.
+    stepToolPolicy: { kind: "declared", tools: [] },
   });
 
   // Parse the LLM text response and validate with the Zod schema (enum constraint).
