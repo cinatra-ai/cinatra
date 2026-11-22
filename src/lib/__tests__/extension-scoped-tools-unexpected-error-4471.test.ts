@@ -80,6 +80,13 @@ vi.mock("@/lib/artifacts/extension-artifact-reads", async (importOriginal) => ({
   extensionArtifactGet: (...a: unknown[]) => artifactGet(...a),
   extensionArtifactContentRead: (...a: unknown[]) => contentRead(...a),
 }));
+// THE ORIGIN IS STUBBED to the run package's own road (cinatra#4154): every step is
+// re-anchored in the exact parent installation's flow, which extension-tool-origin.test.ts
+// pins; this suite reads what the dispatch does on that road.
+vi.mock("@/lib/extension-tool-origin", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/extension-tool-origin")>()),
+  resolveExtensionToolOrigin: async () => ({ kind: "parent" }),
+}));
 
 const RUN = {
   id: "run-4471",
