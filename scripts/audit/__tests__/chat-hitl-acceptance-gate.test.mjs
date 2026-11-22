@@ -629,6 +629,7 @@ describe("the REAL manifest", () => {
       "3beff055c4cb88797fdd8b87e396386b02080922",
       "9d4d53c26193dfe1064abdc521072d25278e1199",
       "635da0077d169c5e682a082e691f0182b21bcc7c",
+      "0c0ef636f63d77601eb502bab2d8b4b013117d07",
     ]) {
       expect(m.specCommitDrift.priorPins.join("\n"), prior).toContain(prior);
     }
