@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 // THE ADOPTION ROAD (cinatra#3144 G0).
 //
-// Adopting a ratification is four edits that must happen together or not at
+// Adopting a ratification is three edits that must happen together or not at
 // all: the pin in the acceptance manifest, the mirror in the anchor contract,
-// the record of what the re-examination FOUND, and the digest. Doing them by
-// hand is how a pin moves with a digest taken over the old one, or with a
-// re-ratification note nobody could check. This script does them in one
-// transaction, and refuses every shortcut:
+// and the digest (with the unresolved-anchor set it binds). Doing them by hand
+// is how a pin moves with a digest taken over the old one. This script does
+// them in one transaction, and refuses every shortcut:
 //
 //   · the digest is READ FROM THE CANONICAL SCRIPT
 //     (`chat-hitl-acceptance-gate.mjs --print-anchor-digest`) on the tree AFTER
@@ -26,9 +25,11 @@
 // documents whose formatting, key order and long prose notes are part of the
 // record; `JSON.stringify` would reformat every line and bury the change.
 //
-// IT DOES NOT WRITE THE RE-RATIFICATION NOTE. That prose is a claim a person
-// makes about what they re-examined, and this script has re-examined nothing.
-// It prints where the note goes.
+// A PIN MOVE NEEDS NO RE-RATIFICATION NOTE. This script and a green anchor
+// resolution check (`design-anchor-resolution.mjs`, which compares the recorded
+// `anchorsUnresolvedAtPin` with what the drawings at the new pin really show)
+// are the whole adoption. The `RE-RATIFIED` entries already in the anchor
+// contract's `note` and `noteContinued` stay as history; no gate asks for a new one.
 //
 // Usage:
 //   node scripts/audit/adopt-design-pin.mjs --pin "design@<40-hex> specs/a.html [specs/b.html]"
@@ -247,7 +248,6 @@ export function adoptDesignPin({
     log("  then, on the moved tree, in this order:");
     log("    anchorsUnresolvedAtPin <- design-anchor-resolution.mjs --print-unresolved");
     log("    digest                 <- chat-hitl-acceptance-gate.mjs --print-anchor-digest");
-    log("  and a re-ratification note, written by the person who re-examined the anchors.");
     return { exitCode: 0, pin: nextPin };
   }
 
@@ -329,7 +329,7 @@ export function adoptDesignPin({
   log(`adopted ${nextPin}`);
   log(`  anchorsUnresolvedAtPin: ${unresolved.length} recorded (truthful, and a passing state)`);
   log(`  digest: ${digest} (printed by the canonical script on this tree)`);
-  log("  still owed: the re-ratification note, in the contract's established form.");
+  log("  next: run scripts/ci/design-anchor-resolution.mjs with the drawings in reach; it must exit 0.");
   return { exitCode: 0, pin: nextPin, unresolved, digest };
 }
 

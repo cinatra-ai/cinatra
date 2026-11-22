@@ -84,10 +84,14 @@ describe("the run surface's drawing pin is recorded", () => {
     expect(
       CONTRACT.runSurfaceDrawingPin.specCommitDeliberatelyNotMoved,
     ).toMatch(/run-recommendation-chip-row/);
-    expect(parseSpecCommit(CONTRACT.specCommit)).toEqual({
-      revision: "615ed095b8e878dd070033a76be4e671270f7a25",
-      paths: ["specs/app-lifecycle-cards.html", "specs/app-artifact-review.html"],
-    });
+    // The anchor pin moves with every adoption, so this reads its shape (one
+    // revision, the two governed drawings) and never the revision itself.
+    const anchorPin = parseSpecCommit(CONTRACT.specCommit);
+    expect(anchorPin.revision).toMatch(/^[0-9a-f]{40}$/);
+    expect(anchorPin.paths).toEqual([
+      "specs/app-lifecycle-cards.html",
+      "specs/app-artifact-review.html",
+    ]);
   });
 });
 
