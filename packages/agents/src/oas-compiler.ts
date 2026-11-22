@@ -69,6 +69,7 @@ import {
   type PublishRowDeclaration,
   type PublishRowsMap,
 } from "./publish-decision-card";
+import { checkRegenerateDeclaration } from "./verdaccio/package-contract";
 
 // ---------------------------------------------------------------------------
 // OAS Flow compiler
@@ -799,6 +800,9 @@ async function readSiblingPackageJson(
    *  nothing" — so the mirror-parity check below must NOT compare against it
    *  and call the difference a disagreement (cinatra#3095, convergence). */
   producesReadable: boolean;
+  /** The raw `cinatra.lifecycle.regenerate` value (cinatra#4264); `undefined`
+   *  when the manifest declares none. Checked at step 10a2. */
+  regenerate: unknown;
 } | null> {
   // OAS source lives at either:
   //   agents/<slug>/cinatra/oas.json  → package.json is ../../package.json (one up from cinatra/)
@@ -817,7 +821,11 @@ async function readSiblingPackageJson(
       const parsed = JSON.parse(raw) as {
         name?: unknown;
         version?: unknown;
-        cinatra?: { agentDependencies?: Record<string, string>; produces?: unknown };
+        cinatra?: {
+          agentDependencies?: Record<string, string>;
+          produces?: unknown;
+          lifecycle?: { regenerate?: unknown };
+        };
       };
       // `cinatra.produces` — same tolerant PARSE as
       // readAgentProducesFromPackageManifest (never throws), but the result
@@ -861,6 +869,7 @@ async function readSiblingPackageJson(
         produces,
         producesRefs,
         producesReadable,
+        regenerate: parsed.cinatra?.lifecycle?.regenerate,
       };
     } catch {
       // try next candidate
@@ -1738,6 +1747,10 @@ export async function compileOasAgentJson(opts: {
   // pass the template's executionProvider so legacy/unannotated agents still
   // get the right triggerMode classification.
   executionProvider?: string;
+  // cinatra#4264: the `regenerate` entries a writer keeps from the stored row
+  // when it has no readable manifest. Checked against THIS flow only when no
+  // sibling package.json is readable; a readable sibling is the one authority.
+  retainedRegenerate?: unknown;
 }): Promise<CompileOasResult> {
   if (!opts.packageName) {
     return { ok: false, error: "packageName is required" };
@@ -2592,6 +2605,20 @@ export async function compileOasAgentJson(opts: {
         ok: false,
         error: `artifact produces-mirror validation failed for ${opts.packageName}:\n${mirror.error}`,
       };
+    }
+  }
+
+  // 10a2. The regenerate declaration (cinatra#4264) must fit this flow: the
+  // sibling manifest's entries, or, with no readable sibling, the entries the
+  // writer retains from the stored row. A failure refuses the compile, so no
+  // writer persists a declaration the flow cannot honour.
+  {
+    const regenerate = sibling ? sibling.regenerate : opts.retainedRegenerate;
+    if (regenerate !== undefined) {
+      const check = checkRegenerateDeclaration(parsed, regenerate);
+      if (!check.ok) {
+        return { ok: false, error: `regenerate declaration invalid for ${opts.packageName}: ${check.error}` };
+      }
     }
   }
 

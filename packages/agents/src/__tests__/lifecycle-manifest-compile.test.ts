@@ -22,6 +22,9 @@ import {
   readManifestLifecycle,
   serializeLifecycleConfig,
 } from "@/lib/lifecycle/lifecycle-policy";
+// cinatra#4264 A1: read through the namespace so that, on a base without the
+// reader, this file still loads and the cases below fail on their assertions.
+import * as lifecyclePolicy from "@/lib/lifecycle/lifecycle-policy";
 import { agentLifecycleDeclarationSchema } from "../verdaccio/package-contract";
 import {
   BLOG_POST_LIFECYCLE,
@@ -227,5 +230,77 @@ describe("cinatra#4424 — the declared repair findings input", () => {
       repairFindingsInput: { input: "instructions" },
     });
     expect(serializeLifecycleConfig({ repairCapable: true })).toBe('{"repairCapable":true}');
+  });
+});
+
+describe("cinatra#4264 A1: the regenerate declaration", () => {
+  const image = { artifactNode: "file_image", step: "image_flow", noteInput: "prompt" };
+  const draft = { artifactNode: "write_draft", step: "draft_flow", noteInput: "note" };
+
+  it("the schema admits a two-entry list and a 129-character node id", () => {
+    expect(agentLifecycleDeclarationSchema.safeParse({ regenerate: [image, draft] }).success).toBe(true);
+    const long = { ...image, artifactNode: "n".repeat(129) };
+    expect(agentLifecycleDeclarationSchema.safeParse({ regenerate: [long] }).success).toBe(true);
+  });
+
+  it("the schema REFUSES a bare object, an empty or 17-entry list, a duplicate artifactNode, unknown members, empty ids and bad note inputs", () => {
+    const many = Array.from({ length: 17 }, (_, i) => ({ ...image, artifactNode: `f${i}` }));
+    for (const regenerate of [
+      image,
+      [],
+      many,
+      [image, { ...draft, artifactNode: "file_image" }],
+      [{ ...image, extra: 1 }],
+      [{ ...image, artifactNode: "" }],
+      [{ ...image, step: "" }],
+      ...["lifecycleRepairRequest", "__proto__", "constructor", "two words", ""].map((noteInput) => [
+        { ...image, noteInput },
+      ]),
+    ]) {
+      expect(agentLifecycleDeclarationSchema.safeParse({ regenerate }).success).toBe(false);
+    }
+  });
+
+  it("normalizeLifecycle keeps a valid list and drops the whole key on one bad entry", () => {
+    expect(normalizeLifecycle({ regenerate: [image, draft] })).toEqual({ regenerate: [image, draft] });
+    for (const regenerate of [
+      [image, { ...draft, noteInput: "__proto__" }],
+      [image, { ...draft, artifactNode: "file_image" }],
+      [image, { ...draft, extra: 1 }],
+      [],
+      image,
+    ]) {
+      expect(normalizeLifecycle({ repairCapable: true, regenerate })).toEqual({ repairCapable: true });
+    }
+  });
+
+  it("A1a stores no regenerate list: serialization omits the key until A1b revalidates the writer roads", () => {
+    // pre-review 1 MUST-FIX 2: a stored list that a later recompile cannot
+    // revalidate (MCP recompile, ensure drift) would outlive its declaration.
+    // A1a writes nothing to the column, so no stale list can exist.
+    expect(
+      serializeLifecycleConfig({
+        requestedSkips: ["review"],
+        regenerate: [draft, image],
+        repairFindingsInput: { input: "instructions" },
+      }),
+    ).toBe('{"repairFindingsInput":{"input":"instructions"},"requestedSkips":["review"]}');
+    expect(serializeLifecycleConfig({ regenerate: [image, draft] })).toBeNull();
+    expect(serializeLifecycleConfig(normalizeLifecycle({ regenerate: [image] }))).toBeNull();
+  });
+
+  it("a lifecycle without the key serializes to the pinned text of today", () => {
+    expect(
+      serializeLifecycleConfig({ producedTypes: ["t"], repairCapable: true, requestedSkips: ["review"] }),
+    ).toBe('{"producedTypes":["t"],"repairCapable":true,"requestedSkips":["review"]}');
+  });
+
+  it("readRegenerateEntry returns the entry of one filing node, else null", () => {
+    const { readRegenerateEntry } = lifecyclePolicy;
+    expect(typeof readRegenerateEntry).toBe("function");
+    const lifecycle = normalizeLifecycle({ regenerate: [image, draft] });
+    expect(readRegenerateEntry(lifecycle, "file_image")).toEqual({ step: "image_flow", noteInput: "prompt" });
+    expect(readRegenerateEntry(lifecycle, "image_flow")).toBeNull();
+    expect(readRegenerateEntry(null, "file_image")).toBeNull();
   });
 });

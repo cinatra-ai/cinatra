@@ -186,6 +186,51 @@ export interface CompiledManifestLifecycle {
    * Absent ⇒ the repair run gets its own inputs plus the typed request, as
    * before. */
   repairFindingsInput?: RepairFindingsInputDeclaration;
+  /** The step-scoped Regenerate declaration (cinatra#4264): per artifact-filing
+   * node, the producing step a Regenerate reruns and the step input the note
+   * goes into. Unique by `artifactNode`. Checked against the flow at compile
+   * time (`checkRegenerateDeclaration`); read with `readRegenerateEntry`. */
+  regenerate?: RegenerateEntry[];
+}
+
+/** One `cinatra.lifecycle.regenerate` entry (cinatra#4264). */
+export interface RegenerateEntry {
+  artifactNode: string;
+  step: string;
+  noteInput: string;
+}
+
+const REGENERATE_ENTRY_KEYS = ["artifactNode", "noteInput", "step"];
+
+/** All-or-nothing read of a `regenerate` list: every entry carries exactly the
+ * three members, non-empty ids, an admissible `noteInput` and a unique
+ * `artifactNode` (1 to 16 entries); otherwise null. Mirrors
+ * `regenerateDeclarationSchema` in `packages/agents/src/verdaccio/package-contract.ts`. */
+function readRegenerateList(raw: unknown): RegenerateEntry[] | null {
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > 16) return null;
+  const out: RegenerateEntry[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+    const e = entry as Record<string, unknown>;
+    if (Object.keys(e).sort().join() !== REGENERATE_ENTRY_KEYS.join()) return null;
+    const { artifactNode, step, noteInput } = e;
+    if (typeof artifactNode !== "string" || artifactNode.length === 0) return null;
+    if (typeof step !== "string" || step.length === 0) return null;
+    if (!isRepairFindingsInputName(noteInput)) return null;
+    if (out.some((o) => o.artifactNode === artifactNode)) return null;
+    out.push({ artifactNode, step, noteInput });
+  }
+  return out;
+}
+
+/** The Regenerate entry of the node that filed the reviewed artifact, or null
+ * (cinatra#4264). The one reader the Regenerate dispatch calls. */
+export function readRegenerateEntry(
+  lifecycle: Pick<CompiledManifestLifecycle, "regenerate"> | null | undefined,
+  artifactNode: string,
+): { step: string; noteInput: string } | null {
+  const entry = lifecycle?.regenerate?.find((e) => e.artifactNode === artifactNode);
+  return entry ? { step: entry.step, noteInput: entry.noteInput } : null;
 }
 
 /**
@@ -781,6 +826,9 @@ export function normalizeLifecycle(raw: unknown): CompiledManifestLifecycle | nu
     if (isRepairFindingsInputName(input)) out.repairFindingsInput = { input };
   }
 
+  const regenerate = readRegenerateList(src.regenerate);
+  if (regenerate) out.regenerate = regenerate;
+
   return Object.keys(out).length > 0 ? out : null;
 }
 
@@ -816,6 +864,10 @@ export function serializeLifecycleConfig(
   if (lifecycle.repairFindingsInput) {
     ordered.repairFindingsInput = { input: lifecycle.repairFindingsInput.input };
   }
+  // cinatra#4264 A1a: `regenerate` is NOT written. A later recompile (MCP
+  // recompile, ensure drift) cannot yet revalidate a stored list against a new
+  // flow or clear it when the manifest drops it, so a stored list could outlive
+  // its declaration. A1b writes it together with that revalidation.
   if (lifecycle.requestedSkips && lifecycle.requestedSkips.length > 0) {
     ordered.requestedSkips = [...lifecycle.requestedSkips];
   }
