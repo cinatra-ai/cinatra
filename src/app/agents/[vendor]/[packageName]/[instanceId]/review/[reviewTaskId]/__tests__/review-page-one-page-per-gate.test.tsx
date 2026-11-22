@@ -327,6 +327,8 @@ describe("the publish card's review host is the run page (cinatra#4150)", () => 
   // redirected first (below), and for a run it cannot read the card's own read answers `none` and draws nothing
   // (publish-decision-card-core.test.ts, "a run the reader may not read ... are the same silence"). The capture
   // contract records that cell as composition-only (capture-host-admissibility.test.mjs).
+  // It pins the redirect the fix keeps, so it passes before the fix too.
+  // red-first-pin: a run the store CAN read is sent to the run page
   it("a run the store CAN read is sent to the run page, whose panel carries the card on run_card", async () => {
     mocks.loadReviewGateSurface.mockResolvedValue(READY);
     mocks.readAgentRunById.mockResolvedValue({ id: "run-1", launchScopeAnchor: null } as never);
