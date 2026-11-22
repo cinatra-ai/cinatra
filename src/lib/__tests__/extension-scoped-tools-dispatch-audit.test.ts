@@ -563,7 +563,51 @@ describe("a stalled audit sink", () => {
 
   it("admits at most 64 of 65 simultaneous calls, whatever they await before the module runs", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    const answers = await Promise.all(Array.from({ length: 65 }, () => call("parent_tool")));
+    // Vitest serves the real module, not the mock, to a dynamic import of a mocked module that another import
+    // from the same module is still resolving (they share one import call stack). So the calls pass the
+    // dispatch's dynamic imports one at a time: the manifest read's before the slot, the audit sink's after
+    // the module ran. The 64 admitted calls still hold their slots at the module loader while the 65th checks.
+    const turns: Array<() => void> = [];
+    let previous: Promise<void> = Promise.resolve();
+    query.mockImplementation(() => {
+      const mine = previous;
+      previous = new Promise<void>((resolve) => turns.push(resolve));
+      return mine.then(() => ({ rows: [{ package_name: PARENT }] }));
+    });
+    getAgentPackage.mockImplementation(async () => {
+      turns.shift()?.();
+      return { manifest: { cinatra: PARENT_CINATRA } };
+    });
+    let open: () => void = () => {};
+    let loaderTurn = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    let arrived = 0;
+    let answered = 0;
+    const checked = () => {
+      if (arrived + answered === 65) open();
+    };
+    const loaderTurns: Array<() => void> = [];
+    loadDeclaredToolModule.mockImplementation(() => {
+      arrived += 1;
+      checked();
+      const mine = loaderTurn;
+      loaderTurn = new Promise<void>((resolve) => loaderTurns.push(resolve));
+      return mine.then(() => ({ extensionTool: () => ({ ran: "parent" }) }));
+    });
+    logAuditEvent.mockImplementation(() => {
+      loaderTurns.shift()?.();
+      return new Promise<void>((resolve) => settle.push(resolve));
+    });
+    const answers = await Promise.all(
+      Array.from({ length: 65 }, () =>
+        call("parent_tool").then((a) => {
+          answered += 1;
+          checked();
+          return a;
+        }),
+      ),
+    );
     expect(answers.filter((a) => a.ok)).toHaveLength(64);
     expect(answers.filter((a) => !a.ok)).toEqual([{ ok: false, status: 403, error: BACKLOG }]);
     expect(loadDeclaredToolModule).toHaveBeenCalledTimes(64);
