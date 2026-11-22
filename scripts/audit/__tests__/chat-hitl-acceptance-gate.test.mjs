@@ -351,6 +351,10 @@ function row15CensusProblems(gap, index, walkPlan) {
       [/^and the two page hosts recorded as composition-only with their reasons/, () => {
         compositionOnly[kind] = [...PAGE_HOSTS];
       }],
+      // One host on its own (cinatra#4150: the publish card's gate region), named by its host token.
+      [/^and (\w+) recorded as composition-only with its reason/, (m) => {
+        compositionOnly[kind] = [m[1]];
+      }],
     ];
     let rest = clause.slice(head[0].length);
     while (rest.length) {

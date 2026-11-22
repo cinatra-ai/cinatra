@@ -1195,7 +1195,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
           adapter: "mount",
           region: "gate_region",
           surface: "production",
-          why: "the review page mounts the card in its gate region, keyed by the run and nothing else; a run with no open publish decision draws nothing there",
+          why: "the review page composes the card in its gate region, keyed by the run and nothing else; a run with no open publish decision draws nothing there. The cell is composition-only: the retired review address redirects every run the store can read to the run detail (cinatra#3693), where the run panel draws the card on `run_card`, and for a run it cannot read the card answers `none`, so the capture contract records no picture of this host",
         },
       ],
     },

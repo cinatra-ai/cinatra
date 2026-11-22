@@ -403,15 +403,33 @@ export const CARD_KINDS = {
         "recorded, not a photograph of it.",
     },
   },
-  // THE SIXTH KIND (cinatra#4150): the publish card, XV. It is drawn on every host, so every host is capturable. A
-  // pending card draws BOTH controls (disabled where the reader may not decide), and a settled card keeps its rows
-  // and drops both, with its marker below: a drawn reading, not an absence.
+  // THE SIXTH KIND (cinatra#4150): the publish card, XV. It is MOUNTED on all four hosts, and three of them can be
+  // photographed. A pending card draws BOTH controls (disabled where the reader may not decide), and a settled card
+  // keeps its rows and drops both, with its marker below: a drawn reading, not an absence.
   publish_decision: {
     cellTokens: ["publish-card", "publish-decision"],
     root: '[data-lifecycle-card="publish_decision"]',
     decisionControls: ['[data-action="decline-publish -> declined"]', '[data-action="approve-publish -> released"]'],
     // ALL OF THEM, not any one: a pending card that shows one control lost the other.
     decisionControlsAllOf: true,
+    // The gate region is the one host no shipped sequence reaches with a card on it; see `compositionOnly`.
+    capturableHosts: ["chat_thread", "site_widget", "run_card"],
+    capturableReasons: {
+      run_card:
+        "a run's review is read on the run page: the retired review address redirects to the run detail's review " +
+        "step (cinatra#3693), and the run detail's panel mounts this card keyed by the run under " +
+        '`LifecycleCardSurfaceProvider host="run_card"` (packages/agents/src/agentic-run-panel.tsx), so a run parked ' +
+        "at a publish step is photographed there, on the `run_detail` URL class.",
+    },
+    compositionOnly: {
+      page_gate_region:
+        "the standalone review page is retired (cinatra#3693): `reviewAddressRedirect` sends every run the store " +
+        "can read to the run detail before the gate region is composed, so the region is composed only for a run " +
+        "the store cannot read, and for that run the card's own read answers `none` " +
+        "(packages/agents/src/publish-decision-card-core.ts) and draws nothing. The region composes the card, and " +
+        "the composition is what is recorded, not a photograph of it; the run's review, with this card, is " +
+        "photographed on `run_card`.",
+    },
   },
 };
 

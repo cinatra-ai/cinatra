@@ -539,8 +539,11 @@ export default async function AgentRunReviewPage({
                   buys is that a reviewer who arrives while the run IS waiting
                   sees the question rather than a page that looks stalled. */}
               <AgentHitlScreenCard runId={runId} />
-              {/* THE PUBLISH CARD (cinatra#4150), on the same host by the same rule: keyed by the run alone, and a run
-                  with no open publish decision renders NOTHING here. */}
+              {/* THE PUBLISH CARD (cinatra#4150), COMPOSED on the same host by the same rule: keyed by the run alone,
+                  and a run with no open publish decision renders NOTHING here. No reader reaches a card on this
+                  host: a run the store can read was sent to the run detail above, where the run panel draws the
+                  card on `run_card`, and for a run it cannot read the card's own read answers `none`. The capture
+                  contract records this cell as composition-only. */}
               <PublishDecisionCard runId={runId} />
               {gateCardRef ? (
                 <ReviewGateCard

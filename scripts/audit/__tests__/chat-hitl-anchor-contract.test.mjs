@@ -452,17 +452,27 @@ describe("an agent card's own controls are not anchors of this contract", () => 
   });
 });
 
-// THE SIXTH KIND (cinatra#4150). The publish card is drawn with its kind on all four hosts, so the alarm covers it the
-// way it covers the other five: its capture cells are digest inputs, on every host and in both states.
+// THE SIXTH KIND (cinatra#4150). The publish card is mounted with its kind on all four hosts, so the alarm covers it
+// the way it covers the other five: its capture cells are digest inputs, on every host it can be photographed on and
+// in both states, and the gate region's composition-only reason is a digest input too.
 describe("the sixth kind is covered by the same alarm", () => {
   const KIND = "publish_decision";
   const ROOT = '[data-lifecycle-card="publish_decision"]';
   const APPROVE = '[data-action="approve-publish -> released"]';
 
-  it("is one of the ruled kinds, with a capture cell on every host in both states", () => {
+  it("records the gate region as composition-only, with the redirect as its reason, in both states", () => {
+    const anchors = captureAnchorExpectations();
+    for (const state of CAPTURE_STATES) {
+      const cell = anchors.page_gate_region[`${KIND}|${state}`];
+      expect(cell, state).toHaveLength(1);
+      expect(cell[0], state).toMatch(/^composition-only .*reviewAddressRedirect/);
+    }
+  });
+
+  it("is one of the ruled kinds, with a capture cell on every capturable host in both states", () => {
     expect([...ANCHOR_CONTRACT_KINDS]).toContain(KIND);
     const anchors = captureAnchorExpectations();
-    for (const host of CAPTURE_HOSTS) {
+    for (const host of CAPTURE_HOSTS.filter((h) => h !== "page_gate_region")) {
       for (const state of CAPTURE_STATES) {
         expect(anchors[host][`${KIND}|${state}`], `${host} ${state}`).toContain(`${ROOT} frame present  canonical`);
       }

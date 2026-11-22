@@ -84,10 +84,33 @@ describe("the run page's own host is admitted, with the reason recorded", () => 
       /review/,
     );
     for (const kind of Object.keys(CARD_KINDS)) {
-      if (kind === KIND) continue;
+      // The publish card declares its own composition-only cell; it is pinned on its own below.
+      if (kind === KIND || kind === "publish_decision") continue;
       for (const host of CAPTURE_HOSTS) {
         expect(captureHostAdmissibility(kind, host).capturable).toBe(true);
       }
     }
+  });
+});
+
+describe("the publish card's review host is the run page, and the gate region is composition-only (cinatra#4150)", () => {
+  const PUBLISH = "publish_decision";
+
+  it("admits the run page, where a run's review is read since the review address redirects there", () => {
+    const admission = captureHostAdmissibility(PUBLISH, "run_card");
+    expect(admission.capturable).toBe(true);
+    expect(admission.reason).toMatch(/cinatra#3693/);
+    expect(admission.reason).toMatch(/run_detail/);
+    for (const host of ["chat_thread", "site_widget"]) {
+      expect(captureHostAdmissibility(PUBLISH, host).capturable).toBe(true);
+    }
+  });
+
+  it("refuses a picture of the gate region and says why no reader reaches a card there", () => {
+    const admission = captureHostAdmissibility(PUBLISH, "page_gate_region");
+    expect(admission.capturable).toBe(false);
+    expect(admission.reason).toMatch(/reviewAddressRedirect/);
+    expect(admission.reason).toMatch(/`none`/);
+    expect(CARD_KINDS[PUBLISH].capturableHosts).toEqual(["chat_thread", "site_widget", "run_card"]);
   });
 });

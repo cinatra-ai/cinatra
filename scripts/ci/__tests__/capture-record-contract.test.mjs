@@ -1920,7 +1920,9 @@ describe("the publish card owes both controls when pending (cinatra#4150)", () =
   const SHOT_HASH = createHash("sha256").update("publish-fixture").digest("hex");
   const URL_FOR = {
     chat_thread: "http://localhost:3000/chat?thread=t-1",
-    page_gate_region: "http://localhost:3000/agents/cinatra-ai/blog-draft-writer-agent/run-1/review/task-1",
+    // The run's review is read on the run detail (cinatra#3693), so the page host a publish card is photographed on
+    // is `run_card`, not the retired review address's gate region.
+    run_card: "http://localhost:3000/agents/cinatra-ai/blog-draft-writer-agent/ec745b28-1b56-4ef4-b724-62e6fd1ddd23",
   };
   // A record WITHOUT an `instance`: the default graded tier, where the any-of
   // group was honoured. Every anchor the claim owes is observed honestly, minus
@@ -1985,4 +1987,16 @@ describe("the publish card owes both controls when pending (cinatra#4150)", () =
       expect(graded(record).join("\n")).toMatch(/approve-publish/);
     });
   }
+
+  it("REFUSES a gate-region record, with the reason: the review address redirects before that region is composed", () => {
+    const record = {
+      ...publishRecord("chat_thread", "pending"),
+      cell: "P1__publish-card__page_gate_region__pending",
+      declaredHost: "page_gate_region",
+      finalUrl: "http://localhost:3000/agents/cinatra-ai/blog-draft-writer-agent/run-1/review/task-1",
+    };
+    const errors = canonical(record);
+    expect(codes(errors)).toContain("record/host-composition-only");
+    expect(errors.map((e) => e.detail).join("\n")).toMatch(/reviewAddressRedirect/);
+  });
 });

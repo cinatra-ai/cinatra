@@ -323,8 +323,10 @@ export const LIFECYCLE_HOST_PARITY_RATCHET: Readonly<
   },
   // cinatra#4150 -- the publish card lands with all four hosts mounted, by the hitl screen's methods: the shared
   // column draws it on `chat_thread` and `site_widget` beside the `agent_run` part, the run panel and the review
-  // page's gate region compose it keyed by the run. Nothing is owed. The anchor contract was re-ratified for the
-  // new cells; its `note` records the reading.
+  // page's gate region compose it keyed by the run. Nothing is owed. The gate-region cell is a COMPOSITION only: the
+  // retired review address redirects a readable run to the run detail (cinatra#3693), so the capture contract
+  // declares that host composition-only and the run's review is photographed on `run_card`. The anchor contract was
+  // re-ratified for the new cells; its `note` records the reading.
   publish_decision: {
     hosts: Object.freeze({
       chat_thread: "transcript",

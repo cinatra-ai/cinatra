@@ -115,7 +115,7 @@ vi.mock("@cinatra-ai/agents/run-recommendation-chip-row", () => ({
 vi.mock("@cinatra-ai/agents/agent-hitl-screen-card", () => ({
   AgentHitlScreenCard: () => <div data-lifecycle-card="agent_hitl_screen" />,
 }));
-// cinatra#4150: the page also mounts the publish card beside the hitl screen card. This suite mocks the card
+// cinatra#4150: the page also composes the publish card beside the hitl screen card. This suite mocks the card
 // runtime whole, so the card is stubbed the same way, to a marker carrying the one root anchor and the run it is
 // keyed by (the real card owns whether it draws). The stub names the card's file, which the page's package subpath
 // resolves to, so this file also loads before that subpath.
@@ -322,20 +322,11 @@ describe("convergence — a decision that raced the TTL sweeper is still a decis
   });
 });
 
-describe("the publish card's gate-region mount (cinatra#4150)", () => {
-  it("is RENDERED by the page, under page_gate_region, on the path where the run's address cannot be read", async () => {
-    // `reviewAddressRedirect` answers null when the store cannot read the run (review-page-body.tsx), so the page
-    // does not redirect and composes its gate region: the one path that reaches this host's mount.
-    mocks.readAgentRunById.mockResolvedValue(null);
-    mocks.loadReviewGateSurface.mockResolvedValue(READY);
-
-    const html = await renderPage();
-
-    const region = html.slice(html.indexOf('data-lifecycle-card-host="page_gate_region"'));
-    expect(region).toContain('data-lifecycle-card="publish_decision" data-publish-run="run-1"');
-    expect(html.match(/data-lifecycle-card="publish_decision"/g)).toHaveLength(1);
-  });
-
+describe("the publish card's review host is the run page (cinatra#4150)", () => {
+  // The page composes the card in its gate region, but no reader reaches a card there: a run the store can read is
+  // redirected first (below), and for a run it cannot read the card's own read answers `none` and draws nothing
+  // (publish-decision-card-core.test.ts, "a run the reader may not read ... are the same silence"). The capture
+  // contract records that cell as composition-only (capture-host-admissibility.test.mjs).
   it("a run the store CAN read is sent to the run page, whose panel carries the card on run_card", async () => {
     mocks.loadReviewGateSurface.mockResolvedValue(READY);
     mocks.readAgentRunById.mockResolvedValue({ id: "run-1", launchScopeAnchor: null } as never);
