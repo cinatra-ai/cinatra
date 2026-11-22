@@ -54,6 +54,7 @@ import {
   withActorContext,
   injectedSkillSetCatalogIds,
 } from "@cinatra-ai/llm";
+import type { StepToolOfferPolicy } from "@cinatra-ai/llm";
 import {
   resolveInjectedSkillSet,
   type InjectionAuthorization,
@@ -175,6 +176,16 @@ const RUN_OUTPUT_SCHEMA = {
 } as const;
 
 type GeneratedPreview = { name: string; description: string; content: string };
+
+/** cinatra#3745: the audit reads the audited run's data, so its model call is run-bound but has no
+ * run request frame. It asks for no injected MCP server and gets a fixed host ceiling that admits
+ * the skill-delivery tools by kind only (the skill shell and container skills): no tool name
+ * admits anything, so no MCP server or function tool passes it. */
+const AUDITOR_SKILL_TOOL_CEILING: StepToolOfferPolicy = Object.freeze({
+  kind: "declared" as const,
+  tools: Object.freeze([] as string[]),
+  builtinTools: Object.freeze(["shell", "container_skills"] as const),
+});
 
 // ---------------------------------------------------------------------------
 // Injection ports for the audit surface (cinatra#2091, epic #2086 S4).
@@ -383,6 +394,8 @@ export async function POST(request: Request): Promise<Response> {
         injectedSkills,
         outputSchema: RUN_OUTPUT_SCHEMA as unknown as Record<string, unknown>,
         logLabel: "auditor.run-skills",
+        declaredToolboxIds: [],
+        stepToolPolicy: AUDITOR_SKILL_TOOL_CEILING,
       }),
     );
 

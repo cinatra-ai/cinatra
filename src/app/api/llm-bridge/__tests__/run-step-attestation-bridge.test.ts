@@ -29,6 +29,11 @@
  * proof. So when the on-behalf-of road is unavailable the tool is withheld,
  * and no machine bearer is minted or bound. A call without a verified source
  * keeps the best-effort machine fallback.
+ *
+ * The model call of a run-bound step is offered only the tools that step
+ * declares in the run's bound source: a verified source-bound call carries the
+ * step's reading of that source, a run-bound call without a verified source is
+ * offered no tool, and a call without a resolved run carries no step policy.
  */
 import { afterAll, describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createHmac } from "node:crypto";
@@ -52,6 +57,8 @@ const {
   resolveAgentRunMcpActorMock,
   issueAgentRunMcpActorTokenMock,
   verifyRunExecutedSourceMock,
+  readCurrentRunStepToolPolicyMock,
+  readTrustedStepToolDeclarationMock,
 } = vi.hoisted(() => ({
   runResolvedSkillAwareDeterministicLlmTaskMock: vi.fn<
     (input: Record<string, unknown>) => Promise<{ text: string; artifacts: unknown[] }>
@@ -92,6 +99,8 @@ const {
   resolveAgentRunMcpActorMock: vi.fn(),
   issueAgentRunMcpActorTokenMock: vi.fn(() => "obo-token"),
   verifyRunExecutedSourceMock: vi.fn(),
+  readCurrentRunStepToolPolicyMock: vi.fn(),
+  readTrustedStepToolDeclarationMock: vi.fn(),
 }));
 
 vi.mock("server-only", () => ({}));
@@ -111,6 +120,13 @@ vi.mock("@cinatra-ai/llm", () => ({
 }));
 vi.mock("@cinatra-ai/agents/store", () => ({
   verifyRunExecutedSource: verifyRunExecutedSourceMock,
+  // The bound source's step-tool policy, read with the proof that the verified
+  // source is still current, and its trusted reader (their own refusals are
+  // pinned in packages/agents). The older policy reader answers from the same
+  // double, so a bridge that still read it would meet the same store.
+  readCurrentRunStepToolPolicy: readCurrentRunStepToolPolicyMock,
+  readRunStepToolPolicy: (...args: unknown[]) => readCurrentRunStepToolPolicyMock(...args),
+  readTrustedStepToolDeclaration: readTrustedStepToolDeclarationMock,
 }));
 vi.mock("@/lib/agent-run-context-durable", () => ({
   writeDurableRunContextBinding: writeDurableRunContextBindingMock,
@@ -319,6 +335,8 @@ beforeEach(async () => {
   readAgentRunTokenHashByIdMock.mockResolvedValue(null);
   writeDurableRunContextBindingMock.mockResolvedValue("cinatra:run-ctx:v1:test-key");
   verifyRunExecutedSourceMock.mockResolvedValue(VERIFIED_SOURCE);
+  readCurrentRunStepToolPolicyMock.mockResolvedValue({ source: "bound-source-under-test" });
+  readTrustedStepToolDeclarationMock.mockReturnValue({ kind: "undeclared" });
   const mod = await import("../route");
   POST = mod.POST;
 });
@@ -622,6 +640,154 @@ describe("a source-bound call never gets a machine bearer", () => {
     expect(verifyRunExecutedSourceMock).not.toHaveBeenCalled();
     const arg = runResolvedSkillAwareDeterministicLlmTaskMock.mock.calls[0]![0] as Record<string, unknown>;
     expect(arg).not.toHaveProperty("cinatraMcpToolOverride");
+  });
+});
+
+describe("the model bridge offers a run-bound step only the tools it declares", () => {
+  const RUN_BOUND = { "x-cinatra-run-token": RUN_TOKEN, "x-cinatra-a2a-context-id": CTX };
+
+  /** The input of the one model call the bridge made. */
+  function dispatchInput(): Record<string, unknown> {
+    expect(runResolvedSkillAwareDeterministicLlmTaskMock).toHaveBeenCalledTimes(1);
+    return runResolvedSkillAwareDeterministicLlmTaskMock.mock.calls[0]![0];
+  }
+
+  // (b17)
+  it("a verified source-bound call carries the step's reading of the run's bound source", async () => {
+    readTrustedStepToolDeclarationMock.mockReturnValue({ kind: "declared", tools: ["mail_send"] });
+    const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...sourceHeaders() }));
+    expect(res.status).toBe(200);
+    expect(readCurrentRunStepToolPolicyMock).toHaveBeenCalledWith(RUN.id, RUN.orgId, VERIFIED_SOURCE);
+    expect(readTrustedStepToolDeclarationMock).toHaveBeenCalledWith("bound-source-under-test", NODE);
+    expect(dispatchInput().stepToolPolicy).toEqual({ kind: "declared", tools: ["mail_send"] });
+  });
+
+  // (b18)
+  it("a verified source-bound step that declares nothing keeps every tool", async () => {
+    const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...sourceHeaders() }));
+    expect(res.status).toBe(200);
+    expect(dispatchInput().stepToolPolicy).toEqual({ kind: "undeclared" });
+  });
+
+  // (b19)
+  it("a run-bound call without a verified source is offered no tool and reads no policy", async () => {
+    for (const headers of [RUN_BOUND, { ...RUN_BOUND, ...stepHeaders() }]) {
+      vi.clearAllMocks();
+      const res = await POST(makeReq({ user: "hi" }, headers));
+      expect(res.status).toBe(200);
+      expect(dispatchInput().stepToolPolicy).toEqual({ kind: "declared", tools: [] });
+      expect(readCurrentRunStepToolPolicyMock).not.toHaveBeenCalled();
+    }
+  });
+
+  // (b20)
+  it("a call without a resolved run carries no step policy", async () => {
+    const res = await POST(makeReq({ user: "hi" }, { "x-cinatra-a2a-context-id": CTX }));
+    expect(res.status).toBe(200);
+    expect(dispatchInput()).not.toHaveProperty("stepToolPolicy");
+  });
+
+  // (b21)
+  it("a verified source that is no longer current when the policy is read is refused with the fixed 403 before any provider", async () => {
+    readCurrentRunStepToolPolicyMock.mockRejectedValue(
+      Object.assign(new Error("step_tool_run_source_inactive"), { code: "step_tool_run_source_inactive" }));
+    const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...sourceHeaders() }));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "Executing source could not be verified", code: "run_source_mismatch" });
+    expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
+  });
+
+  // (b22)
+  it("a store failure of the policy read answers the fixed 403 and never returns or logs the store's text", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      readCurrentRunStepToolPolicyMock.mockRejectedValue(new Error('relation "secret_table" does not exist'));
+      const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...sourceHeaders() }));
+      const text = await res.text();
+      expect(res.status).toBe(403);
+      expect(JSON.parse(text)).toEqual({ error: "Executing source could not be verified", code: "run_source_mismatch" });
+      expect(text).not.toContain("secret_table");
+      expect(JSON.stringify(errors.mock.calls)).not.toContain("secret_table");
+      expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
+    } finally {
+      errors.mockRestore();
+    }
+  });
+});
+
+// The Gemini media roads reach the provider without the text road's
+// orchestration. Each provider call of a run (the YouTube generate, the file
+// upload and the file generate) is preceded by the same current-source read:
+// a run re-dispatched since the entry check is refused with the fixed 403.
+describe("the model bridge's media roads read the current source before each provider call", () => {
+  const RUN_BOUND = { "x-cinatra-run-token": RUN_TOKEN, "x-cinatra-a2a-context-id": CTX };
+  const MEDIA = { preferredProvider: "gemini", capabilityRequired: "media_input" };
+  const gemini = {
+    provider: "gemini",
+    generate: vi.fn(async () => ({ text: "transcript" })),
+    uploadFile: vi.fn(async () => ({ id: "files/abc" })),
+    generateFromMediaFile: vi.fn(async () => ({ text: "transcript" })),
+    deleteFile: vi.fn(async () => undefined),
+  };
+  const STALE = () => Object.assign(new Error("step_tool_run_source_inactive"), { code: "step_tool_run_source_inactive" });
+  let fetchSpy: ReturnType<typeof vi.spyOn> | undefined;
+  beforeEach(() => {
+    resolveProviderAdapterMock.mockImplementation((async () => gemini) as never);
+    fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      new Response(new Uint8Array(64), { status: 200, headers: { "content-type": "audio/mpeg" } }));
+  });
+  afterEach(() => {
+    fetchSpy?.mockRestore();
+    resolveProviderAdapterMock.mockImplementation(async (provider: LlmProviderId) => ({ provider }));
+  });
+
+  // (b23)
+  it("a YouTube call of a run whose source is no longer current is refused with the fixed 403 before the provider", async () => {
+    readCurrentRunStepToolPolicyMock.mockRejectedValue(STALE());
+    const res = await POST(makeReq({ user: "t", cinatra_llm: MEDIA, media: { url: "https://www.youtube.com/watch?v=abc" } },
+      { ...RUN_BOUND, ...sourceHeaders() }));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(REFUSED);
+    expect(readCurrentRunStepToolPolicyMock).toHaveBeenCalledWith(RUN.id, RUN.orgId, VERIFIED_SOURCE);
+    expect(gemini.generate).not.toHaveBeenCalled();
+  });
+
+  // (b24)
+  it("a file call of a run whose source is no longer current is refused before the upload", async () => {
+    readCurrentRunStepToolPolicyMock.mockRejectedValue(STALE());
+    const res = await POST(makeReq({ user: "t", cinatra_llm: MEDIA, media: { url: "https://example.com/clip.mp3" } },
+      { ...RUN_BOUND, ...sourceHeaders() }));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(REFUSED);
+    expect(gemini.uploadFile).not.toHaveBeenCalled();
+    expect(gemini.generateFromMediaFile).not.toHaveBeenCalled();
+  });
+
+  // (b25)
+  it("a file call whose run is re-dispatched after the upload is refused before the provider transcribes it", async () => {
+    readCurrentRunStepToolPolicyMock.mockResolvedValueOnce({ source: "bound-source-under-test" }).mockRejectedValueOnce(STALE());
+    const res = await POST(makeReq({ user: "t", cinatra_llm: MEDIA, media: { url: "https://example.com/clip.mp3" } },
+      { ...RUN_BOUND, ...sourceHeaders() }));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(REFUSED);
+    expect(gemini.uploadFile).toHaveBeenCalledTimes(1);
+    expect(gemini.generateFromMediaFile).not.toHaveBeenCalled();
+    expect(gemini.deleteFile).toHaveBeenCalledTimes(1);
+  });
+
+  // (b26)
+  it("a media call of a run whose source stays current reaches the provider after each read", async () => {
+    const yt = await POST(makeReq({ user: "t", cinatra_llm: MEDIA, media: { url: "https://www.youtube.com/watch?v=abc" } },
+      { ...RUN_BOUND, ...sourceHeaders() }));
+    expect(yt.status).toBe(200);
+    expect(gemini.generate).toHaveBeenCalledTimes(1);
+    expect(readCurrentRunStepToolPolicyMock).toHaveBeenCalledTimes(1);
+    vi.clearAllMocks();
+    const file = await POST(makeReq({ user: "t", cinatra_llm: MEDIA, media: { url: "https://example.com/clip.mp3" } },
+      { ...RUN_BOUND, ...sourceHeaders() }));
+    expect(file.status).toBe(200);
+    expect(gemini.generateFromMediaFile).toHaveBeenCalledTimes(1);
+    expect(readCurrentRunStepToolPolicyMock).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -45,6 +45,19 @@ vi.mock("@cinatra-ai/llm/actor-context", () => ({
   withActorContext: (_ctx: unknown, fn: () => unknown) => fn(),
 }));
 
+// cinatra#3745: every passthrough call first prepares its arguments against the
+// run's verified executing source and the step's declared tools (pinned in
+// src/app/api/agents/passthrough/__tests__/passthrough-verified-step.test.ts and
+// passthrough-refusal-map-3745.test.ts). Here that check admits the call and
+// hands the tool its input unchanged. The guarded invocation reads the refusal
+// class it throws when the boundary refuses a call; the class is the host's shape.
+vi.mock("@/lib/extension-host-context", () => ({
+  prepareDeclaredRunToolArguments: async (_tool: string, input: unknown) => input,
+  OutwardActionRefusal: class OutwardActionRefusal extends Error {
+    constructor(readonly code: string) { super(code); this.name = "OutwardActionRefusal"; }
+  },
+}));
+
 import { POST } from "@/app/api/agents/passthrough/route";
 import type { createObjectsPrimitiveHandlers } from "@cinatra-ai/objects/mcp-handlers";
 
@@ -92,6 +105,7 @@ afterAll(() => {
     "@/lib/authz/bridge-run-binding",
     "@/lib/authz/build-actor-context-from-run",
     "@cinatra-ai/llm/actor-context",
+    "@/lib/extension-host-context",
   ]) {
     vi.doUnmock(m);
   }

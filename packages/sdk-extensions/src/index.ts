@@ -872,6 +872,10 @@ export type {
   DeclaredTableDeclaration,
 } from "./manifest";
 
+/** Plain JSON of a run's tool-call arguments as the host copies them (cinatra#3745): no accessor, no prototype, no cycle. */
+export type ActionJson = null | boolean | number | string | readonly ActionJson[] |
+  { readonly [key: string]: ActionJson };
+
 /** Structural carrier only (cinatra#3745): the parser checks the shape and grants nothing; a later part proves the values. */
 export type VerifiedExecutedRunSource = {
   readonly contextId: string; readonly stepId: string; readonly executionAttemptId: string;

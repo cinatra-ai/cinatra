@@ -595,7 +595,7 @@ export type ResolvedLlmRuntime =
   // `.provider` must handle it; the `isScriptedLlmRuntime` guard narrows it.
   | ScriptedLlmRuntime;
 
-export type DeterministicLlmExecutionInput = {
+export type DeterministicLlmExecutionInput = StepToolPolicyInput & {
   provider: LlmProvider;
   system: string;
   user: string;
@@ -1068,7 +1068,7 @@ async function runDeterministicLlmTaskImpl(input: DeterministicLlmExecutionInput
     system,
     prompt: input.user,
     model: input.model,
-    tools: exec.tools,
+    tools: restrictStepToolOffers(exec.tools, resolveStepToolPolicy(input.stepToolPolicy)),
     maxSteps: exec.maxSteps,
     maxTokens: input.maxOutputTokens,
     // cinatra#2339: per-provider constraint sanitization at the core→adapter
@@ -1273,7 +1273,7 @@ async function runSkillAwareDeterministicLlmTaskImpl(input: SkillAwareDeterminis
     requestedMaxSteps: input.maxSteps,
     outputSchema: input.outputSchema,
   });
-  const execTools = exec.tools ?? allTools;
+  const execTools = restrictStepToolOffers(exec.tools ?? allTools, resolveStepToolPolicy(input.stepToolPolicy)) ?? [];
   const system = [resolved.system, personalContext, skillContext, exec.systemCue]
     .filter(Boolean)
     .join("\n\n");
@@ -1406,13 +1406,13 @@ export async function runResolvedSkillAwareDeterministicLlmTask(
  * When input.provider is omitted, resolves the configured default internally.
  * Emits usage events automatically.
  */
-export async function generate(input: OrchestrateGenerateInput): Promise<LlmResponse> {
+export async function generate(input: OrchestrateGenerateInput & StepToolPolicyInput): Promise<LlmResponse> {
   return requireActorFrame("generate", input.actorContext, () =>
     orchestrateGenerateImpl(input),
   );
 }
 
-async function orchestrateGenerateImpl(input: OrchestrateGenerateInput): Promise<LlmResponse> {
+async function orchestrateGenerateImpl(input: OrchestrateGenerateInput & StepToolPolicyInput): Promise<LlmResponse> {
   let adapter: LlmProviderAdapter;
   if (input.provider) {
     adapter = await getAdapter(input.provider);
@@ -1427,6 +1427,7 @@ async function orchestrateGenerateImpl(input: OrchestrateGenerateInput): Promise
   // smuggle one via `as any`/JS — the resolver-bypass invariant must hold at
   // runtime, not just at the type).
   const {
+    stepToolPolicy: _stepToolPolicy,
     provider: _provider,
     attachments: _attachments,
     attachmentResolverPorts: _ports,
@@ -1439,7 +1440,8 @@ async function orchestrateGenerateImpl(input: OrchestrateGenerateInput): Promise
     executionExecutor: _executionExecutor,
     executionEnvironment: _executionEnvironment,
     ...adapterInput
-  } = input as OrchestrateGenerateInput & { resolvedAttachments?: unknown };
+  } = input as OrchestrateGenerateInput & StepToolPolicyInput & { resolvedAttachments?: unknown };
+  void _stepToolPolicy;
   // Explicit MCP injection.
   const tools = await injectMcpTools({
     provider: adapter.provider,
@@ -1483,7 +1485,7 @@ async function orchestrateGenerateImpl(input: OrchestrateGenerateInput): Promise
       system: exec.systemCue
         ? [resolvedAtt.system, exec.systemCue].filter(Boolean).join("\n\n")
         : resolvedAtt.system,
-      tools: exec.tools,
+      tools: restrictStepToolOffers(exec.tools, resolveStepToolPolicy(input.stepToolPolicy)),
       maxSteps: exec.maxSteps,
       // cinatra#2339 — see runDeterministicLlmTaskImpl. This entry point may
       // resolve the adapter from the implicit-global default, so `input.provider`
@@ -1504,13 +1506,13 @@ async function orchestrateGenerateImpl(input: OrchestrateGenerateInput): Promise
  * When input.provider is omitted, resolves the configured default internally.
  * Injects usage emission into onUsageData automatically.
  */
-export async function stream(input: OrchestrateStreamInput): Promise<void> {
+export async function stream(input: OrchestrateStreamInput & StepToolPolicyInput): Promise<void> {
   return requireActorFrame("stream", input.actorContext, () =>
     orchestrateStreamImpl(input),
   );
 }
 
-async function orchestrateStreamImpl(input: OrchestrateStreamInput): Promise<void> {
+async function orchestrateStreamImpl(input: OrchestrateStreamInput & StepToolPolicyInput): Promise<void> {
   // Test-only deterministic provider for the WordPress/Drupal Playwright UATs.
   // No-op unless CINATRA_TEST_LLM_PROVIDER=scripted; fail-loud under production
   // runtime so it can never serve a real user.
@@ -1569,8 +1571,11 @@ async function orchestrateStreamImpl(input: OrchestrateStreamInput): Promise<voi
     executionAvailability: _executionAvailability,
     executionExecutor: _executionExecutor,
     executionEnvironment: _executionEnvironment,
+    // cinatra#3745: the step's ceiling is read below and never reaches the adapter.
+    stepToolPolicy: _stepToolPolicy,
     ...rest
-  } = input as OrchestrateStreamInput & { resolvedAttachments?: unknown };
+  } = input as OrchestrateStreamInput & StepToolPolicyInput & { resolvedAttachments?: unknown };
+  void _stepToolPolicy;
   // Per-message resolution. Resolve EACH user message's attachments via the
   // per-message helper, which also SANITIZES every message (drops any
   // caller-smuggled `resolvedAttachments`, keeping only role + content +
@@ -1622,7 +1627,7 @@ async function orchestrateStreamImpl(input: OrchestrateStreamInput): Promise<voi
         ? [streamResolve.system, exec.systemCue].filter(Boolean).join("\n\n")
         : streamResolve.system,
       messages: streamResolve.messages,
-      tools: exec.tools,
+      tools: restrictStepToolOffers(exec.tools, resolveStepToolPolicy(input.stepToolPolicy)),
       ...(onUsageData ? { onUsageData } : {}),
     }),
   );
@@ -1671,7 +1676,7 @@ export async function deleteFile(fileRef: LlmFileReference): Promise<void> {
  * Throws a descriptive error if the resolved provider lacks generateWithFileInput support.
  */
 export async function generateWithFileInput(
-  input: OrchestrateFileInputGenerateInput,
+  input: OrchestrateFileInputGenerateInput & StepToolPolicyInput,
 ): Promise<LlmResponse> {
   let adapter: LlmProviderAdapter;
   if (input.provider) {
@@ -1687,7 +1692,9 @@ export async function generateWithFileInput(
       "Switch to OpenAI or Anthropic in LLM settings."
     );
   }
-  const { provider: _provider, ...adapterInput } = input;
+  if (resolveStepToolPolicy(input.stepToolPolicy)?.kind === "declared") throw new Error("step_tool_file_input_abi_unavailable");
+  const { provider: _provider, stepToolPolicy: _stepToolPolicy, ...adapterInput } = input;
+  void _stepToolPolicy;
   // Usage is emitted by the metering proxy (cinatra#2578).
   return withUsageAttribution({ skillLabel: input.skillLabel ?? null }, () =>
     adapter.generateWithFileInput!({
@@ -1723,7 +1730,7 @@ import type {
 } from "./types";
 import { BatchNotSupportedError } from "./errors";
 
-export type OrchestrateSubmitBatchInput = LlmBatchSubmitInput & {
+export type OrchestrateSubmitBatchInput = LlmBatchSubmitInput & StepToolPolicyInput & {
   provider: LlmProvider;
 };
 
@@ -1749,7 +1756,9 @@ export async function orchestrateSubmitBatch(
   if (!adapter.submitBatch) {
     throw new BatchNotSupportedError(input.provider);
   }
-  const { provider: _provider, ...adapterInput } = input;
+  if (resolveStepToolPolicy(input.stepToolPolicy)?.kind === "declared") throw new Error("step_tool_batch_abi_unavailable");
+  const { provider: _provider, stepToolPolicy: _stepToolPolicy, ...adapterInput } = input;
+  void _stepToolPolicy;
   return adapter.submitBatch(adapterInput);
 }
 
@@ -1888,7 +1897,7 @@ async function requireBatchSurface(
   };
 }
 
-export type OrchestrateSubmitBatchV2Input = {
+export type OrchestrateSubmitBatchV2Input = StepToolPolicyInput & {
   provider: LlmProvider;
   requests: LlmBatchV2Request[];
   /** Best-effort tags; providers without a native slot drop them. */
@@ -1911,6 +1920,7 @@ export type OrchestrateBatchV2ByIdInput = {
 export async function orchestrateSubmitBatchV2(
   input: OrchestrateSubmitBatchV2Input,
 ): Promise<LlmBatchV2SubmitResult> {
+  if (resolveStepToolPolicy(input.stepToolPolicy)?.kind === "declared") throw new Error("step_tool_batch_abi_unavailable");
   assertValidBatchV2Requests(input.requests);
   const { adapter, v2 } = await requireBatchSurface(input.provider);
   const requests = sanitizeBatchV2Requests(input.provider, input.requests);
@@ -2144,4 +2154,152 @@ export async function resolveConfiguredLlmRuntime(input?: {
   // set outside an explicit development runtime it THROWS here rather than
   // returning a runtime anything could execute.
   return resolveScriptedLlmRuntime();
+}
+
+import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server/request-context";
+import { SKILL_FILE_READ_TOOL_NAME as SKILL_READ_FACING_NAME } from "./tools/skill-read-tool";
+import { SANDBOX_EXECUTE_TOOL_NAME as SANDBOX_FACING_NAME } from "./execution-plane";
+
+/** Provider built-in tool kinds; never a function tool or an MCP server. */
+export type StepBuiltinToolType = "shell" | "container_skills" | "web_search" | "sandbox_execution";
+const STEP_BUILTIN_TOOL_TYPES: readonly string[] = Object.freeze(["shell", "container_skills", "web_search", "sandbox_execution"]);
+/** Provider-neutral offer ceiling. A missing policy is never an empty allowlist. `tools` matches
+ * by name; `builtinTools` admits a built-in tool by its kind only, so a function tool or an MCP
+ * tool never passes it by a colliding name. */
+export type StepToolOfferPolicy =
+  | { readonly kind: "undeclared" }
+  | { readonly kind: "declared"; readonly tools: readonly string[];
+      readonly builtinTools?: readonly StepBuiltinToolType[] };
+export function intersectStepToolNames(
+  offered: readonly string[], policy: StepToolOfferPolicy,
+): string[] {
+  if (policy.kind === "undeclared") return [...new Set(offered)];
+  if (policy.kind !== "declared" || !Array.isArray(policy.tools) ||
+      policy.tools.some((t) => typeof t !== "string" || t.length === 0) ||
+      (policy.builtinTools !== undefined && (!Array.isArray(policy.builtinTools) ||
+        policy.builtinTools.some((t) => !STEP_BUILTIN_TOOL_TYPES.includes(t))))) {
+    throw new Error("step_tool_offer_policy_invalid");
+  }
+  return [...new Set(offered)].filter((t) => policy.tools.includes(t));
+}
+/** All ABIs get a nonempty intersection or no server, never unrestricted []. */
+export function restrictMcpServerOffer<T extends { allowedTools?: string[] | null }>(
+  server: T, offeredNames: readonly string[] | null, policy: StepToolOfferPolicy,
+): T | null {
+  if (policy.kind === "undeclared") return server;
+  if (!offeredNames) return null; // Unknown catalog/ABI cannot preserve a ceiling.
+  const initial = server.allowedTools == null ? offeredNames :
+    offeredNames.filter((n) => server.allowedTools!.includes(n));
+  const names = intersectStepToolNames(initial, policy);
+  return names.length === 0 ? null : { ...server, allowedTools: names };
+}
+
+export type StepToolPolicyInput = { stepToolPolicy?: StepToolOfferPolicy };
+/** The ceiling a call inside a run's request frame gets when its caller brings none: no tool. */
+const RUN_FRAME_WITHOUT_POLICY: StepToolOfferPolicy = Object.freeze({ kind: "declared" as const, tools: Object.freeze([] as string[]) });
+/** cinatra#3745: the ceiling a model call applies. A caller's policy is used as given. A call that
+ * brings none inside a run's request frame (a tool handler's own model call, for example) gets the
+ * empty ceiling: it is offered no tool and the file-input and batch roads refuse it. Only a call
+ * with no run frame keeps the unrestricted offer. */
+export function resolveStepToolPolicy(policy: StepToolOfferPolicy | undefined): StepToolOfferPolicy | undefined {
+  if (policy != null) return policy;
+  return mcpRequestContextStorage.getStore()?.runId ? RUN_FRAME_WITHOUT_POLICY : undefined;
+}
+/** cinatra#3745: every name a provider adapter offers a built-in tool to the model under. The adapters
+ * live in the provider connectors and translate each kind themselves; they cannot be imported here,
+ * and the offer filter does not know the target provider. So this one table holds the UNION of the
+ * names the connectors' translateTools give each kind (connector pins of
+ * cinatra-required-extensions.lock.json and cinatra-dev-extensions.lock.json), and the filter counts a
+ * built-in under every one of them (fail closed):
+ * - shell: the restricted function "skill_file_read" (OpenAI, without the sandbox or without the
+ *   native shell), the function "bash" (the connector with container skills), the function "shell"
+ *   (Gemini).
+ * - container_skills: the code-execution entry "code_execution", whose server tools the model calls
+ *   "bash_code_execution" and "text_editor_code_execution"; OpenAI and Gemini skip the kind.
+ * - web_search: the native "web_search"; Gemini skips the kind.
+ * - sandbox_execution: the function "sandbox_execute" (every connector; OpenAI without the native
+ *   shell) and OpenAI's native "shell".
+ * The neutral kind is always counted too. A connector that gives a kind a new name must add it here. */
+export const BUILTIN_TOOL_MODEL_FACING_NAMES: Readonly<Record<StepBuiltinToolType, readonly string[]>> = Object.freeze({
+  shell: Object.freeze(["shell", SKILL_READ_FACING_NAME, "bash"]),
+  container_skills: Object.freeze(["container_skills", "code_execution", "bash_code_execution", "text_editor_code_execution"]),
+  web_search: Object.freeze(["web_search"]),
+  sandbox_execution: Object.freeze(["sandbox_execution", SANDBOX_FACING_NAME, "shell"]),
+});
+/** The names a non-MCP tool is offered to the model under: a function tool's own name; for a
+ * built-in, every name of BUILTIN_TOOL_MODEL_FACING_NAMES (and the sandbox's own toolName). */
+function modelFacingToolNames(tool: LlmTool): string[] {
+  const kind = tool.type;
+  if (kind !== undefined && STEP_BUILTIN_TOOL_TYPES.includes(kind)) {
+    const names = new Set(BUILTIN_TOOL_MODEL_FACING_NAMES[kind as StepBuiltinToolType]);
+    if (kind === "sandbox_execution" && typeof tool.toolName === "string") names.add(tool.toolName);
+    return [...names];
+  }
+  const name = "name" in tool && typeof tool.name === "string" ? tool.name : kind;
+  return name ? [name] : [];
+}
+/** Last filter AFTER every toolbox, skill and execution injection, for every adapter. */
+export function restrictStepToolOffers(tools: readonly LlmTool[] | undefined,
+  policy: StepToolOfferPolicy | undefined): LlmTool[] | undefined {
+  if (!policy || policy.kind === "undeclared") return tools === undefined ? undefined : [...tools];
+  // Validate even a zero-tool input; malformed policy must not be ignored.
+  intersectStepToolNames([], policy);
+  const offered = new Map<string, LlmTool>(); const ambiguous = new Set<string>();
+  // Which retained tools carry each model-facing name: function and MCP tools, and built-ins by kind.
+  const carriers = new Map<string, { other: number; builtinKinds: Map<string, number> }>();
+  const carry = (name: string, builtinKind?: string) => {
+    const c = carriers.get(name) ?? { other: 0, builtinKinds: new Map<string, number>() };
+    if (builtinKind === undefined) c.other += 1;
+    else c.builtinKinds.set(builtinKind, (c.builtinKinds.get(builtinKind) ?? 0) + 1);
+    carriers.set(name, c);
+  };
+  // A name selects one handler when one retained tool carries it. Built-ins of DIFFERENT kinds may
+  // share a name of the table: each adapter translates them under distinct names (OpenAI merges the
+  // skill shell into the sandbox's native shell), so only the union above makes them meet.
+  const selectsOne = (name: string) => {
+    const c = carriers.get(name);
+    if (!c) return false;
+    const builtins = [...c.builtinKinds.values()];
+    const total = c.other + builtins.reduce((a, b) => a + b, 0);
+    return total === 1 || (c.other === 0 && builtins.every((n) => n === 1));
+  };
+  const facingNames = new Map<LlmTool, string[]>();
+  for (const tool of tools ?? []) {
+    let retained: LlmTool | null = null; let key: string;
+    if (tool.type === "mcp") {
+      // No trustworthy catalog ceiling => suppress the server, never unrestricted [].
+      retained = restrictMcpServerOffer(tool, tool.allowedTools ?? null, policy);
+      key = `mcp:${tool.serverUrl}:${tool.serverLabel}`;
+      if (retained?.type === "mcp") for (const name of retained.allowedTools ?? []) carry(name);
+    } else {
+      const name = "name" in tool && typeof tool.name === "string" ? tool.name : tool.type;
+      const isBuiltin = tool.type !== undefined && STEP_BUILTIN_TOOL_TYPES.includes(tool.type);
+      const builtin = isBuiltin && policy.builtinTools?.includes(tool.type as StepBuiltinToolType) === true;
+      if (!name || !(builtin || intersectStepToolNames([name], policy).length)) continue;
+      // Count the tool under EVERY name a provider adapter offers it to the MODEL under (OpenAI sends
+      // the skill shell as "skill_file_read", another as "bash", the sandbox is "sandbox_execute"),
+      // so a function or an MCP tool of any such name collides with it.
+      const facing = modelFacingToolNames(tool);
+      facingNames.set(tool, facing);
+      for (const n of facing) carry(n, isBuiltin ? tool.type : undefined);
+      retained = tool; key = isBuiltin ? `builtin:${tool.type}` : `tool:${name}`;
+    }
+    if (!retained || ambiguous.has(key)) continue;
+    if (offered.has(key)) {
+      // Never pick an arbitrary same-name function/server/credential on collision.
+      offered.delete(key); ambiguous.add(key);
+    } else offered.set(key, retained);
+  }
+  // cinatra#3745: a declared name selects one handler. A name that more than one retained tool
+  // carries (a function and an MCP server, two MCP servers, a built-in and a function or an MCP tool
+  // of one of its model-facing names, or two tools of one kind) is ambiguous: no tool keeps it, and a
+  // server left with no name is not offered. Never pick one of them.
+  const result: LlmTool[] = [];
+  for (const tool of offered.values()) {
+    if (tool.type === "mcp") {
+      const names = (tool.allowedTools ?? []).filter(selectsOne);
+      if (names.length) result.push({ ...tool, allowedTools: names });
+    } else if ((facingNames.get(tool) ?? []).every(selectsOne)) result.push(tool);
+  }
+  return result.length ? result : undefined;
 }

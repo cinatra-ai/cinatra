@@ -95,6 +95,7 @@ import {
   readLaunchScopeAnchor,
   type LaunchScopeAnchorKind,
 } from "@/lib/launch-scope-anchor";
+import { withAttribution, type ExtensionToolAttribution } from "@/lib/extension-tool-attribution";
 
 export const EXTENSION_DATA_OPERATIONS = [
   "select",
@@ -826,13 +827,17 @@ export async function runExtensionDataOperation(input: {
   actorPrincipalId?: string | null;
   request: ExtensionDataRequest;
   audit?: (event: Record<string, unknown>) => Promise<void>;
+  /** Whose code made the call, on the `extension_tool` road (cinatra#4154). */
+  attribution?: ExtensionToolAttribution;
 }): Promise<ExtensionDataToolResult> {
-  const audit =
+  const audit = withAttribution(
     input.audit ??
-    (async (event) => {
-      const { logAuditEvent } = await import("@/lib/authz/audit");
-      await logAuditEvent(event as Parameters<typeof logAuditEvent>[0]);
-    });
+      (async (event) => {
+        const { logAuditEvent } = await import("@/lib/authz/audit");
+        await logAuditEvent(event as Parameters<typeof logAuditEvent>[0]);
+      }),
+    input.attribution,
+  );
   const base = {
     organizationId: input.orgId,
     actorPrincipalId: input.actorPrincipalId ?? undefined,

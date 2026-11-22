@@ -36,6 +36,15 @@ const selfInvoker = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
 vi.mock("@/lib/mcp-server", () => ({
   buildHostSelfPrimitiveHandlers: async () => selfInvoker.handlers,
 }));
+// cinatra#3745: a run's frame carries the executed-run source the host's loader
+// verified, and the step's declared tools are read before the boundary decides;
+// the run store answers that source as current and the step as declaring nothing.
+vi.mock("@cinatra-ai/agents/store", () => ({
+  isRunExecutedSourceCurrent: async () => true,
+  readRunStepToolPolicy: async () => ({ source: "bound-source-under-test" }),
+  readCurrentRunStepToolPolicy: async () => ({ source: "bound-source-under-test" }),
+  assertRunStepToolAllowed: () => ({ kind: "undeclared" }),
+}));
 
 // ---------------------------------------------------------------------------
 // The typed delegated-chat declaration, HOP BY HOP (cinatra#2771).
@@ -77,6 +86,7 @@ beforeEach(() => {
 afterAll(() => {
   __resetHostSelfPrimitiveHandlers();
   vi.doUnmock("@/lib/mcp-server");
+  vi.doUnmock("@cinatra-ai/agents/store");
   vi.resetModules();
 });
 
@@ -315,8 +325,15 @@ describe("the retained-version self-invoker road holds a declared outward tool o
   const VERSION = "2.0.0";
   const REASON = "outward_effect_requires_recorded_decision";
   const FIXTURE_CLASSIFICATION = { resourceType: "agent_run", action: "execute", status: "enforced" } as const;
+  const executedSource = {
+    contextId: "ctx-1", stepId: "step-1", executionAttemptId: "attempt-1",
+    sourceSha256: "a".repeat(64), executedSourceSha256: "b".repeat(64), declarationSourceSha256: "c".repeat(64),
+  };
   const runMemberFrame = (): McpRequestContext =>
-    ({ orgId: "org-1", userId: "user-1", runId: "run-1" }) as McpRequestContext;
+    ({
+      orgId: "org-1", userId: "user-1", runId: "run-1",
+      verifiedStepId: "step-1", verifiedExecutedSource: executedSource,
+    }) as McpRequestContext;
 
   let auditSpy: ReturnType<typeof vi.spyOn>;
   let classificationSpy: ReturnType<typeof vi.spyOn>;

@@ -486,6 +486,21 @@ describe.skipIf(!HAS_DB)("(c) the stopped-orchestrator resume", () => {
     expect(h.callbacks).toEqual([{ admitted: true, current: true, ...after }, "r1-send"]);
   });
 
+  // cinatra#3745: the policy a run's tool call is checked against is read in the
+  // same statement that proves its proof current, so an old attempt never reads it.
+  it("the current policy read refuses a proof minted under the old attempt and returns the bound policy to the current one", async () => {
+    const attemptA = await seedDispatchedRun("stopped");
+    const { policy, attestation: pair } = attestation();
+    const { resumeStoppedOrchestratorAction } = await import("../orchestrator-actions");
+    await resumeStoppedOrchestratorAction(h.runId);
+    const { runAttempt } = await rows();
+    expect(runAttempt).not.toBe(attemptA);
+    await expect(serde.readCurrentRunStepToolPolicy(h.runId, ORG, { ...pair, executionAttemptId: attemptA }))
+      .rejects.toMatchObject({ code: "step_tool_run_source_inactive" });
+    expect(await serde.readCurrentRunStepToolPolicy(h.runId, ORG, { ...pair, executionAttemptId: runAttempt! }))
+      .toEqual(policy);
+  });
+
   it("never admits a callback under a binding held by a foreign attempt", async () => {
     await seedDispatchedRun("stopped");
     const foreign = await rebindToForeignAttempt();
