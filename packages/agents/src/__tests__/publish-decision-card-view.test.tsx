@@ -422,3 +422,61 @@ describe("the artifacts row (C1b)", () => {
     expect(root.querySelector("iframe")).toBeNull();
   });
 });
+
+// cinatra#4738 grade: the anchors design spec XV.1 (app-lifecycle-cards.html at design main 615ed095) names, drawn by the card
+// itself so a capture can count them. Before the fix the card drew none of them (only publish-card), because the rows carried
+// data-publish-row-kind and no conformance anchor.
+// red-first-expect: publish-card-rows
+describe("the XV.1 row anchors", () => {
+  const REF = "Abc_123-xyz";
+  const TEXT = ROWS[0];
+  const LIST = { kind: "list", label: "Recipients", columns: ["Name"], items: [["Ada"]], total: 1 };
+  const ITEMS = { kind: "artifacts", label: "Proposed page", ref: REF, islandSrc: null };
+  const anchors = (root: HTMLElement) =>
+    Array.from(root.querySelectorAll("[data-conformance-id]")).map((el) => el.getAttribute("data-conformance-id"));
+
+  it("a text, a list and an items row each carry their own anchor, under the rows anchor, in the declared order", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [TEXT, LIST, ITEMS] }));
+    const root = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    expect(anchors(root).filter((id) => id!.startsWith("publish-"))).toEqual([
+      "publish-card",
+      "publish-card-rows",
+      "publish-row-text",
+      "publish-row-list",
+      "publish-row-items",
+    ]);
+    const frame = root.querySelector('[data-conformance-id="publish-card-rows"]')!;
+    expect(frame.querySelector("dl")).not.toBeNull();
+    expect(frame.querySelector(APPROVE)).not.toBeNull();
+    // Each anchor holds its own label over its own value, and the text row holds the text value.
+    expect(root.querySelector('[data-conformance-id="publish-row-text"]')?.textContent).toBe("TitleSpring launch");
+    expect(root.querySelector('[data-conformance-id="publish-row-list"] dt')?.textContent).toBe("Recipients");
+    expect(root.querySelector('[data-conformance-id="publish-row-items"] dt')?.textContent).toBe("Proposed page");
+    expect(root.querySelector('[data-conformance-id="publish-row-items"] [data-publish-row-kind="artifacts"]')).not.toBeNull();
+  });
+
+  it("an items row that could not be shown carries the refused anchor and not the items anchor", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [{ ...ITEMS, ref: null }] }));
+    const root = await rootOf(mountOn("run_card", okDoor()));
+    await settle();
+    expect(root.querySelector('[data-conformance-id="publish-row-items"]')).toBeNull();
+    const refused = root.querySelector('[data-conformance-id="publish-row-items-refused"]');
+    expect(refused?.querySelector("dt")?.textContent).toBe("Proposed page");
+    expect(refused?.textContent).toContain("These items could not be shown.");
+  });
+
+  it("a card with no rows has no rows anchor, and a settled card keeps its rows anchor beside its marker", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [] }));
+    const none = await rootOf(mountOn("run_card", okDoor()));
+    await settle();
+    expect(none.querySelector('[data-conformance-id="publish-card-rows"]')).toBeNull();
+    cleanup();
+    stateMock.mockImplementation(async () => ({ ...APPROVED, rows: [TEXT, LIST] }));
+    const settled = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    expect(settled.querySelector('[data-conformance-id="publish-card-rows"]')).not.toBeNull();
+    expect(settled.querySelector('[data-conformance-id="publish-row-list"]')).not.toBeNull();
+    expect(settled.querySelector('[data-conformance-id="publish-card-approved"]')).not.toBeNull();
+  });
+});

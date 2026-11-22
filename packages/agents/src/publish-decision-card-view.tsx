@@ -117,19 +117,32 @@ const MARKERS = {
   expired: ["publish-card-expired", "idle", "Expired"],
 } as const;
 
-/** One read-only row's value (cinatra#4150 W4): a text row's value, a list row's compact table, with a line that
- * says how many records it does not draw (every cell is plain text), or an artifacts row's review-target island (C1b). */
-function rowValue(row: PublishDecisionCardRow, onRetry: () => void): ReactElement | null {
+/** One read-only row (cinatra#4150 W4): its label over its value, as the design draws it (XV.1). Each kind carries its own
+ * conformance anchor on the row (publish-row-text, publish-row-list, publish-row-items; an artifacts row that could not be
+ * shown carries publish-row-items-refused), so a capture can count what the page drew. The value is a text row's value, a
+ * list row's compact table with a line that says how many records it does not draw (every cell is plain text), or an
+ * artifacts row's review-target island (C1b). */
+function PublishRow({ row, onRetry }: { row: PublishDecisionCardRow; onRetry: () => void }): ReactElement | null {
   // Dispatch on the row's OWN kind, every value named: the parse admits only text, list and artifacts, and any other kind draws
   // nothing here (never the text drawing). A kind added to publishRowKind fails the typecheck below until it is drawn.
   const kind = publishRowKind(row);
   switch (kind) {
     case "text":
-      return <dd className="text-reading text-foreground">{(row as PublishDecisionCardTextRow).value}</dd>;
+      return (
+        <div data-conformance-id="publish-row-text">
+          <dt className={KICK}>{row.label}</dt>
+          <dd className="text-reading text-foreground">{(row as PublishDecisionCardTextRow).value}</dd>
+        </div>
+      );
     case "list":
-      return listRowValue(row as PublishDecisionCardListRow);
+      return (
+        <div data-conformance-id="publish-row-list">
+          <dt className={KICK}>{row.label}</dt>
+          {listRowValue(row as PublishDecisionCardListRow)}
+        </div>
+      );
     case "artifacts":
-      return <ArtifactsRowValue row={row as PublishDecisionCardArtifactsRow} onRetry={onRetry} />;
+      return <ArtifactsRow row={row as PublishDecisionCardArtifactsRow} onRetry={onRetry} />;
     case null:
       return null;
     default: {
@@ -176,26 +189,32 @@ function listRowValue(row: PublishDecisionCardListRow): ReactElement {
  * row's ref. A row with no ref, or an address that cannot be composed, says the items could not be shown: the row
  * never vanishes, so no one decides on content they were not shown. The retry re-reads the card for a fresh address.
  */
-function ArtifactsRowValue({ row, onRetry }: { row: PublishDecisionCardArtifactsRow; onRetry: () => void }): ReactElement {
+function ArtifactsRow({ row, onRetry }: { row: PublishDecisionCardArtifactsRow; onRetry: () => void }): ReactElement {
   const frame = useLifecycleCardFrame();
   const colorScheme = useLifecycleCardColorScheme();
   const src = row.ref === null ? null : reviewTargetIslandSrc(row.ref, frame, row.islandSrc, colorScheme);
   if (row.ref === null || src === null) {
     return (
-      <dd className="text-xs text-muted-foreground" data-publish-row-kind="artifacts" data-publish-row-unavailable="">
-        These items could not be shown.
-      </dd>
+      <div data-conformance-id="publish-row-items-refused">
+        <dt className={KICK}>{row.label}</dt>
+        <dd className="text-xs text-muted-foreground" data-publish-row-kind="artifacts" data-publish-row-unavailable="">
+          These items could not be shown.
+        </dd>
+      </div>
     );
   }
   return (
-    <dd className="mt-1 min-w-0" data-publish-row-kind="artifacts">
-      <ReviewTargetFrame
-        headers={null}
-        islandSrc={src}
-        islandCredentialed={reviewIslandAddressCredential(row.islandSrc, row.ref) !== null}
-        onRetryResolve={onRetry}
-      />
-    </dd>
+    <div data-conformance-id="publish-row-items">
+      <dt className={KICK}>{row.label}</dt>
+      <dd className="mt-1 min-w-0" data-publish-row-kind="artifacts">
+        <ReviewTargetFrame
+          headers={null}
+          islandSrc={src}
+          islandCredentialed={reviewIslandAddressCredential(row.islandSrc, row.ref) !== null}
+          onRetryResolve={onRetry}
+        />
+      </dd>
+    </div>
   );
 }
 
@@ -282,59 +301,64 @@ export function PublishDecisionCard({ runId, decide }: { runId: string; decide?:
       </div>
     );
   } else {
+    // The whole card: the question, the rows and the controls. The rows anchor (XV.1) is on the frame only when rows are drawn.
+    const card = (
+      <>
+        <div className="border-b border-line px-3.5 py-2.5">
+          <span className="text-row-title font-bold text-foreground">Publish this?</span>
+          <p className="mt-1 font-mono text-fact-line text-muted-foreground">
+            {state.agentName}
+            {pending ? " \u00b7 nothing has been published" : null}
+          </p>
+        </div>
+        {state.rows.length > 0 ? (
+          <dl className="grid gap-2 px-3.5 py-3">
+            {state.rows.map((row, i) => (
+              <PublishRow key={`${i}-${row.label}`} row={row} onRetry={reload} />
+            ))}
+          </dl>
+        ) : null}
+        {pending ? (
+          <div className="px-3.5 pb-3">
+            {restricted ? null : (
+              <label className="block">
+                <span className={`mb-1.5 block ${KICK}`}>
+                  Note <span className="normal-case tracking-normal">(optional &middot; recorded with Do not publish)</span>
+                </span>
+                <Textarea
+                  value={note}
+                  onChange={(event) => setNote(event.target.value)}
+                  placeholder={"Say why, if you do not publish\u2026"}
+                  disabled={disabled}
+                />
+              </label>
+            )}
+            <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+              <Button type="button" variant="outline" size="sm" data-action="decline-publish -> declined"
+                disabled={disabled} onClick={() => void send("decline")}>
+                Do not publish
+              </Button>
+              <Button type="button" size="sm" data-action="approve-publish -> released"
+                disabled={disabled} onClick={() => void send("approve")}>
+                Publish
+              </Button>
+            </div>
+            {restricted ? (
+              <p className="mt-2.5 text-xs text-muted-foreground">
+                Deciding whether this goes out needs approve access on the run.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+      </>
+    );
     body = (
       <>
-        <div className={FRAME}>
-          <div className="border-b border-line px-3.5 py-2.5">
-            <span className="text-row-title font-bold text-foreground">Publish this?</span>
-            <p className="mt-1 font-mono text-fact-line text-muted-foreground">
-              {state.agentName}
-              {pending ? " \u00b7 nothing has been published" : null}
-            </p>
-          </div>
-          {state.rows.length > 0 ? (
-            <dl className="grid gap-2 px-3.5 py-3">
-              {state.rows.map((row, i) => (
-                <div key={`${i}-${row.label}`}>
-                  <dt className={KICK}>{row.label}</dt>
-                  {rowValue(row, reload)}
-                </div>
-              ))}
-            </dl>
-          ) : null}
-          {pending ? (
-            <div className="px-3.5 pb-3">
-              {restricted ? null : (
-                <label className="block">
-                  <span className={`mb-1.5 block ${KICK}`}>
-                    Note <span className="normal-case tracking-normal">(optional &middot; recorded with Do not publish)</span>
-                  </span>
-                  <Textarea
-                    value={note}
-                    onChange={(event) => setNote(event.target.value)}
-                    placeholder={"Say why, if you do not publish\u2026"}
-                    disabled={disabled}
-                  />
-                </label>
-              )}
-              <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
-                <Button type="button" variant="outline" size="sm" data-action="decline-publish -> declined"
-                  disabled={disabled} onClick={() => void send("decline")}>
-                  Do not publish
-                </Button>
-                <Button type="button" size="sm" data-action="approve-publish -> released"
-                  disabled={disabled} onClick={() => void send("approve")}>
-                  Publish
-                </Button>
-              </div>
-              {restricted ? (
-                <p className="mt-2.5 text-xs text-muted-foreground">
-                  Deciding whether this goes out needs approve access on the run.
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
+        {state.rows.length > 0 ? (
+          <div className={FRAME} data-conformance-id="publish-card-rows">{card}</div>
+        ) : (
+          <div className={FRAME}>{card}</div>
+        )}
         {settledMarker(state)}
       </>
     );
