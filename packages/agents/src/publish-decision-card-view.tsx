@@ -60,14 +60,19 @@ async function readPublishDecisionThroughBroker(
 }
 
 /** The run's publish card for this reader, or `null` until an authorized answer has landed. `onRead` is called when
- * each read ends, landed or failed, so a caller waiting on a read is never left waiting on a failure. */
+ * each read ends, landed or failed, so a caller waiting on a read is never left waiting on a failure. `wireRef` is a
+ * pure CHANGE SIGNAL from the host (the run's status, as the hitl screen card takes the gate's): nothing is read out
+ * of it, and a change re-reads, so a run that opens a publish decision after the first read answered `none` draws
+ * its card without a reload or a focus change. */
 export function usePublishDecisionCardState(params: {
   runId: string;
   auth: LifecycleCardAuth | null;
   reloadToken: number;
+  wireRef?: string | null;
   onRead?: () => void;
 }): PublishDecisionCardState | null {
   const { runId, auth, reloadToken, onRead } = params;
+  const wireRef = params.wireRef ?? null;
   const [resolved, setResolved] = useState<{ runId: string; state: PublishDecisionCardState } | null>(null);
   const onReadRef = useRef(onRead);
   useEffect(() => {
@@ -95,7 +100,7 @@ export function usePublishDecisionCardState(params: {
       live = false;
       ended.abort();
     };
-  }, [runId, auth, reloadToken, focusToken]);
+  }, [runId, auth, reloadToken, focusToken, wireRef]);
   return resolved && resolved.runId === runId ? resolved.state : null;
 }
 
@@ -127,7 +132,16 @@ function settledMarker(state: PublishDecisionCardState): ReactElement | null {
   );
 }
 
-export function PublishDecisionCard({ runId, decide }: { runId: string; decide?: PublishDecisionDecide }): ReactElement | null {
+export function PublishDecisionCard({
+  runId,
+  decide,
+  wireRef,
+}: {
+  runId: string;
+  decide?: PublishDecisionDecide;
+  /** The host's change signal for this run (its status): a change re-reads the card. See the hook above. */
+  wireRef?: string | null;
+}): ReactElement | null {
   const host = useLifecycleCardHost();
   const auth = useLifecycleCardAuth();
   const [reloadToken, setReloadToken] = useState(0);
@@ -140,6 +154,7 @@ export function PublishDecisionCard({ runId, decide }: { runId: string; decide?:
     runId: host === null ? "" : runId,
     auth,
     reloadToken,
+    wireRef,
     onRead: () => setRefreshing(false),
   });
 

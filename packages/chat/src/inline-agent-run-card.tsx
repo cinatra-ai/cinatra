@@ -234,6 +234,7 @@ export function InlineAgentRunCard({
   runId,
   onActiveGateChange,
   onReviewReadingChange,
+  onRunStatusChange,
   recommendationDecided,
 }: {
   runId: string;
@@ -268,6 +269,8 @@ export function InlineAgentRunCard({
    * reading is the review screen, and `false` for every other one.
    */
   onReviewReadingChange?: (runId: string, drawsReview: boolean) => void;
+  /** Forwarded to AgenticRunPanel: the run's status on every change, the publish card's change signal (cinatra#4150). */
+  onRunStatusChange?: (runId: string, status: string) => void;
 }) {
   const [seed, setSeed] = useState<SeedData | null>(null);
   const [loadError, setLoadError] = useState<LoadFailureReason | null>(null);
@@ -434,6 +437,7 @@ export function InlineAgentRunCard({
         initialHitlContext={seed.hitlContext ?? null}
         onActiveGateChange={onActiveGateChange}
         onReviewReadingChange={onReviewReadingChange}
+        onRunStatusChange={onRunStatusChange}
         recommendationDecided={recommendationDecided}
         surface="chat"
         initialReviewGate={seed.reviewGate ?? null}

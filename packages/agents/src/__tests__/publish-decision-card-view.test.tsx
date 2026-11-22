@@ -270,6 +270,25 @@ describe("the broker read on the site widget", () => {
   });
 });
 
+describe("the host's change signal", () => {
+  it("a run that opens its decision AFTER a `none` read draws the card when the host's wireRef moves, with no focus", async () => {
+    stateMock.mockImplementation(async () => ({ state: "none" }));
+    const at = (wireRef: string) => (
+      <LifecycleCardSurfaceProvider host="run_card">
+        <PublishDecisionCard runId={RUN_ID} wireRef={wireRef} />
+      </LifecycleCardSurfaceProvider>
+    );
+    const mounted = render(at("running"));
+    await settle();
+    expect(mounted.container.querySelector(ROOT)).toBeNull();
+    stateMock.mockImplementation(async () => PENDING);
+    mounted.rerender(at("pending_approval"));
+    await settle();
+    expect((await rootOf(mounted)).getAttribute("data-lifecycle-card-state")).toBe("pending");
+    expect(stateMock).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("the decide door", () => {
   it("Publish sends approve with no note, Do not publish sends the written note, and the card re-reads", async () => {
     const decide = vi.fn<PublishDecisionDecide>(async () => "decided");

@@ -39,18 +39,19 @@ function enclosingHost(source: string, index: number): string | null {
 
 describe("the publish card's mounts (cinatra#4150)", () => {
   it.each([
-    [PANEL, "run_card"],
-    [REVIEW_PAGE, "page_gate_region"],
-  ])("%s mounts the card ONCE, keyed by the run alone, under %s", (file, host) => {
+    // The panel passes the run's status as the card's change signal (a pure signal: nothing is read out of it).
+    [PANEL, "run_card", "<PublishDecisionCard runId={runId} wireRef={status} />"],
+    [REVIEW_PAGE, "page_gate_region", "<PublishDecisionCard runId={runId} />"],
+  ])("%s mounts the card ONCE, keyed by the run, under %s", (file, host, element) => {
     const source = read(file);
     const elements = cardElements(source);
-    expect(elements).toEqual(["<PublishDecisionCard runId={runId} />"]);
+    expect(elements).toEqual([element]);
     expect(enclosingHost(source, source.indexOf(elements[0]!))).toBe(host);
   });
 
   it("the run panel's mount stands down inside a conversation host, on the hitl screen's own switch", () => {
     const source = read(PANEL);
-    const at = source.indexOf("<PublishDecisionCard runId={runId} />");
+    const at = source.indexOf("<PublishDecisionCard runId={runId} wireRef={status} />");
     const guard = source.lastIndexOf("{panelMountsHitlScreenCard ? (", at);
     expect(guard).toBeGreaterThan(-1);
     // The switch opens right before this mount's own provider, with nothing between them.
@@ -62,7 +63,9 @@ describe("the publish card's mounts (cinatra#4150)", () => {
   it("the column mounts the card beside the hitl screen in every placement, with no decide door", () => {
     const source = read(COLUMN);
     expect(source).toContain('import { PublishDecisionCard } from "@cinatra-ai/agents/publish-decision-card-view";');
-    expect(cardElements(source)).toEqual(["<PublishDecisionCard runId={runId} />"]);
+    // Its change signal is the run's status as the panel reports it, so a decision opened later still draws.
+    expect(cardElements(source)).toEqual(["<PublishDecisionCard runId={runId} wireRef={runStatusSignal} />"]);
+    expect(source).toContain("onRunStatusChange={onRunStatusChange}");
     // The turn's own placement and both moved placements draw it, exactly where they draw the hitl screen.
     expect(source).toContain("{turnCarriesSettledSchedule ? null : publishCard}");
     expect(source.match(/<div data-agent-run-screen-slot=\{runId\}>\{hitlScreen\}\{publishCard\}<\/div>/g)).toHaveLength(2);

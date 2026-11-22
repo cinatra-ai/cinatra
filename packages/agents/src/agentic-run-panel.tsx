@@ -40,7 +40,7 @@ import {
   hitlFieldPresentationFor,
 } from "./agent-hitl-screen-card";
 import type { AgentRunMessageBody } from "./store";
-import { PublishDecisionCard } from "./publish-decision-card-view";
+import { PublishDecisionCard, usePublishDecisionCardState } from "./publish-decision-card-view";
 import { StatusPill } from "@/components/ui/status-pill";
 import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
 import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
@@ -336,6 +336,12 @@ export type AgenticRunPanelProps = {
    * deliberately does not read. Absent on a host that does not ask.
    */
   onReviewReadingChange?: (runId: string, drawsReview: boolean) => void;
+  /**
+   * The run's status as this panel reads it (stream or poll), reported on every change (cinatra#4150). A host that
+   * mounts a run-keyed card OUTSIDE this panel (the conversation column's publish card) folds it into that card's
+   * change signal, so the card re-reads when the run moves. Absent on a host that does not ask.
+   */
+  onRunStatusChange?: (runId: string, status: string) => void;
 };
 
 export type ChatGateField = {
@@ -568,6 +574,7 @@ export function AgenticRunPanel({
   refreshReviewRail,
   readReviewSlot,
   onReviewReadingChange,
+  onRunStatusChange,
   inputStepInRail = false,
   railDrawsTheFrame = false,
 }: AgenticRunPanelProps) {
@@ -1971,6 +1978,24 @@ export function AgenticRunPanel({
     }
   }, [refetchDerivedContext]);
 
+  // A PUBLISH GATE IS NOT A GENERIC APPROVAL (cinatra#4150). A run parked at a publish gate is `pending_approval` with
+  // no gate context and no generic review task (publish-decision-actions.ts, `holdRunAtPublishGate`), so without
+  // this read the generic approval branch below drew its "Review approval" link, its loading line and its Re-check
+  // beside the publish card. Read only while the run is paused with no gate context, keyed on the run's status.
+  const publishGateState = usePublishDecisionCardState({
+    runId: isPendingApproval && !effectiveHitlContext ? runId : "",
+    auth: ambientLifecycleAuth,
+    reloadToken: 0,
+    wireRef: status,
+  });
+  const parkedAtPublishGate =
+    isPendingApproval && !effectiveHitlContext && publishGateState?.state === "pending";
+  const onRunStatusChangeRef = useRef(onRunStatusChange);
+  onRunStatusChangeRef.current = onRunStatusChange;
+  useEffect(() => {
+    onRunStatusChangeRef.current?.(runId, status);
+  }, [runId, status]);
+
   // Is this paused run degraded (no usable gate context) rather than merely
   // hydrating? Bounded — see hitl-recovery-state.ts.
   // `parkedPause` — the park and its unheard window, read beside the park above.
@@ -3043,7 +3068,7 @@ export function AgenticRunPanel({
           down inside a conversation host for the hitl screen's reason, and draws nothing with no open decision. */}
       {panelMountsHitlScreenCard ? (
         <LifecycleCardSurfaceProvider host="run_card">
-          <PublishDecisionCard runId={runId} />
+          <PublishDecisionCard runId={runId} wireRef={status} />
         </LifecycleCardSurfaceProvider>
       ) : null}
 
@@ -3421,6 +3446,9 @@ export function AgenticRunPanel({
           />
         </LifecycleCardSurfaceProvider>
         )
+      ) : parkedAtPublishGate ? (
+        // The publish card above is this pause's one surface (cinatra#4150): no generic approval banner beside it.
+        null
       ) : parkedWithNoGate && gateGoneOnResume ? (
         // cinatra#3423 — the reader came back to a gate this surface was holding
         // and that is no longer here. Without this branch the banner below draws

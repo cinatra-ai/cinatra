@@ -804,8 +804,17 @@ function AgentRunTurnSlot({
     <AgentHitlScreenCard runId={runId} wireRef={gateSignal} carrier={screenCarrier} />
   );
   // THE PUBLISH CARD (cinatra#4150), an INTERRUPT like the screen above and mounted beside it, in the same placement:
-  // keyed by the run alone, it self-gates, so a run with no open publish decision draws nothing here.
-  const publishCard = <PublishDecisionCard runId={runId} />;
+  // keyed by the run alone, it self-gates, so a run with no open publish decision draws nothing here. A publish gate
+  // has no gate context, so the gate signal above stays quiet for it; the run's status, as the panel reads it, is
+  // this card's change signal instead, so a decision opened after the first read draws without a reload or focus.
+  const [runStatusSignal, setRunStatusSignal] = useState<string | null>(null);
+  const onRunStatusChange = useCallback(
+    (changedRunId: string, status: string) => {
+      if (changedRunId === runId) setRunStatusSignal(status);
+    },
+    [runId],
+  );
+  const publishCard = <PublishDecisionCard runId={runId} wireRef={runStatusSignal} />;
 
   // THE RUN-PROGRESS PANEL, written once for the same reason.
   const runPanel = (
@@ -813,6 +822,7 @@ function AgentRunTurnSlot({
       runId={runId}
       onActiveGateChange={onGateChange}
       onReviewReadingChange={onPanelReviewReadingChange}
+      onRunStatusChange={onRunStatusChange}
       recommendationDecided={decided}
     />
   );

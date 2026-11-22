@@ -76,11 +76,19 @@ vi.mock("@/components/data-safety/undo-toast", () => ({
 // The inline run card is the AG-UI run panel, whose graph reaches the server
 // runtime. The stand-in declares the SAME host the shipped panel declares, so a
 // card found inside it is still recognisable as a run-card mount rather than a
-// conversation one.
+// conversation one. It keeps the run-status report the column hands the shipped panel, so a suite can move the run.
+const statusReporters = vi.hoisted(() => new Map<string, (runId: string, status: string) => void>());
 vi.mock("../inline-agent-run-card", () => ({
-  InlineAgentRunCard: ({ runId }: { runId: string }) => (
-    <div data-lifecycle-card-host="run_card" data-inline-run-card={runId} />
-  ),
+  InlineAgentRunCard: ({
+    runId,
+    onRunStatusChange,
+  }: {
+    runId: string;
+    onRunStatusChange?: (runId: string, status: string) => void;
+  }) => {
+    if (onRunStatusChange) statusReporters.set(runId, onRunStatusChange);
+    return <div data-lifecycle-card-host="run_card" data-inline-run-card={runId} />;
+  },
 }));
 
 import {
@@ -120,10 +128,13 @@ const PENDING = {
 
 let stub: ReturnType<typeof installWidgetServiceStub> | null = null;
 
-async function mountArm(surface: SurfaceName, open: boolean) {
+// The widget reads the run's skills hold through its broker; `none` lets the column mount the run panel there too.
+const NO_HOLD = { recommendationHold: () => ({ state: "none" }) };
+
+async function mountArm(surface: SurfaceName, open: boolean, withPanel = false) {
   const answer = open ? PENDING : { state: "none" };
   publishStateMock.mockImplementation(async () => answer);
-  stub = installWidgetServiceStub({ publishDecision: () => answer });
+  stub = installWidgetServiceStub({ publishDecision: () => answer, ...(withPanel ? NO_HOLD : {}) });
   const mounted = await mountSurface(surface, { messages: lifecycleHeldTranscript() });
   await act(async () => {
     await Promise.resolve();
@@ -139,6 +150,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  statusReporters.clear();
   cleanup();
   stub?.restore();
   stub = null;
@@ -175,6 +187,29 @@ describe("the publish card on the conversation hosts (cinatra#4150)", () => {
     // The turn itself still stands: the mount withholds only its own card.
     expect(root.querySelector(`[data-agent-run-slot="${HELD_RUN_ID}"]`)).not.toBeNull();
   });
+
+  it.each(["chat", "widget"] as const)(
+    "%s: a decision the run opens AFTER the first read answered none draws the card, with no reload and no focus",
+    async (surface) => {
+      const root = await mountArm(surface, false, true);
+      expect(root.querySelector(CARD)).toBeNull();
+      // The run, still working at the first read, now parks at its publish gate; the tab keeps its focus.
+      publishStateMock.mockImplementation(async () => PENDING);
+      stub?.restore();
+      stub = installWidgetServiceStub({ publishDecision: () => PENDING, ...NO_HOLD });
+      const report = statusReporters.get(HELD_RUN_ID);
+      expect(report, "the column hands the run panel its run-status report").toBeTypeOf("function");
+      await act(async () => {
+        report!(HELD_RUN_ID, "running");
+        report!(HELD_RUN_ID, "pending_approval");
+        await Promise.resolve();
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      const cards = root.querySelectorAll<HTMLElement>(CARD);
+      expect(cards).toHaveLength(1);
+      expect(cards[0]!.getAttribute("data-lifecycle-card-state")).toBe("pending");
+    },
+  );
 
   it("/chat reads through the session action and never the broker", async () => {
     await mountArm("chat", true);
