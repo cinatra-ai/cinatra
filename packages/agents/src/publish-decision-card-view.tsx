@@ -164,9 +164,9 @@ export function PublishDecisionCard({ runId, decide }: { runId: string; decide?:
 
   let body: ReactElement;
   if (refreshing) {
-    // IV.1 loading: the frame and placeholder lines, no control.
+    // IV.1 loading: the frame and placeholder lines, no control. Each IV.1 state the card draws carries its spec anchor.
     body = (
-      <div className={`${FRAME} grid gap-2 p-3.5`} aria-busy="true">
+      <div className={`${FRAME} grid gap-2 p-3.5`} aria-busy="true" data-conformance-id="publish-state-loading">
         <div className="h-2 w-2/5 rounded-sm bg-surface-muted" />
         <div className="h-1.5 w-[30%] rounded-sm bg-surface-muted" />
         <div className="h-1.5 w-3/5 rounded-sm bg-surface-muted" />
@@ -179,7 +179,7 @@ export function PublishDecisionCard({ runId, decide }: { runId: string; decide?:
       reload();
     };
     body = (
-      <div className={`${FRAME} px-4 py-4 text-center`}>
+      <div className={`${FRAME} px-4 py-4 text-center`} data-conformance-id="publish-state-no-longer-open">
         <p className="text-row-title font-semibold text-foreground">This publish request is no longer open</p>
         <p className="mt-1 text-xs text-muted-foreground">
           It was already answered, it expired, or the run moved on.{" "}
@@ -192,7 +192,7 @@ export function PublishDecisionCard({ runId, decide }: { runId: string; decide?:
   } else {
     body = (
       <>
-        <div className={FRAME}>
+        <div className={FRAME} data-conformance-id={restricted ? "publish-state-restricted" : undefined}>
           <div className="border-b border-line px-3.5 py-2.5">
             <span className="text-row-title font-bold text-foreground">Publish this?</span>
             <p className="mt-1 font-mono text-fact-line text-muted-foreground">

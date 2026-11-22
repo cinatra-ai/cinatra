@@ -135,6 +135,17 @@ describe("the drawn card", () => {
     expect(root.querySelector<HTMLButtonElement>(DECLINE)?.disabled).toBe(true);
     expect(root.textContent).toContain("needs approve access on the run");
     expect(root.querySelector("textarea")).toBeNull();
+    // IV.1: the restricted card's frame carries its spec anchor, and only the restricted card draws it.
+    const frame = root.querySelector('[data-conformance-id="publish-state-restricted"]');
+    expect(frame?.querySelectorAll("dd")).toHaveLength(2);
+    expect(frame?.querySelector(APPROVE)).not.toBeNull();
+  });
+
+  it("only the restricted card draws the restricted anchor", async () => {
+    const root = await rootOf(mountOn("run_card", okDoor()));
+    await settle();
+    expect(root.getAttribute("data-lifecycle-card-state")).toBe("pending");
+    expect(root.querySelector('[data-conformance-id^="publish-state-"]')).toBeNull();
   });
 
   it("a host that passes no decide door draws both controls disabled", async () => {
@@ -289,6 +300,9 @@ describe("the decide door", () => {
     expect(closed.getAttribute("data-lifecycle-card-state")).toBe("no_longer_open");
     expect(closed.textContent).toContain("This publish request is no longer open");
     expect(closed.querySelector(APPROVE)).toBeNull();
+    expect(closed.querySelector('[data-conformance-id="publish-state-no-longer-open"]')?.textContent).toContain(
+      "This publish request is no longer open",
+    );
     let land: (value: unknown) => void = () => undefined;
     stateMock.mockImplementation(() => new Promise((resolve) => (land = resolve)));
     await act(async () => {
@@ -296,11 +310,14 @@ describe("the decide door", () => {
     });
     expect((await rootOf(mounted)).getAttribute("data-lifecycle-card-state")).toBe("loading");
     expect(mounted.container.querySelector("button")).toBeNull();
+    expect(mounted.container.querySelector('[data-conformance-id="publish-state-loading"]')?.getAttribute("aria-busy")).toBe("true");
+    expect(mounted.container.querySelector('[data-conformance-id="publish-state-no-longer-open"]')).toBeNull();
     await act(async () => {
       land(EXPIRED);
     });
     await settle();
     expect((await rootOf(mounted)).getAttribute("data-lifecycle-card-state")).toBe("expired");
+    expect(mounted.container.querySelector('[data-conformance-id^="publish-state-"]')).toBeNull();
   });
 
   it("a Refresh whose re-read FAILS ends loading and keeps the last answer on screen", async () => {
