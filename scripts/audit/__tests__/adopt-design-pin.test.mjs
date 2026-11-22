@@ -32,10 +32,27 @@ const newPin = `design@${NEW} specs/app-lifecycle-cards.html specs/app-artifact-
 const DIGEST_OLD = "f".repeat(64);
 const DIGEST_NEW = "e".repeat(64);
 
+const PREVIOUS = `design@${"0".repeat(40)} specs/app-lifecycle-cards.html`;
 const manifestText = (pin = oldPin) =>
-  ["{", ' "note": "a manifest",', ` "specCommit": "${pin}",`, ' "version": 7,', ' "rows": []', "}", ""].join(
-    "\n",
-  );
+  [
+    "{",
+    ' "note": "a manifest",',
+    ` "specCommit": "${pin}",`,
+    ' "specCommitDrift": {',
+    `  "previousPin": "${PREVIOUS}",`,
+    '  "priorPins": [',
+    '   "design@aaaa specs/app-lifecycle-cards.html (until 2026-01-01)"',
+    "  ],",
+    '  "movedOn": "2026-02-02",',
+    '  "why": "an older move",',
+    '  "differs": "an older diff",',
+    '  "whoRatified": "an older reader"',
+    " },",
+    ' "version": 7,',
+    ' "rows": []',
+    "}",
+    "",
+  ].join("\n");
 
 const contractText = (pin = oldPin, extra = "") =>
   [
@@ -149,6 +166,29 @@ describe("adopting a pin", () => {
       '[data-skill-action="skip"]',
     ]);
     expect(contractOf(root).digest).toBe(DIGEST_NEW);
+  });
+
+  it("moves the drift record with the pin, so no displaced pin is lost (owner 1207)", () => {
+    const root = tree();
+    const result = adoptDesignPin({ repoRoot: root, pin: newPin, write: true, today: "2026-11-22", ...runners() });
+    expect(result.exitCode).toBe(0);
+    const drift = manifestOf(root).specCommitDrift;
+    expect(drift.previousPin).toBe(oldPin);
+    expect(drift.priorPins).toEqual([
+      "design@aaaa specs/app-lifecycle-cards.html (until 2026-01-01)",
+      `${PREVIOUS} (until 2026-02-02)`,
+    ]);
+    expect(drift.movedOn).toBe("2026-11-22");
+    expect(drift.why).toContain(`design@${NEW.slice(0, 8)}`);
+    expect(drift.differs).toContain(`git diff ${OLD} ${NEW}`);
+    expect(manifestOf(root).version).toBe(7);
+  });
+
+  it("leaves the drift record alone when the pin does not move", () => {
+    const root = tree({ manifest: manifestText(newPin), contract: contractText(newPin) });
+    adoptDesignPin({ repoRoot: root, pin: newPin, write: true, today: "2026-11-22", ...runners() });
+    expect(manifestOf(root).specCommitDrift.previousPin).toBe(PREVIOUS);
+    expect(manifestOf(root).specCommitDrift.movedOn).toBe("2026-02-02");
   });
 
   it("records a non-empty array truthfully rather than requiring an empty one", () => {
