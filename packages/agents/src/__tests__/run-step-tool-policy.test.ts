@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 // The module is new with cinatra#3745. It is loaded here, not by a static import, so that before the
 // change this file still loads and its first case fails by an assertion on the missing module.
 const policyModule = await import("../run-step-tool-policy").catch(() => undefined);
-const { createRunStepToolPolicy, parseRunStepToolPolicy, readTrustedStepToolDeclaration, selectWayflowRunStepToolPolicy } =
+const { createRunStepToolPolicy, parseRunStepToolPolicy, readTrustedStepToolDeclaration, selectWayflowRunStepToolPolicy, assertRunStepToolAllowed, RunStepToolPolicyRefusal } =
   (policyModule ?? {}) as typeof import("../run-step-tool-policy");
 it("the run step tool policy module exists (cinatra#3745)", () => {
  expect(policyModule).toBeDefined();
@@ -109,5 +109,39 @@ describe("the loader's selected source, read before dispatch", () => {
   await expect(selectWayflowRunStepToolPolicy({ agentUrl: "http://wayflow.test:3010/agents/v/s", contextId: "c" }, answer({}) as unknown as typeof fetch)).rejects.toThrow("step_tool_loader_unavailable");
   env();
   await expect(selectWayflowRunStepToolPolicy({ agentUrl: "http://wayflow.test:3010/agents/v/s", contextId: "c" }, answer({}, false) as unknown as typeof fetch)).rejects.toThrow("step_tool_loader_selection_refused");
+ });
+});
+
+// cinatra#3745: one call of a step is admitted only for a tool the step's bound source
+// declares; a step that declares nothing keeps every tool. The binding's context and
+// executing digest must be the proof's.
+describe("the step's declared tools, asserted for one call", () => {
+ const call = (p: ReturnType<typeof policy>, toolName: string) =>
+  ({ policy: p, contextId: "ctx", executedSourceSha256: p.executedSourceSha256, stepId: "step", toolName });
+ it("admits a declared tool and refuses an undeclared one", () => {
+  const p=policy();
+  expect(assertRunStepToolAllowed(call(p,"mail_send"),readers)).toEqual({kind:"declared",tools:["mail_send"]});
+  expect(() => assertRunStepToolAllowed(call(p,"wordpress_publish"),readers)).toThrow("step_tool_not_declared");
+ });
+ it("admits any tool of a step that declares nothing", () => {
+  const undeclared = {...readers,findStepToolDeclaration:()=>({kind:"undeclared"})};
+  expect(assertRunStepToolAllowed(call(policy(),"wordpress_publish"),undeclared)).toEqual({kind:"undeclared"});
+ });
+ it("refuses a proof for another context or another executing source", () => {
+  const p=policy();
+  for(const change of [{contextId:"other"},{executedSourceSha256:"f".repeat(64)}]) {
+   expect(() => assertRunStepToolAllowed({...call(p,"mail_send"),...change},readers)).toThrow("step_tool_executed_source_mismatch");
+  }
+ });
+ it("refuses a binding that is not a bound policy", () => {
+  expect(() => assertRunStepToolAllowed({...call(policy(),"mail_send"),policy:undefined},readers)).toThrow("step_tool_binding_missing");
+  expect(() => assertRunStepToolAllowed({...call(policy(),"mail_send"),policy:{...policy(),source:source+" "}},readers)).toThrow("step_tool_binding_invalid");
+ });
+ it("refuses with its own class, which carries the code and the class name the 403 map reads", () => {
+  let caught: unknown;
+  try { assertRunStepToolAllowed(call(policy(),"wordpress_publish"),readers); } catch (e) { caught = e; }
+  expect(caught).toBeInstanceOf(RunStepToolPolicyRefusal);
+  expect((caught as InstanceType<typeof RunStepToolPolicyRefusal>).name).toBe("RunStepToolPolicyRefusal");
+  expect((caught as InstanceType<typeof RunStepToolPolicyRefusal>).code).toBe("step_tool_not_declared");
  });
 });
