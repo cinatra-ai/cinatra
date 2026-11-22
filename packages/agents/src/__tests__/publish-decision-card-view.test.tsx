@@ -433,7 +433,9 @@ describe("the XV.1 row anchors", () => {
   const LIST = { kind: "list", label: "Recipients", columns: ["Name"], items: [["Ada"]], total: 1 };
   const ITEMS = { kind: "artifacts", label: "Proposed page", ref: REF, islandSrc: null };
   const anchors = (root: HTMLElement) =>
-    Array.from(root.querySelectorAll("[data-conformance-id]")).map((el) => el.getAttribute("data-conformance-id"));
+    [root, ...Array.from(root.querySelectorAll("[data-conformance-id]"))]
+      .filter((el) => el.hasAttribute("data-conformance-id"))
+      .map((el) => el.getAttribute("data-conformance-id"));
 
   it("a text, a list and an items row each carry their own anchor, under the rows anchor, in the declared order", async () => {
     stateMock.mockImplementation(async () => ({ ...PENDING, rows: [TEXT, LIST, ITEMS] }));
