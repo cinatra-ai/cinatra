@@ -35,7 +35,12 @@ vi.mock("../db", () => ({
   },
 }));
 
-import { readPublishDecisionIslandSubject, readRevisionsMadeByRun } from "../publish-decision-island-subject";
+// The module under test is loaded inside the tests (beforeEach), so before the fix this file loads and every test
+// fails on the missing module.
+// red-first-expect: publish-decision-island-subject
+import type * as SubjectModule from "../publish-decision-island-subject";
+let readPublishDecisionIslandSubject: typeof SubjectModule.readPublishDecisionIslandSubject;
+let readRevisionsMadeByRun: typeof SubjectModule.readRevisionsMadeByRun;
 
 const WHO = {
   actor: { actorType: "human" as const, source: "ui" as const, userId: "user-a" },
@@ -68,7 +73,8 @@ const TEMPLATE = {
 };
 const ASK = { runId: "run-1", decisionId: "dec-1", input: "reviewTargets", who: WHO };
 
-beforeEach(() => {
+beforeEach(async () => {
+  ({ readPublishDecisionIslandSubject, readRevisionsMadeByRun } = await import("../publish-decision-island-subject"));
   vi.resetAllMocks();
   storeMock.readAgentRunById.mockResolvedValue(RUN);
   storeMock.readAgentTemplateById.mockResolvedValue(TEMPLATE);

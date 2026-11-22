@@ -11,6 +11,7 @@
 //   - the mint refuses a ref that does not name the ids it is asked to seal;
 //   - a gate credential's sealed shape is unchanged (no subject).
 // Red first: at C1's head mintWidgetPublishDecisionIslandUrl and the publish ref family do not exist (import fails).
+// red-first-expect: encodePublishDecisionIslandRef
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCipheriv, createHmac, randomBytes } from "node:crypto";

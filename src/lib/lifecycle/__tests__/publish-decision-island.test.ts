@@ -17,7 +17,9 @@ const subjectModule = vi.hoisted(() => ({
   readPublishDecisionIslandSubject: vi.fn(),
   readRevisionsMadeByRun: vi.fn(),
 }));
-vi.mock("@cinatra-ai/agents/publish-decision-island-subject", () => subjectModule);
+// The subject module by its relative source path (the package export resolves to this same file), so this file
+// loads before the fix, when the package does not export it yet.
+vi.mock("../../../../packages/agents/src/publish-decision-island-subject", () => subjectModule);
 
 const verifyRunAccess = vi.fn();
 const gatePorts = vi.hoisted(() => ({
@@ -34,12 +36,14 @@ vi.mock("@/lib/authz/build-actor-context", () => ({
 }));
 
 import { publishDecisionIslandSubjectKey } from "../lifecycle-card-ref";
-import {
-  PUBLISH_DECISION_ISLAND_PORTS,
-  loadPublishDecisionIslandSurface,
-  loadPublishDecisionIslandSurfaceWith,
-  type PublishDecisionIslandPorts,
-} from "../publish-decision-island";
+// The module under test is loaded inside the tests (beforeEach), so before the fix this file loads and every test
+// fails on the missing module.
+// red-first-expect: publish-decision-island
+import type * as IslandModule from "../publish-decision-island";
+import type { PublishDecisionIslandPorts } from "../publish-decision-island";
+let PUBLISH_DECISION_ISLAND_PORTS: typeof IslandModule.PUBLISH_DECISION_ISLAND_PORTS;
+let loadPublishDecisionIslandSurface: typeof IslandModule.loadPublishDecisionIslandSurface;
+let loadPublishDecisionIslandSurfaceWith: typeof IslandModule.loadPublishDecisionIslandSurfaceWith;
 
 const ACTOR = {
   actor: { actorType: "human" as const, source: "ui" as const, userId: "user-a" },
@@ -66,7 +70,10 @@ function ports(over: Partial<PublishDecisionIslandPorts> = {}) {
   return p as unknown as PublishDecisionIslandPorts & { [K in keyof typeof p]: ReturnType<typeof vi.fn> };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  ({ PUBLISH_DECISION_ISLAND_PORTS, loadPublishDecisionIslandSurface, loadPublishDecisionIslandSurfaceWith } = await import(
+    "../publish-decision-island"
+  ));
   vi.clearAllMocks();
   gatePorts.bindReviewRunGatePorts.mockReturnValue({ verifyRunAccess });
 });

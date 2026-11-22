@@ -4,6 +4,7 @@
 // separation: a publish ref never decodes as a gate ref (so the gate loader can never be handed it) and a gate ref, a
 // schedule ref and a schedule-form ref never decode as a publish ref. Red first: at C1's head none of these exports
 // exist, so this file fails at its import.
+// red-first-expect: encodePublishDecisionIslandRef
 import { describe, expect, it } from "vitest";
 
 process.env.BETTER_AUTH_SECRET ??= "test-secret-for-lifecycle-refs";
