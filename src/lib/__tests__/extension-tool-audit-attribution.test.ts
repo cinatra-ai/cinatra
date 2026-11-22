@@ -18,7 +18,7 @@
  *
  *   pnpm exec vitest run src/lib/__tests__/extension-tool-audit-attribution.test.ts
  */
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/artifacts/artifact-service", () => ({
   getArtifact: () => null,
@@ -31,10 +31,10 @@ import type { ArtifactDependencyAdmission } from "@/lib/artifacts/extension-arti
 import { extensionArtifactGet } from "@/lib/artifacts/extension-artifact-reads";
 import { runExtensionDataOperation } from "@/lib/extension-data-tool";
 import { createExtensionObjectsPort } from "@/lib/extension-objects-port";
-import {
-  withAttribution,
-  type ExtensionToolAttribution,
-} from "@/lib/extension-tool-attribution";
+// withAttribution is loaded inside its tests (beforeEach), so before the fix this file loads and those tests fail
+// on the missing module.
+import type * as AttributionModule from "../extension-tool-attribution";
+import type { ExtensionToolAttribution } from "../extension-tool-attribution";
 
 const ORG = "org-fixture";
 const PARENT = "@fixture-scope/fixture-parent-agent";
@@ -82,6 +82,12 @@ function metadataOf(audit: ReturnType<typeof auditSpy>, call = 0): Record<string
 }
 
 describe("withAttribution", () => {
+  // red-first-expect: extension-tool-attribution
+  let withAttribution: typeof AttributionModule.withAttribution;
+  beforeEach(async () => {
+    ({ withAttribution } = await import("../extension-tool-attribution"));
+  });
+
   it("adds the four fields to the event's metadata and keeps the rest of the event", async () => {
     const audit = auditSpy();
     await withAttribution(audit, CHILD_ROAD)({

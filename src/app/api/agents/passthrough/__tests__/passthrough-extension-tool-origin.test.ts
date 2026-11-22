@@ -368,6 +368,39 @@ beforeEach(() => {
   h.resolveOriginSpy.mockReset();
 });
 
+// Every test of this file pins route behaviour that part C2 keeps: each one
+// passes before the C2 change and with it (the red-first gate reads one
+// red-first-pin line per test, by its title).
+// red-first-pin: P step + parent_tool answers 200 from the parent
+// red-first-pin: P step + child_tool answers 403
+// red-first-pin: P step + sibling_tool answers 403
+// red-first-pin: P step + nobody_tool answers 403
+// red-first-pin: P step + both_tool answers 200 from the parent
+// red-first-pin: C step + child_tool answers 200 from the child
+// red-first-pin: C step + parent_tool answers 403
+// red-first-pin: C step + sibling_tool answers 403
+// red-first-pin: C step + nobody_tool answers 403
+// red-first-pin: C step + both_tool answers 403
+// red-first-pin: S step + sibling_tool answers 200 from the sibling
+// red-first-pin: C step with no proven pair is refused before the resolver
+// red-first-pin: C step whose node the child marks not embeddable is refused
+// red-first-pin: C step whose fixed tool only the sibling declares is refused, never run from the sibling
+// red-first-pin: C step whose fixed tool both packages declare runs the child's, from the child installation
+// red-first-pin: P step of the same flow with that name still runs the parent's
+// red-first-pin: a package name as the body's tool never reaches the resolver
+// red-first-pin: the child's name in input leaves a P step on the parent
+// red-first-pin: the parent's name in input leaves a C step on the child
+// red-first-pin: the child's name in input.input leaves a P step on the parent
+// red-first-pin: the parent's name in input.input leaves a C step on the child
+// red-first-pin: the child's name in an added envelope field leaves a P step on the parent
+// red-first-pin: the parent's name in an added envelope field leaves a C step on the child
+// red-first-pin: a package name as input.name is an undeclared name, on either road
+// red-first-pin: a run package whose registry manifest declares no agent dependency runs a parent step's tool from the exact parent flow
+// red-first-pin: a signed child step asking for the parent's tool is refused although that manifest declares no agent dependency
+// red-first-pin: a step of an inline, unlabelled subflow runs the parent's tool
+// red-first-pin: data payloads carrying an id in the flow do not refuse the parent's own step
+// red-first-pin: a failing flow read answers the fixed 403 without the path or the install id
+// red-first-pin: an unknown throw answers the fixed 500 without its text
 describe("the truth table through the route", () => {
   // The default flow's embedded node names `child_tool`; the two cases after
   // the table use a flow whose embedded node names `both_tool`.
