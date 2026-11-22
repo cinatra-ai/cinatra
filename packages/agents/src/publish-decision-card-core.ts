@@ -7,8 +7,10 @@ import "server-only";
 // from the run's NEWEST decision (the one every resume road reads): parked = pending, released = approved, declined,
 // expired. A decision the run left another way (run_ended) is no card. "May decide" is the SAME check Publish and Do not
 // publish run (enforcePublishDecisionAccess), asked without deciding, so a restricted card and a refused answer cannot
-// disagree. Every refusal and every unreadable record collapses to "none": a caller holding a run id learns nothing
-// about which runs exist, and a card that cannot be read draws nothing rather than half a card.
+// disagree. The site widget's card (publishDecisionCardStateForWidgetRun) asks the same run rights of the widget's reader
+// (widgetReaderMayDecidePublish), whom those two refuse, so its owner is not drawn restricted; it has no decide door yet.
+// Every refusal and every unreadable record collapses to "none": a caller holding a run id learns nothing about which
+// runs exist, and a card that cannot be read draws nothing rather than half a card.
 //
 // Nothing mounts the card yet and no run states the publish moment yet (later parts), so this read is inert.
 // ---------------------------------------------------------------------------
@@ -23,7 +25,7 @@ import {
   publishDecisionCardRows,
   type PublishDecisionCardState,
 } from "./publish-decision-card";
-import { enforcePublishDecisionAccess } from "./publish-decision-actions";
+import { enforcePublishDecisionAccess, widgetReaderMayDecidePublish } from "./publish-decision-actions";
 import { readLatestDecisionForRun } from "./publish-decision-store";
 import { readAgentRunById, readAgentTemplateById, type AgentRunRecord } from "./store";
 
@@ -40,6 +42,33 @@ export type PublishDecisionCardActor = {
 export async function publishDecisionCardStateForRun(
   run: AgentRunRecord,
   who: PublishDecisionCardActor,
+): Promise<PublishDecisionCardState> {
+  return cardStateForRun(run, who, () =>
+    enforcePublishDecisionAccess({ runId: run.id, actorContext: who.actor, roleHints: who.roleHints }).then(
+      () => true,
+      () => false,
+    ),
+  );
+}
+
+/**
+ * The card for a run the SITE WIDGET's broker route already read and bound to its session. The widget door's actor is
+ * a human of source "a2a", which Publish and Do not publish refuse; "may decide" here asks the same run rights for that
+ * reader (widgetReaderMayDecidePublish), so a run owner who holds them is not drawn restricted. It decides nothing.
+ */
+export async function publishDecisionCardStateForWidgetRun(
+  run: AgentRunRecord,
+  who: PublishDecisionCardActor,
+): Promise<PublishDecisionCardState> {
+  return cardStateForRun(run, who, () =>
+    widgetReaderMayDecidePublish({ runId: run.id, actorContext: who.actor, roleHints: who.roleHints }),
+  );
+}
+
+async function cardStateForRun(
+  run: AgentRunRecord,
+  who: PublishDecisionCardActor,
+  readMayDecide: () => Promise<boolean>,
 ): Promise<PublishDecisionCardState> {
   const decision = await readLatestDecisionForRun(run.id).catch(() => null);
   if (!decision || decision.status === "run_ended") return PUBLISH_DECISION_CARD_NONE;
@@ -62,14 +91,7 @@ export async function publishDecisionCardStateForRun(
   };
   switch (decision.status) {
     case "parked": {
-      const mayDecide = await enforcePublishDecisionAccess({
-        runId: run.id,
-        actorContext: who.actor,
-        roleHints: who.roleHints,
-      }).then(
-        () => true,
-        () => false,
-      );
+      const mayDecide = await readMayDecide().catch(() => false);
       return { state: "pending", ...common, mayDecide };
     }
     case "released":

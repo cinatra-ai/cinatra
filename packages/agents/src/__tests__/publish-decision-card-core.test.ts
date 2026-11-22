@@ -20,7 +20,7 @@ vi.mock("../store", () => storeMock);
 const decisions = vi.hoisted(() => ({ readLatestDecisionForRun: vi.fn() }));
 vi.mock("../publish-decision-store", () => decisions);
 
-const access = vi.hoisted(() => ({ enforcePublishDecisionAccess: vi.fn() }));
+const access = vi.hoisted(() => ({ enforcePublishDecisionAccess: vi.fn(), widgetReaderMayDecidePublish: vi.fn() }));
 vi.mock("../publish-decision-actions", () => access);
 
 const names = vi.hoisted(() => ({ readDeciderName: vi.fn() }));
@@ -28,6 +28,7 @@ vi.mock("@/lib/lifecycle/lifecycle-settled-outcome", () => names);
 
 import {
   publishDecisionCardStateForRun,
+  publishDecisionCardStateForWidgetRun,
   resolvePublishDecisionCardStateForActor,
 } from "../publish-decision-card-core";
 
@@ -92,6 +93,21 @@ describe("which card a run shows", () => {
       actorContext: WHO.actor,
       roleHints: WHO.roleHints,
     });
+  });
+
+  it("the site widget's card asks the widget reader's rights, never the decide check", async () => {
+    const widget = { ...WHO, actor: { actorType: "human" as const, source: "a2a" as const, userId: "user-a" } };
+    for (const answer of [true, false]) {
+      access.widgetReaderMayDecidePublish.mockResolvedValueOnce(answer);
+      const state = await publishDecisionCardStateForWidgetRun(RUN as unknown as Run, widget);
+      expect(state).toMatchObject({ state: "pending", mayDecide: answer });
+    }
+    expect(access.widgetReaderMayDecidePublish).toHaveBeenCalledWith({
+      runId: "run-1",
+      actorContext: widget.actor,
+      roleHints: widget.roleHints,
+    });
+    expect(access.enforcePublishDecisionAccess).not.toHaveBeenCalled();
   });
 
   it("a released decision is APPROVED and names the person who decided", async () => {

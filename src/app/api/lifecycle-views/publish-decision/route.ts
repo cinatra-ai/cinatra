@@ -5,7 +5,7 @@ import { z } from "zod";
 import { readAgentRunById } from "@cinatra-ai/agents/store";
 import {
   PUBLISH_DECISION_CARD_NONE,
-  publishDecisionCardStateForRun,
+  publishDecisionCardStateForWidgetRun,
 } from "@cinatra-ai/agents/publish-decision-card-core";
 
 import { WIDGET_PUBLISH_DECISION_READ_GRANT } from "@/lib/lifecycle/widget-lifecycle-actor";
@@ -47,6 +47,7 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   const reader = { actor: who.actor, roleHints: who.roleHints ?? {} };
-  const state = await publishDecisionCardStateForRun(run, reader).catch(() => null);
+  // The widget's own may-decide reading: the run rights of this reader, who is a human of source "a2a" (cinatra#4150).
+  const state = await publishDecisionCardStateForWidgetRun(run, reader).catch(() => null);
   return Response.json(state ?? PUBLISH_DECISION_CARD_NONE, NO_STORE);
 }

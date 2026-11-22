@@ -45,6 +45,7 @@ import {
   declinePublishDecision,
   publishHoldAnswer,
   sweepExpiredPublishDecisions,
+  widgetReaderMayDecidePublish,
 } from "../publish-decision-actions";
 
 const ACTOR = { actorType: "human" as const, source: "ui" as const, userId: "user-a" };
@@ -444,6 +445,44 @@ describe("Do not publish binds every check and the record to one person (finding
     expect(enforceRunAccess).not.toHaveBeenCalled();
     expect(decisions.decide).not.toHaveBeenCalled();
     expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+  });
+});
+
+describe("may the site widget's reader decide (the card's restricted reading only)", () => {
+  // The widget lifecycle door's actor shape (widget-lifecycle-frame-actor.ts).
+  const WIDGET = { actorType: "human" as const, source: "a2a" as const, userId: "user-a", orgId: "org-1" };
+
+  it("the widget reader is asked the SAME run rights and membership, and decides nothing", async () => {
+    expect(await widgetReaderMayDecidePublish({ runId: "run-1", actorContext: WIDGET })).toBe(true);
+    expect(enforceRunAccess.mock.calls.map((c) => (c as unknown[])[2])).toEqual(["execute", "approveHitl"]);
+    expect(resolveOrgRoleForUser).toHaveBeenCalledWith("org-1", "user-a");
+    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+  });
+
+  it("a refused run right, or no role in the run's organization, is false", async () => {
+    enforceRunAccess.mockRejectedValueOnce(new AuthzError({ statusCode: 403, reason: "forbidden" }));
+    expect(await widgetReaderMayDecidePublish({ runId: "run-1", actorContext: WIDGET })).toBe(false);
+    resolveOrgRoleForUser.mockResolvedValueOnce(undefined);
+    expect(await widgetReaderMayDecidePublish({ runId: "run-1", actorContext: WIDGET })).toBe(false);
+  });
+
+  it.each([
+    ["a UI person (not this road)", ACTOR],
+    ["an A2A peer", { actorType: "a2a", source: "a2a", userId: "user-a" }],
+    ["a token-scoped widget actor", { ...WIDGET, tokenScopes: ["run.resume", "run.approveHitl"] }],
+    ["an agent acting for the person", { ...WIDGET, oboCeiling: [{ tier: "organization", id: "org-1" }] }],
+    ["a widget actor with no user id", { actorType: "human", source: "a2a" }],
+    ["no actor context", null],
+  ])("%s is false before anything is read", async (_label, actorContext) => {
+    expect(await widgetReaderMayDecidePublish({ runId: "run-1", actorContext: actorContext as never })).toBe(false);
+    expect(storeMock.readAgentRunById).not.toHaveBeenCalled();
+    expect(enforceRunAccess).not.toHaveBeenCalled();
+  });
+
+  it("Do not publish still refuses the widget reader", async () => {
+    await expect(declinePublishDecision({ runId: "run-1", actorContext: WIDGET })).rejects.toMatchObject({ statusCode: 403 });
+    expect(decisions.decide).not.toHaveBeenCalled();
   });
 });
 

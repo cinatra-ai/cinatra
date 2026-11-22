@@ -5,13 +5,20 @@
 //   - THE BINDING. A run the widget session does not own answers 200 `{ state: "none" }`, the same body as a run
 //     with no decision, and the card is never read.
 //   - THE READ. An owned run's card is read with the actor the door resolved, and answered unchanged.
+//   - MAY DECIDE. The card core and its access check run for real, with the widget door's own actor shape (a human of
+//     source "a2a"): the run's owner who holds the run's rights is not drawn restricted; a reader whose rights in the
+//     run's organization cannot be resolved still is. Only the stores below the check are stubbed.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveWidgetLifecycleActorContext = vi.fn();
 const resolveAssistantWidgetBinding = vi.fn();
 const readAgentRunById = vi.fn();
-const publishDecisionCardStateForRun = vi.fn();
+const readAgentTemplateById = vi.fn();
+const readRunCoOwners = vi.fn();
+const readLatestDecisionForRun = vi.fn();
+const readDeciderName = vi.fn();
+const resolveOrgRoleForUser = vi.fn();
 
 vi.mock("@/lib/lifecycle/widget-lifecycle-actor", async (importOriginal) => ({
   ...((await importOriginal()) as Record<string, unknown>),
@@ -20,13 +27,21 @@ vi.mock("@/lib/lifecycle/widget-lifecycle-actor", async (importOriginal) => ({
 vi.mock("@/lib/assistant-widget-handles", () => ({
   resolveAssistantWidgetBinding: (...a: unknown[]) => resolveAssistantWidgetBinding(...a),
 }));
+// The STORES under the card core, never the core or its access check: the run, its template and co-owners, its newest
+// decision, the decider's name, and the person's role in the run's organization.
 vi.mock("@cinatra-ai/agents/store", () => ({
   readAgentRunById: (...a: unknown[]) => readAgentRunById(...a),
+  readAgentTemplateById: (...a: unknown[]) => readAgentTemplateById(...a),
+  readRunCoOwners: (...a: unknown[]) => readRunCoOwners(...a),
 }));
-// The card core by its file, which the route's package subpath resolves to, so this file also loads before that subpath.
-vi.mock("../../../../../../packages/agents/src/publish-decision-card-core", () => ({
-  PUBLISH_DECISION_CARD_NONE: { state: "none" },
-  publishDecisionCardStateForRun: (...a: unknown[]) => publishDecisionCardStateForRun(...a),
+vi.mock("../../../../../../packages/agents/src/publish-decision-store", () => ({
+  readLatestDecisionForRun: (...a: unknown[]) => readLatestDecisionForRun(...a),
+}));
+vi.mock("@/lib/lifecycle/lifecycle-settled-outcome", () => ({
+  readDeciderName: (...a: unknown[]) => readDeciderName(...a),
+}));
+vi.mock("@/lib/auth-session", () => ({
+  resolveOrgRoleForUser: (...a: unknown[]) => resolveOrgRoleForUser(...a),
 }));
 
 import { WIDGET_PUBLISH_DECISION_READ_GRANT } from "@/lib/lifecycle/widget-lifecycle-actor";
@@ -46,8 +61,16 @@ async function loadRoute(): Promise<void> {
 
 const RUN_ID = "00000000-0000-4000-8000-000000004150";
 const CLAIMS = { userId: "user-widget", orgId: "org-widget", agentSlug: "blog" } as never;
-const ACTOR_CTX = { actor: { userId: "user-widget", orgId: "org-widget" }, roleHints: { orgRole: "member" } };
-const OWN_RUN = { id: RUN_ID, runBy: "user-widget", orgId: "org-widget" };
+// The widget door's actor, in the shape widget-lifecycle-frame-actor.ts assembles it: a human of source "a2a".
+const ACTOR_CTX = {
+  actor: { actorType: "human", source: "a2a", userId: "user-widget", orgId: "org-widget" },
+  orgId: "org-widget",
+  roleHints: { orgRole: "member", platformRole: "member", actorOrganizationId: "org-widget" },
+};
+const OWN_RUN = { id: RUN_ID, templateId: "tmpl-blog", runBy: "user-widget", orgId: "org-widget", authPolicy: null };
+const TEMPLATE = { id: "tmpl-blog", name: "Blog agent", publishRows: { post: [{ label: "Title", input: "title" }] } };
+const PARKED = { id: "d1", runId: RUN_ID, nodeId: "post", status: "parked", surfacedValues: { title: "Spring launch" },
+  decidedBy: null, decisionNote: null };
 const PENDING = {
   state: "pending",
   runId: RUN_ID,
@@ -69,7 +92,11 @@ beforeEach(() => {
   resolveAssistantWidgetBinding.mockReturnValue({ agentSlug: "blog" });
   resolveWidgetLifecycleActorContext.mockResolvedValue({ ok: true, actorCtx: ACTOR_CTX, claims: CLAIMS });
   readAgentRunById.mockResolvedValue(OWN_RUN);
-  publishDecisionCardStateForRun.mockResolvedValue(PENDING);
+  readAgentTemplateById.mockResolvedValue(TEMPLATE);
+  readRunCoOwners.mockResolvedValue([]);
+  readLatestDecisionForRun.mockResolvedValue(PARKED);
+  readDeciderName.mockResolvedValue(null);
+  resolveOrgRoleForUser.mockResolvedValue("member");
 });
 
 describe("the door", () => {
@@ -125,7 +152,7 @@ describe("the binding", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ state: "none" });
     expect(res.headers.get("Cache-Control")).toBe("no-store");
-    expect(publishDecisionCardStateForRun).not.toHaveBeenCalled();
+    expect(readLatestDecisionForRun).not.toHaveBeenCalled();
   });
 
   it("a failed run read answers the same silence", async () => {
@@ -145,17 +172,47 @@ describe("the read", () => {
     expect(res.headers.get("Cache-Control")).toBe("no-store");
     expect(await res.json()).toEqual(PENDING);
     expect(readAgentRunById).toHaveBeenCalledWith(RUN_ID, ACTOR_CTX.actor, ACTOR_CTX.roleHints);
-    expect(publishDecisionCardStateForRun).toHaveBeenCalledWith(OWN_RUN, {
-      actor: ACTOR_CTX.actor,
-      roleHints: ACTOR_CTX.roleHints,
-    });
+    expect(readLatestDecisionForRun).toHaveBeenCalledWith(RUN_ID);
   });
 
   it("a failed card read answers { state: none }, never an error page", async () => {
     await loadRoute();
-    publishDecisionCardStateForRun.mockRejectedValue(new Error("boom"));
+    readLatestDecisionForRun.mockRejectedValue(new Error("boom"));
     const res = await GET(request(RUN_ID));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ state: "none" });
+  });
+});
+
+describe("may decide, for the widget door's own actor (source a2a)", () => {
+  it("the run's owner, a member of the run's organization, is NOT drawn restricted", async () => {
+    await loadRoute();
+    const res = await GET(request(RUN_ID));
+    const body = (await res.json()) as { state: string; mayDecide?: boolean };
+    expect(body.state).toBe("pending");
+    expect(body.mayDecide).toBe(true);
+    expect(resolveOrgRoleForUser).toHaveBeenCalledWith("org-widget", "user-widget");
+  });
+
+  it("a reader with no role in the run's organization is still drawn restricted", async () => {
+    await loadRoute();
+    resolveOrgRoleForUser.mockResolvedValue(undefined);
+    const res = await GET(request(RUN_ID));
+    const body = (await res.json()) as { state: string; mayDecide?: boolean };
+    expect(body.state).toBe("pending");
+    expect(body.mayDecide).toBe(false);
+  });
+
+  it("a token-scoped a2a actor is drawn restricted, whatever its run rights", async () => {
+    await loadRoute();
+    resolveWidgetLifecycleActorContext.mockResolvedValue({
+      ok: true,
+      actorCtx: { ...ACTOR_CTX, actor: { ...ACTOR_CTX.actor, tokenScopes: ["run.resume", "run.approveHitl"] } },
+      claims: CLAIMS,
+    });
+    const res = await GET(request(RUN_ID));
+    const body = (await res.json()) as { state: string; mayDecide?: boolean };
+    expect(body.state).toBe("pending");
+    expect(body.mayDecide).toBe(false);
   });
 });

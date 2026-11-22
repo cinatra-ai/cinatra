@@ -234,6 +234,17 @@ function isPublishDecider(actor: PrimitiveActorContext | null | undefined): acto
     && typeof actor.userId === "string" && actor.userId.length > 0 && !actor.oboCeiling;
 }
 
+/**
+ * The site widget's reader, as the widget lifecycle door builds it (widget-lifecycle-frame-actor.ts): a human actor of
+ * source "a2a", with no token scopes, a user id and no delegated agent ceiling. Admitted ONLY by
+ * widgetReaderMayDecidePublish, which answers a boolean for the card and decides nothing. Publish and Do not publish
+ * still refuse this actor (isPublishDecider); a widget decide door is a later part (cinatra#4758).
+ */
+function isWidgetPublishReader(actor: PrimitiveActorContext | null | undefined): actor is PrimitiveActorContext & { userId: string } {
+  return actor?.actorType === "human" && actor.source === "a2a" && actor.tokenScopes === undefined
+    && typeof actor.userId === "string" && actor.userId.length > 0 && !actor.oboCeiling;
+}
+
 /** A run that is not found, and a run the person may not see (outside its organization), answer the same. */
 const hidden = () => new AuthzError({ statusCode: 404, reason: "hidden", message: "Not found." });
 
@@ -253,6 +264,25 @@ const hidden = () => new AuthzError({ statusCode: 404, reason: "hidden", message
 export async function enforcePublishDecisionAccess(input: DecideInput): Promise<{ run: AgentRunRecord; deciderId: string; authority: OrgWriteAuthority }> {
   const actor = input.actorContext;
   if (!isPublishDecider(actor)) throw forbidden("Only a person can decide a publish.");
+  return enforcePublishDecisionRights(actor, input);
+}
+
+/**
+ * May the site widget's reader decide this publish? READ ONLY, for the card's restricted reading: the widget reader
+ * (isWidgetPublishReader) and then the SAME rights enforcePublishDecisionAccess asks after its person check (run.execute
+ * and run.approveHitl, membership of the run's organization). Any other actor, and any refusal or fault, is false.
+ */
+export async function widgetReaderMayDecidePublish(input: DecideInput): Promise<boolean> {
+  const actor = input.actorContext;
+  if (!isWidgetPublishReader(actor)) return false;
+  return enforcePublishDecisionRights(actor, input).then(() => true, () => false);
+}
+
+/** The rights half of the publish decision's access check, for a person already admitted by the caller. */
+async function enforcePublishDecisionRights(
+  actor: PrimitiveActorContext & { userId: string },
+  input: DecideInput,
+): Promise<{ run: AgentRunRecord; deciderId: string; authority: OrgWriteAuthority }> {
   const deciderId = actor.userId;
   const run = await readAgentRunById(input.runId);
   const { enforceRunAccess, resolveEffectivePolicy } = await import("./auth-policy");
