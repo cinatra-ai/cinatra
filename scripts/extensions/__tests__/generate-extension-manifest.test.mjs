@@ -1482,7 +1482,6 @@ describe("the generated display map imports through package exports, never a hos
       "@cinatra-ai/blog-idea-artifact/src/renderers/detail",
       "@cinatra-ai/blog-idea-artifact/src/renderers/preview",
       "@cinatra-ai/cms-snapshot-artifact/src/renderers/detail",
-      "@cinatra-ai/cms-snapshot-artifact/src/renderers/list-row",
       "@cinatra-ai/cms-snapshot-artifact/src/renderers/preview",
       "@cinatra-ai/podcast-artifacts/src/renderers/detail",
       "@cinatra-ai/podcast-artifacts/src/renderers/list-row",
@@ -1497,6 +1496,11 @@ describe("the generated display map imports through package exports, never a hos
       // order carries no meaning.
       "@cinatra-ai/email-artifacts/src/renderers/detail",
       "@cinatra-ai/email-artifacts/src/renderers/list-row",
+      // The page display of the website pack joins the same road with its first
+      // pin (cinatra#4366): its detail and list-row subpaths stand in the roster
+      // by name.
+      "@cinatra-ai/website-artifacts/src/renderers/detail",
+      "@cinatra-ai/website-artifacts/src/renderers/list-row",
     ];
     expect(aliased).toEqual(ROSTER.filter((s) => emitted.includes(s)).sort());
     // Anti-vacuity: the CMS snapshot + podcast displays are emitted at every pin.

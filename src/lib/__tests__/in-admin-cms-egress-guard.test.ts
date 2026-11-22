@@ -23,8 +23,12 @@
 //   (b) the sanctioned MCP transports are the routing — asserted at the SPECIFIC
 //       handler->governed-invoker edges for WordPress and the MCP-helper edges
 //       for Drupal, not merely file-wide symbol presence. Connector #114
-//       removed WordPress's connector-owned snapshot/review/read-back helpers;
-//       the generic site-tool handler still forwards through the invoker.
+//       removed WordPress's connector-owned snapshot/review/read-back helpers.
+//       Connector #119 split the site tool into the read-only
+//       wordpress_site_tool_call and the new wordpress_site_tool_write; both
+//       handlers forward through the one shared forwardSiteTool, which holds
+//       the governed invoker edge, so the guard asserts both handler edges
+//       and that shared function.
 //
 // It is a pure static/AST-shaped source assertion: hermetic, Docker-free, and
 // runs in the always-on `pnpm test:root` suite (build-image.yml) where
@@ -84,22 +88,55 @@ function callsNamed(node: ts.Node, name: string): ts.CallExpression[] {
   return calls;
 }
 
+// The two hosted site tools that forward a site ability call to the site.
+const SITE_TOOL_HANDLERS = ["wordpress_site_tool_call", "wordpress_site_tool_write"] as const;
+
+function propertyName(node: ts.ObjectLiteralElementLike): string {
+  const name = (node as { name?: ts.PropertyName }).name;
+  return name && (ts.isStringLiteral(name) || ts.isIdentifier(name)) ? name.text : node.getText();
+}
+
 function assertGovernedWordPressRouting(code: string): void {
   const source = ts.createSourceFile("hosted-handlers.ts", code, ts.ScriptTarget.Latest, true);
   const factory = namedFunction(source, "createWordPressPrimitiveHandlers");
   const returned = factory.body!.statements.find(ts.isReturnStatement)?.expression;
   const handlers = returned && ts.isAsExpression(returned) ? returned.expression : returned;
   if (!handlers || !ts.isObjectLiteralExpression(handlers)) throw new Error("Missing hosted handler map");
-  const property = handlers.properties.find(
-    (node): node is ts.PropertyAssignment => ts.isPropertyAssignment(node)
-      && ts.isStringLiteral(node.name) && node.name.text === "wordpress_site_tool_call",
-  );
-  if (!property || !ts.isArrowFunction(property.initializer) || !ts.isBlock(property.initializer.body)) {
-    throw new Error("Missing generic WordPress site-tool handler");
+  // The entries of the handler map whose source names the shared forward or
+  // the invoker are exactly the two site tools: a further entry that names
+  // either one, or a site tool that no longer forwards, fails here.
+  const forwarding = handlers.properties
+    .filter((node) => /\b(?:forwardSiteTool|invokeSiteTool)\b/.test(node.getText()))
+    .map(propertyName)
+    .sort();
+  expect(forwarding).toEqual([...SITE_TOOL_HANDLERS].sort());
+  for (const name of SITE_TOOL_HANDLERS) {
+    const property = handlers.properties.find(
+      (node): node is ts.PropertyAssignment => ts.isPropertyAssignment(node) && propertyName(node) === name,
+    );
+    if (!property || !ts.isArrowFunction(property.initializer)) {
+      throw new Error(`Missing WordPress site-tool handler: ${name}`);
+    }
+    // Each site tool reaches the site only through the shared governed
+    // forward, once, as its result, naming itself as the calling tool (the
+    // name the write-authority record carries).
+    const body = property.initializer.body;
+    const bodyText = body.getText().replace(/\s+/g, "");
+    expect(bodyText).not.toContain("invokeSiteTool");
+    const forwards = callsNamed(body, "forwardSiteTool");
+    expect(forwards).toHaveLength(1);
+    expect(forwards[0] === body || ts.isReturnStatement(forwards[0].parent)).toBe(true);
+    if (ts.isBlock(body)) expect(bodyText).toContain("constinput=siteToolCallSchema.parse(request.input);");
+    expect(forwards[0].arguments.map((arg) => arg.getText().replace(/\s+/g, ""))).toEqual([
+      ts.isBlock(body) ? "input" : "siteToolCallSchema.parse(request.input)",
+      JSON.stringify(name),
+    ]);
   }
-  const handler = property.initializer.body;
+
+  const forward = namedFunction(source, "forwardSiteTool");
+  expect(forward.parameters.map((parameter) => parameter.name.getText())).toEqual(["input", "tool"]);
+  const handler = forward.body!;
   const compact = handler.getText().replace(/\s+/g, "");
-  expect(compact).toContain("constinput=siteToolCallSchema.parse(request.input);");
   expect(compact).toContain("constinvoke=getWordPressDeps().invokeSiteTool;");
   // The unavailable-channel branch must throw; unrelated strings elsewhere
   // in the connector cannot stand in for the actual handler edge.
@@ -113,20 +150,22 @@ function assertGovernedWordPressRouting(code: string): void {
       && node.expression.getText().replace(/\s+/g, "") === "CONTENT_REVIEW_TARGET_ABILITIES.has(input.toolName)",
   );
   expect(updateBranch?.thenStatement.getText().replace(/\s+/g, ""))
-    .toBe("{returncallReviewGatedSiteTool(invoke,input);}");
+    .toBe("{returncallReviewGatedSiteTool(invoke,input,tool);}");
   expect(code).toMatch(/const EWPA_UPDATE_POST_ABILITY\s*=\s*["']ewpa\/update-post["']/);
   expect(code).toMatch(/CONTENT_REVIEW_TARGET_ABILITIES[^;]*new Set\(\[EWPA_UPDATE_POST_ABILITY\]\)/);
   const genericCalls = callsNamed(handler, "invoke");
   expect(genericCalls).toHaveLength(1);
   expect(ts.isReturnStatement(genericCalls[0].parent)).toBe(true);
 
-  const update = namedFunction(source, "callReviewGatedSiteTool").body!;
+  const reviewGated = namedFunction(source, "callReviewGatedSiteTool");
+  expect(reviewGated.parameters[2]?.name.getText()).toBe("tool");
+  const update = reviewGated.body!;
   const updateCalls = callsNamed(update, "invoke");
   expect(updateCalls).toHaveLength(1);
   const authority = callsNamed(update, "requireWriteAuthority");
   expect(authority).toHaveLength(1);
   expect(ts.isAwaitExpression(authority[0].parent)).toBe(true);
-  expect(authority[0].getText()).toBe('requireWriteAuthority(instanceId, "wordpress_site_tool_call")');
+  expect(authority[0].getText()).toBe("requireWriteAuthority(instanceId, tool)");
   expect(authority[0].getStart()).toBeLessThan(updateCalls[0].getStart());
   expect(update.getText()).toMatch(/if\s*\(!instanceId\)\s*\{\s*throw/);
   expect(update.getText()).toMatch(/if\s*\(!Number\.isInteger\(postId\)\s*\|\|\s*postId\s*<=\s*0\)\s*\{\s*throw/);
@@ -140,9 +179,14 @@ function assertGovernedWordPressRouting(code: string): void {
   }
 }
 
-function mutateHandler(code: string, before: string, after: string): string {
-  const start = code.indexOf("export function createWordPressPrimitiveHandlers()");
+const FORWARD_ANCHOR = "async function forwardSiteTool(";
+const HANDLERS_ANCHOR = "export function createWordPressPrimitiveHandlers()";
+
+// Replace the first `before` that follows `anchor` (anchor must occur once).
+function mutateHandler(code: string, anchor: string, before: string, after: string): string {
+  const start = code.indexOf(anchor);
   expect(start).toBeGreaterThanOrEqual(0);
+  expect(code.indexOf(anchor, start + 1)).toBe(-1);
   const handlerSource = code.slice(start);
   expect(handlerSource).toContain(before);
   return code.slice(0, start) + handlerSource.replace(before, after);
@@ -187,28 +231,78 @@ describe("in-admin CMS egress guard — hosted WordPress connector", () => {
   });
 
   it("rejects an ungoverned handler even when the invoker name remains elsewhere", () => {
-    const changed = mutateHandler(code, "const invoke = getWordPressDeps().invokeSiteTool;", "const invoke = ungovernedCall;");
+    const changed = mutateHandler(code, FORWARD_ANCHOR, "const invoke = getWordPressDeps().invokeSiteTool;", "const invoke = ungovernedCall;");
     expect(() => assertGovernedWordPressRouting(changed)).toThrow();
   });
 
   it("rejects a missing-invoker fallback instead of a refusal", () => {
-    const changed = mutateHandler(code, 'if (typeof invoke !== "function")', 'if (typeof invoke === "function")');
+    const changed = mutateHandler(code, FORWARD_ANCHOR, 'if (typeof invoke !== "function")', 'if (typeof invoke === "function")');
     expect(() => assertGovernedWordPressRouting(changed)).toThrow();
   });
 
   it("rejects an update branch that bypasses argument and authority checks", () => {
-    const changed = mutateHandler(code, "return callReviewGatedSiteTool(invoke, input);", "return invoke(input);");
+    const changed = mutateHandler(code, FORWARD_ANCHOR, "return callReviewGatedSiteTool(invoke, input, tool);", "return invoke(input);");
     expect(() => assertGovernedWordPressRouting(changed)).toThrow();
   });
 
   it("rejects an update that forwards before its write-authority gate", () => {
-    const before = 'await requireWriteAuthority(instanceId, "wordpress_site_tool_call");';
+    const before = "await requireWriteAuthority(instanceId, tool);";
     expect(code).toContain(before);
     expect(() => assertGovernedWordPressRouting(code.replace(before, ""))).toThrow();
   });
 
   it("rejects transformed tool arguments on the generic invocation", () => {
-    const changed = mutateHandler(code, "args: input.args,", "args: {},");
+    const changed = mutateHandler(code, FORWARD_ANCHOR, "args: input.args,", "args: {},");
+    expect(() => assertGovernedWordPressRouting(changed)).toThrow();
+  });
+
+  it("rejects a write handler that calls the invoker past the shared governed forward", () => {
+    const changed = mutateHandler(
+      code,
+      HANDLERS_ANCHOR,
+      'forwardSiteTool(siteToolCallSchema.parse(request.input), "wordpress_site_tool_write")',
+      "getWordPressDeps().invokeSiteTool!(siteToolCallSchema.parse(request.input))",
+    );
+    expect(() => assertGovernedWordPressRouting(changed)).toThrow();
+  });
+
+  it("rejects a write handler that forwards through an ungoverned call", () => {
+    const changed = mutateHandler(
+      code,
+      HANDLERS_ANCHOR,
+      'forwardSiteTool(siteToolCallSchema.parse(request.input), "wordpress_site_tool_write")',
+      "ungovernedCall(siteToolCallSchema.parse(request.input))",
+    );
+    expect(() => assertGovernedWordPressRouting(changed)).toThrow();
+  });
+
+  it("rejects a write handler that forwards under the read tool's name", () => {
+    const changed = mutateHandler(
+      code,
+      HANDLERS_ANCHOR,
+      'forwardSiteTool(siteToolCallSchema.parse(request.input), "wordpress_site_tool_write")',
+      'forwardSiteTool(siteToolCallSchema.parse(request.input), "wordpress_site_tool_call")',
+    );
+    expect(() => assertGovernedWordPressRouting(changed)).toThrow();
+  });
+
+  it("rejects a read handler that calls the invoker past the shared governed forward", () => {
+    const changed = mutateHandler(
+      code,
+      HANDLERS_ANCHOR,
+      'return forwardSiteTool(input, "wordpress_site_tool_call");',
+      "return getWordPressDeps().invokeSiteTool!(input);",
+    );
+    expect(() => assertGovernedWordPressRouting(changed)).toThrow();
+  });
+
+  it("rejects a further handler that reaches the invoker", () => {
+    const changed = mutateHandler(
+      code,
+      HANDLERS_ANCHOR,
+      "return {",
+      'return {\n    "wordpress_site_tool_extra": async (request: unknown) => getWordPressDeps().invokeSiteTool!(request),',
+    );
     expect(() => assertGovernedWordPressRouting(changed)).toThrow();
   });
 });

@@ -68,7 +68,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { resumeWayflowUnderPauseClaim, stopRunRespectingPauseClaim } from "../run-resume-under-claim";
 import { readdir, readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { dirname, join, relative, sep } from "node:path";
+import { basename, dirname, join, relative, sep } from "node:path";
 import { resolveDevExtensionSourceRoot } from "../agent-runtime-mount";
 // Agent-source on-disk path resolution + vendor-segment derivation (extracted
 // from this file to stay under the file-size ratchet; cinatra#537 path-safety).
@@ -90,14 +90,13 @@ import { AGENT_TEMPLATE_TYPE_ID } from "../agent-builder-ids";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 import {
   validateOasAgentJson,
-  scanOasForLiteralSecrets,
-  scanOasForUntrustedUrls,
-  scanOasForLlmBridgeWiring,
-  scanOasForLlmMetadata,
-  scanOasForStartNodeInputsWithoutRequired,
   type ReviewFinding,
   detectCredentialPattern,
 } from "../validate-agent-json";
+// agent_source_review's pure deterministic review and triviality predicate,
+// moved unchanged out of this file (file-size ratchet; cinatra#4264 A1b).
+import { runDeterministicReview, isTrivialOas } from "./agent-source-review-checks";
+export { runDeterministicReview };
 import { compileOasAgentJson, injectCinatraLlmIntoApiNodes, normalizeOasJsonForExport } from "../oas-compiler";
 import type { OasCinatraLlm } from "../llm-provider-policy";
 // agent_creation_review primitive (replaces the
@@ -142,6 +141,10 @@ import {
 } from "../scan-package-siblings";
 import { publishAgentPackage, publishAgentPackageFromGitDir } from "../verdaccio/client";
 import { installAgentFromPackage, syncCompiledTemplateToDb } from "../install-from-package";
+import { readStoredRegenerate } from "@/lib/lifecycle/lifecycle-policy";
+import { packageNameFromAgentLayout } from "../retained-regenerate";
+// The atomic source replace of agent_source_compile: one rename inside one directory.
+import { replaceFileInSameDir } from "../exdev-safe-move";
 // WayFlow reload after a successful publish + DB sync.
 import { triggerWayflowReload, type ReloadResult } from "../wayflow-reload-client";
 import {
@@ -3418,108 +3421,6 @@ const ADVISORY_HELPER_SLUGS = [
 ] as const;
 type AdvisoryHelperSlug = (typeof ADVISORY_HELPER_SLUGS)[number];
 
-/**
- * Pure deterministic review: aggregates the three scan functions from
- * validate-agent-json.ts and partitions by severity. All v1 scans emit
- * severity: "blocker", so warnings/suggestions are currently empty for
- * the deterministic surface — future scans may emit other severities.
- *
- *
- * author-controlled allow-list that downgraded `untrusted_external_url`
- * blockers to warnings. Author-supplied OAS metadata MUST NOT be able to
- * defang a security finding — that's a publish-gate bypass. A future
- * server-side allow-list (managed in code or config, not in OAS) is the
- * correct path if specific MCPToolBox URLs need to be permitted.
- *
- * IDEMPOTENCE: pure function over a single parsed OAS. Calling twice on
- * byte-identical input yields byte-identical arrays (no Date.now(), no
- * randomUUID, no side effects).
- */
-export function runDeterministicReview(parsedOas: Record<string, unknown>): {
-  blockers: ReviewFinding[];
-  warnings: ReviewFinding[];
-  suggestions: ReviewFinding[];
-} {
-  const findings: ReviewFinding[] = [
-    ...scanOasForLiteralSecrets(parsedOas),
-    ...scanOasForUntrustedUrls(parsedOas),
-    ...scanOasForLlmBridgeWiring(parsedOas),
-    // review-gate parity for the LLM
-    // metadata scanner. Compile-gate already calls this scanner; without
-    // mirroring it here, `agent_source_review` returns clean and the
-    // immediately-following `agent_source_compile` rejects on the same OAS.
-    ...scanOasForLlmMetadata(parsedOas),
-    // Warning-only HITL scanner: NOT
-    // wired into `validateOasAgentJson()` (hard gate) because some agents
-    // legitimately accept programmatic-only StartNode inputs (orchestrators
-    // wire values via sub-flow DataFlowEdges). Surfacing via
-    // `agent_source_review` so the chat assistant catches the missing-
-    // metadata.cinatra.required pattern that silently dropped the user's
-    // `webpage-image-count` URL prompt.
-    ...scanOasForStartNodeInputsWithoutRequired(parsedOas),
-  ];
-  const blockers: ReviewFinding[] = [];
-  const warnings: ReviewFinding[] = [];
-  const suggestions: ReviewFinding[] = [];
-  for (const f of findings) {
-    if (f.severity === "blocker") blockers.push(f);
-    else if (f.severity === "warning") warnings.push(f);
-    else suggestions.push(f);
-  }
-  return { blockers, warnings, suggestions };
-}
-
-/**
- * Triviality predicate. Trivial OAS skips the agent-planner
- * advisory dispatch.
- *
- * Trivial iff ALL of:
- * - zero InputMessageNode entries (no HITL)
- * - zero FlowNode entries (no subflow)
- * - zero A2AAgent entries (no peer agent invocation)
- * - zero MCPToolBox entries with a non-cinatra id/name (no external MCP)
- * - at most ONE executable step (AgentNode-backed-by-Agent OR ApiNode).
- *   OutputMessageNode does NOT count toward this quota — it is structural.
- */
-function isTrivialOas(parsedOas: Record<string, unknown>): boolean {
-  const refs = parsedOas["$referenced_components"];
-  if (!refs || typeof refs !== "object") {
-    // No referenced components — degenerate / minimal. Treat as trivial.
-    return true;
-  }
-  let executableSteps = 0;
-  for (const value of Object.values(refs as Record<string, unknown>)) {
-    if (!value || typeof value !== "object") continue;
-    const entry = value as Record<string, unknown>;
-    const type = entry["component_type"];
-    if (typeof type !== "string") continue;
-    if (type === "InputMessageNode") return false;
-    if (type === "FlowNode") return false;
-    if (type === "A2AAgent") return false;
-    if (type === "MCPToolBox") {
-      // External iff neither id nor name starts with "cinatra-". The internal
-      // cinatra-mcp toolbox is the only one that is always-trivial.
-      const id = typeof entry["id"] === "string" ? (entry["id"] as string) : "";
-      const name =
-        typeof entry["name"] === "string" ? (entry["name"] as string) : "";
-      const isCinatraInternal =
-        id.startsWith("cinatra-") || name.startsWith("cinatra-");
-      if (!isCinatraInternal) return false;
-    }
-    if (type === "AgentNode") {
-      // AgentNode is only executable when it has an embedded Agent (with
-      // system_prompt etc.) — the test fixture binds it via
-      // { agent: { $component_ref: "inner_agent" } }. Count any
-      // AgentNode that carries an `agent` field as an executable LLM step.
-      if (entry["agent"]) executableSteps += 1;
-    }
-    if (type === "ApiNode") {
-      executableSteps += 1;
-    }
-  }
-  return executableSteps <= 1;
-}
-
 async function handleAgentSourceReview(
   request: PrimitiveRequest<{
     packageSlug?: string;
@@ -3841,24 +3742,129 @@ async function handleAgentBuilderGitCompileAndWrite(
   // Resolve packageName from the sibling package.json so the compiler can find it.
   let agentPackageName: string = packageSlug;
   let agentPackageVersion: string | null = null;
+  // cinatra#4264 A1b (reviews 1 and 2): the manifest snapshot read here. The
+  // compile's own sibling read must agree with it, and the file must still hold
+  // these exact bytes after the compile (checked below).
+  let manifestRead = false;
+  let manifestName: string | null = null;
+  let manifestLifecycle: unknown = undefined;
+  let pkgRaw: string | null = null;
   // probe new canonical, then legacy via resolveAgentRootDirForRead.
   const agentRootForCompile = resolveAgentRootDirForRead(packageSlug);
   if (agentRootForCompile) {
+    // One that EXISTS but cannot be read or parsed refuses (cinatra#4264 A1b,
+    // review 1), the same rule as the git-file loader's unreadable-sibling
+    // refusal. An ABSENT one, or one without a name, resolves the package
+    // name below (review 2), never the bare slug.
     try {
-      const pkgRaw = await readFile(join(agentRootForCompile, "package.json"), "utf8");
-      const pkg = JSON.parse(pkgRaw as string) as { name?: string; version?: string };
-      if (pkg.name) agentPackageName = pkg.name;
-      if (pkg.version) agentPackageVersion = pkg.version;
-    } catch {
-      /* use slug fallback */
+      pkgRaw = (await readFile(join(agentRootForCompile, "package.json"), "utf8")) as string;
+    } catch (err) {
+      if ((err as { code?: unknown })?.code !== "ENOENT") {
+        const message = err instanceof Error ? err.message : String(err);
+        return { error: `agent.json could not be compiled: the package.json beside ${resolved.relPath} could not be read (${message})` };
+      }
+    }
+    if (pkgRaw !== null) {
+      let pkg: unknown;
+      try {
+        pkg = JSON.parse(pkgRaw);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { error: `agent.json could not be compiled: the package.json beside ${resolved.relPath} is not valid JSON (${message})` };
+      }
+      if (!pkg || typeof pkg !== "object" || Array.isArray(pkg)) {
+        return { error: `agent.json could not be compiled: the package.json beside ${resolved.relPath} is not a JSON object` };
+      }
+      manifestRead = true;
+      const { name, version, cinatra } = pkg as { name?: unknown; version?: unknown; cinatra?: unknown };
+      if (typeof name === "string" && name) manifestName = name;
+      if (typeof version === "string" && version) agentPackageVersion = version;
+      manifestLifecycle =
+        cinatra && typeof cinatra === "object" ? (cinatra as { lifecycle?: unknown }).lifecycle : undefined;
     }
   }
+  // cinatra#4264 A1b (review 2): the package name, in the order the git-file
+  // loader uses: the manifest's name, else the OAS's own
+  // `metadata.cinatra.packageName`, else the name the on-disk layout gives
+  // (`@<vendor>/<slug>`, as the runtime mounts it). The bare slug, which
+  // names no scoped row, is the last resort only.
+  {
+    const oasName = (agentContent.metadata as { cinatra?: { packageName?: unknown } } | undefined)?.cinatra
+      ?.packageName;
+    agentPackageName =
+      manifestName ??
+      (typeof oasName === "string" && oasName ? oasName : null) ??
+      packageNameFromAgentLayout(oasSourcePath) ??
+      packageSlug;
+  }
 
-  const compileResult = await compileOasAgentJson({ packageName: agentPackageName });
+  // cinatra#4264 A1b: the stored `regenerate` list rides the compile as
+  // `retainedRegenerate`. With no readable sibling manifest the compile checks
+  // it against THIS flow and refuses before the source file below is written;
+  // a readable manifest decides on its own. A failed row read refuses too: a
+  // stored list that cannot be read cannot be checked.
+  let retainedRegenerate: unknown;
+  try {
+    const stored = await readAgentTemplateByPackageName(agentPackageName);
+    retainedRegenerate = readStoredRegenerate(stored?.lifecycleConfig);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { error: `agent.json could not be compiled: the stored lifecycle declaration could not be read (${message})` };
+  }
+
+  const compileResult = await compileOasAgentJson({
+    packageName: agentPackageName,
+    // The file resolved and read above, never a second resolution by name.
+    oasSourcePath,
+    retainedRegenerate,
+    reportSiblingLifecycle: true,
+  });
   if (!compileResult.ok) {
     return { error: `agent.json could not be compiled: ${compileResult.error}` };
   }
   const compiled = compileResult.value;
+
+  // cinatra#4264 A1b (review 1): ONE snapshot. The row read above, the bytes
+  // the compile checked, its sibling reading and the bytes written below must
+  // all be the same package state. A compile that read a different manifest
+  // (none where this handler read one, or one naming another package), or a
+  // source file changed by another writer during the compile, refuses before
+  // the row or the file is written; the caller runs the compile again.
+  const reading = compileResult.siblingLifecycle;
+  const changedWhileCompiling =
+    "agent.json could not be compiled: the package changed while it was being compiled; run agent_source_compile again";
+  if (
+    !reading ||
+    reading.readable !== manifestRead ||
+    (manifestRead && (compiled.packageName ?? null) !== manifestName) ||
+    (reading.readable && JSON.stringify(reading.lifecycle) !== JSON.stringify(manifestLifecycle))
+  ) {
+    return { error: `${changedWhileCompiling} (its package.json reading differs)` };
+  }
+  // The WHOLE manifest snapshot (version and lifecycle bytes included): the
+  // package.json must still hold the exact bytes read above.
+  if (agentRootForCompile) {
+    let pkgRawAfter: string | null = null;
+    try {
+      pkgRawAfter = (await readFile(join(agentRootForCompile, "package.json"), "utf8")) as string;
+    } catch (err) {
+      if ((err as { code?: unknown })?.code !== "ENOENT") {
+        return { error: `${changedWhileCompiling} (its package.json could not be read again)` };
+      }
+    }
+    if (pkgRawAfter !== pkgRaw) {
+      return { error: `${changedWhileCompiling} (its package.json was rewritten)` };
+    }
+  }
+  let rawAfterCompile: string;
+  try {
+    rawAfterCompile = (await readFile(oasSourcePath, "utf8")) as string;
+  } catch {
+    return { error: `${changedWhileCompiling} (${resolved.relPath} could not be read again)` };
+  }
+  if (rawAfterCompile !== raw) {
+    return { error: `${changedWhileCompiling} (${resolved.relPath} was rewritten)` };
+  }
 
   // fan `metadata.cinatra.llm` out to every
   // `/api/llm-bridge` ApiNode in `agentContent` (top-level + every FlowNode-
@@ -3874,13 +3880,37 @@ async function handleAgentBuilderGitCompileAndWrite(
     injectCinatraLlmIntoApiNodes(agentContent, llmMetadata);
   }
 
+  // cinatra#4264 A1b (review 1): re-project the compiled result onto the
+  // agent_templates row BEFORE the source write, and refuse when that fails.
+  // The lifecycle column carries the regenerate guarantee, so a failed write
+  // must never be reported as a successful recompile; and a failed source
+  // write after it leaves the row consistent, because the file still holds
+  // the flow this compile checked (the write-back only adds `cinatra_llm`).
+  // The version-pairing rule this write encodes lives with it, in
+  // ../install-from-package (cinatra#3208 ratchets: off the route graph).
+  try {
+    await syncCompiledTemplateToDb(agentPackageName, agentPackageVersion, compiled, reading);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { error: `agent.json was compiled, but the template row could not be updated (${message}); the source file was not written` };
+  }
+
   // The agent.json on disk is already canonical OAS; the write-back persists
   // the  `cinatra_llm` injection above when the OAS declares the
   // policy block. Pre- OAS files round-trip byte-for-byte.
   const updatedRaw = JSON.stringify(agentContent, null, 2);
+  // cinatra#4264 A1b (review 2): written ATOMICALLY, after the row: a temp file
+  // in the same directory, then a rename over the source. A failure (ENOSPC,
+  // EIO, ...) leaves the previous file whole, which holds the flow the row now
+  // describes, never a torn or empty source beside the updated row. The
+  // rename is replaceFileInSameDir: both names are in one directory, so it
+  // cannot cross a filesystem (exdev-rename gate).
+  const tmpSourcePath = join(dirname(oasSourcePath), `.${basename(oasSourcePath)}.${randomUUID()}.tmp`);
   try {
-    await writeFile(oasSourcePath, updatedRaw, "utf8");
+    await writeFile(tmpSourcePath, updatedRaw, "utf8");
+    await replaceFileInSameDir(tmpSourcePath, oasSourcePath);
   } catch (err) {
+    await rm(tmpSourcePath, { force: true }).catch(() => {});
     const message = err instanceof Error ? err.message : String(err);
     return { error: `Failed to write updated agent.json: ${message}` };
   }
@@ -3888,11 +3918,6 @@ async function handleAgentBuilderGitCompileAndWrite(
   // Register agent skills in the skills catalog so they are discoverable via skill_ids.
   const registeredSkillIds: string[] = [];
   try {
-    // Re-project the compiled result onto the agent_templates row. The
-    // version-pairing rule this write encodes lives with it, in
-    // ../install-from-package (cinatra#3208 ratchets: off the route graph).
-    await syncCompiledTemplateToDb(agentPackageName, agentPackageVersion, compiled);
-
     // skills dir lives next to the agent root (handles both new
     // canonical and legacy layouts via resolveAgentRootDirForRead).
     const agentRootForSkills = resolveAgentRootDirForRead(packageSlug);

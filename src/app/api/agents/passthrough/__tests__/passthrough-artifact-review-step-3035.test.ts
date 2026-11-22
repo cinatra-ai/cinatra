@@ -62,6 +62,15 @@ vi.mock("@/lib/artifact-image-tool", () => ({
   generateArtifactImage: h.generateArtifactImage,
 }));
 
+// cinatra#3745: every passthrough call first prepares its arguments against the
+// run's verified executing source and the step's declared tools (pinned in
+// src/app/api/agents/passthrough/__tests__/passthrough-verified-step.test.ts and
+// passthrough-refusal-map-3745.test.ts). Here that check admits the call and
+// hands the tool its input unchanged.
+vi.mock("@/lib/extension-host-context", () => ({
+  prepareDeclaredRunToolArguments: async (_tool: string, input: unknown) => input,
+}));
+
 import { POST } from "@/app/api/agents/passthrough/route";
 
 const ATTEST_KEY = "step-attest-key-under-test";
@@ -185,5 +194,6 @@ afterAll(() => {
   vi.doUnmock("@/lib/primitive-handlers");
   vi.doUnmock("@/lib/artifacts/run-artifact-materializer");
   vi.doUnmock("@/lib/artifact-image-tool");
+  vi.doUnmock("@/lib/extension-host-context");
   vi.resetModules();
 });

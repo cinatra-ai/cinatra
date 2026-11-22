@@ -106,7 +106,7 @@ beforeEach(async () => {
   sendTaskSpy.mockReset();
   sendTaskSpy.mockImplementation(async () => ({ id: "wf-task", status: { state: "completed" } }));
   handleWayflowTaskStateSpy.mockReset();
-  handleWayflowTaskStateSpy.mockImplementation(async () => undefined);
+  pauseAgainOnResume();
   // cinatra#4312 (review 8, finding 4) — each case judges only its own run. The file
   // shares one database, and an intent an earlier case left pending (a carrier among
   // them) would be sent by a later case's sweep. So every run an earlier case left
@@ -265,15 +265,41 @@ function expectResumedWith(p: Pipeline, text: string) {
   expect(sent[0].message.parts[0].text).toBe(text);
   const handled = handleWayflowTaskStateSpy.mock.calls.filter((c) => (c[0] as { runId: string }).runId === p.runId);
   expect(handled).toHaveLength(1);
-  expect(handled[0][0]).toMatchObject({ runId: p.runId, fromStatus: "pending_approval" });
+  // cinatra#3745: the delivery claims the run (pending_approval -> running) before it
+  // sends, so the handler lands the answer from `running`.
+  expect(handled[0][0]).toMatchObject({ runId: p.runId, fromStatus: "running" });
+}
+
+/** cinatra#3745: the stand-in every case starts with. The delivery holds the run
+ * `running` when it calls the replaced task-state handler, and the handler decides
+ * where the run goes from there. This one pauses the run again on the same base task
+ * id: it writes what the status compare-and-set writes on an entry into
+ * `pending_approval` (the pause claim cleared, the pause generation raised by one). A
+ * later intent of that pause then claims the run again and sends. */
+function pauseAgainOnResume() {
+  handleWayflowTaskStateSpy.mockImplementation(async (args: unknown) => {
+    await pool(
+      `UPDATE "${q(TEST_SCHEMA)}"."agent_runs"
+          SET status='pending_approval', pause_generation = pause_generation + 1,
+              pause_claim_token = NULL, pause_claim_phase = NULL, pause_claim_expires_at = NULL
+        WHERE id=$1 AND status='running'`,
+      [(args as { runId: string }).runId],
+    );
+  });
 }
 
 /** cinatra#4312 — a resume moves the run off its pause, as the replaced task-state
- * handler does: later intents of that pause then find it advanced and send nothing. */
+ * handler does: later intents of that pause then find it advanced and send nothing.
+ * cinatra#3745: the delivery holds the run `running` when the handler is called, and a
+ * later intent that finds the run `running` waits for its driver. So the stand-in ends
+ * the run, as the handler does on the completed task the resume returns here: a later
+ * intent then reads a run that left the gate and is closed without a send. */
 function advanceRunsOnResume() {
   handleWayflowTaskStateSpy.mockImplementation(async (args: unknown) => {
     await pool(
-      `UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET status='running' WHERE id=$1 AND status='pending_approval'`,
+      `UPDATE "${q(TEST_SCHEMA)}"."agent_runs"
+          SET status='completed', pause_claim_token = NULL, pause_claim_phase = NULL, pause_claim_expires_at = NULL
+        WHERE id=$1 AND status='running'`,
       [(args as { runId: string }).runId],
     );
   });
@@ -669,7 +695,7 @@ describe.skipIf(!HAS_DB)("cinatra#4476 — state 1: the upgrade re-arms the newe
   it("ONCE, EVER: after the re-armed intent is delivered and the run pauses again on the same base task id, and after the row is dead-lettered again, no later pass writes for that pause", async () => {
     const { p, pictureText, pictureGateId } = await mainExhaustedPause();
     await upgradeNow();
-    await sweep(); // handler mocked: the run stays pending_approval, as on a same-base pause
+    await sweep(); // the handler's stand-in pauses the run again on the same base task id
     expect(resumesOf(p)).toHaveLength(1);
     expect(resumesOf(p)[0].message.parts[0].text).toBe(pictureText);
     expect(await runStatus(p.runId)).toBe("pending_approval");
@@ -1032,7 +1058,7 @@ describe.skipIf(!HAS_DB)("cinatra#4476 — state 2: an old writer's attempt on t
     const reopen = await oldWritersNoteOnTheReopenSlot(pressed.repairId, successor, p.runId, "escalated");
     await nameWrittenBeforeTheFix(successor.gateId, reopen);
     await upgradeNow();
-    await sweep(); // handler mocked: the run stays pending_approval
+    await sweep(); // the handler's stand-in pauses the run again on the same base task id
     expect(resumesOf(p)).toHaveLength(1);
     expect(resumesOf(p)[0].message.parts[0].text).toBe(postText);
     const intentsAfter = await intentsOfRun(p.runId);
@@ -1187,7 +1213,7 @@ describe.skipIf(!HAS_DB)("cinatra#4476 — state 2: an old writer's attempt on t
     const postText = await approve(p.runId, p.step);
     await upgradeNow();
     // The post's intent is live, so the recovery passes the pause over and the claim sends
-    // it (handler mocked: the run stays pending_approval, as on a same-base pause).
+    // it (the handler's stand-in pauses the run again on the same base task id).
     expect((await sweep()).failed).toBe(0);
     expect(resumesOf(p)).toHaveLength(1);
     expect(resumesOf(p)[0].message.parts[0].text).toBe(postText);
@@ -1532,7 +1558,7 @@ describe.skipIf(!HAS_DB)("cinatra#4476 — what the recovery leaves alone, and w
     const p = await pausedPipeline(false);
     const pictureGateId = await escalatedOn(p, p.leg2, p.picture); // closes at once; the post is pending, nothing carried
     const postText = await approve(p.runId, p.step);
-    await sweep(); // handler mocked: the run stays pending_approval, as on a same-base pause
+    await sweep(); // the handler's stand-in pauses the run again on the same base task id
     expect(resumesOf(p)).toHaveLength(1);
     expect(resumesOf(p)[0].message.parts[0].text).toBe(postText);
     expect(await intentOf(pictureGateId)).toBeUndefined();

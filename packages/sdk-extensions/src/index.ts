@@ -871,3 +871,28 @@ export type {
   DeclaredIndexDeclaration,
   DeclaredTableDeclaration,
 } from "./manifest";
+
+/** Plain JSON of a run's tool-call arguments as the host copies them (cinatra#3745): no accessor, no prototype, no cycle. */
+export type ActionJson = null | boolean | number | string | readonly ActionJson[] |
+  { readonly [key: string]: ActionJson };
+
+/** Structural carrier only (cinatra#3745): the parser checks the shape and grants nothing; a later part proves the values. */
+export type VerifiedExecutedRunSource = {
+  readonly contextId: string; readonly stepId: string; readonly executionAttemptId: string;
+  readonly sourceSha256: string; readonly executedSourceSha256: string;
+  readonly declarationSourceSha256: string;
+};
+export function parseVerifiedExecutedRunSource(value: unknown): VerifiedExecutedRunSource | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const keys = ["contextId", "stepId", "executionAttemptId", "sourceSha256", "executedSourceSha256", "declarationSourceSha256"];
+  if (Reflect.ownKeys(value).length !== keys.length) return null;
+  const v: Record<string, string> = {};
+  for (const key of keys) {
+    const d = Object.getOwnPropertyDescriptor(value, key);
+    if (!d || !("value" in d) || typeof d.value !== "string" || !d.value ||
+        d.value.length > 512 || /[\r\n]/.test(d.value)) return null;
+    v[key] = d.value;
+  }
+  for (const key of keys.slice(3)) if (!/^[a-f0-9]{64}$/.test(v[key]!)) return null;
+  return Object.freeze(v) as unknown as VerifiedExecutedRunSource;
+}

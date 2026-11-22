@@ -864,15 +864,46 @@ export function serializeLifecycleConfig(
   if (lifecycle.repairFindingsInput) {
     ordered.repairFindingsInput = { input: lifecycle.repairFindingsInput.input };
   }
-  // cinatra#4264 A1a: `regenerate` is NOT written. A later recompile (MCP
-  // recompile, ensure drift) cannot yet revalidate a stored list against a new
-  // flow or clear it when the manifest drops it, so a stored list could outlive
-  // its declaration. A1b writes it together with that revalidation.
+  // cinatra#4264: the regenerate list, sorted by `artifactNode` in code-unit
+  // order, each entry's members in a fixed order. Every writer road either
+  // re-projects it from a readable manifest or, with none, revalidates the
+  // stored list against the new flow before it writes (A1b).
+  if (lifecycle.regenerate && lifecycle.regenerate.length > 0) {
+    ordered.regenerate = [...lifecycle.regenerate]
+      .sort((a, b) => (a.artifactNode < b.artifactNode ? -1 : a.artifactNode > b.artifactNode ? 1 : 0))
+      .map((e) => ({ artifactNode: e.artifactNode, step: e.step, noteInput: e.noteInput }));
+  }
   if (lifecycle.requestedSkips && lifecycle.requestedSkips.length > 0) {
     ordered.requestedSkips = [...lifecycle.requestedSkips];
   }
   if (Object.keys(ordered).length === 0) return null;
   return JSON.stringify(ordered);
+}
+
+/** The RAW `regenerate` value of a stored `lifecycle_config` text, or undefined
+ * when the column is NULL or the text carries no such key (cinatra#4264). Raw on
+ * purpose: a writer that keeps the stored column (no readable manifest) hands
+ * this value to the regenerate check against the new flow, so a stored list
+ * the normalizer would drop is refused there, never silently kept.
+ *
+ * THROWS on text it cannot read (empty, unparseable, or not a JSON object):
+ * such text may have carried a list, so reading it as "no list" would let a
+ * writer keep it unchecked. Every writer refuses on this throw, as on a failed
+ * row read. The column is JSON text or NULL; an empty text is not "NULL". */
+export function readStoredRegenerate(raw: string | null | undefined): unknown {
+  if (raw === null || raw === undefined) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      `the stored lifecycle declaration cannot be read (${err instanceof Error ? err.message : String(err)})`,
+    );
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("the stored lifecycle declaration cannot be read (it is not a JSON object)");
+  }
+  return (parsed as Record<string, unknown>).regenerate;
 }
 
 /** Parse the persisted JSON-as-text back into the compiled declaration

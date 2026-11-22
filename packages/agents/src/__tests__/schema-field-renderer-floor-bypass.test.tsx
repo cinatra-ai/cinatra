@@ -20,8 +20,18 @@
  * (empty) + overridden per-test, so the suite runs in a partial worktree and CI.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { ComponentType } from "react";
-import { render, cleanup, waitFor } from "@testing-library/react";
+import {
+  Component,
+  startTransition,
+  use,
+  useEffect,
+  useLayoutEffect,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from "react";
+import { act, render, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { Button } from "@/components/ui/button";
 import {
   fieldRendererRegistry,
   type FieldRendererProps,
@@ -144,5 +154,273 @@ describe("SchemaOnlyFloorRenderer — true registry-bypass floor (no heuristic r
     // The bypass floor never consulted the registry, so it could not re-resolve
     // the gmail-sender heuristic and recurse into the wrapper.
     expect(resolveSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("ExtensionFieldRenderer — a crash keeps the component's validity report, and closes its road (cinatra#3562)", () => {
+  const BINDING_ID = "@cinatra-test/pack-agent:ticking";
+
+  /** Reports nothing ticked, and throws while rendering once "Break" is pressed. */
+  function ReportsThenThrows({ onValidityChange }: FieldRendererProps) {
+    const [broken, setBroken] = useState(false);
+    useEffect(() => {
+      onValidityChange?.(false);
+    }, [onValidityChange]);
+    if (broken) throw new Error("render crash");
+    return (
+      <Button type="button" onClick={() => setBroken(true)}>
+        Break
+      </Button>
+    );
+  }
+
+  /**
+   * Reports `initial`, keeps a handle through which a report can still be made
+   * after it has crashed (a callback it scheduled), and throws once "Break" is
+   * pressed.
+   */
+  const late: { report: ((valid: boolean) => void) | null } = { report: null };
+  function ReportsLateAfterCrash({
+    onValidityChange,
+    initial,
+  }: FieldRendererProps & { initial: boolean }) {
+    const [broken, setBroken] = useState(false);
+    useEffect(() => {
+      onValidityChange?.(initial);
+    }, [onValidityChange, initial]);
+    if (broken) throw new Error("render crash");
+    return (
+      <Button
+        type="button"
+        onClick={() => {
+          late.report = (valid) => onValidityChange?.(valid);
+          setBroken(true);
+        }}
+      >
+        Break
+      </Button>
+    );
+  }
+
+  function mapTo(component: ComponentType<FieldRendererProps>) {
+    __setFieldRendererComponentMapForTests({
+      [BINDING_ID]: {
+        resolution: "guardedOptional",
+        packageName: "@cinatra-test/pack-agent",
+        propsApiVersion: 1,
+        load: async () => ({ default: component }),
+      },
+    });
+  }
+
+  it("keeps the false report of a component that crashes into the floor: no report of its own is made for it", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mapTo(ReportsThenThrows);
+    const Wrapper = makeExtensionFieldRenderer(BINDING_ID);
+    const onValidityChange = vi.fn();
+    const view = render(
+      <Wrapper
+        {...senderProps()}
+        fieldName="accountScope"
+        context={{ connectedApps: [] } as unknown as FieldRendererProps["context"]}
+        onValidityChange={onValidityChange}
+      />,
+    );
+
+    await view.findByRole("button", { name: "Break" });
+    await waitFor(() => expect(onValidityChange).toHaveBeenLastCalledWith(false));
+    fireEvent.click(view.getByRole("button", { name: "Break" }));
+
+    await waitFor(() => expect(view.container.querySelector("#field-accountScope")).toBeTruthy());
+    expect(view.queryByRole("button", { name: "Break" })).toBeNull();
+    // Fail-closed: the crash reports nothing, so the component's `false` stands.
+    expect(onValidityChange).toHaveBeenLastCalledWith(false);
+    expect(onValidityChange).not.toHaveBeenCalledWith(true);
+  });
+
+  for (const [first, after] of [
+    [false, true],
+    [false, false],
+    [true, false],
+  ] as const) {
+    it(`a component that reported ${first} and crashed: its later ${after} report changes nothing`, async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      late.report = null;
+      const Reporting = (props: FieldRendererProps) => (
+        <ReportsLateAfterCrash {...props} initial={first} />
+      );
+      mapTo(Reporting);
+      const Wrapper = makeExtensionFieldRenderer(BINDING_ID);
+      const onValidityChange = vi.fn();
+      const view = render(
+        <Wrapper
+          {...senderProps()}
+          fieldName="accountScope"
+          context={{ connectedApps: [] } as unknown as FieldRendererProps["context"]}
+          onValidityChange={onValidityChange}
+        />,
+      );
+
+      await view.findByRole("button", { name: "Break" });
+      await waitFor(() => expect(onValidityChange).toHaveBeenLastCalledWith(first));
+      fireEvent.click(view.getByRole("button", { name: "Break" }));
+      await waitFor(() => expect(view.container.querySelector("#field-accountScope")).toBeTruthy());
+      const madeBeforeAndAtTheCrash = onValidityChange.mock.calls.length;
+      expect(onValidityChange.mock.calls.every(([valid]) => valid === first)).toBe(true);
+
+      expect(late.report).not.toBeNull();
+      act(() => late.report!(after));
+      expect(onValidityChange).toHaveBeenCalledTimes(madeBeforeAndAtTheCrash);
+      expect(onValidityChange).toHaveBeenLastCalledWith(first);
+    });
+  }
+
+  /**
+   * Reports nothing ticked when it is drawn, and `true` from the cleanup of
+   * that layout effect, which runs while the crashed component is removed, in
+   * the same commit that draws the floor and before `componentDidCatch`.
+   */
+  function ReportsTrueWhileRemoved({ onValidityChange }: FieldRendererProps) {
+    const [broken, setBroken] = useState(false);
+    useLayoutEffect(() => {
+      onValidityChange?.(false);
+      return () => onValidityChange?.(true);
+    }, [onValidityChange]);
+    if (broken) throw new Error("render crash");
+    return (
+      <Button type="button" onClick={() => setBroken(true)}>
+        Break
+      </Button>
+    );
+  }
+
+  it("drops a report the crashed component makes while it is removed (a layout-effect cleanup)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mapTo(ReportsTrueWhileRemoved);
+    const Wrapper = makeExtensionFieldRenderer(BINDING_ID);
+    const onValidityChange = vi.fn();
+    const view = render(
+      <Wrapper
+        {...senderProps()}
+        fieldName="accountScope"
+        context={{ connectedApps: [] } as unknown as FieldRendererProps["context"]}
+        onValidityChange={onValidityChange}
+      />,
+    );
+
+    await view.findByRole("button", { name: "Break" });
+    await waitFor(() => expect(onValidityChange).toHaveBeenLastCalledWith(false));
+    fireEvent.click(view.getByRole("button", { name: "Break" }));
+    await waitFor(() => expect(view.container.querySelector("#field-accountScope")).toBeTruthy());
+
+    expect(onValidityChange).not.toHaveBeenCalledWith(true);
+    expect(onValidityChange).toHaveBeenLastCalledWith(false);
+  });
+
+  /**
+   * Reports `true` when it is drawn and `false` when "Untick" is pressed, and
+   * throws while rendering the value "crash".
+   */
+  function ThrowsOnCrashValue({ value, onValidityChange }: FieldRendererProps) {
+    useEffect(() => {
+      onValidityChange?.(true);
+    }, [onValidityChange]);
+    if (value === "crash") throw new Error("render crash");
+    return (
+      <Button type="button" onClick={() => onValidityChange?.(false)}>
+        Untick
+      </Button>
+    );
+  }
+
+  /** Data that never comes: a render that reads it is never committed. */
+  const neverSettles = new Promise<never>(() => {});
+  function WaitsForever({ when }: { when: boolean }) {
+    if (when) use(neverSettles);
+    return null;
+  }
+
+  it("a crash in a render that React throws away closes nothing: the drawn component's later report counts", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mapTo(ThrowsOnCrashValue);
+    const Wrapper = makeExtensionFieldRenderer(BINDING_ID);
+    const onValidityChange = vi.fn();
+    function Screen() {
+      const [thrownAway, setThrownAway] = useState(false);
+      return (
+        <>
+          <Button type="button" onClick={() => startTransition(() => setThrownAway(true))}>
+            Throw away
+          </Button>
+          <Wrapper
+            {...senderProps()}
+            fieldName="accountScope"
+            value={thrownAway ? "crash" : "fine"}
+            context={{ connectedApps: [] } as unknown as FieldRendererProps["context"]}
+            onValidityChange={onValidityChange}
+          />
+          <WaitsForever when={thrownAway} />
+        </>
+      );
+    }
+    const view = render(<Screen />);
+
+    await view.findByRole("button", { name: "Untick" });
+    await waitFor(() => expect(onValidityChange).toHaveBeenLastCalledWith(true));
+
+    // A transition renders the crash (the boundary draws the floor in that
+    // render), then waits for data that never comes, so React keeps the drawn
+    // screen and never commits that render.
+    await act(async () => {
+      fireEvent.click(view.getByRole("button", { name: "Throw away" }));
+    });
+    expect(view.getByRole("button", { name: "Untick" })).toBeTruthy();
+    expect(view.container.querySelector("#field-accountScope")).toBeNull();
+
+    // The component that is still drawn reports, and its report reaches the host.
+    fireEvent.click(view.getByRole("button", { name: "Untick" }));
+    expect(onValidityChange).toHaveBeenLastCalledWith(false);
+  });
+
+  /** Draws what the wrapper lets escape, so a throw past the wrapper is read here. */
+  class EscapeCatcher extends Component<{ children?: ReactNode }, { escaped: boolean }> {
+    state = { escaped: false };
+
+    static getDerivedStateFromError(): { escaped: boolean } {
+      return { escaped: true };
+    }
+
+    render(): ReactNode {
+      return this.state.escaped ? <p>escaped the wrapper</p> : this.props.children;
+    }
+  }
+
+  it("still draws the floor when the caller passes no onValidityChange", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    __setFieldRendererComponentMapForTests({
+      [BINDING_ID]: {
+        resolution: "guardedOptional",
+        packageName: "@cinatra-test/pack-agent",
+        propsApiVersion: 1,
+        load: async () => ({ default: ReportsThenThrows }),
+      },
+    });
+    const Wrapper = makeExtensionFieldRenderer(BINDING_ID);
+    const view = render(
+      <EscapeCatcher>
+        <Wrapper
+          {...senderProps()}
+          fieldName="accountScope"
+          context={{ connectedApps: [] } as unknown as FieldRendererProps["context"]}
+        />
+      </EscapeCatcher>,
+    );
+
+    await view.findByRole("button", { name: "Break" });
+    fireEvent.click(view.getByRole("button", { name: "Break" }));
+
+    await waitFor(() => expect(view.container.querySelector("#field-accountScope")).toBeTruthy());
+    expect(view.queryByRole("button", { name: "Break" })).toBeNull();
+    expect(view.queryByText("escaped the wrapper")).toBeNull();
   });
 });

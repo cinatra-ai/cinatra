@@ -222,6 +222,22 @@ describe("createOrUpdatePersonalSkillForAgent — prompt delta semantics", () =>
     // The old copy-prone phrase must be gone
     expect(call.system).not.toMatch(/merge.*coherent/i);
   });
+
+  // cinatra#3745: the run-completion autosave calls this generation with a
+  // run's prompts and no run request frame, so the llm package's run-frame
+  // default does not reach it. The generation itself brings the empty ceiling.
+  it("offers the model no tool: the generation call carries the explicit empty ceiling", async () => {
+    await createOrUpdatePersonalSkillForAgent({
+      agentId: "agent-x",
+      promptEntries: [{ id: "p1", kind: "initial", prompt: "be more concise", savedAt: new Date().toISOString() }],
+      skillName: "Test",
+    });
+
+    expect(runResolvedDeterministicLlmTaskMock.mock.calls.length).toBeGreaterThanOrEqual(1);
+    for (const args of runResolvedDeterministicLlmTaskMock.mock.calls as unknown as Array<[Record<string, unknown>]>) {
+      expect(args[0].stepToolPolicy).toEqual({ kind: "declared", tools: [] });
+    }
+  });
 });
 
 describe("createOrUpdatePersonalSkillForAgent — based_on frontmatter injection", () => {

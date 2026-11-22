@@ -28,6 +28,8 @@
 
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+// Before the fix the review floor draws no Continue, so the query for it throws.
+// red-first-expect: Unable to find role="button" and name "Continue"
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import type { LifecycleCardState } from "@cinatra-ai/agent-ui-protocol/renderable-views";
@@ -78,6 +80,7 @@ vi.mock("../run-window-actions", () => ({
 
 import { sendRunWindowTurn } from "../run-window-actions";
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
+import { RunPageChrome } from "../run-page-chrome";
 import {
   REVIEW_TARGET_ISLAND_PATH,
   ReviewGateCard,
@@ -159,17 +162,27 @@ const WIDGET_AUTH = {
   credentials: "omit" as const,
 };
 
+/**
+ * AMENDED BY cinatra#3487. Every host outside a conversation is drawn inside the
+ * run page's CHROME now, because the chrome is what owns the one prompt window:
+ * "one window owned by the page … never part of that screen's component or
+ * markup". The card's own readings — who is offered a channel, what a landed
+ * change request does to the exchange — are unchanged and are what this suite
+ * still measures.
+ */
 function renderOn(
   host: "chat_thread" | "run_card" | "page_gate_region" | "site_widget",
   props: { runId?: string } = {},
 ) {
   return render(
-    <LifecycleCardSurfaceProvider
-      host={host}
-      auth={host === "site_widget" ? WIDGET_AUTH : undefined}
-    >
-      <ReviewGateCard view={VIEW} runId={props.runId ?? "run-3141"} />
-    </LifecycleCardSurfaceProvider>,
+    <RunPageChrome>
+      <LifecycleCardSurfaceProvider
+        host={host}
+        auth={host === "site_widget" ? WIDGET_AUTH : undefined}
+      >
+        <ReviewGateCard view={VIEW} runId={props.runId ?? "run-3141"} />
+      </LifecycleCardSurfaceProvider>
+    </RunPageChrome>,
   );
 }
 
@@ -200,7 +213,7 @@ const frameQuery = (frame: Element | null | undefined): URLSearchParams => {
 // ---------------------------------------------------------------------------
 
 describe("#3141 item 1 — the conversational prompt window is part of the gate", () => {
-  it("the run page's own gate draws the window inside the gate's frame, offered in the drawing's words", async () => {
+  it("the run page's own gate is offered the window, in the drawing's words — and the card carries none", async () => {
     mockResolve({ state: "pending", canDecide: true, canComment: true });
     const { container } = renderOn("run_card");
     await waitFor(() =>
@@ -208,9 +221,13 @@ describe("#3141 item 1 — the conversational prompt window is part of the gate"
     );
     const card = container.querySelector('[data-conformance-id="review-gate-card"]');
     expect(card).not.toBeNull();
-    const window = card!.querySelector('[data-conformance-id="review-prompt-window"]');
-    expect(window, "the window is inside the gate's own frame").not.toBeNull();
-    expect(window!.textContent).toContain(OFFER);
+    await waitFor(() => expect(promptWindows(container)).toHaveLength(1));
+    const window = promptWindows(container)[0];
+    expect(window.textContent).toContain(OFFER);
+    // AMENDED BY cinatra#3487: it is the PAGE's window, in the page's chrome,
+    // and never inside the card.
+    expect(window.closest('[data-run-window-host="page-chrome"]')).not.toBeNull();
+    expect(card!.querySelectorAll('[data-conformance-id="review-prompt-window"]')).toHaveLength(0);
   });
 
   it("draws it beneath the decision bar, which is where the drawing puts it", async () => {
@@ -218,7 +235,7 @@ describe("#3141 item 1 — the conversational prompt window is part of the gate"
     const { container } = renderOn("run_card");
     await waitFor(() => expect(promptWindows(container)).toHaveLength(1));
     const bar = container.querySelector('[data-conformance-id="review-decision-bar"]')!;
-    const window = container.querySelector('[data-conformance-id="review-prompt-window"]')!;
+    const window = promptWindows(container)[0];
     expect(bar.compareDocumentPosition(window) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
@@ -273,12 +290,14 @@ describe("#3141 item 1 — the conversational prompt window is part of the gate"
     for (const host of ["chat_thread", "site_widget"] as const) {
       mockResolve({ state: "pending", canDecide: true, canComment: true });
       const { container } = render(
-        <LifecycleCardSurfaceProvider
-          host={host}
-          auth={host === "site_widget" ? WIDGET_AUTH : undefined}
-        >
-          <ReviewGateCard view={VIEW} />
-        </LifecycleCardSurfaceProvider>,
+        <RunPageChrome>
+          <LifecycleCardSurfaceProvider
+            host={host}
+            auth={host === "site_widget" ? WIDGET_AUTH : undefined}
+          >
+            <ReviewGateCard view={VIEW} />
+          </LifecycleCardSurfaceProvider>
+        </RunPageChrome>,
       );
       await waitFor(() =>
         expect(container.querySelector('[data-conformance-id="review-decision-bar"]')).not.toBeNull(),
@@ -306,9 +325,11 @@ describe("#3141 item 1 — the conversational prompt window is part of the gate"
       async () => ({ ok: true, entries: [], fills: [], acted: false }) as never,
     );
     const { container } = render(
-      <LifecycleCardSurfaceProvider host="run_card">
-        <ReviewGateCard view={VIEW} runId="run-3141" submitAction={submitAction} />
-      </LifecycleCardSurfaceProvider>,
+      <RunPageChrome>
+        <LifecycleCardSurfaceProvider host="run_card">
+          <ReviewGateCard view={VIEW} runId="run-3141" submitAction={submitAction} />
+        </LifecycleCardSurfaceProvider>
+      </RunPageChrome>,
     );
     await waitFor(() => expect(promptWindows(container)).toHaveLength(1));
     const resolvesBefore = resolveFetch.mock.calls.length;
@@ -347,9 +368,11 @@ describe("#3141 item 1 — the conversational prompt window is part of the gate"
       async () => ({ ok: true, entries: [], fills: [], acted: true }) as never,
     );
     const { container } = render(
-      <LifecycleCardSurfaceProvider host="run_card">
-        <ReviewGateCard view={VIEW} runId="run-3141" />
-      </LifecycleCardSurfaceProvider>,
+      <RunPageChrome>
+        <LifecycleCardSurfaceProvider host="run_card">
+          <ReviewGateCard view={VIEW} runId="run-3141" />
+        </LifecycleCardSurfaceProvider>
+      </RunPageChrome>,
     );
     await waitFor(() => expect(promptWindows(container)).toHaveLength(1));
     const resolvesBefore = resolveFetch.mock.calls.length;
@@ -359,7 +382,7 @@ describe("#3141 item 1 — the conversational prompt window is part of the gate"
     });
 
     await waitFor(() => expect(resolveFetch.mock.calls.length).toBeGreaterThan(resolvesBefore));
-    expect(promptWindows(container)).toHaveLength(1);
+    await waitFor(() => expect(promptWindows(container)).toHaveLength(1));
   });
 
   it("offered only to a reviewer who may comment — a restricted reader with none gets no window", async () => {
@@ -434,6 +457,17 @@ describe("#3141 item 7 — the target header does not vanish with the preview", 
   it("keeps the header past the 12-second bound, where only the BODY shows the recovery affordance", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const { container } = await renderPending("run_card");
+    // DRAIN THE PASSIVE EFFECTS BEFORE MOVING THE CLOCK. The island arms its
+    // 12-second bound in an effect, and React schedules a passive effect through
+    // the scheduler — a callback that, under fake timers, has not necessarily run
+    // by the time `waitFor` returned. Measured on this suite: the island is
+    // committed and reading "loading" while `vi.getTimerCount()` is still 0, so
+    // an advance made here would fire nothing, the effect would arm the bound
+    // afterwards, and the card would read "loading" for a bound that had never
+    // been moved past. Draining the queue first is what makes the advance land on
+    // a real timer — the card reaches "timed-out" on its own, which is what this
+    // case is here to read.
+    await act(async () => {});
     await act(async () => {
       vi.advanceTimersByTime(12_500);
     });
@@ -632,6 +666,10 @@ describe("cinatra#3441 — a one-target gate draws ONE bordered panel: its heade
     mockResolve(PENDING, { targetHeaders: [HEADER_ONE] });
     const { container } = renderOn("run_card");
     await waitFor(() => expect(islandIn(container)).not.toBeNull());
+    // Drain the passive effects before moving the clock, as the header test
+    // above does: inside the page chrome the island arms its 12-second
+    // bound in an effect that may not have run when waitFor returns.
+    await act(async () => {});
     await act(async () => {
       vi.advanceTimersByTime(12_500);
     });
@@ -833,6 +871,7 @@ describe("cinatra#4129 — a pending gate that pins several targets draws each h
   it("past the 12-second bound each header stays above its own failed body", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const { container } = await renderGate("run_card");
+    await act(async () => {});
     await act(async () => {
       vi.advanceTimersByTime(12_500);
     });
@@ -1531,7 +1570,7 @@ describe("cinatra#4129 — a pending gate that pins several targets draws each h
     await waitFor(() => expect(pairs(container)).toHaveLength(2));
     const addresses = watchFrameAddresses(container);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     await waitFor(() => expect(resolves()).toBe(2));
     await waitFor(() => expect(settledMarker(container)).not.toBeNull());
 
@@ -1576,7 +1615,7 @@ describe("cinatra#4129 — a pending gate that pins several targets draws each h
     await waitFor(() => expect(pairs(container)).toHaveLength(2));
     const addresses = watchFrameAddresses(container);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     await waitFor(() => expect(resolves()).toBe(2));
     await waitFor(() => expect(settledMarker(container)).not.toBeNull());
     await act(async () => {
@@ -1619,7 +1658,7 @@ describe("cinatra#4129 — a pending gate that pins several targets draws each h
     const painted = container.querySelector("iframe")!;
     expect(frameQuery(painted).get("ic")).toBe("ic-gate");
 
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     await waitFor(() => expect(resolves()).toBe(2));
     await waitFor(() => expect(settledMarker(container)).not.toBeNull());
     // The same frame, at the same grant, through the settle.
@@ -1645,7 +1684,7 @@ describe("cinatra#4129 — a pending gate that pins several targets draws each h
     const { container } = renderOn("run_card");
     await waitFor(() => expect(pairs(container)).toHaveLength(2));
 
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     await waitFor(() => expect(resolves()).toBe(2));
     await waitFor(() => expect(settledMarker(container)).not.toBeNull());
     // The settled reading's one island, at the reader's cookie, before any answer.
@@ -1717,7 +1756,7 @@ describe("cinatra#4129 — a pending gate that pins several targets draws each h
     expect(container.querySelectorAll("iframe")).toHaveLength(0);
     const addresses = watchFrameAddresses(container);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     await waitFor(() => expect(resolves()).toBe(2));
     await settledAnswerDrawn(container);
     return { container, addresses, resolves };
@@ -1759,7 +1798,7 @@ describe("cinatra#4129 — a pending gate that pins several targets draws each h
       );
       const { container } = renderOn("run_card");
       await waitFor(() => expect(pairs(container)).toHaveLength(2));
-      fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
       await waitFor(() => expect(resolves()).toBe(2));
       await settledAnswerDrawn(container);
 
@@ -2665,11 +2704,11 @@ describe("the held island address follows one transition table on one mounted ca
               break;
             case "decide":
               server.answer = step.answer;
-              fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+              fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
               break;
             case "refused":
               server.blocked = true;
-              fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+              fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
               await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledWith(expect.stringMatching(/\/decide$/), expect.anything()));
               break;
             case "arrive": {

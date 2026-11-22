@@ -37,6 +37,7 @@ import {
   type ExtensionToolPorts,
 } from "@/lib/extension-tool-dispatch";
 import { ExtensionToolModuleRefusal } from "@/lib/extension-tool-module-loader";
+import { ExtensionToolOriginRefusal, resolveExtensionToolOrigin } from "@/lib/extension-tool-origin";
 import { createExtensionObjectsPort } from "@/lib/extension-objects-port";
 import {
   ArtifactAdmissionRefusal,
@@ -54,6 +55,7 @@ import {
   passthroughFixedFailureText,
 } from "@/lib/passthrough-refusal";
 import { logFixedLine } from "@/lib/failure-log";
+import { RUN_ACTION_REFUSED, runActionRefusalCode } from "@/lib/run-action-refusal";
 
 /** The names W7 adds to the passthrough allowlist, each scoped below. */
 export const EXTENSION_SCOPED_TOOLS = new Set<string>([
@@ -87,7 +89,7 @@ export type ExtensionScopedToolRun = {
 
 export type ExtensionScopedToolOutcome =
   | { ok: true; result: unknown }
-  | { ok: false; status: number; error: string };
+  | { ok: false; status: number; error: string; code?: string };
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -149,6 +151,11 @@ export async function dispatchExtensionScopedTool(input: {
       return { ok: false, status: 500, error: PASSTHROUGH_UNEXPECTED_ERROR };
     }
     if (stated !== null) return stated;
+    // cinatra#3745: a refused run tool call answers 403 with one fixed sentence
+    // and the refusal's code, never with exception text (a read that throws is
+    // no refusal: the fixed failure below answers it).
+    const refusal = await runActionRefusalCode(e).catch(() => null);
+    if (refusal) return { ok: false, status: 403, error: RUN_ACTION_REFUSED, code: refusal };
     return {
       ok: false,
       status: 500,
@@ -195,6 +202,7 @@ function statedRefusal(e: unknown): ExtensionScopedToolOutcome | null | typeof U
       e instanceof ExtensionDataRefusal ||
       e instanceof ExtensionToolRefusal ||
       e instanceof ExtensionToolModuleRefusal ||
+      e instanceof ExtensionToolOriginRefusal ||
       e instanceof ArtifactAdmissionRefusal ||
       e instanceof ArtifactCursorRefusal
     ) {
@@ -268,7 +276,7 @@ async function runDataTool(
  * dependencies own, through the host's own objects save, the run bound here.
  */
 async function runExtensionTool(
-  context: Awaited<ReturnType<typeof resolveRunExtensionContext>> & object,
+  runContext: Awaited<ReturnType<typeof resolveRunExtensionContext>> & object,
   input: {
     tool: string;
     input: Record<string, unknown>;
@@ -276,6 +284,15 @@ async function runExtensionTool(
     actor?: ActorContext;
   },
 ): Promise<unknown> {
+  // WHOSE CODE RUNS (cinatra#4154): the run package's own, or, for a proven step
+  // of an embedded child flow, the child's, from the exact child installation.
+  // The ports below are then the child's declarations, bound to this same run.
+  const origin = await resolveExtensionToolOrigin({
+    run: input.run,
+    context: runContext,
+    request: isPlainObject(input.input) ? input.input : {},
+  });
+  const context = origin.kind === "child" ? origin.context : runContext;
   const ports: Omit<ExtensionToolPorts, "review"> = {
     data: {
       select: (request) =>
@@ -307,6 +324,7 @@ async function runExtensionTool(
     cinatra: context.cinatra,
     request: input.input,
     ports,
+    ...(origin.kind === "child" ? { install: origin.install } : {}),
   });
 }
 
