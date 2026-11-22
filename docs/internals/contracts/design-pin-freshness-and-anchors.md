@@ -209,8 +209,8 @@ reason printed (cinatra#3670).
 ## `adopt-design-pin` — the adoption the three make safe
 
 [`scripts/audit/adopt-design-pin.mjs`](../../../scripts/audit/adopt-design-pin.mjs)
-moves the pin in the manifest and its mirror, records what the re-examination
-found, and re-derives the digest — in one transaction, with a rollback:
+moves the pin in the manifest and its mirror, records the unresolved anchors
+and re-derives the digest — in one transaction, with a rollback:
 
 ```
 node scripts/audit/adopt-design-pin.mjs --pin "design@<40-hex> specs/<drawing>.html" [--write]
@@ -238,9 +238,10 @@ node scripts/audit/adopt-design-pin.mjs --pin "design@<40-hex> specs/<drawing>.h
   mirror behind, the exact disagreement this script refuses to adopt on top of.
   A rollback that itself fails is reported in those words rather than reported
   as a clean tree;
-- the **re-ratification note is not written by the script**. That prose is a
-  claim a person makes about what they re-examined, and the script has
-  re-examined nothing. It prints where the note goes.
+- **a pin move needs no re-ratification note.** The script and a green
+  `design-anchor-resolution` run, with the drawings at the new pin in reach, are
+  the whole adoption. The `RE-RATIFIED` entries already in the anchor contract's
+  `note` and `noteContinued` stay as history, and no gate asks for a new one.
 
 While `anchorsUnresolvedAtPin` is absent, the digest is taken over the original
 three inputs and stands exactly where it stood. That is what let these checks
