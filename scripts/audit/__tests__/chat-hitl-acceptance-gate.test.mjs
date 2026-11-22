@@ -595,6 +595,10 @@ describe("the REAL manifest", () => {
     // The displaced pin governed both drawings, so it is recorded with both:
     // the canonical parser reads it exactly as it read the pin when it stood.
     const previous = parseSpecCommit(m.specCommitDrift.previousPin);
+    // The drift record follows the pin (adopt-design-pin.mjs writes it in the same run):
+    // the displaced pin is not the pin, and it is not yet in the older trail.
+    expect(previous.revision).not.toBe(pinned.revision);
+    expect(m.specCommitDrift.priorPins.some((p) => p.includes(previous.revision))).toBe(false);
     expect(previous.revision).toMatch(/^[0-9a-f]{40}$/);
     expect(previous.paths).toEqual(GOVERNED);
     // An earlier move took two steps on a branch that was squashed into one

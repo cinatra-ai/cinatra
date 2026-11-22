@@ -165,6 +165,45 @@ export function upsertJsonStringArrayField(text, field, values, { before }) {
 // The canonical readers
 // ---------------------------------------------------------------------------
 
+/**
+ * The drift record follows every move, written by this tool and never by hand
+ * (owner 2026-11-22, entry 1207: a pin move needs only this tool and a green
+ * anchor resolution check). The displaced pin becomes `previousPin`, the pin
+ * before it joins `priorPins` with the day it stopped being the pin, and
+ * `why`, `differs` and `whoRatified` say what moved and where to read the change.
+ */
+export function recordPinDrift(manifestText, manifest, nextPin, today) {
+  const oldPin = manifest.specCommit;
+  if (oldPin === nextPin) return manifestText;
+  const drift = manifest.specCommitDrift;
+  if (!drift || typeof drift !== "object") {
+    throw new DesignPinError("the manifest carries no specCommitDrift record to move");
+  }
+  const priorPins = Array.isArray(drift.priorPins) ? [...drift.priorPins] : [];
+  if (drift.previousPin) priorPins.push(`${drift.previousPin} (until ${drift.movedOn})`);
+  const revisionOf = (pin) => /^design@([0-9a-f]{40})\b/.exec(pin)?.[1] ?? pin;
+  const paths = nextPin.split(" ").slice(1).join(" ");
+  let text = replaceJsonStringField(manifestText, "previousPin", oldPin);
+  text = upsertJsonStringArrayField(text, "priorPins", priorPins, { before: "movedOn" });
+  text = replaceJsonStringField(text, "movedOn", today);
+  text = replaceJsonStringField(
+    text,
+    "why",
+    `adopt-design-pin.mjs --write moved the pin from design@${revisionOf(oldPin).slice(0, 8)} to design@${revisionOf(nextPin).slice(0, 8)}.`,
+  );
+  text = replaceJsonStringField(
+    text,
+    "differs",
+    `Read it as: git diff ${revisionOf(oldPin)} ${revisionOf(nextPin)} -- ${paths}`,
+  );
+  text = replaceJsonStringField(
+    text,
+    "whoRatified",
+    "adopt-design-pin.mjs --write; anchorsUnresolvedAtPin and the digest were read from the moved tree in the same run.",
+  );
+  return text;
+}
+
 const run = (repoRoot, args) =>
   execFileSync("node", args, { cwd: repoRoot, encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
 
@@ -207,6 +246,7 @@ export function adoptDesignPin({
   writeImpl = writeFileSync,
   log = console.log,
   logError = console.error,
+  today = new Date().toISOString().slice(0, 10),
 } = {}) {
   const manifestPath = join(repoRoot, MANIFEST_RELATIVE);
   const contractPath = join(repoRoot, CONTRACT_RELATIVE);
@@ -273,7 +313,12 @@ export function adoptDesignPin({
   // behind — the exact disagreement this script refuses to adopt on top of.
   let nextContract;
   try {
-    const nextManifest = replaceJsonStringField(manifestText, "specCommit", nextPin);
+    const nextManifest = recordPinDrift(
+      replaceJsonStringField(manifestText, "specCommit", nextPin),
+      JSON.parse(manifestText),
+      nextPin,
+      today,
+    );
     nextContract = replaceJsonStringField(contractText, "specCommit", nextPin);
     writeImpl(manifestPath, nextManifest, "utf8");
     writeImpl(contractPath, nextContract, "utf8");
