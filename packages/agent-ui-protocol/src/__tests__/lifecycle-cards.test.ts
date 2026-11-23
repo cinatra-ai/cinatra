@@ -56,7 +56,7 @@ describe("the registry is one card per interaction kind (§IX)", () => {
       // kind reaches a surface), and `canonical` is the one the wave adds
       // (which fact decides the card is live). The membership it asserts is
       // unchanged; only the field it reads it from is named.
-      expect(["data_part", "interrupt"]).toContain(
+      expect(["data_part", "interrupt", "read"]).toContain(
         LIFECYCLE_CARD_CARRIAGE[kind].represent,
       );
     }
@@ -66,8 +66,10 @@ describe("the registry is one card per interaction kind (§IX)", () => {
     // The rule is WHY, not how many: the run genuinely waits on the answer, so
     // a fire-and-forget data part would be the wrong frame. The hold parks the
     // run before it starts; the HITL screen parks it mid-flight (cinatra#2928).
-    // The publish card stops the run in front of its publishing step (cinatra#4150).
-    expect([...interrupts].sort()).toEqual(["agent_hitl_screen", "publish_decision", "recommendation_hold"]);
+    // The publish card (cinatra#4150) also stops its run, but its gate emits no typed interrupt, so it is carried by
+    // the run's own read and is NOT advertised as an interrupt.
+    expect([...interrupts].sort()).toEqual(["agent_hitl_screen", "recommendation_hold"]);
+    expect(LIFECYCLE_CARD_CARRIAGE.publish_decision.represent).toBe("read");
   });
 
   it("every DATA_PART kind is registered in the renderable-view schema registry", () => {
@@ -75,7 +77,7 @@ describe("the registry is one card per interaction kind (§IX)", () => {
       expect(KNOWN_RENDERABLE_VIEW_TYPES).toContain(viewType);
       expect(isLifecycleDataPartViewType(viewType)).toBe(true);
     }
-    // The interrupt-carried kinds are deliberately NOT registered views.
+    // The interrupt-carried kinds, and the read-carried publish card, are deliberately NOT registered views.
     for (const kind of ["recommendation_hold", "agent_hitl_screen", "publish_decision"] as const) {
       expect(KNOWN_RENDERABLE_VIEW_TYPES).not.toContain(kind);
       expect(isLifecycleDataPartViewType(kind)).toBe(false);

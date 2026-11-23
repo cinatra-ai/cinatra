@@ -230,7 +230,8 @@ export const LIFECYCLE_CARD_CARRIAGE = Object.freeze({
   recommendation_hold: "interrupt",
   trigger_schedule_proposal: "data_part",
   agent_hitl_screen: "interrupt",
-  publish_decision: "interrupt",
+  // cinatra#4150: carried by the run's own read; the publish gate emits no typed interrupt.
+  publish_decision: "read",
 });
 
 /** The four hosts. Mirrors `LIFECYCLE_CARD_HOSTS`. */
@@ -1141,12 +1142,12 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
     design:
       "the publish card in specs/app-lifecycle-cards.html at the pin: section XV (the question, the agent's rows, the note, Do not publish and Publish, and the three settled readings) and section IV.1 (pending, loading, restricted, no longer open)",
     component: "PublishDecisionCard",
-    wireCarriage: "interrupt",
+    wireCarriage: "read",
     deliveries: ["platform_injected"],
     owner: "packages/agents/src/publish-decision-card-view.tsx",
     composes: [],
-    // A typed INTERRUPT like the hitl screen: no resolve envelope, so the owner reads the run's card through its own
-    // authorized read, the run access door first, and a failed read stays a failure.
+    // Carried by a READ, not an interrupt (the publish gate emits none): no resolve envelope, so the owner reads the
+    // run's card through its own authorized read, the run access door first, and a failed read stays a failure.
     body: {
       validator: "usePublishDecisionCardState",
       params: ["runId"],
@@ -1167,7 +1168,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
           adapter: "mount",
           region: "transcript",
           surface: "production",
-          why: "the dispatch turn: the card mounts on the run read off the `agent_run` tool result, at the hitl screen's place, as a sibling of the inline run card and not through the renderable-view registry, because the carriage is an interrupt",
+          why: "the dispatch turn: the card mounts on the run read off the `agent_run` tool result, at the hitl screen's place, as a sibling of the inline run card and not through the renderable-view registry, because the card rides no wire part: it is found by its own read of the run's publish decision",
         },
       ],
       site_widget: [

@@ -43,6 +43,7 @@ import {
   REGISTRY_KINDS,
   HOST_PROVIDED_BY_PARENT,
   collectFiles,
+  LIFECYCLE_CARD_CARRIAGE,
   LIFECYCLE_CARD_CONTRACTS,
   LIFECYCLE_CARD_KINDS,
   LIFECYCLE_CARD_HOSTS,
@@ -1479,7 +1480,7 @@ describe("the contract mirrors the epic table's shape", () => {
   it("every row carries a component owner and a wire carriage", () => {
     for (const [kind, c] of Object.entries(LIFECYCLE_CARD_CONTRACTS)) {
       expect(c.component, kind).toBeTruthy();
-      expect(["data_part", "interrupt"], kind).toContain(c.wireCarriage);
+      expect(["data_part", "interrupt", "read"], kind).toContain(c.wireCarriage);
     }
   });
 
@@ -1533,7 +1534,9 @@ describe("the two modes on the real tree", () => {
     expect(c.status).toBe("DRAWN");
     expect(c.component).toBe("PublishDecisionCard");
     expect(c.owner).toBe("packages/agents/src/publish-decision-card-view.tsx");
-    expect(c.wireCarriage).toBe("interrupt");
+    // Carried by the run's read: the publish gate emits no typed interrupt, so none is claimed.
+    expect(c.wireCarriage).toBe("read");
+    expect(LIFECYCLE_CARD_CARRIAGE.publish_decision).toBe("read");
     expect(c.openObligations).toEqual([]);
     for (const host of LIFECYCLE_CARD_HOSTS) expect(c.hosts[host], host).not.toBeNull();
     expect(c.instanceProof.hosts.sort()).toEqual([...LIFECYCLE_CARD_HOSTS].sort());

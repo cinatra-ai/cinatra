@@ -17,8 +17,8 @@ import {
 // ---------------------------------------------------------------------------
 // GET /api/lifecycle-views/publish-decision?runId= -- the BROKER READ of the publish card (cinatra#4150).
 //
-// The hitl screen's road, for the hitl screen's reasons: `publish_decision` is a typed INTERRUPT, so it mints no
-// view ref and is addressed by the run. The first-party hosts read through the cookie-bound server action; this
+// The hitl screen's road: `publish_decision` is carried by this read (its gate emits no typed interrupt), so it mints
+// no view ref and is addressed by the run. The first-party hosts read through the cookie-bound server action; this
 // route serves the site widget, which presents its own `cwu_` or is refused (401), with no session fallback.
 //
 // TWO GATES, IN ORDER: the credential at THIS route's audience with `lifecycle.read`, then the run read through its

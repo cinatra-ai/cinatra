@@ -235,6 +235,12 @@ export function scheduleScreenSelection(input: {
  *     genuinely BLOCKED on the answer; its durable anchor in the turn is the
  *     `agent_run` part of the dispatch it belongs to, which is what the card is
  *     mounted at and re-read from after a reload.
+ *   - `read` — the card rides NO wire part at all, neither a `DATA_PART` nor a
+ *     typed `INTERRUPT`: nothing is emitted for it. Every host finds it by its
+ *     own authorized read of the run's record, keyed by the run identity of the
+ *     `agent_run` part of the dispatch it belongs to, and re-reads it there
+ *     after a reload. `publish_decision` (cinatra#4150) is the one kind: its
+ *     gate parks the run on its decision record and states no moment.
  *
  * THE TWO ARE INDEPENDENT, and `recommendation_hold` is why: the run is blocked
  * on it, so its representation is an interrupt — and its truth has always been
@@ -261,16 +267,18 @@ export const LIFECYCLE_CARD_CARRIAGE = {
   // data-part view type and therefore no resolve envelope. Its truth is the
   // run's own stated moment.
   agent_hitl_screen: { canonical: "run_state", represent: "interrupt" },
-  // `publish_decision` (cinatra#4150) is an INTERRUPT for the same reason: the run is stopped in front of its
-  // publishing step until a person answers, and its truth is the run's own decision record.
-  publish_decision: { canonical: "run_state", represent: "interrupt" },
+  // `publish_decision` (cinatra#4150) is carried by a READ, not an interrupt: the run is stopped in front of its
+  // publishing step until a person answers and its truth is the run's own decision record, but the publish gate
+  // emits no typed interrupt and states no lifecycle moment. Every host finds the card by reading that record for
+  // the run its transcript already names, so no interrupt is advertised that nothing emits.
+  publish_decision: { canonical: "run_state", represent: "read" },
 } as const satisfies Record<LifecycleCardKind, LifecycleCardCarriageRow>;
 
 /** Which fact decides a card is live. */
 export type LifecycleCanonicalCarriage = "run_state" | "data_part";
 
 /** How a card reaches a transcript on the one wire. */
-export type LifecycleRepresentCarriage = "data_part" | "interrupt";
+export type LifecycleRepresentCarriage = "data_part" | "interrupt" | "read";
 
 export type LifecycleCardCarriageRow = {
   canonical: LifecycleCanonicalCarriage;
@@ -2315,8 +2323,6 @@ export const LIFECYCLE_INTERRUPT_RENDERER_IDS = {
   // pattern-matching a task-id prefix; the card W3 (cinatra#2930) mounts on it
   // is not part of this slice.
   agent_hitl_screen: "@cinatra-ai/lifecycle:agent-hitl-screen",
-  // cinatra#4150 — the publish card's own namespaced id, the same shape as the two above.
-  publish_decision: "@cinatra-ai/lifecycle:publish-decision",
 } as const satisfies Record<LifecycleInterruptKind, string>;
 
 /**

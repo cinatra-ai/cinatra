@@ -209,7 +209,7 @@ function installStub(options: Parameters<typeof installWidgetServiceStub>[0] = {
     // as a typed INTERRUPT, so on this surface it is read through its own
     // broker endpoint rather than a cookie-bound action, for the same reason.
     hitlScreen: () => hitlScreenStateMock(),
-    // cinatra#4150: the publish card is the third INTERRUPT kind, read through its own broker endpoint here.
+    // cinatra#4150: the publish card is carried by the run's read (no interrupt), through its own broker endpoint here.
     publishDecision: () => publishStateMock(),
     ...options,
   });

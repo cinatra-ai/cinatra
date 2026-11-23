@@ -805,7 +805,7 @@ function AgentRunTurnSlot({
   const hitlScreen = (
     <AgentHitlScreenCard runId={runId} wireRef={gateSignal} carrier={screenCarrier} />
   );
-  // THE PUBLISH CARD (cinatra#4150), an INTERRUPT like the screen above and mounted beside it, in the same placement:
+  // THE PUBLISH CARD (cinatra#4150), mounted beside the screen above, in the same placement, but carried by its read:
   // keyed by the run alone, it self-gates, so a run with no open publish decision draws nothing here. A publish gate
   // has no gate context, so the gate signal above stays quiet for it; the panel's publish-read signal (the run's
   // status, the gate it waits at and, at a pause with no gate context, each reading of the run) is this card's change

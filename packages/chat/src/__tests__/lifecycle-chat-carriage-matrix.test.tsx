@@ -212,7 +212,8 @@ const REF_BY_KIND: Record<LifecycleCardKind, string> = {
   // keyed by the protocol's closed set and a missing key would be a kind the
   // matrix silently skips.
   agent_hitl_screen: "hitl-screen-ref-2928",
-  // cinatra#4150 -- the sixth kind, an INTERRUPT too: never minted into an envelope, keyed here for the closed set.
+  // cinatra#4150 -- the sixth kind, carried by the run's read: never minted into an envelope and never an interrupt,
+  // keyed here for the closed set.
   publish_decision: "publish-decision-ref-4150",
 };
 
@@ -276,7 +277,10 @@ async function driveSink(kind: LifecycleCardKind): Promise<AgUiEvent[]> {
     // Both INTERRUPT kinds run the shape they actually have: an `agent_run`
     // dispatch that parks, whose own tool call is the slot. The hold parks
     // BEFORE the run starts (`pending_input`); the HITL screen parks the run
-    // mid-flight while the agent asks (`pending_approval`).
+    // mid-flight while the agent asks (`pending_approval`). The publish card
+    // (cinatra#4150) is NOT an interrupt kind: its gate parks the run in
+    // `pending_approval` and emits nothing, so the same parked `agent_run`
+    // dispatch is all the turn carries, and the card is found by its own read.
     adapter.send("tool_call", { id: CALL_ID, name: "agent_run" });
     adapter.send("tool_result", {
       id: CALL_ID,
@@ -625,6 +629,19 @@ describe("the five-kind chat_thread carriage matrix, in the REAL view", () => {
   // cinatra#4150: the matrix's ref map names the sixth kind, so the closed set it is read against must hold it too.
   it("keys its ref map by exactly the protocol's closed kind set, the publish decision included", () => {
     expect(Object.keys(REF_BY_KIND).sort()).toEqual([...LIFECYCLE_CARD_KINDS].sort());
+  });
+
+  // cinatra#4150: the publish gate emits no typed interrupt, so the row claims none. The turn carries only the parked
+  // `agent_run` dispatch, and the card draws from its own read of the run's publish decision.
+  it("publish_decision: carried by the run's read, not an interrupt; the card draws from that read", async () => {
+    const row = carriageRowFor("publish_decision");
+    expect(row.carriage).toBe("read");
+    const events = await driveSink("publish_decision");
+    expect(events.some((e) => e.type === "INTERRUPT")).toBe(false);
+    publishStateMock.mockClear();
+    const { root } = await mountKind("publish_decision");
+    await waitFor(() => expect(root.querySelector('[data-lifecycle-card="publish_decision"]')).not.toBeNull());
+    expect(publishStateMock).toHaveBeenCalled();
   });
 
   it.each([...LIFECYCLE_CARD_KINDS])(

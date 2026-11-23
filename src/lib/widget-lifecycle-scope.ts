@@ -160,8 +160,8 @@ export const WIDGET_LIFECYCLE_HITL_SCREEN_ROUTE_PATH =
 
 /**
  * The audience a widget PUBLISH-CARD read is served at (cinatra#4150). A fourth audience under the same
- * `lifecycle.read` grant, for the hitl screen's reason: `publish_decision` is carried as a typed INTERRUPT, and a run
- * stopped in front of its publishing step until you answer is work waiting on you. A token minted before this
+ * `lifecycle.read` grant, for the hitl screen's reason: `publish_decision` is carried by this read and no view ref,
+ * and a run stopped in front of its publishing step until you answer is work waiting on you. A token minted before this
  * audience existed is refused here, fail-closed, until the next sign-in.
  */
 export const WIDGET_LIFECYCLE_PUBLISH_DECISION_ROUTE_PATH =
