@@ -988,7 +988,8 @@ describe("the decision keeps the rows its template declared at the park (review 
 // generation). The park copies its node's rows from the plan the attempt was dispatched with
 // (agent_runs.dispatch_publish_rows).
 describe("round 20: a decision belongs to one reset generation of its run", () => {
-  const CURRENT = /coalesce\(coalesce\("agent_run_publish_decisions"\."run_generation", 0\) = \(select attempt_run\.reset_generation from "[^"]+"\."agent_runs" attempt_run where attempt_run\.id = "agent_run_publish_decisions"\."run_id"\), false\)/;
+  // A row with no generation reads as the run's own generation: current, so it holds (round 21: an old node's park).
+  const CURRENT = /coalesce\(coalesce\("agent_run_publish_decisions"\."run_generation", \(select attempt_run\.reset_generation from "[^"]+"\."agent_runs" attempt_run where attempt_run\.id = "agent_run_publish_decisions"\."run_id"\)\) = \(select attempt_run\.reset_generation from "[^"]+"\."agent_runs" attempt_run where attempt_run\.id = "agent_run_publish_decisions"\."run_id"\), false\)/;
   /** The SQL with the app schema's qualifier dropped (the schema the suite runs under varies). */
   const unschema = (text: string) => text.replace(/"[^"]+"\.(?="agent_run_publish_decisions")/g, "");
 

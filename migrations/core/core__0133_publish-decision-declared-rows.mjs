@@ -31,17 +31,21 @@
 // migration ended its attempt without any mark, so each existing decision is
 // classified once:
 //   run_generation = the run's reset_generation (current) when the run row
-//     exists, the run is not in pending_input, and the run's current attempt
-//     started no later than the decision (started_at IS NULL, or
-//     created_at >= started_at);
+//     exists, the run is not in pending_input, and either the run's current
+//     attempt started no later than the decision (created_at >= started_at),
+//     or started_at is NULL and the run is not waiting to be dispatched
+//     (queued, armed, pending_trigger);
 //   run_generation = -1 (an ended attempt) otherwise.
 // Why: started_at is the current attempt's first dispatch; the queued ->
 // running CAS keeps it (COALESCE) and only a reset clears it, so a decision
 // older than it belongs to an attempt a reset ended. A run in pending_input
 // holds no publish gate: it waits for its inputs, and its next dispatch is a
-// fresh attempt. A run whose started_at is NULL in any other status (a run
-// dispatched before the stamp existed) keeps its decisions current: a declined
-// or open decision of a stopped or held run must still hold its resume.
+// fresh attempt. A run reset before the upgrade and waiting to be dispatched
+// (queued, armed, pending_trigger: its started_at was cleared by the reset and
+// no dispatch has stamped it yet) holds no decision of its own either: a run
+// only parks while running. A run whose started_at is NULL in any other status
+// (a run dispatched before the stamp existed) keeps its decisions current: a
+// declined or open decision of a stopped or held run must still hold its resume.
 // No other column and no other stored value changes.
 //
 // The schema-migration gate counts a NOT NULL column added to an existing
@@ -90,7 +94,8 @@ export const publishDecisionRunGenerationBackfillSql = `UPDATE agent_run_publish
          (SELECT r.reset_generation FROM agent_runs AS r
            WHERE r.id = d.run_id
              AND r.status <> 'pending_input'
-             AND (r.started_at IS NULL OR d.created_at >= r.started_at)),
+             AND ((r.started_at IS NOT NULL AND d.created_at >= r.started_at)
+               OR (r.started_at IS NULL AND r.status NOT IN ('queued', 'armed', 'pending_trigger')))),
          -1)
  WHERE d.run_generation IS NULL`;
 

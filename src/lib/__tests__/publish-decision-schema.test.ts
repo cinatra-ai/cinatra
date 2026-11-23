@@ -247,7 +247,8 @@ describe("agent_run_publish_decisions.run_generation, agent_runs.reset_generatio
     const sqlText = mod.publishDecisionRunGenerationBackfillSql.replace(/\s+/g, " ");
     expect(sqlText).toBe(
       "UPDATE agent_run_publish_decisions AS d SET run_generation = COALESCE( (SELECT r.reset_generation FROM agent_runs AS r " +
-        "WHERE r.id = d.run_id AND r.status <> 'pending_input' AND (r.started_at IS NULL OR d.created_at >= r.started_at)), -1) " +
+        "WHERE r.id = d.run_id AND r.status <> 'pending_input' AND ((r.started_at IS NOT NULL AND d.created_at >= r.started_at) " +
+        "OR (r.started_at IS NULL AND r.status NOT IN ('queued', 'armed', 'pending_trigger')))), -1) " +
         "WHERE d.run_generation IS NULL",
     );
     const out: string[] = [];

@@ -436,10 +436,17 @@ describe("failed→pending_input: the reset generation (cinatra#4150)", () => {
     expect(shared.updateTables[1]).toBe(agentRunPublishDecisions);
     expect(shared.setPayloads[1]).toMatchObject({ status: "run_ended", decidedBy: null, decisionNote: null });
     const close = await sqlOf(shared.wheres[1]);
-    expect(close.sql).toMatch(/"agent_run_publish_decisions"\."status" = \$\d+ and coalesce\("[^"]+"\."agent_run_publish_decisions"\."run_generation", 0\) <= \$\d+/);
-    expect(close.params).toEqual([RUN, "parked", 3]);
+    // A row with no generation (an old node's park during a rolling deploy) is the ended attempt's too: it closes...
+    expect(close.sql).toMatch(/"agent_run_publish_decisions"\."status" = \$\d+ and coalesce\("[^"]+"\."agent_run_publish_decisions"\."run_generation", \$\d+\) <= \$\d+/);
+    expect(close.params).toEqual([RUN, "parked", 3, 3]);
+    // ...and every row with no generation is stamped the ended one, so no read takes it for the retry's.
+    expect(shared.updateTables[2]).toBe(agentRunPublishDecisions);
+    expect(shared.setPayloads[2]).toEqual({ runGeneration: 3 });
+    const stamp = await sqlOf(shared.wheres[2]);
+    expect(stamp.sql).toMatch(/"agent_run_publish_decisions"\."run_generation" is null/);
+    expect(stamp.params).toEqual([RUN]);
     // The generation is a control key: it never reaches the delegated meta write.
-    expect(shared.setPayloads.slice(2).some((p) => Object.prototype.hasOwnProperty.call(p, "resetGeneration"))).toBe(false);
+    expect(shared.setPayloads.slice(3).some((p) => Object.prototype.hasOwnProperty.call(p, "resetGeneration"))).toBe(false);
   });
 
   it("a reset that lost its CAS (another reset, or a newer failure's newer generation) closes no decision", async () => {

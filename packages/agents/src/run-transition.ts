@@ -838,13 +838,18 @@ function assertResetGenerationEdge(runId: string, from: AgentRunStatus, to: Agen
 }
 
 /** Inside the reset's guarded transaction, after its compare-and-set: the run's decisions still open from generation
- *  `generation` or earlier (a row older than the column reads 0) close run_ended with no person. */
+ *  `generation` or earlier, or with no generation (written by code older than the column), close run_ended with no
+ *  person; then every row with no generation is stamped `generation`, so it belongs to the attempt this reset ended. */
 async function endResetAttemptDecisionsInTx(tx: GuardedRunTx, runId: string, generation: number): Promise<void> {
   const d = agentRunPublishDecisions;
   await (tx as unknown as typeof db)
     .update(d)
     .set({ status: "run_ended", decidedBy: null, decidedAt: sql`now()`, decisionNote: null })
-    .where(and(eq(d.runId, runId), eq(d.status, "parked"), sql`coalesce(${d.runGeneration}, 0) <= ${generation}`));
+    .where(and(eq(d.runId, runId), eq(d.status, "parked"), sql`coalesce(${d.runGeneration}, ${generation}) <= ${generation}`));
+  await (tx as unknown as typeof db)
+    .update(d)
+    .set({ runGeneration: generation })
+    .where(and(eq(d.runId, runId), sql`${d.runGeneration} is null`));
 }
 
 /**

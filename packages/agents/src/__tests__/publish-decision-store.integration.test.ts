@@ -413,6 +413,30 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     expect(await rowOf(next.id)).toMatchObject({ status: "run_ended", run_generation: 1 });
   });
 
+  it("round 21, finding 1: a row an old node parks with no generation after a reset holds, and the next reset ends it", async () => {
+    const runId = await seedRun(`run-${randomUUID()}`, "failed");
+    await reset(runId, 0);
+    await setRun(runId, "pending_approval");
+    expect((await genOf(runId)).reset_generation).toBe(1);
+    // An old node (code older than the column) parks the retry's publish gate: no run_generation.
+    const oldNode = `legacy-${randomUUID()}`;
+    await admin.query(
+      `INSERT INTO ${TABLE} (id, org_id, run_id, node_id, gate_task_id, status, surfaced_values, expires_at, run_generation)
+       VALUES ($1, $2, $3, 'publish', $4, 'parked', '{}', now() + interval '1 hour', NULL)`,
+      [oldNode, ORG, runId, `task-${randomUUID()}`],
+    );
+    // It is the run's current decision: the card shows it and the hold's read holds the resume on it.
+    expect((await store.readOpenDecisionForRun(runId))?.id).toBe(oldNode);
+    expect(await store.readLatestDecisionForRun(runId, { orEarlierAttempt: true })).toMatchObject({ id: oldNode, current: true, status: "parked" });
+    // The attempt fails and is reset: the row closes and is stamped the ended generation, so the retry is not held by it.
+    await setRun(runId, "failed");
+    await reset(runId, 1);
+    expect(await rowOf(oldNode)).toMatchObject({ status: "run_ended", run_generation: 1, decided_by: null });
+    await setRun(runId, "pending_approval");
+    expect(await store.readOpenDecisionForRun(runId)).toBeNull();
+    expect(await store.readLatestDecisionForRun(runId, { orEarlierAttempt: true })).toMatchObject({ id: oldNode, current: false });
+  });
+
   it("round 20, finding 1: a reset in an archived org is refused, and nothing is written, decisions included", async () => {
     const runId = await seedRun(`run-${randomUUID()}`, "running", ARCHIVED_ORG);
     const open = await parkAt(runId, "open");
@@ -501,6 +525,11 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     const T2 = "2026-11-01T02:00:00Z";
     // Reset before the upgrade and not run since: the run waits for its inputs.
     const resetWaiting = await legacy(await run("pending_input", null), T0);
+    // Round 21: reset before the upgrade and waiting to be dispatched (the reset cleared started_at, no dispatch stamped
+    // it yet): its stale rows belong to the ended attempt.
+    const resetQueued = await legacy(await run("queued", null), T0);
+    const resetArmed = await legacy(await run("armed", null), T0);
+    const resetTrigger = await legacy(await run("pending_trigger", null), T0);
     // Reset before the upgrade and run again: now held at an ordinary gate; the failed attempt's rows predate its start.
     const retried = await run("pending_approval", T1);
     const retriedEnded = await legacy(retried, T0, "run_ended");
@@ -529,10 +558,10 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     const generationOf = async (id: string) => (await admin.query(`SELECT run_generation FROM ${TABLE} WHERE id = $1`, [id])).rows[0].run_generation;
     const classified: Record<string, number> = {};
     for (const [name, id] of Object.entries({
-      resetWaiting, retriedEnded, retriedParked, againOld, againNew, liveRow, liveUnstamped, stoppedRow, completedRow, failedRow, orphanRow, stampedRow,
+      resetWaiting, resetQueued, resetArmed, resetTrigger, retriedEnded, retriedParked, againOld, againNew, liveRow, liveUnstamped, stoppedRow, completedRow, failedRow, orphanRow, stampedRow,
     })) classified[name] = await generationOf(id);
     expect(classified).toEqual({
-      resetWaiting: -1, retriedEnded: -1, retriedParked: -1, againOld: -1, againNew: 0, liveRow: 0, liveUnstamped: 0,
+      resetWaiting: -1, resetQueued: -1, resetArmed: -1, resetTrigger: -1, retriedEnded: -1, retriedParked: -1, againOld: -1, againNew: 0, liveRow: 0, liveUnstamped: 0,
       stoppedRow: 0, completedRow: 0, failedRow: 0, orphanRow: -1, stampedRow: 7,
     });
 
