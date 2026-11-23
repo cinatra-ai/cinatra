@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { PgDialect } from "drizzle-orm/pg-core";
 import type { AgentRunStatus } from "../run-status";
 
@@ -181,6 +184,21 @@ vi.mock("../regenerate-segment", async (orig) => {
   };
 });
 
+// cinatra#4264 (the reader and dispatch slice): the real plan's two external
+// reads. The provenance ledger answers the filing node a case names; the
+// installed flow document is a file this suite writes, in which one start
+// output (`draftNote`) feeds the declared input (`draft_flow`, `note`).
+const segmentPorts = vi.hoisted(() => ({
+  provenance: null as null | { runId: string; nodeId: string },
+  oasPath: null as string | null,
+}));
+vi.mock("@/lib/artifacts/regenerate-provenance", () => ({
+  readVerifiedFilingNode: async () => segmentPorts.provenance,
+}));
+vi.mock("../installed-oas-path", () => ({
+  resolveInstalledOasPathForRead: () => segmentPorts.oasPath,
+}));
+
 import { dispatchPendingProducerRepairs, repairRunId } from "../lifecycle-repair-dispatch-store";
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
 
@@ -213,6 +231,7 @@ beforeEach(() => {
   ports.run = null; ports.transitions = []; ports.transitionFailure = null; ports.raceTo = null; ports.clears = []; ports.events = [];
   ports.claims = new Set(); ports.claimEvents = []; ports.clientsReleased = 0; ports.selected = []; ports.repairNow = new Map();
   stepRoad.dispatches = true; segmentPlan.calls = []; segmentPlan.answer = null;
+  segmentPorts.provenance = null; segmentPorts.oasPath = null;
   vi.clearAllMocks();
 });
 
@@ -327,13 +346,48 @@ describe("input data cannot become repair authorization", () => {
       templateId: "template-producing", packageName: "@any-vendor/repair-producer", lifecycleConfig: REGENERATE_CONFIG,
       request: { repairId: "repair-current", findings: [currentFinding] },
     });
-    expect(String(segmentPlan.calls[0].note)).toContain(currentFinding.message);
+    // The note is the Note field's words (the `prompt-window` finding) only;
+    // another finding never stands in for it, and no findings text is built.
+    expect(segmentPlan.calls[0].note).toBeNull();
     expect(ports.created).toHaveLength(1);
     expect(ports.created[0].input).toMatchObject({ parentRunId: "provenance-run", runBy: "human-origin", orgId: "repair-org" });
     expect(inputParams()).toEqual(segmentInputs);
     expect(ports.queued).toHaveBeenCalledOnce();
     expect(ports.writes).toHaveLength(1);
     expect(ports.writes[0].values.status).toBe("dispatched");
+  });
+
+  it("a requested Regenerate, through the real plan, puts the Note field's words into the declared input only: no findings text, no findings in the request", async () => {
+    const note = "Open with the harbour, not the market";
+    const findings = [{ id: "prompt-window", message: note }];
+    const dir = mkdtempSync(path.join(tmpdir(), "regen-4264-"));
+    segmentPorts.oasPath = path.join(dir, "agent.oas.json");
+    writeFileSync(segmentPorts.oasPath, JSON.stringify({
+      component_type: "Flow",
+      start_node: { $component_ref: "start" },
+      data_flow_connections: [
+        { source_node: { $component_ref: "start" }, source_output: "draftNote",
+          destination_node: { $component_ref: "draft_flow" }, destination_input: "note" },
+      ],
+    }));
+    segmentPorts.provenance = { runId: "provenance-run", nodeId: "write_draft" };
+    arrangeProducer({ custom: "not-inherited", instructions: "Original input" }, {}, JSON.stringify({
+      repairFindingsInput: { input: "instructions" },
+      regenerate: [{ artifactNode: "write_draft", step: "draft_flow", noteInput: "note" }],
+    }));
+    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft", findings })];
+    try {
+      const result = await dispatchPendingProducerRepairs();
+      expect(result).toMatchObject({ scanned: 1, dispatched: 1, escalated: 0, failed: 0 });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    expect(ports.created[0].input).toMatchObject({ parentRunId: "provenance-run" });
+    const params = inputParams();
+    expect(Object.keys(params).sort()).toEqual(["draftNote", "lifecycleRepairRequest"]);
+    expect(params.draftNote).toBe(note);
+    expect(params.lifecycleRepairRequest).toMatchObject({ kind: "lifecycle_repair_request", repairId: "repair-current", findings: [] });
+    expect(JSON.stringify(params).split(note)).toHaveLength(2);
   });
 
   it("a Regenerate whose segment plan refuses is escalated with the plan's reason: no run, no job", async () => {

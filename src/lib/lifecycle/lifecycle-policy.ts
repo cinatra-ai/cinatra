@@ -345,6 +345,29 @@ export function buildRepairFindingsText(findings: readonly RepairFindingText[]):
   return [REPAIR_FINDINGS_TEXT_LEAD, lines.join("\n")].join("\n\n");
 }
 
+/** The id of the finding that carries the review floor's Note (the review
+ *  store records the Note field's words under it). */
+export const REVIEW_NOTE_FINDING_ID = "prompt-window";
+
+/**
+ * The reviewer's note of a Regenerate (cinatra#4264): the message of the one
+ * `prompt-window` finding, exactly as recorded, or null when there is no such
+ * finding, more than one, or its message is blank. Read from a stored value,
+ * fail-soft. No other finding stands in for it, and the words are never
+ * wrapped in the findings text: the producing step works from the Note
+ * field's words as they are.
+ */
+export function readRegenerateNote(findings: unknown): string | null {
+  if (!Array.isArray(findings)) return null;
+  const notes = findings.filter(
+    (finding): finding is { message?: unknown } =>
+      !!finding && typeof finding === "object" && (finding as { id?: unknown }).id === REVIEW_NOTE_FINDING_ID,
+  );
+  if (notes.length !== 1) return null;
+  const message = notes[0].message;
+  return typeof message === "string" && message.trim().length > 0 ? message : null;
+}
+
 /**
  * The input a producer's compiled lifecycle declares for its repair findings,
  * or null when it declares none, or names an input that is not admissible (the

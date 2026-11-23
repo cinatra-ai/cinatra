@@ -87,7 +87,7 @@ JSON-as-text — the same compiled-config column shape `trigger_mode` /
 | `producedTypes` | array of strings | The artifact types the producer declares it creates. The lattice does not branch on it. |
 | `repairCapable` | boolean | Whether this producer implements the typed repair round-trip (§4). |
 | `repairFindingsInput` | object `{ "input": "<name>" }` | The input of this producer's template that a dispatched repair run gets the reviewer's findings in (§4). `input` is an identifier, and is never `lifecycleRepairRequest` or a property name of `Object.prototype`. |
-| `regenerate` | array of `{ "artifactNode", "step", "noteInput" }` | Per node that files a reviewed artifact, the producing step a Regenerate reruns and the step input the reviewer's note goes into (section 4). Stored; no run reads it yet. |
+| `regenerate` | array of `{ "artifactNode", "step", "noteInput" }` | Per node that files a reviewed artifact, the producing step a Regenerate reruns and the step input the reviewer's note goes into (section 4). Read by Regenerate. |
 
 **Reading is tolerant.** Neither reader throws on a malformed value: an absent,
 empty or non-object value yields no declarations, and the producer gets pure core
@@ -367,7 +367,11 @@ of each declared node (the step snapshots). A repair whose row names
   runs as an ordinary repair; a blank one is refused and escalated, never run
   as an ordinary repair; no input of the run makes it a segment run.
 - **Inputs.** The run's inputs are the note and the typed
-  `lifecycleRepairRequest` only. The note travels under the flow's start output
+  `lifecycleRepairRequest` only. The note is the reviewer's words from the
+  Note field, exactly as recorded (`readRegenerateNote`), never the findings
+  text; a repair with no note is refused and escalated. The request is carried
+  with no findings, so the note's words reach the declared input and no other
+  place of the run's input. The note travels under the flow's start output
   that feeds the step's `noteInput` (its name may differ from `noteInput`); the
   segment request carries that name, and the runtime refuses a name that its
   mounted start node does not output or that does not feed the note. A name

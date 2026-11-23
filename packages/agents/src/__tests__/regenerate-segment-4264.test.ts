@@ -716,7 +716,8 @@ describe("planSegmentDispatch", () => {
     expect(await planSegmentDispatch(base, { readVerifiedFilingNode: read, readNoteStartOutput })).toEqual({
       kind: "segment",
       parentRunId: PROVENANCE_RUN,
-      inputParams: { imagePrompt: "brighter picture", lifecycleRepairRequest: { kind: "lifecycle_repair" } },
+      // The request travels without findings: the note is in the declared input only.
+      inputParams: { imagePrompt: "brighter picture", lifecycleRepairRequest: { kind: "lifecycle_repair", findings: [] } },
     });
     expect(readNoteStartOutput).toHaveBeenCalledWith({ packageName: PACKAGE, step: "image_flow", noteInput: "prompt" });
   });

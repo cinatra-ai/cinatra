@@ -531,6 +531,12 @@ export type SegmentDispatchPlan =
  * its input params hold the note, under the flow's start output that feeds
  * the entry's `noteInput`, and the typed request only. A provenance that cannot be proven, or another filing node,
  * refuses (the drain escalates the repair; nothing is dispatched).
+ *
+ * THE NOTE APPEARS ONCE (cinatra#4264). `note` is the reviewer's note as the
+ * Note field holds it (`readRegenerateNote`), never a findings text; a blank
+ * or absent note refuses. The typed request is carried with no findings, so
+ * the note's words reach the declared input and no other place of the run's
+ * input. The repair row keeps the findings for the record.
  */
 export async function planSegmentDispatch(
   input: {
@@ -538,7 +544,8 @@ export async function planSegmentDispatch(
     templateId: string;
     packageName: string | null;
     lifecycleConfig: unknown;
-    note: string;
+    /** The reviewer's note (`readRegenerateNote`), or null when it has none. */
+    note: string | null;
     request: Record<string, unknown>;
   },
   deps?: Pick<RegenerateSegmentDeps, "readVerifiedFilingNode" | "readNoteStartOutput">,
@@ -546,6 +553,10 @@ export async function planSegmentDispatch(
   const { repair } = input;
   const nodeId = repair.regenerateNodeId;
   if (!nonEmptyString(nodeId)) return { kind: "refused", reason: "the Regenerate intent names no node" };
+  const note = input.note;
+  if (typeof note !== "string" || note.trim().length === 0) {
+    return { kind: "refused", reason: "Regenerate refused: the repair carries no reviewer's note" };
+  }
   const read =
     deps?.readVerifiedFilingNode ??
     (await import("@/lib/artifacts/regenerate-provenance")).readVerifiedFilingNode;
@@ -576,7 +587,7 @@ export async function planSegmentDispatch(
   return {
     kind: "segment",
     parentRunId: provenance.runId,
-    inputParams: { [noteStartOutput]: input.note, [LIFECYCLE_REPAIR_REQUEST_INPUT]: input.request },
+    inputParams: { [noteStartOutput]: note, [LIFECYCLE_REPAIR_REQUEST_INPUT]: { ...input.request, findings: [] } },
   };
 }
 

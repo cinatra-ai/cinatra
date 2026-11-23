@@ -98,9 +98,9 @@ import type { OboCeilingChain } from "@cinatra-ai/mcp-server/obo-ceiling";
 
 import type { ChangesRequestedRequest, RepairFinding } from "@/lib/lifecycle/lifecycle-repair";
 import {
-  buildRepairFindingsText,
   parseLifecycleConfigText,
   projectRepairFindingsInput,
+  readRegenerateNote,
   type CompiledManifestLifecycle,
 } from "@/lib/lifecycle/lifecycle-policy";
 import { hasRegenerateIntent, planSegmentDispatch } from "./regenerate-segment";
@@ -518,7 +518,9 @@ async function deliverRepair(row: typeof lifecycleRepair.$inferSelect): Promise<
       templateId: producer.templateId,
       packageName: producer.packageName,
       lifecycleConfig: producer.lifecycleConfigText,
-      note: buildRepairFindingsText(request.findings),
+      // The Note field's words as the reviewer left them, never a findings
+      // text; the plan carries the request without its findings.
+      note: readRegenerateNote(request.findings),
       request: request as unknown as Record<string, unknown>,
     });
     if (segment.kind === "refused") {
