@@ -61,20 +61,18 @@ import { readKeyList } from "./gate-keys-not-from-run-inputs";
 import {
   PUBLISH_ROW_COLUMNS_MAX,
   PUBLISH_ROW_FIELD_MAX,
+  PUBLISH_DECISION_ISLAND_REF_FIELD_MAX,
   PUBLISH_ROW_INPUT_MAX,
   PUBLISH_ROW_LABEL_MAX,
   PUBLISH_ROWS_MAX,
   isPublishRowField,
   isPublishRowLabel,
+  publishDecisionIslandRefInputFits,
   type PublishRowColumn,
   type PublishRowDeclaration,
   type PublishRowsMap,
 } from "./publish-decision-card";
 import { checkRegenerateDeclaration } from "./verdaccio/package-contract";
-import {
-  PUBLISH_DECISION_ISLAND_REF_FIELD_MAX,
-  publishDecisionIslandRefInputFits,
-} from "@/lib/lifecycle/lifecycle-card-ref";
 
 // ---------------------------------------------------------------------------
 // OAS Flow compiler

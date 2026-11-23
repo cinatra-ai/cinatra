@@ -38,6 +38,17 @@ export const PUBLISH_ROW_FIELD_MAX = 64;
  *  refuses it too and a compiled row is always one the store keeps. */
 export const PUBLISH_ROW_INPUT_MAX = 256;
 
+/** The longest input an artifacts row may name: its island ref carries the name as one field, and the ref codec
+ *  (src/lib/lifecycle/lifecycle-card-ref.ts, which holds the same bound) seals no field past 128 bytes. */
+export const PUBLISH_DECISION_ISLAND_REF_FIELD_MAX = 128;
+
+/** Can an artifacts row over this input ever be addressed (cinatra#4738)? True when the name is 1 to 128 characters
+ *  and its sealed (JSON string) form takes at most 128 bytes, so a name of 128 non-ASCII characters is refused. */
+export function publishDecisionIslandRefInputFits(input: unknown): boolean {
+  if (typeof input !== "string" || input.length === 0 || input.length > PUBLISH_DECISION_ISLAND_REF_FIELD_MAX) return false;
+  return new TextEncoder().encode(JSON.stringify(input)).length - 2 <= PUBLISH_DECISION_ISLAND_REF_FIELD_MAX;
+}
+
 const ONE_LINE = /[\p{Cc}\u2028\u2029]/u;
 /** A row or column label: one line of 1 to 60 characters with no leading or trailing space. */
 export const isPublishRowLabel = (label: unknown): label is string =>

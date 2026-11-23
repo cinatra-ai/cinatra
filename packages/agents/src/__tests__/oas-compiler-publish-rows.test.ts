@@ -262,7 +262,7 @@ describe("cinatra#4150 W4 — four rows, the text kind and the list row", () => 
       );
     const TOO_LONG = /^PUBLISH_ROWS_MALFORMED: node "publish" metadata\.cinatra\.publishRows\[0\]\.input of an artifacts row must name an input of at most 128 characters \(128 bytes\)$/;
 
-    // red-first-expect: metadata.cinatra.publishRows[0] must be an object with exactly the keys label and input
+    // red-first-expect: expected { ok: false, …(1) } to deeply equal { ok: false, error: StringMatching{…} }
     it("a 129-character input is refused at compile time, with the codec's own bound", () => {
       const name = "p".repeat(129);
       expect(withInput(name, { ...ARTIFACTS, input: name })).toEqual({ ok: false, error: expect.stringMatching(TOO_LONG) });
@@ -397,5 +397,19 @@ describe("cinatra#4150 — compileOasAgentJson emits publishRows", () => {
     expect(res.ok).toBe(false);
     if (res.ok) throw new Error("unreachable");
     expect(res.error).toMatch(/^PUBLISH_ROWS_MISPLACED: node "publish" /);
+  });
+});
+
+// The agents package holds its own copy of the island ref's input bound (it cannot import the app's codec); the two
+// must agree on every name the compiler decides about.
+describe("the compiler's island ref bound agrees with the ref codec", () => {
+  it("accepts and refuses the same names", async () => {
+    process.env.BETTER_AUTH_SECRET ??= "test-secret-for-lifecycle-refs";
+    const codec = await import("@/lib/lifecycle/lifecycle-card-ref");
+    const card = await import("../publish-decision-card");
+    expect(card.PUBLISH_DECISION_ISLAND_REF_FIELD_MAX).toBe(codec.PUBLISH_DECISION_ISLAND_REF_FIELD_MAX);
+    for (const name of ["", "p", "p".repeat(128), "p".repeat(129), "页".repeat(42), "页".repeat(43), "页".repeat(128), 'a"b', "\\".repeat(64), "\\".repeat(65), 7]) {
+      expect(card.publishDecisionIslandRefInputFits(name), String(name)).toBe(codec.publishDecisionIslandRefInputFits(name));
+    }
   });
 });

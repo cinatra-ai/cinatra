@@ -14,9 +14,9 @@
 //     does not show, a decision that is no longer the newest, and a row the reader may not read all serve nothing;
 //   - a gate capability sealed with the row's subject key serves nothing either.
 // Red first at ffe421ea: a publish row names no sealed road, so the target keeps the session addresses. Before the
-// publish row existed at all, the file does not load:
-// red-first-expect: "./publish-decision-island-subject" is not exported under the conditions
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// publish row existed at all, the subject key it seals with does not exist:
+// red-first-expect: publishDecisionIslandSubjectKey is not a function
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createElement, isValidElement, type ReactElement, type ReactNode } from "react";
 
 process.env.BETTER_AUTH_SECRET ??= "test-secret-for-lifecycle-refs";
@@ -33,7 +33,8 @@ const state = {
 };
 const ROW = { runId: "run-1", decisionId: "dec-1", input: "proposedPages" };
 
-vi.mock("@cinatra-ai/agents/publish-decision-island-subject", () => ({
+// Registered before the tests rather than hoisted, so a tree without this module fails its tests, not the file.
+beforeAll(() => vi.doMock("@cinatra-ai/agents/publish-decision-island-subject", () => ({
   readPublishDecisionIslandRows: async ({ runId }: { runId: string; who: Who }) =>
     state.readable && runId === ROW.runId ? { decisionId: state.newestDecisionId, inputs: ["summary", ROW.input] } : null,
   readPublishDecisionIslandSubject: async (input: { runId: string; decisionId: string; input: string; who: Who }) =>
@@ -41,7 +42,7 @@ vi.mock("@cinatra-ai/agents/publish-decision-island-subject", () => ({
       ? { runId: ROW.runId, orgId: "org-1", decided: false, targets: state.targets }
       : null,
   readRevisionsMadeByRun: async () => state.madeByRun,
-}));
+})));
 
 const begun: Array<{ byteMinter?: unknown }> = [];
 vi.mock("@/app/artifacts/[id]/review-target-prepare", () => ({
@@ -168,9 +169,11 @@ vi.mock("@cinatra-ai/agents/review-gate-states", () => ({
 
 import { encodePublishDecisionIslandRef, publishDecisionIslandSubjectKey } from "@/lib/lifecycle/lifecycle-card-ref";
 import { mintReviewIslandByteCapability, reviewIslandByteUrl } from "@/lib/lifecycle/review-island-byte-capability";
-import ReviewTargetIslandPage from "../page";
-import { GET as getBytes } from "@/app/api/lifecycle-views/artifact-bytes/route";
-import { GET as getCapture } from "@/app/api/lifecycle-views/capture/route";
+// The page and both routes load inside each test, so a tree without the publish row fails the test that needs it
+// rather than the whole file.
+const loadPage = async () => (await import("../page")).default;
+const getBytes = async (req: Request) => (await import("@/app/api/lifecycle-views/artifact-bytes/route")).GET(req);
+const getCapture = async (req: Request) => (await import("@/app/api/lifecycle-views/capture/route")).GET(req);
 
 const ACTOR = {
   actor: { actorType: "human", userId: "u1", orgId: "org-1", source: "route" },
@@ -188,7 +191,7 @@ function streams(node: ReactNode): Array<{ prepared: Promise<{ bytes: Record<str
 
 async function paint(): Promise<{ bytes: Record<string, unknown>; pair: { left: { imageUrl: string | null } | null; right: { imageUrl: string | null } | null } | null }> {
   const ref = encodePublishDecisionIslandRef(ROW)!;
-  const el = (await ReviewTargetIslandPage({ searchParams: Promise.resolve({ ref, ic: "sealed-credential" }) })) as ReactElement;
+  const el = (await (await loadPage())({ searchParams: Promise.resolve({ ref, ic: "sealed-credential" }) })) as ReactElement;
   const [one] = streams(el);
   expect(one, "the island drew no target").toBeDefined();
   return { bytes: (await one.prepared).bytes, pair: (await one.capturePair) as never };
