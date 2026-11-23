@@ -1366,9 +1366,11 @@ export async function buildDeclaredScreenSubmitValues(input: {
   readonly attachments: readonly Record<string, unknown>[];
 }): Promise<Record<string, unknown> | null> {
   const answer = await import("@cinatra-ai/agents/hitl-gate-submit");
-  const staged = input.fills.reduce(
-    (current, fill) => answer.declaredHitlStage(input.card, input.runValue, current, fill),
+  const staged = answer.declaredHitlReplayFills(
+    input.card,
+    input.runValue,
     answer.declaredHitlStage(input.card, input.runValue, {}, {}),
+    input.fills,
   );
   if (!answer.declaredHitlScreenReady(input.card, input.runValue, staged)) return null;
   return answer.declaredHitlContinuePayload(input.card, staged, input.attachments as never);

@@ -63,6 +63,7 @@ import {
   makeDeclaredHitlScreenRenderer,
   type DeclaredHitlCard,
 } from "./declared-hitl-screen-renderer";
+import { hasUsableListPick } from "./hitl-gate-submit";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: dependency-free .mjs validation module (allowJs)
 import { MID_RUN_ONLY_MESSAGE, validateHitlScreen } from "../../../scripts/extensions/agent-hitl-screen-schema.mjs";
@@ -113,6 +114,15 @@ const RENDERER_KIND_TABLE: Record<
     drawsOwnSubmit?: true;
     /** A component of this kind commits a pick, so its gate's Continue waits for one; see `FieldRendererEntry.holdsContinueUntilPicked` (cinatra#3035). The schema floor commits none, so a binding the floor draws never holds. */
     holdsContinueUntilPicked?: true;
+    /**
+     * When the host's Continue may send this kind's staged answer, for a
+     * binding that DECLARES its screen as this kind (`screen: {layout:
+     * "kind"}`, cinatra#3470): the same readiness hold every declared card
+     * has (`FieldRendererEntry.continueReady`). Declared only where an
+     * untouched component would send an answer that answers nothing: a list
+     * step with no usable pick sends an empty snapshot (`listId: ""`).
+     */
+    declaredContinueReady?: FieldRendererEntry["continueReady"];
     /**
      * Optional custom condition factory for kinds whose match logic goes
      * beyond strict ID equality (e.g. gmail-sender's context gating +
@@ -202,7 +212,14 @@ const RENDERER_KIND_TABLE: Record<
   // this kind degrades to the SchemaFieldRenderer floor here (AC4 never-blank).
   // Same shape as final-list-review / scrape-schema-review above.
   "linkedin-draft-review": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true, drawsOwnSubmit: true },
-  "list-picker": { renderer: ListPickerRenderer, bareAliases: ["list-picker"] },
+  // A declared list step holds the host's Continue until a usable pick
+  // exists (cinatra#3470): its renderer reports no validity, and with nothing
+  // picked the lift would send an empty snapshot.
+  "list-picker": {
+    renderer: ListPickerRenderer,
+    bareAliases: ["list-picker"],
+    declaredContinueReady: ({ staged }) => hasUsableListPick(staged),
+  },
   // See the final-list-review note above — the component migrated; the kind + its
   // floor stay host so the vocabulary holds and a not-in-build binding never blanks.
   "scrape-schema-review": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true, drawsOwnSubmit: true },
@@ -311,6 +328,9 @@ function registerDeclaredScreen(b: FieldRendererBindingInput): void {
     continueReady = ({ runValue, staged }) => declaredHitlScreenReady(declared, runValue, staged);
   } else if (kindEntry && checked.screen?.layout === "kind" && kindEntry.renderer !== SchemaOnlyFloorRenderer) {
     renderer = kindEntry.renderer;
+    // The same hold as a card (cinatra#3470): a kind whose untouched answer
+    // answers nothing holds the host's Continue until it is ready.
+    continueReady = kindEntry.declaredContinueReady;
   }
   // A declared screen belongs to a mid-run gate only (runtime data is checked
   // again here, as the build-time validator checks it).

@@ -125,12 +125,13 @@ import {
   continueHeldByRenderer,
   stageRendererAnswer,
   stageAssistantFill,
+  stageAssistantFills,
   isSetupGateTaskId,
   liftRendererApprovalNote,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
-  withDeclaredRendererValues,
+  finishContinuePayload,
   wrapPrimitiveSetupPayload,
   type GateValidityStore,
   readSchemaFieldGate,
@@ -917,6 +918,10 @@ function HitlApprovalCard({
     const { entry: target, runValue } = fillTargetRef.current;
     setBufferedHitlValue(prev => stageAssistantFill(target, runValue, prev, suggestions));
   }, []);
+  const applyTurnFills = useCallback((fills: Record<string, unknown>[]) => {
+    const { entry: target, runValue } = fillTargetRef.current;
+    setBufferedHitlValue(prev => stageAssistantFills(target, runValue, prev, fills));
+  }, []);
 
   const fieldSchema: Record<string, unknown> = {
     ...(interruptContext.schema ?? {}),
@@ -1007,7 +1012,9 @@ function HitlApprovalCard({
       // moved past would show values that were never sent. "The card is the
       // visible truth": a turn that pressed makes the screen re-read instead.
       if (effect.fill && !effect.acted) {
-        handleApply(effect.fill.values);       // updates parent buffer
+        // Every fill of the turn, in order (cinatra#3470): a declared card
+        // replays them as the server does, so a later decision wins.
+        applyTurnFills(effect.fill.inOrder);   // updates parent buffer
         setAiSuggestions(effect.fill.values);  // renderers sync local state
       }
     } finally {
@@ -1064,6 +1071,10 @@ function HitlApprovalCard({
     // Reported unsendable (see `gateValidity`): the press sends nothing, before
     // the run-name check and the optimistic spinner below.
     if (gateValidity.isHeld(setupGateKey)) return;
+    // A declared screen that is not ready (cinatra#3470) sends nothing, as its
+    // drawn Continue is unavailable: a card without its answer, a list step
+    // without a usable pick.
+    if (continueHeldByRenderer(entry, interruptContext.values, bufferedHitlValue)) return;
     if (!(await checkRunName())) return;
     // …and again after the run-name check: a report made while it was pending
     // holds this press too. Nothing below awaits before the send.
@@ -1108,29 +1119,19 @@ function HitlApprovalCard({
       interruptContext.values,
       nextBuffered,
     );
-    // Wrap the legacy `userResponse` text with the WayFlow envelope when
-    // paperclip attachments are pending. Skip wrap for setup gates because the
-    // server path doesn't read userResponse there; only enter the wrap when
-    // attachments.length > 0. PRESERVE any renderer-authored userResponse
-    // already on nextBuffered; clobbering it would change WayFlow text.
-    // Fallback "[Approved by operator]" mirrors review-task-actions.ts
-    // server default when no userResponse text exists.
-    const isSetupGate = isSetupGateTaskId(interruptContext.reviewTaskId);
-    if (!isSetupGate && pendingAttachmentsRef.current.length > 0) {
-      // Share the precedence-and-wrap pure helper with the renderer-inline
-      // submits. Server-side precedence userResponse → approvalNote → default
-      // is mirrored inside `pickLegacyResumeText`.
-      nextBuffered = applyAttachmentEnvelope(
-        nextBuffered,
-        pendingAttachmentsRef.current,
-      );
-    }
     // cinatra#3380 — on a mid-run gate, a key the gate declares and the renderer
     // wrote is sent as the renderer wrote it, over approved, approvedAt and every
-    // lift and wrap above.
-    if (isMidRunHitl) {
-      nextBuffered = withDeclaredRendererValues(renderSchema, bufferedHitlValue, nextBuffered);
-    }
+    // lift above; THEN the files waiting in the window are wrapped around the
+    // resume text (cinatra#3470), last, so a declared answer staged in
+    // `userResponse` goes with them. The wrap keeps the server's precedence
+    // userResponse -> approvalNote -> default (`pickLegacyResumeText`). A setup
+    // gate wraps nothing: the server path does not read userResponse there.
+    nextBuffered = finishContinuePayload(nextBuffered, {
+      declaredSchema: isMidRunHitl ? renderSchema : null,
+      written: bufferedHitlValue,
+      attachments: isSetupGateTaskId(interruptContext.reviewTaskId) ? [] : pendingAttachmentsRef.current,
+      wrapAttachments: applyAttachmentEnvelope,
+    });
     let didApprove = false;
     try {
       const outcome = await approveReviewTask(interruptContext.reviewTaskId, nextBuffered, undefined, interruptContext.schema as Record<string, unknown> | undefined);

@@ -207,9 +207,11 @@ async function readDeclaredFill(
     return { kind: "too-large", fields };
   }
   // What the card shows now: its prefill, then every fill this message placed.
-  const shown = placedInOrder.reduce(
-    (staged, fill) => answer.declaredHitlStage(card, runValue, staged, fill),
+  const shown = answer.declaredHitlReplayFills(
+    card,
+    runValue,
     answer.declaredHitlStage(card, runValue, {}, {}),
+    placedInOrder,
   );
   const after = answer.declaredHitlStage(card, runValue, shown, read.change);
   if (JSON.stringify(after) === JSON.stringify(shown)) {

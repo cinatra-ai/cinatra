@@ -159,11 +159,10 @@ import {
   continueApprovalFlag,
   continueHeldByRenderer,
   stageRendererAnswer,
-  isSetupGateTaskId,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
-  withDeclaredRendererValues,
+  finishContinuePayload,
   wrapPrimitiveSetupPayload,
 } from "./hitl-gate-submit";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
@@ -1029,15 +1028,17 @@ export function AgentHitlScreenContinue({
           payload,
           listStep ? liftRendererApprovalNote(gate.xRenderer, buffered) : null,
         );
-        if (!isSetupGateTaskId(gate.reviewTaskId)) {
-          payload = applyAttachmentEnvelopeUserResponseOnly(payload, []);
-        }
         payload = withContextSelectorEnvelope(gate.xRenderer, gate.currentValues, payload);
         // cinatra#3380 — a key the gate declares and the renderer wrote is sent as
-        // the renderer wrote it, over approved, approvedAt and the wraps above.
-        if (presentationHintOf(gate) === null) {
-          payload = withDeclaredRendererValues(gate.inputSchema, buffered, payload);
-        }
+        // the renderer wrote it, over approved, approvedAt and the lifts above,
+        // finished by the one helper every mid-run Continue uses
+        // (cinatra#3470). This card carries no waiting files.
+        payload = finishContinuePayload(payload, {
+          declaredSchema: presentationHintOf(gate) === null ? gate.inputSchema : null,
+          written: buffered,
+          attachments: [],
+          wrapAttachments: applyAttachmentEnvelopeUserResponseOnly,
+        });
         await onContinue(payload);
       }}
     />

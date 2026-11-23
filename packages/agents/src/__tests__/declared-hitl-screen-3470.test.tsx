@@ -61,7 +61,7 @@ import {
   type FieldRendererEntry,
   type FieldRendererProps,
 } from "../field-renderer-registry";
-import { registerFieldRendererBindings } from "../register-default-renderers";
+import { knownFieldRendererKinds, registerFieldRendererBindings } from "../register-default-renderers";
 import {
   __resetFieldRendererComponentMapForTests,
   __setFieldRendererComponentMapForTests,
@@ -71,7 +71,7 @@ import { SchemaOnlyFloorRenderer } from "../schema-field-renderer";
 import { AgentHitlScreenCard } from "../agent-hitl-screen-card";
 import { parseAgentHitlScreenState } from "../agent-hitl-screen";
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
-import { continueApprovalFlag } from "../hitl-gate-submit";
+import { continueApprovalFlag, continueHeldByRenderer } from "../hitl-gate-submit";
 
 const ID = "@acme-test/publish-agent:confirm";
 
@@ -519,7 +519,7 @@ describe("a declared card holds the host's Continue (cinatra#3470)", () => {
     expect(continueApprovalFlag(staged({ itemId: "item-1", revisionId: "rev-1", approved: true }), ID)).toBe(true);
   });
 
-  it("a 'kind' layout and a binding without a screen never hold the Continue", () => {
+  it("a 'kind' layout whose untouched answer is an answer, and a binding without a screen, never hold the Continue", () => {
     registerFieldRendererBindings([
       { id: ID, kind: "cta", priority: 80, midRunHitl: true, screen: { layout: "kind" } },
     ]);
@@ -527,6 +527,35 @@ describe("a declared card holds the host's Continue (cinatra#3470)", () => {
     expect(entryOf()?.continueReady).toBeUndefined();
     registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90 }]);
     expect(entryOf()?.continueReady).toBeUndefined();
+  });
+
+  // Round 5, finding 3: a declared list step holds the host's Continue until a
+  // usable pick exists, as a card holds it until its answer is complete.
+  it("a declared list-picker kind holds the Continue until a usable pick exists", () => {
+    registerFieldRendererBindings([
+      { id: ID, kind: "list-picker", priority: 80, midRunHitl: true, screen: { layout: "kind" } },
+    ]);
+    expect(continueHeldByRenderer(entryOf(), {}, {})).toBe(true);
+    expect(continueHeldByRenderer(entryOf(), {}, { listId: "  " })).toBe(true);
+    expect(continueHeldByRenderer(entryOf(), {}, { listIds: [""] })).toBe(true);
+    expect(continueHeldByRenderer(entryOf(), {}, { listId: "list-1" })).toBe(false);
+    expect(continueHeldByRenderer(entryOf(), {}, { listIds: ["list-1"] })).toBe(false);
+  });
+
+  // The check of every other kind: a declared 'kind' registers only for a kind
+  // with a host component, and of those only the list step's untouched answer
+  // answers nothing (an empty snapshot). Context selection, the reviews and
+  // the call to action continue on what they draw; the grouped setup form
+  // sends from its own control.
+  it("of every kind a 'kind' layout can declare, only the list step holds the Continue", () => {
+    const holding: string[] = [];
+    for (const kind of knownFieldRendererKinds()) {
+      fieldRendererRegistry.clear();
+      registerFieldRendererBindings([{ id: ID, kind, priority: 80, midRunHitl: true, screen: { layout: "kind" } }]);
+      if (entryOf()?.continueReady !== undefined) holding.push(kind);
+    }
+    // red-first-expect: expected [] to deeply equal [ 'list-picker' ]
+    expect(holding).toEqual(["list-picker"]);
   });
 
   it("only a 'card' stages its whole answer; a 'kind' and a plain binding stage as their kind does", () => {

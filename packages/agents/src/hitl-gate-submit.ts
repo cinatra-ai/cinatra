@@ -392,6 +392,26 @@ export function stageAssistantFill(
   return { ...buffered, ...fill };
 }
 
+/**
+ * The buffer after EVERY fill one assistant turn placed, applied in the order
+ * they were placed (cinatra#3470). A declared card replays them through its
+ * one writer exactly as the server does (`declaredHitlReplayFills`), so a
+ * later decision replaces an earlier one and the screen shows what a press
+ * by asking would send; every other entry merges them in order, later fills
+ * winning, as before.
+ */
+export function stageAssistantFills(
+  entry: { declaredScreen?: DeclaredHitlCard } | null | undefined,
+  runValue: Record<string, unknown> | null | undefined,
+  buffered: Record<string, unknown>,
+  fills: ReadonlyArray<Record<string, unknown>>,
+): Record<string, unknown> {
+  if (entry?.declaredScreen !== undefined) {
+    return declaredHitlReplayFills(entry.declaredScreen, runValue ?? {}, buffered, fills);
+  }
+  return fills.reduce<Record<string, unknown>>((staged, fill) => ({ ...staged, ...fill }), buffered);
+}
+
 // ---------------------------------------------------------------------------
 // A DECLARED HITL CARD'S ANSWER (cinatra#3470): ONE WRITER FOR EVERY ROAD
 // ---------------------------------------------------------------------------
@@ -578,6 +598,26 @@ export function declaredHitlStage(
   const picked = declaredHitlChosenDecision(screen, change) ?? declaredHitlChosenDecision(screen, staged);
   if (picked === null) return {};
   return declaredHitlStagedAnswer(screen, runValue, { ...decisions[picked]!.answer });
+}
+
+/**
+ * THE ONE REPLAY of a turn's fills on a declared card: each fill, oldest
+ * first, through the card's one writer over the answer staged so far. The
+ * server replays a message's fills with it (the bound-screen fill and the
+ * lent-action press, from the card's prefill), and the browser applies a
+ * turn's fills with it (`stageAssistantFills`, over its buffer), so both read
+ * a later decision as replacing the earlier one.
+ */
+export function declaredHitlReplayFills(
+  screen: DeclaredHitlCard,
+  runValue: Record<string, unknown>,
+  staged: Record<string, unknown>,
+  fills: ReadonlyArray<Record<string, unknown>>,
+): Record<string, unknown> {
+  return fills.reduce<Record<string, unknown>>(
+    (current, fill) => declaredHitlStage(screen, runValue, current, fill),
+    staged,
+  );
 }
 
 /**
@@ -1246,6 +1286,35 @@ export function withDeclaredRendererValues(
     sent[key] = value;
   }
   return sent;
+}
+
+/**
+ * THE LAST STEP OF EVERY MID-RUN CONTINUE'S PAYLOAD (cinatra#3470): the run
+ * panel, the stepper and the HITL screen card each build their payload, then
+ * finish it here. First each key the gate declares and the renderer wrote is
+ * put back as written (`withDeclaredRendererValues`; pass no schema to skip
+ * it), and only then are the waiting files wrapped around the resume text. The
+ * wrap comes LAST, so a declared answer the renderer staged in `userResponse`
+ * is the text the files go with, and never replaces the envelope that carries
+ * them. `wrapAttachments` is the surface's own wrap (`applyAttachmentEnvelope`
+ * or `applyAttachmentEnvelopeUserResponseOnly`), passed in so this pure module
+ * imports nothing more; a setup gate passes no attachments.
+ */
+export function finishContinuePayload(
+  payload: Record<string, unknown>,
+  finish: {
+    declaredSchema: Record<string, unknown> | null | undefined;
+    written: Record<string, unknown> | null | undefined;
+    attachments: ReadonlyArray<LlmAttachmentRef>;
+    wrapAttachments: (
+      payload: Record<string, unknown>,
+      attachments: ReadonlyArray<LlmAttachmentRef>,
+    ) => Record<string, unknown>;
+  },
+): Record<string, unknown> {
+  const declared = withDeclaredRendererValues(finish.declaredSchema, finish.written, payload);
+  if (finish.attachments.length === 0) return declared;
+  return finish.wrapAttachments(declared, finish.attachments);
 }
 
 /**

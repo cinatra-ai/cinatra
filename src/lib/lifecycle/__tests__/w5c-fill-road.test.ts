@@ -1061,8 +1061,18 @@ describe("a declared card is filled and sent through its own answer (cinatra#347
     expect(approveReviewTaskInternal).not.toHaveBeenCalled();
   });
 
-  it("a card with no controls sends its carried values, never a bare approval", async () => {
+  it("a card with no controls is not sent by asking; its own Continue sends its carried values", async () => {
     const TITLE_ONLY = { layout: "card" as const, title: "Fixture title only", carry: ["itemId"] };
+    // THE REAL ROUTE: such a card offers no control to fill, so a message can
+    // place nothing on it, and the lent-action press refuses a message that
+    // placed nothing (the plan: a press sends what the same message placed).
+    expect(await fill(TITLE_ONLY, { itemId: "item-2" })).toMatchObject({ kind: "no-fields" });
+    expect(appended).toHaveLength(0);
+    const res = await submit(TITLE_ONLY);
+    expect(res.structuredContent).toMatchObject({ ok: false, outcome: { kind: "nothing-placed" } });
+    expect(approveReviewTaskInternal).not.toHaveBeenCalled();
+    // The person's own Continue sends the card's whole answer (the shared
+    // payload builder both roads use): its carried values, never a bare approval.
     const values = await buildDeclaredScreenSubmitValues({
       card: TITLE_ONLY,
       runValue: RUN_VALUES,

@@ -104,6 +104,37 @@ const hitlActions = vi.hoisted(() => ({
 }));
 vi.mock("../hitl-actions", () => hitlActions);
 
+/**
+ * A file waiting in the window (cinatra#3470): the run page draws the window
+ * without its paperclip, so a test that needs a waiting file adds one send
+ * control beside the real window, drawn only while `windowFiles.attachments`
+ * is set (agentic-run-panel-setup-continue-3532's stand-in). Its message is
+ * empty: the screen keeps the files and no turn goes to the conversation.
+ */
+const windowFiles = vi.hoisted(() => ({ attachments: null as null | unknown[] }));
+vi.mock("../hitl-conversation-panel", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../hitl-conversation-panel")>();
+  const { Button: WindowButton } = await import("@/components/ui/button");
+  function WindowWithAFile(props: React.ComponentProps<typeof real.HitlConversationPanel>) {
+    return (
+      <>
+        <real.HitlConversationPanel {...props} />
+        {windowFiles.attachments ? (
+          <WindowButton
+            type="button"
+            onClick={() =>
+              void props.onSubmit("", windowFiles.attachments as Parameters<typeof props.onSubmit>[1])
+            }
+          >
+            Send with a file
+          </WindowButton>
+        ) : null}
+      </>
+    );
+  }
+  return { ...real, HitlConversationPanel: WindowWithAFile };
+});
+
 vi.mock("../a2a-actions", () => ({
   getAgentBuilderTask: vi.fn(async () => null),
 }));
@@ -226,6 +257,7 @@ beforeEach(() => {
   windowActions.loadRunWindowConversation.mockResolvedValue([]);
   nextMessage.text = "";
   parkedGate.current = null;
+  windowFiles.attachments = null;
 });
 
 afterEach(() => {
@@ -328,7 +360,40 @@ describe("the run page's setup field shows what the window placed (cinatra#2934)
 describe("an assistant fill on a declared card reaches the agent as the answer (cinatra#3470)", () => {
   const DECLARED_ID = "@acme-test/declared-agent:confirm";
 
-  async function renderDeclaredCard() {
+  const FIELD_SCREEN = {
+    layout: "card",
+    title: "Fixture question",
+    sections: [{ type: "field", key: "answer", label: "Fixture answer" }],
+    carry: ["itemId"],
+  };
+  const CHOICE_SCREEN = {
+    layout: "card",
+    title: "Fixture choice",
+    decisionLabel: "Fixture decision",
+    decisions: [
+      { label: "Fixture decline", answer: { approved: false, reason: "Fixture reason" } },
+      { label: "Fixture revise", answer: { action: "revise" } },
+    ],
+    carry: ["itemId"],
+  };
+  /** A gate that declares `userResponse` as the value its renderer must write. */
+  const REQUIRES_USER_RESPONSE = {
+    type: "object",
+    properties: { userResponse: { type: "string", "x-required": true } },
+  };
+  const FILE = {
+    artifactId: "art-1",
+    representationRevisionId: "ver-1",
+    digest: "sha256:abc",
+    mime: "application/pdf",
+    originKind: "upload",
+    filename: "report.pdf",
+  };
+
+  async function renderDeclaredCard(
+    declared: Record<string, unknown> = FIELD_SCREEN,
+    schema: Record<string, unknown> = { type: "object" },
+  ) {
     const { registerFieldRendererBindings } = await import("../register-default-renderers");
     registerFieldRendererBindings([
       {
@@ -336,16 +401,11 @@ describe("an assistant fill on a declared card reaches the agent as the answer (
         kind: "linkedin-draft-review",
         priority: 90,
         midRunHitl: true,
-        screen: {
-          layout: "card",
-          title: "Fixture question",
-          sections: [{ type: "field", key: "answer", label: "Fixture answer" }],
-          carry: ["itemId"],
-        },
+        screen: declared,
       },
     ]);
     parkedGate.current = {
-      schema: { type: "object" },
+      schema,
       xRenderer: DECLARED_ID,
       values: { itemId: "item-1" },
       reviewTaskId: "wayflow-task-3470-fill",
@@ -358,8 +418,14 @@ describe("an assistant fill on a declared card reaches the agent as the answer (
       </RunPageChrome>,
     );
     // red-first-expect: expected null not to be null
-    await waitFor(() => expect(screen.queryByLabelText("Fixture answer")).not.toBeNull());
+    await waitFor(() => expect(screen.queryByText(declared.title as string)).not.toBeNull());
     await waitFor(() => expect(screen.queryByTestId("prompt-field")).not.toBeNull());
+  }
+
+  /** The radio of the declared decision drawn with `name`. */
+  function radio(name: RegExp): HTMLElement {
+    const row = Array.from(document.querySelectorAll("label")).find((l) => name.test(l.textContent ?? ""));
+    return row!.querySelector<HTMLElement>('[role="radio"]')!;
   }
 
   const answerField = () => screen.getByLabelText("Fixture answer") as HTMLInputElement;
@@ -401,5 +467,50 @@ describe("an assistant fill on a declared card reaches the agent as the answer (
     const payload = await pressContinue();
     expect(payload.userResponse).toBe(JSON.stringify({ itemId: "item-1", answer: "new" }));
     expect(payload.answer).toBe("new");
+  });
+
+  // Round 5, finding 1: the gate declares `userResponse` as its renderer's
+  // value, and the card stages its answer there. The attachment envelope is
+  // applied last, over that staged answer, so the waiting file reaches the
+  // agent with it.
+  it("a waiting file goes with a declared answer on a gate that requires `userResponse`", async () => {
+    windowFiles.attachments = [FILE];
+    await renderDeclaredCard(FIELD_SCREEN, REQUIRES_USER_RESPONSE);
+    fireEvent.change(answerField(), { target: { value: "typed" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send with a file" }));
+    });
+
+    const payload = await pressContinue();
+    const envelope = JSON.parse(payload.userResponse as string) as {
+      text?: string;
+      attachments?: Array<{ artifactId: string }>;
+    };
+    expect(envelope.attachments?.map((a) => a.artifactId)).toEqual(["art-1"]);
+    expect(envelope.text).toBe(JSON.stringify({ itemId: "item-1", answer: "typed" }));
+  });
+
+  // Round 5, finding 2: two decision fills in one turn. The server replays
+  // them in order through the card's one writer, so the later decision
+  // replaces the earlier one; the screen applies them the same way.
+  it("two decision fills in one turn stage the later decision, as the server replays them", async () => {
+    windowActions.sendRunWindowTurn.mockResolvedValue(
+      turnOf({
+        ask: "Decline it. No, revise it.",
+        fills: [
+          { ref: "ref_1", values: { approved: false, reason: "Fixture reason" } },
+          { ref: "ref_1", values: { action: "revise" } },
+        ],
+        acted: false,
+      }),
+    );
+    await renderDeclaredCard(CHOICE_SCREEN);
+    await sendInWindow("Decline it. No, revise it.");
+    await waitFor(() => expect(radio(/Fixture revise/).getAttribute("aria-checked")).toBe("true"));
+
+    const payload = await pressContinue();
+    expect(payload.userResponse).toBe(JSON.stringify({ itemId: "item-1", action: "revise" }));
+    expect(Object.hasOwn(payload, "reason")).toBe(false);
+    expect(payload.approved).toBe(true);
   });
 });

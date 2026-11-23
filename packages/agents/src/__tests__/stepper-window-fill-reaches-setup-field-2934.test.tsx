@@ -117,6 +117,43 @@ const hitlActions = vi.hoisted(() => ({
 }));
 vi.mock("../hitl-actions", () => hitlActions);
 
+/**
+ * A file waiting in the window (cinatra#3470): a send control beside the real
+ * window, drawn only while `windowFiles.attachments` is set
+ * (agentic-run-panel-setup-continue-3532's stand-in). Its message is empty:
+ * the screen keeps the files and no turn goes to the conversation.
+ */
+const windowFiles = vi.hoisted(() => ({ attachments: null as null | unknown[] }));
+vi.mock("../hitl-conversation-panel", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../hitl-conversation-panel")>();
+  const { Button: WindowButton } = await import("@/components/ui/button");
+  function WindowWithAFile(props: React.ComponentProps<typeof real.HitlConversationPanel>) {
+    return (
+      <>
+        <real.HitlConversationPanel {...props} />
+        {windowFiles.attachments ? (
+          <WindowButton
+            type="button"
+            onClick={() =>
+              void props.onSubmit("", windowFiles.attachments as Parameters<typeof props.onSubmit>[1])
+            }
+          >
+            Send with a file
+          </WindowButton>
+        ) : null}
+      </>
+    );
+  }
+  return { ...real, HitlConversationPanel: WindowWithAFile };
+});
+
+// The list step's lists (cinatra#3470): one fixture list to pick.
+vi.mock("../list-picker-actions", () => ({
+  fetchAvailableLists: vi.fn(async () => [
+    { id: "list-1", name: "Fixture list", memberCount: 3, lastUpdated: null, memberType: "contact" },
+  ]),
+}));
+
 vi.mock("../use-runtime-field-renderer-bindings", () => ({
   useRuntimeFieldRendererBindings: () => ({ bindings: {}, loading: false }),
 }));
@@ -171,6 +208,7 @@ beforeEach(() => {
   ensureDefaultFieldRenderersRegistered();
   windowActions.loadRunWindowConversation.mockResolvedValue([]);
   parkedGate.current = null;
+  windowFiles.attachments = null;
 });
 
 afterEach(() => {
@@ -193,6 +231,8 @@ afterAll(() => {
     "../hitl-actions",
     "../use-runtime-field-renderer-bindings",
     "../use-ag-ui-run-stream",
+    "../hitl-conversation-panel",
+    "../list-picker-actions",
   ]) {
     vi.doUnmock(id);
   }
@@ -259,13 +299,33 @@ describe("a declared card on the step-by-step screen (cinatra#3470)", () => {
     carry: ["itemId"],
   };
 
-  async function renderDeclaredCard(id: string) {
+  const CHOICE_SCREEN = {
+    layout: "card",
+    title: "Fixture choice",
+    decisionLabel: "Fixture decision",
+    decisions: [
+      { label: "Fixture decline", answer: { approved: false, reason: "Fixture reason" } },
+      { label: "Fixture revise", answer: { action: "revise" } },
+    ],
+    carry: ["itemId"],
+  };
+  /** A gate that declares `userResponse` as the value its renderer must write. */
+  const REQUIRES_USER_RESPONSE = {
+    type: "object",
+    properties: { userResponse: { type: "string", "x-required": true } },
+  };
+
+  async function renderDeclaredCard(
+    id: string,
+    declared: Record<string, unknown> = FIELD_SCREEN,
+    schema: Record<string, unknown> = { type: "object" },
+  ) {
     const { registerFieldRendererBindings } = await import("../register-default-renderers");
     registerFieldRendererBindings([
-      { id, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: FIELD_SCREEN },
+      { id, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: declared },
     ]);
     parkedGate.current = {
-      schema: { type: "object" },
+      schema,
       xRenderer: id,
       values: { itemId: "item-1" },
       reviewTaskId: "wayflow-task-3470-step",
@@ -281,7 +341,22 @@ describe("a declared card on the step-by-step screen (cinatra#3470)", () => {
       </RunPageChrome>,
     );
     // red-first-expect: expected null not to be null
-    await waitFor(() => expect(screen.queryByLabelText("Fixture answer")).not.toBeNull());
+    await waitFor(() => expect(screen.queryByText(declared.title as string)).not.toBeNull());
+  }
+
+  /** The radio of the declared decision drawn with `name`. */
+  function radio(name: RegExp): HTMLElement {
+    const row = Array.from(document.querySelectorAll("label")).find((l) => name.test(l.textContent ?? ""));
+    return row!.querySelector<HTMLElement>('[role="radio"]')!;
+  }
+
+  async function pressContinue(): Promise<Record<string, unknown>> {
+    await waitFor(() => expect(continueButton()?.disabled).toBe(false));
+    await act(async () => {
+      fireEvent.click(continueButton()!);
+    });
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    return (hitlActions.approveReviewTask.mock.calls[0] as unknown as [string, Record<string, unknown>])[1];
   }
 
   const answerField = () => screen.getByLabelText("Fixture answer") as HTMLInputElement;
@@ -333,5 +408,126 @@ describe("a declared card on the step-by-step screen (cinatra#3470)", () => {
     expect(payload.userResponse).toBe(JSON.stringify({ itemId: "item-1", answer: "f" }));
     // The grouped setup's lift never rides along on a declared card.
     expect(Object.hasOwn(payload, "approvalNote")).toBe(false);
+  });
+
+  // Round 5, finding 1: the attachment envelope is applied last, over the
+  // declared answer staged in `userResponse`, so the waiting file goes with it.
+  it("a waiting file goes with a declared answer on a gate that requires `userResponse`", async () => {
+    windowFiles.attachments = [
+      {
+        artifactId: "art-1",
+        representationRevisionId: "ver-1",
+        digest: "sha256:abc",
+        mime: "application/pdf",
+        originKind: "upload",
+        filename: "report.pdf",
+      },
+    ];
+    await renderDeclaredCard("@acme-test/declared-agent:confirm", FIELD_SCREEN, REQUIRES_USER_RESPONSE);
+    fireEvent.change(answerField(), { target: { value: "typed" } });
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Send with a file" })).not.toBeNull());
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send with a file" }));
+    });
+
+    const payload = await pressContinue();
+    const envelope = JSON.parse(payload.userResponse as string) as {
+      text?: string;
+      attachments?: Array<{ artifactId: string }>;
+    };
+    expect(envelope.attachments?.map((a) => a.artifactId)).toEqual(["art-1"]);
+    expect(envelope.text).toBe(JSON.stringify({ itemId: "item-1", answer: "typed" }));
+  });
+
+  // Round 5, finding 2: the later of two decision fills in one turn is the
+  // staged decision, as the server replays the fills.
+  it("two decision fills in one turn stage the later decision, as the server replays them", async () => {
+    windowActions.sendRunWindowTurn.mockResolvedValue({
+      ok: true,
+      entries: [
+        { id: 1, role: "user", content: "Decline it. No, revise it." },
+        { id: 2, role: "assistant", content: "Placed in the fields on your screen." },
+      ],
+      fills: [
+        { ref: "ref_1", values: { approved: false, reason: "Fixture reason" } },
+        { ref: "ref_1", values: { action: "revise" } },
+      ],
+      acted: false,
+    });
+    await renderDeclaredCard("@acme-test/declared-agent:confirm", CHOICE_SCREEN);
+    await waitFor(() => expect(screen.queryByTestId("prompt-field")).not.toBeNull());
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("prompt-field"));
+    });
+    await waitFor(() => expect(windowActions.sendRunWindowTurn).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(radio(/Fixture revise/).getAttribute("aria-checked")).toBe("true"));
+
+    const payload = await pressContinue();
+    expect(payload.userResponse).toBe(JSON.stringify({ itemId: "item-1", action: "revise" }));
+    expect(Object.hasOwn(payload, "reason")).toBe(false);
+    expect(payload.approved).toBe(true);
+  });
+});
+
+// Round 5, finding 3: a declared list-picker kind (`screen: {layout: "kind"}`)
+// holds the stepper's Continue until a usable pick exists, as every declared
+// card holds it until its answer is complete. Before, the press sent an
+// empty list snapshot (`listId: ""`).
+describe("a declared list-picker kind on the step-by-step screen (cinatra#3470)", () => {
+  const LIST_ID = "@acme-test/list-agent:pick-list";
+
+  async function renderListStep() {
+    const { registerFieldRendererBindings } = await import("../register-default-renderers");
+    registerFieldRendererBindings([
+      { id: LIST_ID, kind: "list-picker", priority: 90, midRunHitl: true, screen: { layout: "kind" } },
+    ]);
+    parkedGate.current = {
+      schema: { type: "object" },
+      xRenderer: LIST_ID,
+      values: {},
+      reviewTaskId: "wayflow-task-3470-list",
+    };
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    const { RunPageChrome } = (await import(/* @vite-ignore */ RUN_PAGE_CHROME)) as typeof RunPageChromeModule;
+    render(
+      <RunPageChrome>
+        <OrchestratorStepperPanel
+          {...baseProps()}
+          stepperSteps={[{ index: 1, stepNumber: 1, label: "Fixture list step", xRenderer: LIST_ID }]}
+        />
+      </RunPageChrome>,
+    );
+    await waitFor(() => expect(screen.queryByText("Fixture list")).not.toBeNull());
+  }
+
+  const continueButton = () =>
+    Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find((b) =>
+      /^Continue/.test(b.textContent ?? ""),
+    );
+
+  it("holds the Continue with nothing picked, and a press sends nothing", async () => {
+    await renderListStep();
+    expect(continueButton()).toBeDefined();
+    // red-first-expect: expected false to be true // Object.is equality
+    expect(continueButton()!.disabled).toBe(true);
+    await act(async () => {
+      fireEvent.click(continueButton()!);
+    });
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  });
+
+  it("sends the pick once one is made", async () => {
+    await renderListStep();
+    const row = screen.getByText("Fixture list").closest('[role="button"]') as HTMLElement;
+    fireEvent.click(row);
+    await waitFor(() => expect(continueButton()!.disabled).toBe(false));
+    await act(async () => {
+      fireEvent.click(continueButton()!);
+    });
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const payload = (hitlActions.approveReviewTask.mock.calls[0] as unknown as [string, Record<string, unknown>])[1];
+    // red-first-expect: expected 'undefined' to be 'string' // Object.is equality
+    expect(typeof payload.approvalNote).toBe("string");
+    expect(JSON.parse(payload.approvalNote as string)).toMatchObject({ type: "list", listId: "list-1" });
   });
 });

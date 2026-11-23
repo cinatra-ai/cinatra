@@ -27,7 +27,12 @@ import type { RunWindowSurface } from "./run-window-conversation-store";
  * re-reads its state from the server and settles.
  */
 export type RunWindowTurnEffect = {
-  fill: RunWindowFillEntry | null;
+  /**
+   * `values` is every fill of the turn merged, later fills winning;
+   * `inOrder` is each fill's values, oldest first, for a screen whose answer
+   * is replayed fill by fill (a declared card, `stageAssistantFills`).
+   */
+  fill: (RunWindowFillEntry & { inOrder: Record<string, unknown>[] }) | null;
   acted: boolean;
 };
 
@@ -211,6 +216,10 @@ export function useRunWindowConversation(args: {
         // fill of the message over them (`buildScreenSubmitValues`). The two must
         // agree, or the fields would show one thing and the submit send another.
         // The composition here is that builder's, key for key: later fills win.
+        // A DECLARED CARD (cinatra#3470) is not composed key by key: the server
+        // replays its fills one by one through the card's one writer, so a
+        // later decision replaces an earlier one. The fills also go in order,
+        // and the screen replays them the same way (`stageAssistantFills`).
         const fills = outcome.fills;
         return {
           fill:
@@ -218,6 +227,7 @@ export function useRunWindowConversation(args: {
               ? {
                   ref: fills[fills.length - 1]!.ref,
                   values: Object.assign({}, ...fills.map((f) => f.values)),
+                  inOrder: fills.map((f) => f.values),
                 }
               : null,
           acted: outcome.acted,

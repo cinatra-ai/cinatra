@@ -89,10 +89,14 @@ describe("a turn applies its own fill and no other", () => {
     await act(async () => {
       effect = await result.current.send("make the subject that, and the body this");
     });
+    // red-first-expect: expected { fill: { ref: 'ref_1', …(1) }, …(1) } to deeply equal { fill: { ref: 'ref_1', …(2) }, …(1) }
     expect(effect).toEqual({
       fill: {
         ref: "ref_1",
         values: { subject: "and then this", body: "and this" },
+        // Each fill, oldest first (cinatra#3470): a declared card replays
+        // them one by one, as the server does, instead of merging them.
+        inOrder: [MINE.values, ALSO_MINE.values, { subject: "and then this" }],
       },
       acted: false,
     });
@@ -121,7 +125,8 @@ describe("a turn applies its own fill and no other", () => {
     await act(async () => {
       effect = await result.current.send("make it say that");
     });
-    expect(effect).toEqual({ fill: MINE, acted: false });
+    // red-first-expect: expected { fill: { ref: 'ref_1', …(1) }, …(1) } to deeply equal { fill: { ref: 'ref_1', …(2) }, …(1) }
+    expect(effect).toEqual({ fill: { ...MINE, inOrder: [MINE.values] }, acted: false });
     await act(async () => {
       releaseLoad([]);
     });

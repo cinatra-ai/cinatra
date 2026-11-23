@@ -100,6 +100,7 @@ import {
   continueHeldByRenderer,
   stageRendererAnswer,
   stageAssistantFill,
+  stageAssistantFills,
   declaredHitlContinuePayload,
   declaredHitlScreenReady,
   declaredHitlStage,
@@ -110,7 +111,7 @@ import {
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
-  withDeclaredRendererValues,
+  finishContinuePayload,
   wrapPrimitiveSetupPayload,
   type GateValidityStore,
 } from "./hitl-gate-submit";
@@ -779,6 +780,10 @@ export function AgenticRunPanel({
   const handleApply = useCallback((suggestions: Record<string, unknown>) => {
     const { entry: target, runValue } = fillTargetRef.current;
     setBufferedHitlValue(prev => stageAssistantFill(target, runValue, prev, suggestions));
+  }, []);
+  const applyTurnFills = useCallback((fills: Record<string, unknown>[]) => {
+    const { entry: target, runValue } = fillTargetRef.current;
+    setBufferedHitlValue(prev => stageAssistantFills(target, runValue, prev, fills));
   }, []);
   // After clicking Approve/Reject, suppress re-showing the same HITL screen while the
   // server processes the resume. Prevents "Loading recipients" loop caused by the poll
@@ -1521,12 +1526,20 @@ export function AgenticRunPanel({
         });
         return;
       }
+      const heldByTheRule =
+        (ctx.xRenderer.endsWith(":output") || hasMidRunHitlBinding(ctx.xRenderer)) &&
+        !isSetupGateTaskId(ctx.reviewTaskId) &&
+        !gateCarriesPresentationHint(ctx.currentValues);
+      // A gate under the rule below wraps its waiting files LAST, after the
+      // declared keys go back (`finishContinuePayload`, cinatra#3470), so a
+      // declared `userResponse` goes with them; every other gate keeps the
+      // wrap of the shared builder.
       const { payload, payloadFieldName } = buildChatGateSubmitPayload({
         reviewTaskId: ctx.reviewTaskId,
         fieldName: ctx.fieldName,
         value,
         buffered: bufferedHitlValueRef.current,
-        pendingAttachments: pendingAttachmentsRef.current,
+        pendingAttachments: heldByTheRule ? [] : pendingAttachmentsRef.current,
       });
       // cinatra#3380 — a caller of the published submit (none yet) is a second entrance
       // to the same resume as the gate's Continue, so it is held by the same
@@ -1542,17 +1555,20 @@ export function AgenticRunPanel({
       const callerFields =
         value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
       const answer = { ...bufferedHitlValueRef.current, ...callerFields };
-      const heldByTheRule =
-        (ctx.xRenderer.endsWith(":output") || hasMidRunHitlBinding(ctx.xRenderer)) &&
-        !isSetupGateTaskId(ctx.reviewTaskId) &&
-        !gateCarriesPresentationHint(ctx.currentValues);
       if (heldByTheRule && gateAwaitsRendererValue(ctx.inputSchema, answer)) {
         throw new Error("This step is waiting for a choice on its card. Choose one there, then continue.");
       }
       await performGateSubmit({
         reviewTaskId: ctx.reviewTaskId,
         xRenderer: ctx.xRenderer,
-        payload: heldByTheRule ? withDeclaredRendererValues(ctx.inputSchema, answer, payload) : payload,
+        payload: heldByTheRule
+          ? finishContinuePayload(payload, {
+              declaredSchema: ctx.inputSchema,
+              written: answer,
+              attachments: pendingAttachmentsRef.current,
+              wrapAttachments: applyAttachmentEnvelopeUserResponseOnly,
+            })
+          : payload,
         payloadFieldName,
         trackApproving: true,
         suppressGate: true,
@@ -2179,7 +2195,9 @@ export function AgenticRunPanel({
       // moved past would show values that were never sent. "The card is the
       // visible truth": a turn that pressed makes the screen re-read instead.
       if (effect.fill && !effect.acted) {
-        handleApply(effect.fill.values);       // updates parent buffer
+        // Every fill of the turn, in order (cinatra#3470): a declared card
+        // replays them as the server does, so a later decision wins.
+        applyTurnFills(effect.fill.inOrder);   // updates parent buffer
         setAiSuggestions(effect.fill.values);  // renderers sync local state
       }
     } finally {
@@ -2338,14 +2356,6 @@ export function AgenticRunPanel({
             nextBuffered,
             approvalNoteLift,
           );
-          if (!isSetupGateTaskId(effectiveHitlContext.reviewTaskId)) {
-            nextBuffered = approvalNoteLift
-              ? applyAttachmentEnvelope(nextBuffered, pendingAttachmentsRef.current)
-              : applyAttachmentEnvelopeUserResponseOnly(
-                  nextBuffered,
-                  pendingAttachmentsRef.current,
-                );
-          }
           // #817: context-selector gate — synthesize the selection envelope
           // when the renderer emitted none (zero-candidate slot). A real
           // toggle already set bufferedHitlValue.userResponse — the helper
@@ -2356,14 +2366,20 @@ export function AgenticRunPanel({
             nextBuffered,
           );
           // cinatra#3380 — a key the gate declares and the renderer wrote is sent
-          // as the renderer wrote it, over approved, approvedAt and the wrap above.
-          if (opts?.declaredSchema) {
-            nextBuffered = withDeclaredRendererValues(
-              opts.declaredSchema,
-              bufferedHitlValue,
-              nextBuffered,
-            );
-          }
+          // as the renderer wrote it, over approved and approvedAt; THEN the
+          // files waiting in the window are wrapped around the resume text
+          // (cinatra#3470), last, so a declared answer staged in `userResponse`
+          // goes with them. A list step's note is its resume text.
+          nextBuffered = finishContinuePayload(nextBuffered, {
+            declaredSchema: opts?.declaredSchema,
+            written: bufferedHitlValue,
+            attachments: isSetupGateTaskId(effectiveHitlContext.reviewTaskId)
+              ? []
+              : pendingAttachmentsRef.current,
+            wrapAttachments: approvalNoteLift
+              ? applyAttachmentEnvelope
+              : applyAttachmentEnvelopeUserResponseOnly,
+          });
           await performGateSubmit({
             reviewTaskId: effectiveHitlContext.reviewTaskId,
             xRenderer: effectiveHitlContext.xRenderer,
