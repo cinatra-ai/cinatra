@@ -12,6 +12,17 @@ export function createdAtMicrosSql(column: AnyColumn): SQL<string> {
   return sql<string>`(floor(extract(epoch from ${column}))::bigint * 1000000 + floor(extract(microseconds from ${column}))::bigint % 1000000)::text`;
 }
 
+/**
+ * cinatra#4762 — the one rule that tells a gate a person decided from one the system settled. A person's decision
+ * resolves its gate with the decision core's sha256 fingerprint (64 lowercase hex characters); the optional review's
+ * expiry resolves its gate 'approve' with a synthetic `expiry:<gateId>` fingerprint and no person. The decision-fact
+ * read (readGatePinnedTargets) and the publish gate's approved-review read (approvedReviewPrecedes) both ask this, so
+ * they never disagree on what counts as a person's approval.
+ */
+export function isHumanDecisionFingerprint(fingerprint: unknown): fingerprint is string {
+  return typeof fingerprint === "string" && /^[a-f0-9]{64}$/.test(fingerprint);
+}
+
 type GateTime = { reviewTaskId: string; createdAt?: Date | null; createdAtMicros?: string | null };
 
 const MICROS = /^\d{1,20}$/;

@@ -8,7 +8,7 @@
  *     pnpm --filter @cinatra-ai/agents test:integration publish-decision-store
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Client } from "pg";
 
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
@@ -47,9 +47,9 @@ function park(overrides: Record<string, unknown> = {}) {
   } as Parameters<typeof store.insertParkedDecision>[0];
 }
 
-/** cinatra#4762: a settled review gate's columns, as the store's decision writes them. */
+/** cinatra#4762: a settled review gate's columns, as a person's decision writes them (the decision core's sha256). */
 function resolvedGate(disposition: string) {
-  return { status: "resolved", disposition, fingerprint: `fp-${randomUUID()}`, resolved_at: new Date() };
+  return { status: "resolved", disposition, fingerprint: createHash("sha256").update(randomUUID()).digest("hex"), resolved_at: new Date() };
 }
 
 beforeAll(async () => {
@@ -483,6 +483,69 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     expect(await genOf(runId)).toEqual({ status: "running", reset_generation: 1 });
     await transitions.transitionRunStatus(runId, "running", "stopped", { completedAt: new Date(), attemptGeneration: 1 }, authority);
     expect(await genOf(runId)).toEqual({ status: "stopped", reset_generation: 1 });
+  });
+
+  it("cinatra#4762: a stop of an attempt a retry ended inserts no decision row", async () => {
+    const runId = await seedRun(`run-${randomUUID()}`, "running");
+    await admin.query(`UPDATE ${RUNS_TABLE} SET reset_generation = 1 WHERE id = $1`, [runId]);
+    const count = async () => Number((await admin.query(`SELECT count(*) AS n FROM ${TABLE} WHERE run_id = $1`, [runId])).rows[0].n);
+    await expect(store.insertParkedDecision(park({ runId, attemptGeneration: 0 }))).rejects.toMatchObject({ code: "stale-attempt" });
+    expect(await count()).toBe(0);
+    // A run no longer held at a gate is no live attempt either, at any generation.
+    await setRun(runId, "failed");
+    await expect(store.insertParkedDecision(park({ runId, attemptGeneration: 1 }))).rejects.toMatchObject({ code: "stale-attempt" });
+    expect(await count()).toBe(0);
+    // The live attempt's own stop is written, stamped with its generation.
+    await setRun(runId, "running");
+    const own = await store.insertParkedDecision(park({ runId, attemptGeneration: 1 }));
+    expect(own).toMatchObject({ inserted: true, current: true });
+    expect(await rowOf(own.decision.id)).toMatchObject({ status: "parked", run_generation: 1 });
+  });
+
+  it("cinatra#4762: an optional review its expiry settled 'approve' is no approval; a person's is", async () => {
+    const { bindArtifactReviewGateSeam } = await import("../artifact-review-gate-seam");
+    const { emitArtifactReviewGate } = await import("../artifact-review-gate-store");
+    const { approvedReviewPrecedes } = await import("../publish-decision-actions");
+    bindArtifactReviewGateSeam();
+    const GATES = `"${q(TEST_SCHEMA)}"."artifact_review_gates"`;
+    const runId = await seedRun(`run-${randomUUID()}`, "running");
+    const raise = async () => (await emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: `review-${randomUUID()}`,
+      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }] })).gateId;
+    const expired = await raise();
+    // The expiry's own write shape: approve, a synthetic fingerprint, no person.
+    await admin.query(`UPDATE ${GATES} SET status = 'resolved', disposition = 'approve', fingerprint = $2, resolved_at = now() WHERE id = $1`,
+      [expired, `expiry:${expired}`]);
+    expect(await approvedReviewPrecedes(runId, 0)).toBe(false);
+    const person = await raise();
+    await admin.query(`UPDATE ${GATES} SET status = 'resolved', disposition = 'approve', fingerprint = $2, resolved_at = now() WHERE id = $1`,
+      [person, resolvedGate("approve").fingerprint]);
+    expect(await approvedReviewPrecedes(runId, 0)).toBe(true);
+  });
+
+  it("cinatra#4762: a produced event carries its attempt's generation, and the review the drain raises later keeps it", async () => {
+    const { buildProducedEventInsertOp } = await import("@/lib/lifecycle/lifecycle-emit");
+    const { emitArtifactReviewGate } = await import("../artifact-review-gate-store");
+    const OUTBOX = `"${q(TEST_SCHEMA)}"."artifact_produced_outbox"`;
+    const GATES = `"${q(TEST_SCHEMA)}"."artifact_review_gates"`;
+    const runId = await seedRun(`run-${randomUUID()}`, "running");
+    const produce = async () => {
+      const artifactId = `art-${randomUUID()}`;
+      const op = buildProducedEventInsertOp(q(TEST_SCHEMA), { orgId: ORG, artifactId, representationRevisionId: "rev-1",
+        emitter: "createSemanticArtifact", originKind: "agent_generated", producerRunId: runId });
+      await admin.query(op.text, op.values);
+      return (await admin.query(`SELECT producer_run_generation FROM ${OUTBOX} WHERE artifact_id = $1`, [artifactId])).rows[0].producer_run_generation as number;
+    };
+    // Attempt 0 writes its output; the attempt fails and a retry's reset raises the run to generation 1.
+    const produced = await produce();
+    expect(produced).toBe(0);
+    await setRun(runId, "failed");
+    await reset(runId, 0);
+    await setRun(runId, "running");
+    expect(await produce()).toBe(1);
+    // The drain consumes attempt 0's event during attempt 1: the review keeps generation 0, never the live 1.
+    const { gateId } = await emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: `auto-${randomUUID()}`,
+      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-1" }], runGeneration: produced });
+    expect((await admin.query(`SELECT run_generation FROM ${GATES} WHERE id = $1`, [gateId])).rows[0]).toEqual({ run_generation: 0 });
   });
 
   it("round 21, finding 1: a row an old node parks with no generation after a reset holds, and the next reset ends it", async () => {

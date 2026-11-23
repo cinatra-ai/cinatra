@@ -127,17 +127,32 @@ describe("the actual artifact-review gate seam", () => {
 });
 
 describe("the run's reviews, as the publish gate reads them (cinatra#4762)", () => {
+  const HUMAN = "a".repeat(64);
+
+  // red-first-expect: expected [ undefined, undefined, undefined ] to deeply equal [ 'expiry:gate-1', …(2) ]
+  it("carry each review's resolving fingerprint, so the publish gate can tell a person's approval from an expiry", async () => {
+    const createdAt = new Date("2026-11-20T10:05:00.000Z");
+    store.listReviewGatesForRun.mockResolvedValue([
+      { reviewTaskId: "r1", status: "resolved", disposition: "approve", createdAt, runGeneration: 0, fingerprint: "expiry:gate-1" },
+      { reviewTaskId: "r2", status: "resolved", disposition: "approve", createdAt, runGeneration: 0, fingerprint: HUMAN },
+      { reviewTaskId: "r3", status: "pending", disposition: null, createdAt, runGeneration: 0, fingerprint: null },
+    ]);
+    const seam = slot.__cinatraArtifactReviewGateSeam! as unknown as { listReviews?: (runId: string) => Promise<Array<{ fingerprint?: unknown }>> };
+    const listed = typeof seam.listReviews === "function" ? await seam.listReviews(runId) : [{}, {}, {}];
+    expect(listed.map((r) => r.fingerprint)).toEqual(["expiry:gate-1", HUMAN, null]);
+  });
+
   // red-first-expect: seam.listReviews is not a function
   it("carry the store's exact microseconds, which a Date would cut to milliseconds", async () => {
     const createdAt = new Date("2026-11-20T10:05:00.000Z");
     store.listReviewGatesForRun.mockResolvedValue([
-      { reviewTaskId: "r1", status: "resolved", disposition: "changes_requested", createdAt, createdAtMicros: "1795169100000100", runGeneration: 0 },
-      { reviewTaskId: "r2", status: "resolved", disposition: "approve", createdAt, createdAtMicros: "1795169100000900", runGeneration: 0 },
+      { reviewTaskId: "r1", status: "resolved", disposition: "changes_requested", createdAt, createdAtMicros: "1795169100000100", runGeneration: 0, fingerprint: HUMAN },
+      { reviewTaskId: "r2", status: "resolved", disposition: "approve", createdAt, createdAtMicros: "1795169100000900", runGeneration: 0, fingerprint: HUMAN },
     ]);
     const seam = slot.__cinatraArtifactReviewGateSeam!;
     expect(await seam.listReviews(runId)).toEqual([
-      { status: "resolved", disposition: "changes_requested", createdAt, createdAtMicros: "1795169100000100", runGeneration: 0 },
-      { status: "resolved", disposition: "approve", createdAt, createdAtMicros: "1795169100000900", runGeneration: 0 },
+      { status: "resolved", disposition: "changes_requested", createdAt, createdAtMicros: "1795169100000100", runGeneration: 0, fingerprint: HUMAN },
+      { status: "resolved", disposition: "approve", createdAt, createdAtMicros: "1795169100000900", runGeneration: 0, fingerprint: HUMAN },
     ]);
     expect(store.listReviewGatesForRun).toHaveBeenCalledWith(runId);
   });

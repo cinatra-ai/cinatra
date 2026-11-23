@@ -91,6 +91,25 @@ describe("buildProducedEventInsertOp — op shape", () => {
     expect(op.values[7]).toBe("agent-9");
   });
 
+  // red-first-expect: to contain 'producer_run_generation'
+  it("stamps the producing attempt's reset generation, read from the run row when the event is written (cinatra#4762)", () => {
+    // The delayed drain raises the event's review later, perhaps after a retry's reset began the next attempt: the
+    // event itself carries the generation of the attempt that produced it, read in this insert, in both insert shapes.
+    for (const op of [
+      buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9" }),
+      buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9" }, { whereExistsSql: "true" }),
+    ]) {
+      expect(op.text).toContain("producer_run_generation");
+      expect(op.text).toMatch(/continuation_address, status, producer_run_generation\)/);
+      // While the run executes, its reset_generation; else -1, which never counts. No run named ($7 null): -1.
+      expect(op.text.replace(/\s+/g, " ")).toContain(
+          `coalesce((SELECT live_run.reset_generation FROM "cinatra"."agent_runs" live_run WHERE live_run.id = $7::text AND live_run.status IN ('running', 'pending_approval')), -1)`,
+      );
+      expect(op.values[6]).toBe("run-9");
+      expect(op.values).toHaveLength(11);
+    }
+  });
+
   it("rejects an unknown emitter (the closed emitter set)", () => {
     expect(() =>
       buildProducedEventInsertOp("cinatra", {

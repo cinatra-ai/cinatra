@@ -32,6 +32,7 @@ import {
 } from "./store";
 import { resolveWayflowUrl } from "./wayflow-url";
 import { claimPause, releasePauseClaim, settlePauseSend } from "./run-pause-claim";
+import { isHumanDecisionFingerprint } from "./declared-review-pause";
 
 /** The id prefix of the gate the flow runtime inserts in front of a publishing step. The
  *  compiler reserves the same prefix (oas-compiler.ts, PUBLISH_GATE_ID_PREFIX). */
@@ -165,7 +166,7 @@ const opaque = (err: unknown): unknown => err instanceof AuthzError || STORE_COD
 export const PUBLISH_REVIEW_MISSING_REASON = "No approved review came before this change outside Cinatra.";
 
 /** One review of a run, as the gate seam's listReviews answers it. */
-type ReviewOfRun = { status: string; disposition: string | null; createdAt: Date; createdAtMicros?: string | null; runGeneration: number | null };
+type ReviewOfRun = { status: string; disposition: string | null; createdAt: Date; createdAtMicros?: string | null; runGeneration: number | null; fingerprint?: string | null };
 
 /** When a review was raised, in microseconds since the epoch: the store's exact text when the seam carries it (a Date
  *  keeps only milliseconds, so two reviews raised in one millisecond would read as one instant), else the Date. */
@@ -190,7 +191,9 @@ export async function approvedReviewPrecedes(runId: string, generation: number):
     .__cinatraArtifactReviewGateSeam;
   if (typeof seam?.listReviews !== "function") throw new Error("the review store is not bound");
   const reviews = (await seam.listReviews(runId)).filter((g) => (g.runGeneration ?? 0) === generation);
-  const approvedAt = reviews.filter((g) => g.status === "resolved" && g.disposition === "approve").map(raisedAt);
+  // Only a person's approval counts: the optional review's expiry also settles a gate 'approve', with a synthetic
+  // fingerprint and no person, and the decision-fact read refuses the same rows (isHumanDecisionFingerprint).
+  const approvedAt = reviews.filter((g) => g.status === "resolved" && g.disposition === "approve" && isHumanDecisionFingerprint(g.fingerprint)).map(raisedAt);
   if (approvedAt.length === 0) return false;
   return reviews.every((g) => g.status === "resolved" && (g.disposition === "approve" ||
     (g.disposition === "changes_requested" && approvedAt.some((at) => at > raisedAt(g)))));
@@ -272,6 +275,8 @@ export async function holdRunAtPublishGate(args: {
       a2aContextId: contextId ?? null,
       surfacedValues: surfacedValuesOf(task),
       declaredRows: await readDispatchedPublishRows(run.id, nodeId).catch(() => null),
+      // cinatra#4762: the row is written only while the run is still at this attempt, in the insert's own transaction.
+      attemptGeneration: attempt.attemptGeneration,
     });
     // The stop belongs to an attempt that has ended: an existing row of an earlier reset generation, or a new row
     // stamped while the run was no longer held at a gate (its attempt failed and may have been reset meanwhile). It
@@ -280,7 +285,9 @@ export async function holdRunAtPublishGate(args: {
       if (park.inserted) await decide(park.decision.id, { from: "parked", to: "run_ended", actor: null }).catch(() => undefined);
       throw new Error("superseded");
     }
-  } catch {
+  } catch (err) {
+    // A callback of an attempt a retry's reset ended: the store wrote no row, and nothing of the next attempt moves.
+    if ((err as { code?: unknown } | null)?.code === "stale-attempt") return true;
     await moveRun(run.id, fromStatus, "failed", { error: "publish_decision_unrecorded: the publish decision could not be recorded", completedAt: new Date(), ...attempt }, authority);
     return true;
   }

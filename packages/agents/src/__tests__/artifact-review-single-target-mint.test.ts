@@ -14,6 +14,8 @@ type StoredGate = {
 const storage = vi.hoisted(() => {
   const rows = new Map<string, StoredGate>();
   const inserts: StoredGate[] = [];
+  /** The run generation each insert stamps, as the emitter hands it to the statement (a number, or an SQL read). */
+  const generations: unknown[] = [];
   let readFailure = false;
   let lateConflict: StoredGate | null = null;
   let crashAfter: number | null = null;
@@ -30,6 +32,7 @@ const storage = vi.hoisted(() => {
         values(input: StoredGate & { runGeneration?: unknown }) {
           // The run generation is an SQL expression the database evaluates from the run row; this store keeps none.
           const row: StoredGate & { runGeneration?: unknown } = { ...input };
+          generations.push(row.runGeneration);
           delete row.runGeneration;
           readIdentity = row;
           inserts.push(row);
@@ -69,7 +72,7 @@ const storage = vi.hoisted(() => {
       };
     },
   };
-  return { rows, inserts, executor, setLateConflict(row: StoredGate | null) { lateConflict = row; }, setReadFailure(value: boolean) { readFailure = value; }, setCrashAfter(n: number | null) { crashAfter = n; }, setReadKey(row: StoredGate) { readIdentity = row; } };
+  return { rows, inserts, generations, executor, setLateConflict(row: StoredGate | null) { lateConflict = row; }, setReadFailure(value: boolean) { readFailure = value; }, setCrashAfter(n: number | null) { crashAfter = n; }, setReadKey(row: StoredGate) { readIdentity = row; } };
 });
 
 vi.mock("../db", () => ({ db: storage.executor }));
@@ -86,7 +89,7 @@ const A = { artifactId: "post", representationRevisionId: "post-r1" };
 const B = { artifactId: "image", representationRevisionId: "image-r1" };
 const input = (targets: unknown) => ({ runId: "run", orgId: "org", reviewTaskId: "task", targets });
 
-beforeEach(() => { storage.rows.clear(); storage.inserts.length = 0; storage.setCrashAfter(null); storage.setReadFailure(false); storage.setLateConflict(null); });
+beforeEach(() => { storage.rows.clear(); storage.inserts.length = 0; storage.generations.length = 0; storage.setCrashAfter(null); storage.setReadFailure(false); storage.setLateConflict(null); });
 
 describe("new review gates freeze one artifact revision", () => {
   it.each([
@@ -243,4 +246,20 @@ describe("H1 atomic original-pause membership", () => {
     expect(storage.rows.get("run/wayflow-task")!.pinnedTargets[0]).toMatchObject({ declaredReviewPlan: { orgId: "org" } });
   });
 
+});
+
+describe("the attempt a review gate belongs to (cinatra#4762)", () => {
+  // red-first-expect: to deeply equal [ 3, -1, -1 ]
+  it("a gate raised for a produced event carries the producing attempt's generation, never the run's live state", async () => {
+    // The delayed drain names the generation the event was written with; an event of an older build carries none, and
+    // its gate is stamped -1, which no publish gate counts.
+    await emitArtifactReviewGate({ ...input([A]), reviewTaskId: "produced-3", runGeneration: 3 });
+    await emitArtifactReviewGate({ ...input([A]), reviewTaskId: "produced-old", runGeneration: null });
+    await emitArtifactReviewGate({ ...input([A]), reviewTaskId: "produced-bad", runGeneration: 1.5 });
+    expect(storage.generations).toEqual([3, -1, -1]);
+    // A gate the run raises itself names none: the statement reads the run row (an SQL expression, not a number).
+    await emitArtifactReviewGate({ ...input([A]), reviewTaskId: "own" });
+    expect(typeof storage.generations[3]).toBe("object");
+    expect(storage.generations[3]).not.toBeNull();
+  });
 });

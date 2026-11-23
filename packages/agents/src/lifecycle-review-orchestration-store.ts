@@ -432,6 +432,17 @@ interface ProducedEventRow {
   continuationMode: string;
   continuationAddress: string | null;
   status: string;
+  /** cinatra#4762: the producing attempt's reset generation, stamped when the event was written (null or absent: an
+   *  older build; its review never counts). */
+  producerRunGeneration?: number | null;
+}
+
+/** cinatra#4762: the generation an automatic review of these events is stamped with: the producing attempt's, carried
+ *  by the events since production; -1 (never counts) when one carries none or they disagree. */
+function producedGeneration(rows: ReadonlyArray<Pick<ProducedEventRow, "producerRunGeneration">>): number {
+  const [first] = rows;
+  const g = first?.producerRunGeneration;
+  return typeof g === "number" && Number.isSafeInteger(g) && rows.every((r) => r.producerRunGeneration === g) ? g : -1;
 }
 
 function toAxes(row: ProducedEventRow): ProducedEventAxes {
@@ -460,6 +471,7 @@ const PRODUCED_OUTBOX_COLUMNS = {
   continuationMode: artifactProducedOutbox.continuationMode,
   continuationAddress: artifactProducedOutbox.continuationAddress,
   status: artifactProducedOutbox.status,
+  producerRunGeneration: artifactProducedOutbox.producerRunGeneration,
 } as const;
 
 /** The COMPLETE pending membership of ONE production `(orgId, producerRunId)`,
@@ -878,6 +890,7 @@ export async function orchestrateProducedEvent(row: ProducedEventRow): Promise<O
         reviewTaskId: plan.reviewTaskId,
         targets: [{ artifactId: row.artifactId, representationRevisionId: row.representationRevisionId }],
         expiresAt: new Date(Date.now() + AUTO_REVIEW_GATE_TTL_MS),
+        runGeneration: producedGeneration([row]),
       }, tx),
     );
     if (decided.kind === "withheld") {
@@ -1523,7 +1536,7 @@ async function orchestrateProducedBatch(
         // gate pins it; a member still free waits for the next pass, and the
         // epoch stays open until it is gated.
         const decided = await emitUnderEventLocks(members.map((m) => m.row), (tx) =>
-          emitArtifactReviewGate({ runId, orgId, reviewTaskId, targets: partition, expiresAt }, tx),
+          emitArtifactReviewGate({ runId, orgId, reviewTaskId, targets: partition, expiresAt, runGeneration: producedGeneration(members.map((m) => m.row)) }, tx),
         );
         if (decided.kind === "withheld") {
           for (const m of members) {

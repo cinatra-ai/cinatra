@@ -882,6 +882,10 @@ export const artifactProducedOutbox = cinatraSchema.table("artifact_produced_out
   status:                   text("status").notNull().default("pending"), // pending | processed | reconciled
   createdAt:                timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   processedAt:              timestamp("processed_at", { withTimezone: true }),
+  // cinatra#4762 (core__0134): the producing run's reset_generation when the event was written (read from the run
+  // row in the insert while it executes, else -1). The review the event raises carries it. null = an event written
+  // by code older than the column; its review never counts for a publish.
+  producerRunGeneration:    integer("producer_run_generation"),
 }, (t) => ({
   revisionUniq: uniqueIndex("artifact_produced_outbox_revision_uniq")
     .on(t.artifactId, t.representationRevisionId, t.eventKind),

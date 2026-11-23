@@ -41,7 +41,7 @@ export const PUBLISH_DECISION_MAX_DECLARED_TEXT = 256;
 export type PublishDeclaredRow = { label: string; input: string };
 
 export class PublishDecisionError extends Error {
-  readonly code: "invalid-input" | "invalid-transition" | "malformed-row" | "not-found" | "conflict";
+  readonly code: "invalid-input" | "invalid-transition" | "malformed-row" | "not-found" | "conflict" | "stale-attempt";
   constructor(code: PublishDecisionError["code"], message: string) {
     super(message);
     this.name = "PublishDecisionError";
@@ -163,6 +163,11 @@ export interface InsertParkedDecisionInput {
   /** The rows the dispatched plan declares for this node, kept with the decision; null or absent = not recorded. */
   declaredRows?: ReadonlyArray<PublishDeclaredRow> | null;
   ttlMs?: number;
+  /** cinatra#4762: the reset generation of the attempt that reached the stop. The insert lands only while the run is at
+   *  it and held at a gate (running or pending_approval), checked under a share lock on the run row in the insert's own
+   *  transaction, so a retry's reset cannot land between the check and the insert. A stale attempt inserts nothing and
+   *  throws `stale-attempt`. Absent: the run's generation is read in the insert, as before. */
+  attemptGeneration?: number;
 }
 
 export interface InsertParkedDecisionResult {
@@ -203,19 +208,36 @@ export async function insertParkedDecision(input: InsertParkedDecisionInput): Pr
     throw new PublishDecisionError("invalid-input", "ttlMs must be a positive finite number");
   }
 
-  const [row] = await db
+  const attempt = input.attemptGeneration;
+  if (attempt !== undefined && !(Number.isSafeInteger(attempt) && attempt >= 0)) {
+    throw new PublishDecisionError("invalid-input", "attemptGeneration must be a safe integer >= 0");
+  }
+  const insertVia = (executor: Pick<typeof db, "insert">) => executor
     .insert(agentRunPublishDecisions)
     .values({
       id: randomUUID(), orgId, runId, nodeId, gateTaskId, a2aContextId, status: "parked", surfacedValues: surfaced,
       declaredRows: declared,
-      // The run's generation, read in this statement, only while the run is held at a gate; else -1 (an ended attempt).
-      runGeneration: sql`coalesce((select live_run.reset_generation from ${agentRuns} live_run where live_run.id = ${runId} and live_run.status in ('running', 'pending_approval')), -1)`,
+      // The attempt's generation, checked under the run row's lock in this transaction; or, with no attempt named, the
+      // run's generation read in this statement, only while the run is held at a gate; else -1 (an ended attempt).
+      runGeneration: attempt ?? sql`coalesce((select live_run.reset_generation from ${agentRuns} live_run where live_run.id = ${runId} and live_run.status in ('running', 'pending_approval')), -1)`,
       expiresAt: sql`now() + (${ttlMs} || ' milliseconds')::interval`,
     })
     .onConflictDoNothing({
       target: [agentRunPublishDecisions.runId, agentRunPublishDecisions.nodeId, agentRunPublishDecisions.gateTaskId],
     })
     .returning();
+  const [row] = attempt === undefined ? await insertVia(db) : await db.transaction(async (tx) => {
+    // cinatra#4762: the generation check and the insert share this transaction; the share lock holds off the reset's
+    // compare-and-set (an UPDATE of this row) until the insert commits, so a callback of an ended attempt writes no row.
+    const [live] = await tx
+      .select({ id: agentRuns.id })
+      .from(agentRuns)
+      .where(and(eq(agentRuns.id, runId), eq(agentRuns.resetGeneration, attempt),
+        inArray(agentRuns.status, ["running", "pending_approval"])))
+      .for("share");
+    if (!live) throw new PublishDecisionError("stale-attempt", "the attempt that reached this stop has ended");
+    return insertVia(tx);
+  });
   if (row) return { inserted: true, current: row.runGeneration !== null && row.runGeneration >= 0, decision: deserialize(row) };
 
   const [existing] = await db

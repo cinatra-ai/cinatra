@@ -202,7 +202,7 @@ const transitions = () =>
 
 // cinatra#4762: a publish card opens only after an approved review earlier in the run; these cases hold one
 // (publish-gate-review-before-4762.test.ts drives the cases without one).
-const listReviews = vi.fn(async (_runId: string) => [{ status: "resolved", disposition: "approve", createdAt: new Date("2026-01-01") }]);
+const listReviews = vi.fn(async (_runId: string) => [{ status: "resolved", disposition: "approve", createdAt: new Date("2026-01-01"), fingerprint: "a".repeat(64) }]);
 const seamSlot = globalThis as { __cinatraArtifactReviewGateSeam?: unknown };
 const previousSeam = seamSlot.__cinatraArtifactReviewGateSeam;
 const previousKey = process.env.CINATRA_CONTEXT_ATTEST_KEY;
@@ -246,6 +246,8 @@ describe("a run that reaches a publish gate (A4 without the moment)", () => {
       a2aContextId: CONTEXT,
       surfacedValues: SURFACED,
       declaredRows: [{ label: "Title", input: "title" }],
+      // cinatra#4762: the row is written only while the run is still at the attempt that reached the gate.
+      attemptGeneration: 0,
     });
     expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
     expect(decisions.insertParkedDecision.mock.invocationCallOrder[0]!).toBeLessThan(

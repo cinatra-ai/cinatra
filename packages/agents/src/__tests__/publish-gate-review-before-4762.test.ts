@@ -108,7 +108,10 @@ const REASON = "No approved review came before this change outside Cinatra.";
 
 type Review = {
   status: string; disposition: string | null; createdAt: Date; createdAtMicros?: string | null; resolvedBy?: string | null; runGeneration?: number | null;
+  fingerprint?: string | null;
 };
+/** The fingerprint a person's decision stamps on its review (the decision core's sha256). */
+const HUMAN_DECISION = "d".repeat(64);
 const listReviews = vi.fn(async (_runId: string) => [] as Review[]);
 
 function sign(node: string) {
@@ -154,7 +157,7 @@ async function reachPublishGate(stored: AgentRunRecord = makeRun(), held: AgentR
 
 const at = (minutes: number) => new Date(STARTED.getTime() + minutes * 60_000);
 const approved = (minutes: number, resolvedBy = "user-reviewer", runGeneration: number | null = 0): Review =>
-  ({ status: "resolved", disposition: "approve", createdAt: at(minutes), resolvedBy, runGeneration });
+  ({ status: "resolved", disposition: "approve", createdAt: at(minutes), resolvedBy, runGeneration, fingerprint: HUMAN_DECISION });
 const changesRequested = (minutes: number, runGeneration: number | null = 0): Review =>
   ({ status: "resolved", disposition: "changes_requested", createdAt: at(minutes), runGeneration });
 
@@ -287,17 +290,32 @@ describe("a publish card opens only after an approved review earlier in the same
       }
       landed.push({ to, error: patch?.error });
     }) as never);
-    // Attempt A (generation 0) answers late: with no review of B, or with A's own approved review, it writes nothing.
+    // The store's insert, as insertParkedDecision runs it: with an attempt named, the row is written only while the run
+    // is at that generation, in the insert's own transaction; a row with none named is stamped with the run's live one.
+    const parkedRows: Array<{ runGeneration: number }> = [];
+    decisions.insertParkedDecision.mockImplementation((async (input: { attemptGeneration?: number }) => {
+      if (input.attemptGeneration !== undefined && input.attemptGeneration !== 1) {
+        throw Object.assign(new Error("the attempt that reached this stop has ended"), { code: "stale-attempt" });
+      }
+      parkedRows.push({ runGeneration: 1 });
+      return { inserted: true, current: true, decision: { id: `dec-${parkedRows.length}`, runId: "run-4762", nodeId: "publish", status: "parked" } };
+    }) as never);
+    // Attempt A (generation 0) answers late: with no review of B, or with A's own approved review, it writes nothing:
+    // no move of the run and no decision row.
+    const named: Array<number | undefined> = [];
     for (const reviews of [[], [approved(-30, "user-reviewer", 0)]]) {
       vi.clearAllMocks();
       listReviews.mockResolvedValue(reviews);
       await reachPublishGate(makeRun({ resetGeneration: 1 }), makeRun({ startedAt: null, resetGeneration: 0 }));
       expect(landed).toEqual([]);
+      expect(parkedRows).toEqual([]);
       expect(onInterruptSpy).not.toHaveBeenCalled();
+      named.push(...(storeMock.transitionRunStatus.mock.calls as unknown as Array<[string, string, string, { attemptGeneration?: number }]>)
+        .map(([, , , patch]) => patch?.attemptGeneration));
     }
+    // The insert A reached named A's attempt.
+    expect(decisions.insertParkedDecision).toHaveBeenCalledWith(expect.objectContaining({ attemptGeneration: 0 }));
     // Every move this gate makes names the attempt that reached it.
-    const named = (storeMock.transitionRunStatus.mock.calls as unknown as Array<[string, string, string, { attemptGeneration?: number }]>)
-      .map(([, , , patch]) => patch?.attemptGeneration);
     expect(named.length).toBeGreaterThan(0);
     expect(named.every((g) => g === 0)).toBe(true);
     // B's own callback, at generation 1 with B's approved review, still lands.
@@ -305,6 +323,27 @@ describe("a publish card opens only after an approved review earlier in the same
     listReviews.mockResolvedValue([approved(5, "user-reviewer", 1)]);
     await reachPublishGate(makeRun({ resetGeneration: 1 }));
     expect(landed).toEqual([{ to: "pending_approval", error: undefined }]);
+    expect(parkedRows).toEqual([{ runGeneration: 1 }]);
+  });
+
+  // red-first-expect: expected [ 'pending_approval' ] to deeply equal [ 'stopped' ]
+  it("an optional review its expiry settled 'approve' is no person's approval: the run ends stopped", async () => {
+    // The expiry resolves an optional review 'approve' with a synthetic fingerprint and no person.
+    const expired: Review = { ...approved(5), resolvedBy: null, fingerprint: "expiry:gate-optional" };
+    listReviews.mockResolvedValue([expired]);
+    await reachPublishGate();
+    expect(transitions().map((m) => m.to)).toEqual(["stopped"]);
+    expectStoppedWithoutWriting();
+    // A review with no fingerprint at all is no person's approval either.
+    vi.clearAllMocks();
+    listReviews.mockResolvedValue([{ ...approved(5), fingerprint: null }]);
+    await reachPublishGate();
+    expectStoppedWithoutWriting();
+    // Beside it, a review a person approved opens the card; the expired one neither blocks nor counts.
+    vi.clearAllMocks();
+    listReviews.mockResolvedValue([expired, approved(6)]);
+    await reachPublishGate();
+    expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
   });
 
   // red-first-expect: expected [ { from: 'running', …(2) } ] to deeply equal [ { from: 'running', …(2) } ]

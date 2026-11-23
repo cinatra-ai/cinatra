@@ -52,7 +52,7 @@ import { and, desc, eq, getTableColumns, gte, inArray, isNotNull, isNull, lt, lt
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 
 import { db } from "./db";
-import { createdAtMicrosSql } from "./declared-review-pause";
+import { createdAtMicrosSql, isHumanDecisionFingerprint } from "./declared-review-pause";
 import type { GuardedRunTx } from "./org-write-run-seam";
 import { dispatchAutoGateResolved } from "./run-wait-notifier";
 // THE PARK'S OWN READING (cinatra#3046), from the module that writes the marker.
@@ -209,6 +209,11 @@ export async function emitArtifactReviewGate(input: {
    * none (null — the expiry drain never touches it). Set only on the INSERT: a
    * re-emit onto an existing gate never re-stamps the expiry (idempotent pin). */
   expiresAt?: Date | null;
+  /** cinatra#4762: the reset generation of the attempt that PRODUCED the reviewed output, for a gate raised after that
+   *  attempt by a delayed consumer (the produced-event drain passes the event's producer_run_generation). Present: the
+   *  gate is stamped with it, and a null (an event of an older build, with no generation) is stamped -1, which never
+   *  counts. Absent: a gate raised by the run itself, stamped from the run row in the insert. */
+  runGeneration?: number | null;
 }, executor: GateStoreExecutor = db, plan?: DeclaredReviewPlan): Promise<EmitReviewGateResult> {
   const normalized = normalizeReviewTargets(input.targets);
   if (!normalized.ok) {
@@ -256,10 +261,14 @@ export async function emitArtifactReviewGate(input: {
       status: "pending",
       pinnedTargets: pinned,
       expiresAt: input.expiresAt ?? null,
-      // cinatra#4762: the attempt the gate belongs to, read from the run row in this statement (the decision park's
-      // rule): the run's reset_generation while it executes (running or pending_approval), else -1. A retry's reset
-      // raises the generation once, and nothing else writes it, so a review of an ended attempt never counts again.
-      runGeneration: sql`coalesce((select live_run.reset_generation from ${agentRuns} live_run where live_run.id = ${input.runId} and live_run.status in ('running', 'pending_approval')), -1)`,
+      // cinatra#4762: the attempt the gate belongs to. A delayed consumer names the producing attempt's generation
+      // (input.runGeneration, -1 when the event carries none). Else it is read from the run row in this statement (the
+      // decision park's rule): the run's reset_generation while it executes (running or pending_approval), else -1. A
+      // retry's reset raises the generation once, and nothing else writes it, so a review of an ended attempt never
+      // counts again.
+      runGeneration: "runGeneration" in input
+        ? (Number.isSafeInteger(input.runGeneration) ? (input.runGeneration as number) : -1)
+        : sql`coalesce((select live_run.reset_generation from ${agentRuns} live_run where live_run.id = ${input.runId} and live_run.status in ('running', 'pending_approval')), -1)`,
     })
     // One gate per (run, task) — the run_task_uniq index.
     .onConflictDoNothing({
@@ -724,7 +733,7 @@ export async function readGatePinnedTargets(
       typeof options?.decisionFactsForOrgId === "string" && options.decisionFactsForOrgId.length > 0 &&
       gate.orgId === options.decisionFactsForOrgId && gate.runId === runId && gate.reviewTaskId === reviewTaskId &&
       typeof gate.id === "string" && gate.id.length > 0 && gate.disposition === "approve" &&
-      typeof gate.fingerprint === "string" && /^[a-f0-9]{64}$/.test(gate.fingerprint) &&
+      isHumanDecisionFingerprint(gate.fingerprint) &&
       time instanceof Date && Number.isFinite(time.getTime())
       ? { gateId: gate.id, orgId: gate.orgId, runId: gate.runId, reviewTaskId: gate.reviewTaskId,
           fingerprint: gate.fingerprint, disposition: "approve" as const, decidedAt: time.toISOString() }

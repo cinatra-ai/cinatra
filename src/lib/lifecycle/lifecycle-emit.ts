@@ -94,14 +94,20 @@ export function buildProducedEventInsertOp(
   }
   const eventKind = input.eventKind ?? "artifact_produced";
   const eventId = producedEventId(input.artifactId, input.representationRevisionId, eventKind);
+  // cinatra#4762: the producing attempt's reset generation, read from the run row in this statement (at production
+  // time, inside the writer's transaction): the run's reset_generation while it executes (running or
+  // pending_approval), else -1. The review the event later raises carries THIS value, never the run's state when the
+  // delayed drain consumes the event, so output of an ended attempt never counts as a review of the next one.
   const bound = `$1::text, $2::text, $3::text, $4::text, $5::text, $6::text,
         $7::text, $8::text, $9::text, $10::text,
-        $11::text, NULL, 'pending'`;
+        $11::text, NULL, 'pending',
+        coalesce((SELECT live_run.reset_generation FROM "${schema}"."agent_runs" live_run
+          WHERE live_run.id = $7::text AND live_run.status IN ('running', 'pending_approval')), -1)`;
   return {
     text: `INSERT INTO "${schema}"."artifact_produced_outbox"
   (event_id, org_id, artifact_id, representation_revision_id, event_kind, emitter,
    producer_run_id, producer_agent_id, origin_kind, destination_class,
-   continuation_mode, continuation_address, status)
+   continuation_mode, continuation_address, status, producer_run_generation)
 ${opts?.whereExistsSql ? `SELECT ${bound}\nWHERE ${opts.whereExistsSql}` : `VALUES (${bound})`}
 ON CONFLICT (event_id) DO NOTHING`,
     values: [
