@@ -541,7 +541,13 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     // A live run held at its publish gate, stamped or dispatched before the start stamp existed.
     const live = await run("pending_approval", T0);
     const liveRow = await legacy(live, T1);
-    const liveUnstamped = await legacy(await run("pending_approval", null), T1);
+    // Dispatched before the start stamp existed and held mid-run: it has a human-wait attempt.
+    const unstampedRun = await run("pending_approval", null);
+    await admin.query(`UPDATE ${RUNS_TABLE} SET human_wait_attempt_id = $2 WHERE id = $1`, [unstampedRun, `attempt-${randomUUID()}`]);
+    const liveUnstamped = await legacy(unstampedRun, T1);
+    // Round 22: reset before the upgrade, and the retry is held at its SETUP interrupt before dispatch (pending_approval,
+    // no start stamp, no human-wait attempt): it has not executed, so the stale row is the ended attempt's.
+    const setupHeld = await legacy(await run("pending_approval", null), T0);
     // Settled runs: a stopped run's decline still holds its resume; a completed run keeps its release.
     const stopped = await run("stopped", T0);
     const stoppedRow = await legacy(stopped, T1, "declined");
@@ -558,10 +564,10 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     const generationOf = async (id: string) => (await admin.query(`SELECT run_generation FROM ${TABLE} WHERE id = $1`, [id])).rows[0].run_generation;
     const classified: Record<string, number> = {};
     for (const [name, id] of Object.entries({
-      resetWaiting, resetQueued, resetArmed, resetTrigger, retriedEnded, retriedParked, againOld, againNew, liveRow, liveUnstamped, stoppedRow, completedRow, failedRow, orphanRow, stampedRow,
+      resetWaiting, resetQueued, resetArmed, resetTrigger, setupHeld, retriedEnded, retriedParked, againOld, againNew, liveRow, liveUnstamped, stoppedRow, completedRow, failedRow, orphanRow, stampedRow,
     })) classified[name] = await generationOf(id);
     expect(classified).toEqual({
-      resetWaiting: -1, resetQueued: -1, resetArmed: -1, resetTrigger: -1, retriedEnded: -1, retriedParked: -1, againOld: -1, againNew: 0, liveRow: 0, liveUnstamped: 0,
+      resetWaiting: -1, resetQueued: -1, resetArmed: -1, resetTrigger: -1, setupHeld: -1, retriedEnded: -1, retriedParked: -1, againOld: -1, againNew: 0, liveRow: 0, liveUnstamped: 0,
       stoppedRow: 0, completedRow: 0, failedRow: 0, orphanRow: -1, stampedRow: 7,
     });
 

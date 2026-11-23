@@ -34,7 +34,8 @@
 //     exists, the run is not in pending_input, and either the run's current
 //     attempt started no later than the decision (created_at >= started_at),
 //     or started_at is NULL and the run is not waiting to be dispatched
-//     (queued, armed, pending_trigger);
+//     (queued, armed, pending_trigger) and not held at its setup interrupt
+//     (pending_approval with no human-wait attempt: it has not executed);
 //   run_generation = -1 (an ended attempt) otherwise.
 // Why: started_at is the current attempt's first dispatch; the queued ->
 // running CAS keeps it (COALESCE) and only a reset clears it, so a decision
@@ -43,7 +44,11 @@
 // fresh attempt. A run reset before the upgrade and waiting to be dispatched
 // (queued, armed, pending_trigger: its started_at was cleared by the reset and
 // no dispatch has stamped it yet) holds no decision of its own either: a run
-// only parks while running. A run whose started_at is NULL in any other status
+// only parks while running. The same holds for a retry held at its setup
+// interrupt before dispatch: pending_approval with started_at and
+// human_wait_attempt_id both NULL has not executed (run-status.ts,
+// START_AMBIGUOUS_RUN_STATUSES), so it holds no decision of its own. A run whose
+// started_at is NULL in any other status
 // (a run dispatched before the stamp existed) keeps its decisions current: a
 // declined or open decision of a stopped or held run must still hold its resume.
 // No other column and no other stored value changes.
@@ -95,7 +100,8 @@ export const publishDecisionRunGenerationBackfillSql = `UPDATE agent_run_publish
            WHERE r.id = d.run_id
              AND r.status <> 'pending_input'
              AND ((r.started_at IS NOT NULL AND d.created_at >= r.started_at)
-               OR (r.started_at IS NULL AND r.status NOT IN ('queued', 'armed', 'pending_trigger')))),
+               OR (r.started_at IS NULL AND r.status NOT IN ('queued', 'armed', 'pending_trigger')
+                   AND NOT (r.status = 'pending_approval' AND r.human_wait_attempt_id IS NULL)))),
          -1)
  WHERE d.run_generation IS NULL`;
 
