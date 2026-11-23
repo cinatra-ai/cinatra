@@ -97,7 +97,7 @@ const BROKER_SURFACES = ["widget_content_editor_carrier_run"] as const;
 // ---------------------------------------------------------------------------
 
 describe("the surface matrix — HUMAN surfaces carry every interaction kind", () => {
-  it("declares exactly the four hosts and the five interaction kinds", () => {
+  it("declares exactly the four hosts and the six interaction kinds", () => {
     expect([...LIFECYCLE_CARD_HOSTS]).toEqual([
       "chat_thread",
       "site_widget",
@@ -112,6 +112,8 @@ describe("the surface matrix — HUMAN surfaces carry every interaction kind", (
       // cinatra#2928 (lifecycle-b W2a) — the agent pausing to ask for input.
       // Registered so a run can STATE the moment; drawn by W3 (cinatra#2930).
       "agent_hitl_screen",
+      // cinatra#4150 -- the publish card, registered with its card mounted on all four hosts.
+      "publish_decision",
     ]);
   });
 
@@ -123,15 +125,18 @@ describe("the surface matrix — HUMAN surfaces carry every interaction kind", (
     }
   });
 
-  it("covers every kind exactly once across the two carriages — no kind is unreachable", () => {
-    const carried = [...LIFECYCLE_DATA_PART_VIEW_TYPES, ...LIFECYCLE_INTERRUPT_KINDS].sort();
+  it("covers every kind exactly once across the three carriages — no kind is unreachable", () => {
+    // cinatra#4150: the publish card rides no wire part; its hosts find it by reading the run's decision record.
+    const readCarried = LIFECYCLE_CARD_KINDS.filter((kind) => LIFECYCLE_CARD_CARRIAGE[kind].represent === "read");
+    expect(readCarried).toEqual(["publish_decision"]);
+    const carried = [...LIFECYCLE_DATA_PART_VIEW_TYPES, ...LIFECYCLE_INTERRUPT_KINDS, ...readCarried].sort();
     expect(carried).toEqual([...LIFECYCLE_CARD_KINDS].sort());
     for (const kind of LIFECYCLE_CARD_KINDS) {
       // AMENDED BY cinatra#2930 (lifecycle-b W3): the carriage record is two
       // axes. `represent` is the wire one this matrix is about; `canonical`
       // says which fact decides the card is live, and both are closed sets.
       expect(LIFECYCLE_CARD_CARRIAGE[kind].represent, kind).toMatch(
-        /^(data_part|interrupt)$/,
+        /^(data_part|interrupt|read)$/,
       );
       expect(LIFECYCLE_CARD_CARRIAGE[kind].canonical, kind).toMatch(
         /^(run_state|data_part)$/,

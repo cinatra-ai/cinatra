@@ -148,7 +148,7 @@ describe("the resume delivery and a publish decision", () => {
       } finally {
         warn.mockRestore();
       }
-      expect(decisions.readLatestDecisionForRun).toHaveBeenCalledWith("run-1");
+      expect(decisions.readLatestDecisionForRun).toHaveBeenCalledWith("run-1", { orEarlierAttempt: true });
       expect(sendTaskSpy).not.toHaveBeenCalled();
       expect(handleWayflowTaskStateSpy).not.toHaveBeenCalled();
       expect(gateStoreMock.markResumeIntentDelivered).not.toHaveBeenCalled();

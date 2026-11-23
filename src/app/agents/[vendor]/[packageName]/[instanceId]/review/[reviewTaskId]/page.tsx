@@ -64,6 +64,7 @@ import { ReviewGateCard } from "@cinatra-ai/agents/review-gate-card";
 // screen, and the review screen registers what it is and what it lends.
 import { RunPageChrome } from "@cinatra-ai/agents/run-page-chrome";
 import { AgentHitlScreenCard } from "@cinatra-ai/agents/agent-hitl-screen-card";
+import { PublishDecisionCard } from "@cinatra-ai/agents/publish-decision-card-view";
 import { readRunTriggerByRunId } from "@cinatra-ai/agents/trigger-store";
 import { readRecommendationParkForRun } from "@cinatra-ai/agents/recommendation-hold";
 import { recommendationDecidedForRun } from "@cinatra-ai/agents/run-recommendation-core";
@@ -538,6 +539,12 @@ export default async function AgentRunReviewPage({
                   buys is that a reviewer who arrives while the run IS waiting
                   sees the question rather than a page that looks stalled. */}
               <AgentHitlScreenCard runId={runId} />
+              {/* THE PUBLISH CARD (cinatra#4150), COMPOSED on the same host by the same rule: keyed by the run alone,
+                  and a run with no open publish decision renders NOTHING here. No reader reaches a card on this
+                  host: a run the store can read was sent to the run detail above, where the run panel draws the
+                  card on `run_card`, and for a run it cannot read the card's own read answers `none`. The capture
+                  contract records this cell as composition-only. */}
+              <PublishDecisionCard runId={runId} />
               {gateCardRef ? (
                 <ReviewGateCard
                   view={{

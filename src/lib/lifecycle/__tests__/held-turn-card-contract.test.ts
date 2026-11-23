@@ -308,10 +308,19 @@ describe("the per-kind table", () => {
     // `agent_hitl_screen` (cinatra#2928) parks it mid-flight while the agent
     // asks. Every other kind is a fire-and-forget DATA_PART with no tool of its
     // own to bind to.
+    // `publish_decision` (cinatra#4150) stops it in front of a step it declares as publishing, but its gate emits
+    // no interrupt: it binds to the same agent_run result and is carried by the run's read, never as an interrupt.
     const INTERRUPT_KINDS = ["recommendation_hold", "agent_hitl_screen"];
+    // The publish card's row must EXIST, so the read-carriage check below always runs.
+    const publishRow = CHAT_THREAD_CARRIAGE_CONTRACT.find((r) => r.kind === "publish_decision");
+    expect(publishRow).toBeDefined();
+    expect(publishRow?.carriage).toBe("read");
     for (const row of CHAT_THREAD_CARRIAGE_CONTRACT) {
       if (INTERRUPT_KINDS.includes(row.kind)) {
         expect(row.carriage).toBe("interrupt");
+        expect(row.triggerToolName).toBe("agent_run");
+      } else if (row.kind === "publish_decision") {
+        expect(row.carriage).toBe("read");
         expect(row.triggerToolName).toBe("agent_run");
       } else {
         expect(row.carriage).toBe("data_part");

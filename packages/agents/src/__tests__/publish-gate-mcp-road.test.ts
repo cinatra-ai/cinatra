@@ -254,7 +254,7 @@ describe("agent_run_resume and a publish decision", () => {
       const answer = (await resume()) as { error?: string; code?: string };
       expect(answer.code).toBe("publish_decision_required");
       expect(typeof answer.error).toBe("string");
-      expect(decisions.readLatestDecisionForRun).toHaveBeenCalledWith("run-1");
+      expect(decisions.readLatestDecisionForRun).toHaveBeenCalledWith("run-1", { orEarlierAttempt: true });
       expect(sendTaskSpy).not.toHaveBeenCalled();
       expect(storeMock.writeHitlPrompt).not.toHaveBeenCalled();
       expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();

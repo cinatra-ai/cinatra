@@ -132,7 +132,7 @@ describe("the generic approve road and a publish decision", () => {
       await expect(approveReviewTaskInternal("wayflow-task-4150", "reader-a")).rejects.toMatchObject({
         code: "publish_decision_required",
       });
-      expect(decisions.readLatestDecisionForRun).toHaveBeenCalledWith(RUN.id);
+      expect(decisions.readLatestDecisionForRun).toHaveBeenCalledWith(RUN.id, { orEarlierAttempt: true });
       expect(sendTask).not.toHaveBeenCalled();
       // The hold is read before the fence: no status moves, and the pause claim is given back.
       expect(moves()).toEqual([]);
