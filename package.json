@@ -138,6 +138,7 @@
       "@cinatra-ai/web-research-agent": "https://github.com/cinatra-ai/web-research-agent.git",
       "@cinatra-ai/web-research-skill": "https://github.com/cinatra-ai/web-research-skill.git",
       "@cinatra-ai/web-scrape-agent": "https://github.com/cinatra-ai/web-scrape-agent.git",
+      "@cinatra-ai/website-artifacts": "https://github.com/cinatra-ai/website-artifacts.git",
       "@cinatra-ai/wordpress-agent": "https://github.com/cinatra-ai/wordpress-agent.git",
       "@cinatra-ai/wordpress-assistant-connector": "https://github.com/cinatra-ai/wordpress-assistant-connector.git",
       "@cinatra-ai/wordpress-mcp-connector": "https://github.com/cinatra-ai/wordpress-mcp-connector.git",

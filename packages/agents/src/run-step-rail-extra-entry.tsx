@@ -807,7 +807,30 @@ export type RailActiveStepInput = {
   spine: ReadonlyArray<RailSpineStep>;
   /** The trailing rows, in the order the rail draws them after the spine. */
   railExtras: ReadonlyArray<RailTrailingEntry>;
+  /** The gates that stand in a spine step's place (cinatra#3035): that step's
+   *  display index and the gate's status. */
+  spineGates?: ReadonlyArray<{ index: number; status: string }>;
 };
+
+/**
+ * THE RAIL'S NON-SPINE ENTRIES, SPLIT AT THE SPINE (cinatra#3035).
+ *
+ * A review gate raised at the one step its template marks stands in that step's
+ * place — the builder gives it (and its verification) the step's number as
+ * `onStep` — so a rail drawing the spine itself draws those entries there, and
+ * only the rest trail the spine, in their order.
+ */
+export function splitRailExtrasAtSpine<E extends { onStep?: number }>(
+  railExtras: ReadonlyArray<E>,
+): { onSpine: E[]; trailing: E[] } {
+  const onSpine: E[] = [];
+  const trailing: E[] = [];
+  for (const entry of railExtras) {
+    if (entry.onStep !== undefined) onSpine.push(entry);
+    else trailing.push(entry);
+  }
+  return { onSpine, trailing };
+}
 
 /**
  * The display index of the entry the run is parked on — the stepper's `value`.
@@ -817,7 +840,7 @@ export type RailActiveStepInput = {
  * them. A number past every row highlights nothing.
  */
 export function electRunRailActiveStep(input: RailActiveStepInput): number {
-  const { status, currentStepNumber, awaitingNextStep, highestStepNumber, spine, railExtras } = input;
+  const { status, currentStepNumber, awaitingNextStep, highestStepNumber, spine, railExtras, spineGates } = input;
   const spineLength = spine.length;
   const pastTheEnd = spineLength + railExtras.length + 1;
   const toDisplayIndex = (policyStepNumber: number): number =>
@@ -829,6 +852,11 @@ export function electRunRailActiveStep(input: RailActiveStepInput): number {
   // the run is waiting on, and its display index is its own.
   const parkedTrailingIndex = railExtras.findIndex((entry) => entry.status === "pending");
   const parkedTrailingStep = parkedTrailingIndex === -1 ? null : spineLength + parkedTrailingIndex + 1;
+  // A GATE STANDING IN A SPINE STEP'S PLACE IS THAT STEP (cinatra#3035): a run
+  // parked at it stands on that step, never past the whole spine. It comes
+  // before every trailing row, so it wins over a trailing gate wherever a
+  // parked gate wins.
+  const parkedSpineStep = spineGates?.find((gate) => gate.status === "pending")?.index ?? null;
 
   if (status === "pending_input" || status === "queued") return 1;
 
@@ -846,6 +874,7 @@ export function electRunRailActiveStep(input: RailActiveStepInput): number {
   }
 
   if (status === "pending_approval") {
+    if (parkedSpineStep !== null) return parkedSpineStep;
     // THE GATE THE RUN IS PARKED AT WINS, WHATEVER STEP PRODUCED THE WORK
     // (cinatra#3221, fix leg 7). A gate that arrives as a trailing entry is its
     // own row, and that row is where the run stands: "The step the run is
@@ -872,9 +901,10 @@ export function electRunRailActiveStep(input: RailActiveStepInput): number {
   }
 
   if (status === "completed" || status === "stopped") {
-    // A gate reached on a stopped run is still where the run stands; a run
-    // with nothing pending stands past EVERY row, spine and trailing alike.
-    return parkedTrailingStep ?? pastTheEnd;
+    // A gate reached on a stopped run is still where the run stands, in a
+    // spine step's place or trailing (cinatra#3035); a run with nothing pending
+    // stands past EVERY row, spine and trailing alike.
+    return parkedSpineStep ?? parkedTrailingStep ?? pastTheEnd;
   }
 
   if (status === "failed") {

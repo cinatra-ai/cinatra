@@ -3,13 +3,31 @@ import "server-only";
 import type { ReactNode } from "react";
 import type { ArtifactUiSlot } from "@cinatra-ai/sdk-extensions/artifact-contract";
 
-import { loadArtifactRenderer } from "@/lib/artifacts/artifact-renderer-loader";
+import {
+  loadArtifactRenderer,
+  type ArtifactRendererLoadResult,
+} from "@/lib/artifacts/artifact-renderer-loader";
 import {
   artifactRendererPropsAtVersion,
   type ArtifactRendererProps,
 } from "@/lib/artifacts/artifact-renderer-props";
 
 import { RendererDegradedNotice } from "./renderer-degraded-notice";
+
+/**
+ * Whether this slot MOUNTS the display of a load decision for a snapshot built
+ * at `snapshotPropsApiVersion`: exactly the two degrade branches of
+ * `ExtensionRendererSlot` below, negated (a failed load, and a negotiated
+ * version above the snapshot's). The artifact page's identity line names a
+ * renderer only where this holds for the same decision the slot mounts with
+ * (cinatra#4366).
+ */
+export function rendererLoadMountsAt(
+  result: ArtifactRendererLoadResult,
+  snapshotPropsApiVersion: number,
+): result is Extract<ArtifactRendererLoadResult, { ok: true }> {
+  return result.ok && result.negotiatedPropsApiVersion <= snapshotPropsApiVersion;
+}
 
 /**
  * Mount an extension-shipped artifact renderer resolved by the dispatch spine
@@ -27,19 +45,29 @@ export async function ExtensionRendererSlot({
   slot,
   props,
   fallback,
+  decision,
 }: {
   generatedKey: string;
   packageName: string;
   slot: ArtifactUiSlot;
   props: ArtifactRendererProps;
   fallback: ReactNode;
+  /**
+   * The caller's own load decision for this very key and snapshot version,
+   * made once (`loadArtifactRenderer`) and shared with a surface that reads
+   * the same display (the artifact page's identity line, cinatra#4366). Given,
+   * the slot mounts from it and loads nothing itself: one quarantine read, one
+   * module load, one answer for both. Absent, the slot loads as it always did.
+   */
+  decision?: Promise<ArtifactRendererLoadResult>;
 }): Promise<ReactNode> {
-  const result = await loadArtifactRenderer({
-    generatedKey,
-    packageName,
-    slot,
-    expectedPropsApiVersion: props.propsApiVersion,
-  });
+  const result = await (decision ??
+    loadArtifactRenderer({
+      generatedKey,
+      packageName,
+      slot,
+      expectedPropsApiVersion: props.propsApiVersion,
+    }));
 
   if (!result.ok) {
     return (
