@@ -403,7 +403,13 @@ describe("a Regenerate segment run is resolved and fenced before anything is sen
     }
     expect(segmentMock.resolveRegenerateSegment).toHaveBeenCalledWith(
       expect.objectContaining({
-        run: expect.objectContaining({ id: RUN_ID, sourceType: "lifecycle_repair", templateId: "tmpl-4424" }),
+        run: expect.objectContaining({
+          id: RUN_ID,
+          sourceType: "lifecycle_repair",
+          templateId: "tmpl-4424",
+          // The run's own inputs, so the resolution checks their form.
+          inputParams: expect.objectContaining({ instructions: "Old producing instructions" }),
+        }),
         packageName: null,
       }),
     );

@@ -5,11 +5,12 @@
  *
  * The note is the words of the review floor's Note field, as the reviewer left
  * them (the `prompt-window` finding the review store records, read with
- * `readRegenerateNote`). It is never the generic findings text (a lead sentence
- * and numbered lines), and the typed repair request the segment run carries
- * holds no findings, so the note's words appear once in the run's inputs. The
- * drain's own use of the reader is pinned in
- * `lifecycle-repair-dispatch-start-inputs.test.ts`.
+ * `readRegenerateNote`); a picture's prompt is its own field (`picture-prompt`).
+ * Each fills only the input declared for it (`routeRegenerateFindings`). The
+ * words are never the generic findings text (a lead sentence and numbered
+ * lines), and the typed repair request the segment run carries holds no
+ * findings, so the words appear once in the run's inputs. The drain's own use
+ * of the routing is pinned in `lifecycle-repair-dispatch-start-inputs.test.ts`.
  */
 import { describe, expect, it, vi } from "vitest";
 
@@ -26,6 +27,7 @@ const LIFECYCLE = JSON.stringify({
   ],
 });
 const NOTE = "a brighter sky over the harbour";
+const PROMPT = "a lighthouse at dusk, wide angle";
 
 function intent(overrides: Record<string, unknown> = {}) {
   return {
@@ -39,10 +41,10 @@ function intent(overrides: Record<string, unknown> = {}) {
 }
 
 /** The findings the review store records for a picture's Regenerate: the note,
- *  and the same words again as the recorded prompt. */
+ *  and the picture's prompt, here with other words than the note. */
 const PICTURE_FINDINGS = [
   { id: "prompt-window", message: NOTE },
-  { id: "picture-prompt", message: NOTE },
+  { id: "picture-prompt", message: PROMPT },
 ];
 
 function request(findings: unknown) {
@@ -90,8 +92,47 @@ describe("readRegenerateNote: the reviewer's note of a Regenerate repair", () =>
   });
 });
 
-describe("planSegmentDispatch: the note goes into the declared input and nowhere else", () => {
-  it("puts the Note field's words under the start output that feeds the declared input, unwrapped", async () => {
+describe("routeRegenerateFindings: each review field fills only its own declared input", () => {
+  type Route = (findings: unknown) => { value: string; deliveredFindingIds: string[] } | null;
+  const route = () => (lifecyclePolicy as Record<string, unknown>).routeRegenerateFindings as Route | undefined;
+
+  // red-first-expect: expected 'undefined' to be 'function' // Object.is equality
+  it("gives a picture's declared input its prompt, and delivers the note only when its words are the same", () => {
+    expect(typeof route()).toBe("function");
+    expect(route()!(PICTURE_FINDINGS)).toEqual({ value: PROMPT, deliveredFindingIds: ["picture-prompt"] });
+    // The review floor sends the Note field's words as the prompt too: then
+    // both findings are given to the run, in the one input.
+    expect(
+      route()!([
+        { id: "prompt-window", message: PROMPT },
+        { id: "picture-prompt", message: PROMPT },
+      ]),
+    ).toEqual({ value: PROMPT, deliveredFindingIds: ["prompt-window", "picture-prompt"] });
+  });
+
+  it("gives every other step's declared input the Note; a malformed prompt never falls back to the note", () => {
+    expect(typeof route()).toBe("function");
+    expect(route()!([{ id: "prompt-window", message: NOTE }])).toEqual({
+      value: NOTE,
+      deliveredFindingIds: ["prompt-window"],
+    });
+    for (const prompt of ["   ", 7]) {
+      expect(route()!([{ id: "prompt-window", message: NOTE }, { id: "picture-prompt", message: prompt }])).toBeNull();
+    }
+    expect(
+      route()!([
+        { id: "prompt-window", message: NOTE },
+        { id: "picture-prompt", message: PROMPT },
+        { id: "picture-prompt", message: NOTE },
+      ]),
+    ).toBeNull();
+    expect(route()!([{ id: "finding-1", message: NOTE }])).toBeNull();
+    expect(route()!(null)).toBeNull();
+  });
+});
+
+describe("planSegmentDispatch: the declared input's words go there and nowhere else", () => {
+  it("puts the routed words under the start output that feeds the declared input, unwrapped; the other field's words appear nowhere", async () => {
     const d = deps();
     const planned = await planSegmentDispatch(
       {
@@ -99,7 +140,8 @@ describe("planSegmentDispatch: the note goes into the declared input and nowhere
         templateId: "tpl-1",
         packageName: "@any-vendor/pipeline",
         lifecycleConfig: LIFECYCLE,
-        note: NOTE,
+        // The picture step's declared input takes the picture's prompt.
+        note: PROMPT,
         request: request(PICTURE_FINDINGS),
       },
       d,
@@ -108,10 +150,11 @@ describe("planSegmentDispatch: the note goes into the declared input and nowhere
       kind: "segment",
       parentRunId: PROVENANCE_RUN,
       inputParams: {
-        imagePrompt: NOTE,
+        imagePrompt: PROMPT,
         lifecycleRepairRequest: { kind: "lifecycle_repair_request", repairId: "repair-1", findings: [] },
       },
     });
+    expect(JSON.stringify(planned)).not.toContain(NOTE);
     // The declared step's own input is what the start output was looked up for.
     expect(d.readNoteStartOutput).toHaveBeenCalledWith({
       packageName: "@any-vendor/pipeline",

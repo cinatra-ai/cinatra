@@ -306,6 +306,48 @@ describe("resolveRegenerateSegment (T11)", () => {
   });
 });
 
+describe("resolveRegenerateSegment checks the run's inputs at its start", () => {
+  // The worker hands the run's input params to the resolution. A segment run
+  // whose inputs are not the declared-input form (the reviewer's words under
+  // the note's start output, and the request with no findings) is refused
+  // before anything is sent, so a run made in the earlier form by an older
+  // build is never executed with the findings text.
+  const NOTE = "Make the sky brighter";
+  const PROMPT = "A lighthouse at dusk, wide angle";
+  const FINDINGS = [
+    { id: "prompt-window", message: NOTE },
+    { id: "picture-prompt", message: PROMPT },
+  ];
+  const withFindings = () => deps({ readRepairForRun: vi.fn(async () => ({ ...intent(), findings: FINDINGS })) });
+  const runWith = (inputParams: unknown) => ({ ...RUN_ROW, inputParams }) as typeof RUN_ROW;
+
+  // red-first-expect: expected 'segment' to be 'refused' // Object.is equality
+  it("refuses a run that holds the earlier findings form", async () => {
+    const earlier = {
+      imagePrompt: "Apply these review findings:\n\n1. Make the sky brighter\n2. A lighthouse at dusk, wide angle",
+      lifecycleRepairRequest: { kind: "lifecycle_repair_request", repairId: "repair-1", findings: FINDINGS },
+    };
+    expectRefused(await resolve(withFindings(), runWith(earlier)));
+    // The words alone are not enough: the request must hold no findings.
+    expectRefused(
+      await resolve(
+        withFindings(),
+        runWith({ imagePrompt: PROMPT, lifecycleRepairRequest: { repairId: "repair-1", findings: FINDINGS } }),
+      ),
+    );
+    // Nor is another field's words in the declared input.
+    expectRefused(
+      await resolve(withFindings(), runWith({ imagePrompt: NOTE, lifecycleRepairRequest: { findings: [] } })),
+    );
+  });
+
+  it("resolves a run in the declared-input form, from the stored text or the parsed object", async () => {
+    const form = { imagePrompt: PROMPT, lifecycleRepairRequest: { repairId: "repair-1", findings: [] } };
+    expect((await resolve(withFindings(), runWith(form))).kind).toBe("segment");
+    expect((await resolve(withFindings(), runWith(JSON.stringify(form)))).kind).toBe("segment");
+  });
+});
+
 describe("isRegenerateSegmentRun", () => {
   it("is true for a repair run whose repair names a node, and for a fault (fail closed)", async () => {
     const read = (r: RegenerateRepairIntent | null) => ({ readRepairForRun: vi.fn(async () => r) });
@@ -874,9 +916,10 @@ describe("a blank non-NULL intent is refused, never run as an ordinary repair (r
 
   it("the dispatch drain plans every non-NULL intent, blank included", () => {
     const source = readFileSync(path.resolve(__dirname, "../lifecycle-repair-dispatch-store.ts"), "utf8");
-    // The deterministic-run read comes first; only a repair with no run is planned.
+    // The deterministic-run read comes first; every Regenerate is then planned,
+    // an existing run included (it is checked against the plan).
     const runRead = source.indexOf("const [already] = await db");
-    const gate = source.indexOf("if (!already && hasRegenerateIntent(row.regenerateNodeId)) {");
+    const gate = source.indexOf("if (hasRegenerateIntent(row.regenerateNodeId)) {", runRead);
     expect(runRead).toBeGreaterThan(0);
     expect(gate).toBeGreaterThan(runRead);
     expect(source.indexOf("await planSegmentDispatch(", gate)).toBeGreaterThan(gate);

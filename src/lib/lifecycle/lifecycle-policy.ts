@@ -358,14 +358,65 @@ export const REVIEW_NOTE_FINDING_ID = "prompt-window";
  * field's words as they are.
  */
 export function readRegenerateNote(findings: unknown): string | null {
+  return readWindowFinding(findings, REVIEW_NOTE_FINDING_ID);
+}
+
+/** The id of the finding that carries a picture review's prompt: the recorded
+ *  prompt the floor sends back beside the note (cinatra#3080 item 5). */
+export const PICTURE_PROMPT_FINDING_ID = "picture-prompt";
+
+/** The message of the one finding with `id`, or null when there is none, more
+ *  than one, or its message is blank. */
+function readWindowFinding(findings: unknown, id: string): string | null {
   if (!Array.isArray(findings)) return null;
-  const notes = findings.filter(
+  const matching = findings.filter(
     (finding): finding is { message?: unknown } =>
-      !!finding && typeof finding === "object" && (finding as { id?: unknown }).id === REVIEW_NOTE_FINDING_ID,
+      !!finding && typeof finding === "object" && (finding as { id?: unknown }).id === id,
   );
-  if (notes.length !== 1) return null;
-  const message = notes[0].message;
+  if (matching.length !== 1) return null;
+  const message = matching[0].message;
   return typeof message === "string" && message.trim().length > 0 ? message : null;
+}
+
+/** What a Regenerate hands the producing step's one declared input. */
+export type RegenerateDelivery = {
+  /** The recorded words the declared input receives, exactly as recorded. */
+  value: string;
+  /** The findings whose recorded words are exactly `value`: the findings the
+   *  run is given. Every other finding reaches no input of the run. */
+  deliveredFindingIds: string[];
+};
+
+/**
+ * The value of the producing step's declared input for a Regenerate, and the
+ * findings it delivers (cinatra#4264). Each review field fills only its own
+ * input. A step declares one text input: a picture step declares its prompt
+ * (the blog pipeline's `image_flow.prompt`), every other step the input its
+ * Note fills (`draft_flow.note`). A picture review records its prompt under
+ * `picture-prompt` (only a review that opened with a picture's recorded prompt
+ * has one), so when the request carries that finding it fills the declared
+ * input; otherwise the Note (`prompt-window`) does. A finding of the other
+ * field reaches no input: it is delivered only when its words are exactly the
+ * value given. Null when the field's finding is missing, repeated or blank;
+ * the Note never stands in for a malformed prompt.
+ */
+export function routeRegenerateFindings(findings: unknown): RegenerateDelivery | null {
+  if (!Array.isArray(findings)) return null;
+  const hasPrompt = findings.some(
+    (finding) => !!finding && typeof finding === "object" && (finding as { id?: unknown }).id === PICTURE_PROMPT_FINDING_ID,
+  );
+  const value = readWindowFinding(findings, hasPrompt ? PICTURE_PROMPT_FINDING_ID : REVIEW_NOTE_FINDING_ID);
+  if (value === null) return null;
+  const deliveredFindingIds = findings
+    .filter(
+      (finding): finding is { id: string; message: string } =>
+        !!finding &&
+        typeof finding === "object" &&
+        typeof (finding as { id?: unknown }).id === "string" &&
+        (finding as { message?: unknown }).message === value,
+    )
+    .map((finding) => finding.id);
+  return { value, deliveredFindingIds };
 }
 
 /**

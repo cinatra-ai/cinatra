@@ -70,6 +70,7 @@ import { sessionAuthorityFromResolvedRole } from "@/lib/org-write/authority";
 import { producedEventId, type ContinuationMode } from "@/lib/lifecycle/lifecycle-produced-event";
 import {
   parseLifecycleConfigText,
+  PICTURE_PROMPT_FINDING_ID,
   REVIEW_NOTE_FINDING_ID,
   type CompiledManifestLifecycle,
 } from "@/lib/lifecycle/lifecycle-policy";
@@ -83,14 +84,15 @@ export type { RecordChangesRequestedResult } from "./lifecycle-repair-store";
  * response-lost retry re-derives the identical `changes_requested` fingerprint
  * (the entry point keys the fingerprint on the idempotency key + the sorted
  * finding ids). The distinguishing datum across submits is the FEEDBACK, which the
- * idempotency key encodes below. A Regenerate's dispatch reads the note from
- * this finding alone (`readRegenerateNote`, cinatra#4264). */
+ * idempotency key encodes below. A Regenerate's dispatch reads the Note from
+ * this finding alone (`routeRegenerateFindings`, cinatra#4264). */
 const PROMPT_WINDOW_FINDING_ID = REVIEW_NOTE_FINDING_ID;
 
-/** The stable finding id the PICTURE PROMPT travels under (cinatra#3080 item 5).
- * Its OWN id is what makes the note and the prompt two values rather than one
- * concatenated sentence — at the store as well as on the wire. */
-const PICTURE_PROMPT_FINDING_ID = "picture-prompt";
+/* The PICTURE PROMPT travels under its own finding id (`PICTURE_PROMPT_FINDING_ID`,
+ * cinatra#3080 item 5). Its OWN id is what makes the note and the prompt two
+ * values rather than one concatenated sentence — at the store as well as on the
+ * wire — and a Regenerate's dispatch routes it to the picture step's declared
+ * input by that id (`routeRegenerateFindings`, cinatra#4264). */
 
 /** cinatra#4245: the refusal for the step's own declared gate (`wayflow-<task>`)
  * when it does not meet every condition of a change request that ends the run's

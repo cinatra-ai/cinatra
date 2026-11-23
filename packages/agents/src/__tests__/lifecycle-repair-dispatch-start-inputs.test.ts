@@ -200,6 +200,7 @@ vi.mock("../installed-oas-path", () => ({
 }));
 
 import { dispatchPendingProducerRepairs, repairRunId } from "../lifecycle-repair-dispatch-store";
+import { REPAIR_FINDINGS_TEXT_LEAD } from "@/lib/lifecycle/lifecycle-policy";
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
 
 const currentFinding = { id: "finding-current", path: "title", message: "Use the current reviewed title", severity: "minor" };
@@ -417,16 +418,18 @@ describe("input data cannot become repair authorization", () => {
     expect(String(ports.writes[0].values.changeSummary)).toContain("the Regenerate intent names no node");
   });
 
-  // A retry of a Regenerate reads the deterministic run BEFORE any plan. The
-  // reviewer's sequence: a "write_draft" dispatch created and enqueued its
-  // segment run, then stopped before the repair was marked dispatched; the
-  // template then lost its Regenerate entry, so a new plan would refuse. The
-  // retry must not escalate a repair whose run and job are live: it carries
-  // the existing run to the mark, as the ordinary retry does.
-  it("a Regenerate retry whose run already exists is carried to dispatched with no new plan, no second create and the same job id, even when a new plan would refuse", async () => {
+  // A retry of a Regenerate reads the deterministic run, then plans. A
+  // "write_draft" dispatch created and enqueued its segment run, then stopped
+  // before the repair was marked dispatched. When the run is exactly what the
+  // plan writes now, the retry carries it to the mark: no second create and the
+  // same job id. When the plan refuses now, the run is stopped and the repair
+  // escalated: nothing is sent that the plan would not write.
+  const PLANNED = { kind: "segment" as const, parentRunId: "provenance-run",
+    inputParams: { draftNote: "the note", lifecycleRepairRequest: { repairId: "repair-current", findings: [] } } };
+  async function firstPassCreatesAndEnqueuesTheRun() {
     arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG);
     ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
-    segmentPlan.answer = { kind: "segment", parentRunId: "provenance-run", inputParams: { draftNote: "the note" } };
+    segmentPlan.answer = PLANNED;
     ports.updateResults = []; // the pass stops before the dispatched mark
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
@@ -434,21 +437,143 @@ describe("input data cannot become repair authorization", () => {
     } finally { error.mockRestore(); }
     expect(ports.created).toHaveLength(1);
     expect(ports.queued).toHaveBeenCalledOnce();
+    return ports.created[0].input;
+  }
+
+  // red-first-expect: expected [ { repair: { …(5) }, …(5) } ] to have a length of 2 but got 1
+  it("a Regenerate retry whose run already exists as the plan writes it is carried to dispatched: no second create and the same job id", async () => {
+    const created = await firstPassCreatesAndEnqueuesTheRun();
     const firstJobId = ports.queued.mock.calls[0][1].jobId;
 
     arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG);
     ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
-    ports.reads[3] = [{ id: repairRunId("repair-current") }];
-    segmentPlan.answer = { kind: "refused", reason: "Regenerate refused: the agent declares no Regenerate entry for that step" };
+    ports.reads[3] = [{ id: repairRunId("repair-current"), status: "queued",
+      inputParams: JSON.stringify(created.inputParams), parentRunId: created.parentRunId }];
     const result = await dispatchPendingProducerRepairs();
     expect(result).toMatchObject({ scanned: 1, dispatched: 1, escalated: 0, failed: 0 });
-    expect(segmentPlan.calls).toHaveLength(1);
+    expect(segmentPlan.calls).toHaveLength(2);
     expect(ports.created).toHaveLength(1);
     expect(ports.queued).toHaveBeenCalledTimes(2);
     expect(ports.queued.mock.calls[1][0].runId).toBe(repairRunId("repair-current"));
     expect(ports.queued.mock.calls[1][1].jobId).toBe(firstJobId);
     expect(ports.writes.map((w) => w.values.status)).not.toContain("escalated");
     expect(ports.writes.at(-1)!.values.status).toBe("dispatched");
+  });
+
+  // red-first-expect: expected { scanned: 1, dispatched: 1, …(3) } to match object { scanned: 1, dispatched: +0, …(2) }
+  it("a Regenerate retry whose run already exists and whose new plan refuses stops the run, then escalates: no second create, no second job", async () => {
+    const created = await firstPassCreatesAndEnqueuesTheRun();
+    ports.run = { status: "queued" }; ports.events = [];
+
+    arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG);
+    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
+    ports.reads[3] = [{ id: repairRunId("repair-current"), status: "queued",
+      inputParams: JSON.stringify(created.inputParams), parentRunId: created.parentRunId }];
+    ports.reads.push([{ status: "queued" }]); // the stop's own read of the run
+    segmentPlan.answer = { kind: "refused", reason: "Regenerate refused: the agent declares no Regenerate entry for that step" };
+    const result = await dispatchPendingProducerRepairs();
+    expect(result).toMatchObject({ scanned: 1, dispatched: 0, escalated: 1, failed: 0 });
+    expect(ports.run).toEqual({ status: "stopped" });
+    expect(ports.events).toEqual(["transition queued->stopped", "write escalated"]);
+    expect(ports.created).toHaveLength(1);
+    expect(ports.queued).toHaveBeenCalledOnce(); // the first pass's call only
+    expect(String(ports.writes.at(-1)!.values.changeSummary)).toContain("declares no Regenerate entry for that step");
+  });
+
+  // A run made in the earlier form (the generic findings text in the note's
+  // start output and the request with all its findings, as an older build
+  // writes it) that a pass created before a crash, or during a rolling
+  // deployment, is never sent in that form: the retry stops it and escalates.
+  // red-first-expect: expected { scanned: 1, dispatched: 1, …(3) } to match object { scanned: 1, dispatched: +0, …(2) }
+  it("a Regenerate retry whose existing run holds the earlier findings form is stopped and escalated, never enqueued in that form", async () => {
+    const note = "Open with the harbour, not the market";
+    const findings = [{ id: "prompt-window", message: note }];
+    const dir = mkdtempSync(path.join(tmpdir(), "regen-4264-"));
+    segmentPorts.oasPath = path.join(dir, "agent.oas.json");
+    writeFileSync(segmentPorts.oasPath, JSON.stringify({
+      component_type: "Flow",
+      start_node: { $component_ref: "start" },
+      data_flow_connections: [
+        { source_node: { $component_ref: "start" }, source_output: "draftNote",
+          destination_node: { $component_ref: "draft_flow" }, destination_input: "note" },
+      ],
+    }));
+    segmentPorts.provenance = { runId: "provenance-run", nodeId: "write_draft" };
+    const config = JSON.stringify({ regenerate: [{ artifactNode: "write_draft", step: "draft_flow", noteInput: "note" }] });
+    arrangeProducer({ custom: "retained" }, {}, config);
+    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft", findings })];
+    const earlierForm = {
+      draftNote: `${REPAIR_FINDINGS_TEXT_LEAD}\n\n1. ${note}`,
+      lifecycleRepairRequest: { kind: "lifecycle_repair_request", repairId: "repair-current", findings },
+    };
+    ports.reads[3] = [{ id: repairRunId("repair-current"), status: "queued",
+      inputParams: JSON.stringify(earlierForm), parentRunId: "provenance-run" }];
+    ports.reads.push([{ status: "queued" }]); // the stop's own read of the run
+    ports.run = { status: "queued" };
+    let result: unknown;
+    try {
+      result = await dispatchPendingProducerRepairs();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    expect(result).toMatchObject({ scanned: 1, dispatched: 0, escalated: 1, failed: 0 });
+    expect(ports.queued).not.toHaveBeenCalled();
+    expect(ports.created).toHaveLength(0);
+    expect(ports.run).toEqual({ status: "stopped" });
+    expect(ports.writes.map((w) => w.values.status)).toEqual(["escalated"]);
+    expect(String(ports.writes[0].values.changeSummary)).toContain("stopped and not sent");
+  });
+
+  // A picture's Regenerate carries two review fields: the Note and the
+  // picture's prompt. Each fills only the input declared for it. The picture
+  // step declares its prompt, so the prompt's words (not the note's) reach
+  // that input, once; the draft step declares its note, so the Note's words
+  // reach that input, once. Neither text appears anywhere else in the run.
+  // red-first-expect: expected 'A reviewer requested changes to the w…' to be 'A lighthouse at dusk, wide angle' // Object.is equality
+  it("a note and a picture prompt with different words each reach only their own declared input, once", async () => {
+    const note = "Make the sky brighter";
+    const prompt = "A lighthouse at dusk, wide angle";
+    const dir = mkdtempSync(path.join(tmpdir(), "regen-4264-"));
+    segmentPorts.oasPath = path.join(dir, "agent.oas.json");
+    writeFileSync(segmentPorts.oasPath, JSON.stringify({
+      component_type: "Flow",
+      start_node: { $component_ref: "start" },
+      data_flow_connections: [
+        { source_node: { $component_ref: "start" }, source_output: "draftNote",
+          destination_node: { $component_ref: "draft_flow" }, destination_input: "note" },
+        { source_node: { $component_ref: "start" }, source_output: "imagePrompt",
+          destination_node: { $component_ref: "image_flow" }, destination_input: "prompt" },
+      ],
+    }));
+    const config = JSON.stringify({ regenerate: [
+      { artifactNode: "file_image", step: "image_flow", noteInput: "prompt" },
+      { artifactNode: "write_draft", step: "draft_flow", noteInput: "note" },
+    ] });
+    try {
+      segmentPorts.provenance = { runId: "provenance-run", nodeId: "file_image" };
+      arrangeProducer({ custom: "retained" }, {}, config);
+      ports.reads[0] = [pendingRepair({ regenerateNodeId: "file_image", findings: [
+        { id: "prompt-window", message: note }, { id: "picture-prompt", message: prompt },
+      ] })];
+      expect(await dispatchPendingProducerRepairs()).toMatchObject({ dispatched: 1, escalated: 0 });
+      const picture = inputParams();
+      expect(picture.imagePrompt).toBe(prompt);
+      expect(Object.keys(picture).sort()).toEqual(["imagePrompt", "lifecycleRepairRequest"]);
+      expect(JSON.stringify(picture).split(prompt)).toHaveLength(2);
+      expect(JSON.stringify(picture)).not.toContain(note);
+
+      ports.created = [];
+      segmentPorts.provenance = { runId: "provenance-run", nodeId: "write_draft" };
+      arrangeProducer({ custom: "retained" }, {}, config);
+      ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft", findings: [{ id: "prompt-window", message: note }] })];
+      expect(await dispatchPendingProducerRepairs()).toMatchObject({ dispatched: 1, escalated: 0 });
+      const draft = inputParams();
+      expect(draft.draftNote).toBe(note);
+      expect(Object.keys(draft).sort()).toEqual(["draftNote", "lifecycleRepairRequest"]);
+      expect(JSON.stringify(draft).split(note)).toHaveLength(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("a Regenerate retry that finds no run and whose new plan refuses is escalated with the plan's reason, as before", async () => {

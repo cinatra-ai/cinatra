@@ -85,6 +85,8 @@ import "server-only";
 // skipped only when `CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION=off`.
 // ---------------------------------------------------------------------------
 
+import { isDeepStrictEqual } from "node:util";
+
 import { and, asc, eq, isNotNull, or, sql } from "drizzle-orm";
 
 import { agentBuilderPool, db } from "./db";
@@ -100,7 +102,7 @@ import type { ChangesRequestedRequest, RepairFinding } from "@/lib/lifecycle/lif
 import {
   parseLifecycleConfigText,
   projectRepairFindingsInput,
-  readRegenerateNote,
+  routeRegenerateFindings,
   type CompiledManifestLifecycle,
 } from "@/lib/lifecycle/lifecycle-policy";
 import { hasRegenerateIntent, planSegmentDispatch } from "./regenerate-segment";
@@ -474,22 +476,36 @@ async function deliverRepair(row: typeof lifecycleRepair.$inferSelect): Promise<
   // unchanged. A strict NULL check: a blank intent is planned, refused
   // and escalated, never dispatched as an ordinary repair.
   //
-  // The deterministic run is read FIRST, before any plan. A run that
-  // already exists (an earlier pass created it, and maybe enqueued it,
-  // then stopped before the repair was marked dispatched) is carried to
-  // the mark as an ordinary retry: no plan, no second create, and the
-  // same derived job id, so no second job. Only a repair with no run is
-  // planned, and only then can a refused plan escalate it. The checks
-  // above this read that escalate a Regenerate stop an existing run first
-  // (`escalateRepairBeforeRunRead`), so an escalated Regenerate never
-  // leaves a live run or job behind it.
+  // The deterministic run is read FIRST, then every Regenerate is planned.
+  // A repair with no run is created from the plan. A run that already
+  // exists (an earlier pass created it, and maybe enqueued it, then stopped
+  // before the repair was marked dispatched) is carried to the mark only
+  // when it is exactly what the plan writes now (its inputs and its parent):
+  // no second create, and the same derived job id, so no second job. A run
+  // the plan does not match (one made in the earlier form, with the findings
+  // text and the full findings request, by an older build before a crash or
+  // during a rolling deployment) or a plan that refuses stops that run and
+  // escalates the repair (`escalateRepairBeforeRunRead`). It is refused
+  // rather than re-planned: the earlier pass may already have enqueued its
+  // job, so a worker can start the run at any moment, and rewriting its
+  // inputs would race that start. The stop is a compare-and-set, nothing new
+  // is created or enqueued, so nothing is dispatched twice; the worker's run
+  // start fails such a run on its own as well (`resolveRegenerateSegment`).
+  // The checks above this read that escalate a Regenerate stop an existing
+  // run first too, so an escalated Regenerate never leaves a live run or job
+  // behind it.
   //
   // A Regenerate whose existing run is already terminal is escalated here,
   // never enqueued or marked dispatched: a pass that stopped the run and
   // died before its escalation leaves a stopped run and a `requested`
   // repair, and the check that stopped it may pass on this pass.
   const [already] = await db
-    .select({ id: agentRuns.id, status: agentRuns.status })
+    .select({
+      id: agentRuns.id,
+      status: agentRuns.status,
+      inputParams: agentRuns.inputParams,
+      parentRunId: agentRuns.parentRunId,
+    })
     .from(agentRuns)
     .where(eq(agentRuns.id, runId))
     .limit(1);
@@ -506,7 +522,7 @@ async function deliverRepair(row: typeof lifecycleRepair.$inferSelect): Promise<
   }
   let segmentParentRunId: string | null = null;
   let segmentInputParams: Record<string, unknown> | null = null;
-  if (!already && hasRegenerateIntent(row.regenerateNodeId)) {
+  if (hasRegenerateIntent(row.regenerateNodeId)) {
     const segment = await planSegmentDispatch({
       repair: {
         id: row.id,
@@ -518,13 +534,24 @@ async function deliverRepair(row: typeof lifecycleRepair.$inferSelect): Promise<
       templateId: producer.templateId,
       packageName: producer.packageName,
       lifecycleConfig: producer.lifecycleConfigText,
-      // The Note field's words as the reviewer left them, never a findings
+      // The recorded words of the review field the step's declared input
+      // takes (a picture's prompt, otherwise the Note), never a findings
       // text; the plan carries the request without its findings.
-      note: readRegenerateNote(request.findings),
+      note: routeRegenerateFindings(request.findings)?.value ?? null,
       request: request as unknown as Record<string, unknown>,
     });
     if (segment.kind === "refused") {
-      const escalated = await escalateRepair(row.id, segment.reason);
+      // An existing run is stopped first; with none, nothing is left to stop.
+      const escalated = already
+        ? await escalateRepairBeforeRunRead(row, segment.reason)
+        : await escalateRepair(row.id, segment.reason);
+      return escalated ? "escalated" : "raced";
+    }
+    if (already && !existingRunMatchesPlan(already, segment)) {
+      const escalated = await escalateRepairBeforeRunRead(
+        row,
+        "the Regenerate's repair run was made with other inputs than the reviewer's words in the step's declared input, so it is stopped and not sent",
+      );
       return escalated ? "escalated" : "raced";
     }
     segmentParentRunId = segment.parentRunId;
@@ -610,6 +637,22 @@ async function deliverRepair(row: typeof lifecycleRepair.$inferSelect): Promise<
 
   const moved = await markRepairDispatched(row.id);
   return moved ? "dispatched" : "raced";
+}
+
+/** Whether an existing Regenerate run is exactly what `plan` writes: the same
+ *  parent and the same input params (the stored JSON text, parsed). */
+function existingRunMatchesPlan(
+  run: { inputParams: string | null; parentRunId: string | null },
+  plan: { parentRunId: string; inputParams: Record<string, unknown> },
+): boolean {
+  if (run.parentRunId !== plan.parentRunId || typeof run.inputParams !== "string") return false;
+  let stored: unknown;
+  try {
+    stored = JSON.parse(run.inputParams);
+  } catch {
+    return false;
+  }
+  return isDeepStrictEqual(stored, JSON.parse(JSON.stringify(plan.inputParams)));
 }
 
 /**

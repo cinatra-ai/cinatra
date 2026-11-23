@@ -69,11 +69,17 @@ import {
 } from "./regenerate-segment";
 
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
+import { routeRegenerateFindings } from "@/lib/lifecycle/lifecycle-policy";
 import {
   advanceArtifactPointerOntoRevision,
   refileRevisionOntoArtifact,
   SemanticArtifactRevisionAppendRefusal,
 } from "@/lib/artifacts/artifact-revision-append";
+
+/** Why a Regenerate's finding is reported skipped: its words reached no input
+ *  of the segment run (cinatra#4264). */
+export const REGENERATE_FINDING_NOT_DELIVERED =
+  "the producing step declares no input for this field, so the run was not given these words";
 
 /** The CMS-snapshot capture emitter, the one emitter this drain does not claim.
  * Its rows were the answers the CMS bridge's retired completer matched on a
@@ -575,6 +581,26 @@ export async function completeDispatchedProducerRepairs(opts?: {
         refiledOntoBase = true;
       }
 
+      // The producing step carries no per-finding "which one did I fix"
+      // channel: it was handed the words and made the work again. An ordinary
+      // repair run is handed every finding, so each is reported applied. A
+      // Regenerate segment run is handed only the words of the review field
+      // its step declares an input for (`routeRegenerateFindings`, cinatra#4264),
+      // so only the findings those words deliver are reported applied; a
+      // finding that reached no input of the run is reported skipped. This is
+      // an annotation, not a security boundary: the post-change verification
+      // is what measures the produced revision against what the review
+      // authorized.
+      const deliveredFindingIds = segmentIntent
+        ? new Set(routeRegenerateFindings(repair.findings)?.deliveredFindingIds ?? [])
+        : null;
+      const findingOutcomes = repair.findings.map((f) =>
+        deliveredFindingIds === null || deliveredFindingIds.has(f.id)
+          ? { findingId: f.id, applied: true }
+          : { findingId: f.id, applied: false, skipReason: REGENERATE_FINDING_NOT_DELIVERED },
+      );
+      const appliedCount = findingOutcomes.filter((o) => o.applied).length;
+
       const result = await submitRepairResponse({
         repairId: repair.id,
         currentBaseRevisionId,
@@ -593,13 +619,8 @@ export async function completeDispatchedProducerRepairs(opts?: {
             artifactId: successorTarget.artifactId,
             representationRevisionId: successorTarget.representationRevisionId,
           },
-          // The producing step carries no per-finding "which one did I fix"
-          // channel — it was handed the note and made the work again — so every
-          // requested finding is reported applied. This is an annotation, not a
-          // security boundary: the post-change verification is what measures the
-          // produced revision against what the review authorized.
-          findingOutcomes: repair.findings.map((f) => ({ findingId: f.id, applied: true })),
-          changeSummary: `The producing step ran again from the reviewer's note and answered ${repair.findings.length} requested change(s).`,
+          findingOutcomes,
+          changeSummary: `The producing step ran again from the reviewer's note and answered ${appliedCount} requested change(s).`,
           producerProvenance: { runId, agentId: null },
         },
       });

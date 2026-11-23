@@ -1,6 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 import { writeStepSnapshotRow, type StepSnapshotWriter } from "./step-snapshots";
+import { routeRegenerateFindings } from "@/lib/lifecycle/lifecycle-policy";
 import {
   PLATFORM_SUPPLIED_FLOW_INPUTS,
   PLATFORM_SUPPLIED_RUN_TOKEN_KEY,
@@ -169,6 +170,9 @@ export type RegenerateRepairIntent = {
   regenerateNodeId: string | null;
   baseArtifactId: string;
   baseRepresentationRevisionId: string;
+  /** The repair's recorded findings: what the run's declared input must hold
+   *  (`segmentInputsInDeclaredForm`). */
+  findings?: unknown;
 };
 
 export type StoredStepSnapshot = {
@@ -297,6 +301,7 @@ async function defaultRegenerateSegmentDeps(): Promise<RegenerateSegmentDeps> {
         regenerateNodeId: repair.regenerateNodeId ?? null,
         baseArtifactId: repair.baseArtifactId,
         baseRepresentationRevisionId: repair.baseRepresentationRevisionId,
+        findings: repair.findings,
       };
     },
     readVerifiedFilingNode: (input) => readVerifiedFilingNode(input),
@@ -320,15 +325,57 @@ function refused(reason: string): RegenerateSegmentResolution {
 }
 
 /**
+ * Whether a segment run's input params are the declared-input form the drain
+ * writes (cinatra#4264): exactly the note's start output and the typed
+ * request, the start output holding the value `routeRegenerateFindings` gives
+ * for the repair's findings, and the request holding no findings. A run made
+ * in the earlier form (the generic findings text, the request with all its
+ * findings) is not, and is never sent. `inputParams` is the stored JSON text
+ * or its parsed object.
+ */
+export function segmentInputsInDeclaredForm(
+  inputParams: unknown,
+  noteStartOutput: string,
+  findings: unknown,
+): boolean {
+  let params: unknown = inputParams;
+  if (typeof inputParams === "string") {
+    try {
+      params = JSON.parse(inputParams);
+    } catch {
+      return false;
+    }
+  }
+  if (!plainObject(params)) return false;
+  const keys = Object.keys(params).sort();
+  const expected = [noteStartOutput, LIFECYCLE_REPAIR_REQUEST_INPUT].sort();
+  if (keys.length !== 2 || keys[0] !== expected[0] || keys[1] !== expected[1]) return false;
+  const delivery = routeRegenerateFindings(findings);
+  if (!delivery || params[noteStartOutput] !== delivery.value) return false;
+  const request = params[LIFECYCLE_REPAIR_REQUEST_INPUT];
+  return plainObject(request) && Array.isArray(request.findings) && request.findings.length === 0;
+}
+
+/**
  * Whether `run` is a Regenerate segment run, and its plan. `ordinary` for a
  * run that is not a lifecycle repair run, a repair run whose id names no
  * repair, and a repair whose `regenerate_node_id` is NULL (both run as before).
  * `refused` for every disagreement of the re-derivation and for a read fault
- * (fail closed: the run is failed before anything is sent).
+ * (fail closed: the run is failed before anything is sent). When the caller
+ * passes the run's `inputParams` (the worker's run start does), a run whose
+ * inputs are not the declared-input form (`segmentInputsInDeclaredForm`) is
+ * refused too: a run made in the earlier form, dispatched before this check
+ * existed, never runs with the findings text.
  */
 export async function resolveRegenerateSegment(
   input: {
-    run: { id: string; orgId: string | null; sourceType?: string | null; templateId: string };
+    run: {
+      id: string;
+      orgId: string | null;
+      sourceType?: string | null;
+      templateId: string;
+      inputParams?: unknown;
+    };
     lifecycleConfig: unknown;
     /** The template's package: its installed flow names the note's start output. */
     packageName: string | null;
@@ -370,6 +417,12 @@ export async function resolveRegenerateSegment(
     });
     if (!usableNoteKey(noteStartOutput)) {
       return refused("no single start output of the agent's flow feeds the step's note input");
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(run, "inputParams") &&
+      !segmentInputsInDeclaredForm(run.inputParams, noteStartOutput, repair.findings)
+    ) {
+      return refused("the run's inputs are not the reviewer's words in the step's declared input alone");
     }
     const nodes = [...new Set([entry.step, nodeId])].sort();
     const rows = await d.readStepSnapshots({ orgId: repair.orgId, runId: provenance.runId, nodeIds: nodes });
@@ -532,11 +585,13 @@ export type SegmentDispatchPlan =
  * the entry's `noteInput`, and the typed request only. A provenance that cannot be proven, or another filing node,
  * refuses (the drain escalates the repair; nothing is dispatched).
  *
- * THE NOTE APPEARS ONCE (cinatra#4264). `note` is the reviewer's note as the
- * Note field holds it (`readRegenerateNote`), never a findings text; a blank
- * or absent note refuses. The typed request is carried with no findings, so
- * the note's words reach the declared input and no other place of the run's
- * input. The repair row keeps the findings for the record.
+ * THE WORDS APPEAR ONCE (cinatra#4264). `note` is the recorded value of the
+ * review field that fills the step's declared input (`routeRegenerateFindings`:
+ * a picture's prompt, otherwise the Note), never a findings text; a blank or
+ * absent value refuses. The typed request is carried with no findings, so the
+ * words reach the declared input and no other place of the run's input. The
+ * repair row keeps the findings for the record, and the completer marks
+ * applied only the findings those words deliver.
  */
 export async function planSegmentDispatch(
   input: {
@@ -544,7 +599,7 @@ export async function planSegmentDispatch(
     templateId: string;
     packageName: string | null;
     lifecycleConfig: unknown;
-    /** The reviewer's note (`readRegenerateNote`), or null when it has none. */
+    /** The declared input's value (`routeRegenerateFindings`), or null. */
     note: string | null;
     request: Record<string, unknown>;
   },

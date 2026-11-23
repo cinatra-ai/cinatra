@@ -4070,9 +4070,16 @@ async function runAgentBuilderExecutionJobInner(
   // provenance and snapshots, never from the run's inputs) is resolved here,
   // before anything reads the inputs. A disagreement fails the run before
   // dispatch with a plain reason. A segment run skips the findings binding:
-  // its inputs are the note and the typed request only.
+  // its inputs are the note and the typed request only, and the resolution
+  // checks they are (a run made in an earlier form is failed, never sent).
   const segmentResolution = await resolveRegenerateSegment({
-    run: { id: runId, orgId: run.orgId, sourceType: run.sourceType, templateId: run.templateId },
+    run: {
+      id: runId,
+      orgId: run.orgId,
+      sourceType: run.sourceType,
+      templateId: run.templateId,
+      inputParams: run.inputParams,
+    },
     lifecycleConfig: template.lifecycleConfig ?? null,
     packageName: template.packageName ?? null,
   });
