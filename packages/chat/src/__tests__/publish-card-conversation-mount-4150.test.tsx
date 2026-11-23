@@ -152,6 +152,7 @@ async function mountArm(surface: SurfaceName, open: boolean, withPanel = false) 
 
 beforeEach(() => {
   publishStateMock.mockImplementation(async () => ({ state: "none" }));
+  hitlScreenStateMock.mockImplementation(async () => ({ state: "none" }));
 });
 
 afterEach(() => {
@@ -282,6 +283,86 @@ describe("the publish card on the conversation hosts (cinatra#4150)", () => {
       } finally {
         vi.useRealTimers();
       }
+    },
+  );
+
+  // ONE HELD-RUN CARD PER TURN. A run parked at its publish gate is parked THERE and nowhere else, so while the publish
+  // read positively answers `pending` an hitl screen for the same run is a stale reading (its read resolved first, or
+  // its re-read failed and kept the last answer) and the publish card is the turn's only card.
+  const HITL_CARD = '[data-lifecycle-card="agent_hitl_screen"]';
+  const HITL_ASKING = {
+    state: "asking",
+    runId: HELD_RUN_ID,
+    screenRef: "hitl-screen-ref-4150",
+    gate: {
+      reviewTaskId: "task-4150",
+      xRenderer: "cinatra.schema-field:output",
+      inputSchema: { type: "object", properties: { answer: { type: "string" } } },
+      currentValues: {},
+      fieldName: "answer",
+    },
+  } as Record<string, unknown>;
+
+  async function mountWithHitl(surface: SurfaceName, open: boolean) {
+    hitlScreenStateMock.mockImplementation(async () => HITL_ASKING);
+    const answer = open ? PENDING : { state: "none" };
+    publishStateMock.mockImplementation(async () => answer);
+    stub = installWidgetServiceStub({ publishDecision: () => answer, hitlScreen: () => HITL_ASKING });
+    const mounted = await mountSurface(surface, { messages: lifecycleHeldTranscript() });
+    await act(async () => {
+      await Promise.resolve();
+      await new Promise((r) => setTimeout(r, 0));
+      await Promise.resolve();
+    });
+    const root = mounted.container.querySelector<HTMLElement>(`[data-parity-surface="${surface}"]`);
+    if (!root) throw new Error(`the ${surface} surface did not mount`);
+    return root;
+  }
+
+  it.each(["chat", "widget"] as const)(
+    "%s: an hitl screen still answering `asking` beside an OPEN publish decision is stale: EXACTLY ONE card, the publish card",
+    async (surface) => {
+      const root = await mountWithHitl(surface, true);
+      const cards = root.querySelectorAll<HTMLElement>(`${CARD}, ${HITL_CARD}`);
+      expect(cards).toHaveLength(1);
+      expect(cards[0]!.getAttribute("data-lifecycle-card")).toBe("publish_decision");
+      expect(cards[0]!.getAttribute("data-lifecycle-card-state")).toBe("pending");
+    },
+  );
+
+  it.each(["chat", "widget"] as const)(
+    "%s: a run that moves from an hitl question to its publish gate, with the hitl re-read FAILING, shows only the publish card",
+    async (surface) => {
+      const root = await mountWithHitl(surface, false);
+      // The question is open and no publish decision is: the hitl screen is the turn's one card.
+      expect(root.querySelectorAll(HITL_CARD)).toHaveLength(1);
+      expect(root.querySelector(CARD)).toBeNull();
+      // The run answers and parks at its publish gate; every hitl re-read now fails, so that card keeps `asking`.
+      hitlScreenStateMock.mockImplementation(async () => {
+        throw new Error("hitl re-read failed");
+      });
+      publishStateMock.mockImplementation(async () => PENDING);
+      stub?.restore();
+      stub = installWidgetServiceStub({ publishDecision: () => PENDING, hitlScreen: () => null });
+      await act(async () => {
+        window.dispatchEvent(new Event("focus"));
+        await Promise.resolve();
+        await new Promise((r) => setTimeout(r, 0));
+        await Promise.resolve();
+      });
+      const cards = root.querySelectorAll<HTMLElement>(`${CARD}, ${HITL_CARD}`);
+      expect(cards).toHaveLength(1);
+      expect(cards[0]!.getAttribute("data-lifecycle-card")).toBe("publish_decision");
+    },
+  );
+
+  it.each(["chat", "widget"] as const)(
+    "%s: with NO open publish decision an asking hitl screen still draws, alone",
+    async (surface) => {
+      const root = await mountWithHitl(surface, false);
+      const cards = root.querySelectorAll<HTMLElement>(`${CARD}, ${HITL_CARD}`);
+      expect(cards).toHaveLength(1);
+      expect(cards[0]!.getAttribute("data-lifecycle-card")).toBe("agent_hitl_screen");
     },
   );
 

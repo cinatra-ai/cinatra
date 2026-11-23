@@ -77,7 +77,11 @@ import {
   type AgentHitlScreenCarry,
 } from "@cinatra-ai/agents/agent-hitl-screen-card";
 // The ONE renderer of `publish_decision` (cinatra#4150), by its own subpath for the same reason.
-import { PublishDecisionCard, usePublishDecisionCardRead } from "@cinatra-ai/agents/publish-decision-card-view";
+import {
+  PublishDecisionCard,
+  publishGateIsOpen,
+  usePublishDecisionCardRead,
+} from "@cinatra-ai/agents/publish-decision-card-view";
 // The turn's own register for the settled schedule card (cinatra#3174), reached
 // by the same subpath the host declaration is.
 import { SettledScheduleRegisterProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
@@ -802,9 +806,6 @@ function AgentRunTurnSlot({
   // never read by anything else, and it dies with the turn - see
   // `AgentHitlScreenCarry` for why that is deliberately not a cache.
   const screenCarrier = useRef<AgentHitlScreenCarry | null>(null);
-  const hitlScreen = (
-    <AgentHitlScreenCard runId={runId} wireRef={gateSignal} carrier={screenCarrier} />
-  );
   // THE PUBLISH CARD (cinatra#4150), mounted beside the screen above, in the same placement, but carried by its read:
   // keyed by the run alone, it self-gates, so a run with no open publish decision draws nothing here. A publish gate
   // has no gate context, so the gate signal above stays quiet for it; the panel's publish-read signal (the run's
@@ -828,6 +829,14 @@ function AgentRunTurnSlot({
     runStatus: runChange?.status ?? null,
   });
   const publishCard = <PublishDecisionCard runId={runId} read={publishRead} />;
+  // ONE HELD-RUN CARD PER TURN (cinatra#4150), by the run panels' own rule (`publishGateIsOpen`): a run parked at its
+  // publish gate is parked there and nowhere else, so while the shared read POSITIVELY answers `pending` the hitl
+  // screen for this run is a stale reading (its own read landed first, or a failed re-read kept its last answer) and
+  // the publish card is the turn's only card. Any other publish reading (not landed, failed, `none`, settled) leaves
+  // the screen exactly as it was. The screen is withheld, not blanked: its own stale-on-failed-refresh rule stands.
+  const hitlScreen = publishGateIsOpen(publishRead) ? null : (
+    <AgentHitlScreenCard runId={runId} wireRef={gateSignal} carrier={screenCarrier} />
+  );
 
   // THE RUN-PROGRESS PANEL, written once for the same reason.
   const runPanel = (

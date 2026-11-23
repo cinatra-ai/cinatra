@@ -167,7 +167,11 @@ export function usePublishDecisionCardRead(params: {
 }
 
 /** The publish gate is OPEN for this read only when the read positively answered `pending`. A read that has not
- * landed or failed with no earlier answer is not a publish gate, so a host keeps its own approval surface. */
+ * landed or failed with no earlier answer is not a publish gate, so a host keeps its own approval surface.
+ *
+ * ONE HELD-RUN CARD. While it is open the run is parked at its publish gate and nowhere else, so every host (the run
+ * panel, the stepper, the conversation turn) draws the publish card as the run's only held-run card and withholds any
+ * hitl screen or gate card it still holds for the same run: that reading is stale. */
 export function publishGateIsOpen(read: PublishDecisionCardRead): boolean {
   return read.state?.state === "pending";
 }

@@ -252,6 +252,42 @@ describe("OrchestratorStepperPanel at a publish gate (cinatra#4150)", () => {
     expect(container.textContent).not.toContain(PROCESSING);
   }, 30_000);
 
+  // ONE HELD-RUN CARD (the conversation turn's and the agentic panel's rule, the same `publishGateIsOpen`). A run
+  // parked at its publish gate is parked there and nowhere else, so a gate reading the stream still holds is stale
+  // while the publish read positively answers `pending`: the publish card is the stage card, and no gate card beside it.
+  const STALE_GATE = {
+    schema: { type: "object", properties: { answer: { type: "string", title: "Your answer" } } },
+    xRenderer: "",
+    values: {},
+    fieldName: "answer",
+    reviewTaskId: "task-stale-question",
+  };
+  // What the gate's approval card draws for this gate (no renderer is registered for it in this suite).
+  const GATE_CARD_TEXT = "Waiting for input";
+
+  it("a STALE gate reading beside an OPEN publish decision: only the publish card is the stage card", async () => {
+    streamState.interruptContext = STALE_GATE;
+    publishStateMock.mockImplementation(async () => PENDING);
+    const { container } = await mountPanel();
+    await waitFor(() => expect(publishStateMock).toHaveBeenCalled());
+    await flush();
+    expect(container.querySelectorAll(CARD)).toHaveLength(1);
+    expect(container.querySelector(CARD)!.getAttribute("data-lifecycle-card-state")).toBe("pending");
+    // The stale gate's approval card is not drawn beside it.
+    expect(container.textContent).not.toContain(GATE_CARD_TEXT);
+    expect(container.textContent).not.toContain(PROCESSING);
+  });
+
+  it("the same gate reading with NO open publish decision keeps its gate card and draws no publish card", async () => {
+    streamState.interruptContext = STALE_GATE;
+    publishStateMock.mockImplementation(async () => ({ state: "none" }));
+    const { container } = await mountPanel();
+    await waitFor(() => expect(publishStateMock).toHaveBeenCalled());
+    await flush();
+    expect(container.querySelector(CARD)).toBeNull();
+    expect(container.textContent).toContain(GATE_CARD_TEXT);
+  });
+
   it("a SETTLED decision keeps its reading above what the run draws next, as on the agentic panel", async () => {
     streamState.status = "running";
     row.status = "running";

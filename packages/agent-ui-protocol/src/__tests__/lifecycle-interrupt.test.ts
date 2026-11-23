@@ -73,6 +73,8 @@ describe("the interrupt-carried kind set is derived, not hand-listed", () => {
     ]);
   });
 
+  // Before the fix the carriage table has no publish_decision row, so the first read of its `represent` throws:
+  // red-first-expect: Cannot read properties of undefined (reading 'represent')
   it("does NOT advertise the publish card as an interrupt: its gate emits none (cinatra#4150)", () => {
     // The publish gate parks the run on its decision record and states no lifecycle moment, so no typed interrupt
     // for this kind is ever emitted. A consumer that awaited one would never find the gate; the card is found by the

@@ -3236,8 +3236,10 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     wireRef: publishReadSignal,
     runStatus: status,
   });
-  const parkedAtPublishGate =
-    status === "pending_approval" && effectiveInterruptContext === null && publishGateIsOpen(publishRead);
+  // ONE HELD-RUN CARD: a run parked at its publish gate is parked there and nowhere else, so while the read POSITIVELY
+  // answers `pending` a gate reading the stream still holds is stale and the publish card is the stage card, the same
+  // rule the agentic panel and the conversation turn apply.
+  const parkedAtPublishGate = status === "pending_approval" && publishGateIsOpen(publishRead);
   // Keyed by the run alone under this panel's own `run_card` declaration; it draws nothing with no decision.
   const publishCard = panelMountsPublishCard ? (
     <LifecycleCardSurfaceProvider host="run_card">
@@ -3306,6 +3308,11 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     stageCard = (
       <CancelledCard runId={runId} agentId={agentId} lgThreadId={lgThreadId} launchBase={launchBase} />
     );
+  } else if (parkedAtPublishGate) {
+    // The publish card IS this pause's one surface (cinatra#4150): never the waiting spinner's "Processing
+    // response…", never the resume reading's "no longer open", never a gate card (stale) or a generic approval card
+    // beside it.
+    stageCard = publishCard;
   } else if (
     status === "pending_approval" &&
     effectiveInterruptContext !== null &&
@@ -3370,10 +3377,6 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
         embedMode={embedMode}
       />
     );
-  } else if (parkedAtPublishGate) {
-    // The publish card IS this pause's one surface (cinatra#4150): never the waiting spinner's "Processing
-    // response…", never the resume reading's "no longer open", never a generic approval card beside it.
-    stageCard = publishCard;
   } else if (settledSetupStepReading !== null) {
     // cinatra#3532 (fix leg 3) — the step this surface was answered on, and
     // which the run is no longer asking. It is drawn BEFORE the two readings

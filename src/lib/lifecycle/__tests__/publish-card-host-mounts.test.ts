@@ -65,7 +65,12 @@ describe("the publish card's mounts (cinatra#4150)", () => {
 
   it("the column mounts the card beside the hitl screen in every placement, with no decide door", () => {
     const source = read(COLUMN);
-    expect(source).toContain('import { PublishDecisionCard, usePublishDecisionCardRead } from "@cinatra-ai/agents/publish-decision-card-view";');
+    expect(source).toContain(
+      'import {\n  PublishDecisionCard,\n  publishGateIsOpen,\n  usePublishDecisionCardRead,\n} from "@cinatra-ai/agents/publish-decision-card-view";',
+    );
+    // ONE HELD-RUN CARD: while the shared read is an open publish gate the turn's hitl screen is withheld, by the
+    // panels' own rule, so a stale screen never draws beside the publish card.
+    expect(source).toMatch(/const hitlScreen = publishGateIsOpen\(publishRead\) \? null : \(\s*<AgentHitlScreenCard /);
     // The turn reads ONCE, keyed on the change signal the panel reports (status, gate, readings at a pause with no gate
     // context), and hands that read to its card and to the panel, so the card and the banner stand on one answer.
     expect(cardElements(source)).toEqual(["<PublishDecisionCard runId={runId} read={publishRead} />"]);
@@ -96,14 +101,18 @@ describe("the publish card's mounts (cinatra#4150)", () => {
     const source = read(STEPPER);
     expect(source).toContain("const panelMountsPublishCard = runCardOwnsLifecycleCopy(ambientLifecycleHost);");
     expect(source).toMatch(/const publishCard = panelMountsPublishCard \? \(\s*<LifecycleCardSurfaceProvider host="run_card">/);
-    expect(source).toMatch(
-      /const parkedAtPublishGate =\s*status === "pending_approval" && effectiveInterruptContext === null && publishGateIsOpen\(publishRead\);/,
-    );
+    // ONE HELD-RUN CARD: an open publish gate wins over any gate reading the stream still holds (it is stale), so the
+    // card's arm comes before every interrupt arm too.
+    expect(source).toMatch(/const parkedAtPublishGate = status === "pending_approval" && publishGateIsOpen\(publishRead\);/);
     const arm = source.indexOf("} else if (parkedAtPublishGate) {");
     expect(arm).toBeGreaterThan(-1);
     expect(source.slice(arm, arm + 400)).toContain("stageCard = publishCard;");
     expect(arm).toBeLessThan(source.indexOf("} else if (parkedWithNoGate && gateGoneOnResume && !awaitingNextStep) {"));
     expect(arm).toBeLessThan(source.indexOf("    awaitingNextStep ||\n    status === \"queued\" ||"));
+    expect(arm).toBeLessThan(
+      source.indexOf("  } else if (status === \"pending_approval\" && effectiveInterruptContext !== null && !awaitingNextStep) {"),
+    );
+    expect(arm).toBeLessThan(source.indexOf("    effectiveInterruptContext.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID\n  ) {"));
     expect(source).toContain("wireRef: publishReadSignal,");
     expect(source).toMatch(/wireRef: publishReadSignal,\s*runStatus: status,/);
     expect(source).not.toMatch(/wireRef: status,/);

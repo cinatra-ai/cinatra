@@ -222,6 +222,42 @@ describe("AgenticRunPanel at a publish gate (cinatra#4150)", () => {
     }
   });
 
+  // ONE HELD-RUN CARD (the conversation turn's rule, the same `publishGateIsOpen`). A run parked at its publish gate is
+  // parked there and nowhere else, so a gate reading the panel still holds (a stream or row reading that has not
+  // caught up) is stale while the publish read positively answers `pending`: the publish card is the only surface.
+  const HITL_GATE = {
+    schema: { type: "object", properties: { answer: { type: "string" } } },
+    xRenderer: "cinatra.schema-field:output",
+    values: {},
+    fieldName: "answer",
+    reviewTaskId: "task-hitl-question",
+  };
+  const held = (container: HTMLElement) => ({
+    ...surfaces(container),
+    hitl: container.querySelectorAll('[data-lifecycle-card="agent_hitl_screen"]').length,
+  });
+
+  it("a STALE hitl question beside an OPEN publish decision: only the publish card draws", async () => {
+    streamState.interruptContext = HITL_GATE;
+    publishStateMock.mockImplementation(async () => PENDING);
+    const mounted = await mountPanel();
+    expect(held(mounted.container)).toEqual({ card: 1, banner: 0, hitl: 0 });
+  });
+
+  it("a STALE ordinary approval gate beside an OPEN publish decision: only the publish card draws", async () => {
+    streamState.interruptContext = { schema: {}, xRenderer: "", values: {}, reviewTaskId: "task-ordinary-gate" };
+    publishStateMock.mockImplementation(async () => PENDING);
+    const mounted = await mountPanel();
+    expect(held(mounted.container)).toEqual({ card: 1, banner: 0, hitl: 0 });
+  });
+
+  it("an hitl question with NO open publish decision keeps its hitl screen", async () => {
+    streamState.interruptContext = HITL_GATE;
+    publishStateMock.mockImplementation(async () => ({ state: "none" }));
+    const mounted = await mountPanel();
+    expect(held(mounted.container)).toEqual({ card: 0, banner: 0, hitl: 1 });
+  });
+
   it("reads pending then none: the card draws and the banner does not", async () => {
     publishStateMock
       .mockImplementationOnce(async () => PENDING)

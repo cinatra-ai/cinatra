@@ -311,6 +311,10 @@ describe("the per-kind table", () => {
     // `publish_decision` (cinatra#4150) stops it in front of a step it declares as publishing, but its gate emits
     // no interrupt: it binds to the same agent_run result and is carried by the run's read, never as an interrupt.
     const INTERRUPT_KINDS = ["recommendation_hold", "agent_hitl_screen"];
+    // The publish card's row must EXIST, so the read-carriage check below always runs.
+    const publishRow = CHAT_THREAD_CARRIAGE_CONTRACT.find((r) => r.kind === "publish_decision");
+    expect(publishRow).toBeDefined();
+    expect(publishRow?.carriage).toBe("read");
     for (const row of CHAT_THREAD_CARRIAGE_CONTRACT) {
       if (INTERRUPT_KINDS.includes(row.kind)) {
         expect(row.carriage).toBe("interrupt");

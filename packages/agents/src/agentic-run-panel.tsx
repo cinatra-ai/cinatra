@@ -2027,7 +2027,10 @@ export function AgenticRunPanel({
     runStatus: status,
   });
   const publishRead = hostPublishRead ?? ownPublishRead;
-  const parkedAtPublishGate = isPendingApproval && !effectiveHitlContext && publishGateIsOpen(publishRead);
+  // ONE HELD-RUN CARD: a run parked at its publish gate is parked there and nowhere else, so while the read POSITIVELY
+  // answers `pending` any gate reading this panel still holds (a stream or row reading not yet caught up) is stale and
+  // the publish card is the pause's only surface, the same rule the conversation turn applies to its hitl screen.
+  const parkedAtPublishGate = isPendingApproval && publishGateIsOpen(publishRead);
   const onRunChangeSignalRef = useRef(onRunChangeSignal);
   onRunChangeSignalRef.current = onRunChangeSignal;
   useEffect(() => {
@@ -3110,7 +3113,11 @@ export function AgenticRunPanel({
         </LifecycleCardSurfaceProvider>
       ) : null}
 
-      {isPendingApproval &&
+      {parkedAtPublishGate ? (
+        // The publish card above is this pause's one surface (cinatra#4150): no hitl screen and no generic approval
+        // banner beside it, whatever stale gate reading the panel still holds.
+        null
+      ) : isPendingApproval &&
       effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID ? (
         // A MARKED artifact-review gate NEVER draws here any more (cinatra#2997).
         // The review screen is the whole card now — it is mounted by the slot
@@ -3484,9 +3491,6 @@ export function AgenticRunPanel({
           />
         </LifecycleCardSurfaceProvider>
         )
-      ) : parkedAtPublishGate ? (
-        // The publish card above is this pause's one surface (cinatra#4150): no generic approval banner beside it.
-        null
       ) : parkedWithNoGate && gateGoneOnResume ? (
         // cinatra#3423 — the reader came back to a gate this surface was holding
         // and that is no longer here. Without this branch the banner below draws
