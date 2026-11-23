@@ -413,6 +413,39 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     expect(await rowOf(next.id)).toMatchObject({ status: "run_ended", run_generation: 1 });
   });
 
+  it("cinatra#4762: a reset clears the start stamp in its compare-and-set, so only the next attempt's reviews count", async () => {
+    const { bindArtifactReviewGateSeam } = await import("../artifact-review-gate-seam");
+    const { approvedReviewPrecedes } = await import("../publish-decision-actions");
+    bindArtifactReviewGateSeam();
+    const GATES = `"${q(TEST_SCHEMA)}"."artifact_review_gates"`;
+    const review = (runId: string, disposition: string | null, at: string) => admin.query(
+      `INSERT INTO ${GATES} (id, run_id, org_id, review_task_id, status, pinned_targets, disposition, created_at)
+       VALUES ($1, $2, $3, $4, $5, '[]'::jsonb, $6, ${at})`,
+      [`gate-${randomUUID()}`, runId, ORG, `review-${randomUUID()}`, disposition ? "resolved" : "pending", disposition],
+    );
+    const runId = await seedRun(`run-${randomUUID()}`, "running");
+    await admin.query(`UPDATE ${RUNS_TABLE} SET started_at = now() - interval '2 hours' WHERE id = $1`, [runId]);
+    // The first attempt: no review yet, then an approved one.
+    expect(await approvedReviewPrecedes(runId)).toBe(false);
+    await review(runId, "approve", "now() - interval '1 hour'");
+    expect(await approvedReviewPrecedes(runId)).toBe(true);
+    // The attempt fails and is reset: the reset itself clears the stamp, with no later write.
+    await setRun(runId, "failed");
+    await reset(runId, 0);
+    expect((await admin.query(`SELECT started_at, reset_generation FROM ${RUNS_TABLE} WHERE id = $1`, [runId])).rows[0])
+      .toEqual({ started_at: null, reset_generation: 1 });
+    // The retry's dispatch stamps its start: the earlier attempt's approval no longer counts.
+    await admin.query(`UPDATE ${RUNS_TABLE} SET status = 'running', started_at = now() - interval '1 minute' WHERE id = $1`, [runId]);
+    expect(await approvedReviewPrecedes(runId)).toBe(false);
+    // A declined review of this attempt never counts; an approved one after it does not undo the decline.
+    await review(runId, "reject", "now() - interval '30 seconds'");
+    await review(runId, "approve", "now()");
+    expect(await approvedReviewPrecedes(runId)).toBe(false);
+    const fresh = await seedRun(`run-${randomUUID()}`, "running");
+    await review(fresh, "approve", "now()");
+    expect(await approvedReviewPrecedes(fresh)).toBe(true);
+  });
+
   it("round 21, finding 1: a row an old node parks with no generation after a reset holds, and the next reset ends it", async () => {
     const runId = await seedRun(`run-${randomUUID()}`, "failed");
     await reset(runId, 0);

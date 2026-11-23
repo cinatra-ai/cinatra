@@ -317,8 +317,9 @@ export async function updateAgentRunStatusConditional(
         ? { humanWaitAttemptId: expectedStatus === "running" ? sql`${agentRuns.executionAttemptId}` : null }
         : {}),
       ...pauseClaimSet(nextStatus, pause),
-      // cinatra#4150: a retry's reset starts a new attempt: the generation it read, plus 1.
-      ...(resetGeneration !== undefined ? { resetGeneration: resetGeneration + 1 } : {}),
+      // cinatra#4150: a retry's reset starts a new attempt: the generation it read, plus 1. cinatra#4762: it clears the
+      // start stamp in the same write, so the next dispatch stamps the new attempt's start, which bounds its reviews.
+      ...(resetGeneration !== undefined ? { resetGeneration: resetGeneration + 1, startedAt: null } : {}),
     })
     .where(
       and(

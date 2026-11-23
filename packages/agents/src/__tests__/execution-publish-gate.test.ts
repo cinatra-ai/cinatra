@@ -200,11 +200,18 @@ const transitions = () =>
     ([, from, to, patch]) => ({ from, to, error: patch?.error }),
   );
 
+// cinatra#4762: a publish card opens only after an approved review earlier in the run; these cases hold one
+// (publish-gate-review-before-4762.test.ts drives the cases without one).
+const listReviews = vi.fn(async (_runId: string) => [{ status: "resolved", disposition: "approve", createdAt: new Date("2026-01-01") }]);
+const seamSlot = globalThis as { __cinatraArtifactReviewGateSeam?: unknown };
+const previousSeam = seamSlot.__cinatraArtifactReviewGateSeam;
 const previousKey = process.env.CINATRA_CONTEXT_ATTEST_KEY;
 beforeAll(() => {
   process.env.CINATRA_CONTEXT_ATTEST_KEY = KEY;
+  seamSlot.__cinatraArtifactReviewGateSeam = { listReviews };
 });
 afterAll(() => {
+  seamSlot.__cinatraArtifactReviewGateSeam = previousSeam;
   if (previousKey === undefined) delete process.env.CINATRA_CONTEXT_ATTEST_KEY;
   else process.env.CINATRA_CONTEXT_ATTEST_KEY = previousKey;
   vi.doUnmock("@cinatra-ai/agent-ui-protocol/server");
@@ -220,6 +227,7 @@ afterAll(() => {
 beforeEach(() => {
   vi.clearAllMocks();
   storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(["publish"]));
+  storeMock.readAgentRunById.mockResolvedValue(makeRun());
   storeMock.transitionRunStatus.mockResolvedValue(undefined);
   decisions.insertParkedDecision.mockResolvedValue({ inserted: true, current: true, decision: parkedRow() });
   decisions.readDispatchedPublishRows.mockReset();

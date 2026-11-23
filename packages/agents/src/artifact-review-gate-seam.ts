@@ -64,6 +64,10 @@ export type ArtifactReviewGateSeam = {
    *  sends the person to the first artifact still waiting to be read, and only
    *  the run's own gate list can say which that is. */
   listGates(runId: string): Promise<Array<{ reviewTaskId: string; status: string }>>;
+  /** cinatra#4762 — every review this run owns, oldest first, projected to what the publish gate needs to see that an
+   *  approved review came before it in the run's current attempt: the status, the settled disposition, and when the
+   *  review was raised. */
+  listReviews(runId: string): Promise<Array<{ status: string; disposition: string | null; createdAt: Date }>>;
 };
 
 /** Boot-time binding (idempotent, last write wins). Binds the run executor's
@@ -105,6 +109,10 @@ export function bindArtifactReviewGateSeam(): void {
     async listGates(runId) {
       const gates = await listReviewGatesForRun(runId);
       return gates.map((gate) => ({ reviewTaskId: gate.reviewTaskId, status: gate.status }));
+    },
+    async listReviews(runId) {
+      const gates = await listReviewGatesForRun(runId);
+      return gates.map((gate) => ({ status: gate.status, disposition: gate.disposition, createdAt: gate.createdAt }));
     },
   };
   (

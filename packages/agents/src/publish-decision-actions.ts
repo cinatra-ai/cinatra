@@ -160,12 +160,45 @@ const STORE_CODES = new Set(["invalid-input", "invalid-transition", "malformed-r
 const opaque = (err: unknown): unknown => err instanceof AuthzError || STORE_CODES.has((err as { code?: unknown } | null)?.code as string) ? err
   : Object.assign(new Error("The publish decision could not be read or written."), { code: PUBLISH_DECISION_UNAVAILABLE });
 
+/** What a run records when it reaches an external write with no approved review before it (design §XV). */
+export const PUBLISH_REVIEW_MISSING_REASON = "No approved review came before this change outside Cinatra.";
+
+/** One review of a run, oldest first, as the gate seam's listReviews answers it. */
+type ReviewOfRun = { status: string; disposition: string | null; createdAt: Date };
+
+/**
+ * cinatra#4762 (design app-lifecycle-cards §XV): did an approved review card (§II) come earlier in the run's CURRENT
+ * attempt? A run never reset has one attempt, so each of its reviews counts. After a retry's reset, only reviews made
+ * at or after the run's start stamp count: the reset clears started_at in its compare-and-set and the next dispatch
+ * stamps it again, so a review of an attempt a reset ended never counts, and a reset run with no stamp has none.
+ * Approved: no review of the attempt is still open or declined, and the newest one settled continued, so a review
+ * settled changes requested or superseded counts only through an approved review after it. Who reviewed is not read:
+ * the reviewer and the person who answers the publish card may differ. A read error propagates.
+ */
+export async function approvedReviewPrecedes(runId: string): Promise<boolean> {
+  const current = await readAgentRunById(runId);
+  if (!current) return false;
+  const reset = (current.resetGeneration ?? 0) > 0;
+  const start = current.startedAt;
+  if (reset && !(start instanceof Date)) return false;
+  // The review store is reached through the boot-bound gate seam, as the run executor reaches it (execution.ts): never
+  // imported here, so no route's graph grows. An unbound seam is a read error.
+  const seam = (globalThis as { __cinatraArtifactReviewGateSeam?: { listReviews?: (runId: string) => Promise<ReviewOfRun[]> } })
+    .__cinatraArtifactReviewGateSeam;
+  if (typeof seam?.listReviews !== "function") throw new Error("the review store is not bound");
+  const reviews = (await seam.listReviews(runId)).filter((g) => !reset || g.createdAt.getTime() >= (start as Date).getTime());
+  if (reviews.some((g) => g.status !== "resolved" || g.disposition === "reject")) return false;
+  return reviews.at(-1)?.disposition === "approve";
+}
+
 /**
  * The publish classification of the input-required branch, run before anything else there.
  * False: not a publish gate, the caller goes on as before. True: handled, the caller returns.
  *   - a verified `cinatra_publish_gate__<node>` claim (the prefix wins over the template's
  *     list): the row is written FIRST (a failure ends the run failed), then the run moves to
  *     pending_approval; a lost move closes the row run_ended;
+ *   - before the park, the run's current attempt must hold an approved review (approvedReviewPrecedes): with none,
+ *     the run ends stopped with PUBLISH_REVIEW_MISSING_REASON and no row is written (cinatra#4762);
  *   - a missing or unverified claim on a template that lists publishing steps, or an unverified publish-gate claim
  *     on a template that is not found or cannot be read: the run ends failed, publish_gate_unverified.
  * No renderer, no generic review task and no lifecycle moment is offered for a publish gate.
@@ -199,6 +232,22 @@ export async function holdRunAtPublishGate(args: {
   }
   if (!verified.startsWith(PUBLISH_GATE_NODE_PREFIX)) return false;
   const nodeId = verified.slice(PUBLISH_GATE_NODE_PREFIX.length);
+
+  // cinatra#4762: no publish card opens without an approved review earlier in this attempt. The run ends stopped with
+  // the reason, no decision row is written and nothing is sent, so the write never happens. An unreadable review ends
+  // the run failed, as an unrecorded decision does.
+  let reviewed: boolean;
+  try {
+    reviewed = await approvedReviewPrecedes(run.id);
+  } catch (err) {
+    console.warn(`[publish-decision] the review before a publish could not be read: ${nameOf(err)}`);
+    await moveRun(run.id, fromStatus, "failed", { error: "publish_review_unread: the review before the publish could not be read", completedAt: new Date() }, authority);
+    return true;
+  }
+  if (!reviewed) {
+    await moveRun(run.id, fromStatus, "stopped", { error: PUBLISH_REVIEW_MISSING_REASON, completedAt: new Date() }, authority);
+    return true;
+  }
 
   let park: Awaited<ReturnType<typeof insertParkedDecision>>;
   try {
