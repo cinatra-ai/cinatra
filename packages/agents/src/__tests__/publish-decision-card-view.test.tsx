@@ -607,6 +607,30 @@ describe("the decide door", () => {
     expect((await rootOf(mounted)).querySelector('[role="status"]')?.textContent).toBe("The decision could not be sent.");
   });
 
+  it("a reply that comes back after a re-read settled the decision never replaces the settled reading", async () => {
+    for (const settled of [APPROVED, DECLINED, EXPIRED]) {
+      brokerAnswer = { status: 200, body: PENDING };
+      const replies: Array<(outcome: "not_open" | "failed") => void> = [];
+      const decide = vi.fn<PublishDecisionDecide>(() => new Promise((resolve) => replies.push(resolve)));
+      const mounted = mountOn("site_widget", decide);
+      const root = await rootOf(mounted);
+      await act(async () => {
+        fireEvent.click(root.querySelector(APPROVE)!);
+      });
+      await moveTo(settled);
+      expect((await rootOf(mounted)).getAttribute("data-lifecycle-card-state")).toBe(settled.state);
+      await act(async () => {
+        replies[0]!("not_open");
+      });
+      await settle();
+      const after = await rootOf(mounted);
+      // red-first-expect: expected 'no_longer_open' to be 'approved'
+      expect(after.getAttribute("data-lifecycle-card-state")).toBe(settled.state);
+      expect(after.textContent).not.toContain("no longer open");
+      mounted.unmount();
+    }
+  });
+
   it("a decision allowed whose run did not go on offers Allow only, with no note and no Do not allow", async () => {
     stateMock.mockImplementation(async () => ({ ...PENDING, resumeOnly: true }));
     const root = await rootOf(mountOn("run_card", okDoor()));

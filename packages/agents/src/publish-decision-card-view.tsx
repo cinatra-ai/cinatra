@@ -328,10 +328,12 @@ export function PublishDecisionCard({
   if (shownId !== null && shownId !== local.decisionId) setLocal(blankLocal(shownId));
   const onDecision = (decisionId: string, change: Partial<Omit<DecisionLocal, "decisionId">>) =>
     setLocal((now) => (now.decisionId === decisionId ? { ...now, ...change } : now));
-  const current = useRef(local.decisionId);
+  // The open decision the card SHOWS now: none once a re-read settled it (allowed, declined or expired), so a reply that
+  // comes back after that never replaces the settled reading.
+  const current = useRef(shownId);
   useEffect(() => {
-    current.current = local.decisionId;
-  }, [local.decisionId]);
+    current.current = shownId;
+  }, [shownId]);
   const { note, sending, failed, noLongerOpen } = local;
 
   // No host declaration, no authorized answer yet, or no open decision: NO DOM at all.
