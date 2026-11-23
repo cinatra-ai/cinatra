@@ -592,6 +592,22 @@ describe("registration validates the declaration again (cinatra#3470)", () => {
     }
   }
 
+  it("a per-binding card claims its own exact id only, never the kind's bare alias", () => {
+    // A legacy interrupt of ANOTHER agent names only the kind's bare alias. A
+    // declared card of that kind must not win it: every host resolves the gate
+    // through this registry, and the card would draw that agent's gate.
+    registerFieldRendererBindings([
+      { id: "@acme-test/legacy-agent:output", kind: "email-drafts-review", priority: 80 },
+      { id: ID, kind: "email-drafts-review", priority: 90, midRunHitl: true, screen: CARD },
+    ]);
+    const resolved = (xRenderer: string) =>
+      fieldRendererRegistry.resolve("f", { "x-renderer": xRenderer }, { connectedApps: [] })?.id;
+    expect(resolved(ID)).toBe(ID);
+    // red-first-expect: expected '@acme-test/publish-agent:confirm' not to be '@acme-test/publish-agent:confirm'
+    expect(resolved("email-drafts-review")).not.toBe(ID);
+    expect(resolved("email-drafts-review")).toBe("@acme-test/legacy-agent:output");
+  });
+
   it("a binding without a screen keeps its existing kind road", () => {
     registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90 }]);
     expect(entryOf()?.renderer).toBe(SchemaOnlyFloorRenderer);

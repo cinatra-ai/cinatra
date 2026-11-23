@@ -123,6 +123,7 @@
   "./run-window-markdown": "./src/run-window-markdown.ts",
     "./agent-builder-ids": "./src/agent-builder-ids.ts",
     "./hitl-gate-submit": "./src/hitl-gate-submit.ts",
+    "./field-renderer-bindings.server": "./src/field-renderer-bindings.server.ts",
     "./run-window-actions": "./src/run-window-actions.ts",
     "./use-run-window-conversation": "./src/use-run-window-conversation.ts"
   },

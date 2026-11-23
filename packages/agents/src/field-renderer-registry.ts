@@ -3,6 +3,7 @@ import type {
   FieldRendererProps,
   FieldRendererContext,
 } from "@cinatra-ai/sdk-ui/field-renderer-props";
+import type { DeclaredHitlCard } from "./hitl-gate-submit";
 
 // ---------------------------------------------------------------------------
 // Public props contract (cinatra#1625, epic #1620 S8 — M3)
@@ -137,6 +138,13 @@ export type FieldRendererEntry = {
    * entries, which keep the id-suffix reading (`isListPickerRenderer`).
    */
   kind?: string;
+  /**
+   * THE DECLARED HITL CARD this entry draws (cinatra#3470). Every road that
+   * writes the gate's staged answer reads it (`declaredHitlStage`), and every
+   * reading of the gate's id checks it before the id's suffix
+   * (`rendererReadsAsKind`). ABSENT for every other entry.
+   */
+  declaredScreen?: DeclaredHitlCard;
 };
 
 /**
@@ -207,9 +215,30 @@ export const fieldRendererRegistry = new FieldRendererRegistryImpl();
  * `:list-picker` suffix.
  */
 export function isListPickerRenderer(xRenderer: string): boolean {
+  return rendererReadsAsKind(xRenderer, "list-picker", ":list-picker");
+}
+
+/**
+ * The declared HITL card registered under EXACTLY this id (cinatra#3470), or
+ * undefined. A binding that declares its card is that card whatever its id
+ * says.
+ */
+export function declaredHitlCardOf(xRenderer: string): DeclaredHitlCard | undefined {
+  return fieldRendererRegistry.list().find((e) => e.id === xRenderer)?.declaredScreen;
+}
+
+/**
+ * Does `xRenderer` read as a renderer of `kind` (cinatra#3470)? The registered
+ * binding decides first: a declared card is never one (it is the host's card
+ * whatever its suffix, never a setup form, list step or grouped setup), and a
+ * binding with a declared kind is one exactly when that kind is `kind`. Only an
+ * id with no registered kind falls back to its `suffix`: an id is free text.
+ */
+export function rendererReadsAsKind(xRenderer: string, kind: string, suffix: string): boolean {
   const entry = fieldRendererRegistry.list().find((e) => e.id === xRenderer);
-  if (entry?.kind !== undefined) return entry.kind === "list-picker" && entry.stagesWholeAnswer !== true;
-  return xRenderer.endsWith(":list-picker");
+  if (entry?.declaredScreen !== undefined || entry?.stagesWholeAnswer === true) return false;
+  if (entry?.kind !== undefined) return entry.kind === kind;
+  return xRenderer.endsWith(suffix);
 }
 
 /** Whether a gate's Continue still waits for a pick: its entry declares the hold and the buffered `userResponse` is not a non-empty string (cinatra#3035). */

@@ -20,7 +20,7 @@
 
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import { GROUPED_SETUP_FORM_RENDERER_ID } from "./agent-builder-ids";
-import { isListPickerRenderer } from "./field-renderer-registry";
+import { isListPickerRenderer, rendererReadsAsKind } from "./field-renderer-registry";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
 import { isSetupInterruptTaskId } from "./run-surface-status";
 import { wrapUserResponseWithAttachments } from "./wayflow-user-response-envelope";
@@ -79,7 +79,13 @@ export function isGroupedSetupRenderer(
   ) {
     return true;
   }
-  return opts?.includeSetupFormSuffix === true && xRenderer.endsWith(":setup-form");
+  // A `:setup-form` id is a grouped setup only when no registered binding says
+  // otherwise: a declared card is never one, and a binding's declared kind
+  // decides before its suffix (cinatra#3470).
+  return (
+    opts?.includeSetupFormSuffix === true &&
+    rendererReadsAsKind(xRenderer, "wayflow-setup-form", ":setup-form")
+  );
 }
 
 /**
@@ -363,6 +369,300 @@ export function stageRendererAnswer(
   return entry?.stagesWholeAnswer === true ? { ...next } : { ...buffered, ...next };
 }
 
+/**
+ * The buffer a mid-run host holds after the assistant FILLED the screen
+ * (cinatra#3470, cinatra#2934). A declared card's fill goes through the one
+ * writer of its answer (`declaredHitlStage`), so the buffer is the whole
+ * staged answer with its `userResponse`; every other entry merges the fill
+ * into the buffer as before.
+ */
+export function stageAssistantFill(
+  entry: { declaredScreen?: DeclaredHitlCard } | null | undefined,
+  runValue: Record<string, unknown> | null | undefined,
+  buffered: Record<string, unknown>,
+  fill: Record<string, unknown>,
+): Record<string, unknown> {
+  if (entry?.declaredScreen !== undefined) {
+    return declaredHitlStage(entry.declaredScreen, runValue ?? {}, buffered, fill);
+  }
+  return { ...buffered, ...fill };
+}
+
+// ---------------------------------------------------------------------------
+// A DECLARED HITL CARD'S ANSWER (cinatra#3470): ONE WRITER FOR EVERY ROAD
+// ---------------------------------------------------------------------------
+//
+// Every road that writes a declared card's staged answer goes through
+// `declaredHitlStage`: the card's own typing and clicking, the assistant's fill
+// on the run panel, the stepper and the chat composer's submit, and the
+// server's bound-screen fill and lent-action submit. It builds the WHOLE
+// answer, `userResponse` included, from the run values, the answer staged so
+// far and the change, so no road can leave `userResponse` missing or stale, or
+// send the raw gate values. Pure, and here rather than in a module of its own:
+// a new module would add a first-party module to every locked route of the
+// route-graph ratchet, and the server reads it from this pure module.
+
+export type DeclaredHitlSection =
+  | { type: "note"; text: string }
+  | { type: "fact"; label: string; key: string; qualifierKey?: string }
+  | { type: "words"; key: string; label?: string }
+  | { type: "quote"; key: string }
+  | { type: "field"; key: string; label: string; multiline?: boolean; placeholder?: string };
+
+export type DeclaredHitlCard = {
+  layout: "card";
+  title: string;
+  sections?: DeclaredHitlSection[];
+  /** The decision's declared label, drawn above its answer rows. */
+  decisionLabel?: string;
+  decisions?: { label: string; answer: Record<string, unknown> }[];
+  carry?: string[];
+  requires?: string[];
+};
+
+/** The value's OWN text under `key`; anything else reads as blank. */
+function declaredOwnText(v: Record<string, unknown>, key: string): string {
+  const x = Object.hasOwn(v, key) ? v[key] : undefined;
+  return typeof x === "string" ? x : "";
+}
+
+/** The card's field keys, in declaration order. */
+export function declaredHitlFieldKeys(screen: Pick<DeclaredHitlCard, "sections">): string[] {
+  return (screen.sections ?? []).flatMap((s) => (s.type === "field" ? [s.key] : []));
+}
+
+/**
+ * The text a field shows: the staged text once the field is staged, the run
+ * value's (a prefill) while it is not.
+ */
+export function declaredHitlFieldText(
+  runValue: Record<string, unknown>,
+  staged: Record<string, unknown>,
+  key: string,
+): string {
+  return Object.hasOwn(staged, key) ? declaredOwnText(staged, key) : declaredOwnText(runValue, key);
+}
+
+/**
+ * The chosen row: the index of the decision whose answer is EXACTLY the
+ * answer's own keys (every key except the carried ones and `userResponse`),
+ * or null. The run value never chooses for the person.
+ */
+export function declaredHitlChosenDecision(
+  screen: Pick<DeclaredHitlCard, "decisions" | "carry">,
+  staged: Record<string, unknown>,
+): number | null {
+  const carried = new Set(screen.carry ?? []);
+  const own = Object.keys(staged).filter((k) => k !== "userResponse" && !carried.has(k));
+  const i = (screen.decisions ?? []).findIndex((d) => {
+    const keys = Object.keys(d.answer);
+    return (
+      keys.length === own.length &&
+      keys.every((k) => Object.hasOwn(staged, k) && Object.is(staged[k], d.answer[k]))
+    );
+  });
+  return i === -1 ? null : i;
+}
+
+/** Every `requires` key that is not a field holds non-blank run-value text. */
+export function declaredHitlRequiredRunValuesHeld(
+  screen: DeclaredHitlCard,
+  runValue: Record<string, unknown>,
+): boolean {
+  const fieldKeys = new Set(declaredHitlFieldKeys(screen));
+  return (screen.requires ?? []).every((k) => fieldKeys.has(k) || declaredOwnText(runValue, k).trim() !== "");
+}
+
+/**
+ * May the Continue send this card's answer yet? It reads what the Continue
+ * SENDS (the staged answer), never only what is drawn: every `requires` run
+ * value holds text, every field holds non-blank STAGED text, and a card with
+ * decisions has one chosen. Nothing is chosen for the person.
+ */
+export function declaredHitlScreenReady(
+  screen: DeclaredHitlCard,
+  runValue: Record<string, unknown>,
+  staged: Record<string, unknown>,
+): boolean {
+  if (!declaredHitlRequiredRunValuesHeld(screen, runValue)) return false;
+  for (const k of declaredHitlFieldKeys(screen)) {
+    if (declaredOwnText(staged, k).trim() === "") return false;
+  }
+  if ((screen.decisions ?? []).length === 0) return true;
+  return declaredHitlChosenDecision(screen, staged) !== null;
+}
+
+/**
+ * The whole answer: the carried run values (own keys only, from the gate's
+ * ORIGINAL run values), then `answer`, and `userResponse`, the JSON of exactly
+ * those keys. The server resumes the agent with `userResponse` and records the
+ * parsed JSON, so what the agent reads and what is recorded are one answer.
+ */
+export function declaredHitlStagedAnswer(
+  screen: Pick<DeclaredHitlCard, "carry">,
+  runValue: Record<string, unknown>,
+  answer: Record<string, unknown>,
+): Record<string, unknown> {
+  const whole: Record<string, unknown> = {
+    ...Object.fromEntries(
+      (screen.carry ?? []).filter((k) => Object.hasOwn(runValue, k)).map((k) => [k, runValue[k]]),
+    ),
+    ...answer,
+  };
+  return { ...whole, userResponse: JSON.stringify(whole) };
+}
+
+/**
+ * THE ONE WRITER of a declared card's staged answer. `change` is what one
+ * road wrote: a field's text, a declared answer, or an assistant's fill.
+ *
+ *   - a card with fields stages every field: the change's text where it
+ *     names the field, the text the field shows otherwise;
+ *   - a card with decisions stages the declared answer the change names
+ *     exactly, or keeps the one already chosen; with none chosen it stages
+ *     nothing;
+ *   - a card with neither has nothing to write.
+ *
+ * The result is always the WHOLE answer (`declaredHitlStagedAnswer`), so a
+ * host replaces its buffer with it.
+ */
+export function declaredHitlStage(
+  screen: DeclaredHitlCard,
+  runValue: Record<string, unknown>,
+  staged: Record<string, unknown>,
+  change: Record<string, unknown>,
+): Record<string, unknown> {
+  const fields = declaredHitlFieldKeys(screen);
+  if (fields.length > 0) {
+    const answer = Object.fromEntries(
+      fields.map((k) => [
+        k,
+        Object.hasOwn(change, k) && typeof change[k] === "string"
+          ? change[k]
+          : declaredHitlFieldText(runValue, staged, k),
+      ]),
+    );
+    return declaredHitlStagedAnswer(screen, runValue, answer);
+  }
+  const decisions = screen.decisions ?? [];
+  if (decisions.length === 0) return { ...staged };
+  const picked = declaredHitlChosenDecision(screen, change) ?? declaredHitlChosenDecision(screen, staged);
+  if (picked === null) return {};
+  return declaredHitlStagedAnswer(screen, runValue, { ...decisions[picked]!.answer });
+}
+
+/**
+ * The controls a declared card offers a fill: its field keys, or the keys of
+ * its declared answers. Read from the DECLARATION, never from the gate's
+ * input schema.
+ */
+export function declaredHitlControls(screen: DeclaredHitlCard): string[] {
+  const fields = declaredHitlFieldKeys(screen);
+  if (fields.length > 0) return fields;
+  const keys: string[] = [];
+  for (const d of screen.decisions ?? []) {
+    for (const k of Object.keys(d.answer)) if (!keys.includes(k)) keys.push(k);
+  }
+  return keys;
+}
+
+/**
+ * The bound screen's form schema of a declared card: one text property per
+ * field, or one property per declared answer key with the declared values.
+ */
+export function declaredHitlFormSchema(screen: DeclaredHitlCard): Record<string, unknown> {
+  const fields = declaredHitlFieldKeys(screen);
+  const properties: Record<string, unknown> = {};
+  if (fields.length > 0) {
+    for (const k of fields) properties[k] = { type: "string" };
+  } else {
+    for (const k of declaredHitlControls(screen)) {
+      const values: unknown[] = [];
+      for (const d of screen.decisions ?? []) {
+        if (Object.hasOwn(d.answer, k) && !values.some((v) => Object.is(v, d.answer[k]))) values.push(d.answer[k]);
+      }
+      properties[k] = { enum: values };
+    }
+  }
+  return { type: "object", properties };
+}
+
+/**
+ * What an assistant's fill means for a declared card: `change` is what the
+ * card can hold (field texts, or exactly one declared answer); `notFields`
+ * names keys the card offers no control for; `unusable` names controls the
+ * fill gave a value the card cannot hold.
+ */
+export function declaredHitlFillChange(
+  screen: DeclaredHitlCard,
+  requested: Record<string, unknown>,
+): { change: Record<string, unknown>; notFields: string[]; unusable: string[] } {
+  const controls = declaredHitlControls(screen);
+  const fields = declaredHitlFieldKeys(screen);
+  const notFields = Object.keys(requested).filter((k) => !controls.includes(k));
+  if (fields.length > 0) {
+    const change: Record<string, unknown> = {};
+    const unusable: string[] = [];
+    for (const k of fields) {
+      if (!Object.hasOwn(requested, k) || requested[k] === undefined) continue;
+      const v = requested[k];
+      if (typeof v === "string") change[k] = v;
+      else if (v === null) change[k] = "";
+      else unusable.push(k);
+    }
+    return { change, notFields, unusable };
+  }
+  const picked = declaredHitlChosenDecision(screen, requested);
+  if (picked !== null) {
+    return { change: { ...(screen.decisions ?? [])[picked]!.answer }, notFields: [], unusable: [] };
+  }
+  return {
+    change: {},
+    notFields,
+    unusable: Object.keys(requested).filter((k) => controls.includes(k)),
+  };
+}
+
+/**
+ * The declared card's rows in words, for the turn that names a bound screen
+ * to the assistant: each field and the text it shows, or the decision with
+ * each declared answer to fill exactly.
+ */
+export function describeDeclaredHitlRows(
+  screen: DeclaredHitlCard,
+  runValue: Record<string, unknown>,
+  maxEcho = 120,
+): string[] {
+  const fields = declaredHitlFieldKeys(screen);
+  if (fields.length > 0) {
+    return fields.map((k) => {
+      const text = declaredHitlFieldText(runValue, {}, k);
+      const shown = text.length > maxEcho ? `${text.slice(0, maxEcho)}…` : text;
+      return `${k} (text; now ${JSON.stringify(shown)})`;
+    });
+  }
+  const answers = (screen.decisions ?? [])
+    .map((d) => `${JSON.stringify(d.answer)} (${JSON.stringify(d.label)})`)
+    .join(" or ");
+  return answers ? [`one decision, filled with exactly one of ${answers}`] : [];
+}
+
+/**
+ * What the Continue sends for a declared card: the staged whole answer, its
+ * approval flag (a staged decline stays a decline), the time, and the
+ * attachment envelope over its `userResponse`. Never the raw gate values.
+ */
+export function declaredHitlContinuePayload(
+  staged: Record<string, unknown>,
+  attachments: ReadonlyArray<LlmAttachmentRef>,
+  now: string = new Date().toISOString(),
+): Record<string, unknown> {
+  return applyAttachmentEnvelopeUserResponseOnly(
+    { ...staged, approved: continueApprovalFlag(staged), approvedAt: now },
+    attachments,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // #817 context-selector envelope synthesis
 // ---------------------------------------------------------------------------
@@ -386,7 +686,7 @@ export function withContextSelectorEnvelope(
   interruptValues: Record<string, unknown> | undefined,
   payload: Record<string, unknown>,
 ): Record<string, unknown> {
-  if (!xRenderer.endsWith(":context-selector")) return payload;
+  if (!rendererReadsAsKind(xRenderer, "context-selector", ":context-selector")) return payload;
   if (typeof payload.userResponse === "string") return payload;
   const vals = (interruptValues ?? {}) as Record<string, unknown>;
   const slotMeta = vals["slotMeta"] as
@@ -500,7 +800,7 @@ export function liftRendererApprovalNote(
       }),
     };
   }
-  if (xRenderer.endsWith(":setup-form")) {
+  if (rendererReadsAsKind(xRenderer, "wayflow-setup-form", ":setup-form")) {
     const { offeringCompanyWebsite, callToAction, senderName } = buffered as {
       offeringCompanyWebsite?: string;
       callToAction?: string;
@@ -512,7 +812,7 @@ export function liftRendererApprovalNote(
   }
   // Gate 1: scrape-schema-review — snapshot the operator-edited
   // instructions + outputSchema + seedUrls exactly as approved.
-  if (xRenderer.endsWith(":scrape-schema-review")) {
+  if (rendererReadsAsKind(xRenderer, "scrape-schema-review", ":scrape-schema-review")) {
     const {
       instructions = "",
       outputSchema = { type: "object", properties: {} },
@@ -534,7 +834,7 @@ export function liftRendererApprovalNote(
   }
   // Gate 2: final-list-review — snapshot listName + LLM-built memberRefs;
   // the server re-resolves members during crm_list_member_add.
-  if (xRenderer.endsWith(":final-list-review")) {
+  if (rendererReadsAsKind(xRenderer, "final-list-review", ":final-list-review")) {
     const {
       listName = "",
       memberRefs = [],

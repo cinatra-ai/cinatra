@@ -41,7 +41,12 @@ import {
 } from "./agent-hitl-screen-card";
 import type { AgentRunMessageBody } from "./store";
 import { StatusPill } from "@/components/ui/status-pill";
-import { continueAwaitsAPick, fieldRendererRegistry, wholeAnswerStageProps } from "./field-renderer-registry";
+import {
+  continueAwaitsAPick,
+  declaredHitlCardOf,
+  fieldRendererRegistry,
+  wholeAnswerStageProps,
+} from "./field-renderer-registry";
 import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
 import type { FieldRendererContext, FieldRendererProps } from "./field-renderer-registry";
 import { ArrowRight } from "lucide-react";
@@ -94,6 +99,10 @@ import {
   continueApprovalFlag,
   continueHeldByRenderer,
   stageRendererAnswer,
+  stageAssistantFill,
+  declaredHitlContinuePayload,
+  declaredHitlScreenReady,
+  declaredHitlStage,
   hitlGateIdentityKey,
   isMidRunListStepGate,
   isSetupGateTaskId,
@@ -757,8 +766,19 @@ export function AgenticRunPanel({
   // prev is spread first so unmentioned keys are preserved;
   // suggestion values override matching user edits intentionally —
   // the user pressed Suggest expecting AI to take priority on the keys it returns.
+  //
+  // A DECLARED CARD'S FILL (cinatra#3470) goes through the one writer of its
+  // answer (`stageAssistantFill` -> `declaredHitlStage`): the buffer becomes
+  // the whole staged answer with its `userResponse`, never a raw merge that
+  // leaves the resume text missing or stale. The gate's entry and run values
+  // are read at the call, from the render that drew the gate.
+  const fillTargetRef = useRef<{
+    entry: ReturnType<typeof fieldRendererRegistry.resolve>;
+    runValue: Record<string, unknown>;
+  }>({ entry: null, runValue: {} });
   const handleApply = useCallback((suggestions: Record<string, unknown>) => {
-    setBufferedHitlValue(prev => ({ ...prev, ...suggestions }));
+    const { entry: target, runValue } = fillTargetRef.current;
+    setBufferedHitlValue(prev => stageAssistantFill(target, runValue, prev, suggestions));
   }, []);
   // After clicking Approve/Reject, suppress re-showing the same HITL screen while the
   // server processes the resume. Prevents "Loading recipients" loop caused by the poll
@@ -1476,6 +1496,31 @@ export function AgenticRunPanel({
       // as the Continue drawn for the gate does.
       const gateKey = hitlGateIdentityKey(ctx);
       if (gateValidity.isHeld(gateKey)) return;
+      // A DECLARED CARD (cinatra#3470): what the caller hands in is a change to
+      // the card's answer, written by the one writer (`declaredHitlStage`),
+      // held until the card is ready, and sent as the staged whole answer,
+      // never the raw values.
+      const declared = declaredHitlCardOf(ctx.xRenderer);
+      if (declared !== undefined && !isSetupGateTaskId(ctx.reviewTaskId)) {
+        const runValue = ctx.currentValues ?? {};
+        const change =
+          value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
+        const staged = declaredHitlStage(declared, runValue, bufferedHitlValueRef.current, change);
+        if (!declaredHitlScreenReady(declared, runValue, staged)) {
+          throw new Error("This step is waiting for a choice on its card. Choose one there, then continue.");
+        }
+        await performGateSubmit({
+          reviewTaskId: ctx.reviewTaskId,
+          xRenderer: ctx.xRenderer,
+          payload: declaredHitlContinuePayload(staged, pendingAttachmentsRef.current),
+          trackApproving: true,
+          suppressGate: true,
+          clearAttachmentsOnSuccess: true,
+          errorMode: "rethrow",
+          holdKey: gateKey,
+        });
+        return;
+      }
       const { payload, payloadFieldName } = buildChatGateSubmitPayload({
         reviewTaskId: ctx.reviewTaskId,
         fieldName: ctx.fieldName,
@@ -2045,6 +2090,10 @@ export function AgenticRunPanel({
     void _xr;
     return { entry, fieldSchema: renderSchema, context };
   })();
+  fillTargetRef.current = {
+    entry: hitlRendererEntry?.entry ?? null,
+    runValue: effectiveHitlContext?.currentValues ?? {},
+  };
 
   // Mirror the presentation hint out of currentValues so
   // the HITL render block can choose DispatchRenderer over the registry path.

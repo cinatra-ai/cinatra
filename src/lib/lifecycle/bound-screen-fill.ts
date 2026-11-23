@@ -66,6 +66,7 @@ import { canActorRespondToRun } from "@/lib/lifecycle/run-window-turn";
 import {
   classifyDrawnFillValues,
   drawnScreenControls,
+  FILL_MAX_SERIALIZED_CHARS,
 } from "@/lib/lifecycle/bound-screen-controls";
 
 // THE PURE CLOSED SET LIVES NEXT DOOR (cinatra#2934, repaired after the picture
@@ -153,22 +154,68 @@ async function readRunWindowState(
   runId: string,
   ref: string,
   messageId: string,
-): Promise<{ surface: RunWindowSurface; placedThisMessage: Record<string, unknown> }> {
+): Promise<{
+  surface: RunWindowSurface;
+  placedThisMessage: Record<string, unknown>;
+  /** The same fills, oldest first: a declared card replays them in order. */
+  placedInOrder: Record<string, unknown>[];
+}> {
   try {
     const rows = await readRunWindowMessages(runId);
     const placedThisMessage: Record<string, unknown> = {};
+    const placedInOrder: Record<string, unknown>[] = [];
     for (const row of rows) {
       if (row.messageId !== messageId) continue;
       if (!row.fill || row.fill.ref !== ref) continue;
       Object.assign(placedThisMessage, row.fill.values);
+      placedInOrder.push(row.fill.values);
     }
     return {
       surface: rows[rows.length - 1]?.surface ?? "run-page",
       placedThisMessage,
+      placedInOrder,
     };
   } catch {
-    return { surface: "run-page", placedThisMessage: {} };
+    return { surface: "run-page", placedThisMessage: {}, placedInOrder: [] };
   }
+}
+
+/**
+ * A DECLARED CARD'S FILL (cinatra#3470). Its controls are the card's own
+ * fields and decisions, never the gate's input schema, and what the fill
+ * means is read by the card's one writer (`declaredHitlStage`) against the
+ * answer this message has already placed. Recorded is what the card can hold:
+ * the fields' text, or exactly one declared answer.
+ */
+async function readDeclaredFill(
+  card: NonNullable<Extract<BoundReferenceResolution, { kind: "hitl_screen" }>["declared"]>["card"],
+  runValue: Record<string, unknown>,
+  placedInOrder: readonly Record<string, unknown>[],
+  requested: Record<string, unknown>,
+): Promise<
+  | { readonly kind: "values"; readonly values: Record<string, unknown> }
+  | Exclude<BoundScreenFillOutcome, { kind: "filled" } | { kind: "unavailable" } | { kind: "not-editable" }>
+> {
+  const answer = await import("@cinatra-ai/agents/hitl-gate-submit");
+  const fields = answer.declaredHitlControls(card);
+  const read = answer.declaredHitlFillChange(card, requested);
+  if (Object.keys(read.change).length === 0) {
+    if (read.unusable.length > 0) return { kind: "unusable-values", rows: read.unusable, fields };
+    return { kind: "no-fields", fields };
+  }
+  if (JSON.stringify(read.change).length > FILL_MAX_SERIALIZED_CHARS) {
+    return { kind: "too-large", fields };
+  }
+  // What the card shows now: its prefill, then every fill this message placed.
+  const shown = placedInOrder.reduce(
+    (staged, fill) => answer.declaredHitlStage(card, runValue, staged, fill),
+    answer.declaredHitlStage(card, runValue, {}, {}),
+  );
+  const after = answer.declaredHitlStage(card, runValue, shown, read.change);
+  if (JSON.stringify(after) === JSON.stringify(shown)) {
+    return { kind: "already-holding", fields: Object.keys(read.change) };
+  }
+  return { kind: "values", values: read.change };
 }
 
 /**
@@ -251,29 +298,41 @@ export async function recordBoundScreenFill(input: {
   // person can see, so it is what a further fill is computed against and what
   // the no-op rule compares to.
   const state = await readRunWindowState(bound.runId, input.ref, input.messageId);
-  const shown = { ...bound.form.values, ...state.placedThisMessage };
-  const read = classifyDrawnFillValues({ ...bound.form, values: shown }, input.values);
-  const values = read.values;
-  const applied = Object.keys(values);
-  if (applied.length === 0) {
-    // WHICH REASON, AND NEVER THE WRONG ONE (cinatra#2934, the fourth graded
-    // capture). These four outcomes used to be one, and the one sentence they
-    // shared was true of only the first of them. They are asked in the order a
-    // reader would ask them: a row that refused the value is the most specific
-    // thing that happened, then a row already showing it, then a key that names
-    // no control at all.
-    const fields = drawnScreenControls(bound.form);
-    if (read.unusable.length > 0) {
-      return { kind: "unusable-values", rows: read.unusable, fields };
+  let values: Record<string, unknown>;
+  if (bound.kind === "hitl_screen" && bound.declared) {
+    const declared = await readDeclaredFill(
+      bound.declared.card,
+      bound.form.values,
+      state.placedInOrder,
+      input.values,
+    );
+    if (declared.kind !== "values") return declared;
+    values = declared.values;
+  } else {
+    const shown = { ...bound.form.values, ...state.placedThisMessage };
+    const read = classifyDrawnFillValues({ ...bound.form, values: shown }, input.values);
+    values = read.values;
+    if (Object.keys(values).length === 0) {
+      // WHICH REASON, AND NEVER THE WRONG ONE (cinatra#2934, the fourth graded
+      // capture). These four outcomes used to be one, and the one sentence they
+      // shared was true of only the first of them. They are asked in the order a
+      // reader would ask them: a row that refused the value is the most specific
+      // thing that happened, then a row already showing it, then a key that names
+      // no control at all.
+      const fields = drawnScreenControls(bound.form);
+      if (read.unusable.length > 0) {
+        return { kind: "unusable-values", rows: read.unusable, fields };
+      }
+      if (read.tooLarge) {
+        return { kind: "too-large", fields };
+      }
+      if (read.unchanged.length > 0 && read.notFields.length === 0) {
+        return { kind: "already-holding", fields: read.unchanged };
+      }
+      return { kind: "no-fields", fields };
     }
-    if (read.tooLarge) {
-      return { kind: "too-large", fields };
-    }
-    if (read.unchanged.length > 0 && read.notFields.length === 0) {
-      return { kind: "already-holding", fields: read.unchanged };
-    }
-    return { kind: "no-fields", fields };
   }
+  const applied = Object.keys(values);
 
   // THE GRANT, CLAIMED LAST. Everything above is a read; this is the moment
   // before the write, and a grant already spent by a press stops the fill here.

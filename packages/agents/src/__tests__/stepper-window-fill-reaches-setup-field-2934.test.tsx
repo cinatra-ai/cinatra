@@ -124,10 +124,13 @@ vi.mock("../use-runtime-field-renderer-bindings", () => ({
   useRuntimeFieldRendererBindings: () => ({ bindings: {}, loading: false }),
 }));
 
+/** A gate a test parks the run on instead of the setup gate (cinatra#3470). */
+const parkedGate = vi.hoisted(() => ({ current: null as Record<string, unknown> | null }));
+
 vi.mock("../use-ag-ui-run-stream", () => ({
   useAgUiRunStream: (_runId: string, opts: { initialStatus?: string }) => ({
     status: opts?.initialStatus ?? "pending_approval",
-    interruptContext: {
+    interruptContext: parkedGate.current ?? {
       schema: {
         type: "string",
         "x-multiline": true,
@@ -170,6 +173,7 @@ function baseProps(): PanelProps {
 beforeEach(() => {
   ensureDefaultFieldRenderersRegistered();
   windowActions.loadRunWindowConversation.mockResolvedValue([]);
+  parkedGate.current = null;
 });
 
 afterEach(() => {
@@ -240,5 +244,97 @@ describe("the step-by-step screen's setup field shows what the window placed (ci
 
     await waitFor(() => expect(field().value).toBe(W));
     expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  });
+});
+
+// cinatra#3470: A DECLARED CARD ON THE STEP-BY-STEP SCREEN.
+//   - An assistant fill goes through the card's one writer, so the Continue
+//     sends the filled answer as the resume text (a raw merge left
+//     `userResponse` missing, and the agent read the approval marker).
+//   - A declared card whose binding id ends in `:setup-form` is the card, not
+//     a grouped setup form: it stages what is typed and sends nothing until
+//     its Continue (a suffix reading sent the first keystroke).
+describe("a declared card on the step-by-step screen (cinatra#3470)", () => {
+  const FIELD_SCREEN = {
+    layout: "card",
+    title: "Fixture question",
+    sections: [{ type: "field", key: "answer", label: "Fixture answer" }],
+    carry: ["itemId"],
+  };
+
+  async function renderDeclaredCard(id: string) {
+    const { registerFieldRendererBindings } = await import("../register-default-renderers");
+    registerFieldRendererBindings([
+      { id, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: FIELD_SCREEN },
+    ]);
+    parkedGate.current = {
+      schema: { type: "object" },
+      xRenderer: id,
+      values: { itemId: "item-1" },
+      reviewTaskId: "wayflow-task-3470-step",
+    };
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    const { RunPageChrome } = (await import(/* @vite-ignore */ RUN_PAGE_CHROME)) as typeof RunPageChromeModule;
+    render(
+      <RunPageChrome>
+        <OrchestratorStepperPanel
+          {...baseProps()}
+          stepperSteps={[{ index: 1, stepNumber: 1, label: "Fixture step", xRenderer: id }]}
+        />
+      </RunPageChrome>,
+    );
+    // red-first-expect: expected null not to be null
+    await waitFor(() => expect(screen.queryByLabelText("Fixture answer")).not.toBeNull());
+  }
+
+  const answerField = () => screen.getByLabelText("Fixture answer") as HTMLInputElement;
+  const continueButton = () =>
+    Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find((b) =>
+      /^Continue/.test(b.textContent ?? ""),
+    );
+
+  it("an assistant fill, then Continue, sends the filled answer as the resume text", async () => {
+    windowActions.sendRunWindowTurn.mockResolvedValue({
+      ok: true,
+      entries: [
+        { id: 1, role: "user", content: "Answer new." },
+        { id: 2, role: "assistant", content: "Placed in the fields on your screen." },
+      ],
+      fills: [{ ref: "ref_1", values: { answer: "new" } }],
+      acted: false,
+    });
+    await renderDeclaredCard("@acme-test/declared-agent:confirm");
+    await waitFor(() => expect(screen.queryByTestId("prompt-field")).not.toBeNull());
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("prompt-field"));
+    });
+    await waitFor(() => expect(answerField().value).toBe("new"));
+
+    await waitFor(() => expect(continueButton()?.disabled).toBe(false));
+    await act(async () => {
+      fireEvent.click(continueButton()!);
+    });
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const payload = (hitlActions.approveReviewTask.mock.calls[0] as unknown as [string, Record<string, unknown>])[1];
+    expect(payload.userResponse).toBe(JSON.stringify({ itemId: "item-1", answer: "new" }));
+    expect(payload.answer).toBe("new");
+  });
+
+  it("a declared ':setup-form' card stages what is typed and sends nothing before its Continue", async () => {
+    await renderDeclaredCard("@acme-test/declared-agent:setup-form");
+    fireEvent.change(answerField(), { target: { value: "f" } });
+    await act(async () => {});
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    expect(answerField().value).toBe("f");
+
+    await waitFor(() => expect(continueButton()?.disabled).toBe(false));
+    await act(async () => {
+      fireEvent.click(continueButton()!);
+    });
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const payload = (hitlActions.approveReviewTask.mock.calls[0] as unknown as [string, Record<string, unknown>])[1];
+    expect(payload.userResponse).toBe(JSON.stringify({ itemId: "item-1", answer: "f" }));
+    // The grouped setup's lift never rides along on a declared card.
+    expect(Object.hasOwn(payload, "approvalNote")).toBe(false);
   });
 });

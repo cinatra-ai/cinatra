@@ -141,6 +141,9 @@ const IDEA_SCHEMA = {
   "x-placeholder": "Paste one idea, or type what this post should be about",
 };
 
+/** A gate a test parks the run on instead of the setup gate (cinatra#3470). */
+const parkedGate = vi.hoisted(() => ({ current: null as Record<string, unknown> | null }));
+
 /** The run parked on the per-field setup gate that collects `idea`. */
 function streamResultFor() {
   return {
@@ -148,7 +151,7 @@ function streamResultFor() {
     error: null,
     presentationHint: null,
     isLive: true,
-    interruptContext: {
+    interruptContext: parkedGate.current ?? {
       schema: IDEA_SCHEMA,
       xRenderer: SCHEMA_FIELD_FALLBACK_RENDERER_ID,
       values: {},
@@ -225,6 +228,7 @@ beforeEach(() => {
   ensureDefaultFieldRenderersRegistered();
   windowActions.loadRunWindowConversation.mockResolvedValue([]);
   nextMessage.text = "";
+  parkedGate.current = null;
 });
 
 afterEach(() => {
@@ -315,5 +319,90 @@ describe("the run page's setup field shows what the window placed (cinatra#2934)
 
     expect(ideaField().value).toBe("typed before the turn");
     expect(ideaField().value).not.toBe(W);
+  });
+});
+
+// cinatra#3470: AN ASSISTANT FILL ON A DECLARED CARD. The card stages its
+// whole answer with `userResponse`, the JSON the agent reads as its resume
+// text. A fill applied as a raw merge left `userResponse` missing (the agent
+// read the approval marker) or stale (the agent read the earlier answer). The
+// fill goes through the card's one writer, so the Continue sends what the
+// field shows.
+describe("an assistant fill on a declared card reaches the agent as the answer (cinatra#3470)", () => {
+  const DECLARED_ID = "@acme-test/declared-agent:confirm";
+
+  async function renderDeclaredCard() {
+    const { registerFieldRendererBindings } = await import("../register-default-renderers");
+    registerFieldRendererBindings([
+      {
+        id: DECLARED_ID,
+        kind: "linkedin-draft-review",
+        priority: 90,
+        midRunHitl: true,
+        screen: {
+          layout: "card",
+          title: "Fixture question",
+          sections: [{ type: "field", key: "answer", label: "Fixture answer" }],
+          carry: ["itemId"],
+        },
+      },
+    ]);
+    parkedGate.current = {
+      schema: { type: "object" },
+      xRenderer: DECLARED_ID,
+      values: { itemId: "item-1" },
+      reviewTaskId: "wayflow-task-3470-fill",
+    };
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    const { RunPageChrome } = (await import(/* @vite-ignore */ RUN_PAGE_CHROME)) as typeof RunPageChromeModule;
+    render(
+      <RunPageChrome>
+        <AgenticRunPanel {...PANEL_PROPS} surface="agent-detail" />
+      </RunPageChrome>,
+    );
+    // red-first-expect: expected null not to be null
+    await waitFor(() => expect(screen.queryByLabelText("Fixture answer")).not.toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("prompt-field")).not.toBeNull());
+  }
+
+  const answerField = () => screen.getByLabelText("Fixture answer") as HTMLInputElement;
+  const cardContinue = () =>
+    document.querySelector<HTMLButtonElement>('[data-action="submit-hitl-screen"]')!;
+
+  async function pressContinue(): Promise<Record<string, unknown>> {
+    await waitFor(() => expect(cardContinue().disabled).toBe(false));
+    await act(async () => {
+      fireEvent.click(cardContinue());
+    });
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    return (hitlActions.approveReviewTask.mock.calls[0] as unknown as [string, Record<string, unknown>])[1];
+  }
+
+  it("a fill into an empty card, then Continue, sends the filled answer as the resume text", async () => {
+    windowActions.sendRunWindowTurn.mockResolvedValue(
+      turnOf({ ask: "Answer new.", fills: [{ ref: "ref_1", values: { answer: "new" } }], acted: false }),
+    );
+    await renderDeclaredCard();
+    await sendInWindow("Answer new.");
+    await waitFor(() => expect(answerField().value).toBe("new"));
+
+    const payload = await pressContinue();
+    expect(payload.userResponse).toBe(JSON.stringify({ itemId: "item-1", answer: "new" }));
+    expect(payload.answer).toBe("new");
+    expect(payload.approved).toBe(true);
+  });
+
+  it("a fill over a typed answer sends the filled answer, never the typed one's resume text", async () => {
+    windowActions.sendRunWindowTurn.mockResolvedValue(
+      turnOf({ ask: "Answer new.", fills: [{ ref: "ref_1", values: { answer: "new" } }], acted: false }),
+    );
+    await renderDeclaredCard();
+    fireEvent.change(answerField(), { target: { value: "old" } });
+    await sendInWindow("Answer new.");
+    await waitFor(() => expect(answerField().value).toBe("new"));
+
+    const payload = await pressContinue();
+    expect(payload.userResponse).toBe(JSON.stringify({ itemId: "item-1", answer: "new" }));
+    expect(payload.answer).toBe("new");
   });
 });

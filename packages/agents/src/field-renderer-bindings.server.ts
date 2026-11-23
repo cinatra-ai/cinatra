@@ -31,6 +31,10 @@ import {
 } from "@/lib/generated/agent-bindings";
 import { resolveAgentRuntimeMountDir } from "./agent-runtime-mount";
 import type { FieldRendererBindingInput } from "./register-default-renderers";
+import type { DeclaredHitlCard } from "./hitl-gate-submit";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: dependency-free .mjs validation module (allowJs)
+import { validateHitlScreen } from "../../../scripts/extensions/agent-hitl-screen-schema.mjs";
 import {
   A2UI_MID_RUN_TRANSLATOR_KINDS,
   type MidRunTranslatorResolver,
@@ -152,6 +156,28 @@ export function getMergedFieldRendererBindings(): ReadonlyArray<CollectedBinding
     ...(GENERATED_FIELD_RENDERER_BINDINGS as ReadonlyArray<CollectedBinding>),
     ...runtimeOnly,
   ];
+}
+
+/**
+ * The declared HITL CARD of a gate's renderer (cinatra#3470), or null: the
+ * merged binding with exactly this id, declared mid-run, whose screen is a
+ * "card" that passes the same validation the client registration runs. The
+ * server's bound-screen fill and lent-action submit read the card's answer
+ * from it, never from the gate's input schema. Any failure reads as no card.
+ */
+export function readDeclaredHitlCard(xRenderer: string): DeclaredHitlCard | null {
+  try {
+    const binding = getMergedFieldRendererBindings().find((b) => b.id === xRenderer);
+    if (!binding || binding.midRunHitl !== true || binding.screen === undefined) return null;
+    const checked = validateHitlScreen(binding.screen, `${binding.id} screen`) as {
+      screen?: { layout?: string };
+      errors: string[];
+    };
+    if (checked.errors.length > 0 || checked.screen?.layout !== "card") return null;
+    return checked.screen as DeclaredHitlCard;
+  } catch {
+    return null;
+  }
 }
 
 /**

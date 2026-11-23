@@ -124,6 +124,7 @@ import {
   continueApprovalFlag,
   continueHeldByRenderer,
   stageRendererAnswer,
+  stageAssistantFill,
   isSetupGateTaskId,
   liftRendererApprovalNote,
   midRunBooleanFieldHidesSubmit,
@@ -902,8 +903,19 @@ function HitlApprovalCard({
   // prev is spread first so unmentioned keys are preserved;
   // suggestion values override matching user edits intentionally —
   // the user pressed Suggest expecting AI to take priority on the keys it returns.
+  //
+  // A DECLARED CARD'S FILL (cinatra#3470) goes through the one writer of its
+  // answer (`stageAssistantFill` -> `declaredHitlStage`): the buffer becomes
+  // the whole staged answer with its `userResponse`, never a raw merge that
+  // leaves the resume text missing or stale. The gate's entry and run values
+  // are read at the call, from the render that drew the gate.
+  const fillTargetRef = useRef<{
+    entry: ReturnType<typeof fieldRendererRegistry.resolve>;
+    runValue: Record<string, unknown>;
+  }>({ entry: null, runValue: {} });
   const handleApply = useCallback((suggestions: Record<string, unknown>) => {
-    setBufferedHitlValue(prev => ({ ...prev, ...suggestions }));
+    const { entry: target, runValue } = fillTargetRef.current;
+    setBufferedHitlValue(prev => stageAssistantFill(target, runValue, prev, suggestions));
   }, []);
 
   const fieldSchema: Record<string, unknown> = {
@@ -932,6 +944,7 @@ function HitlApprovalCard({
     fieldSchema,
     context,
   );
+  fillTargetRef.current = { entry, runValue: interruptContext.values ?? {} };
   const { "x-renderer": _xr, ...renderSchema } = fieldSchema;
   void _xr;
 

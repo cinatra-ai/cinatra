@@ -302,11 +302,13 @@ function registerDeclaredScreen(b: FieldRendererBindingInput): void {
     : undefined;
   let renderer: ComponentType<FieldRendererProps> | undefined;
   let continueReady: FieldRendererEntry["continueReady"] = undefined;
+  let card: DeclaredHitlCard | undefined;
   if (kindEntry && checked.screen?.layout === "card") {
-    const card = checked.screen as DeclaredHitlCard;
+    card = checked.screen as DeclaredHitlCard;
     renderer = makeDeclaredHitlScreenRenderer(card);
     // The host's Continue waits for a declared choice and every required value.
-    continueReady = ({ runValue, staged }) => declaredHitlScreenReady(card, runValue, staged);
+    const declared = card;
+    continueReady = ({ runValue, staged }) => declaredHitlScreenReady(declared, runValue, staged);
   } else if (kindEntry && checked.screen?.layout === "kind" && kindEntry.renderer !== SchemaOnlyFloorRenderer) {
     renderer = kindEntry.renderer;
   }
@@ -326,7 +328,10 @@ function registerDeclaredScreen(b: FieldRendererBindingInput): void {
   fieldRendererRegistry.register({
     id: b.id,
     priority: b.priority,
-    condition: conditionFor(b.id, b.kind),
+    // ITS OWN EXACT ID ONLY (cinatra#3470): never the kind's bare aliases or a
+    // kind's own condition. One agent's declared card must not claim another
+    // agent's gate of the same kind (a legacy bare-alias interrupt included).
+    condition: (_fieldName, schema) => xRendererOf(schema) === b.id,
     renderer: withBindingParams(renderer, b.params),
     // A "card" is pure host rendering: it calls no server action and resolves
     // nothing from the registry (declared-hitl-screen-3470.test.tsx pins that
@@ -339,6 +344,11 @@ function registerDeclaredScreen(b: FieldRendererBindingInput): void {
     // A card stages its whole answer each time: the host replaces its buffer
     // with it, so a later choice never carries an earlier one's keys.
     ...(isKind ? {} : { stagesWholeAnswer: true }),
+    // The declared card itself: every road that writes its staged answer
+    // (the assistant's fill on every host included) goes through its one
+    // writer, and no reading of the id's suffix takes it for a setup form,
+    // a list step or a grouped setup (`rendererReadsAsKind`).
+    ...(card !== undefined ? { declaredScreen: card } : {}),
     midRunHitl: b.midRunHitl === true,
     // The declared kind: a card's entry is never a list step whatever its
     // kind (`isListPickerRenderer` reads `stagesWholeAnswer` too).

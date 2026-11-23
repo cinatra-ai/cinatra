@@ -141,8 +141,10 @@ import { AgentHitlScreenCard, type AgentHitlScreenCarrier } from "../agent-hitl-
 import {
   continueApprovalFlag,
   continueHeldByRenderer,
+  isGroupedSetupRenderer,
   isMidRunListStepGate,
   liftRendererApprovalNote,
+  withContextSelectorEnvelope,
 } from "../hitl-gate-submit";
 import { classifyMidRunHitl } from "../orchestrator-mid-run-hitl";
 import {
@@ -748,5 +750,32 @@ describe("a list step on the HITL screen card sends its pick on the real wire (c
     registerFieldRendererBindings([{ id: SUFFIX_ID, kind: "linkedin-draft-review", priority: 80 }]);
     expect(isMidRunListStepGate(SUFFIX_ID, TASK_ID)).toBe(false);
     expect(liftRendererApprovalNote(SUFFIX_ID, { listId: "list-1" })).toBeNull();
+  });
+
+  // red-first-expect: Failed to resolve import "../declared-hitl-screen-renderer"
+  it("a declared card is the card whatever its id's suffix: never a setup form, list step or grouped setup", () => {
+    const suffixes = [":setup-form", ":list-picker", ":scrape-schema-review", ":final-list-review", ":context-selector"];
+    for (const suffix of suffixes) {
+      const id = `@acme-test/declared-agent${suffix}`;
+      registerFieldRendererBindings([
+        {
+          id,
+          kind: "linkedin-draft-review",
+          priority: 90,
+          midRunHitl: true,
+          screen: {
+            layout: "card",
+            title: "Fixture question",
+            sections: [{ type: "field", key: "answer", label: "Fixture answer label" }],
+            carry: ["itemId"],
+          },
+        },
+      ]);
+      expect(isGroupedSetupRenderer(id, { includeSetupFormSuffix: true })).toBe(false);
+      expect(isMidRunListStepGate(id, TASK_ID)).toBe(false);
+      expect(liftRendererApprovalNote(id, { listId: "list-1", instructions: "x" })).toBeNull();
+      const staged = { itemId: "item-1", answer: "a" };
+      expect(withContextSelectorEnvelope(id, { slotMeta: { slotId: "s" } }, staged)).toBe(staged);
+    }
   });
 });

@@ -77,6 +77,7 @@ import {
   scheduleFormValues,
 } from "@/lib/lifecycle/schedule-form-screen";
 import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
+import type { DeclaredHitlCard } from "@cinatra-ai/agents/hitl-gate-submit";
 
 // ---------------------------------------------------------------------------
 // THE ARMED FORM'S OWN TWO FACTS, from the two functions that already own them
@@ -135,6 +136,17 @@ export type BoundHitlScreen = {
     readonly values: Record<string, unknown>;
     /** Setup-loop screens only — the single property the form writes back. */
     readonly fieldName?: string;
+  };
+  /**
+   * THE DECLARED CARD the gate's renderer draws (cinatra#3470), when one is
+   * declared. Its controls are the card's own fields and decisions, so
+   * `form.schema` is built from it, not from the gate's input schema, and the
+   * fill and the submit write its answer through its one writer.
+   */
+  readonly declared?: {
+    readonly card: DeclaredHitlCard;
+    /** The card's rows in words, for the turn that names them. */
+    readonly rows: readonly string[];
   };
 };
 
@@ -320,6 +332,11 @@ export type BoundReferencePorts = {
   ) => Promise<boolean>;
   readonly readPinnedTargets: typeof readGatePinnedTargets;
   readonly readParkedScreen: typeof readLatestDurableHitlGateArtifact;
+  /**
+   * The declared HITL card of a gate's renderer (cinatra#3470), or null: the
+   * installed binding's own declaration, validated again.
+   */
+  readonly readDeclaredCard: (xRenderer: string) => Promise<DeclaredHitlCard | null>;
   readonly readRunTrigger: typeof readRunTriggerByRunId;
   /**
    * The skills hold, for one verified reader — the SAME read the chip row and
@@ -374,6 +391,17 @@ async function loadHoldReader() {
   return mod.resolveRecommendationHoldStateForActor;
 }
 
+// The installed bindings' own reader, already on these routes' graphs (the
+// run's execution reads it): the declared card adds no module to them.
+async function loadDeclaredCardReader() {
+  const mod = await import("@cinatra-ai/agents/field-renderer-bindings.server");
+  return mod.readDeclaredHitlCard;
+}
+
+async function loadDeclaredAnswer() {
+  return import("@cinatra-ai/agents/hitl-gate-submit");
+}
+
 async function loadScheduleCardReader() {
   const mod = await import("@/lib/lifecycle/trigger-schedule-proposal-card");
   return mod.resolveTriggerScheduleProposalCard;
@@ -391,6 +419,7 @@ const DEFAULT_PORTS: BoundReferencePorts = {
   },
   readPinnedTargets: readGatePinnedTargets,
   readParkedScreen: readLatestDurableHitlGateArtifact,
+  readDeclaredCard: async (xRenderer) => (await loadDeclaredCardReader())(xRenderer),
   readRunTrigger: readRunTriggerByRunId,
   readRecommendationHold: async (input) =>
     (await loadHoldReader())(input as never) as unknown as HoldStateRead,
@@ -639,6 +668,21 @@ export async function resolveBoundReference(input: {
   try {
     const screen = await ports.readParkedScreen(payload.runId);
     if (screen && screen.reviewTaskId === payload.reviewTaskId) {
+      // A DECLARED CARD (cinatra#3470) offers its own fields and decisions, not
+      // the gate's input schema: a fill names them, and the submit sends the
+      // card's staged whole answer. A failed read leaves the screen as before.
+      const card = await ports.readDeclaredCard(screen.xRenderer).catch(() => null);
+      if (card) {
+        const answer = await loadDeclaredAnswer();
+        return {
+          kind: "hitl_screen",
+          runId: payload.runId,
+          screenRef: payload.reviewTaskId,
+          xRenderer: screen.xRenderer,
+          form: { schema: answer.declaredHitlFormSchema(card), values: screen.values },
+          declared: { card, rows: answer.describeDeclaredHitlRows(card, screen.values) },
+        };
+      }
       return {
         kind: "hitl_screen",
         runId: payload.runId,

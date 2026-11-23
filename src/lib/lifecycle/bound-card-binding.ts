@@ -849,7 +849,11 @@ export async function issueTurnLentActionGrant(input: {
     // (cinatra#2934, repaired after the picture leg): a setup-loop screen draws
     // ONE control, and a model told the schema's inner keys addressed fields
     // that were not on the screen.
-    const screenRows = describeDrawnRows(binding.resolution.form).join("; ");
+    // A DECLARED CARD (cinatra#3470) names its own fields and decisions, read
+    // from its declaration, never the gate's input schema.
+    const screenRows = (
+      binding.resolution.declared?.rows ?? describeDrawnRows(binding.resolution.form)
+    ).join("; ");
     // TWO ROADS, NAMED APART (cinatra#2934). Filling is the ordinary thing a
     // described change reaches and presses nothing; the press is the separate
     // thing the person has to ask for in so many words.

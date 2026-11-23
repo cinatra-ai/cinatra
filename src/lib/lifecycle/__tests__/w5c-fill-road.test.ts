@@ -101,7 +101,7 @@ import {
   recordBoundScreenFill,
   selectFillableValues,
 } from "../bound-screen-fill";
-import { controlsLentBy } from "../bound-reference-resolver";
+import { controlsLentBy, resolveBoundReference } from "../bound-reference-resolver";
 import { primaryControlFor } from "../bound-card-binding";
 import {
   LENT_ACTION_PRIMITIVE,
@@ -922,5 +922,141 @@ describe("the fill's own sentences are written to the person", () => {
     // talks ABOUT the person; a `message` is read by the person and talks TO
     // them. Flattening the two would break the description's meaning.
     expect(BOUND_SCREEN_FILL_TOOL_DESCRIPTION).toMatch(/in front of the person/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3470: A DECLARED CARD ON THE FILL ROAD AND THE LENT-ACTION ROAD.
+//
+// The real resolver, the real fill and the real submit. The gate's input
+// schema declares none of the card's controls: a declared card offers its OWN
+// fields and decisions, so a fill names them, and the submit sends the card's
+// staged whole answer (with `userResponse`, the JSON the agent reads), never
+// the gate's raw values.
+// ---------------------------------------------------------------------------
+describe("a declared card is filled and sent through its own answer (cinatra#3470)", () => {
+  const DECLARED_ID = "@acme-test/declared-agent:confirm";
+  const FIELD_CARD = {
+    layout: "card" as const,
+    title: "Fixture question",
+    sections: [{ type: "field" as const, key: "answer", label: "Fixture answer" }],
+    carry: ["itemId"],
+  };
+  const CHOICE_CARD = {
+    layout: "card" as const,
+    title: "Fixture choice",
+    decisionLabel: "Fixture decision",
+    decisions: [
+      { label: "Fixture do not send", answer: { approved: false } },
+      { label: "Fixture send", answer: { approved: true } },
+    ],
+    carry: ["itemId"],
+    requires: ["itemId"],
+  };
+  /** The gate's run values: a carried key and a value the card only shows. */
+  const RUN_VALUES = { itemId: "item-1", content: "Fixture words" };
+
+  function resolveDeclared(card: unknown) {
+    return (async (input: { ref: string; actorCtx: ReviewActorContext }) =>
+      resolveBoundReference({
+        ...input,
+        ports: {
+          enforceRunRead: async () => true,
+          readPinnedTargets: async () => ({ status: "none" }) as never,
+          readParkedScreen: async () =>
+            ({
+              runId: RUN,
+              reviewTaskId: SCREEN,
+              xRenderer: DECLARED_ID,
+              inputSchema: { type: "object", properties: { content: { type: "string" } } },
+              values: RUN_VALUES,
+              fieldName: null,
+            }) as never,
+          readDeclaredCard: async (xRenderer: string) => (xRenderer === DECLARED_ID ? card : null) as never,
+        } as never,
+      }));
+  }
+
+  async function fill(card: unknown, values: Record<string, unknown>) {
+    return recordBoundScreenFill({
+      ref: REF,
+      values,
+      actorCtx: ACTOR,
+      messageId: "msg_1",
+      claimGrant: async () => true,
+      deps: { resolve: resolveDeclared(card) as never, surface: "run-page" },
+    });
+  }
+
+  async function submit(card: unknown) {
+    frame.store = {
+      userId: PERSON.userId,
+      orgId: PERSON.orgId,
+      lentActionGrant: mint("submit").grant,
+    };
+    return handleLentAction(
+      { ref: REF, control: "submit" },
+      {
+        resolve: resolveDeclared(card) as never,
+        resolveActor: resolveActor as never,
+        consume: (async () => ({ outcome: "consumed", messageText: "fill it and send it" })) as never,
+      },
+    );
+  }
+
+  function sentValues(): Record<string, unknown> {
+    expect(approveReviewTaskInternal).toHaveBeenCalledTimes(1);
+    return (approveReviewTaskInternal.mock.calls[0] as unknown as unknown[])[2] as Record<string, unknown>;
+  }
+
+  it("the bound screen's controls are the card's own fields, not the gate's input schema", async () => {
+    const bound = await resolveDeclared(FIELD_CARD)({ ref: REF, actorCtx: ACTOR });
+    // red-first-expect: expected { content: { type: 'string' } } to deeply equal { answer: { type: 'string' } }
+    expect((bound as unknown as { form: { schema: { properties: unknown } } }).form.schema.properties).toEqual({
+      answer: { type: "string" },
+    });
+    // The turn that names the screen's rows to the assistant names the
+    // declared answers too, read from the declaration.
+    const choice = await resolveDeclared(CHOICE_CARD)({ ref: REF, actorCtx: ACTOR });
+    expect((choice as unknown as { declared?: { rows: string[] } }).declared?.rows.join("; ")).toContain(
+      '{"approved":false} ("Fixture do not send")',
+    );
+  });
+
+  it("a fill names the card's field, and the submit sends the staged whole answer", async () => {
+    const filled = await fill(FIELD_CARD, { answer: "new" });
+    // red-first-expect: expected { kind: 'no-fields', …(1) } to deeply equal { kind: 'filled', …(2) }
+    expect(filled).toEqual({ kind: "filled", ref: REF, applied: ["answer"] });
+    expect(appended.at(-1)?.fill).toEqual({ ref: REF, values: { answer: "new" } });
+
+    const res = await submit(FIELD_CARD);
+    expect((res.structuredContent as { ok: boolean }).ok).toBe(true);
+    const values = sentValues();
+    expect(values.userResponse).toBe(JSON.stringify({ itemId: "item-1", answer: "new" }));
+    expect(values).toMatchObject({ itemId: "item-1", answer: "new", approved: true });
+    // Never the gate's raw values.
+    expect(Object.hasOwn(values, "content")).toBe(false);
+  });
+
+  it("a fill names a declared answer, and a decline is sent as a decline", async () => {
+    expect(await fill(CHOICE_CARD, { approved: false })).toEqual({
+      kind: "filled",
+      ref: REF,
+      applied: ["approved"],
+    });
+    await submit(CHOICE_CARD);
+    const values = sentValues();
+    expect(values.approved).toBe(false);
+    expect(values.userResponse).toBe(JSON.stringify({ itemId: "item-1", approved: false }));
+    expect(Object.hasOwn(values, "content")).toBe(false);
+  });
+
+  it("a fill that names no declared answer places nothing, and a card with no choice sends nothing", async () => {
+    expect(await fill(CHOICE_CARD, { approved: "maybe" })).toMatchObject({ kind: "unusable-values" });
+    expect(appended).toHaveLength(0);
+    // A fill of nothing the card holds leaves nothing to send.
+    const res = await submit(CHOICE_CARD);
+    expect((res.structuredContent as { ok: boolean }).ok).toBe(false);
+    expect(approveReviewTaskInternal).not.toHaveBeenCalled();
   });
 });

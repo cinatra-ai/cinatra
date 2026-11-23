@@ -49,24 +49,21 @@ import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import type { FieldRendererProps, HitlStageSplit } from "./field-renderer-registry";
+import {
+  declaredHitlChosenDecision,
+  declaredHitlFieldKeys,
+  declaredHitlFieldText,
+  declaredHitlRequiredRunValuesHeld,
+  declaredHitlScreenReady,
+  declaredHitlStage,
+  declaredHitlStagedAnswer,
+  type DeclaredHitlCard,
+  type DeclaredHitlSection,
+} from "./hitl-gate-submit";
 
-type Section =
-  | { type: "note"; text: string }
-  | { type: "fact"; label: string; key: string; qualifierKey?: string }
-  | { type: "words"; key: string; label?: string }
-  | { type: "quote"; key: string }
-  | { type: "field"; key: string; label: string; multiline?: boolean; placeholder?: string };
-
-export type DeclaredHitlCard = {
-  layout: "card";
-  title: string;
-  sections?: Section[];
-  /** The decision's declared label, drawn above its answer rows. */
-  decisionLabel?: string;
-  decisions?: { label: string; answer: Record<string, unknown> }[];
-  carry?: string[];
-  requires?: string[];
-};
+type Section = DeclaredHitlSection;
+export type { DeclaredHitlCard };
+export { declaredHitlScreenReady, declaredHitlStagedAnswer, declaredHitlChosenDecision, declaredHitlFieldText };
 
 /** The run value's OWN text under `key`; anything else reads as blank. */
 function textOf(v: Record<string, unknown>, key: string): string {
@@ -91,95 +88,6 @@ function ReadOnlyValue({ label, text }: { label?: string; text: string }) {
   );
 }
 
-function fieldKeysOf(screen: Pick<DeclaredHitlCard, "sections">): string[] {
-  return (screen.sections ?? []).flatMap((s) => (s.type === "field" ? [s.key] : []));
-}
-
-/**
- * The text a field shows: the staged text once the field is staged, the run
- * value's (a prefill) while it is not.
- */
-export function declaredHitlFieldText(
-  runValue: Record<string, unknown>,
-  staged: Record<string, unknown>,
-  key: string,
-): string {
-  return Object.hasOwn(staged, key) ? textOf(staged, key) : textOf(runValue, key);
-}
-
-/**
- * The chosen row: the index of the decision whose answer is EXACTLY the
- * staged answer's own keys (every staged key except the carried ones and
- * `userResponse`), or null. The run value never chooses for the person.
- */
-export function declaredHitlChosenDecision(
-  screen: Pick<DeclaredHitlCard, "decisions" | "carry">,
-  staged: Record<string, unknown>,
-): number | null {
-  const carried = new Set(screen.carry ?? []);
-  const own = Object.keys(staged).filter((k) => k !== "userResponse" && !carried.has(k));
-  const i = (screen.decisions ?? []).findIndex((d) => {
-    const keys = Object.keys(d.answer);
-    return (
-      keys.length === own.length &&
-      keys.every((k) => Object.hasOwn(staged, k) && Object.is(staged[k], d.answer[k]))
-    );
-  });
-  return i === -1 ? null : i;
-}
-
-/** Every `requires` key that is not a field holds non-blank run-value text. */
-function requiredRunValuesHeld(screen: DeclaredHitlCard, runValue: Record<string, unknown>): boolean {
-  const fieldKeys = new Set(fieldKeysOf(screen));
-  return (screen.requires ?? []).every((k) => fieldKeys.has(k) || textOf(runValue, k).trim() !== "");
-}
-
-/**
- * May the host's Continue send this card's answer yet? It reads what the
- * Continue SENDS (the staged answer), never only what is drawn:
- *
- *   - every `requires` key that is a run value holds non-blank text;
- *   - every field holds non-blank STAGED text: a declared field is a required
- *     value, and a prefill counts once it is staged (the card stages it on
- *     mount);
- *   - a card with decisions has one chosen (`declaredHitlChosenDecision`).
- *     Nothing is chosen for the person, not even by the run value.
- */
-export function declaredHitlScreenReady(
-  screen: DeclaredHitlCard,
-  runValue: Record<string, unknown>,
-  staged: Record<string, unknown>,
-): boolean {
-  if (!requiredRunValuesHeld(screen, runValue)) return false;
-  for (const k of fieldKeysOf(screen)) {
-    if (textOf(staged, k).trim() === "") return false;
-  }
-  if ((screen.decisions ?? []).length === 0) return true;
-  return declaredHitlChosenDecision(screen, staged) !== null;
-}
-
-/**
- * The whole answer a declared card stages (cinatra#3470): the carried run
- * values (own keys only, from the gate's ORIGINAL run values, never from a
- * staged answer), then `answer` (every field's text, or the chosen declared
- * answer), and `userResponse`, the JSON of exactly those keys. The server
- * resumes the agent with `userResponse` and records the parsed JSON, so what
- * the agent reads and what is recorded are this one answer.
- */
-export function declaredHitlStagedAnswer(
-  screen: Pick<DeclaredHitlCard, "carry">,
-  runValue: Record<string, unknown>,
-  answer: Record<string, unknown>,
-): Record<string, unknown> {
-  const whole: Record<string, unknown> = {
-    ...Object.fromEntries(
-      (screen.carry ?? []).filter((k) => Object.hasOwn(runValue, k)).map((k) => [k, runValue[k]]),
-    ),
-    ...answer,
-  };
-  return { ...whole, userResponse: JSON.stringify(whole) };
-}
-
 function asRecord(x: unknown): Record<string, unknown> {
   return x !== null && typeof x === "object" && !Array.isArray(x) ? (x as Record<string, unknown>) : {};
 }
@@ -199,16 +107,16 @@ export function makeDeclaredHitlScreenRenderer(
     const runValue = hitlStage ? asRecord(hitlStage.runValue) : asRecord(value);
     const staged = hitlStage ? asRecord(hitlStage.staged) : asRecord(value);
     const idPrefix = useId();
-    const fieldKeys = fieldKeysOf(screen);
+    const fieldKeys = declaredHitlFieldKeys(screen);
     // A choice waits for the run values it requires. A field is never locked
     // by them: its own key may be required, and the person must type it.
-    const choicesLocked = disabled === true || !requiredRunValuesHeld(screen, runValue);
-    // Every stage is the whole answer (`declaredHitlStagedAnswer`), its
-    // carried keys from the ORIGINAL run values.
-    const stage = (answer: Record<string, unknown>) =>
-      onChange(declaredHitlStagedAnswer(screen, runValue, answer));
-    const fieldsAsShown = () =>
-      Object.fromEntries(fieldKeys.map((k) => [k, declaredHitlFieldText(runValue, staged, k)]));
+    const choicesLocked = disabled === true || !declaredHitlRequiredRunValuesHeld(screen, runValue);
+    // Every stage goes through THE ONE WRITER of a declared card's answer
+    // (`declaredHitlStage`), as the assistant's fill and the server's do: the
+    // whole answer, `userResponse` included, from the run values, what is
+    // staged and this change.
+    const stage = (change: Record<string, unknown>) =>
+      onChange(declaredHitlStage(screen, runValue, staged, change));
     // A PREFILL IS STAGED ONCE, ON MOUNT: with nothing staged yet and a field
     // prefilled by the run value, the answer as shown is staged, so an
     // untouched prefill is what the Continue sends and what makes it ready.
@@ -218,7 +126,7 @@ export function makeDeclaredHitlScreenRenderer(
       Object.keys(staged).length === 0 &&
       fieldKeys.some((k) => textOf(runValue, k) !== "");
     useEffect(() => {
-      if (prefilled) stage(fieldsAsShown());
+      if (prefilled) stage({});
       // Once per mount: a later render reads the staged answer.
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
@@ -238,7 +146,7 @@ export function makeDeclaredHitlScreenRenderer(
           className: DECLARED_INPUT_CLASS,
         };
         // The whole answer: every field as drawn, this one as typed.
-        const write = (text: string) => stage({ ...fieldsAsShown(), [s.key]: text });
+        const write = (text: string) => stage({ [s.key]: text });
         return (
           <div key={i} className="grid gap-[3px]">
             <label htmlFor={id} className={DECLARED_LABEL_CLASS}>

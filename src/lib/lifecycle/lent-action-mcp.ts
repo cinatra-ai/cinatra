@@ -407,6 +407,14 @@ export const LENT_ACTION_NOTHING_PLACED_TO_SEND =
   "Nothing has been placed in that screen to send, so nothing was submitted. " +
   "Say what to put in its fields, or press the screen's own button yourself.";
 
+/**
+ * A declared card asked to send before it is ready (cinatra#3470): no choice
+ * is made yet, or a value it requires is blank. Nothing is pressed.
+ */
+export const LENT_ACTION_DECLARED_CARD_INCOMPLETE =
+  "That screen is not ready to send yet, so nothing was submitted. " +
+  "Make its choice or fill its fields first, or press the screen's own button yourself.";
+
 export const LENT_ACTION_NOTHING_PLACED_TO_SAVE =
   "Nothing has been placed in that form to save, so nothing was changed. " +
   "Describe the change first, or press Save changes on the form yourself.";
@@ -1230,7 +1238,26 @@ export async function handleLentAction(
   const attachments = await readAttachments(bound.runId, claims.messageId).catch(
     () => null,
   );
-  const submitValues = await buildScreenSubmitValues({
+  // A DECLARED CARD (cinatra#3470) sends its STAGED WHOLE ANSWER, never the
+  // gate's raw values: every fill this message placed is replayed through the
+  // card's one writer, over its prefill, and a card that is not ready (no
+  // choice made, a required value blank) sends nothing.
+  const declaredValues = bound.declared
+    ? await buildDeclaredScreenSubmitValues({
+        card: bound.declared.card,
+        runValue: bound.form.values,
+        fills: fills.map((f) => f.values),
+        attachments: attachments ?? [],
+      })
+    : null;
+  if (bound.declared && declaredValues === null) {
+    return say({
+      ok: false,
+      outcome: { kind: "incomplete" },
+      message: LENT_ACTION_DECLARED_CARD_INCOMPLETE,
+    });
+  }
+  const submitValues = declaredValues ?? await buildScreenSubmitValues({
     reviewTaskId: bound.screenRef,
     fieldName: bound.form.fieldName,
     // THE SCREEN'S OWN CURRENT VALUES FIRST, then every fill this message placed
@@ -1323,6 +1350,28 @@ export async function buildScreenSubmitValues(input: {
     pendingAttachments: input.attachments as never,
   });
   return payload;
+}
+
+/**
+ * The resume payload for a DECLARED card submitted by asking (cinatra#3470):
+ * the card's staged whole answer, built by its one writer from its prefill and
+ * every fill this message placed, in order, then sent exactly as the card's
+ * own Continue sends it (`declaredHitlContinuePayload`). `null` while the
+ * card is not ready to send: nothing is pressed.
+ */
+export async function buildDeclaredScreenSubmitValues(input: {
+  readonly card: import("@cinatra-ai/agents/hitl-gate-submit").DeclaredHitlCard;
+  readonly runValue: Record<string, unknown>;
+  readonly fills: ReadonlyArray<Record<string, unknown>>;
+  readonly attachments: readonly Record<string, unknown>[];
+}): Promise<Record<string, unknown> | null> {
+  const answer = await import("@cinatra-ai/agents/hitl-gate-submit");
+  const staged = input.fills.reduce(
+    (current, fill) => answer.declaredHitlStage(input.card, input.runValue, current, fill),
+    answer.declaredHitlStage(input.card, input.runValue, {}, {}),
+  );
+  if (!answer.declaredHitlScreenReady(input.card, input.runValue, staged)) return null;
+  return answer.declaredHitlContinuePayload(staged, input.attachments as never);
 }
 
 /** The floor's three buttons as the one entry names them; `approve` is Continue. */
