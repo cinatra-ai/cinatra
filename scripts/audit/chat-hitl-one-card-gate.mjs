@@ -1187,6 +1187,13 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
           surface: "production",
           why: "the run page's panel mounts the card keyed by the run under its own `run_card` declaration, and stands down inside a conversation host (`runCardOwnsLifecycleCopy`), where the column's card owns the run",
         },
+        {
+          module: "packages/agents/src/orchestrator-stepper-panel.tsx",
+          adapter: "mount",
+          region: "run_panel",
+          surface: "production",
+          why: "the stepper branch of the same host: a publishing FLOW run is served by this panel on the run page, so it mounts the card keyed by the run under its own `run_card` declaration, by the agentic panel's rule, and at an open publish gate the card takes the waiting spinner's place",
+        },
       ],
       page_gate_region: [
         {
@@ -1198,6 +1205,19 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
           why: "the review page composes the card in its gate region, keyed by the run and nothing else; a run with no open publish decision draws nothing there. The cell is composition-only: the retired review address redirects every run the store can read to the run detail (cinatra#3693), where the run panel draws the card on `run_card`, and for a run it cannot read the card answers `none`, so the capture contract records no picture of this host",
         },
       ],
+    },
+    // The two run_card adapters are the run detail's two panels: the branch selector draws exactly one of them for a
+    // given run (a publishing flow run gets the stepper), so the card is drawn once on that host.
+    exclusions: {
+      run_card: {
+        selector: "runDetailPanelKind",
+        module: "packages/agents/src/instance-screens.tsx",
+        proof: {
+          file: "packages/agents/src/__tests__/instance-screens-recommendation-host.test.ts",
+          testName:
+            "answers exactly one panel for every run shape — the two run_card adapters are never both chosen",
+        },
+      },
     },
     instanceRootSelector: '[data-lifecycle-card="publish_decision"]',
     renderedProof: {

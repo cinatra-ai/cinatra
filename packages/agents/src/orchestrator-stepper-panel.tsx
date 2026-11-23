@@ -85,10 +85,16 @@ import {
   LifecycleCardSurfaceProvider,
   defaultRunReviewSlotReader,
   markedReviewGateCard,
+  runCardOwnsLifecycleCopy,
+  useLifecycleCardAuth,
+  useLifecycleCardHost,
   useRunReviewSlot,
   useRunReviewRailRefresh,
   type RunReviewSlot,
 } from "./lifecycle-card-runtime";
+// The publish card (cinatra#4150), mounted by the same rule as the agentic panel: one read decides the card and the
+// stage card's stand-down.
+import { PublishDecisionCard, publishGateIsOpen, usePublishDecisionCardRead } from "./publish-decision-card-view";
 // The review screen's PLACEHOLDER (cinatra#2997) — the same one the agentic
 // panel draws, so a run's terminal card reads the same on both panels.
 // The gate-level BLOCKED state (cinatra#3219) and the review screen's
@@ -3203,6 +3209,41 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     };
   }, [parkedWithNoGate]);
 
+  // A PUBLISH GATE IS NOT A GENERIC APPROVAL, ON THIS PANEL TOO (cinatra#4150). A publishing FLOW run is served by
+  // this panel, and its publish gate parks the run in `pending_approval` with no interrupt and no generic review task
+  // (publish-decision-actions.ts, `holdRunAtPublishGate`), so the ladder below fell through to the waiting spinner and
+  // said "Processing response…" for a decision nobody was shown. The rule is the agentic panel's, read the same way:
+  // ONE read decides both the card and the stand-down, and only a read that POSITIVELY answers `pending` swaps the
+  // card in; a read not landed, failed or answering `none` keeps today's ladder and draws no card.
+  //
+  // THE READ'S CHANGE SIGNAL IS PER GATE, from this panel's own readings: the gate the stream hands it, the
+  // produced-review park, and, at a pause with no gate context (the publish gate's own shape), each answered look of
+  // the row watch, so a run that moves between two pauses with no status change any reading sees is re-read.
+  const ambientLifecycleHost = useLifecycleCardHost();
+  const ambientLifecycleAuth = useLifecycleCardAuth();
+  const panelMountsPublishCard = runCardOwnsLifecycleCopy(ambientLifecycleHost);
+  const publishReadSignal =
+    status !== "pending_approval"
+      ? status
+      : effectiveInterruptContext
+        ? `${status}:gate:${effectiveInterruptContext.reviewTaskId ?? ""}:${effectiveInterruptContext.xRenderer}:${effectiveInterruptContext.fieldName ?? ""}`
+        : parkedOnProducedReview
+          ? `${status}:produced-review`
+          : `${status}:no-gate:${heardFromRun}`;
+  const publishRead = usePublishDecisionCardRead({
+    runId: panelMountsPublishCard ? runId : "",
+    auth: ambientLifecycleAuth,
+    wireRef: publishReadSignal,
+  });
+  const parkedAtPublishGate =
+    status === "pending_approval" && effectiveInterruptContext === null && publishGateIsOpen(publishRead);
+  // Keyed by the run alone under this panel's own `run_card` declaration; it draws nothing with no decision.
+  const publishCard = panelMountsPublishCard ? (
+    <LifecycleCardSurfaceProvider host="run_card">
+      <PublishDecisionCard runId={runId} read={publishRead} />
+    </LifecycleCardSurfaceProvider>
+  ) : null;
+
   let stageCard: ReactNode = null;
 
   if (parkedOnProducedReview && (reviewSlot.ref !== null || reviewStillReading)) {
@@ -3328,6 +3369,10 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
         embedMode={embedMode}
       />
     );
+  } else if (parkedAtPublishGate) {
+    // The publish card IS this pause's one surface (cinatra#4150): never the waiting spinner's "Processing
+    // response…", never the resume reading's "no longer open", never a generic approval card beside it.
+    stageCard = publishCard;
   } else if (settledSetupStepReading !== null) {
     // cinatra#3532 (fix leg 3) — the step this surface was answered on, and
     // which the run is no longer asking. It is drawn BEFORE the two readings
@@ -3461,6 +3506,17 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
           <ReviewGatePlaceholder runRef={shortRunReference(runId)} settled={false} />
         </CardContent>
       </Card>
+    );
+  }
+
+  // A SETTLED publish decision (approved, declined, expired) keeps its reading above whatever the run draws next, as on
+  // the agentic panel; with no decision the card draws nothing, so every other state is unchanged.
+  if (!parkedAtPublishGate && publishCard !== null && publishRead.state !== null && publishRead.state.state !== "none") {
+    stageCard = (
+      <>
+        {publishCard}
+        {stageCard}
+      </>
     );
   }
 
