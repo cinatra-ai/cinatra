@@ -149,6 +149,21 @@ describe("readPublishDecisionIslandSubject", () => {
     expect(await readPublishDecisionIslandSubject(ASK)).toBeNull();
   });
 
+  // cinatra#4738 on main's declared rows: the island reads the rows the decision kept at its park, as the card does;
+  // only a decision with none recorded (null) reads the template's current rows.
+  it("reads the decision's stored rows before the template's current ones", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue({ id: "tmpl-1", publishRows: { publish: [{ label: "Page", input: "pageTitle" }] } });
+    decisions.readLatestDecisionForRun.mockResolvedValue(
+      decision({ declaredRows: [{ kind: "artifacts", label: "Proposed page", input: "reviewTargets" }] }),
+    );
+    expect(await readPublishDecisionIslandSubject(ASK)).toMatchObject({ targets: TARGETS });
+    storeMock.readAgentTemplateById.mockResolvedValue(TEMPLATE);
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ declaredRows: [{ label: "Page", input: "pageTitle" }] }));
+    expect(await readPublishDecisionIslandSubject(ASK)).toBeNull();
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ declaredRows: null }));
+    expect(await readPublishDecisionIslandSubject(ASK)).toMatchObject({ targets: TARGETS });
+  });
+
   it("an empty or over-long id is refused before any read", async () => {
     for (const ask of [{ ...ASK, runId: "" }, { ...ASK, decisionId: "d".repeat(129) }, { ...ASK, input: "" }]) {
       expect(await readPublishDecisionIslandSubject(ask)).toBeNull();

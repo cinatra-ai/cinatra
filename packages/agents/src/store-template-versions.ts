@@ -40,13 +40,7 @@ import type {
   ReadAgentTemplateVersionsOptions,
   AgentTemplateVersionListPage,
 } from "./store";
-import {
-  PUBLISH_ROW_COLUMNS_MAX,
-  PUBLISH_ROWS_MAX,
-  isPublishRowField,
-  isPublishRowLabel,
-  type PublishRowsMap,
-} from "./publish-decision-card";
+import { PUBLISH_ROWS_MAX, isPublishRowDeclaration, type PublishRowsMap } from "./publish-decision-card";
 
 // ---------------------------------------------------------------------------
 // Serialization helpers (private)
@@ -556,23 +550,9 @@ function parsePublishRowsColumn(text: string | null): PublishRowsMap | null {
     throw malformed();
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) throw malformed();
-  const isObject = (o: unknown): o is Record<string, unknown> => !!o && typeof o === "object" && !Array.isArray(o);
-  const keysAre = (o: object, keys: string) => Object.keys(o).sort().join(",") === keys;
   // The shapes the compiler writes (oas-compiler.ts collectPublishRows), under the compiler's own caps: 1 to 4 rows
-  // per node, no input shown twice. A text row keeps the reading it has always had (two string keys). A list row
-  // (cinatra#4150 W4) has no older form, so it meets every compiler rule: its label and each column label, each field,
-  // 1 to 4 columns, no field shown twice.
-  const isColumns = (columns: unknown) =>
-    Array.isArray(columns) && columns.length >= 1 && columns.length <= PUBLISH_ROW_COLUMNS_MAX &&
-    columns.every((c: unknown) => isObject(c) && keysAre(c, "field,label") && isPublishRowLabel(c.label) && isPublishRowField(c.field)) &&
-    new Set(columns.map((c: { field: string }) => c.field)).size === columns.length;
-  // An artifacts row (C1b) has no older form either: exactly kind, label and input, under the label rule.
-  const isRow = (row: unknown) => {
-    if (!isObject(row) || typeof row.input !== "string" || typeof row.label !== "string") return false;
-    if (keysAre(row, "input,label")) return true;
-    if (keysAre(row, "input,kind,label")) return row.kind === "artifacts" && isPublishRowLabel(row.label);
-    return keysAre(row, "columns,input,kind,label") && row.kind === "list" && isPublishRowLabel(row.label) && isColumns(row.columns);
-  };
+  // per node, no input shown twice, each row one of the shapes isPublishRowDeclaration reads (cinatra#4150 W4).
+  const isRow = isPublishRowDeclaration;
   for (const rows of Object.values(value)) {
     if (!Array.isArray(rows) || rows.length < 1 || rows.length > PUBLISH_ROWS_MAX || !rows.every(isRow)) throw malformed();
     if (new Set(rows.map((r: { input: string }) => r.input)).size !== rows.length) throw malformed();

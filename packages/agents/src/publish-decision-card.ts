@@ -77,6 +77,23 @@ export function declaredPublishRowsFor(
   return own(map, nodeId) ? (map[nodeId] ?? []) : [];
 }
 
+/** One stored row in a shape the compiler writes (oas-compiler.ts collectPublishRows): a text row (exactly a string label
+ * and a string input, the reading it has always had), an artifacts row (exactly kind, label and input, under the label
+ * rule) or a list row (exactly kind, label, input and 1 to 4 columns of a label and a field, no field shown twice). The
+ * template column reader and the decision store read rows through this one check. */
+export function isPublishRowDeclaration(row: unknown): row is PublishRowDeclaration {
+  const isObject = (o: unknown): o is Record<string, unknown> => !!o && typeof o === "object" && !Array.isArray(o);
+  const keysAre = (o: object, keys: string) => Object.keys(o).sort().join(",") === keys;
+  const isColumns = (columns: unknown) =>
+    Array.isArray(columns) && columns.length >= 1 && columns.length <= PUBLISH_ROW_COLUMNS_MAX &&
+    columns.every((c: unknown) => isObject(c) && keysAre(c, "field,label") && isPublishRowLabel(c.label) && isPublishRowField(c.field)) &&
+    new Set(columns.map((c: { field: string }) => c.field)).size === columns.length;
+  if (!isObject(row) || typeof row.input !== "string" || typeof row.label !== "string") return false;
+  if (keysAre(row, "input,label")) return true;
+  if (keysAre(row, "input,kind,label")) return row.kind === "artifacts" && isPublishRowLabel(row.label);
+  return keysAre(row, "columns,input,kind,label") && row.kind === "list" && isPublishRowLabel(row.label) && isColumns(row.columns);
+}
+
 /** How a server reader draws an artifacts row from its surfaced value, or null to drop it. */
 export type DrawPublishArtifactsRow = (
   row: PublishArtifactsRowDeclaration,

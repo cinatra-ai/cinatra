@@ -68,10 +68,12 @@ export async function readPublishDecisionIslandSubject(input: {
     if (!decision || decision.id !== input.decisionId || decision.runId !== run.id) return null;
     if (decision.status === "run_ended") return null;
     if (decision.orgId !== null && decision.orgId !== run.orgId) return null;
-    // 3. The declared row: an artifacts row over the named input, on the decision's own node (own keys only).
+    // 3. The declared row: an artifacts row over the named input, on the decision's own node (own keys only). The rows
+    //    the decision kept at its park are the card's rows; only a decision older than that record (declaredRows null)
+    //    reads the template's current rows, as the card does.
     const template = await readAgentTemplateById(run.templateId);
     if (!template) return null;
-    const declared = declaredPublishRowsFor(template.publishRows, decision.nodeId);
+    const declared = decision.declaredRows ?? declaredPublishRowsFor(template.publishRows, decision.nodeId);
     const row = declared.find((r) => publishRowKind(r) === "artifacts" && r.input === input.input);
     if (!row) return null;
     // 4. The frozen targets, read by own key. Normalized as a review gate's set is: 1 to 50, deduped, and one entry that

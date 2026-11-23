@@ -411,6 +411,20 @@ describe("a decision's rows are the ones its template declared at the park (revi
     expect((await read() as { rows: unknown }).rows).toEqual([]);
   });
 
+  // cinatra#4738: the artifacts row a decision kept at its park draws with its island ref, whatever the template now says.
+  it("a stored artifacts row draws with the decision's island ref after the template drops it", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue(RECOMPILED);
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({
+      declaredRows: [{ kind: "artifacts", label: "Proposed page", input: "page" }],
+      surfacedValues: { page: [{ artifactId: "art-1", representationRevisionId: "rev-1" }] },
+    }));
+    const card = await read();
+    if (card.state !== "pending") throw new Error("expected a pending card");
+    const row = card.rows[0] as { kind: string; label: string; ref: string };
+    expect(row).toMatchObject({ kind: "artifacts", label: "Proposed page", islandSrc: null });
+    expect(decodePublishDecisionIslandRef(row.ref)).toEqual({ runId: "run-1", decisionId: "d1", input: "page" });
+  });
+
   it("an older decision with no stored declaration (null) falls back to the template's current rows", async () => {
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ declaredRows: null }));
     expect((await read() as { rows: unknown }).rows).toEqual(STORED_ROWS);

@@ -973,6 +973,31 @@ describe("the decision keeps the rows its template declared at the park (review 
     expect(calls.values).toHaveLength(0);
   });
 
+  // cinatra#4738 on main's declared rows: a list or artifacts row the dispatched plan declares is kept with its kind and
+  // columns, never cut down to a text row (which would draw a list as nothing and an artifacts row as nothing).
+  // red-first-expect: expected [ { label: 'Recipients', input: 'people' }, { label: 'Proposed page', input: 'page' } ]
+  it("keeps a list row's columns and an artifacts row's kind, at the park and through the dispatched plan", async () => {
+    const KINDED = [
+      { label: "Title", input: "title" },
+      { kind: "list", label: "Recipients", input: "people", columns: [{ label: "Name", field: "name" }] },
+      { kind: "artifacts", label: "Proposed page", input: "page" },
+    ];
+    answers.insert = async () => [stored({ declaredRows: JSON.stringify(KINDED) })];
+    const result = await insertParkedDecision({ ...PARK, declaredRows: KINDED as never });
+    expect(calls.values[0]).toMatchObject({ declaredRows: JSON.stringify(KINDED) });
+    expect(result.decision.declaredRows).toEqual(KINDED);
+    answers.select = async () => [{ rows: JSON.stringify({ publish: KINDED }) }];
+    expect(await readDispatchedPublishRows("run-1", "publish")).toEqual(KINDED);
+    // A kind this build cannot read, a list row with no columns and an extra field are refused, never read as text.
+    for (const bad of [
+      [{ kind: "chart", label: "Title", input: "title" }],
+      [{ kind: "list", label: "Recipients", input: "people", columns: [] }],
+      [{ kind: "artifacts", label: "Proposed page", input: "page", targets: [] }],
+    ]) {
+      expect(await codeOf(insertParkedDecision({ ...PARK, declaredRows: bad as never }))).toBe("invalid-input");
+    }
+  });
+
   // red-first-expect: expected a refusal
   it("a stored declaration the module cannot read is a malformed row, never a quiet fallback", async () => {
     for (const text of ["{nope", '{"label":"Title"}', '[{"label":"Title"}]']) {
