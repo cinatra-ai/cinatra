@@ -346,6 +346,20 @@ export function continueHeldByRenderer(
   return entry.continueReady({ runValue: runValue ?? {}, staged }) === false;
 }
 
+/**
+ * The buffer a mid-run host holds after its renderer staged `next`
+ * (cinatra#3470). An entry that declares `stagesWholeAnswer` stages its whole
+ * answer every time, so the buffer becomes exactly that answer; every other
+ * entry, and no entry at all, merges into the buffer as before.
+ */
+export function stageRendererAnswer(
+  entry: { stagesWholeAnswer?: boolean } | null | undefined,
+  buffered: Record<string, unknown>,
+  next: Record<string, unknown>,
+): Record<string, unknown> {
+  return entry?.stagesWholeAnswer === true ? { ...next } : { ...buffered, ...next };
+}
+
 // ---------------------------------------------------------------------------
 // #817 context-selector envelope synthesis
 // ---------------------------------------------------------------------------

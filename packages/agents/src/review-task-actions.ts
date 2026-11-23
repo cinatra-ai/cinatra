@@ -1127,7 +1127,16 @@ export async function approveReviewTaskInternal(
     // Extract structured submission payload: a named single text answer under
     // its field (cinatra#4244), else parsed userResponse JSON, else values minus
     // userResponse, else null. The resume text above is unchanged by this.
-    const submittedValues = readWayflowSubmittedValues(values);
+    //
+    // cinatra#3470: it is read from the answer AS SENT. When a decline rewrote
+    // the `userResponse` above, the recorded values (the captured prompt and
+    // the Continue receipt's digest) read that rewritten text, never the
+    // caller's original, so the record and the agent hold one decision.
+    const answerAsSent: unknown =
+      valuesObj !== null && userResponseRaw !== valuesObj.userResponse
+        ? { ...valuesObj, userResponse: userResponseRaw }
+        : values;
+    const submittedValues = readWayflowSubmittedValues(answerAsSent);
 
     // THE CLAIM IS RELEASED WHEN THE ANSWER NEVER LEAVES (cinatra#3423).
     //

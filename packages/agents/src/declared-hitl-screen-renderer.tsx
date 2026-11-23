@@ -12,6 +12,15 @@
 // decline as a decline. That Continue is held (`declaredHitlScreenReady`)
 // until a declared choice is made and every required value holds text.
 //
+// What a stage holds (`declaredHitlStagedAnswer`): the WHOLE answer, every
+// time. That is the carried run values, then every field's text or the one
+// chosen answer, and `userResponse`, the JSON of exactly that answer. The
+// running agent reads `userResponse` as its resume text, so a field's text or
+// a choice reaches it, not only the approval flag. The entry declares
+// `stagesWholeAnswer`, so every host replaces its buffer with each stage and
+// never merges it into the one before: a choice made after another one sends
+// only its own answer.
+//
 // Drawing (app-lifecycle-cards V.1, design#243): the card draws no frame of
 // its own. The host draws the frame where V.1 asks for one (the chat thread
 // and the site widget), and the run card and the page gate region place the
@@ -97,6 +106,27 @@ export function declaredHitlScreenReady(
   );
 }
 
+/**
+ * The whole answer a declared card stages (cinatra#3470): the carried run
+ * values (own keys only), then `answer` (every field's text, or the chosen
+ * declared answer), and `userResponse`, the JSON of exactly those keys. The
+ * server resumes the agent with `userResponse` and records the parsed JSON,
+ * so what the agent reads and what is recorded are this one answer.
+ */
+export function declaredHitlStagedAnswer(
+  screen: Pick<DeclaredHitlCard, "carry">,
+  runValue: Record<string, unknown>,
+  answer: Record<string, unknown>,
+): Record<string, unknown> {
+  const whole: Record<string, unknown> = {
+    ...Object.fromEntries(
+      (screen.carry ?? []).filter((k) => Object.hasOwn(runValue, k)).map((k) => [k, runValue[k]]),
+    ),
+    ...answer,
+  };
+  return { ...whole, userResponse: JSON.stringify(whole) };
+}
+
 export function makeDeclaredHitlScreenRenderer(
   screen: DeclaredHitlCard,
 ): ComponentType<FieldRendererProps> {
@@ -111,11 +141,10 @@ export function makeDeclaredHitlScreenRenderer(
     // by them: its own key may be required, and the person must type it.
     const ready = (screen.requires ?? []).every((k) => textOf(v, k).trim() !== "");
     const choicesLocked = disabled === true || !ready;
-    // The carried run values ride on every staged answer (own keys only).
-    const carried = (): Record<string, unknown> =>
-      Object.fromEntries(
-        (screen.carry ?? []).filter((k) => Object.hasOwn(v, k)).map((k) => [k, v[k]]),
-      );
+    // Every stage is the whole answer (`declaredHitlStagedAnswer`).
+    const stage = (answer: Record<string, unknown>) =>
+      onChange(declaredHitlStagedAnswer(screen, v, answer));
+    const fieldKeys = (screen.sections ?? []).flatMap((s) => (s.type === "field" ? [s.key] : []));
 
     const section = (s: Section, i: number): ReactNode => {
       if (s.type === "note") {
@@ -130,7 +159,9 @@ export function makeDeclaredHitlScreenRenderer(
           disabled: disabled === true,
           className: DECLARED_INPUT_CLASS,
         };
-        const write = (text: string) => onChange({ ...carried(), [s.key]: text });
+        // The whole answer: every field as drawn, this one as typed.
+        const write = (text: string) =>
+          stage({ ...Object.fromEntries(fieldKeys.map((k) => [k, textOf(v, k)])), [s.key]: text });
         return (
           <div key={i} className="grid gap-[3px]">
             <label htmlFor={id} className={DECLARED_LABEL_CLASS}>
@@ -183,7 +214,7 @@ export function makeDeclaredHitlScreenRenderer(
               const d = decisions[i];
               if (!Number.isInteger(i) || d === undefined) return;
               setPicked(i);
-              onChange({ ...carried(), ...d.answer });
+              stage({ ...d.answer });
             }}
           >
             {decisions.map((d, i) => {

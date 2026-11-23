@@ -15,7 +15,14 @@
  *     with `approved: false`, and an untouched gate still continues as an
  *     approval;
  *   - end to end: a declared card's "decline" choice reaches the server action
- *     as `approved: false` with its carried keys.
+ *     as `approved: false` with its carried keys;
+ *   - ON THE REAL WIRE: what the card's own Continue sends goes through the
+ *     real `approveReviewTaskInternal` (only the A2A client, the stores and
+ *     the database are stubbed), on the chat thread and through the site
+ *     widget's broker body. A typed field answer, a decline with its keys and
+ *     a choice made after another one reach the running agent as exactly the
+ *     staged answer, and the captured prompt and the answered-gate binding
+ *     record the same answer.
  *
  * Harness mirrors agent-hitl-screen-card-boolean-4310.test.tsx.
  *
@@ -46,6 +53,73 @@ vi.mock("../hitl-actions", () => ({
   rejectReviewTask: vi.fn(async () => undefined),
 }));
 
+// --- The real server road (cinatra#3470): only what lies past it is stubbed.
+type SendTaskInput = { message?: { parts?: Array<{ kind?: string; text?: string }> } };
+const sendTaskMock = vi.fn(async (_input: SendTaskInput) => ({
+  id: "task-resume",
+  status: { state: "completed" },
+  contextId: "ctx-3470",
+}));
+const answeredMock = vi.fn(async (..._args: unknown[]) => {});
+vi.mock("../publish-decision-store", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readLatestDecisionForRun: async () => null,
+}));
+vi.mock("../run-pause-claim", async (orig) => ({
+  ...(await orig<typeof import("../run-pause-claim")>()),
+  ...(await import("./pause-claim-test-fake")).pauseClaimFake,
+}));
+vi.mock("../agent-run-serde", async (orig) => ({
+  ...(await orig<typeof import("../agent-run-serde")>()),
+  assertAgentRunScopeAuthorized: vi.fn(async () => undefined),
+  assertAgentRunDispatchAuthorized: vi.fn(async () => undefined),
+}));
+vi.mock("server-only", () => ({}));
+vi.mock("../db", () => ({
+  db: { update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => {}) })) })) },
+  agentBuilderPool: { on: () => {}, listenerCount: () => 1 },
+}));
+vi.mock("@/lib/background-jobs", () => ({
+  enqueueBackgroundJob: vi.fn(),
+  BACKGROUND_JOB_NAMES: { AGENT_BUILDER_EXECUTION: "agent-builder-execution" },
+}));
+const storeMock = vi.hoisted(() => ({
+  readAgentRunById: vi.fn(),
+  readAgentRunByTaskId: vi.fn(),
+  setAgentRunTokenHash: vi.fn(async () => {}),
+  readAgentTemplateById: vi.fn(),
+  writeHitlPrompt: vi.fn(async (_input: { submittedValues?: unknown }) => undefined),
+  transitionRunStatus: vi.fn(async () => undefined),
+}));
+vi.mock("../store", () => storeMock);
+vi.mock("../agent-run-hitl-prompts", () => ({
+  captureHitlPromptForContinue: async (input: never) => {
+    await storeMock.writeHitlPrompt(input);
+    return "captured-prompt";
+  },
+  recordSuccessfulContinue: async () => {},
+  continueBindingDigest: () => "",
+  continueGateDigest: () => "",
+}));
+vi.mock("../wayflow-url", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  resolveWayflowUrl: vi.fn(() => "http://wayflow.test"),
+  WAYFLOW_UNDICI_TIMEOUT_MS: 60_000,
+  WAYFLOW_A2A_TIMEOUT_MS: 60_000,
+  createWayflowFetch: () => globalThis.fetch,
+}));
+vi.mock("@cinatra-ai/a2a", () => ({
+  createExternalA2AClient: vi.fn(async () => ({ sendTask: sendTaskMock })),
+  rememberLatestWayflowGateTask: vi.fn(async () => {}),
+  rememberAnsweredGateSubmission: (...args: unknown[]) => answeredMock(...args),
+}));
+vi.mock("../execution", () => ({ handleWayflowTaskState: vi.fn(async () => undefined) }));
+vi.mock("@/lib/auth-session", async (orig) => ({
+  ...(await orig<typeof import("@/lib/auth-session")>()),
+  resolveOrgRoleForUser: vi.fn(async () => "member"),
+}));
+
+import { approveReviewTaskInternal } from "../review-task-actions";
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 import { fieldRendererRegistry, type FieldRendererProps } from "../field-renderer-registry";
 import {
@@ -57,7 +131,7 @@ import { continueApprovalFlag, continueHeldByRenderer } from "../hitl-gate-submi
 import { Button } from "@/components/ui/button";
 
 const RUN_ID = "run-3470";
-const TASK_ID = "task-3470";
+const TASK_ID = "wayflow-task-3470";
 const PROBE_ID = "@acme-test/probe-agent:confirm";
 const DECLARED_ID = "@acme-test/publish-agent:confirm";
 
@@ -314,5 +388,154 @@ describe("a declared card on the site widget (cinatra#3470)", () => {
     expect(go).not.toBeNull();
     expect(go!.disabled).toBe(false);
     expect(go!.getAttribute("title")).toBeNull();
+  });
+});
+
+describe("a declared card's answer on the real wire (cinatra#3470)", () => {
+  /** The cookie door forwards into the real server road, as the action does. */
+  function throughTheServer() {
+    storeMock.readAgentRunByTaskId.mockResolvedValue({
+      id: "run-wire-3470",
+      templateId: "tpl-3470",
+      status: "pending_approval",
+      a2aContextId: "ctx-3470",
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tpl-3470",
+      packageName: "@acme-test/publish-agent",
+      sourceType: "internal",
+    });
+    approveMock.mockImplementation(async (taskId: string, values?: unknown) => {
+      await approveReviewTaskInternal(taskId, "actor-3470", values);
+      return { ok: true as const };
+    });
+  }
+
+  /** The one text part the running agent receives. */
+  function wireText(): string {
+    expect(sendTaskMock).toHaveBeenCalledTimes(1);
+    const parts = (sendTaskMock.mock.calls[0]?.[0] as SendTaskInput)?.message?.parts;
+    expect(parts).toHaveLength(1);
+    return parts?.[0]?.text ?? "";
+  }
+
+  /** What the captured prompt recorded as the submitted values. */
+  function recorded(): unknown {
+    return (storeMock.writeHitlPrompt.mock.calls[0]?.[0] as { submittedValues?: unknown })?.submittedValues;
+  }
+
+  function registerCard(screen: Record<string, unknown>, currentValues: Record<string, unknown>) {
+    registerFieldRendererBindings([
+      { id: DECLARED_ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen },
+    ]);
+    current = asking(DECLARED_ID, currentValues);
+  }
+
+  const FIELD_CARD = {
+    layout: "card",
+    title: "Fixture question",
+    sections: [
+      { type: "field", key: "answer", label: "Fixture answer label" },
+      { type: "field", key: "detail", label: "Fixture detail label", multiline: true },
+    ],
+    carry: ["itemId"],
+  };
+
+  const CHOICE_CARD = {
+    layout: "card",
+    title: "Fixture choice",
+    decisionLabel: "Fixture decision",
+    decisions: [
+      { label: "Fixture decline", answer: { approved: false, reason: "Fixture reason" } },
+      { label: "Fixture revise", answer: { action: "revise" } },
+    ],
+    carry: ["itemId"],
+  };
+
+  beforeEach(() => {
+    sendTaskMock.mockClear();
+    answeredMock.mockClear();
+    storeMock.writeHitlPrompt.mockClear();
+    throughTheServer();
+  });
+
+  it("a typed field answer reaches the agent as the answer, and is recorded as sent", async () => {
+    registerCard(FIELD_CARD, { itemId: "item-1" });
+    const { container } = mount();
+    await settle();
+    await waitFor(() => expect(container.querySelector("input")).not.toBeNull());
+    fireEvent.change(container.querySelector("input")!, { target: { value: "revise this" } });
+    await settle();
+    fireEvent.change(container.querySelector("textarea")!, { target: { value: "Fixture detail" } });
+    await settle();
+    await pressContinue(container);
+    await waitFor(() => expect(sendTaskMock).toHaveBeenCalledTimes(1));
+    const sent = JSON.stringify({ itemId: "item-1", answer: "revise this", detail: "Fixture detail" });
+    expect(wireText()).toBe(sent);
+    expect(recorded()).toEqual({ itemId: "item-1", answer: "revise this", detail: "Fixture detail" });
+    expect(answeredMock).toHaveBeenCalledWith("run-wire-3470", "task-3470", sent);
+  });
+
+  it("a declared decline reaches the agent with its own keys, and is recorded as the same decline", async () => {
+    registerCard(CHOICE_CARD, { itemId: "item-1" });
+    const { container } = mount();
+    await settle();
+    await waitFor(() => expect(answer(container, /Fixture decline/)).toBeDefined());
+    fireEvent.click(answer(container, /Fixture decline/)!);
+    await settle();
+    const payload = await pressContinue(container);
+    expect(payload.approved).toBe(false);
+    await waitFor(() => expect(sendTaskMock).toHaveBeenCalledTimes(1));
+    const sent = JSON.stringify({ itemId: "item-1", approved: false, reason: "Fixture reason" });
+    expect(wireText()).toBe(sent);
+    expect(recorded()).toEqual({ itemId: "item-1", approved: false, reason: "Fixture reason" });
+    expect(answeredMock).toHaveBeenCalledWith("run-wire-3470", "task-3470", sent);
+  });
+
+  it("a choice made after another one sends only its own answer, never the earlier one's keys", async () => {
+    registerCard(CHOICE_CARD, { itemId: "item-1" });
+    const { container } = mount();
+    await settle();
+    await waitFor(() => expect(answer(container, /Fixture decline/)).toBeDefined());
+    fireEvent.click(answer(container, /Fixture decline/)!);
+    await settle();
+    fireEvent.click(answer(container, /Fixture revise/)!);
+    await settle();
+    const payload = await pressContinue(container);
+    expect(payload.approved).toBe(true);
+    expect(Object.hasOwn(payload, "reason")).toBe(false);
+    await waitFor(() => expect(sendTaskMock).toHaveBeenCalledTimes(1));
+    expect(wireText()).toBe(JSON.stringify({ itemId: "item-1", action: "revise" }));
+    expect(recorded()).toEqual({ itemId: "item-1", action: "revise" });
+  });
+
+  it("the site widget's broker body carries the same answer to the same server road", async () => {
+    registerCard(FIELD_CARD, { itemId: "item-1" });
+    const bodies: Array<Record<string, unknown>> = [];
+    const readFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: unknown, init?: { body?: unknown }) => {
+      if (String(url).endsWith("/submit")) {
+        bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return new Response(JSON.stringify({ outcome: { ok: true } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return readFetch(url as string);
+    }) as unknown as typeof fetch;
+    const { container } = mountOnSiteWidget();
+    await settle();
+    await waitFor(() => expect(container.querySelector("input")).not.toBeNull());
+    fireEvent.change(container.querySelector("input")!, { target: { value: "revise this" } });
+    await settle();
+    fireEvent.change(container.querySelector("textarea")!, { target: { value: "Fixture detail" } });
+    await settle();
+    await waitFor(() => expect(button(container, /^Continue/)?.disabled).toBe(false));
+    fireEvent.click(button(container, /^Continue/)!);
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(approveMock).not.toHaveBeenCalled();
+    // The submit route hands `values` to the same core (agent-hitl-screen-submit.ts).
+    await approveReviewTaskInternal(String(bodies[0]!.reviewTaskId), "actor-3470", bodies[0]!.values);
+    expect(wireText()).toBe(JSON.stringify({ itemId: "item-1", answer: "revise this", detail: "Fixture detail" }));
   });
 });

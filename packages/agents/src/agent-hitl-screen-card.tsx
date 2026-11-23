@@ -149,6 +149,7 @@ import {
   isGroupedSetupRenderer,
   continueApprovalFlag,
   continueHeldByRenderer,
+  stageRendererAnswer,
   isSetupGateTaskId,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
@@ -864,7 +865,9 @@ export function AgentHitlScreenFields({
                   // the reader only ever sees one Continue.
                   let nextBuffered = buffered;
                   if (next && typeof next === "object" && !Array.isArray(next)) {
-                    nextBuffered = { ...buffered, ...(next as Record<string, unknown>) };
+                    // A renderer that stages its whole answer replaces the
+                    // buffer (cinatra#3470); every other one merges into it.
+                    nextBuffered = stageRendererAnswer(entry, buffered, next as Record<string, unknown>);
                     onBuffer(nextBuffered);
                   }
                   if (isGroupedSetup) await onSubmitBuffer(nextBuffered);

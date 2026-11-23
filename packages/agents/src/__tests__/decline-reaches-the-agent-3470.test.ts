@@ -212,7 +212,35 @@ describe("a decline reaches the running agent as a decline (cinatra#3470)", () =
       userResponse: JSON.stringify({ itemId: "item-1", approved: true }),
       approved: false,
     });
-    expect(JSON.parse(wireText())).toEqual({ itemId: "item-1", approved: false });
+    const text = wireText();
+    expect(JSON.parse(text)).toEqual({ itemId: "item-1", approved: false });
+    // The record holds the decision the agent received, not the caller's
+    // original `approved: true` (the captured prompt, the receipt's digest
+    // input and the answered-gate binding read one answer).
+    const prompt = storeMock.writeHitlPrompt.mock.calls[0]?.[0] as { submittedValues?: unknown };
+    expect(prompt?.submittedValues).toEqual({ itemId: "item-1", approved: false });
+    expect(answeredMock).toHaveBeenCalledWith("run-r1", expect.any(String), text);
+  });
+
+  it("a decline of a named single text answer is recorded as the decline the agent received", async () => {
+    await approveReviewTaskInternal("wayflow-task-r1", "actor-1", {
+      idea: "Fixture idea",
+      userResponse: "Fixture idea",
+      userResponseFieldName: "idea",
+      approved: false,
+    });
+    const sent = JSON.parse(wireText()) as Record<string, unknown>;
+    expect(sent.approved).toBe(false);
+    const prompt = storeMock.writeHitlPrompt.mock.calls[0]?.[0] as { submittedValues?: unknown };
+    expect(prompt?.submittedValues).toEqual(sent);
+  });
+
+  it("an approval with a JSON userResponse is recorded from that same text, unchanged", async () => {
+    const structured = JSON.stringify({ itemId: "item-1", action: "revise" });
+    await approveReviewTaskInternal("wayflow-task-r1", "actor-1", { userResponse: structured, approved: true });
+    expect(wireText()).toBe(structured);
+    const prompt = storeMock.writeHitlPrompt.mock.calls[0]?.[0] as { submittedValues?: unknown };
+    expect(prompt?.submittedValues).toEqual({ itemId: "item-1", action: "revise" });
   });
 
   it("an attachment envelope keeps its attachments and its text says approved: false", async () => {

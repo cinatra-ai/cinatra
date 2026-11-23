@@ -458,3 +458,73 @@ describe("OrchestratorStepperPanel — a mid-run Continue waits for the renderer
     expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
   });
 });
+
+// cinatra#3470: a declared card in the stepper. Its stages replace the
+// buffer, and the Continue sends exactly the staged answer with its JSON as
+// the resume text (the server road for that payload is pinned on the real
+// wire in continue-sends-decline-3470.test.tsx).
+describe("OrchestratorStepperPanel — a declared card's Continue sends exactly the staged answer (cinatra#3470)", () => {
+  const DECLARED_ID = "@cinatra-test/declared-agent:confirm";
+
+  async function mountDeclared(screen: Record<string, unknown>) {
+    const { registerFieldRendererBindings } = await import("../register-default-renderers");
+    registerFieldRendererBindings([
+      { id: DECLARED_ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen },
+    ]);
+    INTERRUPT = {
+      schema: { type: "object" },
+      xRenderer: DECLARED_ID,
+      values: { itemId: "item-1" },
+      reviewTaskId: REVIEW_TASK_ID,
+    };
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    return render(<OrchestratorStepperPanel {...baseProps()} />);
+  }
+
+  function radio(name: RegExp): HTMLElement {
+    const row = Array.from(document.querySelectorAll("label")).find((l) => name.test(l.textContent ?? ""));
+    return row!.querySelector<HTMLElement>('[role="radio"]')!;
+  }
+
+  async function sent(): Promise<Record<string, unknown>> {
+    await waitFor(() => expect(outerContinue()!.disabled).toBe(false));
+    fireEvent.click(outerContinue()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    return (hitlActions.approveReviewTask.mock.calls[0] as unknown as [string, Record<string, unknown>])[1];
+  }
+
+  it("a choice made after another one sends only its own answer", async () => {
+    await mountDeclared({
+      layout: "card",
+      title: "Fixture choice",
+      decisionLabel: "Fixture decision",
+      decisions: [
+        { label: "Fixture decline", answer: { approved: false, reason: "Fixture reason" } },
+        { label: "Fixture revise", answer: { action: "revise" } },
+      ],
+      carry: ["itemId"],
+    });
+    await waitFor(() => expect(document.querySelectorAll('[role="radio"]')).toHaveLength(2));
+    fireEvent.click(radio(/Fixture decline/));
+    await act(async () => {});
+    fireEvent.click(radio(/Fixture revise/));
+    const payload = await sent();
+    expect(Object.hasOwn(payload, "reason")).toBe(false);
+    expect(payload.approved).toBe(true);
+    expect(payload.userResponse).toBe(JSON.stringify({ itemId: "item-1", action: "revise" }));
+  });
+
+  it("a typed field answer is sent as the resume text", async () => {
+    await mountDeclared({
+      layout: "card",
+      title: "Fixture question",
+      sections: [{ type: "field", key: "answer", label: "Fixture answer" }],
+      carry: ["itemId"],
+    });
+    await waitFor(() => expect(document.querySelector("input")).not.toBeNull());
+    fireEvent.change(document.querySelector("input")!, { target: { value: "revise this" } });
+    const payload = await sent();
+    expect(payload.userResponse).toBe(JSON.stringify({ itemId: "item-1", answer: "revise this" }));
+    expect(payload.answer).toBe("revise this");
+  });
+});

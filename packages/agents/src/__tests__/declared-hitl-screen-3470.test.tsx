@@ -20,11 +20,16 @@
  *     an unknown or inherited kind name, or a kind whose host entry is only
  *     the schema floor registers NOTHING, and the package component is never
  *     the fallback;
- *   - a binding without `screen` keeps its existing road.
+ *   - a binding without `screen` keeps its existing road;
+ *   - each stage is the WHOLE answer with its JSON as `userResponse`, and the
+ *     entry tells every host to replace its buffer with it;
+ *   - a conversation host registers a declared binding with its params, so a
+ *     "kind" list picker keeps its declared question there too.
  *
  *   pnpm --filter @cinatra-ai/agents exec vitest run \
  *     src/__tests__/declared-hitl-screen-3470.test.tsx
  */
+import { useState } from "react";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,6 +47,9 @@ vi.mock("../agent-hitl-screen-actions", () => ({
 vi.mock("../server-actions", () => ({
   getFieldRendererContextForAgentBuilderAction: async () => ({ connectedApps: [], gmailAliases: [] }),
   getRuntimeFieldRendererBindingsAction: async () => [],
+}));
+vi.mock("../list-picker-actions", () => ({
+  fetchAvailableLists: vi.fn(async () => []),
 }));
 vi.mock("../hitl-actions", () => ({
   approveReviewTask: vi.fn(async () => ({ ok: true as const })),
@@ -99,6 +107,11 @@ const VALUE = {
   excerpt: "A fixture excerpt.",
   unrelated: "not carried",
 };
+
+/** What a declared card stages: the whole answer and its JSON as the resume text. */
+function staged(answer: Record<string, unknown>): Record<string, unknown> {
+  return { ...answer, userResponse: JSON.stringify(answer) };
+}
 
 function entryOf(id = ID): FieldRendererEntry | undefined {
   return fieldRendererRegistry.list().find((e) => e.id === id);
@@ -278,7 +291,7 @@ describe("a declared card is drawn by the host (cinatra#3470)", () => {
     const onChange = mount(VALUE);
     fireEvent.click(dom.getByRole("radio", { name: "Do not send" }));
     expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange).toHaveBeenLastCalledWith({ itemId: "item-1", revisionId: "rev-1", approved: false });
+    expect(onChange).toHaveBeenLastCalledWith(staged({ itemId: "item-1", revisionId: "rev-1", approved: false }));
     const decline = dom.getByRole("radio", { name: "Do not send" });
     expect(decline.getAttribute("aria-checked")).toBe("true");
     // The chosen row is marked as chosen; the other row is not.
@@ -286,7 +299,7 @@ describe("a declared card is drawn by the host (cinatra#3470)", () => {
     expect(dom.getByRole("radio", { name: "Send it" }).closest("label")!.className).not.toMatch(/\bborder-primary\b/);
     fireEvent.click(dom.getByRole("radio", { name: "Send it" }));
     expect(onChange).toHaveBeenCalledTimes(2);
-    expect(onChange).toHaveBeenLastCalledWith({ itemId: "item-1", revisionId: "rev-1", approved: true });
+    expect(onChange).toHaveBeenLastCalledWith(staged({ itemId: "item-1", revisionId: "rev-1", approved: true }));
     expect(dom.getByRole("radio", { name: "Send it" }).getAttribute("aria-checked")).toBe("true");
     expect(dom.getByRole("radio", { name: "Do not send" }).getAttribute("aria-checked")).toBe("false");
   });
@@ -318,7 +331,7 @@ describe("a declared card is drawn by the host (cinatra#3470)", () => {
     ]);
     const onChange = mount(value);
     fireEvent.click(dom.getByRole("radio", { name: "Send it" }));
-    expect(onChange).toHaveBeenLastCalledWith({ itemId: "item-1", approved: true });
+    expect(onChange).toHaveBeenLastCalledWith(staged({ itemId: "item-1", approved: true }));
   });
 });
 
@@ -346,8 +359,56 @@ describe("a declared text field (app-lifecycle-cards V.1)", () => {
     expectDeclaredLabel(dom.getByText("Fixture label"));
     expectDeclaredInput(box);
     fireEvent.change(box, { target: { value: "typed" } });
-    expect(onChange).toHaveBeenLastCalledWith({ itemId: "item-1", answer: "typed" });
+    expect(onChange).toHaveBeenLastCalledWith(staged({ itemId: "item-1", answer: "typed" }));
     expect(dom.queryByRole("button")).toBeNull();
+  });
+
+  it("each stage is the whole answer: a second field keeps the first one's text", () => {
+    registerFieldRendererBindings([
+      {
+        id: ID,
+        kind: "linkedin-draft-review",
+        priority: 90,
+        midRunHitl: true,
+        screen: {
+          layout: "card",
+          title: "Fixture question",
+          sections: [
+            { type: "field", key: "answer", label: "Fixture answer" },
+            { type: "field", key: "detail", label: "Fixture detail" },
+          ],
+          carry: ["itemId"],
+        },
+      },
+    ]);
+    const entry = entryOf()!;
+    // The entry tells the host to replace its buffer with each stage.
+    expect(entry.stagesWholeAnswer).toBe(true);
+    const Renderer = entry.renderer;
+    const stages: unknown[] = [];
+    // A host as the run page, the stepper and the card are: the run value
+    // under the buffer, and the buffer replaced by each stage.
+    function Host() {
+      const [buffer, setBuffer] = useState<Record<string, unknown>>({});
+      return (
+        <Renderer
+          {...({
+            fieldName: "field",
+            schema: { "x-renderer": ID },
+            value: { itemId: "item-1", ...buffer },
+            onChange: (next: unknown) => {
+              stages.push(next);
+              setBuffer(next as Record<string, unknown>);
+            },
+            context: { connectedApps: [] },
+          } as FieldRendererProps)}
+        />
+      );
+    }
+    render(<Host />);
+    fireEvent.change(dom.getByLabelText("Fixture answer"), { target: { value: "revise this" } });
+    fireEvent.change(dom.getByLabelText("Fixture detail"), { target: { value: "Fixture detail" } });
+    expect(stages.at(-1)).toEqual(staged({ itemId: "item-1", answer: "revise this", detail: "Fixture detail" }));
   });
 });
 
@@ -391,7 +452,7 @@ describe("a declared card holds the host's Continue (cinatra#3470)", () => {
     const box = dom.getByLabelText("Fixture label") as HTMLInputElement;
     expect(box.disabled).toBe(false);
     fireEvent.change(box, { target: { value: "typed" } });
-    expect(onChange).toHaveBeenLastCalledWith({ itemId: "item-1", answer: "typed" });
+    expect(onChange).toHaveBeenLastCalledWith(staged({ itemId: "item-1", answer: "typed" }));
   });
 
   it("treats every declared field as a required value", () => {
@@ -410,6 +471,17 @@ describe("a declared card holds the host's Continue (cinatra#3470)", () => {
     expect(entryOf()?.continueReady).toBeUndefined();
     registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90 }]);
     expect(entryOf()?.continueReady).toBeUndefined();
+  });
+
+  it("only a 'card' stages its whole answer; a 'kind' and a plain binding stage as their kind does", () => {
+    registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90, screen: CARD }]);
+    expect(entryOf()?.stagesWholeAnswer).toBe(true);
+    registerFieldRendererBindings([
+      { id: ID, kind: "cta", priority: 80, midRunHitl: true, screen: { layout: "kind" } },
+    ]);
+    expect(entryOf()?.stagesWholeAnswer).toBeUndefined();
+    registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90 }]);
+    expect(entryOf()?.stagesWholeAnswer).toBeUndefined();
   });
 });
 
@@ -553,5 +625,56 @@ describe("the conversation hosts draw the declared card (cinatra#3470, V.1)", ()
     expect(kept?.state === "asking" && kept.declaredScreen).toEqual(DECLARED);
     const other = parseAgentHitlScreenState({ ...ASKING, declaredScreen: { ...DECLARED, id: "@acme-test/other:confirm" } });
     expect(other?.state === "asking" && other.declaredScreen).toBeUndefined();
+  });
+
+  it("the read keeps the binding's params, and refuses params that are not an object", () => {
+    const withParams = { ...DECLARED, params: { question: "Fixture question?" } };
+    const kept = parseAgentHitlScreenState({ ...ASKING, declaredScreen: withParams });
+    expect(kept?.state === "asking" && kept.declaredScreen).toEqual(withParams);
+    for (const params of [null, "x", ["x"]]) {
+      const refused = parseAgentHitlScreenState({ ...ASKING, declaredScreen: { ...DECLARED, params } });
+      expect(refused?.state === "asking" && refused.declaredScreen).toBeUndefined();
+    }
+  });
+
+  it("a 'kind' list picker registered from the transport answer keeps its declared question", async () => {
+    // The site widget reads the gate over the transport (fetch, then the
+    // client parse), and its registration replaces any earlier entry of the
+    // binding. The params must survive that road to reach the component.
+    const LIST_ID = "@acme-test/list-agent:pick-list";
+    const listAsking = {
+      ...ASKING,
+      gate: { ...ASKING.gate, xRenderer: LIST_ID, currentValues: {} },
+      declaredScreen: {
+        id: LIST_ID,
+        kind: "list-picker",
+        priority: 80,
+        midRunHitl: true,
+        params: { question: "Fixture declared question?" },
+        screen: { layout: "kind" },
+      },
+    };
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify(listAsking), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })) as unknown as typeof fetch;
+    mountOn("site_widget");
+    await waitFor(() => expect(entryOf(LIST_ID)).toBeDefined());
+    cleanup();
+    const Picker = entryOf(LIST_ID)!.renderer;
+    render(
+      <Picker
+        {...({
+          fieldName: "field",
+          schema: { "x-renderer": LIST_ID },
+          value: {},
+          onChange: vi.fn(),
+          context: { connectedApps: [] },
+          mode: "edit",
+        } as FieldRendererProps)}
+      />,
+    );
+    expect(dom.queryByTestId("list-picker-gate-question")?.textContent).toBe("Fixture declared question?");
   });
 });

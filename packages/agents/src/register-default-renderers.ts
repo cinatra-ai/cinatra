@@ -331,6 +331,9 @@ function registerDeclaredScreen(b: FieldRendererBindingInput): void {
     // The card draws no send: the host's one Continue sends its answer.
     drawsOwnSubmit: isKind && kindEntry.drawsOwnSubmit === true,
     ...(continueReady !== undefined ? { continueReady } : {}),
+    // A card stages its whole answer each time: the host replaces its buffer
+    // with it, so a later choice never carries an earlier one's keys.
+    ...(isKind ? {} : { stagesWholeAnswer: true }),
     midRunHitl: b.midRunHitl === true,
   });
 }

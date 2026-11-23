@@ -20,6 +20,9 @@
 //     rows (app-lifecycle-cards V.1); required with decisions, refused
 //     without them.
 //     carry: run-value keys copied into every staged answer.
+//     A field key, an answer key and a carry key is never one the host
+//     writes into the staged answer itself (RESERVED_ANSWER_KEYS): the
+//     card stages `userResponse` as the JSON of its whole answer.
 //     requires: keys that must hold non-blank text before the host's
 //     Continue can send; a choice also waits for them. Every field is a
 //     required value, and a card with decisions holds the Continue until
@@ -35,6 +38,16 @@ const MAX_TEXT = 600;
 const MAX_LIST = 8;
 const MAX_SECTIONS = 16;
 const MAX_DECISIONS = 3;
+
+// The keys the host writes into a staged answer itself: the resume text, the
+// name of a single text answer and the time of the Continue.
+export const RESERVED_ANSWER_KEYS = ["userResponse", "userResponseFieldName", "approvedAt"];
+
+function checkNotReserved(where, key, errors) {
+  if (RESERVED_ANSWER_KEYS.includes(key)) {
+    errors.push(`${where}: ${JSON.stringify(key)} is written by the host and cannot be declared`);
+  }
+}
 
 // Per section type: prop -> [type, required].
 const SECTION_SHAPES = {
@@ -189,6 +202,7 @@ function checkAnswer(where, answer, errors) {
         (typeof v === "number" && Number.isFinite(v)) ||
         (typeof v === "string" && v.length <= MAX_TEXT));
     if (!ok) errors.push(`${where}: key ${JSON.stringify(k)} must be a key with text, a number or a boolean`);
+    checkNotReserved(where, k, errors);
   }
 }
 
@@ -242,6 +256,7 @@ export function validateHitlScreen(raw, where = "screen") {
         }
         const { type: _type, ...props } = s;
         checkObject(at, props, SECTION_SHAPES[s.type], errors);
+        if (s.type === "field") checkNotReserved(at, s.key, errors);
       });
     }
     if (decisions !== undefined) {
@@ -260,7 +275,10 @@ export function validateHitlScreen(raw, where = "screen") {
         errors.push(`${where}: a card offers decisions or fields, never both`);
       }
     }
-    if (carry !== undefined) checkKeyList(`${where}.carry`, carry, errors);
+    if (carry !== undefined) {
+      checkKeyList(`${where}.carry`, carry, errors);
+      if (Array.isArray(carry)) carry.forEach((k) => checkNotReserved(`${where}.carry`, k, errors));
+    }
     if (requires !== undefined) checkKeyList(`${where}.requires`, requires, errors);
   } else {
     errors.push(`${where}: unknown layout ${JSON.stringify(screen.layout)}`);

@@ -118,6 +118,16 @@ export type FieldRendererEntry = {
     runValue: Record<string, unknown>;
     staged: Record<string, unknown>;
   }) => boolean;
+  /**
+   * EACH onChange IS THE WHOLE STAGED ANSWER (cinatra#3470).
+   *
+   * A mid-run host REPLACES its buffer with what this renderer stages instead
+   * of merging it into the buffer before (`stageRendererAnswer`). ABSENT MEANS
+   * MERGE, as every other renderer stages. A declared HITL card sets it: its
+   * answers may have different keys, and a merge would send a choice together
+   * with the keys of a choice made before it.
+   */
+  stagesWholeAnswer?: boolean;
   /** cinatra#3035: this kind's component commits a pick as `userResponse`, and a gate drawn by it holds the card's Continue until a pick is made. */
   holdsContinueUntilPicked?: boolean;
 };

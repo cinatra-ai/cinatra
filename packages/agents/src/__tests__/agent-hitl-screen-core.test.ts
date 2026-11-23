@@ -179,6 +179,27 @@ describe("the declared screen of the gate's renderer (cinatra#3470)", () => {
       midRunHitl: true,
       screen: SCREEN,
     });
+    // The binding's params travel with it (a "kind" component reads them).
+    mergedBindings.mockReturnValue([
+      {
+        id: DECLARED_ID,
+        kind: "list-picker",
+        priority: 80,
+        midRunHitl: true,
+        params: { question: "Fixture question?" },
+        screen: { layout: "kind" },
+        declaredBy: "x",
+      },
+    ]);
+    const withParams = await agentHitlScreenStateForRun(RUN);
+    expect(withParams.state === "asking" && withParams.declaredScreen).toEqual({
+      id: DECLARED_ID,
+      kind: "list-picker",
+      priority: 80,
+      midRunHitl: true,
+      params: { question: "Fixture question?" },
+      screen: { layout: "kind" },
+    });
     // Nothing for a binding without a screen, or when the bindings cannot be read.
     mergedBindings.mockReturnValue([{ id: DECLARED_ID, kind: "cta", priority: 80, declaredBy: "x" }]);
     const plain = await agentHitlScreenStateForRun(RUN);

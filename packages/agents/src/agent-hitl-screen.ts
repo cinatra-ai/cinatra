@@ -53,6 +53,9 @@ export type AgentHitlDeclaredScreenBinding = {
   kind: string;
   priority: number;
   midRunHitl?: boolean;
+  /** The binding's declared params, handed to its renderer as
+   *  `bindingParams` exactly as the run page's registration hands them. */
+  params?: Record<string, unknown>;
   screen: Record<string, unknown>;
 };
 
@@ -155,11 +158,19 @@ export function parseDeclaredScreenBinding(
   if (typeof b.priority !== "number" || !Number.isFinite(b.priority)) return null;
   const screen = b.screen;
   if (screen === null || typeof screen !== "object" || Array.isArray(screen)) return null;
+  // Params travel with the binding (cinatra#3470): a "kind" layout's component
+  // reads them, and the registration this answer drives replaces the run
+  // page's. Params that are present but not a plain object refuse the binding.
+  const params = b.params;
+  if (params !== undefined && (params === null || typeof params !== "object" || Array.isArray(params))) {
+    return null;
+  }
   return {
     id: xRenderer,
     kind: b.kind,
     priority: b.priority,
     ...(b.midRunHitl === true ? { midRunHitl: true } : {}),
+    ...(params !== undefined ? { params: params as Record<string, unknown> } : {}),
     screen: screen as Record<string, unknown>,
   };
 }

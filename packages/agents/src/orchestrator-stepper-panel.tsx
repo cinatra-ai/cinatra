@@ -123,6 +123,7 @@ import {
   isGroupedSetupRenderer,
   continueApprovalFlag,
   continueHeldByRenderer,
+  stageRendererAnswer,
   isSetupGateTaskId,
   liftRendererApprovalNote,
   midRunBooleanFieldHidesSubmit,
@@ -1545,7 +1546,9 @@ function HitlApprovalCard({
                     let nextBuffered = bufferedHitlValue;
                     if (next && typeof next === "object" && !Array.isArray(next)) {
                       const newValues = next as Record<string, unknown>;
-                      nextBuffered = { ...bufferedHitlValue, ...newValues };
+                      // A renderer that stages its whole answer replaces the
+                      // buffer (cinatra#3470); every other one merges into it.
+                      nextBuffered = stageRendererAnswer(entry, bufferedHitlValue, newValues);
                       // A renderer that has been replaced writes for a gate that
                       // is gone (cinatra#3380): the buffer is the gate on
                       // screen's, so that write does not reach it.

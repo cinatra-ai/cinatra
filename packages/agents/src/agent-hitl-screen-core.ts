@@ -166,6 +166,9 @@ async function declaredScreenBindingOf(
         kind: binding.kind,
         priority: binding.priority,
         midRunHitl: binding.midRunHitl,
+        // The binding's params travel with it: the conversation card's
+        // registration replaces the run page's, so it must carry them too.
+        params: binding.params,
         screen: binding.screen,
       },
       xRenderer,

@@ -72,7 +72,10 @@ describe("readWayflowSubmittedValues (cinatra#4244)", () => {
 describe("approveReviewTaskInternal uses the reader (cinatra#4244)", () => {
   it("reads the submitted values through readWayflowSubmittedValues", () => {
     const src = readFileSync(join(__dirname, "..", "review-task-actions.ts"), "utf8");
-    expect(src).toMatch(/submittedValues\s*=\s*readWayflowSubmittedValues\(\s*values\s*\)/);
+    // cinatra#3470: the reader reads the answer as sent, which is the
+    // caller's values unless a decline rewrote their resume text.
+    expect(src).toMatch(/submittedValues\s*=\s*readWayflowSubmittedValues\(\s*answerAsSent\s*\)/);
+    expect(src).toMatch(/\{ \.\.\.valuesObj, userResponse: userResponseRaw \}\s*:\s*values;/);
     expect(src).toMatch(/import \{ readWayflowSubmittedValues \} from "\.\/hitl-gate-submit";/);
   });
 
