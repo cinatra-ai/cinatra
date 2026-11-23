@@ -251,6 +251,43 @@ describe("cinatra#4150 W4 — four rows, the text kind and the list row", () => 
     });
   });
 
+  // cinatra#4738 round 2: the artifacts row's island ref carries the input name, and the ref codec refuses a field
+  // longer than its bound. Such a row used to compile and then never draw (its ref was always null). Red at ffe421ea,
+  // which compiles it.
+  describe("an artifacts row over an input the island ref cannot carry", () => {
+    const withInput = (title: string, row: Record<string, unknown>) =>
+      collect(
+        flowWith({ publish: publishNode({ publishes: true, publishRows: [row] }, { inputs: [...INPUTS, { title, type: "array" }] }) }),
+        ["publish"],
+      );
+    const TOO_LONG = /^PUBLISH_ROWS_MALFORMED: node "publish" metadata\.cinatra\.publishRows\[0\]\.input of an artifacts row must name an input of at most 128 characters \(128 bytes\)$/;
+
+    // red-first-expect: metadata.cinatra.publishRows[0] must be an object with exactly the keys label and input
+    it("a 129-character input is refused at compile time, with the codec's own bound", () => {
+      const name = "p".repeat(129);
+      expect(withInput(name, { ...ARTIFACTS, input: name })).toEqual({ ok: false, error: expect.stringMatching(TOO_LONG) });
+    });
+
+    it("a 128-character input of 3-byte characters is refused: it is 384 bytes, past the ref's bound", () => {
+      const name = "页".repeat(128);
+      expect(withInput(name, { ...ARTIFACTS, input: name })).toEqual({ ok: false, error: expect.stringMatching(TOO_LONG) });
+    });
+
+    it("a 128-character ASCII input compiles, and its row's ref encodes", async () => {
+      const name = "p".repeat(128);
+      expect(withInput(name, { ...ARTIFACTS, input: name })).toMatchObject({ ok: true });
+      process.env.BETTER_AUTH_SECRET ??= "test-secret-for-lifecycle-refs";
+      const { encodePublishDecisionIslandRef } = await import("@/lib/lifecycle/lifecycle-card-ref");
+      const ids = { runId: "0b8c6a2e-6f7d-4c1e-9a55-1d2e3f4a5b6c", decisionId: "7c1d2e3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f" };
+      expect(encodePublishDecisionIslandRef({ ...ids, input: name })).not.toBeNull();
+    });
+
+    it("a text row over a long input still compiles: it carries no ref", () => {
+      const name = "p".repeat(129);
+      expect(withInput(name, { label: "Long", input: name })).toMatchObject({ ok: true });
+    });
+  });
+
   it("an error never quotes a column label or a field the pack wrote", () => {
     const SECRET = "sk-live-SECRET-0123";
     for (const columns of [[{ label: SECRET, field: "x", y: 1 }], [{ label: `${SECRET}\n`, field: "x" }], [{ label: "A", field: `${SECRET}\n` }]]) {

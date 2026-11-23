@@ -53,6 +53,7 @@ import {
   type CaptureServePorts,
 } from "@/lib/lifecycle/capture-capability-serving";
 import { readLiveWidgetCapturePrincipal } from "@/lib/lifecycle/widget-capture-principal";
+import { readPublishDecisionIslandPinnedTargets } from "@/lib/lifecycle/publish-decision-island-pins";
 
 export const runtime = "nodejs";
 
@@ -123,6 +124,9 @@ const ports: CaptureServePorts = {
       representationRevisionId: t.representationRevisionId,
     }));
   },
+  // A PUBLISH ROW'S proven set (cinatra#4738 round 2): the row the sealed subject key names on the run's newest
+  // decision, read as the sealed principal, with every target made by the run.
+  readPublishDecisionPinnedTargets: (input) => readPublishDecisionIslandPinnedTargets(input),
   readCapture: (orgId, captureArtifactId) => {
     // Org-scoped and TYPE-scoped by the store's own query: a row that is not a
     // pinned preview capture in this org simply does not come back, which is

@@ -45,6 +45,31 @@ const boundedId = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0 && value.length <= ID_MAX;
 const own = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
 
+type Who = { actor: PrimitiveActorContext; roleHints?: ActorRoleHints };
+
+/**
+ * The card a reader may see on a run: the run access door ("read"), then the run's NEWEST decision, still a card (not
+ * run_ended) of this run and its organization, and the rows that card declares. `null` for every refusal.
+ */
+async function openCardOfRun(runId: string, who: Who) {
+  if (!boundedId(runId)) return null;
+  // 1. The run access door, the card's own: a reader who may not read the run reaches nothing below.
+  const run = await readAgentRunById(runId, who.actor, who.roleHints);
+  if (!run || run.id !== runId || !boundedId(run.orgId)) return null;
+  // 2. The decision the card shows: the run's NEWEST. An older decision, another run's, one the run left another way
+  //    (run_ended) and one recorded for another organization draw nothing.
+  const decision = await readLatestDecisionForRun(run.id);
+  if (!decision || decision.runId !== run.id) return null;
+  if (decision.status === "run_ended") return null;
+  if (decision.orgId !== null && decision.orgId !== run.orgId) return null;
+  // 3. The declared rows. The rows the decision kept at its park are the card's rows; only a decision older than that
+  //    record (declaredRows null) reads the template's current rows, as the card does.
+  const template = await readAgentTemplateById(run.templateId);
+  if (!template) return null;
+  const declared = decision.declaredRows ?? declaredPublishRowsFor(template.publishRows, decision.nodeId);
+  return { run: { id: run.id, orgId: run.orgId }, decision, declared };
+}
+
 /**
  * Prove one artifacts row of the run's open card for one verified reader, in this order: the run access door ("read"),
  * the run's newest decision is the named one and still a card (not run_ended) of this run and its organization, the
@@ -55,25 +80,14 @@ export async function readPublishDecisionIslandSubject(input: {
   runId: string;
   decisionId: string;
   input: string;
-  who: { actor: PrimitiveActorContext; roleHints?: ActorRoleHints };
+  who: Who;
 }): Promise<PublishDecisionIslandSubject | null> {
   try {
     if (!boundedId(input.runId) || !boundedId(input.decisionId) || !boundedId(input.input)) return null;
-    // 1. The run access door, the card's own: a reader who may not read the run reaches nothing below.
-    const run = await readAgentRunById(input.runId, input.who.actor, input.who.roleHints);
-    if (!run || run.id !== input.runId || !boundedId(run.orgId)) return null;
-    // 2. The decision the card shows: the run's NEWEST, by the named id. An older decision, another run's, one the run
-    //    left another way (run_ended) and one recorded for another organization draw nothing.
-    const decision = await readLatestDecisionForRun(run.id);
-    if (!decision || decision.id !== input.decisionId || decision.runId !== run.id) return null;
-    if (decision.status === "run_ended") return null;
-    if (decision.orgId !== null && decision.orgId !== run.orgId) return null;
-    // 3. The declared row: an artifacts row over the named input, on the decision's own node (own keys only). The rows
-    //    the decision kept at its park are the card's rows; only a decision older than that record (declaredRows null)
-    //    reads the template's current rows, as the card does.
-    const template = await readAgentTemplateById(run.templateId);
-    if (!template) return null;
-    const declared = decision.declaredRows ?? declaredPublishRowsFor(template.publishRows, decision.nodeId);
+    const card = await openCardOfRun(input.runId, input.who);
+    if (!card || card.decision.id !== input.decisionId) return null;
+    const { run, decision, declared } = card;
+    // The declared row: an artifacts row over the named input, on the decision's own node (own keys only).
     const row = declared.find((r) => publishRowKind(r) === "artifacts" && r.input === input.input);
     if (!row) return null;
     // 4. The frozen targets, read by own key. Normalized as a review gate's set is: 1 to 50, deduped, and one entry that
@@ -83,6 +97,26 @@ export async function readPublishDecisionIslandSubject(input: {
     const targets = normalizeReviewTargets(surfaced[input.input]);
     if (!targets.ok) return null;
     return { runId: run.id, orgId: run.orgId, decided: decision.status !== "parked", targets: targets.targets };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The artifacts rows of the card a reader may see on a run (cinatra#4738 round 2): the newest decision's id and the
+ * input each of its artifacts rows reads, behind the same door and decision checks as the subject read. The sealed
+ * byte and capture roads of a publish row carry only the row's subject key, so their serving path reads these to find
+ * which row a key names, and then proves that row with `readPublishDecisionIslandSubject`. `null` for every refusal.
+ */
+export async function readPublishDecisionIslandRows(input: {
+  runId: string;
+  who: Who;
+}): Promise<{ decisionId: string; inputs: string[] } | null> {
+  try {
+    const card = await openCardOfRun(input.runId, input.who);
+    if (!card) return null;
+    const inputs = card.declared.filter((r) => publishRowKind(r) === "artifacts").map((r) => r.input);
+    return { decisionId: card.decision.id, inputs };
   } catch {
     return null;
   }

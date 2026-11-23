@@ -3,8 +3,9 @@
 // The same document, the same panels and the same one empty answer; only the loader differs. Pinned here:
 //   - the cookie branch: a publish-family ref goes to the publish loader with the row it names, and NEVER to the gate
 //     loader; a gate ref still goes to the gate loader, unchanged;
-//   - the credential branch: the row comes from the resolver (proven equal to the ref there), and a publish row names
-//     no sealed road (the sealed byte serving re-proves a gate's set, which a publish row has not);
+//   - the credential branch: the row comes from the resolver (proven equal to the ref there), and a publish row gets
+//     the gate's sealed roads, sealed as a publish row's (cinatra#4738 round 2; the roads serving for real is pinned in
+//     island-publish-decision-sealed-roads-4738.test.tsx);
 //   - a refusal from the publish loader is the one empty island; a ready answer draws its targets as panels, read as
 //     decided or pending from the loader's own answer.
 // Red first: at C1's head the page knows no publish ref (it draws the empty island and calls no publish loader).
@@ -150,7 +151,7 @@ describe("the cookie branch", () => {
 });
 
 describe("the credential branch", () => {
-  it("the row comes from the resolver, and a publish row names no sealed road", async () => {
+  it("the row comes from the resolver, and a publish row gets the sealed roads", async () => {
     resolveIslandCredentialReader.mockResolvedValue({
       actorCtx: ACTOR,
       runId: "run-1",
@@ -164,8 +165,14 @@ describe("the credential branch", () => {
     expect(loadReviewGateSurface).not.toHaveBeenCalled();
     const args = loadPublishDecisionIslandSurface.mock.calls[0][0] as Record<string, unknown>;
     expect(args).toMatchObject({ runId: "run-1", decisionId: "dec-1", input: "reviewTargets", actorCtx: ACTOR });
-    expect(Object.prototype.hasOwnProperty.call(args, "roads")).toBe(false);
-    expect(mintPreview).not.toHaveBeenCalled();
+    // cinatra#4738 round 2: a widget reader holds no cookie, so the session addresses load nothing there. Red at
+    // ffe421ea, which names no road for a publish row.
+    const roads = args.roads as { byteMinter?: unknown; capturePair?: unknown; buildContent?: unknown } | undefined;
+    expect(typeof roads?.byteMinter).toBe("function");
+    expect(typeof roads?.capturePair).toBe("function");
+    expect(typeof roads?.buildContent).toBe("function");
+    // The road was probed once with the closure every panel uses, as a gate's is.
+    expect(mintPreview).toHaveBeenCalledWith(expect.objectContaining({ artifactId: "unmintable-probe", mime: "image/png" }));
     expect(isEmptyIsland(el)).toBe(false);
   });
 

@@ -355,6 +355,22 @@ export type PublishDecisionIslandRefPayload = { runId: string; decisionId: strin
 const boundedRefField = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0 && value.length <= REF_FIELD_MAX;
 
+/** The longest field this ref carries, in characters. The compiler names it when it refuses an artifacts row. */
+export const PUBLISH_DECISION_ISLAND_REF_FIELD_MAX = REF_FIELD_MAX;
+
+/**
+ * Can an artifacts row over this declared input ever be addressed (cinatra#4738)? The input is the one ref field a
+ * pack declares: the run id and the decision id are minted by the store. So the compiler refuses a row whose input
+ * fails this, rather than compiling a row whose ref is always null and which never draws. True when the input is a
+ * bounded field AND its sealed form takes at most `PUBLISH_DECISION_ISLAND_REF_FIELD_MAX` bytes: a name of 128
+ * characters that are not ASCII is more than 128 bytes, and beside the two minted ids it would push the ref past
+ * its length bound.
+ */
+export function publishDecisionIslandRefInputFits(input: unknown): boolean {
+  if (!boundedRefField(input)) return false;
+  return Buffer.byteLength(JSON.stringify(input), "utf8") - 2 <= PUBLISH_DECISION_ISLAND_REF_FIELD_MAX;
+}
+
 /** Key-derivation label for the publish-decision island ref's SYNTHETIC IV. A key of its own, never the cipher key. */
 const PUBLISH_DECISION_ISLAND_REF_IV_KEY_INFO = "cinatra:lifecycle-publish-decision-island-ref-iv:v1";
 

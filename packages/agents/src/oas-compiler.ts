@@ -70,6 +70,10 @@ import {
   type PublishRowsMap,
 } from "./publish-decision-card";
 import { checkRegenerateDeclaration } from "./verdaccio/package-contract";
+import {
+  PUBLISH_DECISION_ISLAND_REF_FIELD_MAX,
+  publishDecisionIslandRefInputFits,
+} from "@/lib/lifecycle/lifecycle-card-ref";
 
 // ---------------------------------------------------------------------------
 // OAS Flow compiler
@@ -1704,6 +1708,14 @@ export function collectPublishRows(
         continue;
       }
       if (kind === "artifacts") {
+        // The row's island is addressed by a ref that carries this input name (cinatra#4738). A name the ref cannot
+        // carry would compile into a row that never draws, so it is refused here, under the ref codec's own bound.
+        if (!publishDecisionIslandRefInputFits(input)) {
+          return {
+            ok: false,
+            error: `PUBLISH_ROWS_MALFORMED: ${where}.input of an artifacts row must name an input of at most ${PUBLISH_DECISION_ISLAND_REF_FIELD_MAX} characters (${PUBLISH_DECISION_ISLAND_REF_FIELD_MAX} bytes)`,
+          };
+        }
         out.push(Object.freeze({ kind: "artifacts" as const, label, input }));
         continue;
       }

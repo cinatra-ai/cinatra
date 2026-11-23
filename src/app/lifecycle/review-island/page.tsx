@@ -274,16 +274,19 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
     // and to this gate, and the serving path re-proves every one of them
     // before a byte is read — so naming the road here grants nothing that the
     // credential did not already carry.
-    // A PUBLISH ROW NAMES NO SEALED ROAD (cinatra#4150 W4 C1b). The sealed byte
-    // and capture capabilities re-prove a GATE's pinned set before a byte is
-    // read, and a publish row has no gate, so they would refuse every target.
-    // It keeps the session addresses, the narrower grant — the same fallback as
-    // an unsealable principal below.
-    const built = reader.principal && !publishRow
+    // A PUBLISH ROW GETS THE SAME SEALED ROADS (cinatra#4738 round 2). A reader
+    // inside a third-party site holds no Cinatra cookie, so the session
+    // addresses would load no picture, document or capture pair there. The
+    // road is the gate's, sealed to the same principal and run, with the row's
+    // SUBJECT KEY (proven equal to the ref inside the resolver) in the gate's
+    // slot and the publish kind sealed beside it: the serving paths then prove
+    // each target against THIS row's own set, never against a gate's.
+    const built = reader.principal
       ? islandReviewSurfaceRoads({
           principal: reader.principal,
           runId: reader.runId,
           reviewTaskId: reader.reviewTaskId,
+          ...(publishRow ? { subject: "publish-decision" as const } : {}),
         })
       : null;
     // A ROAD THAT CANNOT MINT IS NOT A ROAD. The byte minter is exercised once

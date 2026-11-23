@@ -82,7 +82,8 @@ describe("the publish-decision island ref", () => {
   // cinatra#4738 round 1, finding 2: the card re-reads every 5 s and the ref addresses the row's frame, so a ref minted
   // afresh per read moved the frame on every poll. The same row encodes to the same ref; the IV is synthetic (an HMAC
   // over the plaintext), so a different row never meets the same IV.
-  // red-first-expect: Object.is equality
+  // On origin/main the export does not exist, so this test fails on the missing function, not on an assertion:
+  // red-first-expect: is not a function
   it("the same row encodes to the same ref, and any other row to another ref with another IV", () => {
     const ref = encodePublishDecisionIslandRef(ROW)!;
     expect(encodePublishDecisionIslandRef({ ...ROW })).toBe(ref);

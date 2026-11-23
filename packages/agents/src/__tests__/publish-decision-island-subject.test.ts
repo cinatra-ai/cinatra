@@ -41,6 +41,7 @@ vi.mock("../db", () => ({
 import type * as SubjectModule from "../publish-decision-island-subject";
 let readPublishDecisionIslandSubject: typeof SubjectModule.readPublishDecisionIslandSubject;
 let readRevisionsMadeByRun: typeof SubjectModule.readRevisionsMadeByRun;
+let readPublishDecisionIslandRows: typeof SubjectModule.readPublishDecisionIslandRows;
 
 const WHO = {
   actor: { actorType: "human" as const, source: "ui" as const, userId: "user-a" },
@@ -74,7 +75,9 @@ const TEMPLATE = {
 const ASK = { runId: "run-1", decisionId: "dec-1", input: "reviewTargets", who: WHO };
 
 beforeEach(async () => {
-  ({ readPublishDecisionIslandSubject, readRevisionsMadeByRun } = await import("../publish-decision-island-subject"));
+  ({ readPublishDecisionIslandSubject, readRevisionsMadeByRun, readPublishDecisionIslandRows } = await import(
+    "../publish-decision-island-subject"
+  ));
   vi.resetAllMocks();
   storeMock.readAgentRunById.mockResolvedValue(RUN);
   storeMock.readAgentTemplateById.mockResolvedValue(TEMPLATE);
@@ -219,5 +222,38 @@ describe("readRevisionsMadeByRun", () => {
     ).toBe(false);
     dbState.throws = true;
     expect(await readRevisionsMadeByRun(ASK_REVS)).toBe(false);
+  });
+});
+
+// cinatra#4738 round 2: the rows a sealed publish-row capability's serving path reads to find which row its subject key
+// names, behind the same door and decision checks as the subject read.
+describe("readPublishDecisionIslandRows", () => {
+  it("answers the newest decision's id and the input of each of its artifacts rows, through the card's door", async () => {
+    expect(await readPublishDecisionIslandRows({ runId: "run-1", who: WHO })).toEqual({
+      decisionId: "dec-1",
+      inputs: ["reviewTargets"],
+    });
+    expect(storeMock.readAgentRunById).toHaveBeenCalledWith("run-1", WHO.actor, WHO.roleHints);
+  });
+
+  it("refuses a reader the run refuses, a run_ended decision, another organization's decision, and a throw", async () => {
+    storeMock.readAgentRunById.mockResolvedValueOnce(null);
+    expect(await readPublishDecisionIslandRows({ runId: "run-1", who: WHO })).toBeNull();
+    decisions.readLatestDecisionForRun.mockResolvedValueOnce(decision({ status: "run_ended" }));
+    expect(await readPublishDecisionIslandRows({ runId: "run-1", who: WHO })).toBeNull();
+    decisions.readLatestDecisionForRun.mockResolvedValueOnce(decision({ orgId: "org-2" }));
+    expect(await readPublishDecisionIslandRows({ runId: "run-1", who: WHO })).toBeNull();
+    decisions.readLatestDecisionForRun.mockRejectedValueOnce(new Error("db down"));
+    expect(await readPublishDecisionIslandRows({ runId: "run-1", who: WHO })).toBeNull();
+  });
+
+  it("reads the rows the decision kept at its park before the template's current rows", async () => {
+    decisions.readLatestDecisionForRun.mockResolvedValueOnce(
+      decision({ declaredRows: [{ kind: "artifacts", label: "Kept", input: "keptTargets" }] }),
+    );
+    expect(await readPublishDecisionIslandRows({ runId: "run-1", who: WHO })).toEqual({
+      decisionId: "dec-1",
+      inputs: ["keptTargets"],
+    });
   });
 });
