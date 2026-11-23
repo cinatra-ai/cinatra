@@ -28,6 +28,7 @@ import {
   useLifecycleCardFrame,
   useLifecycleCardHost,
   type LifecycleCardAuth,
+  type LifecycleColorScheme,
 } from "./lifecycle-card-runtime";
 import {
   PUBLISH_DECISION_CARD_NONE,
@@ -311,6 +312,63 @@ function listRowValue(row: PublishDecisionCardListRow): ReactElement {
   );
 }
 
+type HeldArtifactsAddress = {
+  /** The row identity the address was taken for: the ref names the run, the decision and the input, and is minted
+   * deterministically, so the same row of the same decision reads the same ref on every poll. */
+  ref: string | null;
+  scheme: LifecycleColorScheme | null;
+  islandSrc: string | null;
+  /** The reader asked for a retry: the next unframed credential replaces the held one. */
+  fresh: boolean;
+  /** The palette a fresh address was last asked for, so a repaint asks once. */
+  askedFor: LifecycleColorScheme | null;
+};
+
+/**
+ * THE ADDRESS THE ROW'S FRAME IS HELD AT (cinatra#4738). The card re-reads its state on the run surfaces' tick, and the
+ * frame is keyed on its address: an address that moves on a read reloads the preview, so a slow one never finishes and
+ * a loaded one keeps restarting.
+ *
+ *   - A COOKIE HOST's address is the ref alone, and the ref is deterministic, so it does not move on a poll. With no
+ *     credential to spend, a new ref or palette is adopted at once.
+ *   - A WIDGET read brings a FRESH single-use credential each time. The row holds the credentialed address it first
+ *     framed for as long as the row is the same row (the same ref), and adopts a newer credential only when the reader
+ *     asked for a retry (the held one may be spent or expired) or the palette changed (a repaint of a spent address
+ *     would draw the refusal; the row asks for a fresh read once per palette and keeps the frame until it lands).
+ *   - A NEW REF (a new decision, or another row in this place) adopts the live answer at once.
+ */
+function useHeldArtifactsAddress(
+  row: PublishDecisionCardArtifactsRow,
+  colorScheme: LifecycleColorScheme | null,
+  reread: () => void,
+): { islandSrc: string | null; scheme: LifecycleColorScheme | null; askFresh: () => void } {
+  const live: HeldArtifactsAddress = { ref: row.ref, scheme: colorScheme, islandSrc: row.islandSrc, fresh: false, askedFor: null };
+  const [held, setHeld] = useState<HeldArtifactsAddress>(live);
+  const credentialed = (src: string | null) => row.ref !== null && reviewIslandAddressCredential(src, row.ref) !== null;
+  let current = held;
+  let adopt = false;
+  if (held.ref !== row.ref) {
+    adopt = true;
+  } else if (!credentialed(held.islandSrc)) {
+    // Nothing to spend: a newer address or a repaint lands at once.
+    adopt = held.islandSrc !== row.islandSrc || held.scheme !== colorScheme;
+  } else if (held.fresh || held.scheme !== colorScheme) {
+    adopt = row.islandSrc !== held.islandSrc && credentialed(row.islandSrc);
+  }
+  if (adopt) {
+    current = live;
+    setHeld(live);
+  }
+  const repaintWaits = !adopt && credentialed(current.islandSrc) && current.scheme !== colorScheme;
+  useEffect(() => {
+    if (!repaintWaits || held.askedFor === colorScheme) return;
+    setHeld((h) => ({ ...h, askedFor: colorScheme }));
+    reread();
+  }, [repaintWaits, held.askedFor, colorScheme, reread]);
+  const askFresh = useCallback(() => setHeld((h) => ({ ...h, fresh: true })), []);
+  return { islandSrc: current.islandSrc, scheme: current.scheme, askFresh };
+}
+
 /**
  * An artifacts row (cinatra#4150 W4 C1b): the surfaced revisions drawn by the SAME review-target island a review gate
  * frames, through the review card's own frame (its loading, timeout and retry states and the height the island
@@ -322,7 +380,13 @@ function listRowValue(row: PublishDecisionCardListRow): ReactElement {
 function ArtifactsRow({ row, onRetry }: { row: PublishDecisionCardArtifactsRow; onRetry: () => void }): ReactElement {
   const frame = useLifecycleCardFrame();
   const colorScheme = useLifecycleCardColorScheme();
-  const src = row.ref === null ? null : reviewTargetIslandSrc(row.ref, frame, row.islandSrc, colorScheme);
+  const held = useHeldArtifactsAddress(row, colorScheme, onRetry);
+  const src = row.ref === null ? null : reviewTargetIslandSrc(row.ref, frame, held.islandSrc, held.scheme);
+  const { askFresh } = held;
+  const retry = useCallback(() => {
+    askFresh();
+    onRetry();
+  }, [askFresh, onRetry]);
   if (row.ref === null || src === null) {
     return (
       <div data-conformance-id="publish-row-items-refused">
@@ -340,8 +404,8 @@ function ArtifactsRow({ row, onRetry }: { row: PublishDecisionCardArtifactsRow; 
         <ReviewTargetFrame
           headers={null}
           islandSrc={src}
-          islandCredentialed={reviewIslandAddressCredential(row.islandSrc, row.ref) !== null}
-          onRetryResolve={onRetry}
+          islandCredentialed={reviewIslandAddressCredential(held.islandSrc, row.ref) !== null}
+          onRetryResolve={retry}
         />
       </dd>
     </div>

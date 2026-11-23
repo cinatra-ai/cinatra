@@ -958,7 +958,6 @@ describe("the decision keeps the rows its template declared at the park (review 
     expect(result.decision.declaredRows).toEqual([]);
   });
 
-  // red-first-expect: expected a refusal
   it("refuses a declaration that is not rows of a label and an input, before any write", async () => {
     for (const bad of [
       [{ label: "", input: "title" }],
@@ -975,7 +974,7 @@ describe("the decision keeps the rows its template declared at the park (review 
 
   // cinatra#4738 on main's declared rows: a list or artifacts row the dispatched plan declares is kept with its kind and
   // columns, never cut down to a text row (which would draw a list as nothing and an artifacts row as nothing).
-  // red-first-expect: expected [ { label: 'Recipients', input: 'people' }, { label: 'Proposed page', input: 'page' } ]
+  // red-first-expect: to match object { Object (declaredRows) }
   it("keeps a list row's columns and an artifacts row's kind, at the park and through the dispatched plan", async () => {
     const KINDED = [
       { label: "Title", input: "title" },
@@ -998,7 +997,6 @@ describe("the decision keeps the rows its template declared at the park (review 
     }
   });
 
-  // red-first-expect: expected a refusal
   it("a stored declaration the module cannot read is a malformed row, never a quiet fallback", async () => {
     for (const text of ["{nope", '{"label":"Title"}', '[{"label":"Title"}]']) {
       answers.select = async () => [stored({ declaredRows: text })];
@@ -1077,7 +1075,6 @@ describe("round 20: a decision belongs to one reset generation of its run", () =
 describe("round 19: the park copies its node's rows from the dispatched plan", () => {
   const MAP = JSON.stringify({ publish: [{ label: "Title", input: "title" }], other: [{ label: "X", input: "x" }] });
 
-  // red-first-expect: readDispatchedPublishRows is not a function
   it("answers the node's rows of the recorded map, [] for a node it declares none for, and null when none is recorded", async () => {
     answers.select = async () => [{ rows: MAP }];
     expect(await readDispatchedPublishRows("run-1", "publish")).toEqual([{ label: "Title", input: "title" }]);
@@ -1097,7 +1094,6 @@ describe("round 19: the park copies its node's rows from the dispatched plan", (
     expect(await readDispatchedPublishRows("run-1", "publish")).toBeNull();
   });
 
-  // red-first-expect: readDispatchedPublishRows is not a function
   it("a read error propagates (the park records nothing for it)", async () => {
     answers.select = async () => {
       throw new Error("db down");

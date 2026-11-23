@@ -98,8 +98,6 @@ describe("which card a run shows", () => {
     });
   });
 
-  // Before the fix the widget read does not exist yet, so this test fails on the missing export.
-  // red-first-expect: publishDecisionCardStateForWidgetRun is not a function
   it("the site widget's card asks the widget reader's rights, never the decide check", async () => {
     const widget = { ...WHO, actor: { actorType: "human" as const, source: "a2a" as const, userId: "user-a" } };
     for (const answer of [true, false]) {
@@ -260,6 +258,7 @@ describe("the rows are the pack's words over the surfaced values", () => {
     expect(await read()).toMatchObject({ state: "pending", rows: [] });
   });
 
+  // red-first-expect: to match object { rows: [
   it("a declared list row reads the surfaced records into the card (W4)", async () => {
     storeMock.readAgentTemplateById.mockResolvedValue({
       ...TEMPLATE,

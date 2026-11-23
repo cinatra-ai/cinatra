@@ -628,14 +628,73 @@ describe("the artifacts row (C1b)", () => {
     expect(value!.querySelector(APPROVE)).toBeNull();
   });
 
-  it("a credential host frames the server-minted credential when its address names the row's ref", async () => {
-    const islandSrc = `/lifecycle/review-island?ref=${REF}&ic=sealed-credential`;
-    brokerAnswer = { status: 200, body: { ...PENDING, rows: [{ ...ARTIFACTS, islandSrc }] } };
+  // The widget address on this row comes from the real broker route, and that wiring is proved end to end in
+  // src/app/api/lifecycle-views/publish-decision/__tests__/widget-artifacts-row-4738.test.tsx (cinatra#4738). The tests
+  // below pin only the card's own hold over the addresses a broker hands it.
+
+  // cinatra#4738 round 1, finding 2: every widget read brings a fresh single-use credential. Before the fix the row
+  // framed each read's address, so the frame reloaded its preview on every poll.
+  // red-first-expect: no card root
+  it("a widget re-read with a fresh credential for the same row keeps the same frame on the same address", async () => {
+    let n = 0;
+    globalThis.fetch = (async () => {
+      n += 1;
+      const islandSrc = `/lifecycle/review-island?ref=${REF}&ic=credential-${n}`;
+      return new Response(JSON.stringify({ ...PENDING, rows: [{ ...ARTIFACTS, islandSrc }] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const mounted = mountOn("site_widget", okDoor());
+    const root = await rootOf(mounted);
+    await settle();
+    const first = root.querySelector("iframe");
+    expect(first).not.toBeNull();
+    expect(new URL(first!.getAttribute("src")!, "https://app.example").searchParams.get("ic")).toBe("credential-1");
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await settle();
+    expect(n).toBe(2);
+    expect(root.querySelector("iframe")).toBe(first);
+    expect(new URL(first!.getAttribute("src")!, "https://app.example").searchParams.get("ic")).toBe("credential-1");
+  });
+
+  it("a widget re-read that names ANOTHER row (a new ref) frames the new row's address at once", async () => {
+    let n = 0;
+    globalThis.fetch = (async () => {
+      n += 1;
+      const ref = n === 1 ? REF : "Next_Decision-Ref";
+      const islandSrc = `/lifecycle/review-island?ref=${ref}&ic=credential-${n}`;
+      return new Response(JSON.stringify({ ...PENDING, rows: [{ ...ARTIFACTS, ref, islandSrc }] }), { status: 200 });
+    }) as unknown as typeof fetch;
     const root = await rootOf(mountOn("site_widget", okDoor()));
     await settle();
+    expect(root.querySelector("iframe")).not.toBeNull();
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await settle();
     const src = await frameSrc(root);
-    expect(src.searchParams.get("ref")).toBe(REF);
-    expect(src.searchParams.get("ic")).toBe("sealed-credential");
+    expect(src.searchParams.get("ref")).toBe("Next_Decision-Ref");
+    expect(src.searchParams.get("ic")).toBe("credential-2");
+  });
+
+  it("a widget re-read whose address could not be minted keeps the frame it already drew", async () => {
+    let n = 0;
+    globalThis.fetch = (async () => {
+      n += 1;
+      const islandSrc = n === 1 ? `/lifecycle/review-island?ref=${REF}&ic=credential-1` : null;
+      return new Response(JSON.stringify({ ...PENDING, rows: [{ ...ARTIFACTS, islandSrc }] }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const root = await rootOf(mountOn("site_widget", okDoor()));
+    await settle();
+    const first = root.querySelector("iframe");
+    expect(first).not.toBeNull();
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await settle();
+    expect(n).toBe(2);
+    expect(root.querySelector("iframe")).toBe(first);
+    expect(new URL(first!.getAttribute("src")!, "https://app.example").searchParams.get("ic")).toBe("credential-1");
   });
 
   // pre-1 MUST-FIX 3: on a widget host the credential is the only proof of the reader, so an address minted for another
@@ -665,7 +724,7 @@ describe("the artifacts row (C1b)", () => {
 // cinatra#4738 grade: the anchors design spec XV.1 (app-lifecycle-cards.html at design main 615ed095) names, drawn by the card
 // itself so a capture can count them. Before the fix the card drew none of them (only publish-card), because the rows carried
 // data-publish-row-kind and no conformance anchor.
-// red-first-expect: publish-card-rows
+// red-first-expect: no card root
 describe("the XV.1 row anchors", () => {
   const REF = "Abc_123-xyz";
   const TEXT = ROWS[0];

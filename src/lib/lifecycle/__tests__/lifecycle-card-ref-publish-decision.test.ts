@@ -78,4 +78,24 @@ describe("the publish-decision island ref", () => {
     // The ref itself keeps a lone surrogate exactly, so ref and key name the same input.
     expect(decodePublishDecisionIslandRef(encodePublishDecisionIslandRef({ ...ROW, input: "\uD800" })!)?.input).toBe("\uD800");
   });
+
+  // cinatra#4738 round 1, finding 2: the card re-reads every 5 s and the ref addresses the row's frame, so a ref minted
+  // afresh per read moved the frame on every poll. The same row encodes to the same ref; the IV is synthetic (an HMAC
+  // over the plaintext), so a different row never meets the same IV.
+  // red-first-expect: Object.is equality
+  it("the same row encodes to the same ref, and any other row to another ref with another IV", () => {
+    const ref = encodePublishDecisionIslandRef(ROW)!;
+    expect(encodePublishDecisionIslandRef({ ...ROW })).toBe(ref);
+    const iv = (r: string) => Buffer.from(r, "base64url").subarray(0, 12).toString("hex");
+    for (const other of [
+      { ...ROW, runId: "run-2" },
+      { ...ROW, decisionId: "dec-2" },
+      { ...ROW, input: "otherTargets" },
+    ]) {
+      const otherRef = encodePublishDecisionIslandRef(other)!;
+      expect(otherRef).not.toBe(ref);
+      expect(iv(otherRef)).not.toBe(iv(ref));
+      expect(decodePublishDecisionIslandRef(otherRef)).toEqual(other);
+    }
+  });
 });

@@ -355,19 +355,35 @@ export type PublishDecisionIslandRefPayload = { runId: string; decisionId: strin
 const boundedRefField = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0 && value.length <= REF_FIELD_MAX;
 
-/** Encode a publish-decision island ref. `null` when it cannot be expressed. */
+/** Key-derivation label for the publish-decision island ref's SYNTHETIC IV. A key of its own, never the cipher key. */
+const PUBLISH_DECISION_ISLAND_REF_IV_KEY_INFO = "cinatra:lifecycle-publish-decision-island-ref-iv:v1";
+
+/**
+ * Encode a publish-decision island ref. `null` when it cannot be expressed.
+ *
+ * DETERMINISTIC, SO A POLL DOES NOT MOVE THE FRAME (cinatra#4738). The card re-reads its state every few seconds
+ * while the run is live, and the row's frame is addressed by this ref: a ref minted afresh on every read is a new
+ * frame address on every read, and the frame reloads its preview each time. So the same row of the same decision
+ * always encodes to the same ref. The IV is SYNTHETIC: the first 12 bytes of an HMAC-SHA256, under a key derived for
+ * this purpose alone, over the exact plaintext the cipher seals. One plaintext therefore always meets one IV (and
+ * produces one ciphertext, which discloses nothing a second copy of the same ref would not), and two different
+ * plaintexts meet the same IV only on a 96-bit collision, the same bound a random IV has. An IV is never reused for
+ * a different plaintext beyond that bound, so the GCM key and tag stay safe. What the ref now shows is only that two
+ * reads named the same row, which is what it is for. The decision id inside the plaintext changes with each new
+ * decision, so a later decision on the same row is a new ref.
+ */
 export function encodePublishDecisionIslandRef(payload: PublishDecisionIslandRefPayload): string | null {
   const { runId, decisionId, input } = payload;
   if (!boundedRefField(runId) || !boundedRefField(decisionId) || !boundedRefField(input)) return null;
   const key = publishDecisionIslandRefKey();
-  if (!key) return null;
+  const secret = process.env.BETTER_AUTH_SECRET;
+  if (!key || !secret) return null;
   try {
-    const iv = randomBytes(IV_BYTES);
+    const plaintext = Buffer.from(JSON.stringify({ r: runId, d: decisionId, i: input }), "utf8");
+    const ivKey = createHmac("sha256", secret).update(PUBLISH_DECISION_ISLAND_REF_IV_KEY_INFO).digest();
+    const iv = createHmac("sha256", ivKey).update(plaintext).digest().subarray(0, IV_BYTES);
     const cipher = createCipheriv("aes-256-gcm", key, iv);
-    const body = Buffer.concat([
-      cipher.update(JSON.stringify({ r: runId, d: decisionId, i: input }), "utf8"),
-      cipher.final(),
-    ]);
+    const body = Buffer.concat([cipher.update(plaintext), cipher.final()]);
     const ref = Buffer.concat([iv, body, cipher.getAuthTag()]).toString("base64url");
     return ref.length <= REF_MAX ? ref : null;
   } catch {

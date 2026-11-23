@@ -11,6 +11,9 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+process.env.BETTER_AUTH_SECRET ??= "test-secret-for-publish-decision-route";
+
+const recordIslandCredentialGrant = vi.fn();
 const resolveWidgetLifecycleActorContext = vi.fn();
 const resolveAssistantWidgetBinding = vi.fn();
 const readAgentRunById = vi.fn();
@@ -23,6 +26,12 @@ const resolveOrgRoleForUser = vi.fn();
 vi.mock("@/lib/lifecycle/widget-lifecycle-actor", async (importOriginal) => ({
   ...((await importOriginal()) as Record<string, unknown>),
   resolveWidgetLifecycleActorContext: (...a: unknown[]) => resolveWidgetLifecycleActorContext(...a),
+}));
+// The single-use ledger is the one store under the real widget mint (cinatra#4738); every grant it is asked to record
+// is kept here so a test can count them.
+vi.mock("@/lib/lifecycle/review-island-grant-store", async (importOriginal) => ({
+  ...((await importOriginal()) as Record<string, unknown>),
+  recordIslandCredentialGrant: (...a: unknown[]) => recordIslandCredentialGrant(...a),
 }));
 vi.mock("@/lib/assistant-widget-handles", () => ({
   resolveAssistantWidgetBinding: (...a: unknown[]) => resolveAssistantWidgetBinding(...a),
@@ -53,7 +62,6 @@ import type * as RouteModule from "../route";
 // The route the fix adds is loaded inside each test, not at the top of the
 // file: before the fix the file still loads and each test fails on the
 // missing module.
-// red-first-expect: Cannot find module '/src/app/api/lifecycle-views/publish-decision/route'
 let GET!: typeof RouteModule.GET;
 async function loadRoute(): Promise<void> {
   ({ GET } = await import("../route"));
@@ -98,6 +106,7 @@ beforeEach(() => {
   readLatestDecisionForRun.mockResolvedValue(PARKED);
   readDeciderName.mockResolvedValue(null);
   resolveOrgRoleForUser.mockResolvedValue("member");
+  recordIslandCredentialGrant.mockReturnValue(true);
 });
 
 describe("the door", () => {
@@ -215,5 +224,100 @@ describe("may decide, for the widget door's own actor (source a2a)", () => {
     const body = (await res.json()) as { state: string; mayDecide?: boolean };
     expect(body.state).toBe("pending");
     expect(body.mayDecide).toBe(false);
+  });
+});
+
+// cinatra#4738 round 1, finding 1: a widget frame sends no cookie, so an artifacts row draws only from an address that
+// carries its own credential. Before the fix the route answered the core's `islandSrc: null` unchanged, and no widget
+// publish card ever drew its artifacts row. These run the REAL core, the REAL ref codec, the REAL widget mint and the
+// REAL credential codec; only the stores and the single-use ledger are stubbed.
+// red-first-expect: expected null not to be null
+describe("the artifacts row's widget address", () => {
+  const FULL_CLAIMS = {
+    userId: "user-widget",
+    orgId: "org-widget",
+    siteId: "site-1",
+    client: "wordpress",
+    siteOrigin: "https://wp.example.test",
+    agentSlug: "blog",
+    instanceId: "inst-1",
+    jti: "jti-1",
+    grantedScopes: [WIDGET_LIFECYCLE_READ_SCOPE],
+  };
+  const ARTIFACTS_TEMPLATE = {
+    ...TEMPLATE,
+    publishRows: { post: [{ label: "Title", input: "title" }, { kind: "artifacts", label: "Proposed page", input: "reviewTargets" }] },
+  };
+  const ARTIFACTS_PARKED = {
+    ...PARKED,
+    surfacedValues: { title: "Spring launch", reviewTargets: [{ artifactId: "art-1", representationRevisionId: "rev-1" }] },
+  };
+  type ArtifactsRow = { kind: "artifacts"; label: string; ref: string | null; islandSrc: string | null };
+  const artifactsRowOf = async (res: Response) =>
+    ((await res.json()) as { rows?: Array<Record<string, unknown>> }).rows?.find(
+      (row) => row.kind === "artifacts",
+    ) as ArtifactsRow | undefined;
+
+  beforeEach(() => {
+    resolveWidgetLifecycleActorContext.mockResolvedValue({ ok: true, actorCtx: ACTOR_CTX, claims: FULL_CLAIMS });
+    readAgentTemplateById.mockResolvedValue(ARTIFACTS_TEMPLATE);
+    readLatestDecisionForRun.mockResolvedValue(ARTIFACTS_PARKED);
+  });
+
+  it("an owned run's artifacts row carries a credentialed address for exactly that row, under this reader", async () => {
+    await loadRoute();
+    const { decodePublishDecisionIslandRef, publishDecisionIslandSubjectKey } = await import(
+      "@/lib/lifecycle/lifecycle-card-ref"
+    );
+    const { REVIEW_ISLAND_CREDENTIAL_QUERY_PARAM, verifyReviewIslandCredential } = await import(
+      "@/lib/lifecycle/review-island-credential"
+    );
+    const row = await artifactsRowOf(await GET(request(RUN_ID)));
+    expect(row?.ref).not.toBeNull();
+    expect(row?.islandSrc ?? null).not.toBeNull();
+    const address = new URL(row!.islandSrc!, "https://app.example");
+    expect(address.pathname).toBe("/lifecycle/review-island");
+    expect(address.searchParams.get("ref")).toBe(row!.ref);
+    const sealed = verifyReviewIslandCredential(address.searchParams.get(REVIEW_ISLAND_CREDENTIAL_QUERY_PARAM)!);
+    expect(sealed).toMatchObject({
+      subject: "publish-decision",
+      runId: RUN_ID,
+      reviewTaskId: publishDecisionIslandSubjectKey({ decisionId: "d1", input: "reviewTargets" }),
+      userId: "user-widget",
+      orgId: "org-widget",
+      jti: "jti-1",
+    });
+    expect(decodePublishDecisionIslandRef(row!.ref!)).toEqual({ runId: RUN_ID, decisionId: "d1", input: "reviewTargets" });
+    // One single-use grant per minted address.
+    expect(recordIslandCredentialGrant).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["another person's run", { ...OWN_RUN, runBy: "someone-else" }],
+    ["a run in another org", { ...OWN_RUN, orgId: "org-other" }],
+  ])("%s mints no address and records no grant", async (_label, run) => {
+    await loadRoute();
+    readAgentRunById.mockResolvedValue(run);
+    const res = await GET(request(RUN_ID));
+    expect(await res.json()).toEqual({ state: "none" });
+    expect(recordIslandCredentialGrant).not.toHaveBeenCalled();
+  });
+
+  it("an address whose grant cannot be recorded is not handed out: the row keeps its ref and no address", async () => {
+    await loadRoute();
+    recordIslandCredentialGrant.mockReturnValue(false);
+    const row = await artifactsRowOf(await GET(request(RUN_ID)));
+    expect(row?.ref).not.toBeNull();
+    expect(row?.islandSrc).toBeNull();
+  });
+
+  // Finding 2: the row's ref is the frame's identity, so a second read of the same decision names the same row by the
+  // same ref. Each read still mints its own single-use credential; the card holds the one it framed.
+  it("a second read of the same decision answers the same ref, with a fresh credential", async () => {
+    await loadRoute();
+    const first = await artifactsRowOf(await GET(request(RUN_ID)));
+    const second = await artifactsRowOf(await GET(request(RUN_ID)));
+    expect(second?.ref).toBe(first?.ref);
+    expect(second?.islandSrc).not.toBe(first?.islandSrc);
   });
 });
