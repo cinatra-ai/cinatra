@@ -200,6 +200,7 @@ vi.mock("../installed-oas-path", () => ({
 }));
 
 import { dispatchPendingProducerRepairs, repairRunId } from "../lifecycle-repair-dispatch-store";
+import * as dispatchStore from "../lifecycle-repair-dispatch-store";
 import { REPAIR_FINDINGS_TEXT_LEAD } from "@/lib/lifecycle/lifecycle-policy";
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
 
@@ -861,4 +862,26 @@ describe("input data cannot become repair authorization", () => {
       expect(ports.created[0].input.runBy).toBe("human-origin");
     });
   }
+});
+
+describe("the escalation of a Regenerate repair whose run is not in the declared-input form", () => {
+  // The run start and the completer escalate by this one rule. During a
+  // rolling deployment the repair can already be `dispatched` (an older
+  // dispatcher marked it), so the compare-and-set takes a `requested` or a
+  // `dispatched` Regenerate repair, and only one that names a Regenerate node.
+  // A second escalation of the same repair matches no row and writes nothing.
+  // red-first-expect: to have property "escalateRegenerateRepairOfUndeclaredRun"
+  it("moves a dispatched Regenerate repair to escalated with the reason, once", async () => {
+    expect(dispatchStore).toHaveProperty("escalateRegenerateRepairOfUndeclaredRun");
+    ports.updateResults = [[{ lineageId: "lineage-current" }], []];
+    expect(await dispatchStore.escalateRegenerateRepairOfUndeclaredRun("repair-current")).toBe(true);
+    expect(await dispatchStore.escalateRegenerateRepairOfUndeclaredRun("repair-current")).toBe(false);
+    expect(ports.writes.map((w) => w.values.status)).toEqual(["escalated", "escalated"]);
+    expect(String(ports.writes[0].values.changeSummary)).toBe(
+      `${dispatchStore.DISPATCH_ESCALATION_PREFIX}${dispatchStore.REGENERATE_RUN_NOT_DECLARED_FORM}`,
+    );
+    const query = new PgDialect().sqlToQuery(ports.writes[0].condition as Parameters<PgDialect["sqlToQuery"]>[0]);
+    expect(query.params).toEqual(["repair-current", "requested", "dispatched"]);
+    expect(query.sql).toContain('"regenerate_node_id" is not null');
+  });
 });

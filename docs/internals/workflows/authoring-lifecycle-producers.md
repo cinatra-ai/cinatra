@@ -368,10 +368,15 @@ of each declared node (the step snapshots). A repair whose row names
   as an ordinary repair; no input of the run makes it a segment run.
 - **Inputs.** The run's inputs are the note and the typed
   `lifecycleRepairRequest` only. The note is the reviewer's words from the
-  Note field, exactly as recorded (`readRegenerateNote`), never the findings
-  text; a repair with no note is refused and escalated. The request is carried
-  with no findings, so the note's words reach the declared input and no other
-  place of the run's input. The note travels under the flow's start output
+  review field that fills the step's declared input, exactly as recorded
+  (`routeRegenerateFindings`), never the findings text: a picture step
+  receives the picture's prompt, every other step the Note field. A repair
+  with no such words is refused and escalated. The request is carried
+  with no findings, so the words reach the declared input and no other
+  place of the run's input. A run whose stored inputs are not this form (one
+  an older build made during a rolling deployment) is never run or applied:
+  the run start fails it, and the run start or the completer escalates its
+  repair, also when the repair is already `dispatched`. The note travels under the flow's start output
   that feeds the step's `noteInput` (its name may differ from `noteInput`); the
   segment request carries that name, and the runtime refuses a name that its
   mounted start node does not output or that does not feed the note. A name

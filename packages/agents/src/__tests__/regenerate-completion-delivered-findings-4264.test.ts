@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PgDialect } from "drizzle-orm/pg-core";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 // cinatra#4264: the completer of a Regenerate reports applied only the
 // findings whose words the segment run was given. A picture's Regenerate
@@ -16,7 +19,7 @@ import { PgDialect } from "drizzle-orm/pg-core";
 
 const dialect = new PgDialect();
 type Row = Record<string, unknown>;
-let tables: { lifecycleRepair: unknown; agentRuns: unknown; artifactProducedOutbox: unknown };
+let tables: { lifecycleRepair: unknown; agentRuns: unknown; agentTemplates: unknown; artifactProducedOutbox: unknown };
 
 const ports = {
   readRepair: vi.fn(),
@@ -24,6 +27,7 @@ const ports = {
   readDeliveredRepairRequest: vi.fn(),
   resolveOrgRoleForUser: vi.fn(),
   claimSegmentProduction: vi.fn(),
+  escalateRegenerateRepairOfUndeclaredRun: vi.fn(),
 };
 
 const MOCKED = [
@@ -34,18 +38,43 @@ const MOCKED = [
   "../regenerate-segment",
   "@/lib/auth-session",
   "@/lib/artifacts/artifact-revision-append",
+  "../installed-oas-path",
 ] as const;
 
 const RUN = "lifecycle-repair-run-repair-1";
 const NOTE = "Make the sky brighter";
 const PROMPT = "A lighthouse at dusk, wide angle";
 
+// The template's Regenerate entries and its installed flow: the picture step
+// declares its prompt (fed by the start output `imagePrompt`), the draft step
+// its note (fed by `draftNote`). The run's stored inputs are read against them.
+const LIFECYCLE = JSON.stringify({ regenerate: [
+  { artifactNode: "file_image", step: "image_flow", noteInput: "prompt" },
+  { artifactNode: "write_draft", step: "draft_flow", noteInput: "note" },
+] });
+const OAS = {
+  component_type: "Flow",
+  start_node: { $component_ref: "start" },
+  data_flow_connections: [
+    { source_node: { $component_ref: "start" }, source_output: "imagePrompt",
+      destination_node: { $component_ref: "image_flow" }, destination_input: "prompt" },
+    { source_node: { $component_ref: "start" }, source_output: "draftNote",
+      destination_node: { $component_ref: "draft_flow" }, destination_input: "note" },
+  ],
+};
+let oasDir: string;
+/** The repair run's status and stored inputs (the declared-input form unless a case sets another). */
+let runRow: Row;
+const declaredForm = (words: string) =>
+  JSON.stringify({ imagePrompt: words, lifecycleRepairRequest: { repairId: "repair-1", findings: [] } });
+
 function answer(table: unknown, where: unknown): Row[] {
   const params = where ? dialect.sqlToQuery(where as Parameters<PgDialect["sqlToQuery"]>[0]).params : [];
   if (table === tables.lifecycleRepair) {
     return params.includes("repair-1") ? [] : [{ id: "repair-1", createdAt: "2026-11-01 10:00:00+00" }];
   }
-  if (table === tables.agentRuns) return [{ status: "completed" }];
+  if (table === tables.agentRuns) return [runRow];
+  if (table === tables.agentTemplates) return [{ lifecycleConfig: LIFECYCLE, packageName: "@vendor/blog" }];
   // an ordinary repair run's latest write, on the reviewed artifact itself
   if (table === tables.artifactProducedOutbox) return [{ artifactId: "art-base", representationRevisionId: "rev-run" }];
   // the base artifact's liveness and pointer
@@ -65,6 +94,12 @@ function repairRow(findings: Row[], regenerateNodeId: string | null) {
 
 beforeEach(async () => {
   tables = await import("../schema");
+  oasDir = mkdtempSync(path.join(tmpdir(), "regen-completion-4264-"));
+  writeFileSync(path.join(oasDir, "agent.oas.json"), JSON.stringify(OAS));
+  runRow = { status: "completed", templateId: "tmpl-1", inputParams: declaredForm(PROMPT) };
+  vi.doMock("../installed-oas-path", () => ({
+    resolveInstalledOasPathForRead: () => path.join(oasDir, "agent.oas.json"),
+  }));
   vi.doMock("server-only", () => ({}));
   vi.doMock("../db", () => ({
     db: {
@@ -88,6 +123,7 @@ beforeEach(async () => {
   vi.doMock("../lifecycle-repair-dispatch-store", () => ({
     repairRunId: () => RUN,
     readDeliveredRepairRequest: ports.readDeliveredRepairRequest,
+    escalateRegenerateRepairOfUndeclaredRun: ports.escalateRegenerateRepairOfUndeclaredRun,
   }));
   vi.doMock("../regenerate-segment", async () => ({
     ...(await vi.importActual<typeof import("../regenerate-segment")>("../regenerate-segment")),
@@ -106,6 +142,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  rmSync(oasDir, { recursive: true, force: true });
   for (const path of MOCKED) vi.doUnmock(path);
   vi.resetModules();
   vi.resetAllMocks();
@@ -158,5 +195,66 @@ describe("the completer reports applied only the findings a Regenerate delivered
       { findingId: "finding-2", applied: true },
     ]);
     expect(response.changeSummary).toContain("answered 2 requested change(s)");
+  });
+});
+
+describe("a Regenerate run that is not in the declared-input form is escalated, never applied", () => {
+  // During a rolling deployment an older dispatcher makes the run in the
+  // earlier form (the findings text in the declared input, the request with
+  // all its findings) and marks its repair `dispatched`. Whether an older
+  // worker completed it or the run start failed it, the completer reads the
+  // run's stored inputs as the run start does and escalates the repair: its
+  // work is never applied and the review is never left with no successor and
+  // no escalation. The next pass finds the repair escalated and writes nothing.
+  const FINDINGS = [{ id: "prompt-window", message: NOTE }, { id: "picture-prompt", message: PROMPT }];
+  const EARLIER_FORM = JSON.stringify({
+    imagePrompt: `A reviewer requested changes to the work you produced. Apply the following requested changes:\n\n1. ${NOTE}\n2. ${PROMPT}`,
+    lifecycleRepairRequest: { kind: "lifecycle_repair_request", repairId: "repair-1", findings: FINDINGS },
+  });
+
+  async function completeTwice() {
+    ports.escalateRegenerateRepairOfUndeclaredRun.mockResolvedValueOnce(true);
+    const { completeDispatchedProducerRepairs } = await import("../lifecycle-repair-producer-completion-store");
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const first = await completeDispatchedProducerRepairs();
+      // The next pass reads the repair as the escalation left it.
+      ports.readRepair.mockResolvedValue({ ...repairRow(FINDINGS, "file_image"), status: "escalated" });
+      const second = await completeDispatchedProducerRepairs();
+      return { first, second };
+    } finally {
+      error.mockRestore();
+    }
+  }
+
+  // red-first-expect: expected "vi.fn()" to not be called at all, but actually been called 1 times
+  it("an earlier-form run's completion is escalated, not applied", async () => {
+    ports.readRepair.mockResolvedValue(repairRow(FINDINGS, "file_image"));
+    runRow = { status: "completed", templateId: "tmpl-1", inputParams: EARLIER_FORM };
+    const { first, second } = await completeTwice();
+    expect(ports.submitRepairResponse).not.toHaveBeenCalled();
+    expect(ports.claimSegmentProduction).not.toHaveBeenCalled();
+    expect(ports.escalateRegenerateRepairOfUndeclaredRun).toHaveBeenCalledTimes(1);
+    expect(ports.escalateRegenerateRepairOfUndeclaredRun).toHaveBeenCalledWith("repair-1");
+    expect(first).toMatchObject({ completed: 0, escalated: 1, unresolved: 0 });
+    expect(second).toMatchObject({ completed: 0, escalated: 0, unresolved: 0 });
+  });
+
+  // red-first-expect: expected "vi.fn()" to be called 1 times, but got 0 times
+  it("a dispatched earlier-form repair whose run the run start failed ends escalated, not unresolved", async () => {
+    ports.readRepair.mockResolvedValue(repairRow(FINDINGS, "file_image"));
+    runRow = { status: "failed", templateId: "tmpl-1", inputParams: EARLIER_FORM };
+    ports.claimSegmentProduction.mockResolvedValue(null);
+    const { first } = await completeTwice();
+    expect(ports.escalateRegenerateRepairOfUndeclaredRun).toHaveBeenCalledTimes(1);
+    expect(ports.submitRepairResponse).not.toHaveBeenCalled();
+    expect(first).toMatchObject({ completed: 0, escalated: 1, unresolved: 0 });
+  });
+
+  it("an ordinary repair run's inputs are not read against a declared input", async () => {
+    ports.readRepair.mockResolvedValue(repairRow([{ id: "finding-1", message: NOTE }], null));
+    runRow = { status: "completed", templateId: "tmpl-1", inputParams: EARLIER_FORM };
+    await completeOne();
+    expect(ports.escalateRegenerateRepairOfUndeclaredRun).not.toHaveBeenCalled();
   });
 });

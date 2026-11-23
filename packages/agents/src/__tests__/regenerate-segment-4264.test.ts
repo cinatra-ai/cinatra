@@ -327,7 +327,10 @@ describe("resolveRegenerateSegment checks the run's inputs at its start", () => 
       imagePrompt: "Apply these review findings:\n\n1. Make the sky brighter\n2. A lighthouse at dusk, wide angle",
       lifecycleRepairRequest: { kind: "lifecycle_repair_request", repairId: "repair-1", findings: FINDINGS },
     };
-    expectRefused(await resolve(withFindings(), runWith(earlier)));
+    const refusal = await resolve(withFindings(), runWith(earlier));
+    expectRefused(refusal);
+    // Marked, so the run start escalates the run's repair as well.
+    expect(refusal).toMatchObject({ inputsNotDeclared: true });
     // The words alone are not enough: the request must hold no findings.
     expectRefused(
       await resolve(
@@ -339,6 +342,12 @@ describe("resolveRegenerateSegment checks the run's inputs at its start", () => 
     expectRefused(
       await resolve(withFindings(), runWith({ imagePrompt: NOTE, lifecycleRepairRequest: { findings: [] } })),
     );
+  });
+
+  it("a refusal for another reason than the run's inputs is not marked", async () => {
+    const other = await resolve(deps({ readVerifiedFilingNode: vi.fn(async () => null) }), runWith({}));
+    expectRefused(other);
+    expect(other).not.toHaveProperty("inputsNotDeclared");
   });
 
   it("resolves a run in the declared-input form, from the stored text or the parsed object", async () => {

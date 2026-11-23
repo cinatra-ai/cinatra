@@ -200,7 +200,10 @@ export type RegenerateSegmentPlan = {
 export type RegenerateSegmentResolution =
   | { kind: "ordinary" }
   | { kind: "segment"; plan: RegenerateSegmentPlan }
-  | { kind: "refused"; reason: string };
+  /** `inputsNotDeclared`: the refusal is the run's own inputs, which are not
+   *  the declared-input form (`segmentInputsInDeclaredForm`). The run start
+   *  then escalates the run's repair as well. */
+  | { kind: "refused"; reason: string; inputsNotDeclared?: true };
 
 export type RegenerateSegmentDeps = {
   /** The repair a repair-run id belongs to (null: not a repair run, or no row). */
@@ -357,6 +360,36 @@ export function segmentInputsInDeclaredForm(
 }
 
 /**
+ * Whether a finished Regenerate run's stored inputs are the declared-input
+ * form (`segmentInputsInDeclaredForm`), read for the completer (cinatra#4264).
+ * The note's start output is resolved as the run start resolves it: the
+ * template's `regenerate` entry for the repair's node, then the installed
+ * flow. With no entry, or no usable start output, the form cannot be the
+ * declared one: false (the run start refuses such a run too). A read fault
+ * throws.
+ */
+export async function regenerateRunInDeclaredForm(
+  input: {
+    regenerateNodeId: string;
+    findings: unknown;
+    inputParams: unknown;
+    lifecycleConfig: unknown;
+    packageName: string | null;
+  },
+  readNoteStartOutput: RegenerateSegmentDeps["readNoteStartOutput"] = readNoteStartOutputFromInstalledOas,
+): Promise<boolean> {
+  const entry = readRegenerateEntry(input.lifecycleConfig, input.regenerateNodeId);
+  if (!entry) return false;
+  const noteStartOutput = await readNoteStartOutput({
+    packageName: input.packageName,
+    step: entry.step,
+    noteInput: entry.noteInput,
+  });
+  if (!usableNoteKey(noteStartOutput)) return false;
+  return segmentInputsInDeclaredForm(input.inputParams, noteStartOutput, input.findings);
+}
+
+/**
  * Whether `run` is a Regenerate segment run, and its plan. `ordinary` for a
  * run that is not a lifecycle repair run, a repair run whose id names no
  * repair, and a repair whose `regenerate_node_id` is NULL (both run as before).
@@ -422,7 +455,11 @@ export async function resolveRegenerateSegment(
       Object.prototype.hasOwnProperty.call(run, "inputParams") &&
       !segmentInputsInDeclaredForm(run.inputParams, noteStartOutput, repair.findings)
     ) {
-      return refused("the run's inputs are not the reviewer's words in the step's declared input alone");
+      return {
+        kind: "refused",
+        reason: `${REGENERATE_SEGMENT_REFUSED}: the run's inputs are not the reviewer's words in the step's declared input alone`,
+        inputsNotDeclared: true,
+      };
     }
     const nodes = [...new Set([entry.step, nodeId])].sort();
     const rows = await d.readStepSnapshots({ orgId: repair.orgId, runId: provenance.runId, nodeIds: nodes });

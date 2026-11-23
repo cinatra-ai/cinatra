@@ -87,7 +87,7 @@ import "server-only";
 
 import { isDeepStrictEqual } from "node:util";
 
-import { and, asc, eq, isNotNull, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
 
 import { agentBuilderPool, db } from "./db";
 import { agentRuns, agentTemplates, artifactReviewGates, lifecycleRepair } from "./schema";
@@ -862,11 +862,41 @@ async function stopExistingRepairRun(runId: string, orgId: string): Promise<void
   throw new Error(`the repair run ${runId} was not stopped: ${String(notStopped.error)}`);
 }
 
+/** Why a Regenerate repair whose run is not in the declared-input form
+ *  (`segmentInputsInDeclaredForm`) is escalated (cinatra#4264). */
+export const REGENERATE_RUN_NOT_DECLARED_FORM =
+  "the Regenerate's repair run was made with other inputs than the reviewer's words in the step's declared input, so it is not run and its work is not applied";
+
+/**
+ * cinatra#4264: escalate the Regenerate repair of a run whose inputs are not
+ * the declared-input form. One rule for both readers of such a run: the
+ * worker's run start, which fails the run (`resolveRegenerateSegment` refuses
+ * it), and the completer, which finds it finished. During a rolling deployment
+ * an older dispatcher can create the run in the earlier form and mark its
+ * repair `dispatched`; the dispatch drain reads only `requested` repairs, so
+ * the escalation takes a `requested` or a `dispatched` repair. Only a repair
+ * that names a Regenerate node is taken. A compare-and-set, as
+ * `escalateRepair`: a second call for the same repair changes nothing and
+ * returns false.
+ */
+export async function escalateRegenerateRepairOfUndeclaredRun(repairId: string): Promise<boolean> {
+  return escalateRepair(repairId, REGENERATE_RUN_NOT_DECLARED_FORM, { fromDispatched: true });
+}
+
 /** CAS a `requested` repair to `escalated`, recording WHY on `change_summary`
  * behind the dispatch sentinel. Returns false when the row moved under us.
  * cinatra#4312 — an escalated lineage has no successor to decide, so the same
- * commit carries a declared review's latest decision (carryDeclaredReviewDecision). */
-async function escalateRepair(repairId: string, reason: string): Promise<boolean> {
+ * commit carries a declared review's latest decision (carryDeclaredReviewDecision).
+ * `fromDispatched` (only `escalateRegenerateRepairOfUndeclaredRun`): a
+ * `dispatched` Regenerate repair is taken too. */
+async function escalateRepair(
+  repairId: string,
+  reason: string,
+  opts?: { fromDispatched: true },
+): Promise<boolean> {
+  const from = opts?.fromDispatched
+    ? and(inArray(lifecycleRepair.status, ["requested", "dispatched"]), isNotNull(lifecycleRepair.regenerateNodeId))
+    : eq(lifecycleRepair.status, "requested");
   return db.transaction(async (tx) => {
     const rows = await tx
       .update(lifecycleRepair)
@@ -875,7 +905,7 @@ async function escalateRepair(repairId: string, reason: string): Promise<boolean
         changeSummary: `${DISPATCH_ESCALATION_PREFIX}${reason}`,
         updatedAt: sql`now()`,
       })
-      .where(and(eq(lifecycleRepair.id, repairId), eq(lifecycleRepair.status, "requested")))
+      .where(and(eq(lifecycleRepair.id, repairId), from))
       .returning({ lineageId: lifecycleRepair.lineageId });
     if (rows.length !== 1) return false;
     await carryDeclaredReviewDecision(tx, rows[0].lineageId);

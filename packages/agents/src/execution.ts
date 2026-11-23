@@ -551,6 +551,7 @@ import {
   redactSegmentRequests,
   regenerateSegmentMetadata,
   resolveRegenerateSegment,
+  segmentRepairIdFromRunId,
   stripSegmentReceipts,
   REGENERATE_RUNTIME_UNSUPPORTED,
   type RegenerateSegmentPlan,
@@ -4086,6 +4087,24 @@ async function runAgentBuilderExecutionJobInner(
   if (segmentResolution.kind === "refused") {
     console.error(`[agent-builder] run ${runId} rejected before dispatch: ${segmentResolution.reason}`);
     await transitionRunStatus(runId, "queued", "failed", { error: segmentResolution.reason }, executionAuthority);
+    // A run whose inputs are not the declared-input form (one an older
+    // dispatcher made during a rolling deployment, its repair maybe already
+    // `dispatched`) is failed and its repair escalated, so the review gets
+    // its escalation and is never left waiting on a run that never answers.
+    // A compare-and-set: a second refusal of the same run writes nothing. A
+    // failed escalation is logged; the completer escalates the finished run
+    // by the same rule (`escalateRegenerateRepairOfUndeclaredRun`).
+    const repairId = segmentResolution.inputsNotDeclared ? segmentRepairIdFromRunId(runId) : null;
+    if (repairId) {
+      try {
+        const { escalateRegenerateRepairOfUndeclaredRun } = await import("./lifecycle-repair-dispatch-store");
+        await escalateRegenerateRepairOfUndeclaredRun(repairId);
+      } catch (err) {
+        console.error(
+          `[agent-builder] run ${runId}: its repair was not escalated: ${err instanceof Error ? err.name : "error"}`,
+        );
+      }
+    }
     return;
   }
   const segmentPlan: RegenerateSegmentPlan | null =
