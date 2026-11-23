@@ -171,7 +171,7 @@ describe("OrchestratorStepperPanel at a publish gate (cinatra#4150)", () => {
     const card = container.querySelector(CARD)!;
     expect(card.getAttribute("data-lifecycle-card-host")).toBe("run_card");
     expect(card.getAttribute("data-lifecycle-card-state")).toBe("pending");
-    expect(container.textContent).toContain("Publish this?");
+    expect(container.textContent).toContain("Allow this change outside Cinatra?");
     expect(container.textContent).not.toContain(PROCESSING);
     // No generic approval surface beside it: no resume reading, no review placeholder.
     expect(container.querySelector('[data-run-review-slot]')).toBeNull();

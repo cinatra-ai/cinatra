@@ -97,18 +97,18 @@ describe("the drawn card", () => {
       expect(root.getAttribute("data-lifecycle-card-host"), host).toBe(host);
       expect(root.getAttribute("data-lifecycle-card-state"), host).toBe("pending");
       expect(root.getAttribute("data-conformance-id"), host).toBe("publish-card");
-      expect(root.textContent).toContain("Publish this?");
-      expect(root.textContent).toContain("Blog publisher \u00b7 nothing has been published");
+      expect(root.textContent).toContain("Allow this change outside Cinatra?");
+      expect(root.textContent).toContain("Blog publisher \u00b7 nothing outside Cinatra has changed yet");
       const labels = Array.from(root.querySelectorAll("dt")).map((el) => el.textContent);
       const values = Array.from(root.querySelectorAll("dd")).map((el) => el.textContent);
       expect(labels).toEqual(["Title", "Site"]);
       expect(values).toEqual(["Spring launch", "Company blog"]);
       expect(root.querySelector("textarea")).not.toBeNull();
-      expect(root.textContent).toContain("recorded with Do not publish");
+      expect(root.textContent).toContain("recorded with Do not allow");
       const decline = root.querySelector<HTMLButtonElement>('[data-action="decline-publish -> declined"]');
       const approve = root.querySelector<HTMLButtonElement>('[data-action="approve-publish -> released"]');
-      expect(decline?.textContent).toBe("Do not publish");
-      expect(approve?.textContent).toBe("Publish");
+      expect(decline?.textContent).toBe("Do not allow");
+      expect(approve?.textContent).toBe("Allow");
       expect(decline?.disabled).toBe(false);
       expect(approve?.disabled).toBe(false);
       // Two controls and no third: no Continue beneath them.
@@ -138,7 +138,7 @@ describe("the drawn card", () => {
     expect(root.querySelectorAll("dd")).toHaveLength(2);
     expect(root.querySelector<HTMLButtonElement>(APPROVE)?.disabled).toBe(true);
     expect(root.querySelector<HTMLButtonElement>(DECLINE)?.disabled).toBe(true);
-    expect(root.textContent).toContain("needs approve access on the run");
+    expect(root.textContent).toContain("Deciding whether this change is made needs approve access on the run, so Do not allow and Allow stay disabled with the reason shown.");
     expect(root.querySelector("textarea")).toBeNull();
     // IV.1: the restricted card's frame carries its spec anchor, and only the restricted card draws it.
     const frame = root.querySelector('[data-conformance-id="publish-state-restricted"]');
@@ -163,10 +163,10 @@ describe("the drawn card", () => {
   });
 
   it.each([
-    [APPROVED, "publish-card-approved", "Publish approved", "Approved by Dana Okafor. The run goes on to the agent's own publishing step."],
-    [DECLINED, "publish-card-declined", "Not published", "Declined by Dana Okafor. The run ended, and nothing was published. Reason: \u201cNot ready yet.\u201d"],
-    [{ ...DECLINED, reason: null, deciderName: null }, "publish-card-declined", "Not published", "Declined. The run ended, and nothing was published."],
-    [EXPIRED, "publish-card-expired", "Expired", "No one decided before this request expired. The run ended, and nothing was published."],
+    [APPROVED, "publish-card-approved", "Allowed", "Approved by Dana Okafor. The run goes on to the agent's own step that makes the change."],
+    [DECLINED, "publish-card-declined", "Not allowed", "Declined by Dana Okafor. The run ended, and nothing outside Cinatra changed. Reason: \u201cNot ready yet.\u201d"],
+    [{ ...DECLINED, reason: null, deciderName: null }, "publish-card-declined", "Not allowed", "Declined. The run ended, and nothing outside Cinatra changed."],
+    [EXPIRED, "publish-card-expired", "Expired", "No one decided before this request expired. The run ended, and nothing outside Cinatra changed."],
   ])("a settled card keeps its rows, drops the controls and the note, and draws its marker (%#)", async (answer, id, label, line) => {
     stateMock.mockImplementation(async () => answer);
     const root = await rootOf(mountOn("page_gate_region", okDoor()));
@@ -175,11 +175,31 @@ describe("the drawn card", () => {
     expect(root.querySelectorAll("dd")).toHaveLength(2);
     expect(root.querySelector("button")).toBeNull();
     expect(root.querySelector("textarea")).toBeNull();
-    expect(root.textContent).not.toContain("nothing has been published");
+    expect(root.textContent).not.toContain("nothing outside Cinatra has changed yet");
     const marker = root.querySelector(`[data-conformance-id="${id}"]`);
     expect(marker?.querySelector('[data-slot="status-pill"]')?.textContent).toContain(label);
     expect(marker?.textContent).toContain(line);
     if (answer.state === "expired") expect(marker?.textContent).not.toContain(" by ");
+  });
+
+  it("the three settled readings carry the spec's exact copy: the generic question and the marker, nothing more", async () => {
+    // specs/app-lifecycle-cards.html section XV: one generic question on every settled card, and a marker that is a chip
+    // followed by one line. No agent, site or service is named in the card's own words, and none says "published" (the agent\u2019s own display name is its own words).
+    const spec: Array<[typeof APPROVED | typeof EXPIRED, string]> = [
+      [APPROVED, "AllowedApproved by Dana Okafor. The run goes on to the agent's own step that makes the change."],
+      [DECLINED, "Not allowedDeclined by Dana Okafor. The run ended, and nothing outside Cinatra changed. Reason: \u201cNot ready yet.\u201d"],
+      [EXPIRED, "ExpiredNo one decided before this request expired. The run ended, and nothing outside Cinatra changed."],
+    ];
+    for (const [answer, marker] of spec) {
+      stateMock.mockImplementation(async () => answer);
+      const mounted = mountOn("chat_thread", okDoor());
+      await settle();
+      const root = await rootOf(mounted);
+      expect(root.querySelector("span.font-bold")?.textContent).toBe("Allow this change outside Cinatra?");
+      expect(root.querySelector(`[data-conformance-id="publish-card-${answer.state}"]`)?.textContent).toBe(marker);
+      expect(root.textContent).not.toMatch(/published|publishing|Publish this/i);
+      cleanup();
+    }
   });
 
   it("a pending card with no rows draws no row list", async () => {
@@ -451,7 +471,7 @@ describe("the shared read's tick while the run has not finished", () => {
 });
 
 describe("the decide door", () => {
-  it("Publish sends approve with no note, Do not publish sends the written note, and the card re-reads", async () => {
+  it("Allow sends approve with no note, Do not allow sends the written note, and the card re-reads", async () => {
     const decide = vi.fn<PublishDecisionDecide>(async () => "decided");
     const mounted = mountOn("run_card", decide);
     const root = await rootOf(mounted);
@@ -478,10 +498,10 @@ describe("the decide door", () => {
     await settle();
     const closed = await rootOf(mounted);
     expect(closed.getAttribute("data-lifecycle-card-state")).toBe("no_longer_open");
-    expect(closed.textContent).toContain("This publish request is no longer open");
+    expect(closed.textContent).toContain("This request is no longer open");
     expect(closed.querySelector(APPROVE)).toBeNull();
     expect(closed.querySelector('[data-conformance-id="publish-state-no-longer-open"]')?.textContent).toContain(
-      "This publish request is no longer open",
+      "This request is no longer open",
     );
     let land: (value: unknown) => void = () => undefined;
     stateMock.mockImplementation(() => new Promise((resolve) => (land = resolve)));

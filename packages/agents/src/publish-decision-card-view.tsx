@@ -217,8 +217,8 @@ export function publishGateIsOpen(read: PublishDecisionCardRead): boolean {
 const FRAME = "w-full min-w-0 overflow-hidden rounded-card border border-line bg-surface-strong";
 const KICK = "font-mono text-badge-2xs uppercase tracking-kicker text-muted-foreground";
 const MARKERS = {
-  approved: ["publish-card-approved", "approved", "Publish approved"],
-  declined: ["publish-card-declined", "idle", "Not published"],
+  approved: ["publish-card-approved", "approved", "Allowed"],
+  declined: ["publish-card-declined", "idle", "Not allowed"],
   expired: ["publish-card-expired", "idle", "Expired"],
 } as const;
 
@@ -227,10 +227,10 @@ function settledMarker(state: PublishDecisionCardState): ReactElement | null {
   if (state.state !== "approved" && state.state !== "declined" && state.state !== "expired") return null;
   const [id, pill, label] = MARKERS[state.state];
   const by = (verb: string, name: string | null) => (name ? `${verb} by ${name}.` : `${verb}.`);
-  const ended = "The run ended, and nothing was published.";
+  const ended = "The run ended, and nothing outside Cinatra changed.";
   const line =
     state.state === "approved"
-      ? `${by("Approved", state.deciderName)} The run goes on to the agent's own publishing step.`
+      ? `${by("Approved", state.deciderName)} The run goes on to the agent's own step that makes the change.`
       : state.state === "declined"
         ? `${by("Declined", state.deciderName)} ${ended}${state.reason ? ` Reason: \u201c${state.reason}\u201d` : ""}`
         : `No one decided before this request expired. ${ended}`;
@@ -299,7 +299,7 @@ export function PublishDecisionCard({
     };
     body = (
       <div className={`${FRAME} px-4 py-4 text-center`} data-conformance-id="publish-state-no-longer-open">
-        <p className="text-row-title font-semibold text-foreground">This publish request is no longer open</p>
+        <p className="text-row-title font-semibold text-foreground">This request is no longer open</p>
         <p className="mt-1 text-xs text-muted-foreground">
           It was already answered, it expired, or the run moved on.{" "}
           <Button type="button" variant="link" className="h-auto p-0 text-xs" onClick={refresh}>
@@ -313,10 +313,10 @@ export function PublishDecisionCard({
       <>
         <div className={FRAME} data-conformance-id={restricted ? "publish-state-restricted" : undefined}>
           <div className="border-b border-line px-3.5 py-2.5">
-            <span className="text-row-title font-bold text-foreground">Publish this?</span>
+            <span className="text-row-title font-bold text-foreground">Allow this change outside Cinatra?</span>
             <p className="mt-1 font-mono text-fact-line text-muted-foreground">
               {state.agentName}
-              {pending ? " \u00b7 nothing has been published" : null}
+              {pending ? " \u00b7 nothing outside Cinatra has changed yet" : null}
             </p>
           </div>
           {state.rows.length > 0 ? (
@@ -334,12 +334,12 @@ export function PublishDecisionCard({
               {restricted ? null : (
                 <label className="block">
                   <span className={`mb-1.5 block ${KICK}`}>
-                    Note <span className="normal-case tracking-normal">(optional &middot; recorded with Do not publish)</span>
+                    Note <span className="normal-case tracking-normal">(optional &middot; recorded with Do not allow)</span>
                   </span>
                   <Textarea
                     value={note}
                     onChange={(event) => setNote(event.target.value)}
-                    placeholder={"Say why, if you do not publish\u2026"}
+                    placeholder={"Say why, if you do not allow this\u2026"}
                     disabled={disabled}
                   />
                 </label>
@@ -347,16 +347,16 @@ export function PublishDecisionCard({
               <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
                 <Button type="button" variant="outline" size="sm" data-action="decline-publish -> declined"
                   disabled={disabled} onClick={() => void send("decline")}>
-                  Do not publish
+                  Do not allow
                 </Button>
                 <Button type="button" size="sm" data-action="approve-publish -> released"
                   disabled={disabled} onClick={() => void send("approve")}>
-                  Publish
+                  Allow
                 </Button>
               </div>
               {restricted ? (
                 <p className="mt-2.5 text-xs text-muted-foreground">
-                  Deciding whether this goes out needs approve access on the run.
+                  Deciding whether this change is made needs approve access on the run, so Do not allow and Allow stay disabled with the reason shown.
                 </p>
               ) : null}
             </div>

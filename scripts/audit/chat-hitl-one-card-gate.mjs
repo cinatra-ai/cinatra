@@ -1140,7 +1140,7 @@ export const LIFECYCLE_CARD_CONTRACTS = Object.freeze({
     // DRAWN with its kind (cinatra#4150): the kind is registered in the same change that mounts its card on all four
     // hosts, so it never stands as a placeholder and no host carries a gap.
     design:
-      "the publish card in specs/app-lifecycle-cards.html at the pin: section XV (the question, the agent's rows, the note, Do not publish and Publish, and the three settled readings) and section IV.1 (pending, loading, restricted, no longer open)",
+      "the publish card in specs/app-lifecycle-cards.html at the pin: section XV (the question, the agent's rows, the note, Do not allow and Allow, and the three settled readings) and section IV.1 (pending, loading, restricted, no longer open)",
     component: "PublishDecisionCard",
     wireCarriage: "read",
     deliveries: ["platform_injected"],
