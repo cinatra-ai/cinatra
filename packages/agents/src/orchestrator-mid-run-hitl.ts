@@ -13,7 +13,7 @@
  * needs no edit.
  */
 
-import { fieldRendererRegistry } from "./field-renderer-registry";
+import { fieldRendererRegistry, isListPickerRenderer } from "./field-renderer-registry";
 
 /**
  * Manifest-declared strict classification: does a registered binding flag
@@ -42,7 +42,7 @@ export function classifyMidRunHitl(xRenderer: string): boolean {
   return (
     xRenderer.endsWith(":output") ||
     xRenderer.endsWith("-output") || // per-content IDs: :contacts-output, :drafts-output, :followups-output
-    xRenderer.endsWith(":list-picker") || // list-based recipient selection
+    isListPickerRenderer(xRenderer) || // a list step: the binding's declared kind
     xRenderer.endsWith(":scrape-schema-review") || // Gate 1 - list-curator
     xRenderer.endsWith(":final-list-review") || // Gate 2 - list-curator
     xRenderer.endsWith(":setup-form")

@@ -41,7 +41,7 @@ import {
 } from "./agent-hitl-screen-card";
 import type { AgentRunMessageBody } from "./store";
 import { StatusPill } from "@/components/ui/status-pill";
-import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
+import { continueAwaitsAPick, fieldRendererRegistry, wholeAnswerStageProps } from "./field-renderer-registry";
 import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
 import type { FieldRendererContext, FieldRendererProps } from "./field-renderer-registry";
 import { ArrowRight } from "lucide-react";
@@ -3242,6 +3242,13 @@ export function AgenticRunPanel({
                       // interrupts that carry no field name (mid-run gates).
                       fieldName={hitlRendererFieldName(effectiveHitlContext.fieldName)}
                       schema={hitlRendererEntry.fieldSchema}
+                      // A whole-answer renderer reads the run values and the
+                      // staged answer apart (cinatra#3470).
+                      {...wholeAnswerStageProps(
+                        hitlRendererEntry.entry,
+                        effectiveHitlContext.currentValues,
+                        bufferedHitlValue,
+                      )}
                       // An OBJECT-typed setup field gets its OWN value, not the
                       // whole currentValues envelope (cinatra#2484). The
                       // unwrapping stays at the CALLER even now that the renderer

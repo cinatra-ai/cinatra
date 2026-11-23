@@ -130,7 +130,35 @@ export type FieldRendererEntry = {
   stagesWholeAnswer?: boolean;
   /** cinatra#3035: this kind's component commits a pick as `userResponse`, and a gate drawn by it holds the card's Continue until a pick is made. */
   holdsContinueUntilPicked?: boolean;
+  /**
+   * THE BINDING'S DECLARED KIND (cinatra#3470), as its manifest names it.
+   * What the gate's answer needs (the list step's pick snapshot) is read from
+   * it, never from the id: an id is free text. ABSENT for host-internal
+   * entries, which keep the id-suffix reading (`isListPickerRenderer`).
+   */
+  kind?: string;
 };
+
+/**
+ * What a host holds for a renderer that stages its whole answer
+ * (`stagesWholeAnswer`, cinatra#3470): the gate's ORIGINAL run values and the
+ * answer staged so far, apart. The renderer derives everything it shows from
+ * these two, so what is shown, what holds the Continue and what is sent are
+ * one reading. `value` alone cannot carry it: it is the two merged.
+ */
+export type HitlStageSplit = {
+  runValue: Record<string, unknown>;
+  staged: Record<string, unknown>;
+};
+
+/** The props a host adds for a whole-answer renderer; none for any other. */
+export function wholeAnswerStageProps(
+  entry: FieldRendererEntry | null | undefined,
+  runValue: Record<string, unknown> | null | undefined,
+  staged: Record<string, unknown>,
+): { hitlStage?: HitlStageSplit } {
+  return entry?.stagesWholeAnswer === true ? { hitlStage: { runValue: runValue ?? {}, staged } } : {};
+}
 
 class FieldRendererRegistryImpl {
   private entries: FieldRendererEntry[] = [];
@@ -170,6 +198,19 @@ class FieldRendererRegistryImpl {
 }
 
 export const fieldRendererRegistry = new FieldRendererRegistryImpl();
+
+/**
+ * Is `xRenderer` a list step (cinatra#3470)? The registered binding's
+ * DECLARED kind decides, so `{ kind: "list-picker", id: "@scope/pkg:pick-list" }`
+ * is one. A declared card is drawn by the host's card whatever its kind, so it
+ * is never one. Only an id with no registered kind falls back to the
+ * `:list-picker` suffix.
+ */
+export function isListPickerRenderer(xRenderer: string): boolean {
+  const entry = fieldRendererRegistry.list().find((e) => e.id === xRenderer);
+  if (entry?.kind !== undefined) return entry.kind === "list-picker" && entry.stagesWholeAnswer !== true;
+  return xRenderer.endsWith(":list-picker");
+}
 
 /** Whether a gate's Continue still waits for a pick: its entry declares the hold and the buffered `userResponse` is not a non-empty string (cinatra#3035). */
 export function continueAwaitsAPick(

@@ -22,7 +22,11 @@
  *     widget's broker body. A typed field answer, a decline with its keys and
  *     a choice made after another one reach the running agent as exactly the
  *     staged answer, and the captured prompt and the answered-gate binding
- *     record the same answer.
+ *     record the same answer. So does an untouched prefilled field, a choice
+ *     staged before the conversation moved the card (still drawn as chosen),
+ *     and a choice switch, whose carried keys come from the run values;
+ *   - a list step is read from the binding's declared kind, so a list picker
+ *     with any id sends its pick.
  *
  * Harness mirrors agent-hitl-screen-card-boolean-4310.test.tsx.
  *
@@ -133,8 +137,19 @@ import {
   ensureDefaultFieldRenderersRegistered,
   registerFieldRendererBindings,
 } from "../register-default-renderers";
-import { AgentHitlScreenCard } from "../agent-hitl-screen-card";
-import { continueApprovalFlag, continueHeldByRenderer } from "../hitl-gate-submit";
+import { AgentHitlScreenCard, type AgentHitlScreenCarrier } from "../agent-hitl-screen-card";
+import {
+  continueApprovalFlag,
+  continueHeldByRenderer,
+  isMidRunListStepGate,
+  liftRendererApprovalNote,
+} from "../hitl-gate-submit";
+import { classifyMidRunHitl } from "../orchestrator-mid-run-hitl";
+import {
+  declaredHitlScreenReady,
+  makeDeclaredHitlScreenRenderer,
+  type DeclaredHitlCard,
+} from "../declared-hitl-screen-renderer";
 import { Button } from "@/components/ui/button";
 
 const RUN_ID = "run-3470";
@@ -516,6 +531,86 @@ describe("a declared card's answer on the real wire (cinatra#3470)", () => {
     expect(recorded()).toEqual({ itemId: "item-1", action: "revise" });
   });
 
+  it("an untouched prefilled field is sent exactly as shown", async () => {
+    // The run value prefills both fields; the person presses Continue without
+    // touching either. What the card shows is what the agent receives.
+    registerCard(FIELD_CARD, { itemId: "item-1", answer: "prefilled", detail: "Fixture prefilled detail" });
+    const { container } = mount();
+    await settle();
+    await waitFor(() => expect(container.querySelector<HTMLInputElement>("input")?.value).toBe("prefilled"));
+    await pressContinue(container);
+    await waitFor(() => expect(sendTaskMock).toHaveBeenCalledTimes(1));
+    const sent = JSON.stringify({ itemId: "item-1", answer: "prefilled", detail: "Fixture prefilled detail" });
+    expect(wireText()).toBe(sent);
+    expect(recorded()).toEqual({ itemId: "item-1", answer: "prefilled", detail: "Fixture prefilled detail" });
+  });
+
+  it("a card moved to another place in the conversation keeps its staged choice visible, and sends it", async () => {
+    // The conversation draws the card in one of two containers and moves it
+    // mid-answer (chat-messages-view.tsx): the instance is unmounted and a new
+    // one mounted, with the host's carrier keeping the staged answer.
+    registerCard(CHOICE_CARD, { itemId: "item-1" });
+    const carrier: AgentHitlScreenCarrier = { current: null };
+    const draw = () => (
+      <LifecycleCardSurfaceProvider host="chat_thread">
+        <AgentHitlScreenCard runId={RUN_ID} wireRef={TASK_ID} carrier={carrier} />
+      </LifecycleCardSurfaceProvider>
+    );
+    const first = render(<section data-place="first">{draw()}</section>);
+    await settle();
+    await waitFor(() => expect(answer(first.container, /Fixture decline/)).toBeDefined());
+    fireEvent.click(answer(first.container, /Fixture decline/)!);
+    await settle();
+    first.unmount();
+    const moved = render(<aside data-place="moved">{draw()}</aside>);
+    await settle();
+    await waitFor(() => expect(answer(moved.container, /Fixture decline/)).toBeDefined());
+    expect(answer(moved.container, /Fixture decline/)!.getAttribute("aria-checked")).toBe("true");
+    expect(answer(moved.container, /Fixture revise/)!.getAttribute("aria-checked")).toBe("false");
+    await pressContinue(moved.container);
+    await waitFor(() => expect(sendTaskMock).toHaveBeenCalledTimes(1));
+    expect(wireText()).toBe(JSON.stringify({ itemId: "item-1", approved: false, reason: "Fixture reason" }));
+  });
+
+  it("a choice switch carries its keys from the run values, never from the earlier choice", async () => {
+    // The schema refuses a carry key that is also an answer key; this card
+    // is registered past the schema to prove the card itself reads carried
+    // keys from the gate's run values: the earlier choice's `mode` is never
+    // what goes out.
+    const card: DeclaredHitlCard = {
+      layout: "card",
+      title: "Fixture choice",
+      decisionLabel: "Fixture decision",
+      decisions: [
+        { label: "Fixture block", answer: { mode: "block" } },
+        { label: "Fixture proceed", answer: { action: "proceed" } },
+      ],
+      carry: ["mode"],
+    };
+    fieldRendererRegistry.register({
+      id: DECLARED_ID,
+      priority: 90,
+      condition: (_f, schema) => (schema as { "x-renderer"?: unknown })["x-renderer"] === DECLARED_ID,
+      renderer: makeDeclaredHitlScreenRenderer(card),
+      credentialSafe: true,
+      midRunHitl: true,
+      stagesWholeAnswer: true,
+      continueReady: ({ runValue, staged }) => declaredHitlScreenReady(card, runValue, staged),
+      kind: "linkedin-draft-review",
+    });
+    current = asking(DECLARED_ID, { mode: "review" });
+    const { container } = mount();
+    await settle();
+    await waitFor(() => expect(answer(container, /Fixture block/)).toBeDefined());
+    fireEvent.click(answer(container, /Fixture block/)!);
+    await settle();
+    fireEvent.click(answer(container, /Fixture proceed/)!);
+    await settle();
+    await pressContinue(container);
+    await waitFor(() => expect(sendTaskMock).toHaveBeenCalledTimes(1));
+    expect(wireText()).toBe(JSON.stringify({ mode: "review", action: "proceed" }));
+  });
+
   it("the site widget's broker body carries the same answer to the same server road", async () => {
     registerCard(FIELD_CARD, { itemId: "item-1" });
     const bodies: Array<Record<string, unknown>> = [];
@@ -549,17 +644,20 @@ describe("a declared card's answer on the real wire (cinatra#3470)", () => {
 
 describe("a list step on the HITL screen card sends its pick on the real wire (cinatra#3470)", () => {
   // A list step reached through the card's own read: a declared "kind" list
-  // picker, and the `:list-picker` binding an installed agent declares with no
-  // screen. Both are lifted into the approval note, as on the run page.
-  const LIST_ID = "@acme-test/list-agent:list-picker";
+  // picker, and the list binding an installed agent declares with no screen.
+  // Both are lifted into the approval note, as on the run page. A list step is
+  // read from the binding's declared kind, so an id with any local name (not
+  // only one ending in `:list-picker`) is one.
+  const SUFFIX_ID = "@acme-test/list-agent:list-picker";
+  const ARBITRARY_ID = "@acme-test/list-agent:pick-list";
 
-  function listAsking(declared: boolean) {
+  function listAsking(declared: boolean, listId: string) {
     return {
-      ...asking(LIST_ID, {}),
+      ...asking(listId, {}),
       ...(declared
         ? {
             declaredScreen: {
-              id: LIST_ID,
+              id: listId,
               kind: "list-picker",
               priority: 80,
               midRunHitl: true,
@@ -604,12 +702,17 @@ describe("a list step on the HITL screen card sends its pick on the real wire (c
     );
   }
 
-  for (const declared of [true, false]) {
-    it(`${declared ? "a declared 'kind' list picker" : "an installed :list-picker binding"}: the pick reaches the agent as the list snapshot`, async () => {
+  for (const [declared, LIST_ID] of [
+    [true, SUFFIX_ID],
+    [false, SUFFIX_ID],
+    [true, ARBITRARY_ID],
+    [false, ARBITRARY_ID],
+  ] as const) {
+    it(`${declared ? "a declared 'kind' list picker" : "an installed list binding"} with the id ${LIST_ID}: the pick reaches the agent as the list snapshot`, async () => {
       if (!declared) {
         registerFieldRendererBindings([{ id: LIST_ID, kind: "list-picker", priority: 80 }]);
       }
-      current = listAsking(declared);
+      current = listAsking(declared, LIST_ID);
       const { container } = mountOnChat();
       await settle();
       await waitFor(() => expect(container.textContent).toContain("Fixture list"));
@@ -634,4 +737,16 @@ describe("a list step on the HITL screen card sends its pick on the real wire (c
       expect(prompt?.submittedValues).toEqual(expect.objectContaining({ approvalNote: text }));
     });
   }
+
+  it("the run page's and the stepper's shared readings take the declared kind, not the id", () => {
+    registerFieldRendererBindings([{ id: ARBITRARY_ID, kind: "list-picker", priority: 80 }]);
+    expect(isMidRunListStepGate(ARBITRARY_ID, TASK_ID)).toBe(true);
+    expect(classifyMidRunHitl(ARBITRARY_ID)).toBe(true);
+    const lift = liftRendererApprovalNote(ARBITRARY_ID, { listId: "list-1", listName: "Fixture list" });
+    expect(JSON.parse(lift?.approvalNote ?? "{}")).toMatchObject({ type: "list", listId: "list-1" });
+    // A binding of another kind is never a list step, whatever its id says.
+    registerFieldRendererBindings([{ id: SUFFIX_ID, kind: "linkedin-draft-review", priority: 80 }]);
+    expect(isMidRunListStepGate(SUFFIX_ID, TASK_ID)).toBe(false);
+    expect(liftRendererApprovalNote(SUFFIX_ID, { listId: "list-1" })).toBeNull();
+  });
 });

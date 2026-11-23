@@ -133,18 +133,35 @@ function expectDeclaredInput(el: HTMLElement) {
   expect(classes).not.toContain("border");
 }
 
-function mount(value: unknown, onChange = vi.fn()) {
+/**
+ * Mount the entry's renderer the way every mid-run host does: the run value
+ * under a buffer the host keeps, each stage replacing that buffer, and the
+ * two handed over apart (as `wholeAnswerStageProps` does). `initial` is a
+ * buffer the host already holds (a card drawn again elsewhere in the
+ * conversation).
+ */
+function mount(value: unknown, onChange = vi.fn(), initial: Record<string, unknown> = {}) {
   const entry = entryOf();
   expect(entry).toBeDefined();
   const Renderer = entry!.renderer;
-  const props: FieldRendererProps = {
-    fieldName: "field",
-    schema: { "x-renderer": ID },
-    value,
-    onChange,
-    context: { connectedApps: [] },
-  } as FieldRendererProps;
-  render(<Renderer {...props} />);
+  const runValue = value as Record<string, unknown>;
+  function Host() {
+    const [buffer, setBuffer] = useState<Record<string, unknown>>(initial);
+    const props = {
+      fieldName: "field",
+      schema: { "x-renderer": ID },
+      value: { ...runValue, ...buffer },
+      onChange: (next: unknown) => {
+        onChange(next);
+        setBuffer(next as Record<string, unknown>);
+      },
+      context: { connectedApps: [] },
+      // What `wholeAnswerStageProps` hands a whole-answer renderer.
+      hitlStage: { runValue, staged: buffer },
+    } as FieldRendererProps;
+    return <Renderer {...props} />;
+  }
+  render(<Host />);
   return onChange;
 }
 
@@ -304,6 +321,15 @@ describe("a declared card is drawn by the host (cinatra#3470)", () => {
     expect(dom.getByRole("radio", { name: "Do not send" }).getAttribute("aria-checked")).toBe("false");
   });
 
+  it("a card drawn again with a staged choice shows that choice: the chosen row is read from the staged answer", () => {
+    // The conversation moves the card (a new instance) while the host keeps
+    // its staged answer: the row it will send is the row drawn as chosen.
+    const onChange = mount(VALUE, vi.fn(), staged({ itemId: "item-1", revisionId: "rev-1", approved: false }));
+    expect(dom.getByRole("radio", { name: "Do not send" }).getAttribute("aria-checked")).toBe("true");
+    expect(dom.getByRole("radio", { name: "Send it" }).getAttribute("aria-checked")).toBe("false");
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("holds the decisions while a required run value is blank", () => {
     const onChange = mount({ ...VALUE, revisionId: "  " });
     const decline = dom.getByRole("radio", { name: "Do not send" }) as HTMLButtonElement;
@@ -453,6 +479,16 @@ describe("a declared card holds the host's Continue (cinatra#3470)", () => {
     expect(box.disabled).toBe(false);
     fireEvent.change(box, { target: { value: "typed" } });
     expect(onChange).toHaveBeenLastCalledWith(staged({ itemId: "item-1", answer: "typed" }));
+  });
+
+  it("an untouched prefill holds the Continue until it is staged, and the card stages it once on mount", () => {
+    registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: FIELD_SCREEN }]);
+    // Ready reads what the Continue sends: a prefill nothing has staged is not sent.
+    expect(ready({ itemId: "item-1", answer: "prefilled" }, {})).toBe(false);
+    const onChange = mount({ itemId: "item-1", answer: "prefilled" });
+    expect((dom.getByLabelText("Fixture label") as HTMLInputElement).value).toBe("prefilled");
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenLastCalledWith(staged({ itemId: "item-1", answer: "prefilled" }));
   });
 
   it("treats every declared field as a required value", () => {

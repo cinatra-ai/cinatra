@@ -340,6 +340,9 @@ function registerDeclaredScreen(b: FieldRendererBindingInput): void {
     // with it, so a later choice never carries an earlier one's keys.
     ...(isKind ? {} : { stagesWholeAnswer: true }),
     midRunHitl: b.midRunHitl === true,
+    // The declared kind: a card's entry is never a list step whatever its
+    // kind (`isListPickerRenderer` reads `stagesWholeAnswer` too).
+    kind: b.kind,
   });
 }
 
@@ -401,6 +404,7 @@ export function registerFieldRendererBindings(
         // A wrapper instance that settles on the floor tells its own host (RendererFloorReportContext).
         holdsContinueUntilPicked: RENDERER_KIND_TABLE[b.kind]?.holdsContinueUntilPicked === true,
         midRunHitl: b.midRunHitl === true,
+        kind: b.kind,
       });
       continue;
     }
@@ -431,6 +435,9 @@ export function registerFieldRendererBindings(
       // The schema floor commits no pick, so a kind drawn by the floor never holds.
       holdsContinueUntilPicked: kindEntry.holdsContinueUntilPicked === true && kindEntry.renderer !== SchemaOnlyFloorRenderer,
       midRunHitl: b.midRunHitl === true,
+      // The binding's declared kind: what its answer needs is read from it,
+      // never from the id (`isListPickerRenderer`, cinatra#3470).
+      kind: b.kind,
     });
   }
 }

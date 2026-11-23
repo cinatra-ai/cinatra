@@ -19,7 +19,9 @@
 //     decisionLabel: the decision's declared label, drawn above its answer
 //     rows (app-lifecycle-cards V.1); required with decisions, refused
 //     without them.
-//     carry: run-value keys copied into every staged answer.
+//     carry: run-value keys copied into every staged answer, always from the
+//     run value; a carried key is never a decision answer key or a field key,
+//     and no two decisions stage the same answer.
 //     A field key, an answer key and a carry key is never one the host
 //     writes into the staged answer itself (RESERVED_ANSWER_KEYS): the
 //     card stages `userResponse` as the JSON of its whole answer.
@@ -278,6 +280,15 @@ export function validateHitlScreen(raw, where = "screen") {
           checkObject(at, rest, { label: ["text", true] }, errors);
           checkAnswer(`${at}.answer`, answer, errors);
         });
+        // Each answer row is told apart by its answer: two rows that stage
+        // the same answer would show one choice and send the other's.
+        const seen = new Set();
+        decisions.forEach((d, i) => {
+          if (!isPlainObject(d) || !isPlainObject(d.answer)) return;
+          const sig = JSON.stringify(Object.keys(d.answer).sort().map((k) => [k, d.answer[k]]));
+          if (seen.has(sig)) errors.push(`${where}.decisions[${i}]: answer repeats an earlier decision's answer`);
+          seen.add(sig);
+        });
       }
       if (Array.isArray(sectionList) && sectionList.some((s) => isPlainObject(s) && s.type === "field")) {
         errors.push(`${where}: a card offers decisions or fields, never both`);
@@ -286,6 +297,21 @@ export function validateHitlScreen(raw, where = "screen") {
     if (carry !== undefined) {
       checkKeyList(`${where}.carry`, carry, errors);
       if (Array.isArray(carry)) carry.forEach((k) => checkNotReserved(`${where}.carry`, k, errors));
+      // A carried key comes from the run value, an answer key from the
+      // person: one key cannot be both, or the staged answer would hold two
+      // values for it and the card could send one it does not show.
+      if (Array.isArray(carry)) {
+        const answered = new Set();
+        if (Array.isArray(decisions)) {
+          for (const d of decisions) if (isPlainObject(d) && isPlainObject(d.answer)) Object.keys(d.answer).forEach((k) => answered.add(k));
+        }
+        if (Array.isArray(sectionList)) {
+          for (const s of sectionList) if (isPlainObject(s) && s.type === "field") answered.add(s.key);
+        }
+        for (const k of carry) {
+          if (answered.has(k)) errors.push(`${where}.carry: ${JSON.stringify(k)} is also an answer key; a carried key comes from the run value only`);
+        }
+      }
     }
     if (requires !== undefined) checkKeyList(`${where}.requires`, requires, errors);
   } else {

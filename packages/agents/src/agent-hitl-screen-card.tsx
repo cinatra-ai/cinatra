@@ -134,7 +134,12 @@ import {
   type AgentHitlScreenState,
 } from "./agent-hitl-screen";
 import { getAgentHitlScreenStateAction } from "./agent-hitl-screen-actions";
-import { continueAwaitsAPick, fieldRendererRegistry, type FieldRendererContext } from "./field-renderer-registry";
+import {
+  continueAwaitsAPick,
+  fieldRendererRegistry,
+  wholeAnswerStageProps,
+  type FieldRendererContext,
+} from "./field-renderer-registry";
 import { hasMidRunHitlBinding } from "./orchestrator-mid-run-hitl";
 import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
 import { DispatchRenderer, type PresentationHint } from "./result-renderers";
@@ -853,6 +858,10 @@ export function AgentHitlScreenFields({
           key={hitlGateKey(gate)}
           fieldName={hitlRendererFieldName(gate.fieldName ?? undefined)}
           schema={renderSchema}
+          // A whole-answer renderer reads the run values and the staged
+          // answer apart (cinatra#3470): one reading for what it shows, what
+          // holds the Continue and what is sent.
+          {...wholeAnswerStageProps(entry, gate.currentValues, buffered)}
           value={
             hideRendererSubmit === true &&
             setupDraft !== null &&

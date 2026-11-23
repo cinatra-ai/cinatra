@@ -119,6 +119,11 @@ describe("validateHitlScreen refuses by name", () => {
     ["a field under the resume text's key", { ...FIELD_CARD, sections: [{ type: "field", key: "userResponse", label: "x" }] }, /"userResponse" is written by the host/],
     ["an answer key the host writes", { ...CARD, decisions: [{ label: "x", answer: { approvedAt: "now" } }] }, /"approvedAt" is written by the host/],
     ["a carried key the host writes", { ...CARD, carry: ["userResponseFieldName"] }, /"userResponseFieldName" is written by the host/],
+    // A carried key comes from the run value only, never from the person, and
+    // each answer row is told apart by its answer.
+    ["a carried key that is also a decision's answer key", { ...CARD, carry: ["itemId", "mode"] }, /carry: "mode" is also an answer key/],
+    ["a carried key that is also a field key", { ...FIELD_CARD, carry: ["answer"] }, /carry: "answer" is also an answer key/],
+    ["two decisions that stage the same answer", { ...CARD, decisions: [CARD.decisions[0], { label: "Fixture no again", answer: { approved: false } }] }, /decisions\[1\]: answer repeats an earlier decision's answer/],
     ["a screen that is not an object", "card", /must be an object/],
     ["a list", [CARD], /must be an object/],
     ["null", null, /must be an object/],

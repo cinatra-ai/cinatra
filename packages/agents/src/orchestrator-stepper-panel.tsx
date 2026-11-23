@@ -152,7 +152,7 @@ import {
 } from "./run-surface-status";
 import { useRunRowWatch } from "./use-run-row-watch";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
-import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
+import { continueAwaitsAPick, fieldRendererRegistry, wholeAnswerStageProps } from "./field-renderer-registry";
 import type { FieldRendererContext, FieldRendererProps } from "./field-renderer-registry";
 import {
   ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
@@ -1520,6 +1520,9 @@ function HitlApprovalCard({
             // A gate that declares fields is drawn from its reading's schema
             // (cinatra#4244): no bookkeeping keys, required values folded in.
             schema={fallbackGateRenderSchema ?? renderSchema}
+            // A whole-answer renderer reads the run values and the staged
+            // answer apart (cinatra#3470).
+            {...wholeAnswerStageProps(entry, interruptContext.values, bufferedHitlValue)}
             // An OBJECT-typed setup field gets its OWN value, not the whole
             // values envelope (cinatra#2484) — see setupFieldRendererValue.
             // The staged draft is this field's own reading while it waits for

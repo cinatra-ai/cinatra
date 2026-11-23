@@ -13,11 +13,14 @@
  *
  * PURITY CONTRACT: no React, no `"use client"`, no host `@/` imports —
  * only other pure leaf modules. Mirrors the constraints documented in
- * `attachment-envelope-payload.ts` and `agent-builder-ids.ts`.
+ * `attachment-envelope-payload.ts` and `agent-builder-ids.ts`. The one read
+ * beyond its arguments is a binding's declared kind in the field-renderer
+ * registry (`isListPickerRenderer`, cinatra#3470), a leaf with no React.
  */
 
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import { GROUPED_SETUP_FORM_RENDERER_ID } from "./agent-builder-ids";
+import { isListPickerRenderer } from "./field-renderer-registry";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
 import { isSetupInterruptTaskId } from "./run-surface-status";
 import { wrapUserResponseWithAttachments } from "./wayflow-user-response-envelope";
@@ -407,15 +410,15 @@ export function withContextSelectorEnvelope(
 // ---------------------------------------------------------------------------
 
 /**
- * THE RUN PANEL'S MID-RUN LIST STEP (cinatra#3562): a `:list-picker` gate that
- * is not a setup gate. The run panel draws it as a mid-run gate (its picks
+ * THE RUN PANEL'S MID-RUN LIST STEP (cinatra#3562): a list-step gate (the
+ * binding's declared kind, `isListPickerRenderer`) that is not a setup gate. The run panel draws it as a mid-run gate (its picks
  * buffer for the outer Continue) and lifts its picks into the approval note;
  * the same reading decides both, so they cannot disagree. On a setup gate the
  * list step stays on the setup road, where its answer is sent under the gate's
  * field name.
  */
 export function isMidRunListStepGate(xRenderer: string, reviewTaskId: string): boolean {
-  return xRenderer.endsWith(":list-picker") && !isSetupGateTaskId(reviewTaskId);
+  return isListPickerRenderer(xRenderer) && !isSetupGateTaskId(reviewTaskId);
 }
 
 /** A list id that names a pick: a string that is not blank (whitespace only). */
@@ -452,7 +455,7 @@ export function liftRendererApprovalNote(
   buffered: Record<string, unknown>,
   now: string = new Date().toISOString(),
 ): { approvalNote: string } | null {
-  if (xRenderer.endsWith(":list-picker")) {
+  if (isListPickerRenderer(xRenderer)) {
     // SEVERAL PICKS (cinatra#3562): a list step declared to take several picks
     // buffers `listIds` (and `listNames`, in the same order). The snapshot then
     // carries every ticked id in the order ticked, each once, with its name.
@@ -573,7 +576,7 @@ export function applyRendererApprovalNote(
 ): Record<string, unknown> {
   if (!lift) return payload;
   const merged: Record<string, unknown> = { ...payload, ...lift };
-  if (!xRenderer.endsWith(":list-picker")) return merged;
+  if (!isListPickerRenderer(xRenderer)) return merged;
   delete merged.userResponse;
   return merged;
 }
