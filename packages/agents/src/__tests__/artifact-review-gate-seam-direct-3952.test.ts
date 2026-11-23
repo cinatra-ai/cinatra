@@ -125,3 +125,20 @@ describe("the actual artifact-review gate seam", () => {
     await expect(seam.listGates(runId)).rejects.toBe(failure);
   });
 });
+
+describe("the run's reviews, as the publish gate reads them (cinatra#4762)", () => {
+  // red-first-expect: seam.listReviews is not a function
+  it("carry the store's exact microseconds, which a Date would cut to milliseconds", async () => {
+    const createdAt = new Date("2026-11-20T10:05:00.000Z");
+    store.listReviewGatesForRun.mockResolvedValue([
+      { reviewTaskId: "r1", status: "resolved", disposition: "changes_requested", createdAt, createdAtMicros: "1795169100000100", runGeneration: 0 },
+      { reviewTaskId: "r2", status: "resolved", disposition: "approve", createdAt, createdAtMicros: "1795169100000900", runGeneration: 0 },
+    ]);
+    const seam = slot.__cinatraArtifactReviewGateSeam!;
+    expect(await seam.listReviews(runId)).toEqual([
+      { status: "resolved", disposition: "changes_requested", createdAt, createdAtMicros: "1795169100000100", runGeneration: 0 },
+      { status: "resolved", disposition: "approve", createdAt, createdAtMicros: "1795169100000900", runGeneration: 0 },
+    ]);
+    expect(store.listReviewGatesForRun).toHaveBeenCalledWith(runId);
+  });
+});

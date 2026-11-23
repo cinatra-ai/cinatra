@@ -522,6 +522,41 @@ describe("an edge fenced to its attempt's reset generation (cinatra#4762)", () =
     expect(shared.updateCalls).toBe(0);
   });
 
+  // red-first-expect: expected { Object (id, templateId, ...) } to be { Object (id, orgId, ...) } // Object.is equality
+  it("a stop that ends its attempt closes the attempt's parked decisions in the same transaction, after the CAS", async () => {
+    const { agentRuns, agentRunPublishDecisions } = await import("../schema");
+    await transitionRunStatus(RUN, "running", "stopped", { error: "no review", completedAt: new Date(), attemptGeneration: 2, endParkedDecisions: true }, SESSION);
+    expect(shared.updateTables[0]).toBe(agentRuns);
+    expect(shared.updateTables[1]).toBe(agentRunPublishDecisions);
+    expect(shared.setPayloads[1]).toMatchObject({ status: "run_ended", decidedBy: null, decisionNote: null });
+    const close = await sqlOf(shared.wheres[1]);
+    expect(close.sql).toMatch(/"agent_run_publish_decisions"\."status" = \$\d+ and coalesce\("[^"]+"\."agent_run_publish_decisions"\."run_generation", \$\d+\) <= \$\d+/);
+    expect(close.params).toEqual([RUN, "parked", 2, 2]);
+    expect(shared.setPayloads.some((p) => Object.prototype.hasOwnProperty.call(p, "endParkedDecisions"))).toBe(false);
+    // A lost CAS closes nothing.
+    shared.updateTables.length = 0;
+    shared.setPayloads.length = 0;
+    shared.returningRows = [[]];
+    await expect(
+      transitionRunStatus(RUN, "running", "stopped", { completedAt: new Date(), attemptGeneration: 0, endParkedDecisions: true }, SESSION),
+    ).rejects.toMatchObject({ code: "stale_from_status" });
+    expect(shared.updateTables.includes(agentRunPublishDecisions)).toBe(false);
+  });
+
+  // red-first-expect: promise resolved "undefined" instead of rejecting
+  it("closing the parked decisions needs the attempt's generation and an edge that ends it: refused before any write", async () => {
+    for (const [from, to, meta] of [
+      ["running", "stopped", { endParkedDecisions: true }],
+      ["running", "pending_approval", { attemptGeneration: 0, endParkedDecisions: true }],
+      ["running", "stopped", { attemptGeneration: 0, endParkedDecisions: false }],
+    ] as const) {
+      await expect(
+        transitionRunStatus(RUN, from as AgentRunStatus, to as AgentRunStatus, meta as never, SESSION),
+      ).rejects.toMatchObject({ name: "RunTransitionError", code: "illegal_transition" });
+    }
+    expect(shared.updateCalls).toBe(0);
+  });
+
   it("the reset raises the generation and leaves the start stamp to the dispatch", async () => {
     await transitionRunStatus(RUN, "failed", "pending_input", { resetGeneration: 1 }, SESSION);
     expect(shared.setPayloads[0]).toMatchObject({ resetGeneration: 2 });

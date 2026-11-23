@@ -86,7 +86,15 @@ const decisions = vi.hoisted(() => ({
 }));
 vi.mock("../publish-decision-store", () => decisions);
 
+// The decider's rights check (enforcePublishDecisionAccess) asks the run policy and the organization role; both are
+// answered here so a real Publish decision runs against the run this file parks.
+const enforceRunAccess = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("../auth-policy", async (orig) => ({ ...((await orig()) as object), enforceRunAccess, resolveEffectivePolicy: () => "owner-only" }));
+const resolveOrgRoleForUser = vi.hoisted(() => vi.fn(async () => "member" as string | undefined));
+vi.mock("@/lib/auth-session", () => ({ resolveOrgRoleForUser }));
+
 import { handleWayflowTaskState } from "../execution";
+import { declinePublishDecision } from "../publish-decision-actions";
 import type { AgentRunRecord } from "../store";
 
 const KEY = "test-context-attest-key-4762";
@@ -98,7 +106,9 @@ const SURFACED = { what: "the post" };
 const STARTED = new Date("2026-11-20T10:00:00Z");
 const REASON = "No approved review came before this change outside Cinatra.";
 
-type Review = { status: string; disposition: string | null; createdAt: Date; resolvedBy?: string | null; runGeneration?: number | null };
+type Review = {
+  status: string; disposition: string | null; createdAt: Date; createdAtMicros?: string | null; resolvedBy?: string | null; runGeneration?: number | null;
+};
 const listReviews = vi.fn(async (_runId: string) => [] as Review[]);
 
 function sign(node: string) {
@@ -327,11 +337,69 @@ describe("a publish card opens only after an approved review earlier in the same
     expect(decisions.insertParkedDecision).not.toHaveBeenCalled();
   });
 
-  it("a different reviewer and decider still pass: a review another member approved opens the card for anyone allowed to decide", async () => {
+  it("a review one member approved opens the card, and a third member, neither owner nor reviewer, decides it", async () => {
     listReviews.mockResolvedValue([approved(5, "user-reviewer")]);
     await reachPublishGate();
-    expect(listReviews).toHaveBeenCalledWith("run-4762");
     expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
-    // Who reviewed is never compared with who decides: the run's owner, the reviewer and the decider are three people.
+    const parked = { id: "dec-1", runId: "run-4762", nodeId: "publish", status: "parked" };
+    expect(decisions.insertParkedDecision).toHaveBeenCalledTimes(1);
+    // The run waits at the gate; its owner is user-a, the review was approved by user-reviewer, user-decider answers.
+    storeMock.readAgentRunById.mockResolvedValue(makeRun({ status: "pending_approval" }));
+    decisions.readOpenDecisionForRun.mockResolvedValue(parked as never);
+    decisions.decide.mockResolvedValue({ outcome: "won", decision: { ...parked, status: "declined" } });
+    storeMock.transitionRunStatus.mockClear();
+    const decider = { actorType: "human", source: "ui", userId: "user-decider" } as never;
+    expect(await declinePublishDecision({ runId: "run-4762", actorContext: decider })).toEqual({ ok: true, runStopped: true });
+    expect(decisions.decide).toHaveBeenCalledWith("dec-1", { from: "parked", to: "declined", actor: "user-decider", note: null });
+    expect(resolveOrgRoleForUser).toHaveBeenCalledWith("org-test", "user-decider");
+    const [runId, from, to] = storeMock.transitionRunStatus.mock.calls[0] as unknown as [string, string, string];
+    expect([runId, from, to]).toEqual(["run-4762", "pending_approval", "stopped"]);
+  });
+
+  // red-first-expect: expected [ { from: 'running', …(2) } ] to deeply equal [ { from: 'running', …(2) } ]
+  it("reviews raised within one millisecond are ordered by their exact microseconds", async () => {
+    // Both reviews read as the same millisecond; the store's exact time says the approval came 800 microseconds later.
+    const ms = at(5);
+    const micros = (offset: number) => (BigInt(ms.getTime()) * BigInt(1000) + BigInt(offset)).toString();
+    const changed: Review = { ...changesRequested(5), createdAt: ms, createdAtMicros: micros(100) };
+    const successor: Review = { ...approved(5), createdAt: ms, createdAtMicros: micros(900) };
+    for (const reviews of [[changed, successor], [successor, changed]]) {
+      vi.clearAllMocks();
+      listReviews.mockResolvedValue(reviews);
+      await reachPublishGate();
+      expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
+    }
+    // An approval raised BEFORE the change request, within the same millisecond, is no successor.
+    vi.clearAllMocks();
+    listReviews.mockResolvedValue([{ ...successor, createdAtMicros: micros(100) }, { ...changed, createdAtMicros: micros(900) }]);
+    await reachPublishGate();
+    expectStoppedWithoutWriting();
+  });
+
+  // red-first-expect: expected [] to deeply equal [ { from: 'pending_approval', …(2) } ]
+  it("a gate redelivered after its decision parked, with no approved review, ends stopped and closes that row in the stop", async () => {
+    // The row parked before the review rule; the run waits at the gate when the same gate task is delivered again. The
+    // store closes the attempt's parked rows only inside a move that asks for it, as transitionRunStatus does.
+    const rows = [{ id: "dec-old", status: "parked" }];
+    storeMock.transitionRunStatus.mockImplementation((async (...args: unknown[]) => {
+      const patch = args[3] as { endParkedDecisions?: boolean; attemptGeneration?: number } | undefined;
+      if (patch?.endParkedDecisions === true && patch.attemptGeneration === 0) for (const row of rows) if (row.status === "parked") row.status = "run_ended";
+    }) as never);
+    storeMock.readAgentRunById.mockResolvedValue(makeRun({ status: "pending_approval" }));
+    await handleWayflowTaskState({
+      authority: AUTHORITY, runId: "run-4762", run: makeRun({ status: "pending_approval", startedAt: null }), fromStatus: "pending_approval", task: pausedTask(),
+    });
+    expect(transitions()).toEqual([{ from: "pending_approval", to: "stopped", error: REASON }]);
+    expect(rows).toEqual([{ id: "dec-old", status: "run_ended" }]);
+    // An unreadable review ends the attempt failed, and closes its parked rows the same way.
+    rows[0]!.status = "parked";
+    vi.clearAllMocks();
+    listReviews.mockRejectedValue(new Error("db down"));
+    await handleWayflowTaskState({
+      authority: AUTHORITY, runId: "run-4762", run: makeRun({ status: "pending_approval", startedAt: null }), fromStatus: "pending_approval", task: pausedTask(),
+    });
+    expect(transitions().map((m) => `${m.from}->${m.to}`)).toEqual(["pending_approval->failed"]);
+    expect(rows).toEqual([{ id: "dec-old", status: "run_ended" }]);
+    expect(decisions.insertParkedDecision).not.toHaveBeenCalled();
   });
 });

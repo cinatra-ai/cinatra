@@ -855,22 +855,38 @@ async function endResetAttemptDecisionsInTx(tx: GuardedRunTx, runId: string, gen
     .where(and(eq(d.runId, runId), sql`${d.runGeneration} is null`));
 }
 
+/** Inside the guarded transaction of an edge that ends an attempt (cinatra#4762), after its compare-and-set won at
+ *  `generation`: the run's decisions still parked from that generation or earlier, or with no generation, close
+ *  run_ended with no person, so no parked row outlives the attempt the edge ended. */
+async function endAttemptParkedDecisionsInTx(tx: GuardedRunTx, runId: string, generation: number): Promise<void> {
+  const d = agentRunPublishDecisions;
+  await (tx as unknown as typeof db)
+    .update(d)
+    .set({ status: "run_ended", decidedBy: null, decidedAt: sql`now()`, decisionNote: null })
+    .where(and(eq(d.runId, runId), eq(d.status, "parked"), sql`coalesce(${d.runGeneration}, ${generation}) <= ${generation}`));
+}
+
 /** Pre-guard (cinatra#4762): `attemptGeneration` names the generation of the attempt an edge belongs to (a safe
  *  integer >= 0). It is not legal on the reset, which names its own, nor with derivationOutbox, whose delegate runs its
- *  own compare-and-set. */
+ *  own compare-and-set. `endParkedDecisions` is legal only with it, on an edge that ends the attempt (to stopped or
+ *  failed). */
 function assertAttemptGenerationEdge(
   runId: string,
   from: AgentRunStatus,
   to: AgentRunStatus,
-  meta: { attemptGeneration?: unknown; resetGeneration?: unknown; derivationOutbox?: unknown },
+  meta: { attemptGeneration?: unknown; resetGeneration?: unknown; derivationOutbox?: unknown; endParkedDecisions?: unknown },
 ): void {
   const g = meta.attemptGeneration;
   const why =
-    !(Number.isSafeInteger(g) && (g as number) >= 0)
-      ? "attemptGeneration must be a safe integer >= 0"
-      : meta.resetGeneration !== undefined || meta.derivationOutbox !== undefined
-        ? "attemptGeneration is not legal with resetGeneration or derivationOutbox"
-        : null;
+    meta.endParkedDecisions !== undefined && (g === undefined || meta.endParkedDecisions !== true || (to !== "stopped" && to !== "failed"))
+      ? "endParkedDecisions is legal only as true, with attemptGeneration, on an edge to stopped or failed"
+      : g === undefined
+        ? null
+        : !(Number.isSafeInteger(g) && (g as number) >= 0)
+          ? "attemptGeneration must be a safe integer >= 0"
+          : meta.resetGeneration !== undefined || meta.derivationOutbox !== undefined
+            ? "attemptGeneration is not legal with resetGeneration or derivationOutbox"
+            : null;
   if (why !== null) {
     throw new RunTransitionError({ code: "illegal_transition", runId, from, to, message: `transitionRunStatus(${runId}) illegal_transition: ${why}` });
   }
@@ -896,6 +912,7 @@ const CONTROL_META_KEYS = [
   "runningAttempt",
   "resetGeneration",
   "attemptGeneration",
+  "endParkedDecisions",
 ] as const;
 
 /**
@@ -944,6 +961,10 @@ export async function transitionRunStatus(
          *  still at it, so a callback of an attempt a retry's reset ended writes nothing on the next attempt's row. Not
          *  legal on the reset or with derivationOutbox. Not a meta column. */
         attemptGeneration?: number;
+        /** cinatra#4762: with attemptGeneration, on an edge to stopped or failed: the run's decisions still parked from
+         *  that generation close run_ended in the same transaction, so a stopped attempt leaves no parked row. Not a
+         *  meta column. */
+        endParkedDecisions?: true;
       }
     | undefined,
   // cinatra#1939 wave 2 — REQUIRED host-minted authority (the compile-time
@@ -974,7 +995,7 @@ export async function transitionRunStatus(
   if (meta?.resumeLeg) assertResumeLegEdge(runId, from, to, meta);
   if (meta?.runningAttempt !== undefined) assertRunningAttemptEdge(runId, from, to, meta);
   assertResetGenerationEdge(runId, from, to, meta?.resetGeneration);
-  if (meta?.attemptGeneration !== undefined) assertAttemptGenerationEdge(runId, from, to, meta);
+  if (meta?.attemptGeneration !== undefined || meta?.endParkedDecisions !== undefined) assertAttemptGenerationEdge(runId, from, to, meta);
   // (2) Fail-closed: every status transition requires a host-minted authority.
   // The org (lock + CAS scope) is the authority's org — a wrong-org authority
   // fails closed as `stale_from_status` via the §1d org-scoped CAS.
@@ -1089,6 +1110,10 @@ export async function transitionRunStatus(
     // cinatra#4150: the reset won at its generation; the attempt it ended leaves no open publish decision.
     if (meta?.resetGeneration !== undefined) {
       await endResetAttemptDecisionsInTx(guardedTx, runId, meta.resetGeneration);
+    }
+    // cinatra#4762: the edge ended its attempt; that attempt leaves no parked publish decision.
+    if (meta?.endParkedDecisions === true && meta.attemptGeneration !== undefined) {
+      await endAttemptParkedDecisionsInTx(guardedTx, runId, meta.attemptGeneration);
     }
     if (to === "running") {
       await clearOtherResumeClaimsInTx(guardedTx, { runId, keepGateId: meta?.resumeIntentLease?.gateId ?? null });

@@ -66,8 +66,9 @@ export type ArtifactReviewGateSeam = {
   listGates(runId: string): Promise<Array<{ reviewTaskId: string; status: string }>>;
   /** cinatra#4762 — every review this run owns, projected to what the publish gate needs to see that an approved review
    *  came before it in the attempt that reached it: the status, the settled disposition, when the review was raised,
+   *  in microseconds since the epoch as the store's exact decimal text (createdAtMicros; a Date keeps milliseconds only),
    *  and the run's reset generation at that raise (null: raised before the column existed). */
-  listReviews(runId: string): Promise<Array<{ status: string; disposition: string | null; createdAt: Date; runGeneration: number | null }>>;
+  listReviews(runId: string): Promise<Array<{ status: string; disposition: string | null; createdAt: Date; createdAtMicros: string | null; runGeneration: number | null }>>;
 };
 
 /** Boot-time binding (idempotent, last write wins). Binds the run executor's
@@ -113,7 +114,8 @@ export function bindArtifactReviewGateSeam(): void {
     async listReviews(runId) {
       const gates = await listReviewGatesForRun(runId);
       return gates.map((gate) => ({
-        status: gate.status, disposition: gate.disposition, createdAt: gate.createdAt, runGeneration: gate.runGeneration ?? null,
+        status: gate.status, disposition: gate.disposition, createdAt: gate.createdAt, createdAtMicros: gate.createdAtMicros ?? null,
+        runGeneration: gate.runGeneration ?? null,
       }));
     },
   };

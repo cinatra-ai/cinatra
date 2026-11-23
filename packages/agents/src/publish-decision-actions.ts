@@ -165,7 +165,12 @@ const opaque = (err: unknown): unknown => err instanceof AuthzError || STORE_COD
 export const PUBLISH_REVIEW_MISSING_REASON = "No approved review came before this change outside Cinatra.";
 
 /** One review of a run, as the gate seam's listReviews answers it. */
-type ReviewOfRun = { status: string; disposition: string | null; createdAt: Date; runGeneration: number | null };
+type ReviewOfRun = { status: string; disposition: string | null; createdAt: Date; createdAtMicros?: string | null; runGeneration: number | null };
+
+/** When a review was raised, in microseconds since the epoch: the store's exact text when the seam carries it (a Date
+ *  keeps only milliseconds, so two reviews raised in one millisecond would read as one instant), else the Date. */
+const raisedAt = (g: ReviewOfRun): bigint =>
+  typeof g.createdAtMicros === "string" && /^-?\d+$/.test(g.createdAtMicros) ? BigInt(g.createdAtMicros) : BigInt(g.createdAt.getTime()) * BigInt(1000);
 
 /**
  * cinatra#4762 (design app-lifecycle-cards §XV): did an approved review card (§II) come earlier in the attempt that
@@ -185,10 +190,10 @@ export async function approvedReviewPrecedes(runId: string, generation: number):
     .__cinatraArtifactReviewGateSeam;
   if (typeof seam?.listReviews !== "function") throw new Error("the review store is not bound");
   const reviews = (await seam.listReviews(runId)).filter((g) => (g.runGeneration ?? 0) === generation);
-  const approvedAt = reviews.filter((g) => g.status === "resolved" && g.disposition === "approve").map((g) => g.createdAt.getTime());
+  const approvedAt = reviews.filter((g) => g.status === "resolved" && g.disposition === "approve").map(raisedAt);
   if (approvedAt.length === 0) return false;
   return reviews.every((g) => g.status === "resolved" && (g.disposition === "approve" ||
-    (g.disposition === "changes_requested" && approvedAt.some((at) => at > g.createdAt.getTime()))));
+    (g.disposition === "changes_requested" && approvedAt.some((at) => at > raisedAt(g)))));
 }
 
 /**
@@ -198,7 +203,8 @@ export async function approvedReviewPrecedes(runId: string, generation: number):
  *     list): the row is written FIRST (a failure ends the run failed), then the run moves to
  *     pending_approval; a lost move closes the row run_ended;
  *   - before the park, the attempt that reached the gate must hold an approved review (approvedReviewPrecedes): with
- *     none, the run ends stopped with PUBLISH_REVIEW_MISSING_REASON and no row is written (cinatra#4762);
+ *     none, the run ends stopped with PUBLISH_REVIEW_MISSING_REASON, no row is written, and the stop closes run_ended
+ *     any row of the attempt still parked (cinatra#4762);
  *   - every move of the run here carries the reset generation of the attempt that reached the gate (attemptGeneration):
  *     a callback of an attempt a retry's reset ended moves nothing on the next attempt's row (cinatra#4762);
  *   - a missing or unverified claim on a template that lists publishing steps, or an unverified publish-gate claim
@@ -239,17 +245,20 @@ export async function holdRunAtPublishGate(args: {
 
   // cinatra#4762: no publish card opens without an approved review earlier in this attempt. The run ends stopped with
   // the reason, no decision row is written and nothing is sent, so the write never happens. An unreadable review ends
-  // the run failed, as an unrecorded decision does.
+  // the run failed, as an unrecorded decision does. Either move closes, in its own guarded transaction, every decision
+  // of this attempt still parked (a gate redelivered after its row parked, before this rule): no parked row outlives
+  // the attempt the move ends.
+  const endAttempt = { ...attempt, endParkedDecisions: true as const };
   let reviewed: boolean;
   try {
     reviewed = await approvedReviewPrecedes(run.id, attempt.attemptGeneration);
   } catch (err) {
     console.warn(`[publish-decision] the review before a publish could not be read: ${nameOf(err)}`);
-    await moveRun(run.id, fromStatus, "failed", { error: "publish_review_unread: the review before the publish could not be read", completedAt: new Date(), ...attempt }, authority);
+    await moveRun(run.id, fromStatus, "failed", { error: "publish_review_unread: the review before the publish could not be read", completedAt: new Date(), ...endAttempt }, authority);
     return true;
   }
   if (!reviewed) {
-    await moveRun(run.id, fromStatus, "stopped", { error: PUBLISH_REVIEW_MISSING_REASON, completedAt: new Date(), ...attempt }, authority);
+    await moveRun(run.id, fromStatus, "stopped", { error: PUBLISH_REVIEW_MISSING_REASON, completedAt: new Date(), ...endAttempt }, authority);
     return true;
   }
 
