@@ -2800,7 +2800,10 @@ export function AgenticRunPanel({
   // card resolved to would have to come from the card, which is a wire this
   // change does not open; so the value is read for what it is, and a host that
   // needs the stronger question asks it of the card.
-  const panelDrawsReview = Boolean(reviewRefInTheBox);
+  // AN OPEN PUBLISH DECISION IS THE RUN'S ONE HELD-RUN READING (cinatra#4150): a review reference the shared reader
+  // still retains (its flag and ref survive dropped readings by design) is stale while the publish read POSITIVELY
+  // answers `pending`, so this panel draws no review over it and reports none to its host.
+  const panelDrawsReview = Boolean(reviewRefInTheBox) && !parkedAtPublishGate;
   const reviewTaskId = !panelDrawsReview
     ? null
     : markedReviewGate
@@ -2893,7 +2896,7 @@ export function AgenticRunPanel({
   // (see the publish effect above), so this mount adds no second resume path.
   const conversationHostedReview =
     ambientLifecycleHost === "chat_thread" || ambientLifecycleHost === "site_widget" || ambientDeclarationRefused;
-  const reviewScreenNode: ReactNode = reviewRefInTheBox ? (
+  const reviewScreenNode: ReactNode = reviewRefInTheBox && !parkedAtPublishGate ? (
     conversationHostedReview ? (
       <ReviewGateCard
         view={{
@@ -2949,7 +2952,8 @@ export function AgenticRunPanel({
     });
     observer.observe(box, { childList: true });
     return () => observer.disconnect();
-  }, [reviewRefInTheBox]);
+    // The box leaves while an open publish decision holds the panel, and a new box stands when it closes: observe it.
+  }, [reviewRefInTheBox, parkedAtPublishGate]);
   const reviewCardDrawn =
     reviewScreenNode !== null && reviewCardDrawnFor === reviewRefInTheBox;
   // The hand-over's one latch (fix leg 20, above): the reference the card has
@@ -2963,7 +2967,10 @@ export function AgenticRunPanel({
     setHeldReview({ runId, ref: reviewRefInTheBox, heardAt: null });
   }
 
-  if (reviewScreenNode !== null || runIsWorking) {
+  // THE PUBLISH ARM IS ASKED FIRST (cinatra#4150): an open publish decision draws the plate below with its card and
+  // nothing else, so neither the review screen nor the working placeholder (a produced-review park or a review hold
+  // the reader still retains) may return ahead of it. Any other publish reading leaves this arm exactly as it was.
+  if (!parkedAtPublishGate && (reviewScreenNode !== null || runIsWorking)) {
     return (
       <>
         <section

@@ -88,20 +88,32 @@ vi.mock("../use-ag-ui-run-stream", () => ({
   }),
 }));
 
-/** The run row the panel's row watch reads while the stream cannot speak. */
-const row = vi.hoisted(() => ({ status: "pending_approval" as string }));
+/**
+ * The run row the panel's row watch reads while the stream cannot speak, and its review-slot reading: a case can retain
+ * a produced-review park and its ref (the shared reader keeps both across dropped readings by design).
+ */
+const row = vi.hoisted(() => ({
+  status: "pending_approval" as string,
+  reviewRef: null as string | null,
+  producedReviewPark: false,
+}));
 
 beforeEach(() => {
   publishStateMock.mockReset();
   streamState.status = "pending_approval";
   streamState.interruptContext = null;
   row.status = "pending_approval";
+  row.reviewRef = null;
+  row.producedReviewPark = false;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: unknown) => {
       const url = String(input);
       const payload = url.includes("/api/agents/runs/")
-        ? { status: row.status, reviewGate: { ref: null, awaiting: false, producedReviewPark: false } }
+        ? {
+            status: row.status,
+            reviewGate: { ref: row.reviewRef, awaiting: false, producedReviewPark: row.producedReviewPark },
+          }
         : { kind: "artifact_review_gate", state: { state: "none" }, body: null };
       return new Response(JSON.stringify(payload), { status: 200, headers: { "Content-Type": "application/json" } });
     }),
@@ -286,6 +298,39 @@ describe("OrchestratorStepperPanel at a publish gate (cinatra#4150)", () => {
     await flush();
     expect(container.querySelector(CARD)).toBeNull();
     expect(container.textContent).toContain(GATE_CARD_TEXT);
+  });
+
+  // A STALE PRODUCED-REVIEW READING while the status stays `pending_approval` and the run has moved on to its publish
+  // gate: the park's arm (the review card, or its waiting box before the gate row) must not draw over the decision.
+  const REVIEW_SLOT = "[data-run-review-slot]";
+  const REVIEW_CARD = '[data-lifecycle-card="artifact_review_gate"]';
+
+  for (const reviewRef of ["review-ref-stale", null]) {
+    it(`a STALE produced-review park (ref ${reviewRef ?? "not yet minted"}) beside an OPEN publish decision: only the publish card`, async () => {
+      row.producedReviewPark = true;
+      row.reviewRef = reviewRef;
+      publishStateMock.mockImplementation(async () => PENDING);
+      const { container } = await mountPanel();
+      await waitFor(() => expect(container.querySelectorAll(CARD)).toHaveLength(1));
+      await flush();
+      expect(container.querySelectorAll(CARD)).toHaveLength(1);
+      expect(container.querySelector(CARD)!.getAttribute("data-lifecycle-card-state")).toBe("pending");
+      expect(container.querySelector(REVIEW_SLOT)).toBeNull();
+      expect(container.querySelector(REVIEW_CARD)).toBeNull();
+      expect(container.textContent).not.toContain(PROCESSING);
+    });
+  }
+
+  it("the same produced-review park with NO open publish decision keeps its review arm and draws no publish card", async () => {
+    row.producedReviewPark = true;
+    row.reviewRef = null;
+    publishStateMock.mockImplementation(async () => ({ state: "none" }));
+    const { container } = await mountPanel();
+    await waitFor(() => expect(container.querySelector(REVIEW_SLOT)).not.toBeNull());
+    await waitFor(() => expect(publishStateMock).toHaveBeenCalled());
+    await flush();
+    expect(container.querySelector(CARD)).toBeNull();
+    expect(container.querySelector(REVIEW_SLOT)).not.toBeNull();
   });
 
   it("a SETTLED decision keeps its reading above what the run draws next, as on the agentic panel", async () => {

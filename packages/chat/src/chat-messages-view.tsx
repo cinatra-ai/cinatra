@@ -865,7 +865,12 @@ function AgentRunTurnSlot({
   // still drawing its working placeholder, so it reports no review while a
   // decision is already owed — the case cinatra#3080's own suite pins with a
   // review gate read as `ref: null, awaiting: true`.
-  const turnOwesTheReaderAReview = panelDrawsReview || runCardDrawsAReview;
+  // AND AN OPEN PUBLISH DECISION OWES NO REVIEW (cinatra#4150): while the shared read POSITIVELY answers `pending` the
+  // publish card is the turn's one held-run card, so a review reading (the panel's report or the run row's) does not
+  // reveal the stood-down panel beside it. Any other publish reading leaves this exactly as it was.
+  const publishDecisionIsOpen = publishGateIsOpen(publishRead);
+  const turnOwesTheReaderAReview =
+    !publishDecisionIsOpen && (panelDrawsReview || runCardDrawsAReview);
 
   const turn = (
     // THE REGISTER THIS CONTAINER LISTENS ON (cinatra#3174), around the whole

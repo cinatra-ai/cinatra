@@ -93,7 +93,12 @@ async function flush() {
   });
 }
 
-async function mountPanel(onRunChangeSignal?: (runId: string, signal: string) => void) {
+type ReviewSlotReading = { ref: string | null; awaiting: boolean; producedReviewPark?: boolean; reviewTaskId?: string | null };
+
+async function mountPanel(
+  onRunChangeSignal?: (runId: string, signal: string) => void,
+  reviewSlot?: ReviewSlotReading,
+) {
   const { AgenticRunPanel } = await import("../agentic-run-panel");
   const element = () => (
     <AgenticRunPanel
@@ -103,6 +108,7 @@ async function mountPanel(onRunChangeSignal?: (runId: string, signal: string) =>
       initialMessages={[]}
       agUiEnabled={true}
       onRunChangeSignal={onRunChangeSignal}
+      {...(reviewSlot ? { initialReviewGate: reviewSlot, readReviewSlot: async () => reviewSlot } : {})}
     />
   );
   const mounted = render(element());
@@ -256,6 +262,40 @@ describe("AgenticRunPanel at a publish gate (cinatra#4150)", () => {
     publishStateMock.mockImplementation(async () => ({ state: "none" }));
     const mounted = await mountPanel();
     expect(held(mounted.container)).toEqual({ card: 0, banner: 0, hitl: 1 });
+  });
+
+  // A STALE PRODUCED-REVIEW READING (the shared reader retains the park flag and the review ref across dropped
+  // readings by design) while the status stays `pending_approval` and the run has moved on to its publish gate.
+  const STALE_PRODUCED_REVIEW: ReviewSlotReading = {
+    ref: "review-ref-stale",
+    awaiting: false,
+    producedReviewPark: true,
+    reviewTaskId: "task-produced-review",
+  };
+  const reviewArm = (container: HTMLElement) => ({
+    slot: container.querySelectorAll("[data-run-review-slot]").length,
+    review: container.querySelectorAll('[data-lifecycle-card="artifact_review_gate"]').length,
+  });
+
+  it("a STALE produced-review park and ref beside an OPEN publish decision: only the publish card draws", async () => {
+    publishStateMock.mockImplementation(async () => PENDING);
+    const mounted = await mountPanel(undefined, STALE_PRODUCED_REVIEW);
+    expect(held(mounted.container)).toEqual({ card: 1, banner: 0, hitl: 0 });
+    expect(reviewArm(mounted.container)).toEqual({ slot: 0, review: 0 });
+  });
+
+  it("a STALE produced-review park with no ref yet beside an OPEN publish decision: no working box, only the card", async () => {
+    publishStateMock.mockImplementation(async () => PENDING);
+    const mounted = await mountPanel(undefined, { ...STALE_PRODUCED_REVIEW, ref: null });
+    expect(held(mounted.container)).toEqual({ card: 1, banner: 0, hitl: 0 });
+    expect(reviewArm(mounted.container).slot).toBe(0);
+  });
+
+  it("the same produced-review park with NO open publish decision keeps its review slot and draws no publish card", async () => {
+    publishStateMock.mockImplementation(async () => ({ state: "none" }));
+    const mounted = await mountPanel(undefined, STALE_PRODUCED_REVIEW);
+    expect(mounted.container.querySelector('[data-lifecycle-card="publish_decision"]')).toBeNull();
+    expect(reviewArm(mounted.container).slot).toBe(1);
   });
 
   it("reads pending then none: the card draws and the banner does not", async () => {

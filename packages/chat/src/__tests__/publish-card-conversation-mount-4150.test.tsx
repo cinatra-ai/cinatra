@@ -80,21 +80,33 @@ vi.mock("@/components/data-safety/undo-toast", () => ({
 // exactly as the panel reports it (the panel's own suite pins how the panel computes that signal).
 const statusReporters = vi.hoisted(() => new Map<string, (runId: string, signal: string, status?: string) => void>());
 const panelReads = vi.hoisted(() => new Map<string, { state: { state: string } | null } | undefined>());
-vi.mock("../inline-agent-run-card", () => ({
-  InlineAgentRunCard: ({
-    runId,
-    onRunChangeSignal,
-    publishRead,
-  }: {
-    runId: string;
-    onRunChangeSignal?: (runId: string, signal: string, status?: string) => void;
-    publishRead?: { state: { state: string } | null };
-  }) => {
-    if (onRunChangeSignal) statusReporters.set(runId, onRunChangeSignal);
-    panelReads.set(runId, publishRead);
-    return <div data-lifecycle-card-host="run_card" data-inline-run-card={runId} />;
-  },
-}));
+// The review reading the stand-in reports, as the shipped panel reports its own (`onReviewReadingChange`): a case can
+// have the panel still report a review it retains while the run has moved on to its publish gate.
+const panelReview = vi.hoisted(() => ({ draws: false }));
+vi.mock("../inline-agent-run-card", async () => {
+  const { useEffect } = await import("react");
+  return {
+    InlineAgentRunCard: ({
+      runId,
+      onRunChangeSignal,
+      onReviewReadingChange,
+      publishRead,
+    }: {
+      runId: string;
+      onRunChangeSignal?: (runId: string, signal: string, status?: string) => void;
+      onReviewReadingChange?: (runId: string, drawsReview: boolean) => void;
+      publishRead?: { state: { state: string } | null };
+    }) => {
+      if (onRunChangeSignal) statusReporters.set(runId, onRunChangeSignal);
+      panelReads.set(runId, publishRead);
+      const draws = panelReview.draws;
+      useEffect(() => {
+        onReviewReadingChange?.(runId, draws);
+      }, [onReviewReadingChange, runId, draws]);
+      return <div data-lifecycle-card-host="run_card" data-inline-run-card={runId} />;
+    },
+  };
+});
 
 import {
   HELD_RUN_ID,
@@ -156,6 +168,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  panelReview.draws = false;
+  holdStateMock.mockImplementation(async () => ({ state: "none" }));
   statusReporters.clear();
   panelReads.clear();
   cleanup();
@@ -363,6 +377,51 @@ describe("the publish card on the conversation hosts (cinatra#4150)", () => {
       const cards = root.querySelectorAll<HTMLElement>(`${CARD}, ${HITL_CARD}`);
       expect(cards).toHaveLength(1);
       expect(cards[0]!.getAttribute("data-lifecycle-card")).toBe("agent_hitl_screen");
+    },
+  );
+
+  // THE REVIEW REVEAL. A decided turn stands its run panel down and reveals it only while the panel reports a review.
+  // A review the panel still reports from a retained produced-review reading is stale while the publish read
+  // positively answers `pending`: the publish card is the turn's one held-run surface, and the panel stays stood down.
+  const CONFIRMED = { state: "confirmed", runId: HELD_RUN_ID, skillNames: ["blog-content"] } as Record<string, unknown>;
+  async function mountDecidedWithReview(surface: SurfaceName, open: boolean) {
+    holdStateMock.mockImplementation(async () => CONFIRMED);
+    panelReview.draws = true;
+    const answer = open ? PENDING : { state: "none" };
+    publishStateMock.mockImplementation(async () => answer);
+    stub = installWidgetServiceStub({ publishDecision: () => answer, recommendationHold: () => CONFIRMED });
+    const mounted = await mountSurface(surface, { messages: lifecycleHeldTranscript() });
+    await act(async () => {
+      await Promise.resolve();
+      await new Promise((r) => setTimeout(r, 0));
+      await Promise.resolve();
+    });
+    const root = mounted.container.querySelector<HTMLElement>(`[data-parity-surface="${surface}"]`);
+    if (!root) throw new Error(`the ${surface} surface did not mount`);
+    const panel = root.querySelector<HTMLElement>(`[data-inline-run-card="${HELD_RUN_ID}"]`);
+    if (!panel) throw new Error(`the ${surface} turn did not mount its run panel`);
+    return { root, panel };
+  }
+
+  it.each(["chat", "widget"] as const)(
+    "%s: a STALE review report beside an OPEN publish decision does not reveal the stood-down panel",
+    async (surface) => {
+      const { root, panel } = await mountDecidedWithReview(surface, true);
+      expect(root.querySelectorAll(CARD)).toHaveLength(1);
+      expect(root.querySelector(CARD)!.getAttribute("data-lifecycle-card-state")).toBe("pending");
+      const wrapper = panel.closest(`[data-inline-run-panel-stood-down="${HELD_RUN_ID}"]`);
+      expect(wrapper, "the panel's stale review is revealed beside the publish card").not.toBeNull();
+      expect(wrapper!.hasAttribute("hidden")).toBe(true);
+    },
+  );
+
+  it.each(["chat", "widget"] as const)(
+    "%s: with NO open publish decision the panel's review report still reveals it",
+    async (surface) => {
+      const { root, panel } = await mountDecidedWithReview(surface, false);
+      expect(root.querySelector(CARD)).toBeNull();
+      expect(panel.closest("[data-inline-run-panel-stood-down]")).toBeNull();
+      expect(panel.closest("[hidden]")).toBeNull();
     },
   );
 

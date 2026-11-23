@@ -84,6 +84,28 @@ describe("the publish card's mounts (cinatra#4150)", () => {
     expect(source.match(/<div data-agent-run-screen-slot=\{runId\}>\{hitlScreen\}\{publishCard\}<\/div>/g)).toHaveLength(2);
   });
 
+  it("the run panel asks the publish arm before its review screen, its working box and its review report", () => {
+    // ONE HELD-RUN CARD: the review screen and the working placeholder return BEFORE the plate that holds the publish
+    // card, and a produced-review park or ref the shared reader retains is stale at an open publish gate.
+    const source = read(PANEL);
+    expect(source).toMatch(/const parkedAtPublishGate = isPendingApproval && publishGateIsOpen\(publishRead\);/);
+    expect(source).toContain("const reviewScreenNode: ReactNode = reviewRefInTheBox && !parkedAtPublishGate ? (");
+    expect(source).toContain("if (!parkedAtPublishGate && (reviewScreenNode !== null || runIsWorking)) {");
+    expect(source).not.toContain("  if (reviewScreenNode !== null || runIsWorking) {");
+    expect(source).toContain("const panelDrawsReview = Boolean(reviewRefInTheBox) && !parkedAtPublishGate;");
+    // Every early return of the render that draws a held-run surface comes after the publish reading is taken.
+    const decided = source.indexOf("const parkedAtPublishGate = ");
+    expect(decided).toBeLessThan(source.indexOf("if (!parkedAtPublishGate && (reviewScreenNode !== null || runIsWorking)) {"));
+  });
+
+  it("the column's review reveal stands down at an open publish decision", () => {
+    const source = read(COLUMN);
+    expect(source).toContain("const publishDecisionIsOpen = publishGateIsOpen(publishRead);");
+    expect(source).toMatch(
+      /const turnOwesTheReaderAReview =\s*!publishDecisionIsOpen && \(panelDrawsReview \|\| runCardDrawsAReview\);/,
+    );
+  });
+
   it("the run panel keys its publish read on the gate, not on the status alone, and reports that signal", () => {
     // A run can move between two pauses with no status change any reading sees, so a status-keyed read keeps its
     // earlier answer. The panel's own read and the signal it hands the column are the SAME per-gate value.
@@ -101,12 +123,25 @@ describe("the publish card's mounts (cinatra#4150)", () => {
     const source = read(STEPPER);
     expect(source).toContain("const panelMountsPublishCard = runCardOwnsLifecycleCopy(ambientLifecycleHost);");
     expect(source).toMatch(/const publishCard = panelMountsPublishCard \? \(\s*<LifecycleCardSurfaceProvider host="run_card">/);
-    // ONE HELD-RUN CARD: an open publish gate wins over any gate reading the stream still holds (it is stale), so the
-    // card's arm comes before every interrupt arm too.
+    // ONE HELD-RUN CARD: an open publish gate wins over any held-run reading the panel still holds (a stream gate, or a
+    // produced-review park and ref the shared reader retains): all stale, so the card's arm is the ladder's FIRST arm.
     expect(source).toMatch(/const parkedAtPublishGate = status === "pending_approval" && publishGateIsOpen\(publishRead\);/);
-    const arm = source.indexOf("} else if (parkedAtPublishGate) {");
+    const ladder = source.indexOf("  let stageCard: ReactNode = null;");
+    expect(ladder).toBeGreaterThan(-1);
+    const arm = source.indexOf("  if (parkedAtPublishGate) {\n    stageCard = publishCard;\n  } else if (", ladder);
     expect(arm).toBeGreaterThan(-1);
-    expect(source.slice(arm, arm + 400)).toContain("stageCard = publishCard;");
+    // Nothing between the ladder's start and the publish arm assigns the stage card or branches.
+    expect(source.slice(ladder, arm)).not.toMatch(/stageCard =|\bif \(/);
+    expect(arm).toBeLessThan(
+      source.indexOf("} else if (parkedOnProducedReview && (reviewSlot.ref !== null || reviewStillReading)) {"),
+    );
+    expect(arm).toBeLessThan(source.indexOf('} else if (status === "failed") {'));
+    expect(source).not.toContain("} else if (parkedAtPublishGate) {");
+    // The read-only replay and the interrupt separator do not draw over the open decision either.
+    expect(source).toContain("} else if (replayStepIndex !== null && !parkedOnProducedReview && !parkedAtPublishGate) {");
+    expect(source).toContain(
+      '{status === "pending_approval" && effectiveInterruptContext !== null && !parkedAtPublishGate && (',
+    );
     expect(arm).toBeLessThan(source.indexOf("} else if (parkedWithNoGate && gateGoneOnResume && !awaitingNextStep) {"));
     expect(arm).toBeLessThan(source.indexOf("    awaitingNextStep ||\n    status === \"queued\" ||"));
     expect(arm).toBeLessThan(

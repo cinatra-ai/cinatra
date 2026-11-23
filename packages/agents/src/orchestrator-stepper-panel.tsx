@@ -3249,8 +3249,14 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
 
   let stageCard: ReactNode = null;
 
-  if (parkedOnProducedReview && (reviewSlot.ref !== null || reviewStillReading)) {
-    // THE PARK'S OWN ARM, first because every arm below it is about a different
+  // THE PUBLISH ARM IS ASKED FIRST (cinatra#4150). The publish card IS this pause's one surface: never the waiting
+  // spinner's "Processing response…", never the resume reading's "no longer open", never a produced-review park or ref
+  // the shared reader still retains, a marked review gate or an approval card (all stale while the read POSITIVELY
+  // answers `pending`). Any other publish reading leaves the ladder exactly as it was.
+  if (parkedAtPublishGate) {
+    stageCard = publishCard;
+  } else if (parkedOnProducedReview && (reviewSlot.ref !== null || reviewStillReading)) {
+    // THE PARK'S OWN ARM, first of the arms after the publish arm because every arm below it is about a different
     // state and two of them would swallow this one. It is the same two halves
     // the agentic panel draws, in the same order and from the same reader: the
     // review card once the gate row exists, and until then the quiet
@@ -3308,11 +3314,6 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     stageCard = (
       <CancelledCard runId={runId} agentId={agentId} lgThreadId={lgThreadId} launchBase={launchBase} />
     );
-  } else if (parkedAtPublishGate) {
-    // The publish card IS this pause's one surface (cinatra#4150): never the waiting spinner's "Processing
-    // response…", never the resume reading's "no longer open", never a gate card (stale) or a generic approval card
-    // beside it.
-    stageCard = publishCard;
   } else if (
     status === "pending_approval" &&
     effectiveInterruptContext !== null &&
@@ -3560,7 +3561,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
             {runStatusBadgeLabel(status, effectiveInterruptContext)}
           </StatusPill>
         </div>
-        {status === "pending_approval" && effectiveInterruptContext !== null && (
+        {status === "pending_approval" && effectiveInterruptContext !== null && !parkedAtPublishGate && (
           <Separator />
         )}
         {stageCard}
@@ -3618,7 +3619,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
         <span className="text-sm">Starting dev preview…</span>
       </div>
     );
-  } else if (replayStepIndex !== null && !parkedOnProducedReview) {
+  } else if (replayStepIndex !== null && !parkedOnProducedReview && !parkedAtPublishGate) {
     // Read-only HITL replay — read-only replay surface for a completed HITL gate.
     // The effectiveInterruptContext effect clears replayStepIndex when a new
     // interrupt arrives, so replay can coexist with pending_approval status.
