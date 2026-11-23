@@ -11,12 +11,13 @@ import { AuthzError } from "@/lib/authz/errors";
 import { sessionAuthorityFromResolvedRole } from "@/lib/org-write/authority";
 import type { ActorRoleHints } from "./auth-policy";
 import {
-  closeParkedDecisionsOfFailedRun,
   decide,
+  endFailedAttemptDecisions,
   insertParkedDecision,
   listDueParked,
   listSettledWithWaitingRun,
   readDecisionForRunNode,
+  readDispatchedPublishRows,
   readLatestDecisionForRun,
   readOpenDecisionForRun,
   type PublishDecisionRow,
@@ -62,11 +63,13 @@ const isStale = (err: unknown): boolean =>
 const LOGGED_ERROR_NAMES = new Set(["Error", "TypeError", "RangeError", "SyntaxError", "AbortError", "TimeoutError", "AuthzError"]);
 const nameOf = (err: unknown): string => (err instanceof Error ? (LOGGED_ERROR_NAMES.has(err.name) ? err.name : "Error") : "error");
 
-/** Refuses a resume when the run's newest decision exists and is not `released`. A read error propagates. Answers
- *  whether the run has a (released) decision: such a run met a publish gate, so it can meet one again. */
+/** Refuses a resume when the newest decision of the run's CURRENT attempt exists and is not `released`: a decision a
+ *  retry's reset ended with its failed attempt (superseded) never holds the later attempt's gate, while a declined,
+ *  expired or run_ended decision of the current attempt still does. A read error propagates. Answers whether the run has
+ *  any decision, of any attempt: such a run met a publish gate, so it can meet one again. */
 export async function assertNoOpenPublishDecision(runId: string): Promise<boolean> {
-  const latest = await readLatestDecisionForRun(runId);
-  if (latest && latest.status !== "released") throw new PublishDecisionRequiredError();
+  const latest = await readLatestDecisionForRun(runId, { orEarlierAttempt: true });
+  if (latest && latest.supersededAt == null && latest.status !== "released") throw new PublishDecisionRequiredError();
   return latest !== null;
 }
 
@@ -206,8 +209,10 @@ export async function holdRunAtPublishGate(args: {
       gateTaskId: task.id,
       a2aContextId: contextId ?? null,
       surfacedValues: surfacedValuesOf(task),
-      declaredRows: await declaredRowsAtPark(run.templateId, nodeId),
+      declaredRows: await readDispatchedPublishRows(run.id, nodeId).catch(() => null),
     });
+    // This gate task's stop belongs to an attempt a retry's reset ended: it cannot be recorded again for this attempt.
+    if (!park.inserted && park.decision.supersededAt != null) throw new Error("superseded");
   } catch {
     await moveRun(run.id, fromStatus, "failed", { error: "publish_decision_unrecorded: the publish decision could not be recorded", completedAt: new Date() }, authority);
     return true;
@@ -229,26 +234,15 @@ export async function holdRunAtPublishGate(args: {
 }
 
 /**
- * Closes every open (parked) publish decision of a run whose attempt failed, as run_ended with no person (the close the
- * expiry sweep makes for a run that left its gate). Called before a failed run is reset for a retry, so a decision the
- * failed attempt left open never reads as the open stop of the next attempt. The close holds only while the run is still
- * `failed`, checked in the same statement: a reset that lost to a concurrent reset closes nothing, and never the stop a
- * newer attempt opened. A fault is not swallowed: the reset fails and may be tried again.
+ * Ends the publish decisions of a run whose attempt failed, before a retry's reset: every decision of that attempt is
+ * marked superseded, and an open (parked) one closes run_ended with no person (the close the expiry sweep makes for a
+ * run that left its gate). So no decision of the failed attempt reads as the open stop, the hold, the card or a stop
+ * reason of the next attempt. The change holds only while the run is still `failed`, checked in the same statement: a
+ * reset that lost to a concurrent reset changes nothing, and never a newer attempt's decision. A fault is not
+ * swallowed: the reset fails and may be tried again.
  */
 export async function closeOpenPublishDecisionsOfRun(runId: string): Promise<number> {
-  return closeParkedDecisionsOfFailedRun(runId);
-}
-
-/**
- * The rows the template declares for this node NOW, kept with the decision so a later recompile never relabels it. An
- * own key only (a node id that names an Object.prototype member declares nothing). A template that is not found or
- * cannot be read records nothing (null): the park goes on, and the card falls back to the template's rows at its read.
- */
-async function declaredRowsAtPark(templateId: string, nodeId: string): Promise<Array<{ label: string; input: string }> | null> {
-  const template = await readAgentTemplateById(templateId).catch(() => null);
-  if (!template) return null;
-  const byNode = template.publishRows ?? {};
-  return Object.prototype.hasOwnProperty.call(byNode, nodeId) ? [...(byNode[nodeId] ?? [])] : [];
+  return endFailedAttemptDecisions(runId);
 }
 
 export type PublishDecisionAnswer =

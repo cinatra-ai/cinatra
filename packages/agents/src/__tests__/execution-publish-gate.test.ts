@@ -80,6 +80,8 @@ vi.mock("@cinatra-ai/a2a", async (orig) => {
 
 const decisions = vi.hoisted(() => ({
   insertParkedDecision: vi.fn(),
+  // The rows of the plan the run's current attempt was dispatched with (agent_runs.dispatch_publish_rows), for a node.
+  readDispatchedPublishRows: vi.fn(async (_runId: string, _nodeId: string) => null as unknown),
   decide: vi.fn(),
   readLatestDecisionForRun: vi.fn(async () => null),
   readOpenDecisionForRun: vi.fn(async () => null),
@@ -220,6 +222,8 @@ beforeEach(() => {
   storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(["publish"]));
   storeMock.transitionRunStatus.mockResolvedValue(undefined);
   decisions.insertParkedDecision.mockResolvedValue({ inserted: true, decision: parkedRow() });
+  decisions.readDispatchedPublishRows.mockReset();
+  decisions.readDispatchedPublishRows.mockResolvedValue([{ label: "Title", input: "title" }]);
   decisions.decide.mockResolvedValue({ outcome: "won", decision: parkedRow("run_ended") });
 });
 
@@ -244,19 +248,42 @@ describe("a run that reaches a publish gate (A4 without the moment)", () => {
     expect(gateStore.rememberWayflowGateTask).not.toHaveBeenCalled();
   });
 
-  it("the decision keeps the rows the template declares for its node AT THE PARK (review finding 2)", async () => {
-    // No declaration for the node: an empty declaration is recorded, never another node's rows.
-    storeMock.readAgentTemplateById.mockResolvedValue({ ...makeTemplate(["publish"]), publishRows: { another: [{ label: "X", input: "x" }] } });
+  it("the decision keeps the rows of the plan the attempt was DISPATCHED with, never the live template's (review finding 2)", async () => {
+    // The live template was recompiled after the dispatch: it now labels the node's input differently and adds a row.
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      ...makeTemplate(["publish"]),
+      publishRows: { publish: [{ label: "Headline", input: "title" }, { label: "Body", input: "body" }] },
+    });
+    decisions.readDispatchedPublishRows.mockResolvedValue([{ label: "Title", input: "title" }]);
+    await pause(sign(GATE));
+    expect(decisions.readDispatchedPublishRows).toHaveBeenCalledWith("run-pub-1", "publish");
+    expect(decisions.insertParkedDecision).toHaveBeenLastCalledWith(expect.objectContaining({ declaredRows: [{ label: "Title", input: "title" }] }));
+    // The dispatched plan declares no rows for the node: an empty declaration is recorded, never the live template's.
+    decisions.readDispatchedPublishRows.mockResolvedValue([]);
     await pause(sign(GATE));
     expect(decisions.insertParkedDecision).toHaveBeenLastCalledWith(expect.objectContaining({ declaredRows: [] }));
-    // A template that cannot be read records nothing (null), and the park still goes on.
-    vi.clearAllMocks();
-    decisions.insertParkedDecision.mockResolvedValue({ inserted: true, decision: parkedRow() });
-    storeMock.transitionRunStatus.mockResolvedValue(undefined);
-    storeMock.readAgentTemplateById.mockRejectedValue(new Error("template store down"));
+    // No recorded dispatch rows, or a read that faults, records nothing (null), and the park still goes on.
+    for (const read of [async () => null, async () => { throw new Error("run store down"); }]) {
+      vi.clearAllMocks();
+      decisions.insertParkedDecision.mockResolvedValue({ inserted: true, decision: parkedRow() });
+      storeMock.transitionRunStatus.mockResolvedValue(undefined);
+      decisions.readDispatchedPublishRows.mockImplementation(read);
+      await pause(sign(GATE));
+      expect(decisions.insertParkedDecision).toHaveBeenLastCalledWith(expect.objectContaining({ declaredRows: null }));
+      expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
+    }
+  });
+
+  it("a gate task whose stop a retry's reset already ended with its attempt fails the run, never wedges it running", async () => {
+    decisions.insertParkedDecision.mockResolvedValue({
+      inserted: false,
+      decision: { ...parkedRow("run_ended"), supersededAt: new Date("2026-11-01T00:00:00Z") },
+    });
     await pause(sign(GATE));
-    expect(decisions.insertParkedDecision).toHaveBeenLastCalledWith(expect.objectContaining({ declaredRows: null }));
-    expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
+    expect(transitions().map((m) => `${m.from}->${m.to}:${(m.error ?? "").split(":")[0]}`)).toEqual([
+      "running->failed:publish_decision_unrecorded",
+    ]);
+    expect(onInterruptSpy).not.toHaveBeenCalled();
   });
 
   it("the prefix wins: a step the template does not list, or a template with no list, is still held", async () => {

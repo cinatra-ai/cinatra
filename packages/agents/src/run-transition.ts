@@ -305,6 +305,9 @@ export async function updateAgentRunStatusConditional(
             // a re-dispatch keeps the run's FIRST start, and a reset that cleared
             // the column (`clearAgentRunFailureMetadata`) legitimately re-stamps.
             startedAt: sql`COALESCE(${agentRuns.startedAt}, now())`,
+            // cinatra#4150: the publish rows of the plan THIS dispatch runs, when the dispatcher states them; a dispatch
+            // that states none (a resume of the same flow) keeps the rows of the attempt it continues.
+            ...(dispatch.publishRows !== undefined ? { dispatchPublishRows: dispatch.publishRows } : {}),
           }
         : {}),
       // cinatra#1938: durable in-attempt wait marker (rationale on the agent_runs
@@ -485,6 +488,8 @@ export type AgentRunDispatchFields = {
   attemptId: string;
   /** cinatra#3745: a resume's dispatch carries the run's bound step-tool graph to `attemptId` in THIS transaction (carryRunStepToolPolicyInTx). */
   carryBoundStepToolPolicy?: true;
+  /** cinatra#4150: the publish rows map of the template object this dispatch runs, as JSON text (agent_runs.dispatch_publish_rows). */
+  publishRows?: string;
 };
 
 /**

@@ -128,6 +128,11 @@ export function publishDecisionSchemaQueries(schemaName: string): { text: string
       // no backfill: null = not recorded. Operator-upgrade twin in migrations/core/core__0133.
       text: `ALTER TABLE "${q}"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS declared_rows text`,
     },
+    {
+      // superseded_at: when a retry's reset ended the attempt the decision belongs to. NULLABLE, no default, no backfill:
+      // null = the run's current attempt. Operator-upgrade twin in migrations/core/core__0133.
+      text: `ALTER TABLE "${q}"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS superseded_at timestamptz`,
+    },
   ];
 }
 

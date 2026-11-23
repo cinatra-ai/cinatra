@@ -13,7 +13,7 @@ import { PgDialect, getTableConfig } from "drizzle-orm/pg-core";
 
 import { buildCreateStoreSchemaQueries } from "@/lib/drizzle-store";
 import { publishDecisionSchemaQueries } from "@/lib/artifacts/publication-operation-schema";
-import { agentRunPublishDecisions } from "@cinatra-ai/agents/schema";
+import { agentRunPublishDecisions, agentRuns } from "@cinatra-ai/agents/schema";
 
 type MigrationModule = {
   agentRunPublishDecisionsDdlSql: string;
@@ -96,10 +96,11 @@ describe("agent_run_publish_decisions — DDL parity", () => {
       name: line.split(" ")[0],
       notNull: /NOT NULL|PRIMARY KEY/.test(line),
     }));
-    // core__0133 adds declared_rows after the table's creation: last, and nullable.
+    // core__0133 adds declared_rows and superseded_at after the table's creation: last, and nullable.
     expect(config.columns.map((c) => ({ name: c.name, notNull: c.notNull }))).toEqual([
       ...ddlColumns,
       { name: "declared_rows", notNull: false },
+      { name: "superseded_at", notNull: false },
     ]);
     const indexes = config.indexes.map((i) => ({ name: i.config.name, unique: i.config.unique }));
     expect(indexes).toEqual([
@@ -152,7 +153,7 @@ describe("agent_run_publish_decisions.declared_rows — DDL parity (core__0133)"
 
   it("the bootstrap leaf adds the column, idempotently, once, after the table and its indexes, with the schema quoted", () => {
     const leaf = publishDecisionSchemaQueries('we"ird').map((q) => q.text);
-    expect(leaf.at(-1)).toBe('ALTER TABLE "we""ird"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS declared_rows text');
+    expect(leaf.at(-2)).toBe('ALTER TABLE "we""ird"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS declared_rows text');
     const all = buildCreateStoreSchemaQueries("cinatra").map((q) => q.text);
     expect(all.filter((t) => /agent_run_publish_decisions.* ADD COLUMN IF NOT EXISTS declared_rows text/.test(t))).toHaveLength(1);
   });
@@ -168,13 +169,17 @@ describe("agent_run_publish_decisions.declared_rows — DDL parity (core__0133)"
     expect(up.sql).toEqual([
       "SET lock_timeout = 5000",
       "ALTER TABLE agent_run_publish_decisions ADD COLUMN IF NOT EXISTS declared_rows text",
+      "ALTER TABLE agent_run_publish_decisions ADD COLUMN IF NOT EXISTS superseded_at timestamptz",
+      "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS dispatch_publish_rows text",
       "RESET lock_timeout",
     ]);
   });
 
   // red-first-expect: Cannot find module '/migrations/core/core__0133_publish-decision-declared-rows.mjs'
-  it("down drops only this column, with IF EXISTS", async () => {
+  it("down drops only these columns, with IF EXISTS", async () => {
     expect(record((await load()).down).sql).toEqual([
+      "ALTER TABLE agent_runs DROP COLUMN IF EXISTS dispatch_publish_rows",
+      "ALTER TABLE agent_run_publish_decisions DROP COLUMN IF EXISTS superseded_at",
       "ALTER TABLE agent_run_publish_decisions DROP COLUMN IF EXISTS declared_rows",
     ]);
   });
@@ -188,7 +193,7 @@ describe("agent_run_publish_decisions.declared_rows — DDL parity (core__0133)"
       seq: "0133",
       file: "core/core__0133_publish-decision-declared-rows.mjs",
       destructive: false,
-      tables: ["agent_run_publish_decisions"],
+      tables: ["agent_run_publish_decisions", "agent_runs"],
     });
   });
 
@@ -198,5 +203,25 @@ describe("agent_run_publish_decisions.declared_rows — DDL parity (core__0133)"
     expect(column!.notNull).toBe(false);
     expect(column!.hasDefault).toBe(false);
     expect(column!.columnType).toBe("PgText");
+  });
+});
+
+// Round 19: a decision's attempt mark (finding 1) and the dispatched plan's rows (finding 2), in every home.
+describe("agent_run_publish_decisions.superseded_at and agent_runs.dispatch_publish_rows — DDL parity (core__0133)", () => {
+  it("the bootstrap adds each column, idempotently, exactly once, with the schema quoted", () => {
+    const leaf = publishDecisionSchemaQueries('we"ird').map((q) => q.text);
+    expect(leaf.at(-1)).toBe('ALTER TABLE "we""ird"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS superseded_at timestamptz');
+    const all = buildCreateStoreSchemaQueries('we"ird').map((q) => q.text);
+    expect(all.filter((t) => /agent_run_publish_decisions.* ADD COLUMN IF NOT EXISTS superseded_at/.test(t))).toHaveLength(1);
+    expect(all.filter((t) => t.includes("dispatch_publish_rows"))).toEqual([
+      'ALTER TABLE "we""ird"."agent_runs" ADD COLUMN IF NOT EXISTS dispatch_publish_rows text',
+    ]);
+  });
+
+  it("the Drizzle columns are nullable with no default (no backfill), of the bootstrap's types", () => {
+    const superseded = getTableConfig(agentRunPublishDecisions).columns.find((c) => c.name === "superseded_at");
+    expect(superseded).toMatchObject({ notNull: false, hasDefault: false, columnType: "PgTimestamp" });
+    const rows = getTableConfig(agentRuns).columns.find((c) => c.name === "dispatch_publish_rows");
+    expect(rows).toMatchObject({ notNull: false, hasDefault: false, columnType: "PgText" });
   });
 });

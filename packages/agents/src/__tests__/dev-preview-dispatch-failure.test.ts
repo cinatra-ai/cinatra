@@ -104,16 +104,31 @@ vi.mock("../agent-run-serde", () => ({
   assertAgentRunScopeAuthorized: vi.fn(async () => undefined),
 }));
 
-// The publish decision record of one run, in memory, as the store answers it: the reset goes through the REAL
-// publish-decision-actions close. `closeParkedDecisionsOfFailedRun` keeps the store's contract (it closes only while the
-// run is still failed, in one statement; proved on Postgres in publish-decision-store.integration.test.ts).
+// The publish decision record of one run, in memory, newest last, as the store answers it: the reset and the hold go
+// through the REAL publish-decision-actions. `endFailedAttemptDecisions` keeps the store's contract (only while the run
+// is still failed, in one statement, it marks every decision of the failed attempt superseded and closes an open one
+// run_ended; proved on Postgres in publish-decision-store.integration.test.ts), and every read answers the current
+// attempt's rows only. `closeParkedDecisionsOfFailedRun` is the store's former close (open rows only, no attempt mark),
+// kept so this suite also runs over the code before the attempt mark and fails there on its assertions.
 const record = vi.hoisted(() => ({
   runStatus: "failed",
-  rows: [] as Array<{ id: string; status: string }>,
+  rows: [] as Array<{ id: string; status: string; superseded?: true }>,
   closedBy: [] as string[],
   closer: "",
 }));
-const parkedRows = () => record.rows.filter((r) => r.status === "parked");
+const current = () => record.rows.filter((r) => !r.superseded);
+const parkedRows = () => current().filter((r) => r.status === "parked");
+const asRow = (r: { id: string; status: string; superseded?: true }) =>
+  ({ id: r.id, status: r.status, supersededAt: r.superseded ? new Date("2026-11-01T00:00:00Z") : null });
+const endFailedAttemptDecisions = vi.fn(async (_runId: string) => {
+  if (record.runStatus !== "failed") return 0;
+  const ended = current();
+  for (const r of ended) {
+    r.superseded = true;
+    if (r.status === "parked") { r.status = "run_ended"; record.closedBy.push(`${record.closer}:${r.id}`); }
+  }
+  return ended.length;
+});
 const closeParkedDecisionsOfFailedRun = vi.fn(async (_runId: string) => {
   if (record.runStatus !== "failed") return 0;
   const open = parkedRows();
@@ -121,10 +136,15 @@ const closeParkedDecisionsOfFailedRun = vi.fn(async (_runId: string) => {
   return open.length;
 });
 vi.mock("../publish-decision-store", () => ({
+  endFailedAttemptDecisions: (runId: string) => endFailedAttemptDecisions(runId),
   closeParkedDecisionsOfFailedRun: (runId: string) => closeParkedDecisionsOfFailedRun(runId),
   readOpenDecisionForRun: vi.fn(async () => {
     const open = parkedRows();
-    return open.length ? { ...open[open.length - 1]! } : null;
+    return open.length ? asRow(open[open.length - 1]!) : null;
+  }),
+  readLatestDecisionForRun: vi.fn(async (_runId: string, opts?: { orEarlierAttempt?: boolean }) => {
+    const pick = current().at(-1) ?? (opts?.orEarlierAttempt ? record.rows.at(-1) : undefined);
+    return pick ? asRow(pick) : null;
   }),
   decide: vi.fn(async (id: string, change: { to: string }) => {
     const row = record.rows.find((r) => r.id === id);
@@ -136,6 +156,7 @@ vi.mock("../publish-decision-store", () => ({
 }));
 
 import { resetAgentRun, startDevChildPreviewRun } from "../run-actions";
+import { assertNoOpenPublishDecision } from "../publish-decision-actions";
 
 const createdRun = {
   id: RUN_ID,
@@ -244,9 +265,25 @@ describe("resetAgentRun closes a failed attempt's open publish decision, and onl
   it("a single reset of a failed run closes its stale parked decision and moves the run to pending_input", async () => {
     record.rows = [{ id: "d-failed", status: "parked" }];
     await expect(resetAgentRun({ runId: RUN_ID })).resolves.toEqual({ ok: true });
-    expect(record.rows).toEqual([{ id: "d-failed", status: "run_ended" }]);
+    expect(record.rows.map(({ id, status }) => ({ id, status }))).toEqual([{ id: "d-failed", status: "run_ended" }]);
     expect(record.runStatus).toBe("pending_input");
   });
+
+  // Round 19, finding 1: the retry reached an ordinary HITL gate before any publish gate, and its approval ran the hold
+  // check, which refused every status but released: the retry was wedged.
+  it.each(["parked", "run_ended", "declined", "expired"])(
+    "after the reset, the failed attempt's %s decision never holds the retry's ordinary gate; the retry's own closed decision does",
+    async (status) => {
+      record.rows = [{ id: "d-failed", status }];
+      await expect(resetAgentRun({ runId: RUN_ID })).resolves.toEqual({ ok: true });
+      // The retry runs and waits at an ordinary gate: its approval's hold check lets it go on.
+      record.runStatus = "pending_approval";
+      await expect(assertNoOpenPublishDecision(RUN_ID)).resolves.toBe(true);
+      // The retry then meets a publish gate and that stop ends (run_ended by a lost move): it holds, as before.
+      record.rows.push({ id: "d-next", status: "run_ended" });
+      await expect(assertNoOpenPublishDecision(RUN_ID)).rejects.toMatchObject({ code: "publish_decision_required" });
+    },
+  );
 
   /** Holds reset B after it read the run as failed, until the test lets it go on. */
   function holdSecondReset() {
@@ -283,13 +320,13 @@ describe("resetAgentRun closes a failed attempt's open publish decision, and onl
     record.rows.push({ id: "d-next", status: "parked" });
     release();
     await expect(b).resolves.toEqual({ ok: false, error: "run is not in failed state" });
-    expect(record.rows).toEqual([{ id: "d-failed", status: "run_ended" }, { id: "d-next", status: "parked" }]);
+    expect(record.rows).toEqual([{ id: "d-failed", status: "run_ended", superseded: true }, { id: "d-next", status: "parked" }]);
     expect(record.closedBy).toEqual(["A:d-failed"]);
     expect(record.runStatus).toBe("pending_approval");
   });
 
   it("a fault closing the decision fails the reset, and the run is not moved", async () => {
-    closeParkedDecisionsOfFailedRun.mockRejectedValueOnce(new Error("db down"));
+    endFailedAttemptDecisions.mockRejectedValueOnce(new Error("db down"));
     await expect(resetAgentRun({ runId: RUN_ID })).rejects.toThrow("db down");
     expect(transitionRunStatus).not.toHaveBeenCalled();
   });

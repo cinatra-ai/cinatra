@@ -5059,7 +5059,8 @@ async function runAgentBuilderExecutionJobInner(
 
     try {
       await transitionRunStatus(runId, "queued", "running", {
-        dispatch: { attemptId: randomUUID() },
+        // cinatra#4150: the publish rows of the template object this dispatch runs (the pinned overlay included).
+        dispatch: { attemptId: randomUUID(), publishRows: JSON.stringify(template.publishRows ?? {}) },
       }, executionAuthority);
     } catch (err) {
       if (err instanceof RunTransitionError && err.code === "stale_from_status") {

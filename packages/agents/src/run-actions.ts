@@ -441,10 +441,10 @@ export async function resetAgentRun(
   }
 
   const authority = await verifySessionAuthority(userId, run.orgId);
-  // A publish decision the failed attempt left open must not read as the open stop of the next attempt: it closes
-  // run_ended first, as the expiry sweep closes the row of a run that left its gate. The close holds only while the run
-  // is still failed (one statement), so a reset that loses the claim below to a concurrent reset closes nothing, and
-  // never the stop of the attempt that reset started. Loaded at the call, so this module's graph does not take the
+  // The failed attempt's publish decisions must not hold, label or stop the next attempt: each is marked superseded
+  // first, and one left open closes run_ended, as the expiry sweep closes the row of a run that left its gate. The change
+  // holds only while the run is still failed (one statement), so a reset that loses the claim below to a concurrent
+  // reset changes nothing, and never a decision of the attempt that reset started. Loaded at the call, so this module's graph does not take the
   // publish decision store.
   const { closeOpenPublishDecisionsOfRun } = await import("./publish-decision-actions");
   await closeOpenPublishDecisionsOfRun(args.runId);

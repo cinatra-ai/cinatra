@@ -370,6 +370,11 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // streamed_text precedent); NULL means "not parked on a produced review".
   // Migration: see src/lib/drizzle-store.ts produced_review_park entry.
   producedReviewPark: text("produced_review_park"),
+  // cinatra#4150: the publish rows map ({ node: [{ label, input }] }, JSON-as-text) of the template object the worker
+  // dispatched this run's current attempt with (the pinned overlay included), written by the queued -> running CAS; a
+  // publish decision copies its node's rows from here, so a recompile between dispatch and park never relabels it. null =
+  // not recorded (a dispatch before core__0133, or a dispatch road that records none). DDL: drizzle-store.ts + core__0133.
+  dispatchPublishRows: text("dispatch_publish_rows"),
   // authPolicy: per-run override of the template's agentAuthPolicy (JSON-as-text).
   // Nullable; null = inherit from agent_templates.agentAuthPolicy (or DEFAULT_AGENT_AUTH_POLICY).
   authPolicy: text("auth_policy"),
@@ -935,6 +940,10 @@ export const agentRunPublishDecisions = cinatraSchema.table("agent_run_publish_d
   // The rows the template declared for this node at the park ([{ label, input }], JSON-as-text); null = not recorded
   // (a row older than core__0133, or a park whose template could not be read).
   declaredRows:   text("declared_rows"),
+  // When a retry's reset ended the attempt this decision belongs to (core__0133); null = its attempt is the run's
+  // current one. Every run-level read judges only rows with null here, so a closed row of a failed attempt never holds a
+  // later attempt.
+  supersededAt:   timestamp("superseded_at", { withTimezone: true }),
 }, (t) => ({
   parkUniq: uniqueIndex("agent_run_publish_decisions_park_uniq").on(t.runId, t.nodeId, t.gateTaskId),
   dueIdx:   index("agent_run_publish_decisions_due_idx").on(t.expiresAt).where(sql`status = 'parked'`),

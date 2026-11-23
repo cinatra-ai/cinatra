@@ -12,6 +12,8 @@ const { calls, answers } = vi.hoisted(() => ({
     where: [] as unknown[],
     limit: [] as number[],
     orderBy: 0,
+    /** The terms of each orderBy, in order. */
+    orderByArgs: [] as unknown[][],
     transactions: 0,
     rollbacks: 0,
     /** Each call by the handle it went through: "db" (the pool) or "tx" (the transaction). */
@@ -70,8 +72,9 @@ vi.mock("../db", () => {
         };
         return {
           limit,
-          orderBy: () => {
+          orderBy: (...terms: unknown[]) => {
             calls.orderBy += 1;
+            calls.orderByArgs.push(terms);
             return { limit };
           },
         };
@@ -115,10 +118,12 @@ import {
   PUBLISH_DECISION_MAX_SURFACED_DEPTH,
   PublishDecisionError,
   decide,
+  endFailedAttemptDecisions,
   insertParkedDecision,
   listDueParked,
   listSettledWithWaitingRun,
   readDecisionForRunNode,
+  readDispatchedPublishRows,
   readLatestDecisionForRun,
   readOpenDecisionForRun,
 } from "../publish-decision-store";
@@ -173,6 +178,7 @@ beforeEach(() => {
   calls.where.length = 0;
   calls.limit.length = 0;
   calls.orderBy = 0;
+  calls.orderByArgs.length = 0;
   calls.transactions = 0;
   calls.rollbacks = 0;
   calls.via.length = 0;
@@ -974,5 +980,88 @@ describe("the decision keeps the rows its template declared at the park (review 
       answers.select = async () => [stored({ declaredRows: text })];
       expect(await codeOf(readLatestDecisionForRun("run-1"))).toBe("malformed-row");
     }
+  });
+});
+
+// Round 19 on cinatra#4150. Finding 1: a decision belongs to one attempt of its run; a retry's reset ends the failed
+// attempt's decisions (superseded_at), and every run-level read judges the current attempt's rows only. Finding 2: the
+// park copies its node's rows from the plan the attempt was dispatched with (agent_runs.dispatch_publish_rows).
+describe("round 19: a decision belongs to one attempt of its run", () => {
+  const CURRENT = /"agent_run_publish_decisions"\."superseded_at" is null/;
+  /** The SQL with the app schema's qualifier dropped (the schema the suite runs under varies). */
+  const unschema = (text: string) => text.replace(/"[^"]+"\.(?="agent_run_publish_decisions")/g, "");
+
+  it("every run-level read asks for the current attempt's rows only", async () => {
+    await readLatestDecisionForRun("run-1");
+    await readOpenDecisionForRun("run-1");
+    await readDecisionForRunNode("run-1", "publish");
+    await listSettledWithWaitingRun(50);
+    expect(calls.where).toHaveLength(4);
+    for (const where of calls.where) expect(rendered(where).sql).toMatch(CURRENT);
+  });
+
+  it("the hold's read answers the current attempt's newest row first, else an earlier attempt's, in one read", async () => {
+    answers.select = async () => [stored({ status: "run_ended", supersededAt: new Date("2026-11-01T00:00:00Z") })];
+    const row = await readLatestDecisionForRun("run-1", { orEarlierAttempt: true });
+    expect(row?.supersededAt).toEqual(new Date("2026-11-01T00:00:00Z"));
+    expect(rendered(calls.where[0]).sql).not.toMatch(CURRENT);
+    expect(calls.orderByArgs).toHaveLength(1);
+    expect(unschema(rendered(calls.orderByArgs[0]![0]).sql)).toBe('("agent_run_publish_decisions"."superseded_at" is null) desc');
+    expect(calls.limit).toEqual([1]);
+  });
+
+  it("a stored row reads its attempt mark; a current row reads null", async () => {
+    answers.select = async () => [stored({ supersededAt: null })];
+    expect((await readLatestDecisionForRun("run-1"))?.supersededAt).toBeNull();
+  });
+
+  // red-first-expect: TypeError: endFailedAttemptDecisions is not a function
+  it("the reset's end of a failed attempt is ONE statement: it marks every current row and closes an open one", async () => {
+    answers.update = async () => [{ id: "d1" }, { id: "d2" }];
+    expect(await endFailedAttemptDecisions("run-1")).toBe(2);
+    expect(calls.transactions).toBe(0);
+    expect(calls.via).toEqual(["db.update"]);
+    const set = calls.set[0]!;
+    expect(rendered(set.supersededAt).sql).toBe("now()");
+    expect(unschema(rendered(set.status).sql)).toBe(`case when "agent_run_publish_decisions"."status" = 'parked' then 'run_ended' else "agent_run_publish_decisions"."status" end`);
+    expect(unschema(rendered(set.decidedBy).sql)).toBe(`case when "agent_run_publish_decisions"."status" = 'parked' then null else "agent_run_publish_decisions"."decided_by" end`);
+    expect(unschema(rendered(set.decidedAt).sql)).toBe(`case when "agent_run_publish_decisions"."status" = 'parked' then now() else "agent_run_publish_decisions"."decided_at" end`);
+    const where = rendered(calls.where[0]);
+    expect(where.params).toEqual(["run-1"]);
+    expect(where.sql).toMatch(CURRENT);
+    expect(where.sql).toMatch(/failed_run\.status = 'failed'/);
+    expect(await codeOf(endFailedAttemptDecisions(""))).toBe("invalid-input");
+  });
+});
+
+describe("round 19: the park copies its node's rows from the dispatched plan", () => {
+  const MAP = JSON.stringify({ publish: [{ label: "Title", input: "title" }], other: [{ label: "X", input: "x" }] });
+
+  // red-first-expect: TypeError: readDispatchedPublishRows is not a function
+  it("answers the node's rows of the recorded map, [] for a node it declares none for, and null when none is recorded", async () => {
+    answers.select = async () => [{ rows: MAP }];
+    expect(await readDispatchedPublishRows("run-1", "publish")).toEqual([{ label: "Title", input: "title" }]);
+    expect(rendered(calls.where[0]).params).toEqual(["run-1"]);
+    expect(await readDispatchedPublishRows("run-1", "missing")).toEqual([]);
+    // An own key only: a node id that names an Object.prototype member declares nothing.
+    expect(await readDispatchedPublishRows("run-1", "__proto__")).toEqual([]);
+    expect(await readDispatchedPublishRows("run-1", "toString")).toEqual([]);
+    for (const rows of [null, "not json", "[]", "null"]) {
+      answers.select = async () => [{ rows }];
+      expect(await readDispatchedPublishRows("run-1", "publish")).toBeNull();
+    }
+    answers.select = async () => [];
+    expect(await readDispatchedPublishRows("run-1", "publish")).toBeNull();
+    // A node entry this module cannot read is not recorded either.
+    answers.select = async () => [{ rows: JSON.stringify({ publish: [{ label: "" }] }) }];
+    expect(await readDispatchedPublishRows("run-1", "publish")).toBeNull();
+  });
+
+  // red-first-expect: TypeError: readDispatchedPublishRows is not a function
+  it("a read error propagates (the park records nothing for it)", async () => {
+    answers.select = async () => {
+      throw new Error("db down");
+    };
+    await expect(readDispatchedPublishRows("run-1", "publish")).rejects.toThrow("db down");
   });
 });

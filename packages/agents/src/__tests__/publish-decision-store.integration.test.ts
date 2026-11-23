@@ -291,24 +291,25 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     const stale2 = (await store.insertParkedDecision(park({ runId: failed, gateTaskId: "task-2" }))).decision;
     const answered = (await store.insertParkedDecision(park({ runId: failed, gateTaskId: "task-3" }))).decision;
     await store.decide(answered.id, { from: "parked", to: "declined", actor: "person-1", note: "no" });
-    expect(await store.closeParkedDecisionsOfFailedRun(failed)).toBe(2);
+    // Every decision of the failed attempt is ended (three), and only the open ones change status.
+    expect(await store.endFailedAttemptDecisions(failed)).toBe(3);
     for (const id of [stale1.id, stale2.id]) expect(await statusOf(id)).toBe("run_ended");
     expect(await statusOf(answered.id)).toBe("declined");
     expect(await store.readOpenDecisionForRun(failed)).toBeNull();
     // Two concurrent closes of one failed run close each row once.
     const twice = await run("failed");
     await store.insertParkedDecision(park({ runId: twice }));
-    expect((await Promise.all([store.closeParkedDecisionsOfFailedRun(twice), store.closeParkedDecisionsOfFailedRun(twice)])).reduce((a, b) => a + b)).toBe(1);
+    expect((await Promise.all([store.endFailedAttemptDecisions(twice), store.endFailedAttemptDecisions(twice)])).reduce((a, b) => a + b)).toBe(1);
     // A run a concurrent reset already moved on, and whose next attempt opened its own stop, closes nothing.
     for (const status of ["pending_input", "running", "pending_approval"]) {
       const movedOn = await run(status);
       const live = (await store.insertParkedDecision(park({ runId: movedOn }))).decision;
-      expect(await store.closeParkedDecisionsOfFailedRun(movedOn)).toBe(0);
+      expect(await store.endFailedAttemptDecisions(movedOn)).toBe(0);
       expect(await statusOf(live.id)).toBe("parked");
     }
     // A row with no run closes nothing.
     const orphan = (await store.insertParkedDecision(park())).decision;
-    expect(await store.closeParkedDecisionsOfFailedRun(orphan.runId)).toBe(0);
+    expect(await store.endFailedAttemptDecisions(orphan.runId)).toBe(0);
     expect(await statusOf(orphan.id)).toBe("parked");
   });
 
@@ -327,5 +328,86 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
       after = page[page.length - 1];
     }
     expect(paged).toEqual(all);
+  });
+
+  it("round 19: a retry's reset ends the failed attempt's decisions, and no run-level read judges them again", async () => {
+    const RUNS = `"${q(TEST_SCHEMA)}"."agent_runs"`;
+    const runId = `run-${randomUUID()}`;
+    await admin.query(`INSERT INTO ${RUNS} (id, template_id, org_id, status, input_params) VALUES ($1, $2, 'org-4150', 'failed', '{}')`, [runId, `tpl-${randomUUID()}`]);
+    const setRun = (status: string) => admin.query(`UPDATE ${RUNS} SET status = $2 WHERE id = $1`, [runId, status]);
+    const rowOf = async (id: string) =>
+      (await admin.query(`SELECT status, superseded_at, decided_by, decided_at FROM ${TABLE} WHERE id = $1`, [id])).rows[0];
+    // The failed attempt: a stop it declined, one it released, one a hold-path fault closed run_ended, one left parked.
+    const ids: Record<string, string> = {};
+    for (const [n, to] of [["declined", "declined"], ["released", "released"], ["ended", "run_ended"], ["open", null]] as const) {
+      const { decision } = await store.insertParkedDecision(park({ runId, nodeId: `node-${n}`, gateTaskId: `task-${n}` }));
+      if (to) await store.decide(decision.id, to === "run_ended" ? { from: "parked", to, actor: null } : { from: "parked", to, actor: "user-1" });
+      ids[n] = decision.id;
+    }
+    const declinedBefore = await rowOf(ids.declined!);
+    expect(await store.endFailedAttemptDecisions(runId)).toBe(4);
+    for (const id of Object.values(ids)) expect((await rowOf(id)).superseded_at).toBeInstanceOf(Date);
+    // An open row closes run_ended with no person; a settled row keeps its answer, its person and its time.
+    expect(await rowOf(ids.open!)).toMatchObject({ status: "run_ended", decided_by: null });
+    expect((await rowOf(ids.open!)).decided_at).toBeInstanceOf(Date);
+    expect(await rowOf(ids.declined!)).toMatchObject({ status: "declined", decided_by: "user-1", decided_at: declinedBefore.decided_at });
+    // A second end changes nothing.
+    expect(await store.endFailedAttemptDecisions(runId)).toBe(0);
+
+    // The retry: the run is waiting at an ordinary gate. No read answers a row of the ended attempt...
+    await setRun("pending_approval");
+    expect(await store.readLatestDecisionForRun(runId)).toBeNull();
+    expect(await store.readOpenDecisionForRun(runId)).toBeNull();
+    expect(await store.readDecisionForRunNode(runId, "node-released")).toBeNull();
+    expect(await store.readDecisionForRunNode(runId, "node-declined")).toBeNull();
+    expect((await store.listSettledWithWaitingRun(1000)).map((r) => r.id)).not.toContain(ids.declined);
+    // ...except the hold's read, which says the run met a publish gate before, marked as an earlier attempt's.
+    const earlier = await store.readLatestDecisionForRun(runId, { orEarlierAttempt: true });
+    expect(earlier?.supersededAt).toBeInstanceOf(Date);
+
+    // The retry reaches the same publish gate again (a new gate task) and another one: each is the current attempt's.
+    const again = (await store.insertParkedDecision(park({ runId, nodeId: "node-open", gateTaskId: "task-open-retry" }))).decision;
+    expect(again.supersededAt).toBeNull();
+    expect((await store.readOpenDecisionForRun(runId))?.id).toBe(again.id);
+    expect((await store.readLatestDecisionForRun(runId))?.id).toBe(again.id);
+    expect((await store.readLatestDecisionForRun(runId, { orEarlierAttempt: true }))?.id).toBe(again.id);
+    // An ended attempt's row stays first in the hold's read order only while the current attempt has none: even an older
+    // current row wins over a newer ended one.
+    await admin.query(`UPDATE ${TABLE} SET created_at = now() + interval '1 hour' WHERE id = $1`, [ids.ended]);
+    expect((await store.readLatestDecisionForRun(runId, { orEarlierAttempt: true }))?.id).toBe(again.id);
+    // The current attempt's decline is a stop left unmade the sweep may end; the ended attempt's never was.
+    await store.decide(again.id, { from: "parked", to: "declined", actor: "user-1" });
+    await admin.query(`UPDATE ${TABLE} SET created_at = now() + interval '2 hours' WHERE id = $1`, [again.id]);
+    const listed = (await store.listSettledWithWaitingRun(1000)).map((r) => r.id);
+    expect(listed).toContain(again.id);
+    expect(listed).not.toContain(ids.declined);
+    // A reset of a run that is not failed changes nothing, the current attempt's rows included.
+    expect(await store.endFailedAttemptDecisions(runId)).toBe(0);
+    expect((await rowOf(again.id)).superseded_at).toBeNull();
+  });
+
+  it("round 19: the park's rows come from the run's dispatched plan, one node at a time", async () => {
+    const RUNS = `"${q(TEST_SCHEMA)}"."agent_runs"`;
+    const runId = `run-${randomUUID()}`;
+    await admin.query(`INSERT INTO ${RUNS} (id, template_id, org_id, status, input_params) VALUES ($1, $2, 'org-4150', 'running', '{}')`, [runId, `tpl-${randomUUID()}`]);
+    expect(await store.readDispatchedPublishRows(runId, "publish")).toBeNull();
+    await admin.query(`UPDATE ${RUNS} SET dispatch_publish_rows = $2 WHERE id = $1`, [runId, JSON.stringify({ publish: [{ label: "Title", input: "title" }] })]);
+    expect(await store.readDispatchedPublishRows(runId, "publish")).toEqual([{ label: "Title", input: "title" }]);
+    expect(await store.readDispatchedPublishRows(runId, "other")).toEqual([]);
+    expect(await store.readDispatchedPublishRows(`run-${randomUUID()}`, "publish")).toBeNull();
+  });
+
+  it("round 19: the migration's two added columns are no-ops on a bootstrapped schema", async () => {
+    const mod = (await import("../../../../migrations/core/core__0133_publish-decision-declared-rows.mjs")) as unknown as {
+      publishDecisionSupersededAtDdlSql: string;
+      runDispatchPublishRowsDdlSql: string;
+    };
+    await admin.query(`SET search_path TO "${q(TEST_SCHEMA)}"`);
+    try {
+      await expect(admin.query(mod.publishDecisionSupersededAtDdlSql)).resolves.toBeDefined();
+      await expect(admin.query(mod.runDispatchPublishRowsDdlSql)).resolves.toBeDefined();
+    } finally {
+      await admin.query("RESET search_path");
+    }
   });
 });
