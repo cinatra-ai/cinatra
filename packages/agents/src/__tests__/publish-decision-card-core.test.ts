@@ -107,7 +107,7 @@ describe("which card a run shows", () => {
   });
 
   // Before the fix the widget read does not exist yet, so this test fails on the missing export.
-  // red-first-expect: publishDecisionCardStateForWidgetRun is not a function
+  // red-first-expect: expected { state: 'pending', …(4) } to deeply equal { state: 'pending', …(5) }
   it("the site widget's card asks the widget reader's rights, never the decide check", async () => {
     const widget = { ...WHO, actor: { actorType: "human" as const, source: "a2a" as const, userId: "user-a" } };
     for (const answer of [true, false]) {
