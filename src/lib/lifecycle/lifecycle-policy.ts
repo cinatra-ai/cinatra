@@ -387,24 +387,35 @@ export type RegenerateDelivery = {
   deliveredFindingIds: string[];
 };
 
+/** The declared input name of a picture step: its prompt (the blog
+ *  pipeline's `image_flow.prompt`). Only a step that declares it takes the
+ *  picture's prompt. */
+export const PICTURE_PROMPT_NOTE_INPUT = "prompt";
+
 /**
  * The value of the producing step's declared input for a Regenerate, and the
- * findings it delivers (cinatra#4264). Each review field fills only its own
- * input. A step declares one text input: a picture step declares its prompt
- * (the blog pipeline's `image_flow.prompt`), every other step the input its
- * Note fills (`draft_flow.note`). A picture review records its prompt under
- * `picture-prompt` (only a review that opened with a picture's recorded prompt
- * has one), so when the request carries that finding it fills the declared
- * input; otherwise the Note (`prompt-window`) does. A finding of the other
- * field reaches no input: it is delivered only when its words are exactly the
- * value given. Null when the field's finding is missing, repeated or blank;
- * the Note never stands in for a malformed prompt.
+ * findings it delivers (cinatra#4264). The step being regenerated decides,
+ * by the input it declares (`noteInput` of its `regenerate` entry): each
+ * review field fills only its own input. A picture step declares its prompt
+ * (`PICTURE_PROMPT_NOTE_INPUT`); when the request carries the picture's
+ * prompt (`picture-prompt`, recorded only for a review opened on a picture
+ * with a recorded prompt) it fills that input, otherwise the Note
+ * (`prompt-window`) does, and the Note never stands in for a malformed
+ * prompt. Every other step takes the Note alone: a submitted prompt belongs
+ * to no input of it, is never sent and never delivered. A finding of the
+ * other field is delivered only when its words are exactly the value given
+ * and the step takes that field. Null when the field's finding is missing,
+ * repeated or blank.
  */
-export function routeRegenerateFindings(findings: unknown): RegenerateDelivery | null {
+export function routeRegenerateFindings(findings: unknown, noteInput: string): RegenerateDelivery | null {
   if (!Array.isArray(findings)) return null;
-  const hasPrompt = findings.some(
-    (finding) => !!finding && typeof finding === "object" && (finding as { id?: unknown }).id === PICTURE_PROMPT_FINDING_ID,
-  );
+  const pictureStep = noteInput === PICTURE_PROMPT_NOTE_INPUT;
+  const hasPrompt =
+    pictureStep &&
+    findings.some(
+      (finding) =>
+        !!finding && typeof finding === "object" && (finding as { id?: unknown }).id === PICTURE_PROMPT_FINDING_ID,
+    );
   const value = readWindowFinding(findings, hasPrompt ? PICTURE_PROMPT_FINDING_ID : REVIEW_NOTE_FINDING_ID);
   if (value === null) return null;
   const deliveredFindingIds = findings
@@ -413,6 +424,7 @@ export function routeRegenerateFindings(findings: unknown): RegenerateDelivery |
         !!finding &&
         typeof finding === "object" &&
         typeof (finding as { id?: unknown }).id === "string" &&
+        (pictureStep || (finding as { id: string }).id !== PICTURE_PROMPT_FINDING_ID) &&
         (finding as { message?: unknown }).message === value,
     )
     .map((finding) => finding.id);

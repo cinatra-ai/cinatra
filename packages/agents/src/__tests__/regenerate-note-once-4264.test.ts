@@ -93,41 +93,68 @@ describe("readRegenerateNote: the reviewer's note of a Regenerate repair", () =>
 });
 
 describe("routeRegenerateFindings: each review field fills only its own declared input", () => {
-  type Route = (findings: unknown) => { value: string; deliveredFindingIds: string[] } | null;
+  type Route = (findings: unknown, noteInput: string) => { value: string; deliveredFindingIds: string[] } | null;
   const route = () => (lifecyclePolicy as Record<string, unknown>).routeRegenerateFindings as Route | undefined;
 
   // red-first-expect: expected 'undefined' to be 'function' // Object.is equality
   it("gives a picture's declared input its prompt, and delivers the note only when its words are the same", () => {
     expect(typeof route()).toBe("function");
-    expect(route()!(PICTURE_FINDINGS)).toEqual({ value: PROMPT, deliveredFindingIds: ["picture-prompt"] });
+    expect(route()!(PICTURE_FINDINGS, "prompt")).toEqual({ value: PROMPT, deliveredFindingIds: ["picture-prompt"] });
     // The review floor sends the Note field's words as the prompt too: then
     // both findings are given to the run, in the one input.
     expect(
       route()!([
         { id: "prompt-window", message: PROMPT },
         { id: "picture-prompt", message: PROMPT },
-      ]),
+      ], "prompt"),
     ).toEqual({ value: PROMPT, deliveredFindingIds: ["prompt-window", "picture-prompt"] });
-  });
-
-  it("gives every other step's declared input the Note; a malformed prompt never falls back to the note", () => {
-    expect(typeof route()).toBe("function");
-    expect(route()!([{ id: "prompt-window", message: NOTE }])).toEqual({
+    // A picture review with no recorded prompt: its Note fills the prompt.
+    expect(route()!([{ id: "prompt-window", message: NOTE }], "prompt")).toEqual({
       value: NOTE,
       deliveredFindingIds: ["prompt-window"],
     });
+  });
+
+  it("a picture step's malformed prompt never falls back to the note", () => {
+    expect(typeof route()).toBe("function");
     for (const prompt of ["   ", 7]) {
-      expect(route()!([{ id: "prompt-window", message: NOTE }, { id: "picture-prompt", message: prompt }])).toBeNull();
+      expect(
+        route()!([{ id: "prompt-window", message: NOTE }, { id: "picture-prompt", message: prompt }], "prompt"),
+      ).toBeNull();
     }
     expect(
       route()!([
         { id: "prompt-window", message: NOTE },
         { id: "picture-prompt", message: PROMPT },
         { id: "picture-prompt", message: NOTE },
-      ]),
+      ], "prompt"),
     ).toBeNull();
-    expect(route()!([{ id: "finding-1", message: NOTE }])).toBeNull();
-    expect(route()!(null)).toBeNull();
+    expect(route()!([{ id: "finding-1", message: NOTE }], "prompt")).toBeNull();
+    expect(route()!(null, "prompt")).toBeNull();
+  });
+
+  it("gives every other step's declared input the Note: a submitted prompt is never sent and never delivered", () => {
+    expect(typeof route()).toBe("function");
+    expect(route()!([{ id: "prompt-window", message: NOTE }], "note")).toEqual({
+      value: NOTE,
+      deliveredFindingIds: ["prompt-window"],
+    });
+    // The step decides, not the request: a draft's Regenerate that also
+    // carries a prompt takes the Note.
+    expect(route()!(PICTURE_FINDINGS, "note")).toEqual({ value: NOTE, deliveredFindingIds: ["prompt-window"] });
+    // A prompt with the Note's own words is still not delivered to the step.
+    expect(
+      route()!([{ id: "prompt-window", message: NOTE }, { id: "picture-prompt", message: NOTE }], "note"),
+    ).toEqual({ value: NOTE, deliveredFindingIds: ["prompt-window"] });
+    // A malformed prompt does not belong to the step and changes nothing.
+    expect(route()!([{ id: "prompt-window", message: NOTE }, { id: "picture-prompt", message: "  " }], "note")).toEqual({
+      value: NOTE,
+      deliveredFindingIds: ["prompt-window"],
+    });
+    // A prompt alone gives the step nothing.
+    expect(route()!([{ id: "picture-prompt", message: PROMPT }], "note")).toBeNull();
+    expect(route()!([{ id: "finding-1", message: NOTE }], "note")).toBeNull();
+    expect(route()!(null, "note")).toBeNull();
   });
 });
 
@@ -141,7 +168,7 @@ describe("planSegmentDispatch: the declared input's words go there and nowhere e
         packageName: "@any-vendor/pipeline",
         lifecycleConfig: LIFECYCLE,
         // The picture step's declared input takes the picture's prompt.
-        note: PROMPT,
+        findings: PICTURE_FINDINGS,
         request: request(PICTURE_FINDINGS),
       },
       d,
@@ -151,7 +178,13 @@ describe("planSegmentDispatch: the declared input's words go there and nowhere e
       parentRunId: PROVENANCE_RUN,
       inputParams: {
         imagePrompt: PROMPT,
-        lifecycleRepairRequest: { kind: "lifecycle_repair_request", repairId: "repair-1", findings: [] },
+        lifecycleRepairRequest: {
+          kind: "lifecycle_repair_request",
+          repairId: "repair-1",
+          findings: [],
+          // The declared input the run is made for, with no words.
+          regenerateInput: { artifactNode: "file_image", step: "image_flow", noteInput: "prompt", startOutput: "imagePrompt" },
+        },
       },
     });
     expect(JSON.stringify(planned)).not.toContain(NOTE);
@@ -170,7 +203,7 @@ describe("planSegmentDispatch: the declared input's words go there and nowhere e
         templateId: "tpl-1",
         packageName: "@any-vendor/pipeline",
         lifecycleConfig: LIFECYCLE,
-        note: NOTE,
+        findings: [{ id: "prompt-window", message: NOTE }],
         request: request([{ id: "prompt-window", message: NOTE }]),
       },
       deps("write_draft", "draftNote"),
@@ -183,16 +216,35 @@ describe("planSegmentDispatch: the declared input's words go there and nowhere e
     expect(JSON.stringify(planned.inputParams)).not.toContain(lifecyclePolicy.REPAIR_FINDINGS_TEXT_LEAD);
   });
 
+  it("a draft step whose findings also carry a picture prompt takes the Note; the prompt appears nowhere", async () => {
+    const planned = await planSegmentDispatch(
+      {
+        repair: intent({ regenerateNodeId: "write_draft" }),
+        templateId: "tpl-1",
+        packageName: "@any-vendor/pipeline",
+        lifecycleConfig: LIFECYCLE,
+        findings: PICTURE_FINDINGS,
+        request: request(PICTURE_FINDINGS),
+      },
+      deps("write_draft", "draftNote"),
+    );
+    expect(planned.kind).toBe("segment");
+    if (planned.kind !== "segment") throw new Error("unreachable");
+    expect(planned.inputParams.draftNote).toBe(NOTE);
+    expect(JSON.stringify(planned.inputParams)).not.toContain(PROMPT);
+  });
+
   it("refuses a Regenerate whose repair carries no note: nothing is dispatched with an empty input", async () => {
     for (const note of [null, "", "   "]) {
+      const findings = note === null ? [] : [{ id: "prompt-window", message: note }];
       const planned = await planSegmentDispatch(
         {
           repair: intent(),
           templateId: "tpl-1",
           packageName: "@any-vendor/pipeline",
           lifecycleConfig: LIFECYCLE,
-          note,
-          request: request([]),
+          findings,
+          request: request(findings),
         },
         deps(),
       );

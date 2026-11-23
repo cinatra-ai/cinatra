@@ -57,7 +57,7 @@ import { and, asc, desc, eq, ne, notInArray, sql } from "drizzle-orm";
 import { jsonb, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
 
 import { db } from "./db";
-import { agentRunStepSnapshots, agentRuns, agentTemplates, artifactProducedOutbox, lifecycleRepair } from "./schema";
+import { agentRunStepSnapshots, agentRuns, artifactProducedOutbox, lifecycleRepair } from "./schema";
 import { TERMINAL_RUN_STATUSES, type AgentRunStatus } from "./run-status";
 import { readRepair, submitRepairResponse } from "./lifecycle-repair-store";
 import {
@@ -68,7 +68,7 @@ import {
 import {
   claimSegmentProduction,
   hasRegenerateIntent,
-  regenerateRunInDeclaredForm,
+  recordedRegenerateInput,
   SEGMENT_RECEIPT_NODE_ID,
   type SegmentClaimDeps,
 } from "./regenerate-segment";
@@ -313,20 +313,6 @@ async function resolveCurrentBaseRevisionId(
   return pointer;
 }
 
-/** The run's template's lifecycle declaration and package, or nulls when the
- *  template is gone (cinatra#4264: the declared-input form is read from them). */
-async function readRunTemplateLifecycle(
-  templateId: string | null,
-): Promise<{ lifecycleConfig: string | null; packageName: string | null }> {
-  if (!templateId) return { lifecycleConfig: null, packageName: null };
-  const [template] = await db
-    .select({ lifecycleConfig: agentTemplates.lifecycleConfig, packageName: agentTemplates.packageName })
-    .from(agentTemplates)
-    .where(eq(agentTemplates.id, templateId))
-    .limit(1);
-  return { lifecycleConfig: template?.lifecycleConfig ?? null, packageName: template?.packageName ?? null };
-}
-
 /**
  * Complete the DISPATCHED `producer_repair` repairs, within the candidate window
  * below, whose repair run has done its work — opening the successor gate the
@@ -429,7 +415,7 @@ export async function completeDispatchedProducerRepairs(opts?: {
       // past, with no way back. A run that is still going has not answered yet:
       // it is `pending`, and the next pass asks again.
       const [run] = await db
-        .select({ status: agentRuns.status, templateId: agentRuns.templateId, inputParams: agentRuns.inputParams })
+        .select({ status: agentRuns.status, inputParams: agentRuns.inputParams })
         .from(agentRuns)
         .where(eq(agentRuns.id, runId))
         .limit(1);
@@ -477,23 +463,21 @@ export async function completeDispatchedProducerRepairs(opts?: {
         continue;
       }
       // cinatra#4264: a Regenerate run is accepted only when its stored inputs
-      // are the declared-input form (`segmentInputsInDeclaredForm`, the check
-      // the run start makes). A run an older build made in the earlier form
-      // (an older dispatcher and worker during a rolling deployment) is never
-      // applied, and one the run start failed is never left `dispatched` with
-      // no successor: the repair is escalated, by the rule the run start
-      // follows (`escalateRegenerateRepairOfUndeclaredRun`). A second pass
-      // finds the repair escalated and writes nothing.
-      if (
-        segmentIntent &&
-        regenerateNodeId &&
-        !(await regenerateRunInDeclaredForm({
-          regenerateNodeId,
-          findings: repair.findings,
-          inputParams: run.inputParams,
-          ...(await readRunTemplateLifecycle(run.templateId)),
-        }))
-      ) {
+      // are the declared-input form its dispatch recorded in them
+      // (`recordedRegenerateInput`: the record the dispatch wrote, and the
+      // repair's own findings; the template and the installed flow are not
+      // read, so an agent updated after the run was made never decides). A
+      // run an older build made in the earlier form (no record: an older
+      // dispatcher during a rolling deployment) is never applied, and one the
+      // run start failed is never left `dispatched` with no successor: the
+      // repair is escalated, by the rule the run start follows
+      // (`escalateRegenerateRepairOfUndeclaredRun`). A second pass finds the
+      // repair escalated and writes nothing.
+      const regenerateInput =
+        segmentIntent && regenerateNodeId
+          ? recordedRegenerateInput({ regenerateNodeId, findings: repair.findings, inputParams: run.inputParams })
+          : null;
+      if (segmentIntent && regenerateNodeId && !regenerateInput) {
         if (await escalateRegenerateRepairOfUndeclaredRun(repair.id)) summary.escalated += 1;
         console.error(
           `[lifecycle-repair-producer-completion-store] the run of repair ${repair.id} was not made in the ` +
@@ -642,7 +626,11 @@ export async function completeDispatchedProducerRepairs(opts?: {
       // is what measures the produced revision against what the review
       // authorized.
       const deliveredFindingIds = segmentIntent
-        ? new Set(routeRegenerateFindings(repair.findings)?.deliveredFindingIds ?? [])
+        ? new Set(
+            regenerateInput
+              ? (routeRegenerateFindings(repair.findings, regenerateInput.noteInput)?.deliveredFindingIds ?? [])
+              : [],
+          )
         : null;
       const findingOutcomes = repair.findings.map((f) =>
         deliveredFindingIds === null || deliveredFindingIds.has(f.id)

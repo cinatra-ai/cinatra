@@ -63,10 +63,19 @@ const OAS = {
   ],
 };
 let oasDir: string;
+/** Whether the agent's flow is mounted now; a case unmounts it. */
+let oasMounted: boolean;
+/** The template the run was made from, as it reads now; a case changes it. */
+let templateRow: Row;
 /** The repair run's status and stored inputs (the declared-input form unless a case sets another). */
 let runRow: Row;
+/** The declared input the dispatch recorded in the run's request when it made the run. */
+const PICTURE_RECORD = { artifactNode: "file_image", step: "image_flow", noteInput: "prompt", startOutput: "imagePrompt" };
 const declaredForm = (words: string) =>
-  JSON.stringify({ imagePrompt: words, lifecycleRepairRequest: { repairId: "repair-1", findings: [] } });
+  JSON.stringify({
+    imagePrompt: words,
+    lifecycleRepairRequest: { repairId: "repair-1", findings: [], regenerateInput: PICTURE_RECORD },
+  });
 
 function answer(table: unknown, where: unknown): Row[] {
   const params = where ? dialect.sqlToQuery(where as Parameters<PgDialect["sqlToQuery"]>[0]).params : [];
@@ -74,7 +83,7 @@ function answer(table: unknown, where: unknown): Row[] {
     return params.includes("repair-1") ? [] : [{ id: "repair-1", createdAt: "2026-11-01 10:00:00+00" }];
   }
   if (table === tables.agentRuns) return [runRow];
-  if (table === tables.agentTemplates) return [{ lifecycleConfig: LIFECYCLE, packageName: "@vendor/blog" }];
+  if (table === tables.agentTemplates) return [templateRow];
   // an ordinary repair run's latest write, on the reviewed artifact itself
   if (table === tables.artifactProducedOutbox) return [{ artifactId: "art-base", representationRevisionId: "rev-run" }];
   // the base artifact's liveness and pointer
@@ -97,8 +106,10 @@ beforeEach(async () => {
   oasDir = mkdtempSync(path.join(tmpdir(), "regen-completion-4264-"));
   writeFileSync(path.join(oasDir, "agent.oas.json"), JSON.stringify(OAS));
   runRow = { status: "completed", templateId: "tmpl-1", inputParams: declaredForm(PROMPT) };
+  oasMounted = true;
+  templateRow = { lifecycleConfig: LIFECYCLE, packageName: "@vendor/blog" };
   vi.doMock("../installed-oas-path", () => ({
-    resolveInstalledOasPathForRead: () => path.join(oasDir, "agent.oas.json"),
+    resolveInstalledOasPathForRead: () => (oasMounted ? path.join(oasDir, "agent.oas.json") : null),
   }));
   vi.doMock("server-only", () => ({}));
   vi.doMock("../db", () => ({
@@ -195,6 +206,53 @@ describe("the completer reports applied only the findings a Regenerate delivered
       { findingId: "finding-2", applied: true },
     ]);
     expect(response.changeSummary).toContain("answered 2 requested change(s)");
+  });
+});
+
+describe("the completer reads a Regenerate run against what its dispatch recorded, not the agent as it is now", () => {
+  // The agent can be updated, or its flow briefly not mounted, between the
+  // run's end and the maintenance pass. The run's own stored inputs and the
+  // declared input its dispatch recorded in them decide; the template and the
+  // installed flow as they read now never discard a valid run's work.
+  const FINDINGS = [{ id: "prompt-window", message: NOTE }, { id: "picture-prompt", message: PROMPT }];
+  const EXPECTED = [
+    { findingId: "prompt-window", applied: false, skipReason: expect.any(String) },
+    { findingId: "picture-prompt", applied: true },
+  ];
+
+  // red-first-expect: expected [ { …(2) }, { …(2) } ] to deeply equal [ { …(3) }, { …(2) } ]
+  it("accepts a valid run after the template's declaration and the flow's start output changed", async () => {
+    ports.readRepair.mockResolvedValue(repairRow(FINDINGS, "file_image"));
+    templateRow = {
+      lifecycleConfig: JSON.stringify({ regenerate: [{ artifactNode: "file_image", step: "image_flow", noteInput: "caption" }] }),
+      packageName: "@vendor/blog",
+    };
+    writeFileSync(path.join(oasDir, "agent.oas.json"), JSON.stringify({ ...OAS, data_flow_connections: [] }));
+    const response = await completeOne();
+    expect(ports.escalateRegenerateRepairOfUndeclaredRun).not.toHaveBeenCalled();
+    expect(response.findingOutcomes).toEqual(EXPECTED);
+  });
+
+  it("accepts a valid run while the agent's flow is not mounted and its template is gone", async () => {
+    ports.readRepair.mockResolvedValue(repairRow(FINDINGS, "file_image"));
+    oasMounted = false;
+    templateRow = { lifecycleConfig: null, packageName: null };
+    const response = await completeOne();
+    expect(ports.escalateRegenerateRepairOfUndeclaredRun).not.toHaveBeenCalled();
+    expect(response.findingOutcomes).toEqual(EXPECTED);
+  });
+
+  it("escalates a run whose recorded declared input names another node than the repair", async () => {
+    ports.readRepair.mockResolvedValue(repairRow(FINDINGS, "write_draft"));
+    ports.escalateRegenerateRepairOfUndeclaredRun.mockResolvedValueOnce(true);
+    const { completeDispatchedProducerRepairs } = await import("../lifecycle-repair-producer-completion-store");
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await completeDispatchedProducerRepairs()).toMatchObject({ completed: 0, escalated: 1 });
+    } finally {
+      error.mockRestore();
+    }
+    expect(ports.submitRepairResponse).not.toHaveBeenCalled();
   });
 });
 

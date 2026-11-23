@@ -348,9 +348,10 @@ describe("input data cannot become repair authorization", () => {
       templateId: "template-producing", packageName: "@any-vendor/repair-producer", lifecycleConfig: REGENERATE_CONFIG,
       request: { repairId: "repair-current", findings: [currentFinding] },
     });
-    // The note is the Note field's words (the `prompt-window` finding) only;
-    // another finding never stands in for it, and no findings text is built.
-    expect(segmentPlan.calls[0].note).toBeNull();
+    // The plan is handed the recorded findings and routes them by the step
+    // itself; the drain builds no findings text and picks no field.
+    expect(segmentPlan.calls[0].findings).toEqual([currentFinding]);
+    expect(segmentPlan.calls[0]).not.toHaveProperty("note");
     expect(ports.created).toHaveLength(1);
     expect(ports.created[0].input).toMatchObject({ parentRunId: "provenance-run", runBy: "human-origin", orgId: "repair-org" });
     expect(inputParams()).toEqual(segmentInputs);
@@ -575,6 +576,48 @@ describe("input data cannot become repair authorization", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // The step being regenerated decides which review field fills its declared
+  // input. A draft's Regenerate whose request also carries a picture prompt
+  // (a client can submit one on any review) still sends the Note: the prompt
+  // belongs to no input of the draft step, is never sent and is never
+  // reported applied.
+  // red-first-expect: expected 'A reviewer requested changes to the w…' to be 'Make the sky brighter' // Object.is equality
+  it("a draft Regenerate whose request also carries a picture prompt sends the Note; the prompt reaches no input", async () => {
+    const note = "Make the sky brighter";
+    const prompt = "A lighthouse at dusk, wide angle";
+    const dir = mkdtempSync(path.join(tmpdir(), "regen-4264-"));
+    segmentPorts.oasPath = path.join(dir, "agent.oas.json");
+    writeFileSync(segmentPorts.oasPath, JSON.stringify({
+      component_type: "Flow",
+      start_node: { $component_ref: "start" },
+      data_flow_connections: [
+        { source_node: { $component_ref: "start" }, source_output: "draftNote",
+          destination_node: { $component_ref: "draft_flow" }, destination_input: "note" },
+        { source_node: { $component_ref: "start" }, source_output: "imagePrompt",
+          destination_node: { $component_ref: "image_flow" }, destination_input: "prompt" },
+      ],
+    }));
+    const config = JSON.stringify({ regenerate: [
+      { artifactNode: "file_image", step: "image_flow", noteInput: "prompt" },
+      { artifactNode: "write_draft", step: "draft_flow", noteInput: "note" },
+    ] });
+    try {
+      segmentPorts.provenance = { runId: "provenance-run", nodeId: "write_draft" };
+      arrangeProducer({ custom: "retained" }, {}, config);
+      ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft", findings: [
+        { id: "prompt-window", message: note }, { id: "picture-prompt", message: prompt },
+      ] })];
+      expect(await dispatchPendingProducerRepairs()).toMatchObject({ dispatched: 1, escalated: 0 });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    const draft = inputParams();
+    expect(draft.draftNote).toBe(note);
+    expect(Object.keys(draft).sort()).toEqual(["draftNote", "lifecycleRepairRequest"]);
+    expect(JSON.stringify(draft)).not.toContain(prompt);
+    expect(JSON.stringify(draft).split(note)).toHaveLength(2);
   });
 
   it("a Regenerate retry that finds no run and whose new plan refuses is escalated with the plan's reason, as before", async () => {

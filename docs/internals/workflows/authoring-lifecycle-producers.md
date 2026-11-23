@@ -369,14 +369,20 @@ of each declared node (the step snapshots). A repair whose row names
 - **Inputs.** The run's inputs are the note and the typed
   `lifecycleRepairRequest` only. The note is the reviewer's words from the
   review field that fills the step's declared input, exactly as recorded
-  (`routeRegenerateFindings`), never the findings text: a picture step
-  receives the picture's prompt, every other step the Note field. A repair
-  with no such words is refused and escalated. The request is carried
-  with no findings, so the words reach the declared input and no other
+  (`routeRegenerateFindings`), never the findings text. The step being
+  regenerated decides: a step that declares `prompt` (a picture step)
+  receives the picture's prompt when the review recorded one, otherwise the
+  Note; every other step receives the Note field, and a submitted prompt is
+  never sent to it. A repair with no such words is refused and escalated.
+  The request is carried with no findings and records the declared input
+  the run is made for (`regenerateInput`: node, step, `noteInput` and start
+  output, no words), so the words reach the declared input and no other
   place of the run's input. A run whose stored inputs are not this form (one
-  an older build made during a rolling deployment) is never run or applied:
-  the run start fails it, and the run start or the completer escalates its
-  repair, also when the repair is already `dispatched`. The note travels under the flow's start output
+  an older build made during a rolling deployment has no record) is never
+  run or applied: the run start fails it, and the run start or the completer
+  escalates its repair, also when the repair is already `dispatched`. The
+  completer reads the run against its own record and the repair's findings
+  only, so an agent updated after the run was made never discards its work. The note travels under the flow's start output
   that feeds the step's `noteInput` (its name may differ from `noteInput`); the
   segment request carries that name, and the runtime refuses a name that its
   mounted start node does not output or that does not feed the note. A name

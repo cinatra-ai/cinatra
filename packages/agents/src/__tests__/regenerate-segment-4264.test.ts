@@ -350,10 +350,21 @@ describe("resolveRegenerateSegment checks the run's inputs at its start", () => 
     expect(other).not.toHaveProperty("inputsNotDeclared");
   });
 
+  const RECORD = { artifactNode: "file_image", step: "image_flow", noteInput: "prompt", startOutput: "imagePrompt" };
+
   it("resolves a run in the declared-input form, from the stored text or the parsed object", async () => {
-    const form = { imagePrompt: PROMPT, lifecycleRepairRequest: { repairId: "repair-1", findings: [] } };
+    const form = { imagePrompt: PROMPT, lifecycleRepairRequest: { repairId: "repair-1", findings: [], regenerateInput: RECORD } };
     expect((await resolve(withFindings(), runWith(form))).kind).toBe("segment");
     expect((await resolve(withFindings(), runWith(JSON.stringify(form)))).kind).toBe("segment");
+  });
+
+  it("refuses a run whose request records no declared input, or another one than the step declares now", async () => {
+    const form = (record: unknown) => ({ imagePrompt: PROMPT, lifecycleRepairRequest: { findings: [], regenerateInput: record } });
+    expectRefused(await resolve(withFindings(), runWith({ imagePrompt: PROMPT, lifecycleRepairRequest: { findings: [] } })));
+    expectRefused(await resolve(withFindings(), runWith(form({ ...RECORD, noteInput: "note" }))));
+    expectRefused(await resolve(withFindings(), runWith(form({ ...RECORD, startOutput: "otherPrompt" }))));
+    expectRefused(await resolve(withFindings(), runWith(form({ ...RECORD, artifactNode: "write_draft" }))));
+    expectRefused(await resolve(withFindings(), runWith(form({ ...RECORD, extra: "x" }))));
   });
 });
 
@@ -516,7 +527,7 @@ describe("the platform-owned input names", () => {
           templateId: "tpl-1",
           packageName: PACKAGE,
           lifecycleConfig: LIFECYCLE,
-          note: "n",
+          findings: [{ id: "prompt-window", message: "n" }],
           request: {},
         },
         {
@@ -755,7 +766,7 @@ describe("planSegmentDispatch", () => {
     templateId: "tpl-1",
     packageName: PACKAGE,
     lifecycleConfig: LIFECYCLE,
-    note: "brighter picture",
+    findings: [{ id: "picture-prompt", message: "brighter picture" }],
     request: { kind: "lifecycle_repair" },
   };
 
@@ -768,7 +779,14 @@ describe("planSegmentDispatch", () => {
       kind: "segment",
       parentRunId: PROVENANCE_RUN,
       // The request travels without findings: the note is in the declared input only.
-      inputParams: { imagePrompt: "brighter picture", lifecycleRepairRequest: { kind: "lifecycle_repair", findings: [] } },
+      inputParams: {
+        imagePrompt: "brighter picture",
+        lifecycleRepairRequest: {
+          kind: "lifecycle_repair",
+          findings: [],
+          regenerateInput: { artifactNode: "file_image", step: "image_flow", noteInput: "prompt", startOutput: "imagePrompt" },
+        },
+      },
     });
     expect(readNoteStartOutput).toHaveBeenCalledWith({ packageName: PACKAGE, step: "image_flow", noteInput: "prompt" });
   });
@@ -914,7 +932,7 @@ describe("a blank non-NULL intent is refused, never run as an ordinary repair (r
         templateId: "tpl-1",
         packageName: PACKAGE,
         lifecycleConfig: LIFECYCLE,
-        note: "n",
+        findings: [{ id: "prompt-window", message: "n" }],
         request: {},
       },
       { readVerifiedFilingNode, readNoteStartOutput: vi.fn(async () => "imagePrompt") },

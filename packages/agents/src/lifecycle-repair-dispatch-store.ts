@@ -102,7 +102,6 @@ import type { ChangesRequestedRequest, RepairFinding } from "@/lib/lifecycle/lif
 import {
   parseLifecycleConfigText,
   projectRepairFindingsInput,
-  routeRegenerateFindings,
   type CompiledManifestLifecycle,
 } from "@/lib/lifecycle/lifecycle-policy";
 import { hasRegenerateIntent, planSegmentDispatch } from "./regenerate-segment";
@@ -534,10 +533,11 @@ async function deliverRepair(row: typeof lifecycleRepair.$inferSelect): Promise<
       templateId: producer.templateId,
       packageName: producer.packageName,
       lifecycleConfig: producer.lifecycleConfigText,
-      // The recorded words of the review field the step's declared input
-      // takes (a picture's prompt, otherwise the Note), never a findings
-      // text; the plan carries the request without its findings.
-      note: routeRegenerateFindings(request.findings)?.value ?? null,
+      // The plan routes the recorded words of the review field the step
+      // being regenerated takes (a picture step's prompt, every other
+      // step's Note) to its declared input, never a findings text; the
+      // request travels without its findings.
+      findings: request.findings,
       request: request as unknown as Record<string, unknown>,
     });
     if (segment.kind === "refused") {
