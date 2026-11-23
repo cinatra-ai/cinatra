@@ -3,7 +3,10 @@ import "server-only";
 import { z } from "zod";
 
 import { readAgentRunById } from "@cinatra-ai/agents/store";
-import { decidePublishDecisionCardForWidgetReader } from "@cinatra-ai/agents/publish-decision-card-core";
+import {
+  PUBLISH_DECISION_MAX_NOTE_LENGTH,
+  decidePublishDecisionCardForWidgetReader,
+} from "@cinatra-ai/agents/publish-decision-card-core";
 
 import { WIDGET_PUBLISH_DECISION_DECIDE_GRANT } from "@/lib/lifecycle/widget-lifecycle-actor";
 import {
@@ -28,8 +31,9 @@ import {
 const requestSchema = z
   .object({
     runId: z.string().min(1).max(256),
+    decisionId: z.string().min(1).max(256),
     answer: z.enum(["approve", "decline"]),
-    note: z.string().max(2000).optional(),
+    note: z.string().max(PUBLISH_DECISION_MAX_NOTE_LENGTH).optional(),
   })
   .strict();
 
@@ -56,7 +60,7 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const outcome = await decidePublishDecisionCardForWidgetReader(
-    { runId: run.id, answer: body.answer, note: body.note ?? null },
+    { runId: run.id, decisionId: body.decisionId, answer: body.answer, note: body.note ?? null },
     who,
   );
   return Response.json({ outcome }, NO_STORE);

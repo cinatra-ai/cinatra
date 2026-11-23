@@ -39,7 +39,7 @@ import {
 import { readLatestDecisionForRun } from "./publish-decision-store";
 import { readAgentRunById, readAgentTemplateById, type AgentRunRecord } from "./store";
 
-export { PUBLISH_DECISION_CARD_NONE } from "./publish-decision-card";
+export { PUBLISH_DECISION_CARD_NONE, PUBLISH_DECISION_MAX_NOTE_LENGTH } from "./publish-decision-card";
 export type {
   PublishDecisionCardAnswer,
   PublishDecisionCardRow,
@@ -122,7 +122,7 @@ async function cardStateForRun(
       // answers what that close will: no card. Nothing is written by this read.
       if (run.status !== "pending_approval" && run.status !== "running") return PUBLISH_DECISION_CARD_NONE;
       const mayDecide = await readMayDecide().catch(() => false);
-      return { state: "pending", ...common, mayDecide };
+      return { state: "pending", ...common, decisionId: decision.id, mayDecide };
     }
     case "released":
       return settled((deciderName) => ({ state: "approved", ...common, deciderName }));
@@ -154,18 +154,19 @@ export async function resolvePublishDecisionCardStateForActor(input: {
 // the widget's reader. A late answer is "not_open"; every refusal and fault is "failed", with nothing else told.
 // ---------------------------------------------------------------------------
 
-/** A card's answer as sent: the run, the answer and the note (a decline's only). */
-export type PublishDecisionCardDecideInput = { runId: string; answer: PublishDecisionCardAnswer; note?: string | null };
+/** A card's answer as sent: the run, the decision the card shows, the answer and the note (a decline's only). */
+export type PublishDecisionCardDecideInput = { runId: string; decisionId: string; answer: PublishDecisionCardAnswer; note?: string | null };
 
 const isAnswer = (value: unknown): value is PublishDecisionCardAnswer => value === "approve" || value === "decline";
 
 /** The input as the roads take it, or null for a shape the card never sends. */
-function decideInputOf(input: PublishDecisionCardDecideInput): { runId: string; answer: PublishDecisionCardAnswer; note: string | null } | null {
-  const { runId, answer, note } = (input ?? {}) as Partial<PublishDecisionCardDecideInput>;
-  if (typeof runId !== "string" || runId.length === 0 || runId.length > 256 || !isAnswer(answer)) return null;
+function decideInputOf(input: PublishDecisionCardDecideInput): { runId: string; decisionId: string; answer: PublishDecisionCardAnswer; note: string | null } | null {
+  const { runId, decisionId, answer, note } = (input ?? {}) as Partial<PublishDecisionCardDecideInput>;
+  const isId = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 256;
+  if (!isId(runId) || !isId(decisionId) || !isAnswer(answer)) return null;
   if (note !== undefined && note !== null && typeof note !== "string") return null;
   // Only a decline records a note; an empty or blank note is none. A note over the store's cap is refused by its write.
-  return { runId, answer, note: answer === "decline" && typeof note === "string" && note.trim().length > 0 ? note : null };
+  return { runId, decisionId, answer, note: answer === "decline" && typeof note === "string" && note.trim().length > 0 ? note : null };
 }
 
 function outcomeOf(answer: PublishDecisionAnswer | PublishApproveAnswer): PublishDecisionDecideOutcome {
@@ -182,7 +183,8 @@ async function decideWith(
 ): Promise<PublishDecisionDecideOutcome> {
   const parsed = decideInputOf(input);
   if (!parsed) return "failed";
-  const base = { runId: parsed.runId, actorContext: who.actor, roleHints: who.roleHints };
+  // The answer lands only on the decision the card showed (the roads' guarded write): never on a newer gate.
+  const base = { runId: parsed.runId, decisionId: parsed.decisionId, actorContext: who.actor, roleHints: who.roleHints };
   try {
     return outcomeOf(parsed.answer === "approve" ? await roads.approve(base) : await roads.decline({ ...base, note: parsed.note }));
   } catch {

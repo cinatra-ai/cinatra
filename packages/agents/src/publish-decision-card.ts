@@ -20,10 +20,16 @@ type PublishDecisionCardCommon = {
 
 export type PublishDecisionCardState =
   | { state: "none" }
-  | (PublishDecisionCardCommon & { state: "pending"; mayDecide: boolean })
+  /** `decisionId`: the decision row this card shows. An answer names it, so it lands only on that row while it is still the
+   *  run's open decision of its current attempt, never on a newer gate the card has not drawn. */
+  | (PublishDecisionCardCommon & { state: "pending"; decisionId: string; mayDecide: boolean })
   | (PublishDecisionCardCommon & { state: "approved"; deciderName: string | null })
   | (PublishDecisionCardCommon & { state: "declined"; deciderName: string | null; reason: string | null })
   | (PublishDecisionCardCommon & { state: "expired" });
+
+/** The longest note a decline records: the decision store's own cap, which the card's note field and the widget's decide
+ *  route also apply. */
+export const PUBLISH_DECISION_MAX_NOTE_LENGTH = 2000;
 
 /** The card's two answers (cinatra#4758): Allow and Do not allow. */
 export type PublishDecisionCardAnswer = "approve" | "decline";
@@ -82,7 +88,9 @@ export function parsePublishDecisionCardState(data: unknown): PublishDecisionCar
   const common = { runId: d.runId, agentName: d.agentName, rows };
   switch (d.state) {
     case "pending":
-      return typeof d.mayDecide === "boolean" ? { state: "pending", ...common, mayDecide: d.mayDecide } : null;
+      return typeof d.mayDecide === "boolean" && isText(d.decisionId) && d.decisionId.length > 0
+        ? { state: "pending", ...common, decisionId: d.decisionId, mayDecide: d.mayDecide }
+        : null;
     case "approved":
       return isNameOrNull(d.deciderName) ? { state: "approved", ...common, deciderName: d.deciderName } : null;
     case "declined":

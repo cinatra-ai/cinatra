@@ -30,6 +30,7 @@ import {
 } from "./lifecycle-card-runtime";
 import {
   PUBLISH_DECISION_CARD_NONE,
+  PUBLISH_DECISION_MAX_NOTE_LENGTH,
   parsePublishDecisionCardState,
   parsePublishDecisionDecideOutcome,
   type PublishDecisionCardAnswer,
@@ -45,6 +46,8 @@ export const PUBLISH_DECISION_CARD_POLL_MS = 5000;
 /** A decide door answers: the decision landed, the request was no longer open, or the send failed. */
 export type PublishDecisionDecide = (input: {
   runId: string;
+  /** The decision the card shows: the answer lands on that decision only. */
+  decisionId: string;
   answer: PublishDecisionCardAnswer;
   note: string;
 }) => Promise<PublishDecisionDecideOutcome>;
@@ -60,7 +63,7 @@ async function decidePublishDecisionThroughBroker(
       fetch(LIFECYCLE_PUBLISH_DECISION_DECIDE_PATH, {
         method: "POST",
         headers: { "Content-Type": "application/json", ...auth.headers() },
-        body: JSON.stringify({ runId: input.runId, answer: input.answer, note: input.note }),
+        body: JSON.stringify({ runId: input.runId, decisionId: input.decisionId, answer: input.answer, note: input.note }),
         credentials: auth.credentials,
       });
     const response = await sendAcrossRenewal(auth, send);
@@ -312,6 +315,8 @@ export function PublishDecisionCard({
   const auth = useLifecycleCardAuth();
   const [noLongerOpen, setNoLongerOpen] = useState(false);
   const [sending, setSending] = useState(false);
+  // The decision an answer did not land on: its card says so until the next answer (never on another decision's card).
+  const [failedOn, setFailedOn] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const own = usePublishDecisionCardRead({ runId: host === null || read ? "" : runId, auth, wireRef });
   const { state, refreshing, reload } = read ?? own;
@@ -320,14 +325,17 @@ export function PublishDecisionCard({
   if (host === null || state === null || state.state === "none") return null;
 
   const send = async (answer: "approve" | "decline") => {
-    if (!decide || sending) return;
+    if (!decide || sending || state.state !== "pending") return;
     setSending(true);
+    setFailedOn(null);
     const sentNote = answer === "decline" ? note : "";
-    const outcome = await decide({ runId: state.runId, answer, note: sentNote }).catch(() => "failed" as const);
+    const outcome = await decide({ runId: state.runId, decisionId: state.decisionId, answer, note: sentNote }).catch(() => "failed" as const);
     setSending(false);
     // A late answer is never sent again: the request is no longer open, and the reader is told so.
     if (outcome === "not_open") setNoLongerOpen(true);
     if (outcome === "decided") reload();
+    // An answer that did not land is told too: the request stays open, and the reader may answer again.
+    if (outcome === "failed") setFailedOn(state.decisionId);
   };
   const pending = state.state === "pending";
   const restricted = pending && !state.mayDecide;
@@ -392,6 +400,7 @@ export function PublishDecisionCard({
                     value={note}
                     onChange={(event) => setNote(event.target.value)}
                     placeholder={"Say why, if you do not allow this\u2026"}
+                    maxLength={PUBLISH_DECISION_MAX_NOTE_LENGTH}
                     disabled={disabled}
                   />
                 </label>
@@ -406,6 +415,11 @@ export function PublishDecisionCard({
                   Allow
                 </Button>
               </div>
+              {pending && !restricted && failedOn === state.decisionId ? (
+                <p role="status" className="mt-2.5 text-xs text-destructive">
+                  The decision could not be sent.
+                </p>
+              ) : null}
               {restricted ? (
                 <p className="mt-2.5 text-xs text-muted-foreground">
                   Deciding whether this change is made needs approve access on the run, so Do not allow and Allow stay disabled with the reason shown.

@@ -242,7 +242,13 @@ export type PublishDecisionAnswer =
   | { ok: true; runStopped: boolean }
   | { ok: false; code: typeof PUBLISH_DECISION_NOT_OPEN; currentStatus: PublishDecisionStatus | null };
 
-type DecideInput = { runId: string; actorContext: PrimitiveActorContext; roleHints?: ActorRoleHints };
+/** `decisionId` (the publish card, cinatra#4758): the decision row the answer was given on. Given, the decision write
+ *  lands only on that row, and only while it is the run's newest decision, of its current attempt, still parked: one
+ *  guarded write (the store's `decide`), so an answer to an earlier gate never lands on a newer one. */
+type DecideInput = { runId: string; actorContext: PrimitiveActorContext; roleHints?: ActorRoleHints; decisionId?: string };
+/** The decision an answer writes, and the store's guard for an answer that names its row. */
+const answerTarget = (runId: string, open: PublishDecisionRow, decisionId: string | undefined) =>
+  decisionId === undefined ? { id: open.id, guard: {} } : { id: decisionId, guard: { ofRun: runId, newestOnly: true } };
 const forbidden = (message: string) => new AuthzError({ statusCode: 403, reason: "forbidden", message });
 /**
  * Who counts as a person for Publish and Do not publish: a human actor that reached the product through its own UI or a
@@ -370,7 +376,8 @@ async function declineWith(access: DecisionAccess, input: DecideInput & { note?:
       return { ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: latest?.status ?? null };
     }
     const note = typeof input.note === "string" && input.note.trim().length > 0 ? input.note : null;
-    const answer = await decide(open.id, { from: "parked", to: "declined", actor: deciderId, note });
+    const target = answerTarget(run.id, open, input.decisionId);
+    const answer = await decide(target.id, { from: "parked", to: "declined", actor: deciderId, note, ...target.guard });
     if (answer.outcome === "lost") return { ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: answer.currentStatus };
     // false: the run is not waiting at the gate. A fault here, or a run still running, leaves the stop to the expiry pass.
     return { ok: true, runStopped: await stopHeldRun(run.id, "pending_approval", authority) };
@@ -444,6 +451,8 @@ async function approveWith(enforce: DecisionAccess, input: DecideInput): Promise
     const open = await readOpenDecisionForRun(run.id);
     const target = open ?? (await readLatestDecisionForRun(run.id));
     if (!target || (!open && target.status !== "released")) return { ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: target?.status ?? null };
+    // An answer that names its row is never applied to another gate: a newer open decision, or another released one.
+    if (input.decisionId !== undefined && target.id !== input.decisionId) return { ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: null };
     // claimPause refuses a generation that cannot be read.
     const claimed = await claimPause({ runId: run.id, orgId: run.orgId, generation: run.pauseGeneration as number }, authority);
     if (claimed.kind === "refused") {
@@ -451,10 +460,11 @@ async function approveWith(enforce: DecisionAccess, input: DecideInput): Promise
       return latest?.status === "released" ? { ok: true, resumed: false } : { ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: latest?.status ?? null };
     }
     claim = claimed;
+    const answerOn = open ? answerTarget(run.id, open, input.decisionId) : null;
     try {
       const { resolveLatestWayflowGateTaskId } = await import("@cinatra-ai/a2a");
       const answer = (await resolveLatestWayflowGateTaskId(run.id)) !== target.gateTaskId ? null
-        : open ? await decide(open.id, { from: "parked", to: "released", actor: deciderId }) : { outcome: "won" as const };
+        : answerOn ? await decide(answerOn.id, { from: "parked", to: "released", actor: deciderId, ...answerOn.guard }) : { outcome: "won" as const };
       if (answer?.outcome !== "won") {
         await giveBack();
         return answer ? { ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: answer.currentStatus } : { ok: true, resumed: false };

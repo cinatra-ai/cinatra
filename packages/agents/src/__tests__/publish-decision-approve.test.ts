@@ -141,6 +141,48 @@ describe("Allow from the site widget (cinatra#4758)", () => {
   });
 });
 
+// gate A was answered elsewhere and gate B opened before this card re-read; Allow
+// pressed on the stale card A must leave B untouched: no claim, no decision write, no send. Both doors run for real.
+describe("a stale card never approves a newer gate", () => {
+  const WIDGET = { actorType: "human" as const, source: "a2a" as const, userId: "user-a", orgId: "org-1" };
+
+  beforeEach(() => {
+    decisions.readOpenDecisionForRun.mockResolvedValue(decision({ id: "dB", nodeId: "publish-2", gateTaskId: "task-2" }));
+    resolveLatestWayflowGateTaskId.mockResolvedValue("task-2");
+    decisions.decide.mockImplementation(async (id: string, change: { to: string }) =>
+      id === "dA" ? { outcome: "lost", currentStatus: "released" } : { outcome: "won", decision: decision({ id, status: change.to }) });
+  });
+
+  it.each([
+    ["the session door", "decidePublishDecisionCardForActor", ACTOR],
+    ["the widget door", "decidePublishDecisionCardForWidgetReader", WIDGET],
+  ] as const)("%s: Allow on card A is not open, and B is not released and nothing is sent", async (_label, door, actor) => {
+    const core = await import("../publish-decision-card-core");
+    expect(await core[door]({ runId: "run-1", decisionId: "dA", answer: "approve" }, { actor, roleHints: {} })).toBe("not_open");
+    expect(decisions.decide.mock.calls.map((c) => (c as unknown[])[0])).not.toContain("dB");
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+    expect(moves()).toEqual([]);
+  });
+
+  it("an Allow that names the open row writes it under the claim, bound to the run, and only while it is the newest open row of the current attempt", async () => {
+    decisions.readOpenDecisionForRun.mockResolvedValue(decision());
+    resolveLatestWayflowGateTaskId.mockResolvedValue("task-1");
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR, decisionId: "d1" } as never)).toEqual({ ok: true, resumed: true });
+    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "released", actor: "user-a", ofRun: "run-1", newestOnly: true });
+  });
+
+  it("a stale card never resumes another decision released earlier", async () => {
+    decisions.readOpenDecisionForRun.mockResolvedValue(null);
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ id: "dB", status: "released", gateTaskId: "task-2" }));
+    resolveLatestWayflowGateTaskId.mockResolvedValue("task-2");
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR, decisionId: "dA" } as never)).toMatchObject({
+      ok: false, code: PUBLISH_DECISION_NOT_OPEN,
+    });
+    expect(claims.claimPause).not.toHaveBeenCalled();
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+  });
+});
+
 describe("Publish (A7)", () => {
   it("checks the decider, claims the pause, writes ONE released decision under the claim, then fences and sends once into its held context", async () => {
     expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: true });

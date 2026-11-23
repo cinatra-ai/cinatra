@@ -77,6 +77,7 @@ const PENDING = {
   runId: RUN_ID,
   agentName: "Blog agent",
   rows: [{ label: "Title", value: "Spring launch" }],
+  decisionId: "d1",
   mayDecide: true,
 };
 

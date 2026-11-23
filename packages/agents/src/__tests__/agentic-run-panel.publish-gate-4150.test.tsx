@@ -69,6 +69,7 @@ const PENDING = {
   runId: RUN_ID,
   agentName: "Blog publisher",
   rows: [{ label: "Title", value: "Spring launch" }],
+  decisionId: "d1",
   mayDecide: true,
 };
 
@@ -411,7 +412,7 @@ describe("AgenticRunPanel's publish card decides (cinatra#4758)", () => {
       fireEvent.click(button(mounted.container, "Allow"));
     });
     await flush();
-    expect(publishDecideMock).toHaveBeenCalledWith({ runId: RUN_ID, answer: "approve", note: "" });
+    expect(publishDecideMock).toHaveBeenCalledWith({ runId: RUN_ID, decisionId: "d1", answer: "approve", note: "" });
   });
 
   it("Do not allow sends the note through the session door", async () => {
@@ -424,7 +425,7 @@ describe("AgenticRunPanel's publish card decides (cinatra#4758)", () => {
       fireEvent.click(button(mounted.container, "Do not allow"));
     });
     await flush();
-    expect(publishDecideMock).toHaveBeenCalledWith({ runId: RUN_ID, answer: "decline", note: "Not ready yet." });
+    expect(publishDecideMock).toHaveBeenCalledWith({ runId: RUN_ID, decisionId: "d1", answer: "decline", note: "Not ready yet." });
   });
 
   it("the controls follow the reader: live for one who may approve, disabled with the reason for one who may only view", async () => {

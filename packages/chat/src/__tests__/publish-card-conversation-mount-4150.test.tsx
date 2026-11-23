@@ -142,6 +142,7 @@ const PENDING = {
   runId: HELD_RUN_ID,
   agentName: "Proof agent",
   rows: [{ label: "Title", value: "Spring launch" }],
+  decisionId: "d1",
   mayDecide: true,
 } as Record<string, unknown>;
 
@@ -483,7 +484,7 @@ describe("the publish card on the conversation hosts (cinatra#4150)", () => {
       fireEvent.click(allow(root));
       await new Promise((r) => setTimeout(r, 0));
     });
-    expect(publishDecideMock).toHaveBeenCalledWith({ runId: HELD_RUN_ID, answer: "approve", note: "" });
+    expect(publishDecideMock).toHaveBeenCalledWith({ runId: HELD_RUN_ID, decisionId: "d1", answer: "approve", note: "" });
     expect((stub?.calls ?? []).some((c) => c.url.startsWith(`${BROKER}/decide`))).toBe(false);
   });
 
@@ -500,7 +501,7 @@ describe("the publish card on the conversation hosts (cinatra#4150)", () => {
     expect(posts).toHaveLength(1);
     expect(posts[0]!.init.method).toBe("POST");
     expect(posts[0]!.init.credentials).toBe("omit");
-    expect(JSON.parse(String(posts[0]!.init.body))).toEqual({ runId: HELD_RUN_ID, answer: "decline", note: "Not ready yet." });
+    expect(JSON.parse(String(posts[0]!.init.body))).toEqual({ runId: HELD_RUN_ID, decisionId: "d1", answer: "decline", note: "Not ready yet." });
     expect(publishDecideMock).not.toHaveBeenCalled();
   });
 

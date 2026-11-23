@@ -87,6 +87,7 @@ describe("which card a run shows", () => {
         { label: "Title", value: "Autumn launch" },
         { label: "Where", value: "Blog" },
       ],
+      decisionId: "d1",
       mayDecide: true,
     });
     expect(decisions.readLatestDecisionForRun).toHaveBeenCalledWith("run-1");
@@ -347,7 +348,7 @@ describe("a decision's rows are the ones its template declared at the park (revi
 // declinePublishDecision, which check run.execute then run.approveHitl and write the one guarded decision); the site
 // widget's answer takes their widget-reader twins. The card is told only: decided, no longer open, or failed.
 describe("the card's answer (cinatra#4758)", () => {
-  type Decide = (input: { runId: string; answer: "approve" | "decline"; note?: string | null }, who: typeof WHO) => Promise<string>;
+  type Decide = (input: { runId: string; decisionId: string; answer: "approve" | "decline"; note?: string | null }, who: typeof WHO) => Promise<string>;
   const decideFor = (name: string): Decide => {
     const fn = (core as unknown as Record<string, unknown>)[name];
     expect(typeof fn, `${name} is exported`).toBe("function");
@@ -362,57 +363,71 @@ describe("the card's answer (cinatra#4758)", () => {
   });
 
   it("Allow releases the run through the approve road, as this person, and is decided", async () => {
-    expect(await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", answer: "approve", note: "" }, WHO)).toBe("decided");
-    expect(access.approvePublishDecision).toHaveBeenCalledWith({ runId: "run-1", actorContext: WHO.actor, roleHints: WHO.roleHints });
+    expect(await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", decisionId: "d1", answer: "approve", note: "" }, WHO)).toBe("decided");
+    expect(access.approvePublishDecision).toHaveBeenCalledWith({ runId: "run-1", decisionId: "d1", actorContext: WHO.actor, roleHints: WHO.roleHints });
     expect(access.declinePublishDecision).not.toHaveBeenCalled();
   });
 
   it("Do not allow stops the run through the decline road, with the note recorded, and is decided", async () => {
-    expect(await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", answer: "decline", note: "Not ready yet." }, WHO)).toBe("decided");
+    expect(await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", decisionId: "d1", answer: "decline", note: "Not ready yet." }, WHO)).toBe("decided");
     expect(access.declinePublishDecision).toHaveBeenCalledWith({
-      runId: "run-1", actorContext: WHO.actor, roleHints: WHO.roleHints, note: "Not ready yet.",
+      runId: "run-1", decisionId: "d1", actorContext: WHO.actor, roleHints: WHO.roleHints, note: "Not ready yet.",
     });
     expect(access.approvePublishDecision).not.toHaveBeenCalled();
   });
 
   it("a blank note is no note, and Allow never carries one", async () => {
-    await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", answer: "decline", note: "   " }, WHO);
+    await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", decisionId: "d1", answer: "decline", note: "   " }, WHO);
     expect((access.declinePublishDecision.mock.calls[0]![0] as { note: unknown }).note).toBeNull();
-    await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", answer: "approve", note: "a note" }, WHO);
+    await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", decisionId: "d1", answer: "approve", note: "a note" }, WHO);
     expect(access.approvePublishDecision.mock.calls[0]![0]).not.toHaveProperty("note");
   });
 
   it("a second answer after the request was decided is no longer open", async () => {
     access.declinePublishDecision.mockResolvedValue({ ok: false, code: "publish_decision_not_open", currentStatus: "released" });
-    expect(await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", answer: "decline", note: "" }, WHO)).toBe("not_open");
+    expect(await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", decisionId: "d1", answer: "decline", note: "" }, WHO)).toBe("not_open");
     access.approvePublishDecision.mockResolvedValue({ ok: false, code: "publish_decision_not_open", currentStatus: "declined" });
-    expect(await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", answer: "approve", note: "" }, WHO)).toBe("not_open");
+    expect(await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", decisionId: "d1", answer: "approve", note: "" }, WHO)).toBe("not_open");
     // An Allow that met a run no longer waiting at this decision (another Allow released it) resumed nothing.
     access.approvePublishDecision.mockResolvedValue({ ok: true, resumed: false });
-    expect(await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", answer: "approve", note: "" }, WHO)).toBe("not_open");
+    expect(await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", decisionId: "d1", answer: "approve", note: "" }, WHO)).toBe("not_open");
   });
 
   it("a reader who may view but not decide is refused by the road's own access check: failed, nothing else told", async () => {
     access.declinePublishDecision.mockRejectedValue(Object.assign(new Error("Run access denied."), { statusCode: 403 }));
-    expect(await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", answer: "decline", note: "x" }, WHO)).toBe("failed");
+    expect(await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", decisionId: "d1", answer: "decline", note: "x" }, WHO)).toBe("failed");
     access.approvePublishDecision.mockRejectedValue(Object.assign(new Error("Run access denied."), { statusCode: 403 }));
-    expect(await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", answer: "approve", note: "" }, WHO)).toBe("failed");
+    expect(await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", decisionId: "d1", answer: "approve", note: "" }, WHO)).toBe("failed");
   });
 
   it.each([
     ["no run id", { runId: "", answer: "approve" }],
-    ["an unknown answer", { runId: "run-1", answer: "publish" }],
-    ["a note that is not text", { runId: "run-1", answer: "decline", note: 7 }],
+    ["an unknown answer", { runId: "run-1", decisionId: "d1", answer: "publish" }],
+    ["a note that is not text", { runId: "run-1", decisionId: "d1", answer: "decline", note: 7 }],
+    ["no decision (an answer must name the decision the card shows)", { runId: "run-1", answer: "approve" }],
+    ["an empty decision", { runId: "run-1", decisionId: "", answer: "decline" }],
   ])("%s is failed, and no road is taken", async (_label, input) => {
     expect(await decideFor("decidePublishDecisionCardForActor")(input as never, WHO)).toBe("failed");
     expect(access.approvePublishDecision).not.toHaveBeenCalled();
     expect(access.declinePublishDecision).not.toHaveBeenCalled();
   });
 
+  // both doors hand the roads the decision the card showed, so the roads' guarded write lands
+  // only on that decision.
+  it.each([
+    ["the session door", "decidePublishDecisionCardForActor", "approvePublishDecision", "declinePublishDecision"],
+    ["the widget door", "decidePublishDecisionCardForWidgetReader", "approvePublishDecisionAsWidgetReader", "declinePublishDecisionAsWidgetReader"],
+  ] as const)("%s hands both roads the decision the card showed", async (_label, door, approve, decline) => {
+    await decideFor(door)({ runId: "run-1", decisionId: "d-shown", answer: "approve", note: "" }, WHO);
+    await decideFor(door)({ runId: "run-1", decisionId: "d-shown", answer: "decline", note: "" }, WHO);
+    expect(access[approve].mock.calls[0]![0]).toMatchObject({ runId: "run-1", decisionId: "d-shown" });
+    expect(access[decline].mock.calls[0]![0]).toMatchObject({ runId: "run-1", decisionId: "d-shown" });
+  });
+
   it("the site widget's answer takes the widget-reader roads, never the session ones", async () => {
     const decide = decideFor("decidePublishDecisionCardForWidgetReader");
-    expect(await decide({ runId: "run-1", answer: "approve", note: "" }, WHO)).toBe("decided");
-    expect(await decide({ runId: "run-1", answer: "decline", note: "Not ready yet." }, WHO)).toBe("decided");
+    expect(await decide({ runId: "run-1", decisionId: "d1", answer: "approve", note: "" }, WHO)).toBe("decided");
+    expect(await decide({ runId: "run-1", decisionId: "d1", answer: "decline", note: "Not ready yet." }, WHO)).toBe("decided");
     expect(access.approvePublishDecisionAsWidgetReader).toHaveBeenCalledTimes(1);
     expect((access.declinePublishDecisionAsWidgetReader.mock.calls[0]![0] as { note: unknown }).note).toBe("Not ready yet.");
     expect(access.approvePublishDecision).not.toHaveBeenCalled();

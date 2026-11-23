@@ -97,7 +97,7 @@ describe("the door and the grant", () => {
     const POST = await loadRoute();
     const bare = new Request("https://app.example/api/lifecycle-views/publish-decision/decide", {
       method: "POST",
-      body: JSON.stringify({ runId: RUN_ID, answer: "approve" }),
+      body: JSON.stringify({ runId: RUN_ID, decisionId: "d1", answer: "approve" }),
     });
     expect((await POST(bare)).status).toBe(401);
     expect(readAgentRunById).not.toHaveBeenCalled();
@@ -107,14 +107,14 @@ describe("the door and the grant", () => {
   it("a credential the decide grant refuses (a read-only token, an older token) is 401, and nothing is written", async () => {
     const POST = await loadRoute();
     resolveWidgetLifecycleActorContext.mockResolvedValue({ ok: false, reason: "token_rejected" });
-    expect((await POST(request({ runId: RUN_ID, answer: "decline" }))).status).toBe(401);
+    expect((await POST(request({ runId: RUN_ID, decisionId: "d1", answer: "decline" }))).status).toBe(401);
     expect(readAgentRunById).not.toHaveBeenCalled();
     expect(decide).not.toHaveBeenCalled();
   });
 
   it("consumes at THIS route's own audience under lifecycle.decide, an audience the read grant does not hold", async () => {
     const POST = await loadRoute();
-    await POST(request({ runId: RUN_ID, answer: "decline" }));
+    await POST(request({ runId: RUN_ID, decisionId: "d1", answer: "decline" }));
     const grant = (actor as Record<string, unknown>).WIDGET_PUBLISH_DECISION_DECIDE_GRANT as {
       routePath: string; requiredScopes: string[]; auditAuthorized: string;
     };
@@ -129,10 +129,11 @@ describe("the door and the grant", () => {
   });
 
   it.each([
-    ["no run id", { answer: "approve" }],
-    ["an unknown answer", { runId: RUN_ID, answer: "publish" }],
-    ["an unknown field", { runId: RUN_ID, answer: "approve", actor: "user-z" }],
-    ["an oversized note", { runId: RUN_ID, answer: "decline", note: "n".repeat(2001) }],
+    ["no run id", { decisionId: "d1", answer: "approve" }],
+    ["no decision id (the card names the decision it shows)", { runId: RUN_ID, answer: "approve" }],
+    ["an unknown answer", { runId: RUN_ID, decisionId: "d1", answer: "publish" }],
+    ["an unknown field", { runId: RUN_ID, decisionId: "d1", answer: "approve", actor: "user-z" }],
+    ["an oversized note", { runId: RUN_ID, decisionId: "d1", answer: "decline", note: "n".repeat(2001) }],
   ])("%s is 400, and no run is read", async (_label, body) => {
     const POST = await loadRoute();
     expect((await POST(request(body))).status).toBe(400);
@@ -148,7 +149,7 @@ describe("the binding", () => {
   ])("%s answers 200 { outcome: failed }, and nothing is written", async (_label, run) => {
     const POST = await loadRoute();
     readAgentRunById.mockResolvedValue(run);
-    const res = await POST(request({ runId: RUN_ID, answer: "decline", note: "x" }));
+    const res = await POST(request({ runId: RUN_ID, decisionId: "d1", answer: "decline", note: "x" }));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ outcome: "failed" });
     expect(res.headers.get("Cache-Control")).toBe("no-store");
@@ -160,11 +161,11 @@ describe("the binding", () => {
 describe("the answer", () => {
   it("Do not allow records the widget's person and the note, stops the run, and is decided", async () => {
     const POST = await loadRoute();
-    const res = await POST(request({ runId: RUN_ID, answer: "decline", note: "Not ready yet." }));
+    const res = await POST(request({ runId: RUN_ID, decisionId: "d1", answer: "decline", note: "Not ready yet." }));
     expect(await res.json()).toEqual({ outcome: "decided" });
     expect(readAgentRunById).toHaveBeenCalledWith(RUN_ID, ACTOR_CTX.actor, ACTOR_CTX.roleHints);
     expect(decide).toHaveBeenCalledTimes(1);
-    expect(decide).toHaveBeenCalledWith("d1", { from: "parked", to: "declined", actor: "user-widget", note: "Not ready yet." });
+    expect(decide).toHaveBeenCalledWith("d1", { from: "parked", to: "declined", actor: "user-widget", note: "Not ready yet.", ofRun: RUN_ID, newestOnly: true });
     expect((transitionRunStatus.mock.calls[0] as unknown[]).slice(0, 3)).toEqual([RUN_ID, "pending_approval", "stopped"]);
   });
 
@@ -172,16 +173,31 @@ describe("the answer", () => {
     const POST = await loadRoute();
     readOpenDecisionForRun.mockResolvedValue(null);
     readLatestDecisionForRun.mockResolvedValue({ ...PARKED, status: "declined", decidedBy: "user-other" });
-    const res = await POST(request({ runId: RUN_ID, answer: "decline" }));
+    const res = await POST(request({ runId: RUN_ID, decisionId: "d1", answer: "decline" }));
     expect(await res.json()).toEqual({ outcome: "not_open" });
     expect(decide).not.toHaveBeenCalled();
+    expect(transitionRunStatus).not.toHaveBeenCalled();
+  });
+
+  // gate A was answered elsewhere and gate B opened before the widget's card re-read. Do not
+  // allow pressed on the stale card A leaves B untouched (Allow's twin runs over the same core in
+  // packages/agents/src/__tests__/publish-decision-approve.test.ts).
+  it("Do not allow on a stale card A, while gate B is open, is not_open, and B is untouched", async () => {
+    const answer = "decline";
+    const POST = await loadRoute();
+    readOpenDecisionForRun.mockResolvedValue({ ...PARKED, id: "dB", nodeId: "post-2", gateTaskId: "task-2" });
+    decide.mockImplementation(async (id: string, change: { to: string }) =>
+      id === "dA" ? { outcome: "lost", currentStatus: "released" } : { outcome: "won", decision: { ...PARKED, id, status: change.to } });
+    const res = await POST(request({ runId: RUN_ID, decisionId: "dA", answer, note: "No." }));
+    expect(await res.json()).toEqual({ outcome: "not_open" });
+    expect(decide.mock.calls.map((c) => (c as unknown[])[0])).not.toContain("dB");
     expect(transitionRunStatus).not.toHaveBeenCalled();
   });
 
   it("a reader who may view but not decide (no role in the run's organization) is failed, and nothing is written", async () => {
     const POST = await loadRoute();
     resolveOrgRoleForUser.mockResolvedValue(undefined);
-    const res = await POST(request({ runId: RUN_ID, answer: "decline", note: "x" }));
+    const res = await POST(request({ runId: RUN_ID, decisionId: "d1", answer: "decline", note: "x" }));
     expect(await res.json()).toEqual({ outcome: "failed" });
     expect(decide).not.toHaveBeenCalled();
     expect(transitionRunStatus).not.toHaveBeenCalled();

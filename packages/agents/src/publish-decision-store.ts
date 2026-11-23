@@ -14,6 +14,7 @@ import { types } from "node:util";
 import { and, asc, desc, eq, getTableColumns, gt, inArray, lte, sql } from "drizzle-orm";
 
 import { db } from "./db";
+import { PUBLISH_DECISION_MAX_NOTE_LENGTH } from "./publish-decision-card";
 import { agentRunPublishDecisions, agentRuns } from "./schema";
 
 /** A decision of the run's current attempt: its run_generation equals the run's reset_generation, read in the same
@@ -31,7 +32,7 @@ export const PUBLISH_DECISION_DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 export const PUBLISH_DECISION_MAX_DUE_PAGE = 1000;
 // Caps. Text is stored as given, never trimmed: an id is matched by equality.
 export const PUBLISH_DECISION_MAX_ID_LENGTH = 256;
-export const PUBLISH_DECISION_MAX_NOTE_LENGTH = 2000;
+export { PUBLISH_DECISION_MAX_NOTE_LENGTH };
 export const PUBLISH_DECISION_MAX_SURFACED_BYTES = 64 * 1024;
 /** The most rows one declaration may hold, and the longest label or input name in one. */
 export const PUBLISH_DECISION_MAX_DECLARED_ROWS = 32;
@@ -239,6 +240,8 @@ export interface DecideInput {
   /** Wins only while no newer decision of the same run exists and the row belongs to the run's current attempt, checked in
    *  the same UPDATE (the expiry's rule): a decision of an ended attempt never stops the attempt a retry started. */
   newestOnly?: boolean;
+  /** Wins only while the row belongs to this run, checked in the same UPDATE; a row of another run is not found. */
+  ofRun?: string;
 }
 
 export type DecideResult =
@@ -277,20 +280,21 @@ const NO_NEWER_DECISION = sql`not exists (select 1 from ${agentRunPublishDecisio
 export async function decide(id: string, input: DecideInput): Promise<DecideResult> {
   const decisionId = requireText(id, "id");
   const { actor, note } = requireTransition(input);
+  const ofRun = input.ofRun === undefined ? undefined : eq(agentRunPublishDecisions.runId, requireText(input.ofRun, "ofRun"));
 
   return db.transaction(async (tx): Promise<DecideResult> => {
     const [won] = await tx
       .update(agentRunPublishDecisions)
       .set({ status: input.to, decidedBy: actor, decidedAt: sql`now()`, decisionNote: note })
       .where(and(eq(agentRunPublishDecisions.id, decisionId), eq(agentRunPublishDecisions.status, "parked"),
-        ...(input.newestOnly ? [NO_NEWER_DECISION, CURRENT_ATTEMPT] : [])))
+        ...(ofRun ? [ofRun] : []), ...(input.newestOnly ? [NO_NEWER_DECISION, CURRENT_ATTEMPT] : [])))
       .returning();
     if (won) return { outcome: "won", decision: deserialize(won) };
 
     const [current] = await tx
       .select()
       .from(agentRunPublishDecisions)
-      .where(eq(agentRunPublishDecisions.id, decisionId))
+      .where(and(eq(agentRunPublishDecisions.id, decisionId), ofRun))
       .limit(1);
     if (!current) throw new PublishDecisionError("not-found", "no decision has this id");
     return { outcome: "lost", currentStatus: deserialize(current).status };

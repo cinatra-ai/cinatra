@@ -25,7 +25,7 @@ const ROWS = [
   { label: "Title", value: "Spring launch" },
   { label: "Site", value: "Company blog" },
 ];
-const PENDING = { state: "pending", runId: RUN_ID, agentName: "Blog publisher", rows: ROWS, mayDecide: true };
+const PENDING = { state: "pending", runId: RUN_ID, agentName: "Blog publisher", rows: ROWS, decisionId: "d1", mayDecide: true };
 const RESTRICTED = { ...PENDING, mayDecide: false };
 const APPROVED = { state: "approved", runId: RUN_ID, agentName: "Blog publisher", rows: ROWS, deciderName: "Dana Okafor" };
 const DECLINED = { ...APPROVED, state: "declined", reason: "Not ready yet." };
@@ -502,13 +502,63 @@ describe("the decide door", () => {
       fireEvent.click(root.querySelector(APPROVE)!);
     });
     await settle();
-    expect(decide).toHaveBeenLastCalledWith({ runId: RUN_ID, answer: "approve", note: "" });
+    expect(decide).toHaveBeenLastCalledWith({ runId: RUN_ID, decisionId: "d1", answer: "approve", note: "" });
     await act(async () => {
       fireEvent.click(mounted.container.querySelector(DECLINE)!);
     });
     await settle();
-    expect(decide).toHaveBeenLastCalledWith({ runId: RUN_ID, answer: "decline", note: "Not ready yet." });
+    expect(decide).toHaveBeenLastCalledWith({ runId: RUN_ID, decisionId: "d1", answer: "decline", note: "Not ready yet." });
     expect(stateMock).toHaveBeenCalledTimes(3);
+  });
+
+  // the answer names the decision the card SHOWS, so a card drawn for an earlier
+  // gate can never answer a newer one it has not drawn.
+  it("each answer names the decision the card shows, and a card re-read onto a newer decision names that one", async () => {
+    const decide = vi.fn<PublishDecisionDecide>(async () => "failed");
+    const mounted = mountOn("site_widget", decide);
+    const root = await rootOf(mounted);
+    await act(async () => {
+      fireEvent.click(root.querySelector(DECLINE)!);
+    });
+    await settle();
+    expect(decide.mock.calls[0]![0]).toMatchObject({ runId: RUN_ID, decisionId: "d1", answer: "decline" });
+    brokerAnswer = { status: 200, body: { ...PENDING, decisionId: "d2" } };
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await settle();
+    await act(async () => {
+      fireEvent.click(mounted.container.querySelector(APPROVE)!);
+    });
+    await settle();
+    expect(decide.mock.calls[1]![0]).toMatchObject({ runId: RUN_ID, decisionId: "d2", answer: "approve" });
+  });
+
+  // an answer that did not land is told, never silent.
+  it("an answer that did not land says so under the controls, keeps them live, and clears on the next answer", async () => {
+    let answer: "failed" | "decided" = "failed";
+    const mounted = mountOn("run_card", vi.fn<PublishDecisionDecide>(async () => answer));
+    const root = await rootOf(mounted);
+    expect(root.textContent).not.toContain("The decision could not be sent.");
+    await act(async () => {
+      fireEvent.click(root.querySelector(DECLINE)!);
+    });
+    await settle();
+    const after = await rootOf(mounted);
+    expect(after.getAttribute("data-lifecycle-card-state")).toBe("pending");
+    expect(after.querySelector('[role="status"]')?.textContent).toBe("The decision could not be sent.");
+    expect(after.querySelector<HTMLButtonElement>(DECLINE)?.disabled).toBe(false);
+    answer = "decided";
+    await act(async () => {
+      fireEvent.click(after.querySelector(APPROVE)!);
+    });
+    await settle();
+    expect((await rootOf(mounted)).textContent).not.toContain("The decision could not be sent.");
+  });
+
+  it("the note field takes no more than the decision store records (2,000 characters)", async () => {
+    const root = await rootOf(mountOn("chat_thread", vi.fn<PublishDecisionDecide>(async () => "decided")));
+    expect(root.querySelector("textarea")?.maxLength).toBe(2000);
   });
 
   it("an answer that is no longer open is reported, and Refresh draws loading until the re-read lands", async () => {

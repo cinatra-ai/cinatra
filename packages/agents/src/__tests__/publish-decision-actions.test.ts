@@ -557,6 +557,42 @@ describe("Do not allow from the site widget (cinatra#4758)", () => {
   });
 });
 
+// a card answers only the decision it shows. Gate A was answered elsewhere and
+// gate B opened before this card re-read; Do not allow pressed on the stale card A must leave B untouched. The doors run
+// for real over the roads: the session door (decidePublishDecisionCardForActor) and the widget door's road.
+describe("a stale card never answers a newer gate", () => {
+  const WIDGET = { actorType: "human" as const, source: "a2a" as const, userId: "user-a", orgId: "org-1" };
+  const GATE_B = decision({ id: "dB", nodeId: "publish-2", gateTaskId: "task-2" });
+
+  beforeEach(() => {
+    decisions.readOpenDecisionForRun.mockResolvedValue(GATE_B);
+    // The store's guarded write: A is no longer parked, so its answer loses; B would be won by any write aimed at it.
+    decisions.decide.mockImplementation(async (id: string, change: { to: string }) =>
+      id === "dA" ? { outcome: "lost", currentStatus: "released" } : { outcome: "won", decision: decision({ id, status: change.to }) });
+  });
+
+  it.each([
+    ["the session door", "decidePublishDecisionCardForActor", ACTOR],
+    ["the widget door", "decidePublishDecisionCardForWidgetReader", WIDGET],
+  ] as const)("%s: Do not allow on card A is not open, and B is neither decided nor its run stopped", async (_label, door, actor) => {
+    const core = await import("../publish-decision-card-core");
+    const outcome = await core[door]({ runId: "run-1", decisionId: "dA", answer: "decline", note: "No." }, { actor, roleHints: {} });
+    expect(outcome).toBe("not_open");
+    expect(decisions.decide.mock.calls.map((c) => (c as unknown[])[0])).not.toContain("dB");
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+  });
+
+  it("the decline's one write names card A's row, bound to the run, and only while it is the newest open row of the current attempt", async () => {
+    expect(await declinePublishDecision({ runId: "run-1", actorContext: ACTOR, decisionId: "dA" } as never)).toEqual({
+      ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: "released",
+    });
+    expect(decisions.decide).toHaveBeenCalledTimes(1);
+    expect(decisions.decide).toHaveBeenCalledWith("dA", {
+      from: "parked", to: "declined", actor: "user-a", note: null, ofRun: "run-1", newestOnly: true,
+    });
+  });
+});
+
 describe("Do not publish answers a store fault with a fixed text (finding 5)", () => {
   it.each([
     ["the decision write", () => decisions.decide.mockRejectedValueOnce(new Error("insert failed: d1 user-a not today"))],

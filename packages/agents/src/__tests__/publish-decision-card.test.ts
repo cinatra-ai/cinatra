@@ -16,8 +16,8 @@ const COMMON = { runId: "run-1", agentName: "Launch writer", rows: [{ label: "Ti
 describe("parsePublishDecisionCardState", () => {
   it.each<PublishDecisionCardState>([
     { state: "none" },
-    { state: "pending", ...COMMON, mayDecide: true },
-    { state: "pending", ...COMMON, rows: [], mayDecide: false },
+    { state: "pending", ...COMMON, decisionId: "d1", mayDecide: true },
+    { state: "pending", ...COMMON, rows: [], decisionId: "d1", mayDecide: false },
     { state: "approved", ...COMMON, deciderName: "Dana Okafor" },
     { state: "approved", ...COMMON, deciderName: null },
     { state: "declined", ...COMMON, deciderName: "Dana Okafor", reason: "Not ready yet." },
@@ -40,7 +40,10 @@ describe("parsePublishDecisionCardState", () => {
     ["no agent name", { ...COMMON, state: "expired", agentName: 7 }],
     ["rows not a list", { ...COMMON, state: "expired", rows: {} }],
     ["a row without a value", { ...COMMON, state: "expired", rows: [{ label: "Title" }] }],
-    ["a pending card without mayDecide", { ...COMMON, state: "pending" }],
+    ["a pending card without mayDecide", { ...COMMON, state: "pending", decisionId: "d1" }],
+    // cinatra#4758: an answer names the decision the card shows, so a pending card without one cannot be drawn.
+    ["a pending card without its decision", { ...COMMON, state: "pending", mayDecide: true }],
+    ["a pending card with an empty decision", { ...COMMON, state: "pending", decisionId: "", mayDecide: true }],
     ["an approved card with a numeric name", { ...COMMON, state: "approved", deciderName: 1 }],
     ["a declined card without a reason field", { ...COMMON, state: "declined", deciderName: null }],
   ])("refuses %s", (_name, data) => {

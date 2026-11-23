@@ -909,6 +909,20 @@ describe("cinatra#4150 PR 3a, pre-review 3: the expiry's own rules in the store"
     expect(calls.via).toEqual(["tx.update"]);
   });
 
+  // a card's answer names its row, and the row must belong to the run whose
+  // rights were checked, in the same UPDATE; a row of another run is not found, never a status that run leaks.
+  it("decide with ofRun wins only on a row of that run, in the same UPDATE, and its re-read asks the same", async () => {
+    answers.update = async () => [];
+    answers.select = async () => [];
+    expect(await codeOf(decide("d1", { from: "parked", to: "declined", actor: "person-1", ofRun: "run-1", newestOnly: true } as never))).toBe("not-found");
+    const update = rendered(calls.where[0]);
+    expect(update.params).toEqual(["d1", "parked", "run-1"]);
+    expect(update.sql).toMatch(/"id" = \$1 and .*"status" = \$2 and .*"run_id" = \$3 and not exists/);
+    const reread = rendered(calls.where[1]);
+    expect(reread.params).toEqual(["d1", "run-1"]);
+    expect(calls.via).toEqual(["tx.update", "tx.select"]);
+  });
+
   it("decide without newestOnly asks nothing about other decisions", async () => {
     answers.update = async () => [stored({ status: "run_ended" })];
     await decide("d1", { from: "parked", to: "run_ended", actor: null });

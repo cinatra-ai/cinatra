@@ -70,6 +70,7 @@ const PENDING = {
   runId: RUN_ID,
   agentName: "Blog publisher",
   rows: [{ label: "Title", value: "Spring launch" }],
+  decisionId: "d1",
   mayDecide: true,
 };
 
@@ -408,7 +409,7 @@ describe("OrchestratorStepperPanel's publish card decides (cinatra#4758)", () =>
       fireEvent.click(button(container, "Allow"));
     });
     await waitFor(() => expect(container.textContent).toContain("This request is no longer open"));
-    expect(publishDecideMock).toHaveBeenCalledWith({ runId: RUN_ID, answer: "approve", note: "" });
+    expect(publishDecideMock).toHaveBeenCalledWith({ runId: RUN_ID, decisionId: "d1", answer: "approve", note: "" });
   });
 
   it("the controls follow the reader: live for one who may approve, disabled with the reason for one who may only view", async () => {
