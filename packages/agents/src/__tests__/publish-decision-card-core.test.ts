@@ -36,7 +36,7 @@ const WHO = {
   actor: { actorType: "human" as const, source: "ui" as const, userId: "user-a" },
   roleHints: { orgRole: "member" as const, actorOrganizationId: "org-1" },
 };
-const RUN = { id: "run-1", templateId: "tmpl-1", orgId: "org-1", runBy: "user-a" };
+const RUN = { id: "run-1", templateId: "tmpl-1", orgId: "org-1", runBy: "user-a", status: "pending_approval" };
 
 function decision(overrides: Record<string, unknown> = {}) {
   return {
@@ -181,6 +181,17 @@ describe("which card a run shows", () => {
     // A settled decision still shows its outcome on an ended run.
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "expired" }));
     expect((await publishDecisionCardStateForRun({ ...RUN, status: "stopped" } as unknown as Run, WHO)).state).toBe("expired");
+  });
+
+  it("a parked decision of a run NOT held at its gate (a retry back in pending_input or queued) is no open card", async () => {
+    // A failed attempt's row left parked must not read as the open stop of the run's next attempt.
+    for (const status of ["pending_input", "queued", "some_future_status", undefined]) {
+      const notHeld = { ...RUN, status } as unknown as Run;
+      expect(await publishDecisionCardStateForRun(notHeld, WHO), String(status)).toEqual({ state: "none" });
+      expect(await publishDecisionCardStateForWidgetRun(notHeld, WHO), String(status)).toEqual({ state: "none" });
+    }
+    expect(access.enforcePublishDecisionAccess).not.toHaveBeenCalled();
+    expect(access.widgetReaderMayDecidePublish).not.toHaveBeenCalled();
   });
 
   it("an unreadable decision or template draws nothing rather than half a card", async () => {

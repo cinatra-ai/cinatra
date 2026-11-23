@@ -6,7 +6,8 @@ import "server-only";
 // "Which publish card does this run show this reader?" Answered for one verified actor through the run access door,
 // from the run's NEWEST decision (the one every resume road reads): parked = pending, released = approved, declined,
 // expired. A decision the run left another way (run_ended) is no card, and neither is a parked decision of a run that
-// has already ended (the sweep has not closed it as run_ended yet). "May decide" is the SAME check Publish and Do not
+// is not held at its gate (pending_approval, or running when a hold wrote its row but not its move): an ended run the
+// sweep has not closed yet, or a failed attempt's row read through a retry's next attempt. "May decide" is the SAME check Publish and Do not
 // publish run (enforcePublishDecisionAccess), asked without deciding, so a restricted card and a refused answer cannot
 // disagree. The site widget's card (publishDecisionCardStateForWidgetRun) asks the same run rights of the widget's reader
 // (widgetReaderMayDecidePublish), whom those two refuse, so its owner is not drawn restricted; it has no decide door yet.
@@ -26,7 +27,6 @@ import {
 } from "./publish-decision-card";
 import { enforcePublishDecisionAccess, widgetReaderMayDecidePublish } from "./publish-decision-actions";
 import { readLatestDecisionForRun } from "./publish-decision-store";
-import { runStatusIsTerminal } from "./run-surface-status";
 import { readAgentRunById, readAgentTemplateById, type AgentRunRecord } from "./store";
 
 export { PUBLISH_DECISION_CARD_NONE } from "./publish-decision-card";
@@ -98,9 +98,11 @@ async function cardStateForRun(
   };
   switch (decision.status) {
     case "parked": {
-      // A run that has ENDED is parked at no gate. Its decision closes as run_ended only at the expiry sweep, so until
-      // then the read already answers what that close will: no card. Nothing is written by this read.
-      if (runStatusIsTerminal(run.status ?? null)) return PUBLISH_DECISION_CARD_NONE;
+      // Only a HELD run is parked at this gate: pending_approval, or running when a hold wrote its row but not its move
+      // (the statuses the expiry sweep holds). An ended run, and a retried run back in pending_input or queued, is parked
+      // at no gate: its row closes as run_ended (at the retry's reset, or the sweep), and until then the read already
+      // answers what that close will: no card. Nothing is written by this read.
+      if (run.status !== "pending_approval" && run.status !== "running") return PUBLISH_DECISION_CARD_NONE;
       const mayDecide = await readMayDecide().catch(() => false);
       return { state: "pending", ...common, mayDecide };
     }

@@ -268,15 +268,27 @@ describe("a run that reaches a publish gate (A4 without the moment)", () => {
     expect(onInterruptSpy).not.toHaveBeenCalled();
   });
 
-  it("a store fault on the move to pending_approval is not swallowed: the row stays parked, nothing is offered", async () => {
+  it("a store fault on the move to pending_approval is not swallowed: the row closes run_ended, nothing is offered", async () => {
+    // The dispatch records the attempt failed; a row left parked would read as the open stop of a retry's next attempt.
     storeMock.transitionRunStatus.mockRejectedValueOnce(new Error("db down"));
     const run = makeRun();
     await expect(
       handleWayflowTaskState({ authority: AUTHORITY, runId: run.id, run, fromStatus: "running", task: pausedTask(sign(GATE)) }),
     ).rejects.toThrow("db down");
     expect(decisions.insertParkedDecision).toHaveBeenCalledTimes(1);
-    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(decisions.decide).toHaveBeenCalledTimes(1);
+    expect(decisions.decide).toHaveBeenCalledWith("dec-1", { from: "parked", to: "run_ended", actor: null });
     expect(onInterruptSpy).not.toHaveBeenCalled();
+  });
+
+  it("a fault closing the row after a faulted move does not hide the move's own fault", async () => {
+    storeMock.transitionRunStatus.mockRejectedValueOnce(new Error("db down"));
+    decisions.decide.mockRejectedValueOnce(new Error("close failed"));
+    const run = makeRun();
+    await expect(
+      handleWayflowTaskState({ authority: AUTHORITY, runId: run.id, run, fromStatus: "running", task: pausedTask(sign(GATE)) }),
+    ).rejects.toThrow("db down");
+    expect(decisions.decide).toHaveBeenCalledWith("dec-1", { from: "parked", to: "run_ended", actor: null });
   });
 
   it("a task without a context id is verified against the run's context id", async () => {

@@ -67,7 +67,8 @@ const ACTOR_CTX = {
   orgId: "org-widget",
   roleHints: { orgRole: "member", platformRole: "member", actorOrganizationId: "org-widget" },
 };
-const OWN_RUN = { id: RUN_ID, templateId: "tmpl-blog", runBy: "user-widget", orgId: "org-widget", authPolicy: null };
+// A run held at its publish gate: only a held run (pending_approval or running) shows its parked decision as pending.
+const OWN_RUN = { id: RUN_ID, templateId: "tmpl-blog", runBy: "user-widget", orgId: "org-widget", authPolicy: null, status: "pending_approval" };
 const TEMPLATE = { id: "tmpl-blog", name: "Blog agent", publishRows: { post: [{ label: "Title", input: "title" }] } };
 const PARKED = { id: "d1", runId: RUN_ID, nodeId: "post", status: "parked", surfacedValues: { title: "Spring launch" },
   decidedBy: null, decisionNote: null };

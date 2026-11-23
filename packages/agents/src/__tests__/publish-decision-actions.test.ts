@@ -42,6 +42,7 @@ import {
   assertNoOpenPublishDecision,
   approvePublishDecision,
   claimRunBeforeSend,
+  closeOpenPublishDecisionsOfRun,
   declinePublishDecision,
   publishHoldAnswer,
   sweepExpiredPublishDecisions,
@@ -797,5 +798,36 @@ describe("the write registry tells the truth about the decline's authority (find
   it("the decline's one authority is the decider's member session in the run's org", () => {
     expect(src.match(/sessionAuthorityFromResolvedRole\(/g)).toHaveLength(1);
     expect(src).toContain("sessionAuthorityFromResolvedRole(run.orgId, role)");
+  });
+});
+
+describe("a failed attempt's open decision closes before the retry's reset (review finding 1)", () => {
+  // red-first-expect: closeOpenPublishDecisionsOfRun is not a function
+  it("every open row of the run closes run_ended with no person, newest first, until none is open", async () => {
+    decisions.readOpenDecisionForRun
+      .mockResolvedValueOnce(decision({ id: "d2" }))
+      .mockResolvedValueOnce(decision({ id: "d1" }))
+      .mockResolvedValue(null);
+    await expect(closeOpenPublishDecisionsOfRun("run-1")).resolves.toBe(2);
+    expect(decisions.readOpenDecisionForRun).toHaveBeenCalledWith("run-1");
+    expect(decisions.decide.mock.calls).toEqual([
+      ["d2", { from: "parked", to: "run_ended", actor: null }],
+      ["d1", { from: "parked", to: "run_ended", actor: null }],
+    ]);
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+  });
+
+  // red-first-expect: closeOpenPublishDecisionsOfRun is not a function
+  it("a run with no open row closes nothing", async () => {
+    decisions.readOpenDecisionForRun.mockResolvedValue(null);
+    await expect(closeOpenPublishDecisionsOfRun("run-1")).resolves.toBe(0);
+    expect(decisions.decide).not.toHaveBeenCalled();
+  });
+
+  // red-first-expect: closeOpenPublishDecisionsOfRun is not a function
+  it("a store fault is not swallowed", async () => {
+    decisions.readOpenDecisionForRun.mockResolvedValue(decision());
+    decisions.decide.mockRejectedValue(new Error("db down"));
+    await expect(closeOpenPublishDecisionsOfRun("run-1")).rejects.toThrow("db down");
   });
 });

@@ -104,7 +104,12 @@ vi.mock("../agent-run-serde", () => ({
   assertAgentRunScopeAuthorized: vi.fn(async () => undefined),
 }));
 
-import { startDevChildPreviewRun } from "../run-actions";
+const closeOpenPublishDecisionsOfRun = vi.fn();
+vi.mock("../publish-decision-actions", () => ({
+  closeOpenPublishDecisionsOfRun: (...a: unknown[]) => closeOpenPublishDecisionsOfRun(...a),
+}));
+
+import { resetAgentRun, startDevChildPreviewRun } from "../run-actions";
 
 const createdRun = {
   id: RUN_ID,
@@ -190,5 +195,36 @@ describe("startDevChildPreviewRun and a failed dispatch", () => {
     if (!result.ok) throw new Error("the preview refused to open");
     expect(result.runId).toBe(RUN_ID);
     expect(enqueueAgentRun).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Review finding 1 on cinatra#4150: a retry's reset (failed -> pending_input) closes the publish decision a failed attempt
+// left open BEFORE the run moves, so the stale row never reads as the open stop of the run's next attempt.
+describe("resetAgentRun closes a failed attempt's open publish decision first", () => {
+  const failedRun = { ...createdRun, status: "failed" };
+  beforeEach(() => {
+    readAgentRunById.mockResolvedValue({ ...failedRun });
+    closeOpenPublishDecisionsOfRun.mockResolvedValue(1);
+  });
+
+  it("closes the run's open decisions, then moves the run failed -> pending_input", async () => {
+    await expect(resetAgentRun({ runId: RUN_ID })).resolves.toEqual({ ok: true });
+    expect(closeOpenPublishDecisionsOfRun).toHaveBeenCalledWith(RUN_ID);
+    expect(transitionRunStatus).toHaveBeenCalledWith(RUN_ID, "failed", "pending_input", undefined, expect.anything());
+    expect(closeOpenPublishDecisionsOfRun.mock.invocationCallOrder[0]!).toBeLessThan(
+      transitionRunStatus.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("a fault closing the decision fails the reset, and the run is not moved", async () => {
+    closeOpenPublishDecisionsOfRun.mockRejectedValue(new Error("db down"));
+    await expect(resetAgentRun({ runId: RUN_ID })).rejects.toThrow("db down");
+    expect(transitionRunStatus).not.toHaveBeenCalled();
+  });
+
+  it("a run that is not failed is refused, and nothing is closed", async () => {
+    readAgentRunById.mockResolvedValue({ ...createdRun, status: "running" });
+    await expect(resetAgentRun({ runId: RUN_ID })).resolves.toEqual({ ok: false, error: "run is not in failed state" });
+    expect(closeOpenPublishDecisionsOfRun).not.toHaveBeenCalled();
   });
 });

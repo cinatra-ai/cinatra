@@ -441,6 +441,11 @@ export async function resetAgentRun(
   }
 
   const authority = await verifySessionAuthority(userId, run.orgId);
+  // A publish decision the failed attempt left open must not read as the open stop of the next attempt: it closes
+  // run_ended first, as the expiry sweep closes the row of a run that left its gate. Loaded at the call, so this module's
+  // graph does not take the publish decision store.
+  const { closeOpenPublishDecisionsOfRun } = await import("./publish-decision-actions");
+  await closeOpenPublishDecisionsOfRun(args.runId);
   try {
     await transitionRunStatus(args.runId, "failed", "pending_input", undefined, authority);
   } catch (err) {
