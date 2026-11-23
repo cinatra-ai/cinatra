@@ -535,6 +535,88 @@ describe("the decide door", () => {
   });
 
   // an answer that did not land is told, never silent.
+  // What the card holds for one decision (the note, "no longer open", the answer in flight) never reaches another.
+  const moveTo = async (next: unknown) => {
+    brokerAnswer = { status: 200, body: next };
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await settle();
+  };
+
+  it("a re-read onto a newer decision starts its note over, and Do not allow sends the newer decision's own note", async () => {
+    const decide = vi.fn<PublishDecisionDecide>(async () => "decided");
+    const mounted = mountOn("site_widget", decide);
+    const root = await rootOf(mounted);
+    await act(async () => {
+      fireEvent.change(root.querySelector("textarea")!, { target: { value: "Wrong channel." } });
+    });
+    await moveTo({ ...PENDING, decisionId: "d2" });
+    const after = await rootOf(mounted);
+    // red-first-expect: expected 'Wrong channel.' to be ''
+    expect(after.querySelector("textarea")?.value).toBe("");
+    await act(async () => {
+      fireEvent.click(after.querySelector(DECLINE)!);
+    });
+    await settle();
+    expect(decide).toHaveBeenLastCalledWith({ runId: RUN_ID, decisionId: "d2", answer: "decline", note: "" });
+  });
+
+  it("a card that read no longer open draws the newer decision a re-read brings, with its controls", async () => {
+    const mounted = mountOn("site_widget", vi.fn<PublishDecisionDecide>(async () => "not_open"));
+    const root = await rootOf(mounted);
+    await act(async () => {
+      fireEvent.click(root.querySelector(APPROVE)!);
+    });
+    await settle();
+    expect((await rootOf(mounted)).getAttribute("data-lifecycle-card-state")).toBe("no_longer_open");
+    await moveTo({ ...PENDING, decisionId: "d2" });
+    const after = await rootOf(mounted);
+    // red-first-expect: expected 'no_longer_open' to be 'pending'
+    expect(after.getAttribute("data-lifecycle-card-state")).toBe("pending");
+    expect(after.querySelector<HTMLButtonElement>(APPROVE)?.disabled).toBe(false);
+  });
+
+  it("a reply that comes back for a decision the card no longer shows changes nothing on the newer one", async () => {
+    const replies: Array<(outcome: "not_open" | "failed") => void> = [];
+    const decide = vi.fn<PublishDecisionDecide>(() => new Promise((resolve) => replies.push(resolve)));
+    const mounted = mountOn("site_widget", decide);
+    const root = await rootOf(mounted);
+    await act(async () => {
+      fireEvent.click(root.querySelector(APPROVE)!);
+    });
+    await moveTo({ ...PENDING, decisionId: "d2" });
+    // The earlier decision's answer is still out; the newer decision's controls are its own.
+    // red-first-expect: expected true to be false
+    expect((await rootOf(mounted)).querySelector<HTMLButtonElement>(APPROVE)?.disabled).toBe(false);
+    await act(async () => {
+      replies[0]!("not_open");
+    });
+    await settle();
+    const after = await rootOf(mounted);
+    expect(after.getAttribute("data-lifecycle-card-state")).toBe("pending");
+    expect(after.querySelector('[role="status"]')).toBeNull();
+    await act(async () => {
+      fireEvent.click(after.querySelector(APPROVE)!);
+    });
+    expect(decide.mock.calls[1]![0]).toMatchObject({ decisionId: "d2", answer: "approve" });
+    await act(async () => {
+      replies[1]!("failed");
+    });
+    await settle();
+    expect((await rootOf(mounted)).querySelector('[role="status"]')?.textContent).toBe("The decision could not be sent.");
+  });
+
+  it("a decision allowed whose run did not go on offers Allow only, with no note and no Do not allow", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, resumeOnly: true }));
+    const root = await rootOf(mountOn("run_card", okDoor()));
+    expect(root.getAttribute("data-lifecycle-card-state")).toBe("pending");
+    expect(root.querySelector<HTMLButtonElement>(APPROVE)?.disabled).toBe(false);
+    expect(root.querySelector(DECLINE)).toBeNull();
+    expect(root.querySelector("textarea")).toBeNull();
+    expect(root.textContent).toContain("Allow again to let it go on.");
+  });
+
   it("an answer that did not land says so under the controls, keeps them live, and clears on the next answer", async () => {
     let answer: "failed" | "decided" = "failed";
     const mounted = mountOn("run_card", vi.fn<PublishDecisionDecide>(async () => answer));

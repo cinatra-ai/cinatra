@@ -58,7 +58,11 @@ vi.mock("../wayflow-url", () => ({ resolveWayflowUrl: (pkg: string) => `http://w
 const resolveLatestWayflowGateTaskId = vi.hoisted(() => vi.fn(async (_runId: string): Promise<string | null> => "task-1"));
 vi.mock("@cinatra-ai/a2a", () => ({ resolveLatestWayflowGateTaskId }));
 
+// The card's read names a settled decider through this helper; the retry case below reads the card over these doubles.
+vi.mock("@/lib/lifecycle/lifecycle-settled-outcome", () => ({ readDeciderName: async () => "Dana Okafor" }));
+
 import * as decisionActions from "../publish-decision-actions";
+import { decidePublishDecisionCardForActor, publishDecisionCardStateForRun } from "../publish-decision-card-core";
 import {
   PUBLISH_DECISION_NOT_OPEN,
   approvePublishDecision,
@@ -298,6 +302,40 @@ describe("Publish (A7)", () => {
     expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: true });
     expect(decisions.decide).toHaveBeenCalledTimes(1);
     expect(sendWayflowResume).toHaveBeenCalledTimes(1);
+  });
+
+  // The card is the reader's only way to answer. After an Allow whose resume failed before its fence, the run still
+  // waits at the gate with its decision released: the card must keep offering Allow on that decision, and that Allow
+  // resumes the run without a second decision write. A card that read "Approved" here would leave the run paused for good.
+  it("after a resume that failed before its send, the card still offers Allow, and that Allow resumes the run once", async () => {
+    const who = { actor: ACTOR, roleHints: ROLE_HINTS };
+    prepareWayflowResume.mockRejectedValueOnce(new Error("wayflow down"));
+    // red-first-expect: decidePublishDecisionCardForActor is not a function
+    expect(await decidePublishDecisionCardForActor({ runId: "run-1", decisionId: "d1", answer: "approve" }, who)).toBe("failed");
+    expect(decisions.decide).toHaveBeenCalledTimes(1);
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+
+    // What the store now holds: the decision released by user-a, the run still pending_approval at gate task-1.
+    decisions.readOpenDecisionForRun.mockResolvedValue(null);
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released", decidedBy: "user-a" }));
+    const card = await publishDecisionCardStateForRun(run() as never, who);
+    expect(card).toMatchObject({ state: "pending", decisionId: "d1", mayDecide: true });
+
+    expect(await decidePublishDecisionCardForActor({ runId: "run-1", decisionId: "d1", answer: "approve" }, who)).toBe("decided");
+    expect(decisions.decide).toHaveBeenCalledTimes(1);
+    expect(moves()).toEqual([["run-1", "pending_approval", "running"]]);
+    expect(sendWayflowResume).toHaveBeenCalledTimes(1);
+  });
+
+  it("a released decision whose run went on, or waits at a later gate, reads as Approved", async () => {
+    const who = { actor: ACTOR, roleHints: ROLE_HINTS };
+    decisions.readOpenDecisionForRun.mockResolvedValue(null);
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released", decidedBy: "user-a" }));
+    expect(await publishDecisionCardStateForRun(run({ status: "running" }) as never, who)).toMatchObject({ state: "approved" });
+    resolveLatestWayflowGateTaskId.mockResolvedValue("task-7");
+    expect(await publishDecisionCardStateForRun(run() as never, who)).toMatchObject({ state: "approved" });
+    resolveLatestWayflowGateTaskId.mockRejectedValue(new Error("redis down"));
+    expect(await publishDecisionCardStateForRun(run() as never, who)).toMatchObject({ state: "approved" });
   });
 
   it("a fence lost to a stop or another claimer sends nothing, gives nothing back and keeps the decision", async () => {

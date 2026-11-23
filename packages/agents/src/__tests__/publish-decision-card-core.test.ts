@@ -22,6 +22,7 @@ vi.mock("../publish-decision-store", () => decisions);
 
 const access = vi.hoisted(() => ({
   enforcePublishDecisionAccess: vi.fn(),
+  releasedPublishAwaitsResume: vi.fn(),
   widgetReaderMayDecidePublish: vi.fn(),
   approvePublishDecision: vi.fn(),
   declinePublishDecision: vi.fn(),
@@ -74,6 +75,7 @@ beforeEach(() => {
   storeMock.readAgentTemplateById.mockResolvedValue(TEMPLATE);
   decisions.readLatestDecisionForRun.mockResolvedValue(decision());
   access.enforcePublishDecisionAccess.mockResolvedValue({ run: RUN, deciderId: "user-a", authority: {} });
+  access.releasedPublishAwaitsResume.mockResolvedValue(false);
   names.readDeciderName.mockResolvedValue("Dana Okafor");
 });
 
@@ -126,6 +128,20 @@ describe("which card a run shows", () => {
     expect(await read()).toMatchObject({ state: "approved", deciderName: "Dana Okafor" });
     expect(names.readDeciderName).toHaveBeenCalledWith("user-b");
     expect(access.enforcePublishDecisionAccess).not.toHaveBeenCalled();
+  });
+
+  // An Allow whose resume did not complete leaves a released decision on a run that still waits at its gate. That run is
+  // not approved and going on: the card keeps Allow (and only Allow), so the run is never left with no way forward.
+  it("a released decision whose run still waits at its gate keeps Allow open on that decision, and draws no Approved", async () => {
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released", decidedBy: "user-b", gateTaskId: "task-1" }));
+    access.releasedPublishAwaitsResume.mockResolvedValue(true);
+    // red-first-expect: expected { state: 'approved', …(4) } to match object { state: 'pending', …(3) }
+    expect(await read()).toMatchObject({ state: "pending", decisionId: "d1", mayDecide: true, resumeOnly: true });
+    expect(access.releasedPublishAwaitsResume).toHaveBeenCalledWith(RUN, expect.objectContaining({ id: "d1", status: "released" }));
+    access.releasedPublishAwaitsResume.mockResolvedValue(false);
+    expect(await read()).toMatchObject({ state: "approved", deciderName: "Dana Okafor" });
+    access.releasedPublishAwaitsResume.mockRejectedValue(new Error("redis down"));
+    expect(await read()).toMatchObject({ state: "approved", deciderName: "Dana Okafor" });
   });
 
   it("a declined decision names the person and carries the reason that was written", async () => {

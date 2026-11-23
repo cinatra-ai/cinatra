@@ -18,6 +18,7 @@ describe("parsePublishDecisionCardState", () => {
     { state: "none" },
     { state: "pending", ...COMMON, decisionId: "d1", mayDecide: true },
     { state: "pending", ...COMMON, rows: [], decisionId: "d1", mayDecide: false },
+    { state: "pending", ...COMMON, decisionId: "d1", mayDecide: true, resumeOnly: true },
     { state: "approved", ...COMMON, deciderName: "Dana Okafor" },
     { state: "approved", ...COMMON, deciderName: null },
     { state: "declined", ...COMMON, deciderName: "Dana Okafor", reason: "Not ready yet." },
@@ -54,6 +55,10 @@ describe("parsePublishDecisionCardState", () => {
     expect(
       parsePublishDecisionCardState({ ...COMMON, state: "expired", deciderName: "Dana Okafor", extra: 1 }),
     ).toEqual({ state: "expired", ...COMMON });
+    // Allow-only is drawn only on an explicit true.
+    expect(parsePublishDecisionCardState({ ...COMMON, state: "pending", decisionId: "d1", mayDecide: true, resumeOnly: "yes" })).toEqual({
+      state: "pending", ...COMMON, decisionId: "d1", mayDecide: true,
+    });
   });
 });
 

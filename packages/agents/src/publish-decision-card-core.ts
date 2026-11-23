@@ -4,9 +4,10 @@ import "server-only";
 // The publish card's ONE authorized read (cinatra#4150 part 7a-1a).
 //
 // "Which publish card does this run show this reader?" Answered for one verified actor through the run access door,
-// from the run's NEWEST decision (the one every resume road reads): parked = pending, released = approved, declined,
-// expired. A decision the run left another way (run_ended) is no card, and neither is a parked decision of a run that
-// is not held at its gate (pending_approval, or running when a hold wrote its row but not its move): an ended run the
+// from the run's NEWEST decision (the one every resume road reads): parked = pending, released = approved (or pending
+// again, Allow only, while its run still waits at that gate because the resume did not complete), declined, expired.
+// A decision the run left another way (run_ended) is no card, and neither is a parked decision of a run that is not
+// held at its gate (pending_approval, or running when a hold wrote its row but not its move): an ended run the
 // sweep has not closed yet, or a failed attempt's row read through a retry's next attempt. "May decide" is the SAME check Publish and Do not
 // publish run (enforcePublishDecisionAccess), asked without deciding, so a restricted card and a refused answer cannot
 // disagree. The site widget's card (publishDecisionCardStateForWidgetRun) asks the same run rights of the widget's reader
@@ -32,6 +33,7 @@ import {
   declinePublishDecision,
   declinePublishDecisionAsWidgetReader,
   enforcePublishDecisionAccess,
+  releasedPublishAwaitsResume,
   widgetReaderMayDecidePublish,
   type PublishApproveAnswer,
   type PublishDecisionAnswer,
@@ -124,8 +126,16 @@ async function cardStateForRun(
       const mayDecide = await readMayDecide().catch(() => false);
       return { state: "pending", ...common, decisionId: decision.id, mayDecide };
     }
-    case "released":
+    case "released": {
+      // Allowed, but the run did not go on: the resume failed (or stopped) between the release and its fence, and the
+      // run still waits at this decision's gate. That is no settled Approved: the card keeps Allow, which resumes the run
+      // under the pause claim without a second decision (approvePublishDecision takes a released decision).
+      if (await releasedPublishAwaitsResume(run, decision).catch(() => false)) {
+        const mayDecide = await readMayDecide().catch(() => false);
+        return { state: "pending", ...common, decisionId: decision.id, mayDecide, resumeOnly: true };
+      }
       return settled((deciderName) => ({ state: "approved", ...common, deciderName }));
+    }
     case "declined":
       return settled((deciderName) => ({ state: "declined", ...common, deciderName, reason: decision.decisionNote }));
     case "expired":

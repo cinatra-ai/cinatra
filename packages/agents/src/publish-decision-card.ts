@@ -21,8 +21,10 @@ type PublishDecisionCardCommon = {
 export type PublishDecisionCardState =
   | { state: "none" }
   /** `decisionId`: the decision row this card shows. An answer names it, so it lands only on that row while it is still the
-   *  run's open decision of its current attempt, never on a newer gate the card has not drawn. */
-  | (PublishDecisionCardCommon & { state: "pending"; decisionId: string; mayDecide: boolean })
+   *  run's open decision of its current attempt, never on a newer gate the card has not drawn. `resumeOnly`: the decision
+   *  was already allowed, but its run did not go on and still waits at this gate; only Allow is offered, and it resumes
+   *  the run without a second decision. */
+  | (PublishDecisionCardCommon & { state: "pending"; decisionId: string; mayDecide: boolean; resumeOnly?: true })
   | (PublishDecisionCardCommon & { state: "approved"; deciderName: string | null })
   | (PublishDecisionCardCommon & { state: "declined"; deciderName: string | null; reason: string | null })
   | (PublishDecisionCardCommon & { state: "expired" });
@@ -89,7 +91,7 @@ export function parsePublishDecisionCardState(data: unknown): PublishDecisionCar
   switch (d.state) {
     case "pending":
       return typeof d.mayDecide === "boolean" && isText(d.decisionId) && d.decisionId.length > 0
-        ? { state: "pending", ...common, decisionId: d.decisionId, mayDecide: d.mayDecide }
+        ? { state: "pending", ...common, decisionId: d.decisionId, mayDecide: d.mayDecide, ...(d.resumeOnly === true ? { resumeOnly: true as const } : {}) }
         : null;
     case "approved":
       return isNameOrNull(d.deciderName) ? { state: "approved", ...common, deciderName: d.deciderName } : null;

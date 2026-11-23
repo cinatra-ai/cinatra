@@ -506,6 +506,27 @@ async function approveWith(enforce: DecisionAccess, input: DecideInput): Promise
 }
 
 /**
+ * A released decision whose run did NOT go on (the publish card's retry, cinatra#4758): Publish wrote `released`, then a
+ * step before its fence failed (or the process died there), so the run still waits at this decision's own gate
+ * (pending_approval, and the run's current gate visit is the decision's gate task). Publish again resumes exactly such a
+ * run (approveWith: it takes a released decision, writes no second decision, and resumes only under the pause claim and
+ * the fence), so the card keeps its Allow for it. A run at another gate, or whose gate cannot be read, is not waiting
+ * here: false. Reads only.
+ */
+export async function releasedPublishAwaitsResume(
+  run: Pick<AgentRunRecord, "id" | "status">,
+  decision: Pick<PublishDecisionRow, "status" | "gateTaskId">,
+): Promise<boolean> {
+  if (decision.status !== "released" || run.status !== "pending_approval" || !decision.gateTaskId) return false;
+  try {
+    const { resolveLatestWayflowGateTaskId } = await import("@cinatra-ai/a2a");
+    return (await resolveLatestWayflowGateTaskId(run.id)) === decision.gateTaskId;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * The call-site check of the model bridge and the passthrough road (A6): may this call of `run` go on? `verifiedStepId`
  * is the step the runtime signed for the call, or undefined when the call carries no verified step.
  *   - A verified step with a decision row is served only while that row (its newest) reads `released`.

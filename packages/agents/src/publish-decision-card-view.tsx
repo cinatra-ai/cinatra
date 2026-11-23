@@ -297,6 +297,10 @@ function settledMarker(state: PublishDecisionCardState): ReactElement | null {
   );
 }
 
+/** What the card holds for ONE open decision (the one `decisionId` names): never carried over to another decision. */
+type DecisionLocal = { decisionId: string | null; note: string; sending: boolean; failed: boolean; noLongerOpen: boolean };
+const blankLocal = (decisionId: string | null): DecisionLocal => ({ decisionId, note: "", sending: false, failed: false, noLongerOpen: false });
+
 export function PublishDecisionCard({
   runId,
   decide,
@@ -313,32 +317,42 @@ export function PublishDecisionCard({
 }): ReactElement | null {
   const host = useLifecycleCardHost();
   const auth = useLifecycleCardAuth();
-  const [noLongerOpen, setNoLongerOpen] = useState(false);
-  const [sending, setSending] = useState(false);
-  // The decision an answer did not land on: its card says so until the next answer (never on another decision's card).
-  const [failedOn, setFailedOn] = useState<string | null>(null);
-  const [note, setNote] = useState("");
   const own = usePublishDecisionCardRead({ runId: host === null || read ? "" : runId, auth, wireRef });
   const { state, refreshing, reload } = read ?? own;
+  // THE DECISION'S OWN STATE: the note, the answer in flight, the answer that did not land and "no longer open" belong
+  // to the open decision the card last drew. When the read draws another open decision, all of it starts over in the
+  // same render (never one frame of the earlier decision's note or reading on the newer one), and a reply that comes
+  // back for the earlier decision changes nothing.
+  const shownId = state?.state === "pending" ? state.decisionId : null;
+  const [local, setLocal] = useState<DecisionLocal>(() => blankLocal(shownId));
+  if (shownId !== null && shownId !== local.decisionId) setLocal(blankLocal(shownId));
+  const onDecision = (decisionId: string, change: Partial<Omit<DecisionLocal, "decisionId">>) =>
+    setLocal((now) => (now.decisionId === decisionId ? { ...now, ...change } : now));
+  const current = useRef(local.decisionId);
+  useEffect(() => {
+    current.current = local.decisionId;
+  }, [local.decisionId]);
+  const { note, sending, failed, noLongerOpen } = local;
 
   // No host declaration, no authorized answer yet, or no open decision: NO DOM at all.
   if (host === null || state === null || state.state === "none") return null;
 
   const send = async (answer: "approve" | "decline") => {
     if (!decide || sending || state.state !== "pending") return;
-    setSending(true);
-    setFailedOn(null);
+    const decisionId = state.decisionId;
+    onDecision(decisionId, { sending: true, failed: false });
     const sentNote = answer === "decline" ? note : "";
-    const outcome = await decide({ runId: state.runId, decisionId: state.decisionId, answer, note: sentNote }).catch(() => "failed" as const);
-    setSending(false);
-    // A late answer is never sent again: the request is no longer open, and the reader is told so.
-    if (outcome === "not_open") setNoLongerOpen(true);
+    const outcome = await decide({ runId: state.runId, decisionId, answer, note: sentNote }).catch(() => "failed" as const);
+    // A reply for a decision the card no longer shows is dropped: it never speaks for the decision drawn now.
+    if (current.current !== decisionId) return;
+    // A late answer is never sent again: the request is no longer open, and the reader is told so. An answer that did
+    // not land is told too: the request stays open, and the reader may answer again.
+    onDecision(decisionId, { sending: false, noLongerOpen: outcome === "not_open", failed: outcome === "failed" });
     if (outcome === "decided") reload();
-    // An answer that did not land is told too: the request stays open, and the reader may answer again.
-    if (outcome === "failed") setFailedOn(state.decisionId);
   };
   const pending = state.state === "pending";
   const restricted = pending && !state.mayDecide;
+  const resumeOnly = pending && state.resumeOnly === true;
   const disabled = restricted || !decide || sending;
   const cardState = refreshing ? "loading" : noLongerOpen ? "no_longer_open" : restricted ? "restricted" : state.state;
 
@@ -354,7 +368,7 @@ export function PublishDecisionCard({
     );
   } else if (noLongerOpen) {
     const refresh = () => {
-      setNoLongerOpen(false);
+      setLocal((now) => ({ ...now, noLongerOpen: false }));
       reload(true);
     };
     body = (
@@ -391,14 +405,14 @@ export function PublishDecisionCard({
           ) : null}
           {pending ? (
             <div className="px-3.5 pb-3">
-              {restricted ? null : (
+              {restricted || resumeOnly ? null : (
                 <label className="block">
                   <span className={`mb-1.5 block ${KICK}`}>
                     Note <span className="normal-case tracking-normal">(optional &middot; recorded with Do not allow)</span>
                   </span>
                   <Textarea
                     value={note}
-                    onChange={(event) => setNote(event.target.value)}
+                    onChange={(event) => onDecision(state.decisionId, { note: event.target.value })}
                     placeholder={"Say why, if you do not allow this\u2026"}
                     maxLength={PUBLISH_DECISION_MAX_NOTE_LENGTH}
                     disabled={disabled}
@@ -406,16 +420,23 @@ export function PublishDecisionCard({
                 </label>
               )}
               <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
-                <Button type="button" variant="outline" size="sm" data-action="decline-publish -> declined"
-                  disabled={disabled} onClick={() => void send("decline")}>
-                  Do not allow
-                </Button>
+                {resumeOnly ? null : (
+                  <Button type="button" variant="outline" size="sm" data-action="decline-publish -> declined"
+                    disabled={disabled} onClick={() => void send("decline")}>
+                    Do not allow
+                  </Button>
+                )}
                 <Button type="button" size="sm" data-action="approve-publish -> released"
                   disabled={disabled} onClick={() => void send("approve")}>
                   Allow
                 </Button>
               </div>
-              {pending && !restricted && failedOn === state.decisionId ? (
+              {resumeOnly && !restricted ? (
+                <p className="mt-2.5 text-xs text-muted-foreground">
+                  This change was allowed, but the run did not go on. Allow again to let it go on.
+                </p>
+              ) : null}
+              {pending && !restricted && failed ? (
                 <p role="status" className="mt-2.5 text-xs text-destructive">
                   The decision could not be sent.
                 </p>
