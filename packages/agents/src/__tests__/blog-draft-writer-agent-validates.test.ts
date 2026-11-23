@@ -134,7 +134,7 @@ describe("blog-draft-writer-agent OAS validates against L1, LLM metadata, and St
     expect(data.skill_source_path).toBeUndefined();
   });
 
-  it("StartNode required=['idea'] + hidden covers other 11 inputs including cinatra_run_id, context-slot wiring, contextSlotBindings, and projectId; EndNode declares the structured blog-post outputs (title/excerpt/content+artifact/sourcesUsed/notes); 20 DFE + 4 CFE", () => {
+  it("StartNode required=['idea'] + hidden covers the other 11 inputs including cinatra_run_id, the Regenerate note, context-slot wiring, contextSlotBindings, and projectId; EndNode declares the structured blog-post outputs (title/excerpt/content+artifact/sourcesUsed/notes); 21 DFE + 4 CFE", () => {
     const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const start = refs.start;
     expect(start).toBeDefined();
@@ -153,6 +153,8 @@ describe("blog-draft-writer-agent OAS validates against L1, LLM metadata, and St
       "draftContextParentPackageName",
       "draftContextSlotId",
       "projectId",
+      // The hidden revision note a Regenerate of the draft fills (cinatra#4264).
+      "note",
     ]);
     const startInputs = start!.inputs as Array<Record<string, unknown>>;
     const inputTitles = new Set(startInputs.map((i) => i.title as string));
@@ -181,7 +183,8 @@ describe("blog-draft-writer-agent OAS validates against L1, LLM metadata, and St
     const dfc = oas.data_flow_connections as unknown[];
     // blog-draft-writer-agent#50's brand-voice read adds two data-flow and one
     // control-flow connection (18 / 3 before it).
-    expect(dfc.length).toBe(20);
+    // 21 data edges: the Regenerate note (cinatra#4264) adds one from the start to the writer.
+    expect(dfc.length).toBe(21);
     const cfc = oas.control_flow_connections as unknown[];
     expect(cfc.length).toBe(4);
   });

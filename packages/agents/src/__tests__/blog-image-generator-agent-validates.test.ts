@@ -150,6 +150,8 @@ describe("blog-image-generator-agent OAS validates against agent schema and meta
       "imagePromptContextParentPackageName",
       "imagePromptContextSlotId",
       "projectId",
+      // The hidden prompt a Regenerate of the picture fills (cinatra#4264).
+      "prompt",
     ]);
     const inputs = start!.inputs as Array<Record<string, unknown>>;
     const inputTitles = new Set(inputs.map((i) => i.title as string));
@@ -163,7 +165,7 @@ describe("blog-image-generator-agent OAS validates against agent schema and meta
       ...(meta?.hidden as string[]),
     ]);
     expect(union).toEqual(inputTitles);
-    expect(union.size).toBe(7);
+    expect(union.size).toBe(8);
   });
 
   it("fixes the placement at the featured image", () => {
