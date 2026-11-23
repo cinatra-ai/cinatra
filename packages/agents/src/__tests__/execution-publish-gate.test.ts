@@ -248,6 +248,15 @@ describe("a run that reaches a publish gate (A4 without the moment)", () => {
     expect(gateStore.rememberWayflowGateTask).not.toHaveBeenCalled();
   });
 
+  // cinatra#4758: the pause records its own gate task in the compare-and-set that enters it, so the run row names this
+  // gate's task for exactly this pause, and a Publish's claim bound to that task lands only here.
+  // Red first at 7ca04b14: the park move named no task.
+  // red-first-expect: expected undefined to deeply equal { pauseTaskId: 'task-gate-1' }
+  it("the park move writes the gate's own task id with the pause", async () => {
+    await pause(sign(GATE));
+    expect((storeMock.transitionRunStatus.mock.calls[0] as unknown[])[3]).toEqual({ pauseTaskId: TASK });
+  });
+
   it("the decision keeps the rows of the plan the attempt was DISPATCHED with, never the live template's (review finding 2)", async () => {
     // The live template was recompiled after the dispatch: it now labels the node's input differently and adds a row.
     storeMock.readAgentTemplateById.mockResolvedValue({

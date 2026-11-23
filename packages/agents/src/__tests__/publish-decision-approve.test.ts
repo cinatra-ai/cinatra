@@ -195,7 +195,7 @@ describe("Publish (A7)", () => {
     expect(decisions.decide).toHaveBeenCalledTimes(1);
     expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "released", actor: "user-a" });
     expect(claims.claimPause).toHaveBeenCalledTimes(1);
-    expect((claims.claimPause.mock.calls[0] as unknown[])[0]).toEqual({ runId: "run-1", orgId: "org-1", generation: 3 });
+    expect((claims.claimPause.mock.calls[0] as unknown[])[0]).toEqual({ runId: "run-1", orgId: "org-1", generation: 3, taskId: "task-1" });
     expect(moves()).toEqual([["run-1", "pending_approval", "running"]]);
     expect((storeMock.transitionRunStatus.mock.calls[0] as unknown[])[3]).toEqual({ pauseFence: { token: "tok-1", generation: 4 } });
     expect(prepareWayflowResume).toHaveBeenCalledWith("run-1", "http://wayflow.test/@acme/poster");
@@ -327,29 +327,54 @@ describe("Publish (A7)", () => {
     expect(sendWayflowResume).toHaveBeenCalledTimes(1);
   });
 
-  // The latest-task key in Redis lives seven days and can be lost. The run row keeps the gate task it paused at
-  // (a2a_task_id, written before every pause), so a run still waiting at the released decision's own pause is read from
-  // the database: Allow stays, and that Allow resumes the run once, with no second decision write.
-  it("with no latest-task key, a released decision whose run still waits at that pause keeps Allow, and Allow resumes the run once", async () => {
+  // The accurate reading: the run row and the latest-task key both name the released decision's gate task, so the run
+  // still waits at that pause. Allow stays, and it resumes the run exactly once, with no second decision write, under a
+  // pause claim bound to that gate task (cinatra#4758). Red first at 7ca04b14: the claim named the generation only. On
+  // the base, which has no retry reading, the card reads Approved:
+  // red-first-expect: expected { state: 'approved', …(4) } to match object { state: 'pending', …(3) }
+  it("a released decision whose run row and latest-task key both name its gate keeps Allow, and Allow resumes the run exactly once under a claim bound to that gate", async () => {
     const who = { actor: ACTOR, roleHints: ROLE_HINTS };
     decisions.readOpenDecisionForRun.mockResolvedValue(null);
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released", decidedBy: "user-a" }));
-    resolveLatestWayflowGateTaskId.mockResolvedValue(null);
-    // red-first-expect: expected { state: 'approved', …(4) } to match object { state: 'pending', …(3) }
+    resolveLatestWayflowGateTaskId.mockResolvedValue("task-1");
     expect(await publishDecisionCardStateForRun(run() as never, who)).toMatchObject({ state: "pending", decisionId: "d1", mayDecide: true, resumeOnly: true });
     expect(await decidePublishDecisionCardForActor({ runId: "run-1", decisionId: "d1", answer: "approve" }, who)).toBe("decided");
+    expect(claims.claimPause).toHaveBeenCalledTimes(1);
+    expect((claims.claimPause.mock.calls[0] as unknown[])[0]).toEqual({ runId: "run-1", orgId: "org-1", generation: 3, taskId: "task-1" });
     expect(decisions.decide).not.toHaveBeenCalled();
     expect(moves()).toEqual([["run-1", "pending_approval", "running"]]);
     expect(sendWayflowResume).toHaveBeenCalledTimes(1);
   });
 
-  it("a latest-task read that faults never turns a run still waiting at the released decision's pause into Approved", async () => {
+  // The latest-task key lives seven days and can be lost, and the run row's task can still name an earlier gate visit
+  // (event-log.ts: a pause entered without its own task write keeps the column, and that write can lose a race). Gate A
+  // (task-1) was released and the run went on; it now waits at gate B, a later pause, but a2a_task_id still names A and
+  // the key has expired. The row alone cannot tell A's pause from B's: no card (never Allow, never Approved), and an
+  // Allow resumes nothing, so B is never answered. Red first at 7ca04b14: the row alone was read as A's pause.
+  // red-first-expect: to deeply equal { state: 'none' }
+  it("with a stale run row and no latest-task key, a released decision offers no Allow and its Allow resumes nothing", async () => {
+    const who = { actor: ACTOR, roleHints: ROLE_HINTS };
+    decisions.readOpenDecisionForRun.mockResolvedValue(null);
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released", decidedBy: "user-a" }));
+    const atGateB = run({ a2aTaskId: "task-1", pauseGeneration: 6 });
+    storeMock.readAgentRunById.mockResolvedValue(atGateB);
+    resolveLatestWayflowGateTaskId.mockResolvedValue(null);
+    expect(await publishDecisionCardStateForRun(atGateB as never, who)).toEqual({ state: "none" });
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: false });
+    expect(await decidePublishDecisionCardForActor({ runId: "run-1", decisionId: "d1", answer: "approve" }, who)).not.toBe("decided");
+    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(prepareWayflowResume).not.toHaveBeenCalled();
+    expect(moves()).toEqual([]);
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+  });
+
+  it("a latest-task read that faults never turns a run still waiting at the released decision's pause into Approved, nor into Allow", async () => {
     const who = { actor: ACTOR, roleHints: ROLE_HINTS };
     decisions.readOpenDecisionForRun.mockResolvedValue(null);
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released", decidedBy: "user-a" }));
     resolveLatestWayflowGateTaskId.mockRejectedValue(new Error("redis down"));
-    // red-first-expect: expected { state: 'approved', …(4) } to match object { state: 'pending', …(2) }
-    expect(await publishDecisionCardStateForRun(run() as never, who)).toMatchObject({ state: "pending", decisionId: "d1", resumeOnly: true });
+    // red-first-expect: to deeply equal { state: 'none' }
+    expect(await publishDecisionCardStateForRun(run() as never, who)).toEqual({ state: "none" });
   });
 
   // The run went on past the released decision and paused at another gate: the run row names that other gate task. The
