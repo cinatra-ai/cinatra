@@ -327,7 +327,7 @@ describe("a declared card is drawn by the host (cinatra#3470)", () => {
     const { requires: _requires, ...withoutRequires } = CARD;
     void _requires;
     registerFieldRendererBindings([
-      { id: ID, kind: "linkedin-draft-review", priority: 90, screen: withoutRequires },
+      { id: ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: withoutRequires },
     ]);
     const onChange = mount(value);
     fireEvent.click(dom.getByRole("radio", { name: "Send it" }));
@@ -426,7 +426,7 @@ describe("a declared card holds the host's Continue (cinatra#3470)", () => {
   }
 
   it("holds the Continue until one of the declared choices is made", () => {
-    registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90, screen: CARD }]);
+    registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: CARD }]);
     expect(entryOf()?.continueReady).toBeTypeOf("function");
     expect(ready(VALUE, {})).toBe(false);
     expect(ready(VALUE, { itemId: "item-1", revisionId: "rev-1" })).toBe(false);
@@ -438,12 +438,12 @@ describe("a declared card holds the host's Continue (cinatra#3470)", () => {
   });
 
   it("holds the Continue while a required run value is blank, even with a choice made", () => {
-    registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90, screen: CARD }]);
+    registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: CARD }]);
     expect(ready({ ...VALUE, revisionId: " " }, { approved: false })).toBe(false);
   });
 
   it("holds the Continue until a required field holds text, and the field stays usable", () => {
-    registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90, screen: FIELD_SCREEN }]);
+    registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: FIELD_SCREEN }]);
     expect(ready({ itemId: "item-1" }, {})).toBe(false);
     expect(ready({ itemId: "item-1" }, { answer: "   " })).toBe(false);
     expect(ready({ itemId: "item-1" }, { itemId: "item-1", answer: "typed" })).toBe(true);
@@ -458,7 +458,7 @@ describe("a declared card holds the host's Continue (cinatra#3470)", () => {
   it("treats every declared field as a required value", () => {
     const { requires: _requires, ...withoutRequires } = FIELD_SCREEN;
     void _requires;
-    registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90, screen: withoutRequires }]);
+    registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: withoutRequires }]);
     expect(ready({}, {})).toBe(false);
     expect(ready({}, { answer: "typed" })).toBe(true);
   });
@@ -474,7 +474,7 @@ describe("a declared card holds the host's Continue (cinatra#3470)", () => {
   });
 
   it("only a 'card' stages its whole answer; a 'kind' and a plain binding stage as their kind does", () => {
-    registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90, screen: CARD }]);
+    registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: CARD }]);
     expect(entryOf()?.stagesWholeAnswer).toBe(true);
     registerFieldRendererBindings([
       { id: ID, kind: "cta", priority: 80, midRunHitl: true, screen: { layout: "kind" } },
@@ -502,9 +502,25 @@ describe("registration validates the declaration again (cinatra#3470)", () => {
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(`declared screen of ${ID} refused`));
   });
 
+  it("a declared screen on a binding that is not mid-run registers nothing, and says why", () => {
+    for (const [kind, screen] of [["linkedin-draft-review", CARD], ["cta", { layout: "kind" }]] as const) {
+      for (const midRunHitl of [undefined, false]) {
+        fieldRendererRegistry.clear();
+        errorSpy.mockClear();
+        registerFieldRendererBindings([
+          { id: ID, kind, priority: 90, ...(midRunHitl === undefined ? {} : { midRunHitl }), screen },
+        ]);
+        expect(entryOf()).toBeUndefined();
+        expect(errorSpy).toHaveBeenCalledWith(
+          expect.stringContaining("a declared screen is drawn only at a mid-run gate"),
+        );
+      }
+    }
+  });
+
   it("a 'kind' layout whose host entry is only the schema floor registers nothing", () => {
     registerFieldRendererBindings([
-      { id: ID, kind: "linkedin-draft-review", priority: 90, screen: { layout: "kind" } },
+      { id: ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: { layout: "kind" } },
     ]);
     expect(entryOf()).toBeUndefined();
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(ID));
@@ -522,7 +538,7 @@ describe("registration validates the declaration again (cinatra#3470)", () => {
         [ID]: { resolution: "guardedOptional", packageName: "@acme-test/publish-agent", propsApiVersion: 1, load },
       });
       registerFieldRendererBindings([
-        { id: ID, kind: "linkedin-draft-review", priority: 90, screen: screen as never },
+        { id: ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: screen as never },
       ]);
       expect(entryOf()).toBeUndefined();
       expect(load).not.toHaveBeenCalled();
@@ -533,7 +549,7 @@ describe("registration validates the declaration again (cinatra#3470)", () => {
   for (const kind of ["constructor", "toString", "__proto__"]) {
     for (const screen of [CARD, { layout: "kind" }]) {
       it(`an inherited kind name "${kind}" registers nothing (${screen.layout})`, () => {
-        registerFieldRendererBindings([{ id: ID, kind, priority: 90, screen }]);
+        registerFieldRendererBindings([{ id: ID, kind, priority: 90, midRunHitl: true, screen }]);
         expect(entryOf()).toBeUndefined();
         expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(`declared screen of ${ID} refused`));
       });

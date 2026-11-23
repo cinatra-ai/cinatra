@@ -29,11 +29,19 @@
 //     one of them is chosen.
 //   - "kind": { layout } - the host's own component for the binding's kind.
 //
+// A declared screen belongs to a MID-RUN gate only: the binding that carries
+// it must declare `midRunHitl: true` (MID_RUN_ONLY_MESSAGE). Every host then
+// reads its gate as mid-run (`hasMidRunHitlBinding`), so the card's answer
+// goes out with the host's one Continue and never takes the setup road, which
+// would wrap it under a setup field's name and send it on every change.
+//
 // Dependency-free and fs-free on purpose (build scripts, the runtime
 // collector and browser code all import it).
 
 export const HITL_SCREEN_KEY_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 export const MAX_HITL_SCREEN_BYTES = 8192;
+export const MID_RUN_ONLY_MESSAGE =
+  "a declared screen is drawn only at a mid-run gate: the binding must declare midRunHitl: true (a setup gate takes no declared screen)";
 const MAX_TEXT = 600;
 const MAX_LIST = 8;
 const MAX_SECTIONS = 16;

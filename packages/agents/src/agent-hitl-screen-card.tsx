@@ -142,7 +142,11 @@ import { approveReviewTask } from "./hitl-actions";
 import { getFieldRendererContextForAgentBuilderAction } from "./server-actions";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
+  applyRendererApprovalNote,
   gateAwaitsRendererValue,
+  hasUsableListPick,
+  isMidRunListStepGate,
+  liftRendererApprovalNote,
   hitlGateIdentityKey,
   hitlRendererFieldName,
   isAlreadyResolvedError,
@@ -538,20 +542,23 @@ export function useAgentHitlScreenState(params: {
  * spread it into its buffer would submit top-level keys with no field name —
  * merging into the wrong inputs, or leaving the setup loop paused for ever.
  *
- * ONE DIFFERENCE (cinatra#3562): on a gate that is not a setup gate, the run
- * panel also reads a `:list-picker` renderer as mid-run, as the stepper does,
- * and its outer Continue lifts the list step's picks into the approval note.
- * This card does not: its Continue lifts no approval note, so a list step
- * here keeps the setup-loop path it had. Moving it belongs with the later
- * work that holds this card's Continues, which do not read a renderer's
- * validity report yet.
+ * THE LIST STEP (cinatra#3562, cinatra#3470): on a gate that is not a setup
+ * gate, a `:list-picker` renderer is read as mid-run here too
+ * (`isMidRunListStepGate`, the run panel's own reading), and the card's
+ * Continue lifts the list step's picks into the approval note exactly as the
+ * run panel's and the stepper's do (`liftRendererApprovalNote`). Without it a
+ * list step drawn on a conversation host sent no pick at all: the agent read
+ * the approval marker. On a setup gate it keeps the setup-loop path.
  */
 function classifyHitlGate(gate: AgentHitlScreenGate): {
   isMidRun: boolean;
   isGroupedSetup: boolean;
 } {
   return {
-    isMidRun: gate.xRenderer.endsWith(":output") || hasMidRunHitlBinding(gate.xRenderer),
+    isMidRun:
+      gate.xRenderer.endsWith(":output") ||
+      isMidRunListStepGate(gate.xRenderer, gate.reviewTaskId) ||
+      hasMidRunHitlBinding(gate.xRenderer),
     isGroupedSetup: isGroupedSetupRenderer(gate.xRenderer),
   };
 }
@@ -996,11 +1003,23 @@ export function AgentHitlScreenContinue({
         presentationHintOf(gate) === null && gateAwaitsRendererValue(gate.inputSchema, buffered)
       }
       onPress={async () => {
+        // THE LIST STEP (cinatra#3562, cinatra#3470), as on the run panel: a
+        // drawn list step with nothing picked sends nothing (its snapshot
+        // would name no list), and its picks leave in the approval note,
+        // which the shared lift makes the resume text.
+        const listStep =
+          presentationHintOf(gate) === null && isMidRunListStepGate(gate.xRenderer, gate.reviewTaskId);
+        if (listStep && !hasUsableListPick(buffered)) return;
         let payload: Record<string, unknown> = {
           ...buffered,
           approved: continueApprovalFlag(buffered),
           approvedAt: new Date().toISOString(),
         };
+        payload = applyRendererApprovalNote(
+          gate.xRenderer,
+          payload,
+          listStep ? liftRendererApprovalNote(gate.xRenderer, buffered) : null,
+        );
         if (!isSetupGateTaskId(gate.reviewTaskId)) {
           payload = applyAttachmentEnvelopeUserResponseOnly(payload, []);
         }

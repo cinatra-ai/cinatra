@@ -21,7 +21,7 @@
 // Dependency-free on purpose (imported by build scripts, TS host code via
 // `allowJs`, and tests).
 
-import { validateHitlScreen } from "./agent-hitl-screen-schema.mjs";
+import { MID_RUN_ONLY_MESSAGE, validateHitlScreen } from "./agent-hitl-screen-schema.mjs";
 
 export const KNOWN_FIELD_RENDERER_KINDS = Object.freeze([
   "blog-idea-selection",
@@ -197,6 +197,10 @@ export function validateFieldRendererDeclarations(packageName, raw) {
       const checked = validateHitlScreen(screen, `${where}.screen`);
       if (checked.errors.length > 0) {
         errors.push(...checked.errors);
+        return;
+      }
+      if (midRunHitl !== true) {
+        errors.push(`${where}.screen: ${MID_RUN_ONLY_MESSAGE}`);
         return;
       }
       normalizedScreen = checked.screen;

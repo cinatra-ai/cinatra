@@ -39,6 +39,20 @@ describe("the binding validator carries a declared screen", () => {
     expect(errors.join("\n")).toMatch(/cinatra\.fieldRenderers\[0\]\.screen: unknown layout "page"/);
   });
 
+  it("refuses a screen on a binding that is not mid-run: a setup gate takes no declared screen", () => {
+    const { midRunHitl: _m, ...setupBinding } = BINDING;
+    void _m;
+    for (const binding of [setupBinding, { ...setupBinding, midRunHitl: false }]) {
+      for (const screen of [CARD, { layout: "kind" }]) {
+        const { entries, errors } = validateFieldRendererDeclarations(PKG, [{ ...binding, screen }]);
+        expect(entries).toEqual([]);
+        expect(errors.join("\n")).toMatch(
+          /cinatra\.fieldRenderers\[0\]\.screen: a declared screen is drawn only at a mid-run gate: the binding must declare midRunHitl: true/,
+        );
+      }
+    }
+  });
+
   it("a duplicate id that disagrees on the screen is a conflict", () => {
     const a = validateFieldRendererDeclarations(PKG, [{ ...BINDING, screen: CARD }]).entries;
     const b = validateFieldRendererDeclarations("@acme-test/other", [BINDING]).entries;

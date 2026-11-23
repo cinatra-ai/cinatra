@@ -65,7 +65,7 @@ import {
 } from "./declared-hitl-screen-renderer";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: dependency-free .mjs validation module (allowJs)
-import { validateHitlScreen } from "../../../scripts/extensions/agent-hitl-screen-schema.mjs";
+import { MID_RUN_ONLY_MESSAGE, validateHitlScreen } from "../../../scripts/extensions/agent-hitl-screen-schema.mjs";
 
 // ---------------------------------------------------------------------------
 // The normalized binding shape this module registers from. Mirrors
@@ -310,10 +310,15 @@ function registerDeclaredScreen(b: FieldRendererBindingInput): void {
   } else if (kindEntry && checked.screen?.layout === "kind" && kindEntry.renderer !== SchemaOnlyFloorRenderer) {
     renderer = kindEntry.renderer;
   }
-  if (!kindEntry || !renderer) {
+  // A declared screen belongs to a mid-run gate only (runtime data is checked
+  // again here, as the build-time validator checks it).
+  const midRunOnly = b.midRunHitl !== true && checked.errors.length === 0;
+  if (!kindEntry || !renderer || midRunOnly) {
     const reason = checked.errors.length > 0
       ? checked.errors.join("; ")
-      : `the host has no component of its own for kind "${b.kind}"`;
+      : midRunOnly
+        ? MID_RUN_ONLY_MESSAGE
+        : `the host has no component of its own for kind "${b.kind}"`;
     console.error(`[field-renderers] declared screen of ${b.id} refused: ${reason}`);
     return;
   }

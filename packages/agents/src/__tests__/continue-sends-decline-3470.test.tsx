@@ -47,6 +47,13 @@ vi.mock("../server-actions", () => ({
   }),
 }));
 
+// The list step's lists (cinatra#3470): one fixture list to pick.
+vi.mock("../list-picker-actions", () => ({
+  fetchAvailableLists: vi.fn(async () => [
+    { id: "list-1", name: "Fixture list", memberCount: 3, lastUpdated: null, memberType: "contact" },
+  ]),
+}));
+
 vi.mock("../hitl-actions", () => ({
   approveReviewTask: (taskId: string, values?: unknown, fieldName?: string) =>
     approveMock(taskId, values, fieldName),
@@ -538,4 +545,93 @@ describe("a declared card's answer on the real wire (cinatra#3470)", () => {
     await approveReviewTaskInternal(String(bodies[0]!.reviewTaskId), "actor-3470", bodies[0]!.values);
     expect(wireText()).toBe(JSON.stringify({ itemId: "item-1", answer: "revise this", detail: "Fixture detail" }));
   });
+});
+
+describe("a list step on the HITL screen card sends its pick on the real wire (cinatra#3470)", () => {
+  // A list step reached through the card's own read: a declared "kind" list
+  // picker, and the `:list-picker` binding an installed agent declares with no
+  // screen. Both are lifted into the approval note, as on the run page.
+  const LIST_ID = "@acme-test/list-agent:list-picker";
+
+  function listAsking(declared: boolean) {
+    return {
+      ...asking(LIST_ID, {}),
+      ...(declared
+        ? {
+            declaredScreen: {
+              id: LIST_ID,
+              kind: "list-picker",
+              priority: 80,
+              midRunHitl: true,
+              params: { question: "Fixture question?" },
+              screen: { layout: "kind" },
+            },
+          }
+        : {}),
+    };
+  }
+
+  function wireText(): string {
+    expect(sendTaskMock).toHaveBeenCalledTimes(1);
+    return (sendTaskMock.mock.calls[0]?.[0] as SendTaskInput)?.message?.parts?.[0]?.text ?? "";
+  }
+
+  beforeEach(() => {
+    sendTaskMock.mockClear();
+    storeMock.writeHitlPrompt.mockClear();
+    storeMock.readAgentRunByTaskId.mockResolvedValue({
+      id: "run-wire-3470",
+      templateId: "tpl-3470",
+      status: "pending_approval",
+      a2aContextId: "ctx-3470",
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tpl-3470",
+      packageName: "@acme-test/list-agent",
+      sourceType: "internal",
+    });
+    approveMock.mockImplementation(async (taskId: string, values?: unknown) => {
+      await approveReviewTaskInternal(taskId, "actor-3470", values);
+      return { ok: true as const };
+    });
+  });
+
+  function mountOnChat() {
+    return render(
+      <LifecycleCardSurfaceProvider host="chat_thread">
+        <AgentHitlScreenCard runId={RUN_ID} wireRef={TASK_ID} />
+      </LifecycleCardSurfaceProvider>,
+    );
+  }
+
+  for (const declared of [true, false]) {
+    it(`${declared ? "a declared 'kind' list picker" : "an installed :list-picker binding"}: the pick reaches the agent as the list snapshot`, async () => {
+      if (!declared) {
+        registerFieldRendererBindings([{ id: LIST_ID, kind: "list-picker", priority: 80 }]);
+      }
+      current = listAsking(declared);
+      const { container } = mountOnChat();
+      await settle();
+      await waitFor(() => expect(container.textContent).toContain("Fixture list"));
+      // Nothing picked: the card's Continue sends nothing.
+      const go = () => container.querySelector<HTMLButtonElement>('[data-action="submit-hitl-screen"]');
+      await waitFor(() => expect(go()).not.toBeNull());
+      fireEvent.click(go()!);
+      await settle();
+      expect(approveMock).not.toHaveBeenCalled();
+      const row = Array.from(container.querySelectorAll<HTMLElement>('[role="button"]')).find((el) =>
+        (el.textContent ?? "").includes("Fixture list"),
+      )!;
+      fireEvent.click(row);
+      await settle();
+      fireEvent.click(go()!);
+      await waitFor(() => expect(sendTaskMock).toHaveBeenCalledTimes(1));
+      const text = wireText();
+      expect(text).toMatch(/^\{"type":"list"/);
+      const snapshot = JSON.parse(text) as Record<string, unknown>;
+      expect(snapshot).toMatchObject({ type: "list", listId: "list-1", listName: "Fixture list", memberCount: 3 });
+      const prompt = storeMock.writeHitlPrompt.mock.calls[0]?.[0] as { submittedValues?: unknown };
+      expect(prompt?.submittedValues).toEqual(expect.objectContaining({ approvalNote: text }));
+    });
+  }
 });
