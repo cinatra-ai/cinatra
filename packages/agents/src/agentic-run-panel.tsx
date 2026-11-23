@@ -42,6 +42,7 @@ import {
 import type { AgentRunMessageBody } from "./store";
 import {
   PublishDecisionCard,
+  publishDecisionIsSettled,
   publishGateIsOpen,
   usePublishDecisionCardRead,
   type PublishDecisionCardRead,
@@ -2030,7 +2031,9 @@ export function AgenticRunPanel({
   // ONE HELD-RUN CARD: a run parked at its publish gate is parked there and nowhere else, so while the read POSITIVELY
   // answers `pending` any gate reading this panel still holds (a stream or row reading not yet caught up) is stale and
   // the publish card is the pause's only surface, the same rule the conversation turn applies to its hitl screen.
-  const parkedAtPublishGate = isPendingApproval && publishGateIsOpen(publishRead);
+  // THE READ ALONE DECIDES IT, never also this panel's status: the decision is written before the run's status moves
+  // and the status is refreshed apart from the read, so a `running` status beside a `pending` read is the same pause.
+  const parkedAtPublishGate = publishGateIsOpen(publishRead, status);
   const onRunChangeSignalRef = useRef(onRunChangeSignal);
   onRunChangeSignalRef.current = onRunChangeSignal;
   useEffect(() => {
@@ -2982,8 +2985,7 @@ export function AgenticRunPanel({
   if (!parkedAtPublishGate && (reviewScreenNode !== null || runIsWorking)) {
     // A SETTLED publish decision (approved, declined, expired) is a record, not a held card: it keeps its reading above
     // the working or review surface while the run resumes, as on the stepper; with no decision nothing is drawn here.
-    const settledPublishCard =
-      publishRead.state !== null && publishRead.state.state !== "none" ? publishCard : null;
+    const settledPublishCard = publishDecisionIsSettled(publishRead) ? publishCard : null;
     return (
       <>
         {settledPublishCard}

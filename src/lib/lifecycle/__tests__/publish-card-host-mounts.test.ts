@@ -66,7 +66,8 @@ describe("the publish card's mounts (cinatra#4150)", () => {
 
   it("the run panel keeps a SETTLED decision's card beside its working and review surface, as the stepper does", () => {
     // A settled decision is a record, not a held card: the arm that returns the working or review surface draws the
-    // one card element above its box once the read has answered anything but `none`, and the plate draws it otherwise.
+    // one card element above its box only for a SETTLED read (`publishDecisionIsSettled`: never `pending`, never `none`),
+    // and the plate draws it otherwise.
     const source = read(PANEL);
     const arm = source.indexOf("if (!parkedAtPublishGate && (reviewScreenNode !== null || runIsWorking)) {");
     const element = source.indexOf("const publishCard = panelMountsHitlScreenCard ? (");
@@ -75,8 +76,10 @@ describe("the publish card's mounts (cinatra#4150)", () => {
     const box = source.indexOf("data-run-review-slot={reviewCardDrawn ? \"review\" : \"working\"}", arm);
     const armHead = source.slice(arm, box);
     expect(armHead).toMatch(
-      /const settledPublishCard =\s*publishRead\.state !== null && publishRead\.state\.state !== "none" \? publishCard : null;\s*return \(\s*<>\s*\{settledPublishCard\}\s*<section/,
+      /const settledPublishCard = publishDecisionIsSettled\(publishRead\) \? publishCard : null;\s*return \(\s*<>\s*\{settledPublishCard\}\s*<section/,
     );
+    // A `pending` read is never classed as settled beside the working surface.
+    expect(source).not.toMatch(/publishRead\.state\.state !== "none"/);
     // The plate draws the same element, and it is the panel's only other use of it.
     expect(source.match(/\{publishCard\}/g)).toHaveLength(1);
     expect(source.indexOf("{publishCard}")).toBeGreaterThan(box);
@@ -107,7 +110,10 @@ describe("the publish card's mounts (cinatra#4150)", () => {
     // ONE HELD-RUN CARD: the review screen and the working placeholder return BEFORE the plate that holds the publish
     // card, and a produced-review park or ref the shared reader retains is stale at an open publish gate.
     const source = read(PANEL);
-    expect(source).toMatch(/const parkedAtPublishGate = isPendingApproval && publishGateIsOpen\(publishRead\);/);
+    // THE READ ALONE decides the park (with the run's status only for the terminal rule), never also the panel's own
+    // independently refreshed status reading `pending_approval`.
+    expect(source).toMatch(/const parkedAtPublishGate = publishGateIsOpen\(publishRead, status\);/);
+    expect(source).not.toMatch(/isPendingApproval && publishGateIsOpen/);
     expect(source).toContain("const reviewScreenNode: ReactNode = reviewRefInTheBox && !parkedAtPublishGate ? (");
     expect(source).toContain("if (!parkedAtPublishGate && (reviewScreenNode !== null || runIsWorking)) {");
     expect(source).not.toContain("  if (reviewScreenNode !== null || runIsWorking) {");
@@ -144,7 +150,13 @@ describe("the publish card's mounts (cinatra#4150)", () => {
     expect(source).toMatch(/const publishCard = panelMountsPublishCard \? \(\s*<LifecycleCardSurfaceProvider host="run_card">/);
     // ONE HELD-RUN CARD: an open publish gate wins over any held-run reading the panel still holds (a stream gate, or a
     // produced-review park and ref the shared reader retains): all stale, so the card's arm is the ladder's FIRST arm.
-    expect(source).toMatch(/const parkedAtPublishGate = status === "pending_approval" && publishGateIsOpen\(publishRead\);/);
+    expect(source).toMatch(/const parkedAtPublishGate = publishGateIsOpen\(publishRead, status\);/);
+    expect(source).not.toMatch(/status === "pending_approval" && publishGateIsOpen/);
+    // A SETTLED decision (never `pending`, never `none`) keeps its reading above the stage card.
+    expect(source).toContain(
+      "if (!parkedAtPublishGate && publishCard !== null && publishDecisionIsSettled(publishRead)) {",
+    );
+    expect(source).not.toMatch(/publishRead\.state\.state !== "none"/);
     const ladder = source.indexOf("  let stageCard: ReactNode = null;");
     expect(ladder).toBeGreaterThan(-1);
     const arm = source.indexOf("  if (parkedAtPublishGate) {\n    stageCard = publishCard;\n  } else if (", ladder);

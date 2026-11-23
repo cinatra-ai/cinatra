@@ -14,6 +14,7 @@ vi.mock("../publish-decision-card-actions", () => ({
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 import {
   PublishDecisionCard,
+  publishDecisionIsSettled,
   publishGateIsOpen,
   usePublishDecisionCardRead,
   type PublishDecisionDecide,
@@ -371,6 +372,27 @@ describe("the shared read's tick while the run has not finished", () => {
     await advance(TICK * 4);
     expect(stateMock).toHaveBeenCalledTimes(beforeEnd + 1);
     expect(publishGateIsOpen(hook.result.current)).toBe(false);
+  });
+
+  it("the two predicates: an open gate is a `pending` read for a run that has not ended; settled is never `pending` or `none`", () => {
+    const at = (state: unknown) =>
+      ({ state, refreshing: false, reload: () => undefined }) as unknown as Parameters<typeof publishGateIsOpen>[0];
+    const settled = { ...PENDING, deciderName: "Ana" };
+    // The read is the truth: a `pending` read is open whatever non-terminal status the host still holds.
+    expect(publishGateIsOpen(at(PENDING))).toBe(true);
+    expect(publishGateIsOpen(at(PENDING), "running")).toBe(true);
+    expect(publishGateIsOpen(at(PENDING), "pending_approval")).toBe(true);
+    expect(publishGateIsOpen(at(PENDING), "stopped")).toBe(false);
+    expect(publishGateIsOpen(at(PENDING), "completed")).toBe(false);
+    for (const state of [null, { state: "none" }, { ...settled, state: "approved" }, { ...settled, state: "expired" }]) {
+      expect(publishGateIsOpen(at(state), "running")).toBe(false);
+    }
+    expect(publishDecisionIsSettled(at({ ...settled, state: "approved" }))).toBe(true);
+    expect(publishDecisionIsSettled(at({ ...settled, state: "declined", reason: null }))).toBe(true);
+    expect(publishDecisionIsSettled(at({ ...settled, state: "expired" }))).toBe(true);
+    for (const state of [null, { state: "none" }, PENDING]) {
+      expect(publishDecisionIsSettled(at(state))).toBe(false);
+    }
   });
 
   it("the tick stops when the host unmounts, and pauses while the document is hidden", async () => {

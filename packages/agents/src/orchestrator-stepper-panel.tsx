@@ -94,7 +94,12 @@ import {
 } from "./lifecycle-card-runtime";
 // The publish card (cinatra#4150), mounted by the same rule as the agentic panel: one read decides the card and the
 // stage card's stand-down.
-import { PublishDecisionCard, publishGateIsOpen, usePublishDecisionCardRead } from "./publish-decision-card-view";
+import {
+  PublishDecisionCard,
+  publishDecisionIsSettled,
+  publishGateIsOpen,
+  usePublishDecisionCardRead,
+} from "./publish-decision-card-view";
 // The review screen's PLACEHOLDER (cinatra#2997) — the same one the agentic
 // panel draws, so a run's terminal card reads the same on both panels.
 // The gate-level BLOCKED state (cinatra#3219) and the review screen's
@@ -3239,7 +3244,9 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   // ONE HELD-RUN CARD: a run parked at its publish gate is parked there and nowhere else, so while the read POSITIVELY
   // answers `pending` a gate reading the stream still holds is stale and the publish card is the stage card, the same
   // rule the agentic panel and the conversation turn apply.
-  const parkedAtPublishGate = status === "pending_approval" && publishGateIsOpen(publishRead);
+  // The read alone decides it, never also this panel's status (the agentic panel's rule: the decision is written before
+  // the run's status moves, so a `running` status beside a `pending` read is the same pause).
+  const parkedAtPublishGate = publishGateIsOpen(publishRead, status);
   // Keyed by the run alone under this panel's own `run_card` declaration; it draws nothing with no decision.
   const publishCard = panelMountsPublishCard ? (
     <LifecycleCardSurfaceProvider host="run_card">
@@ -3516,7 +3523,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
 
   // A SETTLED publish decision (approved, declined, expired) keeps its reading above whatever the run draws next, as on
   // the agentic panel; with no decision the card draws nothing, so every other state is unchanged.
-  if (!parkedAtPublishGate && publishCard !== null && publishRead.state !== null && publishRead.state.state !== "none") {
+  if (!parkedAtPublishGate && publishCard !== null && publishDecisionIsSettled(publishRead)) {
     stageCard = (
       <>
         {publishCard}

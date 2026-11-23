@@ -204,14 +204,29 @@ export function usePublishDecisionCardRead(params: {
   return { state, refreshing, reload };
 }
 
-/** The publish gate is OPEN for this read only when the read positively answered `pending`. A read that has not
- * landed or failed with no earlier answer is not a publish gate, so a host keeps its own approval surface.
+/** The publish gate is OPEN for this read only when the read positively answered `pending` for a run that has not
+ * ended. A read that has not landed or failed with no earlier answer is not a publish gate, so a host keeps its own
+ * approval surface. A run that has ended is parked at no gate (the read's own terminal rule); a host that knows its
+ * run's status passes it, so a `pending` answer it still holds from before the run ended is not open either.
+ *
+ * THE READ IS THE TRUTH FOR "PARKED AT ITS PUBLISH GATE". The decision is written before the run's status moves, and a
+ * host's own status is refreshed apart from this read, so a host never also requires its status to read
+ * `pending_approval`: a `pending` read beside a `running` status is the same pause, seen first by the read.
  *
  * ONE HELD-RUN CARD. While it is open the run is parked at its publish gate and nowhere else, so every host (the run
  * panel, the stepper, the conversation turn) draws the publish card as the run's only held-run card and withholds any
- * hitl screen or gate card it still holds for the same run: that reading is stale. */
-export function publishGateIsOpen(read: PublishDecisionCardRead): boolean {
+ * hitl screen, gate card, review surface or working surface it still holds for the same run: that reading is stale. */
+export function publishGateIsOpen(read: PublishDecisionCardRead, runStatus?: string | null): boolean {
+  if (runStatus != null && runStatusIsTerminal(runStatus)) return false;
   return read.state?.state === "pending";
+}
+
+/** The read holds a SETTLED decision (allowed, declined, expired): a record, not a held card. It is drawn above
+ * whatever the run draws next. Never `pending` (that is the open gate above), never `none`, a read not landed or a
+ * failed read with no earlier answer. */
+export function publishDecisionIsSettled(read: PublishDecisionCardRead): boolean {
+  const state = read.state?.state;
+  return state === "approved" || state === "declined" || state === "expired";
 }
 
 const FRAME = "w-full min-w-0 overflow-hidden rounded-card border border-line bg-surface-strong";

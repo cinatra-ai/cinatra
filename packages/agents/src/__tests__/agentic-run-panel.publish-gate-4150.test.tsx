@@ -332,6 +332,30 @@ describe("AgenticRunPanel at a publish gate (cinatra#4150)", () => {
     const mounted = await mountPanel();
     expect(surfaces(mounted.container)).toEqual({ card: 0, banner: 1 });
   });
+  // THE READ IS THE TRUTH FOR "PARKED AT ITS PUBLISH GATE". The decision is written before the run's status moves, and
+  // the panel's status is refreshed apart from the read, so a `pending` read beside a `running` status is the same
+  // pause: exactly the publish card, never the working box, the review surface or a settled reading beside it.
+  it("a `pending` read while the panel's status still reads `running`: only the publish card, no working box", async () => {
+    publishStateMock.mockImplementation(async () => PENDING);
+    const mounted = await mountPanel(undefined, undefined, "running");
+    expect(held(mounted.container)).toEqual({ card: 1, banner: 0, hitl: 0 });
+    expect(mounted.container.querySelector('[data-lifecycle-card="publish_decision"]')!.getAttribute("data-lifecycle-card-state")).toBe("pending");
+    expect(reviewArm(mounted.container)).toEqual({ slot: 0, review: 0 });
+  });
+
+  it("a `pending` read while the panel's status reads `running` beside a review surface: only the publish card", async () => {
+    publishStateMock.mockImplementation(async () => PENDING);
+    const mounted = await mountPanel(undefined, STALE_PRODUCED_REVIEW, "running");
+    expect(held(mounted.container)).toEqual({ card: 1, banner: 0, hitl: 0 });
+    expect(reviewArm(mounted.container)).toEqual({ slot: 0, review: 0 });
+  });
+
+  it("a `pending` read for a run that has ENDED is no open gate: no publish card", async () => {
+    publishStateMock.mockImplementation(async () => PENDING);
+    const mounted = await mountPanel(undefined, undefined, "stopped");
+    expect(mounted.container.querySelector('[data-lifecycle-card="publish_decision"]')).toBeNull();
+  });
+
   // A SETTLED DECISION IS A RECORD (the stepper's rule): it keeps its reading in place while the run resumes and works,
   // beside the working or review surface, and in every later state; drawn once.
   const SETTLED_CARD = (container: HTMLElement, marker: string) => ({

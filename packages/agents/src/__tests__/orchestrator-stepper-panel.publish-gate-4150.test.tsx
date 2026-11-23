@@ -162,6 +162,8 @@ async function mountPanel(overrides: Partial<PanelProps> = {}) {
 
 const CARD = '[data-lifecycle-card="publish_decision"]';
 const PROCESSING = "Processing response…";
+// What the stage card draws while the run works (the running arm of the ladder).
+const WORKING = "Starting agent…";
 
 describe("OrchestratorStepperPanel at a publish gate (cinatra#4150)", () => {
   it("a flow run at an open publish gate draws the card in place of the 'Processing response…' spinner", async () => {
@@ -333,6 +335,49 @@ describe("OrchestratorStepperPanel at a publish gate (cinatra#4150)", () => {
     expect(container.querySelector(REVIEW_SLOT)).not.toBeNull();
   });
 
+  // THE READ IS THE TRUTH FOR "PARKED AT ITS PUBLISH GATE" (the agentic panel's rule): a `pending` read beside a
+  // `running` status (the decision is written before the status moves) is the same pause, so the publish card is the
+  // stage card and nothing of the working, review or progress arms is drawn beside it.
+  it("a `pending` read while the panel's status still reads `running`: only the publish card is the stage card", async () => {
+    streamState.status = "running";
+    row.status = "running";
+    publishStateMock.mockImplementation(async () => PENDING);
+    const { container } = await mountPanel({ initialStatus: "running" });
+    await waitFor(() => expect(publishStateMock).toHaveBeenCalled());
+    await flush();
+    expect(container.querySelectorAll(CARD)).toHaveLength(1);
+    expect(container.querySelector(CARD)!.getAttribute("data-lifecycle-card-state")).toBe("pending");
+    expect(container.textContent).not.toContain(PROCESSING);
+    expect(container.textContent).not.toContain(WORKING);
+    expect(container.querySelector(REVIEW_SLOT)).toBeNull();
+  });
+
+  it("a `pending` read while the status reads `running` beside a produced-review park: only the publish card", async () => {
+    streamState.status = "running";
+    row.status = "running";
+    row.producedReviewPark = true;
+    row.reviewRef = "review-ref-stale";
+    publishStateMock.mockImplementation(async () => PENDING);
+    const { container } = await mountPanel({ initialStatus: "running" });
+    await waitFor(() => expect(publishStateMock).toHaveBeenCalled());
+    await flush();
+    expect(container.querySelectorAll(CARD)).toHaveLength(1);
+    expect(container.querySelector(REVIEW_SLOT)).toBeNull();
+    expect(container.querySelector(REVIEW_CARD)).toBeNull();
+    expect(container.textContent).not.toContain(PROCESSING);
+    expect(container.textContent).not.toContain(WORKING);
+  });
+
+  it("a `pending` read for a run that has ENDED is no open gate: no publish card", async () => {
+    streamState.status = "stopped";
+    row.status = "stopped";
+    publishStateMock.mockImplementation(async () => PENDING);
+    const { container } = await mountPanel({ initialStatus: "stopped" });
+    await waitFor(() => expect(publishStateMock).toHaveBeenCalled());
+    await flush();
+    expect(container.querySelector(CARD)).toBeNull();
+  });
+
   it("a SETTLED decision keeps its reading above what the run draws next, as on the agentic panel", async () => {
     streamState.status = "running";
     row.status = "running";
@@ -340,5 +385,7 @@ describe("OrchestratorStepperPanel at a publish gate (cinatra#4150)", () => {
     const { container } = await mountPanel({ initialStatus: "running" });
     await waitFor(() => expect(container.querySelector('[data-conformance-id="publish-card-approved"]')).not.toBeNull());
     expect(container.querySelectorAll(CARD)).toHaveLength(1);
+    // The settled record stands ABOVE the working surface, never in its place.
+    expect(container.textContent).toContain(WORKING);
   });
 });
