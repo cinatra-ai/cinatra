@@ -17,8 +17,6 @@ import "server-only";
 
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 
-import { readDeciderName } from "@/lib/lifecycle/lifecycle-settled-outcome";
-
 import type { ActorRoleHints } from "./auth-policy";
 import {
   PUBLISH_DECISION_CARD_NONE,
@@ -85,8 +83,15 @@ async function cardStateForRun(
   // A settled card names its decider. A row with none recorded, or a name read that fails, draws nothing: never an
   // anonymous card, and never a decline reason the read could not attribute.
   const settled = async (draw: (deciderName: string | null) => PublishDecisionCardState) => {
-    if (!decision.decidedBy) return PUBLISH_DECISION_CARD_NONE;
-    const name = await readDeciderName(decision.decidedBy).catch(() => false as const);
+    const decidedBy = decision.decidedBy;
+    if (!decidedBy) return PUBLISH_DECISION_CARD_NONE;
+    // Loaded at the read, never at module load: the settled-outcome helper imports the review gate store, and this
+    // module is reached from the agents barrel (through the stepper panel's card), which the review gate store's own
+    // import graph reaches back into. A static edge closes that loop at module load, so a test that mocks the store
+    // with an async factory waits on itself forever (the whole unit suite stalled on it).
+    const name = await import("@/lib/lifecycle/lifecycle-settled-outcome")
+      .then(({ readDeciderName }) => readDeciderName(decidedBy))
+      .catch(() => false as const);
     return name === false ? PUBLISH_DECISION_CARD_NONE : draw(name ?? null);
   };
   switch (decision.status) {
