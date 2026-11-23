@@ -61,6 +61,7 @@
     { "alias": "@cinatra-ai/agents/agent-hitl-screen-submit", "target": "./packages/agents/src/agent-hitl-screen-submit.ts" },
     { "alias": "@cinatra-ai/agents/publish-decision-card-view", "target": "./packages/agents/src/publish-decision-card-view.tsx" },
     { "alias": "@cinatra-ai/agents/publish-decision-card-core", "target": "./packages/agents/src/publish-decision-card-core.ts" },
+    { "alias": "@cinatra-ai/agents/publish-decision-card-actions", "target": "./packages/agents/src/publish-decision-card-actions.ts" },
     { "alias": "@cinatra-ai/agents/pages", "target": "./packages/agents/src/pages.tsx" },
     { "alias": "@cinatra-ai/agents/screens", "target": "./packages/agents/src/screens.tsx" },
     { "alias": "@cinatra-ai/agents/module", "target": "./packages/agents/src/integration/module.ts" },

@@ -36,6 +36,7 @@ vi.mock("../auth-policy", () => ({
 const resolveOrgRoleForUser = vi.hoisted(() => vi.fn(async () => "member" as string | undefined));
 vi.mock("@/lib/auth-session", () => ({ resolveOrgRoleForUser }));
 
+import * as decisionActions from "../publish-decision-actions";
 import {
   PUBLISH_DECISION_NOT_OPEN,
   PUBLISH_DECISION_REQUIRED,
@@ -501,6 +502,57 @@ describe("may the site widget's reader decide (the card's restricted reading onl
 
   it("Do not publish still refuses the widget reader", async () => {
     await expect(declinePublishDecision({ runId: "run-1", actorContext: WIDGET })).rejects.toMatchObject({ statusCode: 403 });
+    expect(decisions.decide).not.toHaveBeenCalled();
+  });
+});
+
+// cinatra#4758: the site widget's Do not allow. The widget's reader (a human of source "a2a", built by the widget door)
+// is admitted ONLY on this road, which only the widget's decide route calls; every check after the person is the same.
+describe("Do not allow from the site widget (cinatra#4758)", () => {
+  const WIDGET = { actorType: "human" as const, source: "a2a" as const, userId: "user-a", orgId: "org-1" };
+  type Decline = (input: { runId: string; actorContext: unknown; note?: string | null }) => Promise<unknown>;
+  const declineAsWidget = (input: Parameters<Decline>[0]) => {
+    const fn = (decisionActions as unknown as Record<string, unknown>).declinePublishDecisionAsWidgetReader;
+    expect(typeof fn, "the widget's decline road is exported").toBe("function");
+    return (fn as Decline)(input);
+  };
+
+  it("checks run.execute then run.approveHitl, writes ONE declined decision naming the widget's person with the note, then stops the run", async () => {
+    expect(await declineAsWidget({ runId: "run-1", actorContext: WIDGET, note: "Not ready yet." })).toEqual({ ok: true, runStopped: true });
+    expect(enforceRunAccess.mock.calls.map((c) => (c as unknown[])[2])).toEqual(["execute", "approveHitl"]);
+    expect(decisions.decide).toHaveBeenCalledTimes(1);
+    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "declined", actor: "user-a", note: "Not ready yet." });
+    expect((storeMock.transitionRunStatus.mock.calls[0] as unknown[]).slice(0, 3)).toEqual(["run-1", "pending_approval", "stopped"]);
+  });
+
+  it("a second answer after the request was decided is reported as not open, and the run is not moved", async () => {
+    decisions.readOpenDecisionForRun.mockResolvedValue(null);
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released" }));
+    expect(await declineAsWidget({ runId: "run-1", actorContext: WIDGET })).toEqual({
+      ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: "released",
+    });
+    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+  });
+
+  it("a widget reader who may view but not decide (the run's approve right refused) writes nothing", async () => {
+    enforceRunAccess.mockImplementation(async (...args: unknown[]) => {
+      if (args[2] === "approveHitl") throw new AuthzError({ statusCode: 403, reason: "forbidden" });
+    });
+    await expect(declineAsWidget({ runId: "run-1", actorContext: WIDGET })).rejects.toBeInstanceOf(AuthzError);
+    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a UI person (the session road's actor)", ACTOR],
+    ["an A2A peer", { actorType: "a2a", source: "a2a", userId: "user-a" }],
+    ["a token-scoped widget actor", { ...WIDGET, tokenScopes: ["run.resume", "run.approveHitl"] }],
+    ["an agent acting for the person", { ...WIDGET, oboCeiling: [{ tier: "organization", id: "org-1" }] }],
+    ["no actor context", null],
+  ])("%s is refused before anything is read", async (_label, actorContext) => {
+    await expect(declineAsWidget({ runId: "run-1", actorContext })).rejects.toMatchObject({ statusCode: 403 });
+    expect(storeMock.readAgentRunById).not.toHaveBeenCalled();
     expect(decisions.decide).not.toHaveBeenCalled();
   });
 });

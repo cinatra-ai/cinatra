@@ -58,6 +58,7 @@ vi.mock("../wayflow-url", () => ({ resolveWayflowUrl: (pkg: string) => `http://w
 const resolveLatestWayflowGateTaskId = vi.hoisted(() => vi.fn(async (_runId: string): Promise<string | null> => "task-1"));
 vi.mock("@cinatra-ai/a2a", () => ({ resolveLatestWayflowGateTaskId }));
 
+import * as decisionActions from "../publish-decision-actions";
 import {
   PUBLISH_DECISION_NOT_OPEN,
   approvePublishDecision,
@@ -112,6 +113,32 @@ beforeEach(() => {
   claims.claimPause.mockResolvedValue(CLAIMED);
   claims.releasePauseClaim.mockResolvedValue("released");
   claims.settlePauseSend.mockResolvedValue("settled");
+});
+
+// cinatra#4758: the site widget's Allow. The widget's reader is admitted ONLY on this road (the widget's decide route);
+// the decision, the claim, the fence and the one send are Publish's own.
+describe("Allow from the site widget (cinatra#4758)", () => {
+  const WIDGET = { actorType: "human" as const, source: "a2a" as const, userId: "user-a", orgId: "org-1" };
+  type Approve = (input: { runId: string; actorContext: unknown }) => Promise<unknown>;
+  const approveAsWidget = (input: Parameters<Approve>[0]) => {
+    const fn = (decisionActions as unknown as Record<string, unknown>).approvePublishDecisionAsWidgetReader;
+    expect(typeof fn, "the widget's approve road is exported").toBe("function");
+    return (fn as Approve)(input);
+  };
+
+  it("releases the decision as the widget's person and resumes the run to its publishing step, once", async () => {
+    expect(await approveAsWidget({ runId: "run-1", actorContext: WIDGET })).toEqual({ ok: true, resumed: true });
+    expect(enforceRunAccess.mock.calls.map((c) => (c as unknown[])[2])).toEqual(["execute", "approveHitl"]);
+    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "released", actor: "user-a" });
+    expect(sendWayflowResume).toHaveBeenCalledTimes(1);
+  });
+
+  it("the session road still refuses the widget's reader, and the widget road refuses a UI person", async () => {
+    await expect(approvePublishDecision({ runId: "run-1", actorContext: WIDGET })).rejects.toMatchObject({ statusCode: 403 });
+    await expect(approveAsWidget({ runId: "run-1", actorContext: ACTOR })).rejects.toMatchObject({ statusCode: 403 });
+    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+  });
 });
 
 describe("Publish (A7)", () => {

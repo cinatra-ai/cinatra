@@ -9,16 +9,19 @@
 // (publish-decision-card-core.ts): a cookie host calls the session action, a host that declares a credential (the
 // site widget) reads the broker route with that credential. The read sends no decision. A read that fails keeps the
 // last authorized answer, and a card with no answer draws NO DOM, so a run with no open decision draws nothing.
-// The two controls send through the `decide` door a host passes; a host that passes none draws them disabled.
+// The two controls send through the `decide` door a host passes (cinatra#4758): `usePublishDecisionDecide` gives a
+// client host its door for its transport (the session action, or the broker answer with the host's credential), and a
+// server host passes the session action itself. A card given no door draws them disabled.
 // ---------------------------------------------------------------------------
 
-import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 
 import { Button } from "@/components/ui/button";
 import { StatusPill } from "@/components/ui/status-pill";
 import { Textarea } from "@/components/ui/textarea";
 
 import {
+  LIFECYCLE_PUBLISH_DECISION_DECIDE_PATH,
   LIFECYCLE_PUBLISH_DECISION_PATH,
   sendAcrossRenewal,
   useLifecycleCardAuth,
@@ -28,9 +31,12 @@ import {
 import {
   PUBLISH_DECISION_CARD_NONE,
   parsePublishDecisionCardState,
+  parsePublishDecisionDecideOutcome,
+  type PublishDecisionCardAnswer,
   type PublishDecisionCardState,
+  type PublishDecisionDecideOutcome,
 } from "./publish-decision-card";
-import { getPublishDecisionCardStateAction } from "./publish-decision-card-actions";
+import { decidePublishDecisionCardAction, getPublishDecisionCardStateAction } from "./publish-decision-card-actions";
 import { runStatusIsTerminal } from "./run-surface-status";
 
 /** The re-read cadence while the host's run has not finished: the run surfaces' own tick (5 s). */
@@ -39,9 +45,40 @@ export const PUBLISH_DECISION_CARD_POLL_MS = 5000;
 /** A decide door answers: the decision landed, the request was no longer open, or the send failed. */
 export type PublishDecisionDecide = (input: {
   runId: string;
-  answer: "approve" | "decline";
+  answer: PublishDecisionCardAnswer;
   note: string;
-}) => Promise<"decided" | "not_open" | "failed">;
+}) => Promise<PublishDecisionDecideOutcome>;
+
+/** The BROKER ANSWER (cinatra#4758), for a host that proves itself with its own credential: a POST of the run, the
+ * answer and the note, never a cookie of whoever else is signed in. Anything but a readable answer is "failed". */
+async function decidePublishDecisionThroughBroker(
+  input: Parameters<PublishDecisionDecide>[0],
+  auth: LifecycleCardAuth,
+): Promise<PublishDecisionDecideOutcome> {
+  try {
+    const send = () =>
+      fetch(LIFECYCLE_PUBLISH_DECISION_DECIDE_PATH, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...auth.headers() },
+        body: JSON.stringify({ runId: input.runId, answer: input.answer, note: input.note }),
+        credentials: auth.credentials,
+      });
+    const response = await sendAcrossRenewal(auth, send);
+    if (response === null || !response.ok) return "failed";
+    return parsePublishDecisionDecideOutcome((await response.json()) as unknown);
+  } catch {
+    return "failed";
+  }
+}
+
+/** The host's DECIDE DOOR for its transport (cinatra#4758), the same choice the read makes: with a host credential the
+ * broker answer, else the cookie host's session action. Stable for one credential. */
+export function usePublishDecisionDecide(auth: LifecycleCardAuth | null): PublishDecisionDecide {
+  return useMemo<PublishDecisionDecide>(
+    () => (auth ? (input) => decidePublishDecisionThroughBroker(input, auth) : (input) => decidePublishDecisionCardAction(input)),
+    [auth],
+  );
+}
 
 /** The BROKER read, for a host that proves itself with its own credential. A GET: it sends only the run id. */
 async function readPublishDecisionThroughBroker(

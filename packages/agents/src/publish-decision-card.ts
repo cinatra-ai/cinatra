@@ -25,6 +25,19 @@ export type PublishDecisionCardState =
   | (PublishDecisionCardCommon & { state: "declined"; deciderName: string | null; reason: string | null })
   | (PublishDecisionCardCommon & { state: "expired" });
 
+/** The card's two answers (cinatra#4758): Allow and Do not allow. */
+export type PublishDecisionCardAnswer = "approve" | "decline";
+
+/** What a decide door answers: the answer was recorded, the request was no longer open (already answered, expired,
+ *  or the run moved on), or the answer did not land (a refusal or a fault; nothing to report beyond that). */
+export type PublishDecisionDecideOutcome = "decided" | "not_open" | "failed";
+
+/** Parse a transport's decide answer, or "failed" for anything else. */
+export function parsePublishDecisionDecideOutcome(data: unknown): PublishDecisionDecideOutcome {
+  const outcome = (data as { outcome?: unknown } | null)?.outcome;
+  return outcome === "decided" || outcome === "not_open" ? outcome : "failed";
+}
+
 /** Every refusal and every run with nothing to decide: the card draws no DOM at all. */
 export const PUBLISH_DECISION_CARD_NONE: PublishDecisionCardState = Object.freeze({ state: "none" });
 

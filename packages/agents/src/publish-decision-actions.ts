@@ -258,8 +258,9 @@ function isPublishDecider(actor: PrimitiveActorContext | null | undefined): acto
 /**
  * The site widget's reader, as the widget lifecycle door builds it (widget-lifecycle-frame-actor.ts): a human actor of
  * source "a2a", with no token scopes, a user id and no delegated agent ceiling. Admitted ONLY by
- * widgetReaderMayDecidePublish, which answers a boolean for the card and decides nothing. Publish and Do not publish
- * still refuse this actor (isPublishDecider); a widget decide door is a later part (cinatra#4758).
+ * widgetReaderMayDecidePublish (the card's restricted reading) and by the two widget answers below
+ * (cinatra#4758), which only the widget's decide route calls, after it consumed the reader's own credential under the
+ * decide grant and bound the run to that widget session. Publish and Do not publish refuse this actor (isPublishDecider).
  */
 function isWidgetPublishReader(actor: PrimitiveActorContext | null | undefined): actor is PrimitiveActorContext & { userId: string } {
   return actor?.actorType === "human" && actor.source === "a2a" && actor.tokenScopes === undefined
@@ -299,6 +300,16 @@ export async function widgetReaderMayDecidePublish(input: DecideInput): Promise<
   return enforcePublishDecisionRights(actor, input).then(() => true, () => false);
 }
 
+/** The access check of the site widget's answers: the widget reader (isWidgetPublishReader), then the SAME rights
+ *  enforcePublishDecisionAccess asks after its person check. Any other actor is refused before any read. */
+async function enforceWidgetPublishDecisionAccess(input: DecideInput): Promise<{ run: AgentRunRecord; deciderId: string; authority: OrgWriteAuthority }> {
+  const actor = input.actorContext;
+  if (!isWidgetPublishReader(actor)) throw forbidden("Only a person can decide a publish.");
+  return enforcePublishDecisionRights(actor, input);
+}
+
+type DecisionAccess = typeof enforcePublishDecisionAccess;
+
 /** The rights half of the publish decision's access check, for a person already admitted by the caller. */
 async function enforcePublishDecisionRights(
   actor: PrimitiveActorContext & { userId: string },
@@ -333,7 +344,7 @@ async function enforcePublishDecisionRights(
 }
 
 /**
- * "Do not publish" (its surface is the decision card, a later part). The decider and the authority are those of
+ * "Do not publish" (the publish card's Do not allow, cinatra#4758). The decider and the authority are those of
  * enforcePublishDecisionAccess. Then ONE decision write (parked -> declined, with that person and the optional note),
  * then the run moves pending_approval -> stopped. It never sends anything to the run's context. A late answer is
  * reported as publish_decision_not_open with the decision's current status. Every fault after the person check, a read
@@ -341,8 +352,18 @@ async function enforcePublishDecisionRights(
  * pass.
  */
 export async function declinePublishDecision(input: DecideInput & { note?: string | null }): Promise<PublishDecisionAnswer> {
+  return declineWith(enforcePublishDecisionAccess, input);
+}
+
+/** "Do not allow" from the site widget (cinatra#4758): declinePublishDecision for the widget's reader. Called only by
+ *  the widget's decide route, after the decide grant and the run's widget-session binding. */
+export async function declinePublishDecisionAsWidgetReader(input: DecideInput & { note?: string | null }): Promise<PublishDecisionAnswer> {
+  return declineWith(enforceWidgetPublishDecisionAccess, input);
+}
+
+async function declineWith(access: DecisionAccess, input: DecideInput & { note?: string | null }): Promise<PublishDecisionAnswer> {
   try {
-    const { run, deciderId, authority } = await enforcePublishDecisionAccess(input);
+    const { run, deciderId, authority } = await access(input);
     const open = await readOpenDecisionForRun(run.id);
     if (!open) {
       const latest = await readLatestDecisionForRun(run.id);
@@ -366,7 +387,7 @@ export type PublishApproveAnswer =
 const PUBLISH_RESUME_TEXT = "[Publish approved]";
 
 /**
- * "Publish" (its surface is the decision card, a later part). The decider and the authority are those of
+ * "Publish" (the publish card's Allow, cinatra#4758). The decider and the authority are those of
  * enforcePublishDecisionAccess, then the agent's install scope for that person, as the generic approve asks it. The run
  * must hold a WayFlow context of an internal template. Its decision is the open (parked) one, or else a released one (a
  * resume that failed before its send). The run's pause is claimed first (claimPause, cinatra#4245, the claim every
@@ -387,9 +408,19 @@ const PUBLISH_RESUME_TEXT = "[Publish approved]";
  * pass, and a scope refusal is answered as before.
  */
 export async function approvePublishDecision(input: DecideInput): Promise<PublishApproveAnswer> {
+  return approveWith(enforcePublishDecisionAccess, input);
+}
+
+/** "Allow" from the site widget (cinatra#4758): approvePublishDecision for the widget's reader. Called only by the
+ *  widget's decide route, after the decide grant and the run's widget-session binding. */
+export async function approvePublishDecisionAsWidgetReader(input: DecideInput): Promise<PublishApproveAnswer> {
+  return approveWith(enforceWidgetPublishDecisionAccess, input);
+}
+
+async function approveWith(enforce: DecisionAccess, input: DecideInput): Promise<PublishApproveAnswer> {
   let access: Awaited<ReturnType<typeof enforcePublishDecisionAccess>>;
   try {
-    access = await enforcePublishDecisionAccess(input);
+    access = await enforce(input);
   } catch (err) {
     throw opaque(err);
   }
