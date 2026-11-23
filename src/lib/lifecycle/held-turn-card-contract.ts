@@ -319,7 +319,7 @@ export type LifecycleCardDelivery = (typeof LIFECYCLE_CARD_DELIVERIES)[number];
 export type ChatThreadCarriageRow = {
   kind: LifecycleCardKind;
   /** How the kind reaches the transcript, mirrored from the protocol package. */
-  carriage: "data_part" | "interrupt";
+  carriage: "data_part" | "interrupt" | "read";
   /**
    * WHICH FACT DECIDES THE CARD IS LIVE, mirrored from the protocol package
    * (cinatra#2930). `run_state` for every run-carried kind; `data_part` only
@@ -334,7 +334,7 @@ export type ChatThreadCarriageRow = {
   /** The canonical part that triggers this kind's chat_thread render. */
   triggeringPart: string;
   /**
-   * For an `interrupt` row: the tool name of the triggering tool result. The
+   * For an `interrupt` or `read` row: the tool name of the triggering tool result. The
    * transcript slot of THAT part is the position the card must render at.
    */
   triggerToolName: string | null;
@@ -623,6 +623,30 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
     // in a conversation, and both submit the same gate answer.
     decisionControls: Object.freeze([
       '[data-action="submit-hitl-screen"]',
+    ]),
+    foreignHostSubtrees: RUN_CARD_SUBTREES,
+    enforcer: "chat-hitl-one-card-gate",
+  },
+  {
+    // cinatra#4150 -- the SIXTH kind, the publish card. Carried by a READ, not an interrupt: the run is stopped in
+    // front of a step the agent declares as publishing until a person answers, but the publish gate emits no typed
+    // interrupt, so the card mounts at the dispatch's `agent_run` part and finds the decision by reading the run's
+    // record. It is registered in the same change that mounts its card, so it takes no row on either obligation list.
+    kind: "publish_decision",
+    carriage: LIFECYCLE_CARD_CARRIAGE.publish_decision.represent,
+    canonical: LIFECYCLE_CARD_CARRIAGE.publish_decision.canonical,
+    deliveries: Object.freeze(["platform_injected"] as const),
+    triggeringPart: "the durable agent_run tool result of the stopped run, read for its open publish decision",
+    triggerToolName: "agent_run",
+    alsoTriggeredBy: ["agent_named_start"],
+    owner: "PublishDecisionCard",
+    // The card's own conformance id, kept apart from the ruled root declaration for the hitl screen's reason above.
+    ownerAnchors: Object.freeze([`[data-conformance-id="publish-card"]`]),
+    ruledRootAnchors: rootAnchorsFor("publish_decision"),
+    // The two controls of the drawing (XV), each named by its action and the outcome it records.
+    decisionControls: Object.freeze([
+      '[data-action="decline-publish -> declined"]',
+      '[data-action="approve-publish -> released"]',
     ]),
     foreignHostSubtrees: RUN_CARD_SUBTREES,
     enforcer: "chat-hitl-one-card-gate",

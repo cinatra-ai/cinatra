@@ -71,6 +71,8 @@
       "@cinatra-ai/agents/agent-hitl-screen": ["./packages/agents/src/agent-hitl-screen.ts"],
       "@cinatra-ai/agents/agent-hitl-screen-core": ["./packages/agents/src/agent-hitl-screen-core.ts"],
       "@cinatra-ai/agents/agent-hitl-screen-submit": ["./packages/agents/src/agent-hitl-screen-submit.ts"],
+      "@cinatra-ai/agents/publish-decision-card-view": ["./packages/agents/src/publish-decision-card-view.tsx"],
+      "@cinatra-ai/agents/publish-decision-card-core": ["./packages/agents/src/publish-decision-card-core.ts"],
       "@cinatra-ai/agents/pages": ["./packages/agents/src/pages.tsx"],
       "@cinatra-ai/agents/screens": ["./packages/agents/src/screens.tsx"],
       "@cinatra-ai/agents/module": ["./packages/agents/src/integration/module.ts"],

@@ -2,7 +2,7 @@
 // The publish card (cinatra#4150 part 7a-1b): design 635da007, specs/app-lifecycle-cards.html XV and IV.1.
 // Red first: at the base the module under test does not exist, so this file fails at its import.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook, waitFor } from "@testing-library/react";
 
 import type { LifecycleCardHost } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
@@ -12,7 +12,13 @@ vi.mock("../publish-decision-card-actions", () => ({
 }));
 
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
-import { PublishDecisionCard, type PublishDecisionDecide } from "../publish-decision-card-view";
+import {
+  PublishDecisionCard,
+  publishDecisionIsSettled,
+  publishGateIsOpen,
+  usePublishDecisionCardRead,
+  type PublishDecisionDecide,
+} from "../publish-decision-card-view";
 
 const RUN_ID = "run-4150";
 const ROWS = [
@@ -92,18 +98,18 @@ describe("the drawn card", () => {
       expect(root.getAttribute("data-lifecycle-card-host"), host).toBe(host);
       expect(root.getAttribute("data-lifecycle-card-state"), host).toBe("pending");
       expect(root.getAttribute("data-conformance-id"), host).toBe("publish-card");
-      expect(root.textContent).toContain("Publish this?");
-      expect(root.textContent).toContain("Blog publisher \u00b7 nothing has been published");
+      expect(root.textContent).toContain("Allow this change outside Cinatra?");
+      expect(root.textContent).toContain("Blog publisher \u00b7 nothing outside Cinatra has changed yet");
       const labels = Array.from(root.querySelectorAll("dt")).map((el) => el.textContent);
       const values = Array.from(root.querySelectorAll("dd")).map((el) => el.textContent);
       expect(labels).toEqual(["Title", "Site"]);
       expect(values).toEqual(["Spring launch", "Company blog"]);
       expect(root.querySelector("textarea")).not.toBeNull();
-      expect(root.textContent).toContain("recorded with Do not publish");
+      expect(root.textContent).toContain("recorded with Do not allow");
       const decline = root.querySelector<HTMLButtonElement>('[data-action="decline-publish -> declined"]');
       const approve = root.querySelector<HTMLButtonElement>('[data-action="approve-publish -> released"]');
-      expect(decline?.textContent).toBe("Do not publish");
-      expect(approve?.textContent).toBe("Publish");
+      expect(decline?.textContent).toBe("Do not allow");
+      expect(approve?.textContent).toBe("Allow");
       expect(decline?.disabled).toBe(false);
       expect(approve?.disabled).toBe(false);
       // Two controls and no third: no Continue beneath them.
@@ -133,8 +139,19 @@ describe("the drawn card", () => {
     expect(root.querySelectorAll("dd")).toHaveLength(2);
     expect(root.querySelector<HTMLButtonElement>(APPROVE)?.disabled).toBe(true);
     expect(root.querySelector<HTMLButtonElement>(DECLINE)?.disabled).toBe(true);
-    expect(root.textContent).toContain("needs approve access on the run");
+    expect(root.textContent).toContain("Deciding whether this change is made needs approve access on the run, so Do not allow and Allow stay disabled with the reason shown.");
     expect(root.querySelector("textarea")).toBeNull();
+    // IV.1: the restricted card's frame carries its spec anchor, and only the restricted card draws it.
+    const frame = root.querySelector('[data-conformance-id="publish-state-restricted"]');
+    expect(frame?.querySelectorAll("dd")).toHaveLength(2);
+    expect(frame?.querySelector(APPROVE)).not.toBeNull();
+  });
+
+  it("only the restricted card draws the restricted anchor", async () => {
+    const root = await rootOf(mountOn("run_card", okDoor()));
+    await settle();
+    expect(root.getAttribute("data-lifecycle-card-state")).toBe("pending");
+    expect(root.querySelector('[data-conformance-id^="publish-state-"]')).toBeNull();
   });
 
   it("a host that passes no decide door draws both controls disabled", async () => {
@@ -147,10 +164,10 @@ describe("the drawn card", () => {
   });
 
   it.each([
-    [APPROVED, "publish-card-approved", "Publish approved", "Approved by Dana Okafor. The run goes on to the agent's own publishing step."],
-    [DECLINED, "publish-card-declined", "Not published", "Declined by Dana Okafor. The run ended, and nothing was published. Reason: \u201cNot ready yet.\u201d"],
-    [{ ...DECLINED, reason: null, deciderName: null }, "publish-card-declined", "Not published", "Declined. The run ended, and nothing was published."],
-    [EXPIRED, "publish-card-expired", "Expired", "No one decided before this request expired. The run ended, and nothing was published."],
+    [APPROVED, "publish-card-approved", "Allowed", "Approved by Dana Okafor. The run goes on to the agent's own step that makes the change."],
+    [DECLINED, "publish-card-declined", "Not allowed", "Declined by Dana Okafor. The run ended, and nothing outside Cinatra changed. Reason: \u201cNot ready yet.\u201d"],
+    [{ ...DECLINED, reason: null, deciderName: null }, "publish-card-declined", "Not allowed", "Declined. The run ended, and nothing outside Cinatra changed."],
+    [EXPIRED, "publish-card-expired", "Expired", "No one decided before this request expired. The run ended, and nothing outside Cinatra changed."],
   ])("a settled card keeps its rows, drops the controls and the note, and draws its marker (%#)", async (answer, id, label, line) => {
     stateMock.mockImplementation(async () => answer);
     const root = await rootOf(mountOn("page_gate_region", okDoor()));
@@ -159,7 +176,7 @@ describe("the drawn card", () => {
     expect(root.querySelectorAll("dd")).toHaveLength(2);
     expect(root.querySelector("button")).toBeNull();
     expect(root.querySelector("textarea")).toBeNull();
-    expect(root.textContent).not.toContain("nothing has been published");
+    expect(root.textContent).not.toContain("nothing outside Cinatra has changed yet");
     const marker = root.querySelector(`[data-conformance-id="${id}"]`);
     expect(marker?.querySelector('[data-slot="status-pill"]')?.textContent).toContain(label);
     expect(marker?.textContent).toContain(line);
@@ -192,6 +209,26 @@ describe("the drawn card", () => {
     await settle();
     expect(root.querySelectorAll("tbody tr")).toHaveLength(1);
     expect(root.querySelector("[data-publish-row-more]")).toBeNull();
+  });
+
+  it("the three settled readings carry the spec's exact copy: the generic question and the marker, nothing more", async () => {
+    // specs/app-lifecycle-cards.html section XV: one generic question on every settled card, and a marker that is a chip
+    // followed by one line. No agent, site or service is named in the card's own words, and none says "published" (the agent\u2019s own display name is its own words).
+    const spec: Array<[typeof APPROVED | typeof EXPIRED, string]> = [
+      [APPROVED, "AllowedApproved by Dana Okafor. The run goes on to the agent's own step that makes the change."],
+      [DECLINED, "Not allowedDeclined by Dana Okafor. The run ended, and nothing outside Cinatra changed. Reason: \u201cNot ready yet.\u201d"],
+      [EXPIRED, "ExpiredNo one decided before this request expired. The run ended, and nothing outside Cinatra changed."],
+    ];
+    for (const [answer, marker] of spec) {
+      stateMock.mockImplementation(async () => answer);
+      const mounted = mountOn("chat_thread", okDoor());
+      await settle();
+      const root = await rootOf(mounted);
+      expect(root.querySelector("span.font-bold")?.textContent).toBe("Allow this change outside Cinatra?");
+      expect(root.querySelector(`[data-conformance-id="publish-card-${answer.state}"]`)?.textContent).toBe(marker);
+      expect(root.textContent).not.toMatch(/published|publishing|Publish this/i);
+      cleanup();
+    }
   });
 
   it("a pending card with no rows draws no row list", async () => {
@@ -287,8 +324,204 @@ describe("the broker read on the site widget", () => {
   });
 });
 
+describe("the host's change signal", () => {
+  it("a run that opens its decision AFTER a `none` read draws the card when the host's wireRef moves, with no focus", async () => {
+    stateMock.mockImplementation(async () => ({ state: "none" }));
+    const at = (wireRef: string) => (
+      <LifecycleCardSurfaceProvider host="run_card">
+        <PublishDecisionCard runId={RUN_ID} wireRef={wireRef} />
+      </LifecycleCardSurfaceProvider>
+    );
+    const mounted = render(at("running"));
+    await settle();
+    expect(mounted.container.querySelector(ROOT)).toBeNull();
+    stateMock.mockImplementation(async () => PENDING);
+    mounted.rerender(at("pending_approval"));
+    await settle();
+    expect((await rootOf(mounted)).getAttribute("data-lifecycle-card-state")).toBe("pending");
+    expect(stateMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+// THE SHARED READ'S OWN TICK. The host's change signal cannot carry every move (a run can open its decision with no
+// status or signal change), so while the host's run has not finished the read repeats on the run surfaces' cadence.
+describe("the shared read's tick while the run has not finished", () => {
+  const TICK = 5_000;
+  const readWith = (runStatus: string | null) =>
+    renderHook((props: { runStatus: string | null }) => usePublishDecisionCardRead({ runId: RUN_ID, auth: null, runStatus: props.runStatus }), {
+      initialProps: { runStatus },
+    });
+  async function advance(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("a decision opened with NO signal change is read on the next tick, and the tick stops once the run is terminal", async () => {
+    stateMock.mockImplementation(async () => ({ state: "none" }));
+    const hook = readWith("pending_approval");
+    await advance(0);
+    expect(stateMock).toHaveBeenCalledTimes(1);
+    expect(hook.result.current.state?.state).toBe("none");
+
+    stateMock.mockImplementation(async () => PENDING);
+    await advance(TICK);
+    expect(stateMock).toHaveBeenCalledTimes(2);
+    expect(hook.result.current.state?.state).toBe("pending");
+
+    hook.rerender({ runStatus: "completed" });
+    await advance(0);
+    const atTerminal = stateMock.mock.calls.length;
+    await advance(TICK * 4);
+    expect(stateMock).toHaveBeenCalledTimes(atTerminal);
+  });
+
+  it("a run that ENDS with its decision unanswered is no longer an open gate: one final read, and no cached `pending` survives", async () => {
+    stateMock.mockImplementation(async () => PENDING);
+    const hook = readWith("pending_approval");
+    await advance(0);
+    expect(hook.result.current.state?.state).toBe("pending");
+    expect(publishGateIsOpen(hook.result.current)).toBe(true);
+    const beforeEnd = stateMock.mock.calls.length;
+
+    // The run is cancelled while parked; its decision is closed only by the later sweep, so the read still answers
+    // `pending`. A run in a terminal status is parked at no gate.
+    hook.rerender({ runStatus: "stopped" });
+    await advance(0);
+    expect(stateMock).toHaveBeenCalledTimes(beforeEnd + 1);
+    expect(publishGateIsOpen(hook.result.current)).toBe(false);
+    expect(hook.result.current.state?.state).toBe("none");
+    await advance(TICK * 4);
+    expect(stateMock).toHaveBeenCalledTimes(beforeEnd + 1);
+    expect(publishGateIsOpen(hook.result.current)).toBe(false);
+  });
+
+  it("the two predicates: an open gate is a `pending` read for a run that has not ended; settled is never `pending` or `none`", () => {
+    const at = (state: unknown) =>
+      ({ state, refreshing: false, reload: () => undefined }) as unknown as Parameters<typeof publishGateIsOpen>[0];
+    const settled = { ...PENDING, deciderName: "Ana" };
+    // The read is the truth: a `pending` read is open whatever non-terminal status the host still holds.
+    expect(publishGateIsOpen(at(PENDING))).toBe(true);
+    expect(publishGateIsOpen(at(PENDING), "running")).toBe(true);
+    expect(publishGateIsOpen(at(PENDING), "pending_approval")).toBe(true);
+    expect(publishGateIsOpen(at(PENDING), "stopped")).toBe(false);
+    expect(publishGateIsOpen(at(PENDING), "completed")).toBe(false);
+    for (const state of [null, { state: "none" }, { ...settled, state: "approved" }, { ...settled, state: "expired" }]) {
+      expect(publishGateIsOpen(at(state), "running")).toBe(false);
+    }
+    expect(publishDecisionIsSettled(at({ ...settled, state: "approved" }))).toBe(true);
+    expect(publishDecisionIsSettled(at({ ...settled, state: "declined", reason: null }))).toBe(true);
+    expect(publishDecisionIsSettled(at({ ...settled, state: "expired" }))).toBe(true);
+    for (const state of [null, { state: "none" }, PENDING]) {
+      expect(publishDecisionIsSettled(at(state))).toBe(false);
+    }
+  });
+
+  it("the tick stops when the host unmounts, and pauses while the document is hidden", async () => {
+    stateMock.mockImplementation(async () => ({ state: "none" }));
+    const hook = readWith("running");
+    await advance(0);
+    await advance(TICK);
+    expect(stateMock).toHaveBeenCalledTimes(2);
+
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    await advance(TICK * 3);
+    expect(stateMock).toHaveBeenCalledTimes(2);
+    visibility.mockRestore();
+    await advance(TICK);
+    expect(stateMock).toHaveBeenCalledTimes(3);
+
+    hook.unmount();
+    await advance(TICK * 4);
+    expect(stateMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("never overlaps reads: a tick is skipped while a read is still out", async () => {
+    let release: (value: unknown) => void = () => {};
+    stateMock.mockImplementation(() => new Promise((resolve) => (release = resolve)));
+    readWith("running");
+    await advance(TICK * 3);
+    expect(stateMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      release({ state: "none" });
+    });
+    await advance(TICK);
+    expect(stateMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("a slow read is never starved or overlapped by host signals: one read out at a time, it lands, then exactly one follow-up", async () => {
+    const releases: Array<(value: unknown) => void> = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    stateMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          inFlight += 1;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          releases.push((value) => {
+            inFlight -= 1;
+            resolve(value);
+          });
+        }),
+    );
+    const hook = renderHook(
+      (props: { wireRef: string }) =>
+        usePublishDecisionCardRead({ runId: RUN_ID, auth: null, wireRef: props.wireRef, runStatus: "pending_approval" }),
+      { initialProps: { wireRef: "pending_approval:no-gate:0" } },
+    );
+    await advance(0);
+    expect(stateMock).toHaveBeenCalledTimes(1);
+    // The host's signal moves every 2 s (each successful run poll) while the first read is still out.
+    for (let n = 1; n <= 5; n++) {
+      hook.rerender({ wireRef: `pending_approval:no-gate:${n}` });
+      await advance(2_000);
+    }
+    expect(stateMock).toHaveBeenCalledTimes(1);
+    expect(maxInFlight).toBe(1);
+
+    await act(async () => {
+      releases[0]!(PENDING);
+    });
+    await advance(0);
+    // The slow result LANDS (a mere signal change does not discard it), and the signals it missed coalesce into ONE
+    // follow-up read.
+    expect(hook.result.current.state?.state).toBe("pending");
+    expect(stateMock).toHaveBeenCalledTimes(2);
+    expect(maxInFlight).toBe(1);
+
+    await act(async () => {
+      releases[1]!({ state: "none" });
+    });
+    await advance(0);
+    expect(hook.result.current.state?.state).toBe("none");
+    expect(stateMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("the broker read is handed an abort signal, aborted when the host unmounts", async () => {
+    const signals: Array<AbortSignal | null | undefined> = [];
+    globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
+      signals.push(init?.signal);
+      return new Promise<Response>(() => undefined);
+    }) as unknown as typeof fetch;
+    const hook = renderHook(() => usePublishDecisionCardRead({ runId: RUN_ID, auth: WIDGET_AUTH, runStatus: "running" }));
+    await advance(0);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
+    expect(signals[0]!.aborted).toBe(false);
+    hook.unmount();
+    expect(signals[0]!.aborted).toBe(true);
+  });
+});
+
 describe("the decide door", () => {
-  it("Publish sends approve with no note, Do not publish sends the written note, and the card re-reads", async () => {
+  it("Allow sends approve with no note, Do not allow sends the written note, and the card re-reads", async () => {
     const decide = vi.fn<PublishDecisionDecide>(async () => "decided");
     const mounted = mountOn("run_card", decide);
     const root = await rootOf(mounted);
@@ -315,8 +548,11 @@ describe("the decide door", () => {
     await settle();
     const closed = await rootOf(mounted);
     expect(closed.getAttribute("data-lifecycle-card-state")).toBe("no_longer_open");
-    expect(closed.textContent).toContain("This publish request is no longer open");
+    expect(closed.textContent).toContain("This request is no longer open");
     expect(closed.querySelector(APPROVE)).toBeNull();
+    expect(closed.querySelector('[data-conformance-id="publish-state-no-longer-open"]')?.textContent).toContain(
+      "This request is no longer open",
+    );
     let land: (value: unknown) => void = () => undefined;
     stateMock.mockImplementation(() => new Promise((resolve) => (land = resolve)));
     await act(async () => {
@@ -324,11 +560,14 @@ describe("the decide door", () => {
     });
     expect((await rootOf(mounted)).getAttribute("data-lifecycle-card-state")).toBe("loading");
     expect(mounted.container.querySelector("button")).toBeNull();
+    expect(mounted.container.querySelector('[data-conformance-id="publish-state-loading"]')?.getAttribute("aria-busy")).toBe("true");
+    expect(mounted.container.querySelector('[data-conformance-id="publish-state-no-longer-open"]')).toBeNull();
     await act(async () => {
       land(EXPIRED);
     });
     await settle();
     expect((await rootOf(mounted)).getAttribute("data-lifecycle-card-state")).toBe("expired");
+    expect(mounted.container.querySelector('[data-conformance-id^="publish-state-"]')).toBeNull();
   });
 
   it("a Refresh whose re-read FAILS ends loading and keeps the last answer on screen", async () => {

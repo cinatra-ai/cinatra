@@ -22,7 +22,7 @@ vi.mock("../store", () => storeMock);
 const decisions = vi.hoisted(() => ({ readLatestDecisionForRun: vi.fn() }));
 vi.mock("../publish-decision-store", () => decisions);
 
-const access = vi.hoisted(() => ({ enforcePublishDecisionAccess: vi.fn() }));
+const access = vi.hoisted(() => ({ enforcePublishDecisionAccess: vi.fn(), widgetReaderMayDecidePublish: vi.fn() }));
 vi.mock("../publish-decision-actions", () => access);
 
 const names = vi.hoisted(() => ({ readDeciderName: vi.fn() }));
@@ -30,6 +30,7 @@ vi.mock("@/lib/lifecycle/lifecycle-settled-outcome", () => names);
 
 import {
   publishDecisionCardStateForRun,
+  publishDecisionCardStateForWidgetRun,
   resolvePublishDecisionCardStateForActor,
 } from "../publish-decision-card-core";
 import { decodeLifecycleGateRef, decodePublishDecisionIslandRef } from "@/lib/lifecycle/lifecycle-card-ref";
@@ -38,7 +39,7 @@ const WHO = {
   actor: { actorType: "human" as const, source: "ui" as const, userId: "user-a" },
   roleHints: { orgRole: "member" as const, actorOrganizationId: "org-1" },
 };
-const RUN = { id: "run-1", templateId: "tmpl-1", orgId: "org-1", runBy: "user-a" };
+const RUN = { id: "run-1", templateId: "tmpl-1", orgId: "org-1", runBy: "user-a", status: "pending_approval" };
 
 function decision(overrides: Record<string, unknown> = {}) {
   return {
@@ -97,6 +98,23 @@ describe("which card a run shows", () => {
     });
   });
 
+  // Before the fix the widget read does not exist yet, so this test fails on the missing export.
+  // red-first-expect: publishDecisionCardStateForWidgetRun is not a function
+  it("the site widget's card asks the widget reader's rights, never the decide check", async () => {
+    const widget = { ...WHO, actor: { actorType: "human" as const, source: "a2a" as const, userId: "user-a" } };
+    for (const answer of [true, false]) {
+      access.widgetReaderMayDecidePublish.mockResolvedValueOnce(answer);
+      const state = await publishDecisionCardStateForWidgetRun(RUN as unknown as Run, widget);
+      expect(state).toMatchObject({ state: "pending", mayDecide: answer });
+    }
+    expect(access.widgetReaderMayDecidePublish).toHaveBeenCalledWith({
+      runId: "run-1",
+      actorContext: widget.actor,
+      roleHints: widget.roleHints,
+    });
+    expect(access.enforcePublishDecisionAccess).not.toHaveBeenCalled();
+  });
+
   it("a released decision is APPROVED and names the person who decided", async () => {
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released", decidedBy: "user-b" }));
     expect(await read()).toMatchObject({ state: "approved", deciderName: "Dana Okafor" });
@@ -150,6 +168,33 @@ describe("which card a run shows", () => {
     expect(await read()).toEqual({ state: "none" });
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "some_future_status" }));
     expect(await read()).toEqual({ state: "none" });
+  });
+
+  it("a parked decision of a run that has ENDED is no open card: the run is parked at no gate", async () => {
+    for (const status of ["stopped", "completed", "failed"]) {
+      const ended = { ...RUN, status } as unknown as Run;
+      expect(await publishDecisionCardStateForRun(ended, WHO), status).toEqual({ state: "none" });
+      expect(await publishDecisionCardStateForWidgetRun(ended, WHO), status).toEqual({ state: "none" });
+    }
+    // A held or working run keeps its open card.
+    for (const status of ["pending_approval", "running"]) {
+      const held = { ...RUN, status } as unknown as Run;
+      expect((await publishDecisionCardStateForRun(held, WHO)).state, status).toBe("pending");
+    }
+    // A settled decision still shows its outcome on an ended run.
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "expired" }));
+    expect((await publishDecisionCardStateForRun({ ...RUN, status: "stopped" } as unknown as Run, WHO)).state).toBe("expired");
+  });
+
+  it("a parked decision of a run NOT held at its gate (a retry back in pending_input or queued) is no open card", async () => {
+    // A failed attempt's row left parked must not read as the open stop of the run's next attempt.
+    for (const status of ["pending_input", "queued", "some_future_status", undefined]) {
+      const notHeld = { ...RUN, status } as unknown as Run;
+      expect(await publishDecisionCardStateForRun(notHeld, WHO), String(status)).toEqual({ state: "none" });
+      expect(await publishDecisionCardStateForWidgetRun(notHeld, WHO), String(status)).toEqual({ state: "none" });
+    }
+    expect(access.enforcePublishDecisionAccess).not.toHaveBeenCalled();
+    expect(access.widgetReaderMayDecidePublish).not.toHaveBeenCalled();
   });
 
   it("an unreadable decision or template draws nothing rather than half a card", async () => {
@@ -328,5 +373,48 @@ describe("the artifacts row (C1b)", () => {
     if (state.state !== "approved") throw new Error("expected an approved card");
     const row = state.rows[0] as { ref: string };
     expect(decodePublishDecisionIslandRef(row.ref)).toEqual({ runId: "run-1", decisionId: "d1", input: "page" });
+  });
+});
+
+describe("a decision's rows are the ones its template declared at the park (review finding 2)", () => {
+  const AT_PARK = [{ label: "Title", input: "title" }, { label: "Where", input: "channel" }];
+  // A recompile after the park: new labels, an input renamed, a row added that names an identifier.
+  const RECOMPILED = {
+    ...TEMPLATE,
+    publishRows: { post: [{ label: "Headline", input: "headline" }, { label: "Record", input: "secretId" }] },
+  };
+  const STORED_ROWS = [{ label: "Title", value: "Autumn launch" }, { label: "Where", value: "Blog" }];
+
+  it("a parked decision keeps its stored labels and inputs after the template is recompiled", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue(RECOMPILED);
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ declaredRows: AT_PARK }));
+    const card = await read();
+    expect(card.state).toBe("pending");
+    expect((card as { rows: unknown }).rows).toEqual(STORED_ROWS);
+  });
+
+  it("a settled decision keeps its stored labels and inputs after the template is recompiled", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue(RECOMPILED);
+    for (const settled of [
+      decision({ status: "released", decidedBy: "user-b", declaredRows: AT_PARK }),
+      decision({ status: "declined", decidedBy: "user-b", decisionNote: "No.", declaredRows: AT_PARK }),
+      decision({ status: "expired", declaredRows: AT_PARK }),
+    ]) {
+      decisions.readLatestDecisionForRun.mockResolvedValue(settled);
+      const card = await read();
+      expect((card as { rows: unknown }).rows, settled.status as string).toEqual(STORED_ROWS);
+    }
+  });
+
+  it("a stored empty declaration draws no rows, even when the template now declares some", async () => {
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ declaredRows: [] }));
+    expect((await read() as { rows: unknown }).rows).toEqual([]);
+  });
+
+  it("an older decision with no stored declaration (null) falls back to the template's current rows", async () => {
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ declaredRows: null }));
+    expect((await read() as { rows: unknown }).rows).toEqual(STORED_ROWS);
+    storeMock.readAgentTemplateById.mockResolvedValue(RECOMPILED);
+    expect((await read() as { rows: unknown }).rows).toEqual([{ label: "Record", value: "row-77" }]);
   });
 });

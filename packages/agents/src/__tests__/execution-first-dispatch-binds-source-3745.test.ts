@@ -266,3 +266,35 @@ describe("cinatra#3745 - the first message names the bound source", () => {
     expect(payload.cinatra_run_id).toBe(RUN_ID);
   });
 });
+
+// cinatra#4150 round 19, finding 2: the dispatch records the publish rows of the template object it runs, in the same
+// queued -> running CAS, so a park later in this attempt labels its values by the plan it runs, never by a recompile.
+describe("cinatra#4150 - the dispatch records the publish rows of the plan it runs", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    storeMock.readAgentRunById.mockResolvedValue(makeRun());
+    storeMock.selectWayflowRunStepToolPolicy.mockImplementation(async (input: { contextId: string }) => ({
+      version: 1, contextId: input.contextId, source: "{}",
+      sourceSha256: "a".repeat(64), executedSourceSha256: "b".repeat(64), declarationSourceSha256: "c".repeat(64),
+    }));
+    storeMock.bindRunStepToolPolicy.mockResolvedValue(undefined);
+  });
+
+  const dispatchOf = () => {
+    const call = (storeMock.transitionRunStatus.mock.calls as unknown as Array<[string, string, string, { dispatch?: Record<string, unknown> }]>)
+      .find(([, from, to]) => from === "queued" && to === "running");
+    return call?.[3]?.dispatch;
+  };
+
+  it("the queued -> running CAS carries the template's rows map as JSON, and {} for a template with none", async () => {
+    const rows = { publish: [{ label: "Title", input: "title" }] };
+    storeMock.readAgentTemplateById.mockResolvedValue({ ...makeTemplate(), publishingSteps: ["publish"], publishRows: rows });
+    await run();
+    expect(dispatchOf()).toEqual({ attemptId: expect.any(String), publishRows: JSON.stringify(rows) });
+
+    storeMock.transitionRunStatus.mockClear();
+    storeMock.readAgentTemplateById.mockResolvedValue({ ...makeTemplate(), publishRows: null });
+    await run();
+    expect(dispatchOf()).toEqual({ attemptId: expect.any(String), publishRows: "{}" });
+  });
+});

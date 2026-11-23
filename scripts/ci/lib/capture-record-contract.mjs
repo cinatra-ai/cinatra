@@ -403,6 +403,34 @@ export const CARD_KINDS = {
         "recorded, not a photograph of it.",
     },
   },
+  // THE SIXTH KIND (cinatra#4150): the publish card, XV. It is MOUNTED on all four hosts, and three of them can be
+  // photographed. A pending card draws BOTH controls (disabled where the reader may not decide), and a settled card
+  // keeps its rows and drops both, with its marker below: a drawn reading, not an absence.
+  publish_decision: {
+    cellTokens: ["publish-card", "publish-decision"],
+    root: '[data-lifecycle-card="publish_decision"]',
+    decisionControls: ['[data-action="decline-publish -> declined"]', '[data-action="approve-publish -> released"]'],
+    // ALL OF THEM, not any one: a pending card that shows one control lost the other.
+    decisionControlsAllOf: true,
+    // The gate region is the one host no shipped sequence reaches with a card on it; see `compositionOnly`.
+    capturableHosts: ["chat_thread", "site_widget", "run_card"],
+    capturableReasons: {
+      run_card:
+        "a run's review is read on the run page: the retired review address redirects to the run detail's review " +
+        "step (cinatra#3693), and the run detail's panel mounts this card keyed by the run under " +
+        '`LifecycleCardSurfaceProvider host="run_card"` (packages/agents/src/agentic-run-panel.tsx), so a run parked ' +
+        "at a publish step is photographed there, on the `run_detail` URL class.",
+    },
+    compositionOnly: {
+      page_gate_region:
+        "the standalone review page is retired (cinatra#3693): `reviewAddressRedirect` sends every run the store " +
+        "can read to the run detail before the gate region is composed, so the region is composed only for a run " +
+        "the store cannot read, and for that run the card's own read answers `none` " +
+        "(packages/agents/src/publish-decision-card-core.ts) and draws nothing. The region composes the card, and " +
+        "the composition is what is recorded, not a photograph of it; the run's review, with this card, is " +
+        "photographed on `run_card`.",
+    },
+  },
 };
 
 /**
@@ -660,6 +688,7 @@ export const KIND_CAPTURE_STATES = Object.freeze({
   // grading every kind. What is unusual about this kind is its settled
   // READING, not its settled state: `settledIsAbsence` above.
   agent_hitl_screen: CANONICAL_CAPTURE_STATES,
+  publish_decision: CANONICAL_CAPTURE_STATES,
   verification_summary: Object.freeze(["advisory"]),
 });
 
@@ -785,9 +814,12 @@ export function requiredAssertionsFor({ host, kind, state, cell = null }) {
        * differently. Every one of the 26 records on file observes all three, so
        * naming all three costs no truthful picture.
        */
+      // A kind that draws every control at once (`decisionControlsAllOf`) owes each
+      // one on its own, like a pre-redraw cell; any other kind keeps its any-of group.
+      const allOf = preRedraw || spec.decisionControlsAllOf === true;
       for (const sel of controls) {
         required.push(
-          preRedraw ? { selector: sel, scope: "root" } : { selector: sel, scope: "root", any: controls },
+          allOf ? { selector: sel, scope: "root" } : { selector: sel, scope: "root", any: controls },
         );
       }
     }

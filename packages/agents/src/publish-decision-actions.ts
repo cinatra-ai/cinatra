@@ -16,6 +16,7 @@ import {
   listDueParked,
   listSettledWithWaitingRun,
   readDecisionForRunNode,
+  readDispatchedPublishRows,
   readLatestDecisionForRun,
   readOpenDecisionForRun,
   type PublishDecisionRow,
@@ -69,11 +70,14 @@ const isStale = (err: unknown): boolean =>
 const LOGGED_ERROR_NAMES = new Set(["Error", "TypeError", "RangeError", "SyntaxError", "AbortError", "TimeoutError", "AuthzError"]);
 const nameOf = (err: unknown): string => (err instanceof Error ? (LOGGED_ERROR_NAMES.has(err.name) ? err.name : "Error") : "error");
 
-/** Refuses a resume when the run's newest decision exists and is not `released`. A read error propagates. Answers
- *  whether the run has a (released) decision: such a run met a publish gate, so it can meet one again. */
+/** Refuses a resume when the newest decision of the run's CURRENT attempt exists and is not `released`: a decision of an
+ *  attempt a retry's reset ended (an earlier reset generation) never holds the later attempt's gate, while a declined,
+ *  expired or run_ended decision of the current attempt still does. A read error propagates. Answers whether the run has
+ *  any decision, of any attempt: such a run met a publish gate, so it can meet one again. */
 export async function assertNoOpenPublishDecision(runId: string): Promise<boolean> {
-  const latest = await readLatestDecisionForRun(runId);
-  if (latest && latest.status !== "released") throw new PublishDecisionRequiredError();
+  const latest = await readLatestDecisionForRun(runId, { orEarlierAttempt: true });
+  // Only a row the read marks as an earlier generation's (current === false) lets the run go on: fail-closed.
+  if (latest && latest.current !== false && latest.status !== "released") throw new PublishDecisionRequiredError();
   return latest !== null;
 }
 
@@ -202,6 +206,7 @@ export async function holdRunAtPublishGate(args: {
     return true;
   }
   if (!verified.startsWith(PUBLISH_GATE_NODE_PREFIX)) return false;
+  const nodeId = verified.slice(PUBLISH_GATE_NODE_PREFIX.length);
 
   const surfacedValues = surfacedValuesOf(task);
   // A stop that surfaced more than the record holds is refused by name, before any write. The text is fixed: it names
@@ -230,20 +235,36 @@ export async function holdRunAtPublishGate(args: {
     park = await insertParkedDecision({
       orgId: run.orgId,
       runId: run.id,
-      nodeId: verified.slice(PUBLISH_GATE_NODE_PREFIX.length),
+      nodeId,
       gateTaskId: task.id,
       a2aContextId: contextId ?? null,
       surfacedValues,
+      declaredRows: await readDispatchedPublishRows(run.id, nodeId).catch(() => null),
     });
+    // The stop belongs to an attempt that has ended: an existing row of an earlier reset generation, or a new row
+    // stamped while the run was no longer held at a gate (its attempt failed and may have been reset meanwhile). It
+    // cannot hold this attempt; a new row is closed run_ended at once, so it never waits for a person.
+    if (!park.current) {
+      if (park.inserted) await decide(park.decision.id, { from: "parked", to: "run_ended", actor: null }).catch(() => undefined);
+      throw new Error("superseded");
+    }
   } catch {
     await moveRun(run.id, fromStatus, "failed", { error: PUBLISH_DECISION_UNRECORDED_TEXT, completedAt: new Date() }, authority);
     return true;
   }
   // A stop this gate task already answered is closed; the newest-decision rule keeps it closed.
   if (park.decision.status !== "parked" || fromStatus === "pending_approval") return true;
-  if (!(await moveRun(run.id, fromStatus, "pending_approval", undefined, authority))) {
-    await decide(park.decision.id, { from: "parked", to: "run_ended", actor: null });
+  let moved: boolean;
+  try {
+    moved = await moveRun(run.id, fromStatus, "pending_approval", undefined, authority);
+  } catch (err) {
+    // The dispatch records this attempt failed. A row left parked would read as the open stop of the run's next attempt
+    // (a retry), so it is closed run_ended here, as a lost move closes it. A fault on that close does not hide the move's
+    // own fault; the retry's reset closes the row then, in the guarded transaction of its compare-and-set.
+    await decide(park.decision.id, { from: "parked", to: "run_ended", actor: null }).catch(() => undefined);
+    throw err;
   }
+  if (!moved) await decide(park.decision.id, { from: "parked", to: "run_ended", actor: null });
   return true;
 }
 
@@ -261,6 +282,17 @@ const forbidden = (message: string) => new AuthzError({ statusCode: 403, reason:
  */
 function isPublishDecider(actor: PrimitiveActorContext | null | undefined): actor is PrimitiveActorContext & { userId: string } {
   return actor?.actorType === "human" && (actor.source === "ui" || actor.source === "route") && actor.tokenScopes === undefined
+    && typeof actor.userId === "string" && actor.userId.length > 0 && !actor.oboCeiling;
+}
+
+/**
+ * The site widget's reader, as the widget lifecycle door builds it (widget-lifecycle-frame-actor.ts): a human actor of
+ * source "a2a", with no token scopes, a user id and no delegated agent ceiling. Admitted ONLY by
+ * widgetReaderMayDecidePublish, which answers a boolean for the card and decides nothing. Publish and Do not publish
+ * still refuse this actor (isPublishDecider); a widget decide door is a later part (cinatra#4758).
+ */
+function isWidgetPublishReader(actor: PrimitiveActorContext | null | undefined): actor is PrimitiveActorContext & { userId: string } {
+  return actor?.actorType === "human" && actor.source === "a2a" && actor.tokenScopes === undefined
     && typeof actor.userId === "string" && actor.userId.length > 0 && !actor.oboCeiling;
 }
 
@@ -283,6 +315,25 @@ const hidden = () => new AuthzError({ statusCode: 404, reason: "hidden", message
 export async function enforcePublishDecisionAccess(input: DecideInput): Promise<{ run: AgentRunRecord; deciderId: string; authority: OrgWriteAuthority }> {
   const actor = input.actorContext;
   if (!isPublishDecider(actor)) throw forbidden("Only a person can decide a publish.");
+  return enforcePublishDecisionRights(actor, input);
+}
+
+/**
+ * May the site widget's reader decide this publish? READ ONLY, for the card's restricted reading: the widget reader
+ * (isWidgetPublishReader) and then the SAME rights enforcePublishDecisionAccess asks after its person check (run.execute
+ * and run.approveHitl, membership of the run's organization). Any other actor, and any refusal or fault, is false.
+ */
+export async function widgetReaderMayDecidePublish(input: DecideInput): Promise<boolean> {
+  const actor = input.actorContext;
+  if (!isWidgetPublishReader(actor)) return false;
+  return enforcePublishDecisionRights(actor, input).then(() => true, () => false);
+}
+
+/** The rights half of the publish decision's access check, for a person already admitted by the caller. */
+async function enforcePublishDecisionRights(
+  actor: PrimitiveActorContext & { userId: string },
+  input: DecideInput,
+): Promise<{ run: AgentRunRecord; deciderId: string; authority: OrgWriteAuthority }> {
   const deciderId = actor.userId;
   const run = await readAgentRunById(input.runId);
   const { enforceRunAccess, resolveEffectivePolicy } = await import("./auth-policy");
