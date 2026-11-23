@@ -20,10 +20,16 @@
 
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import { GROUPED_SETUP_FORM_RENDERER_ID } from "./agent-builder-ids";
-import { declaredHitlCardOf, isListPickerRenderer, rendererReadsAsKind } from "./field-renderer-registry";
+import {
+  declaredHitlCardOf,
+  isListPickerRenderer,
+  isRendererBound,
+  rendererReadsAsKind,
+  type RendererBindingsLoad,
+} from "./field-renderer-registry";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
 import { isSetupInterruptTaskId } from "./run-surface-status";
-import { wrapUserResponseWithAttachments } from "./wayflow-user-response-envelope";
+import { readBridgeUserEnvelope, wrapUserResponseWithAttachments } from "./wayflow-user-response-envelope";
 
 // ---------------------------------------------------------------------------
 // Gate classification
@@ -339,11 +345,41 @@ export function continueApprovalFlag(staged: Record<string, unknown>, xRenderer?
   return staged.approved !== false;
 }
 
+/** The reason a mid-run Continue shows while the gate's screen is loading. */
+export const SCREEN_LOADING_HOLD_REASON = "This step's screen is still loading.";
+/** The reason a mid-run Continue shows when the gate's screen failed to load. */
+export const SCREEN_FAILED_HOLD_REASON =
+  "This step's screen could not be loaded. Reload the page to try again.";
+
 /**
- * Is the mid-run Continue held by the gate's renderer (cinatra#3470)? Only an
- * entry that declares `continueReady` can hold it, and only by answering
- * `false`: a declared card waits for an explicit choice and every required
- * value. Every other entry, and no entry at all, never holds it.
+ * Why the mid-run Continue of the gate drawn by `xRenderer` is held because
+ * its renderer binding is missing (cinatra#3470), or null. A gate with no
+ * binding registered under its exact id is held while the host's bindings
+ * are still loading, after they failed to load, and when the source named a
+ * declared screen for it that did not register. It FAILS CLOSED: the
+ * fallback such a gate draws can only approve, so a press would resume a
+ * declared screen without its decision and its fields.
+ */
+export function rendererBindingHoldReason(
+  xRenderer: string,
+  bindings: RendererBindingsLoad,
+): string | null {
+  if (xRenderer === "" || isRendererBound(xRenderer)) return null;
+  if (bindings.status === "loading") return SCREEN_LOADING_HOLD_REASON;
+  if (bindings.status === "failed" || bindings.announcedIds.has(xRenderer)) {
+    return SCREEN_FAILED_HOLD_REASON;
+  }
+  return null;
+}
+
+/**
+ * Is the mid-run Continue held by the gate's renderer (cinatra#3470)? THE ONE
+ * READINESS PREDICATE of every host (the run panel, the stepper and the
+ * card). It is held while the gate's renderer binding is missing
+ * (`rendererBindingHoldReason`). Otherwise only an entry that declares
+ * `continueReady` can hold it, and only by answering `false`: a declared card
+ * waits for an explicit choice and every required value. Every other entry,
+ * and no entry at all, never holds it.
  */
 export function continueHeldByRenderer(
   entry: {
@@ -354,7 +390,9 @@ export function continueHeldByRenderer(
   } | null | undefined,
   runValue: Record<string, unknown> | null | undefined,
   staged: Record<string, unknown>,
+  gate: { xRenderer: string; bindings: RendererBindingsLoad },
 ): boolean {
+  if (rendererBindingHoldReason(gate.xRenderer, gate.bindings) !== null) return true;
   if (typeof entry?.continueReady !== "function") return false;
   return entry.continueReady({ runValue: runValue ?? {}, staged }) === false;
 }
@@ -1589,7 +1627,16 @@ export function buildSchemaFieldGatePayload(args: {
  *     alone - even when the text reads as JSON (`42`, `{"tone":"warm"}`), which
  *     the reading below would otherwise take for the submitted values. A name
  *     whose value is not the resume text is not believed.
- *  2. Otherwise, as before: a `userResponse` that parses as a JSON object is the
+ *  2. THE ATTACHMENT ENVELOPE (cinatra#3470). A `userResponse` that is exactly
+ *     the `{ text, attachments }` envelope the bridge accepts
+ *     (`readBridgeUserEnvelope`) carries the answer in `text`, and the agent
+ *     reads that text with the files beside it. When the text is a structured
+ *     answer (rule 1, or a JSON object), that answer is recorded, with the
+ *     files under `attachments` (unless the answer has a key of that name).
+ *     A plain-text answer keeps the envelope as its record, as before. So a
+ *     declared card's answer sent with a file is recorded as that answer, never
+ *     as the transport envelope.
+ *  3. Otherwise, as before: a `userResponse` that parses as a JSON object is the
  *     submitted values; one that is not JSON leaves the values without
  *     `userResponse`; no `userResponse` leaves the values themselves; nothing
  *     left is `null`.
@@ -1608,29 +1655,52 @@ export function readWayflowSubmittedValues(values: unknown): Record<string, unkn
   const own = (key: string): unknown =>
     Object.prototype.hasOwnProperty.call(valuesObj, key) ? valuesObj[key] : undefined;
   const userResponseRaw = own("userResponse");
-  if (typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0) {
+  /** Rule 1: the answer under its named field, or null. */
+  const namedAnswer = (text: string): Record<string, unknown> | null => {
     const fieldName = own("userResponseFieldName");
     if (
-      typeof fieldName === "string" &&
-      fieldName !== "userResponse" &&
-      fieldName !== "userResponseFieldName" &&
-      own(fieldName) === userResponseRaw
+      typeof fieldName !== "string" ||
+      fieldName === "userResponse" ||
+      fieldName === "userResponseFieldName" ||
+      own(fieldName) !== text
     ) {
-      const recorded: Record<string, unknown> = {};
-      Object.defineProperty(recorded, fieldName, {
-        value: userResponseRaw,
-        enumerable: true,
-        writable: true,
-        configurable: true,
-      });
-      return recorded;
+      return null;
     }
+    const recorded: Record<string, unknown> = {};
+    Object.defineProperty(recorded, fieldName, {
+      value: text,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+    return recorded;
+  };
+  const objectOf = (parsed: unknown): Record<string, unknown> | null =>
+    parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  if (typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0) {
+    const named = namedAnswer(userResponseRaw);
+    if (named !== null) return named;
     try {
       const parsed = JSON.parse(userResponseRaw);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>;
+      const envelope = readBridgeUserEnvelope(parsed);
+      if (envelope !== null) {
+        let inner = namedAnswer(envelope.text);
+        if (inner === null) {
+          try {
+            inner = objectOf(JSON.parse(envelope.text));
+          } catch {
+            inner = null;
+          }
+        }
+        if (inner !== null) {
+          return envelope.attachments.length > 0 && !Object.prototype.hasOwnProperty.call(inner, "attachments")
+            ? { ...inner, attachments: envelope.attachments }
+            : inner;
+        }
       }
-      return null;
+      return objectOf(parsed);
     } catch {
       const { userResponse: _u, ...rest } = valuesObj;
       void _u;

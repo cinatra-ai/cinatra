@@ -21,10 +21,13 @@
 // Both imports are DELIBERATELY lazy: the action module and the registration
 // module (which owns the full renderer component table) only load when
 // runtime bindings actually exist, so panel test graphs and first-paint
-// bundles stay unchanged. Every failure path degrades silently — resolution
-// falls back to the schema-field path.
+// bundles stay unchanged. A failure is recorded, never thrown
+// (`settleRuntimeRendererBindings`): a mid-run screen whose binding has not
+// loaded, or failed to load, holds its Continue (`continueHeldByRenderer`,
+// cinatra#3470) rather than sending an answer its renderer never drew.
 
 import { useEffect, useState } from "react";
+import { settleRuntimeRendererBindings } from "./field-renderer-registry";
 
 export function useRuntimeFieldRendererBindings(): void {
   const [, setVersion] = useState(0);
@@ -36,16 +39,25 @@ export function useRuntimeFieldRendererBindings(): void {
           "./server-actions"
         );
         const bindings = await getRuntimeFieldRendererBindingsAction();
-        if (cancelled || !Array.isArray(bindings) || bindings.length === 0) {
+        if (!Array.isArray(bindings)) {
+          settleRuntimeRendererBindings({ ok: false });
           return;
         }
-        const { registerFieldRendererBindings } = await import(
-          "./register-default-renderers"
-        );
-        registerFieldRendererBindings(bindings);
+        if (bindings.length > 0) {
+          const { registerFieldRendererBindings } = await import(
+            "./register-default-renderers"
+          );
+          registerFieldRendererBindings(bindings);
+        }
+        // The bindings that declare a screen: one that is still unregistered
+        // after this was refused, and its gate stays held.
+        settleRuntimeRendererBindings({
+          ok: true,
+          screenIds: bindings.filter((b) => b.screen !== undefined).map((b) => b.id),
+        });
         if (!cancelled) setVersion((v) => v + 1);
       } catch {
-        // Degrade silently: resolution falls back to the schema-field path.
+        settleRuntimeRendererBindings({ ok: false });
       }
     })();
     return () => {

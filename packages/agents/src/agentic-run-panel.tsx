@@ -45,6 +45,8 @@ import {
   continueAwaitsAPick,
   declaredHitlCardOf,
   fieldRendererRegistry,
+  runtimeRendererBindingsLoad,
+  subscribeRuntimeRendererBindings,
   wholeAnswerStageProps,
 } from "./field-renderer-registry";
 import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
@@ -98,6 +100,7 @@ import {
   isGroupedSetupRenderer,
   continueApprovalFlag,
   continueHeldByRenderer,
+  rendererBindingHoldReason,
   stageRendererAnswer,
   stageAssistantFill,
   stageAssistantFills,
@@ -590,6 +593,15 @@ export function AgenticRunPanel({
   // bindings of RUNTIME-installed agent packages; re-renders on arrival so
   // resolution below picks them up.
   useRuntimeFieldRendererBindings();
+  // Where those bindings stand (cinatra#3470): a mid-run screen whose binding
+  // has not loaded, or failed to load, holds its Continue.
+  const rendererBindings = useSyncExternalStore(
+    subscribeRuntimeRendererBindings,
+    runtimeRendererBindingsLoad,
+    runtimeRendererBindingsLoad,
+  );
+  const rendererBindingsRef = useRef(rendererBindings);
+  rendererBindingsRef.current = rendererBindings;
   // THE AMBIENT HOST, read BEFORE this panel declares its own. When an outer
   // conversation provider (`chat_thread` or `site_widget`) is already in scope,
   // this panel is being drawn INSIDE a conversation transcript that mounts the
@@ -1501,6 +1513,13 @@ export function AgenticRunPanel({
       // as the Continue drawn for the gate does.
       const gateKey = hitlGateIdentityKey(ctx);
       if (gateValidity.isHeld(gateKey)) return;
+      // A mid-run screen whose binding has not loaded, or failed to load, is
+      // held here as on its Continue (cinatra#3470).
+      const bindingHold =
+        ctx.xRenderer.endsWith(":output") && !isSetupGateTaskId(ctx.reviewTaskId)
+          ? rendererBindingHoldReason(ctx.xRenderer, rendererBindingsRef.current)
+          : null;
+      if (bindingHold !== null) throw new Error(bindingHold);
       // A DECLARED CARD (cinatra#3470): what the caller hands in is a change to
       // the card's answer, written by the one writer (`declaredHitlStage`),
       // held until the card is ready, and sent as the staged whole answer,
@@ -2225,6 +2244,12 @@ export function AgenticRunPanel({
     declaredSchema?: Record<string, unknown> | null;
   }): ReactNode => effectiveHitlContext && (
     <div className="flex justify-end items-center gap-2 pt-2 border-t border-line">
+      {!opts?.withReject &&
+      rendererBindingHoldReason(effectiveHitlContext.xRenderer, rendererBindings) !== null ? (
+        <span className="text-xs text-muted-foreground" data-continue-hold-reason="">
+          {rendererBindingHoldReason(effectiveHitlContext.xRenderer, rendererBindings)}
+        </span>
+      ) : null}
       {opts?.withReject ? (
         <Button
           size="sm"
@@ -2295,6 +2320,7 @@ export function AgenticRunPanel({
               hitlRendererEntry?.entry,
               effectiveHitlContext.currentValues,
               bufferedHitlValue,
+              { xRenderer: effectiveHitlContext.xRenderer, bindings: rendererBindings },
             )) ||
           opts?.awaitingRendererValue === true ||
           (!rendererFloored && continueAwaitsAPick(hitlRendererEntry?.entry, bufferedHitlValue))
@@ -2310,6 +2336,16 @@ export function AgenticRunPanel({
           // Reported unsendable: the press sends nothing (the drawn state can
           // lag the report by one frame; the store cannot).
           if (gateValidity.isHeld(activeGateKey)) return;
+          // A screen whose binding has not loaded sends nothing (cinatra#3470).
+          if (
+            !opts?.withReject &&
+            rendererBindingHoldReason(
+              effectiveHitlContext.xRenderer,
+              rendererBindingsRef.current,
+            ) !== null
+          ) {
+            return;
+          }
           // A LIST STEP WITH NOTHING PICKED (cinatra#3562) sends nothing: its
           // snapshot would name no list (`listId: ""`). The list step reports
           // nothing yet, so the Continue stays drawn, and a press is refused
@@ -3487,14 +3523,22 @@ export function AgenticRunPanel({
               })()}
             </div>
           ) : (
-            // Fallback: renderer not found in registry.
+            // Fallback: renderer not found in registry. A screen whose binding
+            // has not loaded, or failed to load, says so (cinatra#3470); its
+            // published submit is held by the same reading.
             <div
               className="soft-panel rounded-panel p-4 bg-surface-muted"
               data-conformance-id="hitl-screen-fields"
             >
-              <p className="text-sm text-muted-foreground">
-                Waiting for input — no renderer configured for this step.
-              </p>
+              {rendererBindingHoldReason(effectiveHitlContext.xRenderer, rendererBindings) !== null ? (
+                <p className="text-sm text-muted-foreground" data-continue-hold-reason="">
+                  {rendererBindingHoldReason(effectiveHitlContext.xRenderer, rendererBindings)}
+                </p>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Waiting for input — no renderer configured for this step.
+                </p>
+              )}
             </div>
           )}
         </>

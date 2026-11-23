@@ -102,11 +102,12 @@ export async function getFieldRendererContextForAgentBuilderAction(): Promise<{
 // Security: requires a valid session — unauthenticated callers receive [].
 // Output is PUBLIC renderer metadata (validated, size-capped plain JSON ids/
 // kinds/params — never secrets); enumeration-only, no writes.
-// All errors → [] so renderer resolution degrades to the schema-field
-// fallback rather than crashing the panel.
+// A collection error → null, never a crash: the panel records the failure,
+// and a mid-run screen whose binding is missing holds its Continue
+// (cinatra#3470) instead of reading the error as "no binding declared".
 // ---------------------------------------------------------------------------
 export async function getRuntimeFieldRendererBindingsAction(): Promise<
-  FieldRendererBindingInput[]
+  FieldRendererBindingInput[] | null
 > {
   const session = await requireAuthSession().catch(() => null);
   if (!session?.user?.id) return [];
@@ -132,7 +133,7 @@ export async function getRuntimeFieldRendererBindingsAction(): Promise<
         ...(screen !== undefined ? { screen } : {}),
       }));
   } catch {
-    return [];
+    return null;
   }
 }
 

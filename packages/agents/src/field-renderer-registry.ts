@@ -250,3 +250,56 @@ export function continueAwaitsAPick(
   const pick = buffered.userResponse;
   return !(typeof pick === "string" && pick.length > 0);
 }
+
+// ---------------------------------------------------------------------------
+// WHERE THE GATE'S RENDERER BINDING STANDS (cinatra#3470)
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a host's renderer bindings stand. `status` is `loading` until the
+ * host's source of bindings answered, `loaded` once it did, and `failed` when
+ * it could not. `announcedIds` names every binding the source said declares a
+ * screen: one of them that is still not registered failed to register.
+ */
+export type RendererBindingsLoad = {
+  status: "loading" | "loaded" | "failed";
+  announcedIds: ReadonlySet<string>;
+};
+
+/** Is a binding registered under exactly this id? */
+export function isRendererBound(xRenderer: string): boolean {
+  return fieldRendererRegistry.list().some((e) => e.id === xRenderer);
+}
+
+let runtimeBindingsLoad: RendererBindingsLoad = { status: "loading", announcedIds: new Set() };
+const runtimeBindingsListeners = new Set<() => void>();
+
+/**
+ * The run page's runtime bindings (`useRuntimeFieldRendererBindings`): where
+ * the fetch of the installed agents' bindings stands. It starts `loading`, so a
+ * screen drawn before the fetch answered is never taken for one with no
+ * binding. A later failure never undoes an earlier `loaded`.
+ */
+export function runtimeRendererBindingsLoad(): RendererBindingsLoad {
+  return runtimeBindingsLoad;
+}
+
+/** Record what the runtime bindings fetch answered. */
+export function settleRuntimeRendererBindings(
+  outcome: { ok: true; screenIds: ReadonlyArray<string> } | { ok: false },
+): void {
+  const announcedIds = outcome.ok
+    ? new Set([...runtimeBindingsLoad.announcedIds, ...outcome.screenIds])
+    : runtimeBindingsLoad.announcedIds;
+  const status = outcome.ok || runtimeBindingsLoad.status === "loaded" ? "loaded" : "failed";
+  runtimeBindingsLoad = { status, announcedIds };
+  for (const listener of runtimeBindingsListeners) listener();
+}
+
+/** Subscribe to `runtimeRendererBindingsLoad` (for `useSyncExternalStore`). */
+export function subscribeRuntimeRendererBindings(listener: () => void): () => void {
+  runtimeBindingsListeners.add(listener);
+  return () => {
+    runtimeBindingsListeners.delete(listener);
+  };
+}

@@ -24,7 +24,14 @@
  *     staged answer, and the captured prompt and the answered-gate binding
  *     record the same answer. So does an untouched prefilled field, a choice
  *     staged before the conversation moved the card (still drawn as chosen),
- *     and a choice switch, whose carried keys come from the run values;
+ *     and a choice switch, whose carried keys come from the run values. A
+ *     declared answer sent with a file reaches the agent in the attachment
+ *     envelope, and is recorded as that answer with its file under
+ *     `attachments`, never as the envelope;
+ *   - the shared readiness predicate holds a gate with no binding while the
+ *     host's bindings load, after they failed, and when its declared screen
+ *     did not register; on the card, a read that could not tell and a handed
+ *     screen that did not register both hold the Continue with their reason;
  *   - a list step is read from the binding's declared kind, so a list picker
  *     with any id sends its pick.
  *
@@ -132,7 +139,7 @@ vi.mock("@/lib/auth-session", async (orig) => ({
 
 import { approveReviewTaskInternal } from "../review-task-actions";
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
-import { fieldRendererRegistry, type FieldRendererProps } from "../field-renderer-registry";
+import { declaredHitlCardOf, fieldRendererRegistry, type FieldRendererProps } from "../field-renderer-registry";
 import {
   ensureDefaultFieldRenderersRegistered,
   registerFieldRendererBindings,
@@ -141,6 +148,8 @@ import { AgentHitlScreenCard, type AgentHitlScreenCarrier } from "../agent-hitl-
 import {
   continueApprovalFlag,
   continueHeldByRenderer,
+  declaredHitlContinuePayload,
+  declaredHitlStage,
   isGroupedSetupRenderer,
   isMidRunListStepGate,
   liftRendererApprovalNote,
@@ -388,14 +397,81 @@ describe("a declared card holds the HITL screen card's Continue (cinatra#3470)",
 });
 
 describe("continueHeldByRenderer (cinatra#3470)", () => {
+  const loaded = { status: "loaded" as const, announcedIds: new Set<string>() };
+  const boundGate = { xRenderer: PROBE_ID, bindings: loaded };
+
   it("holds only where the entry declares continueReady and it answers false", () => {
-    expect(continueHeldByRenderer(null, {}, {})).toBe(false);
-    expect(continueHeldByRenderer({}, {}, {})).toBe(false);
-    expect(continueHeldByRenderer({ continueReady: () => true }, {}, {})).toBe(false);
-    expect(continueHeldByRenderer({ continueReady: () => false }, {}, {})).toBe(true);
+    expect(continueHeldByRenderer(null, {}, {}, boundGate)).toBe(false);
+    expect(continueHeldByRenderer({}, {}, {}, boundGate)).toBe(false);
+    expect(continueHeldByRenderer({ continueReady: () => true }, {}, {}, boundGate)).toBe(false);
+    expect(continueHeldByRenderer({ continueReady: () => false }, {}, {}, boundGate)).toBe(true);
     const seen = vi.fn(() => true);
-    continueHeldByRenderer({ continueReady: seen }, undefined, { a: 1 });
+    continueHeldByRenderer({ continueReady: seen }, undefined, { a: 1 }, boundGate);
     expect(seen).toHaveBeenCalledWith({ runValue: {}, staged: { a: 1 } });
+  });
+
+  // red-first-expect: Failed to resolve import "../declared-hitl-screen-renderer"
+  it("holds a gate with no binding registered while bindings load, after they failed, and when its announced screen did not register", () => {
+    const unbound = "@acme-test/runtime-agent:output";
+    const at = (bindings: { status: "loading" | "loaded" | "failed"; announcedIds: ReadonlySet<string> }) =>
+      ({ xRenderer: unbound, bindings });
+    expect(continueHeldByRenderer(null, {}, {}, at({ status: "loading", announcedIds: new Set() }))).toBe(true);
+    expect(continueHeldByRenderer(null, {}, {}, at({ status: "failed", announcedIds: new Set() }))).toBe(true);
+    expect(continueHeldByRenderer(null, {}, {}, at({ status: "loaded", announcedIds: new Set([unbound]) }))).toBe(true);
+    // Loaded, and no screen announced for it: a gate with no binding, as before.
+    expect(continueHeldByRenderer(null, {}, {}, at(loaded))).toBe(false);
+    // A registered binding is never held by the load, whatever its status.
+    expect(continueHeldByRenderer(null, {}, {}, { xRenderer: PROBE_ID, bindings: { status: "failed", announcedIds: new Set() } })).toBe(false);
+  });
+});
+
+describe("the HITL screen card holds a screen whose binding failed to load (cinatra#3470)", () => {
+  const RUNTIME_ID = "@acme-test/runtime-agent:output";
+  const HOLD_FAILED = "This step's screen could not be loaded. Reload the page to try again.";
+
+  function continueButton(container: HTMLElement): HTMLButtonElement | null {
+    return container.querySelector<HTMLButtonElement>('[data-action="submit-hitl-screen"]');
+  }
+  function holdReason(container: HTMLElement): string | null {
+    return container.querySelector("[data-continue-hold-reason]")?.textContent ?? null;
+  }
+
+  // red-first-expect: Failed to resolve import "../declared-hitl-screen-renderer"
+  it("holds the Continue, with its reason, when the read could not tell whether a screen is declared", async () => {
+    current = { ...asking(RUNTIME_ID, { itemId: "item-1" }), declaredScreenUnavailable: true } as typeof current;
+    const { container } = mount();
+    await settle();
+    await waitFor(() => expect(continueButton(container)).not.toBeNull());
+    expect(continueButton(container)!.disabled).toBe(true);
+    expect(holdReason(container)).toBe(HOLD_FAILED);
+    fireEvent.click(continueButton(container)!);
+    await settle();
+    expect(approveMock).not.toHaveBeenCalled();
+  });
+
+  // red-first-expect: Failed to resolve import "../declared-hitl-screen-renderer"
+  it("holds the Continue, with its reason, when the declared screen the read handed over did not register", async () => {
+    current = {
+      ...asking(RUNTIME_ID, { itemId: "item-1" }),
+      // A screen the registration refuses: a card with no title and no sections.
+      declaredScreen: { id: RUNTIME_ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: { layout: "card" } },
+    } as typeof current;
+    const { container } = mount();
+    await settle();
+    await waitFor(() => expect(continueButton(container)).not.toBeNull());
+    expect(continueButton(container)!.disabled).toBe(true);
+    expect(holdReason(container)).toBe(HOLD_FAILED);
+    fireEvent.click(continueButton(container)!);
+    await settle();
+    expect(approveMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves a gate with no binding and no declared screen as before: its Continue sends", async () => {
+    current = asking(RUNTIME_ID, { itemId: "item-1" });
+    const { container } = mount();
+    await settle();
+    await waitFor(() => expect(continueButton(container)?.disabled).toBe(false));
+    expect(holdReason(container)).toBeNull();
   });
 });
 
@@ -498,6 +574,47 @@ describe("a declared card's answer on the real wire (cinatra#3470)", () => {
     expect(wireText()).toBe(sent);
     expect(recorded()).toEqual({ itemId: "item-1", answer: "revise this", detail: "Fixture detail" });
     expect(answeredMock).toHaveBeenCalledWith("run-wire-3470", "task-3470", sent);
+  });
+
+  // The run page's Continue sends a declared answer with the files the person
+  // attached (`declaredHitlContinuePayload`): the agent reads the answer in the
+  // envelope's text with the files beside it, and the record holds that
+  // answer and its files, never the transport envelope.
+  const FILE = {
+    artifactId: "art-3470",
+    representationRevisionId: "rev-file-3470",
+    digest: "sha256:fixture",
+    mime: "application/pdf",
+    originKind: "upload" as const,
+    filename: "fixture.pdf",
+  };
+
+  async function sendWithFile(screen: Record<string, unknown>, runValue: Record<string, unknown>, change: Record<string, unknown>) {
+    registerCard(screen, runValue);
+    const card = declaredHitlCardOf(DECLARED_ID)!;
+    const staged = declaredHitlStage(card, runValue, {}, change);
+    await approveReviewTaskInternal(TASK_ID, "actor-3470", declaredHitlContinuePayload(card, staged, [FILE]));
+  }
+
+  it("a typed field answer sent with a file reaches the agent with the file, and is recorded as the answer and its file", async () => {
+    await sendWithFile(FIELD_CARD, { itemId: "item-1" }, { answer: "revise this", detail: "Fixture detail" });
+    const sent = JSON.stringify({ itemId: "item-1", answer: "revise this", detail: "Fixture detail" });
+    expect(wireText()).toBe(JSON.stringify({ text: sent, attachments: [FILE] }));
+    // red-first-expect: Failed to resolve import "../declared-hitl-screen-renderer"
+    expect(recorded()).toEqual({
+      itemId: "item-1",
+      answer: "revise this",
+      detail: "Fixture detail",
+      attachments: [FILE],
+    });
+  });
+
+  it("a declared decline sent with a file is recorded as the decline and its file", async () => {
+    await sendWithFile(CHOICE_CARD, { itemId: "item-1" }, { approved: false, reason: "Fixture reason" });
+    const sent = JSON.stringify({ itemId: "item-1", approved: false, reason: "Fixture reason" });
+    expect(wireText()).toBe(JSON.stringify({ text: sent, attachments: [FILE] }));
+    // red-first-expect: Failed to resolve import "../declared-hitl-screen-renderer"
+    expect(recorded()).toEqual({ itemId: "item-1", approved: false, reason: "Fixture reason", attachments: [FILE] });
   });
 
   it("a declared decline reaches the agent with its own keys, and is recorded as the same decline", async () => {

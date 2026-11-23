@@ -75,6 +75,9 @@ export type AgentHitlScreenState =
       gate: AgentHitlScreenGate;
       /** The declared screen of the gate's renderer, when one is declared. */
       declaredScreen?: AgentHitlDeclaredScreenBinding;
+      /** The read could not tell whether the gate's renderer declares a
+       *  screen (cinatra#3470): the card holds the gate's Continue. */
+      declaredScreenUnavailable?: true;
     };
 
 export const AGENT_HITL_SCREEN_NONE: AgentHitlScreenState = Object.freeze({
@@ -124,15 +127,19 @@ export function parseAgentHitlScreenState(data: unknown): AgentHitlScreenState |
     value !== null && typeof value === "object" && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : {};
-  const declaredScreen = parseDeclaredScreenBinding(
-    (data as { declaredScreen?: unknown }).declaredScreen,
-    xRenderer,
-  );
+  const rawDeclaredScreen = (data as { declaredScreen?: unknown }).declaredScreen;
+  const declaredScreen = parseDeclaredScreenBinding(rawDeclaredScreen, xRenderer);
+  // A declared screen that does not read back is a screen that failed to
+  // load, never "none declared" (cinatra#3470).
+  const declaredScreenUnavailable =
+    (data as { declaredScreenUnavailable?: unknown }).declaredScreenUnavailable === true ||
+    (rawDeclaredScreen !== undefined && rawDeclaredScreen !== null && declaredScreen === null);
   return {
     state: "asking",
     runId,
     screenRef: typeof screenRef === "string" ? screenRef : null,
     ...(declaredScreen ? { declaredScreen } : {}),
+    ...(declaredScreenUnavailable ? { declaredScreenUnavailable: true as const } : {}),
     gate: {
       reviewTaskId,
       xRenderer,

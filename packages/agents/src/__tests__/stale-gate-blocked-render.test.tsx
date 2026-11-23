@@ -98,9 +98,13 @@ vi.mock("../hitl-actions", () => ({
     (approveReviewTask as unknown as (...a: unknown[]) => Promise<unknown>)(...args),
 }));
 
-vi.mock("../use-runtime-field-renderer-bindings", () => ({
-  useRuntimeFieldRendererBindings: () => ({ bindings: {}, loading: false }),
-}));
+// The page's installed bindings answered with nothing beyond the build: a gate
+// with no binding is then not held as still loading (cinatra#3470).
+vi.mock("../use-runtime-field-renderer-bindings", async () => {
+  const { settleRuntimeRendererBindings } = await import("../field-renderer-registry");
+  settleRuntimeRendererBindings({ ok: true, screenIds: [] });
+  return { useRuntimeFieldRendererBindings: () => ({ bindings: {}, loading: false }) };
+});
 
 let interruptContext: {
   schema: Record<string, unknown>;

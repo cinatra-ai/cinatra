@@ -133,7 +133,11 @@ export async function agentHitlScreenStateForRun(
     state: "asking",
     runId: run.id,
     screenRef: runStatesHitlMoment(run) ? (run.lifecycleCardRef ?? null) : null,
-    ...(declaredScreen ? { declaredScreen } : {}),
+    ...(declaredScreen === "unavailable"
+      ? { declaredScreenUnavailable: true as const }
+      : declaredScreen
+        ? { declaredScreen }
+        : {}),
     gate: {
       reviewTaskId: context.reviewTaskId,
       xRenderer: context.xRenderer,
@@ -150,17 +154,19 @@ export async function agentHitlScreenStateForRun(
  * (`useRuntimeFieldRendererBindings`); a conversation host has only this read,
  * so without it the chat thread and the site widget found no renderer for a
  * gate the run page draws. Only a binding that declares a `screen` is handed
- * over: that card is drawn by the host from the declaration alone. Any failure
- * hands nothing, and the card falls back exactly as before.
+ * over: that card is drawn by the host from the declaration alone. A failure
+ * of the read, or a declared screen that does not read back, is
+ * "unavailable", never "none declared": the card then holds the gate's
+ * Continue (cinatra#3470).
  */
 async function declaredScreenBindingOf(
   xRenderer: string,
-): Promise<AgentHitlDeclaredScreenBinding | null> {
+): Promise<AgentHitlDeclaredScreenBinding | "unavailable" | null> {
   try {
     const { getMergedFieldRendererBindings } = await import("./field-renderer-bindings.server");
     const binding = getMergedFieldRendererBindings().find((b) => b.id === xRenderer);
     if (!binding || binding.screen === undefined) return null;
-    return parseDeclaredScreenBinding(
+    const parsed = parseDeclaredScreenBinding(
       {
         id: binding.id,
         kind: binding.kind,
@@ -173,8 +179,9 @@ async function declaredScreenBindingOf(
       },
       xRenderer,
     );
+    return parsed ?? "unavailable";
   } catch {
-    return null;
+    return "unavailable";
   }
 }
 

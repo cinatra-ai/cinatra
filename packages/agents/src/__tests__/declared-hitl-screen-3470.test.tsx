@@ -73,6 +73,9 @@ import { parseAgentHitlScreenState } from "../agent-hitl-screen";
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 import { continueApprovalFlag, continueHeldByRenderer } from "../hitl-gate-submit";
 
+/** The gate of `ID` once the host's bindings loaded. */
+const LOADED_GATE = { xRenderer: "@acme-test/publish-agent:confirm", bindings: { status: "loaded" as const, announcedIds: new Set<string>() } };
+
 const ID = "@acme-test/publish-agent:confirm";
 
 // Fixture declaration: the words are the fixture's own, standing for an
@@ -535,11 +538,11 @@ describe("a declared card holds the host's Continue (cinatra#3470)", () => {
     registerFieldRendererBindings([
       { id: ID, kind: "list-picker", priority: 80, midRunHitl: true, screen: { layout: "kind" } },
     ]);
-    expect(continueHeldByRenderer(entryOf(), {}, {})).toBe(true);
-    expect(continueHeldByRenderer(entryOf(), {}, { listId: "  " })).toBe(true);
-    expect(continueHeldByRenderer(entryOf(), {}, { listIds: [""] })).toBe(true);
-    expect(continueHeldByRenderer(entryOf(), {}, { listId: "list-1" })).toBe(false);
-    expect(continueHeldByRenderer(entryOf(), {}, { listIds: ["list-1"] })).toBe(false);
+    expect(continueHeldByRenderer(entryOf(), {}, {}, LOADED_GATE)).toBe(true);
+    expect(continueHeldByRenderer(entryOf(), {}, { listId: "  " }, LOADED_GATE)).toBe(true);
+    expect(continueHeldByRenderer(entryOf(), {}, { listIds: [""] }, LOADED_GATE)).toBe(true);
+    expect(continueHeldByRenderer(entryOf(), {}, { listId: "list-1" }, LOADED_GATE)).toBe(false);
+    expect(continueHeldByRenderer(entryOf(), {}, { listIds: ["list-1"] }, LOADED_GATE)).toBe(false);
   });
 
   // The check of every other kind: a declared 'kind' registers only for a kind

@@ -95,6 +95,8 @@ vi.mock("../a2a-actions", () => ({
   getAgentBuilderTask: vi.fn(async () => null),
 }));
 vi.mock("../server-actions", () => ({
+  // The page's installed bindings: none beyond the build (cinatra#3470).
+  getRuntimeFieldRendererBindingsAction: vi.fn(async () => []),
   getFieldRendererContextForAgentBuilderAction: vi.fn(async () => ({
     connectedApps: [],
     gmailAliases: [],

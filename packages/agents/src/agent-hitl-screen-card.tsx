@@ -139,6 +139,7 @@ import {
   fieldRendererRegistry,
   wholeAnswerStageProps,
   type FieldRendererContext,
+  type RendererBindingsLoad,
 } from "./field-renderer-registry";
 import { hasMidRunHitlBinding } from "./orchestrator-mid-run-hitl";
 import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
@@ -158,6 +159,7 @@ import {
   isGroupedSetupRenderer,
   continueApprovalFlag,
   continueHeldByRenderer,
+  rendererBindingHoldReason,
   stageRendererAnswer,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
@@ -937,10 +939,14 @@ function HitlContinueControl({
   held = false,
   awaitsPick = false,
   awaitingRendererValue = false,
+  holdReason = null,
   onPress,
 }: {
   submitting: boolean;
   blocked: boolean;
+  /** Why the Continue is held while the gate's screen binding is missing
+   *  (`rendererBindingHoldReason`, cinatra#3470), shown beside it. */
+  holdReason?: string | null;
   /** The gate's renderer reports its value unsendable, or holds the Continue
    *  until its answer is complete (`FieldRendererEntry.continueReady`): drawn,
    *  inert, with no credential title. */
@@ -954,6 +960,11 @@ function HitlContinueControl({
 }): ReactElement {
   return (
     <div className="flex justify-end items-center gap-2 pt-2 border-t border-line">
+      {holdReason !== null ? (
+        <span className="text-xs text-muted-foreground" data-continue-hold-reason="">
+          {holdReason}
+        </span>
+      ) : null}
       <Button
         size="sm"
         className="gap-1.5"
@@ -980,12 +991,15 @@ export function AgentHitlScreenContinue({
   submitting,
   blocked,
   held = false,
+  holdReason = null,
   awaitsPick,
   onContinue,
 }: {
   gate: AgentHitlScreenGate;
   buffered: Record<string, unknown>;
   submitting: boolean;
+  /** Why the Continue is held while the gate's screen binding is missing. */
+  holdReason?: string | null;
   /** The renderer's answer is not complete yet (a declared card with no
    *  choice made, or a required value blank). */
   held?: boolean;
@@ -1001,6 +1015,7 @@ export function AgentHitlScreenContinue({
       submitting={submitting}
       blocked={blocked}
       held={held}
+      holdReason={holdReason}
       awaitsPick={awaitsPick}
       // cinatra#3380 — the same rule the run panel and the stepper apply to
       // their mid-run Continue (`hitl-gate-submit.ts`): a gate that declares
@@ -1266,6 +1281,25 @@ export function AgentHitlScreenCard({
     // registers nothing new.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [declaredScreenKey]);
+
+  // WHERE THIS GATE'S BINDING STANDS (cinatra#3470), as the run page reads its
+  // own: the read could not tell (failed), the declared screen it handed over
+  // is not registered yet (loading), or it was tried (loaded; one that did not
+  // register is then named as failed by `rendererBindingHoldReason`).
+  const declaredScreenUnavailable =
+    state !== null && state.state === "asking" && state.declaredScreenUnavailable === true;
+  const gateBindings = useMemo<RendererBindingsLoad>(
+    () => ({
+      status: declaredScreenUnavailable
+        ? "failed"
+        : declaredScreenKey !== null && registeredScreenKey !== declaredScreenKey
+          ? "loading"
+          : "loaded",
+      announcedIds: new Set(declaredScreen === null ? [] : [declaredScreen.id]),
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [declaredScreenUnavailable, declaredScreenKey, registeredScreenKey],
+  );
 
   // THE BUFFER BELONGS TO ONE GATE, AND ONLY TO IT.
   //
@@ -1574,7 +1608,9 @@ export function AgentHitlScreenCard({
               resolveHitlGateEntry(runId, gate),
               gate.currentValues,
               activeBuffered,
+              { xRenderer: gate.xRenderer, bindings: gateBindings },
             )}
+            holdReason={rendererBindingHoldReason(gate.xRenderer, gateBindings)}
             blocked={(!cookieSession && auth === null) || withholdRenderer}
             awaitsPick={!rendererFloored && continueAwaitsAPick(resolveHitlGateEntry(runId, gate), activeBuffered)}
             onContinue={onContinue}
@@ -1610,6 +1646,7 @@ export function AgentHitlScreenCard({
     setRendererFloored,
     // A declared screen registered after the read re-resolves the renderer.
     registeredScreenKey,
+    gateBindings,
   ]);
 
   // Nothing before an authorized read, and NO DOM AT ALL for `none` — the

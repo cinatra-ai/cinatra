@@ -123,6 +123,7 @@ import {
   isGroupedSetupRenderer,
   continueApprovalFlag,
   continueHeldByRenderer,
+  rendererBindingHoldReason,
   stageRendererAnswer,
   stageAssistantFill,
   stageAssistantFills,
@@ -154,7 +155,13 @@ import {
 } from "./run-surface-status";
 import { useRunRowWatch } from "./use-run-row-watch";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
-import { continueAwaitsAPick, fieldRendererRegistry, wholeAnswerStageProps } from "./field-renderer-registry";
+import {
+  continueAwaitsAPick,
+  fieldRendererRegistry,
+  runtimeRendererBindingsLoad,
+  subscribeRuntimeRendererBindings,
+  wholeAnswerStageProps,
+} from "./field-renderer-registry";
 import type { FieldRendererContext, FieldRendererProps } from "./field-renderer-registry";
 import {
   ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
@@ -950,6 +957,15 @@ function HitlApprovalCard({
     context,
   );
   fillTargetRef.current = { entry, runValue: interruptContext.values ?? {} };
+  // Where the run page's renderer bindings stand (cinatra#3470): a mid-run
+  // screen whose binding has not loaded, or failed to load, holds its Continue.
+  const rendererBindings = useSyncExternalStore(
+    subscribeRuntimeRendererBindings,
+    runtimeRendererBindingsLoad,
+    runtimeRendererBindingsLoad,
+  );
+  const continueGate = { xRenderer: interruptContext.xRenderer, bindings: rendererBindings };
+  const bindingHoldReason = rendererBindingHoldReason(interruptContext.xRenderer, rendererBindings);
   const { "x-renderer": _xr, ...renderSchema } = fieldSchema;
   void _xr;
 
@@ -1074,7 +1090,7 @@ function HitlApprovalCard({
     // A declared screen that is not ready (cinatra#3470) sends nothing, as its
     // drawn Continue is unavailable: a card without its answer, a list step
     // without a usable pick.
-    if (continueHeldByRenderer(entry, interruptContext.values, bufferedHitlValue)) return;
+    if (continueHeldByRenderer(entry, interruptContext.values, bufferedHitlValue, continueGate)) return;
     if (!(await checkRunName())) return;
     // …and again after the run-name check: a report made while it was pending
     // holds this press too. Nothing below awaits before the send.
@@ -1727,7 +1743,12 @@ function HitlApprovalCard({
         ) : null}
 
         {showContinueButton && (
-          <div className="flex justify-end pt-2 border-t border-line">
+          <div className="flex justify-end items-center gap-2 pt-2 border-t border-line">
+            {bindingHoldReason !== null ? (
+              <span className="text-xs text-muted-foreground" data-continue-hold-reason="">
+                {bindingHoldReason}
+              </span>
+            ) : null}
             {/* cinatra#3380: held while the gate's declared renderer value is unwritten.
                 cinatra#3035: held while a gate whose kind declares the hold has no pick. */}
             <Button
@@ -1741,7 +1762,7 @@ function HitlApprovalCard({
               disabled={
                 isApproving ||
                 gateReportedInvalid ||
-                continueHeldByRenderer(entry, interruptContext.values, bufferedHitlValue) ||
+                continueHeldByRenderer(entry, interruptContext.values, bufferedHitlValue, continueGate) ||
                 continueAwaitsRendererValue ||
                 (!rendererFloored && continueAwaitsAPick(entry, bufferedHitlValue))
               }

@@ -44,7 +44,13 @@ vi.mock("../run-recommendation-actions", () => ({
 }));
 vi.mock("../run-name-actions", () => ({ ensureOrCheckRunNameAction: vi.fn(async () => ({ ok: true, title: "Run 1" })) }));
 vi.mock("../hitl-actions", () => ({ approveReviewTask: (...args: unknown[]) => gateSend.approveReviewTask(...args) }));
-vi.mock("../use-runtime-field-renderer-bindings", () => ({ useRuntimeFieldRendererBindings: () => ({ bindings: {}, loading: false }) }));
+// The page's installed bindings answered with nothing beyond the build: a gate
+// with no binding is then not held as still loading (cinatra#3470).
+vi.mock("../use-runtime-field-renderer-bindings", async () => {
+  const { settleRuntimeRendererBindings } = await import("../field-renderer-registry");
+  settleRuntimeRendererBindings({ ok: true, screenIds: [] });
+  return { useRuntimeFieldRendererBindings: () => ({ bindings: {}, loading: false }) };
+});
 vi.mock("../use-ag-ui-run-stream", () => ({
   useAgUiRunStream: (_runId: string, opts: { initialStatus?: string }) => ({
     status: opts?.initialStatus ?? "pending_approval", interruptContext: stream.interruptContext, messages: [],
