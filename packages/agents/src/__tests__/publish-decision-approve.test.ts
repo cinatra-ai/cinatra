@@ -327,15 +327,51 @@ describe("Publish (A7)", () => {
     expect(sendWayflowResume).toHaveBeenCalledTimes(1);
   });
 
-  it("a released decision whose run went on, or waits at a later gate, reads as Approved", async () => {
+  // The latest-task key in Redis lives seven days and can be lost. The run row keeps the gate task it paused at
+  // (a2a_task_id, written before every pause), so a run still waiting at the released decision's own pause is read from
+  // the database: Allow stays, and that Allow resumes the run once, with no second decision write.
+  it("with no latest-task key, a released decision whose run still waits at that pause keeps Allow, and Allow resumes the run once", async () => {
+    const who = { actor: ACTOR, roleHints: ROLE_HINTS };
+    decisions.readOpenDecisionForRun.mockResolvedValue(null);
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released", decidedBy: "user-a" }));
+    resolveLatestWayflowGateTaskId.mockResolvedValue(null);
+    // red-first-expect: expected { state: 'approved', …(4) } to match object { state: 'pending', …(3) }
+    expect(await publishDecisionCardStateForRun(run() as never, who)).toMatchObject({ state: "pending", decisionId: "d1", mayDecide: true, resumeOnly: true });
+    expect(await decidePublishDecisionCardForActor({ runId: "run-1", decisionId: "d1", answer: "approve" }, who)).toBe("decided");
+    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(moves()).toEqual([["run-1", "pending_approval", "running"]]);
+    expect(sendWayflowResume).toHaveBeenCalledTimes(1);
+  });
+
+  it("a latest-task read that faults never turns a run still waiting at the released decision's pause into Approved", async () => {
+    const who = { actor: ACTOR, roleHints: ROLE_HINTS };
+    decisions.readOpenDecisionForRun.mockResolvedValue(null);
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released", decidedBy: "user-a" }));
+    resolveLatestWayflowGateTaskId.mockRejectedValue(new Error("redis down"));
+    // red-first-expect: expected { state: 'approved', …(4) } to match object { state: 'pending', …(2) }
+    expect(await publishDecisionCardStateForRun(run() as never, who)).toMatchObject({ state: "pending", decisionId: "d1", resumeOnly: true });
+  });
+
+  // The run went on past the released decision and paused at another gate: the run row names that other gate task. The
+  // old decision is settled, with or without the latest-task key, and its Allow claims nothing back from the new pause.
+  it("a released decision whose run went on, or waits at another gate, reads as Approved, and its Allow resumes nothing", async () => {
     const who = { actor: ACTOR, roleHints: ROLE_HINTS };
     decisions.readOpenDecisionForRun.mockResolvedValue(null);
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released", decidedBy: "user-a" }));
     expect(await publishDecisionCardStateForRun(run({ status: "running" }) as never, who)).toMatchObject({ state: "approved" });
-    resolveLatestWayflowGateTaskId.mockResolvedValue("task-7");
-    expect(await publishDecisionCardStateForRun(run() as never, who)).toMatchObject({ state: "approved" });
+    const movedOn = run({ a2aTaskId: "task-7", pauseGeneration: 5 });
+    storeMock.readAgentRunById.mockResolvedValue(movedOn);
+    for (const latest of ["task-7", null]) {
+      resolveLatestWayflowGateTaskId.mockResolvedValue(latest);
+      expect(await publishDecisionCardStateForRun(movedOn as never, who)).toMatchObject({ state: "approved" });
+    }
     resolveLatestWayflowGateTaskId.mockRejectedValue(new Error("redis down"));
-    expect(await publishDecisionCardStateForRun(run() as never, who)).toMatchObject({ state: "approved" });
+    expect(await publishDecisionCardStateForRun(movedOn as never, who)).toMatchObject({ state: "approved" });
+    resolveLatestWayflowGateTaskId.mockResolvedValue(null);
+    expect(await decidePublishDecisionCardForActor({ runId: "run-1", decisionId: "d1", answer: "approve" }, who)).toBe("not_open");
+    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(moves()).toEqual([]);
+    expect(sendWayflowResume).not.toHaveBeenCalled();
   });
 
   it("a fence lost to a stop or another claimer sends nothing, gives nothing back and keeps the decision", async () => {
@@ -485,7 +521,8 @@ describe("Publish (A7)", () => {
     }
   });
 
-  it("a released decision whose run's current gate cannot be read resumes nothing", async () => {
+  it("a released decision whose run row names another gate task resumes nothing, with no latest-task key", async () => {
+    storeMock.readAgentRunById.mockResolvedValue(run({ a2aTaskId: "task-7" }));
     decisions.readOpenDecisionForRun.mockResolvedValue(null);
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released" }));
     resolveLatestWayflowGateTaskId.mockResolvedValue(null);

@@ -140,8 +140,16 @@ describe("which card a run shows", () => {
     expect(access.releasedPublishAwaitsResume).toHaveBeenCalledWith(RUN, expect.objectContaining({ id: "d1", status: "released" }));
     access.releasedPublishAwaitsResume.mockResolvedValue(false);
     expect(await read()).toMatchObject({ state: "approved", deciderName: "Dana Okafor" });
-    access.releasedPublishAwaitsResume.mockRejectedValue(new Error("redis down"));
-    expect(await read()).toMatchObject({ state: "approved", deciderName: "Dana Okafor" });
+  });
+
+  // Whether the run still waits at the released decision's pause is read from the run row; a read that faults has not
+  // shown that the run went on, so it draws no card rather than a settled Approved over a run that may still wait.
+  it("a released decision whose waiting check faults draws no card, never Approved", async () => {
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released", decidedBy: "user-b", gateTaskId: "task-1" }));
+    access.releasedPublishAwaitsResume.mockRejectedValue(new Error("read failed"));
+    // red-first-expect: expected { state: 'approved', …(4) } to deeply equal { state: 'none' }
+    expect(await read()).toEqual({ state: "none" });
+    expect(names.readDeciderName).not.toHaveBeenCalled();
   });
 
   it("a declined decision names the person and carries the reason that was written", async () => {

@@ -128,9 +128,12 @@ async function cardStateForRun(
     }
     case "released": {
       // Allowed, but the run did not go on: the resume failed (or stopped) between the release and its fence, and the
-      // run still waits at this decision's gate. That is no settled Approved: the card keeps Allow, which resumes the run
-      // under the pause claim without a second decision (approvePublishDecision takes a released decision).
-      if (await releasedPublishAwaitsResume(run, decision).catch(() => false)) {
+      // run still waits at this decision's pause (read from the run row). That is no settled Approved: the card keeps
+      // Allow, which resumes the run under the pause claim without a second decision (approvePublishDecision takes a
+      // released decision). A check that faults has not shown that the run went on: no card, never Approved.
+      const awaits = await releasedPublishAwaitsResume(run, decision).catch(() => null);
+      if (awaits === null) return PUBLISH_DECISION_CARD_NONE;
+      if (awaits) {
         const mayDecide = await readMayDecide().catch(() => false);
         return { state: "pending", ...common, decisionId: decision.id, mayDecide, resumeOnly: true };
       }

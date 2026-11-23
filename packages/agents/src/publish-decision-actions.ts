@@ -400,10 +400,10 @@ const PUBLISH_RESUME_TEXT = "[Publish approved]";
  * resume that failed before its send). The run's pause is claimed first (claimPause, cinatra#4245, the claim every
  * resume road takes; the run stays pending_approval): only the claim holder releases or resumes, so a run that is not
  * waiting (another resume holds it, or it went on or ended) gets no release ({ ok: true, resumed: false } when its
- * newest decision is released, else publish_decision_not_open). Under the claim, the run's current gate visit must be
- * the decision's own gate task; then ONE decision write (parked -> released, with that person), the steps that can fail
- * before the send (the client, the credential, the message id), the fence (the one move pending_approval -> running,
- * under the claim) and ONE message sent into the held context. A run at another gate, or whose gate cannot be read,
+ * newest decision is released, else publish_decision_not_open). Under the claim, the run must still wait at the
+ * decision's own gate task (runWaitsAtGateTask: the run row, and the latest-task key when present); then ONE decision
+ * write (parked -> released, with that person), the steps that can fail before the send (the client, the credential, the message id), the fence (the one move pending_approval -> running,
+ * under the claim) and ONE message sent into the held context. A run at another gate, or whose latest-task read faults,
  * gives the claim back and resumes nothing. A late answer is publish_decision_not_open with the current status. A resume
  * that fails before its fence gives the claim back; a fence lost to a stop or to another claimer sends nothing; after the
  * fence the run stays where the send left it and the send's lease is settled (when that settle write fails, it is logged
@@ -463,7 +463,9 @@ async function approveWith(enforce: DecisionAccess, input: DecideInput): Promise
     const answerOn = open ? answerTarget(run.id, open, input.decisionId) : null;
     try {
       const { resolveLatestWayflowGateTaskId } = await import("@cinatra-ai/a2a");
-      const answer = (await resolveLatestWayflowGateTaskId(run.id)) !== target.gateTaskId ? null
+      // The run row read before the claim is the pause the claim holds (claimPause wins only at that pause generation,
+      // and every pause raises it), so its gate task is this pause's. A latest-task read that faults refuses here.
+      const answer = !runWaitsAtGateTask(run, target.gateTaskId, await resolveLatestWayflowGateTaskId(run.id)) ? null
         : answerOn ? await decide(answerOn.id, { from: "parked", to: "released", actor: deciderId, ...answerOn.guard }) : { outcome: "won" as const };
       if (answer?.outcome !== "won") {
         await giveBack();
@@ -506,24 +508,36 @@ async function approveWith(enforce: DecisionAccess, input: DecideInput): Promise
 }
 
 /**
+ * Does the run still wait at the pause of the gate task `gateTaskId`? Read from the run row (durable): the run is
+ * pending_approval and its a2a_task_id names that gate task. Every pause writes the run's gate task before its move to
+ * pending_approval (the interrupt's task-id write, or the move's own pauseTaskId), and every gate visit mints a new task
+ * id, so a run that went on and paused at another gate names that gate instead. `latest` is the latest-task key
+ * (Redis, a seven-day key that can be lost): when it holds a value it must agree; when it is absent it adds nothing.
+ */
+function runWaitsAtGateTask(run: Pick<AgentRunRecord, "status" | "a2aTaskId">, gateTaskId: string, latest: string | null): boolean {
+  return run.status === "pending_approval" && gateTaskId.length > 0 && run.a2aTaskId === gateTaskId
+    && (latest === null || latest === gateTaskId);
+}
+
+/**
  * A released decision whose run did NOT go on (the publish card's retry, cinatra#4758): Publish wrote `released`, then a
- * step before its fence failed (or the process died there), so the run still waits at this decision's own gate
- * (pending_approval, and the run's current gate visit is the decision's gate task). Publish again resumes exactly such a
- * run (approveWith: it takes a released decision, writes no second decision, and resumes only under the pause claim and
- * the fence), so the card keeps its Allow for it. A run at another gate, or whose gate cannot be read, is not waiting
- * here: false. Reads only.
+ * step before its fence failed (or the process died there), so the run still waits at this decision's own pause
+ * (runWaitsAtGateTask). Publish again resumes exactly such a run (approveWith: it takes a released decision, writes no
+ * second decision, and resumes only under the pause claim and the fence), so the card keeps its Allow for it. A run that
+ * went on, or that waits at another gate, is not waiting here: false. A latest-task key that is absent, or whose read
+ * faults, never turns a run that still waits into false. Reads only.
  */
 export async function releasedPublishAwaitsResume(
-  run: Pick<AgentRunRecord, "id" | "status">,
+  run: Pick<AgentRunRecord, "id" | "status" | "a2aTaskId">,
   decision: Pick<PublishDecisionRow, "status" | "gateTaskId">,
 ): Promise<boolean> {
-  if (decision.status !== "released" || run.status !== "pending_approval" || !decision.gateTaskId) return false;
+  if (decision.status !== "released" || !decision.gateTaskId || !runWaitsAtGateTask(run, decision.gateTaskId, null)) return false;
+  let latest: string | null = null;
   try {
     const { resolveLatestWayflowGateTaskId } = await import("@cinatra-ai/a2a");
-    return (await resolveLatestWayflowGateTaskId(run.id)) === decision.gateTaskId;
-  } catch {
-    return false;
-  }
+    latest = await resolveLatestWayflowGateTaskId(run.id);
+  } catch { /* the key adds nothing: the run row has answered */ }
+  return runWaitsAtGateTask(run, decision.gateTaskId, latest);
 }
 
 /**
