@@ -77,10 +77,12 @@ export interface IslandByteServePorts {
   readLivePrincipal: (jti: string) => LiveWidgetCapturePrincipal | null;
   /** Live run READ access for the sealed principal. */
   runReadAccess: (input: { runId: string; userId: string; orgId: string }) => Promise<boolean>;
-  /** The gate's FROZEN pinned target set — null when the gate is absent. */
+  /** The gate's FROZEN pinned targets the sealed reader may still read (`object.read`) — null when the gate is absent. */
   readGatePinnedTargets: (
     runId: string,
     reviewTaskId: string,
+    /** The sealed reader: the set answered is the targets this reader may still read as artifacts. */
+    reader: { userId: string; orgId: string },
   ) => Promise<readonly IslandByteGateTarget[] | null>;
   /**
    * A PUBLISH ROW'S proven target set (cinatra#4738 round 2), for a capability sealed as a publish row's: the row its
@@ -215,7 +217,10 @@ export async function decideIslandByteServe(params: {
               orgId: capability.orgId,
             })
           : null
-        : await ports.readGatePinnedTargets(capability.runId, capability.reviewTaskId);
+        : await ports.readGatePinnedTargets(capability.runId, capability.reviewTaskId, {
+            userId: capability.userId,
+            orgId: capability.orgId,
+          });
     if (!targets || targets.length === 0) return REFUSED;
     const pinnedByThisGate = targets.some(
       (t) =>

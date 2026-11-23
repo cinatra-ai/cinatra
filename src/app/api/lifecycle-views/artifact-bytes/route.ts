@@ -61,6 +61,7 @@ import {
 } from "@/lib/lifecycle/review-island-byte-serving";
 import { readLiveWidgetCapturePrincipal } from "@/lib/lifecycle/widget-capture-principal";
 import { readPublishDecisionIslandPinnedTargets } from "@/lib/lifecycle/publish-decision-island-pins";
+import { readIslandTargetsReadableBy } from "@/lib/lifecycle/island-target-read-access";
 
 export const runtime = "nodejs";
 
@@ -111,13 +112,19 @@ const ports: IslandByteServePorts = {
   // showing the work it decided (enabler 0.9), so its pinned bytes keep serving
   // to a reader who may still read the run — the same parity the first-party
   // settled surface has through the session byte routes.
-  readGatePinnedTargets: async (runId, reviewTaskId) => {
+  // Each pinned target is re-read as an artifact by the sealed reader (`object.read`): run access does not carry
+  // that read, and a target the panel floors as `read-denied` serves nothing (cinatra#4738).
+  readGatePinnedTargets: async (runId, reviewTaskId, reader) => {
     const gate = await readReviewGate(runId, reviewTaskId);
     if (!gate) return null;
-    return gate.pinnedTargets.map((t) => ({
-      artifactId: t.artifactId,
-      representationRevisionId: t.representationRevisionId,
-    }));
+    return readIslandTargetsReadableBy({
+      targets: gate.pinnedTargets.map((t) => ({
+        artifactId: t.artifactId,
+        representationRevisionId: t.representationRevisionId,
+      })),
+      userId: reader.userId,
+      orgId: reader.orgId,
+    });
   },
   // A PUBLISH ROW'S proven set (cinatra#4738 round 2): the row the sealed subject key names on the run's newest
   // decision, read as the sealed principal, with every target made by the run.

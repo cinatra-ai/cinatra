@@ -55,6 +55,7 @@ import {
 import {
   type BeginReviewResult,
   type PrepareReviewInput,
+  type PreparedReviewTarget,
   type ResolvedRendererMount,
   type ReviewTargetPreparation,
   type RunAccessOutcome,
@@ -644,8 +645,9 @@ export function streamReviewTargets(
     target,
     prepared,
     capturePair: prepared
-      .then(() => pairing())
+      .then((done) => (artifactReadRefused(done) ? null : pairing()))
       .then((resolved) => {
+        if (resolved === null) return null;
         switch (resolved.kind) {
           case "repair":
             // THE REPAIR SUCCESSOR'S PAIR IS NOT THE ROAD'S TO MAKE (wave 3). A
@@ -681,6 +683,17 @@ export function streamReviewTargets(
       // which case the panel never draws a picture anyway.
       .catch(() => null),
   }));
+}
+
+/**
+ * NO PICTURE FOR A TARGET THE READER MAY NOT READ (cinatra#4738). A preparation that resolved to an artifact-level
+ * floor for the read itself (`read-denied`: `object.read` refused; `unknown-or-tombstoned`: the reader cannot even list
+ * it) withholds the artifact, so its capture pair is neither read nor minted: a picture of the page beside a panel
+ * that withheld the work would show exactly what the panel refused to.
+ */
+function artifactReadRefused(prepared: PreparedReviewTarget | undefined): boolean {
+  const mount = prepared?.mount;
+  return mount?.kind === "floor" && (mount.reason === "read-denied" || mount.reason === "unknown-or-tombstoned");
 }
 
 /**

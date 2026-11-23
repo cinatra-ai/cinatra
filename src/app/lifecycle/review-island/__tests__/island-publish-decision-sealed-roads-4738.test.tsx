@@ -12,7 +12,9 @@
 //     sealed pictures, and the byte and capture routes SERVE them;
 //   - they are proven against the row's own set, never a gate's: no gate exists for the run, and a target the row
 //     does not show, a decision that is no longer the newest, and a row the reader may not read all serve nothing;
-//   - a gate capability sealed with the row's subject key serves nothing either.
+//   - a gate capability sealed with the row's subject key serves nothing either;
+//   - a target the reader keeps the run for but may not read as an artifact (`object.read`) serves no bytes and no
+//     pictures, and a target the core floors as `read-denied` gets no capture pair minted at all.
 // Red first at ffe421ea: a publish row names no sealed road, so the target keeps the session addresses. Before the
 // publish row existed at all, the subject key it seals with does not exist:
 // red-first-expect: publishDecisionIslandSubjectKey is not a function
@@ -30,6 +32,10 @@ const state = {
   readable: true,
   targets: [{ artifactId: "art-1", representationRevisionId: "rev-1" }] as Target[],
   madeByRun: true,
+  /** The artifacts `object.read` refuses this reader. */
+  objectReadDenied: new Set<string>(),
+  /** A target the one core floors as `read-denied`. */
+  floorReadDenied: false,
 };
 const ROW = { runId: "run-1", decisionId: "dec-1", input: "proposedPages" };
 
@@ -59,6 +65,11 @@ vi.mock("@/app/artifacts/[id]/review-target-prepare", () => ({
     return {
       ok: true,
       targets: args.input.targets.map((target) => {
+        if (state.floorReadDenied) {
+          // The real core's floor for an artifact `object.read` refuses: no props, no bytes minted.
+          const mount = { kind: "floor", slot: "detail", packageName: null, reason: "read-denied" };
+          return { target, prepared: Promise.resolve({ target, props: null, mount, bytes: {} }) };
+        }
         const minted = args.byteMinter ? args.byteMinter({ ...target, mime: "image/png" }) : null;
         const bytes = minted
           ? { road: "island", ...minted }
@@ -128,6 +139,28 @@ vi.mock("@/lib/artifacts/artifact-read", async (importOriginal) => ({
     storageKey: `blob/${input.artifactId}/${input.representationRevisionId}`,
     sizeBytes: 4,
   }),
+}));
+// The reader's live standing and the artifact read (`object.read`) the serving paths re-prove.
+const objectReads: Array<{ artifactId: string; orgId: string | null; actor?: { principalId?: string } }> = [];
+vi.mock("@/lib/lifecycle/widget-lifecycle-frame-actor", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/lifecycle/widget-lifecycle-frame-actor")>()),
+  resolveWidgetLifecycleStanding: async ({ userId, orgId }: { userId: string; orgId: string }) => ({
+    ok: true,
+    actorCtx: {
+      actor: { actorType: "human", source: "a2a", userId, orgId },
+      orgId,
+      roleHints: { actorOrganizationId: orgId, orgRole: "member" },
+    },
+  }),
+}));
+vi.mock("@/lib/artifacts/artifact-service", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/artifacts/artifact-service")>()),
+  readArtifactForDetail: (input: { artifactId: string; orgId: string | null; actor?: { principalId?: string } }) => {
+    objectReads.push(input);
+    return state.objectReadDenied.has(input.artifactId)
+      ? { kind: "denied" }
+      : { kind: "ok", artifact: { id: input.artifactId } };
+  },
 }));
 vi.mock("@/lib/artifacts/local-disk-blob-store", () => ({
   createLocalDiskBlobStore: () => ({
@@ -208,6 +241,9 @@ beforeEach(() => {
   state.readable = true;
   state.targets = [{ artifactId: "art-1", representationRevisionId: "rev-1" }];
   state.madeByRun = true;
+  state.objectReadDenied = new Set();
+  state.floorReadDenied = false;
+  objectReads.length = 0;
   readReviewGate.mockClear();
   resolveIslandCredentialReader.mockResolvedValue({
     actorCtx: ACTOR,
@@ -278,5 +314,24 @@ describe("a credentialed publish-decision island", () => {
     })!;
     expect((await serveBytes(reviewIslandByteUrl(sealed))).status).toBe(404);
     expect(readReviewGate).toHaveBeenCalled();
+  });
+
+  it("serves no bytes and no pictures for a target the reader keeps the run for but may not read as an artifact", async () => {
+    const { bytes, pair } = await paint();
+    expect((await serveBytes(bytes.preview as string)).status).toBe(200);
+    expect((await serveCapture(pair!.left!.imageUrl!)).status).toBe(200);
+    // The run stays readable; only the artifact's own read (`object.read`) now refuses this reader.
+    state.objectReadDenied = new Set(["art-1"]);
+    expect((await serveCapture(pair!.left!.imageUrl!)).status).toBe(404);
+    expect((await serveCapture(pair!.right!.imageUrl!)).status).toBe(404);
+    expect((await serveBytes(bytes.preview as string)).status).toBe(404);
+    // The read ran as the sealed user, in the sealed organization.
+    expect(objectReads.some((r) => r.artifactId === "art-1" && r.orgId === "org-1" && r.actor?.principalId === "u1")).toBe(true);
+  });
+
+  it("mints no capture pair for a target the core floors as read-denied", async () => {
+    state.floorReadDenied = true;
+    const { pair } = await paint();
+    expect(pair).toBeNull();
   });
 });

@@ -12,9 +12,12 @@ import "server-only";
 //   2. exactly one artifacts row of that decision has this subject key, so a key minted for an older decision, or for
 //      another row, names nothing;
 //   3. that row is proven by the island loader's own subject read, in the reader's organization, and every target was
-//      made by this run (`readRevisionsMadeByRun`).
+//      made by this run (`readRevisionsMadeByRun`);
+//   4. the reader may still read each target as an artifact (`object.read`, as the sealed user). Run access does not
+//      carry that read: a target the panel floors as `read-denied` is not in the answer, so neither its bytes nor its
+//      capture pictures serve.
 //
-// The answer is that row's frozen targets and nothing else. Every refusal, and every read that throws, is `null`.
+// The answer is that row's frozen targets this reader may read, and nothing else. Every refusal, and every read that throws, is `null`.
 // ---------------------------------------------------------------------------
 
 import {
@@ -25,9 +28,10 @@ import {
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 
 import type { ArtifactReviewTarget } from "@/lib/artifacts/artifact-review-target";
+import { readIslandTargetsReadableBy } from "@/lib/lifecycle/island-target-read-access";
 import { publishDecisionIslandSubjectKey } from "@/lib/lifecycle/lifecycle-card-ref";
 
-/** The frozen targets of the publish row this subject key names, for this reader, or `null`. */
+/** The frozen targets of the publish row this subject key names that this reader may read, or `null`. */
 export async function readPublishDecisionIslandPinnedTargets(input: {
   runId: string;
   subjectKey: string;
@@ -57,7 +61,13 @@ export async function readPublishDecisionIslandPinnedTargets(input: {
     if (!subject || subject.runId !== input.runId || subject.orgId !== input.orgId) return null;
     if (subject.targets.length === 0) return null;
     const made = await readRevisionsMadeByRun({ orgId: subject.orgId, runId: subject.runId, targets: subject.targets });
-    return made === true ? subject.targets : null;
+    if (made !== true) return null;
+    const readable = await readIslandTargetsReadableBy({
+      targets: subject.targets,
+      userId: input.userId,
+      orgId: input.orgId,
+    });
+    return readable && readable.length > 0 ? readable : null;
   } catch {
     return null;
   }
