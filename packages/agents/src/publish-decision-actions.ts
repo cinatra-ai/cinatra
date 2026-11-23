@@ -11,6 +11,7 @@ import { AuthzError } from "@/lib/authz/errors";
 import { sessionAuthorityFromResolvedRole } from "@/lib/org-write/authority";
 import type { ActorRoleHints } from "./auth-policy";
 import {
+  closeParkedDecisionsOfFailedRun,
   decide,
   insertParkedDecision,
   listDueParked,
@@ -219,7 +220,7 @@ export async function holdRunAtPublishGate(args: {
   } catch (err) {
     // The dispatch records this attempt failed. A row left parked would read as the open stop of the run's next attempt
     // (a retry), so it is closed run_ended here, as a lost move closes it. A fault on that close does not hide the move's
-    // own fault; the retry's reset closes the row then (closeOpenPublishDecisionsOfRun).
+    // own fault; the retry's reset closes the row then (closeOpenPublishDecisionsOfRun), while the run is still failed.
     await decide(park.decision.id, { from: "parked", to: "run_ended", actor: null }).catch(() => undefined);
     throw err;
   }
@@ -227,24 +228,15 @@ export async function holdRunAtPublishGate(args: {
   return true;
 }
 
-/** How many open rows one reset closes at most: a run holds one open stop, so more than this is no run's real state. */
-const MAX_OPEN_CLOSED_AT_RESET = 100;
-
 /**
- * Closes every open (parked) publish decision of a run whose attempt ended, as run_ended with no person (the close the
+ * Closes every open (parked) publish decision of a run whose attempt failed, as run_ended with no person (the close the
  * expiry sweep makes for a run that left its gate). Called before a failed run is reset for a retry, so a decision the
- * failed attempt left open never reads as the open stop of the next attempt. A fault is not swallowed: the reset fails
- * and may be tried again.
+ * failed attempt left open never reads as the open stop of the next attempt. The close holds only while the run is still
+ * `failed`, checked in the same statement: a reset that lost to a concurrent reset closes nothing, and never the stop a
+ * newer attempt opened. A fault is not swallowed: the reset fails and may be tried again.
  */
 export async function closeOpenPublishDecisionsOfRun(runId: string): Promise<number> {
-  let closed = 0;
-  for (let i = 0; i < MAX_OPEN_CLOSED_AT_RESET; i += 1) {
-    const open = await readOpenDecisionForRun(runId);
-    if (!open) return closed;
-    const answer = await decide(open.id, { from: "parked", to: "run_ended", actor: null });
-    if (answer.outcome === "won") closed += 1;
-  }
-  return closed;
+  return closeParkedDecisionsOfFailedRun(runId);
 }
 
 /**

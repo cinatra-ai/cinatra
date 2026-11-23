@@ -277,6 +277,41 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     expect((await store.decide(older.id, { from: "parked", to: "run_ended", actor: null })).outcome).toBe("won");
   });
 
+  it("cinatra#4150 review: a reset's close ends a run's open rows only while the run is still failed", async () => {
+    const RUNS = `"${q(TEST_SCHEMA)}"."agent_runs"`;
+    const run = async (status: string) => {
+      const id = `run-${randomUUID()}`;
+      await admin.query(`INSERT INTO ${RUNS} (id, template_id, org_id, status, input_params) VALUES ($1, $2, 'org-4150', $3, '{}')`, [id, `tpl-${randomUUID()}`, status]);
+      return id;
+    };
+    const statusOf = async (id: string) => (await admin.query(`SELECT status FROM ${TABLE} WHERE id = $1`, [id])).rows[0].status;
+    // A failed run's stale open rows close run_ended with no person; a settled row keeps its answer.
+    const failed = await run("failed");
+    const stale1 = (await store.insertParkedDecision(park({ runId: failed, gateTaskId: "task-1" }))).decision;
+    const stale2 = (await store.insertParkedDecision(park({ runId: failed, gateTaskId: "task-2" }))).decision;
+    const answered = (await store.insertParkedDecision(park({ runId: failed, gateTaskId: "task-3" }))).decision;
+    await store.decide(answered.id, { from: "parked", to: "declined", actor: "person-1", note: "no" });
+    expect(await store.closeParkedDecisionsOfFailedRun(failed)).toBe(2);
+    for (const id of [stale1.id, stale2.id]) expect(await statusOf(id)).toBe("run_ended");
+    expect(await statusOf(answered.id)).toBe("declined");
+    expect(await store.readOpenDecisionForRun(failed)).toBeNull();
+    // Two concurrent closes of one failed run close each row once.
+    const twice = await run("failed");
+    await store.insertParkedDecision(park({ runId: twice }));
+    expect((await Promise.all([store.closeParkedDecisionsOfFailedRun(twice), store.closeParkedDecisionsOfFailedRun(twice)])).reduce((a, b) => a + b)).toBe(1);
+    // A run a concurrent reset already moved on, and whose next attempt opened its own stop, closes nothing.
+    for (const status of ["pending_input", "running", "pending_approval"]) {
+      const movedOn = await run(status);
+      const live = (await store.insertParkedDecision(park({ runId: movedOn }))).decision;
+      expect(await store.closeParkedDecisionsOfFailedRun(movedOn)).toBe(0);
+      expect(await statusOf(live.id)).toBe("parked");
+    }
+    // A row with no run closes nothing.
+    const orphan = (await store.insertParkedDecision(park())).decision;
+    expect(await store.closeParkedDecisionsOfFailedRun(orphan.runId)).toBe(0);
+    expect(await statusOf(orphan.id)).toBe("parked");
+  });
+
   it("cinatra#4150 PR 3a, pre-review 3: the due list is read page by page after the last row, each row once, oldest first", async () => {
     for (const hours of [5, 6, 7]) {
       const { decision } = await store.insertParkedDecision(park());

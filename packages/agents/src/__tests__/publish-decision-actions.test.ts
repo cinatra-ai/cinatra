@@ -20,6 +20,7 @@ vi.mock("../store", () => storeMock);
 const decisions = vi.hoisted(() => ({
   insertParkedDecision: vi.fn(),
   decide: vi.fn(),
+  closeParkedDecisionsOfFailedRun: vi.fn(async (_runId: string) => 0),
   readLatestDecisionForRun: vi.fn(async (_runId: string) => null as unknown),
   readOpenDecisionForRun: vi.fn(async () => null as unknown),
   listDueParked: vi.fn(async () => [] as unknown[]),
@@ -80,7 +81,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   // clearAllMocks keeps queued once-answers; a case that leaves one (a red run over older code) must not feed the next.
   for (const m of [storeMock.readAgentRunById, storeMock.transitionRunStatus, decisions.readOpenDecisionForRun,
-    decisions.readLatestDecisionForRun, decisions.decide, decisions.listDueParked, decisions.listSettledWithWaitingRun]) m.mockReset();
+    decisions.readLatestDecisionForRun, decisions.decide, decisions.listDueParked, decisions.listSettledWithWaitingRun,
+    decisions.closeParkedDecisionsOfFailedRun]) m.mockReset();
+  decisions.closeParkedDecisionsOfFailedRun.mockResolvedValue(0);
   storeMock.readAgentRunById.mockResolvedValue(run());
   storeMock.transitionRunStatus.mockResolvedValue(undefined);
   decisions.readOpenDecisionForRun.mockResolvedValue(decision());
@@ -802,32 +805,25 @@ describe("the write registry tells the truth about the decline's authority (find
 });
 
 describe("a failed attempt's open decision closes before the retry's reset (review finding 1)", () => {
-  // red-first-expect: closeOpenPublishDecisionsOfRun is not a function
-  it("every open row of the run closes run_ended with no person, newest first, until none is open", async () => {
-    decisions.readOpenDecisionForRun
-      .mockResolvedValueOnce(decision({ id: "d2" }))
-      .mockResolvedValueOnce(decision({ id: "d1" }))
-      .mockResolvedValue(null);
+  // The close is one guarded store write: it holds only while the run is still failed (proved on Postgres in
+  // publish-decision-store.integration.test.ts), never a read of the run's open row and a separate close of it.
+  it("closes the run's open rows through the store's close of a failed run, and nothing else", async () => {
+    decisions.closeParkedDecisionsOfFailedRun.mockResolvedValue(2);
     await expect(closeOpenPublishDecisionsOfRun("run-1")).resolves.toBe(2);
-    expect(decisions.readOpenDecisionForRun).toHaveBeenCalledWith("run-1");
-    expect(decisions.decide.mock.calls).toEqual([
-      ["d2", { from: "parked", to: "run_ended", actor: null }],
-      ["d1", { from: "parked", to: "run_ended", actor: null }],
-    ]);
+    expect(decisions.closeParkedDecisionsOfFailedRun).toHaveBeenCalledWith("run-1");
+    expect(decisions.readOpenDecisionForRun).not.toHaveBeenCalled();
+    expect(decisions.decide).not.toHaveBeenCalled();
     expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
   });
 
-  // red-first-expect: closeOpenPublishDecisionsOfRun is not a function
-  it("a run with no open row closes nothing", async () => {
-    decisions.readOpenDecisionForRun.mockResolvedValue(null);
+  it("a run that is no longer failed, or has no open row, closes nothing", async () => {
+    decisions.closeParkedDecisionsOfFailedRun.mockResolvedValue(0);
     await expect(closeOpenPublishDecisionsOfRun("run-1")).resolves.toBe(0);
     expect(decisions.decide).not.toHaveBeenCalled();
   });
 
-  // red-first-expect: closeOpenPublishDecisionsOfRun is not a function
   it("a store fault is not swallowed", async () => {
-    decisions.readOpenDecisionForRun.mockResolvedValue(decision());
-    decisions.decide.mockRejectedValue(new Error("db down"));
+    decisions.closeParkedDecisionsOfFailedRun.mockRejectedValue(new Error("db down"));
     await expect(closeOpenPublishDecisionsOfRun("run-1")).rejects.toThrow("db down");
   });
 });

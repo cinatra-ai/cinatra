@@ -278,6 +278,24 @@ export async function decide(id: string, input: DecideInput): Promise<DecideResu
   });
 }
 
+/**
+ * Closes every open (parked) decision of a run as run_ended with no person, ONLY while the run itself is `failed`, in one
+ * UPDATE: the run's status is read in the same statement that closes the rows. A run that is no longer failed (a
+ * concurrent reset already moved it on, and a next attempt may have opened its own stop) closes nothing, so a delayed
+ * reset never ends the decision of a newer attempt. Returns how many rows it closed.
+ */
+export async function closeParkedDecisionsOfFailedRun(runId: string): Promise<number> {
+  const id = requireText(runId, "runId");
+  const d = agentRunPublishDecisions;
+  const closed = await db
+    .update(d)
+    .set({ status: "run_ended", decidedBy: null, decidedAt: sql`now()`, decisionNote: null })
+    .where(and(eq(d.runId, id), eq(d.status, "parked"),
+      sql`exists (select 1 from ${agentRuns} failed_run where failed_run.id = ${d.runId} and failed_run.status = 'failed')`))
+    .returning({ id: d.id });
+  return closed.length;
+}
+
 /** The newest decision of this step of this run, whatever its status. */
 export async function readDecisionForRunNode(runId: string, nodeId: string): Promise<PublishDecisionRow | null> {
   const [row] = await db

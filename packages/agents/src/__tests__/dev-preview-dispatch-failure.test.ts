@@ -104,9 +104,35 @@ vi.mock("../agent-run-serde", () => ({
   assertAgentRunScopeAuthorized: vi.fn(async () => undefined),
 }));
 
-const closeOpenPublishDecisionsOfRun = vi.fn();
-vi.mock("../publish-decision-actions", () => ({
-  closeOpenPublishDecisionsOfRun: (...a: unknown[]) => closeOpenPublishDecisionsOfRun(...a),
+// The publish decision record of one run, in memory, as the store answers it: the reset goes through the REAL
+// publish-decision-actions close. `closeParkedDecisionsOfFailedRun` keeps the store's contract (it closes only while the
+// run is still failed, in one statement; proved on Postgres in publish-decision-store.integration.test.ts).
+const record = vi.hoisted(() => ({
+  runStatus: "failed",
+  rows: [] as Array<{ id: string; status: string }>,
+  closedBy: [] as string[],
+  closer: "",
+}));
+const parkedRows = () => record.rows.filter((r) => r.status === "parked");
+const closeParkedDecisionsOfFailedRun = vi.fn(async (_runId: string) => {
+  if (record.runStatus !== "failed") return 0;
+  const open = parkedRows();
+  for (const r of open) { r.status = "run_ended"; record.closedBy.push(`${record.closer}:${r.id}`); }
+  return open.length;
+});
+vi.mock("../publish-decision-store", () => ({
+  closeParkedDecisionsOfFailedRun: (runId: string) => closeParkedDecisionsOfFailedRun(runId),
+  readOpenDecisionForRun: vi.fn(async () => {
+    const open = parkedRows();
+    return open.length ? { ...open[open.length - 1]! } : null;
+  }),
+  decide: vi.fn(async (id: string, change: { to: string }) => {
+    const row = record.rows.find((r) => r.id === id);
+    if (!row || row.status !== "parked") return { outcome: "lost", currentStatus: row?.status ?? null };
+    row.status = change.to;
+    record.closedBy.push(`${record.closer}:${id}`);
+    return { outcome: "won", decision: { ...row } };
+  }),
 }));
 
 import { resetAgentRun, startDevChildPreviewRun } from "../run-actions";
@@ -198,33 +224,81 @@ describe("startDevChildPreviewRun and a failed dispatch", () => {
   });
 });
 
-// Review finding 1 on cinatra#4150: a retry's reset (failed -> pending_input) closes the publish decision a failed attempt
-// left open BEFORE the run moves, so the stale row never reads as the open stop of the run's next attempt.
-describe("resetAgentRun closes a failed attempt's open publish decision first", () => {
+// Review findings on cinatra#4150: a retry's reset (failed -> pending_input) closes the publish decision a failed attempt
+// left open, so the stale row never reads as the open stop of the run's next attempt; and a reset that loses the claim to
+// a concurrent reset closes nothing, never the stop the winning reset's next attempt opened.
+describe("resetAgentRun closes a failed attempt's open publish decision, and only that", () => {
   const failedRun = { ...createdRun, status: "failed" };
   beforeEach(() => {
-    readAgentRunById.mockResolvedValue({ ...failedRun });
-    closeOpenPublishDecisionsOfRun.mockResolvedValue(1);
+    record.runStatus = "failed";
+    record.rows = [];
+    record.closedBy = [];
+    record.closer = "";
+    readAgentRunById.mockImplementation(async () => ({ ...failedRun, status: record.runStatus }));
+    transitionRunStatus.mockImplementation(async (_id: string, from: string, to: string) => {
+      if (record.runStatus !== from) throw new StubRunTransitionError("stale_from_status");
+      record.runStatus = to;
+    });
   });
 
-  it("closes the run's open decisions, then moves the run failed -> pending_input", async () => {
+  it("a single reset of a failed run closes its stale parked decision and moves the run to pending_input", async () => {
+    record.rows = [{ id: "d-failed", status: "parked" }];
     await expect(resetAgentRun({ runId: RUN_ID })).resolves.toEqual({ ok: true });
-    expect(closeOpenPublishDecisionsOfRun).toHaveBeenCalledWith(RUN_ID);
-    expect(transitionRunStatus).toHaveBeenCalledWith(RUN_ID, "failed", "pending_input", undefined, expect.anything());
-    expect(closeOpenPublishDecisionsOfRun.mock.invocationCallOrder[0]!).toBeLessThan(
-      transitionRunStatus.mock.invocationCallOrder[0]!,
-    );
+    expect(record.rows).toEqual([{ id: "d-failed", status: "run_ended" }]);
+    expect(record.runStatus).toBe("pending_input");
+  });
+
+  /** Holds reset B after it read the run as failed, until the test lets it go on. */
+  function holdSecondReset() {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    verifySessionAuthority
+      .mockImplementationOnce(async () => ({ kind: "session" }))
+      .mockImplementationOnce(async () => { await gate; record.closer = "B"; return { kind: "session" }; });
+    return release;
+  }
+
+  it("of two concurrent resets, the one that loses the claim closes nothing", async () => {
+    record.rows = [{ id: "d-failed", status: "parked" }];
+    const release = holdSecondReset();
+    record.closer = "A";
+    const a = resetAgentRun({ runId: RUN_ID });
+    const b = resetAgentRun({ runId: RUN_ID });
+    await expect(a).resolves.toEqual({ ok: true });
+    release();
+    await expect(b).resolves.toEqual({ ok: false, error: "run is not in failed state" });
+    expect(record.closedBy).toEqual(["A:d-failed"]);
+    expect(record.runStatus).toBe("pending_input");
+  });
+
+  it("a delayed losing reset never closes the decision the next attempt opened after the winning reset", async () => {
+    record.rows = [{ id: "d-failed", status: "parked" }];
+    const release = holdSecondReset();
+    record.closer = "A";
+    const a = resetAgentRun({ runId: RUN_ID });
+    const b = resetAgentRun({ runId: RUN_ID });
+    await expect(a).resolves.toEqual({ ok: true });
+    // The run is retriggered and its next attempt parks at its publish gate before reset B goes on.
+    record.runStatus = "pending_approval";
+    record.rows.push({ id: "d-next", status: "parked" });
+    release();
+    await expect(b).resolves.toEqual({ ok: false, error: "run is not in failed state" });
+    expect(record.rows).toEqual([{ id: "d-failed", status: "run_ended" }, { id: "d-next", status: "parked" }]);
+    expect(record.closedBy).toEqual(["A:d-failed"]);
+    expect(record.runStatus).toBe("pending_approval");
   });
 
   it("a fault closing the decision fails the reset, and the run is not moved", async () => {
-    closeOpenPublishDecisionsOfRun.mockRejectedValue(new Error("db down"));
+    closeParkedDecisionsOfFailedRun.mockRejectedValueOnce(new Error("db down"));
     await expect(resetAgentRun({ runId: RUN_ID })).rejects.toThrow("db down");
     expect(transitionRunStatus).not.toHaveBeenCalled();
   });
 
   it("a run that is not failed is refused, and nothing is closed", async () => {
-    readAgentRunById.mockResolvedValue({ ...createdRun, status: "running" });
+    record.runStatus = "running";
+    record.rows = [{ id: "d-live", status: "parked" }];
     await expect(resetAgentRun({ runId: RUN_ID })).resolves.toEqual({ ok: false, error: "run is not in failed state" });
-    expect(closeOpenPublishDecisionsOfRun).not.toHaveBeenCalled();
+    expect(record.rows).toEqual([{ id: "d-live", status: "parked" }]);
+    expect(transitionRunStatus).not.toHaveBeenCalled();
   });
 });
