@@ -14,7 +14,7 @@ import { types } from "node:util";
 import { and, asc, desc, eq, getTableColumns, gt, inArray, lte, sql } from "drizzle-orm";
 
 import { db } from "./db";
-import { isPublishRowDeclaration, PUBLISH_ROW_INPUT_MAX, type PublishRowDeclaration } from "./publish-decision-card";
+import { isPublishRowDeclaration, isPublishRowInput, PUBLISH_ROW_INPUT_MAX, type PublishRowDeclaration } from "./publish-decision-card";
 import { agentRunPublishDecisions, agentRuns } from "./schema";
 
 /** A decision of the run's current attempt: its run_generation equals the run's reset_generation, read in the same
@@ -112,8 +112,7 @@ function declaredRowsOf(value: unknown): PublishDeclaredRow[] | null {
   for (const row of value as unknown[]) {
     if (!isPlainObject(row) || !isPublishRowDeclaration(row)) return null;
     const { label, input } = row;
-    if (label.length === 0 || input.length === 0
-      || label.length > PUBLISH_DECISION_MAX_DECLARED_TEXT || input.length > PUBLISH_DECISION_MAX_DECLARED_TEXT) return null;
+    if (label.length === 0 || label.length > PUBLISH_DECISION_MAX_DECLARED_TEXT || !isPublishRowInput(input)) return null;
     if (row.kind === "list") {
       rows.push({ kind: "list", label, input, columns: row.columns.map(({ label: l, field }) => ({ label: l, field })) });
     } else if (row.kind === "artifacts") {

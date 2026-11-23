@@ -66,6 +66,7 @@ import {
   PUBLISH_ROW_LABEL_MAX,
   PUBLISH_ROWS_MAX,
   isPublishRowField,
+  isPublishRowInput,
   isPublishRowLabel,
   publishDecisionIslandRefInputFits,
   type PublishRowColumn,
@@ -1699,10 +1700,10 @@ export function collectPublishRows(
       if (typeof input !== "string" || !titles.has(input)) {
         return { ok: false, error: `PUBLISH_ROWS_UNKNOWN_INPUT: ${where}.input does not name an input of the node` };
       }
-      // The decision store freezes no declaration whose input is longer, so such a row would compile and then lose its
-      // frozen rows at dispatch; it is refused here, under the store's own bound.
-      if (input.length > PUBLISH_ROW_INPUT_MAX) {
-        return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where}.input must name an input of at most ${PUBLISH_ROW_INPUT_MAX} characters` };
+      // The decision store freezes no declaration whose input is empty or longer, so such a row would compile and then
+      // lose its frozen rows at dispatch; it is refused here, by the store's own predicate.
+      if (!isPublishRowInput(input)) {
+        return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where}.input must name an input of 1 to ${PUBLISH_ROW_INPUT_MAX} characters` };
       }
       if (out.some((r) => r.input === input)) {
         return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where}.input repeats an input another row shows` };

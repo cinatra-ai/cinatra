@@ -291,13 +291,13 @@ describe("cinatra#4150 W4 — four rows, the text kind and the list row", () => 
   // The decision store freezes a step's declared rows at dispatch and keeps none whose input is past its bound, so a
   // row the compiler accepted over a longer input would lose its frozen declaration and the card would read the
   // current template instead. The compiler refuses every row kind past the store's own bound.
-  describe("a row over an input longer than the decision store keeps", () => {
+  describe("a row over an input the decision store does not keep (empty, or longer than 256)", () => {
     const withInput = (title: string, row: Record<string, unknown>) =>
       collect(
         flowWith({ publish: publishNode({ publishes: true, publishRows: [row] }, { inputs: [...INPUTS, { title, type: "array" }] }) }),
         ["publish"],
       );
-    const PAST_STORE = /^PUBLISH_ROWS_MALFORMED: node "publish" metadata\.cinatra\.publishRows\[0\]\.input must name an input of at most 256 characters$/;
+    const PAST_STORE = /^PUBLISH_ROWS_MALFORMED: node "publish" metadata\.cinatra\.publishRows\[0\]\.input must name an input of 1 to 256 characters$/;
     const long = "p".repeat(257);
 
     it("the bound is 256 characters (the store reads the same constant)", () => {
@@ -311,6 +311,12 @@ describe("cinatra#4150 W4 — four rows, the text kind and the list row", () => 
 
     it("a list row over a 257-character input is refused", () => {
       expect(withInput(long, { ...LIST, input: long })).toEqual({ ok: false, error: expect.stringMatching(PAST_STORE) });
+    });
+
+    // red-first-expect: expected { ok: true, …(1) } to deeply equal { ok: false, error: StringMatching{…} }
+    it("a text or list row over an input with an empty title is refused", () => {
+      expect(withInput("", { label: "Empty", input: "" })).toEqual({ ok: false, error: expect.stringMatching(PAST_STORE) });
+      expect(withInput("", { ...LIST, input: "" })).toEqual({ ok: false, error: expect.stringMatching(PAST_STORE) });
     });
 
     it("a text row over a 256-character input compiles", () => {

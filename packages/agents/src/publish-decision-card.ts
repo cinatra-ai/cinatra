@@ -37,6 +37,10 @@ export const PUBLISH_ROW_FIELD_MAX = 64;
 /** The longest input name a row may show: the publish decision store freezes no declaration past it, so the compiler
  *  refuses it too and a compiled row is always one the store keeps. */
 export const PUBLISH_ROW_INPUT_MAX = 256;
+/** The input name a row may show: 1 to PUBLISH_ROW_INPUT_MAX characters. One predicate for the compiler and the
+ *  decision store, so a row the compiler accepts is always one the store freezes. */
+export const isPublishRowInput = (input: unknown): input is string =>
+  typeof input === "string" && input.length > 0 && input.length <= PUBLISH_ROW_INPUT_MAX;
 
 /** The longest input an artifacts row may name: its island ref carries the name as one field, and the ref codec
  *  (src/lib/lifecycle/lifecycle-card-ref.ts, which holds the same bound) seals no field past 128 bytes. */
