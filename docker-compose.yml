@@ -82,7 +82,7 @@ services:
     # newer major offered). Dev registry only, ephemeral storage. Re-resolve at
     # bump time: `docker buildx imagetools inspect verdaccio/verdaccio:6`.
     # See docs/internals/workflows/upgrade-track.md §8.
-    image: verdaccio/verdaccio:6@sha256:fcd45478bff37ec37100eb328fcb4d034cff3e904868d4f30e10a3db14a80ab9
+    image: verdaccio/verdaccio:6@sha256:8c9cd40d28ef134140f4f6c4cef2032ac58bd554cce56757048f81b72717c09c
     ports:
       - "4873:4873"
     volumes:
