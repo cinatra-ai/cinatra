@@ -23,6 +23,12 @@ export const PUBLISH_DECISION_MAX_DUE_PAGE = 1000;
 export const PUBLISH_DECISION_MAX_ID_LENGTH = 256;
 export const PUBLISH_DECISION_MAX_NOTE_LENGTH = 2000;
 export const PUBLISH_DECISION_MAX_SURFACED_BYTES = 64 * 1024;
+/** The most rows one declaration may hold, and the longest label or input name in one. */
+export const PUBLISH_DECISION_MAX_DECLARED_ROWS = 32;
+export const PUBLISH_DECISION_MAX_DECLARED_TEXT = 256;
+
+/** One row the template declared for a publishing node: the pack's label over one of the node's inputs. */
+export type PublishDeclaredRow = { label: string; input: string };
 
 export class PublishDecisionError extends Error {
   readonly code: "invalid-input" | "invalid-transition" | "malformed-row" | "not-found" | "conflict";
@@ -42,6 +48,8 @@ export interface PublishDecisionRow {
   a2aContextId: string | null;
   status: PublishDecisionStatus;
   surfacedValues: Record<string, unknown>;
+  /** The rows the template declared for this node at the park; null = not recorded (an older row). */
+  declaredRows: PublishDeclaredRow[] | null;
   decidedBy: string | null;
   decidedAt: Date | null;
   decisionNote: string | null;
@@ -69,7 +77,30 @@ function deserialize(row: StoredRow): PublishDecisionRow {
   if (!isPlainObject(surfacedValues)) {
     throw new PublishDecisionError("malformed-row", "a stored decision has unreadable surfaced values");
   }
-  return { ...row, status: row.status, surfacedValues };
+  let declaredRows: PublishDeclaredRow[] | null = null;
+  if (row.declaredRows !== null && row.declaredRows !== undefined) {
+    let parsed: unknown = null;
+    try {
+      parsed = JSON.parse(row.declaredRows);
+    } catch { /* reported below */ }
+    declaredRows = declaredRowsOf(parsed);
+    if (declaredRows === null) throw new PublishDecisionError("malformed-row", "a stored decision has unreadable declared rows");
+  }
+  return { ...row, status: row.status, surfacedValues, declaredRows };
+}
+
+/** A declaration as plain rows of two texts each, within the caps; null for any other shape. */
+function declaredRowsOf(value: unknown): PublishDeclaredRow[] | null {
+  if (!Array.isArray(value) || value.length > PUBLISH_DECISION_MAX_DECLARED_ROWS) return null;
+  const rows: PublishDeclaredRow[] = [];
+  for (const row of value as unknown[]) {
+    if (!isPlainObject(row)) return null;
+    const { label, input } = row;
+    if (typeof label !== "string" || typeof input !== "string" || label.length === 0 || input.length === 0
+      || label.length > PUBLISH_DECISION_MAX_DECLARED_TEXT || input.length > PUBLISH_DECISION_MAX_DECLARED_TEXT) return null;
+    rows.push({ label, input });
+  }
+  return rows;
 }
 
 export const PUBLISH_DECISION_MAX_SURFACED_DEPTH = 64;
@@ -117,6 +148,8 @@ export interface InsertParkedDecisionInput {
   gateTaskId: string;
   a2aContextId: string | null;
   surfacedValues: Record<string, unknown>;
+  /** The rows the template declares for this node now, kept with the decision; null or absent = not recorded. */
+  declaredRows?: ReadonlyArray<PublishDeclaredRow> | null;
   ttlMs?: number;
 }
 
@@ -142,6 +175,14 @@ export async function insertParkedDecision(input: InsertParkedDecisionInput): Pr
   if (surfaced === null || Buffer.byteLength(surfaced, "utf8") > PUBLISH_DECISION_MAX_SURFACED_BYTES) {
     throw new PublishDecisionError("invalid-input", `surfacedValues must be an object of at most ${PUBLISH_DECISION_MAX_SURFACED_BYTES} bytes of JSON`);
   }
+  let declared: string | null = null;
+  if (input.declaredRows !== undefined && input.declaredRows !== null) {
+    const rows = declaredRowsOf(input.declaredRows);
+    if (rows === null) {
+      throw new PublishDecisionError("invalid-input", `declaredRows must be at most ${PUBLISH_DECISION_MAX_DECLARED_ROWS} rows of a label and an input of at most ${PUBLISH_DECISION_MAX_DECLARED_TEXT} characters`);
+    }
+    declared = JSON.stringify(rows);
+  }
   const ttlMs = input.ttlMs ?? PUBLISH_DECISION_DEFAULT_TTL_MS;
   if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
     throw new PublishDecisionError("invalid-input", "ttlMs must be a positive finite number");
@@ -151,6 +192,7 @@ export async function insertParkedDecision(input: InsertParkedDecisionInput): Pr
     .insert(agentRunPublishDecisions)
     .values({
       id: randomUUID(), orgId, runId, nodeId, gateTaskId, a2aContextId, status: "parked", surfacedValues: surfaced,
+      declaredRows: declared,
       expiresAt: sql`now() + (${ttlMs} || ' milliseconds')::interval`,
     })
     .onConflictDoNothing({

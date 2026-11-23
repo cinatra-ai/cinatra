@@ -74,9 +74,12 @@ async function cardStateForRun(
   if (!decision || decision.status === "run_ended") return PUBLISH_DECISION_CARD_NONE;
   const template = await readAgentTemplateById(run.templateId).catch(() => null);
   if (!template) return PUBLISH_DECISION_CARD_NONE;
-  // An own key only: a node id that names an Object.prototype member reads as no declaration.
+  // The rows the decision kept at its park: a later recompile of the template never relabels a decision. Only a row
+  // older than that record (declaredRows null) falls back to the template's current rows. An own key only: a node id
+  // that names an Object.prototype member reads as no declaration.
   const byNode = template.publishRows ?? {};
-  const declared = Object.prototype.hasOwnProperty.call(byNode, decision.nodeId) ? (byNode[decision.nodeId] ?? []) : [];
+  const declared = decision.declaredRows
+    ?? (Object.prototype.hasOwnProperty.call(byNode, decision.nodeId) ? (byNode[decision.nodeId] ?? []) : []);
   const common = {
     runId: run.id,
     agentName: template.name,

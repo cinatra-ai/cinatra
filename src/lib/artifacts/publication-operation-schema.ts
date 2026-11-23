@@ -123,6 +123,11 @@ export function publishDecisionSchemaQueries(schemaName: string): { text: string
       // The expiry sweep finds due open decisions without touching settled rows.
       text: `CREATE INDEX IF NOT EXISTS agent_run_publish_decisions_due_idx ON "${q}"."agent_run_publish_decisions" (expires_at) WHERE status = 'parked'`,
     },
+    {
+      // declared_rows: the rows the template declared for the node at the park, JSON-as-text. NULLABLE, no default,
+      // no backfill: null = not recorded. Operator-upgrade twin in migrations/core/core__0133.
+      text: `ALTER TABLE "${q}"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS declared_rows text`,
+    },
   ];
 }
 

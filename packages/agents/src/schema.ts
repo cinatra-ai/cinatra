@@ -932,6 +932,9 @@ export const agentRunPublishDecisions = cinatraSchema.table("agent_run_publish_d
   decisionNote:   text("decision_note"),
   createdAt:      timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   expiresAt:      timestamp("expires_at", { withTimezone: true }).notNull(),
+  // The rows the template declared for this node at the park ([{ label, input }], JSON-as-text); null = not recorded
+  // (a row older than core__0133, or a park whose template could not be read).
+  declaredRows:   text("declared_rows"),
 }, (t) => ({
   parkUniq: uniqueIndex("agent_run_publish_decisions_park_uniq").on(t.runId, t.nodeId, t.gateTaskId),
   dueIdx:   index("agent_run_publish_decisions_due_idx").on(t.expiresAt).where(sql`status = 'parked'`),

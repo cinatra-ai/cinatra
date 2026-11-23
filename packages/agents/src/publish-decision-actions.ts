@@ -194,16 +194,18 @@ export async function holdRunAtPublishGate(args: {
     return true;
   }
   if (!verified.startsWith(PUBLISH_GATE_NODE_PREFIX)) return false;
+  const nodeId = verified.slice(PUBLISH_GATE_NODE_PREFIX.length);
 
   let park: Awaited<ReturnType<typeof insertParkedDecision>>;
   try {
     park = await insertParkedDecision({
       orgId: run.orgId,
       runId: run.id,
-      nodeId: verified.slice(PUBLISH_GATE_NODE_PREFIX.length),
+      nodeId,
       gateTaskId: task.id,
       a2aContextId: contextId ?? null,
       surfacedValues: surfacedValuesOf(task),
+      declaredRows: await declaredRowsAtPark(run.templateId, nodeId),
     });
   } catch {
     await moveRun(run.id, fromStatus, "failed", { error: "publish_decision_unrecorded: the publish decision could not be recorded", completedAt: new Date() }, authority);
@@ -243,6 +245,18 @@ export async function closeOpenPublishDecisionsOfRun(runId: string): Promise<num
     if (answer.outcome === "won") closed += 1;
   }
   return closed;
+}
+
+/**
+ * The rows the template declares for this node NOW, kept with the decision so a later recompile never relabels it. An
+ * own key only (a node id that names an Object.prototype member declares nothing). A template that is not found or
+ * cannot be read records nothing (null): the park goes on, and the card falls back to the template's rows at its read.
+ */
+async function declaredRowsAtPark(templateId: string, nodeId: string): Promise<Array<{ label: string; input: string }> | null> {
+  const template = await readAgentTemplateById(templateId).catch(() => null);
+  if (!template) return null;
+  const byNode = template.publishRows ?? {};
+  return Object.prototype.hasOwnProperty.call(byNode, nodeId) ? [...(byNode[nodeId] ?? [])] : [];
 }
 
 export type PublishDecisionAnswer =

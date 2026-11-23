@@ -926,3 +926,53 @@ describe("cinatra#4150 PR 3a, pre-review 3: the expiry's own rules in the store"
     expect(calls.via).toEqual([]);
   });
 });
+
+describe("the decision keeps the rows its template declared at the park (review finding 2)", () => {
+  const ROWS = [{ label: "Title", input: "title" }, { label: "Where", input: "channel" }];
+
+  it("writes the declared rows as JSON text with the row, and reads them back", async () => {
+    answers.insert = async () => [stored({ declaredRows: JSON.stringify(ROWS) })];
+    const result = await insertParkedDecision({ ...PARK, declaredRows: ROWS });
+    expect(calls.values[0]).toMatchObject({ declaredRows: JSON.stringify(ROWS) });
+    expect(result.decision.declaredRows).toEqual(ROWS);
+  });
+
+  it("no declaration given writes null, and an older row (null) reads as not recorded", async () => {
+    answers.insert = async () => [stored({ declaredRows: null })];
+    const result = await insertParkedDecision(PARK);
+    expect(calls.values[0]).toMatchObject({ declaredRows: null });
+    expect(result.decision.declaredRows).toBeNull();
+    await insertParkedDecision({ ...PARK, declaredRows: null });
+    expect(calls.values[1]).toMatchObject({ declaredRows: null });
+  });
+
+  it("an empty declaration is kept as empty, not as not recorded", async () => {
+    answers.insert = async () => [stored({ declaredRows: "[]" })];
+    const result = await insertParkedDecision({ ...PARK, declaredRows: [] });
+    expect(calls.values[0]).toMatchObject({ declaredRows: "[]" });
+    expect(result.decision.declaredRows).toEqual([]);
+  });
+
+  // red-first-expect: expected a refusal
+  it("refuses a declaration that is not rows of a label and an input, before any write", async () => {
+    for (const bad of [
+      [{ label: "", input: "title" }],
+      [{ label: "Title" }],
+      [{ label: "Title", input: 3 }],
+      ["Title"],
+      Array.from({ length: 33 }, () => ({ label: "L", input: "i" })),
+      [{ label: "x".repeat(257), input: "title" }],
+    ]) {
+      expect(await codeOf(insertParkedDecision({ ...PARK, declaredRows: bad as never }))).toBe("invalid-input");
+    }
+    expect(calls.values).toHaveLength(0);
+  });
+
+  // red-first-expect: expected a refusal
+  it("a stored declaration the module cannot read is a malformed row, never a quiet fallback", async () => {
+    for (const text of ["{nope", '{"label":"Title"}', '[{"label":"Title"}]']) {
+      answers.select = async () => [stored({ declaredRows: text })];
+      expect(await codeOf(readLatestDecisionForRun("run-1"))).toBe("malformed-row");
+    }
+  });
+});

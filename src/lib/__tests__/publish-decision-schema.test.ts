@@ -96,7 +96,11 @@ describe("agent_run_publish_decisions — DDL parity", () => {
       name: line.split(" ")[0],
       notNull: /NOT NULL|PRIMARY KEY/.test(line),
     }));
-    expect(config.columns.map((c) => ({ name: c.name, notNull: c.notNull }))).toEqual(ddlColumns);
+    // core__0133 adds declared_rows after the table's creation: last, and nullable.
+    expect(config.columns.map((c) => ({ name: c.name, notNull: c.notNull }))).toEqual([
+      ...ddlColumns,
+      { name: "declared_rows", notNull: false },
+    ]);
     const indexes = config.indexes.map((i) => ({ name: i.config.name, unique: i.config.unique }));
     expect(indexes).toEqual([
       { name: "agent_run_publish_decisions_park_uniq", unique: true },
@@ -131,5 +135,68 @@ describe("agent_run_publish_decisions — DDL parity", () => {
       expect(indexes).toHaveLength(2);
       expect(drizzle).toEqual({ checks, indexes });
     }
+  });
+});
+
+// Review finding 2: the decision keeps the rows its template declared at the park, so a recompile never relabels it.
+describe("agent_run_publish_decisions.declared_rows — DDL parity (core__0133)", () => {
+  type Pgm = { sql: (s: string) => void; noTransaction: () => void };
+  type Mod = { publishDecisionDeclaredRowsDdlSql: string; up: (pgm: Pgm) => void; down: (pgm: Pgm) => void };
+  const load = async () =>
+    (await import("../../../migrations/core/core__0133_publish-decision-declared-rows.mjs")) as unknown as Mod;
+  const record = (fn: (pgm: Pgm) => void) => {
+    const out = { sql: [] as string[], noTransaction: 0 };
+    fn({ sql: (s) => out.sql.push(s), noTransaction: () => (out.noTransaction += 1) });
+    return out;
+  };
+
+  it("the bootstrap leaf adds the column, idempotently, once, after the table and its indexes, with the schema quoted", () => {
+    const leaf = publishDecisionSchemaQueries('we"ird').map((q) => q.text);
+    expect(leaf.at(-1)).toBe('ALTER TABLE "we""ird"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS declared_rows text');
+    const all = buildCreateStoreSchemaQueries("cinatra").map((q) => q.text);
+    expect(all.filter((t) => /agent_run_publish_decisions.* ADD COLUMN IF NOT EXISTS declared_rows text/.test(t))).toHaveLength(1);
+  });
+
+  // red-first-expect: Cannot find module '/migrations/core/core__0133_publish-decision-declared-rows.mjs'
+  it("the migration adds the same column, idempotently, outside a transaction, under a bounded lock wait", async () => {
+    const mod = await load();
+    expect(mod.publishDecisionDeclaredRowsDdlSql).toBe(
+      "ALTER TABLE agent_run_publish_decisions ADD COLUMN IF NOT EXISTS declared_rows text",
+    );
+    const up = record(mod.up);
+    expect(up.noTransaction).toBe(1);
+    expect(up.sql).toEqual([
+      "SET lock_timeout = 5000",
+      "ALTER TABLE agent_run_publish_decisions ADD COLUMN IF NOT EXISTS declared_rows text",
+      "RESET lock_timeout",
+    ]);
+  });
+
+  // red-first-expect: Cannot find module '/migrations/core/core__0133_publish-decision-declared-rows.mjs'
+  it("down drops only this column, with IF EXISTS", async () => {
+    expect(record((await load()).down).sql).toEqual([
+      "ALTER TABLE agent_run_publish_decisions DROP COLUMN IF EXISTS declared_rows",
+    ]);
+  });
+
+  // red-first-expect: ENOENT: no such file or directory
+  it("the manifest fragment names the migration, its table and an additive change", () => {
+    const fragment = JSON.parse(
+      readFileSync(join(process.cwd(), "migrations/manifest.d/core__0133_publish-decision-declared-rows.json"), "utf8"),
+    ) as { seq: string; file: string; destructive: boolean; tables: string[] };
+    expect(fragment).toMatchObject({
+      seq: "0133",
+      file: "core/core__0133_publish-decision-declared-rows.mjs",
+      destructive: false,
+      tables: ["agent_run_publish_decisions"],
+    });
+  });
+
+  it("the Drizzle column is nullable text with no default (no backfill)", () => {
+    const column = getTableConfig(agentRunPublishDecisions).columns.find((c) => c.name === "declared_rows");
+    expect(column).toBeDefined();
+    expect(column!.notNull).toBe(false);
+    expect(column!.hasDefault).toBe(false);
+    expect(column!.columnType).toBe("PgText");
   });
 });

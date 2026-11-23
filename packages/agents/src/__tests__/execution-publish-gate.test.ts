@@ -159,6 +159,7 @@ function makeTemplate(publishingSteps: string[] | null) {
     packageVersion: null,
     gatedSteps: [],
     publishingSteps,
+    publishRows: { publish: [{ label: "Title", input: "title" }] } as Record<string, Array<{ label: string; input: string }>> | null,
     triggerMode: "none",
     approvalPolicy: { steps: [] },
     agentDependencies: null,
@@ -233,6 +234,7 @@ describe("a run that reaches a publish gate (A4 without the moment)", () => {
       gateTaskId: TASK,
       a2aContextId: CONTEXT,
       surfacedValues: SURFACED,
+      declaredRows: [{ label: "Title", input: "title" }],
     });
     expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
     expect(decisions.insertParkedDecision.mock.invocationCallOrder[0]!).toBeLessThan(
@@ -240,6 +242,21 @@ describe("a run that reaches a publish gate (A4 without the moment)", () => {
     );
     expect(onInterruptSpy).not.toHaveBeenCalled();
     expect(gateStore.rememberWayflowGateTask).not.toHaveBeenCalled();
+  });
+
+  it("the decision keeps the rows the template declares for its node AT THE PARK (review finding 2)", async () => {
+    // No declaration for the node: an empty declaration is recorded, never another node's rows.
+    storeMock.readAgentTemplateById.mockResolvedValue({ ...makeTemplate(["publish"]), publishRows: { another: [{ label: "X", input: "x" }] } });
+    await pause(sign(GATE));
+    expect(decisions.insertParkedDecision).toHaveBeenLastCalledWith(expect.objectContaining({ declaredRows: [] }));
+    // A template that cannot be read records nothing (null), and the park still goes on.
+    vi.clearAllMocks();
+    decisions.insertParkedDecision.mockResolvedValue({ inserted: true, decision: parkedRow() });
+    storeMock.transitionRunStatus.mockResolvedValue(undefined);
+    storeMock.readAgentTemplateById.mockRejectedValue(new Error("template store down"));
+    await pause(sign(GATE));
+    expect(decisions.insertParkedDecision).toHaveBeenLastCalledWith(expect.objectContaining({ declaredRows: null }));
+    expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
   });
 
   it("the prefix wins: a step the template does not list, or a template with no list, is still held", async () => {

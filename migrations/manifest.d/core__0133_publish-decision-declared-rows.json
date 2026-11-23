@@ -1,0 +1,9 @@
+{
+  "seq": "0133",
+  "file": "core/core__0133_publish-decision-declared-rows.mjs",
+  "summary": "The publish decision's own row declaration on agent_run_publish_decisions (cinatra#4150). ONE additive nullable column: declared_rows text, JSON-as-text like surfaced_values: the rows ([{ label, input }]) the template declared for the decision's node when the run parked there, written by insertParkedDecision at the park. The publish card draws a decision's rows from it, so a later recompile that changes agent_templates.publish_rows never relabels a decision already surfaced; null = not recorded (rows written before this column, or a park whose template could not be read), and the card then falls back to the template's current rows. No backfill, no default, no constraint change: every existing row reads NULL. up runs outside a transaction with lock_timeout 5 s (set first, reset last), so an ALTER queued behind a long reader fails (55P03) and replays instead of stalling the table; the add itself is catalog-only. Idempotent ADD COLUMN IF NOT EXISTS twin of the fresh-install bootstrap DDL (publishDecisionSchemaQueries in src/lib/artifacts/publication-operation-schema.ts), shipped in the SAME change. down() drops the column and the stored declarations with it. SEQ IS PROVISIONAL: 0132 is the highest sequence on main (2026-11-23); a rename-only renumber at merge is normal.",
+  "destructive": false,
+  "tables": [
+    "agent_run_publish_decisions"
+  ]
+}

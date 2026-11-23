@@ -291,3 +291,46 @@ describe("the access door runs first", () => {
     }
   });
 });
+
+describe("a decision's rows are the ones its template declared at the park (review finding 2)", () => {
+  const AT_PARK = [{ label: "Title", input: "title" }, { label: "Where", input: "channel" }];
+  // A recompile after the park: new labels, an input renamed, a row added that names an identifier.
+  const RECOMPILED = {
+    ...TEMPLATE,
+    publishRows: { post: [{ label: "Headline", input: "headline" }, { label: "Record", input: "secretId" }] },
+  };
+  const STORED_ROWS = [{ label: "Title", value: "Autumn launch" }, { label: "Where", value: "Blog" }];
+
+  it("a parked decision keeps its stored labels and inputs after the template is recompiled", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue(RECOMPILED);
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ declaredRows: AT_PARK }));
+    const card = await read();
+    expect(card.state).toBe("pending");
+    expect((card as { rows: unknown }).rows).toEqual(STORED_ROWS);
+  });
+
+  it("a settled decision keeps its stored labels and inputs after the template is recompiled", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue(RECOMPILED);
+    for (const settled of [
+      decision({ status: "released", decidedBy: "user-b", declaredRows: AT_PARK }),
+      decision({ status: "declined", decidedBy: "user-b", decisionNote: "No.", declaredRows: AT_PARK }),
+      decision({ status: "expired", declaredRows: AT_PARK }),
+    ]) {
+      decisions.readLatestDecisionForRun.mockResolvedValue(settled);
+      const card = await read();
+      expect((card as { rows: unknown }).rows, settled.status as string).toEqual(STORED_ROWS);
+    }
+  });
+
+  it("a stored empty declaration draws no rows, even when the template now declares some", async () => {
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ declaredRows: [] }));
+    expect((await read() as { rows: unknown }).rows).toEqual([]);
+  });
+
+  it("an older decision with no stored declaration (null) falls back to the template's current rows", async () => {
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ declaredRows: null }));
+    expect((await read() as { rows: unknown }).rows).toEqual(STORED_ROWS);
+    storeMock.readAgentTemplateById.mockResolvedValue(RECOMPILED);
+    expect((await read() as { rows: unknown }).rows).toEqual([{ label: "Record", value: "row-77" }]);
+  });
+});
