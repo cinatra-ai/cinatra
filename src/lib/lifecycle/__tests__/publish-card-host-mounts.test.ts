@@ -55,12 +55,31 @@ describe("the publish card's mounts (cinatra#4150)", () => {
   it("the run panel's mount stands down inside a conversation host, on the hitl screen's own switch", () => {
     const source = read(PANEL);
     const at = source.indexOf("<PublishDecisionCard runId={runId} read={publishRead} />");
-    const guard = source.lastIndexOf("{panelMountsHitlScreenCard ? (", at);
+    const guard = source.lastIndexOf("const publishCard = panelMountsHitlScreenCard ? (", at);
     expect(guard).toBeGreaterThan(-1);
     // The switch opens right before this mount's own provider, with nothing between them.
     const between = source.slice(guard, at);
     expect(between.match(/<LifecycleCardSurfaceProvider host="run_card">/g)).toHaveLength(1);
+    expect(between).toMatch(/^const publishCard = panelMountsHitlScreenCard \? \(\s*<LifecycleCardSurfaceProvider host="run_card">\s*$/);
     expect(source).toMatch(/const panelMountsHitlScreenCard = runCardOwnsLifecycleCopy\(ambientLifecycleHost\);/);
+  });
+
+  it("the run panel keeps a SETTLED decision's card beside its working and review surface, as the stepper does", () => {
+    // A settled decision is a record, not a held card: the arm that returns the working or review surface draws the
+    // one card element above its box once the read has answered anything but `none`, and the plate draws it otherwise.
+    const source = read(PANEL);
+    const arm = source.indexOf("if (!parkedAtPublishGate && (reviewScreenNode !== null || runIsWorking)) {");
+    const element = source.indexOf("const publishCard = panelMountsHitlScreenCard ? (");
+    expect(element).toBeGreaterThan(-1);
+    expect(element).toBeLessThan(arm);
+    const box = source.indexOf("data-run-review-slot={reviewCardDrawn ? \"review\" : \"working\"}", arm);
+    const armHead = source.slice(arm, box);
+    expect(armHead).toMatch(
+      /const settledPublishCard =\s*publishRead\.state !== null && publishRead\.state\.state !== "none" \? publishCard : null;\s*return \(\s*<>\s*\{settledPublishCard\}\s*<section/,
+    );
+    // The plate draws the same element, and it is the panel's only other use of it.
+    expect(source.match(/\{publishCard\}/g)).toHaveLength(1);
+    expect(source.indexOf("{publishCard}")).toBeGreaterThan(box);
   });
 
   it("the column mounts the card beside the hitl screen in every placement, with no decide door", () => {

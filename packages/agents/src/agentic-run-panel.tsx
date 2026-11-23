@@ -2967,12 +2967,26 @@ export function AgenticRunPanel({
     setHeldReview({ runId, ref: reviewRefInTheBox, heardAt: null });
   }
 
+  // THE PUBLISH CARD (cinatra#4150), keyed by the run under this panel's own `run_card` declaration. It stands down
+  // inside a conversation host for the hitl screen's reason, and draws nothing with no decision. ONE element, drawn by
+  // exactly one of the two arms below.
+  const publishCard = panelMountsHitlScreenCard ? (
+    <LifecycleCardSurfaceProvider host="run_card">
+      <PublishDecisionCard runId={runId} read={publishRead} />
+    </LifecycleCardSurfaceProvider>
+  ) : null;
+
   // THE PUBLISH ARM IS ASKED FIRST (cinatra#4150): an open publish decision draws the plate below with its card and
   // nothing else, so neither the review screen nor the working placeholder (a produced-review park or a review hold
   // the reader still retains) may return ahead of it. Any other publish reading leaves this arm exactly as it was.
   if (!parkedAtPublishGate && (reviewScreenNode !== null || runIsWorking)) {
+    // A SETTLED publish decision (approved, declined, expired) is a record, not a held card: it keeps its reading above
+    // the working or review surface while the run resumes, as on the stepper; with no decision nothing is drawn here.
+    const settledPublishCard =
+      publishRead.state !== null && publishRead.state.state !== "none" ? publishCard : null;
     return (
       <>
+        {settledPublishCard}
         <section
           // The rail owns the two-column layout; this slot owns the one
           // .runcard frame and strong ground in both working and review readings
@@ -3112,13 +3126,8 @@ export function AgenticRunPanel({
           of what the panel still takes from that interaction, is above the
           review-screen mount. */}
 
-      {/* THE PUBLISH CARD (cinatra#4150), keyed by the run under this panel's own `run_card` declaration. It stands
-          down inside a conversation host for the hitl screen's reason, and draws nothing with no open decision. */}
-      {panelMountsHitlScreenCard ? (
-        <LifecycleCardSurfaceProvider host="run_card">
-          <PublishDecisionCard runId={runId} read={publishRead} />
-        </LifecycleCardSurfaceProvider>
-      ) : null}
+      {/* THE PUBLISH CARD (cinatra#4150): the one element above, open or settled, in this plate. */}
+      {publishCard}
 
       {parkedAtPublishGate ? (
         // The publish card above is this pause's one surface (cinatra#4150): no hitl screen and no generic approval

@@ -70,13 +70,15 @@ const PENDING = {
   mayDecide: true,
 };
 
-// The stream's reading, mutable so a suite can move the run to another gate WITHOUT a status change.
+// The stream's reading, mutable so a suite can move the run to another gate WITHOUT a status change, or set the run's
+// status (a run resumed past a settled decision reads `running`).
 const streamState = vi.hoisted(() => ({
+  status: "pending_approval",
   interruptContext: null as null | Record<string, unknown>,
 }));
 vi.mock("../use-ag-ui-run-stream", () => ({
   useAgUiRunStream: vi.fn(() => ({
-    status: "pending_approval",
+    status: streamState.status,
     error: null,
     presentationHint: null,
     isLive: true,
@@ -98,12 +100,14 @@ type ReviewSlotReading = { ref: string | null; awaiting: boolean; producedReview
 async function mountPanel(
   onRunChangeSignal?: (runId: string, signal: string) => void,
   reviewSlot?: ReviewSlotReading,
+  status: string = "pending_approval",
 ) {
+  streamState.status = status;
   const { AgenticRunPanel } = await import("../agentic-run-panel");
   const element = () => (
     <AgenticRunPanel
       runId={RUN_ID}
-      initialStatus="pending_approval"
+      initialStatus={status as "pending_approval"}
       initialError={null}
       initialMessages={[]}
       agUiEnabled={true}
@@ -119,6 +123,7 @@ async function mountPanel(
 beforeEach(() => {
   cleanup();
   publishStateMock.mockReset();
+  streamState.status = "pending_approval";
   streamState.interruptContext = null;
 });
 afterEach(() => {
@@ -326,5 +331,37 @@ describe("AgenticRunPanel at a publish gate (cinatra#4150)", () => {
     });
     const mounted = await mountPanel();
     expect(surfaces(mounted.container)).toEqual({ card: 0, banner: 1 });
+  });
+  // A SETTLED DECISION IS A RECORD (the stepper's rule): it keeps its reading in place while the run resumes and works,
+  // beside the working or review surface, and in every later state; drawn once.
+  const SETTLED_CARD = (container: HTMLElement, marker: string) => ({
+    card: container.querySelectorAll('[data-lifecycle-card="publish_decision"]').length,
+    marker: container.querySelectorAll(`[data-conformance-id="${marker}"]`).length,
+  });
+
+  it("a SETTLED allowed decision stays drawn, once, while the resumed run is running", async () => {
+    publishStateMock.mockImplementation(async () => ({ ...PENDING, state: "approved", deciderName: "Ana" }));
+    const mounted = await mountPanel(undefined, undefined, "running");
+    expect(SETTLED_CARD(mounted.container, "publish-card-approved")).toEqual({ card: 1, marker: 1 });
+    expect(reviewArm(mounted.container).slot).toBe(1);
+  });
+
+  it("a SETTLED allowed decision stays drawn, once, beside a review surface", async () => {
+    publishStateMock.mockImplementation(async () => ({ ...PENDING, state: "approved", deciderName: "Ana" }));
+    const mounted = await mountPanel(undefined, STALE_PRODUCED_REVIEW);
+    expect(SETTLED_CARD(mounted.container, "publish-card-approved")).toEqual({ card: 1, marker: 1 });
+    expect(reviewArm(mounted.container).slot).toBe(1);
+  });
+
+  it("a SETTLED declined decision stays drawn, once, while the run is running", async () => {
+    publishStateMock.mockImplementation(async () => ({ ...PENDING, state: "declined", deciderName: "Ana", reason: null }));
+    const mounted = await mountPanel(undefined, undefined, "running");
+    expect(SETTLED_CARD(mounted.container, "publish-card-declined")).toEqual({ card: 1, marker: 1 });
+  });
+
+  it("a SETTLED declined decision keeps its record, once, after the run has ended", async () => {
+    publishStateMock.mockImplementation(async () => ({ ...PENDING, state: "declined", deciderName: "Ana", reason: null }));
+    const mounted = await mountPanel(undefined, undefined, "stopped");
+    expect(SETTLED_CARD(mounted.container, "publish-card-declined")).toEqual({ card: 1, marker: 1 });
   });
 });
