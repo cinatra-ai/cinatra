@@ -129,9 +129,10 @@ export function publishDecisionSchemaQueries(schemaName: string): { text: string
       text: `ALTER TABLE "${q}"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS declared_rows text`,
     },
     {
-      // superseded_at: when a retry's reset ended the attempt the decision belongs to. NULLABLE, no default, no backfill:
-      // null = the run's current attempt. Operator-upgrade twin in migrations/core/core__0133.
-      text: `ALTER TABLE "${q}"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS superseded_at timestamptz`,
+      // run_generation: the run's reset_generation at the park; the decision belongs to the run's current attempt only
+      // while the two are equal. NULLABLE, no default: null = a row older than the column, read as generation 0. The
+      // backfill of existing rows is the operator-upgrade twin's, in migrations/core/core__0133.
+      text: `ALTER TABLE "${q}"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS run_generation integer`,
     },
   ];
 }

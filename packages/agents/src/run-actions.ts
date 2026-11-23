@@ -441,15 +441,13 @@ export async function resetAgentRun(
   }
 
   const authority = await verifySessionAuthority(userId, run.orgId);
-  // The failed attempt's publish decisions must not hold, label or stop the next attempt: each is marked superseded
-  // first, and one left open closes run_ended, as the expiry sweep closes the row of a run that left its gate. The change
-  // holds only while the run is still failed (one statement), so a reset that loses the claim below to a concurrent
-  // reset changes nothing, and never a decision of the attempt that reset started. Loaded at the call, so this module's graph does not take the
-  // publish decision store.
-  const { closeOpenPublishDecisionsOfRun } = await import("./publish-decision-actions");
-  await closeOpenPublishDecisionsOfRun(args.runId);
+  // cinatra#4150: the reset ends the failed attempt at the generation read above, in ONE guarded transaction: the
+  // compare-and-set lands only while the run is still failed at that generation and raises it by 1, and the attempt's
+  // open publish decisions close run_ended in the same transaction, so none holds, labels or stops the next attempt. A
+  // reset that lost to another (a newer failure has a newer generation), or that the org-write kernel refused, writes
+  // nothing.
   try {
-    await transitionRunStatus(args.runId, "failed", "pending_input", undefined, authority);
+    await transitionRunStatus(args.runId, "failed", "pending_input", { resetGeneration: run.resetGeneration ?? 0 }, authority);
   } catch (err) {
     if (err instanceof RunTransitionError && err.code === "stale_from_status") {
       return { ok: false, error: "run is not in failed state" };

@@ -32,6 +32,9 @@ const shared = vi.hoisted(() => ({
   // Queue of CAS `.returning()` results; empty → default win ([{ id }]).
   returningRows: [] as Array<Array<{ id: string }>>,
   setPayloads: [] as unknown[],
+  /** The table and the WHERE of each update, in order (cinatra#4150: the reset's CAS and its decision close). */
+  updateTables: [] as unknown[],
+  wheres: [] as unknown[],
   inserted: [] as unknown[],
   updateCalls: 0,
   // 1-indexed update-call ordinal whose write should REJECT (meta-write-failure sim).
@@ -47,15 +50,17 @@ vi.mock("../db", async () => {
   const { wrapTxWithOrgWriteKernel } = await import(
     "@cinatra-ai/org-write-kernel/testing"
   );
-  const update = () => {
+  const update = (table?: unknown) => {
     shared.updateCalls += 1;
+    shared.updateTables.push(table);
     const thisCall = shared.updateCalls;
     return {
       set: (payload: unknown) => {
         shared.setPayloads.push(payload);
         return {
           // The CAS calls `.returning()`; the meta write awaits `.where()` directly.
-          where: () => {
+          where: (w?: unknown) => {
+            shared.wheres.push(w);
             if (shared.failOnUpdateCall === thisCall) {
               const rej = () => {
                 const r = Promise.reject(new Error("simulated write failure"));
@@ -189,6 +194,8 @@ function derivationCapture() {
 beforeEach(() => {
   vi.clearAllMocks();
   shared.setPayloads.length = 0;
+  shared.updateTables.length = 0;
+  shared.wheres.length = 0;
   shared.inserted.length = 0;
   shared.returningRows = [];
   shared.updateCalls = 0;
@@ -400,9 +407,70 @@ describe("mid-attempt wait marker stamping (#1938)", () => {
   });
 
   it("pending_input edges never touch the marker column", async () => {
-    await transitionRunStatus(RUN, "failed", "pending_input", undefined, SESSION);
+    await transitionRunStatus(RUN, "failed", "pending_input", { resetGeneration: 0 }, SESSION);
     const cas = shared.setPayloads[0] as Record<string, unknown>;
     expect(Object.prototype.hasOwnProperty.call(cas, "humanWaitAttemptId")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4150 round 20: a retry's reset ends its attempt at the reset generation it read, in ONE guarded transaction:
+// the CAS lands only at that generation and raises it, and the attempt's open publish decisions close in the same
+// transaction. A lost or refused reset writes nothing.
+// ---------------------------------------------------------------------------
+describe("failed→pending_input: the reset generation (cinatra#4150)", () => {
+  const sqlOf = async (w: unknown) => {
+    const { PgDialect } = await import("drizzle-orm/pg-core");
+    return new PgDialect().sqlToQuery(w as import("drizzle-orm").SQL);
+  };
+
+  it("the CAS lands only at the generation read and raises it by 1; the attempt's open decisions close in the same transaction", async () => {
+    const { agentRuns, agentRunPublishDecisions } = await import("../schema");
+    await transitionRunStatus(RUN, "failed", "pending_input", { resetGeneration: 3 }, SESSION);
+    expect(shared.updateTables[0]).toBe(agentRuns);
+    expect(shared.setPayloads[0]).toMatchObject({ status: "pending_input", resetGeneration: 4 });
+    const cas = await sqlOf(shared.wheres[0]);
+    expect(cas.sql).toMatch(/"agent_runs"\."reset_generation" = \$\d+/);
+    expect(cas.params).toEqual(expect.arrayContaining([RUN, "failed", ORG, 3]));
+    // The decision close rides the same guarded transaction, after the CAS won.
+    expect(shared.updateTables[1]).toBe(agentRunPublishDecisions);
+    expect(shared.setPayloads[1]).toMatchObject({ status: "run_ended", decidedBy: null, decisionNote: null });
+    const close = await sqlOf(shared.wheres[1]);
+    expect(close.sql).toMatch(/"agent_run_publish_decisions"\."status" = \$\d+ and coalesce\("[^"]+"\."agent_run_publish_decisions"\."run_generation", 0\) <= \$\d+/);
+    expect(close.params).toEqual([RUN, "parked", 3]);
+    // The generation is a control key: it never reaches the delegated meta write.
+    expect(shared.setPayloads.slice(2).some((p) => Object.prototype.hasOwnProperty.call(p, "resetGeneration"))).toBe(false);
+  });
+
+  it("a reset that lost its CAS (another reset, or a newer failure's newer generation) closes no decision", async () => {
+    shared.returningRows = [[]];
+    await expect(
+      transitionRunStatus(RUN, "failed", "pending_input", { resetGeneration: 0 }, SESSION),
+    ).rejects.toMatchObject({ code: "stale_from_status" });
+    expect(shared.updateCalls).toBe(1);
+    expect(dispatchRunWaitTransition).not.toHaveBeenCalled();
+  });
+
+  it("a reset of an archived org is refused before any write, decisions included", async () => {
+    shared.kernelAnswers.organization = { archivedAt: "2026-07-01T00:00:00Z", archiveEpoch: 1 };
+    await expect(
+      transitionRunStatus(RUN, "failed", "pending_input", { resetGeneration: 0 }, SESSION),
+    ).rejects.toMatchObject({ name: "OrgWriteRefusedError", reason: "capability-denied" });
+    expect(shared.setPayloads).toHaveLength(0);
+  });
+
+  it("a reset must name a generation, and only a reset may: refused before any write", async () => {
+    for (const [from, to, meta] of [
+      ["failed", "pending_input", undefined],
+      ["failed", "pending_input", { resetGeneration: -1 }],
+      ["failed", "pending_input", { resetGeneration: 1.5 }],
+      ["pending_input", "queued", { resetGeneration: 0 }],
+    ] as const) {
+      await expect(
+        transitionRunStatus(RUN, from as AgentRunStatus, to as AgentRunStatus, meta as never, SESSION),
+      ).rejects.toMatchObject({ name: "RunTransitionError", code: "illegal_transition" });
+    }
+    expect(shared.updateCalls).toBe(0);
   });
 });
 

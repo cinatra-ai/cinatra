@@ -12,7 +12,6 @@ import { sessionAuthorityFromResolvedRole } from "@/lib/org-write/authority";
 import type { ActorRoleHints } from "./auth-policy";
 import {
   decide,
-  endFailedAttemptDecisions,
   insertParkedDecision,
   listDueParked,
   listSettledWithWaitingRun,
@@ -63,13 +62,14 @@ const isStale = (err: unknown): boolean =>
 const LOGGED_ERROR_NAMES = new Set(["Error", "TypeError", "RangeError", "SyntaxError", "AbortError", "TimeoutError", "AuthzError"]);
 const nameOf = (err: unknown): string => (err instanceof Error ? (LOGGED_ERROR_NAMES.has(err.name) ? err.name : "Error") : "error");
 
-/** Refuses a resume when the newest decision of the run's CURRENT attempt exists and is not `released`: a decision a
- *  retry's reset ended with its failed attempt (superseded) never holds the later attempt's gate, while a declined,
+/** Refuses a resume when the newest decision of the run's CURRENT attempt exists and is not `released`: a decision of an
+ *  attempt a retry's reset ended (an earlier reset generation) never holds the later attempt's gate, while a declined,
  *  expired or run_ended decision of the current attempt still does. A read error propagates. Answers whether the run has
  *  any decision, of any attempt: such a run met a publish gate, so it can meet one again. */
 export async function assertNoOpenPublishDecision(runId: string): Promise<boolean> {
   const latest = await readLatestDecisionForRun(runId, { orEarlierAttempt: true });
-  if (latest && latest.supersededAt == null && latest.status !== "released") throw new PublishDecisionRequiredError();
+  // Only a row the read marks as an earlier generation's (current === false) lets the run go on: fail-closed.
+  if (latest && latest.current !== false && latest.status !== "released") throw new PublishDecisionRequiredError();
   return latest !== null;
 }
 
@@ -211,8 +211,13 @@ export async function holdRunAtPublishGate(args: {
       surfacedValues: surfacedValuesOf(task),
       declaredRows: await readDispatchedPublishRows(run.id, nodeId).catch(() => null),
     });
-    // This gate task's stop belongs to an attempt a retry's reset ended: it cannot be recorded again for this attempt.
-    if (!park.inserted && park.decision.supersededAt != null) throw new Error("superseded");
+    // The stop belongs to an attempt that has ended: an existing row of an earlier reset generation, or a new row
+    // stamped while the run was no longer held at a gate (its attempt failed and may have been reset meanwhile). It
+    // cannot hold this attempt; a new row is closed run_ended at once, so it never waits for a person.
+    if (!park.current) {
+      if (park.inserted) await decide(park.decision.id, { from: "parked", to: "run_ended", actor: null }).catch(() => undefined);
+      throw new Error("superseded");
+    }
   } catch {
     await moveRun(run.id, fromStatus, "failed", { error: "publish_decision_unrecorded: the publish decision could not be recorded", completedAt: new Date() }, authority);
     return true;
@@ -225,24 +230,12 @@ export async function holdRunAtPublishGate(args: {
   } catch (err) {
     // The dispatch records this attempt failed. A row left parked would read as the open stop of the run's next attempt
     // (a retry), so it is closed run_ended here, as a lost move closes it. A fault on that close does not hide the move's
-    // own fault; the retry's reset closes the row then (closeOpenPublishDecisionsOfRun), while the run is still failed.
+    // own fault; the retry's reset closes the row then, in the guarded transaction of its compare-and-set.
     await decide(park.decision.id, { from: "parked", to: "run_ended", actor: null }).catch(() => undefined);
     throw err;
   }
   if (!moved) await decide(park.decision.id, { from: "parked", to: "run_ended", actor: null });
   return true;
-}
-
-/**
- * Ends the publish decisions of a run whose attempt failed, before a retry's reset: every decision of that attempt is
- * marked superseded, and an open (parked) one closes run_ended with no person (the close the expiry sweep makes for a
- * run that left its gate). So no decision of the failed attempt reads as the open stop, the hold, the card or a stop
- * reason of the next attempt. The change holds only while the run is still `failed`, checked in the same statement: a
- * reset that lost to a concurrent reset changes nothing, and never a newer attempt's decision. A fault is not
- * swallowed: the reset fails and may be tried again.
- */
-export async function closeOpenPublishDecisionsOfRun(runId: string): Promise<number> {
-  return endFailedAttemptDecisions(runId);
 }
 
 export type PublishDecisionAnswer =

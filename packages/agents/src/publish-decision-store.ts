@@ -4,16 +4,21 @@ import "server-only";
 // `decide` is the ONE way a row leaves `parked`: one conditional UPDATE in a transaction, so
 // one of two concurrent answers wins, and a row it cannot read rolls the answer back. Every
 // read error and every unreadable row THROWS: it never reads as "no open decision".
-// A decision belongs to one ATTEMPT of its run. A retry's reset ends the failed attempt: it stamps every decision of that
-// attempt superseded_at (endFailedAttemptDecisions). Every run-level read below judges only the CURRENT attempt's rows
-// (superseded_at null), so a closed decision of an earlier attempt never holds, labels or stops a later one.
+// A decision belongs to one ATTEMPT of its run: the park stamps the run's reset_generation on it (run_generation), and a
+// retry's reset raises the run's generation in its compare-and-set (run-transition.ts). Every run-level read below judges
+// only the CURRENT attempt's rows (run_generation = the run's reset_generation), so a closed decision of an earlier
+// attempt never holds, labels or stops a later one.
 
 import { randomUUID } from "node:crypto";
 import { types } from "node:util";
-import { and, asc, desc, eq, gt, inArray, isNull, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, gt, inArray, lte, sql } from "drizzle-orm";
 
 import { db } from "./db";
 import { agentRunPublishDecisions, agentRuns } from "./schema";
+
+/** A decision of the run's current attempt: its run_generation (a row older than the column reads 0) equals the run's
+ *  reset_generation, read in the same statement. False, never null, when the run row is gone. */
+const CURRENT_ATTEMPT = sql<boolean>`coalesce(coalesce(${agentRunPublishDecisions.runGeneration}, 0) = (select attempt_run.reset_generation from ${agentRuns} attempt_run where attempt_run.id = ${agentRunPublishDecisions.runId}), false)`;
 
 export const PUBLISH_DECISION_STATUSES = ["parked", "released", "declined", "expired", "run_ended"] as const;
 export type PublishDecisionStatus = (typeof PUBLISH_DECISION_STATUSES)[number];
@@ -53,8 +58,8 @@ export interface PublishDecisionRow {
   surfacedValues: Record<string, unknown>;
   /** The rows the template declared for this node at the park; null = not recorded (an older row). */
   declaredRows: PublishDeclaredRow[] | null;
-  /** When a retry's reset ended this decision's attempt; null = the run's current attempt. */
-  supersededAt: Date | null;
+  /** The run's reset generation at the park; -1 = an ended attempt; null = a row older than the column (read as 0). */
+  runGeneration: number | null;
   decidedBy: string | null;
   decidedAt: Date | null;
   decisionNote: string | null;
@@ -91,7 +96,7 @@ function deserialize(row: StoredRow): PublishDecisionRow {
     declaredRows = declaredRowsOf(parsed);
     if (declaredRows === null) throw new PublishDecisionError("malformed-row", "a stored decision has unreadable declared rows");
   }
-  return { ...row, status: row.status, surfacedValues, declaredRows, supersededAt: row.supersededAt ?? null };
+  return { ...row, status: row.status, surfacedValues, declaredRows, runGeneration: row.runGeneration ?? null };
 }
 
 /** A declaration as plain rows of two texts each, within the caps; null for any other shape. */
@@ -161,6 +166,9 @@ export interface InsertParkedDecisionInput {
 export interface InsertParkedDecisionResult {
   /** False when this stop already had a row, whatever its status; `decision` is that row, unchanged. */
   inserted: boolean;
+  /** The row belongs to the run's current attempt: a new row stamped while the run was held at a gate (running or
+   *  pending_approval), or an existing row of the current generation. */
+  current: boolean;
   decision: PublishDecisionRow;
 }
 
@@ -198,22 +206,25 @@ export async function insertParkedDecision(input: InsertParkedDecisionInput): Pr
     .values({
       id: randomUUID(), orgId, runId, nodeId, gateTaskId, a2aContextId, status: "parked", surfacedValues: surfaced,
       declaredRows: declared,
+      // The run's generation, read in this statement, only while the run is held at a gate; else -1 (an ended attempt).
+      runGeneration: sql`coalesce((select live_run.reset_generation from ${agentRuns} live_run where live_run.id = ${runId} and live_run.status in ('running', 'pending_approval')), -1)`,
       expiresAt: sql`now() + (${ttlMs} || ' milliseconds')::interval`,
     })
     .onConflictDoNothing({
       target: [agentRunPublishDecisions.runId, agentRunPublishDecisions.nodeId, agentRunPublishDecisions.gateTaskId],
     })
     .returning();
-  if (row) return { inserted: true, decision: deserialize(row) };
+  if (row) return { inserted: true, current: row.runGeneration !== null && row.runGeneration >= 0, decision: deserialize(row) };
 
   const [existing] = await db
-    .select()
+    .select({ ...getTableColumns(agentRunPublishDecisions), current: CURRENT_ATTEMPT })
     .from(agentRunPublishDecisions)
     .where(and(eq(agentRunPublishDecisions.runId, runId), eq(agentRunPublishDecisions.nodeId, nodeId),
       eq(agentRunPublishDecisions.gateTaskId, gateTaskId)))
     .limit(1);
   if (!existing) throw new PublishDecisionError("conflict", "the stop conflicted and has no row");
-  return { inserted: false, decision: deserialize(existing) };
+  const { current, ...stored } = existing;
+  return { inserted: false, current: current === true, decision: deserialize(stored) };
 }
 
 export interface DecideInput {
@@ -223,7 +234,8 @@ export interface DecideInput {
   actor: string | null;
   /** Only a decline carries a note. */
   note?: string | null;
-  /** Wins only while no newer decision of the same run exists, checked in the same UPDATE (the expiry's rule). */
+  /** Wins only while no newer decision of the same run exists and the row belongs to the run's current attempt, checked in
+   *  the same UPDATE (the expiry's rule): a decision of an ended attempt never stops the attempt a retry started. */
   newestOnly?: boolean;
 }
 
@@ -269,7 +281,7 @@ export async function decide(id: string, input: DecideInput): Promise<DecideResu
       .update(agentRunPublishDecisions)
       .set({ status: input.to, decidedBy: actor, decidedAt: sql`now()`, decisionNote: note })
       .where(and(eq(agentRunPublishDecisions.id, decisionId), eq(agentRunPublishDecisions.status, "parked"),
-        input.newestOnly ? NO_NEWER_DECISION : undefined))
+        ...(input.newestOnly ? [NO_NEWER_DECISION, CURRENT_ATTEMPT] : [])))
       .returning();
     if (won) return { outcome: "won", decision: deserialize(won) };
 
@@ -281,35 +293,6 @@ export async function decide(id: string, input: DecideInput): Promise<DecideResu
     if (!current) throw new PublishDecisionError("not-found", "no decision has this id");
     return { outcome: "lost", currentStatus: deserialize(current).status };
   });
-}
-
-/** A decision of the run's current attempt: no retry's reset ended its attempt. */
-const CURRENT_ATTEMPT = isNull(agentRunPublishDecisions.supersededAt);
-
-/**
- * Ends the attempt of a FAILED run before a retry's reset, in one UPDATE that reads the run's status in the same
- * statement: every decision of the run not yet superseded is stamped superseded_at, and an open (parked) one also closes
- * as run_ended with no person. A run that is no longer failed (a concurrent reset already moved it on, and a next
- * attempt may have opened its own stop) changes nothing, so a delayed reset never ends a newer attempt's decision.
- * Returns how many decisions it ended the attempt of.
- */
-export async function endFailedAttemptDecisions(runId: string): Promise<number> {
-  const id = requireText(runId, "runId");
-  const d = agentRunPublishDecisions;
-  const parked = sql`${d.status} = 'parked'`;
-  const ended = await db
-    .update(d)
-    .set({
-      supersededAt: sql`now()`,
-      status: sql`case when ${parked} then 'run_ended' else ${d.status} end`,
-      decidedBy: sql`case when ${parked} then null else ${d.decidedBy} end`,
-      decidedAt: sql`case when ${parked} then now() else ${d.decidedAt} end`,
-      decisionNote: sql`case when ${parked} then null else ${d.decisionNote} end`,
-    })
-    .where(and(eq(d.runId, id), CURRENT_ATTEMPT,
-      sql`exists (select 1 from ${agentRuns} failed_run where failed_run.id = ${d.runId} and failed_run.status = 'failed')`))
-    .returning({ id: d.id });
-  return ended.length;
 }
 
 /**
@@ -368,18 +351,20 @@ export async function readOpenDecisionForRun(runId: string): Promise<PublishDeci
 }
 
 /** The newest decision of the run's current attempt, whatever its status: the one a resume of the run must read.
- *  `orEarlierAttempt`: when the current attempt has none, the newest decision of an earlier attempt instead (its
- *  supersededAt is set), in the same read, so a caller also learns whether the run ever met a publish gate. */
-export async function readLatestDecisionForRun(runId: string, opts?: { orEarlierAttempt?: boolean }): Promise<PublishDecisionRow | null> {
+ *  `orEarlierAttempt`: when the current attempt has none, the newest decision of an earlier attempt instead (`current`
+ *  false), in the same read, so a caller also learns whether the run ever met a publish gate. */
+export async function readLatestDecisionForRun(runId: string, opts?: { orEarlierAttempt?: boolean }): Promise<(PublishDecisionRow & { current: boolean }) | null> {
   const d = agentRunPublishDecisions;
   const anyAttempt = opts?.orEarlierAttempt === true;
   const [row] = await db
-    .select()
+    .select({ ...getTableColumns(d), current: CURRENT_ATTEMPT })
     .from(d)
     .where(and(eq(d.runId, requireText(runId, "runId")), anyAttempt ? undefined : CURRENT_ATTEMPT))
-    .orderBy(...(anyAttempt ? [sql`(${d.supersededAt} is null) desc`] : []), desc(d.createdAt), desc(d.id))
+    .orderBy(...(anyAttempt ? [sql`(${CURRENT_ATTEMPT}) desc`] : []), desc(d.createdAt), desc(d.id))
     .limit(1);
-  return row ? deserialize(row) : null;
+  if (!row) return null;
+  const { current, ...stored } = row;
+  return { ...deserialize(stored), current: current === true };
 }
 
 /** Stops left unmade: the NEWEST decision of each run, when it is declined or expired, of the run's current attempt, and

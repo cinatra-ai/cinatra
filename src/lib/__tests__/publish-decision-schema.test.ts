@@ -96,11 +96,11 @@ describe("agent_run_publish_decisions — DDL parity", () => {
       name: line.split(" ")[0],
       notNull: /NOT NULL|PRIMARY KEY/.test(line),
     }));
-    // core__0133 adds declared_rows and superseded_at after the table's creation: last, and nullable.
+    // core__0133 adds declared_rows and run_generation after the table's creation: last, and nullable.
     expect(config.columns.map((c) => ({ name: c.name, notNull: c.notNull }))).toEqual([
       ...ddlColumns,
       { name: "declared_rows", notNull: false },
-      { name: "superseded_at", notNull: false },
+      { name: "run_generation", notNull: false },
     ]);
     const indexes = config.indexes.map((i) => ({ name: i.config.name, unique: i.config.unique }));
     expect(indexes).toEqual([
@@ -169,9 +169,11 @@ describe("agent_run_publish_decisions.declared_rows — DDL parity (core__0133)"
     expect(up.sql).toEqual([
       "SET lock_timeout = 5000",
       "ALTER TABLE agent_run_publish_decisions ADD COLUMN IF NOT EXISTS declared_rows text",
-      "ALTER TABLE agent_run_publish_decisions ADD COLUMN IF NOT EXISTS superseded_at timestamptz",
+      "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS reset_generation integer NOT NULL DEFAULT 0",
+      "ALTER TABLE agent_run_publish_decisions ADD COLUMN IF NOT EXISTS run_generation integer",
       "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS dispatch_publish_rows text",
       "RESET lock_timeout",
+      expect.stringMatching(/^UPDATE agent_run_publish_decisions AS d\s+SET run_generation = COALESCE\(/),
     ]);
   });
 
@@ -179,20 +181,21 @@ describe("agent_run_publish_decisions.declared_rows — DDL parity (core__0133)"
   it("down drops only these columns, with IF EXISTS", async () => {
     expect(record((await load()).down).sql).toEqual([
       "ALTER TABLE agent_runs DROP COLUMN IF EXISTS dispatch_publish_rows",
-      "ALTER TABLE agent_run_publish_decisions DROP COLUMN IF EXISTS superseded_at",
+      "ALTER TABLE agent_run_publish_decisions DROP COLUMN IF EXISTS run_generation",
+      "ALTER TABLE agent_runs DROP COLUMN IF EXISTS reset_generation",
       "ALTER TABLE agent_run_publish_decisions DROP COLUMN IF EXISTS declared_rows",
     ]);
   });
 
   // red-first-expect: ENOENT: no such file or directory
-  it("the manifest fragment names the migration, its table and an additive change", () => {
+  it("the manifest fragment names the migration and its tables, marked destructive for the NOT NULL column and the backfill", () => {
     const fragment = JSON.parse(
       readFileSync(join(process.cwd(), "migrations/manifest.d/core__0133_publish-decision-declared-rows.json"), "utf8"),
     ) as { seq: string; file: string; destructive: boolean; tables: string[] };
     expect(fragment).toMatchObject({
       seq: "0133",
       file: "core/core__0133_publish-decision-declared-rows.mjs",
-      destructive: false,
+      destructive: true,
       tables: ["agent_run_publish_decisions", "agent_runs"],
     });
   });
@@ -206,22 +209,49 @@ describe("agent_run_publish_decisions.declared_rows — DDL parity (core__0133)"
   });
 });
 
-// Round 19: a decision's attempt mark (finding 1) and the dispatched plan's rows (finding 2), in every home.
-describe("agent_run_publish_decisions.superseded_at and agent_runs.dispatch_publish_rows — DDL parity (core__0133)", () => {
+// Rounds 19 and 20: a decision's reset generation and the run's (the attempt mark), and the dispatched plan's rows, in
+// every home.
+describe("agent_run_publish_decisions.run_generation, agent_runs.reset_generation and agent_runs.dispatch_publish_rows — DDL parity (core__0133)", () => {
+  type Pgm = { sql: (s: string) => void; noTransaction: () => void };
+  type Mod = { publishDecisionRunGenerationBackfillSql: string; up: (pgm: Pgm) => void };
+  const load = async () =>
+    (await import("../../../migrations/core/core__0133_publish-decision-declared-rows.mjs")) as unknown as Mod;
+
   it("the bootstrap adds each column, idempotently, exactly once, with the schema quoted", () => {
     const leaf = publishDecisionSchemaQueries('we"ird').map((q) => q.text);
-    expect(leaf.at(-1)).toBe('ALTER TABLE "we""ird"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS superseded_at timestamptz');
+    expect(leaf.at(-1)).toBe('ALTER TABLE "we""ird"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS run_generation integer');
     const all = buildCreateStoreSchemaQueries('we"ird').map((q) => q.text);
-    expect(all.filter((t) => /agent_run_publish_decisions.* ADD COLUMN IF NOT EXISTS superseded_at/.test(t))).toHaveLength(1);
+    expect(all.filter((t) => t.includes("superseded_at") && t.includes("agent_run_publish_decisions"))).toEqual([]);
+    expect(all.filter((t) => /agent_run_publish_decisions.* ADD COLUMN IF NOT EXISTS run_generation/.test(t))).toHaveLength(1);
     expect(all.filter((t) => t.includes("dispatch_publish_rows"))).toEqual([
       'ALTER TABLE "we""ird"."agent_runs" ADD COLUMN IF NOT EXISTS dispatch_publish_rows text',
     ]);
+    expect(all.filter((t) => t.includes("reset_generation"))).toEqual([
+      'ALTER TABLE "we""ird"."agent_runs" ADD COLUMN IF NOT EXISTS reset_generation integer NOT NULL DEFAULT 0',
+    ]);
   });
 
-  it("the Drizzle columns are nullable with no default (no backfill), of the bootstrap's types", () => {
-    const superseded = getTableConfig(agentRunPublishDecisions).columns.find((c) => c.name === "superseded_at");
-    expect(superseded).toMatchObject({ notNull: false, hasDefault: false, columnType: "PgTimestamp" });
+  it("the Drizzle columns match the bootstrap's types: the run's generation NOT NULL DEFAULT 0, the decision's nullable", () => {
+    const columns = getTableConfig(agentRunPublishDecisions).columns.map((c) => c.name);
+    expect(columns).not.toContain("superseded_at");
+    const runGeneration = getTableConfig(agentRunPublishDecisions).columns.find((c) => c.name === "run_generation");
+    expect(runGeneration).toMatchObject({ notNull: false, hasDefault: false, columnType: "PgInteger" });
+    const resetGeneration = getTableConfig(agentRuns).columns.find((c) => c.name === "reset_generation");
+    expect(resetGeneration).toMatchObject({ notNull: true, hasDefault: true, default: 0, columnType: "PgInteger" });
     const rows = getTableConfig(agentRuns).columns.find((c) => c.name === "dispatch_publish_rows");
     expect(rows).toMatchObject({ notNull: false, hasDefault: false, columnType: "PgText" });
+  });
+
+  it("the backfill classifies only rows still NULL, after the columns exist, by the run's status and current attempt start", async () => {
+    const mod = await load();
+    const sqlText = mod.publishDecisionRunGenerationBackfillSql.replace(/\s+/g, " ");
+    expect(sqlText).toBe(
+      "UPDATE agent_run_publish_decisions AS d SET run_generation = COALESCE( (SELECT r.reset_generation FROM agent_runs AS r " +
+        "WHERE r.id = d.run_id AND r.status <> 'pending_input' AND (r.started_at IS NULL OR d.created_at >= r.started_at)), -1) " +
+        "WHERE d.run_generation IS NULL",
+    );
+    const out: string[] = [];
+    mod.up({ sql: (t) => out.push(t), noTransaction: () => undefined });
+    expect(out.at(-1)).toBe(mod.publishDecisionRunGenerationBackfillSql);
   });
 });

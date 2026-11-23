@@ -182,6 +182,8 @@ export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunReco
     lifecycleCardRef: row.lifecycleCardRef ?? null,
     // The pause generation (cinatra#4245), parsed strictly; see above.
     pauseGeneration: parsePauseGeneration(row.pauseGeneration),
+    // The reset generation (cinatra#4150), parsed as strictly as the pause generation.
+    resetGeneration: parsePauseGeneration(row.resetGeneration),
     // The LAUNCH ANCHOR (cinatra#2809), surfaced AS STORED. It is decoded by
     // src/lib/launch-scope-anchor.ts at the surface that addresses the
     // instance, where a malformed or unknown payload reads UNANCHORED — the row

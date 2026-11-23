@@ -2195,6 +2195,8 @@ $body$` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS produced_review_park text` },
     // dispatch_publish_rows: cinatra#4150 — the publish rows map of the template object the worker dispatched the run's current attempt with, written by the queued -> running CAS; a publish decision copies its node's rows from it at the park. Additive and nullable, its own NEW line (the produced_review_park precedent above). Operator-upgrade twin in migrations/core/core__0133.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS dispatch_publish_rows text` },
+    // reset_generation: cinatra#4150 — raised by 1 by each retry's reset in its compare-and-set; a publish decision stamps it at the park and belongs to the run's current attempt only while the two are equal. NOT NULL DEFAULT 0 (a constant default: catalog-only, every existing row reads 0). Its own NEW line. Operator-upgrade twin in migrations/core/core__0133.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS reset_generation integer NOT NULL DEFAULT 0` },
     // a2a_context_id: fasta2a conversation context ID for WayFlow resume.
     // Resume sends a new message into the same context so the flow continues from
     // the input-required checkpoint rather than starting a fresh conversation.

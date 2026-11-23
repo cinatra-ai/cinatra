@@ -80,4 +80,8 @@ export type AgentRunRecord = {
   // integer >= 0; otherwise (and on a hand-built record) it is absent, which a
   // reader of the pause must treat as unverifiable, never as 0.
   pauseGeneration?: number;
+  // THE RESET GENERATION (cinatra#4150): raised by 1 by each retry's reset in its
+  // compare-and-set. Absent on a hand-built record; a reset then compares 0, and
+  // a stale compare changes nothing.
+  resetGeneration?: number;
 };

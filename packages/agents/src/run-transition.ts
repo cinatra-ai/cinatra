@@ -37,7 +37,7 @@ import { orgWriteLeaseSchemaName } from "@/lib/org-write/schema-name";
 // above — packages/agents already reaches into src/lib/org-write/* directly.
 import { mintLeaseExpiryFinalizerAuthority } from "@/lib/org-write/lease-expiry-authority-mint";
 import { db } from "./db";
-import { agentRuns } from "./schema";
+import { agentRunPublishDecisions, agentRuns } from "./schema";
 import { dispatchRunWaitTransition } from "./run-wait-notifier"; // #1559/E9: zero-dep leaf seam
 import { LEGAL_TRANSITIONS, TERMINAL_RUN_STATUSES, RunTransitionError, PAUSE_SEND_LEASE_SECONDS } from "./run-status";
 import type { AgentRunStatus, PauseFence, PauseEndMark } from "./run-status";
@@ -254,6 +254,7 @@ export async function updateAgentRunStatusConditional(
   pause?: PauseSeamFields,
   gate?: ResumeGateIdentity,
   runningAttempt?: string,
+  resetGeneration?: number,
 ): Promise<boolean> {
   assertPauseSeamFields(id, expectedStatus, nextStatus, pause);
   if (expectedStatus === "pending_approval" && nextStatus === "running" && pause?.pauseFence === undefined) {
@@ -316,6 +317,8 @@ export async function updateAgentRunStatusConditional(
         ? { humanWaitAttemptId: expectedStatus === "running" ? sql`${agentRuns.executionAttemptId}` : null }
         : {}),
       ...pauseClaimSet(nextStatus, pause),
+      // cinatra#4150: a retry's reset starts a new attempt: the generation it read, plus 1.
+      ...(resetGeneration !== undefined ? { resetGeneration: resetGeneration + 1 } : {}),
     })
     .where(
       and(
@@ -341,6 +344,8 @@ export async function updateAgentRunStatusConditional(
           : []),
         // cinatra#3745: an edge out of `running` bound to one execution attempt.
         ...(runningAttempt !== undefined ? [eq(agentRuns.executionAttemptId, runningAttempt)] : []),
+        // cinatra#4150: a reset lands only on the attempt its caller read.
+        ...(resetGeneration !== undefined ? [eq(agentRuns.resetGeneration, resetGeneration)] : []),
       ),
     )
     .returning({ id: agentRuns.id });
@@ -795,6 +800,53 @@ async function clearOtherResumeClaimsInTx(
 // use transitionRunStatus. updateAgentRunStatus is still the correct call for
 // the narrow meta-only case handled by updateAgentRunMeta below (now tx-scoped).
 
+// ---------------------------------------------------------------------------
+// THE RESET GENERATION (cinatra#4150)
+// ---------------------------------------------------------------------------
+//
+// A retry's reset (`failed -> pending_input`) is the one edge that ends an
+// attempt and starts the next. It names the run's reset_generation G its caller
+// read (`resetGeneration`); the compare-and-set lands only while the row is
+// still `failed` at G and sets G + 1, and, in the same guarded transaction, the
+// run's publish decisions still open from generation G or earlier close
+// run_ended with no person. A publish decision belongs to the run's current
+// attempt only while its run_generation equals the run's generation, so the
+// settled decisions of G stop counting at the same commit. A reset that lost
+// (another reset moved the run on, so a newer failure has a newer G), or that
+// the org-write kernel refused (an archived org), writes nothing.
+
+/** Pre-guard: the generation is legal only on `failed -> pending_input`, which always names one (a safe integer >= 0). */
+function assertResetGenerationEdge(runId: string, from: AgentRunStatus, to: AgentRunStatus, generation: unknown): void {
+  const isReset = from === "failed" && to === "pending_input";
+  const why =
+    isReset && generation === undefined
+      ? "a reset must name the reset generation it read"
+      : !isReset && generation !== undefined
+        ? `resetGeneration is not legal on ${from} → ${to}`
+        : isReset && !(Number.isSafeInteger(generation) && (generation as number) >= 0)
+          ? "resetGeneration must be a safe integer >= 0"
+          : null;
+  if (why !== null) {
+    throw new RunTransitionError({
+      code: "illegal_transition",
+      runId,
+      from,
+      to,
+      message: `transitionRunStatus(${runId}) illegal_transition: ${why}`,
+    });
+  }
+}
+
+/** Inside the reset's guarded transaction, after its compare-and-set: the run's decisions still open from generation
+ *  `generation` or earlier (a row older than the column reads 0) close run_ended with no person. */
+async function endResetAttemptDecisionsInTx(tx: GuardedRunTx, runId: string, generation: number): Promise<void> {
+  const d = agentRunPublishDecisions;
+  await (tx as unknown as typeof db)
+    .update(d)
+    .set({ status: "run_ended", decidedBy: null, decidedAt: sql`now()`, decisionNote: null })
+    .where(and(eq(d.runId, runId), eq(d.status, "parked"), sql`coalesce(${d.runGeneration}, 0) <= ${generation}`));
+}
+
 /**
  * The CONTROL keys of transitionRunStatus's meta: `dispatch` and `pauseTaskId`
  * are written BY the status compare-and-set, `pauseFence` and `pauseEndMark`
@@ -813,6 +865,7 @@ const CONTROL_META_KEYS = [
   "resumeGate",
   "resumeLeg",
   "runningAttempt",
+  "resetGeneration",
 ] as const;
 
 /**
@@ -855,6 +908,8 @@ export async function transitionRunStatus(
         resumeLeg?: ResumeGateIdentity;
         /** cinatra#3745: the edge out of `running` lands only while the run runs under this execution attempt, in the CAS, so the compensation of one dispatch claim never moves a newer one. Legal only on an edge out of `running`, alone among the CAS keys. Not a DB column. */
         runningAttempt?: string;
+        /** cinatra#4150: REQUIRED on `failed -> pending_input` (a retry's reset), legal only there: the reset_generation the caller read. The CAS lands only at it and sets it + 1; the run's decisions still open from it close run_ended in the same transaction. Not a meta column. */
+        resetGeneration?: number;
       }
     | undefined,
   // cinatra#1939 wave 2 — REQUIRED host-minted authority (the compile-time
@@ -884,6 +939,7 @@ export async function transitionRunStatus(
   if (meta?.resumeGate) assertResumeGateEdge(runId, from, to, meta.resumeGate);
   if (meta?.resumeLeg) assertResumeLegEdge(runId, from, to, meta);
   if (meta?.runningAttempt !== undefined) assertRunningAttemptEdge(runId, from, to, meta);
+  assertResetGenerationEdge(runId, from, to, meta?.resetGeneration);
   // (2) Fail-closed: every status transition requires a host-minted authority.
   // The org (lock + CAS scope) is the authority's org — a wrong-org authority
   // fails closed as `stale_from_status` via the §1d org-scoped CAS.
@@ -978,6 +1034,7 @@ export async function transitionRunStatus(
       },
       casGate ? { a2aTaskId: casGate.a2aTaskId, executionAttemptId: casGate.executionAttemptId } : undefined,
       meta?.runningAttempt,
+      meta?.resetGeneration,
     );
     if (!won) {
       // Rolls back the guarded tx; the meta write below never runs and the
@@ -992,6 +1049,10 @@ export async function transitionRunStatus(
     // cinatra#3745: no lease, no edge — a lost lease rolls the CAS back with it.
     if (meta?.resumeIntentLease) {
       await fenceResumeIntentLeaseInTx(guardedTx, { runId, from, to, lease: meta.resumeIntentLease });
+    }
+    // cinatra#4150: the reset won at its generation; the attempt it ended leaves no open publish decision.
+    if (meta?.resetGeneration !== undefined) {
+      await endResetAttemptDecisionsInTx(guardedTx, runId, meta.resetGeneration);
     }
     if (to === "running") {
       await clearOtherResumeClaimsInTx(guardedTx, { runId, keepGateId: meta?.resumeIntentLease?.gateId ?? null });

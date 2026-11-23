@@ -221,7 +221,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(["publish"]));
   storeMock.transitionRunStatus.mockResolvedValue(undefined);
-  decisions.insertParkedDecision.mockResolvedValue({ inserted: true, decision: parkedRow() });
+  decisions.insertParkedDecision.mockResolvedValue({ inserted: true, current: true, decision: parkedRow() });
   decisions.readDispatchedPublishRows.mockReset();
   decisions.readDispatchedPublishRows.mockResolvedValue([{ label: "Title", input: "title" }]);
   decisions.decide.mockResolvedValue({ outcome: "won", decision: parkedRow("run_ended") });
@@ -265,7 +265,7 @@ describe("a run that reaches a publish gate (A4 without the moment)", () => {
     // No recorded dispatch rows, or a read that faults, records nothing (null), and the park still goes on.
     for (const read of [async () => null, async () => { throw new Error("run store down"); }]) {
       vi.clearAllMocks();
-      decisions.insertParkedDecision.mockResolvedValue({ inserted: true, decision: parkedRow() });
+      decisions.insertParkedDecision.mockResolvedValue({ inserted: true, current: true, decision: parkedRow() });
       storeMock.transitionRunStatus.mockResolvedValue(undefined);
       decisions.readDispatchedPublishRows.mockImplementation(read);
       await pause(sign(GATE));
@@ -277,9 +277,24 @@ describe("a run that reaches a publish gate (A4 without the moment)", () => {
   it("a gate task whose stop a retry's reset already ended with its attempt fails the run, never wedges it running", async () => {
     decisions.insertParkedDecision.mockResolvedValue({
       inserted: false,
-      decision: { ...parkedRow("run_ended"), supersededAt: new Date("2026-11-01T00:00:00Z") },
+      current: false,
+      decision: { ...parkedRow("run_ended"), runGeneration: 0 },
     });
     await pause(sign(GATE));
+    expect(transitions().map((m) => `${m.from}->${m.to}:${(m.error ?? "").split(":")[0]}`)).toEqual([
+      "running->failed:publish_decision_unrecorded",
+    ]);
+    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(onInterruptSpy).not.toHaveBeenCalled();
+  });
+
+  // Round 20: the park stamps the run's generation only while the run is held at a gate. A late park of an attempt that
+  // already left it (failed, and maybe reset) is written as an ended attempt's row (-1): it is closed at once and never
+  // holds, labels or stops the run's next attempt.
+  it("a new stop written while the run is no longer held closes run_ended at once and fails nothing new", async () => {
+    decisions.insertParkedDecision.mockResolvedValue({ inserted: true, current: false, decision: { ...parkedRow(), runGeneration: -1 } });
+    await pause(sign(GATE));
+    expect(decisions.decide).toHaveBeenCalledWith("dec-1", { from: "parked", to: "run_ended", actor: null });
     expect(transitions().map((m) => `${m.from}->${m.to}:${(m.error ?? "").split(":")[0]}`)).toEqual([
       "running->failed:publish_decision_unrecorded",
     ]);
@@ -290,7 +305,7 @@ describe("a run that reaches a publish gate (A4 without the moment)", () => {
     for (const steps of [[], null, ["another_step"]]) {
       vi.clearAllMocks();
       storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(steps));
-      decisions.insertParkedDecision.mockResolvedValue({ inserted: true, decision: parkedRow() });
+      decisions.insertParkedDecision.mockResolvedValue({ inserted: true, current: true, decision: parkedRow() });
       await pause(sign(GATE));
       expect(decisions.insertParkedDecision).toHaveBeenCalledTimes(1);
       expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
@@ -367,7 +382,7 @@ describe("a run that reaches a publish gate (A4 without the moment)", () => {
   });
 
   it("a gate task already answered is not parked again", async () => {
-    decisions.insertParkedDecision.mockResolvedValue({ inserted: false, decision: parkedRow("declined") });
+    decisions.insertParkedDecision.mockResolvedValue({ inserted: false, current: true, decision: parkedRow("declined") });
     await pause(sign(GATE));
     expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
     expect(onInterruptSpy).not.toHaveBeenCalled();

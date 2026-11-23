@@ -20,7 +20,6 @@ vi.mock("../store", () => storeMock);
 const decisions = vi.hoisted(() => ({
   insertParkedDecision: vi.fn(),
   decide: vi.fn(),
-  endFailedAttemptDecisions: vi.fn(async (_runId: string) => 0),
   readLatestDecisionForRun: vi.fn(async (_runId: string) => null as unknown),
   readOpenDecisionForRun: vi.fn(async () => null as unknown),
   listDueParked: vi.fn(async () => [] as unknown[]),
@@ -43,7 +42,6 @@ import {
   assertNoOpenPublishDecision,
   approvePublishDecision,
   claimRunBeforeSend,
-  closeOpenPublishDecisionsOfRun,
   declinePublishDecision,
   publishHoldAnswer,
   sweepExpiredPublishDecisions,
@@ -71,6 +69,9 @@ function decision(overrides: Record<string, unknown> = {}) {
     decisionNote: null,
     createdAt: new Date("2026-11-01T00:00:00Z"),
     expiresAt: new Date("2026-11-02T00:00:00Z"),
+    runGeneration: 0,
+    /** The hold's read answers whether the row is of the run's current reset generation. */
+    current: true,
     ...overrides,
   };
 }
@@ -82,8 +83,7 @@ beforeEach(() => {
   // clearAllMocks keeps queued once-answers; a case that leaves one (a red run over older code) must not feed the next.
   for (const m of [storeMock.readAgentRunById, storeMock.transitionRunStatus, decisions.readOpenDecisionForRun,
     decisions.readLatestDecisionForRun, decisions.decide, decisions.listDueParked, decisions.listSettledWithWaitingRun,
-    decisions.endFailedAttemptDecisions]) m.mockReset();
-  decisions.endFailedAttemptDecisions.mockResolvedValue(0);
+  ]) m.mockReset();
   storeMock.readAgentRunById.mockResolvedValue(run());
   storeMock.transitionRunStatus.mockResolvedValue(undefined);
   decisions.readOpenDecisionForRun.mockResolvedValue(decision());
@@ -110,16 +110,16 @@ describe("the hold every resume road reads", () => {
     },
   );
 
-  it("a decision a retry's reset ended with its failed attempt never holds the later attempt; the current attempt's still does (round 19, finding 1)", async () => {
-    // The newest row the hold reads is an earlier attempt's (supersededAt set): the retry's ordinary gate and its next
+  it("a decision of an earlier reset generation never holds the later attempt; the current generation's still does (round 20)", async () => {
+    // The newest row the hold reads is of an earlier generation (current false): the retry's ordinary gate and its next
     // publish gate go on, whatever that row's status.
     for (const status of ["run_ended", "declined", "expired", "parked"]) {
-      decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status, supersededAt: new Date("2026-11-01T01:00:00Z") }));
+      decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status, runGeneration: 0, current: false }));
       await expect(assertNoOpenPublishDecision("run-1")).resolves.toBe(true);
     }
-    // A closed decision of the CURRENT attempt (supersededAt null) still holds, as before.
+    // A closed decision of the CURRENT generation still holds, as before.
     for (const status of ["run_ended", "declined", "expired", "parked"]) {
-      decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status, supersededAt: null }));
+      decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status, runGeneration: 1, current: true }));
       await expect(assertNoOpenPublishDecision("run-1")).rejects.toMatchObject({ code: PUBLISH_DECISION_REQUIRED });
     }
     expect(decisions.readLatestDecisionForRun).toHaveBeenLastCalledWith("run-1", { orEarlierAttempt: true });
@@ -819,30 +819,3 @@ describe("the write registry tells the truth about the decline's authority (find
   });
 });
 
-describe("a failed attempt's open decision closes before the retry's reset (review finding 1)", () => {
-  // The close is one guarded store write: it holds only while the run is still failed (proved on Postgres in
-  // publish-decision-store.integration.test.ts), never a read of the run's open row and a separate close of it. It also
-  // marks every decision of the failed attempt superseded (round 19, finding 1).
-  // red-first-expect: [vitest] No "closeParkedDecisionsOfFailedRun" export is defined on the "../publish-decision-store" mock. Did you forget to return it from "vi.mock"?
-  it("closes the run's open rows through the store's close of a failed run, and nothing else", async () => {
-    decisions.endFailedAttemptDecisions.mockResolvedValue(2);
-    await expect(closeOpenPublishDecisionsOfRun("run-1")).resolves.toBe(2);
-    expect(decisions.endFailedAttemptDecisions).toHaveBeenCalledWith("run-1");
-    expect(decisions.readOpenDecisionForRun).not.toHaveBeenCalled();
-    expect(decisions.decide).not.toHaveBeenCalled();
-    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
-  });
-
-  // red-first-expect: [vitest] No "closeParkedDecisionsOfFailedRun" export is defined on the "../publish-decision-store" mock. Did you forget to return it from "vi.mock"?
-  it("a run that is no longer failed, or has no open row, closes nothing", async () => {
-    decisions.endFailedAttemptDecisions.mockResolvedValue(0);
-    await expect(closeOpenPublishDecisionsOfRun("run-1")).resolves.toBe(0);
-    expect(decisions.decide).not.toHaveBeenCalled();
-  });
-
-  // red-first-expect: [vitest] No "closeParkedDecisionsOfFailedRun" export is defined on the "../publish-decision-store" mock. Did you forget to return it from "vi.mock"?
-  it("a store fault is not swallowed", async () => {
-    decisions.endFailedAttemptDecisions.mockRejectedValue(new Error("db down"));
-    await expect(closeOpenPublishDecisionsOfRun("run-1")).rejects.toThrow("db down");
-  });
-});
