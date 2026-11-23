@@ -210,6 +210,35 @@ describe("OrchestratorStepperPanel at a publish gate (cinatra#4150)", () => {
     expect(mounted.container.textContent).not.toContain(PROCESSING);
   });
 
+  it("a publish gate opened LATER, after a `none` read between gates, with no status or signal change, draws the card on the read's next tick", async () => {
+    // The review finding's timing: the ordinary gate clears and the read, taken while the run works between gates,
+    // answers `none`. The stream stays `pending_approval` (a resume does not move it), so the row watch stays off and
+    // nothing the panel hands the read changes when the publish decision opens afterwards.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      streamState.interruptContext = { schema: {}, xRenderer: "", values: {}, reviewTaskId: "task-ordinary-gate" };
+      publishStateMock.mockImplementation(async () => ({ state: "none" }));
+      const mounted = await mountPanel();
+      streamState.interruptContext = null;
+      await mounted.rerenderPanel();
+      expect(mounted.container.querySelector(CARD)).toBeNull();
+      const readsBetweenGates = publishStateMock.mock.calls.length;
+      expect(readsBetweenGates).toBeGreaterThan(0);
+
+      publishStateMock.mockImplementation(async () => PENDING);
+      await mounted.rerenderPanel();
+      expect(mounted.container.querySelector(CARD)).toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_100);
+      });
+      await flush();
+      expect(mounted.container.querySelectorAll(CARD)).toHaveLength(1);
+      expect(mounted.container.textContent).not.toContain(PROCESSING);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("a park the stream never announces (stream stuck at running, the row says pending_approval) reaches the card", async () => {
     streamState.status = "running";
     row.status = "running";

@@ -31,6 +31,10 @@ import {
   type PublishDecisionCardState,
 } from "./publish-decision-card";
 import { getPublishDecisionCardStateAction } from "./publish-decision-card-actions";
+import { runStatusIsTerminal } from "./run-surface-status";
+
+/** The re-read cadence while the host's run has not finished: the run surfaces' own tick (5 s). */
+export const PUBLISH_DECISION_CARD_POLL_MS = 5000;
 
 /** A decide door answers: the decision landed, the request was no longer open, or the send failed. */
 export type PublishDecisionDecide = (input: {
@@ -62,17 +66,24 @@ async function readPublishDecisionThroughBroker(
 /** The run's publish card for this reader, or `null` until an authorized answer has landed. `onRead` is called when
  * each read ends, landed or failed, so a caller waiting on a read is never left waiting on a failure. `wireRef` is a
  * pure CHANGE SIGNAL from the host (the run's status, as the hitl screen card takes the gate's): nothing is read out
- * of it, and a change re-reads, so a run that opens a publish decision after the first read answered `none` draws
- * its card without a reload or a focus change. */
+ * of it, and a change re-reads at once.
+ *
+ * THE SIGNAL ALONE CANNOT CARRY EVERY MOVE. A run can open its decision with no change any host reading sees (it
+ * resumes under the same status, and the first read during the work between two gates answered `none`). So while
+ * the host says its run has NOT finished (`runStatus`, read by `runStatusIsTerminal`), the read also repeats at the
+ * run surfaces' cadence. It pauses while the document is hidden, skips a tick while a read is still out (never two at
+ * once), and stops when the run finishes or the host unmounts. A host that knows no status (`null`) does not poll. */
 export function usePublishDecisionCardState(params: {
   runId: string;
   auth: LifecycleCardAuth | null;
   reloadToken: number;
   wireRef?: string | null;
+  runStatus?: string | null;
   onRead?: () => void;
 }): PublishDecisionCardState | null {
   const { runId, auth, reloadToken, onRead } = params;
   const wireRef = params.wireRef ?? null;
+  const runStatus = params.runStatus ?? null;
   const [resolved, setResolved] = useState<{ runId: string; state: PublishDecisionCardState } | null>(null);
   const onReadRef = useRef(onRead);
   useEffect(() => {
@@ -84,23 +95,38 @@ export function usePublishDecisionCardState(params: {
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, []);
+  // THE TICK. It only asks for a read when none is out, so a slow read is never overlapped by the next one.
+  const [pollToken, setPollToken] = useState(0);
+  const inFlightRef = useRef(false);
+  const polling = runId !== "" && runStatus !== null && !runStatusIsTerminal(runStatus);
+  useEffect(() => {
+    if (!polling) return;
+    const tick = window.setInterval(() => {
+      if (document.visibilityState === "hidden" || inFlightRef.current) return;
+      setPollToken((n) => n + 1);
+    }, PUBLISH_DECISION_CARD_POLL_MS);
+    return () => window.clearInterval(tick);
+  }, [polling]);
   useEffect(() => {
     if (!runId) return;
     let live = true;
     const ended = new AbortController();
+    inFlightRef.current = true;
     void (async () => {
       const state = auth
         ? await readPublishDecisionThroughBroker(runId, auth, ended.signal)
         : await getPublishDecisionCardStateAction({ runId }).then(parsePublishDecisionCardState, () => null);
+      if (live) inFlightRef.current = false;
       // A read that could not be completed is a FAILURE, not a state: the last authorized answer stands.
       if (live && state !== null) setResolved({ runId, state });
       if (live) onReadRef.current?.();
     })();
     return () => {
       live = false;
+      inFlightRef.current = false;
       ended.abort();
     };
-  }, [runId, auth, reloadToken, focusToken, wireRef]);
+  }, [runId, auth, reloadToken, focusToken, wireRef, pollToken]);
   return resolved && resolved.runId === runId ? resolved.state : null;
 }
 
@@ -114,11 +140,13 @@ export type PublishDecisionCardRead = {
 };
 
 /** The ONE read behind a publish card: `usePublishDecisionCardState` with its reload and its loading reading. An empty
- * `runId` reads nothing. */
+ * `runId` reads nothing. `runStatus` is the host's run status: while it is not terminal the read also repeats on the
+ * run surfaces' cadence (see `usePublishDecisionCardState`), so every host gets the same re-read from this one hook. */
 export function usePublishDecisionCardRead(params: {
   runId: string;
   auth: LifecycleCardAuth | null;
   wireRef?: string | null;
+  runStatus?: string | null;
 }): PublishDecisionCardRead {
   const [reloadToken, setReloadToken] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
@@ -128,6 +156,7 @@ export function usePublishDecisionCardRead(params: {
     auth: params.auth,
     reloadToken,
     wireRef: params.wireRef,
+    runStatus: params.runStatus,
     onRead: () => setRefreshing(false),
   });
   const reload = useCallback((showLoading = false) => {

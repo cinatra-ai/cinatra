@@ -78,7 +78,7 @@ vi.mock("@/components/data-safety/undo-toast", () => ({
 // card found inside it is still recognisable as a run-card mount rather than a
 // conversation one. It keeps the change-signal report the column hands the shipped panel, so a suite can move the run
 // exactly as the panel reports it (the panel's own suite pins how the panel computes that signal).
-const statusReporters = vi.hoisted(() => new Map<string, (runId: string, signal: string) => void>());
+const statusReporters = vi.hoisted(() => new Map<string, (runId: string, signal: string, status?: string) => void>());
 const panelReads = vi.hoisted(() => new Map<string, { state: { state: string } | null } | undefined>());
 vi.mock("../inline-agent-run-card", () => ({
   InlineAgentRunCard: ({
@@ -87,7 +87,7 @@ vi.mock("../inline-agent-run-card", () => ({
     publishRead,
   }: {
     runId: string;
-    onRunChangeSignal?: (runId: string, signal: string) => void;
+    onRunChangeSignal?: (runId: string, signal: string, status?: string) => void;
     publishRead?: { state: { state: string } | null };
   }) => {
     if (onRunChangeSignal) statusReporters.set(runId, onRunChangeSignal);
@@ -246,6 +246,42 @@ describe("the publish card on the conversation hosts (cinatra#4150)", () => {
       expect(cards).toHaveLength(1);
       expect(cards[0]!.getAttribute("data-lifecycle-card-state")).toBe("pending");
       expect(panelReads.get(HELD_RUN_ID)?.state?.state).toBe("pending");
+    },
+  );
+
+  it.each(["chat", "widget"] as const)(
+    "%s: a publish gate opened LATER, after a `none` read between gates, with NO signal change, draws the card on the read's next tick",
+    async (surface) => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        const root = await mountArm(surface, false, true);
+        const report = statusReporters.get(HELD_RUN_ID);
+        expect(report, "the column hands the run panel its change-signal report").toBeTypeOf("function");
+        // The ordinary gate clears and the read taken between gates answers `none`; the status stays.
+        await act(async () => {
+          report!(HELD_RUN_ID, "pending_approval:no-gate:0", "pending_approval");
+          await Promise.resolve();
+          await new Promise((r) => setTimeout(r, 0));
+        });
+        expect(root.querySelector(CARD)).toBeNull();
+        // The publish decision opens with no report at all from the panel.
+        publishStateMock.mockImplementation(async () => PENDING);
+        stub?.restore();
+        stub = installWidgetServiceStub({ publishDecision: () => PENDING, ...NO_HOLD });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(5_100);
+        });
+        await act(async () => {
+          await Promise.resolve();
+          await new Promise((r) => setTimeout(r, 0));
+        });
+        const cards = root.querySelectorAll<HTMLElement>(CARD);
+        expect(cards).toHaveLength(1);
+        expect(cards[0]!.getAttribute("data-lifecycle-card-state")).toBe("pending");
+        expect(panelReads.get(HELD_RUN_ID)?.state?.state).toBe("pending");
+      } finally {
+        vi.useRealTimers();
+      }
     },
   );
 

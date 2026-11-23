@@ -3234,6 +3234,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     runId: panelMountsPublishCard ? runId : "",
     auth: ambientLifecycleAuth,
     wireRef: publishReadSignal,
+    runStatus: status,
   });
   const parkedAtPublishGate =
     status === "pending_approval" && effectiveInterruptContext === null && publishGateIsOpen(publishRead);

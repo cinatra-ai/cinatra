@@ -346,9 +346,10 @@ export type AgenticRunPanelProps = {
    * run's status, the gate it waits at, and, while it waits with no gate context, each reading of the run (see
    * `publishReadSignal`). A host that mounts a run-keyed card OUTSIDE this panel (the conversation column's publish
    * card) uses it as that card's `wireRef`, so the card re-reads when the run moves, including to another gate under
-   * the same status. Absent on a host that does not ask.
+   * the same status. `status` is the run status the panel draws: the host hands it to the shared read, which keeps
+   * re-reading while the run has not finished. Absent on a host that does not ask.
    */
-  onRunChangeSignal?: (runId: string, signal: string) => void;
+  onRunChangeSignal?: (runId: string, signal: string, status: string) => void;
   /**
    * The run's publish card read the HOST already resolved (cinatra#4150): the conversation turn reads once and hands
    * the same answer to its own card and to this panel, so the approval banner here and the card there cannot
@@ -2023,14 +2024,15 @@ export function AgenticRunPanel({
     runId: hostPublishRead ? "" : runId,
     auth: ambientLifecycleAuth,
     wireRef: publishReadSignal,
+    runStatus: status,
   });
   const publishRead = hostPublishRead ?? ownPublishRead;
   const parkedAtPublishGate = isPendingApproval && !effectiveHitlContext && publishGateIsOpen(publishRead);
   const onRunChangeSignalRef = useRef(onRunChangeSignal);
   onRunChangeSignalRef.current = onRunChangeSignal;
   useEffect(() => {
-    onRunChangeSignalRef.current?.(runId, publishReadSignal);
-  }, [runId, publishReadSignal]);
+    onRunChangeSignalRef.current?.(runId, publishReadSignal, status);
+  }, [runId, publishReadSignal, status]);
 
   // Is this paused run degraded (no usable gate context) rather than merely
   // hydrating? Bounded — see hitl-recovery-state.ts.

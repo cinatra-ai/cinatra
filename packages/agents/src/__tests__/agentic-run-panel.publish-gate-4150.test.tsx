@@ -193,6 +193,35 @@ describe("AgenticRunPanel at a publish gate (cinatra#4150)", () => {
     }
   });
 
+  it("a publish gate opened LATER, after a `none` read between gates, with no signal change, draws the card on the read's next tick", async () => {
+    // The review finding's timing on this panel: the ordinary gate clears, the read taken between gates answers
+    // `none`, the status stays `pending_approval`, and the run's own reading does not land (the row read fails), so
+    // the change signal the panel computes does not move when the publish decision opens afterwards.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("unavailable", { status: 503 })));
+    try {
+      streamState.interruptContext = { schema: {}, xRenderer: "", values: {}, reviewTaskId: "task-ordinary-gate" };
+      publishStateMock.mockImplementation(async () => ({ state: "none" }));
+      const signals: string[] = [];
+      const mounted = await mountPanel((_runId, signal) => signals.push(signal));
+      streamState.interruptContext = null;
+      await mounted.rerenderPanel();
+      expect(surfaces(mounted.container).card).toBe(0);
+      const signalBetweenGates = signals.at(-1);
+
+      publishStateMock.mockImplementation(async () => PENDING);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_100);
+      });
+      await flush();
+      expect(signals.at(-1)).toBe(signalBetweenGates);
+      expect(surfaces(mounted.container)).toEqual({ card: 1, banner: 0 });
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
+  });
+
   it("reads pending then none: the card draws and the banner does not", async () => {
     publishStateMock
       .mockImplementationOnce(async () => PENDING)

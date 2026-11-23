@@ -811,10 +811,11 @@ function AgentRunTurnSlot({
   // status, the gate it waits at and, at a pause with no gate context, each reading of the run) is this card's change
   // signal instead, so a decision opened after the first read draws without a reload or focus, also when the run
   // reaches it from another gate under the same status.
-  const [runChangeSignal, setRunChangeSignal] = useState<string | null>(null);
+  // The panel's run status rides beside it: the shared read keeps re-reading while the run has not finished.
+  const [runChange, setRunChange] = useState<{ signal: string; status: string | null } | null>(null);
   const onRunChangeSignal = useCallback(
-    (changedRunId: string, signal: string) => {
-      if (changedRunId === runId) setRunChangeSignal(signal);
+    (changedRunId: string, signal: string, status?: string) => {
+      if (changedRunId === runId) setRunChange({ signal, status: status ?? null });
     },
     [runId],
   );
@@ -823,7 +824,8 @@ function AgentRunTurnSlot({
   const publishRead = usePublishDecisionCardRead({
     runId: ambientLifecycleHost === null ? "" : runId,
     auth: ambientLifecycleAuth,
-    wireRef: runChangeSignal,
+    wireRef: runChange?.signal ?? null,
+    runStatus: runChange?.status ?? null,
   });
   const publishCard = <PublishDecisionCard runId={runId} read={publishRead} />;
 

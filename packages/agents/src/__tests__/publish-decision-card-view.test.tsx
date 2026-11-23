@@ -2,7 +2,7 @@
 // The publish card (cinatra#4150 part 7a-1b): design 635da007, specs/app-lifecycle-cards.html XV and IV.1.
 // Red first: at the base the module under test does not exist, so this file fails at its import.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, renderHook, waitFor } from "@testing-library/react";
 
 import type { LifecycleCardHost } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
@@ -12,7 +12,7 @@ vi.mock("../publish-decision-card-actions", () => ({
 }));
 
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
-import { PublishDecisionCard, type PublishDecisionDecide } from "../publish-decision-card-view";
+import { PublishDecisionCard, usePublishDecisionCardRead, type PublishDecisionDecide } from "../publish-decision-card-view";
 
 const RUN_ID = "run-4150";
 const ROWS = [
@@ -285,6 +285,79 @@ describe("the host's change signal", () => {
     mounted.rerender(at("pending_approval"));
     await settle();
     expect((await rootOf(mounted)).getAttribute("data-lifecycle-card-state")).toBe("pending");
+    expect(stateMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+// THE SHARED READ'S OWN TICK. The host's change signal cannot carry every move (a run can open its decision with no
+// status or signal change), so while the host's run has not finished the read repeats on the run surfaces' cadence.
+describe("the shared read's tick while the run has not finished", () => {
+  const TICK = 5_000;
+  const readWith = (runStatus: string | null) =>
+    renderHook((props: { runStatus: string | null }) => usePublishDecisionCardRead({ runId: RUN_ID, auth: null, runStatus: props.runStatus }), {
+      initialProps: { runStatus },
+    });
+  async function advance(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: false });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("a decision opened with NO signal change is read on the next tick, and the tick stops once the run is terminal", async () => {
+    stateMock.mockImplementation(async () => ({ state: "none" }));
+    const hook = readWith("pending_approval");
+    await advance(0);
+    expect(stateMock).toHaveBeenCalledTimes(1);
+    expect(hook.result.current.state?.state).toBe("none");
+
+    stateMock.mockImplementation(async () => PENDING);
+    await advance(TICK);
+    expect(stateMock).toHaveBeenCalledTimes(2);
+    expect(hook.result.current.state?.state).toBe("pending");
+
+    hook.rerender({ runStatus: "completed" });
+    await advance(0);
+    const atTerminal = stateMock.mock.calls.length;
+    await advance(TICK * 4);
+    expect(stateMock).toHaveBeenCalledTimes(atTerminal);
+  });
+
+  it("the tick stops when the host unmounts, and pauses while the document is hidden", async () => {
+    stateMock.mockImplementation(async () => ({ state: "none" }));
+    const hook = readWith("running");
+    await advance(0);
+    await advance(TICK);
+    expect(stateMock).toHaveBeenCalledTimes(2);
+
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    await advance(TICK * 3);
+    expect(stateMock).toHaveBeenCalledTimes(2);
+    visibility.mockRestore();
+    await advance(TICK);
+    expect(stateMock).toHaveBeenCalledTimes(3);
+
+    hook.unmount();
+    await advance(TICK * 4);
+    expect(stateMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("never overlaps reads: a tick is skipped while a read is still out", async () => {
+    let release: (value: unknown) => void = () => {};
+    stateMock.mockImplementation(() => new Promise((resolve) => (release = resolve)));
+    readWith("running");
+    await advance(TICK * 3);
+    expect(stateMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      release({ state: "none" });
+    });
+    await advance(TICK);
     expect(stateMock).toHaveBeenCalledTimes(2);
   });
 });

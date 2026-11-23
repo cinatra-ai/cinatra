@@ -272,7 +272,7 @@ export function InlineAgentRunCard({
    */
   onReviewReadingChange?: (runId: string, drawsReview: boolean) => void;
   /** Forwarded to AgenticRunPanel: the publish card read's change signal (status, gate, readings), cinatra#4150. */
-  onRunChangeSignal?: (runId: string, signal: string) => void;
+  onRunChangeSignal?: (runId: string, signal: string, status: string) => void;
   /** Forwarded to AgenticRunPanel: the turn's ONE publish card read, shared with the turn's card (cinatra#4150). */
   publishRead?: PublishDecisionCardRead;
 }) {

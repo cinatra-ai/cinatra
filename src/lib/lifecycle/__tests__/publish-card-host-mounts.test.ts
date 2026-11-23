@@ -69,7 +69,9 @@ describe("the publish card's mounts (cinatra#4150)", () => {
     // The turn reads ONCE, keyed on the change signal the panel reports (status, gate, readings at a pause with no gate
     // context), and hands that read to its card and to the panel, so the card and the banner stand on one answer.
     expect(cardElements(source)).toEqual(["<PublishDecisionCard runId={runId} read={publishRead} />"]);
-    expect(source).toContain("wireRef: runChangeSignal,");
+    expect(source).toContain("wireRef: runChange?.signal ?? null,");
+    // The panel's run status rides beside the signal, so the shared read keeps re-reading until the run finishes.
+    expect(source).toContain("runStatus: runChange?.status ?? null,");
     expect(source).toContain("onRunChangeSignal={onRunChangeSignal}");
     expect(source).toContain("publishRead={publishRead}");
     // The turn's own placement and both moved placements draw it, exactly where they draw the hitl screen.
@@ -83,7 +85,8 @@ describe("the publish card's mounts (cinatra#4150)", () => {
     const source = read(PANEL);
     expect(source).not.toMatch(/wireRef: status,/);
     expect(source).toContain("wireRef: publishReadSignal,");
-    expect(source).toContain("onRunChangeSignalRef.current?.(runId, publishReadSignal);");
+    expect(source).toContain("onRunChangeSignalRef.current?.(runId, publishReadSignal, status);");
+    expect(source).toMatch(/wireRef: publishReadSignal,\s*runStatus: status,/);
     expect(source).toMatch(/`\$\{status\}:no-gate:\$\{heardFromRun\}`/);
   });
 
@@ -102,6 +105,7 @@ describe("the publish card's mounts (cinatra#4150)", () => {
     expect(arm).toBeLessThan(source.indexOf("} else if (parkedWithNoGate && gateGoneOnResume && !awaitingNextStep) {"));
     expect(arm).toBeLessThan(source.indexOf("    awaitingNextStep ||\n    status === \"queued\" ||"));
     expect(source).toContain("wireRef: publishReadSignal,");
+    expect(source).toMatch(/wireRef: publishReadSignal,\s*runStatus: status,/);
     expect(source).not.toMatch(/wireRef: status,/);
     expect(source).toMatch(/`\$\{status\}:no-gate:\$\{heardFromRun\}`/);
   });
