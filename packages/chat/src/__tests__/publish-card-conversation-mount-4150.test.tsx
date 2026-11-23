@@ -317,11 +317,11 @@ describe("the publish card on the conversation hosts (cinatra#4150)", () => {
     },
   } as Record<string, unknown>;
 
-  async function mountWithHitl(surface: SurfaceName, open: boolean) {
+  async function mountWithHitl(surface: SurfaceName, open: boolean, withPanel = false) {
     hitlScreenStateMock.mockImplementation(async () => HITL_ASKING);
     const answer = open ? PENDING : { state: "none" };
     publishStateMock.mockImplementation(async () => answer);
-    stub = installWidgetServiceStub({ publishDecision: () => answer, hitlScreen: () => HITL_ASKING });
+    stub = installWidgetServiceStub({ publishDecision: () => answer, hitlScreen: () => HITL_ASKING, ...(withPanel ? NO_HOLD : {}) });
     const mounted = await mountSurface(surface, { messages: lifecycleHeldTranscript() });
     await act(async () => {
       await Promise.resolve();
@@ -367,6 +367,30 @@ describe("the publish card on the conversation hosts (cinatra#4150)", () => {
       const cards = root.querySelectorAll<HTMLElement>(`${CARD}, ${HITL_CARD}`);
       expect(cards).toHaveLength(1);
       expect(cards[0]!.getAttribute("data-lifecycle-card")).toBe("publish_decision");
+    },
+  );
+
+  it.each(["chat", "widget"] as const)(
+    "%s: a run that ENDS while its publish decision is unanswered no longer holds the turn: the hitl screen is not withheld",
+    async (surface) => {
+      const root = await mountWithHitl(surface, true, true);
+      expect(root.querySelectorAll(HITL_CARD)).toHaveLength(0);
+      const report = statusReporters.get(HELD_RUN_ID);
+      expect(report, "the column hands the run panel its change-signal report").toBeTypeOf("function");
+      // The run is cancelled while parked. Its decision is closed only by the later sweep, so a read that has not caught
+      // up still answers `pending`; a run in a terminal status is parked at no gate.
+      const readsBefore = publishStateMock.mock.calls.length + (stub?.calls ?? []).filter((c) => c.url.startsWith(`${BROKER}?`)).length;
+      await act(async () => {
+        report!(HELD_RUN_ID, "stopped", "stopped");
+        await Promise.resolve();
+        await new Promise((r) => setTimeout(r, 0));
+        await Promise.resolve();
+      });
+      const readsAfter = publishStateMock.mock.calls.length + (stub?.calls ?? []).filter((c) => c.url.startsWith(`${BROKER}?`)).length;
+      expect(readsAfter).toBeGreaterThan(readsBefore);
+      expect(panelReads.get(HELD_RUN_ID)?.state?.state).not.toBe("pending");
+      expect(root.querySelector(`${CARD}[data-lifecycle-card-state="pending"]`)).toBeNull();
+      expect(root.querySelectorAll(HITL_CARD)).toHaveLength(1);
     },
   );
 

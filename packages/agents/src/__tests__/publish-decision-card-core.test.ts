@@ -167,6 +167,22 @@ describe("which card a run shows", () => {
     expect(await read()).toEqual({ state: "none" });
   });
 
+  it("a parked decision of a run that has ENDED is no open card: the run is parked at no gate", async () => {
+    for (const status of ["stopped", "completed", "failed"]) {
+      const ended = { ...RUN, status } as unknown as Run;
+      expect(await publishDecisionCardStateForRun(ended, WHO), status).toEqual({ state: "none" });
+      expect(await publishDecisionCardStateForWidgetRun(ended, WHO), status).toEqual({ state: "none" });
+    }
+    // A held or working run keeps its open card.
+    for (const status of ["pending_approval", "running"]) {
+      const held = { ...RUN, status } as unknown as Run;
+      expect((await publishDecisionCardStateForRun(held, WHO)).state, status).toBe("pending");
+    }
+    // A settled decision still shows its outcome on an ended run.
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "expired" }));
+    expect((await publishDecisionCardStateForRun({ ...RUN, status: "stopped" } as unknown as Run, WHO)).state).toBe("expired");
+  });
+
   it("an unreadable decision or template draws nothing rather than half a card", async () => {
     decisions.readLatestDecisionForRun.mockRejectedValue(new Error("malformed"));
     expect(await read()).toEqual({ state: "none" });

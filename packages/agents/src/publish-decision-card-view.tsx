@@ -51,7 +51,8 @@ async function readPublishDecisionThroughBroker(
 ): Promise<PublishDecisionCardState | null> {
   try {
     const url = `${LIFECYCLE_PUBLISH_DECISION_PATH}?runId=${encodeURIComponent(runId)}`;
-    const send = () => fetch(url, { method: "GET", headers: auth.headers(), credentials: auth.credentials });
+    const send = () =>
+      fetch(url, { method: "GET", headers: auth.headers(), credentials: auth.credentials, signal: ended });
     const response = await sendAcrossRenewal(auth, send, ended);
     if (response === null) return null;
     // A refused credential is an answer (the hitl screen's rule): this reader may no longer see the card.
@@ -66,13 +67,21 @@ async function readPublishDecisionThroughBroker(
 /** The run's publish card for this reader, or `null` until an authorized answer has landed. `onRead` is called when
  * each read ends, landed or failed, so a caller waiting on a read is never left waiting on a failure. `wireRef` is a
  * pure CHANGE SIGNAL from the host (the run's status, as the hitl screen card takes the gate's): nothing is read out
- * of it, and a change re-reads at once.
+ * of it, and a change asks for a re-read.
  *
  * THE SIGNAL ALONE CANNOT CARRY EVERY MOVE. A run can open its decision with no change any host reading sees (it
  * resumes under the same status, and the first read during the work between two gates answered `none`). So while
  * the host says its run has NOT finished (`runStatus`, read by `runStatusIsTerminal`), the read also repeats at the
- * run surfaces' cadence. It pauses while the document is hidden, skips a tick while a read is still out (never two at
- * once), and stops when the run finishes or the host unmounts. A host that knows no status (`null`) does not poll. */
+ * run surfaces' cadence. It pauses while the document is hidden and stops when the run finishes or the host unmounts.
+ * A host that knows no status (`null`) does not poll.
+ *
+ * ONE READ OUT AT A TIME. A signal, tick, focus or reload that arrives while a read is out marks the read DIRTY, and
+ * exactly one follow-up read runs when it lands: a host whose signal moves faster than the read answers never starves
+ * it, and reads never pile up. A landed answer is kept unless the host unmounted or its run changed (those abort the
+ * read); a mere signal change never discards it.
+ *
+ * A RUN THAT HAS ENDED IS PARKED AT NO GATE. When the host's status turns terminal the read runs once more, and a
+ * `pending` answer for an ended run (its decision is closed only by the later expiry sweep) reads as `none`. */
 export function usePublishDecisionCardState(params: {
   runId: string;
   auth: LifecycleCardAuth | null;
@@ -84,50 +93,79 @@ export function usePublishDecisionCardState(params: {
   const { runId, auth, reloadToken, onRead } = params;
   const wireRef = params.wireRef ?? null;
   const runStatus = params.runStatus ?? null;
+  const ended = runStatus !== null && runStatusIsTerminal(runStatus);
   const [resolved, setResolved] = useState<{ runId: string; state: PublishDecisionCardState } | null>(null);
-  const onReadRef = useRef(onRead);
+  const latest = useRef({ runId, auth, onRead });
+  const flight = useRef<{ runId: string; abort: AbortController } | null>(null);
+  const dirty = useRef(false);
+  // Declared first, so every effect below reads this render's run, credential and callback.
   useEffect(() => {
-    onReadRef.current = onRead;
-  }, [onRead]);
+    latest.current = { runId, auth, onRead };
+  }, [runId, auth, onRead]);
+  // Built once: it reads only refs, so every caller (the identity, the signals, the tick, a landed read) asks the same
+  // single-flight door.
+  const [request] = useState(() => {
+    const ask = (): void => {
+      const { runId: id, auth: credential } = latest.current;
+      if (!id) return;
+      if (flight.current) {
+        dirty.current = true;
+        return;
+      }
+      dirty.current = false;
+      const mine = { runId: id, abort: new AbortController() };
+      flight.current = mine;
+      void (async () => {
+        const state = credential
+          ? await readPublishDecisionThroughBroker(id, credential, mine.abort.signal)
+          : await getPublishDecisionCardStateAction({ runId: id }).then(parsePublishDecisionCardState, () => null);
+        // Aborted: the host unmounted or its run changed. Nothing lands, and the new run's own read is already out.
+        if (flight.current !== mine) return;
+        flight.current = null;
+        // A read that could not be completed is a FAILURE, not a state: the last authorized answer stands.
+        if (state !== null) setResolved({ runId: id, state });
+        if (dirty.current) ask();
+        else latest.current.onRead?.();
+      })();
+    };
+    return ask;
+  });
+  // THE RUN'S IDENTITY: a new run (or a mount) aborts any read still out and reads at once.
+  useEffect(() => {
+    request();
+    return () => {
+      flight.current?.abort.abort();
+      flight.current = null;
+      dirty.current = false;
+    };
+  }, [runId, request]);
+  // THE SIGNALS: each change asks for a read, coalesced with one already out. The mount's read is the identity's.
   const [focusToken, setFocusToken] = useState(0);
   useEffect(() => {
     const onFocus = () => setFocusToken((n) => n + 1);
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, []);
-  // THE TICK. It only asks for a read when none is out, so a slow read is never overlapped by the next one.
-  const [pollToken, setPollToken] = useState(0);
-  const inFlightRef = useRef(false);
-  const polling = runId !== "" && runStatus !== null && !runStatusIsTerminal(runStatus);
+  const signals = useRef<unknown[] | null>(null);
+  useEffect(() => {
+    const now = [runId, auth, reloadToken, focusToken, wireRef, ended];
+    const before = signals.current;
+    signals.current = now;
+    if (before === null || before[0] !== runId) return;
+    if (now.some((value, i) => value !== before[i])) request();
+  }, [runId, auth, reloadToken, focusToken, wireRef, ended, request]);
+  // THE TICK, while the run has not finished.
+  const polling = runId !== "" && runStatus !== null && !ended;
   useEffect(() => {
     if (!polling) return;
     const tick = window.setInterval(() => {
-      if (document.visibilityState === "hidden" || inFlightRef.current) return;
-      setPollToken((n) => n + 1);
+      if (document.visibilityState === "hidden") return;
+      request();
     }, PUBLISH_DECISION_CARD_POLL_MS);
     return () => window.clearInterval(tick);
-  }, [polling]);
-  useEffect(() => {
-    if (!runId) return;
-    let live = true;
-    const ended = new AbortController();
-    inFlightRef.current = true;
-    void (async () => {
-      const state = auth
-        ? await readPublishDecisionThroughBroker(runId, auth, ended.signal)
-        : await getPublishDecisionCardStateAction({ runId }).then(parsePublishDecisionCardState, () => null);
-      if (live) inFlightRef.current = false;
-      // A read that could not be completed is a FAILURE, not a state: the last authorized answer stands.
-      if (live && state !== null) setResolved({ runId, state });
-      if (live) onReadRef.current?.();
-    })();
-    return () => {
-      live = false;
-      inFlightRef.current = false;
-      ended.abort();
-    };
-  }, [runId, auth, reloadToken, focusToken, wireRef, pollToken]);
-  return resolved && resolved.runId === runId ? resolved.state : null;
+  }, [polling, request]);
+  if (!resolved || resolved.runId !== runId) return null;
+  return ended && resolved.state.state === "pending" ? PUBLISH_DECISION_CARD_NONE : resolved.state;
 }
 
 /** One resolved read of a run's publish card: the state, whether a re-read the reader asked for is running, and the

@@ -12,7 +12,12 @@ vi.mock("../publish-decision-card-actions", () => ({
 }));
 
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
-import { PublishDecisionCard, usePublishDecisionCardRead, type PublishDecisionDecide } from "../publish-decision-card-view";
+import {
+  PublishDecisionCard,
+  publishGateIsOpen,
+  usePublishDecisionCardRead,
+  type PublishDecisionDecide,
+} from "../publish-decision-card-view";
 
 const RUN_ID = "run-4150";
 const ROWS = [
@@ -328,6 +333,26 @@ describe("the shared read's tick while the run has not finished", () => {
     expect(stateMock).toHaveBeenCalledTimes(atTerminal);
   });
 
+  it("a run that ENDS with its decision unanswered is no longer an open gate: one final read, and no cached `pending` survives", async () => {
+    stateMock.mockImplementation(async () => PENDING);
+    const hook = readWith("pending_approval");
+    await advance(0);
+    expect(hook.result.current.state?.state).toBe("pending");
+    expect(publishGateIsOpen(hook.result.current)).toBe(true);
+    const beforeEnd = stateMock.mock.calls.length;
+
+    // The run is cancelled while parked; its decision is closed only by the later sweep, so the read still answers
+    // `pending`. A run in a terminal status is parked at no gate.
+    hook.rerender({ runStatus: "stopped" });
+    await advance(0);
+    expect(stateMock).toHaveBeenCalledTimes(beforeEnd + 1);
+    expect(publishGateIsOpen(hook.result.current)).toBe(false);
+    expect(hook.result.current.state?.state).toBe("none");
+    await advance(TICK * 4);
+    expect(stateMock).toHaveBeenCalledTimes(beforeEnd + 1);
+    expect(publishGateIsOpen(hook.result.current)).toBe(false);
+  });
+
   it("the tick stops when the host unmounts, and pauses while the document is hidden", async () => {
     stateMock.mockImplementation(async () => ({ state: "none" }));
     const hook = readWith("running");
@@ -359,6 +384,69 @@ describe("the shared read's tick while the run has not finished", () => {
     });
     await advance(TICK);
     expect(stateMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("a slow read is never starved or overlapped by host signals: one read out at a time, it lands, then exactly one follow-up", async () => {
+    const releases: Array<(value: unknown) => void> = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    stateMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          inFlight += 1;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          releases.push((value) => {
+            inFlight -= 1;
+            resolve(value);
+          });
+        }),
+    );
+    const hook = renderHook(
+      (props: { wireRef: string }) =>
+        usePublishDecisionCardRead({ runId: RUN_ID, auth: null, wireRef: props.wireRef, runStatus: "pending_approval" }),
+      { initialProps: { wireRef: "pending_approval:no-gate:0" } },
+    );
+    await advance(0);
+    expect(stateMock).toHaveBeenCalledTimes(1);
+    // The host's signal moves every 2 s (each successful run poll) while the first read is still out.
+    for (let n = 1; n <= 5; n++) {
+      hook.rerender({ wireRef: `pending_approval:no-gate:${n}` });
+      await advance(2_000);
+    }
+    expect(stateMock).toHaveBeenCalledTimes(1);
+    expect(maxInFlight).toBe(1);
+
+    await act(async () => {
+      releases[0]!(PENDING);
+    });
+    await advance(0);
+    // The slow result LANDS (a mere signal change does not discard it), and the signals it missed coalesce into ONE
+    // follow-up read.
+    expect(hook.result.current.state?.state).toBe("pending");
+    expect(stateMock).toHaveBeenCalledTimes(2);
+    expect(maxInFlight).toBe(1);
+
+    await act(async () => {
+      releases[1]!({ state: "none" });
+    });
+    await advance(0);
+    expect(hook.result.current.state?.state).toBe("none");
+    expect(stateMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("the broker read is handed an abort signal, aborted when the host unmounts", async () => {
+    const signals: Array<AbortSignal | null | undefined> = [];
+    globalThis.fetch = ((_input: RequestInfo | URL, init?: RequestInit) => {
+      signals.push(init?.signal);
+      return new Promise<Response>(() => undefined);
+    }) as unknown as typeof fetch;
+    const hook = renderHook(() => usePublishDecisionCardRead({ runId: RUN_ID, auth: WIDGET_AUTH, runStatus: "running" }));
+    await advance(0);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
+    expect(signals[0]!.aborted).toBe(false);
+    hook.unmount();
+    expect(signals[0]!.aborted).toBe(true);
   });
 });
 
