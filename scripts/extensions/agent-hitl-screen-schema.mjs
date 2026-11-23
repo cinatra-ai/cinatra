@@ -8,13 +8,17 @@
 // Every unknown layout, section type or key is refused by name.
 //
 // Two layouts:
-//   - "card": { layout, title, sections?, decisions?, carry?, requires? }
+//   - "card": { layout, title, sections?, decisionLabel?, decisions?, carry?,
+//               requires? }
 //     sections: note {text} | fact {label, key, qualifierKey?} |
 //               words {key, label?} | quote {key} |
 //               field {key, label, multiline?, placeholder?}
 //     decisions: at most 3 of { label, answer } - `answer` is the exact object
 //     the choice stages for the host's one Continue. A card offers decisions
 //     or fields, never both.
+//     decisionLabel: the decision's declared label, drawn above its answer
+//     rows (app-lifecycle-cards V.1); required with decisions, refused
+//     without them.
 //     carry: run-value keys copied into every staged answer.
 //     requires: keys that must hold non-blank text before the host's
 //     Continue can send; a choice also waits for them. Every field is a
@@ -215,7 +219,17 @@ export function validateHitlScreen(raw, where = "screen") {
     checkObject(where, rest, {}, errors);
   } else if (screen.layout === "card") {
     const { layout: _layout, sections, decisions, carry, requires, ...rest } = screen;
-    checkObject(where, rest, { title: ["text", true] }, errors);
+    // The decision's declared label is required exactly when the card has
+    // decisions: V.1 draws the answer rows under it.
+    checkObject(
+      where,
+      rest,
+      { title: ["text", true], decisionLabel: ["text", decisions !== undefined] },
+      errors,
+    );
+    if (decisions === undefined && Object.hasOwn(rest, "decisionLabel")) {
+      errors.push(`${where}: decisionLabel needs decisions`);
+    }
     const sectionList = sections === undefined ? [] : sections;
     if (!Array.isArray(sectionList) || sectionList.length > MAX_SECTIONS) {
       errors.push(`${where}.sections: must be a list of at most ${MAX_SECTIONS}`);

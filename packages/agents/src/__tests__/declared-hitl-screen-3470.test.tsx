@@ -30,7 +30,23 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen as dom, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen as dom, waitFor, within } from "@testing-library/react";
+
+import type { LifecycleCardHost } from "@cinatra-ai/agent-ui-protocol/renderable-views";
+
+// The conversation hosts read the gate through the card's own authorized read.
+const screenStateMock = vi.fn();
+vi.mock("../agent-hitl-screen-actions", () => ({
+  getAgentHitlScreenStateAction: (input: { runId: string }) => screenStateMock(input),
+}));
+vi.mock("../server-actions", () => ({
+  getFieldRendererContextForAgentBuilderAction: async () => ({ connectedApps: [], gmailAliases: [] }),
+  getRuntimeFieldRendererBindingsAction: async () => [],
+}));
+vi.mock("../hitl-actions", () => ({
+  approveReviewTask: vi.fn(async () => ({ ok: true as const })),
+  rejectReviewTask: vi.fn(async () => undefined),
+}));
 
 import {
   fieldRendererRegistry,
@@ -44,6 +60,9 @@ import {
 } from "../field-renderer-components";
 import { CtaRenderer } from "../cta-renderer";
 import { SchemaOnlyFloorRenderer } from "../schema-field-renderer";
+import { AgentHitlScreenCard } from "../agent-hitl-screen-card";
+import { parseAgentHitlScreenState } from "../agent-hitl-screen";
+import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 
 const ID = "@acme-test/publish-agent:confirm";
 
@@ -60,6 +79,7 @@ const CARD = {
     { type: "quote", key: "excerpt" },
     { type: "note", text: "Fixture note: go back to change the words." },
   ],
+  decisionLabel: "Fixture decision",
   decisions: [
     { label: "Do not send", answer: { approved: false } },
     { label: "Send it", answer: { approved: true } },
@@ -82,6 +102,22 @@ const VALUE = {
 
 function entryOf(id = ID): FieldRendererEntry | undefined {
   return fieldRendererRegistry.list().find((e) => e.id === id);
+}
+
+/** V.1 `nf-label`: the small uppercase mono label on the muted ink. */
+function expectDeclaredLabel(el: HTMLElement) {
+  for (const c of ["font-mono", "uppercase", "text-badge-2xs", "text-muted-foreground"]) {
+    expect(el.className.split(/\s+/)).toContain(c);
+  }
+}
+
+/** V.1 `nf-input`: no box and no fill, a dashed hairline under the text. */
+function expectDeclaredInput(el: HTMLElement) {
+  const classes = el.className.split(/\s+/);
+  for (const c of ["border-0", "border-b", "border-dashed", "rounded-none", "bg-transparent", "px-0", "shadow-none"]) {
+    expect(classes).toContain(c);
+  }
+  expect(classes).not.toContain("border");
 }
 
 function mount(value: unknown, onChange = vi.fn()) {
@@ -156,8 +192,9 @@ describe("a declared card is drawn by the host (cinatra#3470)", () => {
     expect(dom.getByText(/Line one\.\s+Line two\./)).toBeTruthy();
     expect(dom.getByText("A fixture excerpt.")).toBeTruthy();
     expect(dom.getByText("Fixture note: go back to change the words.")).toBeTruthy();
-    const link = dom.getByRole("link", { name: "https://example.test/source" });
-    expect(link.getAttribute("href")).toBe("https://example.test/source");
+    // A fact value is text, never a link (app-lifecycle-cards V.1: "a fact is text").
+    expect(dom.getByText("https://example.test/source")).toBeTruthy();
+    expect(dom.queryByRole("link")).toBeNull();
     // The card draws the declared decisions and no Continue of its own.
     expect(dom.getByRole("radio", { name: "Do not send" })).toBeTruthy();
     expect(dom.getByRole("radio", { name: "Send it" })).toBeTruthy();
@@ -188,13 +225,43 @@ describe("a declared card is drawn by the host (cinatra#3470)", () => {
     }
   });
 
+  it("draws the words that go out as a read-only value: the declared label over the text, with no box (V.1)", () => {
+    mount(VALUE);
+    const labelEl = dom.getByText("The words that go out");
+    expectDeclaredLabel(labelEl);
+    const value = labelEl.parentElement!;
+    expect(value.children.length).toBe(2);
+    expect(value.children[1].textContent).toBe("Line one.\nLine two.");
+    for (const el of [value, ...Array.from(value.querySelectorAll("*"))]) {
+      expect(el.className.toString()).not.toMatch(/(^|\s)border(\s|$|-)/);
+    }
+  });
+
+  it("draws no frame of its own: the host's frame or detail region holds the fields (V.1)", () => {
+    mount(VALUE);
+    expect(document.querySelector('[data-slot="card"]')).toBeNull();
+    const root = document.querySelector("[data-declared-hitl-screen]")!;
+    expect(root.className).not.toMatch(/(^|\s)(border|rounded|bg-|shadow)/);
+  });
+
+  it("draws the decision's declared label above its answer rows, in the label style (V.1)", () => {
+    mount(VALUE);
+    expect(dom.queryByText("Fixture decision")).not.toBeNull();
+    const labelEl = dom.getByText("Fixture decision");
+    expectDeclaredLabel(labelEl);
+    const group = dom.getByRole("radiogroup", { name: "Fixture decision" });
+    // The label stands directly above the answer rows.
+    expect(labelEl.nextElementSibling).toBe(group);
+  });
+
   it("draws one answer row per declared answer in the card's fields, never footer buttons (design#243 V.1)", () => {
     mount(VALUE);
     expect(document.querySelector('[data-slot="card-footer"]')).toBeNull();
     expect(dom.queryByRole("button", { name: "Do not send" })).toBeNull();
     expect(dom.queryByRole("button", { name: "Send it" })).toBeNull();
-    const group = dom.getByRole("radiogroup", { name: "Send this fixture out?" });
-    expect(group.closest('[data-slot="card-content"]')).not.toBeNull();
+    expect(dom.queryByRole("radiogroup", { name: "Fixture decision" })).not.toBeNull();
+    const group = dom.getByRole("radiogroup", { name: "Fixture decision" });
+    expect(group.closest("[data-declared-hitl-screen]")).not.toBeNull();
     const rows = within(group).getAllByRole("radio");
     expect(rows.map((r) => r.closest("label")?.textContent)).toEqual(["Do not send", "Send it"]);
     // Nothing is chosen for the person.
@@ -232,7 +299,7 @@ describe("a declared card is drawn by the host (cinatra#3470)", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it("draws no line for a missing value, and never links a value that is not http(s)", () => {
+  it("draws no line for a missing value, and never links a value", () => {
     mount({ ...VALUE, accountName: undefined, sourceUrl: "javascript:alert(1)" });
     expect(dom.queryByText("Account")).toBeNull();
     expect(dom.queryByRole("link")).toBeNull();
@@ -275,6 +342,9 @@ describe("a declared text field (app-lifecycle-cards V.1)", () => {
     const box = dom.getByLabelText("Fixture label");
     expect(box.tagName).toBe("TEXTAREA");
     expect(box.getAttribute("placeholder")).toBe("Fixture hint");
+    // V.1 `nf-label` over V.1 `nf-input`, on every host.
+    expectDeclaredLabel(dom.getByText("Fixture label"));
+    expectDeclaredInput(box);
     fireEvent.change(box, { target: { value: "typed" } });
     expect(onChange).toHaveBeenLastCalledWith({ itemId: "item-1", answer: "typed" });
     expect(dom.queryByRole("button")).toBeNull();
@@ -402,5 +472,86 @@ describe("registration validates the declaration again (cinatra#3470)", () => {
     registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90 }]);
     expect(entryOf()?.renderer).toBe(SchemaOnlyFloorRenderer);
     expect(errorSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("the conversation hosts draw the declared card (cinatra#3470, V.1)", () => {
+  // The renderer id names an installed package's binding: it is NOT in the
+  // build-time map, so only the read's declared binding can draw it.
+  const RUN_ID = "run-3470-chat";
+  const DECLARED = {
+    id: ID,
+    kind: "linkedin-draft-review",
+    priority: 90,
+    midRunHitl: true,
+    screen: CARD,
+  };
+  const ASKING = {
+    state: "asking" as const,
+    runId: RUN_ID,
+    screenRef: null,
+    gate: {
+      reviewTaskId: "task-3470-chat",
+      xRenderer: ID,
+      inputSchema: { type: "object" },
+      currentValues: VALUE,
+      fieldName: null,
+    },
+    declaredScreen: DECLARED,
+  };
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    screenStateMock.mockImplementation(async () => ASKING);
+    originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify(ASKING), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })) as unknown as typeof fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  function mountOn(host: LifecycleCardHost) {
+    const widget = host === "site_widget";
+    return render(
+      <LifecycleCardSurfaceProvider
+        host={host}
+        {...(widget
+          ? {
+              auth: { headers: () => ({ Authorization: "Bearer cwu_fixture" }), credentials: "omit" as const },
+              frame: { assistant: "a", instanceId: "i" },
+            }
+          : {})}
+      >
+        <AgentHitlScreenCard runId={RUN_ID} wireRef="task-3470-chat" />
+      </LifecycleCardSurfaceProvider>,
+    );
+  }
+
+  for (const host of ["chat_thread", "site_widget"] as const) {
+    it(`${host}: draws the declared card inside the host's card frame, not "no renderer configured"`, async () => {
+      expect(entryOf()).toBeUndefined();
+      const { container } = mountOn(host);
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 20));
+      });
+      await waitFor(() => expect(within(container).queryAllByRole("radio")).toHaveLength(2));
+      expect(container.textContent).not.toMatch(/no renderer configured/);
+      const frame = container.querySelector('[data-conformance-id="agent-hitl-screen-card"]')!;
+      expect(frame.getAttribute("data-lifecycle-card-host")).toBe(host);
+      // The host's frame is the one box: the declared card adds none inside it.
+      expect(frame.querySelector('[data-slot="card"]')).toBeNull();
+      expect(within(container).getByText("Fixture decision")).toBeTruthy();
+    });
+  }
+
+  it("the read keeps only the declared binding of its own gate's renderer", () => {
+    const kept = parseAgentHitlScreenState(ASKING);
+    expect(kept?.state === "asking" && kept.declaredScreen).toEqual(DECLARED);
+    const other = parseAgentHitlScreenState({ ...ASKING, declaredScreen: { ...DECLARED, id: "@acme-test/other:confirm" } });
+    expect(other?.state === "asking" && other.declaredScreen).toBeUndefined();
   });
 });

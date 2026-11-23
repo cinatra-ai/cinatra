@@ -15,6 +15,7 @@ const CARD = {
   layout: "card",
   title: "Fixture title",
   sections: [{ type: "words", key: "content" }],
+  decisionLabel: "Fixture decision",
   decisions: [
     { label: "Fixture no", answer: { approved: false } },
     { label: "Fixture yes", answer: { approved: true } },

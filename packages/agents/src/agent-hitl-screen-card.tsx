@@ -1204,6 +1204,37 @@ export function AgentHitlScreenCard({
 
   const gate = state !== null && state.state === "asking" ? state.gate : null;
 
+  // THE GATE'S DECLARED SCREEN, REGISTERED FROM THE AUTHORIZED READ
+  // (cinatra#3470). The run page registers the installed agents' bindings
+  // itself; this card has only the run id, so the read hands it the one
+  // binding its gate names, and the card registers it before it resolves the
+  // gate's renderer. The registration validates the screen again, and the
+  // bump re-draws the card with the registered entry.
+  const declaredScreen =
+    state !== null && state.state === "asking" ? (state.declaredScreen ?? null) : null;
+  const declaredScreenKey = declaredScreen === null ? null : JSON.stringify(declaredScreen);
+  const [registeredScreenKey, setRegisteredScreenKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (declaredScreen === null || declaredScreenKey === null) return;
+    let live = true;
+    void import("./register-default-renderers")
+      .then(({ registerFieldRendererBindings }) => {
+        if (!live) return;
+        registerFieldRendererBindings([declaredScreen]);
+        setRegisteredScreenKey(declaredScreenKey);
+      })
+      .catch(() => {
+        // Nothing registered: the gate keeps the drawing it had.
+        if (live) setRegisteredScreenKey(declaredScreenKey);
+      });
+    return () => {
+      live = false;
+    };
+    // The key carries the binding's content; a re-read with the same binding
+    // registers nothing new.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [declaredScreenKey]);
+
   // THE BUFFER BELONGS TO ONE GATE, AND ONLY TO IT.
   //
   // What the reader typed is held here until the Continue submits it, and the
@@ -1545,12 +1576,19 @@ export function AgentHitlScreenCard({
     stageSetupAnswer,
     rendererFloored,
     setRendererFloored,
+    // A declared screen registered after the read re-resolves the renderer.
+    registeredScreenKey,
   ]);
 
   // Nothing before an authorized read, and NO DOM AT ALL for `none` — the
   // collapse of every denial, exactly as the audit card's `absent` is. A
   // host-supplied screen is past both: its host already decided.
   if (!present || !asking) return null;
+  // A declared screen the read handed over is drawn once it is registered,
+  // never first as a gate with no renderer.
+  if (!hostSuppliesScreen && declaredScreenKey !== null && registeredScreenKey !== declaredScreenKey) {
+    return null;
+  }
 
   return (
     <div

@@ -25,6 +25,12 @@ vi.mock("../hitl-context", () => ({
 vi.mock("../store", () => ({
   readAgentRunById: vi.fn(async () => null),
 }));
+// cinatra#3470: the installed agents' field-renderer bindings, read for the
+// binding that declares the gate's screen.
+const mergedBindings = vi.fn((): unknown[] => []);
+vi.mock("../field-renderer-bindings.server", () => ({
+  getMergedFieldRendererBindings: () => mergedBindings(),
+}));
 
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "../agent-builder-ids";
 import { agentHitlScreenStateForRun } from "../agent-hitl-screen-core";
@@ -147,5 +153,42 @@ describe("which run is asking", () => {
   it("refuses a derivation that THREW, rather than letting it escape", async () => {
     deriveRunHitlContext.mockRejectedValue(new Error("the interrupt log is gone"));
     expect((await agentHitlScreenStateForRun(RUN)).state).toBe("none");
+  });
+});
+
+describe("the declared screen of the gate's renderer (cinatra#3470)", () => {
+  const DECLARED_ID = "@acme-test/fixture-agent:confirm";
+  const SCREEN = {
+    layout: "card",
+    title: "Fixture title",
+    decisionLabel: "Fixture decision",
+    decisions: [{ label: "Fixture yes", answer: { approved: true } }],
+  };
+
+  it("hands a conversation host the binding that declares its gate's screen, and nothing else", async () => {
+    deriveRunHitlContext.mockResolvedValue({ ...GATE, xRenderer: DECLARED_ID });
+    mergedBindings.mockReturnValue([
+      { id: "@acme-test/other:confirm", kind: "cta", priority: 80, screen: SCREEN, declaredBy: "x" },
+      { id: DECLARED_ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: SCREEN, declaredBy: "x" },
+    ]);
+    const state = await agentHitlScreenStateForRun(RUN);
+    expect(state.state === "asking" && state.declaredScreen).toEqual({
+      id: DECLARED_ID,
+      kind: "linkedin-draft-review",
+      priority: 90,
+      midRunHitl: true,
+      screen: SCREEN,
+    });
+    // Nothing for a binding without a screen, or when the bindings cannot be read.
+    mergedBindings.mockReturnValue([{ id: DECLARED_ID, kind: "cta", priority: 80, declaredBy: "x" }]);
+    const plain = await agentHitlScreenStateForRun(RUN);
+    expect(plain.state).toBe("asking");
+    expect(plain.state === "asking" && "declaredScreen" in plain).toBe(false);
+    mergedBindings.mockImplementation(() => {
+      throw new Error("no mount");
+    });
+    const failed = await agentHitlScreenStateForRun(RUN);
+    expect(failed.state).toBe("asking");
+    expect(failed.state === "asking" && "declaredScreen" in failed).toBe(false);
   });
 });

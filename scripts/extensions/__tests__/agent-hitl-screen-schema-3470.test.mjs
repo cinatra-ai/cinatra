@@ -34,6 +34,7 @@ const CARD = {
     { type: "words", key: "content", label: "Fixture words" },
     { type: "quote", key: "excerpt" },
   ],
+  decisionLabel: "Fixture decision",
   decisions: [
     { label: "Fixture no", answer: { approved: false } },
     { label: "Fixture yes", answer: { approved: true, mode: "now", count: 1 } },
@@ -106,6 +107,10 @@ describe("validateHitlScreen refuses by name", () => {
     ["a NaN answer", { ...CARD, decisions: [{ label: "x", answer: { n: Number.NaN } }] }, /decisions\[0\]\.answer\.n is not a finite number/],
     ["an Infinity answer", { ...CARD, decisions: [{ label: "x", answer: { n: Infinity } }] }, /decisions\[0\]\.answer\.n is not a finite number/],
     ["decisions and a field together", { ...CARD, sections: FIELD_CARD.sections }, /decisions or fields, never both/],
+    // app-lifecycle-cards V.1: the answer rows stand under the decision's declared label.
+    ["decisions without the decision's label", (({ decisionLabel: _l, ...rest }) => rest)(CARD), /decisionLabel is required/],
+    ["a blank decision label", { ...CARD, decisionLabel: "  " }, /decisionLabel must be non-blank text/],
+    ["a decision label without decisions", { ...FIELD_CARD, decisionLabel: "Fixture decision" }, /decisionLabel needs decisions/],
     ["an empty carry list", { ...CARD, carry: [] }, /carry: must be a list of 1\.\.8 keys/],
     ["a carry list of nine", { ...CARD, carry: Array.from({ length: 9 }, (_, i) => `k${i}`) }, /carry: must be a list/],
     ["a requires list of nine", { ...CARD, requires: Array.from({ length: 9 }, (_, i) => `k${i}`) }, /requires: must be a list/],

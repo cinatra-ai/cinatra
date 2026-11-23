@@ -47,7 +47,9 @@ import { isParkedOnProducedReview } from "./run-produced-review-hold";
 import { readAgentRunById, type AgentRunRecord } from "./store";
 import {
   AGENT_HITL_SCREEN_NONE,
+  parseDeclaredScreenBinding,
   runStatesHitlMoment,
+  type AgentHitlDeclaredScreenBinding,
   type AgentHitlScreenState,
 } from "./agent-hitl-screen";
 
@@ -59,6 +61,7 @@ export {
   runStatesHitlMoment,
 } from "./agent-hitl-screen";
 export type {
+  AgentHitlDeclaredScreenBinding,
   AgentHitlScreenGate,
   AgentHitlScreenState,
 } from "./agent-hitl-screen";
@@ -125,10 +128,12 @@ export async function agentHitlScreenStateForRun(
   // the panel and this reader cannot drift into two ideas of what a park is. It
   // costs no read: the record is already in hand.
   if (isParkedOnProducedReview(run)) return AGENT_HITL_SCREEN_NONE;
+  const declaredScreen = await declaredScreenBindingOf(context.xRenderer);
   return {
     state: "asking",
     runId: run.id,
     screenRef: runStatesHitlMoment(run) ? (run.lifecycleCardRef ?? null) : null,
+    ...(declaredScreen ? { declaredScreen } : {}),
     gate: {
       reviewTaskId: context.reviewTaskId,
       xRenderer: context.xRenderer,
@@ -137,6 +142,37 @@ export async function agentHitlScreenStateForRun(
       fieldName: context.fieldName ?? null,
     },
   };
+}
+
+/**
+ * The binding that declares the screen of the gate's renderer (cinatra#3470),
+ * or null. The run page registers the installed bindings itself
+ * (`useRuntimeFieldRendererBindings`); a conversation host has only this read,
+ * so without it the chat thread and the site widget found no renderer for a
+ * gate the run page draws. Only a binding that declares a `screen` is handed
+ * over: that card is drawn by the host from the declaration alone. Any failure
+ * hands nothing, and the card falls back exactly as before.
+ */
+async function declaredScreenBindingOf(
+  xRenderer: string,
+): Promise<AgentHitlDeclaredScreenBinding | null> {
+  try {
+    const { getMergedFieldRendererBindings } = await import("./field-renderer-bindings.server");
+    const binding = getMergedFieldRendererBindings().find((b) => b.id === xRenderer);
+    if (!binding || binding.screen === undefined) return null;
+    return parseDeclaredScreenBinding(
+      {
+        id: binding.id,
+        kind: binding.kind,
+        priority: binding.priority,
+        midRunHitl: binding.midRunHitl,
+        screen: binding.screen,
+      },
+      xRenderer,
+    );
+  } catch {
+    return null;
+  }
 }
 
 /**

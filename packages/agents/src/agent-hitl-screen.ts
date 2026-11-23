@@ -41,6 +41,22 @@ export type AgentHitlScreenGate = {
 };
 
 /**
+ * The binding that DECLARES the gate's screen (cinatra#3470), when the gate's
+ * renderer is one an installed agent package declares with a `screen`. The
+ * run page fetches the installed bindings itself; a conversation host has
+ * only the run id, so the authorized read hands it the one binding its gate
+ * names. Public renderer metadata: the client validates the screen again when
+ * it registers it, and a refused one registers nothing.
+ */
+export type AgentHitlDeclaredScreenBinding = {
+  id: string;
+  kind: string;
+  priority: number;
+  midRunHitl?: boolean;
+  screen: Record<string, unknown>;
+};
+
+/**
  * What this run's HITL screen is, including "there is none".
  *
  * Two states and only two, on the audit card's precedent: `asking` draws the
@@ -54,6 +70,8 @@ export type AgentHitlScreenState =
       /** The server-checked reference the run recorded for the screen. */
       screenRef: string | null;
       gate: AgentHitlScreenGate;
+      /** The declared screen of the gate's renderer, when one is declared. */
+      declaredScreen?: AgentHitlDeclaredScreenBinding;
     };
 
 export const AGENT_HITL_SCREEN_NONE: AgentHitlScreenState = Object.freeze({
@@ -103,10 +121,15 @@ export function parseAgentHitlScreenState(data: unknown): AgentHitlScreenState |
     value !== null && typeof value === "object" && !Array.isArray(value)
       ? (value as Record<string, unknown>)
       : {};
+  const declaredScreen = parseDeclaredScreenBinding(
+    (data as { declaredScreen?: unknown }).declaredScreen,
+    xRenderer,
+  );
   return {
     state: "asking",
     runId,
     screenRef: typeof screenRef === "string" ? screenRef : null,
+    ...(declaredScreen ? { declaredScreen } : {}),
     gate: {
       reviewTaskId,
       xRenderer,
@@ -114,5 +137,29 @@ export function parseAgentHitlScreenState(data: unknown): AgentHitlScreenState |
       currentValues: asRecord((gate as { currentValues?: unknown }).currentValues),
       fieldName: typeof fieldName === "string" ? fieldName : null,
     },
+  };
+}
+
+/**
+ * The declared screen binding of a transport answer, kept only when it is the
+ * binding of THIS gate's renderer and has the binding's plain shape. The
+ * screen itself is validated again at registration.
+ */
+export function parseDeclaredScreenBinding(
+  data: unknown,
+  xRenderer: string,
+): AgentHitlDeclaredScreenBinding | null {
+  if (data === null || typeof data !== "object" || Array.isArray(data)) return null;
+  const b = data as Record<string, unknown>;
+  if (b.id !== xRenderer || typeof b.kind !== "string" || b.kind.length === 0) return null;
+  if (typeof b.priority !== "number" || !Number.isFinite(b.priority)) return null;
+  const screen = b.screen;
+  if (screen === null || typeof screen !== "object" || Array.isArray(screen)) return null;
+  return {
+    id: xRenderer,
+    kind: b.kind,
+    priority: b.priority,
+    ...(b.midRunHitl === true ? { midRunHitl: true } : {}),
+    screen: screen as Record<string, unknown>,
   };
 }

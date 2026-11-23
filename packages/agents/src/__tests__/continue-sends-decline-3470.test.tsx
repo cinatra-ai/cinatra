@@ -159,6 +159,7 @@ function registerDeclaredPublishCard() {
         layout: "card",
         title: "Fixture publish step",
         sections: [{ type: "words", key: "content" }],
+        decisionLabel: "Fixture decision",
         decisions: [
           { label: "Fixture do not send", answer: { approved: false } },
           { label: "Fixture send", answer: { approved: true } },
