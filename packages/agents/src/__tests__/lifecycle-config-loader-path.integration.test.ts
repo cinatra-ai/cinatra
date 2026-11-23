@@ -62,7 +62,7 @@ const REPO_ROOT = resolve(__dirname, "..", "..", "..", "..");
  * drove, not a synthetic stand-in. */
 const WORDPRESS_AGENT_PACKAGE = "@cinatra-ai/wordpress-agent";
 /** The lock-pinned commit/tree whose manifest declares the capability. */
-const WORDPRESS_AGENT_VERSION = "0.1.7";
+const WORDPRESS_AGENT_VERSION = "0.1.8";
 /** The pinned clone-back tree the dev-boot scan loads from. Present in a dev
  * checkout and in the conformance jobs; absent in the DB-tier CI job, which is
  * why the fixture below falls back to a synthesized tree carrying the same
@@ -72,7 +72,7 @@ const PINNED_OAS_PATH = join(PINNED_AGENT_DIR, "cinatra", "oas.json");
 const PINNED_MANIFEST_PATH = join(PINNED_AGENT_DIR, "package.json");
 
 /**
- * The lifecycle declaration `@cinatra-ai/wordpress-agent@0.1.7` ships in its
+ * The lifecycle declaration `@cinatra-ai/wordpress-agent@0.1.8` ships in its
  * `package.json#cinatra.lifecycle` (with `repairFindingsInput` since
  * cinatra#4424). Kept as a literal so the DB-tier CI job can
  * still run the whole proof without the clone-back tree, but NEVER a
