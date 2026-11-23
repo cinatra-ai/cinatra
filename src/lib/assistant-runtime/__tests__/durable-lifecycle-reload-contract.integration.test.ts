@@ -2224,7 +2224,11 @@ describe("the ruled carriage table is the one this contract drives", () => {
     // the obligation row is struck, this assertion goes red until the carriage
     // is driven, which is exactly the pressure the row exists to apply.
     expect(CARRIAGES.map((c) => c.kind).sort()).toEqual(
-      CHAT_THREAD_CARRIAGE_CONTRACT.map((r) => r.kind)
+      CHAT_THREAD_CARRIAGE_CONTRACT
+        // A `read`-carried card rides no wire part, so a persisted turn holds
+        // nothing for this tier to read back; its host's own read draws it.
+        .filter((r) => r.carriage !== "read")
+        .map((r) => r.kind)
         .filter((kind) => !HELD_TURN_MOUNT_OBLIGATIONS.includes(kind))
         .sort(),
     );
