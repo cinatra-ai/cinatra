@@ -119,6 +119,13 @@ describe("validateHitlScreen refuses by name", () => {
     ["a field under the resume text's key", { ...FIELD_CARD, sections: [{ type: "field", key: "userResponse", label: "x" }] }, /"userResponse" is written by the host/],
     ["an answer key the host writes", { ...CARD, decisions: [{ label: "x", answer: { approvedAt: "now" } }] }, /"approvedAt" is written by the host/],
     ["a carried key the host writes", { ...CARD, carry: ["userResponseFieldName"] }, /"userResponseFieldName" is written by the host/],
+    // Only the operator's chosen decision sets the approval flag: a field or a
+    // carried run value never does, and the host's approval note and step
+    // number are its own too.
+    ["a carried approval flag", { ...FIELD_CARD, carry: ["approved"] }, /carry: "approved" is written by the host/],
+    ["a field under the approval flag's key", { ...FIELD_CARD, sections: [{ type: "field", key: "approved", label: "x" }] }, /"approved" is written by the host/],
+    ["a carried approval note", { ...FIELD_CARD, carry: ["approvalNote"] }, /"approvalNote" is written by the host/],
+    ["an answer under the step number's key", { ...CARD, decisions: [{ label: "x", answer: { stepNumber: 2 } }] }, /"stepNumber" is written by the host/],
     // A carried key comes from the run value only, never from the person, and
     // each answer row is told apart by its answer.
     ["a carried key that is also a decision's answer key", { ...CARD, carry: ["itemId", "mode"] }, /carry: "mode" is also an answer key/],

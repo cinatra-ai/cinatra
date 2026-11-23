@@ -23,8 +23,11 @@
 //     run value; a carried key is never a decision answer key or a field key,
 //     and no two decisions stage the same answer.
 //     A field key, an answer key and a carry key is never one the host
-//     writes into the staged answer itself (RESERVED_ANSWER_KEYS): the
-//     card stages `userResponse` as the JSON of its whole answer.
+//     writes into the staged answer or the Continue itself
+//     (RESERVED_ANSWER_KEYS): the card stages `userResponse` as the JSON of
+//     its whole answer. The one exception is `approved` (CHOSEN_ANSWER_KEYS):
+//     a decision's declared answer may set it, because only the operator's
+//     choice says decline; a field or a carried run value never does.
 //     requires: keys that must hold non-blank text before the host's
 //     Continue can send; a choice also waits for them. Every field is a
 //     required value, and a card with decisions holds the Continue until
@@ -49,11 +52,25 @@ const MAX_LIST = 8;
 const MAX_SECTIONS = 16;
 const MAX_DECISIONS = 3;
 
-// The keys the host writes into a staged answer itself: the resume text, the
-// name of a single text answer and the time of the Continue.
-export const RESERVED_ANSWER_KEYS = ["userResponse", "userResponseFieldName", "approvedAt"];
+// The keys the host writes into a staged answer or the Continue itself: the
+// resume text, the name of a single text answer, the approval flag, the time
+// of the Continue, and the approval note and step number of the host's
+// approval envelope (review-task-actions RESERVED_APPROVAL_ENVELOPE_KEYS).
+export const RESERVED_ANSWER_KEYS = [
+  "userResponse",
+  "userResponseFieldName",
+  "approved",
+  "approvedAt",
+  "approvalNote",
+  "stepNumber",
+];
 
-function checkNotReserved(where, key, errors) {
+// The reserved keys a decision's declared answer may still set: the operator
+// CHOOSES that answer, so its `approved` is the operator's own decline.
+export const CHOSEN_ANSWER_KEYS = ["approved"];
+
+function checkNotReserved(where, key, errors, { chosenAnswer = false } = {}) {
+  if (chosenAnswer && CHOSEN_ANSWER_KEYS.includes(key)) return;
   if (RESERVED_ANSWER_KEYS.includes(key)) {
     errors.push(`${where}: ${JSON.stringify(key)} is written by the host and cannot be declared`);
   }
@@ -212,7 +229,7 @@ function checkAnswer(where, answer, errors) {
         (typeof v === "number" && Number.isFinite(v)) ||
         (typeof v === "string" && v.length <= MAX_TEXT));
     if (!ok) errors.push(`${where}: key ${JSON.stringify(k)} must be a key with text, a number or a boolean`);
-    checkNotReserved(where, k, errors);
+    checkNotReserved(where, k, errors, { chosenAnswer: true });
   }
 }
 

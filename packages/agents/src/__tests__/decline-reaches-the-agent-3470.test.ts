@@ -16,7 +16,9 @@
  *     attachment envelope, with a plain-text `userResponse` and with a note;
  *   - the captured prompt and the answered-gate binding see the same answer;
  *   - an approval keeps every existing road byte for byte;
- *   - end to end from the Continue's own payload builders.
+ *   - end to end from the declared card's one writer and the Continue's own
+ *     payload builders: a decline, a card with no controls, and a chosen
+ *     decline whose answer holds `text` and `attachments` keys.
  *
  *   pnpm --filter @cinatra-ai/agents exec vitest run \
  *     src/__tests__/decline-reaches-the-agent-3470.test.ts
@@ -141,8 +143,14 @@ import { approveReviewTaskInternal } from "../review-task-actions";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
   continueApprovalFlag,
+  declaredHitlScreenReady,
+  declaredHitlStage,
   withContextSelectorEnvelope,
+  type DeclaredHitlCard,
 } from "../hitl-gate-submit";
+import { fieldRendererRegistry } from "../field-renderer-registry";
+
+const ID = "@acme-test/publish-agent:confirm";
 
 function setupRun(): void {
   storeMock.readAgentRunByTaskId.mockResolvedValue({
@@ -180,6 +188,7 @@ describe("a decline reaches the running agent as a decline (cinatra#3470)", () =
   beforeEach(() => {
     vi.clearAllMocks();
     dbWrites.length = 0;
+    fieldRendererRegistry.clear();
     setupRun();
   });
 
@@ -287,22 +296,73 @@ describe("a decline reaches the running agent as a decline (cinatra#3470)", () =
   });
 
   it("end to end from the Continue's own payload: a staged decline reaches the agent as one", async () => {
-    // The payload the HITL screen card's Continue builds from a declared
-    // card's staged decline, with the card's own builders.
-    const staged = { itemId: "item-1", revisionId: "rev-1", approved: false };
-    let payload: Record<string, unknown> = {
-      ...staged,
-      approved: continueApprovalFlag(staged),
-      approvedAt: "2026-11-10T00:00:00.000Z",
-    };
-    payload = applyAttachmentEnvelopeUserResponseOnly(payload, []);
-    payload = withContextSelectorEnvelope("@acme-test/publish-agent:confirm", {}, payload);
+    // The declared card's one writer stages the operator's "Do not send", and
+    // the HITL screen card's Continue sends it with its own builders.
+    const staged = continuePayloadOf(DECISION_CARD, { approved: false });
+    await approveReviewTaskInternal("wayflow-task-r1", "actor-1", staged);
+    expect(JSON.parse(wireText())).toEqual({ itemId: "item-1", revisionId: "rev-1", approved: false });
+  });
+
+  it("end to end: a card with no controls sends its carried values, never the approval marker alone", async () => {
+    const payload = continuePayloadOf({ layout: "card", title: "Fixture title only", carry: ["itemId"] }, {});
     await approveReviewTaskInternal("wayflow-task-r1", "actor-1", payload);
-    expect(JSON.parse(wireText())).toEqual({
-      itemId: "item-1",
-      revisionId: "rev-1",
-      approved: false,
-      approvedAt: "2026-11-10T00:00:00.000Z",
-    });
+    expect(wireText()).toBe(JSON.stringify({ itemId: "item-1" }));
+  });
+
+  it("end to end: a chosen decline whose answer holds text and attachments keys stays that answer", async () => {
+    const card = {
+      layout: "card" as const,
+      title: "Fixture question",
+      decisionLabel: "Fixture decision",
+      decisions: [
+        { label: "Fixture stop", answer: { approved: false, text: "stop" } },
+        { label: "Fixture go", answer: { approved: true, text: "go" } },
+      ],
+      carry: ["attachments"],
+    };
+    const payload = continuePayloadOf(card, { approved: false, text: "stop" });
+    await approveReviewTaskInternal("wayflow-task-r1", "actor-1", payload);
+    expect(JSON.parse(wireText())).toEqual({ attachments: ["fixture-a"], approved: false, text: "stop" });
   });
 });
+
+const DECISION_CARD: DeclaredHitlCard = {
+  layout: "card",
+  title: "Send this fixture out?",
+  decisionLabel: "Fixture decision",
+  decisions: [
+    { label: "Fixture do not send", answer: { approved: false } },
+    { label: "Fixture send", answer: { approved: true } },
+  ],
+  carry: ["itemId", "revisionId"],
+};
+
+const RUN_VALUE = { itemId: "item-1", revisionId: "rev-1", attachments: ["fixture-a"], unrelated: "not carried" };
+
+/**
+ * What the HITL screen card's Continue sends for a declared card registered
+ * under ID: the card's one writer stages `change` from the run value, and the
+ * Continue builds its payload as `agent-hitl-screen-card.tsx` does.
+ */
+function continuePayloadOf(card: DeclaredHitlCard, change: Record<string, unknown>): Record<string, unknown> {
+  fieldRendererRegistry.clear();
+  fieldRendererRegistry.register({
+    id: ID,
+    priority: 90,
+    condition: () => false,
+    renderer: (() => null) as never,
+    midRunHitl: true,
+    stagesWholeAnswer: true,
+    declaredScreen: card,
+  });
+  const staged = declaredHitlStage(card, RUN_VALUE, {}, change);
+  expect(declaredHitlScreenReady(card, RUN_VALUE, staged)).toBe(true);
+  let payload: Record<string, unknown> = {
+    ...staged,
+    approved: continueApprovalFlag(staged, ID),
+    approvedAt: "2026-11-10T00:00:00.000Z",
+  };
+  payload = applyAttachmentEnvelopeUserResponseOnly(payload, []);
+  payload = withContextSelectorEnvelope(ID, RUN_VALUE, payload);
+  return payload;
+}

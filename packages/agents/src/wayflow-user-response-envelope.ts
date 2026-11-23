@@ -185,6 +185,20 @@ export function tryParseWrappedUserResponse(
   } catch {
     return null;
   }
+  return readBridgeUserEnvelope(parsed);
+}
+
+/**
+ * THE ONE ENVELOPE PREDICATE: is the already-parsed `parsed` exactly the
+ * `{ text, attachments? }` envelope the bridge accepts? Returns it read back,
+ * or `null`. Shared by `tryParseWrappedUserResponse` and by every reader that
+ * must tell an envelope from an answer object that merely holds `text` and
+ * `attachments` keys (the decline rewrite, cinatra#3470), so the two cannot
+ * drift apart.
+ */
+export function readBridgeUserEnvelope(
+  parsed: unknown,
+): { text: string; attachments: LlmAttachmentRef[] } | null {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
   // STRICT bridge-rejection mirror. The bridge
   // (`src/app/api/llm-bridge/user-envelope.ts`) uses zod `.strict()`

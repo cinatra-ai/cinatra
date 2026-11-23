@@ -1512,7 +1512,7 @@ export function AgenticRunPanel({
         await performGateSubmit({
           reviewTaskId: ctx.reviewTaskId,
           xRenderer: ctx.xRenderer,
-          payload: declaredHitlContinuePayload(staged, pendingAttachmentsRef.current),
+          payload: declaredHitlContinuePayload(declared, staged, pendingAttachmentsRef.current),
           trackApproving: true,
           suppressGate: true,
           clearAttachmentsOnSuccess: true,
@@ -2313,7 +2313,7 @@ export function AgenticRunPanel({
           // Compute payload synchronously from current state to avoid a setState read race.
           let nextBuffered: Record<string, unknown> = {
             ...bufferedHitlValue,
-            approved: continueApprovalFlag(bufferedHitlValue),
+            approved: continueApprovalFlag(bufferedHitlValue, effectiveHitlContext.xRenderer),
             approvedAt: new Date().toISOString(),
           };
           // The list step's approvalNote lift (cinatra#3562): snapshot the

@@ -1078,7 +1078,7 @@ function HitlApprovalCard({
     // so no setState is needed here — just capture the merged object as a local.
     let nextBuffered: Record<string, unknown> = {
       ...bufferedHitlValue,
-      approved: continueApprovalFlag(bufferedHitlValue),
+      approved: continueApprovalFlag(bufferedHitlValue, interruptContext.xRenderer),
       approvedAt: new Date().toISOString(),
     };
     // Renderer-specific approvalNote lifts (list-picker / setup-form /

@@ -1021,7 +1021,7 @@ export function AgentHitlScreenContinue({
         if (listStep && !hasUsableListPick(buffered)) return;
         let payload: Record<string, unknown> = {
           ...buffered,
-          approved: continueApprovalFlag(buffered),
+          approved: continueApprovalFlag(buffered, gate.xRenderer),
           approvedAt: new Date().toISOString(),
         };
         payload = applyRendererApprovalNote(

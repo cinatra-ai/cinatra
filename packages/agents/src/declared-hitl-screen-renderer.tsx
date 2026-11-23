@@ -117,16 +117,18 @@ export function makeDeclaredHitlScreenRenderer(
     // staged and this change.
     const stage = (change: Record<string, unknown>) =>
       onChange(declaredHitlStage(screen, runValue, staged, change));
-    // A PREFILL IS STAGED ONCE, ON MOUNT: with nothing staged yet and a field
-    // prefilled by the run value, the answer as shown is staged, so an
-    // untouched prefill is what the Continue sends and what makes it ready.
-    const prefilled =
+    // STAGED ONCE, ON MOUNT: with nothing staged yet, a card whose answer is
+    // already whole without a choice stages it as shown, so it is what the
+    // Continue sends and what makes it ready: a field prefilled by the run
+    // value, and a card with no controls, whose answer is its carried values.
+    const decisionCount = (screen.decisions ?? []).length;
+    const wholeOnMount =
       hitlStage !== undefined &&
       disabled !== true &&
       Object.keys(staged).length === 0 &&
-      fieldKeys.some((k) => textOf(runValue, k) !== "");
+      (fieldKeys.some((k) => textOf(runValue, k) !== "") || (fieldKeys.length === 0 && decisionCount === 0));
     useEffect(() => {
-      if (prefilled) stage({});
+      if (wholeOnMount) stage({});
       // Once per mount: a later render reads the staged answer.
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);

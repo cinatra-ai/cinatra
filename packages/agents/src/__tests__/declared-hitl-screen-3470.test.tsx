@@ -71,6 +71,7 @@ import { SchemaOnlyFloorRenderer } from "../schema-field-renderer";
 import { AgentHitlScreenCard } from "../agent-hitl-screen-card";
 import { parseAgentHitlScreenState } from "../agent-hitl-screen";
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
+import { continueApprovalFlag } from "../hitl-gate-submit";
 
 const ID = "@acme-test/publish-agent:confirm";
 
@@ -499,6 +500,25 @@ describe("a declared card holds the host's Continue (cinatra#3470)", () => {
     expect(ready({}, { answer: "typed" })).toBe(true);
   });
 
+  it("a card with no controls stages its carried values once on mount, and holds the Continue until it has", () => {
+    const TITLE_ONLY = { layout: "card", title: "Fixture title only", carry: ["itemId"] };
+    registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: TITLE_ONLY }]);
+    // Ready reads what the Continue sends: nothing staged would lose itemId.
+    expect(ready({ itemId: "item-1" }, {})).toBe(false);
+    const onChange = mount({ itemId: "item-1", unrelated: "not carried" });
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenLastCalledWith(staged({ itemId: "item-1" }));
+    expect(ready({ itemId: "item-1" }, staged({ itemId: "item-1" }))).toBe(true);
+  });
+
+  it("only the chosen decision declines: a staged approved: false on a field card is no decline", () => {
+    registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: FIELD_SCREEN }]);
+    expect(continueApprovalFlag({ ...staged({ itemId: "item-1", answer: "typed" }), approved: false }, ID)).toBe(true);
+    registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: CARD }]);
+    expect(continueApprovalFlag(staged({ itemId: "item-1", revisionId: "rev-1", approved: false }), ID)).toBe(false);
+    expect(continueApprovalFlag(staged({ itemId: "item-1", revisionId: "rev-1", approved: true }), ID)).toBe(true);
+  });
+
   it("a 'kind' layout and a binding without a screen never hold the Continue", () => {
     registerFieldRendererBindings([
       { id: ID, kind: "cta", priority: 80, midRunHitl: true, screen: { layout: "kind" } },
@@ -536,6 +556,17 @@ describe("registration validates the declaration again (cinatra#3470)", () => {
     ]);
     expect(entryOf()).toBeUndefined();
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(`declared screen of ${ID} refused`));
+  });
+
+  it("a card that carries or asks for a key the host writes registers nothing: no run value can stage a decline", () => {
+    for (const screen of [
+      { layout: "card", title: "Fixture question", sections: [{ type: "field", key: "answer", label: "Fixture label" }], carry: ["approved"] },
+      { layout: "card", title: "Fixture question", sections: [{ type: "field", key: "approved", label: "Fixture label" }] },
+    ]) {
+      fieldRendererRegistry.clear();
+      registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen }]);
+      expect(entryOf()).toBeUndefined();
+    }
   });
 
   it("a declared screen on a binding that is not mid-run registers nothing, and says why", () => {

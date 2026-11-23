@@ -38,6 +38,7 @@ import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuc
 // ruling 1: "now").
 import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
 import { readWayflowSubmittedValues } from "./hitl-gate-submit";
+import { readBridgeUserEnvelope } from "./wayflow-user-response-envelope";
 // cinatra#2484: the setup-resume path is the LAST place a type-violating setup
 // value can be stopped before it becomes `agent_runs.inputParams` and reaches
 // the run. It needs the SAME effective schema the setup loop rendered from —
@@ -84,7 +85,8 @@ const RESERVED_APPROVAL_ENVELOPE_KEYS = new Set<string>([
  *     `userResponse`, unchanged;
  *   - a decline with a JSON-object `userResponse`: that object with
  *     `approved: false` set (inside the attachment envelope's `text` when the
- *     object is the `{ text, attachments }` envelope);
+ *     object is exactly the envelope the bridge accepts,
+ *     `readBridgeUserEnvelope`);
  *   - any other decline: the JSON of the values (without `userResponse`)
  *     with `approved: false`; a plain-text `userResponse` rides along under
  *     its own name, unless it is the approval marker itself (the attachment
@@ -112,8 +114,11 @@ export function declineAwareUserResponse(values: Record<string, unknown> | null)
     }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return fromValues(text);
     const obj = parsed as Record<string, unknown>;
-    if (typeof obj.text === "string" && Array.isArray(obj.attachments)) {
-      return JSON.stringify({ ...obj, text: withDecline(obj.text) });
+    // Only the exact envelope the bridge accepts is an envelope; an answer
+    // object that merely holds `text` and `attachments` keys is an answer.
+    const envelope = readBridgeUserEnvelope(obj);
+    if (envelope !== null) {
+      return JSON.stringify({ ...obj, text: withDecline(envelope.text) });
     }
     return JSON.stringify({ ...obj, approved: false });
   };

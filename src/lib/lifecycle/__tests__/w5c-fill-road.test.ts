@@ -107,6 +107,7 @@ import {
   LENT_ACTION_PRIMITIVE,
   buildScreenSubmitValues,
   handleLentAction,
+  buildDeclaredScreenSubmitValues,
 } from "../lent-action-mcp";
 import { resolveBoundCard } from "../bound-card-binding";
 import { submitReviewDecisionAction } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/actions";
@@ -1058,5 +1059,18 @@ describe("a declared card is filled and sent through its own answer (cinatra#347
     const res = await submit(CHOICE_CARD);
     expect((res.structuredContent as { ok: boolean }).ok).toBe(false);
     expect(approveReviewTaskInternal).not.toHaveBeenCalled();
+  });
+
+  it("a card with no controls sends its carried values, never a bare approval", async () => {
+    const TITLE_ONLY = { layout: "card" as const, title: "Fixture title only", carry: ["itemId"] };
+    const values = await buildDeclaredScreenSubmitValues({
+      card: TITLE_ONLY,
+      runValue: RUN_VALUES,
+      fills: [],
+      attachments: [],
+    });
+    expect(values).toMatchObject({ itemId: "item-1", approved: true });
+    expect(values?.userResponse).toBe(JSON.stringify({ itemId: "item-1" }));
+    expect(Object.hasOwn(values ?? {}, "content")).toBe(false);
   });
 });

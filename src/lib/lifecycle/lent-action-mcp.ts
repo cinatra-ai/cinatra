@@ -1371,7 +1371,7 @@ export async function buildDeclaredScreenSubmitValues(input: {
     answer.declaredHitlStage(input.card, input.runValue, {}, {}),
   );
   if (!answer.declaredHitlScreenReady(input.card, input.runValue, staged)) return null;
-  return answer.declaredHitlContinuePayload(staged, input.attachments as never);
+  return answer.declaredHitlContinuePayload(input.card, staged, input.attachments as never);
 }
 
 /** The floor's three buttons as the one entry names them; `approve` is Continue. */

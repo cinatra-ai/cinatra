@@ -20,7 +20,7 @@
 
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import { GROUPED_SETUP_FORM_RENDERER_ID } from "./agent-builder-ids";
-import { isListPickerRenderer, rendererReadsAsKind } from "./field-renderer-registry";
+import { declaredHitlCardOf, isListPickerRenderer, rendererReadsAsKind } from "./field-renderer-registry";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
 import { isSetupInterruptTaskId } from "./run-surface-status";
 import { wrapUserResponseWithAttachments } from "./wayflow-user-response-envelope";
@@ -329,9 +329,13 @@ export function midRunBooleanFieldHidesSubmit(gate: {
  * choices only stage an answer and the host's one Continue sends it, "a
  * decline as a decline" (design app-artifact-review I.4 and I.5): a staged
  * `approved: false` is kept, and every other staged answer continues as an
- * approval, as before.
+ * approval, as before. For a DECLARED card (`xRenderer` names one) only the
+ * operator's chosen decision decides (`declaredHitlApprovalFlag`), never a
+ * value the staged answer carries from the run.
  */
-export function continueApprovalFlag(staged: Record<string, unknown>): boolean {
+export function continueApprovalFlag(staged: Record<string, unknown>, xRenderer?: string): boolean {
+  const declared = xRenderer === undefined ? undefined : declaredHitlCardOf(xRenderer);
+  if (declared !== undefined) return declaredHitlApprovalFlag(declared, staged);
   return staged.approved !== false;
 }
 
@@ -426,6 +430,11 @@ function declaredOwnText(v: Record<string, unknown>, key: string): string {
   return typeof x === "string" ? x : "";
 }
 
+/** The value's OWN value under `key`, or undefined. */
+function declaredOwnValue(v: Record<string, unknown>, key: string): unknown {
+  return Object.hasOwn(v, key) ? v[key] : undefined;
+}
+
 /** The card's field keys, in declaration order. */
 export function declaredHitlFieldKeys(screen: Pick<DeclaredHitlCard, "sections">): string[] {
   return (screen.sections ?? []).flatMap((s) => (s.type === "field" ? [s.key] : []));
@@ -464,6 +473,21 @@ export function declaredHitlChosenDecision(
   return i === -1 ? null : i;
 }
 
+/**
+ * The approval flag of a declared card's answer: `false` only when the
+ * operator CHOSE a decision whose declared answer says `approved: false`. A
+ * field card, a card with no controls and a card with nothing chosen continue
+ * as an approval; no carried run value and no other staged key decides.
+ */
+export function declaredHitlApprovalFlag(
+  screen: Pick<DeclaredHitlCard, "decisions" | "carry">,
+  staged: Record<string, unknown>,
+): boolean {
+  const picked = declaredHitlChosenDecision(screen, staged);
+  if (picked === null) return true;
+  return (screen.decisions ?? [])[picked]!.answer.approved !== false;
+}
+
 /** Every `requires` key that is not a field holds non-blank run-value text. */
 export function declaredHitlRequiredRunValuesHeld(
   screen: DeclaredHitlCard,
@@ -476,8 +500,10 @@ export function declaredHitlRequiredRunValuesHeld(
 /**
  * May the Continue send this card's answer yet? It reads what the Continue
  * SENDS (the staged answer), never only what is drawn: every `requires` run
- * value holds text, every field holds non-blank STAGED text, and a card with
- * decisions has one chosen. Nothing is chosen for the person.
+ * value holds text, every field holds non-blank STAGED text, a card with
+ * decisions has one chosen, and a card with no controls has its whole answer
+ * (its carried values and `userResponse`) staged. Nothing is chosen for the
+ * person.
  */
 export function declaredHitlScreenReady(
   screen: DeclaredHitlCard,
@@ -485,10 +511,13 @@ export function declaredHitlScreenReady(
   staged: Record<string, unknown>,
 ): boolean {
   if (!declaredHitlRequiredRunValuesHeld(screen, runValue)) return false;
-  for (const k of declaredHitlFieldKeys(screen)) {
+  const fields = declaredHitlFieldKeys(screen);
+  for (const k of fields) {
     if (declaredOwnText(staged, k).trim() === "") return false;
   }
-  if ((screen.decisions ?? []).length === 0) return true;
+  if ((screen.decisions ?? []).length === 0) {
+    return fields.length > 0 || typeof declaredOwnValue(staged, "userResponse") === "string";
+  }
   return declaredHitlChosenDecision(screen, staged) !== null;
 }
 
@@ -521,7 +550,7 @@ export function declaredHitlStagedAnswer(
  *   - a card with decisions stages the declared answer the change names
  *     exactly, or keeps the one already chosen; with none chosen it stages
  *     nothing;
- *   - a card with neither has nothing to write.
+ *   - a card with neither stages its carried values alone.
  *
  * The result is always the WHOLE answer (`declaredHitlStagedAnswer`), so a
  * host replaces its buffer with it.
@@ -545,7 +574,7 @@ export function declaredHitlStage(
     return declaredHitlStagedAnswer(screen, runValue, answer);
   }
   const decisions = screen.decisions ?? [];
-  if (decisions.length === 0) return { ...staged };
+  if (decisions.length === 0) return declaredHitlStagedAnswer(screen, runValue, {});
   const picked = declaredHitlChosenDecision(screen, change) ?? declaredHitlChosenDecision(screen, staged);
   if (picked === null) return {};
   return declaredHitlStagedAnswer(screen, runValue, { ...decisions[picked]!.answer });
@@ -649,16 +678,18 @@ export function describeDeclaredHitlRows(
 
 /**
  * What the Continue sends for a declared card: the staged whole answer, its
- * approval flag (a staged decline stays a decline), the time, and the
- * attachment envelope over its `userResponse`. Never the raw gate values.
+ * approval flag (the chosen decision's, `declaredHitlApprovalFlag`), the
+ * time, and the attachment envelope over its `userResponse`. Never the raw
+ * gate values.
  */
 export function declaredHitlContinuePayload(
+  screen: DeclaredHitlCard,
   staged: Record<string, unknown>,
   attachments: ReadonlyArray<LlmAttachmentRef>,
   now: string = new Date().toISOString(),
 ): Record<string, unknown> {
   return applyAttachmentEnvelopeUserResponseOnly(
-    { ...staged, approved: continueApprovalFlag(staged), approvedAt: now },
+    { ...staged, approved: declaredHitlApprovalFlag(screen, staged), approvedAt: now },
     attachments,
   );
 }
