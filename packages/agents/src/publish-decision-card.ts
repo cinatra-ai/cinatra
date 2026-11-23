@@ -34,6 +34,9 @@ export const PUBLISH_ROW_COLUMNS_MAX = 4;
 export const PUBLISH_LIST_ROW_ITEMS_MAX = 50;
 export const PUBLISH_ROW_LABEL_MAX = 60;
 export const PUBLISH_ROW_FIELD_MAX = 64;
+/** The longest input name a row may show: the publish decision store freezes no declaration past it, so the compiler
+ *  refuses it too and a compiled row is always one the store keeps. */
+export const PUBLISH_ROW_INPUT_MAX = 256;
 
 const ONE_LINE = /[\p{Cc}\u2028\u2029]/u;
 /** A row or column label: one line of 1 to 60 characters with no leading or trailing space. */

@@ -61,6 +61,7 @@ import { readKeyList } from "./gate-keys-not-from-run-inputs";
 import {
   PUBLISH_ROW_COLUMNS_MAX,
   PUBLISH_ROW_FIELD_MAX,
+  PUBLISH_ROW_INPUT_MAX,
   PUBLISH_ROW_LABEL_MAX,
   PUBLISH_ROWS_MAX,
   isPublishRowField,
@@ -1699,6 +1700,11 @@ export function collectPublishRows(
       }
       if (typeof input !== "string" || !titles.has(input)) {
         return { ok: false, error: `PUBLISH_ROWS_UNKNOWN_INPUT: ${where}.input does not name an input of the node` };
+      }
+      // The decision store freezes no declaration whose input is longer, so such a row would compile and then lose its
+      // frozen rows at dispatch; it is refused here, under the store's own bound.
+      if (input.length > PUBLISH_ROW_INPUT_MAX) {
+        return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where}.input must name an input of at most ${PUBLISH_ROW_INPUT_MAX} characters` };
       }
       if (out.some((r) => r.input === input)) {
         return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where}.input repeats an input another row shows` };

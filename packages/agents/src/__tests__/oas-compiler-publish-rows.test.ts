@@ -16,7 +16,7 @@ import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import * as compiler from "../oas-compiler";
-import { publishRowKind, type PublishListRowDeclaration } from "../publish-decision-card";
+import { PUBLISH_ROW_INPUT_MAX, publishRowKind, type PublishListRowDeclaration } from "../publish-decision-card";
 
 type Node = Record<string, unknown>;
 // The compiler's own result type (text and list rows, readonly), never a narrower stand-in.
@@ -284,6 +284,37 @@ describe("cinatra#4150 W4 — four rows, the text kind and the list row", () => 
 
     it("a text row over a long input still compiles: it carries no ref", () => {
       const name = "p".repeat(129);
+      expect(withInput(name, { label: "Long", input: name })).toMatchObject({ ok: true });
+    });
+  });
+
+  // The decision store freezes a step's declared rows at dispatch and keeps none whose input is past its bound, so a
+  // row the compiler accepted over a longer input would lose its frozen declaration and the card would read the
+  // current template instead. The compiler refuses every row kind past the store's own bound.
+  describe("a row over an input longer than the decision store keeps", () => {
+    const withInput = (title: string, row: Record<string, unknown>) =>
+      collect(
+        flowWith({ publish: publishNode({ publishes: true, publishRows: [row] }, { inputs: [...INPUTS, { title, type: "array" }] }) }),
+        ["publish"],
+      );
+    const PAST_STORE = /^PUBLISH_ROWS_MALFORMED: node "publish" metadata\.cinatra\.publishRows\[0\]\.input must name an input of at most 256 characters$/;
+    const long = "p".repeat(257);
+
+    it("the bound is 256 characters (the store reads the same constant)", () => {
+      expect(PUBLISH_ROW_INPUT_MAX).toBe(256);
+    });
+
+    // red-first-expect: expected { ok: true, …(1) } to deeply equal { ok: false, error: StringMatching{…} }
+    it("a text row over a 257-character input is refused", () => {
+      expect(withInput(long, { label: "Long", input: long })).toEqual({ ok: false, error: expect.stringMatching(PAST_STORE) });
+    });
+
+    it("a list row over a 257-character input is refused", () => {
+      expect(withInput(long, { ...LIST, input: long })).toEqual({ ok: false, error: expect.stringMatching(PAST_STORE) });
+    });
+
+    it("a text row over a 256-character input compiles", () => {
+      const name = "p".repeat(256);
       expect(withInput(name, { label: "Long", input: name })).toMatchObject({ ok: true });
     });
   });

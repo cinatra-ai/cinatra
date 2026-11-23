@@ -14,7 +14,7 @@ import { types } from "node:util";
 import { and, asc, desc, eq, getTableColumns, gt, inArray, lte, sql } from "drizzle-orm";
 
 import { db } from "./db";
-import { isPublishRowDeclaration, type PublishRowDeclaration } from "./publish-decision-card";
+import { isPublishRowDeclaration, PUBLISH_ROW_INPUT_MAX, type PublishRowDeclaration } from "./publish-decision-card";
 import { agentRunPublishDecisions, agentRuns } from "./schema";
 
 /** A decision of the run's current attempt: its run_generation equals the run's reset_generation, read in the same
@@ -36,7 +36,7 @@ export const PUBLISH_DECISION_MAX_NOTE_LENGTH = 2000;
 export const PUBLISH_DECISION_MAX_SURFACED_BYTES = 64 * 1024;
 /** The most rows one declaration may hold, and the longest label or input name in one. */
 export const PUBLISH_DECISION_MAX_DECLARED_ROWS = 32;
-export const PUBLISH_DECISION_MAX_DECLARED_TEXT = 256;
+export const PUBLISH_DECISION_MAX_DECLARED_TEXT = PUBLISH_ROW_INPUT_MAX;
 
 /** One row the template declared for a publishing node: the pack's label over one of the node's inputs, in one of the
  *  shapes the compiler writes (a text row, a list row with its columns, or an artifacts row; publish-decision-card.ts). */
