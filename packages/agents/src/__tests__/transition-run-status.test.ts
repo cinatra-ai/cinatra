@@ -482,6 +482,54 @@ describe("failed→pending_input: the reset generation (cinatra#4150)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// cinatra#4762: an edge of one attempt names that attempt's reset generation; the CAS lands only while the run is still
+// at it, so a callback of an attempt a retry's reset ended writes nothing on the next attempt's row. The reset itself
+// writes the generation and nothing else that bounds an attempt.
+// ---------------------------------------------------------------------------
+describe("an edge fenced to its attempt's reset generation (cinatra#4762)", () => {
+  const sqlOf = async (w: unknown) => {
+    const { PgDialect } = await import("drizzle-orm/pg-core");
+    return new PgDialect().sqlToQuery(w as import("drizzle-orm").SQL);
+  };
+
+  // red-first-expect: expected '("cinatra"."agent_runs"."id" = $1 and…' to match /"agent_runs"\."reset_generation" = \$…/
+  it("the CAS lands only at the named generation, and the generation never reaches the meta write", async () => {
+    await transitionRunStatus(RUN, "running", "stopped", { error: "no review", completedAt: new Date(), attemptGeneration: 2 }, SESSION);
+    const cas = await sqlOf(shared.wheres[0]);
+    expect(cas.sql).toMatch(/"agent_runs"\."reset_generation" = \$\d+/);
+    expect(cas.params).toEqual(expect.arrayContaining([RUN, "running", ORG, 2]));
+    expect(shared.setPayloads.some((p) => Object.prototype.hasOwnProperty.call(p, "attemptGeneration"))).toBe(false);
+  });
+
+  it("a lost fenced edge (a reset moved the run on) writes nothing", async () => {
+    shared.returningRows = [[]];
+    await expect(
+      transitionRunStatus(RUN, "running", "stopped", { completedAt: new Date(), attemptGeneration: 0 }, SESSION),
+    ).rejects.toMatchObject({ code: "stale_from_status" });
+    expect(shared.updateCalls).toBe(1);
+  });
+
+  it("the generation must be a safe integer >= 0, and is not legal on the reset: refused before any write", async () => {
+    for (const [from, to, meta] of [
+      ["running", "stopped", { attemptGeneration: -1 }],
+      ["running", "stopped", { attemptGeneration: 0.5 }],
+      ["failed", "pending_input", { resetGeneration: 0, attemptGeneration: 0 }],
+    ] as const) {
+      await expect(
+        transitionRunStatus(RUN, from as AgentRunStatus, to as AgentRunStatus, meta as never, SESSION),
+      ).rejects.toMatchObject({ name: "RunTransitionError", code: "illegal_transition" });
+    }
+    expect(shared.updateCalls).toBe(0);
+  });
+
+  it("the reset raises the generation and leaves the start stamp to the dispatch", async () => {
+    await transitionRunStatus(RUN, "failed", "pending_input", { resetGeneration: 1 }, SESSION);
+    expect(shared.setPayloads[0]).toMatchObject({ resetGeneration: 2 });
+    expect(Object.prototype.hasOwnProperty.call(shared.setPayloads[0], "startedAt")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Source-scan guard (codex-adopted): every queued→running transition CALL in the
 // tree supplies dispatch fields, so `running` rows never carry a stale attempt.
 // ---------------------------------------------------------------------------

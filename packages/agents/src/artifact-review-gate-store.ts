@@ -256,6 +256,10 @@ export async function emitArtifactReviewGate(input: {
       status: "pending",
       pinnedTargets: pinned,
       expiresAt: input.expiresAt ?? null,
+      // cinatra#4762: the attempt the gate belongs to, read from the run row in this statement (the decision park's
+      // rule): the run's reset_generation while it executes (running or pending_approval), else -1. A retry's reset
+      // raises the generation once, and nothing else writes it, so a review of an ended attempt never counts again.
+      runGeneration: sql`coalesce((select live_run.reset_generation from ${agentRuns} live_run where live_run.id = ${input.runId} and live_run.status in ('running', 'pending_approval')), -1)`,
     })
     // One gate per (run, task) — the run_task_uniq index.
     .onConflictDoNothing({
@@ -342,6 +346,9 @@ export interface ReviewGateRow {
   resolvedBy: string | null;
   resolvedAt: Date | null;
   createdAt: Date;
+  /** cinatra#4762 — the run's reset_generation when the gate was raised (-1: the run was not executing); null for a
+   *  gate raised before the column existed. Set by `listReviewGatesForRun`. */
+  runGeneration?: number | null;
   /** cinatra#4312 — `created_at` in microseconds since the epoch, as decimal text,
    * signed before 1970 (`createdAtMicrosSql`); set by `listReviewGatesForRun`. */
   createdAtMicros?: string;
@@ -425,6 +432,7 @@ export async function listReviewGatesForRun(runId: string, executor: GateStoreEx
     resolvedAt: row.resolvedAt,
     createdAt: row.createdAt,
     createdAtMicros: row.createdAtMicros,
+    runGeneration: row.runGeneration,
   }));
 }
 

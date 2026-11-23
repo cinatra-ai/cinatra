@@ -98,7 +98,7 @@ const SURFACED = { what: "the post" };
 const STARTED = new Date("2026-11-20T10:00:00Z");
 const REASON = "No approved review came before this change outside Cinatra.";
 
-type Review = { status: string; disposition: string | null; createdAt: Date; resolvedBy?: string | null };
+type Review = { status: string; disposition: string | null; createdAt: Date; resolvedBy?: string | null; runGeneration?: number | null };
 const listReviews = vi.fn(async (_runId: string) => [] as Review[]);
 
 function sign(node: string) {
@@ -135,17 +135,18 @@ function pausedTask() {
   };
 }
 
-/** The run reaches its publish gate; the run the store answers is the run of this attempt. */
-async function reachPublishGate(stored: AgentRunRecord = makeRun()) {
+/** The run reaches its publish gate. `stored` is the run row as the store answers it now; `held` is the record the
+ *  attempt's executor read for its attempt (read before the dispatch stamped the start, so it carries none). */
+async function reachPublishGate(stored: AgentRunRecord = makeRun(), held: AgentRunRecord = makeRun({ startedAt: null, resetGeneration: stored.resetGeneration })) {
   storeMock.readAgentRunById.mockResolvedValue(stored);
-  // The record the executor holds was read before the dispatch stamped the start, so it carries none.
-  const held = makeRun({ startedAt: null });
   await handleWayflowTaskState({ authority: AUTHORITY, runId: held.id, run: held, fromStatus: "running", task: pausedTask() });
 }
 
 const at = (minutes: number) => new Date(STARTED.getTime() + minutes * 60_000);
-const approved = (minutes: number, resolvedBy = "user-reviewer"): Review =>
-  ({ status: "resolved", disposition: "approve", createdAt: at(minutes), resolvedBy });
+const approved = (minutes: number, resolvedBy = "user-reviewer", runGeneration: number | null = 0): Review =>
+  ({ status: "resolved", disposition: "approve", createdAt: at(minutes), resolvedBy, runGeneration });
+const changesRequested = (minutes: number, runGeneration: number | null = 0): Review =>
+  ({ status: "resolved", disposition: "changes_requested", createdAt: at(minutes), runGeneration });
 
 const transitions = () =>
   (storeMock.transitionRunStatus.mock.calls as unknown as Array<[string, string, string, { error?: string; completedAt?: Date } | undefined]>)
@@ -231,19 +232,91 @@ describe("a publish card opens only after an approved review earlier in the same
   });
 
   it("a review approved in an EARLIER attempt, before a retry's reset, does not count", async () => {
-    // The reset cleared the start stamp; this attempt's dispatch stamped STARTED. The approval predates it.
-    listReviews.mockResolvedValue([approved(-30)]);
+    // The retry's reset raised the generation to 1; the approval was raised in generation 0.
+    listReviews.mockResolvedValue([approved(-30, "user-reviewer", 0)]);
     await reachPublishGate(makeRun({ resetGeneration: 1 }));
-    expectStoppedWithoutWriting();
-    // A reset run with no start stamp of its attempt has no review of that attempt.
-    vi.clearAllMocks();
-    listReviews.mockResolvedValue([approved(-30), approved(5)]);
-    await reachPublishGate(makeRun({ resetGeneration: 1, startedAt: null }));
     expectStoppedWithoutWriting();
     // The same approval made again in this attempt opens the card.
     vi.clearAllMocks();
-    listReviews.mockResolvedValue([approved(-30), approved(5)]);
+    listReviews.mockResolvedValue([approved(-30, "user-reviewer", 0), approved(5, "user-reviewer", 1)]);
     await reachPublishGate(makeRun({ resetGeneration: 1 }));
+    expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
+    // A review raised while the run was not executing (generation -1) belongs to no attempt.
+    vi.clearAllMocks();
+    listReviews.mockResolvedValue([approved(5, "user-reviewer", -1)]);
+    await reachPublishGate();
+    expectStoppedWithoutWriting();
+    // A review raised before the column existed reads as generation 0: it counts for a run never reset only.
+    vi.clearAllMocks();
+    listReviews.mockResolvedValue([approved(5, "user-reviewer", null)]);
+    await reachPublishGate();
+    expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
+    vi.clearAllMocks();
+    await reachPublishGate(makeRun({ resetGeneration: 1 }));
+    expectStoppedWithoutWriting();
+  });
+
+  it("a retry whose start stamp a later cleanup cleared still counts its own approved review", async () => {
+    // The reset raised the generation to 1; the retry's dispatch stamped its start and a cleanup cleared it again, so
+    // the run row carries no start stamp. The review this attempt approved still opens the card.
+    listReviews.mockResolvedValue([approved(-30, "user-reviewer", 0), approved(5, "user-reviewer", 1)]);
+    await reachPublishGate(makeRun({ resetGeneration: 1, startedAt: null }));
+    expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
+    expect(decisions.insertParkedDecision).toHaveBeenCalledTimes(1);
+  });
+
+  // red-first-expect: expected [ { to: 'pending_approval', …(1) } ] to deeply equal []
+  it("a callback of an attempt a retry ended moves nothing on the newer attempt's row", async () => {
+    // The run row is at generation 1 (retry B runs); the store's compare-and-set lands only at that generation, as
+    // transitionRunStatus does, and a move that names no attempt lands on whatever attempt the row holds.
+    const landed: Array<{ to: string; error?: string }> = [];
+    storeMock.transitionRunStatus.mockImplementation((async (...args: unknown[]) => {
+      const [, , to, patch] = args as [string, string, string, { attemptGeneration?: number; error?: string } | undefined];
+      if (patch?.attemptGeneration !== undefined && patch.attemptGeneration !== 1) {
+        throw new storeMock.RunTransitionError("stale_from_status", "the run moved on");
+      }
+      landed.push({ to, error: patch?.error });
+    }) as never);
+    // Attempt A (generation 0) answers late: with no review of B, or with A's own approved review, it writes nothing.
+    for (const reviews of [[], [approved(-30, "user-reviewer", 0)]]) {
+      vi.clearAllMocks();
+      listReviews.mockResolvedValue(reviews);
+      await reachPublishGate(makeRun({ resetGeneration: 1 }), makeRun({ startedAt: null, resetGeneration: 0 }));
+      expect(landed).toEqual([]);
+      expect(onInterruptSpy).not.toHaveBeenCalled();
+    }
+    // Every move this gate makes names the attempt that reached it.
+    const named = (storeMock.transitionRunStatus.mock.calls as unknown as Array<[string, string, string, { attemptGeneration?: number }]>)
+      .map(([, , , patch]) => patch?.attemptGeneration);
+    expect(named.length).toBeGreaterThan(0);
+    expect(named.every((g) => g === 0)).toBe(true);
+    // B's own callback, at generation 1 with B's approved review, still lands.
+    vi.clearAllMocks();
+    listReviews.mockResolvedValue([approved(5, "user-reviewer", 1)]);
+    await reachPublishGate(makeRun({ resetGeneration: 1 }));
+    expect(landed).toEqual([{ to: "pending_approval", error: undefined }]);
+  });
+
+  // red-first-expect: expected [ { from: 'running', …(2) } ] to deeply equal [ { from: 'running', …(2) } ]
+  it("reviews raised in one transaction (one created_at) resolve the same in any row order", async () => {
+    // A family member settled changes requested beside an approved sibling: no approval came after it, in either order.
+    for (const reviews of [[changesRequested(5), approved(5)], [approved(5), changesRequested(5)]]) {
+      vi.clearAllMocks();
+      listReviews.mockResolvedValue(reviews);
+      await reachPublishGate();
+      expectStoppedWithoutWriting();
+    }
+    // Its successor, raised after it and approved, opens the card in any order.
+    for (const reviews of [[changesRequested(5), approved(5), approved(9)], [approved(9), approved(5), changesRequested(5)]]) {
+      vi.clearAllMocks();
+      listReviews.mockResolvedValue(reviews);
+      await reachPublishGate();
+      expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
+    }
+    // Two approved members of one family open it too.
+    vi.clearAllMocks();
+    listReviews.mockResolvedValue([approved(5), approved(5)]);
+    await reachPublishGate();
     expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
   });
 
@@ -260,6 +333,5 @@ describe("a publish card opens only after an approved review earlier in the same
     expect(listReviews).toHaveBeenCalledWith("run-4762");
     expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
     // Who reviewed is never compared with who decides: the run's owner, the reviewer and the decider are three people.
-    expect(storeMock.readAgentRunById).toHaveBeenCalledWith("run-4762");
   });
 });

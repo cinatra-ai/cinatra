@@ -27,7 +27,10 @@ const storage = vi.hoisted(() => {
     },
     insert() {
       return {
-        values(row: StoredGate) {
+        values(input: StoredGate & { runGeneration?: unknown }) {
+          // The run generation is an SQL expression the database evaluates from the run row; this store keeps none.
+          const row: StoredGate & { runGeneration?: unknown } = { ...input };
+          delete row.runGeneration;
           readIdentity = row;
           inserts.push(row);
           return {

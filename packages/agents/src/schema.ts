@@ -712,6 +712,10 @@ export const artifactReviewGates = cinatraSchema.table("artifact_review_gates", 
   // Added additively by artifact-review-gate-schema.ts + core__0079.
   expiresAt:     timestamp("expires_at", { withTimezone: true }),
   reopenCount:   integer("reopen_count").notNull().default(0),
+  // cinatra#4762 (core__0134): the run's reset_generation when the gate was raised, read from the run row in the
+  // insert; -1 when the run was not executing then (no attempt of its own). A publish gate counts only the reviews of
+  // its own attempt. null = raised by code older than the column, read as generation 0.
+  runGeneration: integer("run_generation"),
 }, (t) => ({
   // One gate per (run, task) — makes emit idempotent + is the pending anchor.
   runTaskUniq: uniqueIndex("artifact_review_gates_run_task_uniq").on(t.runId, t.reviewTaskId),

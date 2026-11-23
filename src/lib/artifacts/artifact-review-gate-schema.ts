@@ -449,6 +449,8 @@ export function lifecycleInterceptionsSchemaQueries(schemaName: string): QueryIn
     // -----------------------------------------------------------------------
     { text: `ALTER TABLE "${q}"."artifact_review_gates" ADD COLUMN IF NOT EXISTS expires_at timestamptz` },
     { text: `ALTER TABLE "${q}"."artifact_review_gates" ADD COLUMN IF NOT EXISTS reopen_count integer NOT NULL DEFAULT 0` },
+    // cinatra#4762 (core__0134): the run's reset_generation at the gate's raise; nullable, no backfill.
+    { text: `ALTER TABLE "${q}"."artifact_review_gates" ADD COLUMN IF NOT EXISTS run_generation integer` },
     { text: `ALTER TABLE "${q}"."artifact_review_resume_outbox" ADD COLUMN IF NOT EXISTS max_attempts integer NOT NULL DEFAULT 20` },
     { text: `ALTER TABLE "${q}"."artifact_review_resume_outbox" ADD COLUMN IF NOT EXISTS dead_lettered_at timestamptz` },
     { text: `ALTER TABLE "${q}"."artifact_review_resume_outbox" ADD COLUMN IF NOT EXISTS last_error text` },

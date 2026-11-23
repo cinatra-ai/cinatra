@@ -47,6 +47,11 @@ function park(overrides: Record<string, unknown> = {}) {
   } as Parameters<typeof store.insertParkedDecision>[0];
 }
 
+/** cinatra#4762: a settled review gate's columns, as the store's decision writes them. */
+function resolvedGate(disposition: string) {
+  return { status: "resolved", disposition, fingerprint: `fp-${randomUUID()}`, resolved_at: new Date() };
+}
+
 beforeAll(async () => {
   if (!HAS_DB) return;
   process.env.SUPABASE_SCHEMA = TEST_SCHEMA;
@@ -75,6 +80,21 @@ afterAll(async () => {
     admin,
     dropSchemaSql: `DROP SCHEMA IF EXISTS "${q(TEST_SCHEMA)}" CASCADE`,
     priorSchema: PRIOR_SCHEMA,
+  });
+});
+
+describe("cinatra#4762: the review gate fixture", () => {
+  it("a settled gate carries every column the store's resolved check requires", async () => {
+    const { artifactReviewGateSchemaQueries } = await import("@/lib/artifacts/artifact-review-gate-schema");
+    const ddl = artifactReviewGateSchemaQueries("s").map((x) => x.text).join("\n");
+    const check = /CONSTRAINT artifact_review_gates_resolved_chk CHECK \(([\s\S]*?)\n\s*\)/.exec(ddl)?.[1] ?? "";
+    const required = [...check.matchAll(/(\w+) IS NOT NULL/g)].map((m) => m[1]);
+    expect(required).toEqual(["fingerprint", "resolved_at"]);
+    for (const disposition of ["approve", "reject", "changes_requested"]) {
+      const row = resolvedGate(disposition) as Record<string, unknown>;
+      expect(check).toContain(`'${disposition}'`);
+      for (const column of required) expect(row[column] ?? null, column).not.toBeNull();
+    }
   });
 });
 
@@ -413,37 +433,56 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     expect(await rowOf(next.id)).toMatchObject({ status: "run_ended", run_generation: 1 });
   });
 
-  it("cinatra#4762: a reset clears the start stamp in its compare-and-set, so only the next attempt's reviews count", async () => {
+  it("cinatra#4762: a review counts only for the attempt it was raised in, whatever happens to the start stamp", async () => {
     const { bindArtifactReviewGateSeam } = await import("../artifact-review-gate-seam");
+    const { emitArtifactReviewGate } = await import("../artifact-review-gate-store");
     const { approvedReviewPrecedes } = await import("../publish-decision-actions");
     bindArtifactReviewGateSeam();
     const GATES = `"${q(TEST_SCHEMA)}"."artifact_review_gates"`;
-    const review = (runId: string, disposition: string | null, at: string) => admin.query(
-      `INSERT INTO ${GATES} (id, run_id, org_id, review_task_id, status, pinned_targets, disposition, created_at)
-       VALUES ($1, $2, $3, $4, $5, '[]'::jsonb, $6, ${at})`,
-      [`gate-${randomUUID()}`, runId, ORG, `review-${randomUUID()}`, disposition ? "resolved" : "pending", disposition],
-    );
+    /** A review raised by the real emitter (which records the run's generation), then settled as the store settles it. */
+    const review = async (runId: string, disposition: string | null) => {
+      const reviewTaskId = `review-${randomUUID()}`;
+      const { gateId } = await emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId,
+        targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }] });
+      if (disposition) {
+        const settled = resolvedGate(disposition);
+        await admin.query(`UPDATE ${GATES} SET status = $2, disposition = $3, fingerprint = $4, resolved_at = now() WHERE id = $1`,
+          [gateId, settled.status, settled.disposition, settled.fingerprint]);
+      }
+      return gateId;
+    };
     const runId = await seedRun(`run-${randomUUID()}`, "running");
-    await admin.query(`UPDATE ${RUNS_TABLE} SET started_at = now() - interval '2 hours' WHERE id = $1`, [runId]);
-    // The first attempt: no review yet, then an approved one.
-    expect(await approvedReviewPrecedes(runId)).toBe(false);
-    await review(runId, "approve", "now() - interval '1 hour'");
-    expect(await approvedReviewPrecedes(runId)).toBe(true);
-    // The attempt fails and is reset: the reset itself clears the stamp, with no later write.
+    // The first attempt: no review yet, then an approved one, recorded at generation 0.
+    expect(await approvedReviewPrecedes(runId, 0)).toBe(false);
+    const first = await review(runId, "approve");
+    expect((await admin.query(`SELECT run_generation FROM ${GATES} WHERE id = $1`, [first])).rows[0]).toEqual({ run_generation: 0 });
+    expect(await approvedReviewPrecedes(runId, 0)).toBe(true);
+    // The attempt fails and is reset: generation 1. The reset leaves the start stamp to the dispatch.
     await setRun(runId, "failed");
     await reset(runId, 0);
-    expect((await admin.query(`SELECT started_at, reset_generation FROM ${RUNS_TABLE} WHERE id = $1`, [runId])).rows[0])
-      .toEqual({ started_at: null, reset_generation: 1 });
-    // The retry's dispatch stamps its start: the earlier attempt's approval no longer counts.
-    await admin.query(`UPDATE ${RUNS_TABLE} SET status = 'running', started_at = now() - interval '1 minute' WHERE id = $1`, [runId]);
-    expect(await approvedReviewPrecedes(runId)).toBe(false);
-    // A declined review of this attempt never counts; an approved one after it does not undo the decline.
-    await review(runId, "reject", "now() - interval '30 seconds'");
-    await review(runId, "approve", "now()");
-    expect(await approvedReviewPrecedes(runId)).toBe(false);
-    const fresh = await seedRun(`run-${randomUUID()}`, "running");
-    await review(fresh, "approve", "now()");
-    expect(await approvedReviewPrecedes(fresh)).toBe(true);
+    expect(await genOf(runId)).toEqual({ status: "pending_input", reset_generation: 1 });
+    // The retry runs; a cleanup clears its start stamp. The earlier attempt's approval does not count for it.
+    await admin.query(`UPDATE ${RUNS_TABLE} SET status = 'running', started_at = NULL WHERE id = $1`, [runId]);
+    expect(await approvedReviewPrecedes(runId, 1)).toBe(false);
+    // Its own approved review counts, with no start stamp at all.
+    await review(runId, "approve");
+    expect(await approvedReviewPrecedes(runId, 1)).toBe(true);
+    // A gate raised while the run is not executing belongs to no attempt.
+    const idle = await seedRun(`run-${randomUUID()}`, "pending_input");
+    const stray = await review(idle, "approve");
+    expect((await admin.query(`SELECT run_generation FROM ${GATES} WHERE id = $1`, [stray])).rows[0]).toEqual({ run_generation: -1 });
+    expect(await approvedReviewPrecedes(idle, 0)).toBe(false);
+  });
+
+  it("cinatra#4762: a move of an attempt a retry ended lands nothing on the next attempt's row", async () => {
+    const runId = await seedRun(`run-${randomUUID()}`, "running");
+    await admin.query(`UPDATE ${RUNS_TABLE} SET reset_generation = 1 WHERE id = $1`, [runId]);
+    const authority = { orgId: ORG, can: () => true } as never;
+    await expect(transitions.transitionRunStatus(runId, "running", "stopped", { completedAt: new Date(), attemptGeneration: 0 }, authority))
+      .rejects.toMatchObject({ code: "stale_from_status" });
+    expect(await genOf(runId)).toEqual({ status: "running", reset_generation: 1 });
+    await transitions.transitionRunStatus(runId, "running", "stopped", { completedAt: new Date(), attemptGeneration: 1 }, authority);
+    expect(await genOf(runId)).toEqual({ status: "stopped", reset_generation: 1 });
   });
 
   it("round 21, finding 1: a row an old node parks with no generation after a reset holds, and the next reset ends it", async () => {

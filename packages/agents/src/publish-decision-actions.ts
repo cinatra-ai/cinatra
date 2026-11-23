@@ -137,7 +137,8 @@ function surfacedValuesOf(task: GateTask): Record<string, unknown> {
   return {};
 }
 
-/** Moves the run `from` -> `to`; false when a stale answer shows the run already left `from`. */
+/** Moves the run `from` -> `to`; false when a stale answer shows the run already left `from`, or (with `attemptGeneration`)
+ *  a retry's reset ended the attempt the move belongs to. */
 async function moveRun(runId: string, from: AgentRunStatus, to: AgentRunStatus, patch: Parameters<typeof transitionRunStatus>[3], authority: OrgWriteAuthority): Promise<boolean> {
   try {
     await transitionRunStatus(runId, from, to, patch, authority);
@@ -163,32 +164,31 @@ const opaque = (err: unknown): unknown => err instanceof AuthzError || STORE_COD
 /** What a run records when it reaches an external write with no approved review before it (design §XV). */
 export const PUBLISH_REVIEW_MISSING_REASON = "No approved review came before this change outside Cinatra.";
 
-/** One review of a run, oldest first, as the gate seam's listReviews answers it. */
-type ReviewOfRun = { status: string; disposition: string | null; createdAt: Date };
+/** One review of a run, as the gate seam's listReviews answers it. */
+type ReviewOfRun = { status: string; disposition: string | null; createdAt: Date; runGeneration: number | null };
 
 /**
- * cinatra#4762 (design app-lifecycle-cards §XV): did an approved review card (§II) come earlier in the run's CURRENT
- * attempt? A run never reset has one attempt, so each of its reviews counts. After a retry's reset, only reviews made
- * at or after the run's start stamp count: the reset clears started_at in its compare-and-set and the next dispatch
- * stamps it again, so a review of an attempt a reset ended never counts, and a reset run with no stamp has none.
- * Approved: no review of the attempt is still open or declined, and the newest one settled continued, so a review
- * settled changes requested or superseded counts only through an approved review after it. Who reviewed is not read:
- * the reviewer and the person who answers the publish card may differ. A read error propagates.
+ * cinatra#4762 (design app-lifecycle-cards §XV): did an approved review card (§II) come earlier in the attempt that
+ * reached the publish gate? The attempt is the run's reset generation the caller holds: a retry's reset raises it once
+ * in its compare-and-set and nothing else writes it, and each review gate records the generation of the run when it
+ * was raised (a gate raised before the column existed reads as generation 0). So a review of an attempt a reset ended
+ * never counts, whatever later writes do to the run's start stamp.
+ * Approved, as a set and not by row order (a declared review family is raised in one transaction, so its members share
+ * one created_at): the attempt has an approved review, none is still open or declined, and each review settled changes
+ * requested has an approved review raised strictly after it (its successor; a sibling of the same family never is).
+ * Who reviewed is not read: the reviewer and the person who answers the publish card may differ. A read error propagates.
  */
-export async function approvedReviewPrecedes(runId: string): Promise<boolean> {
-  const current = await readAgentRunById(runId);
-  if (!current) return false;
-  const reset = (current.resetGeneration ?? 0) > 0;
-  const start = current.startedAt;
-  if (reset && !(start instanceof Date)) return false;
+export async function approvedReviewPrecedes(runId: string, generation: number): Promise<boolean> {
   // The review store is reached through the boot-bound gate seam, as the run executor reaches it (execution.ts): never
   // imported here, so no route's graph grows. An unbound seam is a read error.
   const seam = (globalThis as { __cinatraArtifactReviewGateSeam?: { listReviews?: (runId: string) => Promise<ReviewOfRun[]> } })
     .__cinatraArtifactReviewGateSeam;
   if (typeof seam?.listReviews !== "function") throw new Error("the review store is not bound");
-  const reviews = (await seam.listReviews(runId)).filter((g) => !reset || g.createdAt.getTime() >= (start as Date).getTime());
-  if (reviews.some((g) => g.status !== "resolved" || g.disposition === "reject")) return false;
-  return reviews.at(-1)?.disposition === "approve";
+  const reviews = (await seam.listReviews(runId)).filter((g) => (g.runGeneration ?? 0) === generation);
+  const approvedAt = reviews.filter((g) => g.status === "resolved" && g.disposition === "approve").map((g) => g.createdAt.getTime());
+  if (approvedAt.length === 0) return false;
+  return reviews.every((g) => g.status === "resolved" && (g.disposition === "approve" ||
+    (g.disposition === "changes_requested" && approvedAt.some((at) => at > g.createdAt.getTime()))));
 }
 
 /**
@@ -197,8 +197,10 @@ export async function approvedReviewPrecedes(runId: string): Promise<boolean> {
  *   - a verified `cinatra_publish_gate__<node>` claim (the prefix wins over the template's
  *     list): the row is written FIRST (a failure ends the run failed), then the run moves to
  *     pending_approval; a lost move closes the row run_ended;
- *   - before the park, the run's current attempt must hold an approved review (approvedReviewPrecedes): with none,
- *     the run ends stopped with PUBLISH_REVIEW_MISSING_REASON and no row is written (cinatra#4762);
+ *   - before the park, the attempt that reached the gate must hold an approved review (approvedReviewPrecedes): with
+ *     none, the run ends stopped with PUBLISH_REVIEW_MISSING_REASON and no row is written (cinatra#4762);
+ *   - every move of the run here carries the reset generation of the attempt that reached the gate (attemptGeneration):
+ *     a callback of an attempt a retry's reset ended moves nothing on the next attempt's row (cinatra#4762);
  *   - a missing or unverified claim on a template that lists publishing steps, or an unverified publish-gate claim
  *     on a template that is not found or cannot be read: the run ends failed, publish_gate_unverified.
  * No renderer, no generic review task and no lifecycle moment is offered for a publish gate.
@@ -211,6 +213,8 @@ export async function holdRunAtPublishGate(args: {
   authority: OrgWriteAuthority;
 }): Promise<boolean> {
   const { run, fromStatus, task, claim, authority } = args;
+  // cinatra#4762: the attempt that reached this gate, as the run record its caller read for the attempt names it.
+  const attempt = { attemptGeneration: run.resetGeneration ?? 0 };
   const contextId = task.contextId ?? run.a2aContextId;
   const verified = verifyGateNodeClaim({
     key: process.env.CINATRA_CONTEXT_ATTEST_KEY,
@@ -227,7 +231,7 @@ export async function holdRunAtPublishGate(args: {
     // Not found or unreadable: only a pause that claims a publish gate fails; any other keeps today's road, as on main.
     publishes ??= typeof claim?.node === "string" && claim.node.startsWith(PUBLISH_GATE_NODE_PREFIX);
     if (!publishes) return false;
-    await moveRun(run.id, fromStatus, "failed", { error: `${PUBLISH_GATE_UNVERIFIED}: the pause carries no verified step claim`, completedAt: new Date() }, authority);
+    await moveRun(run.id, fromStatus, "failed", { error: `${PUBLISH_GATE_UNVERIFIED}: the pause carries no verified step claim`, completedAt: new Date(), ...attempt }, authority);
     return true;
   }
   if (!verified.startsWith(PUBLISH_GATE_NODE_PREFIX)) return false;
@@ -238,14 +242,14 @@ export async function holdRunAtPublishGate(args: {
   // the run failed, as an unrecorded decision does.
   let reviewed: boolean;
   try {
-    reviewed = await approvedReviewPrecedes(run.id);
+    reviewed = await approvedReviewPrecedes(run.id, attempt.attemptGeneration);
   } catch (err) {
     console.warn(`[publish-decision] the review before a publish could not be read: ${nameOf(err)}`);
-    await moveRun(run.id, fromStatus, "failed", { error: "publish_review_unread: the review before the publish could not be read", completedAt: new Date() }, authority);
+    await moveRun(run.id, fromStatus, "failed", { error: "publish_review_unread: the review before the publish could not be read", completedAt: new Date(), ...attempt }, authority);
     return true;
   }
   if (!reviewed) {
-    await moveRun(run.id, fromStatus, "stopped", { error: PUBLISH_REVIEW_MISSING_REASON, completedAt: new Date() }, authority);
+    await moveRun(run.id, fromStatus, "stopped", { error: PUBLISH_REVIEW_MISSING_REASON, completedAt: new Date(), ...attempt }, authority);
     return true;
   }
 
@@ -268,14 +272,14 @@ export async function holdRunAtPublishGate(args: {
       throw new Error("superseded");
     }
   } catch {
-    await moveRun(run.id, fromStatus, "failed", { error: "publish_decision_unrecorded: the publish decision could not be recorded", completedAt: new Date() }, authority);
+    await moveRun(run.id, fromStatus, "failed", { error: "publish_decision_unrecorded: the publish decision could not be recorded", completedAt: new Date(), ...attempt }, authority);
     return true;
   }
   // A stop this gate task already answered is closed; the newest-decision rule keeps it closed.
   if (park.decision.status !== "parked" || fromStatus === "pending_approval") return true;
   let moved: boolean;
   try {
-    moved = await moveRun(run.id, fromStatus, "pending_approval", undefined, authority);
+    moved = await moveRun(run.id, fromStatus, "pending_approval", attempt, authority);
   } catch (err) {
     // The dispatch records this attempt failed. A row left parked would read as the open stop of the run's next attempt
     // (a retry), so it is closed run_ended here, as a lost move closes it. A fault on that close does not hide the move's

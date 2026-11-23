@@ -227,7 +227,6 @@ afterAll(() => {
 beforeEach(() => {
   vi.clearAllMocks();
   storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(["publish"]));
-  storeMock.readAgentRunById.mockResolvedValue(makeRun());
   storeMock.transitionRunStatus.mockResolvedValue(undefined);
   decisions.insertParkedDecision.mockResolvedValue({ inserted: true, current: true, decision: parkedRow() });
   decisions.readDispatchedPublishRows.mockReset();
