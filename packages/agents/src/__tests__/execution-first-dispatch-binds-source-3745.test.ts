@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { createHash } from "node:crypto";
 
 /**
  * cinatra#3745 - the canonical first WayFlow dispatch selects the loader's
@@ -372,5 +373,81 @@ describe("cinatra#4762 - the attempt the job dispatches is the one its frame nam
       .mockRejectedValueOnce(new Error("connection terminated"))
       .mockResolvedValue(makeRun({ resetGeneration: 0, status: "running" }));
     expect(await dispatchesOf(true)).toEqual([{ frame: 0, cas: 0 }]);
+  });
+});
+
+// cinatra#4762: a template compiled before the publishing route check is refused where its run is dispatched. The real
+// selection reads the loader's source (a fetch double answers it); a publishing step with a direct external call fails
+// the run with the compiler's fixed text, and nothing is bound or sent.
+describe("cinatra#4762 - a stored template's publishing calls are checked at the first dispatch", () => {
+  const sha = (t: string) => createHash("sha256").update(t).digest("hex");
+  const api = (id: string, url: string) => ({ component_type: "ApiNode", id, name: id, url, http_method: "POST", data: {} });
+  const branch = (node: Record<string, unknown>) => ({ component_type: "Flow", id: `${String(node.id)}_flow`, name: `${String(node.id)}_flow`,
+    start_node: { $component_ref: "s" }, nodes: [{ $component_ref: "s" }, { $component_ref: node.id }],
+    $referenced_components: { s: { component_type: "StartNode", id: "s", name: "s" }, [String(node.id)]: node } });
+  /** The loader's composed source of a pre-upgrade publishing ParallelFlowNode: an artifact branch beside a direct call. */
+  const executed = (directUrl: string, publishes = true) => JSON.stringify({
+    component_type: "Flow", id: "pack", name: "pack", start_node: { $component_ref: "start" },
+    nodes: ["start", "cinatra_publish_gate__publish", "publish", "end"].map((id) => ({ $component_ref: id })),
+    control_flow_connections: [], data_flow_connections: [],
+    $referenced_components: {
+      start: { component_type: "StartNode", id: "start", name: "start" },
+      cinatra_publish_gate__publish: { component_type: "InputMessageNode", id: "cinatra_publish_gate__publish", name: "gate" },
+      publish: { component_type: "ParallelFlowNode", id: "publish", name: "publish",
+        subflows: [branch(api("write_artifact", "{{CINATRA_BASE_URL}}/api/agents/passthrough")), branch(api("direct_post", directUrl))],
+        ...(publishes ? { metadata: { cinatra: { publishes: true } } } : {}) },
+      end: { component_type: "EndNode", id: "end", name: "end" },
+    },
+  });
+
+  let graph = "";
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.stubEnv("WAYFLOW_BASE_URL", "http://wayflow.test");
+    vi.stubEnv("CINATRA_BRIDGE_TOKEN", "bridge-test-value");
+    const { resolveWayflowUrl } = await import("../wayflow-url");
+    vi.mocked(resolveWayflowUrl).mockReturnValue("http://wayflow.test/agents/cinatra/test-agent/");
+    storeMock.readAgentTemplateById.mockResolvedValue({ ...makeTemplate(), publishingSteps: ["publish"] });
+    // Reset, not only cleared: a queued once-answer of an earlier case must not decide this dispatch.
+    storeMock.readAgentRunById.mockReset().mockResolvedValue(makeRun());
+    storeMock.transitionRunStatus.mockReset().mockImplementation(async () => undefined);
+    const { selectWayflowRunStepToolPolicy } = await vi.importActual<typeof import("../agent-run-serde")>("../agent-run-serde");
+    storeMock.selectWayflowRunStepToolPolicy.mockImplementation((input: { agentUrl: string; contextId: string }) =>
+      selectWayflowRunStepToolPolicy(input, (async () => new Response(JSON.stringify({ selectedSourceBinding: {
+        sourceSha256: "a".repeat(64), executedSourceSha256: "b".repeat(64), declarationSourceSha256: sha(graph), declarationSource: graph,
+      } }))) as unknown as typeof fetch));
+  });
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    const { resolveWayflowUrl } = await import("../wayflow-url");
+    vi.mocked(resolveWayflowUrl).mockReturnValue("http://wayflow.test");
+  });
+
+  const failedWith = () => (storeMock.transitionRunStatus.mock.calls as unknown as Array<[string, string, string, { error?: string }]>)
+    .filter(([, from, to]) => from === "running" && to === "failed").map(([, , , patch]) => patch?.error);
+
+  // red-first-expect: expected "vi.fn()" to not be called at all, but actually been called 1 times
+  it("a publishing ParallelFlowNode with a direct external call fails the run with the fixed text, and nothing is bound or sent", async () => {
+    graph = executed("https://api.example.invalid/v2/posts");
+    await run();
+    expect(sendTask).not.toHaveBeenCalled();
+    expect(storeMock.bindRunStepToolPolicy).not.toHaveBeenCalled();
+    expect(failedWith()).toEqual([expect.stringMatching(/^PUBLISH_CALL_UNCHECKED: node "direct_post" of publishing step "publish" calls a URL /)]);
+    expect(failedWith()[0]).not.toContain("example.invalid");
+  });
+
+  it("a stored template whose publishing calls all go to a checked host route starts", async () => {
+    graph = executed("{{CINATRA_BASE_URL}}/api/llm-bridge");
+    await run();
+    expect(storeMock.bindRunStepToolPolicy).toHaveBeenCalledTimes(1);
+    expect(sendTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("a stored template without publishing steps is unaffected", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate());
+    graph = executed("https://api.example.invalid/v2/posts", false);
+    await run();
+    expect(storeMock.bindRunStepToolPolicy).toHaveBeenCalledTimes(1);
+    expect(sendTask).toHaveBeenCalledTimes(1);
   });
 });

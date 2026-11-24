@@ -1817,6 +1817,35 @@ export function checkPublishingCallRoutes(
   return { ok: true };
 }
 
+/** cinatra#4762: checkPublishingCallRoutes on the source a run EXECUTES (the loader's selected declaration source),
+ *  so a template compiled before the route check is refused before its first send, never trusted for having compiled.
+ *  The publishing steps are the source's own: every top-level node whose `metadata.cinatra.publishes` is the boolean
+ *  true, the nodes the loader puts a publish gate in front of. References resolve inside the source only, as the
+ *  runtime resolves them (it has no global registry); one that resolves nowhere refuses. A source that is not a JSON
+ *  object refuses too, since its steps cannot be read. */
+export function checkExecutedPublishingCallRoutes(source: string): { ok: true } | { ok: false; error: string } {
+  let doc: unknown;
+  try {
+    doc = JSON.parse(source);
+  } catch {
+    doc = null;
+  }
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
+    return { ok: false, error: "PUBLISH_CALL_UNCHECKED: the executed source cannot be read, so the calls of its publishing steps cannot be checked" };
+  }
+  const parsed = doc as Record<string, unknown>;
+  const refs = parsed.$referenced_components;
+  const rootRefs = refs && typeof refs === "object" && !Array.isArray(refs) ? (refs as Record<string, unknown>) : {};
+  const steps = (Array.isArray(parsed.nodes) ? parsed.nodes : [])
+    .map((n) => (n && typeof n === "object" ? (n as { $component_ref?: unknown }).$component_ref : undefined))
+    .filter((id): id is string => typeof id === "string" && hasOwn(rootRefs, id))
+    .filter((id) => {
+      const cinatra = ((rootRefs[id] as { metadata?: { cinatra?: unknown } } | null)?.metadata)?.cinatra;
+      return !!cinatra && typeof cinatra === "object" && (cinatra as { publishes?: unknown }).publishes === true;
+    });
+  return checkPublishingCallRoutes(parsed, steps, {});
+}
+
 // ---------------------------------------------------------------------------
 // Main compile entry point
 // ---------------------------------------------------------------------------
