@@ -322,6 +322,8 @@ type HeldArtifactsAddress = {
   fresh: boolean;
   /** The palette a fresh address was last asked for, so a repaint asks once. */
   askedFor: LifecycleColorScheme | null;
+  /** This row already took its one fresh address after a credentialed frame settled empty. */
+  emptyRetried: boolean;
 };
 
 /**
@@ -336,14 +338,30 @@ type HeldArtifactsAddress = {
  *     asked for a retry (the held one may be spent or expired) or the palette changed (a repaint of a spent address
  *     would draw the refusal; the row asks for a fresh read once per palette and keeps the frame until it lands).
  *   - A NEW REF (a new decision, or another row in this place) adopts the live answer at once.
+ *   - A credentialed frame that SETTLED EMPTY adopts the next fresh credential once (see `settledEmpty` below).
  */
 function useHeldArtifactsAddress(
   row: PublishDecisionCardArtifactsRow,
   colorScheme: LifecycleColorScheme | null,
   reread: () => void,
-): { islandSrc: string | null; scheme: LifecycleColorScheme | null; askFresh: () => void } {
-  const live: HeldArtifactsAddress = { ref: row.ref, scheme: colorScheme, islandSrc: row.islandSrc, fresh: false, askedFor: null };
-  const [held, setHeld] = useState<HeldArtifactsAddress>(live);
+): { islandSrc: string | null; scheme: LifecycleColorScheme | null; askFresh: () => void; settledEmpty: () => void } {
+  const [held, setHeld] = useState<HeldArtifactsAddress>(() => ({
+    ref: row.ref,
+    scheme: colorScheme,
+    islandSrc: row.islandSrc,
+    fresh: false,
+    askedFor: null,
+    emptyRetried: false,
+  }));
+  // The one empty retry belongs to the row, so it survives a newer address of the same row and resets for a new ref.
+  const live: HeldArtifactsAddress = {
+    ref: row.ref,
+    scheme: colorScheme,
+    islandSrc: row.islandSrc,
+    fresh: false,
+    askedFor: null,
+    emptyRetried: held.ref === row.ref && held.emptyRetried,
+  };
   const credentialed = (src: string | null) => row.ref !== null && reviewIslandAddressCredential(src, row.ref) !== null;
   let current = held;
   let adopt = false;
@@ -366,7 +384,22 @@ function useHeldArtifactsAddress(
     reread();
   }, [repaintWaits, held.askedFor, colorScheme, reread]);
   const askFresh = useCallback(() => setHeld((h) => ({ ...h, fresh: true })), []);
-  return { islandSrc: current.islandSrc, scheme: current.scheme, askFresh };
+  // A CREDENTIALED FRAME THAT SETTLED EMPTY may only have met its own spent credential: the island spends it before
+  // its later reads, so a refusal after the spend, or a reload of the frame, serves the same empty document as a row
+  // with nothing to show. The row then takes the NEXT fresh address (a focus, a re-read or the tick) and loads once
+  // more on it. It does this once per row: an empty answer on that address is the row's reading, and later reads do not
+  // reload it. A cookie host has no credential to spend, so its empty reading is final at once. The row learns only
+  // that the island is empty, never why.
+  const settledEmpty = useCallback(
+    () =>
+      setHeld((h) =>
+        h.emptyRetried || h.ref === null || reviewIslandAddressCredential(h.islandSrc, h.ref) === null
+          ? h
+          : { ...h, fresh: true, emptyRetried: true },
+      ),
+    [],
+  );
+  return { islandSrc: current.islandSrc, scheme: current.scheme, askFresh, settledEmpty };
 }
 
 /**
@@ -387,8 +420,15 @@ function ArtifactsRow({ row, onRetry }: { row: PublishDecisionCardArtifactsRow; 
   const colorScheme = useLifecycleCardColorScheme();
   const held = useHeldArtifactsAddress(row, colorScheme, onRetry);
   const src = row.ref === null ? null : reviewTargetIslandSrc(row.ref, frame, held.islandSrc, held.scheme);
-  const { askFresh } = held;
+  const { askFresh, settledEmpty } = held;
   const [empty, setEmpty] = useState(false);
+  const onSettledEmpty = useCallback(
+    (settled: boolean) => {
+      setEmpty(settled);
+      if (settled) settledEmpty();
+    },
+    [settledEmpty],
+  );
   const retry = useCallback(() => {
     askFresh();
     onRetry();
@@ -412,7 +452,7 @@ function ArtifactsRow({ row, onRetry }: { row: PublishDecisionCardArtifactsRow; 
           islandSrc={src}
           islandCredentialed={reviewIslandAddressCredential(held.islandSrc, row.ref) !== null}
           onRetryResolve={retry}
-          onSettledEmpty={setEmpty}
+          onSettledEmpty={onSettledEmpty}
         />
       </dd>
     </div>

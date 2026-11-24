@@ -663,7 +663,7 @@ describe("the artifacts row (C1b)", () => {
   // src/app/api/lifecycle-views/publish-decision/__tests__/widget-artifacts-row-4738.test.tsx (cinatra#4738). The tests
   // below pin only the card's own hold over the addresses a broker hands it.
 
-  // cinatra#4738 round 1, finding 2: every widget read brings a fresh single-use credential. Before the fix the row
+  // cinatra#4738: every widget read brings a fresh single-use credential. Before the fix the row
   // framed each read's address, so the frame reloaded its preview on every poll.
   // red-first-expect: no card root
   it("a widget re-read with a fresh credential for the same row keeps the same frame on the same address", async () => {
@@ -892,5 +892,98 @@ describe("the XV.1 empty items panel", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// cinatra#4738: the island spends a widget frame's single-use credential before its later reads, so a refusal after the
+// spend (or a reload of the frame) serves the same empty document as a row with nothing to show. A row whose
+// credentialed frame settled empty takes the next fresh broker address once and loads again; a second empty answer is
+// the row's reading and is not reloaded. Before this the row held the spent address and stayed empty until it remounted.
+// On main the card cannot read an items row at all, so it draws no card:
+// red-first-expect: no card root
+describe("an empty widget items frame and a fresh broker address", () => {
+  const REF = "Abc_123-xyz";
+  const ITEMS = { kind: "artifacts", label: "Proposed page", ref: REF, islandSrc: null };
+  const credentialOf = (frame: Element | null) =>
+    frame === null ? null : new URL(frame.getAttribute("src")!, "https://app.example").searchParams.get("ic");
+  const serveEmpty = (frame: HTMLIFrameElement) =>
+    Object.defineProperty(frame, "contentDocument", {
+      configurable: true,
+      get: () => ({
+        querySelector: (selector: string) => (selector.includes(REVIEW_ISLAND_EMPTY_MARKER) ? ({} as Element) : null),
+      }),
+    });
+  const load = async (frame: HTMLIFrameElement, empty: boolean) => {
+    if (empty) serveEmpty(frame);
+    await act(async () => {
+      frame.dispatchEvent(new Event("load"));
+    });
+    await settle();
+  };
+  const focus = async () => {
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await settle();
+  };
+  let reads = 0;
+  beforeEach(() => {
+    reads = 0;
+    globalThis.fetch = (async () => {
+      reads += 1;
+      const islandSrc = `/lifecycle/review-island?ref=${REF}&ic=credential-${reads}`;
+      return new Response(JSON.stringify({ ...PENDING, rows: [{ ...ITEMS, islandSrc }] }), { status: 200 });
+    }) as unknown as typeof fetch;
+  });
+
+  it("a spent credential that settled empty frames the next fresh address once, and draws the items it serves", async () => {
+    const root = await rootOf(mountOn("site_widget", okDoor()));
+    await settle();
+    const first = root.querySelector("iframe")!;
+    expect(credentialOf(first)).toBe("credential-1");
+    await load(first, true);
+    expect(root.querySelector('[data-conformance-id="publish-row-items-empty"]')).not.toBeNull();
+    await focus();
+    expect(reads).toBe(2);
+    const second = root.querySelector("iframe")!;
+    expect(credentialOf(second)).toBe("credential-2");
+    await load(second, false);
+    expect(root.querySelector('[data-conformance-id="publish-row-items-empty"]')).toBeNull();
+    expect(root.querySelector('[data-conformance-id="publish-row-items"]')).not.toBeNull();
+    expect(root.querySelector('[data-conformance-id="review-target-island"]')?.getAttribute("data-island-load-state")).toBe("loaded");
+    // A drawn frame keeps its address on later reads, as before.
+    await focus();
+    expect(reads).toBe(3);
+    expect(root.querySelector("iframe")).toBe(second);
+    expect(credentialOf(root.querySelector("iframe"))).toBe("credential-2");
+  });
+
+  it("a second empty answer keeps the empty panel and later fresh addresses do not reload it", async () => {
+    const root = await rootOf(mountOn("site_widget", okDoor()));
+    await settle();
+    await load(root.querySelector("iframe")!, true);
+    await focus();
+    const second = root.querySelector("iframe")!;
+    expect(credentialOf(second)).toBe("credential-2");
+    await load(second, true);
+    expect(root.querySelector('[data-conformance-id="publish-row-items-empty"]')).not.toBeNull();
+    await focus();
+    await focus();
+    expect(reads).toBe(4);
+    expect(root.querySelector("iframe")).toBe(second);
+    expect(credentialOf(second)).toBe("credential-2");
+    expect(root.querySelector('[data-conformance-id="publish-row-items-empty"]')).not.toBeNull();
+    expect(root.querySelector('[data-conformance-id="review-target-island"]')?.getAttribute("data-island-load-state")).toBe("empty");
+  });
+
+  it("a cookie host's empty row is final: a re-read does not load it again", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
+    const root = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    const frame = root.querySelector("iframe")!;
+    await load(frame, true);
+    await focus();
+    expect(root.querySelector("iframe")).toBe(frame);
+    expect(root.querySelector('[data-conformance-id="publish-row-items-empty"]')).not.toBeNull();
   });
 });
