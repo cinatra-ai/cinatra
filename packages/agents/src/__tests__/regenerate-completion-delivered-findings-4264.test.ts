@@ -6,8 +6,9 @@ import path from "node:path";
 
 // cinatra#4264: the completer of a Regenerate reports applied only the
 // findings whose words the segment run was given. A picture's Regenerate
-// records two review fields, the Note and the picture's prompt; the picture
-// step declares its prompt, so only the prompt's words reach the run. A note
+// records two review fields, the Note and the picture's prompt (the review
+// store records the prompt only for a picture with a recorded prompt), and
+// only the prompt's words reach the run, whatever its input is called. A note
 // with other words reached no input of the run and is reported skipped, never
 // applied. An ordinary repair run is handed every finding and keeps every
 // finding applied.
@@ -206,6 +207,39 @@ describe("the completer reports applied only the findings a Regenerate delivered
       { findingId: "finding-2", applied: true },
     ]);
     expect(response.changeSummary).toContain("answered 2 requested change(s)");
+  });
+});
+
+describe("the completer's outcomes follow the reviewed work, never the declared input's name", () => {
+  /** A run in the declared-input form for a record, with `words` under its start output. */
+  const formFor = (record: Row, words: string) =>
+    JSON.stringify({
+      [record.startOutput as string]: words,
+      lifecycleRepairRequest: { repairId: "repair-1", findings: [], regenerateInput: record },
+    });
+
+  // red-first-expect: expected [ { …(2) }, { …(2) } ] to deeply equal [ { …(3) }, { …(2) } ]
+  it("a picture step whose declared input is not named prompt: the prompt is applied, the note is skipped", async () => {
+    const record = { artifactNode: "file_picture", step: "picture_flow", noteInput: "imagePrompt", startOutput: "pictureWords" };
+    runRow = { status: "completed", templateId: "tmpl-1", inputParams: formFor(record, PROMPT) };
+    ports.readRepair.mockResolvedValue(
+      repairRow([{ id: "prompt-window", message: NOTE }, { id: "picture-prompt", message: PROMPT }], "file_picture"),
+    );
+    const response = await completeOne();
+    expect(ports.escalateRegenerateRepairOfUndeclaredRun).not.toHaveBeenCalled();
+    expect(response.findingOutcomes).toEqual([
+      { findingId: "prompt-window", applied: false, skipReason: expect.any(String) },
+      { findingId: "picture-prompt", applied: true },
+    ]);
+  });
+
+  it("a text step whose declared input is named prompt: its Note, the one finding its review records, is applied", async () => {
+    const record = { artifactNode: "write_draft", step: "draft_flow", noteInput: "prompt", startOutput: "draftPrompt" };
+    runRow = { status: "completed", templateId: "tmpl-1", inputParams: formFor(record, NOTE) };
+    ports.readRepair.mockResolvedValue(repairRow([{ id: "prompt-window", message: NOTE }], "write_draft"));
+    const response = await completeOne();
+    expect(ports.escalateRegenerateRepairOfUndeclaredRun).not.toHaveBeenCalled();
+    expect(response.findingOutcomes).toEqual([{ findingId: "prompt-window", applied: true }]);
   });
 });
 

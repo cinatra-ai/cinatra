@@ -369,11 +369,14 @@ of each declared node (the step snapshots). A repair whose row names
 - **Inputs.** The run's inputs are the note and the typed
   `lifecycleRepairRequest` only. The note is the reviewer's words from the
   review field that fills the step's declared input, exactly as recorded
-  (`routeRegenerateFindings`), never the findings text. The step being
-  regenerated decides: a step that declares `prompt` (a picture step)
-  receives the picture's prompt when the review recorded one, otherwise the
-  Note; every other step receives the Note field, and a submitted prompt is
-  never sent to it. A repair with no such words is refused and escalated.
+  (`routeRegenerateFindings`), never the findings text. The reviewed work
+  decides, never the name of the declared input: the review store keeps a
+  submitted picture's prompt only when the reviewed revision records the
+  prompt it was made from (its finalized ledger row, read on the server).
+  When the request carries that prompt, the declared input receives it;
+  otherwise it receives the Note, and a prompt submitted for any other work
+  is dropped and never sent. A repair with no such words is refused and
+  escalated.
   The request is carried with no findings and records the declared input
   the run is made for (`regenerateInput`: node, step, `noteInput` and start
   output, no words), so the words reach the declared input and no other

@@ -578,13 +578,12 @@ describe("input data cannot become repair authorization", () => {
     }
   });
 
-  // The step being regenerated decides which review field fills its declared
-  // input. A draft's Regenerate whose request also carries a picture prompt
-  // (a client can submit one on any review) still sends the Note: the prompt
-  // belongs to no input of the draft step, is never sent and is never
-  // reported applied.
-  // red-first-expect: expected 'A reviewer requested changes to the w…' to be 'Make the sky brighter' // Object.is equality
-  it("a draft Regenerate whose request also carries a picture prompt sends the Note; the prompt reaches no input", async () => {
+  // The reviewed work, not the declared input's name, decides which review
+  // field fills that input. The review store records a picture's prompt only
+  // for a picture with a recorded prompt; a picture step whose prompt input
+  // has another name is sent that prompt, and the Note reaches no input.
+  // red-first-expect: expected 'A reviewer requested changes to the w…' to be 'A lighthouse at dusk, wide angle' // Object.is equality
+  it("a picture step whose declared input is not named prompt is sent the picture's prompt; the Note reaches no input", async () => {
     const note = "Make the sky brighter";
     const prompt = "A lighthouse at dusk, wide angle";
     const dir = mkdtempSync(path.join(tmpdir(), "regen-4264-"));
@@ -593,30 +592,60 @@ describe("input data cannot become repair authorization", () => {
       component_type: "Flow",
       start_node: { $component_ref: "start" },
       data_flow_connections: [
-        { source_node: { $component_ref: "start" }, source_output: "draftNote",
-          destination_node: { $component_ref: "draft_flow" }, destination_input: "note" },
-        { source_node: { $component_ref: "start" }, source_output: "imagePrompt",
-          destination_node: { $component_ref: "image_flow" }, destination_input: "prompt" },
+        { source_node: { $component_ref: "start" }, source_output: "pictureWords",
+          destination_node: { $component_ref: "picture_flow" }, destination_input: "imagePrompt" },
       ],
     }));
     const config = JSON.stringify({ regenerate: [
-      { artifactNode: "file_image", step: "image_flow", noteInput: "prompt" },
-      { artifactNode: "write_draft", step: "draft_flow", noteInput: "note" },
+      { artifactNode: "file_picture", step: "picture_flow", noteInput: "imagePrompt" },
     ] });
     try {
-      segmentPorts.provenance = { runId: "provenance-run", nodeId: "write_draft" };
+      segmentPorts.provenance = { runId: "provenance-run", nodeId: "file_picture" };
       arrangeProducer({ custom: "retained" }, {}, config);
-      ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft", findings: [
+      ports.reads[0] = [pendingRepair({ regenerateNodeId: "file_picture", findings: [
         { id: "prompt-window", message: note }, { id: "picture-prompt", message: prompt },
       ] })];
       expect(await dispatchPendingProducerRepairs()).toMatchObject({ dispatched: 1, escalated: 0 });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+    const picture = inputParams();
+    expect(picture.pictureWords).toBe(prompt);
+    expect(Object.keys(picture).sort()).toEqual(["lifecycleRepairRequest", "pictureWords"]);
+    expect(JSON.stringify(picture)).not.toContain(note);
+    expect(JSON.stringify(picture).split(prompt)).toHaveLength(2);
+  });
+
+  // A text step may name its note input `prompt`. Its review records the Note
+  // alone, and the Note is what that input is sent.
+  it("a text step whose declared input is named prompt is sent the Note", async () => {
+    const note = "Make the sky brighter";
+    const dir = mkdtempSync(path.join(tmpdir(), "regen-4264-"));
+    segmentPorts.oasPath = path.join(dir, "agent.oas.json");
+    writeFileSync(segmentPorts.oasPath, JSON.stringify({
+      component_type: "Flow",
+      start_node: { $component_ref: "start" },
+      data_flow_connections: [
+        { source_node: { $component_ref: "start" }, source_output: "draftPrompt",
+          destination_node: { $component_ref: "draft_flow" }, destination_input: "prompt" },
+      ],
+    }));
+    const config = JSON.stringify({ regenerate: [
+      { artifactNode: "write_draft", step: "draft_flow", noteInput: "prompt" },
+    ] });
+    try {
+      segmentPorts.provenance = { runId: "provenance-run", nodeId: "write_draft" };
+      arrangeProducer({ custom: "retained" }, {}, config);
+      ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft", findings: [
+        { id: "prompt-window", message: note },
+      ] })];
+      expect(await dispatchPendingProducerRepairs()).toMatchObject({ dispatched: 1, escalated: 0 });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
     const draft = inputParams();
-    expect(draft.draftNote).toBe(note);
-    expect(Object.keys(draft).sort()).toEqual(["draftNote", "lifecycleRepairRequest"]);
-    expect(JSON.stringify(draft)).not.toContain(prompt);
+    expect(draft.draftPrompt).toBe(note);
+    expect(Object.keys(draft).sort()).toEqual(["draftPrompt", "lifecycleRepairRequest"]);
     expect(JSON.stringify(draft).split(note)).toHaveLength(2);
   });
 

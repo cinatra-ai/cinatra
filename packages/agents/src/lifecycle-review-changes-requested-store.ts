@@ -37,7 +37,7 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import { createHash } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNotNull } from "drizzle-orm";
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 import { pgSchema, text } from "drizzle-orm/pg-core";
 
@@ -91,8 +91,11 @@ const PROMPT_WINDOW_FINDING_ID = REVIEW_NOTE_FINDING_ID;
 /* The PICTURE PROMPT travels under its own finding id (`PICTURE_PROMPT_FINDING_ID`,
  * cinatra#3080 item 5). Its OWN id is what makes the note and the prompt two
  * values rather than one concatenated sentence — at the store as well as on the
- * wire — and a Regenerate's dispatch routes it to the picture step's declared
- * input by that id (`routeRegenerateFindings`, cinatra#4264). */
+ * wire. It is recorded only when the reviewed revision is a picture with a
+ * recorded prompt (`revisionRecordsAPrompt`), so a Regenerate's dispatch reads
+ * its presence as the fact that the reviewed work is a picture and gives the
+ * prompt to the step's declared input, whatever that input is called
+ * (`routeRegenerateFindings`, cinatra#4264). */
 
 /** cinatra#4245: the refusal for the step's own declared gate (`wayflow-<task>`)
  * when it does not meet every condition of a change request that ends the run's
@@ -130,8 +133,10 @@ export interface RecordReviewSurfaceChangesRequestedInput {
    * answered as a gate conflict on an already-repairing gate rather than
    * silently re-deriving the first repair.
    *
-   * Null for everything that is not a picture, and the request is then
-   * byte-identical to the one this composer built before the field existed —
+   * Kept only when the reviewed revision records the prompt it was made from
+   * (read on the server); on any other work a submitted prompt is dropped
+   * (cinatra#4264). Null for everything that is not a picture, and the
+   * request is then byte-identical to the one this composer built before the field existed —
    * the idempotency key included, so a retry that crosses the deploy boundary
    * still reconciles against its own repair.
    */
@@ -175,7 +180,42 @@ const materializationLedgerRef = appSchemaRef.table("artifact_materializations",
   path: text("path"),
   phase: text("phase"),
   verifiedStepId: text("verified_step_id"),
+  imagePrompt: text("image_prompt"),
 });
+
+/**
+ * Is the reviewed revision a picture with a recorded prompt (cinatra#4264)?
+ * True exactly when one finalized ledger row of (org, artifact, revision)
+ * records a non-blank prompt: the scope of the review surface's prefill read
+ * (`readRevisionImagePrompt`), so the store keeps the picture's prompt exactly
+ * when the surface offered it. Read on the server, never from the request.
+ * Fail-soft toward no prompt: no row, two rows, a blank prompt or a read
+ * fault all yield false, and the request then carries the Note alone.
+ */
+async function revisionRecordsAPrompt(
+  orgId: string,
+  target: { artifactId: string; representationRevisionId: string },
+): Promise<boolean> {
+  try {
+    const rows = await db
+      .select({ imagePrompt: materializationLedgerRef.imagePrompt })
+      .from(materializationLedgerRef)
+      .where(
+        and(
+          eq(materializationLedgerRef.orgId, orgId),
+          eq(materializationLedgerRef.artifactId, target.artifactId),
+          eq(materializationLedgerRef.representationRevisionId, target.representationRevisionId),
+          eq(materializationLedgerRef.phase, "finalized"),
+          isNotNull(materializationLedgerRef.imagePrompt),
+        ),
+      )
+      .limit(2);
+    const prompt = rows.length === 1 ? rows[0].imagePrompt : null;
+    return typeof prompt === "string" && prompt.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * The node that filed the reviewed revision (cinatra#3080 on cinatra#4264): the
@@ -305,7 +345,7 @@ export async function recordReviewSurfaceChangesRequested(
   input: RecordReviewSurfaceChangesRequestedInput,
 ): Promise<RecordChangesRequestedResult> {
   const { runId, reviewTaskId, baseTarget, currentBaseRevisionId, feedback } = input;
-  const prompt = input.prompt?.trim() ?? "";
+  const submittedPrompt = input.prompt?.trim() ?? "";
 
   const lifecycleGate = isAutoReviewTaskId(reviewTaskId);
   if (!lifecycleGate && !isDeclaredReviewTaskId(reviewTaskId)) {
@@ -419,6 +459,14 @@ export async function recordReviewSurfaceChangesRequested(
   // own prefix (`rg:`), so it never equals a typed key whatever the words; the
   // typed key (`pw:`) is byte-identical to the one stored rows carry, so a typed
   // retry still reconciles against its own repair.
+  //
+  // THE PICTURE'S PROMPT BELONGS TO A PICTURE (cinatra#4264). A submitted
+  // prompt is kept only when the reviewed revision records the prompt it was
+  // made from; on any other work it belongs to no input of the step and is
+  // dropped here, so it is never recorded, never keyed and never sent. A
+  // request without one reads nothing more than before.
+  const prompt =
+    submittedPrompt.length > 0 && (await revisionRecordsAPrompt(gate.orgId, baseTarget)) ? submittedPrompt : "";
   const keyMaterial =
     prompt.length > 0
       ? `${gate.id} ${trimmed} ${prompt}`

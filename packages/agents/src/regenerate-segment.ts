@@ -373,7 +373,7 @@ function readInputRecord(request: unknown): RegenerateInputRecord | null {
  * Whether a segment run's input params are the declared-input form the drain
  * writes for `expected` (cinatra#4264): exactly the start output and the typed
  * request; the start output holding the value `routeRegenerateFindings` gives
- * for the repair's findings and the declared input; the request holding no
+ * for the repair's findings; the request holding no
  * findings and recording exactly `expected`. A run made in the earlier form
  * (the generic findings text, the request with all its findings, no record)
  * is not, and is never sent. `inputParams` is the stored JSON text or its
@@ -401,7 +401,7 @@ export function segmentInputsInDeclaredForm(
   ) {
     return false;
   }
-  const delivery = routeRegenerateFindings(findings, expected.noteInput);
+  const delivery = routeRegenerateFindings(findings);
   return !!delivery && params[expected.startOutput] === delivery.value;
 }
 
@@ -664,9 +664,11 @@ export type SegmentDispatchPlan =
  *
  * THE WORDS APPEAR ONCE (cinatra#4264). The declared input takes the recorded
  * value of the review field that belongs to the step being regenerated
- * (`routeRegenerateFindings` on the entry's `noteInput`: a picture step's
- * prompt, every other step's Note), never a findings text; a blank or absent
- * value refuses, and a field that does not belong to the step is never sent.
+ * (`routeRegenerateFindings`: the picture's prompt when the review store
+ * recorded one, which it does only for a picture with a recorded prompt, and
+ * the Note otherwise; the input's name never decides), never a findings text;
+ * a blank or absent value refuses, and a field that does not belong to the
+ * step is never sent.
  * The typed request is carried with no findings and records the declared
  * input the run is made for (`RegenerateInputRecord`), so the words reach the
  * declared input and no other place of the run's input. The repair row keeps
@@ -716,7 +718,7 @@ export async function planSegmentDispatch(
       reason: "Regenerate refused: no single start output of the agent's flow feeds the step's note input",
     };
   }
-  const note = routeRegenerateFindings(input.findings, entry.noteInput)?.value;
+  const note = routeRegenerateFindings(input.findings)?.value;
   if (typeof note !== "string") {
     return { kind: "refused", reason: "Regenerate refused: the repair carries no reviewer's words for the step's declared input" };
   }

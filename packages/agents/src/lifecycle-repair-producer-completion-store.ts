@@ -619,8 +619,10 @@ export async function completeDispatchedProducerRepairs(opts?: {
       // channel: it was handed the words and made the work again. An ordinary
       // repair run is handed every finding, so each is reported applied. A
       // Regenerate segment run is handed only the words of the review field
-      // its step declares an input for (`routeRegenerateFindings`, cinatra#4264),
-      // so only the findings those words deliver are reported applied; a
+      // that belongs to the reviewed work (`routeRegenerateFindings`,
+      // cinatra#4264): the picture's prompt, which the review store records
+      // only for a picture with a recorded prompt, or else the Note. So only
+      // the findings those words deliver are reported applied; a
       // finding that reached no input of the run is reported skipped. This is
       // an annotation, not a security boundary: the post-change verification
       // is what measures the produced revision against what the review
@@ -628,7 +630,7 @@ export async function completeDispatchedProducerRepairs(opts?: {
       const deliveredFindingIds = segmentIntent
         ? new Set(
             regenerateInput
-              ? (routeRegenerateFindings(repair.findings, regenerateInput.noteInput)?.deliveredFindingIds ?? [])
+              ? (routeRegenerateFindings(repair.findings)?.deliveredFindingIds ?? [])
               : [],
           )
         : null;

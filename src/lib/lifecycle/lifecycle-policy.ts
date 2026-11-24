@@ -387,35 +387,27 @@ export type RegenerateDelivery = {
   deliveredFindingIds: string[];
 };
 
-/** The declared input name of a picture step: its prompt (the blog
- *  pipeline's `image_flow.prompt`). Only a step that declares it takes the
- *  picture's prompt. */
-export const PICTURE_PROMPT_NOTE_INPUT = "prompt";
-
 /**
  * The value of the producing step's declared input for a Regenerate, and the
- * findings it delivers (cinatra#4264). The step being regenerated decides,
- * by the input it declares (`noteInput` of its `regenerate` entry): each
- * review field fills only its own input. A picture step declares its prompt
- * (`PICTURE_PROMPT_NOTE_INPUT`); when the request carries the picture's
- * prompt (`picture-prompt`, recorded only for a review opened on a picture
- * with a recorded prompt) it fills that input, otherwise the Note
- * (`prompt-window`) does, and the Note never stands in for a malformed
- * prompt. Every other step takes the Note alone: a submitted prompt belongs
- * to no input of it, is never sent and never delivered. A finding of the
- * other field is delivered only when its words are exactly the value given
- * and the step takes that field. Null when the field's finding is missing,
- * repeated or blank.
+ * findings it delivers (cinatra#4264). Which review field fills the input is
+ * a fact of the reviewed work, never of the input's name: the review store
+ * records the picture's prompt (`picture-prompt`) only when the reviewed
+ * revision is a picture with a recorded prompt, read on the server from the
+ * finalized ledger row of that revision (`recordReviewSurfaceChangesRequested`).
+ * So a request that carries that finding regenerates the step that made a
+ * picture, and its prompt fills the declared input whatever that input is
+ * called; the Note never stands in for a malformed or repeated prompt. Every
+ * other request carries the Note (`prompt-window`) alone, and the Note fills
+ * the input whatever that input is called. A finding is delivered when its
+ * words are exactly the value given. Null when the field's finding is
+ * missing, repeated or blank.
  */
-export function routeRegenerateFindings(findings: unknown, noteInput: string): RegenerateDelivery | null {
+export function routeRegenerateFindings(findings: unknown): RegenerateDelivery | null {
   if (!Array.isArray(findings)) return null;
-  const pictureStep = noteInput === PICTURE_PROMPT_NOTE_INPUT;
-  const hasPrompt =
-    pictureStep &&
-    findings.some(
-      (finding) =>
-        !!finding && typeof finding === "object" && (finding as { id?: unknown }).id === PICTURE_PROMPT_FINDING_ID,
-    );
+  const hasPrompt = findings.some(
+    (finding) =>
+      !!finding && typeof finding === "object" && (finding as { id?: unknown }).id === PICTURE_PROMPT_FINDING_ID,
+  );
   const value = readWindowFinding(findings, hasPrompt ? PICTURE_PROMPT_FINDING_ID : REVIEW_NOTE_FINDING_ID);
   if (value === null) return null;
   const deliveredFindingIds = findings
@@ -424,7 +416,6 @@ export function routeRegenerateFindings(findings: unknown, noteInput: string): R
         !!finding &&
         typeof finding === "object" &&
         typeof (finding as { id?: unknown }).id === "string" &&
-        (pictureStep || (finding as { id: string }).id !== PICTURE_PROMPT_FINDING_ID) &&
         (finding as { message?: unknown }).message === value,
     )
     .map((finding) => finding.id);
