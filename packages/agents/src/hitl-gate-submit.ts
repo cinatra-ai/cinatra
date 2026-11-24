@@ -596,9 +596,11 @@ export function readListStepRefreshAsk(values: unknown): unknown {
  * Whether an answer has exactly the shape `buildListStepRefreshPayload` gives:
  * no own key but `approved`, `approvedAt`, `userResponse` and
  * `LIST_STEP_REFRESH_KEY`, with the refresh key a nonblank string equal to
- * `userResponse`. The server uses it only when the gate's durable record
- * cannot be read: it then cannot tell a list step from another step, so it
- * refuses this shape rather than store a refresh as an ordinary answer.
+ * `userResponse`. The server uses it twice. Every refresh it takes must have
+ * this shape, so a refresh carries no other value that could be stored or
+ * bound. And when the gate's durable record cannot be read, the server cannot
+ * tell a list step from another step, so it refuses this shape rather than
+ * store a refresh as an ordinary answer.
  *
  * A step whose schema declares a field of that name answers in another shape:
  * a single text field adds `userResponseFieldName`, and any other answer sends

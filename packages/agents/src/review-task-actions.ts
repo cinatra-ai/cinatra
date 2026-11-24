@@ -970,10 +970,13 @@ export async function approveReviewTaskInternal(
     // refresh request only when the gate's durable record proves a list step
     // whose schema declares no field of that name (`listStepRefreshIsRequest`);
     // on every other step it is an ordinary answer value. A request is taken
-    // only when the list step's binding declares that refresh value
-    // (`params.refreshValue`), and refused before the claim, so nothing is held
-    // or sent.
-    let listStepRefreshAsk: unknown = undefined;
+    // only in the hosts' exact refresh shape (`isListStepRefreshPayloadShape`:
+    // no other key, and `userResponse` equal to the refresh value) and only when
+    // the list step's binding declares that refresh value (`params.refreshValue`).
+    // Anything else is refused before the claim, so nothing is held or sent.
+    // A taken refresh sends the declared value and records nothing of the
+    // answer: no answered-gate provenance, no prompt row, no Continue receipt.
+    let listStepRefreshAsk: string | undefined = undefined;
     const refreshKeyValue = readListStepRefreshAsk(values);
     if (refreshKeyValue !== undefined) {
       const gate = await readDurableHitlGateForContinue(run.id, reviewTaskId).catch(() => null);
@@ -999,10 +1002,14 @@ export async function approveReviewTaskInternal(
         const { getMergedFieldRendererBindings } = await import("./field-renderer-bindings.server");
         const binding = getMergedFieldRendererBindings().find((b) => b.id === gate.xRenderer);
         const declaredRefreshValue = (binding?.params as { refreshValue?: unknown } | undefined)?.refreshValue;
-        if (!listStepRefreshAccepted({ reviewTaskId, gateXRenderer: gate.xRenderer, declaredRefreshValue, requested: refreshKeyValue })) {
+        if (
+          !isListStepRefreshPayloadShape(values) ||
+          !listStepRefreshAccepted({ reviewTaskId, gateXRenderer: gate.xRenderer, declaredRefreshValue, requested: refreshKeyValue }) ||
+          typeof declaredRefreshValue !== "string"
+        ) {
           throw new Error(`WayFlow approval rejected: gate ${taskId} on run ${run.id} takes no such list step refresh`);
         }
-        listStepRefreshAsk = refreshKeyValue;
+        listStepRefreshAsk = declaredRefreshValue;
       }
     }
 
@@ -1097,8 +1104,8 @@ export async function approveReviewTaskInternal(
     const trimmedNote = typeof approvalNoteRaw === "string" ? approvalNoteRaw.trim() : "";
 
     let resumeText: string;
-    if (typeof listStepRefreshAsk === "string") {
-      // Accepted above: the refresh value is the resume text, exactly.
+    if (listStepRefreshAsk !== undefined) {
+      // Accepted above: the binding's declared refresh value is the resume text, exactly.
       resumeText = listStepRefreshAsk;
     } else if (typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0) {
       resumeText = userResponseRaw;
@@ -1205,7 +1212,11 @@ export async function approveReviewTaskInternal(
       // write), mirroring `rememberLatestWayflowGateTask`. The digest hashes
       // `userResponseRaw` — the exact byte string WayFlow forwards VERBATIM to the
       // apply node as `resumePayloadJson`, which the persist seam re-hashes.
-      if (typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0) {
+      // A list step's refresh (cinatra#3562) mints nothing: it answers no step and
+      // authorizes no persist, and its `userResponse` is not what is sent (the
+      // declared refresh value is). A mint here would let the refresh's payload
+      // authorize a draft or recipient write that the operator never answered.
+      if (listStepRefreshAsk === undefined && typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0) {
         try {
           const { rememberAnsweredGateSubmission, rememberLatestWayflowGateTask } =
             await import("@cinatra-ai/a2a");
@@ -1274,7 +1285,7 @@ export async function approveReviewTaskInternal(
       // step again, and its pick comes later. `buildSubmissionMapByStepIndex`
       // ties every row to the next declared pause by position, so a refresh row
       // would take the list step's place and shift the pick onto the next step.
-      capturedPromptId = typeof listStepRefreshAsk === "string" ? null : await captureHitlPromptForContinue({
+      capturedPromptId = listStepRefreshAsk !== undefined ? null : await captureHitlPromptForContinue({
         runId: run.id,
         agentId: template.packageName,
         stepKey: taskId,
@@ -1303,6 +1314,7 @@ export async function approveReviewTaskInternal(
         onDispatch: () => { dispatchStarted = true; },
       });
 
+      // A refresh has no prompt row (`capturedPromptId` is null), so it records no Continue receipt.
       const state=task.status?.state;
       if(capturedPromptId && gateSnapshot && submittedValues !== null
         && task.contextId===run.a2aContextId && typeof task.id==="string"

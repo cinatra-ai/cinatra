@@ -13,6 +13,11 @@
  * position) gives the later pick to the list step and leaves the next pause
  * unanswered.
  *
+ * A refresh also mints no answered-gate provenance: the run-scoped persist
+ * seam (answered-gate-provenance.ts) authorizes a draft or recipient write only
+ * with a digest minted at an answer, and a refresh is none. The store under the
+ * real mint and consume functions is an in-memory `ioredis` double.
+ *
  * Harness mirrors resume-message-before-fence-4245.test.ts.
  *
  * Run: cd packages/agents && pnpm exec vitest run src/__tests__/list-step-refresh-resume-3562.test.ts
@@ -111,15 +116,52 @@ vi.mock("@/lib/auth-session", async (orig) => ({
 vi.mock("../wayflow-run-token-carrier", () => ({
   mintResumeRunTokenMetadata: vi.fn(async () => ({ token: "t" })),
 }));
+/**
+ * An in-memory `ioredis` double for the answered-gate store: the real
+ * `rememberAnsweredGateSubmission` writes into it and the real
+ * `consumeAnsweredGateSubmission` reads it. `eval` does what the consume's Lua
+ * does: absent, or delete on an equal digest, or mismatch.
+ */
+const redis = vi.hoisted(() => {
+  const store = new Map<string, string>();
+  class FakeRedis {
+    async set(key: string, value: string): Promise<"OK"> {
+      store.set(key, value);
+      return "OK";
+    }
+    async get(key: string): Promise<string | null> {
+      return store.get(key) ?? null;
+    }
+    async eval(_lua: string, _keys: number, key: string, digest: string): Promise<string> {
+      const stored = store.get(key);
+      if (stored === undefined) return "absent";
+      if (stored !== digest) return "mismatch";
+      store.delete(key);
+      return "consumed";
+    }
+    async quit(): Promise<"OK"> {
+      return "OK";
+    }
+    on(): this {
+      return this;
+    }
+  }
+  return { store, FakeRedis };
+});
+vi.mock("ioredis", () => ({ Redis: redis.FakeRedis, default: redis.FakeRedis }));
 const sendTask = vi.hoisted(() => vi.fn());
-vi.mock("@cinatra-ai/a2a", async (orig) => ({
-  ...(await orig<Record<string, unknown>>()),
-  createExternalA2AClient: vi.fn(async () => ({ sendTask })),
-  resolveRunIdByWayflowTaskId: vi.fn(async () => null),
-  resolveLatestWayflowGateTaskId: vi.fn(async () => null),
-  rememberLatestWayflowGateTask: vi.fn(async () => undefined),
-  rememberAnsweredGateSubmission: vi.fn(async () => undefined),
-}));
+vi.mock("@cinatra-ai/a2a", async (orig) => {
+  const real = await orig<typeof import("@cinatra-ai/a2a")>();
+  return {
+    ...real,
+    createExternalA2AClient: vi.fn(async () => ({ sendTask })),
+    resolveRunIdByWayflowTaskId: vi.fn(async () => null),
+    resolveLatestWayflowGateTaskId: vi.fn(async () => null),
+    rememberLatestWayflowGateTask: vi.fn(async () => undefined),
+    // The real mint, watched: it records into the in-memory store.
+    rememberAnsweredGateSubmission: vi.fn(real.rememberAnsweredGateSubmission),
+  };
+});
 const handleWayflowTaskState = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../execution", () => ({ handleWayflowTaskState }));
 
@@ -153,6 +195,7 @@ function listStepGate(xRenderer = LIST_STEP_ID) {
 
 function arrange() {
   row.status = "pending_approval";
+  redis.store.clear();
   promptRows.list = [];
   bindings.generated = false;
   durableGate.value = listStepGate();
@@ -198,6 +241,9 @@ describe("cinatra#3562 — the list step's Try again resumes the run with the de
     const text = sentText();
     expect(text).toContain('"text":"refresh"');
     expect(text).not.toContain("listIds");
+    const { rememberAnsweredGateSubmission } = await import("@cinatra-ai/a2a");
+    expect(rememberAnsweredGateSubmission).not.toHaveBeenCalled();
+    expect(redis.store.size).toBe(0);
   });
 
   it("refuses a refresh the binding does not declare, before anything is held or sent", async () => {
@@ -310,9 +356,21 @@ describe("cinatra#3562 — the list step's Try again resumes the run with the de
     expect(merge.queryChunks.some((chunk) => typeof chunk === "string" && chunk.includes("a setup answer"))).toBe(true);
   });
 
-  it("takes the refresh with the binding the pack's own declaration yields", async () => {
-    // The pack declares `params.refreshValue` on its list step's binding; the
-    // generator and the runtime collector both pass it through this validator.
+  it("takes the refresh with a binding built by the shared validator from the pinned pack declaration plus `refreshValue`", async () => {
+    // The binding is not read from the generated file: at today's pin the
+    // email-outreach-agent release declares its list step without
+    // `params.refreshValue` (the next test proves every refresh is refused
+    // there). The consumer change that adds it is pinned after this change.
+    // So this test takes the pinned declaration's own params, adds the
+    // `refreshValue` that change declares, and passes the declaration through
+    // `validateFieldRendererDeclarations`, the validator the binding generator
+    // and the runtime collector both use.
+    const { GENERATED_FIELD_RENDERER_BINDINGS } = await import("@/lib/generated/agent-bindings");
+    const pinned = GENERATED_FIELD_RENDERER_BINDINGS.find((b) => b.id === LIST_STEP_ID) as
+      | { params?: Record<string, unknown> }
+      | undefined;
+    expect(pinned?.params).toBeDefined();
+    expect(pinned?.params).not.toHaveProperty("refreshValue");
     const { validateFieldRendererDeclarations } = await import(
       "../../../../scripts/extensions/agent-binding-kinds.mjs"
     );
@@ -321,7 +379,7 @@ describe("cinatra#3562 — the list step's Try again resumes the run with the de
         id: LIST_STEP_ID,
         kind: "list-picker",
         priority: 90,
-        params: { selection: "multiple", minSelected: 1, refreshValue: "refresh" },
+        params: { ...pinned?.params, refreshValue: "refresh" },
         component: { entry: "./src/renderers/list-picker.ts", propsApiVersion: 1 },
       },
     ]);
@@ -350,6 +408,66 @@ describe("cinatra#3562 — the list step's Try again resumes the run with the de
   it("leaves an answer without the refresh key as it was (guard)", async () => {
     await approveReviewTaskInternal(TASK, RUN.runBy, { approved: true, userResponse: "refresh" });
     expect(sentText()).toContain('"text":"refresh"');
+  });
+});
+
+describe("cinatra#3562 — a refresh carries nothing but its value and mints no answered-gate provenance", () => {
+  const PERSIST = JSON.stringify({ drafts: [{ id: "d1", subject: "S", body: "B" }] });
+
+  /** The real persist seam's decision for a payload presented for this gate. */
+  async function persistWith(resumePayloadJson: string) {
+    const { enforceAnsweredGateProvenance } = await import("@/app/api/agents/passthrough/answered-gate-provenance");
+    return enforceAnsweredGateProvenance({
+      tool: "email_outreach_initial_drafts_update",
+      runId: RUN.id,
+      verifiedSubmissionId: TASK.slice("wayflow-".length),
+      resumePayloadJson,
+    });
+  }
+
+  it("a structured answer mints provenance that the real persist seam consumes once (guard)", async () => {
+    durableGate.value = null;
+    await approveReviewTaskInternal(TASK, RUN.runBy, { approved: true, userResponse: PERSIST });
+    expect(redis.store.size).toBe(1);
+    expect(await persistWith(PERSIST)).toEqual({ ok: true });
+    expect((await persistWith(PERSIST)).ok).toBe(false);
+  });
+
+  it("a taken refresh mints nothing, and a persist presenting its payload finds no provenance", async () => {
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    const payload = buildListStepRefreshPayload("refresh");
+    await approveReviewTaskInternal(TASK, RUN.runBy, payload);
+    expect(sendTask).toHaveBeenCalledTimes(1);
+    const { rememberAnsweredGateSubmission, rememberLatestWayflowGateTask } = await import("@cinatra-ai/a2a");
+    expect(rememberAnsweredGateSubmission).not.toHaveBeenCalled();
+    expect(rememberLatestWayflowGateTask).not.toHaveBeenCalled();
+    expect(storeMock.writeHitlPrompt).not.toHaveBeenCalled();
+    expect(redis.store.size).toBe(0);
+    for (const presented of ["refresh", JSON.stringify(payload)]) {
+      const decision = await persistWith(presented);
+      expect(decision.ok).toBe(false);
+      if (!decision.ok) expect(decision.error).toMatch(/no unconsumed answered-gate submission/);
+    }
+  });
+
+  it.each([
+    ["a userResponse that carries persist JSON", { userResponse: PERSIST }],
+    ["an extra key with persist JSON", { drafts: [{ id: "d1", subject: "S", body: "B" }] }],
+    ["an approval note", { approvalNote: "note" }],
+    ["a userResponse other than the refresh value", { userResponse: "refresh " }],
+  ])("refuses a refresh with %s, and claims, sends, stores and mints nothing", async (_name, extra) => {
+    const { claimPause } = (await import("./pause-claim-test-fake")).pauseClaimFake;
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    const crafted = { ...buildListStepRefreshPayload("refresh"), ...extra };
+    await expect(approveReviewTaskInternal(TASK, RUN.runBy, crafted)).rejects.toThrow("takes no such list step refresh");
+    const { rememberAnsweredGateSubmission } = await import("@cinatra-ai/a2a");
+    expect(claimPause).not.toHaveBeenCalled();
+    expect(sendTask).not.toHaveBeenCalled();
+    expect(storeMock.writeHitlPrompt).not.toHaveBeenCalled();
+    expect(rememberAnsweredGateSubmission).not.toHaveBeenCalled();
+    expect(redis.store.size).toBe(0);
+    expect(row.status).toBe("pending_approval");
+    expect((await persistWith(PERSIST)).ok).toBe(false);
   });
 });
 
