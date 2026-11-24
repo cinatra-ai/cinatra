@@ -85,12 +85,14 @@ import * as gateSubmit from "../hitl-gate-submit";
 import { agentHitlScreenStateForRun } from "../agent-hitl-screen-core";
 import { AgentHitlScreenCard } from "../agent-hitl-screen-card";
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
+import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 
 // Read through the modules, so a tree without a reader answers nothing.
 const server = bindingsServer as unknown as {
   __clearInstalledFieldRendererBindingsCache: () => void;
   withDeclaredScreenPin?: (schema: Record<string, unknown>, x: string) => Record<string, unknown>;
   readDeclaredHitlCard?: (x: string, stepSchema: unknown) => unknown;
+  stepDeclarationStanding?: (x: string, stepSchema: unknown, opts?: { fresh?: boolean }) => unknown;
 };
 const reg = registry as unknown as {
   readRuntimeRendererBindings?: (freshFor?: string) => Promise<boolean>;
@@ -429,6 +431,126 @@ describe("a conversation card never resolves a binding registered under its step
     } finally {
       uninstall();
       await reg.readRuntimeRendererBindings?.();
+    }
+  });
+});
+
+describe("an installed screen of a bundled renderer id supersedes its generated binding (cinatra#3470)", () => {
+  // A bundled renderer id: the generated map carries it, with no screen.
+  const BUNDLED_ID = "@cinatra-ai/blog-linkedin-publish-agent:draft-review";
+  const hold = (step: unknown) =>
+    submitRules.rendererBindingHoldReason?.(BUNDLED_ID, reg.runtimeRendererBindingsLoad?.(), step) ?? null;
+
+  it("the park pins it, the server reads it, the run page draws it, and uninstalling it brings back the bundled entry", async () => {
+    ensureDefaultFieldRenderersRegistered();
+    const bundled = registry.fieldRendererRegistry.list().find((e) => e.id === BUNDLED_ID);
+    expect(bundled?.declaredScreen).toBeUndefined();
+    // A runtime revision of the bundled agent adds a declared screen.
+    install(LATER, BUNDLED_ID);
+    const parked = parkedSchema(BUNDLED_ID);
+    // red-first-expect: expected undefined to match object { title: 'Fixture later revision' }
+    expect(server.readDeclaredHitlCard?.(BUNDLED_ID, parked)).toMatchObject({ title: "Fixture later revision" });
+    expect(String(parked["x-declared-screen"])).toMatch(/^sha256:/);
+    expect(server.stepDeclarationStanding?.(BUNDLED_ID, parked, { fresh: true })).toBe("matches");
+    // A step opened under the generated binding (no screen) is not answered
+    // without the screen installed since.
+    expect(server.readDeclaredHitlCard?.(BUNDLED_ID, { type: "object" })).toBe("unavailable");
+    expect(server.stepDeclarationStanding?.(BUNDLED_ID, { type: "object" }, { fresh: true })).toBe("changed");
+
+    // The run page registers the installed screen over the bundled entry.
+    await reg.readRuntimeRendererBindings?.();
+    expect(reg.declaredHitlCardOf?.(BUNDLED_ID)).toMatchObject({ title: "Fixture later revision" });
+    expect(hold(reg.rendererStepOf?.("task-bundled", parked))).toBeNull();
+
+    // Uninstalled: the bundled entry is registered again, not left absent.
+    uninstall(BUNDLED_ID);
+    await reg.readRuntimeRendererBindings?.();
+    expect(registry.fieldRendererRegistry.list().filter((e) => e.id === BUNDLED_ID)).toEqual([bundled]);
+    expect(server.readDeclaredHitlCard?.(BUNDLED_ID, { type: "object" })).toBeNull();
+  });
+
+  it("a refused installed screen of a bundled id holds its step, never the generated binding", async () => {
+    // A card with no title: the validator refuses the installed declaration.
+    install({ layout: "card" }, BUNDLED_ID);
+    try {
+      // red-first-expect: expected undefined to be 'unavailable'
+      expect(server.readDeclaredHitlCard?.(BUNDLED_ID, parkedSchema(BUNDLED_ID))).toBe("unavailable");
+      await reg.readRuntimeRendererBindings?.();
+      expect(hold(reg.rendererStepOf?.("task-bundled-refused", { type: "object" }))).toBe(
+        "This step's screen could not be loaded. Reload the page to try again.",
+      );
+    } finally {
+      uninstall(BUNDLED_ID);
+      await reg.readRuntimeRendererBindings?.();
+    }
+  });
+});
+
+describe("a declaration that could not be read at the park is never pinned as no screen (cinatra#3470)", () => {
+  const UNREAD_ID = "@acme-test/unread-agent:confirm";
+  const hold = (step: unknown) =>
+    submitRules.rendererBindingHoldReason?.(UNREAD_ID, reg.runtimeRendererBindingsLoad?.(), step) ?? null;
+
+  it("the step is held while it cannot be read, then answered under the declaration that reads cleanly", async () => {
+    // The agent's manifest cannot be parsed: the scan is incomplete.
+    const dir = join(mount.dir, "acme-test", "unread-agent");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "package.json"), "{ not json");
+    server.__clearInstalledFieldRendererBindingsCache();
+    const parked = parkedSchema(UNREAD_ID);
+    // red-first-expect: expected undefined to be 'unknown'
+    expect(parked["x-declared-screen"]).toBe("unknown");
+    expect(server.stepDeclarationStanding?.(UNREAD_ID, parked, { fresh: true })).toBe("unknown");
+    expect(server.readDeclaredHitlCard?.(UNREAD_ID, parked)).toBe("unavailable");
+
+    // The manifest is readable again, and declares a screen.
+    install(EARLIER, UNREAD_ID);
+    expect(server.stepDeclarationStanding?.(UNREAD_ID, parked, { fresh: true })).toBe("matches");
+    expect(server.readDeclaredHitlCard?.(UNREAD_ID, parked)).toMatchObject({ title: "Fixture earlier revision" });
+    gates.set("run-unread", {
+      xRenderer: UNREAD_ID,
+      childRunId: null,
+      reviewTaskId: "task-unread",
+      inputSchema: parked,
+      currentValues: VALUE,
+    });
+    const state = await agentHitlScreenStateForRun({
+      id: "run-unread",
+      lifecycleMoment: null,
+      lifecycleCardKind: null,
+      lifecycleCardRef: null,
+    } as never);
+    expect(state.state === "asking" ? (state.declaredScreen?.screen as { title?: string } | undefined)?.title : null).toBe(
+      "Fixture earlier revision",
+    );
+
+    // The run page waits for a read made for the step, then draws it.
+    await reg.readRuntimeRendererBindings?.();
+    const step = reg.rendererStepOf?.("task-unread", parked);
+    expect(hold(step)).toBe("This step's screen is still loading.");
+    reg.requestFreshRendererBindingRead?.(UNREAD_ID, step);
+    await waitFor(() => expect(hold(step)).toBeNull());
+    expect(reg.declaredHitlCardOf?.(UNREAD_ID)).toMatchObject({ title: "Fixture earlier revision" });
+    uninstall(UNREAD_ID);
+    await reg.readRuntimeRendererBindings?.();
+  });
+});
+
+describe("a runtime registration gives back the entry it replaced (cinatra#3470)", () => {
+  it("uninstalling the installed binding that shadowed a host-owned renderer restores that renderer", async () => {
+    const HOST_ID = "@acme-test/host-owned:confirm";
+    const builtIn = { id: HOST_ID, priority: 10, condition: () => false, renderer: () => null };
+    registry.fieldRendererRegistry.register(builtIn as never);
+    try {
+      install(LATER, HOST_ID);
+      await reg.readRuntimeRendererBindings?.();
+      // red-first-expect: expected undefined to match object { title: 'Fixture later revision' }
+      expect(reg.declaredHitlCardOf?.(HOST_ID)).toMatchObject({ title: "Fixture later revision" });
+      uninstall(HOST_ID);
+      await reg.readRuntimeRendererBindings?.();
+      expect(registry.fieldRendererRegistry.list().filter((e) => e.id === HOST_ID)).toEqual([builtIn]);
+    } finally {
+      (registry.fieldRendererRegistry as { unregisterEntry?: (e: never) => void }).unregisterEntry?.(builtIn as never);
     }
   });
 });

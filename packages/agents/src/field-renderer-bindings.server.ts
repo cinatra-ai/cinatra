@@ -35,7 +35,9 @@ import type { FieldRendererBindingInput } from "./register-default-renderers";
 import {
   DECLARED_SCREEN_PIN_KEY,
   DECLARED_SCREEN_PIN_NONE,
+  DECLARED_SCREEN_PIN_UNVERIFIED,
   readDeclaredScreenPin,
+  stepPinAdmits,
 } from "./field-renderer-registry";
 import type { DeclaredHitlCard } from "./hitl-gate-submit";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -238,18 +240,22 @@ export type RuntimeFieldRendererBindingsPayload = {
 };
 
 /**
- * The runtime-only bindings the client registers, and the ids of declared
- * screens the validator refused. Generated (build-time) bindings are already
- * compiled into the client registry, so neither list names one.
+ * The installed bindings the client registers, and the ids of declared screens
+ * the validator refused. Generated (build-time) bindings are already compiled
+ * into the client registry, so the list names only installed ones: those of
+ * ids the generated map does not carry, and those whose declared screen
+ * supersedes a generated binding of the same id (`getMergedFieldRendererBindings`).
+ * The refused ids include generated ids whose installed screen was refused.
  */
 export function runtimeFieldRendererBindingsPayload(
   opts?: { fresh?: boolean },
 ): RuntimeFieldRendererBindingsPayload {
-  const generatedIds = new Set(GENERATED_FIELD_RENDERER_BINDINGS.map((b) => b.id));
-  const { entries, refusedScreenIds, complete } = collectInstalled({ fresh: opts?.fresh === true });
+  const { refusedScreenIds, complete } = collectInstalled({ fresh: opts?.fresh === true });
+  const merged = getMergedFieldRendererBindings();
+  const generated = new Set<unknown>(GENERATED_FIELD_RENDERER_BINDINGS);
   return {
-    bindings: entries
-      .filter((b) => !generatedIds.has(b.id))
+    bindings: merged
+      .filter((b) => !generated.has(b))
       .map(({ id, kind, priority, midRunHitl, a2uiTranslator, params, screen }) => ({
         id,
         kind,
@@ -259,10 +265,10 @@ export function runtimeFieldRendererBindingsPayload(
         ...(params !== undefined ? { params } : {}),
         ...(screen !== undefined ? { screen } : {}),
       })),
-    refusedScreenIds: refusedScreenIds.filter((id) => !generatedIds.has(id)),
+    refusedScreenIds,
     ...(complete ? {} : { incomplete: true as const }),
     screenPins: Object.fromEntries(
-      getMergedFieldRendererBindings()
+      merged
         .filter((b) => b.screen !== undefined)
         .map((b) => [b.id, declaredScreenPin(b)]),
     ),
@@ -335,7 +341,11 @@ export function currentDeclaredScreenPin(
  * declaration it opened under (cinatra#3470)? "matches"; "changed" when the
  * renderer installed now declares another screen, or a screen where the step
  * opened with none, or none where it opened with one; "unknown" when what is
- * declared now cannot be read. A step is drawn, filled and submitted only on
+ * declared now cannot be read. A step whose declaration could not be read when
+ * it opened (`DECLARED_SCREEN_PIN_UNVERIFIED`) is "unknown" while it still
+ * cannot be read and "matches" the declaration once it reads cleanly: it is
+ * held, never stranded, and never answered past the declaration installed
+ * when it is sent. A step is drawn, filled and submitted only on
  * "matches". The answer that is sent reads it `fresh`: a cached declaration
  * can still name a screen updated or uninstalled within the cache's seconds.
  */
@@ -346,15 +356,18 @@ export function stepDeclarationStanding(
 ): "matches" | "changed" | "unknown" {
   const current = currentDeclaredScreenPin(xRenderer, opts);
   if (current === null) return "unknown";
-  return current === readDeclaredScreenPin(stepSchema) ? "matches" : "changed";
+  return stepPinAdmits(readDeclaredScreenPin(stepSchema), current) ? "matches" : "changed";
 }
 
 /**
  * A gate schema with the pin of the screen its renderer declares now, written
- * when the host parks the run on it. A renderer that declares no screen, or a
- * declaration that cannot be read, writes no pin (the schema of every gate
- * without a screen stays as it was): the step then reads as opened with no
- * screen, and a screen declared later is never drawn for it. A pin the gate's
+ * when the host parks the run on it. A renderer that declares no screen writes
+ * no pin (the schema of every gate without a screen stays as it was): the step
+ * then reads as opened with no screen, and a screen declared later is never
+ * drawn for it. A declaration that cannot be read is never written as no
+ * screen: the pin then says the step's declaration is unverified
+ * (`DECLARED_SCREEN_PIN_UNVERIFIED`), and the step is held until it reads
+ * cleanly (`stepDeclarationStanding`). A pin the gate's
  * own schema carries is dropped: only the host writes one. The pin is read
  * FRESH past the bindings cache, as the check before an answer is sent reads
  * it: a cached declaration can be one updated since, and a step pinned to it
@@ -366,10 +379,8 @@ export function withDeclaredScreenPin(
 ): Record<string, unknown> {
   const { [DECLARED_SCREEN_PIN_KEY]: _held, ...rest } = schema;
   void _held;
-  const pin = currentDeclaredScreenPin(xRenderer, { fresh: true });
-  return pin === null || pin === DECLARED_SCREEN_PIN_NONE
-    ? rest
-    : { ...rest, [DECLARED_SCREEN_PIN_KEY]: pin };
+  const pin = currentDeclaredScreenPin(xRenderer, { fresh: true }) ?? DECLARED_SCREEN_PIN_UNVERIFIED;
+  return pin === DECLARED_SCREEN_PIN_NONE ? rest : { ...rest, [DECLARED_SCREEN_PIN_KEY]: pin };
 }
 
 /**
@@ -377,6 +388,15 @@ export function withDeclaredScreenPin(
  * (precedence), then installed-package bindings for ids the generated map
  * does not carry. Deterministic; used by the server action, the A2UI
  * translator resolver, and kind-based ID lookups.
+ *
+ * AN INSTALLED DECLARED SCREEN SUPERSEDES THE GENERATED BINDING (cinatra#3470).
+ * An installed binding of a generated id that declares a screen is the
+ * installed truth of that id's screen: it takes the generated binding's place,
+ * so the run page draws it, the park pins it and the submit checks it, never
+ * the generated metadata it replaced. A generated id whose installed screen the
+ * validator refused is dropped: it reads as a refused screen, held, never as
+ * the generated binding. An installed duplicate that declares no screen leaves
+ * the generated binding in place.
  */
 const warnedGeneratedDivergence = new Set<string>();
 
@@ -384,11 +404,25 @@ export function getMergedFieldRendererBindings(): ReadonlyArray<CollectedBinding
   const generatedById = new Map(
     GENERATED_FIELD_RENDERER_BINDINGS.map((b) => [b.id, b]),
   );
+  const scan = collectInstalled();
+  const refused = new Set(scan.refusedScreenIds);
   const runtimeOnly: CollectedBinding[] = [];
-  for (const b of collectInstalledFieldRendererBindings()) {
+  const superseding = new Map<string, CollectedBinding>();
+  for (const b of scan.entries) {
     const generated = generatedById.get(b.id);
     if (!generated) {
       runtimeOnly.push(b);
+      continue;
+    }
+    if (b.screen !== undefined) {
+      superseding.set(b.id, b);
+      if (!warnedGeneratedDivergence.has(b.id)) {
+        warnedGeneratedDivergence.add(b.id);
+        console.warn(
+          `[field-renderer-bindings] installed package ${b.declaredBy} declares a screen for ${b.id}; ` +
+            `it supersedes the generated binding (declared by ${generated.declaredBy})`,
+        );
+      }
       continue;
     }
     // Generated precedence; a DIVERGENT runtime duplicate is named loudly
@@ -408,7 +442,9 @@ export function getMergedFieldRendererBindings(): ReadonlyArray<CollectedBinding
     }
   }
   return [
-    ...(GENERATED_FIELD_RENDERER_BINDINGS as ReadonlyArray<CollectedBinding>),
+    ...(GENERATED_FIELD_RENDERER_BINDINGS as ReadonlyArray<CollectedBinding>)
+      .filter((b) => !refused.has(b.id))
+      .map((b) => superseding.get(b.id) ?? b),
     ...runtimeOnly,
   ];
 }

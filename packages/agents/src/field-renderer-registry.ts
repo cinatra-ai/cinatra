@@ -277,6 +277,24 @@ export function continueAwaitsAPick(
 export const DECLARED_SCREEN_PIN_KEY = "x-declared-screen";
 /** The pin of a step whose renderer declared no screen when it opened. */
 export const DECLARED_SCREEN_PIN_NONE = "none";
+/**
+ * The pin of a step whose renderer's declaration could not be read when it
+ * opened (a mount or manifest unreadable at the park). It is never read as
+ * "no screen": every reader holds the step as "could not be loaded" while the
+ * declaration still cannot be read, and once it reads cleanly, the step is
+ * drawn and answered under the declaration installed then (`stepPinAdmits`),
+ * which the check before an answer is sent reads fresh.
+ */
+export const DECLARED_SCREEN_PIN_UNVERIFIED = "unknown";
+
+/**
+ * Does a step pinned `stepPin` take the declaration whose pin is `current`
+ * (cinatra#3470)? The declaration it opened under, or any cleanly read one
+ * for a step whose declaration could not be read when it opened.
+ */
+export function stepPinAdmits(stepPin: string, current: string): boolean {
+  return stepPin === current || stepPin === DECLARED_SCREEN_PIN_UNVERIFIED;
+}
 
 /**
  * The pin a step's gate schema carries. A schema without one (a step parked
@@ -473,6 +491,9 @@ export function awaitsFreshRendererBindingRead(
   if (bindings.refusedIds?.has(xRenderer)) return false;
   const read = bindings.freshlyReadIds;
   if (read === "every" || read.has(freshReadKey(xRenderer, step?.key))) return false;
+  // A step whose declaration could not be read when it opened takes only a
+  // declaration read for it past every cache.
+  if (step?.pin === DECLARED_SCREEN_PIN_UNVERIFIED) return true;
   const answered = step === undefined ? null : answeredScreenPin(xRenderer, bindings);
   if (answered !== null && answered !== step?.pin) return true;
   return !isRendererBound(xRenderer) && !bindings.announcedIds.has(xRenderer);
@@ -507,7 +528,10 @@ function serverActions(): Promise<typeof import("./server-actions")> {
  * (the generated bindings, the host's own entries, a conversation card's
  * registration) are never in it, so a runtime answer never touches them.
  */
-const runtimeRegisteredEntries = new Map<string, FieldRendererEntry>();
+const runtimeRegisteredEntries = new Map<
+  string,
+  { entry: FieldRendererEntry; displaced: FieldRendererEntry | undefined }
+>();
 
 /**
  * Is the entry registered under exactly this id one a runtime answer (an
@@ -516,8 +540,8 @@ const runtimeRegisteredEntries = new Map<string, FieldRendererEntry>();
  * failed never vouches for it.
  */
 export function isRendererBoundByRuntimeRead(xRenderer: string): boolean {
-  const entry = runtimeRegisteredEntries.get(xRenderer);
-  return entry !== undefined && fieldRendererRegistry.list().includes(entry);
+  const held = runtimeRegisteredEntries.get(xRenderer);
+  return held !== undefined && fieldRendererRegistry.list().includes(held.entry);
 }
 
 /**
@@ -526,6 +550,8 @@ export function isRendererBoundByRuntimeRead(xRenderer: string): boolean {
  * (it is registered anew, or not at all when the registration refuses it),
  * names it refused, or, being complete, names it not at all. An incomplete
  * answer is no proof that an id is gone, so an entry it does not name stays.
+ * A registration replaces every entry of its id, so the entry it replaced is
+ * kept with it and registered again when this road's entry is dropped.
  */
 function reconcileRuntimeRegistrations(
   register: (bindings: ReadonlyArray<FieldRendererBindingInput>) => void,
@@ -535,10 +561,17 @@ function reconcileRuntimeRegistrations(
 ): void {
   const named = new Set(bindings.map((b) => b.id));
   const refused = new Set(refusedIds);
-  for (const [id, entry] of runtimeRegisteredEntries) {
+  for (const [id, held] of runtimeRegisteredEntries) {
     if (named.has(id) || refused.has(id) || !incomplete) {
-      fieldRendererRegistry.unregisterEntry(entry);
+      const stillRegistered = fieldRendererRegistry.list().includes(held.entry);
+      fieldRendererRegistry.unregisterEntry(held.entry);
       runtimeRegisteredEntries.delete(id);
+      // The entry this road's registration replaced (a host-owned or built-in
+      // renderer under the same id) comes back. One another source registered
+      // since in place of this road's entry stays as it is.
+      if (stillRegistered && held.displaced !== undefined && !isRendererBound(id)) {
+        fieldRendererRegistry.register(held.displaced);
+      }
     }
   }
   if (bindings.length === 0) return;
@@ -549,7 +582,8 @@ function reconcileRuntimeRegistrations(
     // Only an entry this registration made: one it refused leaves another
     // source's entry in place, and that entry is not this road's to remove.
     const entry = entryOf(b.id);
-    if (entry !== undefined && entry !== before.get(b.id)) runtimeRegisteredEntries.set(b.id, entry);
+    const displaced = before.get(b.id);
+    if (entry !== undefined && entry !== displaced) runtimeRegisteredEntries.set(b.id, { entry, displaced });
   }
 }
 

@@ -30,6 +30,8 @@ import {
   answeredScreenPin,
   midRunBindingReadsAsKind,
   DECLARED_SCREEN_PIN_NONE,
+  DECLARED_SCREEN_PIN_UNVERIFIED,
+  stepPinAdmits,
   type RendererBindingsLoad,
   type RendererStep,
 } from "./field-renderer-registry";
@@ -438,7 +440,14 @@ export function stepScreenPinHolds(
 ): boolean {
   if (xRenderer === "") return false;
   const answered = bindings.status === "loaded" ? answeredScreenPin(xRenderer, bindings) : null;
-  if (answered !== null) return answered !== step.pin;
+  if (answered !== null) {
+    // A step whose declaration could not be read when it opened waits for a
+    // read made for it (`awaitsFreshRendererBindingRead`), then takes it.
+    if (step.pin === DECLARED_SCREEN_PIN_UNVERIFIED) {
+      return awaitsFreshRendererBindingRead(xRenderer, bindings, step);
+    }
+    return !stepPinAdmits(step.pin, answered);
+  }
   return step.pin !== DECLARED_SCREEN_PIN_NONE;
 }
 
