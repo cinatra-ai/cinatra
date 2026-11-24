@@ -28,11 +28,10 @@
 // the case instead of skipping it, so the guard cannot pass vacuously.
 //
 // ORDER: while a pack declares the flag and still declares its renderer, the
-// renderer kind it declares is named in product code (the host's kind table in
-// packages/agents/src/register-default-renderers.ts) and this test goes red.
-// The pack change deletes the renderer, and the core lock bump drops the kind
-// with it: the WordPress pack's `wordpress-draft-confirm` left with its re-pin;
-// the LinkedIn pack's `linkedin-draft-review` leaves with its own.
+// renderer kinds `linkedin-draft-review` (register-default-renderers.ts:188) and
+// `wordpress-draft-confirm` (:233) are named in product code and this test goes
+// red. The pack changes delete those renderers in the same pack PRs, and the
+// core lock bump must drop the two keys with them.
 
 import { afterEach, describe, expect, it } from "vitest";
 import * as path from "node:path";
