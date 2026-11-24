@@ -323,6 +323,10 @@ async function expectTheImageFloor(container: HTMLElement) {
   // wait for it under the same limit, never read it in the bar's render.
   await waitFor(
     () => {
+      const control = terminalControl(container);
+      if (!control || control.disabled) {
+        throw new Error("the decision bar lost its enabled terminal control while the window mounted");
+      }
       if (!container.querySelector(CHROME_PROMPT_WINDOW)) {
         throw new Error("the image gate drew no prompt window");
       }
