@@ -7,7 +7,7 @@
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 vi.mock("@cinatra-ai/sdk-ui", () => ({
   LoadingSpinner: () => null,
@@ -57,8 +57,10 @@ vi.mock("../agent-ui-override-registry", () => ({
 }));
 
 const publishStateMock = vi.fn();
+const publishDecideMock = vi.fn();
 vi.mock("../publish-decision-card-actions", () => ({
   getPublishDecisionCardStateAction: (input: { runId: string }) => publishStateMock(input),
+  decidePublishDecisionCardAction: (input: unknown) => publishDecideMock(input),
 }));
 
 const RUN_ID = "run-4150-gate";
@@ -67,6 +69,7 @@ const PENDING = {
   runId: RUN_ID,
   agentName: "Blog publisher",
   rows: [{ label: "Title", value: "Spring launch" }],
+  decisionId: "d1",
   mayDecide: true,
 };
 
@@ -387,5 +390,54 @@ describe("AgenticRunPanel at a publish gate (cinatra#4150)", () => {
     publishStateMock.mockImplementation(async () => ({ ...PENDING, state: "declined", deciderName: "Ana", reason: null }));
     const mounted = await mountPanel(undefined, undefined, "stopped");
     expect(SETTLED_CARD(mounted.container, "publish-card-declined")).toEqual({ card: 1, marker: 1 });
+  });
+});
+
+// cinatra#4758: THE DECIDE DOOR on the run panel. A reader who may approve sees Allow, Do not allow and the note live,
+// and an answer goes through the session action; a reader who may view but not decide gets both controls disabled.
+describe("AgenticRunPanel's publish card decides (cinatra#4758)", () => {
+  const button = (container: HTMLElement, label: string) =>
+    [...container.querySelectorAll<HTMLButtonElement>(`[data-lifecycle-card="publish_decision"] button`)].find(
+      (b) => b.textContent === label,
+    )!;
+
+  it("a reader who may approve: both controls and the note are live, and Allow sends through the session door", async () => {
+    publishStateMock.mockImplementation(async () => PENDING);
+    publishDecideMock.mockResolvedValue("decided");
+    const mounted = await mountPanel();
+    expect(button(mounted.container, "Allow").disabled).toBe(false);
+    expect(button(mounted.container, "Do not allow").disabled).toBe(false);
+    expect(mounted.container.querySelector<HTMLTextAreaElement>('[data-lifecycle-card="publish_decision"] textarea')!.disabled).toBe(false);
+    await act(async () => {
+      fireEvent.click(button(mounted.container, "Allow"));
+    });
+    await flush();
+    expect(publishDecideMock).toHaveBeenCalledWith({ runId: RUN_ID, decisionId: "d1", answer: "approve", note: "" });
+  });
+
+  it("Do not allow sends the note through the session door", async () => {
+    publishStateMock.mockImplementation(async () => PENDING);
+    publishDecideMock.mockResolvedValue("decided");
+    const mounted = await mountPanel();
+    const note = mounted.container.querySelector<HTMLTextAreaElement>('[data-lifecycle-card="publish_decision"] textarea')!;
+    fireEvent.change(note, { target: { value: "Not ready yet." } });
+    await act(async () => {
+      fireEvent.click(button(mounted.container, "Do not allow"));
+    });
+    await flush();
+    expect(publishDecideMock).toHaveBeenCalledWith({ runId: RUN_ID, decisionId: "d1", answer: "decline", note: "Not ready yet." });
+  });
+
+  it("the controls follow the reader: live for one who may approve, disabled with the reason for one who may only view", async () => {
+    publishStateMock.mockImplementation(async () => PENDING);
+    const decider = await mountPanel();
+    expect(button(decider.container, "Allow").disabled).toBe(false);
+    expect(decider.container.textContent).not.toContain("needs approve access on the run");
+    cleanup();
+    publishStateMock.mockImplementation(async () => ({ ...PENDING, mayDecide: false }));
+    const mounted = await mountPanel();
+    expect(button(mounted.container, "Allow").disabled).toBe(true);
+    expect(button(mounted.container, "Do not allow").disabled).toBe(true);
+    expect(mounted.container.textContent).toContain("Deciding whether this change is made needs approve access on the run");
   });
 });

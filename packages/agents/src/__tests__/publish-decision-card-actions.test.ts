@@ -11,9 +11,11 @@ vi.mock("@/lib/auth-session", () => session);
 const core = vi.hoisted(() => ({
   PUBLISH_DECISION_CARD_NONE: Object.freeze({ state: "none" }),
   resolvePublishDecisionCardStateForActor: vi.fn(),
+  decidePublishDecisionCardForActor: vi.fn(),
 }));
 vi.mock("../publish-decision-card-core", () => core);
 
+import * as actions from "../publish-decision-card-actions";
 import { getPublishDecisionCardStateAction } from "../publish-decision-card-actions";
 
 beforeEach(() => {
@@ -49,5 +51,51 @@ describe("getPublishDecisionCardStateAction", () => {
     arrange();
     expect(await getPublishDecisionCardStateAction({ runId: "run-1" })).toEqual({ state: "none" });
     expect(core.resolvePublishDecisionCardStateForActor).not.toHaveBeenCalled();
+  });
+});
+
+// cinatra#4758: the card's ANSWER for a cookie host. The same session person as the read, handed to the core's answer;
+// no session is no actor, and nothing is decided.
+describe("decidePublishDecisionCardAction", () => {
+  type Decide = (input: Record<string, unknown>) => Promise<string>;
+  const decide = (input: Record<string, unknown>) => {
+    const fn = (actions as unknown as Record<string, unknown>).decidePublishDecisionCardAction;
+    expect(typeof fn, "the session decide door is exported").toBe("function");
+    return (fn as Decide)(input);
+  };
+
+  beforeEach(() => {
+    core.decidePublishDecisionCardForActor.mockResolvedValue("decided");
+  });
+
+  it("hands the core the answer and the session's person as a human UI actor, with the viewer's standing", async () => {
+    expect(await decide({ runId: "run-1", answer: "decline", note: "Not ready yet." })).toBe("decided");
+    expect(core.decidePublishDecisionCardForActor).toHaveBeenCalledWith(
+      { runId: "run-1", answer: "decline", note: "Not ready yet." },
+      {
+        actor: { actorType: "human", source: "ui", userId: "user-a" },
+        roleHints: { orgRole: "member", teamIds: ["t1"], actorOrganizationId: "org-1" },
+      },
+    );
+  });
+
+  it("answers what the core answers: a second answer is no longer open", async () => {
+    core.decidePublishDecisionCardForActor.mockResolvedValue("not_open");
+    expect(await decide({ runId: "run-1", answer: "approve", note: "" })).toBe("not_open");
+  });
+
+  it("an actor smuggled into the input is not the decider", async () => {
+    await decide({ runId: "run-1", answer: "approve", note: "", who: { actor: { userId: "user-z" } } });
+    const who = core.decidePublishDecisionCardForActor.mock.calls[0]![1] as { actor: { userId: string } };
+    expect(who.actor.userId).toBe("user-a");
+  });
+
+  it.each([
+    ["no session", () => session.requireAuthSession.mockRejectedValue(new Error("Unauthorized"))],
+    ["no actor context", () => session.requireActorContext.mockRejectedValue(new Error("no org"))],
+  ])("%s is failed, and nothing is decided", async (_name, arrange) => {
+    arrange();
+    expect(await decide({ runId: "run-1", answer: "approve", note: "" })).toBe("failed");
+    expect(core.decidePublishDecisionCardForActor).not.toHaveBeenCalled();
   });
 });

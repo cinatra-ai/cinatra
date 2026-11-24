@@ -308,6 +308,41 @@ describe("decide", () => {
     expect(calls.set[0]).toMatchObject({ decidedBy: "person-1", decisionNote: "not this week" });
   });
 
+  // A release records the run's pause generation its claim holds, in the same UPDATE that releases the row, so a later
+  // read tells a run still parked at that pause (its resume died before the fence) from one that went on.
+  // red-first-expect: expected { status: 'released', …(3) } to match object { status: 'released', …(3) }
+  it("a release records the pause generation in the same UPDATE, and the row reads it back", async () => {
+    answers.update = async () => [stored({ status: "released", decidedBy: "person-1", releasedPauseGeneration: 7 })];
+    const result = await decide("d1", { from: "parked", to: "released", actor: "person-1", pauseGeneration: 7 } as never);
+    expect(calls.set).toHaveLength(1);
+    expect(calls.set[0]).toMatchObject({ status: "released", decidedBy: "person-1", decisionNote: null, releasedPauseGeneration: 7 });
+    expect(result).toMatchObject({ outcome: "won", decision: { releasedPauseGeneration: 7 } });
+    answers.update = async () => [stored({ status: "declined" })];
+    await decide("d1", { from: "parked", to: "declined", actor: "person-1" });
+    expect(calls.set[1]).not.toHaveProperty("releasedPauseGeneration");
+  });
+
+  it("refuses a pause generation on anything but a release, or one that is not a whole number, before any write", async () => {
+    for (const [patch, code] of [
+      [{ to: "declined", actor: "person-1", pauseGeneration: 3 }, "invalid-transition"],
+      [{ to: "expired", actor: null, pauseGeneration: 3 }, "invalid-transition"],
+      [{ to: "released", actor: "person-1", pauseGeneration: -1 }, "invalid-input"],
+      [{ to: "released", actor: "person-1", pauseGeneration: 1.5 }, "invalid-input"],
+    ] as const) {
+      expect(await codeOf(decide("d1", { from: "parked", ...patch } as never))).toBe(code);
+    }
+    expect(calls.set).toHaveLength(0);
+  });
+
+  it("a stored released pause generation it cannot read is a malformed row; none reads as null", async () => {
+    answers.update = async () => [stored({ status: "released", releasedPauseGeneration: -4 })];
+    expect(await codeOf(decide("d1", { from: "parked", to: "released", actor: "person-1" }))).toBe("malformed-row");
+    answers.update = async () => [stored({ status: "released" })];
+    expect(await decide("d1", { from: "parked", to: "released", actor: "person-1" })).toMatchObject({
+      outcome: "won", decision: { releasedPauseGeneration: null },
+    });
+  });
+
   it.each(["expired", "run_ended"] as const)("%s names no person", async (to) => {
     answers.update = async () => [stored({ status: to })];
     await decide("d1", { from: "parked", to, actor: null });
@@ -909,6 +944,20 @@ describe("cinatra#4150 PR 3a, pre-review 3: the expiry's own rules in the store"
     expect(calls.via).toEqual(["tx.update"]);
   });
 
+  // a card's answer names its row, and the row must belong to the run whose
+  // rights were checked, in the same UPDATE; a row of another run is not found, never a status that run leaks.
+  it("decide with ofRun wins only on a row of that run, in the same UPDATE, and its re-read asks the same", async () => {
+    answers.update = async () => [];
+    answers.select = async () => [];
+    expect(await codeOf(decide("d1", { from: "parked", to: "declined", actor: "person-1", ofRun: "run-1", newestOnly: true } as never))).toBe("not-found");
+    const update = rendered(calls.where[0]);
+    expect(update.params).toEqual(["d1", "parked", "run-1"]);
+    expect(update.sql).toMatch(/"id" = \$1 and .*"status" = \$2 and .*"run_id" = \$3 and not exists/);
+    const reread = rendered(calls.where[1]);
+    expect(reread.params).toEqual(["d1", "run-1"]);
+    expect(calls.via).toEqual(["tx.update", "tx.select"]);
+  });
+
   it("decide without newestOnly asks nothing about other decisions", async () => {
     answers.update = async () => [stored({ status: "run_ended" })];
     await decide("d1", { from: "parked", to: "run_ended", actor: null });
@@ -958,6 +1007,7 @@ describe("the decision keeps the rows its template declared at the park (review 
     expect(result.decision.declaredRows).toEqual([]);
   });
 
+  // red-first-expect: expected [ 'd1', 'parked' ] to deeply equal [ 'd1', 'parked', 'run-1' ]
   it("refuses a declaration that is not rows of a label and an input, before any write", async () => {
     for (const bad of [
       [{ label: "", input: "title" }],
@@ -974,7 +1024,6 @@ describe("the decision keeps the rows its template declared at the park (review 
 
   // cinatra#4738 on main's declared rows: a list or artifacts row the dispatched plan declares is kept with its kind and
   // columns, never cut down to a text row (which would draw a list as nothing and an artifacts row as nothing).
-  // red-first-expect: to match object { Object (declaredRows) }
   it("keeps a list row's columns and an artifacts row's kind, at the park and through the dispatched plan", async () => {
     const KINDED = [
       { label: "Title", input: "title" },
@@ -997,6 +1046,7 @@ describe("the decision keeps the rows its template declared at the park (review 
     }
   });
 
+  // red-first-expect: expected [ 'd1', 'parked' ] to deeply equal [ 'd1', 'parked', 'run-1' ]
   it("a stored declaration the module cannot read is a malformed row, never a quiet fallback", async () => {
     for (const text of ["{nope", '{"label":"Title"}', '[{"label":"Title"}]']) {
       answers.select = async () => [stored({ declaredRows: text })];
@@ -1075,6 +1125,7 @@ describe("round 20: a decision belongs to one reset generation of its run", () =
 describe("round 19: the park copies its node's rows from the dispatched plan", () => {
   const MAP = JSON.stringify({ publish: [{ label: "Title", input: "title" }], other: [{ label: "X", input: "x" }] });
 
+  // red-first-expect: expected [ 'd1', 'parked' ] to deeply equal [ 'd1', 'parked', 'run-1' ]
   it("answers the node's rows of the recorded map, [] for a node it declares none for, and null when none is recorded", async () => {
     answers.select = async () => [{ rows: MAP }];
     expect(await readDispatchedPublishRows("run-1", "publish")).toEqual([{ label: "Title", input: "title" }]);
@@ -1094,6 +1145,7 @@ describe("round 19: the park copies its node's rows from the dispatched plan", (
     expect(await readDispatchedPublishRows("run-1", "publish")).toBeNull();
   });
 
+  // red-first-expect: expected [ 'd1', 'parked' ] to deeply equal [ 'd1', 'parked', 'run-1' ]
   it("a read error propagates (the park records nothing for it)", async () => {
     answers.select = async () => {
       throw new Error("db down");

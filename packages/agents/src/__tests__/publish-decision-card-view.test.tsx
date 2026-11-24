@@ -26,7 +26,7 @@ const ROWS = [
   { label: "Title", value: "Spring launch" },
   { label: "Site", value: "Company blog" },
 ];
-const PENDING = { state: "pending", runId: RUN_ID, agentName: "Blog publisher", rows: ROWS, mayDecide: true };
+const PENDING = { state: "pending", runId: RUN_ID, agentName: "Blog publisher", rows: ROWS, decisionId: "d1", mayDecide: true };
 const RESTRICTED = { ...PENDING, mayDecide: false };
 const APPROVED = { state: "approved", runId: RUN_ID, agentName: "Blog publisher", rows: ROWS, deciderName: "Dana Okafor" };
 const DECLINED = { ...APPROVED, state: "declined", reason: "Not ready yet." };
@@ -186,7 +186,6 @@ describe("the drawn card", () => {
 
   // cinatra#4150 W4: a list row draws a compact table under its label, and says how many records it does not draw.
   // Before the fix the card cannot read a list row, so it draws no card and the root lookup fails:
-  // red-first-expect: no card root
   it("a list row draws its columns and records as a table, with the count it does not draw", async () => {
     const list = { kind: "list", label: "Recipients", columns: ["Name", "Email"], items: [["Ada", "ada@example.test"], ["Bo", ""]], total: 7 };
     stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ROWS[0], list] }));
@@ -215,7 +214,6 @@ describe("the drawn card", () => {
   // cinatra#4738, spec XV.1 "a wide table scrolls inside its own frame": the rows sit in a grid track that can never
   // be wider than the card's content box, so a wide table or the items panel cannot push past the card at 360 px.
   // Before the fix the track was sized by its widest row's content:
-  // red-first-expect: to include 'grid-cols-[minmax(0,1fr)]'
   it("the row track is minmax(0, 1fr) and no row can widen it", async () => {
     stateMock.mockImplementation(async () => PENDING);
     const root = await rootOf(mountOn("run_card", okDoor()));
@@ -226,7 +224,6 @@ describe("the drawn card", () => {
   });
 
   // Before the list and items rows were read, the card drew nothing for them:
-  // red-first-expect: no card root
   it("the table scrolls in its own frame and the items panel keeps to the card's content box", async () => {
     const list = { kind: "list", label: "Recipients", columns: ["Name", "Email"], items: [["Ada", "ada@example.test"]], total: 1 };
     const items = { kind: "artifacts", label: "Pages", ref: "Abc_123-xyz", islandSrc: null };
@@ -561,13 +558,293 @@ describe("the decide door", () => {
       fireEvent.click(root.querySelector(APPROVE)!);
     });
     await settle();
-    expect(decide).toHaveBeenLastCalledWith({ runId: RUN_ID, answer: "approve", note: "" });
+    expect(decide).toHaveBeenLastCalledWith({ runId: RUN_ID, decisionId: "d1", answer: "approve", note: "" });
     await act(async () => {
       fireEvent.click(mounted.container.querySelector(DECLINE)!);
     });
     await settle();
-    expect(decide).toHaveBeenLastCalledWith({ runId: RUN_ID, answer: "decline", note: "Not ready yet." });
+    expect(decide).toHaveBeenLastCalledWith({ runId: RUN_ID, decisionId: "d1", answer: "decline", note: "Not ready yet." });
     expect(stateMock).toHaveBeenCalledTimes(3);
+  });
+
+  // the answer names the decision the card SHOWS, so a card drawn for an earlier
+  // gate can never answer a newer one it has not drawn.
+  it("each answer names the decision the card shows, and a card re-read onto a newer decision names that one", async () => {
+    const decide = vi.fn<PublishDecisionDecide>(async () => "failed");
+    const mounted = mountOn("site_widget", decide);
+    const root = await rootOf(mounted);
+    await act(async () => {
+      fireEvent.click(root.querySelector(DECLINE)!);
+    });
+    await settle();
+    expect(decide.mock.calls[0]![0]).toMatchObject({ runId: RUN_ID, decisionId: "d1", answer: "decline" });
+    brokerAnswer = { status: 200, body: { ...PENDING, decisionId: "d2" } };
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await settle();
+    await act(async () => {
+      fireEvent.click(mounted.container.querySelector(APPROVE)!);
+    });
+    await settle();
+    expect(decide.mock.calls[1]![0]).toMatchObject({ runId: RUN_ID, decisionId: "d2", answer: "approve" });
+  });
+
+  // an answer that did not land is told, never silent.
+  // What the card holds for one decision (the note, "no longer open", the answer in flight) never reaches another.
+  const moveTo = async (next: unknown) => {
+    brokerAnswer = { status: 200, body: next };
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    await settle();
+  };
+
+  it("a re-read onto a newer decision starts its note over, and Do not allow sends the newer decision's own note", async () => {
+    const decide = vi.fn<PublishDecisionDecide>(async () => "decided");
+    const mounted = mountOn("site_widget", decide);
+    const root = await rootOf(mounted);
+    await act(async () => {
+      fireEvent.change(root.querySelector("textarea")!, { target: { value: "Wrong channel." } });
+    });
+    await moveTo({ ...PENDING, decisionId: "d2" });
+    const after = await rootOf(mounted);
+    // red-first-expect: expected 'Wrong channel.' to be ''
+    expect(after.querySelector("textarea")?.value).toBe("");
+    await act(async () => {
+      fireEvent.click(after.querySelector(DECLINE)!);
+    });
+    await settle();
+    expect(decide).toHaveBeenLastCalledWith({ runId: RUN_ID, decisionId: "d2", answer: "decline", note: "" });
+  });
+
+  it("a card that read no longer open draws the newer decision a re-read brings, with its controls", async () => {
+    const mounted = mountOn("site_widget", vi.fn<PublishDecisionDecide>(async () => "not_open"));
+    const root = await rootOf(mounted);
+    await act(async () => {
+      fireEvent.click(root.querySelector(APPROVE)!);
+    });
+    await settle();
+    expect((await rootOf(mounted)).getAttribute("data-lifecycle-card-state")).toBe("no_longer_open");
+    await moveTo({ ...PENDING, decisionId: "d2" });
+    const after = await rootOf(mounted);
+    // red-first-expect: expected 'no_longer_open' to be 'pending'
+    expect(after.getAttribute("data-lifecycle-card-state")).toBe("pending");
+    expect(after.querySelector<HTMLButtonElement>(APPROVE)?.disabled).toBe(false);
+  });
+
+  it("a reply that comes back for a decision the card no longer shows changes nothing on the newer one", async () => {
+    const replies: Array<(outcome: "not_open" | "failed") => void> = [];
+    const decide = vi.fn<PublishDecisionDecide>(() => new Promise((resolve) => replies.push(resolve)));
+    const mounted = mountOn("site_widget", decide);
+    const root = await rootOf(mounted);
+    await act(async () => {
+      fireEvent.click(root.querySelector(APPROVE)!);
+    });
+    await moveTo({ ...PENDING, decisionId: "d2" });
+    // The earlier decision's answer is still out; the newer decision's controls are its own.
+    // red-first-expect: expected true to be false
+    expect((await rootOf(mounted)).querySelector<HTMLButtonElement>(APPROVE)?.disabled).toBe(false);
+    await act(async () => {
+      replies[0]!("not_open");
+    });
+    await settle();
+    const after = await rootOf(mounted);
+    expect(after.getAttribute("data-lifecycle-card-state")).toBe("pending");
+    expect(after.querySelector('[role="status"]')).toBeNull();
+    await act(async () => {
+      fireEvent.click(after.querySelector(APPROVE)!);
+    });
+    expect(decide.mock.calls[1]![0]).toMatchObject({ decisionId: "d2", answer: "approve" });
+    await act(async () => {
+      replies[1]!("failed");
+    });
+    await settle();
+    expect((await rootOf(mounted)).querySelector('[role="status"]')?.textContent).toBe("The decision could not be sent.");
+  });
+
+  it("a reply that comes back after a re-read settled the decision never replaces the settled reading", async () => {
+    for (const settled of [APPROVED, DECLINED, EXPIRED]) {
+      brokerAnswer = { status: 200, body: PENDING };
+      const replies: Array<(outcome: "not_open" | "failed") => void> = [];
+      const decide = vi.fn<PublishDecisionDecide>(() => new Promise((resolve) => replies.push(resolve)));
+      const mounted = mountOn("site_widget", decide);
+      const root = await rootOf(mounted);
+      await act(async () => {
+        fireEvent.click(root.querySelector(APPROVE)!);
+      });
+      await moveTo(settled);
+      expect((await rootOf(mounted)).getAttribute("data-lifecycle-card-state")).toBe(settled.state);
+      await act(async () => {
+        replies[0]!("not_open");
+      });
+      await settle();
+      const after = await rootOf(mounted);
+      // red-first-expect: expected 'no_longer_open' to be 'approved'
+      expect(after.getAttribute("data-lifecycle-card-state")).toBe(settled.state);
+      expect(after.textContent).not.toContain("no longer open");
+      mounted.unmount();
+    }
+  });
+
+  // The settled re-read and the late reply land in ONE batch: the reply's guard still reads the open decision (the ref
+  // follows the drawn decision only after a commit), so the reply's reading is recorded. The card still draws the
+  // settled decision: "no longer open" and "failed" speak only for the decision the card shows.
+  // red-first-expect: expected 'no_longer_open' to be 'approved'
+  it("a settled re-read and a late reply in the same batch: the settled reading stands", async () => {
+    for (const [settled, outcome] of [[APPROVED, "not_open"], [DECLINED, "not_open"], [EXPIRED, "failed"]] as const) {
+      const replies: Array<(outcome: "not_open" | "failed") => void> = [];
+      const decide = vi.fn<PublishDecisionDecide>(() => new Promise((resolve) => replies.push(resolve)));
+      const read = (state: unknown) => ({ state: state as never, refreshing: false, reload: () => undefined });
+      const card = (state: unknown) => (
+        <LifecycleCardSurfaceProvider host="run_card">
+          <PublishDecisionCard runId={RUN_ID} decide={decide} read={read(state)} />
+        </LifecycleCardSurfaceProvider>
+      );
+      const mounted = render(card(PENDING));
+      await act(async () => {
+        fireEvent.click((await rootOf(mounted)).querySelector(APPROVE)!);
+      });
+      expect(decide).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        mounted.rerender(card(settled));
+        replies[0]!(outcome);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await settle();
+      const after = await rootOf(mounted);
+      expect(after.getAttribute("data-lifecycle-card-state")).toBe(settled.state);
+      expect(after.textContent).not.toContain("no longer open");
+      expect(after.textContent).not.toContain("The decision could not be sent.");
+      mounted.unmount();
+    }
+  });
+
+  // red-first-expect: expected true to be false
+  it("a reply that lands while a read briefly drew no decision leaves the controls live when the same decision returns", async () => {
+    const replies: Array<(outcome: "failed") => void> = [];
+    const decide = vi.fn<PublishDecisionDecide>(() => new Promise((resolve) => replies.push(resolve)));
+    const read = (state: unknown) => ({ state: state as never, refreshing: false, reload: () => undefined });
+    const card = (state: unknown) => (
+      <LifecycleCardSurfaceProvider host="run_card">
+        <PublishDecisionCard runId={RUN_ID} decide={decide} read={read(state)} />
+      </LifecycleCardSurfaceProvider>
+    );
+    const mounted = render(card(PENDING));
+    await act(async () => {
+      fireEvent.click((await rootOf(mounted)).querySelector(APPROVE)!);
+    });
+    expect(decide).toHaveBeenCalledTimes(1);
+    // A read fault answers "none" while the answer is in flight; the answer then fails.
+    await act(async () => {
+      mounted.rerender(card({ state: "none" }));
+    });
+    await settle();
+    await act(async () => {
+      replies[0]!("failed");
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await settle();
+    // The next read draws the same open decision again: its controls are live.
+    await act(async () => {
+      mounted.rerender(card(PENDING));
+    });
+    await settle();
+    const after = await rootOf(mounted);
+    expect(after.querySelector<HTMLButtonElement>(APPROVE)?.disabled).toBe(false);
+    expect(after.querySelector<HTMLButtonElement>(DECLINE)?.disabled).toBe(false);
+    mounted.unmount();
+  });
+
+  // red-first-expect: expected 'no_longer_open' to be 'pending'
+  it("the same decision allowed by another person whose run did not go on offers Allow again, whatever the open request's reply said", async () => {
+    for (const replyFirst of [true, false]) {
+      const replies: Array<(outcome: "not_open") => void> = [];
+      const decide = vi.fn<PublishDecisionDecide>(() => new Promise((resolve) => replies.push(resolve)));
+      const read = (state: unknown) => ({ state: state as never, refreshing: false, reload: () => undefined });
+      const card = (state: unknown) => (
+        <LifecycleCardSurfaceProvider host="run_card">
+          <PublishDecisionCard runId={RUN_ID} decide={decide} read={read(state)} />
+        </LifecycleCardSurfaceProvider>
+      );
+      const mounted = render(card(PENDING));
+      await act(async () => {
+        fireEvent.click((await rootOf(mounted)).querySelector(APPROVE)!);
+      });
+      const reply = async () => {
+        await act(async () => {
+          replies[0]!("not_open");
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        await settle();
+      };
+      const allowAgain = async () => {
+        await act(async () => {
+          mounted.rerender(card({ ...PENDING, resumeOnly: true }));
+        });
+        await settle();
+      };
+      // Another person allowed the same decision and its resume failed: the next read draws it as Allow again.
+      if (replyFirst) {
+        await reply();
+        await allowAgain();
+      } else {
+        await allowAgain();
+        await reply();
+      }
+      const after = await rootOf(mounted);
+      expect(after.getAttribute("data-lifecycle-card-state"), String(replyFirst)).toBe("pending");
+      expect(after.textContent).not.toContain("no longer open");
+      expect(after.textContent).toContain("Allow again to let it go on.");
+      expect(after.querySelector<HTMLButtonElement>(APPROVE)?.disabled).toBe(false);
+      mounted.unmount();
+    }
+  });
+
+  it("a decision allowed whose run did not go on offers Allow only, with no note and no Do not allow", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, resumeOnly: true }));
+    const root = await rootOf(mountOn("run_card", okDoor()));
+    expect(root.getAttribute("data-lifecycle-card-state")).toBe("pending");
+    expect(root.querySelector<HTMLButtonElement>(APPROVE)?.disabled).toBe(false);
+    expect(root.querySelector(DECLINE)).toBeNull();
+    expect(root.querySelector("textarea")).toBeNull();
+    expect(root.textContent).toContain("Allow again to let it go on.");
+  });
+
+  // red-first-expect: to have a length of 1 but got +0
+  it("the Allow-again card carries the anchor the approved design names for it (app-lifecycle-cards.html XV)", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, resumeOnly: true }));
+    const root = await rootOf(mountOn("run_card", okDoor()));
+    expect(root.querySelectorAll('[data-conformance-id="publish-card-allow-again"]')).toHaveLength(1);
+  });
+
+  it("an answer that did not land says so under the controls, keeps them live, and clears on the next answer", async () => {
+    let answer: "failed" | "decided" = "failed";
+    const mounted = mountOn("run_card", vi.fn<PublishDecisionDecide>(async () => answer));
+    const root = await rootOf(mounted);
+    expect(root.textContent).not.toContain("The decision could not be sent.");
+    await act(async () => {
+      fireEvent.click(root.querySelector(DECLINE)!);
+    });
+    await settle();
+    const after = await rootOf(mounted);
+    expect(after.getAttribute("data-lifecycle-card-state")).toBe("pending");
+    expect(after.querySelector('[role="status"]')?.textContent).toBe("The decision could not be sent.");
+    expect(after.querySelector<HTMLButtonElement>(DECLINE)?.disabled).toBe(false);
+    answer = "decided";
+    await act(async () => {
+      fireEvent.click(after.querySelector(APPROVE)!);
+    });
+    await settle();
+    expect((await rootOf(mounted)).textContent).not.toContain("The decision could not be sent.");
+  });
+
+  it("the note field takes no more than the decision store records (2,000 characters)", async () => {
+    const root = await rootOf(mountOn("chat_thread", vi.fn<PublishDecisionDecide>(async () => "decided")));
+    expect(root.querySelector("textarea")?.maxLength).toBe(2000);
   });
 
   it("an answer that is no longer open is reported, and Refresh draws loading until the re-read lands", async () => {
@@ -665,7 +942,6 @@ describe("the artifacts row (C1b)", () => {
 
   // cinatra#4738: every widget read brings a fresh single-use credential. Before the fix the row
   // framed each read's address, so the frame reloaded its preview on every poll.
-  // red-first-expect: no card root
   it("a widget re-read with a fresh credential for the same row keeps the same frame on the same address", async () => {
     let n = 0;
     globalThis.fetch = (async () => {
@@ -755,7 +1031,6 @@ describe("the artifacts row (C1b)", () => {
 // cinatra#4738 grade: the anchors design spec XV.1 (app-lifecycle-cards.html at design main 615ed095) names, drawn by the card
 // itself so a capture can count them. Before the fix the card drew none of them (only publish-card), because the rows carried
 // data-publish-row-kind and no conformance anchor.
-// red-first-expect: no card root
 describe("the XV.1 row anchors", () => {
   const REF = "Abc_123-xyz";
   const TEXT = ROWS[0];
@@ -816,7 +1091,6 @@ describe("the XV.1 row anchors", () => {
 // or any other refusal: the island draws one empty document for all of them) as the panel's frame with nothing in it,
 // under publish-row-items-empty. Before the fix the card read the island's empty document as a preview that did not
 // load, and drew "The preview did not load" with Try again under publish-row-items.
-// red-first-expect: no card root
 describe("the XV.1 empty items panel", () => {
   const REF = "Abc_123-xyz";
   const ITEMS = { kind: "artifacts", label: "Proposed page", ref: REF, islandSrc: null };
@@ -900,7 +1174,6 @@ describe("the XV.1 empty items panel", () => {
 // credentialed frame settled empty takes the next fresh broker address once and loads again; a second empty answer is
 // the row's reading and is not reloaded. Before this the row held the spent address and stayed empty until it remounted.
 // On main the card cannot read an items row at all, so it draws no card:
-// red-first-expect: no card root
 describe("an empty widget items frame and a fresh broker address", () => {
   const REF = "Abc_123-xyz";
   const ITEMS = { kind: "artifacts", label: "Proposed page", ref: REF, islandSrc: null };

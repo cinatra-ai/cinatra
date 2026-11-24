@@ -81,6 +81,7 @@ import {
   PublishDecisionCard,
   publishGateIsOpen,
   usePublishDecisionCardRead,
+  usePublishDecisionDecide,
 } from "@cinatra-ai/agents/publish-decision-card-view";
 // The turn's own register for the settled schedule card (cinatra#3174), reached
 // by the same subpath the host declaration is.
@@ -828,7 +829,10 @@ function AgentRunTurnSlot({
     wireRef: runChange?.signal ?? null,
     runStatus: runChange?.status ?? null,
   });
-  const publishCard = <PublishDecisionCard runId={runId} read={publishRead} />;
+  // THE DECIDE DOOR (cinatra#4758) for the host's transport: the session action on /chat, the broker answer with the
+  // widget's own credential on the site widget.
+  const publishDecide = usePublishDecisionDecide(ambientLifecycleAuth);
+  const publishCard = <PublishDecisionCard runId={runId} read={publishRead} decide={publishDecide} />;
   // ONE HELD-RUN CARD PER TURN (cinatra#4150), by the run panels' own rule (`publishGateIsOpen`): a run parked at its
   // publish gate is parked there and nowhere else, so while the shared read POSITIVELY answers `pending` the hitl
   // screen for this run is a stale reading (its own read landed first, or a failed re-read kept its last answer) and

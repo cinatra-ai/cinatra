@@ -223,6 +223,7 @@ const PUBLISH_PENDING = {
   runId: RUN_ID,
   agentName: "Proof agent",
   rows: [{ label: "Title", value: "Spring launch" }],
+  decisionId: "d1",
   mayDecide: true,
 };
 

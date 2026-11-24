@@ -9,10 +9,12 @@
 // (publish-decision-card-core.ts): a cookie host calls the session action, a host that declares a credential (the
 // site widget) reads the broker route with that credential. The read sends no decision. A read that fails keeps the
 // last authorized answer, and a card with no answer draws NO DOM, so a run with no open decision draws nothing.
-// The two controls send through the `decide` door a host passes; a host that passes none draws them disabled.
+// The two controls send through the `decide` door a host passes (cinatra#4758): `usePublishDecisionDecide` gives a
+// client host its door for its transport (the session action, or the broker answer with the host's credential), and a
+// server host passes the session action itself. A card given no door draws them disabled.
 // ---------------------------------------------------------------------------
 
-import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 
 import { reviewIslandAddressCredential } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
@@ -21,6 +23,7 @@ import { StatusPill } from "@/components/ui/status-pill";
 import { Textarea } from "@/components/ui/textarea";
 
 import {
+  LIFECYCLE_PUBLISH_DECISION_DECIDE_PATH,
   LIFECYCLE_PUBLISH_DECISION_PATH,
   sendAcrossRenewal,
   useLifecycleCardAuth,
@@ -32,15 +35,19 @@ import {
 } from "./lifecycle-card-runtime";
 import {
   PUBLISH_DECISION_CARD_NONE,
+  PUBLISH_DECISION_MAX_NOTE_LENGTH,
   publishRowKind,
   parsePublishDecisionCardState,
+  parsePublishDecisionDecideOutcome,
+  type PublishDecisionCardAnswer,
   type PublishDecisionCardArtifactsRow,
   type PublishDecisionCardListRow,
   type PublishDecisionCardRow,
   type PublishDecisionCardTextRow,
   type PublishDecisionCardState,
+  type PublishDecisionDecideOutcome,
 } from "./publish-decision-card";
-import { getPublishDecisionCardStateAction } from "./publish-decision-card-actions";
+import { decidePublishDecisionCardAction, getPublishDecisionCardStateAction } from "./publish-decision-card-actions";
 import { ReviewTargetFrame, reviewTargetIslandSrc } from "./review-gate-card";
 import { runStatusIsTerminal } from "./run-surface-status";
 
@@ -50,9 +57,42 @@ export const PUBLISH_DECISION_CARD_POLL_MS = 5000;
 /** A decide door answers: the decision landed, the request was no longer open, or the send failed. */
 export type PublishDecisionDecide = (input: {
   runId: string;
-  answer: "approve" | "decline";
+  /** The decision the card shows: the answer lands on that decision only. */
+  decisionId: string;
+  answer: PublishDecisionCardAnswer;
   note: string;
-}) => Promise<"decided" | "not_open" | "failed">;
+}) => Promise<PublishDecisionDecideOutcome>;
+
+/** The BROKER ANSWER (cinatra#4758), for a host that proves itself with its own credential: a POST of the run, the
+ * answer and the note, never a cookie of whoever else is signed in. Anything but a readable answer is "failed". */
+async function decidePublishDecisionThroughBroker(
+  input: Parameters<PublishDecisionDecide>[0],
+  auth: LifecycleCardAuth,
+): Promise<PublishDecisionDecideOutcome> {
+  try {
+    const send = () =>
+      fetch(LIFECYCLE_PUBLISH_DECISION_DECIDE_PATH, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...auth.headers() },
+        body: JSON.stringify({ runId: input.runId, decisionId: input.decisionId, answer: input.answer, note: input.note }),
+        credentials: auth.credentials,
+      });
+    const response = await sendAcrossRenewal(auth, send);
+    if (response === null || !response.ok) return "failed";
+    return parsePublishDecisionDecideOutcome((await response.json()) as unknown);
+  } catch {
+    return "failed";
+  }
+}
+
+/** The host's DECIDE DOOR for its transport (cinatra#4758), the same choice the read makes: with a host credential the
+ * broker answer, else the cookie host's session action. Stable for one credential. */
+export function usePublishDecisionDecide(auth: LifecycleCardAuth | null): PublishDecisionDecide {
+  return useMemo<PublishDecisionDecide>(
+    () => (auth ? (input) => decidePublishDecisionThroughBroker(input, auth) : (input) => decidePublishDecisionCardAction(input)),
+    [auth],
+  );
+}
 
 /** The BROKER read, for a host that proves itself with its own credential. A GET: it sends only the run id. */
 async function readPublishDecisionThroughBroker(
@@ -479,6 +519,19 @@ function settledMarker(state: PublishDecisionCardState): ReactElement | null {
   );
 }
 
+/** What the card holds for ONE open decision (the one `decisionId` names): never carried over to another decision. */
+type DecisionLocal = {
+  decisionId: string | null;
+  /** The phase of that decision the card drew: open for an answer, or allowed and waiting for Allow again. */
+  resumeOnly: boolean;
+  note: string;
+  sending: boolean;
+  failed: boolean;
+  noLongerOpen: boolean;
+};
+const blankLocal = (decisionId: string | null, resumeOnly = false): DecisionLocal =>
+  ({ decisionId, resumeOnly, note: "", sending: false, failed: false, noLongerOpen: false });
+
 export function PublishDecisionCard({
   runId,
   decide,
@@ -495,27 +548,62 @@ export function PublishDecisionCard({
 }): ReactElement | null {
   const host = useLifecycleCardHost();
   const auth = useLifecycleCardAuth();
-  const [noLongerOpen, setNoLongerOpen] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [note, setNote] = useState("");
   const own = usePublishDecisionCardRead({ runId: host === null || read ? "" : runId, auth, wireRef });
   const { state, refreshing, reload } = read ?? own;
+  // THE DECISION'S OWN STATE: the note, the answer in flight, the answer that did not land and "no longer open" belong
+  // to the open decision the card last drew. When the read draws another open decision, all of it starts over in the
+  // same render (never one frame of the earlier decision's note or reading on the newer one), and a reply that comes
+  // back for the earlier decision changes nothing.
+  const shownId = state?.state === "pending" ? state.decisionId : null;
+  // The same decision in another phase (another person allowed it, but the run did not go on) starts over as well: a
+  // reading recorded for the open request ("no longer open", "failed") never covers the Allow again it now offers.
+  const shownResumeOnly = state?.state === "pending" && state.resumeOnly === true;
+  const [local, setLocal] = useState<DecisionLocal>(() => blankLocal(shownId, shownResumeOnly));
+  if (shownId !== null && (shownId !== local.decisionId || shownResumeOnly !== local.resumeOnly)) {
+    setLocal(blankLocal(shownId, shownResumeOnly));
+  }
+  // A change speaks only for the decision AND the phase it was made in: a reply to the open request never lands on the
+  // Allow again of the same decision.
+  const onDecision = (decisionId: string, change: Partial<Omit<DecisionLocal, "decisionId" | "resumeOnly">>, resumeOnly = shownResumeOnly) =>
+    setLocal((now) => (now.decisionId === decisionId && now.resumeOnly === resumeOnly ? { ...now, ...change } : now));
+  // The open decision the card SHOWS now: none once a re-read settled it (allowed, declined or expired), so a reply that
+  // comes back after that is dropped. The ref follows the drawn decision only after a commit, so a reply that lands in
+  // the same batch as the settling re-read can still pass it; the render-time rule below holds the settled reading then.
+  const current = useRef(shownId);
+  useEffect(() => {
+    current.current = shownId;
+  }, [shownId]);
+  // "No longer open" and "failed" speak only for the decision they were recorded for, and only while the card shows it.
+  const ownsLocal = shownId !== null && shownId === local.decisionId && shownResumeOnly === local.resumeOnly;
+  const { note, sending } = local;
+  const failed = local.failed && ownsLocal;
+  const noLongerOpen = local.noLongerOpen && ownsLocal;
 
   // No host declaration, no authorized answer yet, or no open decision: NO DOM at all.
   if (host === null || state === null || state.state === "none") return null;
 
   const send = async (answer: "approve" | "decline") => {
-    if (!decide || sending) return;
-    setSending(true);
+    if (!decide || sending || state.state !== "pending") return;
+    const decisionId = state.decisionId;
+    const phase = shownResumeOnly;
+    onDecision(decisionId, { sending: true, failed: false }, phase);
     const sentNote = answer === "decline" ? note : "";
-    const outcome = await decide({ runId: state.runId, answer, note: sentNote }).catch(() => "failed" as const);
-    setSending(false);
-    // A late answer is never sent again: the request is no longer open, and the reader is told so.
-    if (outcome === "not_open") setNoLongerOpen(true);
+    const outcome = await decide({ runId: state.runId, decisionId, answer, note: sentNote }).catch(() => "failed" as const);
+    // A reply for a decision the card no longer shows is dropped: it never speaks for the decision drawn now. It still
+    // ends the send it belongs to, so when a read that briefly drew no decision draws the same decision again its
+    // controls are live (onDecision changes nothing when the card holds another decision).
+    if (current.current !== decisionId) {
+      onDecision(decisionId, { sending: false }, phase);
+      return;
+    }
+    // A late answer is never sent again: the request is no longer open, and the reader is told so. An answer that did
+    // not land is told too: the request stays open, and the reader may answer again.
+    onDecision(decisionId, { sending: false, noLongerOpen: outcome === "not_open", failed: outcome === "failed" }, phase);
     if (outcome === "decided") reload();
   };
   const pending = state.state === "pending";
   const restricted = pending && !state.mayDecide;
+  const resumeOnly = pending && state.resumeOnly === true;
   const disabled = restricted || !decide || sending;
   const cardState = refreshing ? "loading" : noLongerOpen ? "no_longer_open" : restricted ? "restricted" : state.state;
 
@@ -531,7 +619,7 @@ export function PublishDecisionCard({
     );
   } else if (noLongerOpen) {
     const refresh = () => {
-      setNoLongerOpen(false);
+      setLocal((now) => ({ ...now, noLongerOpen: false }));
       reload(true);
     };
     body = (
@@ -553,7 +641,7 @@ export function PublishDecisionCard({
           <span className="text-row-title font-bold text-foreground">Allow this change outside Cinatra?</span>
           <p className="mt-1 font-mono text-fact-line text-muted-foreground">
             {state.agentName}
-            {pending ? " \u00b7 nothing outside Cinatra has changed yet" : null}
+            {pending ? " · nothing outside Cinatra has changed yet" : null}
           </p>
         </div>
         {state.rows.length > 0 ? (
@@ -565,29 +653,42 @@ export function PublishDecisionCard({
         ) : null}
         {pending ? (
           <div className="px-3.5 pb-3">
-            {restricted ? null : (
+            {restricted || resumeOnly ? null : (
               <label className="block">
                 <span className={`mb-1.5 block ${KICK}`}>
                   Note <span className="normal-case tracking-normal">(optional &middot; recorded with Do not allow)</span>
                 </span>
                 <Textarea
                   value={note}
-                  onChange={(event) => setNote(event.target.value)}
-                  placeholder={"Say why, if you do not allow this\u2026"}
+                  onChange={(event) => onDecision(state.decisionId, { note: event.target.value })}
+                  placeholder={"Say why, if you do not allow this…"}
+                  maxLength={PUBLISH_DECISION_MAX_NOTE_LENGTH}
                   disabled={disabled}
                 />
               </label>
             )}
             <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
-              <Button type="button" variant="outline" size="sm" data-action="decline-publish -> declined"
-                disabled={disabled} onClick={() => void send("decline")}>
-                Do not allow
-              </Button>
+              {resumeOnly ? null : (
+                <Button type="button" variant="outline" size="sm" data-action="decline-publish -> declined"
+                  disabled={disabled} onClick={() => void send("decline")}>
+                  Do not allow
+                </Button>
+              )}
               <Button type="button" size="sm" data-action="approve-publish -> released"
                 disabled={disabled} onClick={() => void send("approve")}>
                 Allow
               </Button>
             </div>
+            {resumeOnly && !restricted ? (
+              <p className="mt-2.5 text-xs text-muted-foreground">
+                This change was allowed, but the run did not go on. Allow again to let it go on.
+              </p>
+            ) : null}
+            {pending && !restricted && failed ? (
+              <p role="status" className="mt-2.5 text-xs text-destructive">
+                The decision could not be sent.
+              </p>
+            ) : null}
             {restricted ? (
               <p className="mt-2.5 text-xs text-muted-foreground">
                 Deciding whether this change is made needs approve access on the run, so Do not allow and Allow stay disabled with the reason shown.
@@ -597,14 +698,13 @@ export function PublishDecisionCard({
         ) : null}
       </>
     );
+    // One anchor per element: a restricted frame keeps its IV.1 anchor and an Allow-again frame its XV anchor, and each
+    // holds the XV.1 rows anchor inside it; any other frame with rows carries the rows anchor itself.
+    const frameAnchor = restricted ? "publish-state-restricted" : resumeOnly ? "publish-card-allow-again" : undefined;
     body = (
       <>
-        {/* One anchor per element: the restricted frame keeps its IV.1 anchor and holds the XV.1 rows anchor inside it. */}
-        <div
-          className={FRAME}
-          data-conformance-id={restricted ? "publish-state-restricted" : state.rows.length > 0 ? "publish-card-rows" : undefined}
-        >
-          {restricted && state.rows.length > 0 ? <div data-conformance-id="publish-card-rows">{card}</div> : card}
+        <div className={FRAME} data-conformance-id={frameAnchor ?? (state.rows.length > 0 ? "publish-card-rows" : undefined)}>
+          {frameAnchor !== undefined && state.rows.length > 0 ? <div data-conformance-id="publish-card-rows">{card}</div> : card}
         </div>
         {settledMarker(state)}
       </>

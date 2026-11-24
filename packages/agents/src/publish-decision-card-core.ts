@@ -4,17 +4,17 @@ import "server-only";
 // The publish card's ONE authorized read (cinatra#4150 part 7a-1a).
 //
 // "Which publish card does this run show this reader?" Answered for one verified actor through the run access door,
-// from the run's NEWEST decision (the one every resume road reads): parked = pending, released = approved, declined,
-// expired. A decision the run left another way (run_ended) is no card, and neither is a parked decision of a run that
-// is not held at its gate (pending_approval, or running when a hold wrote its row but not its move): an ended run the
+// from the run's NEWEST decision (the one every resume road reads): parked = pending, released = approved (or pending
+// again, Allow only, while its run still waits at that gate because the resume did not complete), declined, expired.
+// A decision the run left another way (run_ended) is no card, and neither is a parked decision of a run that is not
+// held at its gate (pending_approval, or running when a hold wrote its row but not its move): an ended run the
 // sweep has not closed yet, or a failed attempt's row read through a retry's next attempt. "May decide" is the SAME check Publish and Do not
 // publish run (enforcePublishDecisionAccess), asked without deciding, so a restricted card and a refused answer cannot
 // disagree. The site widget's card (publishDecisionCardStateForWidgetRun) asks the same run rights of the widget's reader
-// (widgetReaderMayDecidePublish), whom those two refuse, so its owner is not drawn restricted; it has no decide door yet.
+// (widgetReaderMayDecidePublish), whom those two refuse, so its owner is not drawn
+// restricted; its answer is the widget's own decide road below.
 // Every refusal and every unreadable record collapses to "none": a caller holding a run id learns nothing about which
 // runs exist, and a card that cannot be read draws nothing rather than half a card.
-//
-// Nothing mounts the card yet and no run states the publish moment yet (later parts), so this read is inert.
 // ---------------------------------------------------------------------------
 
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
@@ -27,15 +27,32 @@ import {
   PUBLISH_DECISION_CARD_NONE,
   declaredPublishRowsFor,
   publishDecisionCardRows,
+  type PublishDecisionCardAnswer,
   type DrawPublishArtifactsRow,
   type PublishDecisionCardState,
+  type PublishDecisionDecideOutcome,
 } from "./publish-decision-card";
-import { enforcePublishDecisionAccess, widgetReaderMayDecidePublish } from "./publish-decision-actions";
+import {
+  approvePublishDecision,
+  approvePublishDecisionAsWidgetReader,
+  declinePublishDecision,
+  declinePublishDecisionAsWidgetReader,
+  enforcePublishDecisionAccess,
+  releasedPublishAwaitsResume,
+  widgetReaderMayDecidePublish,
+  type PublishApproveAnswer,
+  type PublishDecisionAnswer,
+} from "./publish-decision-actions";
 import { readLatestDecisionForRun } from "./publish-decision-store";
 import { readAgentRunById, readAgentTemplateById, type AgentRunRecord } from "./store";
 
-export { PUBLISH_DECISION_CARD_NONE } from "./publish-decision-card";
-export type { PublishDecisionCardRow, PublishDecisionCardState } from "./publish-decision-card";
+export { PUBLISH_DECISION_CARD_NONE, PUBLISH_DECISION_MAX_NOTE_LENGTH } from "./publish-decision-card";
+export type {
+  PublishDecisionCardAnswer,
+  PublishDecisionCardRow,
+  PublishDecisionCardState,
+  PublishDecisionDecideOutcome,
+} from "./publish-decision-card";
 
 /** The verified actor a server entry hands in. Never supplied by a caller. */
 export type PublishDecisionCardActor = {
@@ -121,10 +138,24 @@ async function cardStateForRun(
       // answers what that close will: no card. Nothing is written by this read.
       if (run.status !== "pending_approval" && run.status !== "running") return PUBLISH_DECISION_CARD_NONE;
       const mayDecide = await readMayDecide().catch(() => false);
-      return { state: "pending", ...common, mayDecide };
+      return { state: "pending", ...common, decisionId: decision.id, mayDecide };
     }
-    case "released":
+    case "released": {
+      // Allowed, but the run did not go on: the resume failed (or stopped) between the release and its fence, and the
+      // run still waits at this decision's pause (the run is still pending_approval at the pause generation the release
+      // recorded; for a decision released by older code, the run row and the latest-task key both name its gate). That
+      // is no settled Approved: the card keeps Allow, which resumes the run under a pause claim bound to that gate task
+      // without a second decision (approvePublishDecision takes a released decision). A reading that cannot tell this
+      // pause from a later one (an older release with no latest-task key, or a read that faults) draws no card: never
+      // Approved, never Allow.
+      const awaits = await releasedPublishAwaitsResume(run, decision).catch(() => null);
+      if (awaits === null) return PUBLISH_DECISION_CARD_NONE;
+      if (awaits) {
+        const mayDecide = await readMayDecide().catch(() => false);
+        return { state: "pending", ...common, decisionId: decision.id, mayDecide, resumeOnly: true };
+      }
       return settled((deciderName) => ({ state: "approved", ...common, deciderName }));
+    }
     case "declined":
       return settled((deciderName) => ({ state: "declined", ...common, deciderName, reason: decision.decisionNote }));
     case "expired":
@@ -143,4 +174,61 @@ export async function resolvePublishDecisionCardStateForActor(input: {
   const run = await readAgentRunById(input.runId, input.who.actor, input.who.roleHints).catch(() => null);
   if (!run) return PUBLISH_DECISION_CARD_NONE;
   return publishDecisionCardStateForRun(run, input.who);
+}
+
+// ---------------------------------------------------------------------------
+// THE CARD'S ANSWER (cinatra#4758): Allow and Do not allow, for one verified actor. No second approval core: Allow is
+// approvePublishDecision and Do not allow is declinePublishDecision, the roads that check run.execute then
+// run.approveHitl, write the one decision (who and when, and a decline's note) through the decision store's guarded
+// write, and release the run to its publishing step or stop it. The site widget's answer takes the same two roads for
+// the widget's reader. A late answer is "not_open"; every refusal and fault is "failed", with nothing else told.
+// ---------------------------------------------------------------------------
+
+/** A card's answer as sent: the run, the decision the card shows, the answer and the note (a decline's only). */
+export type PublishDecisionCardDecideInput = { runId: string; decisionId: string; answer: PublishDecisionCardAnswer; note?: string | null };
+
+const isAnswer = (value: unknown): value is PublishDecisionCardAnswer => value === "approve" || value === "decline";
+
+/** The input as the roads take it, or null for a shape the card never sends. */
+function decideInputOf(input: PublishDecisionCardDecideInput): { runId: string; decisionId: string; answer: PublishDecisionCardAnswer; note: string | null } | null {
+  const { runId, decisionId, answer, note } = (input ?? {}) as Partial<PublishDecisionCardDecideInput>;
+  const isId = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 256;
+  if (!isId(runId) || !isId(decisionId) || !isAnswer(answer)) return null;
+  if (note !== undefined && note !== null && typeof note !== "string") return null;
+  // Only a decline records a note; an empty or blank note is none. A note over the store's cap is refused by its write.
+  return { runId, decisionId, answer, note: answer === "decline" && typeof note === "string" && note.trim().length > 0 ? note : null };
+}
+
+function outcomeOf(answer: PublishDecisionAnswer | PublishApproveAnswer): PublishDecisionDecideOutcome {
+  if (!answer.ok) return "not_open";
+  // An Allow that resumed nothing met a run that is not waiting at this decision's gate (another answer released it,
+  // or the run moved on): for this reader the request is no longer open.
+  return "resumed" in answer && !answer.resumed ? "not_open" : "decided";
+}
+
+async function decideWith(
+  input: PublishDecisionCardDecideInput,
+  who: PublishDecisionCardActor,
+  roads: { approve: typeof approvePublishDecision; decline: typeof declinePublishDecision },
+): Promise<PublishDecisionDecideOutcome> {
+  const parsed = decideInputOf(input);
+  if (!parsed) return "failed";
+  // The answer lands only on the decision the card showed (the roads' guarded write): never on a newer gate.
+  const base = { runId: parsed.runId, decisionId: parsed.decisionId, actorContext: who.actor, roleHints: who.roleHints };
+  try {
+    return outcomeOf(parsed.answer === "approve" ? await roads.approve(base) : await roads.decline({ ...base, note: parsed.note }));
+  } catch {
+    return "failed";
+  }
+}
+
+/** THE ANSWER, for one verified session actor (the run panel, the chat turn, the review page). */
+export async function decidePublishDecisionCardForActor(input: PublishDecisionCardDecideInput, who: PublishDecisionCardActor): Promise<PublishDecisionDecideOutcome> {
+  return decideWith(input, who, { approve: approvePublishDecision, decline: declinePublishDecision });
+}
+
+/** THE ANSWER, for the SITE WIDGET's reader, called only by the widget's decide route after it consumed the reader's
+ *  credential under the decide grant and bound the run to that widget session. */
+export async function decidePublishDecisionCardForWidgetReader(input: PublishDecisionCardDecideInput, who: PublishDecisionCardActor): Promise<PublishDecisionDecideOutcome> {
+  return decideWith(input, who, { approve: approvePublishDecisionAsWidgetReader, decline: declinePublishDecisionAsWidgetReader });
 }

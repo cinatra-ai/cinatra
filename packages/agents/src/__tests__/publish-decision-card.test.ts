@@ -23,8 +23,9 @@ const COMMON = { runId: "run-1", agentName: "Launch writer", rows: [{ label: "Ti
 describe("parsePublishDecisionCardState", () => {
   it.each<PublishDecisionCardState>([
     { state: "none" },
-    { state: "pending", ...COMMON, mayDecide: true },
-    { state: "pending", ...COMMON, rows: [], mayDecide: false },
+    { state: "pending", ...COMMON, decisionId: "d1", mayDecide: true },
+    { state: "pending", ...COMMON, rows: [], decisionId: "d1", mayDecide: false },
+    { state: "pending", ...COMMON, decisionId: "d1", mayDecide: true, resumeOnly: true },
     { state: "approved", ...COMMON, deciderName: "Dana Okafor" },
     { state: "approved", ...COMMON, deciderName: null },
     { state: "declined", ...COMMON, deciderName: "Dana Okafor", reason: "Not ready yet." },
@@ -47,7 +48,10 @@ describe("parsePublishDecisionCardState", () => {
     ["no agent name", { ...COMMON, state: "expired", agentName: 7 }],
     ["rows not a list", { ...COMMON, state: "expired", rows: {} }],
     ["a row without a value", { ...COMMON, state: "expired", rows: [{ label: "Title" }] }],
-    ["a pending card without mayDecide", { ...COMMON, state: "pending" }],
+    ["a pending card without mayDecide", { ...COMMON, state: "pending", decisionId: "d1" }],
+    // cinatra#4758: an answer names the decision the card shows, so a pending card without one cannot be drawn.
+    ["a pending card without its decision", { ...COMMON, state: "pending", mayDecide: true }],
+    ["a pending card with an empty decision", { ...COMMON, state: "pending", decisionId: "", mayDecide: true }],
     ["an approved card with a numeric name", { ...COMMON, state: "approved", deciderName: 1 }],
     ["a declined card without a reason field", { ...COMMON, state: "declined", deciderName: null }],
   ])("refuses %s", (_name, data) => {
@@ -58,6 +62,10 @@ describe("parsePublishDecisionCardState", () => {
     expect(
       parsePublishDecisionCardState({ ...COMMON, state: "expired", deciderName: "Dana Okafor", extra: 1 }),
     ).toEqual({ state: "expired", ...COMMON });
+    // Allow-only is drawn only on an explicit true.
+    expect(parsePublishDecisionCardState({ ...COMMON, state: "pending", decisionId: "d1", mayDecide: true, resumeOnly: "yes" })).toEqual({
+      state: "pending", ...COMMON, decisionId: "d1", mayDecide: true,
+    });
   });
 });
 
@@ -129,7 +137,7 @@ describe("the list row (W4)", () => {
   });
 
   it("round-trips a card that holds a text row and a list row", () => {
-    const state = { state: "pending", ...COMMON, rows: [...COMMON.rows, LIST_ROW], mayDecide: true };
+    const state = { state: "pending", ...COMMON, rows: [...COMMON.rows, LIST_ROW], decisionId: "d1", mayDecide: true };
     expect(parsePublishDecisionCardState(JSON.parse(JSON.stringify(state)))).toEqual(state);
   });
 
@@ -205,7 +213,7 @@ describe("the artifacts row (C1b)", () => {
     ["a credential host's row", { ...ARTIFACTS_ROW, islandSrc: `/lifecycle/review-island?ref=${REF}&ic=sealed` }],
     ["a row that could not be shown", { ...ARTIFACTS_ROW, ref: null }],
   ])("round-trips %s beside a text row", (_name, row) => {
-    const state = { state: "pending", ...COMMON, rows: [...COMMON.rows, row], mayDecide: true };
+    const state = { state: "pending", ...COMMON, rows: [...COMMON.rows, row], decisionId: "d1", mayDecide: true };
     expect(parsePublishDecisionCardState(JSON.parse(JSON.stringify(state)))).toEqual(state);
   });
 
