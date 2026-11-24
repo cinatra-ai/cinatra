@@ -9,7 +9,9 @@
 // retry's reset raises the run's generation once in its compare-and-set and
 // nothing else writes it, so a publish gate counts only the reviews raised in
 // the attempt that reached it, whatever later writes do to the run's start
-// stamp. null = a gate raised before this column existed, read as generation 0.
+// stamp. null = a gate raised before this column existed (or from an event
+// that names no attempt): read as generation 0 once settled, and while still
+// open it holds every attempt's publish fence (it may be that attempt's).
 //
 // And ONE additive nullable column, `producer_run_generation` (integer), on
 // `artifact_produced_outbox`: the producing run's `reset_generation` when the
@@ -17,7 +19,8 @@
 // else -1. The automatic review the delayed drain raises for the event carries
 // this value, not the run's state at drain time, so output of an attempt a retry
 // ended never counts as a review of the next attempt. null = an event written
-// before this column existed; its review is stamped -1 and never counts.
+// before this column existed, of an unknown attempt: while pending it holds
+// every attempt's publish fence of its run, and its review is stamped null.
 //
 // No backfill, no default, no constraint change: every existing row reads NULL.
 // A run reset before the upgrade has its reviews read as generation 0, so they

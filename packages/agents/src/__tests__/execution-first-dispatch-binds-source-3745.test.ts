@@ -298,3 +298,61 @@ describe("cinatra#4150 - the dispatch records the publish rows of the plan it ru
     expect(dispatchOf()).toEqual({ attemptId: expect.any(String), publishRows: "{}" });
   });
 });
+
+// cinatra#4762: the job's frame names the attempt its writers stamp on their output. The entry captures it; the job's
+// own read decides what it dispatches. A retry's reset between the two must not leave the newer attempt running under
+// the older generation, and the dispatch lands only at the generation the job runs.
+describe("cinatra#4762 - the attempt the job dispatches is the one its frame names", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate());
+    storeMock.selectWayflowRunStepToolPolicy.mockImplementation(async (input: { contextId: string }) => ({
+      version: 1, contextId: input.contextId, source: "{}",
+      sourceSha256: "a".repeat(64), executedSourceSha256: "b".repeat(64), declarationSourceSha256: "c".repeat(64),
+    }));
+    storeMock.bindRunStepToolPolicy.mockResolvedValue(undefined);
+  });
+
+  type Seen = { frame: number | undefined; cas: number | undefined };
+  /** Each queued -> running dispatch: the frame's attempt and the CAS's generation; `lose` makes the first one stale. */
+  const dispatchesOf = async (lose = false): Promise<Seen[]> => {
+    const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
+    const seen: Seen[] = [];
+    storeMock.transitionRunStatus.mockImplementation((async (_id: string, from: string, to: string, patch?: { attemptGeneration?: number }) => {
+      if (from !== "queued" || to !== "running") return;
+      seen.push({ frame: mcpRequestContextStorage.getStore()?.runAttempt?.resetGeneration, cas: patch?.attemptGeneration });
+      if (lose && seen.length === 1) throw new storeMock.RunTransitionError({ code: "stale_from_status" });
+    }) as never);
+    await run();
+    return seen;
+  };
+
+  // red-first-expect: to deeply equal [ { frame: 1, cas: 1 } ]
+  it("a reset between the entry's read and the job's own read: the job runs under the generation it read", async () => {
+    // The entry read generation 0; a retry's reset raised it to 1 before the job read the run it dispatches.
+    storeMock.readAgentRunById.mockResolvedValueOnce(makeRun({ resetGeneration: 0 })).mockResolvedValue(makeRun({ resetGeneration: 1 }));
+    expect(await dispatchesOf()).toEqual([{ frame: 1, cas: 1 }]);
+  });
+
+  // red-first-expect: to deeply equal [ { frame: +0, cas: +0 } ]
+  it("with no reset in between, the frame and the dispatch name the same generation", async () => {
+    storeMock.readAgentRunById.mockResolvedValue(makeRun({ resetGeneration: 0 }));
+    expect(await dispatchesOf()).toEqual([{ frame: 0, cas: 0 }]);
+  });
+
+  // red-first-expect: to deeply equal [ { frame: +0, cas: +0 }, …(1) ]
+  it("a dispatch lost to a reset after the job's read starts the job again when the run is queued at a newer generation", async () => {
+    // The entry and the job read generation 0; the CAS finds the run reset and queued again at 1.
+    storeMock.readAgentRunById
+      .mockResolvedValueOnce(makeRun({ resetGeneration: 0 }))
+      .mockResolvedValueOnce(makeRun({ resetGeneration: 0 }))
+      .mockResolvedValue(makeRun({ resetGeneration: 1 }));
+    expect(await dispatchesOf(true)).toEqual([{ frame: 0, cas: 0 }, { frame: 1, cas: 1 }]);
+    // A run that is no longer queued at all: the job skips, as before.
+    storeMock.readAgentRunById.mockReset()
+      .mockResolvedValueOnce(makeRun({ resetGeneration: 0 }))
+      .mockResolvedValueOnce(makeRun({ resetGeneration: 0 }))
+      .mockResolvedValue(makeRun({ resetGeneration: 0, status: "running" }));
+    expect(await dispatchesOf(true)).toEqual([{ frame: 0, cas: 0 }]);
+  });
+});

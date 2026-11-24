@@ -296,11 +296,37 @@ function requireTransition(input: DecideInput): { actor: string | null; note: st
 /** No newer decision (by created_at, then id) of the same run follows this row. */
 const NO_NEWER_DECISION = sql`not exists (select 1 from ${agentRunPublishDecisions} newer where newer.run_id = ${agentRunPublishDecisions.runId} and (newer.created_at, newer.id) > (${agentRunPublishDecisions.createdAt}, ${agentRunPublishDecisions.id}))`;
 
-export async function decide(id: string, input: DecideInput): Promise<DecideResult> {
+/** The transaction `withRunRowLock` hands its callback. */
+export type RunRowLockTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * cinatra#4762 — runs `fn` in ONE transaction that first takes the run row FOR UPDATE. Every produced-event insert of the
+ * run takes the same row FOR KEY SHARE in its own statement (lifecycle-emit.ts) and holds it until its transaction ends,
+ * and the two lock modes conflict. So while `fn` runs, no output of the run is in flight: each insert committed before
+ * the lock (and is visible to every statement of `fn`), or it waits until this transaction ends. `run` is the locked
+ * row's org and reset generation, or null when the run is gone.
+ */
+export async function withRunRowLock<T>(
+  runId: string,
+  fn: (tx: RunRowLockTx, run: { orgId: string; resetGeneration: number } | null) => Promise<T>,
+): Promise<T> {
+  const id = requireText(runId, "runId");
+  return db.transaction(async (tx) => {
+    const [run] = await tx
+      .select({ orgId: agentRuns.orgId, resetGeneration: agentRuns.resetGeneration })
+      .from(agentRuns)
+      .where(eq(agentRuns.id, id))
+      .for("update");
+    return fn(tx, run ? { orgId: run.orgId, resetGeneration: run.resetGeneration } : null);
+  });
+}
+
+/** `executor`: a transaction to write in (withRunRowLock's); the write then runs in a savepoint of it. */
+export async function decide(id: string, input: DecideInput, executor: Pick<typeof db, "transaction"> = db): Promise<DecideResult> {
   const decisionId = requireText(id, "id");
   const { actor, note } = requireTransition(input);
 
-  return db.transaction(async (tx): Promise<DecideResult> => {
+  return executor.transaction(async (tx): Promise<DecideResult> => {
     const [won] = await tx
       .update(agentRunPublishDecisions)
       .set({ status: input.to, decidedBy: actor, decidedAt: sql`now()`, decisionNote: note })

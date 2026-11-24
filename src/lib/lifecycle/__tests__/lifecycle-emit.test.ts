@@ -123,6 +123,19 @@ describe("buildProducedEventInsertOp — op shape", () => {
     expect(buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 1.5 } }).values.slice(11)).toEqual([null, null]);
   });
 
+  // red-first-expect: to deeply equal { locksRunRow: true, guardKept: true }
+  it("takes the producing run's row FOR KEY SHARE in the insert itself, so a Publish's locked fence read serializes with it (cinatra#4762)", () => {
+    const LOCK = `(SELECT count(*) FROM (SELECT 1 FROM "cinatra"."agent_runs" run_lock WHERE run_lock.id = $7::text FOR KEY SHARE) locked_run) >= 0`;
+    const flat = (text: string) => text.replace(/\s+/g, " ");
+    const plain = flat(buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 0 } }).text);
+    const guarded = flat(buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 0 } },
+      { whereExistsSql: "EXISTS (SELECT 1)" }).text);
+    expect({ locksRunRow: plain.includes(`WHERE ${LOCK} ON CONFLICT`), guardKept: guarded.includes(`WHERE ${LOCK} AND (EXISTS (SELECT 1)) ON CONFLICT`) })
+      .toEqual({ locksRunRow: true, guardKept: true });
+    // The row is the producing run's own ($7): the lock never names another run.
+    expect(buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: null }).values[6]).toBe("run-9");
+  });
+
   it("rejects an unknown emitter (the closed emitter set)", () => {
     expect(() =>
       buildProducedEventInsertOp("cinatra", {

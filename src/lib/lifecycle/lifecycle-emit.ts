@@ -114,8 +114,8 @@ export function buildProducedEventInsertOp(
   input: BuildProducedEventInsertInput,
   opts?: {
     /**
-     * A SQL boolean expression the insert is GUARDED on — the op becomes
-     * `INSERT … SELECT … WHERE <guard>` instead of `INSERT … VALUES …`.
+     * A SQL boolean expression the insert is GUARDED on, ANDed to the
+     * run-row lock in `INSERT … SELECT … WHERE <lock> AND (<guard>)`.
      *
      * Added for the object-backed contract's mint (enabler 0.13, cinatra#3028):
      * that writer's capture statement mints a revision on ONE of its two arms
@@ -124,8 +124,7 @@ export function buildProducedEventInsertOp(
      * fragment the CALLER composes; it may reference its own literals and THIS
      * builder's own bound parameters (`$2` the organization, `$3` the artifact,
      * `$4` the representation revision) and nothing from the caller's other
-     * statements. Omitted ⇒ the plain VALUES insert every existing choke point
-     * already splices, byte-identical.
+     * statements. Omitted ⇒ only the run-row lock guards the insert.
      */
     whereExistsSql?: string;
   },
@@ -149,12 +148,20 @@ export function buildProducedEventInsertOp(
         coalesce($12::integer, (SELECT live_run.reset_generation FROM "${schema}"."agent_runs" live_run
           WHERE live_run.id = $7::text AND live_run.execution_attempt_id = $13::text
             AND live_run.status IN ('running', 'pending_approval')), -1)`;
+  // cinatra#4762: the insert takes the producing run's row FOR KEY SHARE and holds it until the writer's transaction
+  // ends. A Publish writes its release, and the call-site check reads the review fence, under the same row FOR UPDATE
+  // (publish-decision-store withRunRowLock); the two modes conflict, so this output is either committed before that
+  // read (and seen there) or written after it ends. Ordinary run updates take FOR NO KEY UPDATE, which does not
+  // conflict. No run named ($7 null): no row, no lock. The count is never negative: the guard only takes the lock.
+  const runLock = `(SELECT count(*) FROM (SELECT 1 FROM "${schema}"."agent_runs" run_lock
+          WHERE run_lock.id = $7::text FOR KEY SHARE) locked_run) >= 0`;
   return {
     text: `INSERT INTO "${schema}"."artifact_produced_outbox"
   (event_id, org_id, artifact_id, representation_revision_id, event_kind, emitter,
    producer_run_id, producer_agent_id, origin_kind, destination_class,
    continuation_mode, continuation_address, status, producer_run_generation)
-${opts?.whereExistsSql ? `SELECT ${bound}\nWHERE ${opts.whereExistsSql}` : `VALUES (${bound})`}
+SELECT ${bound}
+WHERE ${runLock}${opts?.whereExistsSql ? ` AND (${opts.whereExistsSql})` : ""}
 ON CONFLICT (event_id) DO NOTHING`,
     values: [
       eventId,

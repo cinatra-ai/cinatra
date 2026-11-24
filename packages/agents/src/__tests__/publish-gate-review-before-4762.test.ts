@@ -452,6 +452,26 @@ describe("a publish card opens only after an approved review earlier in the same
     expect(decisions.insertParkedDecision).not.toHaveBeenCalled();
   });
 
+  // red-first-expect: expected [ { from: 'running', …(2) } ] to deeply equal [ { from: 'running', …(2) } ]
+  it("a review with no generation still open may be this attempt's: it holds the card back in every attempt", async () => {
+    // Attempt 1 has its own approved review. A review raised before the generation column existed (or from an output
+    // written before it) is still open: its attempt is unknown, so it may be this one, and no card opens.
+    const unknownOpen: Review = { id: gateId(), status: "pending", disposition: null, createdAt: at(-30), runGeneration: null, fingerprint: null, successorGateId: null };
+    listReviews.mockResolvedValue([approved(5, "user-reviewer", 1), unknownOpen]);
+    await reachPublishGate(makeRun({ resetGeneration: 1 }));
+    expectStoppedWithoutWriting();
+    // The same in the first attempt, where a settled review with no generation reads as generation 0.
+    vi.clearAllMocks();
+    listReviews.mockResolvedValue([approved(5), unknownOpen]);
+    await reachPublishGate();
+    expectStoppedWithoutWriting();
+    // Once a person settles it, it is read as generation 0, as before: attempt 1's own approval opens the card.
+    vi.clearAllMocks();
+    listReviews.mockResolvedValue([approved(5, "user-reviewer", 1), { ...unknownOpen, status: "resolved", disposition: "approve", fingerprint: HUMAN_DECISION }]);
+    await reachPublishGate(makeRun({ resetGeneration: 1 }));
+    expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
+  });
+
   it("an unreadable review ends the run failed and opens no decision row", async () => {
     listReviews.mockRejectedValue(new Error("db down"));
     await reachPublishGate();

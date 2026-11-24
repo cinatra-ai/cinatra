@@ -299,14 +299,15 @@ describe("0.13 — the produced event is emitted at the mint", () => {
       },
     );
     expect(op.text).toContain("SELECT $1::text");
-    expect(op.text).toContain("WHERE EXISTS");
+    // cinatra#4762: the guard is ANDed to the producing run's row lock.
+    expect(op.text).toContain("FOR KEY SHARE) locked_run) >= 0 AND (EXISTS");
     expect(op.text).toContain("ON CONFLICT (event_id) DO NOTHING");
     // The guard binds ONLY this builder's own parameters.
     expect(op.values[0]).toBe(producedEventId(OBJECT, "rev-minted", "artifact_produced"));
     expect(op.values[3]).toBe("rev-minted");
   });
 
-  it("an unguarded emit is byte-identical to the one every existing choke point splices", () => {
+  it("an unguarded emit carries no guard: only the producing run's row lock (cinatra#4762)", () => {
     const op = buildProducedEventInsertOp("app", {
       orgId: ORG,
       artifactId: OBJECT,
@@ -315,7 +316,8 @@ describe("0.13 — the produced event is emitted at the mint", () => {
       originKind: "agent_generated",
       producerAttempt: null,
     });
-    expect(op.text).toContain("VALUES ($1::text");
-    expect(op.text).not.toContain("WHERE EXISTS");
+    expect(op.text).toContain("SELECT $1::text");
+    expect(op.text).toContain("FOR KEY SHARE) locked_run) >= 0\nON CONFLICT");
+    expect(op.text).not.toContain("EXISTS");
   });
 });

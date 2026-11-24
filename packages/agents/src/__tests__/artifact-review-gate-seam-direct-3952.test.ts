@@ -175,4 +175,19 @@ describe("the run's reviews, as the publish gate reads them (cinatra#4762)", () 
     expect(await seam.hasPendingProducedReview({ orgId, runId, generation: 2 })).toBe(true);
     expect(store.hasPendingProducedEventForAttempt).toHaveBeenCalledWith({ orgId, runId, generation: 2 });
   });
+
+  // red-first-expect: expected "vi.fn()" to be called with arguments: [ …(2) ]
+  it("read in the transaction the publish store hands them, so the fence is read under the run row's lock", async () => {
+    const tx = { the: "run-row lock's transaction" };
+    store.hasPendingProducedEventForAttempt.mockResolvedValue(false);
+    store.listReviewLineageForRun.mockResolvedValue([]);
+    const seam = slot.__cinatraArtifactReviewGateSeam! as unknown as {
+      hasPendingProducedReview: (input: unknown, executor?: unknown) => Promise<boolean>;
+      listReviews: (runId: string, executor?: unknown) => Promise<unknown[]>;
+    };
+    if (typeof seam.hasPendingProducedReview === "function") await seam.hasPendingProducedReview({ orgId, runId, generation: 2 }, tx);
+    expect(store.hasPendingProducedEventForAttempt).toHaveBeenCalledWith({ orgId, runId, generation: 2 }, tx);
+    await seam.listReviews(runId, tx);
+    expect(store.listReviewLineageForRun).toHaveBeenCalledWith(runId, tx);
+  });
 });

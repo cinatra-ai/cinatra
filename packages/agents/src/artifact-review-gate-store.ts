@@ -213,12 +213,14 @@ export async function emitArtifactReviewGate(input: {
   /** cinatra#4762: the reset generation of the attempt the gate belongs to, carried by that attempt, never read from
    *  the run row at the raise: the executor passes the generation of the run record it read for the attempt; the
    *  produced-event drain passes the event's producer_run_generation. A null, a non-integer or an absent value (a
-   *  caller with no attempt identity, or an event of an older build) is stamped -1, which never counts. */
-  runGeneration?: number | null;
+   *  caller with no attempt identity) is stamped -1, which never counts. "unknown": the output names no attempt (an
+   *  event written before the column existed); the gate is stamped null, as a gate raised before the column existed,
+   *  which the publish gate reads as generation 0 once settled and as holding every attempt while open. */
+  runGeneration?: number | null | "unknown";
   /** cinatra#4762: a gate that continues a review of the same attempt (a failed verification's reopen, a repair's
-   *  successor) takes the generation of the gate it continues, on the same run, read in the insert: the generation the
-   *  publish gate reads for that gate, so a gate raised before the column existed (null, read as 0) passes 0. A missing
-   *  gate, or one of another run, stamps -1. Wins over runGeneration. */
+   *  successor) takes the generation of the gate it continues, on the same run, read in the insert, null included (a
+   *  gate of an unknown attempt continues as one). A missing gate, or one of another run, stamps -1. Wins over
+   *  runGeneration. */
   successorOfGateId?: string;
 }, executor: GateStoreExecutor = db, plan?: DeclaredReviewPlan): Promise<EmitReviewGateResult> {
   const normalized = normalizeReviewTargets(input.targets);
@@ -271,8 +273,10 @@ export async function emitArtifactReviewGate(input: {
       // successorOfGateId), never the run row's state at the raise: a delayed writer of an ended attempt would read
       // the next attempt there. A retry's reset raises the generation once, so a review of an ended attempt never
       // counts again. No attempt identity: -1.
+      // -2 marks a continued gate with no generation inside the read; it is stored as null.
       runGeneration: typeof input.successorOfGateId === "string"
-        ? sql`coalesce((select coalesce(prior_gate.run_generation, 0) from ${artifactReviewGates} prior_gate where prior_gate.id = ${input.successorOfGateId} and prior_gate.run_id = ${input.runId}), -1)`
+        ? sql`nullif(coalesce((select coalesce(prior_gate.run_generation, -2) from ${artifactReviewGates} prior_gate where prior_gate.id = ${input.successorOfGateId} and prior_gate.run_id = ${input.runId}), -1), -2)`
+        : input.runGeneration === "unknown" ? null
         : Number.isSafeInteger(input.runGeneration) ? (input.runGeneration as number) : -1,
     })
     // One gate per (run, task) — the run_task_uniq index.
@@ -408,8 +412,9 @@ export async function listReviewLineageForRun(runId: string, executor: GateStore
 
 /** cinatra#4762 — does an output of this attempt still wait for the review orchestration? A produced event of the run,
  *  in its org, stamped with the attempt's generation and still pending, may yet raise a review of the attempt (only the
- *  drain's planner can say it will not), so it counts as a review not yet settled. Events of another attempt, or of an
- *  older build (no generation), raise reviews no publish gate of this attempt counts, so they are not read. */
+ *  drain's planner can say it will not), so it counts as a review not yet settled. An event with no generation (written
+ *  before the column existed) names no attempt, so it may be this one's: it counts too (fail closed). Events stamped
+ *  with another attempt's generation, or -1, raise reviews no publish gate of this attempt counts, so they are not read. */
 export async function hasPendingProducedEventForAttempt(
   input: { orgId: string; runId: string; generation: number },
   executor: GateStoreExecutor = db,
@@ -421,7 +426,7 @@ export async function hasPendingProducedEventForAttempt(
       eq(artifactProducedOutbox.status, "pending"),
       eq(artifactProducedOutbox.orgId, input.orgId),
       eq(artifactProducedOutbox.producerRunId, input.runId),
-      eq(artifactProducedOutbox.producerRunGeneration, input.generation),
+      or(eq(artifactProducedOutbox.producerRunGeneration, input.generation), isNull(artifactProducedOutbox.producerRunGeneration)),
     ))
     .limit(1);
   return row !== undefined;

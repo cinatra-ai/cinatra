@@ -1,7 +1,7 @@
 // cinatra#4150 part 5a (A6): no publish without a released decision, enforced at the call. The model bridge and the
 // passthrough road ask publishCallAllowed for every call of a run; their own suites pin that they refuse when it says
 // no. Here: verified and unverified step x parked / declined / expired / run_ended / released / no row / read error.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const storeMock = vi.hoisted(() => ({
   readAgentRunById: vi.fn(),
@@ -13,6 +13,9 @@ vi.mock("../store", () => storeMock);
 
 const decisions = vi.hoisted(() => ({
   insertParkedDecision: vi.fn(),
+  // cinatra#4762: the run-row lock; its callback gets the lock's transaction and the locked run.
+  withRunRowLock: vi.fn(async (_runId: string, fn: (tx: unknown, run: unknown) => Promise<unknown>) =>
+    fn("the run-row lock's transaction", { orgId: "org-1", resetGeneration: 0 })),
   decide: vi.fn(),
   readDecisionForRunNode: vi.fn(),
   readLatestDecisionForRun: vi.fn(),
@@ -26,11 +29,25 @@ import { publishCallAllowed } from "../publish-decision-actions";
 
 const RUN = { id: "run-1", templateId: "tmpl-1" };
 const template = (publishingSteps: string[] | null | undefined) => ({ id: "tmpl-1", publishingSteps });
-const row = (status: string) => ({ id: "d1", runId: "run-1", nodeId: "publish", status });
+const row = (status: string) => ({ id: "d1", orgId: "org-1", runId: "run-1", nodeId: "publish", status, runGeneration: 0 });
+
+// cinatra#4762: the review store, as the boot-bound gate seam answers it. By default the released decision's attempt holds
+// a review a person approved and no output of it waits for the review orchestration.
+const TX = "the run-row lock's transaction";
+const APPROVED_REVIEW = { id: "gate-1", status: "resolved", disposition: "approve", createdAt: new Date("2026-11-01T00:00:00Z"),
+  runGeneration: 0, fingerprint: "e".repeat(64), successorGateId: null };
+const reviewSeam = { listReviews: vi.fn(), hasPendingProducedReview: vi.fn() };
+const seamSlot = globalThis as { __cinatraArtifactReviewGateSeam?: unknown };
+const previousSeam = seamSlot.__cinatraArtifactReviewGateSeam;
+beforeAll(() => { seamSlot.__cinatraArtifactReviewGateSeam = reviewSeam; });
+afterAll(() => { seamSlot.__cinatraArtifactReviewGateSeam = previousSeam; });
 
 beforeEach(() => {
   storeMock.readAgentTemplateById.mockReset().mockResolvedValue(template(["publish"]));
   decisions.readDecisionForRunNode.mockReset().mockResolvedValue(null);
+  decisions.withRunRowLock.mockClear();
+  reviewSeam.listReviews.mockReset().mockResolvedValue([APPROVED_REVIEW]);
+  reviewSeam.hasPendingProducedReview.mockReset().mockResolvedValue(false);
 });
 
 describe("a verified step the template lists as publishing", () => {
@@ -47,6 +64,33 @@ describe("a verified step the template lists as publishing", () => {
 
   it("is refused when it has no decision row", async () => {
     expect(await publishCallAllowed(RUN, "publish")).toBe(false);
+  });
+
+  // red-first-expect: expected true to be false
+  it("a released decision is served only while its attempt's review fence holds, read under the run row's lock (cinatra#4762)", async () => {
+    decisions.readDecisionForRunNode.mockResolvedValue(row("released"));
+    // An output of the attempt written after the release, still waiting for the review orchestration: refused.
+    reviewSeam.hasPendingProducedReview.mockResolvedValue(true);
+    expect(await publishCallAllowed(RUN, "publish")).toBe(false);
+    expect(reviewSeam.hasPendingProducedReview).toHaveBeenCalledWith({ orgId: "org-1", runId: "run-1", generation: 0 }, TX);
+    // Its review raised and still open: refused.
+    reviewSeam.hasPendingProducedReview.mockResolvedValue(false);
+    reviewSeam.listReviews.mockResolvedValue([APPROVED_REVIEW, { ...APPROVED_REVIEW, id: "gate-2", status: "pending", disposition: null, fingerprint: null }]);
+    expect(await publishCallAllowed(RUN, "publish")).toBe(false);
+    // A person approved it: served. Every fence read ran in the lock's transaction.
+    reviewSeam.listReviews.mockResolvedValue([APPROVED_REVIEW, { ...APPROVED_REVIEW, id: "gate-2" }]);
+    expect(await publishCallAllowed(RUN, "publish")).toBe(true);
+    expect(reviewSeam.listReviews.mock.calls.every((c) => c[1] === TX)).toBe(true);
+    // A run whose row is gone, or a fence that cannot be read: refused.
+    decisions.withRunRowLock.mockImplementationOnce(async (_runId: string, fn: (tx: unknown, run: unknown) => Promise<unknown>) => fn(TX, null));
+    expect(await publishCallAllowed(RUN, "publish")).toBe(false);
+    reviewSeam.listReviews.mockRejectedValue(new Error("db down"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(await publishCallAllowed(RUN, "publish")).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
 

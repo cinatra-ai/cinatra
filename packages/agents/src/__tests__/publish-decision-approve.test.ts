@@ -15,8 +15,12 @@ const storeMock = vi.hoisted(() => ({
 }));
 vi.mock("../store", () => storeMock);
 
+// cinatra#4762: the run-row lock's transaction, as the store hands it to its callback; the locked run is at generation 0.
+const TX = "the run-row lock's transaction";
 const decisions = vi.hoisted(() => ({
   insertParkedDecision: vi.fn(),
+  withRunRowLock: vi.fn(async (_runId: string, fn: (tx: unknown, run: unknown) => Promise<unknown>) =>
+    fn("the run-row lock's transaction", { orgId: "org-1", resetGeneration: 0 })),
   decide: vi.fn(),
   readDecisionForRunNode: vi.fn(),
   readLatestDecisionForRun: vi.fn(),
@@ -139,7 +143,7 @@ describe("Publish (A7)", () => {
     expect(enforceRunAccess.mock.calls.map((c) => (c as unknown[])[2])).toEqual(["execute", "approveHitl"]);
     expect(assertAgentRunDispatchAuthorized).toHaveBeenCalledWith({ runId: "run-1", stage: "dispatch", actingUserId: "user-a" });
     expect(decisions.decide).toHaveBeenCalledTimes(1);
-    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "released", actor: "user-a" });
+    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "released", actor: "user-a" }, TX);
     expect(claims.claimPause).toHaveBeenCalledTimes(1);
     expect((claims.claimPause.mock.calls[0] as unknown[])[0]).toEqual({ runId: "run-1", orgId: "org-1", generation: 3 });
     expect(moves()).toEqual([["run-1", "pending_approval", "running"]]);
@@ -494,7 +498,7 @@ describe("the review fence, read again at Publish (cinatra#4762)", () => {
     // The card opened on one approved review; another produced event of the same attempt still waits for the drain.
     reviewSeam.hasPendingProducedReview.mockResolvedValue(true);
     expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: false, code: "publish_review_not_approved" });
-    expect(reviewSeam.hasPendingProducedReview).toHaveBeenCalledWith({ orgId: "org-1", runId: "run-1", generation: 0 });
+    expect(reviewSeam.hasPendingProducedReview).toHaveBeenCalledWith({ orgId: "org-1", runId: "run-1", generation: 0 }, TX);
     expectNothingReleased();
     // The drain raised its review, still open: refused again, and the fence is read under the claim.
     vi.clearAllMocks();
@@ -532,6 +536,32 @@ describe("the review fence, read again at Publish (cinatra#4762)", () => {
   it("a decision of an attempt other than the run's current one is refused", async () => {
     storeMock.readAgentRunById.mockResolvedValue(run({ resetGeneration: 1 }));
     reviewSeam.listReviews.mockResolvedValue([{ ...APPROVED_REVIEW, runGeneration: 1 }]);
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: false, code: "publish_review_not_approved" });
+    expectNothingReleased();
+  });
+
+  // red-first-expect: expected { ok: true, resumed: true } to deeply equal { ok: false, …(1) }
+  it("the release is written in the transaction that reads the fence under the run row's lock, so an output in flight is seen", async () => {
+    // A writer of the attempt inserted an output that commits before the lock is granted: only the reads made in the
+    // lock's transaction see it, as on Postgres (the insert holds the row FOR KEY SHARE until it commits).
+    reviewSeam.hasPendingProducedReview.mockImplementation(async (_input: unknown, executor?: unknown) => executor === TX);
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: false, code: "publish_review_not_approved" });
+    expectNothingReleased();
+    // With no output in flight the fence and the release share that transaction: both reviews' reads and the one write.
+    vi.clearAllMocks();
+    claims.claimPause.mockResolvedValue(CLAIMED);
+    reviewSeam.hasPendingProducedReview.mockResolvedValue(false);
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: true });
+    expect(decisions.withRunRowLock).toHaveBeenCalledTimes(1);
+    expect(decisions.withRunRowLock.mock.calls[0]![0]).toBe("run-1");
+    expect(reviewSeam.listReviews).toHaveBeenCalledWith("run-1", TX);
+    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "released", actor: "user-a" }, TX);
+    expect(sendWayflowResume).toHaveBeenCalledTimes(1);
+    // The run's locked row has left the decision's attempt (a reset since the run was read): refused, nothing written.
+    vi.clearAllMocks();
+    claims.claimPause.mockResolvedValue(CLAIMED);
+    decisions.withRunRowLock.mockImplementationOnce(async (_runId: string, fn: (tx: unknown, run: unknown) => Promise<unknown>) =>
+      fn(TX, { orgId: "org-1", resetGeneration: 1 }));
     expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: false, code: "publish_review_not_approved" });
     expectNothingReleased();
   });

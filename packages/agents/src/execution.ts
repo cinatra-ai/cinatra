@@ -3925,6 +3925,23 @@ async function runAgentBuilderExecutionJobInner(
     console.log(`[agent-builder] run ${runId} not found, skipping`);
     return;
   }
+  // cinatra#4762: this read decides what the job dispatches, so the frame's attempt must be the one it read. A retry's
+  // reset between the entry's read and this one raised the generation: the frame is refreshed to the generation read
+  // here and the job starts again under it, so its writers never stamp the new attempt's output with the old one. The
+  // dispatch's queued -> running compare-and-set lands only at that generation (attemptGeneration), so a reset after
+  // this read dispatches nothing under it; when that CAS is stale and the run is queued again at a newer generation,
+  // the job starts again here (supersededAttempt), since the newer attempt's enqueue may have found this job's id taken.
+  const frame = mcpRequestContextStorage.getStore();
+  if (frame?.runAttempt?.runId === runId && frame.runAttempt.resetGeneration !== (run.resetGeneration ?? 0)) {
+    return mcpRequestContextStorage.run(
+      { ...frame, runAttempt: { runId, resetGeneration: run.resetGeneration ?? 0 } },
+      () => runAgentBuilderExecutionJobInner(data, jobId),
+    );
+  }
+  const supersededAttempt = async (): Promise<boolean> => {
+    const now = await readAgentRunById(runId).catch(() => null);
+    return now?.status === "queued" && (now.resetGeneration ?? 0) !== (run.resetGeneration ?? 0);
+  };
   // cinatra#1939 wave 2 (§2b): mint the SYSTEM dispatch authority ONCE at job
   // entry (scoped to this run's org) and thread it into every status transition
   // this worker drives — dispatch (run.execute) and terminal finalize
@@ -4864,9 +4881,12 @@ async function runAgentBuilderExecutionJobInner(
     try {
       await transitionRunStatus(runId, "queued", "running", {
         dispatch: { attemptId: randomUUID() },
+        // cinatra#4762: only at the attempt this job's frame carries.
+        attemptGeneration: run.resetGeneration ?? 0,
       }, executionAuthority);
     } catch (err) {
       if (err instanceof RunTransitionError && err.code === "stale_from_status") {
+        if (await supersededAttempt()) return runAgentBuilderExecutionJobInner(data, jobId);
         console.log(`[external-a2a] run ${runId} status no longer "queued" — skipping stale transition`);
         return;
       }
@@ -5070,9 +5090,12 @@ async function runAgentBuilderExecutionJobInner(
       await transitionRunStatus(runId, "queued", "running", {
         // cinatra#4150: the publish rows of the template object this dispatch runs (the pinned overlay included).
         dispatch: { attemptId: randomUUID(), publishRows: JSON.stringify(template.publishRows ?? {}) },
+        // cinatra#4762: only at the attempt this job's frame carries.
+        attemptGeneration: run.resetGeneration ?? 0,
       }, executionAuthority);
     } catch (err) {
       if (err instanceof RunTransitionError && err.code === "stale_from_status") {
+        if (await supersededAttempt()) return runAgentBuilderExecutionJobInner(data, jobId);
         console.log(`[wayflow] run ${runId} no longer queued — skipping stale transition`);
         return;
       }

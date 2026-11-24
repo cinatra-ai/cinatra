@@ -47,9 +47,24 @@ function park(overrides: Record<string, unknown> = {}) {
   } as Parameters<typeof store.insertParkedDecision>[0];
 }
 
-/** cinatra#4762: a settled review gate's columns, as a person's decision writes them (the decision core's sha256). */
+/** The person who decides the reviews these cases settle. */
+const REVIEWER = "user-reviewer-4762";
+
+/** cinatra#4762: a settled review gate's columns, as a person's decision writes them: the decision core's sha256
+ *  fingerprint and the deciding person (commitReviewDecision's terminal CAS stamps both). */
 function resolvedGate(disposition: string) {
-  return { status: "resolved", disposition, fingerprint: createHash("sha256").update(randomUUID()).digest("hex"), resolved_at: new Date() };
+  return { status: "resolved", disposition, fingerprint: createHash("sha256").update(randomUUID()).digest("hex"),
+    resolved_by: REVIEWER, resolved_at: new Date() };
+}
+
+/** cinatra#4762: settles a pending review as a person's decision does, in the shape of commitReviewDecision's terminal
+ *  CAS: pending -> resolved with the disposition, the decision fingerprint and the deciding person. */
+async function settleAsPerson(gates: string, gateId: string, disposition: string): Promise<void> {
+  const s = resolvedGate(disposition);
+  const { rowCount } = await admin.query(
+    `UPDATE ${gates} SET status = $2, disposition = $3, fingerprint = $4, resolved_by = $5, resolved_at = now() WHERE id = $1 AND status = 'pending'`,
+    [gateId, s.status, s.disposition, s.fingerprint, s.resolved_by]);
+  expect(rowCount).toBe(1);
 }
 
 beforeAll(async () => {
@@ -446,11 +461,7 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
       const { gateId } = await emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId,
         targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }],
         ...(runGeneration === undefined ? {} : { runGeneration }) });
-      if (disposition) {
-        const settled = resolvedGate(disposition);
-        await admin.query(`UPDATE ${GATES} SET status = $2, disposition = $3, fingerprint = $4, resolved_at = now() WHERE id = $1`,
-          [gateId, settled.status, settled.disposition, settled.fingerprint]);
-      }
+      if (disposition) await settleAsPerson(GATES, gateId, disposition);
       return gateId;
     };
     const runId = await seedRun(`run-${randomUUID()}`, "running");
@@ -518,9 +529,11 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     await admin.query(`UPDATE ${GATES} SET status = 'resolved', disposition = 'approve', fingerprint = $2, resolved_at = now() WHERE id = $1`,
       [expired, `expiry:${expired}`]);
     expect(await approvedReviewPrecedes(runId, 0)).toBe(false);
+    // A person's approval, as the approve path writes it: the decision fingerprint and the deciding person.
     const person = await raise();
-    await admin.query(`UPDATE ${GATES} SET status = 'resolved', disposition = 'approve', fingerprint = $2, resolved_at = now() WHERE id = $1`,
-      [person, resolvedGate("approve").fingerprint]);
+    await settleAsPerson(GATES, person, "approve");
+    expect((await admin.query(`SELECT resolved_by, fingerprint ~ '^[a-f0-9]{64}$' AS human FROM ${GATES} WHERE id = $1`, [person])).rows[0])
+      .toEqual({ resolved_by: REVIEWER, human: true });
     expect(await approvedReviewPrecedes(runId, 0)).toBe(true);
   });
 
@@ -536,11 +549,7 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     const raise = async (extra: { runGeneration?: number; successorOfGateId?: string } = { runGeneration: 0 }) =>
       (await emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: `review-${randomUUID()}`,
         targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }], ...extra })).gateId;
-    const settle = async (gateId: string, disposition: string) => {
-      const s = resolvedGate(disposition);
-      await admin.query(`UPDATE ${GATES} SET status = $2, disposition = $3, fingerprint = $4, resolved_at = now() WHERE id = $1`,
-        [gateId, s.status, s.disposition, s.fingerprint]);
-    };
+    const settle = (gateId: string, disposition: string) => settleAsPerson(GATES, gateId, disposition);
     /** The repair of `gateId` finished and recorded `successorGateId`, as submitRepairResponse writes it. */
     const repaired = async (gateId: string, successorGateId: string, producerRunId = runId) => {
       const id = `repair-${randomUUID()}`;
@@ -568,7 +577,8 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     expect(await approvedReviewPrecedes(runId, 0)).toBe(true);
     expect(await reviewFenceHolds({ runId, orgId: ORG, generation: 0 })).toBe(true);
 
-    // A review raised before the generation column (null, read as 0): its repair successor is stamped 0, so it clears.
+    // A review raised before the generation column (null): its repair successor keeps null, read as 0 once settled,
+    // so it clears.
     const legacyRun = await seedRun(`run-${randomUUID()}`, "running");
     const legacy = (await emitArtifactReviewGate({ runId: legacyRun, orgId: ORG, reviewTaskId: `review-${randomUUID()}`,
       targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }], runGeneration: 0 })).gateId;
@@ -576,7 +586,7 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     await settle(legacy, "changes_requested");
     const legacySuccessor = (await emitArtifactReviewGate({ runId: legacyRun, orgId: ORG, reviewTaskId: `review-${randomUUID()}`,
       targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }], successorOfGateId: legacy })).gateId;
-    expect(await generationOf(legacySuccessor)).toBe(0);
+    expect(await generationOf(legacySuccessor)).toBeNull();
     await repaired(legacy, legacySuccessor, legacyRun);
     await settle(legacySuccessor, "approve");
     expect(await approvedReviewPrecedes(legacyRun, 0)).toBe(true);
@@ -598,6 +608,91 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     expect(await reviewFenceHolds({ runId, orgId: ORG, generation: 0 })).toBe(false);
     await admin.query(`UPDATE ${OUTBOX} SET status = 'processed', processed_at = now() WHERE event_id = $1`, [pending]);
     expect(await reviewFenceHolds({ runId, orgId: ORG, generation: 0 })).toBe(true);
+  });
+
+  it("cinatra#4762: an output or a review of an unknown attempt (no generation) holds every attempt's fence while it is open", async () => {
+    const { bindArtifactReviewGateSeam } = await import("../artifact-review-gate-seam");
+    const { emitArtifactReviewGate, hasPendingProducedEventForAttempt } = await import("../artifact-review-gate-store");
+    const { reviewFenceHolds } = await import("../publish-decision-actions");
+    bindArtifactReviewGateSeam();
+    const GATES = `"${q(TEST_SCHEMA)}"."artifact_review_gates"`;
+    const OUTBOX = `"${q(TEST_SCHEMA)}"."artifact_produced_outbox"`;
+    const runId = await seedRun(`run-${randomUUID()}`, "running");
+    const raise = async (runGeneration: number | "unknown") => (await emitArtifactReviewGate({ runId, orgId: ORG,
+      reviewTaskId: `review-${randomUUID()}`, targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }],
+      runGeneration })).gateId;
+    const approved = await raise(0);
+    await settleAsPerson(GATES, approved, "approve");
+    expect(await reviewFenceHolds({ runId, orgId: ORG, generation: 0 })).toBe(true);
+    // An output written before the generation column (null) is still pending: it may be this attempt's, or a later one's.
+    const legacy = `evt-${randomUUID()}`;
+    await admin.query(
+      `INSERT INTO ${OUTBOX} (event_id, org_id, artifact_id, representation_revision_id, emitter, producer_run_id, origin_kind,
+         destination_class, continuation_mode, status, producer_run_generation)
+       VALUES ($1, $2, $3, 'rev-1', 'createSemanticArtifact', $4, 'agent_produced', 'none', 'checkpointed', 'pending', NULL)`,
+      [legacy, ORG, `art-${randomUUID()}`, runId]);
+    expect(await reviewFenceHolds({ runId, orgId: ORG, generation: 0 })).toBe(false);
+    expect(await hasPendingProducedEventForAttempt({ orgId: ORG, runId, generation: 3 })).toBe(true);
+    // The drain settles it and raises its review with no generation: open, it still holds the fence.
+    await admin.query(`UPDATE ${OUTBOX} SET status = 'processed', processed_at = now() WHERE event_id = $1`, [legacy]);
+    const unknown = await raise("unknown");
+    expect((await admin.query(`SELECT run_generation FROM ${GATES} WHERE id = $1`, [unknown])).rows[0]).toEqual({ run_generation: null });
+    expect(await reviewFenceHolds({ runId, orgId: ORG, generation: 0 })).toBe(false);
+    // A person settles it: it reads as generation 0, as the publish gate reads every review with no generation.
+    await settleAsPerson(GATES, unknown, "approve");
+    expect(await reviewFenceHolds({ runId, orgId: ORG, generation: 0 })).toBe(true);
+  });
+
+  it("cinatra#4762: a produced-event insert and the run-row lock serialize, in both orders", async () => {
+    const { buildProducedEventInsertOp } = await import("@/lib/lifecycle/lifecycle-emit");
+    const { bindArtifactReviewGateSeam } = await import("../artifact-review-gate-seam");
+    const { emitArtifactReviewGate } = await import("../artifact-review-gate-store");
+    const { reviewFenceHolds } = await import("../publish-decision-actions");
+    bindArtifactReviewGateSeam();
+    const GATES = `"${q(TEST_SCHEMA)}"."artifact_review_gates"`;
+    const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const runId = await seedRun(`run-${randomUUID()}`, "pending_approval");
+    const approved = (await emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: `review-${randomUUID()}`,
+      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }], runGeneration: 0 })).gateId;
+    await settleAsPerson(GATES, approved, "approve");
+    const insertOp = () => buildProducedEventInsertOp(q(TEST_SCHEMA), { orgId: ORG, artifactId: `art-${randomUUID()}`,
+      representationRevisionId: "rev-1", emitter: "createSemanticArtifact", originKind: "agent_generated", producerRunId: runId,
+      producerAttempt: { generation: 0 } });
+    const fenceUnderLock = () => store.withRunRowLock(runId, (tx, locked) =>
+      reviewFenceHolds({ runId, orgId: locked!.orgId, generation: locked!.resetGeneration, executor: tx }));
+    expect(await fenceUnderLock()).toBe(true);
+
+    // A writer's output in flight (inserted, not committed): the locked read waits for it, then sees it.
+    await admin.query("BEGIN");
+    try {
+      const op = insertOp();
+      await admin.query(op.text, op.values);
+      let read = false;
+      const fence = fenceUnderLock().then((holds) => { read = true; return holds; });
+      await pause(300);
+      expect(read).toBe(false);
+      await admin.query("COMMIT");
+      expect(await fence).toBe(false);
+    } catch (err) {
+      await admin.query("ROLLBACK").catch(() => undefined);
+      throw err;
+    }
+    await admin.query(`UPDATE "${q(TEST_SCHEMA)}"."artifact_produced_outbox" SET status = 'processed', processed_at = now() WHERE producer_run_id = $1`, [runId]);
+
+    // The lock taken first: a writer's insert waits until the locked transaction ends.
+    let open!: () => void;
+    const held = new Promise<void>((resolve) => { open = resolve; });
+    const locked = store.withRunRowLock(runId, async () => { await held; return true; });
+    await pause(200);
+    let written = false;
+    const op = insertOp();
+    const write = admin.query(op.text, op.values).then(() => { written = true; });
+    await pause(300);
+    expect(written).toBe(false);
+    open();
+    await locked;
+    await write;
+    expect(written).toBe(true);
   });
 
   it("cinatra#4762: a produced event records the generation its attempt carries; a delayed writer of an ended attempt keeps its own", async () => {
@@ -642,9 +737,7 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     const { gateId } = await emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: `auto-${randomUUID()}`,
       targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-1" }], runGeneration: late });
     expect((await admin.query(`SELECT run_generation FROM ${GATES} WHERE id = $1`, [gateId])).rows[0]).toEqual({ run_generation: 0 });
-    const settled = resolvedGate("approve");
-    await admin.query(`UPDATE ${GATES} SET status = $2, disposition = $3, fingerprint = $4, resolved_at = now() WHERE id = $1`,
-      [gateId, settled.status, settled.disposition, settled.fingerprint]);
+    await settleAsPerson(GATES, gateId, "approve");
     expect(await approvedReviewPrecedes(runId, 1)).toBe(false);
     // A failed verification's reopen of that review continues A's review: it keeps generation 0 on the same run.
     const reopen = await emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: `reopen-${randomUUID()}`,

@@ -19,6 +19,7 @@ import {
   readDispatchedPublishRows,
   readLatestDecisionForRun,
   readOpenDecisionForRun,
+  withRunRowLock,
   type PublishDecisionRow,
   type PublishDecisionStatus,
 } from "./publish-decision-store";
@@ -174,15 +175,15 @@ type ReviewOfRun = {
 };
 
 /** The gate seam's review reads, reached as the run executor reaches them (execution.ts): never imported here, so no
- *  route's graph grows. An unbound seam is a read error. */
-function reviewSeam(): {
-  listReviews: (runId: string) => Promise<ReviewOfRun[]>;
-  hasPendingProducedReview: (input: { orgId: string; runId: string; generation: number }) => Promise<boolean>;
-} {
-  const seam = (globalThis as { __cinatraArtifactReviewGateSeam?: {
-    listReviews?: (runId: string) => Promise<ReviewOfRun[]>;
-    hasPendingProducedReview?: (input: { orgId: string; runId: string; generation: number }) => Promise<boolean>;
-  } }).__cinatraArtifactReviewGateSeam;
+ *  route's graph grows. An unbound seam is a read error. `executor`: a transaction to read in (withRunRowLock's). */
+type ReviewSeamReads = {
+  listReviews: (runId: string, executor?: unknown) => Promise<ReviewOfRun[]>;
+  hasPendingProducedReview: (input: { orgId: string; runId: string; generation: number }, executor?: unknown) => Promise<boolean>;
+};
+/** The executor argument of a seam read: none when the read runs on the pool. */
+const via = (executor?: unknown): [] | [unknown] => (executor === undefined ? [] : [executor]);
+function reviewSeam(): ReviewSeamReads {
+  const seam = (globalThis as { __cinatraArtifactReviewGateSeam?: Partial<ReviewSeamReads> }).__cinatraArtifactReviewGateSeam;
   if (typeof seam?.listReviews !== "function" || typeof seam.hasPendingProducedReview !== "function") {
     throw new Error("the review store is not bound");
   }
@@ -205,10 +206,15 @@ const personApproved = (g: ReviewOfRun): boolean =>
  * recorded (lifecycle_repair.successor_gate_id) is a review of this attempt that a person approved, or that was itself
  * settled changes requested and is cleared the same way. Another review approved later (a different artifact, a
  * sibling of the same family) never clears it, whenever it was raised.
+ * A review with no generation (raised before the column existed, or from an output that names no attempt) is read as
+ * generation 0 once it is settled; while it is still open it may be a review of this attempt, so it holds every
+ * attempt's fence (fail closed).
  * Who reviewed is not read: the reviewer and the person who answers the publish card may differ. A read error propagates.
  */
-export async function approvedReviewPrecedes(runId: string, generation: number): Promise<boolean> {
-  const reviews = (await reviewSeam().listReviews(runId)).filter((g) => (g.runGeneration ?? 0) === generation);
+export async function approvedReviewPrecedes(runId: string, generation: number, executor?: unknown): Promise<boolean> {
+  const all = await reviewSeam().listReviews(runId, ...via(executor));
+  if (all.some((g) => g.runGeneration == null && g.status !== "resolved")) return false;
+  const reviews = all.filter((g) => (g.runGeneration ?? 0) === generation);
   if (!reviews.some(personApproved)) return false;
   const byId = new Map(reviews.map((g) => [g.id, g] as const));
   const cleared = (g: ReviewOfRun): boolean => {
@@ -231,12 +237,16 @@ export async function approvedReviewPrecedes(runId: string, generation: number):
  * cinatra#4762 — the review fence before an external write, for the attempt `generation` of the run: an approved
  * review came before it (approvedReviewPrecedes), and no output of the attempt still waits for the review
  * orchestration. A produced event of the attempt still pending may yet raise a review of it; until the drain settles
- * it, the fence does not hold, as for a review still open. A read error propagates.
+ * it, the fence does not hold, as for a review still open. A pending event with no generation (written before the column
+ * existed) may be this attempt's, so it holds the fence too. A read error propagates.
+ * The events are read before the reviews: the drain settles an event and raises its review in one transaction, so an
+ * event that is no longer pending at the first read has its review visible at the second. `executor`: the transaction of
+ * withRunRowLock, under which no output of the run is in flight (see there).
  */
-export async function reviewFenceHolds(input: { runId: string; orgId: string; generation: number }): Promise<boolean> {
-  const { runId, orgId, generation } = input;
-  if (await reviewSeam().hasPendingProducedReview({ orgId, runId, generation })) return false;
-  return approvedReviewPrecedes(runId, generation);
+export async function reviewFenceHolds(input: { runId: string; orgId: string; generation: number; executor?: unknown }): Promise<boolean> {
+  const { runId, orgId, generation, executor } = input;
+  if (await reviewSeam().hasPendingProducedReview({ orgId, runId, generation }, ...via(executor))) return false;
+  return approvedReviewPrecedes(runId, generation, executor);
 }
 
 /**
@@ -539,15 +549,22 @@ export async function approvePublishDecision(input: DecideInput): Promise<Publis
         await giveBack();
         return { ok: true, resumed: false };
       }
-      // cinatra#4762: the review fence is read again under the claim, before the release write and the send: a review of
-      // the decision's attempt raised after the park (a produced event the drain reached late) or settled otherwise since
-      // then refuses the Publish. The claim is given back and the decision stays as it is; nothing is sent.
+      // cinatra#4762: the review fence is read again under the claim, and the release is written in the SAME transaction
+      // as that read, under the run row's lock (withRunRowLock): no output of the run is in flight while it runs, so an
+      // output of the attempt written after the park is either seen here (and refuses the Publish) or is written after
+      // the release commits, where the call-site check (publishCallAllowed) reads the fence again. A review of the
+      // attempt raised or settled otherwise since the park refuses it too. The claim is given back and the decision
+      // stays as it is; nothing is sent.
       const generation = run.resetGeneration ?? 0;
-      if ((target.runGeneration ?? 0) !== generation || !(await reviewFenceHolds({ runId: run.id, orgId: run.orgId, generation }))) {
+      const answer = await withRunRowLock(run.id, async (tx, locked) => {
+        if (locked?.resetGeneration !== generation || (target.runGeneration ?? 0) !== generation ||
+          !(await reviewFenceHolds({ runId: run.id, orgId: run.orgId, generation, executor: tx }))) return null;
+        return open ? decide(open.id, { from: "parked", to: "released", actor: deciderId }, tx) : { outcome: "won" as const };
+      });
+      if (answer === null) {
         await giveBack();
         return { ok: false, code: PUBLISH_REVIEW_NOT_APPROVED };
       }
-      const answer = open ? await decide(open.id, { from: "parked", to: "released", actor: deciderId }) : { outcome: "won" as const };
       if (answer.outcome !== "won") {
         await giveBack();
         return { ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: answer.currentStatus };
@@ -591,7 +608,9 @@ export async function approvePublishDecision(input: DecideInput): Promise<Publis
 /**
  * The call-site check of the model bridge and the passthrough road (A6): may this call of `run` go on? `verifiedStepId`
  * is the step the runtime signed for the call, or undefined when the call carries no verified step.
- *   - A verified step with a decision row is served only while that row (its newest) reads `released`.
+ *   - A verified step with a decision row is served only while that row (its newest) reads `released` and the review
+ *     fence of its attempt still holds (reviewFenceHolds, read under the run row's lock, cinatra#4762): an output of the
+ *     attempt written after the release, or a review of it opened since, refuses the call until it is approved.
  *   - A verified step with no row is refused when the template lists it as a publishing step.
  *   - A call with no verified step is refused when the template lists any publishing step.
  *   - A template that is not found cannot prove that it publishes nothing; a list stored as null (a template compiled
@@ -604,7 +623,11 @@ export async function publishCallAllowed(run: { id: string; templateId: string }
     const listed = template?.publishingSteps ?? [];
     if (verifiedStepId === undefined) return template !== null && listed.length === 0;
     const row = await readDecisionForRunNode(run.id, verifiedStepId);
-    if (row) return row.status === "released";
+    if (row) {
+      if (row.status !== "released") return false;
+      return await withRunRowLock(run.id, async (tx, locked) => !!locked &&
+        reviewFenceHolds({ runId: run.id, orgId: locked.orgId, generation: row.runGeneration ?? locked.resetGeneration, executor: tx }));
+    }
     return template !== null && !listed.includes(verifiedStepId);
   } catch (err) {
     console.warn(`[publish-decision] a call could not check its publish decision: ${nameOf(err)}`);

@@ -27,6 +27,7 @@ import {
   listReviewLineageForRun,
   readReviewGate,
   ArtifactReviewGateError,
+  type GateStoreExecutor,
 } from "./artifact-review-gate-store";
 import { decideDeclaredReviewForGate } from "./lifecycle-declared-review-store";
 import type { DeclaredReviewDecision } from "@/lib/lifecycle/lifecycle-review-core";
@@ -73,14 +74,16 @@ export type ArtifactReviewGateSeam = {
    *  came before it in the attempt that reached it: the gate's id, the status, the settled disposition, when the review
    *  was raised, the run's reset generation at that raise (null: raised before the column existed), the resolving
    *  fingerprint (a person's decision, or the optional review's synthetic expiry; null while pending) and the successor
-   *  gate its repair recorded (null: none), the lineage that clears a change request. */
-  listReviews(runId: string): Promise<Array<{
+   *  gate its repair recorded (null: none), the lineage that clears a change request. `executor`: a transaction of
+   *  the publish store to read in (its run-row lock), else the pool. */
+  listReviews(runId: string, executor?: unknown): Promise<Array<{
     id: string; status: string; disposition: string | null; createdAt: Date; runGeneration: number | null;
     fingerprint: string | null; successorGateId: string | null;
   }>>;
   /** cinatra#4762 — does a produced event of this attempt still wait for the review orchestration (a review it may raise
-   *  is not settled yet)? */
-  hasPendingProducedReview(input: { orgId: string; runId: string; generation: number }): Promise<boolean>;
+   *  is not settled yet)? An event with no generation (written before the column existed) counts for every attempt.
+   *  `executor`: as for listReviews. */
+  hasPendingProducedReview(input: { orgId: string; runId: string; generation: number }, executor?: unknown): Promise<boolean>;
 };
 
 /** Boot-time binding (idempotent, last write wins). Binds the run executor's
@@ -123,15 +126,19 @@ export function bindArtifactReviewGateSeam(): void {
       const gates = await listReviewGatesForRun(runId);
       return gates.map((gate) => ({ reviewTaskId: gate.reviewTaskId, status: gate.status }));
     },
-    async listReviews(runId) {
-      const gates = await listReviewLineageForRun(runId);
+    async listReviews(runId, executor) {
+      const gates = executor === undefined
+        ? await listReviewLineageForRun(runId)
+        : await listReviewLineageForRun(runId, executor as GateStoreExecutor);
       return gates.map((gate) => ({
         id: gate.id, status: gate.status, disposition: gate.disposition, createdAt: gate.createdAt,
         runGeneration: gate.runGeneration ?? null, fingerprint: gate.fingerprint ?? null, successorGateId: gate.successorGateId ?? null,
       }));
     },
-    async hasPendingProducedReview(input) {
-      return hasPendingProducedEventForAttempt(input);
+    async hasPendingProducedReview(input, executor) {
+      return executor === undefined
+        ? hasPendingProducedEventForAttempt(input)
+        : hasPendingProducedEventForAttempt(input, executor as GateStoreExecutor);
     },
   };
   (

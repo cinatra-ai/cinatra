@@ -83,6 +83,7 @@ vi.mock("../auth-policy", () => ({ enforceRunAccess: vi.fn(), resolveEffectivePo
 vi.mock("../run-wait-notifier", () => ({ dispatchAutoGateResolved: vi.fn() }));
 vi.mock("../run-produced-review-hold", () => ({ isParkedOnProducedReview: vi.fn(() => false) }));
 
+import * as gateStore from "../artifact-review-gate-store";
 import { emitArtifactReviewGate, emitDeclaredReviewGateFamily, readGatePinnedTargets } from "../artifact-review-gate-store";
 
 const A = { artifactId: "post", representationRevisionId: "post-r1" };
@@ -283,13 +284,49 @@ describe("a successor of a review raised before the generation column (cinatra#4
     return value instanceof SQL ? new PgDialect().sqlToQuery(value).sql.replace(/\s+/g, " ") : String(value);
   };
 
-  // red-first-expect: to match /coalesce\(\(select coalesce\(prior_ga
-  it("takes generation 0, the generation the publish gate reads for that review, never -1", async () => {
-    // The review it continues has no stored generation (null): the publish gate reads it as generation 0, so its repair
-    // successor is stamped 0 and can clear the change request. A review this run does not own still stamps -1.
+  // red-first-expect: to match /nullif\(coalesce\(\(select coalesce\(
+  it("keeps no generation, as the review it continues: settled it reads as 0, open it holds every attempt; a foreign one is -1", async () => {
+    // The review it continues has no stored generation (null): the successor is stored null too (the -2 marker inside
+    // the read), so the publish gate reads it as that review: generation 0 once settled, so it can clear the change
+    // request, and while open a review of an unknown attempt that holds every attempt's fence. A review this run does
+    // not own still stamps -1.
     await emitArtifactReviewGate({ ...input([A]), reviewTaskId: "repair-successor", successorOfGateId: "gate-old" });
     expect(await rendered(storage.generations[0])).toMatch(
-      /coalesce\(\(select coalesce\(prior_gate\.run_generation, 0\) from \S+ prior_gate where prior_gate\.id = \$\d+ and prior_gate\.run_id = \$\d+\), -1\)/,
+      /nullif\(coalesce\(\(select coalesce\(prior_gate\.run_generation, -2\) from \S+ prior_gate where prior_gate\.id = \$\d+ and prior_gate\.run_id = \$\d+\), -1\), -2\)/,
     );
+  });
+
+  // red-first-expect: to be null
+  it("a review the drain raises for an output that names no attempt is stored with no generation (cinatra#4762)", async () => {
+    await emitArtifactReviewGate({ ...input([A]), reviewTaskId: "auto-unknown", runGeneration: "unknown" as never });
+    expect(storage.generations[0]).toBeNull();
+  });
+});
+
+describe("an output of the attempt still waiting for the review orchestration (cinatra#4762)", () => {
+  /** The WHERE clause the read hands to its executor, rendered as Postgres reads it. */
+  const whereOf = async (generation: number) => {
+    let where = "";
+    let params: unknown[] = [];
+    const executor = {
+      select: () => ({ from: () => ({ where: (condition: SQL) => {
+        const q = new PgDialect().sqlToQuery(condition);
+        where = q.sql.replace(/\s+/g, " ");
+        params = q.params;
+        return { limit: async () => [] };
+      } }) }),
+    };
+    const read = (gateStore as { hasPendingProducedEventForAttempt?: (input: unknown, executor: unknown) => Promise<boolean> })
+      .hasPendingProducedEventForAttempt;
+    if (read) await read({ orgId: "org", runId: "run", generation }, executor);
+    return { where, params };
+  };
+
+  // red-first-expect: expected { nullCounts: false } to deeply equal { nullCounts: true }
+  it("an event with no generation, written before the column existed, may be this attempt's: it counts for every attempt", async () => {
+    const { where, params } = await whereOf(1);
+    expect({ nullCounts: /\((\S+\.)?"artifact_produced_outbox"\."producer_run_generation" = \$\d+ or (\S+\.)?"artifact_produced_outbox"\."producer_run_generation" is null\)/.test(where) })
+      .toEqual({ nullCounts: true });
+    expect(params).toEqual(["pending", "org", "run", 1]);
   });
 });

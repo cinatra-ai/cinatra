@@ -10,7 +10,7 @@ type Event = Target & {
   continuationAddress: string | null; status: string; destinationClass: "none" | "external_publish";
   producerRunGeneration?: number | null;
 };
-type GateInput = { runId: string; orgId: string; reviewTaskId: string; targets: Target[]; runGeneration?: number | null };
+type GateInput = { runId: string; orgId: string; reviewTaskId: string; targets: Target[]; runGeneration?: number | null | "unknown" };
 
 const state = vi.hoisted(() => ({
   events: [] as Event[],
@@ -369,14 +369,14 @@ describe("an automatic review carries the attempt that produced its revision (ci
     expect(stamped()).toEqual([2, 2]);
   });
 
-  // red-first-expect: expected [ undefined ] to deeply equal [ -1 ]
-  it("an event written by an older build, with no generation, raises a review stamped -1, which never counts", async () => {
+  // red-first-expect: to deeply equal [ 'unknown' ]
+  it("an event written before the generation column, with none, raises a review of an unknown attempt, which holds every fence while open", async () => {
     state.events = [{ ...event("post"), producerRunGeneration: null }];
     await drain();
-    expect(stamped()).toEqual([-1]);
+    expect(stamped()).toEqual(["unknown"]);
     vi.clearAllMocks(); state.gates.clear(); state.epoch = null;
     state.events = [event("a"), { ...event("b"), producerRunGeneration: 1 }];
     await drain();
-    expect(stamped()).toEqual([-1, 1]);
+    expect(stamped()).toEqual(["unknown", 1]);
   });
 });

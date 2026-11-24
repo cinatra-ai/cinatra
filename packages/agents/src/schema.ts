@@ -714,7 +714,8 @@ export const artifactReviewGates = cinatraSchema.table("artifact_review_gates", 
   reopenCount:   integer("reopen_count").notNull().default(0),
   // cinatra#4762 (core__0134): the run's reset_generation when the gate was raised, read from the run row in the
   // insert; -1 when the run was not executing then (no attempt of its own). A publish gate counts only the reviews of
-  // its own attempt. null = raised by code older than the column, read as generation 0.
+  // its own attempt. null = raised by code older than the column, or from an event that names no attempt: read as
+  // generation 0 once settled; while open it holds every attempt's publish fence.
   runGeneration: integer("run_generation"),
 }, (t) => ({
   // One gate per (run, task) — makes emit idempotent + is the pending anchor.
@@ -884,7 +885,8 @@ export const artifactProducedOutbox = cinatraSchema.table("artifact_produced_out
   processedAt:              timestamp("processed_at", { withTimezone: true }),
   // cinatra#4762 (core__0134): the producing run's reset_generation when the event was written (read from the run
   // row in the insert while it executes, else -1). The review the event raises carries it. null = an event written
-  // by code older than the column; its review never counts for a publish.
+  // by code older than the column, of an unknown attempt: while pending it holds every attempt's publish fence, and
+  // its review is stamped null.
   producerRunGeneration:    integer("producer_run_generation"),
 }, (t) => ({
   revisionUniq: uniqueIndex("artifact_produced_outbox_revision_uniq")

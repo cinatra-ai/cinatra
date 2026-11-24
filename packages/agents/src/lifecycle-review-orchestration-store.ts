@@ -433,13 +433,16 @@ interface ProducedEventRow {
   continuationAddress: string | null;
   status: string;
   /** cinatra#4762: the producing attempt's reset generation, stamped when the event was written (null or absent: an
-   *  older build; its review never counts). */
+   *  event written before the column existed, of an unknown attempt). */
   producerRunGeneration?: number | null;
 }
 
 /** cinatra#4762: the generation an automatic review of these events is stamped with: the producing attempt's, carried
- *  by the events since production; -1 (never counts) when one carries none or they disagree. */
-function producedGeneration(rows: ReadonlyArray<Pick<ProducedEventRow, "producerRunGeneration">>): number {
+ *  by the events since production. "unknown" when one carries none (written before the column existed): the review is
+ *  stamped null, which holds every attempt's publish fence while it is open (fail closed: it may be this attempt's
+ *  output). -1 (never counts) when they carry different generations. */
+function producedGeneration(rows: ReadonlyArray<Pick<ProducedEventRow, "producerRunGeneration">>): number | "unknown" {
+  if (rows.some((r) => r.producerRunGeneration == null)) return "unknown";
   const [first] = rows;
   const g = first?.producerRunGeneration;
   return typeof g === "number" && Number.isSafeInteger(g) && rows.every((r) => r.producerRunGeneration === g) ? g : -1;
