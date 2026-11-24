@@ -38,6 +38,7 @@ import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuc
 // ruling 1: "now").
 import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
 import { readWayflowSubmittedValues } from "./hitl-gate-submit";
+import { SCREEN_FAILED_HOLD_REASON } from "./hitl-gate-submit";
 import { readSentUserEnvelope } from "./wayflow-user-response-envelope";
 // cinatra#2484: the setup-resume path is the LAST place a type-violating setup
 // value can be stopped before it becomes `agent_runs.inputParams` and reaches
@@ -74,16 +75,30 @@ export const DECLARED_SCREEN_CHANGED_REFUSAL =
   "This step's screen was changed after the step opened, so the answer was not sent.";
 
 /**
- * Did the renderer of a parked step change its declared screen since the step
- * opened (cinatra#3470)? Read from the pin the park wrote into the step's gate
- * schema. Only a read that positively finds another declaration says so.
+ * Why an answer to a parked step may not be sent (cinatra#3470), or null when
+ * it may. The step is answered only under the declared screen it opened under:
+ * the pin the park wrote into its gate schema is compared with what its
+ * renderer declares now, read fresh past the bindings cache. Only "matches"
+ * sends. Another declaration refuses as changed. A step that cannot be
+ * verified refuses as a screen that could not be loaded, which a reload
+ * retries: its gate row missing or unreadable, or a declaration that cannot be
+ * read (refused, malformed, missing from an incomplete scan, a failed read).
+ * A step that opened with no screen, whose renderer is verified to declare
+ * none now, matches and is sent as before.
  */
-async function stepScreenChangedSinceItOpened(gate: {
-  xRenderer: string;
-  inputSchema: Record<string, unknown>;
-}): Promise<boolean> {
-  const { stepDeclarationStanding } = await import("./field-renderer-bindings.server");
-  return stepDeclarationStanding(gate.xRenderer, gate.inputSchema) === "changed";
+async function stepScreenRefusal(
+  gate: { xRenderer: string; inputSchema: Record<string, unknown> } | null,
+): Promise<string | null> {
+  if (gate === null) return SCREEN_FAILED_HOLD_REASON;
+  let standing: "matches" | "changed" | "unknown";
+  try {
+    const { stepDeclarationStanding } = await import("./field-renderer-bindings.server");
+    standing = stepDeclarationStanding(gate.xRenderer, gate.inputSchema, { fresh: true });
+  } catch {
+    return SCREEN_FAILED_HOLD_REASON;
+  }
+  if (standing === "matches") return null;
+  return standing === "changed" ? DECLARED_SCREEN_CHANGED_REFUSAL : SCREEN_FAILED_HOLD_REASON;
 }
 
 /**
@@ -1174,7 +1189,8 @@ export async function approveReviewTaskInternal(
     // section exists to prevent.
     // Read only THIS pre-dispatch materialization, never the latest gate later.
     let gateSnapshot: Awaited<ReturnType<typeof readDurableHitlGateForContinue>> = null;
-    try { gateSnapshot = await readDurableHitlGateForContinue(run.id,reviewTaskId); } catch { /* Missing durable evidence stays unconfirmed. */ }
+    // A missing or unreadable row leaves it null: the step's screen is then unverified and the answer is refused below.
+    try { gateSnapshot = await readDurableHitlGateForContinue(run.id,reviewTaskId); } catch { gateSnapshot = null; }
     let dispatchStarted = false;
     let fencedAt = 0;
     let settled = false;
@@ -1186,11 +1202,10 @@ export async function approveReviewTaskInternal(
       // fixed text that names no run and carries no store error.
       await assertNoOpenPublishDecision(run.id).catch((err: unknown) => { throw publishHoldFault(err); });
       // cinatra#3470: a step is answered only under the screen it opened under. A renderer
-      // updated or uninstalled while the step waited refuses the answer before the fence, and
-      // the claim is given back: the answer was made on a screen the step never asked with.
-      if (gateSnapshot !== null && (await stepScreenChangedSinceItOpened(gateSnapshot))) {
-        throw new Error(DECLARED_SCREEN_CHANGED_REFUSAL);
-      }
+      // updated or uninstalled while the step waited, or a screen that cannot be verified,
+      // refuses the answer before the fence, and the claim is given back.
+      const screenRefusal = await stepScreenRefusal(gateSnapshot);
+      if (screenRefusal !== null) throw new Error(screenRefusal);
       // The shared WayFlow resume (cinatra#4150) is prepared before the fence and
       // sent after it (cinatra#4245): the client with its 24h ceiling and the
       // runtime's long header/body timeouts, this leg's credential and the message.

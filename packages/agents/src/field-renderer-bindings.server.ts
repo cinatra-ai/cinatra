@@ -314,11 +314,15 @@ export function declaredScreenPin(binding: {
 /**
  * The pin of what `xRenderer` declares now, or null when that cannot be read
  * (a refused declaration, an id an incomplete scan does not name, a failed
- * read): those are held as unavailable on their own.
+ * read): those are held as unavailable on their own. `fresh` reads past the
+ * bindings cache (`lookupFieldRendererBinding`).
  */
-export function currentDeclaredScreenPin(xRenderer: string): string | null {
+export function currentDeclaredScreenPin(
+  xRenderer: string,
+  opts?: { fresh?: boolean },
+): string | null {
   try {
-    const { binding, refused, unknown } = lookupFieldRendererBinding(xRenderer);
+    const { binding, refused, unknown } = lookupFieldRendererBinding(xRenderer, opts);
     if (binding === undefined) return refused || unknown ? null : DECLARED_SCREEN_PIN_NONE;
     return declaredScreenPin(binding);
   } catch {
@@ -332,13 +336,15 @@ export function currentDeclaredScreenPin(xRenderer: string): string | null {
  * renderer installed now declares another screen, or a screen where the step
  * opened with none, or none where it opened with one; "unknown" when what is
  * declared now cannot be read. A step is drawn, filled and submitted only on
- * "matches".
+ * "matches". The answer that is sent reads it `fresh`: a cached declaration
+ * can still name a screen updated or uninstalled within the cache's seconds.
  */
 export function stepDeclarationStanding(
   xRenderer: string,
   stepSchema: unknown,
+  opts?: { fresh?: boolean },
 ): "matches" | "changed" | "unknown" {
-  const current = currentDeclaredScreenPin(xRenderer);
+  const current = currentDeclaredScreenPin(xRenderer, opts);
   if (current === null) return "unknown";
   return current === readDeclaredScreenPin(stepSchema) ? "matches" : "changed";
 }
@@ -437,9 +443,13 @@ export function isRefusedDeclaredScreen(xRenderer: string): boolean {
  * installed agents are scanned again, and only that answer reads as none.
  * NOR DOES AN INCOMPLETE SCAN: when a part of the installed agents could not be
  * read, an id it does not name is `unknown` (could not be loaded), never none.
+ * `fresh` scans the installed agents first, whatever the cache holds: the
+ * check before an answer is sent reads it, since a cached binding can be one
+ * updated or uninstalled since.
  */
 export function lookupFieldRendererBinding(
   xRenderer: string,
+  opts?: { fresh?: boolean },
 ): { binding: CollectedBinding | undefined; refused: boolean; unknown: boolean } {
   const read = () => {
     const binding = getMergedFieldRendererBindings().find((b) => b.id === xRenderer);
@@ -447,6 +457,10 @@ export function lookupFieldRendererBinding(
     const refused = binding === undefined && scan.refusedScreenIds.includes(xRenderer);
     return { binding, refused, unknown: binding === undefined && !refused && !scan.complete };
   };
+  if (opts?.fresh === true) {
+    collectInstalled({ fresh: true });
+    return read();
+  }
   const wasCached = scanIsCached();
   const first = read();
   if (first.binding !== undefined || first.refused || !wasCached) return first;

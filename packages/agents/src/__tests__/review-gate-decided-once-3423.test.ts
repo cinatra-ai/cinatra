@@ -62,6 +62,12 @@ vi.mock("../run-pause-claim", () => ({
   PauseClaimReleaseError: class extends Error {},
 }));
 vi.mock("../agent-run-hitl-prompts", () => ({
+  // cinatra#3470: the gate row of a step that opened with no declared screen (no
+  // pin, a renderer id no binding declares); a missing row refuses the answer.
+  readDurableHitlGateForContinue: async (runId: string, reviewTaskId: string) => ({
+    runId, reviewTaskId, xRenderer: "fixture-test/no-declared-screen",
+    inputSchema: {}, values: {}, materializedAt: "2026-01-01T00:00:00.000Z",
+  }),
   captureHitlPromptForContinue: async (input: never) => {
     await (storeMock.writeHitlPrompt as unknown as (value: unknown) => Promise<void>)(input); return "captured-prompt";
   },

@@ -8,8 +8,11 @@
  * park wrote (`withDeclaredScreenPin`). When the renderer installed now
  * declares another screen, the answer was made on a screen the step never
  * asked with: it is refused before the fence, the pause is given back and
- * nothing is sent. Read through the production lookup over a temporary
- * runtime mount.
+ * nothing is sent. A step whose screen cannot be verified (its gate row
+ * missing or unreadable, its declaration unreadable) is refused the same way;
+ * a step that opened with no screen, whose renderer declares none, is sent.
+ * The check reads the declaration past the bindings cache. Read through the
+ * production lookup over a temporary runtime mount.
  *
  * Run: cd packages/agents && pnpm exec vitest run src/__tests__/declared-screen-pin-submit-3470.test.ts
  */
@@ -48,17 +51,24 @@ vi.mock("../publish-decision-store", async (orig) => ({
   readLatestDecisionForRun: async () => null,
 }));
 // The step's gate row, as the park wrote it.
-const gateRow = vi.hoisted(() => ({ inputSchema: {} as Record<string, unknown> }));
+const gateRow = vi.hoisted(() => ({
+  inputSchema: {} as Record<string, unknown>,
+  read: "row" as "row" | "missing" | "throws",
+}));
 vi.mock("../agent-run-hitl-prompts", () => ({
   captureHitlPromptForContinue: async () => "captured-prompt",
-  readDurableHitlGateForContinue: async (runId: string, reviewTaskId: string) => ({
-    runId,
-    reviewTaskId,
-    xRenderer: "@acme-test/pin-submit-agent:confirm",
-    inputSchema: gateRow.inputSchema,
-    values: {},
-    materializedAt: "2026-01-01T00:00:00.000Z",
-  }),
+  readDurableHitlGateForContinue: async (runId: string, reviewTaskId: string) => {
+    if (gateRow.read === "throws") throw new Error("fixture gate store down");
+    if (gateRow.read === "missing") return null;
+    return {
+      runId,
+      reviewTaskId,
+      xRenderer: "@acme-test/pin-submit-agent:confirm",
+      inputSchema: gateRow.inputSchema,
+      values: {},
+      materializedAt: "2026-01-01T00:00:00.000Z",
+    };
+  },
   recordSuccessfulContinue: async () => {},
   continueBindingDigest: () => "",
   continueGateDigest: () => "",
@@ -130,33 +140,60 @@ const server = bindingsServer as unknown as {
   withDeclaredScreenPin?: (schema: Record<string, unknown>, x: string) => Record<string, unknown>;
 };
 
-/** Install (or update) the fixture agent with `title` on its declared card. */
-function install(title: string): void {
+/** Write the fixture agent's manifest; the bindings cache is left as it is. */
+function writeManifest(manifest: string): void {
   const dir = join(mount.dir, "acme-test", "pin-submit-agent");
   mkdirSync(dir, { recursive: true });
-  writeFileSync(
-    join(dir, "package.json"),
-    JSON.stringify({
-      name: "@acme-test/pin-submit-agent",
-      cinatra: {
-        fieldRenderers: [
-          {
-            id: ID,
-            kind: "linkedin-draft-review",
-            priority: 90,
-            midRunHitl: true,
-            screen: {
-              layout: "card",
-              title,
-              decisionLabel: "Fixture decision",
-              decisions: [{ label: "Fixture send", answer: { approved: true } }],
-            },
-          },
-        ],
-      },
-    }),
-  );
+  writeFileSync(join(dir, "package.json"), manifest);
+}
+
+/** The fixture manifest: a declared card titled `title`, or no screen at all. */
+function manifest(title: string | null): string {
+  return JSON.stringify({
+    name: "@acme-test/pin-submit-agent",
+    cinatra: {
+      fieldRenderers: [
+        {
+          id: ID,
+          kind: "linkedin-draft-review",
+          priority: 90,
+          midRunHitl: true,
+          ...(title === null
+            ? {}
+            : {
+                screen: {
+                  layout: "card",
+                  title,
+                  decisionLabel: "Fixture decision",
+                  decisions: [{ label: "Fixture send", answer: { approved: true } }],
+                },
+              }),
+        },
+      ],
+    },
+  });
+}
+
+/** Install (or update) the fixture agent with `title` on its declared card. */
+function install(title: string | null): void {
+  writeManifest(manifest(title));
   server.__clearInstalledFieldRendererBindingsCache();
+}
+
+/** Answer the gate: "sent", or the refusal's text. */
+function answer(): Promise<string> {
+  return approveReviewTaskInternal(GATE, RUN.runBy, { approved: true }).then(
+    () => "sent",
+    (err: unknown) => (err instanceof Error ? err.message : String(err)),
+  );
+}
+
+/** Nothing was sent, and the pause was given back. */
+function expectRefusedAndGivenBack(): void {
+  expect(sendTask).not.toHaveBeenCalled();
+  expect(fenceCalls()).toEqual([]);
+  expect(pauseClaimFake.releasePauseClaim).toHaveBeenCalledTimes(1);
+  expect(row.status).toBe("pending_approval");
 }
 
 /** The park: the step's gate row carries the pin of what is installed now. */
@@ -207,6 +244,7 @@ afterAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  gateRow.read = "row";
   arrange();
 });
 
@@ -234,5 +272,51 @@ describe("an answer is sent only under the declared screen its step opened under
     expect(fenceCalls()).toHaveLength(1);
     expect(sendTask).toHaveBeenCalledTimes(1);
     expect(pauseClaimFake.releasePauseClaim).not.toHaveBeenCalled();
+  });
+
+  it("an update made while the bindings cache still holds the earlier declaration refuses the answer", async () => {
+    install("Fixture cached revision");
+    park();
+    // The park read the declaration, so the cache holds it; the update is not
+    // followed by a cache clear.
+    writeManifest(manifest("Fixture uncached revision"));
+    // red-first-expect: expected 'sent' to contain 'changed after the step opened'
+    expect(await answer()).toContain("changed after the step opened");
+    expectRefusedAndGivenBack();
+  });
+
+  it("a declaration that can no longer be read (a malformed manifest) refuses the answer", async () => {
+    install("Fixture readable revision");
+    park();
+    writeManifest("{ not json");
+    server.__clearInstalledFieldRendererBindingsCache();
+    // red-first-expect: expected 'sent' to contain 'could not be loaded'
+    expect(await answer()).toContain("could not be loaded");
+    expectRefusedAndGivenBack();
+  });
+
+  it("a gate row that cannot be read refuses the answer", async () => {
+    install("Fixture gate-read revision");
+    park();
+    gateRow.read = "throws";
+    // red-first-expect: expected 'sent' to contain 'could not be loaded'
+    expect(await answer()).toContain("could not be loaded");
+    expectRefusedAndGivenBack();
+  });
+
+  it("a missing gate row refuses the answer", async () => {
+    install("Fixture gate-missing revision");
+    park();
+    gateRow.read = "missing";
+    // red-first-expect: expected 'sent' to contain 'could not be loaded'
+    expect(await answer()).toContain("could not be loaded");
+    expectRefusedAndGivenBack();
+  });
+
+  it("a step that opened with no screen, whose renderer declares none, is sent as before", async () => {
+    install(null);
+    gateRow.inputSchema = { type: "object" };
+    expect(await answer()).toBe("sent");
+    expect(sendTask).toHaveBeenCalledTimes(1);
   });
 });
