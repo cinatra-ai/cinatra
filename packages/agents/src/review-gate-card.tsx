@@ -145,6 +145,7 @@ import {
   useRef,
   useState,
   type ReactElement,
+  type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -1421,6 +1422,13 @@ export function ReviewGateCard({
   // to read). No panel, no placeholder, no reason — the turn carries only prose.
   if (body === null) return null;
 
+  const stateAnchor = reviewStateAnchor({
+    host,
+    insideConversation,
+    state: state.state,
+    recordedPrompt: resolved?.recordedPrompt ?? null,
+  });
+
   return (
     <div
       className={frame}
@@ -1429,9 +1437,79 @@ export function ReviewGateCard({
       data-lifecycle-card-host={host}
       data-conformance-id="review-gate-card"
     >
-      <IslandFramingContext.Provider value={islandFraming}>{body}</IslandFramingContext.Provider>
+      <IslandFramingContext.Provider value={islandFraming}>
+        <ReviewStateAnchor anchor={stateAnchor}>{body}</ReviewStateAnchor>
+      </IslandFramingContext.Provider>
     </div>
   );
+}
+
+/** The design anchors of the two review readings (cinatra#3033). */
+export type ReviewStateAnchorId =
+  | "run-review-step-post"
+  | "run-review-step-picture"
+  | "review-card-post-with-featured-image";
+
+/**
+ * WHICH DRAWN READING THIS CARD IS (cinatra#3033), for the design grader.
+ *
+ * `app-artifact-review.html` §I.3 draws the run page's review step twice: on
+ * the post, and on the featured image. `app-lifecycle-cards.html` §II.1 draws
+ * the featured image's card in the chat thread. The drawing's own trait tells
+ * the two readings apart: on the picture the note field opens carrying the
+ * prompt that made it; on the post it opens empty. The card reads exactly that,
+ * through the resolve answer's `recordedPrompt`, which asks only whether the
+ * reviewed row records the prompt it was made from. It names no artifact type.
+ *
+ * THE PLACE, NOT THE NEAREST PROP. The chat reading is any card drawn inside a
+ * conversation (the inline run panel included, as for the prompt window). The
+ * run page reading is a `run_card` outside one. The review page and the site
+ * widget draw neither.
+ *
+ * ONLY WHERE THE ANSWER CAN TELL. The resolve answer discloses the prompt only
+ * for a `pending` or `restricted` gate. While the answer is loading, and on a
+ * settled or absent gate, a missing prompt says nothing about the reading, so
+ * no reading is claimed.
+ */
+export function reviewStateAnchor(input: {
+  host: LifecycleCardHost | null;
+  insideConversation: boolean;
+  state: LifecycleCardState["state"];
+  recordedPrompt: string | null;
+}): ReviewStateAnchorId | null {
+  if (input.state !== "pending" && input.state !== "restricted") return null;
+  const picture = input.recordedPrompt !== null && input.recordedPrompt !== "";
+  if (input.insideConversation) return picture ? "review-card-post-with-featured-image" : null;
+  if (input.host !== "run_card") return null;
+  return picture ? "run-review-step-picture" : "run-review-step-post";
+}
+
+/**
+ * The anchor's own element. `display: contents` draws no box, so the card's
+ * layout is the same with and without it. Each anchor is a literal so that a
+ * search of the source finds the element that carries it.
+ */
+function ReviewStateAnchor({
+  anchor,
+  children,
+}: {
+  anchor: ReviewStateAnchorId | null;
+  children: ReactNode;
+}): ReactElement {
+  switch (anchor) {
+    case "run-review-step-post":
+      return <div className="contents" data-conformance-id="run-review-step-post">{children}</div>;
+    case "run-review-step-picture":
+      return <div className="contents" data-conformance-id="run-review-step-picture">{children}</div>;
+    case "review-card-post-with-featured-image":
+      return (
+        <div className="contents" data-conformance-id="review-card-post-with-featured-image">
+          {children}
+        </div>
+      );
+    case null:
+      return <>{children}</>;
+  }
 }
 
 /**
