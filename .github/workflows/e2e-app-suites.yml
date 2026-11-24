@@ -287,7 +287,11 @@ jobs:
         timeout-minutes: 20
         env:
           NODE_OPTIONS: --max-old-space-size=3072
-        run: pnpm build
+          # One page-data worker: same cap and reason as the RBAC e2e build
+          # step in build-image.yml (a 3-worker build next to the service
+          # containers hung the runner until the job cap).
+          CINATRA_BUILD_CPUS: "1"
+        run: bash scripts/ci/hosted-build-memory-cap.sh run pnpm build
 
       - name: Start production server on port 3000
         # next.config sets output: "standalone", so run server.js exactly like the
@@ -517,7 +521,11 @@ jobs:
         timeout-minutes: 20
         env:
           NODE_OPTIONS: --max-old-space-size=3072
-        run: pnpm build
+          # One page-data worker: same cap and reason as the RBAC e2e build
+          # step in build-image.yml (a 3-worker build next to the service
+          # containers hung the runner until the job cap).
+          CINATRA_BUILD_CPUS: "1"
+        run: bash scripts/ci/hosted-build-memory-cap.sh run pnpm build
 
       - name: Start production server on port 3000
         run: |

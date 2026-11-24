@@ -322,3 +322,17 @@ describe("classifier model override retired (#2335 AC1)", () => {
     expect(source).toMatch(/const response = await adapter\.generate\(\{[\s\S]*?\n\s*model: input\.model,/);
   });
 });
+
+// cinatra#3745: the classifier's callers include run-bound code with no run
+// request frame (the unbound-output deriver classifies a run's terminal output
+// under a worker actor frame), so the llm package's run-frame default does not
+// reach it. The classifier itself brings the empty ceiling: it is offered no
+// tool on every road.
+describe("the classifier is offered no tool (cinatra#3745)", () => {
+  it("its model call carries the explicit empty ceiling", async () => {
+    h.state.provider = "openai";
+    await unhintedSave();
+    expect(h.state.classifierTaskInputs).toHaveLength(1);
+    expect(h.state.classifierTaskInputs[0].stepToolPolicy).toEqual({ kind: "declared", tools: [] });
+  });
+});

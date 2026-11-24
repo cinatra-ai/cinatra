@@ -43,6 +43,7 @@ import {
   REGISTRY_KINDS,
   HOST_PROVIDED_BY_PARENT,
   collectFiles,
+  LIFECYCLE_CARD_CARRIAGE,
   LIFECYCLE_CARD_CONTRACTS,
   LIFECYCLE_CARD_KINDS,
   LIFECYCLE_CARD_HOSTS,
@@ -1474,7 +1475,7 @@ describe("the contract mirrors the epic table's shape", () => {
   it("every row carries a component owner and a wire carriage", () => {
     for (const [kind, c] of Object.entries(LIFECYCLE_CARD_CONTRACTS)) {
       expect(c.component, kind).toBeTruthy();
-      expect(["data_part", "interrupt"], kind).toContain(c.wireCarriage);
+      expect(["data_part", "interrupt", "read"], kind).toContain(c.wireCarriage);
     }
   });
 
@@ -1521,6 +1522,22 @@ describe("the two modes on the real tree", () => {
     for (const host of LIFECYCLE_CARD_HOSTS) expect(c.hosts[host], host).not.toBeNull();
   });
 
+  it("the publish card is DRAWN, mounted on all four hosts, with its proofs and no open obligation", () => {
+    // cinatra#4150: the sixth kind is registered in the same change that mounts its card, so it is never a
+    // placeholder and owes no host.
+    const c = LIFECYCLE_CARD_CONTRACTS.publish_decision;
+    expect(c.status).toBe("DRAWN");
+    expect(c.component).toBe("PublishDecisionCard");
+    expect(c.owner).toBe("packages/agents/src/publish-decision-card-view.tsx");
+    // Carried by the run's read: the publish gate emits no typed interrupt, so none is claimed.
+    expect(c.wireCarriage).toBe("read");
+    expect(LIFECYCLE_CARD_CARRIAGE.publish_decision).toBe("read");
+    expect(c.openObligations).toEqual([]);
+    for (const host of LIFECYCLE_CARD_HOSTS) expect(c.hosts[host], host).not.toBeNull();
+    expect(c.instanceProof.hosts.sort()).toEqual([...LIFECYCLE_CARD_HOSTS].sort());
+    expect(c.renderedProof.file).toBe("packages/agents/src/__tests__/publish-decision-card-view.test.tsx");
+  });
+
   it("default mode is clean: no false claim, and the placeholders are recorded", () => {
     expect(collectContractViolations()).toEqual([]);
   });
@@ -1565,7 +1582,7 @@ describe("the two modes on the real tree", () => {
     });
     expect(audit.status).toBe(0);
     expect(audit.stdout + audit.stderr).toMatch(
-      /5\/5 kinds drawn by a named owner, every mount host-declared/,
+      /6\/6 kinds drawn by a named owner, every mount host-declared/,
     );
   });
 
@@ -1574,12 +1591,12 @@ describe("the two modes on the real tree", () => {
     const out = res.stdout + res.stderr;
     expect(res.status).toBe(0);
     expect(out).toMatch(/no NEW false claim/);
-    // 5 of 5 DRAWN, and the placeholder rider is GONE — which is the half that
+    // 6 of 6 DRAWN (the sixth kind, cinatra#4150, is drawn with its kind), and the placeholder rider is GONE — which is the half that
     // has to be asserted now. W3 (cinatra#2930) drew the fifth kind, so a
     // lenient read that still named a gap would be reporting one that no longer
     // exists, and a count that stayed at four would be the same claim in
     // arithmetic.
-    expect(out).toMatch(/5\/5 kinds drawn by a named owner/);
+    expect(out).toMatch(/6\/6 kinds drawn by a named owner/);
     expect(out).not.toMatch(/the REQUIRED gate \(no flag\) fails on these/);
     expect(out).not.toMatch(/STILL A PLACEHOLDER/);
   });
@@ -1664,14 +1681,14 @@ describe("exemptions and the live tree", () => {
   it("the CLI's lenient read exits 0 on the real tree, counts the drawn kinds and still names the gap", () => {
     // THE COUNT IS THE SENTENCE THAT MATTERS NOW, and its absence of a rider is
     // the other half. It says how much of the tree the lenient read verified —
-    // all five kinds — so a reader cannot mistake "exit 0" for a read that
+    // all six kinds — so a reader cannot mistake "exit 0" for a read that
     // skipped something; and the `STILL A PLACEHOLDER` rider is gone because
     // W3 (cinatra#2930) drew the last undrawn kind. cinatra#2788 struck the
     // schedule row and cinatra#2789 the verification one before it.
     const res = spawnSync(process.execPath, [GATE, "--audit"], { cwd: REPO_ROOT, encoding: "utf8" });
     const out = res.stdout + res.stderr;
     expect(out).toMatch(/no NEW false claim/);
-    expect(out).toMatch(/5\/5 kinds drawn by a named owner/);
+    expect(out).toMatch(/6\/6 kinds drawn by a named owner/);
     expect(out).not.toMatch(/STILL A PLACEHOLDER/);
     expect(res.status).toBe(0);
   });

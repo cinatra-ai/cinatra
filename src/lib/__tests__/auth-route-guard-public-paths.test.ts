@@ -1156,11 +1156,29 @@ describe("auth-route-guard - cinatra#2576 (S8c) /api/lifecycle-views/capture wid
       "/api/lifecycle-views/hitl-screen/anything",
       "/api/lifecycle-views/hitl-screen/submit/",
       "/api/lifecycle-views/hitl-screen/submit/anything",
+      // cinatra#4150 -- the publish card's read is exact too.
+      "/api/lifecycle-views/publish-decision/",
+      "/api/lifecycle-views/publish-decision/anything",
     ]) {
       const res = await guardAppRoute(fakeRequest(p));
       expect(res.status, `${p} must stay guarded`).toBe(307);
       expect(res.headers.get("location")).toContain("/sign-in");
     }
+  });
+
+  it("cinatra#4150: the publish card's broker read is ADMITTED cookieless, on its own exact entry", async () => {
+    // The widget arm of the card sends a GET with `credentials: "omit"`; without the entry the guard 307s it to
+    // /sign-in before the handler that authorizes the `cwu_` runs, and the card draws nothing.
+    const res = await guardAppRoute(fakeRequest("/api/lifecycle-views/publish-decision"));
+    expect(res.status ?? 200).toBe(200);
+    expect(res.headers.get("x-middleware-next")).toBe("1");
+    expect(res.headers.get("location")).toBeNull();
+    const exact = guardSource.match(/const PUBLIC_EXACT_PATHS = \[([\s\S]*?)\n\];/)?.[1] ?? "";
+    const line = exact.split("\n").find((l) => l.includes('"/api/lifecycle-views/publish-decision"'));
+    expect(line, "the publish card read must have its own entry").toBeDefined();
+    expect((line ?? "").toLowerCase()).toMatch(/reachability only/);
+    expect((line ?? "").toLowerCase()).toMatch(/exact path, never a prefix/);
+    expect(line ?? "").toMatch(/401/);
   });
 
   it("cinatra#2930: BOTH HITL-screen paths are ADMITTED cookieless, and each on its own entry", async () => {
@@ -1665,5 +1683,101 @@ describe("auth-route-guard - /api/cli control-plane exemption (behavioral + pin)
   it("the exemption is the precise /api/cli prefix, never a bare /api prefix", () => {
     // A bare "/api" prefix would make EVERY api route public. Only /api/cli.
     expect(guardSource).not.toMatch(/"\/api"\s*,/);
+  });
+});
+
+describe("auth-route-guard - cinatra#3459 /api/lifecycle-views/artifact-bytes island byte egress", () => {
+  // The review island paints every media display (image, video, audio, pdf)
+  // with an <img>/<video>/<audio>/<embed src> pointed at this route, inside
+  // cinatra's own embed iframe on a third-party CMS page. That subresource load
+  // carries no session cookie (a different site) and cannot carry a bearer, so
+  // the sealed byte capability in the URL is the whole credential. Without the
+  // exemption guardAppRoute answers 307 -> /sign-in, the element decodes the
+  // sign-in HTML and paints nothing, and the redirect echoes the capability
+  // into /sign-in?next=. Reachability only: decideIslandByteServe still runs
+  // its whole ladder and answers every "no" with the same empty 404.
+  const BYTE_PATH = "/api/lifecycle-views/artifact-bytes";
+
+  const byteCapabilitySource = fs.readFileSync(
+    path.resolve(__dirname, "..", "lifecycle", "review-island-byte-capability.ts"),
+    "utf-8",
+  );
+
+  function isNext(res: { status?: number; headers?: Headers }): boolean {
+    return (
+      (res.status ?? 200) === 200 &&
+      res.headers?.get?.("x-middleware-next") === "1" &&
+      (res.headers?.get?.("location") ?? null) === null
+    );
+  }
+
+  function byteRequest(pathname: string, search: string): NextRequest {
+    return {
+      nextUrl: { pathname, search },
+      url: `http://localhost${pathname}${search}`,
+      cookies: { get: () => undefined },
+      headers: new Headers(),
+    } as unknown as NextRequest;
+  }
+
+  it("a COOKIELESS GET to the byte route passes the guard (no 307 - the handler runs)", async () => {
+    const res = await guardAppRoute(fakeRequest(BYTE_PATH));
+    expect(isNext(res)).toBe(true);
+  });
+
+  it("the real <img> shape WITH the sealed capability query passes and has NO Location (the capability never reaches /sign-in?next=)", async () => {
+    const param = byteCapabilitySource.match(
+      /REVIEW_ISLAND_BYTE_CAPABILITY_QUERY_PARAM\s*=\s*"([^"]+)"/,
+    )?.[1];
+    expect(param).toBeDefined();
+    const res = await guardAppRoute(
+      byteRequest(BYTE_PATH, `?${param}=sealed.capability.value`),
+    );
+    expect(isNext(res)).toBe(true);
+    expect(res.headers?.get?.("location") ?? null).toBeNull();
+  });
+
+  it("EXACTNESS: a trailing slash or any descendant of the byte path stays guarded (307)", async () => {
+    for (const p of [
+      `${BYTE_PATH}/`,
+      `${BYTE_PATH}/anything`,
+      `${BYTE_PATH}/1/bytes`,
+      `${BYTE_PATH}-extra`,
+      "/api/lifecycle-views",
+    ]) {
+      const res = await guardAppRoute(fakeRequest(p));
+      expect(res.status, `${p} must stay guarded`).toBe(307);
+      expect(res.headers.get("location")).toContain("/sign-in");
+    }
+  });
+
+  it("SOURCE PIN: the entry is byte-equal to REVIEW_ISLAND_BYTE_ROUTE, the constant the minter builds URLs from", () => {
+    // review-island-byte-capability.ts is `server-only` and the guard runs in
+    // the proxy bundle, so the guard carries a LITERAL; both sources are read
+    // as text so a rename on either side fails here.
+    const routeConst = byteCapabilitySource.match(
+      /REVIEW_ISLAND_BYTE_ROUTE\s*=\s*"([^"]+)"/,
+    )?.[1];
+    expect(routeConst).toBe(BYTE_PATH);
+    const exactBlock = guardSource.match(
+      /const PUBLIC_EXACT_PATHS = \[([\s\S]*?)\n\];/,
+    )?.[1];
+    expect(exactBlock ?? "").toContain(`"${routeConst}"`);
+  });
+
+  it("SOURCE PIN: a LIVE exact-path entry (never a prefix) whose comment names the in-handler ladder", () => {
+    const line = guardSource
+      .split("\n")
+      .find((l) => l.includes(`"${BYTE_PATH}"`));
+    expect(line).toBeDefined();
+    expect((line ?? "").trimStart().startsWith('"')).toBe(true);
+    expect((line ?? "").toLowerCase()).toMatch(/auth enforced inside/);
+    expect((line ?? "").toLowerCase()).toMatch(/sealed capability/);
+    expect(line ?? "").toMatch(/decideIslandByteServe/);
+    const prefixBlock = guardSource.match(
+      /const PUBLIC_PATH_PREFIXES = \[([\s\S]*?)\n\];/,
+    )?.[1];
+    expect(prefixBlock).toBeDefined();
+    expect(prefixBlock ?? "").not.toMatch(/lifecycle-views/);
   });
 });

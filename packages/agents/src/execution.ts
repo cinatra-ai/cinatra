@@ -3,6 +3,9 @@ import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
 import semver from "semver";
 import {
   readAgentRunById,
+  selectWayflowRunStepToolPolicy,
+  bindRunStepToolPolicy,
+  CINATRA_EXPECTED_SOURCE_MESSAGE_KEY,
   readAgentTemplateById,
   readAgentTemplates,
   readAgentTemplateVersionBySemver,
@@ -25,6 +28,7 @@ import {
   stateRunScheduleMoment,
 } from "./lifecycle-coordinator";
 import type { AgentTemplateRecord, AgentRunRecord, AgentRunStatus } from "./store";
+import type { ResumeGateIdentity } from "./run-transition";
 import {
   resolveWayflowUrl,
   describeWayflowDispatchError,
@@ -523,7 +527,7 @@ import { getOrAddWayflowRendererGateIndex, rememberWayflowGateTask, rememberLate
 // host-side caller injects the live `email-send` providers so sender-alias
 // enums resolve registration-driven.
 import { resolveEmailSendProviders } from "@/lib/email-send-providers";
-import { mintRunToken } from "@/lib/agent-run-token";
+import { mintRunToken, CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY } from "@/lib/agent-run-token";
 import { holdRunAtPublishGate } from "./publish-decision-actions";
 // cinatra#2566 — the lifecycle card REF CODEC only (node:crypto + the app
 // secret). Deliberately NOT the refetch resolver: importing that here would pull
@@ -534,6 +538,25 @@ import {
   encodeScheduleRunRef,
 } from "@/lib/lifecycle/lifecycle-card-ref";
 import { buildWayflowInitialMessagePayload } from "./wayflow-dispatch-payload";
+import {
+  persistStepSnapshots,
+  scrubWayflowHistoryCredentials,
+  snapshotNodesMetadata,
+  stripStepSnapshotClaims,
+} from "./step-snapshots";
+import {
+  classifyRegenerateSegmentRun,
+  fenceRegenerateRuntime,
+  persistSegmentReceipt,
+  redactSegmentRequests,
+  regenerateSegmentMetadata,
+  escalateRegenerateRepairOfUndeclaredRun,
+  resolveRegenerateSegment,
+  segmentRepairIdFromRunId,
+  stripSegmentReceipts,
+  REGENERATE_RUNTIME_UNSUPPORTED,
+  type RegenerateSegmentPlan,
+} from "./regenerate-segment";
 import {
   inventoryReviewTargets,
   nextUnresolvedLeg,
@@ -548,44 +571,26 @@ function enrichmentContextFor(userId: string | null) {
 }
 
 // ---------------------------------------------------------------------------
-// Credential keys are stripped from WayFlow task.history before persistence.
-// MUST stay in lockstep with docker/wayflow/cinatra_executors/input_message.py
-// _CREDENTIAL_KEYS and approval_gate.py _CREDENTIAL_KEYS (single source of truth
-// across the TS persistence path and the Python executor strip; tested for
-// parity in docker/wayflow/tests/test_approval_gate.py).
+// Credential keys are stripped from WayFlow task.history before persistence:
+// WAYFLOW_HISTORY_CREDENTIAL_KEYS and scrubWayflowHistoryCredentials live in
+// ./step-snapshots (moved there unchanged, cinatra#4264), which also checks the
+// step snapshot inputs against the same list.
 // ---------------------------------------------------------------------------
-const WAYFLOW_HISTORY_CREDENTIAL_KEYS: ReadonlySet<string> = new Set([
-  "bearer_token",
-  "api_key",
-  "a2a_bearer_token",
-  "mcp_server_url",
-  "password",
-  "secret",
-  "token",
-  "access_token",
-  "refresh_token",
-]);
 
 /**
- * Recursively scrub credential keys from any value before persisting it in
- * stepResults. Walks plain objects and arrays; primitives pass through. Keys
- * matched by WAYFLOW_HISTORY_CREDENTIAL_KEYS are dropped (not redacted) to
- * mirror the Python executors' frozenset-based strip exactly — replacing with
- * a placeholder would diverge from the executors and break future parity tests.
+ * The input-required leg's log line. `history_last` is read from the history
+ * WITHOUT the step snapshot claims (cinatra#4264): their inputs never reach a
+ * log.
  */
-function scrubWayflowHistoryCredentials(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((item) => scrubWayflowHistoryCredentials(item));
-  }
-  if (value && typeof value === "object") {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      if (WAYFLOW_HISTORY_CREDENTIAL_KEYS.has(k)) continue;
-      out[k] = scrubWayflowHistoryCredentials(v);
-    }
-    return out;
-  }
-  return value;
+export function formatWayflowInterruptLog(
+  runId: string,
+  task: { id?: unknown; metadata?: unknown; history?: ReadonlyArray<unknown> },
+  interruptPayload: Record<string, unknown>,
+): string {
+  const history = stripStepSnapshotClaims(
+    task.history as ReadonlyArray<{ role?: unknown; metadata?: unknown; messageId?: unknown; message_id?: unknown }> | undefined,
+  );
+  return `[wayflow-interrupt] run=${runId} task=${String(task.id)} interruptPayload=${(JSON.stringify(interruptPayload) ?? "null").slice(0, 500)} metadata=${(JSON.stringify(task.metadata) ?? "null").slice(0, 500)} history_last=${(JSON.stringify(history?.slice(-1)) ?? "null").slice(0, 500)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1033,6 +1038,8 @@ async function producedReviewHoldsRun(args: {
   authority: OrgWriteAuthority | undefined;
   /** Which terminal edge is asking — log context only. */
   where: string;
+  /** cinatra#3745: the claimed resume leg the park belongs to (its CAS carries it). */
+  resumeLeg?: ResumeGateIdentity;
   /** How many recovery deliveries this run's withheld write has already taken.
    *  Only a recovery leg carries one; a first raise leaves it at zero. */
   holdPark?: number;
@@ -1051,6 +1058,7 @@ async function producedReviewHoldsRun(args: {
         fromStatus: args.fromStatus,
         stepResults: args.stepResults,
         withheld: args.withheld,
+        ...(args.resumeLeg ? { resumeLeg: args.resumeLeg } : {}),
       },
       args.authority,
     );
@@ -1932,7 +1940,11 @@ async function resolveWayflowXRenderer(
 //     where the run ACTUALLY is, and every edge it needs out of `running` — to
 //     `pending_approval` for the next gate, to `completed`, `failed` or
 //     `waiting_trigger` — the state machine already carries.
-//   - mcp/handlers resume          → "pending_approval"
+//   - mcp/handlers resume          → "running" — that road (run-resume-under-claim.ts)
+//     claims the pause and fences it (cinatra#4245), the fence bound to the
+//     gate's a2a task and execution attempt (cinatra#3745), before it records
+//     or sends, and passes the gate as `claimedGate` and its token as
+//     `pauseClaimToken`, so the answer is applied only while the run holds both.
 //
 // Same-status short-circuit: when fromStatus === target, return without
 // calling transitionRunStatus. The pair pending_approval -> pending_approval
@@ -1954,8 +1966,9 @@ async function resolveWayflowXRenderer(
 //   - store.ts:updateAgentRunA2ATaskId is an unconditional
 //     overwrite so the resync below actually works (was first-writer-wins).
 //
-// RunTransitionError codes (from store.ts:1038-1061): "illegal_transition"
-// and "stale_from_status" — only the latter is swallowed.
+// RunTransitionError codes (run-status.ts RunTransitionError): "illegal_transition",
+// "stale_from_status" and "resume_intent_lease_lost" — only "stale_from_status"
+// is swallowed here.
 //
 // State machine (canonical):
 //   - input-required → re-emit INTERRUPT, transition to pending_approval (skipped on resume)
@@ -1966,6 +1979,8 @@ export type HandleWayflowTaskStateArgs = {
   runId: string;
   run: AgentRunRecord;
   fromStatus: AgentRunStatus;
+  /** cinatra#4245: the claim token of a resume's send; see the resync below. */
+  pauseClaimToken?: string;
   /**
    * cinatra#1939 wave 2 (§2d) — the org-write authority grounding this handler's
    * internal transitions (→pending_approval / →failed / →completed). Each of the
@@ -1989,6 +2004,14 @@ export type HandleWayflowTaskStateArgs = {
     history?: ReadonlyArray<{ role?: string; parts?: readonly unknown[] }>;
     metadata?: unknown;
   };
+  /**
+   * cinatra#3745: the gate a resume CLAIMED before it sent (its a2a task and
+   * execution attempt; the MCP resume passes it). The answer is then applied
+   * only while the run is still `running` at that claim (bindResumeLegToTask),
+   * and every edge below carries the leg in its CAS (`resumeLeg`). Absent on
+   * every other road.
+   */
+  claimedGate?: ResumeGateIdentity;
 };
 
 /** The anchor version this build vouches for. Copy of
@@ -2230,18 +2253,107 @@ export function declaredOutputsResponseText(
 }
 
 export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): Promise<void> {
-  const { runId, run, fromStatus, task, authority } = args;
+  const { runId, run, fromStatus, task, authority, pauseClaimToken, claimedGate } = args;
   const taskState = task.status?.state;
 
-  // Defensive resync (idempotent if unchanged): persist task.id / contextId
-  // so the next resume's reverse-lookup by a2aTaskId still finds the run if
-  // WayFlow assigned a new task ID. updateAgentRunA2ATaskId is an
-  // unconditional overwrite so this persists on every call.
-  if (task.id !== run.a2aTaskId) {
-    await updateAgentRunA2ATaskId(runId, task.id).catch(() => undefined);
+  // cinatra#3745: the run's a2a_task_id is the gate identity a resume claim binds
+  // to, so the answer's task id is written BEFORE anything below can park the
+  // run at that answer. From `running` (the worker's dispatch, the human and the
+  // MCP resume) a failed write stops here instead of parking under the earlier
+  // gate's id, where a stale claim of that gate would win: the caller's catch
+  // decides what the run becomes. From `pending_approval` the write stays best
+  // effort; see the unclaimed resync below.
+  let legFence: { resumeLeg: ResumeGateIdentity } | undefined;
+  if (claimedGate) {
+    // A claimed resume leg: the answer is applied only while the run is still
+    // `running` at the claimed gate in the claimed attempt. An answer that comes
+    // back after the run was stopped, retried or moved on writes nothing at all.
+    const { bindResumeLegToTask } = await import("./run-transition");
+    const bound = await bindResumeLegToTask({
+      runId,
+      orgId: run.orgId,
+      claimed: claimedGate,
+      taskId: task.id,
+      contextId: task.contextId ?? null,
+    });
+    if (!bound) {
+      console.warn(
+        `[wayflow] run=${runId} task=${task.id} state=${taskState} is not applied: the run no longer ` +
+          `holds the resume claim of gate ${claimedGate.a2aTaskId}`,
+      );
+      return;
+    }
+    legFence = { resumeLeg: { a2aTaskId: task.id, executionAttemptId: claimedGate.executionAttemptId } };
   }
-  if (task.contextId && task.contextId !== run.a2aContextId) {
-    await updateAgentRunA2AContextId(runId, task.contextId).catch(() => undefined);
+
+  // cinatra#4264 — the step snapshots this leg carries, verified against THIS
+  // handler's own runId (never an id read from the response) and stored BEFORE
+  // the resync below, so a response naming another run's task or context cannot
+  // land that run's snapshots here. Never throws; a fault is logged.
+  // cinatra#3745: on a claimed resume leg they are stored only after the claim
+  // check above, so an answer that no longer holds the claim stores none.
+  await persistStepSnapshots({
+    runId,
+    orgId: run.orgId,
+    history: (task as { history?: ReadonlyArray<{ role?: unknown; metadata?: unknown }> }).history,
+  });
+  // cinatra#4264 B1b — a Regenerate segment's signed receipt, verified against
+  // the same runId and stored before the resync; the completer refiles the
+  // segment's write only with it. Never throws.
+  await persistSegmentReceipt({
+    runId,
+    orgId: run.orgId,
+    history: (task as { history?: ReadonlyArray<{ role?: unknown; metadata?: unknown }> }).history,
+  });
+
+  // Defensive resync (idempotent if unchanged): persist task.id / contextId so
+  // the next resume's reverse-lookup by a2aTaskId still finds the run if
+  // WayFlow assigned a new task ID.
+  //
+  // cinatra#4245: a sender that holds a pause claim writes only under its own
+  // token, even an unchanged id, and in every state that write is awaited with
+  // no catch: a write that fails could not show that the token still holds the
+  // row, so the error leaves this handler before any output or transition, and
+  // the caller settles its lease as after a failed send. 0 rows means the token
+  // no longer holds the row (another claimer took the lease over, or a stop or
+  // another status change cleared it), so this handler makes no transition. On
+  // the MCP resume the claimed leg's write above (cinatra#3745) has already
+  // written the task and its context; this write then proves the token.
+  if (pauseClaimToken !== undefined) {
+    const { written } = await updateAgentRunA2ATaskId(runId, task.id, { pauseClaimToken });
+    if (!written) {
+      console.warn(`[wayflow] run=${runId} task=${task.id}: this sender's claim token no longer holds the run; no transition`);
+      return;
+    }
+    if (!claimedGate && task.contextId && task.contextId !== run.a2aContextId) {
+      await updateAgentRunA2AContextId(runId, task.contextId).catch(() => undefined);
+    }
+  } else if (!claimedGate) {
+    // Without a claim, updateAgentRunA2ATaskId is an unconditional overwrite and
+    // retries the transient collision itself. From `running` (the worker's own
+    // dispatch) it is awaited with no catch in every state, so at a pause a
+    // failure shows no gate (cinatra#4245) and no later edge parks the run under
+    // the earlier gate's id (cinatra#3745).
+    if (task.id !== run.a2aTaskId) {
+      if (fromStatus === "pending_approval") {
+        // From `pending_approval` with no claim the write stays best effort
+        // (cinatra#3745): a failed write must not keep the run parked under the
+        // earlier gate's id while WayFlow waits at this answer. Every resume
+        // road holds a pause claim since cinatra#4245 (the resume delivery
+        // passes its token), so no product road reaches this branch now.
+        await updateAgentRunA2ATaskId(runId, task.id).catch((err) => {
+          console.warn(
+            `[wayflow] run=${runId} task=${task.id} a2a_task_id write failed on the resume delivery ` +
+              `(applied anyway): ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+      } else {
+        await updateAgentRunA2ATaskId(runId, task.id);
+      }
+    }
+    if (task.contextId && task.contextId !== run.a2aContextId) {
+      await updateAgentRunA2AContextId(runId, task.contextId).catch(() => undefined);
+    }
   }
 
   console.log(
@@ -2258,10 +2370,11 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // correctness-critical (NOT best-effort, NOT inside the xRenderer catch
     // below): a Redis failure THROWS here and prevents the interrupt from being
     // published, so a send can never resolve a stale identity from the racy
-    // `agent_runs.a2a_task_id` column (the defensive resync above persists that
-    // column best-effort and may leave it stale under a "tuple concurrently
-    // updated" race). Redis is already load-bearing for gate resume (the
-    // reverse-map fallback), so this is no new hard dependency.
+    // `agent_runs.a2a_task_id` column (the resync above writes that column before
+    // the park, but on the resume delivery that write is best effort, and a later
+    // write can still race this read: the column is not this send's identity).
+    // Redis is already load-bearing for gate resume (the reverse-map fallback),
+    // so this is no new hard dependency.
     await rememberLatestWayflowGateTask(runId, task.id);
     // cinatra#3745 — record which step of the flow paused the run, as the flow
     // runtime signed it. Best-effort: a store fault is logged and the
@@ -2292,7 +2405,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       ),
     );
     const interruptPayload = ((task.metadata as { pendingApproval?: unknown } | undefined)?.pendingApproval ?? {}) as Record<string, unknown>;
-    console.log(`[wayflow-interrupt] run=${runId} task=${task.id} interruptPayload=${(JSON.stringify(interruptPayload) ?? "null").slice(0, 500)} metadata=${(JSON.stringify(task.metadata) ?? "null").slice(0, 500)} history_last=${(JSON.stringify((task as { history?: unknown[] }).history?.slice(-1)) ?? "null").slice(0, 500)}`);
+    console.log(formatWayflowInterruptLog(runId, task, interruptPayload));
     // HITL renderers resolve campaignId via context.runId (passed
     // at agentic-run-panel.tsx:378) and a typed-object lookup. We no longer
     // enrich the HITL SSE payload with a precomputed campaignId.
@@ -2828,7 +2941,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         // winning is the only proof the run is really parked here.
         let parkedAtReview = false;
         try {
-          await transitionRunStatus(runId, fromStatus, "pending_approval", undefined, authority);
+          await transitionRunStatus(runId, fromStatus, "pending_approval", { pauseTaskId: task.id, ...legFence }, authority);
           parkedAtReview = true;
         } catch (e) {
           if (!(e instanceof RunTransitionError && e.code === "stale_from_status")) throw e;
@@ -2848,9 +2961,9 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // #839: Surface an InputMessageNode gate's declared DFE inputs — which the
     // WayFlow runtime propagates through task.metadata.pendingApproval
     // (interruptPayload) — to the renderer. blog-pipeline's idea_selection_gate
-    // needs its `ideas[]` render input present to show an idea chooser (see
-    // blog-idea-selection-renderer.tsx, the dedicated renderer the chooser
-    // relocated onto). Merged BELOW spreadFromOutput and the
+    // needs its `ideas[]` render input present to show an idea chooser (the
+    // pipeline pack's own component on the dedicated idea-selection binding).
+    // Merged BELOW spreadFromOutput and the
     // explicit stepNumber/output so history-derived output still WINS: data-review
     // gates that parse `output` are unaffected.
     //
@@ -2962,7 +3075,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         }),
       parkRun: async () => {
         try {
-          await transitionRunStatus(runId, fromStatus, "pending_approval", undefined, authority);
+          await transitionRunStatus(runId, fromStatus, "pending_approval", { pauseTaskId: task.id, ...legFence }, authority);
         } catch (e) {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
           throw e;
@@ -3006,12 +3119,13 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
             stepResults: [],
             withheld: { status: "failed", error },
             authority,
+            resumeLeg: legFence?.resumeLeg,
             where: "human gate",
           })
         ) {
           return;
         }
-        await transitionRunStatus(runId, fromStatus, "failed", { error }, authority).catch((e) => {
+        await transitionRunStatus(runId, fromStatus, "failed", { error, ...legFence }, authority).catch((e) => {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
           throw e;
         });
@@ -3050,6 +3164,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         stepResults: [],
         withheld: { status: "failed", error: errMsg },
         authority,
+        resumeLeg: legFence?.resumeLeg,
         where: "wayflow failed",
       })
     ) {
@@ -3069,7 +3184,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     if (fromStatus === "failed") {
       return;
     }
-    await transitionRunStatus(runId, fromStatus, "failed", { error: errMsg }, authority).catch((e) => {
+    await transitionRunStatus(runId, fromStatus, "failed", { error: errMsg, ...legFence }, authority).catch((e) => {
       if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
       throw e;
     });
@@ -3086,7 +3201,16 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   const endNodeOutputs = extractCinatraEndNodeOutputs(rawHistory);
   // The pause claims (cinatra#3745) are recorded at their interrupts; the
   // stored history keeps its messages and drops only the claims.
-  const history = stripCinatraGateNodeClaims(stripCinatraEndNodeOutputMessages(rawHistory));
+  // cinatra#4264: the step snapshots live in agent_run_step_snapshots only.
+  // cinatra#4264 B1b: a segment run's first message keeps its snapshots'
+  // nodes and sha256 only; their values live in agent_run_step_snapshots.
+  const history = redactSegmentRequests(
+    stripSegmentReceipts(
+      stripStepSnapshotClaims(
+        stripCinatraGateNodeClaims(stripCinatraEndNodeOutputMessages(rawHistory)),
+      ),
+    ),
+  );
   // A2A spec: role is "user" | "agent". Cinatra also emits "assistant". Accept BOTH.
   const lastAgentMessage = history?.slice().reverse().find((m) => m?.role === "agent" || m?.role === "assistant");
   // Narrow parts at access time — the signature accepts `unknown[]` so all three
@@ -3144,39 +3268,61 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   // Dynamic import keeps the host artifact stack out of this module's static
   // graph (same posture as the nango-system import below).
   let artifactMaterializations: Array<Record<string, unknown>> = [];
-  try {
-    const { materializeRunArtifacts } = await import(
-      "@/lib/artifacts/run-artifact-materializer"
-    );
-    artifactMaterializations = (await materializeRunArtifacts({
-      runId,
-      orgId: run.orgId,
-      templateId: run.templateId,
-      packageVersion: run.packageVersion,
-      createdBy: run.runBy,
-      endNodeOutputs,
-    })) as unknown as Array<Record<string, unknown>>;
-    for (const outcome of artifactMaterializations) {
-      if (outcome.ok !== true) {
-        console.warn(
-          `[artifact-materializer] run=${runId} output=${String(outcome.outputId)} extension=${String(outcome.extension ?? "?")} failed: ${String(outcome.error)}`,
-        );
-      }
-    }
-  } catch (err) {
-    console.warn(
-      `[artifact-materializer] run=${runId} materialization pass threw (recorded in stepResults; the run fails honestly):`,
-      err instanceof Error ? err.message : err,
-    );
+  // cinatra#4264 B1b — a Regenerate segment run executes only the step and its
+  // filing node: its end exposes the filing node's outputs, not the template's
+  // end-node bindings, and its one write is claimed by the repair completer.
+  // Neither the end-node binding materialization nor the default road below
+  // runs for it. A repair row that is missing or cannot be read is never
+  // taken for an ordinary run: the run fails (the materialization-honesty
+  // gate below) and nothing is written.
+  const segmentRunClass = await classifyRegenerateSegmentRun({ id: runId, sourceType: run.sourceType });
+  if (segmentRunClass === "segment") {
+    console.log(`[artifact-materializer] run=${runId} is a Regenerate segment; end-node bindings not materialized`);
+  } else if (segmentRunClass === "unreadable") {
     artifactMaterializations = [
       {
         ok: false,
-        outputId: "(materializer)",
+        outputId: "(regenerate-segment)",
         nodeId: null,
         extension: null,
-        error: `materialization pass failed: ${err instanceof Error ? err.message : String(err)}`,
+        error: "the run's repair row is missing or could not be read, so whether it is a Regenerate segment is unknown; nothing was materialized",
       },
     ];
+  } else {
+    try {
+      const { materializeRunArtifacts } = await import(
+        "@/lib/artifacts/run-artifact-materializer"
+      );
+      artifactMaterializations = (await materializeRunArtifacts({
+        runId,
+        orgId: run.orgId,
+        templateId: run.templateId,
+        packageVersion: run.packageVersion,
+        createdBy: run.runBy,
+        endNodeOutputs,
+      })) as unknown as Array<Record<string, unknown>>;
+      for (const outcome of artifactMaterializations) {
+        if (outcome.ok !== true) {
+          console.warn(
+            `[artifact-materializer] run=${runId} output=${String(outcome.outputId)} extension=${String(outcome.extension ?? "?")} failed: ${String(outcome.error)}`,
+          );
+        }
+      }
+    } catch (err) {
+      console.warn(
+        `[artifact-materializer] run=${runId} materialization pass threw (recorded in stepResults; the run fails honestly):`,
+        err instanceof Error ? err.message : err,
+      );
+      artifactMaterializations = [
+        {
+          ok: false,
+          outputId: "(materializer)",
+          nodeId: null,
+          extension: null,
+          error: `materialization pass failed: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      ];
+    }
   }
 
   // cinatra#2486 — materialization-honesty gate.
@@ -3229,7 +3375,10 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   // default road could not file is a visible per-output outcome on the run's own
   // record. The pickup never throws.
   let defaultRoadPickups: Array<Record<string, unknown>> = [];
-  if (materializationFailures.length === 0) {
+  // cinatra#4264 B1b: a Regenerate segment run's one write is the filing
+  // node's, claimed by the repair completer; the default road never runs for
+  // it (a second production would make the claim refuse the repair).
+  if (materializationFailures.length === 0 && segmentRunClass === "ordinary") {
     try {
       // THE SLOT, not an import (route-graph ratchet): the pickup CORE reaches
       // the ladder, the artifact writer and the pooled-db graph, and this module
@@ -3343,6 +3492,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           // (`completedAt` + `stepResults`) exactly, as it must.
           : { status: "completed" },
       authority,
+      resumeLeg: legFence?.resumeLeg,
       where: "wayflow completed",
     })
   ) {
@@ -3360,7 +3510,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       runId,
       fromStatus,
       "failed",
-      { error, stepResults: terminalStepResults },
+      { error, stepResults: terminalStepResults, ...legFence },
       authority,
     ).catch((err) => {
       // stale_from_status: a concurrent stop/cancel already moved the row;
@@ -3464,6 +3614,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   await transitionRunStatus(runId, fromStatus, "completed", {
     completedAt: new Date(),
     stepResults: terminalStepResults,
+    ...legFence,
   }, authority).catch((err) => {
     // stale_from_status: a concurrent stop/cancel already moved the row;
     // skip RUN_FINISHED so the UI reflects the DB winner, not us.
@@ -3916,7 +4067,52 @@ async function runAgentBuilderExecutionJobInner(
   // scope recheck, so nothing is written for a refused or unverified run, and
   // before the headless recommendation, the version pinning, the input gates
   // and every dispatch branch read the inputs.
+  // cinatra#4264 B1b — a Regenerate segment run (a lifecycle repair whose
+  // repair names `regenerate_node_id`, re-derived from the recorded
+  // provenance and snapshots, never from the run's inputs) is resolved here,
+  // before anything reads the inputs. A disagreement fails the run before
+  // dispatch with a plain reason. A segment run skips the findings binding:
+  // its inputs are the note and the typed request only, and the resolution
+  // checks they are (a run made in an earlier form is failed, never sent).
+  const segmentResolution = await resolveRegenerateSegment({
+    run: {
+      id: runId,
+      orgId: run.orgId,
+      sourceType: run.sourceType,
+      templateId: run.templateId,
+      inputParams: run.inputParams,
+    },
+    lifecycleConfig: template.lifecycleConfig ?? null,
+    packageName: template.packageName ?? null,
+  });
+  if (segmentResolution.kind === "refused") {
+    console.error(`[agent-builder] run ${runId} rejected before dispatch: ${segmentResolution.reason}`);
+    await transitionRunStatus(runId, "queued", "failed", { error: segmentResolution.reason }, executionAuthority);
+    // A run whose inputs are not the declared-input form (one an older
+    // dispatcher made during a rolling deployment, its repair maybe already
+    // `dispatched`) is failed and its repair escalated, so the review gets
+    // its escalation and is never left waiting on a run that never answers.
+    // A compare-and-set: a second refusal of the same run writes nothing. A
+    // failed escalation is logged; the completer escalates the finished run
+    // by the same rule (`escalateRegenerateRepairOfUndeclaredRun`).
+    const repairId = segmentResolution.inputsNotDeclared ? segmentRepairIdFromRunId(runId) : null;
+    if (repairId) {
+      try {
+        // From `./regenerate-segment`, never the dispatch store: this module
+        // is in the locked routes' graph (route-graph ratchet).
+        await escalateRegenerateRepairOfUndeclaredRun(repairId);
+      } catch (err) {
+        console.error(
+          `[agent-builder] run ${runId}: its repair was not escalated: ${err instanceof Error ? err.name : "error"}`,
+        );
+      }
+    }
+    return;
+  }
+  const segmentPlan: RegenerateSegmentPlan | null =
+    segmentResolution.kind === "segment" ? segmentResolution.plan : null;
   if (
+    !segmentPlan &&
     !(await bindRepairFindingsInputAtStart(runId, run, template.lifecycleConfig ?? null, executionAuthority))
   ) {
     return;
@@ -4143,25 +4339,29 @@ async function runAgentBuilderExecutionJobInner(
   // silent-failure shape the artifact-materialization honesty fix removed, just
   // relocated. Mirrors the pre-dispatch failure handling directly above.
   try {
-    assertValuesMatchDeclaredObjectTypes(
-      properties,
-      (run.inputParams ?? {}) as Record<string, unknown>,
-      "Run cannot start",
-    );
-    // cinatra#3003 — SATISFIABILITY gate, the sibling of the declared-type gate
-    // above. That one asks "is what we already hold the right shape?"; this one
-    // asks "can the inputs we do NOT hold ever arrive?". A hidden input with no
-    // `default`, absent from the required list and written by no product path,
-    // can not: the setup loop below filters hidden fields out of `pendingFields`,
-    // so the run falls straight through to dispatch and the runtime refuses it
-    // seconds after the tick, naming a field nobody was ever shown. Fail here
-    // instead, naming the agent and the input.
-    await assertUnsatisfiableHiddenInputs({
-      properties,
-      alreadySupplied: (run.inputParams ?? {}) as Record<string, unknown>,
-      packageName: template.packageName ?? "<unknown agent>",
-      packageVersion: template.packageVersion,
-    });
+    // cinatra#4264 B1b: a segment run starts the segment, not the template's
+    // start node: its inputs are the note and the typed request only.
+    if (!segmentPlan) {
+      assertValuesMatchDeclaredObjectTypes(
+        properties,
+        (run.inputParams ?? {}) as Record<string, unknown>,
+        "Run cannot start",
+      );
+      // cinatra#3003 — SATISFIABILITY gate, the sibling of the declared-type gate
+      // above. That one asks "is what we already hold the right shape?"; this one
+      // asks "can the inputs we do NOT hold ever arrive?". A hidden input with no
+      // `default`, absent from the required list and written by no product path,
+      // can not: the setup loop below filters hidden fields out of `pendingFields`,
+      // so the run falls straight through to dispatch and the runtime refuses it
+      // seconds after the tick, naming a field nobody was ever shown. Fail here
+      // instead, naming the agent and the input.
+      await assertUnsatisfiableHiddenInputs({
+        properties,
+        alreadySupplied: (run.inputParams ?? {}) as Record<string, unknown>,
+        packageName: template.packageName ?? "<unknown agent>",
+        packageVersion: template.packageVersion,
+      });
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[agent-builder] run ${runId} rejected before dispatch: ${message}`);
@@ -4188,7 +4388,7 @@ async function runAgentBuilderExecutionJobInner(
   // fields. (GROUPED_SETUP_FORM_RENDERER_ID is imported from ./agent-builder-ids
   // — the single id authority — rather than re-declared locally.)
 
-  const pendingFields = requiredFields.filter((fieldName) => {
+  const pendingFields = segmentPlan ? [] : requiredFields.filter((fieldName) => {
     const fieldSchema = properties[fieldName] ?? {};
     if ((fieldSchema as { "x-hidden"?: boolean })["x-hidden"]) return false;
     if (
@@ -4635,6 +4835,13 @@ async function runAgentBuilderExecutionJobInner(
   // active until the stream ends and the DB status is set to completed/failed.
   // AG-UI / A2UI events flow through startExternalSseProxyFromStream → Redis.
   // ---------------------------------------------------------------------------
+  // cinatra#4264 B1b: a Regenerate segment runs only on the flow runtime.
+  if (segmentPlan && template.sourceType === "external") {
+    const error = "Regenerate refused: this agent does not run on the flow runtime";
+    console.error(`[agent-builder] run ${runId} rejected before dispatch: ${error}`);
+    await transitionRunStatus(runId, "queued", "failed", { error }, executionAuthority);
+    return;
+  }
   if (template.sourceType === "external") {
     if (!template.agentUrl) {
       await transitionRunStatus(runId, "queued", "failed", {
@@ -4868,9 +5075,20 @@ async function runAgentBuilderExecutionJobInner(
       }
     }
 
+    // cinatra#4264 B1b — THE FENCE. A Regenerate segment is sent only to a
+    // runtime whose /.health lists `regenerate_segment/1`; an older runtime
+    // would run the WHOLE flow. Otherwise the run fails here, nothing sent.
+    if (segmentPlan && !(await fenceRegenerateRuntime())) {
+      const error = `${REGENERATE_RUNTIME_UNSUPPORTED}: the flow runtime cannot run one step of a flow`;
+      console.error(`[wayflow] run ${runId} rejected before dispatch: ${error}`);
+      await transitionRunStatus(runId, "queued", "failed", { error }, executionAuthority);
+      return;
+    }
+
     try {
       await transitionRunStatus(runId, "queued", "running", {
-        dispatch: { attemptId: randomUUID() },
+        // cinatra#4150: the publish rows of the template object this dispatch runs (the pinned overlay included).
+        dispatch: { attemptId: randomUUID(), publishRows: JSON.stringify(template.publishRows ?? {}) },
       }, executionAuthority);
     } catch (err) {
       if (err instanceof RunTransitionError && err.code === "stale_from_status") {
@@ -4986,6 +5204,18 @@ async function runAgentBuilderExecutionJobInner(
         runId: run.id,
         runToken: runToken.token,
       });
+      // cinatra#4264: the nodes whose inputs the runtime records, from the
+      // template's stored `regenerate` declaration. No declaration, or a repair
+      // run: {} (the message metadata then names only the attempt, below).
+      // cinatra#4264 B1b: a segment run carries the segment instead (a repair
+      // run never records snapshots, so the two never meet).
+      const snapshotMetadata = segmentPlan
+        ? regenerateSegmentMetadata(segmentPlan)
+        : snapshotNodesMetadata({
+            runId: run.id,
+            sourceType: run.sourceType,
+            lifecycleConfig: template.lifecycleConfig ?? null,
+          });
       // #813: bind a fasta2a contextId to the run BEFORE the blocking sendTask.
       // WayFlow's flow calls back POST /api/context-resolve DURING sendTask with
       // this contextId (x-cinatra-a2a-context-id); readAgentRunByContextId must
@@ -4999,6 +5229,20 @@ async function runAgentBuilderExecutionJobInner(
       if (dispatchContextId !== run.a2aContextId) {
         await updateAgentRunA2AContextId(runId, dispatchContextId);
       }
+      const policy = await selectWayflowRunStepToolPolicy({ agentUrl: wayflowUrl, contextId: dispatchContextId });
+      // cinatra#3745 dispatch fence: the first message names the selected source, which the bind below binds or
+      // refuses; the loader's mount runs the task only when that source is its own, so a reload between the select
+      // and the send fails the task and never runs another graph. Set after the inputs, so no input can replace it.
+      initialMessagePayload[CINATRA_EXPECTED_SOURCE_MESSAGE_KEY] = { sourceSha256: policy.sourceSha256,
+        executedSourceSha256: policy.executedSourceSha256, declarationSourceSha256: policy.declarationSourceSha256 };
+      const currentDispatchRun = await readAgentRunById(runId);
+      if (!currentDispatchRun?.executionAttemptId) throw new Error("step_tool_dispatch_attempt_missing");
+      await bindRunStepToolPolicy({ runId, orgId: run.orgId,
+        executionAttemptId: currentDispatchRun.executionAttemptId, policy, authority: executionAuthority });
+      // cinatra#3745: the task's message names the attempt just bound (metadata, never
+      // the flow's text input); the runtime signs it in its `s2` pair, so a task of an
+      // earlier attempt of this run cannot sign for this one.
+      const dispatchMetadata = { ...snapshotMetadata, [CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY]: currentDispatchRun.executionAttemptId };
       const task = await client.sendTask({
         message: {
           role: "user",
@@ -5006,6 +5250,7 @@ async function runAgentBuilderExecutionJobInner(
           messageId: randomUUID(),
           contextId: dispatchContextId,
           parts: [{ kind: "text", text: JSON.stringify(initialMessagePayload) }],
+          metadata: dispatchMetadata,
         },
         configuration: { acceptedOutputModes: ["text"] },
       });

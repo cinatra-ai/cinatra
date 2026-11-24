@@ -150,7 +150,8 @@ export default async function LifecycleOperationsPage() {
             <CardTitle>Stuck review releases</CardTitle>
             <CardDescription>
               A review decision was made, but the resume delivery that releases the run exhausted
-              every attempt and was dead-lettered. The run is waiting and nothing will retry it.
+              every attempt and was dead-lettered. The run is waiting. A release the upgrade left
+              stuck is tried once more, with a new set of attempts; after that, nothing retries it.
             </CardDescription>
           </CardHeader>
           <CardContent>

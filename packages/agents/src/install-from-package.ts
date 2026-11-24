@@ -36,7 +36,8 @@ import {
   type ApprovalPolicy,
 } from "./store";
 import { serializeArtifactBindingDeclaration } from "./artifact-binding";
-import type { CompiledAgentOas } from "./oas-compiler";
+import type { CompiledAgentOas, SiblingLifecycleReading } from "./oas-compiler";
+import { normalizeLifecycle, serializeLifecycleConfig } from "@/lib/lifecycle/lifecycle-policy";
 // cinatra#2616 — the identity claim. `claimAgentTemplateIdentity` carries the
 // WHOLE insert-only-or-owned-update operation, 23505 race classification
 // included, so this primitive and its concurrency proof run the same code.
@@ -586,11 +587,15 @@ async function _installAgentFromPackageImpl(
       artifactBindings: seed.artifactBindings,
       // cinatra#4150 — and for the publishing-step declaration.
       publishingSteps: seed.publishingSteps,
+      publishRows: seed.publishRows,
       status: input.status ?? "draft",
     };
 
     let templateId: string;
     let versionId: string;
+    // cinatra#4264 A1b: the adopted row's lifecycle column before this install
+    // rewrote it, restored when a later step fails and the files roll back.
+    let lifecycleRestore: { templateId: string; prior: string | null } | null = null;
     try {
       const claimed = await claimAgentTemplateIdentity(
         { packageName: extracted.packageName, claim },
@@ -600,6 +605,11 @@ async function _installAgentFromPackageImpl(
       if (claimed.mode === "created") {
         templateId = claimed.created.templateId;
         versionId = claimed.created.versionId;
+        // cinatra#4264 A1b (review 2): a fresh row has no prior declaration;
+        // a later failure clears the list this install wrote.
+        if (freshSeed.lifecycleConfig !== null && freshSeed.lifecycleConfig !== undefined) {
+          lifecycleRestore = { templateId, prior: null };
+        }
       } else {
         const existing = claimed.row;
         versionId = randomUUID();
@@ -654,6 +664,7 @@ async function _installAgentFromPackageImpl(
             // cinatra#4150: re-projected on every (re)install, so a version
             // that drops its last declaration clears the list.
             publishingSteps: seed.publishingSteps,
+            publishRows: seed.publishRows,
             packageVersion: extracted.packageVersion,
             agentDependencies:
               Object.keys(agentDependencies).length > 0 ? agentDependencies : undefined,
@@ -687,6 +698,9 @@ async function _installAgentFromPackageImpl(
             `[installAgentFromPackage] the identity claim on '${extracted.packageName}' could ` +
               "not be applied — the template row moved or was removed mid-install. Retry the install.",
           );
+        }
+        if (existing.lifecycleConfig !== undefined) {
+          lifecycleRestore = { templateId: existing.id, prior: existing.lifecycleConfig ?? null };
         }
         await createAgentVersion({
           id: versionId,
@@ -729,6 +743,25 @@ async function _installAgentFromPackageImpl(
       // matching template row; the .old dir (if any) is restored.
       if (materializeResult !== null) {
         await rollbackMaterialize(materializeResult);
+      }
+      // cinatra#4264 A1b (review 1): the files are back on the previous
+      // version, so the lifecycle column this install rewrote goes back too;
+      // a stored regenerate list must never outlive the flow it was checked
+      // against. Best-effort like the rollback: the original error is rethrown.
+      if (lifecycleRestore) {
+        try {
+          await updateAgentTemplate(
+            lifecycleRestore.templateId,
+            { lifecycleConfig: lifecycleRestore.prior },
+            claim,
+          );
+        } catch (restoreErr) {
+          console.warn(
+            `[installAgentFromPackage] could not restore the lifecycle declaration of ` +
+              `'${extracted.packageName}' after the rollback:`,
+            restoreErr,
+          );
+        }
       }
       throw dbErr;
     }
@@ -1010,15 +1043,30 @@ async function makeInstalledArtifactClaimLookup(
  * So with no version to confirm against, ALL THREE are omitted and the columns
  * keep exactly what the last version-paired write set.
  *
- * Best-effort by contract: the compile itself has already succeeded and
- * written the file, so a DB failure here is warned and swallowed, never
- * surfaced as a compile error.
+ * LIFECYCLE (cinatra#4264 A1b). `siblingLifecycle` is the compile's OWN
+ * sibling read (`reportSiblingLifecycle`), so the column follows the manifest
+ * the regenerate check read: a readable manifest with a block re-projects it
+ * (`write`), a readable manifest without one clears it (`clear`), and no
+ * readable manifest leaves it as it is (`none`; the compile has already checked
+ * any stored regenerate list against the new flow, as `retainedRegenerate`). A
+ * caller that passes no reading writes no lifecycle column, as before.
+ *
+ * Best-effort by contract for a caller that passes no reading: a DB failure
+ * here is warned and swallowed, never surfaced as a compile error. A caller
+ * that passes a reading gets the failure as a rejection (review 1): the MCP
+ * recompile runs this sync BEFORE it writes the source file and refuses on it,
+ * so a stale lifecycle column is never reported as a successful recompile.
  */
 export async function syncCompiledTemplateToDb(
   agentPackageName: string,
   agentPackageVersion: string | null | undefined,
   compiled: CompiledAgentOas,
+  siblingLifecycle?: SiblingLifecycleReading,
 ): Promise<void> {
+  const lifecycleConfig =
+    siblingLifecycle?.readable === true
+      ? serializeLifecycleConfig(normalizeLifecycle(siblingLifecycle.lifecycle))
+      : undefined;
   try {
     const template = await readAgentTemplateByPackageName(agentPackageName);
     if (!template) return;
@@ -1037,6 +1085,7 @@ export async function syncCompiledTemplateToDb(
       // version-paired: the runtime loads the current on-disk flow, so the
       // column follows the source it compiled.
       publishingSteps: compiled.publishingSteps,
+      publishRows: compiled.publishRows,
       packageVersion: agentPackageVersion ?? undefined,
       hasArtifactBindings: agentPackageVersion ? compiled.hasArtifactBindings : undefined,
       artifactBindings: agentPackageVersion
@@ -1044,8 +1093,13 @@ export async function syncCompiledTemplateToDb(
           ? serializeArtifactBindingDeclaration(compiled.artifactBindings)
           : null
         : undefined,
+      ...(lifecycleConfig !== undefined ? { lifecycleConfig } : {}),
     });
   } catch (versionSyncErr) {
     console.warn(`[agent_source_compile] DB sync failed:`, versionSyncErr);
+    // cinatra#4264 A1b (review 1): a caller that passed a reading asked for
+    // the lifecycle column, which carries the regenerate guarantee, so the
+    // failure is its to refuse on, never a silent success over a stale row.
+    if (siblingLifecycle !== undefined) throw versionSyncErr;
   }
 }

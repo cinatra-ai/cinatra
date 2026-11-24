@@ -130,6 +130,10 @@ export async function appendArtifactRevision(input: {
   /** The calling node's id — the ledger identity, exactly as the materialize
    *  tool's create path uses it. */
   nodeId: string;
+  /** cinatra#4264: the runtime's signed step of the call, when it verified.
+   *  Recorded as the filing step only when it equals `nodeId` (the request's
+   *  node, never the composite ledger output id). */
+  verifiedStepId?: string;
   artifactId: string;
   baseRepresentationRevisionId: string;
   /**
@@ -254,6 +258,7 @@ export async function appendArtifactRevision(input: {
     path: "materialize_tool",
     extension: input.extension,
     contentHash,
+    ...(input.verifiedStepId !== undefined ? { verifiedStepId: input.verifiedStepId } : {}),
   });
   if (claim.kind === "finalized") {
     // The identity above is append-scoped, so a finalized hit is THIS append.

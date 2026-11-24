@@ -3,6 +3,7 @@ import "server-only";
 import type { ReactNode } from "react";
 import type { ArtifactUiSlot } from "@cinatra-ai/sdk-extensions/artifact-contract";
 
+import type { ArtifactRendererLoadResult } from "@/lib/artifacts/artifact-renderer-loader";
 import type { ArtifactRendererProps } from "@/lib/artifacts/artifact-renderer-props";
 
 import { ExtensionRendererSlot } from "./extension-renderer-slot";
@@ -22,6 +23,7 @@ export async function ArtifactDisplayMountPoint({
   props,
   fallback,
   renderFloor,
+  buildMapDecision,
 }: {
   mount: ArtifactDisplayMountDescriptor;
   /** The display props snapshot. Null only on an artifact-level floor, where
@@ -35,6 +37,11 @@ export async function ArtifactDisplayMountPoint({
     slot: ArtifactUiSlot;
     reason: string;
   }) => ReactNode;
+  /** The caller's one load decision for a build-map mount (made for this
+   *  mount's key at the snapshot's props version), handed to the slot so it
+   *  mounts from that decision and loads nothing again. Absent, the slot loads
+   *  itself. */
+  buildMapDecision?: Promise<ArtifactRendererLoadResult> | null;
 }): Promise<ReactNode> {
   if (mount.kind === "floor") {
     return renderFloor({ packageName: mount.packageName, slot: mount.slot, reason: mount.reason });
@@ -51,6 +58,7 @@ export async function ArtifactDisplayMountPoint({
         slot={mount.slot}
         props={props}
         fallback={fallback}
+        decision={buildMapDecision ?? undefined}
       />
     );
   }

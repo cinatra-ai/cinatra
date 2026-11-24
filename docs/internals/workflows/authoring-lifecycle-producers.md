@@ -87,6 +87,7 @@ JSON-as-text — the same compiled-config column shape `trigger_mode` /
 | `producedTypes` | array of strings | The artifact types the producer declares it creates. The lattice does not branch on it. |
 | `repairCapable` | boolean | Whether this producer implements the typed repair round-trip (§4). |
 | `repairFindingsInput` | object `{ "input": "<name>" }` | The input of this producer's template that a dispatched repair run gets the reviewer's findings in (§4). `input` is an identifier, and is never `lifecycleRepairRequest` or a property name of `Object.prototype`. |
+| `regenerate` | array of `{ "artifactNode", "step", "noteInput" }` | Per node that files a reviewed artifact, the producing step a Regenerate reruns and the step input the reviewer's note goes into (section 4). Read by Regenerate. |
 
 **Reading is tolerant.** Neither reader throws on a malformed value: an absent,
 empty or non-object value yields no declarations, and the producer gets pure core
@@ -219,6 +220,80 @@ name the template does not read adds an input that no prompt reads, and a name t
 template types as `object` fails the run at start with a message that names the
 input.
 
+### Declaring a step for Regenerate
+
+A producer whose reviewed artifacts can be made again by one step declares, per
+filing node, that step and the step input the reviewer's note goes into
+(cinatra#4264):
+
+```json
+{
+  "regenerate": [
+    { "artifactNode": "file_image", "step": "image_flow", "noteInput": "prompt" },
+    { "artifactNode": "write_draft", "step": "draft_flow", "noteInput": "note" }
+  ]
+}
+```
+
+The list holds 1 to 16 entries, unique by `artifactNode`; `noteInput` follows the
+`repairFindingsInput` name rule. The compile (`checkRegenerateDeclaration`,
+`packages/agents/src/verdaccio/package-contract.ts`) refuses the package with
+`REGENERATE_DECLARATION_INVALID` unless, for every entry:
+
+- `step` and `artifactNode` are top-level nodes of the flow; `step` is an
+  `ApiNode`, `AgentNode` or `FlowNode`, and `artifactNode` is an `ApiNode`;
+- a data edge runs from `step` to `artifactNode`, or the two are the same node;
+- the step has exactly one input `{ "title": <noteInput>, "type": "string" }`
+  (for a `FlowNode`, on the StartNode of its subflow, and on its own `inputs`
+  when it lists them); the `inputs` and `outputs` of the step and of those
+  StartNodes, when present, are lists of port objects;
+- exactly one edge ends at that input; it starts at the flow's StartNode on a
+  `string` output that the root `inputs` declare, and that output feeds no other
+  input.
+
+The step's other inputs may come from any node. Entries may share one `step`
+with different note inputs.
+
+The list is stored on `lifecycle_config` after `repairFindingsInput`, sorted by
+`artifactNode`. Every road that writes the column applies one rule:
+
+- a readable manifest that declares a lifecycle block re-projects it (the
+  compile has already checked its list);
+- a readable manifest without a block clears the column;
+- with no readable manifest (none in the archive, an unparseable one, or the
+  git-file loader's synthesis without a sibling manifest) the column is kept,
+  but a stored list is first checked against the new flow, and the write is
+  refused when the flow no longer honours it.
+
+The registry install seed and the archive import (and the boot loaders that go
+through it) follow this rule, and so does the MCP recompile
+(`agent_source_compile`): it passes the stored list to the compile as
+`retainedRegenerate` and writes the column from the compile's own sibling read,
+before it writes the source file, which it then replaces atomically (a temp
+file and a rename). That recompile works on one snapshot: a `package.json` that
+exists but does not parse, a compile reading that differs from the handler's own
+(readability, name or lifecycle block), a `package.json` or source file changed
+during the compile refuses, and a failed column write refuses too instead of
+reporting success. With no manifest name it finds the row by the OAS's own
+`metadata.cinatra.packageName`, else by the name the layout gives
+(`@<vendor>/<slug>`), never by the bare slug; the git-file loader does the same.
+
+Stored text that cannot be read counts as a stored list that cannot be checked:
+every road above refuses on it. The roads that keep a row without writing it
+check the stored list too: the git-file loader before its same-version skip and
+before its unreadable-sibling skip (a watcher reloads the flow on disk after
+either), and the bundled-agent boot seeder for a row that already exists. That
+seeder never re-seeds the row from the image, but it quarantines a stale list:
+it removes only the `regenerate` key from the stored column, under the row's own
+claim, and the boot reports the package. Stored text that is empty counts as
+unreadable. When an import or a registry install (fresh or reinstall) fails
+after its row write and the runtime files roll back, the lifecycle column is
+written back with them (cleared on a fresh row). The CLI install road runs no compile, so it
+refuses a package that declares `regenerate`; install such a package through the
+registry install road. `readRegenerateEntry`
+(`src/lib/lifecycle/lifecycle-policy.ts`) returns the entry of one filing node.
+No run reads the declaration yet.
+
 ### The round-trip a repair-capable producer must satisfy
 
 A `changes_requested` request carries the gate/decision identity, an idempotency
@@ -273,6 +348,77 @@ Claiming a finding applied while changing nothing produces `unmet`.
 The verdict judges only what it can see: a finding whose path is absent from both
 projections is not asserted unapplied. Exposing the finding's field through the
 projector is what makes such a finding verifiable.
+
+### Regenerate: one step again, under one gate
+
+A producer that declares `regenerate` entries
+(`[{ "artifactNode": "...", "step": "...", "noteInput": "..." }]`, unique by
+`artifactNode`) lets a reviewer run ONE producing step and its filing node again,
+instead of the whole flow. The run that filed a revision records the full inputs
+of each declared node (the step snapshots). A repair whose row names
+`regenerate_node_id` is then a segment run:
+
+- **Resolution.** The run start (`resolveRegenerateSegment`,
+  `packages/agents/src/regenerate-segment.ts`) re-derives the segment from the
+  repair row, the verified filing node of the reviewed revision and the stored
+  snapshots of the run that filed it. Another filing node, no declaration, a
+  missing or ambiguous snapshot, or two flow versions fail the run before
+  dispatch with a plain reason. A repair without `regenerate_node_id` (NULL)
+  runs as an ordinary repair; a blank one is refused and escalated, never run
+  as an ordinary repair; no input of the run makes it a segment run.
+- **Inputs.** The run's inputs are the note and the typed
+  `lifecycleRepairRequest` only. The note is the reviewer's words from the
+  review field that fills the step's declared input, exactly as recorded
+  (`routeRegenerateFindings`), never the findings text. The reviewed work
+  decides, never the name of the declared input: the review store keeps a
+  submitted picture's prompt only when the reviewed revision records the
+  prompt it was made from (its finalized ledger row, read on the server).
+  When the request carries that prompt, the declared input receives it;
+  otherwise it receives the Note, and a prompt submitted for any other work
+  is dropped and never sent. A repair with no such words is refused and
+  escalated.
+  The request is carried with no findings and records the declared input
+  the run is made for (`regenerateInput`: node, step, `noteInput` and start
+  output, no words), so the words reach the declared input and no other
+  place of the run's input. A run whose stored inputs are not this form (one
+  an older build made during a rolling deployment has no record) is never
+  run or applied: the run start fails it, and the run start or the completer
+  escalates its repair, also when the repair is already `dispatched`. The
+  completer reads the run against its own record and the repair's findings
+  only, so an agent updated after the run was made never discards its work. The note travels under the flow's start output
+  that feeds the step's `noteInput` (its name may differ from `noteInput`); the
+  segment request carries that name, and the runtime refuses a name that its
+  mounted start node does not output or that does not feed the note. A name
+  the platform owns (`cinatra_run_id`, `agent_run_id`, the run-token key,
+  `lifecycleRepairRequest`) never carries the note: both sides refuse it. Every
+  other input of the two nodes is the value the producing run recorded. So a picture regenerated after a text
+  change reruns on the ORIGINAL post text of the producing run.
+- **Context.** The run's parent is the run that filed the reviewed revision. A
+  context slot inherits that run's recorded answer; a slot whose answer cannot
+  be proven fails the run (no selection screen) and the repair stays open.
+- **Runtime fence.** The run is sent only to a flow runtime whose `/.health`
+  lists `regenerate_segment/1`; otherwise it fails
+  `REGENERATE_RUNTIME_UNSUPPORTED` and nothing is sent. The runtime refuses a
+  mounted flow whose version differs from the recorded one
+  (`REGENERATE_FLOW_CHANGED`) before any step runs.
+- **One write, one gate.** The runtime signs a receipt for the run, verified and
+  stored before the run's task state is synced. The completer refiles the run's
+  write onto the reviewed artifact only when the run has exactly one write, by
+  the named filing node, with a valid receipt; otherwise the repair stays open.
+  The segment's own write is recorded on the repair in the same update as the
+  successor and settles under the successor gate: it is never reviewed twice.
+  Neither the end-node bindings nor the default road run for a segment run; a
+  repair run whose repair row is missing or cannot be read at the end fails,
+  and nothing is written.
+- **One leg.** A segment never pauses: the runtime fails a segment that stops
+  for input (`REGENERATE_SEGMENT_PAUSED`), and every resume road refuses a
+  segment run, and a repair run whose repair row is missing or cannot be read
+  (`REGENERATE_SEGMENT_NOT_RESUMABLE`), before anything is sent.
+  A flow whose step waits for a person cannot be regenerated.
+- **History.** The stored task history and the run's step results keep each
+  snapshot's node and sha256 only; the values stay in the step snapshots. The
+  runtime stores no conversation for a segment run (a segment is never
+  resumed, so nothing reads one).
 
 ## 5. What a producer must not do
 

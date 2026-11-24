@@ -63,6 +63,8 @@ import datetime as _datetime
 import hashlib
 import hmac
 import inspect
+from types import MappingProxyType
+from collections.abc import Mapping
 import json
 import os
 import re
@@ -85,6 +87,14 @@ from context_subflow_injection import (
     inject_context_subflows,
 )
 
+# cinatra#4264 — the step snapshots a Regenerate reruns from (pure module next
+# to this file in the image; see step_snapshot.py for the contract).
+import step_snapshot as _step_snapshot
+
+# cinatra#4264 B1b — the Regenerate segment run (pure module next to this file
+# in the image; see regenerate_segment.py for the contract).
+import regenerate_segment as _regenerate_segment
+
 try:  # pragma: no cover — exercised inside the Docker image only
     from wayflowcore.agentserver import A2AServer  # type: ignore[import-not-found]
     from wayflowcore.agentspec import AgentSpecLoader  # type: ignore[import-not-found]
@@ -97,6 +107,26 @@ except Exception:  # pragma: no cover — host-side typecheck fallback
 # ContextVar for propagating the current WayFlow task context_id to
 # ApiCallStep._execute_request so it can inject X-Cinatra-A2A-Context-Id.
 # ---------------------------------------------------------------------------
+
+#: cinatra#3745: the source binding of the assistant that executes the current
+#: task (set per task in the patched run_task, read when a step is signed).
+_WAYFLOW_EXECUTED_SOURCE: contextvars.ContextVar[Optional[Mapping[str, str]]] = contextvars.ContextVar("_WAYFLOW_EXECUTED_SOURCE", default=None)
+
+
+def _set_executed_source_for(assistant: Any) -> "contextvars.Token[Optional[Mapping[str, str]]]":
+    """Set the executing assistant's frozen mount binding for this task. Only
+    the read-only snapshot the mount attached counts; anything else gives none."""
+    binding = getattr(assistant, "_cinatra_executed_source", None)
+    return _WAYFLOW_EXECUTED_SOURCE.set(binding if isinstance(binding, MappingProxyType) else None)
+
+
+#: cinatra#3745: the execution attempt the current task's own A2A message named
+#: (message metadata CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY), set per task in the
+#: patched run_task and signed in the step pair, so a task of an earlier attempt
+#: of the run cannot sign for a later one. "" when the message names none.
+_WAYFLOW_EXECUTION_ATTEMPT: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "_WAYFLOW_EXECUTION_ATTEMPT", default=""
+)
 
 #: Stores the fasta2a context_id for the task currently executing in this
 #: asyncio task / coroutine chain. Reset to "" between tasks.
@@ -116,10 +146,53 @@ _WAYFLOW_RUN_TOKEN: contextvars.ContextVar[str] = contextvars.ContextVar(
     "_WAYFLOW_RUN_TOKEN", default=""
 )
 
+#: cinatra#4264: the step-snapshot recorder of the task executing in this
+#: asyncio task (None when the message lists no node). Set per leg in the
+#: patched run_task, read by the patched Step.invoke_async, reset after.
+_STEP_SNAPSHOT_RECORDER: contextvars.ContextVar[Any] = contextvars.ContextVar(
+    "_STEP_SNAPSHOT_RECORDER", default=None
+)
+
 #: The reserved initial-message key under which the Cinatra dispatcher embeds the
 #: RAW per-run token. MUST equal CINATRA_RUN_TOKEN_MESSAGE_KEY in
 #: src/lib/agent-run-token.ts — a cross-language ABI with no shared import.
 CINATRA_RUN_TOKEN_MESSAGE_KEY = "__cinatra_run_token__"
+
+#: cinatra#3745: the reserved A2A ``message.metadata`` key under which every
+#: dispatch and resume names the execution attempt its task runs under. MUST
+#: equal CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY in src/lib/agent-run-token.ts.
+CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY = "__cinatra_execution_attempt__"
+
+#: cinatra#3745: the longest context id, step id or attempt the runtime signs in
+#: an ``s2`` pair. MUST equal RUN_SOURCE_PROOF_FIELD_MAX_CHARS in
+#: src/lib/agent-run-token.ts: the application refuses a longer value, so the
+#: runtime signs none.
+_RUN_SOURCE_PROOF_FIELD_MAX_CHARS = 512
+
+
+def _execution_attempt_from_message(message: Any) -> str:
+    """The execution attempt a task's A2A message names in its metadata, or "".
+
+    Read only from ``message["metadata"]`` (the flow's text input is never
+    read): a string of 1 to 512 characters without a line break, as the
+    application's verifier accepts it. Any other shape names no attempt, and
+    the task then signs no step pair.
+    """
+    if not isinstance(message, dict):
+        return ""
+    metadata = message.get("metadata")
+    if not isinstance(metadata, dict):
+        return ""
+    attempt = metadata.get(CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY)
+    if (
+        not isinstance(attempt, str)
+        or not attempt
+        or len(attempt) > _RUN_SOURCE_PROOF_FIELD_MAX_CHARS
+        or "\n" in attempt
+        or "\r" in attempt
+    ):
+        return ""
+    return attempt
 
 #: Default HTTP timeout (in seconds) applied to any ApiNode call that does
 #: not declare its own. 24 hours — matches the OpenAI batch API SLA upper
@@ -359,6 +432,73 @@ def _extract_and_scrub_run_token(
     return (metadata_token or text_token), message
 
 
+#: cinatra#3745 dispatch fence: the reserved initial-message key under which the
+#: host names the source binding it selected and bound to the run before its
+#: send. MUST equal CINATRA_EXPECTED_SOURCE_MESSAGE_KEY in
+#: packages/agents/src/agent-run-serde.ts (a cross-language ABI, no shared import).
+CINATRA_EXPECTED_SOURCE_MESSAGE_KEY = "__cinatra_expected_source__"
+_EXPECTED_SOURCE_FIELDS = ("sourceSha256", "executedSourceSha256", "declarationSourceSha256")
+
+
+def _take_expected_source(
+    message: Optional[Dict[str, Any]], assistant: Any
+) -> Optional[Dict[str, Any]]:
+    """cinatra#3745 dispatch fence: run a bound first task only on the mount whose
+    source the host bound.
+
+    The host reads the loader's source binding on the composed-OAS route, binds it
+    to the run, then sends the first task, naming the bound source in the first
+    text part's JSON under ``CINATRA_EXPECTED_SOURCE_MESSAGE_KEY``. A reload
+    between the read and the send can route the send to another mount of the same
+    agent, and during a reload the registry can name the new mount while the
+    router still serves the prior one. So the mount that receives the task
+    (``assistant``, the worker's own) compares the named source with its frozen
+    mount binding here, before any conversation is loaded or started: equal, the
+    key is removed and the task runs; anything else raises, and the task fails
+    with no step run.
+
+    A message without the key is returned unchanged (a resume, or a dispatch that
+    bound nothing). A key that is not exactly the three digests of this mount's
+    binding, or a mount without its read-only binding, raises. The caller's
+    message is never changed in place.
+    """
+    if not isinstance(message, dict):
+        return message
+    parts = message.get("parts")
+    if not isinstance(parts, list) or not parts:
+        return message
+    p0 = parts[0]
+    if not (
+        isinstance(p0, dict)
+        and p0.get("kind") == "text"
+        and isinstance(p0.get("text"), str)
+    ):
+        return message
+    try:
+        parsed = json.loads(p0["text"])
+    except (ValueError, TypeError):
+        return message
+    if not isinstance(parsed, dict) or CINATRA_EXPECTED_SOURCE_MESSAGE_KEY not in parsed:
+        return message
+    expected = parsed.pop(CINATRA_EXPECTED_SOURCE_MESSAGE_KEY)
+    binding = getattr(assistant, "_cinatra_executed_source", None)
+    if (
+        not isinstance(binding, MappingProxyType)
+        or not isinstance(expected, dict)
+        or set(expected.keys()) != set(_EXPECTED_SOURCE_FIELDS)
+        or any(
+            not isinstance(expected[k], str) or expected[k] != binding.get(k)
+            for k in _EXPECTED_SOURCE_FIELDS
+        )
+    ):
+        raise ValueError("executed_source_mismatch")
+    new_p0 = dict(p0)
+    new_p0["text"] = json.dumps(parsed)
+    new_message = dict(message)
+    new_message["parts"] = [new_p0, *parts[1:]]
+    return new_message
+
+
 def _scrub_run_token_from_message_for_storage(
     message: Any,
 ) -> Any:
@@ -389,14 +529,18 @@ def _scrub_run_token_from_message_for_storage(
     if not isinstance(message, dict):
         return message
     _, scrubbed = _extract_and_scrub_run_token(message)
-    if scrubbed is message:
-        return message  # no carrier present — nothing was copied or removed
-    parts = scrubbed.get("parts")
-    if isinstance(parts, list) and parts is message.get("parts"):
-        # Only the metadata carrier was scrubbed, so the text-part pop returned
-        # the SAME list. Detach it so storage and the broker share nothing.
-        scrubbed["parts"] = list(parts)
-    return scrubbed
+    if scrubbed is not message:
+        parts = scrubbed.get("parts")
+        if isinstance(parts, list) and parts is message.get("parts"):
+            # Only the metadata carrier was scrubbed, so the text-part pop
+            # returned the SAME list. Detach it so storage and the broker
+            # share nothing.
+            scrubbed["parts"] = list(parts)
+    # cinatra#4264 B1b: a Regenerate segment request is stored with each
+    # snapshot's node and sha256 only, never the snapshot's values (a copy;
+    # the broker's message keeps the full request for the worker). No carrier
+    # and no request: the message itself comes back (identity-equal).
+    return _regenerate_segment.redact_segment_request(scrubbed)
 
 
 # Surface EndNode declared outputs as a structured A2A DataPart so the Cinatra
@@ -689,23 +833,236 @@ def _effective_host_port(url: str) -> Tuple[Optional[str], Optional[int]]:
 # ---------------------------------------------------------------------------
 
 
+# The no-retry stop applies to EVERY call the host compiler reads as a bridge
+# call (cinatra#4220, cinatra#4737): the rule is ``_targets_llm_bridge``, the
+# one rule of ``targetsLlmBridge`` in packages/agents/src/oas-compiler.ts,
+# defined once further down (read at call time). A call to another path, even
+# one whose text contains it (``/api/llm-bridge-shadow``,
+# ``/api/llm-bridge/more``), keeps WayFlow's handling.
+# The bridge bounds the step's code to this length (src/app/api/llm-bridge/
+# route.ts, STEP_FAILURE_CODE_MAX); the loader bounds it again, and bounds a
+# sentence that another answer may still carry.
+_STEP_FAILURE_CODE_MAX = 200
+_STEP_FAILURE_SENTENCE_MAX = 1000
+
+
+class StepDeclaredFailureError(RuntimeError):
+    """A bridge step ended FAILED because its model answered a failure.
+
+    The bridge's answer carries no model text, but the failure sentence is
+    read as if it could: a 422 answer that carries a ``message`` may hold
+    newlines, control characters or copied input. It is kept as DATA
+    (``sentence``, bounded) for whatever hands the step's failure on, and it
+    never enters ``str()`` / ``repr()``: those, and so every log line and
+    traceback that prints this error (``_print_task_exception``), show only the
+    step's error code, JSON-escaped (printable ASCII, no newline), and bounded.
+    """
+
+    def __init__(self, step_error_code: Optional[str], sentence: str) -> None:
+        self.step_error_code = (
+            step_error_code[:_STEP_FAILURE_CODE_MAX] if step_error_code else None
+        )
+        self.sentence = sentence[:_STEP_FAILURE_SENTENCE_MAX]
+        super().__init__(self._log_text())
+
+    def _log_text(self) -> str:
+        if self.step_error_code:
+            # JSON escaping leaves DEL (0x7f) as is; escape it too.
+            shown = _json_escape(self.step_error_code).replace("\x7f", "\\u007f")
+            return f"The step answered the error code {shown}."
+        return "The step answered a failure."
+
+    def __str__(self) -> str:
+        return self._log_text()
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}({self._log_text()!r})"
+
+
+class _StepDeclaredFailureAnswer(Exception):
+    """The bridge answered 422 STEP_DECLARED_FAILURE: the step ended failed.
+
+    Private: raised inside the httpx client and turned into
+    ``StepDeclaredFailureError`` at once. Its text is the code only too.
+    """
+
+    def __init__(self, step_error_code: Optional[str], sentence: str) -> None:
+        self.failure = StepDeclaredFailureError(step_error_code, sentence)
+        super().__init__(str(self.failure))
+
+
+def _step_declared_failure_answer(
+    response: Any,
+) -> Optional[Tuple[Optional[str], str]]:
+    """(step error code, failure sentence) of a 422 STEP_DECLARED_FAILURE answer.
+
+    None for every other answer.
+    """
+    if getattr(response, "status_code", None) != 422:
+        return None
+    try:
+        body = response.json()
+    except Exception:  # noqa: BLE001 — any decode/parse error → not that answer
+        return None
+    if not isinstance(body, dict) or body.get("code") != "STEP_DECLARED_FAILURE":
+        return None
+    step_code = body.get("stepErrorCode")
+    code = (
+        step_code.strip()[:_STEP_FAILURE_CODE_MAX]
+        if isinstance(step_code, str) and step_code.strip()
+        else None
+    )
+    message = body.get("message")
+    if isinstance(message, str) and message.strip():
+        return (code, message.strip()[:_STEP_FAILURE_SENTENCE_MAX])
+    if code is not None:
+        return (code, f"The step answered the error code {code}.")
+    return (None, "The step answered a failure.")
+
+
+_STEP_DECLARED_FAILURE_AUTH_CLASS: Any = None
+
+
+def _one_request(request: Any) -> Any:
+    """The auth flow of a request without an auth of its own: send it once."""
+    yield request
+
+
+async def _one_request_async(request: Any) -> Any:
+    """``_one_request`` for the async client."""
+    yield request
+
+
+def _step_declared_failure_auth(own_auth: Any = None) -> Any:
+    """An httpx auth hook that stops the step at a STEP_DECLARED_FAILURE answer.
+
+    httpx calls the hook with each response inside ``client.request``, so it
+    raises before WayFlow's retry loop looks at the status, and before WayFlow
+    reads ``ignore_bad_http_requests``. ``own_auth`` is the request's own auth
+    (None when it has none), in any form httpx takes (an ``httpx.Auth``, a
+    (user, password) pair, or a callable): the hook WRAPS it, so the request
+    still authenticates as its step declared and the declared failure still
+    stops the step. An own auth of another kind refuses the call before
+    anything is sent. The class is built on first use: httpx comes with
+    wayflowcore, which is imported lazily too.
+    """
+    global _STEP_DECLARED_FAILURE_AUTH_CLASS
+    if _STEP_DECLARED_FAILURE_AUTH_CLASS is None:
+        import httpx
+
+        def _stop_at(response: Any) -> None:
+            answer = _step_declared_failure_answer(response)
+            if answer is not None:
+                raise _StepDeclaredFailureAnswer(*answer)
+
+        class _CallableAuth(httpx.Auth):
+            # httpx's own reading of a callable auth: it rewrites the request.
+            def __init__(self, func: Any) -> None:
+                self._func = func
+
+            def auth_flow(self, request: Any) -> Any:
+                yield self._func(request)
+
+        class _StepDeclaredFailureStop(httpx.Auth):
+            def __init__(self, own: Any) -> None:
+                if own is None or own is getattr(httpx, "USE_CLIENT_DEFAULT", None):
+                    own = None
+                elif isinstance(own, httpx.Auth):
+                    pass
+                elif isinstance(own, tuple) and len(own) == 2:
+                    own = httpx.BasicAuth(*own)
+                elif callable(own):
+                    own = _CallableAuth(own)
+                else:
+                    raise RuntimeError(
+                        "A bridge call carries an auth of a kind httpx does not "
+                        "take; the call is refused before it is sent."
+                    )
+                self._own = own
+
+            def sync_auth_flow(self, request: Any) -> Any:
+                flow = (
+                    _one_request(request)
+                    if self._own is None
+                    else self._own.sync_auth_flow(request)
+                )
+                try:
+                    request = next(flow)
+                    while True:
+                        response = yield request
+                        if response.status_code == 422:
+                            response.read()
+                            _stop_at(response)
+                        try:
+                            request = flow.send(response)
+                        except StopIteration:
+                            return
+                finally:
+                    flow.close()
+
+            async def async_auth_flow(self, request: Any) -> Any:
+                flow = (
+                    _one_request_async(request)
+                    if self._own is None
+                    else self._own.async_auth_flow(request)
+                )
+                try:
+                    request = await flow.__anext__()
+                    while True:
+                        response = yield request
+                        if response.status_code == 422:
+                            await response.aread()
+                            _stop_at(response)
+                        try:
+                            request = await flow.asend(response)
+                        except StopAsyncIteration:
+                            return
+                finally:
+                    await flow.aclose()
+
+        _STEP_DECLARED_FAILURE_AUTH_CLASS = _StepDeclaredFailureStop
+    return _STEP_DECLARED_FAILURE_AUTH_CLASS(own_auth)
+
+
+def _install_step_declared_failure_stop(request: Dict[str, Any]) -> None:
+    """Put the declared-failure stop on a bridge call (cinatra#4220, #4737).
+
+    EVERY call the host compiler reads as a bridge call gets it, whatever its
+    host: the rule is ``_targets_llm_bridge``, the one rule of
+    ``targetsLlmBridge`` in packages/agents/src/oas-compiler.ts. Nothing on
+    the step bypasses it: an auth of the request's own stays inside the hook
+    (``_step_declared_failure_auth``), and a step that takes bad answers
+    itself (``ignore_bad_http_requests``) still stops, because the hook raises
+    inside the client. The hook adds nothing to the request and reads only a
+    422 answer. Every other call is left as it is.
+    """
+    if _targets_llm_bridge(str(request.get("url", ""))):
+        request["auth"] = _step_declared_failure_auth(request.get("auth"))
+
+
 def _patch_api_call_step_bridge_token() -> None:
     """Inject X-Cinatra-Bridge-Token on every outbound ApiNode HTTP call.
 
     Wraps ApiCallStep._execute_request to add the header before delegating.
     The token is read once at patch time (env vars don't change at runtime).
-    No-op when the env var is unset; logs a one-line warning.
+
+    The token decides only the auth headers the wrapper adds. The wrapper is
+    installed whether or not the token is set: it puts the declared-failure stop
+    (cinatra#4220, #4737) on every bridge call and keeps its other behaviour (the
+    default timeout, the capability message) either way. When the env var is
+    unset the wrapper adds no X-Cinatra-* header (as before) and the patch logs a
+    one-line warning.
     """
-    token = os.environ.get("CINATRA_BRIDGE_TOKEN")
-    if not token:
+    token: Optional[str] = os.environ.get("CINATRA_BRIDGE_TOKEN") or None
+    if token is None:
         print(
             "[agent_loader] CINATRA_BRIDGE_TOKEN unset — X-Cinatra-Bridge-Token "
             "header NOT injected on ApiCallStep calls. Cinatra rejects requests "
             "with HTTP 403 when the token is missing or wrong "
             "(no BYPASS / XFF fallback). Set CINATRA_BRIDGE_TOKEN in this "
-            "container's env to restore connectivity."
+            "container's env to restore connectivity. The declared-failure stop "
+            "is installed all the same."
         )
-        return
 
     # #907: dedicated per-node context-callback signing key. DISTINCT from the
     # bridge token so a caller holding only the run's shared bridge auth cannot
@@ -714,7 +1071,7 @@ def _patch_api_call_step_bridge_token() -> None:
     # path (context resolution for composed children stops working until it is
     # provisioned), so this is loud-by-consequence, not silent.
     attest_key = os.environ.get("CINATRA_CONTEXT_ATTEST_KEY")
-    if not attest_key:
+    if token is not None and not attest_key:
         print(
             "[agent_loader] CINATRA_CONTEXT_ATTEST_KEY unset — per-node context "
             "attestation NOT injected. Composed-child context resolution "
@@ -731,7 +1088,7 @@ def _patch_api_call_step_bridge_token() -> None:
         "CINATRA_BASE_URL", "http://host.docker.internal:3000"
     )
     proxy_host, proxy_port = _effective_host_port(base_url)
-    if proxy_host is None:
+    if token is not None and proxy_host is None:
         print(
             f"[agent_loader] WARNING: CINATRA_BASE_URL is unparseable ({base_url!r}) "
             "— host-anchored ApiNode credential/attestation injection will match NO "
@@ -744,10 +1101,16 @@ def _patch_api_call_step_bridge_token() -> None:
         print(f"[agent_loader] WARNING: bridge token patch import failed: {exc}")
         return
 
-    if getattr(ApiCallStep._execute_request, "__cinatra_patched__", False):
-        return  # idempotent
-
-    _original = ApiCallStep._execute_request
+    _current = ApiCallStep._execute_request
+    if getattr(_current, "__cinatra_patched__", False):
+        # Idempotent. The one exception: a wrapper made while the token was
+        # unset adds no header, so the wrapper of a later call with the token
+        # set replaces it (over the same original; nothing is chained).
+        if token is None or getattr(_current, "__cinatra_bridge_token_set__", True):
+            return
+        _original = _current.__wrapped__  # type: ignore[attr-defined]
+    else:
+        _original = _current
 
     async def _patched(self: Any, request: Dict[str, Any]) -> Any:
         # request["headers"] may be absent when the ApiNode declares no
@@ -762,8 +1125,10 @@ def _patch_api_call_step_bridge_token() -> None:
         # internal → nothing injected (fail closed). Mirrors the sibling
         # httpx.AsyncClient.send patch's host gate.
         _req_host, _req_port = _effective_host_port(_ctx_url)
+        # An unset token adds no header at all (token is None: never internal).
         _is_internal = (
-            proxy_host is not None
+            token is not None
+            and proxy_host is not None
             and _req_host is not None
             and _req_host == proxy_host
             and _req_port == proxy_port
@@ -849,36 +1214,63 @@ def _patch_api_call_step_bridge_token() -> None:
                     request["headers"]["X-Cinatra-Context-Attestation"] = (
                         f"v2:{_expiry}:{_sig}"
                     )
-            # cinatra#3745: sign the identity of the executing step on the
-            # model-bridge and passthrough calls, so the application learns
-            # which step of the run makes each call. `self.id` is the executing
-            # compiled step's own id; the material `s1\n<ctx>\n<node>\n<expiry>`
+            # cinatra#3745: sign the identity of the executing step, the
+            # execution attempt the task's own message named, and the source of
+            # the assistant that executes it on the model-bridge and passthrough
+            # calls. `self.id` is the executing compiled step's own id; the
+            # three digests are the executing mount's frozen binding. The
+            # material `s2\n<ctx>\n<node>\n<attempt>\n<raw>\n<executed>\n<declaration>\n<expiry>`
             # carries a prefix of its own, distinct from the context pair's.
-            # Step headers of these names that the flow's source declared on
-            # an internal call are replaced by the runtime's values (or
-            # dropped when the runtime has no key, context id or step id).
+            # Step, attempt and source headers of these names that the flow's
+            # source declared on an internal call are replaced by the runtime's
+            # values (or dropped when the runtime has no key, context id, step
+            # id, attempt or mount binding, or the context id, the step id or
+            # the attempt holds a line break or is longer than 512 characters,
+            # the length the application's verifier accepts).
             if "llm-bridge" in _ctx_url or "/agents/passthrough" in _ctx_url:
                 for _hname in list(request["headers"].keys()):
                     if str(_hname).lower() in (
                         "x-cinatra-step-node",
                         "x-cinatra-step-attestation",
+                        "x-cinatra-executed-source",
+                        "x-cinatra-declaration-source",
+                        "x-cinatra-raw-source",
+                        "x-cinatra-execution-attempt",
                     ):
                         del request["headers"][_hname]
                 _step_id = getattr(self, "id", "") or ""
-                if attest_key and _ctx_id and _step_id:
+                _loaded = _WAYFLOW_EXECUTED_SOURCE.get()
+                _attempt = _WAYFLOW_EXECUTION_ATTEMPT.get()
+                _signed_ids = _ctx_id + _step_id + _attempt
+                if (
+                    attest_key
+                    and _ctx_id
+                    and _step_id
+                    and _attempt
+                    and _loaded
+                    and "\n" not in _signed_ids
+                    and "\r" not in _signed_ids
+                    and len(_ctx_id) <= _RUN_SOURCE_PROOF_FIELD_MAX_CHARS
+                    and len(_step_id) <= _RUN_SOURCE_PROOF_FIELD_MAX_CHARS
+                    and len(_attempt) <= _RUN_SOURCE_PROOF_FIELD_MAX_CHARS
+                ):
                     _step_expiry = (
                         int(time.time()) + _CONTEXT_ATTESTATION_TTL_SECONDS
                     )
                     _step_sig = hmac.new(
                         attest_key.encode("utf-8"),
-                        f"s1\n{_ctx_id}\n{_step_id}\n{_step_expiry}".encode(
+                        f"s2\n{_ctx_id}\n{_step_id}\n{_attempt}\n{_loaded['sourceSha256']}\n{_loaded['executedSourceSha256']}\n{_loaded['declarationSourceSha256']}\n{_step_expiry}".encode(
                             "utf-8"
                         ),
                         hashlib.sha256,
                     ).hexdigest()
+                    request["headers"]["X-Cinatra-Execution-Attempt"] = _attempt
+                    request["headers"]["X-Cinatra-Raw-Source"] = _loaded["sourceSha256"]
+                    request["headers"]["X-Cinatra-Executed-Source"] = _loaded["executedSourceSha256"]
+                    request["headers"]["X-Cinatra-Declaration-Source"] = _loaded["declarationSourceSha256"]
                     request["headers"]["X-Cinatra-Step-Node"] = _step_id
                     request["headers"]["X-Cinatra-Step-Attestation"] = (
-                        f"s1:{_step_expiry}:{_step_sig}"
+                        f"s2:{_step_expiry}:{_step_sig}"
                     )
         # ApiNode timeout policy — aligned for batch LLM workloads.
         #
@@ -895,7 +1287,33 @@ def _patch_api_call_step_bridge_token() -> None:
         # declare it explicitly on the ApiNode in the OAS — `setdefault`
         # honors any caller-declared timeout.
         request.setdefault("timeout", _DEFAULT_APINODE_TIMEOUT_SECONDS)
-        resp = await _original(self, request)
+
+        # A model step that answered a failure (cinatra#4220).
+        #
+        # When a bridge step's model answers a non-empty `error.code` that the
+        # step does not list in `completed_error_codes`, /api/llm-bridge returns
+        # HTTP 422 with body {error, code:"STEP_DECLARED_FAILURE",
+        # stepErrorCode}: a fixed sentence and the step's escaped code, no model
+        # text. That answer is final: asking the model again repeats a model
+        # call that already ran (and may already have acted). But `_original`'s
+        # legacy loop sends every non-2xx answer up to 3 times, and a retry
+        # policy retries by status too. Stop it at the FIRST such answer: an
+        # httpx auth hook (it sees each response inside the client, before the
+        # loop decides to retry) raises a private exception, which is not an
+        # httpx.TransportError, so it leaves the loop at once; it is turned
+        # into a StepDeclaredFailureError (a RuntimeError), so the step ends
+        # failed. Its str()/repr() — the run's error text and what the task
+        # runner's logs print — name only the escaped error code.
+        #
+        # Scoped by the compiler's own rule: EVERY bridge call, and nothing
+        # on the step bypasses it (_install_step_declared_failure_stop). Only
+        # that exact status and code stop; every other answer keeps WayFlow's
+        # handling as before.
+        _install_step_declared_failure_stop(request)
+        try:
+            resp = await _original(self, request)
+        except _StepDeclaredFailureAnswer as stop:
+            raise stop.failure from None
 
         # Actionable capability errors (engineering#417).
         #
@@ -942,11 +1360,16 @@ def _patch_api_call_step_bridge_token() -> None:
         return resp
 
     _patched.__cinatra_patched__ = True  # type: ignore[attr-defined]
+    _patched.__cinatra_bridge_token_set__ = token is not None  # type: ignore[attr-defined]
     _patched.__wrapped__ = _original  # type: ignore[attr-defined]
     ApiCallStep._execute_request = _patched  # type: ignore[method-assign]
     print(
         "[agent_loader] ApiCallStep._execute_request patched "
-        "(X-Cinatra-Bridge-Token injection enabled)"
+        + (
+            "(X-Cinatra-Bridge-Token injection enabled)"
+            if token is not None
+            else "(declared-failure stop only: no bridge token to inject)"
+        )
     )
 
 
@@ -1131,6 +1554,20 @@ def _patch_a2a_agent_no_shared_conversation() -> None:
     )
 
 
+def _print_task_exception(label: str, task_id: Any, exc: BaseException) -> None:
+    """Log a task's exception and its traceback (the task runner's two sites).
+
+    Prints ``str(exc)`` and the formatted traceback, as before. The traceback
+    shows each exception through its ``str()``, so a StepDeclaredFailureError
+    (cinatra#4220) logs only its escaped error code: the model's failure
+    sentence, with any newline or control character in it, reaches no log.
+    """
+    import traceback as _tb
+
+    print(f"[agent_loader] _patched_run_task {label} task={task_id}: {exc}")
+    print("".join(_tb.format_exception(type(exc), exc, exc.__traceback__)))
+
+
 def _patch_wayflow_flow_skip_pre_execute() -> None:
     """Skip the pre-execute phase in A2AAgentWorker for WayflowFlow agents.
 
@@ -1199,6 +1636,9 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
         # turns it into a real try/finally reset alongside the run token.)
         _ctx_token = None
         _rt_token = None
+        _snap_token = None
+        _source_token = None
+        _attempt_token = None
 
         try:
             task = await self.storage.load_task(params["id"])
@@ -1232,10 +1672,22 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
             if _scrubbed_message is not None:
                 params["message"] = _scrubbed_message
             _rt_token = _WAYFLOW_RUN_TOKEN.set(_run_token or "")
+            # cinatra#3745 dispatch fence: a bound first task runs only on the
+            # mount whose source the host bound; otherwise it fails here, before
+            # any conversation is loaded or started.
+            _fenced_message = _take_expected_source(params.get("message"), self.assistant)
+            if _fenced_message is not None:
+                params["message"] = _fenced_message
 
             # Propagate context_id to ApiCallStep via ContextVar so
             # X-Cinatra-A2A-Context-Id is injected on llm-bridge calls.
             _ctx_token = _WAYFLOW_CONTEXT_ID.set(task.get("context_id", "") or "")
+            # cinatra#3745: the assistant that executes THIS task, never the active registry.
+            _source_token = _set_executed_source_for(self.assistant)
+            # cinatra#3745: the execution attempt THIS task's own message named.
+            _attempt_token = _WAYFLOW_EXECUTION_ATTEMPT.set(
+                _execution_attempt_from_message(params.get("message"))
+            )
 
             # cinatra#1194 — template-version-per-run: what executes is no
             # longer byte-identical to the published spec for agents with
@@ -1251,9 +1703,27 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
                     f"slots={_ctx_inj.get('slots')}"
                 )
 
+            # cinatra#4264 B1b: a Regenerate segment run executes only the
+            # declared step and its filing node, of the flow version that
+            # produced the reviewed revision. Everything that can refuse it
+            # (the flow version first, then the snapshot bytes, the derivation
+            # and the inputs) runs HERE, before any conversation or step; a
+            # refusal raises into the outer handler, which fails the task.
+            _segment_request = _regenerate_segment.read_segment_request(
+                params.get("message")
+            )
+            _segment_run_id = None
+
             prioritize_task = params.get("metadata", {}).get("prioritize_task", False)
             tools_dict = self.assistant._referenced_tools_dict()
-            if prioritize_task:
+            if _segment_request is not None:
+                conversation, _segment_run_id = _start_segment_conversation(
+                    self.assistant, params.get("message"), _segment_request
+                )
+                # The snapshot values are read; the conversation and the
+                # stored task history get the message without them.
+                params["message"] = _regenerate_segment.redact_segment_request(params.get("message"))
+            elif prioritize_task:
                 conversation = await self.storage.load_task_conversation(
                     task_id=task["id"],
                     tools_dict=tools_dict,
@@ -1264,8 +1734,9 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
                     tools_dict=tools_dict,
                 )
 
-            needs_new_conv = conversation is None or not isinstance(
-                conversation.status, UserMessageRequestStatus
+            needs_new_conv = _segment_request is None and (
+                conversation is None
+                or not isinstance(conversation.status, UserMessageRequestStatus)
             )
 
             if needs_new_conv:
@@ -1327,6 +1798,21 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
             from typing import cast as _cast
             conversation = _cast(object, conversation)
 
+            # cinatra#4264: record the listed nodes' inputs in THIS leg (the
+            # initial message and every resume carry the list). The root
+            # conversation is the one about to execute and the root flow is its
+            # component (or the component's `flow` for an Agent-wrapped root):
+            # only a step of that flow, running in that conversation (or in one
+            # whose component is that flow), is recorded; a subflow's step is
+            # not, even when it shares a root node's id.
+            _snap_recorder = _step_snapshot.snapshot_recorder_for_leg(
+                params.get("message"),
+                flow_sha256=getattr(self.assistant, "_cinatra_flow_sha256", "") or "",
+                key=os.environ.get("CINATRA_CONTEXT_ATTEST_KEY"),
+                conversation=conversation,
+            )
+            _snap_token = _STEP_SNAPSHOT_RECORDER.set(_snap_recorder)
+
             a2a_input_message = params["message"]
             wayflow_input_message = _convert_a2a_messages_to_wayflow_messages(
                 [a2a_input_message]
@@ -1348,12 +1834,18 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
                     new_wayflow_messages
                 )
             except Exception as _exc:
-                import traceback as _tb
-                print(f"[agent_loader] _patched_run_task EXCEPTION task={task['id']}: {_exc}")
-                print(_tb.format_exc())
+                _print_task_exception("EXCEPTION", task["id"], _exc)
                 await self.storage.update_task(task["id"], state="failed")
                 raise
             else:
+                # cinatra#4264 B1b: a segment that did not finish fails here,
+                # before its outcome is stored (no input-required state and no
+                # conversation; the task's working state already exists); it
+                # is never parked for a resume
+                # (a resumed leg carries no request, so it would sign no
+                # receipt and pass no capability check).
+                if _segment_request is not None:
+                    _regenerate_segment.require_segment_finished(isinstance(status, FinishedStatus))
                 if isinstance(status, UserMessageRequestStatus) or isinstance(
                     status, ToolRequestStatus
                 ):
@@ -1417,15 +1909,34 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
                 else:
                     task_state = "completed"
 
-                await self.storage.update_task(
-                    task["id"],
+                # cinatra#4264 B1b: a finished segment carries its signed
+                # receipt; the application refiles the write only with it.
+                if _segment_request is not None and isinstance(status, FinishedStatus):
+                    _regenerate_segment.attach_segment_receipt(
+                        new_a2a_messages,
+                        _regenerate_segment.segment_receipt(
+                            os.environ.get("CINATRA_CONTEXT_ATTEST_KEY"),
+                            _segment_run_id,
+                            _segment_request,
+                        ),
+                        str(task["id"]),
+                    )
+
+                # cinatra#4264: the leg's step snapshots ride its last message.
+                if _snap_recorder is not None:
+                    _step_snapshot.attach_step_snapshots(
+                        new_a2a_messages, _snap_recorder.snapshots(), str(task["id"])
+                    )
+
+                # cinatra#4264 B1b: a segment's conversation holds the
+                # snapshot values as start inputs; it is not stored.
+                await _regenerate_segment.store_task_outcome(
+                    self.storage,
+                    task,
                     state=task_state,
                     new_messages=new_a2a_messages,
-                )
-                await self.storage.update_task_conversation(
-                    context_id=task["context_id"],
-                    task_id=task["id"],
-                    conv=conversation,
+                    conversation=conversation,
+                    segment=_segment_request is not None,
                 )
         except Exception as _outer_exc:
             # CINATRA HANG FIX: a raise from BEFORE the inner try-block (e.g.
@@ -1438,12 +1949,7 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
             # `notifier.wait_for(task_id, timeout=86400)` never wakes up.
             # Mark the task failed defensively, then re-raise. The outer
             # `finally` block guarantees `notify` runs on any exit path.
-            import traceback as _tb_outer
-            print(
-                f"[agent_loader] _patched_run_task OUTER EXCEPTION "
-                f"task={_task_id_for_notify}: {_outer_exc}"
-            )
-            print(_tb_outer.format_exc())
+            _print_task_exception("OUTER EXCEPTION", _task_id_for_notify, _outer_exc)
             try:
                 await self.storage.update_task(_task_id_for_notify, state="failed")
             except Exception as _store_exc:
@@ -1459,6 +1965,12 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
             # coroutine chain. Reset ONLY when set (load_task may raise first) —
             # this is the real try/finally reset the prior dead _ctx_token
             # capture never performed. Reset the run token first (LIFO wrt set).
+            if _snap_token is not None:
+                _STEP_SNAPSHOT_RECORDER.reset(_snap_token)
+            if _attempt_token is not None:
+                _WAYFLOW_EXECUTION_ATTEMPT.reset(_attempt_token)
+            if _source_token is not None:
+                _WAYFLOW_EXECUTED_SOURCE.reset(_source_token)
             if _rt_token is not None:
                 _WAYFLOW_RUN_TOKEN.reset(_rt_token)
             if _ctx_token is not None:
@@ -1487,6 +1999,58 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
 
 
 # ---------------------------------------------------------------------------
+
+
+def _start_segment_conversation(
+    assistant: Any, message: Any, request: Dict[str, Any]
+) -> Tuple[Any, Optional[str]]:
+    """cinatra#4264 B1b: the conversation of a Regenerate segment run, and the
+    run id its receipt is signed for.
+
+    In order, before any step: the mounted flow version against the request
+    (``REGENERATE_FLOW_CHANGED``), each snapshot's sha256 over its bytes, the
+    segment derived from the mounted pre-substitution document (cached per
+    flow version and entry), the segment's start inputs. The segment document
+    is loaded by the same loader and placeholder substitution as the mount,
+    and cached on the mounted agent per (flowSha256, step, artifactNode,
+    noteInput). Every refusal raises RegenerateSegmentError.
+    """
+    message_inputs = _extract_start_inputs(message) or {}
+    derivation, inputs = _regenerate_segment.prepare_segment_run(
+        request,
+        mounted_flow_sha256=getattr(assistant, "_cinatra_flow_sha256", "") or "",
+        working_doc=getattr(assistant, "_cinatra_working_doc", None),
+        message_inputs=message_inputs,
+    )
+    key = (
+        request["flowSha256"],
+        request["step"],
+        request["artifactNode"],
+        request["noteInput"],
+    )
+    cache = getattr(assistant, "_cinatra_segment_flows", None)
+    if not isinstance(cache, dict):
+        cache = {}
+        try:
+            setattr(assistant, "_cinatra_segment_flows", cache)
+        except Exception:
+            pass
+    flow = cache.get(key)
+    if flow is None:
+        loader = getattr(assistant, "_cinatra_spec_loader", None)
+        if loader is None:
+            raise _regenerate_segment.RegenerateSegmentError(
+                _regenerate_segment.REGENERATE_SEGMENT_INVALID,
+                "the mounted agent has no loader for its segment",
+            )
+        flow = loader.load_json(_substitute_placeholders(json.dumps(derivation["doc"])))
+        cache[key] = flow
+    print(
+        f"[agent_loader] regenerate segment step={request['step']} "
+        f"artifactNode={request['artifactNode']} flow={request['flowSha256'][:12]}"
+    )
+    run_id = inputs.get("cinatra_run_id") or message_inputs.get("cinatra_run_id")
+    return flow.start_conversation(inputs=inputs), run_id if isinstance(run_id, str) else None
 
 
 def _is_apinode_only_flow(agent: Any) -> bool:
@@ -1866,6 +2430,9 @@ _LIVE_CLASS_BINDINGS: Tuple[Tuple[str, str, Optional[str]], ...] = (
     ("wayflowcore.steps", "AgentExecutionStep", None),
     ("wayflowcore.a2a.a2aagent", "A2AAgent", "start_conversation"),
     ("wayflowcore.agentserver", "A2AServer", "serve_agent"),
+    # cinatra#4264 step snapshots: the capture wraps Step.invoke_async
+    # (`_patch_step_snapshot_capture`, which also checks its parameters).
+    ("wayflowcore", "Step", "invoke_async"),
     # #1193 token hygiene. `A2AStorage.submit_task` persists the inbound A2A
     # message into task history BEFORE the worker's pop runs, so an unpatched
     # submit_task durably stores the RAW per-run credential and echoes it in the
@@ -2126,6 +2693,34 @@ def _patch_pyagentspec_is_python_primitive_type_guard() -> None:
         "[agent_loader] _DeserializationContextImpl._is_python_primitive_type patched "
         "(guard against TypeError on non-class annotations)"
     )
+
+
+def _patch_step_snapshot_capture() -> None:
+    """cinatra#4264: record a listed node's FULL resolved inputs before it runs.
+
+    wayflowcore calls ``Step.invoke_async(inputs, conversation)`` with the
+    inputs the flow resolved for the step. When the leg's recorder (set by the
+    patched run_task from the message's ``cinatra_snapshot_nodes``) is present,
+    the wrapper hands it the step id, the inputs and the conversation; the
+    recorder keeps only a listed TOP-LEVEL node of the root flow (its
+    conversation is the root conversation itself). No recorder (the message
+    listed no node): nothing is read and the step runs exactly as before. A
+    fault of the recorder is logged and never fails the step.
+
+    Startup-FATAL on drift: a missing ``Step.invoke_async``, or one whose
+    parameters after ``self`` no longer begin with ``(inputs, conversation)``,
+    raises RuntimeError (``install_invoke_capture``), and
+    ``_LIVE_CLASS_BINDINGS`` names the method, so a wayflowcore bump cannot
+    silently drop the capture or sign the wrong dictionary.
+    """
+    try:
+        from wayflowcore import Step  # type: ignore[import-not-found]
+    except Exception as exc:  # pragma: no cover
+        # The live-class guard (`_validate_live_class_names`) names
+        # wayflowcore.Step.invoke_async and fails the startup on this import.
+        print(f"[agent_loader] WARNING: step snapshot patch import failed: {exc}")
+        return
+    _step_snapshot.install_invoke_capture(Step, _STEP_SNAPSHOT_RECORDER.get)
 
 
 def _patch_parallel_flow_node_extended_order() -> None:
@@ -3342,6 +3937,7 @@ class MountedAgent:
         "composed_oas",
         "composed_sha256",
         "context_injection",
+        "selected_source_binding",
     )
 
     def __init__(
@@ -3356,6 +3952,7 @@ class MountedAgent:
         composed_oas: Optional[Dict[str, Any]] = None,
         composed_sha256: Optional[str] = None,
         context_injection: Optional[List[Dict[str, Any]]] = None,
+        selected_source_binding: Optional[Mapping[str, str]] = None,
     ) -> None:
         self.label = f"{vendor}/{slug}"
         self.vendor = vendor
@@ -3366,6 +3963,7 @@ class MountedAgent:
         self.sub_app = sub_app
         self.stack: Optional[contextlib.AsyncExitStack] = None
         self.mount = mount
+        self.selected_source_binding = selected_source_binding
         # cinatra#1194 — mount-time context-subflow injection sidecar. When the
         # loader injected declared slots, `composed_oas` holds the PRE-
         # placeholder-substitution composed document (what actually executes,
@@ -3489,6 +4087,8 @@ def _read_bridge_token() -> Optional[str]:
 #: The host route the derivation applies to. Mirrors `targetsLlmBridge` in
 #: `packages/agents/src/oas-compiler.ts`: the bare path, the authored
 #: `{{CINATRA_BASE_URL}}` template form, or any absolute URL ending in it.
+#: The declared-failure stop reads the same rule at call time
+#: (`_install_step_declared_failure_stop`).
 _LLM_BRIDGE_PATH = "/api/llm-bridge"
 
 
@@ -4432,6 +5032,17 @@ def _mount_one_sync(
 
     substituted = _substitute_placeholders(raw_text)
     agent = loader.load_json(substituted)
+    source_binding = MappingProxyType({
+        "sourceSha256": fingerprint,
+        "executedSourceSha256": hashlib.sha256(substituted.encode("utf-8")).hexdigest(),
+        "declarationSourceSha256": hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
+        "declarationSource": raw_text,
+    })
+    # Frozen host-only selection snapshot; a failed attachment
+    # refuses the mount rather than minting step-only authority.
+    setattr(agent, "_cinatra_executed_source", source_binding)
+    if getattr(agent, "_cinatra_executed_source", None) is not source_binding:
+        raise ValueError("executed_source_sidecar_unavailable")
 
     if injection_report:
         # Per-run template-version logging needs the injection info at
@@ -4455,6 +5066,27 @@ def _mount_one_sync(
                 "(mount-time log above remains authoritative)"
             )
 
+    # cinatra#4264: the flow version a step snapshot is signed for (the
+    # composed document's sha256 when the loader composed one, else the source
+    # fingerprint), read by the patched run_task.
+    try:
+        setattr(agent, "_cinatra_flow_sha256", composed_sha256 or fingerprint)
+    except Exception:
+        print(f"[agent_loader] WARNING: {label}: flow sha not attached; step snapshots unavailable")
+
+    # cinatra#4264 B1b: a Regenerate segment is derived from the document this
+    # mount executes (pre-substitution, after every pass above) and loaded by
+    # the same loader. Without them a segment run is refused, never guessed.
+    try:
+        setattr(
+            agent,
+            "_cinatra_working_doc",
+            composed_oas if composed_oas is not None else parsed_doc,
+        )
+        setattr(agent, "_cinatra_spec_loader", loader)
+    except Exception:
+        print(f"[agent_loader] WARNING: {label}: segment source not attached; Regenerate segments unavailable")
+
     server = A2AServer()
     mount_url = f"{base_url}/agents/{vendor}/{slug}/"
     server.serve_agent(agent, url=mount_url)
@@ -4472,6 +5104,7 @@ def _mount_one_sync(
         composed_oas=composed_oas,
         composed_sha256=composed_sha256,
         context_injection=injection_report or None,
+        selected_source_binding=source_binding,
     )
 
 
@@ -4888,6 +5521,10 @@ class MountedAgentRegistry:
             "failed": len(failed),
             "failed_agents": failed,
             "last_reload_at": self._last_reload_at,
+            # cinatra#4264 B1b: what this runtime can run beyond a whole flow;
+            # the application dispatches a Regenerate segment only when it
+            # reads `regenerate_segment/1` here.
+            "capabilities": list(_regenerate_segment.RUNTIME_CAPABILITIES),
         }
 
     def find(self, label: str) -> Optional[MountedAgent]:
@@ -4996,6 +5633,10 @@ def _build_composed_oas_handler(
                 "injectedSlots": agent.context_injection or [],
                 "composedSha256": agent.composed_sha256,
                 "composedOas": agent.composed_oas,
+                # The host reads this before a run's first dispatch and binds it
+                # to the run (cinatra#3745); each step's s2 signature proves which
+                # assistant ran. The substituted text is never returned, only its digest.
+                "selectedSourceBinding": dict(agent.selected_source_binding) if agent.selected_source_binding is not None else None,
             }
         )
 
@@ -5036,6 +5677,7 @@ def build_parent_app(agents_dir: Path) -> Starlette:
     _patch_pyagentspec_deserialization_error_mask()  # pyagentspec error unmask
     _patch_pyagentspec_is_python_primitive_type_guard()  # non-class annotation guard
     _patch_parallel_flow_node_extended_order()       # Extended ParallelFlowNode order
+    _patch_step_snapshot_capture()             # cinatra#4264 step snapshots
     _validate_live_class_names()
 
     if A2AServer is None or AgentSpecLoader is None:

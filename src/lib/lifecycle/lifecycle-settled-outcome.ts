@@ -121,7 +121,7 @@ function displayableName(candidates: ReadonlyArray<string | null>): string | und
 }
 
 /** The decider's display name, or `undefined` when there is none to show. */
-async function readDeciderName(userId: string | null): Promise<string | undefined> {
+export async function readDeciderName(userId: string | null): Promise<string | undefined> {
   if (!userId) return undefined;
   const rows = await betterAuthDb
     // ONLY the two display columns are selected. The id is already in hand and

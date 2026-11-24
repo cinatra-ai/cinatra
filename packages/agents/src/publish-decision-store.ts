@@ -4,13 +4,23 @@ import "server-only";
 // `decide` is the ONE way a row leaves `parked`: one conditional UPDATE in a transaction, so
 // one of two concurrent answers wins, and a row it cannot read rolls the answer back. Every
 // read error and every unreadable row THROWS: it never reads as "no open decision".
+// A decision belongs to one ATTEMPT of its run: the park stamps the run's reset_generation on it (run_generation), and a
+// retry's reset raises the run's generation in its compare-and-set (run-transition.ts). Every run-level read below judges
+// only the CURRENT attempt's rows (run_generation = the run's reset_generation), so a closed decision of an earlier
+// attempt never holds, labels or stops a later one.
 
 import { randomUUID } from "node:crypto";
 import { types } from "node:util";
-import { and, asc, desc, eq, gt, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, getTableColumns, gt, inArray, lte, sql } from "drizzle-orm";
 
 import { db } from "./db";
 import { agentRunPublishDecisions, agentRuns } from "./schema";
+
+/** A decision of the run's current attempt: its run_generation equals the run's reset_generation, read in the same
+ *  statement. A row with NO generation (written by code older than the column, e.g. an old node during a rolling deploy)
+ *  is always current, so it always holds (fail closed); the reset that ends its attempt stamps it. False, never null,
+ *  when the run row is gone. */
+const CURRENT_ATTEMPT = sql<boolean>`coalesce(coalesce(${agentRunPublishDecisions.runGeneration}, (select attempt_run.reset_generation from ${agentRuns} attempt_run where attempt_run.id = ${agentRunPublishDecisions.runId})) = (select attempt_run.reset_generation from ${agentRuns} attempt_run where attempt_run.id = ${agentRunPublishDecisions.runId}), false)`;
 
 export const PUBLISH_DECISION_STATUSES = ["parked", "released", "declined", "expired", "run_ended"] as const;
 export type PublishDecisionStatus = (typeof PUBLISH_DECISION_STATUSES)[number];
@@ -23,6 +33,12 @@ export const PUBLISH_DECISION_MAX_DUE_PAGE = 1000;
 export const PUBLISH_DECISION_MAX_ID_LENGTH = 256;
 export const PUBLISH_DECISION_MAX_NOTE_LENGTH = 2000;
 export const PUBLISH_DECISION_MAX_SURFACED_BYTES = 64 * 1024;
+/** The most rows one declaration may hold, and the longest label or input name in one. */
+export const PUBLISH_DECISION_MAX_DECLARED_ROWS = 32;
+export const PUBLISH_DECISION_MAX_DECLARED_TEXT = 256;
+
+/** One row the template declared for a publishing node: the pack's label over one of the node's inputs. */
+export type PublishDeclaredRow = { label: string; input: string };
 
 export class PublishDecisionError extends Error {
   readonly code: "invalid-input" | "invalid-transition" | "malformed-row" | "not-found" | "conflict";
@@ -42,6 +58,10 @@ export interface PublishDecisionRow {
   a2aContextId: string | null;
   status: PublishDecisionStatus;
   surfacedValues: Record<string, unknown>;
+  /** The rows the template declared for this node at the park; null = not recorded (an older row). */
+  declaredRows: PublishDeclaredRow[] | null;
+  /** The run's reset generation at the park; -1 = an ended attempt; null = a row older than the column (read as 0). */
+  runGeneration: number | null;
   decidedBy: string | null;
   decidedAt: Date | null;
   decisionNote: string | null;
@@ -69,7 +89,30 @@ function deserialize(row: StoredRow): PublishDecisionRow {
   if (!isPlainObject(surfacedValues)) {
     throw new PublishDecisionError("malformed-row", "a stored decision has unreadable surfaced values");
   }
-  return { ...row, status: row.status, surfacedValues };
+  let declaredRows: PublishDeclaredRow[] | null = null;
+  if (row.declaredRows !== null && row.declaredRows !== undefined) {
+    let parsed: unknown = null;
+    try {
+      parsed = JSON.parse(row.declaredRows);
+    } catch { /* reported below */ }
+    declaredRows = declaredRowsOf(parsed);
+    if (declaredRows === null) throw new PublishDecisionError("malformed-row", "a stored decision has unreadable declared rows");
+  }
+  return { ...row, status: row.status, surfacedValues, declaredRows, runGeneration: row.runGeneration ?? null };
+}
+
+/** A declaration as plain rows of two texts each, within the caps; null for any other shape. */
+function declaredRowsOf(value: unknown): PublishDeclaredRow[] | null {
+  if (!Array.isArray(value) || value.length > PUBLISH_DECISION_MAX_DECLARED_ROWS) return null;
+  const rows: PublishDeclaredRow[] = [];
+  for (const row of value as unknown[]) {
+    if (!isPlainObject(row)) return null;
+    const { label, input } = row;
+    if (typeof label !== "string" || typeof input !== "string" || label.length === 0 || input.length === 0
+      || label.length > PUBLISH_DECISION_MAX_DECLARED_TEXT || input.length > PUBLISH_DECISION_MAX_DECLARED_TEXT) return null;
+    rows.push({ label, input });
+  }
+  return rows;
 }
 
 export const PUBLISH_DECISION_MAX_SURFACED_DEPTH = 64;
@@ -117,12 +160,17 @@ export interface InsertParkedDecisionInput {
   gateTaskId: string;
   a2aContextId: string | null;
   surfacedValues: Record<string, unknown>;
+  /** The rows the dispatched plan declares for this node, kept with the decision; null or absent = not recorded. */
+  declaredRows?: ReadonlyArray<PublishDeclaredRow> | null;
   ttlMs?: number;
 }
 
 export interface InsertParkedDecisionResult {
   /** False when this stop already had a row, whatever its status; `decision` is that row, unchanged. */
   inserted: boolean;
+  /** The row belongs to the run's current attempt: a new row stamped while the run was held at a gate (running or
+   *  pending_approval), or an existing row of the current generation. */
+  current: boolean;
   decision: PublishDecisionRow;
 }
 
@@ -142,6 +190,14 @@ export async function insertParkedDecision(input: InsertParkedDecisionInput): Pr
   if (surfaced === null || Buffer.byteLength(surfaced, "utf8") > PUBLISH_DECISION_MAX_SURFACED_BYTES) {
     throw new PublishDecisionError("invalid-input", `surfacedValues must be an object of at most ${PUBLISH_DECISION_MAX_SURFACED_BYTES} bytes of JSON`);
   }
+  let declared: string | null = null;
+  if (input.declaredRows !== undefined && input.declaredRows !== null) {
+    const rows = declaredRowsOf(input.declaredRows);
+    if (rows === null) {
+      throw new PublishDecisionError("invalid-input", `declaredRows must be at most ${PUBLISH_DECISION_MAX_DECLARED_ROWS} rows of a label and an input of at most ${PUBLISH_DECISION_MAX_DECLARED_TEXT} characters`);
+    }
+    declared = JSON.stringify(rows);
+  }
   const ttlMs = input.ttlMs ?? PUBLISH_DECISION_DEFAULT_TTL_MS;
   if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
     throw new PublishDecisionError("invalid-input", "ttlMs must be a positive finite number");
@@ -151,22 +207,26 @@ export async function insertParkedDecision(input: InsertParkedDecisionInput): Pr
     .insert(agentRunPublishDecisions)
     .values({
       id: randomUUID(), orgId, runId, nodeId, gateTaskId, a2aContextId, status: "parked", surfacedValues: surfaced,
+      declaredRows: declared,
+      // The run's generation, read in this statement, only while the run is held at a gate; else -1 (an ended attempt).
+      runGeneration: sql`coalesce((select live_run.reset_generation from ${agentRuns} live_run where live_run.id = ${runId} and live_run.status in ('running', 'pending_approval')), -1)`,
       expiresAt: sql`now() + (${ttlMs} || ' milliseconds')::interval`,
     })
     .onConflictDoNothing({
       target: [agentRunPublishDecisions.runId, agentRunPublishDecisions.nodeId, agentRunPublishDecisions.gateTaskId],
     })
     .returning();
-  if (row) return { inserted: true, decision: deserialize(row) };
+  if (row) return { inserted: true, current: row.runGeneration !== null && row.runGeneration >= 0, decision: deserialize(row) };
 
   const [existing] = await db
-    .select()
+    .select({ ...getTableColumns(agentRunPublishDecisions), current: CURRENT_ATTEMPT })
     .from(agentRunPublishDecisions)
     .where(and(eq(agentRunPublishDecisions.runId, runId), eq(agentRunPublishDecisions.nodeId, nodeId),
       eq(agentRunPublishDecisions.gateTaskId, gateTaskId)))
     .limit(1);
   if (!existing) throw new PublishDecisionError("conflict", "the stop conflicted and has no row");
-  return { inserted: false, decision: deserialize(existing) };
+  const { current, ...stored } = existing;
+  return { inserted: false, current: current === true, decision: deserialize(stored) };
 }
 
 export interface DecideInput {
@@ -176,7 +236,8 @@ export interface DecideInput {
   actor: string | null;
   /** Only a decline carries a note. */
   note?: string | null;
-  /** Wins only while no newer decision of the same run exists, checked in the same UPDATE (the expiry's rule). */
+  /** Wins only while no newer decision of the same run exists and the row belongs to the run's current attempt, checked in
+   *  the same UPDATE (the expiry's rule): a decision of an ended attempt never stops the attempt a retry started. */
   newestOnly?: boolean;
 }
 
@@ -222,7 +283,7 @@ export async function decide(id: string, input: DecideInput): Promise<DecideResu
       .update(agentRunPublishDecisions)
       .set({ status: input.to, decidedBy: actor, decidedAt: sql`now()`, decisionNote: note })
       .where(and(eq(agentRunPublishDecisions.id, decisionId), eq(agentRunPublishDecisions.status, "parked"),
-        input.newestOnly ? NO_NEWER_DECISION : undefined))
+        ...(input.newestOnly ? [NO_NEWER_DECISION, CURRENT_ATTEMPT] : [])))
       .returning();
     if (won) return { outcome: "won", decision: deserialize(won) };
 
@@ -236,7 +297,28 @@ export async function decide(id: string, input: DecideInput): Promise<DecideResu
   });
 }
 
-/** The newest decision of this step of this run, whatever its status. */
+/**
+ * The publish rows of the plan the run's current attempt was dispatched with (agent_runs.dispatch_publish_rows), for one
+ * node: the node's rows, [] when the plan declares none for it (an own key only), or null when the dispatch recorded no
+ * map or the map cannot be read. A read error propagates.
+ */
+export async function readDispatchedPublishRows(runId: string, nodeId: string): Promise<PublishDeclaredRow[] | null> {
+  const [run] = await db
+    .select({ rows: agentRuns.dispatchPublishRows })
+    .from(agentRuns)
+    .where(eq(agentRuns.id, requireText(runId, "runId")))
+    .limit(1);
+  if (!run || typeof run.rows !== "string") return null;
+  let map: unknown = null;
+  try {
+    map = JSON.parse(run.rows);
+  } catch { /* unreadable: not recorded */ }
+  if (!isPlainObject(map)) return null;
+  const node = requireText(nodeId, "nodeId");
+  return Object.prototype.hasOwnProperty.call(map, node) ? declaredRowsOf(map[node]) : [];
+}
+
+/** The newest decision of this step in the run's current attempt, whatever its status. */
 export async function readDecisionForRunNode(runId: string, nodeId: string): Promise<PublishDecisionRow | null> {
   const [row] = await db
     .select()
@@ -245,6 +327,7 @@ export async function readDecisionForRunNode(runId: string, nodeId: string): Pro
       and(
         eq(agentRunPublishDecisions.runId, requireText(runId, "runId")),
         eq(agentRunPublishDecisions.nodeId, requireText(nodeId, "nodeId")),
+        CURRENT_ATTEMPT,
       ),
     )
     .orderBy(desc(agentRunPublishDecisions.createdAt), desc(agentRunPublishDecisions.id))
@@ -252,7 +335,7 @@ export async function readDecisionForRunNode(runId: string, nodeId: string): Pro
   return row ? deserialize(row) : null;
 }
 
-/** The newest decision of this run still waiting for an answer. */
+/** The newest decision of the run's current attempt still waiting for an answer. */
 export async function readOpenDecisionForRun(runId: string): Promise<PublishDecisionRow | null> {
   const [row] = await db
     .select()
@@ -261,6 +344,7 @@ export async function readOpenDecisionForRun(runId: string): Promise<PublishDeci
       and(
         eq(agentRunPublishDecisions.runId, requireText(runId, "runId")),
         eq(agentRunPublishDecisions.status, "parked"),
+        CURRENT_ATTEMPT,
       ),
     )
     .orderBy(desc(agentRunPublishDecisions.createdAt), desc(agentRunPublishDecisions.id))
@@ -268,19 +352,26 @@ export async function readOpenDecisionForRun(runId: string): Promise<PublishDeci
   return row ? deserialize(row) : null;
 }
 
-/** The newest decision of this run, whatever its status: the one a resume of the run must read. */
-export async function readLatestDecisionForRun(runId: string): Promise<PublishDecisionRow | null> {
+/** The newest decision of the run's current attempt, whatever its status: the one a resume of the run must read.
+ *  `orEarlierAttempt`: when the current attempt has none, the newest decision of an earlier attempt instead (`current`
+ *  false), in the same read, so a caller also learns whether the run ever met a publish gate. */
+export async function readLatestDecisionForRun(runId: string, opts?: { orEarlierAttempt?: boolean }): Promise<(PublishDecisionRow & { current: boolean }) | null> {
+  const d = agentRunPublishDecisions;
+  const anyAttempt = opts?.orEarlierAttempt === true;
   const [row] = await db
-    .select()
-    .from(agentRunPublishDecisions)
-    .where(eq(agentRunPublishDecisions.runId, requireText(runId, "runId")))
-    .orderBy(desc(agentRunPublishDecisions.createdAt), desc(agentRunPublishDecisions.id))
+    .select({ ...getTableColumns(d), current: CURRENT_ATTEMPT })
+    .from(d)
+    .where(and(eq(d.runId, requireText(runId, "runId")), anyAttempt ? undefined : CURRENT_ATTEMPT))
+    .orderBy(...(anyAttempt ? [sql`(${CURRENT_ATTEMPT}) desc`] : []), desc(d.createdAt), desc(d.id))
     .limit(1);
-  return row ? deserialize(row) : null;
+  if (!row) return null;
+  const { current, ...stored } = row;
+  return { ...deserialize(stored), current: current === true };
 }
 
-/** Stops left unmade: the NEWEST decision of each run, when it is declined or expired and its run is still held
- *  (pending_approval, or running when a hold wrote its row but not its move). One page in id order after `afterId`. */
+/** Stops left unmade: the NEWEST decision of each run, when it is declined or expired, of the run's current attempt, and
+ *  its run is still held (pending_approval, or running when a hold wrote its row but not its move). One page in id order
+ *  after `afterId`. A settled decision of an earlier attempt never stops the attempt a retry started. */
 export async function listSettledWithWaitingRun(limit: number, afterId?: string): Promise<PublishDecisionRow[]> {
   if (!Number.isInteger(limit) || limit < 1 || limit > PUBLISH_DECISION_MAX_DUE_PAGE) {
     throw new PublishDecisionError("invalid-input", `limit must be from 1 to ${PUBLISH_DECISION_MAX_DUE_PAGE}`);
@@ -292,7 +383,7 @@ export async function listSettledWithWaitingRun(limit: number, afterId?: string)
     .from(d)
     .innerJoin(agentRuns, eq(agentRuns.id, d.runId))
     .where(and(inArray(d.status, ["declined", "expired"]), inArray(agentRuns.status, ["pending_approval", "running"]),
-      NO_NEWER_DECISION, after === undefined ? undefined : gt(d.id, after)))
+      CURRENT_ATTEMPT, NO_NEWER_DECISION, after === undefined ? undefined : gt(d.id, after)))
     .orderBy(asc(d.id))
     .limit(limit);
   return rows.map((row) => deserialize(row.decision));

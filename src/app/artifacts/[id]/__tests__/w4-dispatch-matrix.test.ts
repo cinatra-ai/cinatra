@@ -141,8 +141,13 @@ const REPRESENTATION_ONLY: readonly Row[] = [
 ];
 
 const REFERENCES: readonly Row[] = [
-  ["the dashboard pointer", "@cinatra-ai/dashboard-artifact:dashboard", winner("@cinatra-ai/dashboard-artifact"), "application/vnd.cinatra.dashboard+json", null],
-  ["the Drupal reference", "@cinatra-ai/drupal:node", NO_WINNER, "text/html", null],
+  // The dashboard pack ships its own `detail` display (in the build map since
+  // cinatra#4311), so the pointer is typed and mounts through that display on
+  // both roads: every artifact display resolves at slot `detail`.
+  ["the dashboard pointer", "@cinatra-ai/dashboard-artifact:dashboard", winner("@cinatra-ai/dashboard-artifact"), "application/vnd.cinatra.dashboard+json", "@cinatra-ai/dashboard-artifact"],
+  // The pack owns its pointer type in its own namespace (cinatra#4366), so its
+  // base identity is the pack; it ships no renderer, so the review floors.
+  ["the Drupal reference", "@cinatra-ai/drupal-artifacts:node-pointer", winner("@cinatra-ai/drupal-artifacts"), "text/html", null],
 ];
 
 afterEach(() => {
@@ -186,8 +191,7 @@ describe.each([
         // base type names no package would keep null.
         const FLOOR_PACKAGE: Record<string, string | null> = {
           "@acme/x:row": "@acme/x",
-          "@cinatra-ai/dashboard-artifact:dashboard": "@cinatra-ai/dashboard-artifact",
-          "@cinatra-ai/drupal:node": "@cinatra-ai/drupal",
+          "@cinatra-ai/drupal-artifacts:node-pointer": "@cinatra-ai/drupal-artifacts",
         };
         expect(mount.kind).toBe("floor");
         expect(mount.packageName ?? null).toBe(FLOOR_PACKAGE[row[1] as string] ?? null);

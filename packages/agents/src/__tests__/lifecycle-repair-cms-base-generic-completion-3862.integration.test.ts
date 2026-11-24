@@ -257,7 +257,7 @@ describe.skipIf(!HAS_DB)("cinatra#3862 leg 7 — the generic completer on a capt
 
     const summary = await completion.completeDispatchedProducerRepairs({ limit: 50 });
 
-    expect(summary).toEqual({ scanned: 1, completed: 0, pending: 0, unresolved: 1, failed: 0 });
+    expect(summary).toEqual({ scanned: 1, completed: 0, pending: 0, unresolved: 1, escalated: 0, failed: 0 });
     expect(await repairRow(ctx.repairId)).toEqual({ status: "dispatched", successor_gate_id: null });
     expect(await revisionsOn(ctx.baseArtifactId)).toBe(0);
   });
@@ -298,7 +298,7 @@ describe.skipIf(!HAS_DB)("cinatra#3862 leg 7 — the generic completer on a capt
 
     const summary = await completion.completeDispatchedProducerRepairs({ limit: 50 });
 
-    expect(summary).toEqual({ scanned: 1, completed: 1, pending: 0, unresolved: 0, failed: 0 });
+    expect(summary).toEqual({ scanned: 1, completed: 1, pending: 0, unresolved: 0, escalated: 0, failed: 0 });
     const row = (
       await pool(
         `SELECT status, successor_gate_id, successor_artifact_id FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE id=$1`,

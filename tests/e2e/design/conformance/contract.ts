@@ -689,10 +689,9 @@ export function suggestionChipDriver(fixture: LifecycleSuggestionChipFixture): S
 //     this wave's readiness list, not approximated through the header.
 //
 //   • It declares NO action driver. Six of these surfaces declare
-//     `continue-review -> resolved` as their only action and no shipped control
-//     carries it (open pull request #3100 is the one that lands it, and it lands
-//     the name `regenerate-review -> changes-requested`, which has to be
-//     reconciled with the manifest before either can be driven at all). The CMS
+//     `continue-review -> resolved` as their only action; the floor's Continue
+//     ships it (cinatra#3080), but only inside the review card, which the
+//     one-card gate keeps a harness from composing. The CMS
 //     page declares `open-in-cms -> cms-opened` instead, which the drawing puts
 //     UNDER the representation rather than in the header, and which no shipped
 //     control carries anywhere.
@@ -703,9 +702,9 @@ export function suggestionChipDriver(fixture: LifecycleSuggestionChipFixture): S
 //     wave does not build and a src this wave will not invent.
 //
 // THE ONE SURFACE OF THIS WAVE THE FAMILY DOES NOT TAKE.
-// `drupal-pointer-never-a-review-target` is drawn as a page and never as a
-// review: "It is not pinnable and it is never a review target: no gate opens on
-// it and no floor is ever drawn beneath it." Its drawn identity line carries
+// `drupal-pointer-never-a-review-target` is drawn as the generic floor and never
+// as a review (design@94d892de): "It is never a review target: no gate opens on
+// it and no review control is ever drawn beneath it." Its drawn identity line carries
 // `not pinnable` exactly where every other kind's carries `revision … · pinned`,
 // and the shipped header has no such reading — it draws the pinned marker
 // unconditionally. Putting the pointer through this family would therefore assert
@@ -2916,7 +2915,7 @@ const SCOPE_DASHBOARDS_TAB_DRIVER: SurfaceDriver = awaitingMount("scope-dashboar
 // The ARTIFACT-KIND DISPLAY family, STANDALONE (cinatra#3158, epic #3155 W2)
 // ---------------------------------------------------------------------------
 //
-// The eleven artifact-kind display surfaces of the artifact-review drawing: the
+// The twelve artifact-kind display surfaces of the artifact-review drawing: the
 // displays the fleet adds, one per type, drawn on the artifact's own page and —
 // unchanged — on the review step of the run page. This is the standalone reading
 // of the same family W1 drives in a conversation.
@@ -2925,14 +2924,17 @@ const SCOPE_DASHBOARDS_TAB_DRIVER: SurfaceDriver = awaitingMount("scope-dashboar
 // manifest surface id, and the map below is built FROM them: being listed is
 // being mapped, so there is no second place a surface could be forgotten. The
 // three surfaces whose per-kind display shape is the whole of what the drawing
-// gives them ride the factory alone; the eight that carry a drawn structure of
+// gives them ride the factory alone; the nine that carry a drawn structure of
 // their own extend it.
 //
 // NONE OF THESE DISPLAYS IS ON THE DEFAULT BRANCH, and this wave does not
 // pretend otherwise. Grounded by reading the shipped tree, not assumed: seven of
-// the eleven belong to extensions that declare a type and ship no renderer at
-// all; the pointer and the page draw through ONE renderer the drawing names
-// (@cinatra-ai/website-artifacts:page-diff) which no package in the tree ships;
+// the twelve belong to extensions that declare a type and ship no renderer at
+// all; the WordPress and the Drupal page draw through ONE renderer the drawing
+// names (@cinatra-ai/website-artifacts:page-diff), which the pinned website pack
+// ships as an extension renderer the conformance harness may not mount; the
+// Drupal pointer draws the product's generic floor, which no harness mount
+// draws over a pointer row (a pointer is never a review target);
 // the shipped markdown display draws its two readings SIDE BY SIDE, which the
 // drawing forbids in those words; and the download card, which IS shipped and
 // does draw what §V.2 describes, carries none of the conformance anchors this
@@ -3008,7 +3010,7 @@ function kindDisplayKindState(surface: string, kind: string): StateAssert {
  * The shared per-kind display factory.
  *
  * What every display in this family owes the drawing, and therefore what this
- * factory asserts for all eleven:
+ * factory asserts for all twelve:
  *
  *   - §XI: "A display draws the work and nothing about itself — no renderer chip
  *     and no provenance line"; §V says the same for the slot, and the
@@ -3158,14 +3160,14 @@ function openLiveDashboardOnceContinued(
 }
 
 /**
- * What each of the eight displays that carry a drawn structure of their own adds
+ * What each of the nine displays that carry a drawn structure of their own adds
  * to the family shape. Keyed by the surface union, so a row without an entry is
  * a deliberate omission (the three factory-only surfaces) rather than a typo.
  */
 /**
- * The eight surfaces that carry a drawn structure of their own — the union
+ * The nine surfaces that carry a drawn structure of their own — the union
  * minus the three the wave rides on the factory alone. The extras map below is
- * typed over THIS union and is NOT Partial, so dropping one of the eight is a
+ * typed over THIS union and is NOT Partial, so dropping one of the nine is a
  * compile error rather than a silently thinner driver.
  */
 type ArtifactKindDisplayExtraSurfaceId = Exclude<
@@ -3282,22 +3284,70 @@ const ARTIFACT_KIND_DISPLAY_EXTRAS: Record<
     },
   }),
 
-  // §XI.7 — the pointer draws through the page display, and "a pointer is still
-  // never a review target": "the identity line reads not pinnable where a target
-  // reads its revision, and no decision floor is drawn anywhere the pointer
-  // appears".
+  // §XI.7 (design@94d892de) — the pointer draws the generic floor of §V: "the
+  // one-line notice above the record's data, read only". Its package ships no
+  // display, so the product's floor (review-target-mount.tsx) names the package,
+  // the detail slot and the reason no-display, over the read-only data of the
+  // pointer's row. "A pointer is never a review target": the identity line reads
+  // not pinnable, nothing of a page is drawn, and no decision floor and no
+  // settled marker is drawn anywhere the pointer appears.
   "drupal-pointer-display": (base) => ({
     ...base,
     present: async (page, root) => {
       await base.present(page, root);
       await expectOneView(root, "drupal-pointer-display");
       const display = kindDisplayPanel(root, "drupal-pointer-display");
-      await expect(display.locator('[data-conformance-id="page-embed"]')).toBeVisible();
-      await expect(display.locator('[data-conformance-id="changed-excerpts"]')).toBeVisible();
+      const floor = display.locator('[data-review-target-floor="no-display"]');
+      await expect(floor).toHaveCount(1);
+      await expect(floor).toHaveAttribute(
+        "data-review-floor-package", "@cinatra-ai/drupal-artifacts",
+      );
+      await expect(floor).toHaveAttribute("data-review-floor-slot", "detail");
+      await expect(floor.locator('[role="status"]')).toHaveText(
+        'review target unavailable — package "@cinatra-ai/drupal-artifacts", slot "detail", reason "no-display"',
+      );
       await expect(display.locator('[data-conformance-id="pointer-identity"]')).toContainText(
         "not pinnable",
       );
+      await expect(display.locator('[data-conformance-id="page-embed"]')).toHaveCount(0);
+      await expect(display.locator('[data-conformance-id="changed-excerpts"]')).toHaveCount(0);
+      await expect(display.locator('[data-action="open-in-cms -> cms-opened"]')).toHaveCount(0);
+      await expect(root.locator('[data-conformance-id="settled-marker"]')).toHaveCount(0);
       await expect(root.locator('[data-conformance-id="review-decision-bar"]')).toHaveCount(0);
+    },
+    // The floor IS the pointer's error reading, drawn on the open mount: the
+    // notice says why there is no display, as a status line over the row,
+    // never an alert and never a blank. The factory's display-state reading
+    // forbids a floor inside a display, so it is replaced here, not kept.
+    states: {
+      ...base.states,
+      error: async (page) => {
+        const mount = page.locator(kindDisplayMount("drupal-pointer-display", "populated"));
+        await expect(mount).toHaveCount(1);
+        const display = kindDisplayPanel(mount, "drupal-pointer-display");
+        const floor = display.locator('[data-review-target-floor="no-display"]');
+        await expect(floor.locator('[role="status"]')).toHaveCount(1);
+        await expect(floor).not.toHaveText(/^\s*$/);
+        await expect(display.locator('[role="alert"]')).toHaveCount(0);
+      },
+    },
+  }),
+
+  // §XI.7 (design@94d892de) — "A page is a page, whichever system holds it":
+  // the Drupal page a run changes is the page snapshot, drawn by the same one
+  // view as the WordPress page of §XI.8, the page embedded live in a frame, the
+  // changed excerpts beneath it and Open in the CMS under them.
+  "drupal-page-display": (base) => ({
+    ...base,
+    present: async (page, root) => {
+      await base.present(page, root);
+      await expectOneView(root, "drupal-page-display");
+      const display = kindDisplayPanel(root, "drupal-page-display");
+      await expect(display.locator('[data-conformance-id="page-embed"]')).toBeVisible();
+      await expect(display.locator('[data-conformance-id="changed-excerpts"]')).toBeVisible();
+      await expect(
+        display.locator('[data-action="open-in-cms -> cms-opened"]'),
+      ).toBeVisible();
     },
   }),
 
@@ -3328,7 +3378,7 @@ function artifactKindDisplayReadiness(row: ArtifactKindDisplay): string {
   );
 }
 
-/** The eleven drivers, built from the one row list. */
+/** The twelve drivers, built from the one row list. */
 const ARTIFACT_KIND_DISPLAY_DRIVERS: Record<string, SurfaceDriver> = Object.fromEntries(
   ARTIFACT_KIND_DISPLAY_ROWS.map((row) => {
     const base = artifactKindDisplayDriver(row);
@@ -3610,11 +3660,31 @@ const RUN_STEP_KIND_ASSERT: Record<RunStepKind, (row: RunStepRailRow) => RunStep
   // Section I.3 — "the same gate header, target, decision bar and prompt window
   // the gate draws anywhere else", and "Both readings end in the same floor —
   // Comment, Regenerate, Continue, over the one Note field".
+  //
+  // E5 OF cinatra#3487, READ ON THE REAL PAGE. The maintainer's ruling of
+  // 2026-09-14 is that the window's anchor is a descendant of the page chrome
+  // and never of `[data-lifecycle-card-host]`, and that a page with a second
+  // window fails. The anchor itself is the drawing's own
+  // `review-prompt-window`. So the window is still read here — it is
+  // simply read on the PAGE rather than inside the step's own panel, and the
+  // step's panel is read for its absence.
   review: (row) => async (_page, root) => {
     const panel = runStepPanel(root, row.surface);
     await expect(panel.locator('[data-conformance-id="review-target"]')).toBeVisible();
     await expect(panel.locator('[data-conformance-id="review-decision-bar"]')).toBeVisible();
-    await expect(panel.locator('[data-conformance-id="review-prompt-window"]')).toBeVisible();
+    // ONE window on the page, and it is the page chrome's.
+    const windows = root.locator('[data-conformance-id="review-prompt-window"]');
+    await expect(windows).toHaveCount(1);
+    await expect(
+      root.locator('[data-run-window-host="page-chrome"] [data-conformance-id="review-prompt-window"]'),
+    ).toHaveCount(1);
+    // And never inside a lifecycle card, nor inside the step's own screen.
+    await expect(
+      root.locator('[data-lifecycle-card-host]').locator(
+        '[data-conformance-id="review-prompt-window"], [data-conformance-id="schedule-prompt-window"], [data-run-window-field], [data-conformance-id="chat-composer-primary"], [data-conversation-composer], [data-testid="chat-prompt-input"], [aria-label="Apply AI suggestion"]',
+      ),
+    ).toHaveCount(0);
+    await expect(panel.locator('[data-conformance-id="review-prompt-window"]')).toHaveCount(0);
   },
 };
 
@@ -4818,7 +4888,7 @@ const CONNECTOR_CONFIG_TAB_DRIVER: SurfaceDriver = {
           panel.locator(`input[name="${CONNECTOR_CONFIG_TAB.fields.shellEnabled.key}"]`),
         ).toHaveValue(CONNECTOR_CONFIG_TAB.fields.shellEnabled.value);
         await expect(
-          panel.getByRole("switch", { name: CONNECTOR_CONFIG_TAB.fields.shellEnabled.label }),
+          panel.getByRole("checkbox", { name: CONNECTOR_CONFIG_TAB.fields.shellEnabled.label }),
         ).toBeChecked();
       },
     },
@@ -5993,10 +6063,9 @@ for (const surface of Object.keys(COMPOSER_FAMILY_DRIVERS)) {
 // keeps the decision floor to the card and to the bar's own module (the
 // foundational wave of this epic moved its own proof off the floor for exactly
 // that reason), and the target panel is server-only and mounts a real type
-// renderer, which a core fixture may not name. Two of the bar's three
-// affordances are not on the default branch at all — the branch draws
-// reject-review and approve-review where the drawing draws Regenerate and
-// Continue — and land with open pull request 3100. The conversation panel ships
+// renderer, which a core fixture may not name. The bar draws the drawing's
+// three affordances under their own names (cinatra#3080), and the one-card gate
+// still keeps it to the card. The conversation panel ships
 // and draws the exchange, but carries no anchor for any of its three surfaces
 // and is filled by a request its parent owns. Nothing in the tree promotes a
 // row. So each of those thirteen is guarded by `awaitingMount` — the same guard,
@@ -6299,6 +6368,11 @@ const REVIEW_DECISION_FLOOR_EXTRAS: Record<
 
   // §VI — "there is no dedicated request changes button": the window IS the
   // request, so the only thing that carries the action is the window itself.
+  //
+  // MOVED BY cinatra#3487: the window is the run page chrome's now. Its anchor
+  // is unchanged — the drawing's own `review-prompt-window`. The reading is
+  // otherwise unchanged, plus the two the ruling adds — it is a descendant of
+  // the page chrome, and never of a lifecycle card.
   "review-prompt-window": (base) => ({
     ...base,
     present: async (page, root) => {
@@ -6306,6 +6380,15 @@ const REVIEW_DECISION_FLOOR_EXTRAS: Record<
       const panel = reviewDecisionFloorPanel(root, REVIEW_DECISION_FLOOR["review-prompt-window"]);
       await expect(panel).toBeVisible();
       await expect(panel.getByRole("button", { name: /request changes/i })).toHaveCount(0);
+      await expect(root.locator('[data-conformance-id="review-prompt-window"]')).toHaveCount(1);
+      await expect(
+        root.locator('[data-run-window-host="page-chrome"] [data-conformance-id="review-prompt-window"]'),
+      ).toHaveCount(1);
+      await expect(
+        root.locator('[data-lifecycle-card-host]').locator(
+        '[data-conformance-id="review-prompt-window"], [data-conformance-id="schedule-prompt-window"], [data-run-window-field], [data-conformance-id="chat-composer-primary"], [data-conversation-composer], [data-testid="chat-prompt-input"], [aria-label="Apply AI suggestion"]',
+      ),
+      ).toHaveCount(0);
     },
   }),
 
@@ -6734,8 +6817,8 @@ function reviewCardStateDriver(fixture: LifecycleResolveFixture): SurfaceDriver 
         // dropped: a withheld card must never be drawn as a disabled one, and a
         // disabled one must never be silently dropped.
         for (const terminal of [
-          '[data-action="approve-review -> resolved"]',
-          '[data-action="reject-review -> resolved"]',
+          '[data-action="regenerate-review -> successor-gate-opened"]',
+          '[data-action="continue-review -> resolved"]',
         ]) {
           const control = bar.locator(terminal);
           await expect(control).toBeVisible();
@@ -6809,8 +6892,10 @@ function reviewCardStateDriver(fixture: LifecycleResolveFixture): SurfaceDriver 
         await expect(count).toContainText(`${suggestions.length} of ${suggestions.length}`);
         await expect(count).toContainText("ride this decision");
         // The gate is decidable for this reader, so the terminal controls are live.
-        await expect(bar.locator('[data-action="approve-review -> resolved"]')).toBeEnabled();
-        await expect(bar.locator('[data-action="reject-review -> resolved"]')).toBeEnabled();
+        await expect(
+          bar.locator('[data-action="regenerate-review -> successor-gate-opened"]'),
+        ).toBeEnabled();
+        await expect(bar.locator('[data-action="continue-review -> resolved"]')).toBeEnabled();
         await expect(
           bar.locator('[data-conformance-id="review-decision-disabled"]'),
         ).toHaveCount(0);
@@ -7123,8 +7208,9 @@ const RUN_PROGRESS_PLACEHOLDER_IN_THREAD_DRIVER: SurfaceDriver = {
  *
  * The section's claim is that nothing moves but the frame, so this driver holds
  * the same assertions as the in-thread target above, on a mount whose only
- * difference is the host declaration. Its `continue-review` action is on the
- * readiness list: the ratified terminal control arrives with cinatra#3100.
+ * difference is the host declaration. Its `continue-review` action is not
+ * driven: the ratified terminal control ships, but the floor may be composed
+ * only by the review card itself.
  */
 const REVIEW_STATES_OUTSIDE_CHAT_DRIVER: SurfaceDriver = {
   path: HARNESS_PATH,
@@ -7138,8 +7224,7 @@ const REVIEW_STATES_OUTSIDE_CHAT_DRIVER: SurfaceDriver = {
   // The manifest declares `continue-review -> resolved` for this surface, and an
   // aspect a driver does not name at all is dropped SILENTLY by the acceptance
   // generator while the drawing is unpinned — no test, no skip, no record. So the
-  // action is declared here and skips with its own readiness reason: the ratified
-  // terminal control arrives with open pull request cinatra#3100, and the floor
+  // action is declared here and skips with its own readiness reason: the floor
   // may be composed only by the review card itself.
   actions: {
     "continue-review": {
@@ -7294,12 +7379,10 @@ const READER_STATE_MATRIX_DRIVER: SurfaceDriver = {
 // branch today, with what makes it so and what will land it. Each reason is the
 // text a skipped test prints, so the list and the skip cannot drift apart.
 
-/** Awaiting the ratified review floor — open pull request cinatra#3100. */
+/** The ratified review floor ships (cinatra#3080); what keeps these surfaces
+ *  unmounted is the one-card gate, which keeps the floor to the review card. */
 const AWAITING_RATIFIED_REVIEW_FLOOR =
-  "the ratified Comment / Regenerate / Continue floor is not on the default " +
-  "branch yet — it arrives with open pull request cinatra#3100, which also has " +
-  "to reconcile the manifest's `regenerate-review -> successor-gate-opened` " +
-  "with the control that pull request ships — and the floor may be composed " +
+  "the ratified Comment / Regenerate / Continue floor may be composed " +
   "only by the review card itself (the repository's one-card gate forbids a " +
   "page-direct decision composition, and a conformance harness is such a page), " +
   "so the harness mounts no such surface. Every assertion in this driver is " +
@@ -7423,14 +7506,22 @@ function ratifiedFloorActions(): SurfaceDriver["actions"] {
       },
     },
     // Regenerate opens the SUCCESSOR gate: the reviewed work is turned back and
-    // the held effect stays held until the successor is decided.
+    // the held effect stays held until the successor is decided. That is the
+    // manifest's outcome NAME and the action's eventual effect, not an element:
+    // what the floor draws when the press lands is the changes-requested notice
+    // (the gate resolves into a repair, `requested` while the repair is in
+    // flight). The successor gate is opened later, by the producer's response,
+    // as a new card. So the driver asserts the real sequence: the notice, then
+    // no floor control left on this gate and no Continued reading.
     "regenerate-review": {
       outcome: "successor-gate-opened",
       run: async (_page, root) => {
         await floorControl(root, "regenerate-review", "successor-gate-opened").click();
-        await expect(
-          root.locator('[data-review-outcome="successor-gate-opened"]'),
-        ).toBeVisible();
+        const notice = root.locator('[data-review-outcome="changes-requested"]');
+        await expect(notice).toBeVisible();
+        await expect(notice).toHaveAttribute("data-changes-status", "requested");
+        await expect(floorControl(root, "regenerate-review", "successor-gate-opened")).toHaveCount(0);
+        await expect(root.locator('[data-review-outcome="decided"]')).toHaveCount(0);
       },
     },
     // Continue is TERMINAL: the gate resolves and the run is released.

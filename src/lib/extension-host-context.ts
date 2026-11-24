@@ -1633,3 +1633,118 @@ export function createNonDefaultVersionHostContext(
 
   return { ...base, settings, secrets, objects: objectsVersionKeyed, nango, mcp, capabilities, ui };
 }
+
+// cinatra#3745: a run's tool call is prepared before any tool runs. The call's
+// arguments are copied once into plain frozen JSON, the run's verified executing
+// source must still be current, and the step's bound source must declare the tool.
+import type { ActionJson } from "@cinatra-ai/sdk-extensions";
+import { parseVerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
+import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server/request-context";
+import { assertRunStepToolAllowed, readCurrentRunStepToolPolicy, RunStepToolPolicyRefusal } from "@cinatra-ai/agents/store";
+import { isProxy } from "node:util/types";
+
+export class ArtifactActionCheckRefusal extends Error {
+  constructor(readonly code: string) { super(code); this.name = "ArtifactActionCheckRefusal"; }
+}
+/** Reject accessors, prototypes, sparse arrays, cycles and unbounded input.
+ * No getter/toJSON is called; checkers receive only deeply frozen JSON copies.
+ * cinatra#3745: every own key is read, not only the enumerable ones: an array
+ * must be a plain Array whose own keys are exactly its indexes and `length`;
+ * an object's every own key must be an enumerable string-keyed data property.
+ * A proxy is refused before any of its traps runs. */
+export function immutableActionJson(value: unknown): ActionJson {
+  const active = new Set<object>(); let nodes = 0;
+  const refuse = (): never => { throw new ArtifactActionCheckRefusal("action_json_invalid"); };
+  function copy(v: unknown, depth: number): ActionJson {
+    if (++nodes > 10000 || depth > 32) throw new ArtifactActionCheckRefusal("action_json_limit");
+    if (v === null || typeof v === "boolean" || typeof v === "string") return v;
+    if (typeof v === "number" && Number.isFinite(v)) return Object.is(v, -0) ? 0 : v;
+    if (typeof v !== "object" || !v || active.has(v) || isProxy(v)) return refuse();
+    const array = Array.isArray(v);
+    const proto = Object.getPrototypeOf(v);
+    if (array ? proto !== Array.prototype : proto !== Object.prototype && proto !== null) return refuse();
+    const keys = Reflect.ownKeys(v);
+    if (keys.some((k) => typeof k === "symbol")) return refuse();
+    active.add(v);
+    try {
+      if (array) {
+        const length = (v as unknown[]).length;
+        if (keys.length !== length + 1) return refuse();
+        const out: ActionJson[] = [];
+        for (let i = 0; i < length; i++) {
+          const d = Object.getOwnPropertyDescriptor(v, String(i));
+          if (!d || !("value" in d) || !d.enumerable) return refuse();
+          out.push(copy(d.value, depth + 1));
+        }
+        return Object.freeze(out);
+      }
+      const out: Record<string, ActionJson> = Object.create(null);
+      for (const key of (keys as string[]).sort()) {
+        const d = Object.getOwnPropertyDescriptor(v, key)!;
+        if (!("value" in d) || !d.enumerable) return refuse();
+        out[key] = copy(d.value, depth + 1);
+      }
+      return Object.freeze(out);
+    } finally { active.delete(v); }
+  }
+  const result = copy(value, 0);
+  if (Buffer.byteLength(JSON.stringify(result)) > 262144) throw new ArtifactActionCheckRefusal("action_json_limit");
+  return result;
+}
+export class OutwardActionRefusal extends Error {
+  constructor(readonly code: string) { super(code); this.name = "OutwardActionRefusal"; }
+}
+
+/** cinatra#3745: the code of an error of one of the three classes that refuse a
+ * run's tool call (the outward-action and action-check refusals here, the
+ * step-tool policy refusal of the run store), matched by identity; null for
+ * every other value and for a refusal without a nonempty code. It reads no
+ * marker and loads nothing: `@/lib/run-action-refusal` asks it after its zod
+ * precedence check, and the in-process host invoker asks it to keep a refusal
+ * thrown by the preparation above unwrapped. Never a throw. */
+export function runActionRefusalClassCode(err: unknown): string | null {
+  try {
+    if (!(err instanceof OutwardActionRefusal) && !(err instanceof ArtifactActionCheckRefusal) &&
+        !(err instanceof RunStepToolPolicyRefusal)) return null;
+    const code = (err as { code?: unknown }).code;
+    return typeof code === "string" && code.length > 0 ? code : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A legacy session has no run declaration. A run frame requires actual signed
+ * loader proof and current durable run/attempt/source binding, even for reads.
+ * `inner` (host only, set from the guarded call's wrapper, never from a request):
+ * an extension module or connector wire call made inside an outer tool whose
+ * name the step's declaration already admitted. Its source is still proven; its
+ * own name is not the step's tool offer, so the offer check is not repeated. */
+export async function prepareDeclaredRunToolArguments(toolName: string, args: unknown,
+  options?: { readonly inner?: true }): Promise<unknown> {
+  const frame = mcpRequestContextStorage.getStore();
+  if (!frame?.runId) return args;
+  // Capture before the first asynchronous source lookup; the effect and CHECK
+  // see this exact detached value even if a caller retains the original object.
+  // Absent MCP arguments are the empty argument object; every other value,
+  // null included, is copied as it is or refused.
+  const frozenArguments = immutableActionJson(args === undefined ? {} : args);
+  const proof = parseVerifiedExecutedRunSource(frame.verifiedExecutedSource);
+  if (!frame.orgId || !proof || proof.stepId !== frame.verifiedStepId) {
+    throw new OutwardActionRefusal("action_executed_source_missing_or_stale");
+  }
+  // cinatra#3745: ONE read proves the proof's attempt and source current and
+  // returns the policy bound to them; any failure of that read refuses. A run
+  // re-dispatched after this read keeps the same policy byte for byte (a rebind
+  // to another graph is refused), so a call admitted here is one its step declares.
+  let policy: unknown;
+  try {
+    policy = await readCurrentRunStepToolPolicy(frame.runId, frame.orgId, proof);
+  } catch {
+    throw new OutwardActionRefusal("action_executed_source_missing_or_stale");
+  }
+  if (options?.inner === true) return frozenArguments;
+  assertRunStepToolAllowed({ policy,
+    contextId: proof.contextId, executedSourceSha256: proof.executedSourceSha256,
+    stepId: proof.stepId, toolName });
+  return frozenArguments;
+}

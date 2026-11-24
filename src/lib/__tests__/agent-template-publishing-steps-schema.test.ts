@@ -26,9 +26,10 @@ describe("agent_templates.publishing_steps — DDL parity", () => {
     );
   });
 
-  it("the agent_templates leaf of the bootstrap carries the ALTER last, with the schema name quoted", () => {
+  it("the agent_templates leaf of the bootstrap carries the ALTER, with the schema name quoted", () => {
     const leaf = agentTemplateRunGateSchemaQueries('we"ird').map((q) => q.text);
-    expect(leaf.at(-1)).toBe('ALTER TABLE "we""ird"."agent_templates" ADD COLUMN IF NOT EXISTS publishing_steps text');
+    // cinatra#4150 (publish rows): the publish_rows ALTER now follows it.
+    expect(leaf.at(-2)).toBe('ALTER TABLE "we""ird"."agent_templates" ADD COLUMN IF NOT EXISTS publishing_steps text');
     expect(leaf.filter((text) => text.includes("publishing_steps"))).toHaveLength(1);
   });
 

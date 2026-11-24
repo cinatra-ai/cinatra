@@ -30,7 +30,7 @@
     {
       "packageName": "@cinatra-ai/blog-draft-writer-agent",
       "repo": "cinatra-ai/blog-draft-writer-agent",
-      "resolvedSha": "72f1c4811dea03fc7920fc7e553d1a62d1e8d9ee"
+      "resolvedSha": "dc9ec0bd4f0e7d7674898fda0ebaacb4ff6b6b7b"
     },
     {
       "packageName": "@cinatra-ai/blog-idea-artifact",
@@ -60,7 +60,7 @@
     {
       "packageName": "@cinatra-ai/blog-image-generator-agent",
       "repo": "cinatra-ai/blog-image-generator-agent",
-      "resolvedSha": "9a6363b732f723d8d3cc058a307a8c1cbba82154"
+      "resolvedSha": "5bb1cf87a14c237813d1aa712dd2465bd607fd49"
     },
     {
       "packageName": "@cinatra-ai/blog-image-matcher-skill",
@@ -85,7 +85,7 @@
     {
       "packageName": "@cinatra-ai/blog-pipeline-agent",
       "repo": "cinatra-ai/blog-pipeline-agent",
-      "resolvedSha": "72da731e174e5f1e55642c8b89069e7898e928a9"
+      "resolvedSha": "9f90e1ef24b8e586dd5c76651a7471e3ed839833"
     },
     {
       "packageName": "@cinatra-ai/blog-post-artifact",
@@ -120,7 +120,7 @@
     {
       "packageName": "@cinatra-ai/cms-snapshot-artifact",
       "repo": "cinatra-ai/cms-snapshot-artifact",
-      "resolvedSha": "1a87c2ead539e435ab7d3e19cd03356e1b35753e"
+      "resolvedSha": "e2709bb7ab1486dcb2570e33c1942605a105b577"
     },
     {
       "packageName": "@cinatra-ai/company-discovery-agent",
@@ -165,12 +165,12 @@
     {
       "packageName": "@cinatra-ai/drupal-agent",
       "repo": "cinatra-ai/drupal-agent",
-      "resolvedSha": "49bd804092915759a151ee6dfb7340c98f88a0e7"
+      "resolvedSha": "a070884f194b13e840b098efc8117cab4d0d7894"
     },
     {
       "packageName": "@cinatra-ai/drupal-artifacts",
       "repo": "cinatra-ai/drupal-artifacts",
-      "resolvedSha": "dd1bbfa0e939ee176f6d01b4173056ca95f6b77a"
+      "resolvedSha": "310d0f8cc3f5b42598c8506bd31771001332d4ce"
     },
     {
       "packageName": "@cinatra-ai/drupal-assistant-connector",
@@ -180,7 +180,7 @@
     {
       "packageName": "@cinatra-ai/drupal-mcp-connector",
       "repo": "cinatra-ai/drupal-mcp-connector",
-      "resolvedSha": "f0964ebee76a43ee1f9116745c0911a4925060b3"
+      "resolvedSha": "a5afea719dda12ca21003415db35b89b4d304965"
     },
     {
       "packageName": "@cinatra-ai/drupal-widget-chat-skill",
@@ -200,7 +200,7 @@
     {
       "packageName": "@cinatra-ai/email-delivery-agent",
       "repo": "cinatra-ai/email-delivery-agent",
-      "resolvedSha": "a5eb814aedde4e5e8321a222e08de8b20430fb83"
+      "resolvedSha": "bf578fce2091224e3fd4ba7adde0dd91f036cdbb"
     },
     {
       "packageName": "@cinatra-ai/email-drafting-agent",
@@ -400,7 +400,7 @@
     {
       "packageName": "@cinatra-ai/twenty-connector",
       "repo": "cinatra-ai/twenty-connector",
-      "resolvedSha": "d8f3451f38b6201fd7f8e5895a8b92fb29955bcf"
+      "resolvedSha": "1730e1e73c8632646cb05e4fe998520d23a6cc1c"
     },
     {
       "packageName": "@cinatra-ai/web-research-agent",
@@ -418,9 +418,14 @@
       "resolvedSha": "a71e9d779b4ae7dddb60213f2f5a437e0ab78048"
     },
     {
+      "packageName": "@cinatra-ai/website-artifacts",
+      "repo": "cinatra-ai/website-artifacts",
+      "resolvedSha": "ef02c3ea7e931943df4a81b2d78f01516c1b6732"
+    },
+    {
       "packageName": "@cinatra-ai/wordpress-agent",
       "repo": "cinatra-ai/wordpress-agent",
-      "resolvedSha": "b434f0a1535620d100b1609d3426734df05a537a"
+      "resolvedSha": "b04d467bcf1433337e0f46fc5a9908f914aead84"
     },
     {
       "packageName": "@cinatra-ai/wordpress-assistant-connector",
@@ -430,7 +435,7 @@
     {
       "packageName": "@cinatra-ai/wordpress-mcp-connector",
       "repo": "cinatra-ai/wordpress-mcp-connector",
-      "resolvedSha": "91f4801d4c304b079d5be44bc2938df6c3c57de4"
+      "resolvedSha": "eba85c4cae449a62cf36ceb1709cd0aad25f62e0"
     },
     {
       "packageName": "@cinatra-ai/wordpress-widget-chat-skill",

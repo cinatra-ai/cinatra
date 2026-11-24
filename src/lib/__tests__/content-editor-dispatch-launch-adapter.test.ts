@@ -43,6 +43,33 @@ vi.mock("@cinatra-ai/agents", () => ({
   transitionRunStatus: (...a: unknown[]) => transitionRunStatus(...(a as [])),
 }));
 vi.mock("@cinatra-ai/llm", () => ({ buildA2aBearerToken: vi.fn(async () => null) }));
+// The run's selected flow source is bound before the task is sent (cinatra#3745):
+// explicit storage and selected-source ports, so no PostgreSQL or loader request.
+// The policy reader's own refusals are exercised by run-step-tool-policy.test.ts.
+const readSourceRun = vi.fn(async () => {
+  const launch = launchAgentRun.mock.calls.at(-1)?.[0] as
+    | { create: { input: { orgId?: string } } }
+    | undefined;
+  return { orgId: launch?.create.input.orgId, executionAttemptId: "attempt", a2aContextId: null as string | null };
+});
+const selectSourcePolicy = vi.fn(async (input: { contextId: string }) => ({
+  version: 1,
+  contextId: input.contextId,
+  source: "{}",
+  sourceSha256: "a".repeat(64),
+  executedSourceSha256: "b".repeat(64),
+  declarationSourceSha256: "c".repeat(64),
+}));
+const bindSourcePolicy = vi.fn(async (input: unknown) => {
+  void input;
+});
+vi.mock("@cinatra-ai/agents/store", () => ({
+  readAgentRunById: () => readSourceRun(),
+  updateAgentRunA2AContextId: vi.fn(),
+  selectWayflowRunStepToolPolicy: (input: { contextId: string }) => selectSourcePolicy(input),
+  bindRunStepToolPolicy: (input: unknown) => bindSourcePolicy(input),
+  CINATRA_EXPECTED_SOURCE_MESSAGE_KEY: "__cinatra_expected_source__",
+}));
 vi.mock("@cinatra-ai/a2a", () => ({
   createExternalA2AClient: (...a: unknown[]) => createExternalA2AClient(...(a as [])),
 }));
@@ -90,7 +117,10 @@ function input(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   createExternalA2AClient.mockResolvedValue({ sendTask });
+  // A completed Task: a carrier run completes only for one (cinatra#3745).
   sendTask.mockResolvedValue({
+    kind: "task",
+    status: { state: "completed" },
     history: [
       { role: "user", parts: [{ kind: "text", text: "{}" }] },
       { role: "agent", parts: [{ kind: "text", text: "{\"ok\":true}" }] },
@@ -206,6 +236,30 @@ describe("the widget's content-edit run", () => {
       runBy: "widget-person",
       orgId: ORG,
       sourceType: "public_site_widget",
+    });
+  });
+
+  // cinatra#3745: the launched carrier run binds the loader's selected source before the send,
+  // and the message carries the context the bind recorded and the bound source's digests.
+  it("binds the loader's selected source to the launched run before it sends (cinatra#3745)", async () => {
+    await dispatchContentEditorViaA2A(input());
+    const runId = (launchAgentRun.mock.calls[0]![0] as { create: { input: { id: string } } })
+      .create.input.id;
+
+    expect(bindSourcePolicy).toHaveBeenCalledTimes(1);
+    expect(bindSourcePolicy).toHaveBeenCalledWith(
+      expect.objectContaining({ runId, orgId: ORG, executionAttemptId: "attempt" }),
+    );
+    expect(bindSourcePolicy.mock.invocationCallOrder[0]!).toBeLessThan(sendTask.mock.invocationCallOrder[0]!);
+    const contextId = (selectSourcePolicy.mock.calls[0]![0] as { contextId: string }).contextId;
+    const sent = sendTask.mock.calls[0]![0] as {
+      message: { contextId?: string; parts: Array<{ text: string }> };
+    };
+    expect(sent.message.contextId).toBe(contextId);
+    expect(JSON.parse(sent.message.parts[0]!.text).__cinatra_expected_source__).toEqual({
+      sourceSha256: "a".repeat(64),
+      executedSourceSha256: "b".repeat(64),
+      declarationSourceSha256: "c".repeat(64),
     });
   });
 

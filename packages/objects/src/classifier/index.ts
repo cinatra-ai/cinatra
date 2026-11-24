@@ -111,10 +111,12 @@ export async function classifyObject(
   // as a candidate would steer the classifier at an outcome the write path
   // always rejects. Every other handler-refused class (dynamic/tombstoned ids)
   // can never enter this static registry in the first place (registry.ts's
-  // tombstone guard), so no further filtering is needed here.
+  // tombstone guard). A RETIRED host type (cinatra#4366) is in the registry
+  // only so its stored rows fail closed; the write path refuses it, so it is
+  // left out of the catalog for the same reason as the generic type.
   const staticTypes = objectTypeRegistry
     .list()
-    .filter((t) => t.type !== GENERIC_OBJECT_TYPE_ID);
+    .filter((t) => t.type !== GENERIC_OBJECT_TYPE_ID && !objectTypeRegistry.isRetired(t.type));
   const catalog = staticTypes.map((t) => ({
     type: t.type,
     category: t.category,
@@ -135,6 +137,10 @@ export async function classifyObject(
     maxSteps: 1,
     maxOutputTokens: 4096,
     logLabel: "objects-classify",
+    // cinatra#3745: a classifier is offered no tool. Its callers include run-bound
+    // code with no run request frame (the unbound-output deriver classifies a
+    // run's terminal output), so the empty ceiling is explicit, never inferred.
+    stepToolPolicy: { kind: "declared", tools: [] },
   });
 
   // Parse the LLM text response and validate with the Zod schema (enum constraint).

@@ -110,6 +110,7 @@ import {
 } from "../lent-action-mcp";
 import { resolveBoundCard } from "../bound-card-binding";
 import { submitReviewDecisionAction } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/actions";
+import { enforceReviewRunAccess } from "@cinatra-ai/agents/artifact-review-gate-store";
 import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
 
 const PERSON = { userId: "usr_1", orgId: "org_1" };
@@ -279,7 +280,7 @@ describe("the fill places values in the screen's own fields and submits nothing"
 
   it("a screen lends BOTH roads; a review lends its own three buttons", () => {
     expect(controlsLentBy(screenResolution as never)).toEqual(["fill", "submit"]);
-    expect(controlsLentBy(reviewResolution as never)).toEqual(["comment", "approve", "reject"]);
+    expect(controlsLentBy(reviewResolution as never)).toEqual(["comment", "regenerate", "approve"]);
     // `fill` is never a GRANT control: filling presses nothing, so it is not an
     // authority a grant can spend.
     expect(LENT_ACTION_CONTROLS).not.toContain("fill");
@@ -459,6 +460,11 @@ describe("the review page's typed road", () => {
       kind: "changes-requested",
       status: "requested",
     } as never);
+    // AMENDED for cinatra#3080 (pre-review 1 of #4571, finding 1): a lent review
+    // press asks the run-access right BEFORE it spends the grant. This person
+    // holds the right Comment needs; the real pre-spend check runs against it.
+    const runAccess = enforceReviewRunAccess as unknown as ReturnType<typeof vi.fn>;
+    runAccess.mockReset().mockResolvedValue({ ok: true } as never);
     frame.store = {
       userId: PERSON.userId,
       orgId: PERSON.orgId,
@@ -478,6 +484,8 @@ describe("the review page's typed road", () => {
       },
     );
     expect((res.structuredContent as { ok: boolean }).ok).toBe(true);
+    // Comment needs the respond right, and the check asked for exactly that.
+    expect(runAccess.mock.calls.map((c) => c[2])).toEqual(["respondToHitl"]);
     const call = (submitReviewDecisionAction as unknown as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(call[2]).toBe("comment");
     expect(call[3]).toBe("tighten the opening paragraph");

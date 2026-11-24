@@ -1,6 +1,7 @@
-// The rendering gate in warn mode (cinatra#3871, the slice of cinatra#3036's
-// acceptance row 2): every claiming artifact extension resolves a display of
-// its own; today's deficit is the floor, and the floor only shrinks.
+// The rendering gate in blocking mode (cinatra#3871, flipped by cinatra#3092
+// item 1): every claiming artifact extension resolves a display of its own,
+// every live finding fails, and the floor is empty: there is no exception list.
+// A claim the host never pins is never a review target (R9).
 //
 // Every fixture lives in a temporary directory that the suite removes, and
 // every package, type and key in it belongs to the owner `@example-org`.
@@ -24,6 +25,7 @@ import {
   checkFloorAgainstBase,
   classifyRendering,
   diffAgainstFloor,
+  parseFloor,
   readClaimingExtensions,
   verdict,
 } from "../extension-rendering-gate.mjs";
@@ -157,7 +159,7 @@ function runGate(root, extra = [], env = FIXTURE_ENV) {
 }
 
 const REPORT_LINE =
-  /\[extension-rendering-gate\] \d+ of \d+ claiming extensions draw no display of their own \(warn mode; \d+ artifact extensions scanned\)/;
+  /\[extension-rendering-gate\] \d+ of \d+ claiming extensions draw no display of their own \(blocking mode; \d+ artifact extensions scanned\)/;
 
 function classifyFixture(root) {
   return classifyRendering({
@@ -193,26 +195,32 @@ describe("extension-rendering-gate — the classifier", () => {
   });
 });
 
-// R2 — checklist 2: a finding above the floor is reported as a warning and does not fail.
-describe("extension-rendering-gate — warn mode", () => {
-  it("the gate's mode is warn", () => {
-    expect(GATE_MODE).toBe("warn");
+// R2 — checklist 2 (cinatra#3092 item 1): in blocking mode every live finding
+// fails, whether the floor holds it or not.
+describe("extension-rendering-gate — blocking mode", () => {
+  it("the gate's mode is blocking", () => {
+    expect(GATE_MODE).toBe("blocking");
   });
 
-  it("a live deficit equal to the floor passes with the report line", () => {
+  it("a live deficit equal to the floor fails: one FAIL line per finding, beside the report line", () => {
     const res = runGate(makeTree());
-    expect(res.status).toBe(0);
+    expect(res.status).toBe(1);
     expect(res.stdout).toMatch(REPORT_LINE);
-    expect(res.stdout).toContain("2 of 3 claiming extensions draw no display of their own (warn mode; 6 artifact extensions scanned)");
+    expect(res.stdout).toContain(
+      "2 of 3 claiming extensions draw no display of their own (blocking mode; 6 artifact extensions scanned)",
+    );
     expect(res.stdout).toContain(`outside the gate by construction: ${EPSILON}`);
+    const fails = res.stderr.split("\n").filter((l) => l.includes("FAIL"));
+    expect(fails).toHaveLength(2);
+    expect(fails[0]).toContain(ALPHA);
+    expect(fails[1]).toContain(GAMMA);
   });
 
-  it("a live finding above the floor prints one WARN line naming it and passes", () => {
+  it("a live finding above the floor fails and names it; no WARN line is printed", () => {
     const res = runGate(makeTree({ floor: [entry(ALPHA, [`${ALPHA}:item`])] }));
-    expect(res.status).toBe(0);
-    const warns = res.stdout.split("\n").filter((l) => l.includes("WARN"));
-    expect(warns).toHaveLength(1);
-    expect(warns[0]).toContain(GAMMA);
+    expect(res.status).toBe(1);
+    expect(res.stderr.split("\n").filter((l) => l.includes("FAIL") && l.includes(GAMMA))).toHaveLength(1);
+    expect(`${res.stdout}${res.stderr}`).not.toContain("WARN");
   });
 
   it("in blocking mode every live finding fails", () => {
@@ -227,17 +235,19 @@ describe("extension-rendering-gate — warn mode", () => {
   });
 });
 
-// R3 — checklist 2 and 3: the floor holds today's deficit and only shrinks.
+// R3 — checklist 2 and 3: a floor entry that no live finding matches is stale
+// and fails; the floor only shrinks.
 describe("extension-rendering-gate — a stale floor entry", () => {
   const staleFloor = [...TODAY, entry(BETA, [`${BETA}:item`])];
 
-  it("warn mode: one WARN line naming the stale entry and the writer that removes it, exit 0", () => {
+  it("run as the gate: the stale entry is one FAIL line naming the writer that removes it, exit 1", () => {
     const res = runGate(makeTree({ floor: staleFloor }));
-    expect(res.status).toBe(0);
-    const warns = res.stdout.split("\n").filter((l) => l.includes("WARN"));
-    expect(warns).toHaveLength(1);
-    expect(warns[0]).toContain(BETA);
-    expect(warns[0]).toContain("--write-baseline");
+    expect(res.status).toBe(1);
+    const stale = res.stderr.split("\n").filter((l) => l.includes("no longer applies"));
+    expect(stale).toHaveLength(1);
+    expect(stale[0]).toContain("FAIL");
+    expect(stale[0]).toContain(BETA);
+    expect(stale[0]).toContain("--write-baseline");
   });
 
   it("blocking mode: the stale entry fails and names the writer", () => {
@@ -344,7 +354,11 @@ describe("extension-rendering-gate — scanner errors exit 2", () => {
     const res = runGate(root);
     expect(res.status).toBe(2);
     expect(res.stderr).toContain("@example-org/missing-artifact");
-    expect(runGate(root, ["--allow-partial-fleet"]).status).toBe(0);
+    // With the flag the tree is scanned: no scanner error, and the fixture
+    // fleet's live findings fail in blocking mode.
+    const partial = runGate(root, ["--allow-partial-fleet"]);
+    expect(partial.status).toBe(1);
+    expect(partial.stderr).not.toContain("SCANNER ERROR");
   });
 
   it("a build map line the reader cannot parse", () => {
@@ -383,8 +397,12 @@ describe("extension-rendering-gate — scanner errors exit 2", () => {
 const REAL_TREE_EMPTY = discoverArtifactPackNames(join(REPO_ROOT, "extensions")).size === 0;
 
 describe("extension-rendering-gate — the real tree (test of record)", () => {
+  it("the checked-in floor is empty: there is no exception list", () => {
+    expect(parseFloor(readFileSync(join(REPO_ROOT, FLOOR_FILE), "utf8"))).toEqual([]);
+  });
+
   it.skipIf(REAL_TREE_EMPTY && !process.env.CI)(
-    "passes in warn mode and prints the report line",
+    "passes in blocking mode and prints the report line",
     () => {
       if (REAL_TREE_EMPTY) {
         throw new Error("the extension tree holds no artifact extension on a CI run; materialize it before the root suite");
@@ -409,19 +427,64 @@ describe("extension-rendering-gate — the real tree (test of record)", () => {
     },
     120_000,
   );
+
+  it.skipIf(REAL_TREE_EMPTY && !process.env.CI)(
+    "the chart extension claims no type: its report line puts it outside the gate by construction",
+    () => {
+      if (REAL_TREE_EMPTY) {
+        throw new Error("the extension tree holds no artifact extension on a CI run; materialize it before the root suite");
+      }
+      const CHART = "@cinatra-ai/chart-artifact";
+      const res = spawnSync(process.execPath, [GATE_SCRIPT], { cwd: REPO_ROOT, encoding: "utf8", env: process.env });
+      expect(res.status, res.stderr).toBe(0);
+      const lines = res.stdout.split("\n");
+      // The complete set of report lines naming the chart pack is exactly the one outside line.
+      const chartLines = lines.filter((line) => line.includes(CHART));
+      expect(chartLines).toEqual([`    outside the gate by construction: ${CHART} \u2014 declares no objectTypes`]);
+    },
+    120_000,
+  );
+
+  it.skipIf(REAL_TREE_EMPTY && !process.env.CI)(
+    "the pointer extension claims only a type the host never pins: its report line puts it outside the gate",
+    () => {
+      if (REAL_TREE_EMPTY) {
+        throw new Error("the extension tree holds no artifact extension on a CI run; materialize it before the root suite");
+      }
+      const POINTER_PACK = "@cinatra-ai/drupal-artifacts";
+      const res = spawnSync(process.execPath, [GATE_SCRIPT], { cwd: REPO_ROOT, encoding: "utf8", env: process.env });
+      expect(res.status, res.stderr).toBe(0);
+      const lines = `${res.stdout}\n${res.stderr}`.split("\n").filter((line) => line.includes(POINTER_PACK));
+      expect(lines).toEqual([
+        `    outside the gate by construction: ${POINTER_PACK} \u2014 never a review target (not pinnable)`,
+      ]);
+    },
+    120_000,
+  );
 });
 
-// R7 — checklist 2: an open pull request that gives a floor extension its
-// display does not turn red when it meets the gate.
+// R7 — checklist 2: with the floor empty, a pull request that gives an
+// extension its display has no floor entry to leave behind; a fleet whose every
+// claiming extension is drawn passes, and an entry left in the floor fails.
 describe("extension-rendering-gate — a pull request that gives an extension its display", () => {
-  it("warns about the stale floor entry and passes", () => {
-    const root = makeTree({ map: [...DEFAULT_MAP, mapLine(ALPHA, "detail", "required")] });
-    const res = runGate(root);
-    expect(res.status).toBe(0);
-    const warns = res.stdout.split("\n").filter((l) => l.includes("WARN"));
-    expect(warns).toHaveLength(1);
-    expect(warns[0]).toContain(ALPHA);
-    expect(warns[0]).toContain("--write-baseline");
+  const drawnFleet = () => fleet().filter((p) => p.manifest.name !== GAMMA);
+  const drawnMap = [...DEFAULT_MAP, mapLine(ALPHA, "detail", "required")];
+
+  it("every claiming extension drawn and an empty floor: exit 0 with the OK line", () => {
+    const res = runGate(makeTree({ packs: drawnFleet(), map: drawnMap, floor: [] }));
+    expect(res.status, res.stderr).toBe(0);
+    expect(res.stdout).toContain(
+      "[extension-rendering-gate] OK \u2014 every claiming extension draws a display of its own.",
+    );
+  });
+
+  it("the same change with its old floor entry left in: one FAIL line naming the writer, exit 1", () => {
+    const res = runGate(makeTree({ packs: drawnFleet(), map: drawnMap, floor: [entry(ALPHA, [`${ALPHA}:item`])] }));
+    expect(res.status).toBe(1);
+    const fails = res.stderr.split("\n").filter((l) => l.includes("FAIL"));
+    expect(fails).toHaveLength(1);
+    expect(fails[0]).toContain(ALPHA);
+    expect(fails[0]).toContain("--write-baseline");
   });
 });
 
@@ -521,23 +584,25 @@ describe("extension-rendering-gate — a form drawn by a required content-type d
     expectDeficit(classifyEta({ file: { mimeTypes: ["application/x-example"] } }, map));
   });
 
-  it("(j) the gate warns about the floor entry the rule resolves, prints the drawn line and passes", () => {
+  it("(j) the gate prints the drawn line and fails on the floor entry the rule resolves", () => {
     const root = makeTree({
       packs: [...fleet(), etaPack({ file: { mimeTypes: ["text/markdown", "image/png"] } })],
       map: [...DEFAULT_MAP, ...PROVIDERS],
       floor: [...TODAY, entry(ETA, [`${ETA}:item`])],
     });
     const res = runGate(root);
-    expect(res.status).toBe(0);
+    expect(res.status).toBe(1);
     expect(res.stdout).toMatch(REPORT_LINE);
-    expect(res.stdout).toContain("2 of 4 claiming extensions draw no display of their own (warn mode; 7 artifact extensions scanned)");
+    expect(res.stdout).toContain(
+      "2 of 4 claiming extensions draw no display of their own (blocking mode; 7 artifact extensions scanned)",
+    );
     expect(res.stdout).toContain(
       `    drawn by a content-type display: ${ETA} (image/png by ${PNG}, text/markdown by ${MARKDOWN})`,
     );
-    const warns = res.stdout.split("\n").filter((l) => l.includes("WARN"));
-    expect(warns).toHaveLength(1);
-    expect(warns[0]).toContain(ETA);
-    expect(warns[0]).toContain("--write-baseline");
+    const stale = res.stderr.split("\n").filter((l) => l.includes("no longer applies"));
+    expect(stale).toHaveLength(1);
+    expect(stale[0]).toContain(ETA);
+    expect(stale[0]).toContain("--write-baseline");
   });
 
   it("(k) a tree without the allowlist source is a scanner error", () => {
@@ -546,5 +611,75 @@ describe("extension-rendering-gate — a form drawn by a required content-type d
     const res = runGate(root);
     expect(res.status).toBe(2);
     expect(res.stderr).toContain("SCANNER ERROR");
+  });
+});
+
+// R9 — cinatra#3092 item 1: a claim whose dispositions say `pinnable: false` is
+// never a review target. An extension whose every artifact-writable claim is
+// such a claim is outside the gate by construction. A rule read from the
+// manifest, not a list: no package is named in the gate.
+describe("extension-rendering-gate — a claim the host never pins is never a review target", () => {
+  const THETA = "@example-org/theta-artifacts";
+  const IOTA = "@example-org/iota-artifact";
+  const NOT_PINNABLE = "never a review target (not pinnable)";
+  const notPinnable = (type, projection) => ({
+    type,
+    dispositions: projection === undefined ? { pinnable: false } : { projection, pinnable: false },
+  });
+  const thetaPack = (claims = [notPinnable("@example-org/theta:pointer", "artifact-safe")]) => ({
+    dir: "theta-artifacts",
+    manifest: artifactManifest(THETA, claims, { connectorRef: { resolvedMimeTypes: ["text/html"] } }),
+  });
+  const iotaPack = (claims) => ({ dir: "iota-artifact", manifest: artifactManifest(IOTA, claims) });
+
+  it("an extension whose only writable claim is not pinnable is outside, with the reason", () => {
+    expect(classifyFixture(makeTree({ packs: [thetaPack()] }))).toEqual({
+      deficit: [],
+      ownDisplay: [],
+      drawnByContentType: [],
+      outside: [{ package: THETA, reason: NOT_PINNABLE }],
+    });
+  });
+
+  it("a self-namespaced non-pinnable claim beside a projection-none foreign claim is outside as well", () => {
+    const pack = iotaPack([
+      notPinnable(`${IOTA}:pointer`),
+      { type: "@example-org/iota:contact", dispositions: { projection: "none" } },
+    ]);
+    expect(classifyFixture(makeTree({ packs: [pack] })).outside).toEqual([{ package: IOTA, reason: NOT_PINNABLE }]);
+  });
+
+  it("one pinnable and one non-pinnable writable claim: the extension stays claiming, its finding names the pinnable type", () => {
+    const result = classifyFixture(makeTree({ packs: [iotaPack([{ type: `${IOTA}:item` }, notPinnable(`${IOTA}:pointer`)])] }));
+    expect(result.deficit).toEqual([entry(IOTA, [`${IOTA}:item`])]);
+    expect(result.outside).toEqual([]);
+  });
+
+  it("only `pinnable: false` takes a claim out: true, absent and the string \"false\" stay review targets", () => {
+    const pack = iotaPack([
+      { type: `${IOTA}:a`, dispositions: { pinnable: true } },
+      { type: `${IOTA}:b`, dispositions: { pinnable: "false" } },
+      { type: `${IOTA}:c` },
+    ]);
+    expect(classifyFixture(makeTree({ packs: [pack] })).deficit).toEqual([
+      entry(IOTA, [`${IOTA}:a`, `${IOTA}:b`, `${IOTA}:c`]),
+    ]);
+  });
+
+  it("the reader records the non-pinnable writable types beside the review targets", () => {
+    const read = readClaimingExtensions(join(makeTree({ packs: [thetaPack()] }), "extensions"));
+    expect(read).toHaveLength(1);
+    expect(read[0].writableTypes).toEqual([]);
+    expect(read[0].nonPinnableTypes).toEqual(["@example-org/theta:pointer"]);
+  });
+
+  it("run as the gate with an empty floor: the outside line is printed and the gate passes", () => {
+    const beta = fleet().find((p) => p.manifest.name === BETA);
+    const res = runGate(makeTree({ packs: [thetaPack(), beta], floor: [] }));
+    expect(res.status, res.stderr).toBe(0);
+    expect(res.stdout).toContain(
+      "0 of 1 claiming extensions draw no display of their own (blocking mode; 2 artifact extensions scanned)",
+    );
+    expect(res.stdout).toContain(`    outside the gate by construction: ${THETA} \u2014 ${NOT_PINNABLE}`);
   });
 });

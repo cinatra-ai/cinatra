@@ -15,6 +15,19 @@
  * drawing draws one — inside the kinds whose own display carries a file's form
  * and size (§V.2's download card) — and never in this header.
  *
+ * ONE EXCEPTION, AND THE DISPLAY DECLARES IT (cinatra#4366, artifact-review
+ * §XI.7 and §XI.8): "the identity line of every page names the renderer that
+ * drew it", and the platform it names is the only thing that tells a WordPress
+ * page from a Drupal page. The drawn line reads "<type> · drawn by <renderer> ·
+ * revision rev_c410… · WordPress · Team: Growth · Private · acme.example/pricing"
+ * (§XI.8; its pinned marker is the review's, and this page pins nothing). Core
+ * knows neither fact and names no extension, so the display that draws the row
+ * says them itself, through two optional exports of its own module that the
+ * page reads generically (`./artifact-display-identity`): the renderer's name,
+ * and the cells after the revision and the cells that close the line in place
+ * of the MIME and the updated time. A display that declares neither draws
+ * exactly the six facts above, byte for byte.
+ *
  * PURE AND TOTAL, and the clock is injected: the page draws exactly what this
  * returns, so the drawing is measured here rather than described in a comment
  * over a template literal.
@@ -36,6 +49,28 @@ export type ArtifactDetailHeaderModel = {
   readonly title: string;
   readonly kindLabel: string;
   readonly metaCells: readonly string[];
+};
+
+/**
+ * WHAT THE DISPLAY THAT DRAWS THE ROW SAYS OF ITSELF, already read and checked
+ * (`./artifact-display-identity`). `drawnBy` is the renderer's name, drawn as
+ * "drawn by <name>" right after the type. `facts.revision` is drawn right after
+ * the revision; `facts.closing` closes the line after the owner and the
+ * visibility, in place of the MIME and the updated time. Null is "declared
+ * nothing", which leaves that part of the line as it always was.
+ */
+export type ArtifactDisplayIdentity = {
+  readonly drawnBy: string | null;
+  readonly facts: {
+    readonly revision: readonly string[];
+    readonly closing: readonly string[];
+  } | null;
+};
+
+/** The display declared nothing: the line every display draws without it. */
+export const NO_DISPLAY_IDENTITY: ArtifactDisplayIdentity = {
+  drawnBy: null,
+  facts: null,
 };
 
 /**
@@ -117,10 +152,15 @@ export function buildArtifactDetailHeader(input: {
    *  workspace-owned row) or where the name did not resolve — the owner cell
    *  then draws the level word alone, never a stored value. */
   readonly ownerName?: string | null;
+  /** What the display that draws the row declared of itself. Absent, or
+   *  `NO_DISPLAY_IDENTITY`, draws the six facts exactly as before. */
+  readonly display?: ArtifactDisplayIdentity;
   readonly now?: Date;
 }): ArtifactDetailHeaderModel {
   const { artifact, mime, revisionId } = input;
   const now = input.now ?? new Date();
+  const drawnBy = input.display?.drawnBy ?? null;
+  const facts = input.display?.facts ?? null;
 
   const revision = artifactRevisionLabel(revisionId);
   const updated = artifact.updatedAt
@@ -137,11 +177,12 @@ export function buildArtifactDetailHeader(input: {
     kindLabel: artifactKindLabel(artifact.presentationIdentity),
     metaCells: [
       artifact.objectType,
+      ...(drawnBy === null ? [] : [`drawn by ${drawnBy}`]),
       ...(revision === null ? [] : [revision]),
+      ...(facts === null ? [] : facts.revision),
       artifactOwnerLabel(artifact.ownerLevel, input.ownerName),
       artifactVisibilityLabel(artifact.visibility),
-      mime || "unknown",
-      updated,
+      ...(facts === null ? [mime || "unknown", updated] : facts.closing),
     ],
   };
 }

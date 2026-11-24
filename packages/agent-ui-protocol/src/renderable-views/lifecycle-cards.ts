@@ -42,8 +42,8 @@ import {
 // ---------------------------------------------------------------------------
 
 /**
- * Every lifecycle interaction that becomes a card. Closed set of FIVE. Adding a
- * sixth interaction means adding a kind HERE first — that is what keeps "one
+ * Every lifecycle interaction that becomes a card. Closed set of SIX. Adding a
+ * seventh interaction means adding a kind HERE first — that is what keeps "one
  * card per interaction" enforceable instead of aspirational.
  *
  * `agent_hitl_screen` is the fifth (cinatra#2928, lifecycle-b W2a). It is the
@@ -54,6 +54,10 @@ import {
  * is not drawn by this slice: W2a registers the kind as data, and W3
  * (cinatra#2930) mounts it — which is why its host cells are OWED in the
  * parity ratchet rather than recorded.
+ *
+ * `publish_decision` is the sixth (cinatra#4150): one confirmation, owned by the application, in front of a step an
+ * agent declares as publishing. It lands with its card mounted on all four hosts, so none of its cells is owed. No
+ * moment states it yet (the publish moment is a later part), so until then no run carries it and no host draws it.
  */
 export const LIFECYCLE_CARD_KINDS = [
   "artifact_review_gate",
@@ -61,6 +65,7 @@ export const LIFECYCLE_CARD_KINDS = [
   "recommendation_hold",
   "trigger_schedule_proposal",
   "agent_hitl_screen",
+  "publish_decision",
 ] as const;
 
 export type LifecycleCardKind = (typeof LIFECYCLE_CARD_KINDS)[number];
@@ -230,6 +235,12 @@ export function scheduleScreenSelection(input: {
  *     genuinely BLOCKED on the answer; its durable anchor in the turn is the
  *     `agent_run` part of the dispatch it belongs to, which is what the card is
  *     mounted at and re-read from after a reload.
+ *   - `read` — the card rides NO wire part at all, neither a `DATA_PART` nor a
+ *     typed `INTERRUPT`: nothing is emitted for it. Every host finds it by its
+ *     own authorized read of the run's record, keyed by the run identity of the
+ *     `agent_run` part of the dispatch it belongs to, and re-reads it there
+ *     after a reload. `publish_decision` (cinatra#4150) is the one kind: its
+ *     gate parks the run on its decision record and states no moment.
  *
  * THE TWO ARE INDEPENDENT, and `recommendation_hold` is why: the run is blocked
  * on it, so its representation is an interrupt — and its truth has always been
@@ -256,13 +267,18 @@ export const LIFECYCLE_CARD_CARRIAGE = {
   // data-part view type and therefore no resolve envelope. Its truth is the
   // run's own stated moment.
   agent_hitl_screen: { canonical: "run_state", represent: "interrupt" },
+  // `publish_decision` (cinatra#4150) is carried by a READ, not an interrupt: the run is stopped in front of its
+  // publishing step until a person answers and its truth is the run's own decision record, but the publish gate
+  // emits no typed interrupt and states no lifecycle moment. Every host finds the card by reading that record for
+  // the run its transcript already names, so no interrupt is advertised that nothing emits.
+  publish_decision: { canonical: "run_state", represent: "read" },
 } as const satisfies Record<LifecycleCardKind, LifecycleCardCarriageRow>;
 
 /** Which fact decides a card is live. */
 export type LifecycleCanonicalCarriage = "run_state" | "data_part";
 
 /** How a card reaches a transcript on the one wire. */
-export type LifecycleRepresentCarriage = "data_part" | "interrupt";
+export type LifecycleRepresentCarriage = "data_part" | "interrupt" | "read";
 
 export type LifecycleCardCarriageRow = {
   canonical: LifecycleCanonicalCarriage;

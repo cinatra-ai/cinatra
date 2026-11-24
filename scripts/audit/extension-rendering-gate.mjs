@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// THE RENDERING GATE — warn mode (cinatra#3871, the slice of cinatra#3036's
-// acceptance row 2; its flip to blocking is cinatra#3092).
+// THE RENDERING GATE — blocking mode (cinatra#3871, the slice of cinatra#3036's
+// acceptance row 2; flipped to blocking by cinatra#3092 item 1).
 //
 //   "The rendering gate: every kind of work draws itself, the binary base
 //    included, whose display is the download card."
@@ -12,8 +12,9 @@
 // artifact-writable claim in `cinatra.artifact.objectTypes[]`: a claim whose
 // type id is well formed AND that is either self-namespaced (the bridge
 // registers it as an artifact type) or declares
-// `dispositions.projection === "artifact-safe"` (a claim-backed host type). A
-// claiming extension that is not drawn is a finding. It is drawn in one of two
+// `dispositions.projection === "artifact-safe"` (a claim-backed host type), and
+// that the host may pin (see NEVER A REVIEW TARGET below). A claiming
+// extension that is not drawn is a finding. It is drawn in one of two
 // ways, read in this order:
 //   - by its OWN display: the build map's entry `<package>::detail` in
 //     GENERATED_ARTIFACT_RENDERERS, read with the floor gate's own fail-closed
@@ -32,6 +33,14 @@
 // projection "none" on a foreign namespace) is reported on every run and never
 // counted.
 //
+// NEVER A REVIEW TARGET (cinatra#3092 item 1). A writable claim whose
+// `dispositions.pinnable === false` is never pinned, so no review can land on
+// it, on its own display or on the fallback. It does not make its extension
+// claiming: an extension whose every writable claim is such a claim is outside
+// the gate by construction, with the reason "never a review target (not
+// pinnable)". This is a rule read from the manifest, not an exception list: the
+// gate names no extension. Only the boolean `false` takes a claim out.
+//
 // NOTHING IS COUNTED TWICE. host-display-floor-gate.mjs counts the
 // application's own displays and reads no extension tree; the floor gate
 // (artifact-review-floor-gate.mjs) counts artifact TYPES whose review lands on
@@ -42,18 +51,15 @@
 // its extension stays in the deficit. The units differ and are reported side
 // by side.
 //
-// THE MODE IS WARN (GATE_MODE). A finding above the floor is printed as a
-// warning and passes. A floor entry that no longer applies is printed as a
-// warning and passes as well, so that an open pull request which gives an
-// extension its display does not turn red when it meets the gate; the floor is
-// shrunk by the gate's own writer (`--write-baseline`) afterwards. A floor that
-// grew against the base, an unreadable base on a pull request, and a scanner
-// error fail. The flip (cinatra#3092) is this one constant and an empty floor,
-// with no exception list: in "blocking" mode every live finding and every stale
-// entry fails, and the floor must be empty.
+// THE MODE IS BLOCKING (GATE_MODE, flipped by cinatra#3092). Every live finding
+// fails, whether the floor holds it or not, and every floor entry that no
+// longer applies fails, so the floor must be empty: there is no exception list.
+// A floor that grew against the base, an unreadable base on a pull request,
+// and a scanner error fail as well. The "warn" branch of verdict() stays for
+// the tests of the verdict alone.
 //
-// THE FLOOR. `extension-rendering-gate.baseline.json` holds today's deficit and
-// only shrinks: it is compared with the base branch through the shared floor
+// THE FLOOR. `extension-rendering-gate.baseline.json` is empty and only
+// shrinks: it is compared with the base branch through the shared floor
 // base guard (growth = an extension the base floor does not hold). The change
 // that introduces this gate has a base that holds neither the floor nor this
 // script; that one case passes as the introducing change. A base that holds
@@ -66,9 +72,8 @@
 // Env:
 //   EXTENSION_RENDERING_GATE_BASE  base ref for the floor base guard (optional).
 //
-// Exit codes: 0 = clean or warn-only; 1 = a grown floor or an unreadable base
-// on a pull request's run (and, in blocking mode only, a live finding or a
-// stale entry); 2 = scanner error (no artifact extension, a partial fleet, an
+// Exit codes: 0 = clean; 1 = a live finding, a stale floor entry, a grown floor
+// or an unreadable base on a pull request's run; 2 = scanner error (no artifact extension, a partial fleet, an
 // unreadable manifest, an unparseable build map, an absent or unparseable
 // preview-inline MIME allowlist or dashboard MIME source, an absent or
 // unreadable floor file).
@@ -97,8 +102,8 @@ import { compareFloorWithBase, newKeys, readFileAtBase, reportFloorGuard } from 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_REPO_ROOT = resolve(__dirname, "..", "..");
 
-/** The gate's mode: "warn" today; "blocking" at its flip (cinatra#3092). */
-export const GATE_MODE = "warn";
+/** The gate's mode: "blocking" since its flip (cinatra#3092 item 1). */
+export const GATE_MODE = "blocking";
 
 /** The committed floor, repo-relative. */
 export const FLOOR_FILE = "scripts/audit/extension-rendering-gate.baseline.json";
@@ -165,10 +170,17 @@ function isWritableClaim(claim, packageName) {
   return namespace === packageName || claim?.dispositions?.projection === "artifact-safe";
 }
 
+/** A claim the host never pins, so no review lands on it (cinatra#3092 item 1). */
+const isNonPinnable = (claim) => claim?.dispositions?.pinnable === false;
+
+const typesOf = (claims) => [...new Set(claims.map((c) => c.type))].sort();
+
 /**
  * Every artifact extension of the tree, sorted by package:
- * `{ package, declaresObjectTypes, writableTypes, accepts }` (writable type ids
- * sorted; `accepts` the raw `cinatra.artifact.accepts`, `{}` when absent).
+ * `{ package, declaresObjectTypes, writableTypes, nonPinnableTypes, accepts }`
+ * (`writableTypes` the writable claims the host may pin, the review targets;
+ * `nonPinnableTypes` the writable claims of `pinnable: false`; both sorted;
+ * `accepts` the raw `cinatra.artifact.accepts`, `{}` when absent).
  * An unreadable manifest is a scanner error.
  */
 export function readClaimingExtensions(extensionsRoot) {
@@ -185,11 +197,17 @@ export function readClaimingExtensions(extensionsRoot) {
     if (pkg?.cinatra?.kind !== "artifact" || typeof pkg.name !== "string") continue;
     const objectTypes = pkg.cinatra.artifact?.objectTypes;
     const declaresObjectTypes = Array.isArray(objectTypes);
-    const writableTypes = declaresObjectTypes
-      ? [...new Set(objectTypes.filter((c) => isWritableClaim(c, pkg.name)).map((c) => c.type))].sort()
-      : [];
+    const writable = declaresObjectTypes ? objectTypes.filter((c) => isWritableClaim(c, pkg.name)) : [];
+    const writableTypes = typesOf(writable.filter((c) => !isNonPinnable(c)));
+    const nonPinnableTypes = typesOf(writable.filter(isNonPinnable));
     const accepts = pkg.cinatra.artifact?.accepts;
-    out.push({ package: pkg.name, declaresObjectTypes, writableTypes, accepts: accepts === undefined ? {} : accepts });
+    out.push({
+      package: pkg.name,
+      declaresObjectTypes,
+      writableTypes,
+      nonPinnableTypes,
+      accepts: accepts === undefined ? {} : accepts,
+    });
   }
   return out.sort(byPackage);
 }
@@ -276,10 +294,9 @@ export function classifyRendering({ extensions, generatedEntries, mimeAllowlist,
   const outside = [];
   for (const ext of extensions) {
     if (ext.writableTypes.length === 0) {
-      outside.push({
-        package: ext.package,
-        reason: ext.declaresObjectTypes ? "declares no artifact-writable claim" : "declares no objectTypes",
-      });
+      let reason = ext.declaresObjectTypes ? "declares no artifact-writable claim" : "declares no objectTypes";
+      if ((ext.nonPinnableTypes ?? []).length > 0) reason = "never a review target (not pinnable)";
+      outside.push({ package: ext.package, reason });
       continue;
     }
     if (keys.has(`${ext.package}::detail`)) {

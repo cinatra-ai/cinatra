@@ -2,7 +2,8 @@
  * isGenericObjectSchema Continue button
  *
  * Requirement: when xRenderer === "@cinatra-ai/agent-builder:schema-field-fallback"
- * AND the interrupt schema has type === "object", the panel must:
+ * AND the interrupt schema has type === "object" AND (cinatra#4244) that schema
+ * declares no field to fill (a bare confirmation), the panel must:
  *   (a) set isGenericObjectSchema = true → showContinueButton = true
  *   (b) NOT render RendererComponent (text-input path is bypassed)
  *   (c) NOT render the "no renderer configured" fallback paragraph
@@ -95,6 +96,21 @@ describe("orchestrator-stepper-panel — isGenericObjectSchema Continue button",
     expect(expr).toMatch(/!\s*isSetupGateTaskId/);
   });
 
+  // cinatra#4244 - a non-setup gate whose object schema DECLARES fields of its
+  // own (a WayFlow input gate with no renderer, e.g. "Pick the brand voice") is
+  // not a bare confirmation: suppressing the renderer drew a Continue with
+  // nothing to fill in. Only a well-formed schema that declares no visible
+  // field is generic; a malformed schema is neither (it fails closed). The
+  // drawn behaviour is pinned by orchestrator-stepper-panel-next-input-gate-4244.
+  it("EXCLUDES gates that declare fields of their own, and malformed ones, from isGenericObjectSchema (cinatra#4244)", () => {
+    const match = SRC.match(/isGenericObjectSchema\s*=\s*([^;]+);/);
+    expect(match, "isGenericObjectSchema must be declared").toBeTruthy();
+    expect(match![1]).toMatch(/gateReading\.kind\s*===\s*"bare"/);
+    expect(SRC).toMatch(/gateReading\s*=\s*readSchemaFieldGate\(\s*interruptContext\.schema\s*\)/);
+    // A malformed gate draws no renderer and no Continue: the paragraph only.
+    expect(SRC).toMatch(/RendererComponent && !isGenericObjectSchema && !fallbackGateIsMalformed/);
+  });
+
   it("hides HitlConversationPanel when isGenericObjectSchema is true", () => {
     // The AI-assist panel must be hidden for generic-object gates because
     // there is nothing for the user to refine — they only click Continue.
@@ -104,8 +120,13 @@ describe("orchestrator-stepper-panel — isGenericObjectSchema Continue button",
     // visibility gained a SECOND term in the same wave — the run's own access,
     // "no window shown to a person whose message it would refuse" — so the
     // single-line literal was replaced by the two terms that must both hold.
-    const visible = SRC.match(/visible=\{([\s\S]*?)\}\n/);
-    expect(visible, "the panel must declare a visible expression").toBeTruthy();
+    // AMENDED AGAIN by cinatra#3487. The rule is unchanged and so are its two
+    // terms; what moved is WHO reads them. The screen no longer mounts a window
+    // of its own — it publishes "has this screen anything to manipulate" to the
+    // run page's chrome, which draws the one window — so the expression is read
+    // off `canManipulate` in the registration rather than off a `visible` prop.
+    const visible = SRC.match(/canManipulate:([\s\S]*?),\n\s*storageKey/);
+    expect(visible, "the screen must declare what it can manipulate").toBeTruthy();
     expect(visible![1]).toMatch(/!isGenericObjectSchema/);
     expect(visible![1]).toMatch(/canRespondInWindow !== false/);
   });

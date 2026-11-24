@@ -1,16 +1,8 @@
 {
   "note": "Host display floor (cinatra#3821): the places where the application draws an artifact's content itself, or a step of one agent, instead of the extension that owns it. Each entry names its owner (the extension or the item that takes it over). SHRINK-ONLY: a new key or a grown count fails; a fallen count is stale until `node scripts/audit/host-display-floor-gate.mjs --write-baseline` ratchets it down (it refuses growth). See scripts/audit/host-display-floor.md.",
   "handlerKinds": {},
-  "displays": {
-    "src/app/artifacts/[id]/dashboard-pointer-detail.tsx": {
-      "owner": "@cinatra-ai/dashboard-artifact",
-      "removedBy": "none filed; the dashboard pointer is held by the ruling recorded for the dashboard type in the data-contract allowlist"
-    }
-  },
+  "displays": {},
   "stepRenderers": {
-    "blog-idea-selection :: packages/agents/src/blog-idea-selection-renderer.tsx": {
-      "owner": "@cinatra-ai/blog-pipeline-agent"
-    },
     "campaign-recipients-review :: packages/agents/src/campaign-recipients-review-renderer.tsx": {
       "owner": "@cinatra-ai/email-artifacts"
     },
@@ -31,15 +23,6 @@
     }
   },
   "ceilings": {
-    "packages/agents/src/blog-idea-selection-renderer.tsx": {
-      "topLevel": 2,
-      "imports": [
-        "packages/agents/src/schema-field-renderer",
-        "react",
-        "src/components/ui/radio-group"
-      ],
-      "owner": "@cinatra-ai/blog-pipeline-agent"
-    },
     "packages/agents/src/campaign-recipients-review-renderer.tsx": {
       "topLevel": 2,
       "imports": [
@@ -118,29 +101,14 @@
       "topLevel": 3,
       "imports": [
         "date-fns",
-        "next/link",
         "packages/agents/src/list-picker-actions",
         "react",
         "src/components/ui/badge",
-        "src/components/ui/button",
         "src/components/ui/card",
         "src/components/ui/input",
         "src/lib/cinatra-toast"
       ],
       "owner": "@cinatra-ai/email-outreach-agent"
-    },
-    "src/app/artifacts/[id]/dashboard-pointer-detail.tsx": {
-      "topLevel": 5,
-      "imports": [
-        "date-fns",
-        "lucide-react",
-        "next/link",
-        "server-only",
-        "src/components/artifacts/dashboard-library-row",
-        "src/components/ui/button",
-        "src/lib/dashboards/dashboard-artifact-surface"
-      ],
-      "owner": "@cinatra-ai/dashboard-artifact"
     }
   },
   "mimeConstructions": {},

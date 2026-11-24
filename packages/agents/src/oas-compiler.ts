@@ -58,6 +58,7 @@ import {
 } from "./artifact-binding";
 import type { PersistedArtifactBindingDeclaration } from "./artifact-binding";
 import { readKeyList } from "./gate-keys-not-from-run-inputs";
+import { checkRegenerateDeclaration } from "./verdaccio/package-contract";
 
 // ---------------------------------------------------------------------------
 // OAS Flow compiler
@@ -788,6 +789,12 @@ async function readSiblingPackageJson(
    *  nothing" — so the mirror-parity check below must NOT compare against it
    *  and call the difference a disagreement (cinatra#3095, convergence). */
   producesReadable: boolean;
+  /** The raw `cinatra.lifecycle.regenerate` value (cinatra#4264); `undefined`
+   *  when the manifest declares none. Checked at step 10a2. */
+  regenerate: unknown;
+  /** The raw `cinatra.lifecycle` block (cinatra#4264 A1b); `undefined` when the
+   *  manifest declares none. Reported to a writer on request. */
+  lifecycle: unknown;
 } | null> {
   // OAS source lives at either:
   //   agents/<slug>/cinatra/oas.json  → package.json is ../../package.json (one up from cinatra/)
@@ -806,7 +813,11 @@ async function readSiblingPackageJson(
       const parsed = JSON.parse(raw) as {
         name?: unknown;
         version?: unknown;
-        cinatra?: { agentDependencies?: Record<string, string>; produces?: unknown };
+        cinatra?: {
+          agentDependencies?: Record<string, string>;
+          produces?: unknown;
+          lifecycle?: { regenerate?: unknown };
+        };
       };
       // `cinatra.produces` — same tolerant PARSE as
       // readAgentProducesFromPackageManifest (never throws), but the result
@@ -850,6 +861,8 @@ async function readSiblingPackageJson(
         produces,
         producesRefs,
         producesReadable,
+        regenerate: parsed.cinatra?.lifecycle?.regenerate,
+        lifecycle: parsed.cinatra?.lifecycle,
       };
     } catch {
       // try next candidate
@@ -1285,6 +1298,10 @@ export type CompiledAgentOas = {
   // writers. The list is for a later consumer that is to stop the run in front
   // of each of them until a person decides; nothing reads it to stop a run yet.
   publishingSteps: string[];
+  // cinatra#4150: the publish card's rows, keyed by declared node id; a node
+  // that declares no rows has no key. Persisted to agent_templates.publish_rows
+  // by the same writers as publishingSteps.
+  publishRows: PublishRows;
   // Sibling cinatra.json metadata: per-agent limits,
   // required connection types, and authoring-time defaults. Operator-tunable
   // overrides will land on agent_install_settings DB table in a follow-up.
@@ -1300,9 +1317,18 @@ export type CinatraAgentConfig = {
   defaults?: { senderName?: string | null };
 };
 
+/** What the compile's own sibling `package.json` read found about
+ * `cinatra.lifecycle` (cinatra#4264 A1b), reported only on request
+ * (`reportSiblingLifecycle`). `readable: false` = no sibling, or one that does
+ * not parse: the writer keeps its stored column. `readable: true` carries the
+ * raw block (`undefined` when the manifest declares none: the writer clears). */
+export type SiblingLifecycleReading =
+  | { readable: false }
+  | { readable: true; lifecycle: unknown };
+
 // Discriminated union eliminates mixed null/throw.
 export type CompileOasResult =
-  | { ok: true; value: CompiledAgentOas }
+  | { ok: true; value: CompiledAgentOas; siblingLifecycle?: SiblingLifecycleReading }
   | { ok: false; error: string };
 
 // Exhaustive component_type list for steppable nodes. Adding a new
@@ -1558,6 +1584,98 @@ export function collectPublishingSteps(
   return { ok: true, steps };
 }
 
+// cinatra#4150: the rows the publish card shows. A declared publishing node may
+// add `metadata.cinatra.publishRows: [{ label, input }]`: one or two rows, each
+// a label in the pack's own words over the value of one of the node's own
+// inputs (the values the stop surfaces). The rows are read only; the card
+// decides whether the content goes out, never what it says. The key is valid
+// only beside `publishes: true` on a top-level node; anywhere else, and in any
+// form but the one below, it refuses the compile. Errors name the field and the
+// node id only, never a label or an input the pack wrote.
+export type PublishRowDeclaration = { label: string; input: string };
+export type PublishRows = Record<string, PublishRowDeclaration[]>;
+const PUBLISH_ROWS_MAX = 2;
+const PUBLISH_ROW_LABEL_MAX = 60;
+const hasOwn = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
+
+function declaredRowsOf(owner: unknown): { present: boolean; value?: unknown } {
+  const metadata = (owner as { metadata?: unknown } | null)?.metadata;
+  const cinatra = metadata && typeof metadata === "object" ? (metadata as { cinatra?: unknown }).cinatra : undefined;
+  if (!cinatra || typeof cinatra !== "object" || !hasOwn(cinatra, "publishRows")) return { present: false };
+  return { present: true, value: (cinatra as Record<string, unknown>).publishRows };
+}
+
+// The row maps this compiler produced. A client-callable writer accepts publishRows only as one of these (the same
+// object), so a map a caller wrote, valid-looking or not, never bypasses the reader above.
+const COMPILED_PUBLISH_ROWS = new WeakSet<object>();
+
+/** True only for a publishRows map that collectPublishRows returned (by identity). */
+export function isCompiledPublishRows(value: unknown): boolean {
+  return typeof value === "object" && value !== null && COMPILED_PUBLISH_ROWS.has(value);
+}
+
+export function collectPublishRows(
+  parsed: Record<string, unknown>,
+  publishingSteps: readonly string[],
+): { ok: true; rows: PublishRows } | { ok: false; error: string } {
+  const rootRefs = (parsed.$referenced_components as Record<string, unknown> | undefined) ?? {};
+  const allowed = new Map<unknown, string>();
+  for (const step of publishingSteps) if (hasOwn(rootRefs, step)) allowed.set(rootRefs[step], step);
+  const rows: PublishRows = {};
+  const stack: unknown[] = [parsed];
+  while (stack.length > 0) {
+    const value = stack.pop();
+    if (!value || typeof value !== "object") continue;
+    if (Array.isArray(value)) {
+      stack.push(...value);
+      continue;
+    }
+    stack.push(...Object.values(value));
+    const declared = declaredRowsOf(value);
+    if (!declared.present) continue;
+    const step = allowed.get(value);
+    const id = (value as { id?: unknown }).id;
+    const who = step !== undefined ? `node ${quoteNodeId(step)}` : typeof id === "string" ? `node ${quoteNodeId(id)}` : "a component";
+    if (step === undefined) {
+      return { ok: false, error: `PUBLISH_ROWS_MISPLACED: ${who} declares metadata.cinatra.publishRows, but only a top-level node that declares publishes: true can carry it` };
+    }
+    const list = declared.value;
+    if (!Array.isArray(list) || list.length < 1 || list.length > PUBLISH_ROWS_MAX) {
+      return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${who} declares metadata.cinatra.publishRows that is not a list of 1 to ${PUBLISH_ROWS_MAX} rows` };
+    }
+    const inputs = (value as { inputs?: unknown }).inputs;
+    const titles = new Set(
+      (Array.isArray(inputs) ? inputs : [])
+        .map((p) => (p && typeof p === "object" ? (p as { title?: unknown }).title : undefined))
+        .filter((t): t is string => typeof t === "string"),
+    );
+    const out: PublishRowDeclaration[] = [];
+    for (const [index, row] of list.entries()) {
+      const where = `${who} metadata.cinatra.publishRows[${index}]`;
+      if (!row || typeof row !== "object" || Array.isArray(row) || Object.keys(row).sort().join(",") !== "input,label") {
+        return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where} must be an object with exactly the keys label and input` };
+      }
+      const { label, input } = row as { label: unknown; input: unknown };
+      if (typeof label !== "string" || label.trim() === "" || label !== label.trim() || label.length > PUBLISH_ROW_LABEL_MAX || /[\p{Cc}\u2028\u2029]/u.test(label)) {
+        return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where}.label must be one line of 1 to ${PUBLISH_ROW_LABEL_MAX} characters with no leading or trailing space` };
+      }
+      if (typeof input !== "string" || !titles.has(input)) {
+        return { ok: false, error: `PUBLISH_ROWS_UNKNOWN_INPUT: ${where}.input does not name an input of the node` };
+      }
+      if (out.some((r) => r.input === input)) {
+        return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where}.input repeats an input another row shows` };
+      }
+      out.push(Object.freeze({ label, input }));
+    }
+    // A defined own property, so a node id such as "__proto__" stays a plain key.
+    Object.defineProperty(rows, step, { value: Object.freeze(out), enumerable: true });
+  }
+  // Frozen through, so no caller can change a map, a list or a row after the reader checked it.
+  Object.freeze(rows);
+  COMPILED_PUBLISH_ROWS.add(rows);
+  return { ok: true, rows };
+}
+
 // ---------------------------------------------------------------------------
 // Main compile entry point
 // ---------------------------------------------------------------------------
@@ -1566,12 +1684,28 @@ export async function compileOasAgentJson(opts: {
   packageName: string | null | undefined;
   registryPath?: string;
   oasSourcePath?: string;
+  // cinatra#4264: the OAS source as bytes. When given, the compile reads these
+  // bytes and never opens `oasSourcePath` for the flow itself; the path still
+  // locates the sibling package.json and cinatra.json. The direct publisher
+  // passes the exact bytes it packages, so the compiled flow and the shipped
+  // file cannot differ. Bytes that are not valid UTF-8 refuse the compile.
+  oasSource?: Buffer;
   // Runtime classification override used by deriveTriggerMode
   // when the OAS itself does not declare `metadata.cinatra.runtime`. Falls back
   // to undefined → "full" (DESIGN.md default). Callers in mcp/handlers.ts may
   // pass the template's executionProvider so legacy/unannotated agents still
   // get the right triggerMode classification.
   executionProvider?: string;
+  // cinatra#4264: the `regenerate` entries a writer keeps from the stored row
+  // when it has no readable manifest. Checked against THIS flow only when no
+  // sibling package.json is readable; a readable sibling is the one authority.
+  retainedRegenerate?: unknown;
+  // cinatra#4264 A1b: report what this compile's sibling read found about
+  // `cinatra.lifecycle` (`siblingLifecycle` on the result), so a writer (the MCP
+  // recompile) projects the lifecycle column from the same manifest the
+  // regenerate check read. Off by default: every other caller's result is
+  // unchanged.
+  reportSiblingLifecycle?: boolean;
 }): Promise<CompileOasResult> {
   if (!opts.packageName) {
     return { ok: false, error: "packageName is required" };
@@ -1579,6 +1713,9 @@ export async function compileOasAgentJson(opts: {
 
   // 1. Resolve OAS source path (with traversal guard)
   let oasSourcePath = opts.oasSourcePath ?? null;
+  if (opts.oasSource !== undefined && !oasSourcePath) {
+    return { ok: false, error: "oasSourcePath is required with oasSource" };
+  }
   if (!oasSourcePath) {
     const candidates = resolveAgentJsonPath(opts.packageName);
     if (!candidates) {
@@ -1604,15 +1741,26 @@ export async function compileOasAgentJson(opts: {
     }
   }
 
-  // 2. Load OAS source
+  // 2. Load OAS source: the handed bytes (cinatra#4264), else the file.
   let raw: string;
-  try {
-    raw = await readFile(oasSourcePath, "utf8");
-  } catch (err) {
-    return {
-      ok: false,
-      error: `OAS source at ${oasSourcePath} could not be read: ${(err as Error).message}`,
-    };
+  if (opts.oasSource !== undefined) {
+    try {
+      raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(opts.oasSource);
+    } catch {
+      return {
+        ok: false,
+        error: `OAS source at ${oasSourcePath} is not valid UTF-8`,
+      };
+    }
+  } else {
+    try {
+      raw = await readFile(oasSourcePath, "utf8");
+    } catch (err) {
+      return {
+        ok: false,
+        error: `OAS source at ${oasSourcePath} could not be read: ${(err as Error).message}`,
+      };
+    }
   }
   let parsed: Record<string, unknown>;
   try {
@@ -1639,6 +1787,10 @@ export async function compileOasAgentJson(opts: {
   const publishing = collectPublishingSteps(parsed);
   if (!publishing.ok) {
     return { ok: false, error: publishing.error };
+  }
+  const publishRows = collectPublishRows(parsed, publishing.steps);
+  if (!publishRows.ok) {
+    return { ok: false, error: publishRows.error };
   }
 
   // Fan out `metadata.cinatra.llm` to every
@@ -2411,6 +2563,20 @@ export async function compileOasAgentJson(opts: {
     }
   }
 
+  // 10a2. The regenerate declaration (cinatra#4264) must fit this flow: the
+  // sibling manifest's entries, or, with no readable sibling, the entries the
+  // writer retains from the stored row. A failure refuses the compile, so no
+  // writer persists a declaration the flow cannot honour.
+  {
+    const regenerate = sibling ? sibling.regenerate : opts.retainedRegenerate;
+    if (regenerate !== undefined) {
+      const check = checkRegenerateDeclaration(parsed, regenerate);
+      if (!check.ok) {
+        return { ok: false, error: `regenerate declaration invalid for ${opts.packageName}: ${check.error}` };
+      }
+    }
+  }
+
   // 10b. Declarative artifact bindings (cinatra#923) — grammar + graph-local
   // reference validation, plus binding↔`cinatra.produces` parity when the
   // sibling package.json is readable (install/publish layouts; the builder
@@ -2543,8 +2709,17 @@ export async function compileOasAgentJson(opts: {
       artifactBindings,
       // cinatra#4150 — the nodes declared `publishes: true`.
       publishingSteps: publishing.steps,
+      // cinatra#4150 — the publish card's rows per declared node.
+      publishRows: publishRows.rows,
       // sibling cinatra.json
       cinatraConfig,
     },
+    ...(opts.reportSiblingLifecycle
+      ? {
+          siblingLifecycle: sibling
+            ? { readable: true as const, lifecycle: sibling.lifecycle }
+            : { readable: false as const },
+        }
+      : {}),
   };
 }

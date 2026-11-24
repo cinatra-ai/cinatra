@@ -29,9 +29,9 @@
  * Defects 1 and 2 are pinned here. Of defect 3, what this file pins is the part
  * the identity read decides: the workspace row is no longer drawn as the
  * file-form floor. The mono MIME label itself is drawn by the shared library
- * row from the stored MIME alone, on the organization tab and the global
- * library alike, so whether an agent-produced typed row carries it is that
- * row's rule and is not decided here.
+ * row, on the organization tab and the global library alike, for a row of a
+ * required upload base type only (#4366), so whether an agent-produced typed
+ * row carries it is that row's rule and is not decided here.
  */
 import { createElement, isValidElement, type ReactElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -136,6 +136,15 @@ vi.mock("@/lib/authz/enforce-resource-access", () => ({
   decideResourceAccessForActorContext: () => null,
 }));
 vi.mock("@/lib/artifacts/artifact-retention", () => ({ tombstoneArtifact: vi.fn() }));
+/** The MIME label is drawn on rows of a required upload base type only (#4366).
+ *  The real file-form row below is stored under the generic type, so that type
+ *  stands in as the one upload base; every other row keeps no label. */
+vi.mock("@/lib/artifacts/upload-artifact-type-map", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/artifacts/upload-artifact-type-map")>()),
+  readSystemBaseUploadCandidates: () => [
+    { objectTypeId: "@cinatra-ai/artifact:object", acceptMimes: ["application/pdf"] },
+  ],
+}));
 vi.mock("@/lib/artifacts/artifact-creation", () => ({
   createSemanticArtifact: vi.fn(),
   ObjectsTypeNotRegisteredError: class extends Error {},

@@ -52,6 +52,7 @@ import {
   resolveDeclaredSkillEdgeForPackageWithReason,
   ensureInstalledSkillRegistered,
   ensureInstalledSkillsRegistered,
+  areInstalledSkillsRegistered,
   scanSkillExtensions,
   filterRetiredSkillExtensions,
   buildSkillIdDisplayNames,
@@ -340,6 +341,57 @@ describe("ensureInstalledSkillsRegistered (batch)", () => {
     // registration is the whole co-located package; rescanning for the failed
     // id necessarily re-touches the sibling, which is an idempotent upsert).
     expect(okFirst).toBe(1);
+  });
+});
+
+// The read-only accessor the tool-manifest route reads (cinatra#3487;
+// packages/agent-ui-protocol/CONTRACT.md section 5.2, "Read only").
+describe("areInstalledSkillsRegistered (read-only accessor)", () => {
+  it("is false before any registration and registers nothing itself", async () => {
+    await writeExtension({
+      vendor: "acme",
+      pkgDir: "accessor-unread",
+      name: "@acme/accessor-unread",
+      kind: "skill",
+      slugs: ["never"],
+    });
+    expect(areInstalledSkillsRegistered(["@acme/accessor-unread:never"])).toBe(false);
+    expect(registerExtensionSkillMock).not.toHaveBeenCalled();
+  });
+
+  it("is false while the registration is in flight, true once it settled", async () => {
+    await writeExtension({
+      vendor: "acme",
+      pkgDir: "accessor-flight",
+      name: "@acme/accessor-flight",
+      kind: "skill",
+      slugs: ["one", "two"],
+    });
+    const ids = ["@acme/accessor-flight:one", "@acme/accessor-flight:two"];
+    const pending = ensureInstalledSkillsRegistered(ids);
+    expect(areInstalledSkillsRegistered(ids)).toBe(false);
+    await pending;
+    expect(areInstalledSkillsRegistered(ids)).toBe(true);
+    // An empty list is trivially registered; one unknown id makes it false.
+    expect(areInstalledSkillsRegistered([])).toBe(true);
+    expect(areInstalledSkillsRegistered([...ids, "@acme/accessor-flight:absent"])).toBe(false);
+  });
+
+  it("is false for an id whose upsert failed, true for its registered sibling", async () => {
+    await writeExtension({
+      vendor: "acme",
+      pkgDir: "accessor-fail",
+      name: "@acme/accessor-fail",
+      kind: "skill",
+      slugs: ["ok", "bad"],
+    });
+    registerExtensionSkillMock.mockImplementation(async ({ skillId }) => {
+      if (skillId === "@acme/accessor-fail:bad") throw new Error("transient upsert failure");
+      return { id: skillId, sourcePath: `data/skills/${skillId}` };
+    });
+    await ensureInstalledSkillsRegistered(["@acme/accessor-fail:ok", "@acme/accessor-fail:bad"]);
+    expect(areInstalledSkillsRegistered(["@acme/accessor-fail:ok"])).toBe(true);
+    expect(areInstalledSkillsRegistered(["@acme/accessor-fail:bad"])).toBe(false);
   });
 });
 

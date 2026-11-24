@@ -43,7 +43,10 @@ import {
 } from "@/lib/authz/build-actor-context";
 
 import type { ArtifactReviewTarget } from "@/lib/artifacts/artifact-review-target";
-import { ARTIFACT_RENDERER_PROPS_API_VERSION } from "@/lib/artifacts/artifact-renderer-props";
+import {
+  ARTIFACT_RENDERER_PROPS_API_VERSION,
+  type ArtifactRendererReviewReading,
+} from "@/lib/artifacts/artifact-renderer-props";
 import {
   type BeginReviewResult,
   type PrepareReviewInput,
@@ -122,6 +125,10 @@ export async function beginReviewTargets(args: {
   /** The roads this surface named (wave 3). Absent means the session byte
    *  routes and the channel's named absence. */
   roads?: ReviewSurfaceRoads | null;
+  /** The reading of the review the surface draws (props v3, cinatra#3092).
+   *  Set by `loadReviewGateSurface` alone; every other caller passes nothing
+   *  and its snapshots carry no reading. */
+  reading?: ArtifactRendererReviewReading["reading"];
 }): Promise<BeginReviewResult> {
   const { actorCtx } = args;
   const kernelActor = buildActorContextFromPrimitive(
@@ -138,6 +145,12 @@ export async function beginReviewTargets(args: {
     // content; every other caller passes nothing and keeps exactly what it had.
     byteMinter: args.roads?.byteMinter,
     buildContent: args.roads?.buildContent,
+    // cinatra#4311: the data road this surface named, if any.
+    dataRoad: args.roads?.dataRoad,
+    // cinatra#4311: the dashboard read gate this surface named, if any.
+    dashboardLiveAddress: args.roads?.dashboardLiveAddress,
+    // cinatra#3092: the review's reading, handed to every target alike.
+    reading: args.reading,
   });
 }
 
@@ -257,11 +270,13 @@ export async function enforceReviewDecisionAccess(args: {
 }
 
 /**
- * The LIFECYCLE `changes_requested` binder (cinatra#2063; owner ruling 2026-07-25).
- * The review surface's prompt-window feedback (the existing Comment path) drives a
- * `changes_requested` decision on a LIFECYCLE review gate: the base gate closes and
- * a repair opens through the S2 store's `recordChangesRequested` entry point (via
- * the surface composer) — no parallel write path.
+ * The LIFECYCLE `changes_requested` binder (cinatra#2063; cinatra#3080). The review
+ * floor's REGENERATE drives a `changes_requested` decision on a LIFECYCLE review
+ * gate: the base gate settles as superseded and a repair opens through the S2
+ * store's `recordChangesRequested` entry point (via the surface composer) — no
+ * parallel write path. The conversation's comment (its own submission) reaches the
+ * same binder on the TYPED origin, which it names itself. The Note-field Comment
+ * never reaches this binder: it is an annotation.
  *
  * The ONE fact the composer needs that the surface holds is the base-revision CAS
  * witness (`currentBaseRevisionId`). It is resolved HERE through the SAME
@@ -270,16 +285,25 @@ export async function enforceReviewDecisionAccess(args: {
  * live member, and null when it was tombstoned between prepare and submit (a
  * fail-closed `tombstoned-base`). No new artifact read path is introduced.
  *
- * Authorization is the CALLER's job and is UNCHANGED from the base Comment
- * decision: the action enforces `respondToHitl` on the run for the comment op
- * BEFORE this binder is reached, exactly as it does for a plain comment.
+ * Authorization is the CALLER's job: Regenerate settles the gate, so the action
+ * enforces `approveHitl` on the run (the right a terminal decision needs) BEFORE
+ * this binder is reached; the conversation's comment keeps `respondToHitl`.
  */
 export async function submitReviewSurfaceChangesRequested(args: {
   runId: string;
   reviewTaskId: string;
   baseTarget: ArtifactReviewTarget;
-  /** The reviewer's typed prompt-window feedback (trimmed, non-empty). */
+  /** The reviewer's note (trimmed, non-empty): Regenerate's, or the
+   *  conversation's typed words. */
   feedback: string;
+  /** The recorded prompt the Regenerate sends back as its own value, or null. */
+  prompt?: string | null;
+  /**
+   * WHICH ROAD ASKED. Omitted means the floor's Regenerate, so a caller that
+   * forgets it is refused before any write rather than escalated; the
+   * conversation's comment passes `typed` (it keeps the change road).
+   */
+  origin?: "typed" | "regenerate";
   actorCtx: ReviewActorContext;
 }): Promise<RecordChangesRequestedResult> {
   const kernelActor = buildActorContextFromPrimitive(
@@ -303,6 +327,12 @@ export async function submitReviewSurfaceChangesRequested(args: {
     },
     currentBaseRevisionId,
     feedback: args.feedback,
+    prompt: args.prompt ?? null,
+    // The floor's Regenerate (the default): the repair store refuses, before any
+    // write, a regenerate that no producing step can serve or that tripped the
+    // cycle bound. The conversation's comment names `typed`: a producer that
+    // cannot repair escalates its request to a person, as before the floor.
+    origin: args.origin ?? "regenerate",
     // The DECIDING actor (cinatra#2047 D-2) — the same verified session actor the
     // approve/reject commit stamps, from the context run access was enforced against.
     decidedBy: args.actorCtx.actor.userId ?? null,
@@ -440,10 +470,16 @@ export async function loadReviewGateSurface(args: {
     // The gate answered `resolved` a line ago; a set that is gone underneath is
     // a row that can no longer be read, which is blocked, not decided.
     if (!pinned) return { kind: "blocked", reason: "no-longer-pending" };
+    // THE CONTINUED READING (cinatra#3092): a gate resolved with the approve
+    // disposition was continued, and its displays may offer the live
+    // navigation. Any other disposition reads as pending: a display reads a
+    // snapshot with no reading as no review standing, which offers the link.
+    const settledGate = await readReviewGate(runId, reviewTaskId);
     const history = await beginReviewTargets({
       input: { runId, reviewTaskId, targets: pinned, acceptResolvedGate: true },
       actorCtx,
       roads,
+      reading: settledGate?.disposition === "approve" ? "continued" : "pending",
     });
     if (!history.ok) {
       return history.error.kind === "run-access-denied"
@@ -474,6 +510,9 @@ export async function loadReviewGateSurface(args: {
     input: { runId, reviewTaskId, targets: gate.targets },
     actorCtx,
     roads,
+    // THE PENDING READING (cinatra#3092): the decision is still open, so no
+    // display on this gate offers the live navigation.
+    reading: "pending",
   });
   if (!prepared.ok) {
     switch (prepared.error.kind) {

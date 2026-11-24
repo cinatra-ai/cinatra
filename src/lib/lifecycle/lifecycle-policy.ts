@@ -186,6 +186,51 @@ export interface CompiledManifestLifecycle {
    * Absent ⇒ the repair run gets its own inputs plus the typed request, as
    * before. */
   repairFindingsInput?: RepairFindingsInputDeclaration;
+  /** The step-scoped Regenerate declaration (cinatra#4264): per artifact-filing
+   * node, the producing step a Regenerate reruns and the step input the note
+   * goes into. Unique by `artifactNode`. Checked against the flow at compile
+   * time (`checkRegenerateDeclaration`); read with `readRegenerateEntry`. */
+  regenerate?: RegenerateEntry[];
+}
+
+/** One `cinatra.lifecycle.regenerate` entry (cinatra#4264). */
+export interface RegenerateEntry {
+  artifactNode: string;
+  step: string;
+  noteInput: string;
+}
+
+const REGENERATE_ENTRY_KEYS = ["artifactNode", "noteInput", "step"];
+
+/** All-or-nothing read of a `regenerate` list: every entry carries exactly the
+ * three members, non-empty ids, an admissible `noteInput` and a unique
+ * `artifactNode` (1 to 16 entries); otherwise null. Mirrors
+ * `regenerateDeclarationSchema` in `packages/agents/src/verdaccio/package-contract.ts`. */
+function readRegenerateList(raw: unknown): RegenerateEntry[] | null {
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > 16) return null;
+  const out: RegenerateEntry[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+    const e = entry as Record<string, unknown>;
+    if (Object.keys(e).sort().join() !== REGENERATE_ENTRY_KEYS.join()) return null;
+    const { artifactNode, step, noteInput } = e;
+    if (typeof artifactNode !== "string" || artifactNode.length === 0) return null;
+    if (typeof step !== "string" || step.length === 0) return null;
+    if (!isRepairFindingsInputName(noteInput)) return null;
+    if (out.some((o) => o.artifactNode === artifactNode)) return null;
+    out.push({ artifactNode, step, noteInput });
+  }
+  return out;
+}
+
+/** The Regenerate entry of the node that filed the reviewed artifact, or null
+ * (cinatra#4264). The one reader the Regenerate dispatch calls. */
+export function readRegenerateEntry(
+  lifecycle: Pick<CompiledManifestLifecycle, "regenerate"> | null | undefined,
+  artifactNode: string,
+): { step: string; noteInput: string } | null {
+  const entry = lifecycle?.regenerate?.find((e) => e.artifactNode === artifactNode);
+  return entry ? { step: entry.step, noteInput: entry.noteInput } : null;
 }
 
 /**
@@ -298,6 +343,83 @@ export function buildRepairFindingsText(findings: readonly RepairFindingText[]):
     (finding, index) => `${index + 1}. ${finding.message}${finding.path ? ` (field: ${finding.path})` : ""}`,
   );
   return [REPAIR_FINDINGS_TEXT_LEAD, lines.join("\n")].join("\n\n");
+}
+
+/** The id of the finding that carries the review floor's Note (the review
+ *  store records the Note field's words under it). */
+export const REVIEW_NOTE_FINDING_ID = "prompt-window";
+
+/**
+ * The reviewer's note of a Regenerate (cinatra#4264): the message of the one
+ * `prompt-window` finding, exactly as recorded, or null when there is no such
+ * finding, more than one, or its message is blank. Read from a stored value,
+ * fail-soft. No other finding stands in for it, and the words are never
+ * wrapped in the findings text: the producing step works from the Note
+ * field's words as they are.
+ */
+export function readRegenerateNote(findings: unknown): string | null {
+  return readWindowFinding(findings, REVIEW_NOTE_FINDING_ID);
+}
+
+/** The id of the finding that carries a picture review's prompt: the recorded
+ *  prompt the floor sends back beside the note (cinatra#3080 item 5). */
+export const PICTURE_PROMPT_FINDING_ID = "picture-prompt";
+
+/** The message of the one finding with `id`, or null when there is none, more
+ *  than one, or its message is blank. */
+function readWindowFinding(findings: unknown, id: string): string | null {
+  if (!Array.isArray(findings)) return null;
+  const matching = findings.filter(
+    (finding): finding is { message?: unknown } =>
+      !!finding && typeof finding === "object" && (finding as { id?: unknown }).id === id,
+  );
+  if (matching.length !== 1) return null;
+  const message = matching[0].message;
+  return typeof message === "string" && message.trim().length > 0 ? message : null;
+}
+
+/** What a Regenerate hands the producing step's one declared input. */
+export type RegenerateDelivery = {
+  /** The recorded words the declared input receives, exactly as recorded. */
+  value: string;
+  /** The findings whose recorded words are exactly `value`: the findings the
+   *  run is given. Every other finding reaches no input of the run. */
+  deliveredFindingIds: string[];
+};
+
+/**
+ * The value of the producing step's declared input for a Regenerate, and the
+ * findings it delivers (cinatra#4264). Which review field fills the input is
+ * a fact of the reviewed work, never of the input's name: the review store
+ * records the picture's prompt (`picture-prompt`) only when the reviewed
+ * revision is a picture with a recorded prompt, read on the server from the
+ * finalized ledger row of that revision (`recordReviewSurfaceChangesRequested`).
+ * So a request that carries that finding regenerates the step that made a
+ * picture, and its prompt fills the declared input whatever that input is
+ * called; the Note never stands in for a malformed or repeated prompt. Every
+ * other request carries the Note (`prompt-window`) alone, and the Note fills
+ * the input whatever that input is called. A finding is delivered when its
+ * words are exactly the value given. Null when the field's finding is
+ * missing, repeated or blank.
+ */
+export function routeRegenerateFindings(findings: unknown): RegenerateDelivery | null {
+  if (!Array.isArray(findings)) return null;
+  const hasPrompt = findings.some(
+    (finding) =>
+      !!finding && typeof finding === "object" && (finding as { id?: unknown }).id === PICTURE_PROMPT_FINDING_ID,
+  );
+  const value = readWindowFinding(findings, hasPrompt ? PICTURE_PROMPT_FINDING_ID : REVIEW_NOTE_FINDING_ID);
+  if (value === null) return null;
+  const deliveredFindingIds = findings
+    .filter(
+      (finding): finding is { id: string; message: string } =>
+        !!finding &&
+        typeof finding === "object" &&
+        typeof (finding as { id?: unknown }).id === "string" &&
+        (finding as { message?: unknown }).message === value,
+    )
+    .map((finding) => finding.id);
+  return { value, deliveredFindingIds };
 }
 
 /**
@@ -781,6 +903,9 @@ export function normalizeLifecycle(raw: unknown): CompiledManifestLifecycle | nu
     if (isRepairFindingsInputName(input)) out.repairFindingsInput = { input };
   }
 
+  const regenerate = readRegenerateList(src.regenerate);
+  if (regenerate) out.regenerate = regenerate;
+
   return Object.keys(out).length > 0 ? out : null;
 }
 
@@ -816,11 +941,46 @@ export function serializeLifecycleConfig(
   if (lifecycle.repairFindingsInput) {
     ordered.repairFindingsInput = { input: lifecycle.repairFindingsInput.input };
   }
+  // cinatra#4264: the regenerate list, sorted by `artifactNode` in code-unit
+  // order, each entry's members in a fixed order. Every writer road either
+  // re-projects it from a readable manifest or, with none, revalidates the
+  // stored list against the new flow before it writes (A1b).
+  if (lifecycle.regenerate && lifecycle.regenerate.length > 0) {
+    ordered.regenerate = [...lifecycle.regenerate]
+      .sort((a, b) => (a.artifactNode < b.artifactNode ? -1 : a.artifactNode > b.artifactNode ? 1 : 0))
+      .map((e) => ({ artifactNode: e.artifactNode, step: e.step, noteInput: e.noteInput }));
+  }
   if (lifecycle.requestedSkips && lifecycle.requestedSkips.length > 0) {
     ordered.requestedSkips = [...lifecycle.requestedSkips];
   }
   if (Object.keys(ordered).length === 0) return null;
   return JSON.stringify(ordered);
+}
+
+/** The RAW `regenerate` value of a stored `lifecycle_config` text, or undefined
+ * when the column is NULL or the text carries no such key (cinatra#4264). Raw on
+ * purpose: a writer that keeps the stored column (no readable manifest) hands
+ * this value to the regenerate check against the new flow, so a stored list
+ * the normalizer would drop is refused there, never silently kept.
+ *
+ * THROWS on text it cannot read (empty, unparseable, or not a JSON object):
+ * such text may have carried a list, so reading it as "no list" would let a
+ * writer keep it unchecked. Every writer refuses on this throw, as on a failed
+ * row read. The column is JSON text or NULL; an empty text is not "NULL". */
+export function readStoredRegenerate(raw: string | null | undefined): unknown {
+  if (raw === null || raw === undefined) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      `the stored lifecycle declaration cannot be read (${err instanceof Error ? err.message : String(err)})`,
+    );
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("the stored lifecycle declaration cannot be read (it is not a JSON object)");
+  }
+  return (parsed as Record<string, unknown>).regenerate;
 }
 
 /** Parse the persisted JSON-as-text back into the compiled declaration

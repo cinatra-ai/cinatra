@@ -116,7 +116,7 @@ describe("cinatra#3862 leg 1 — the generic repair completer", () => {
     const summary = await completeDispatchedProducerRepairs();
 
     expect(summary).toEqual({
-      scanned: 1, completed: 1, pending: 0, unresolved: 0, failed: 0,
+      scanned: 1, completed: 1, pending: 0, unresolved: 0, escalated: 0, failed: 0,
     });
     expect(ports.submitRepairResponse).toHaveBeenCalledTimes(1);
     expect(ports.submitRepairResponse).toHaveBeenCalledWith(expect.objectContaining({
@@ -159,7 +159,7 @@ describe("cinatra#3862 leg 1 — the generic repair completer", () => {
     const { completeDispatchedProducerRepairs } = await import("../lifecycle-repair-producer-completion-store");
     const summary = await completeDispatchedProducerRepairs();
 
-    expect(summary).toEqual({ scanned: 1, completed: 1, pending: 0, unresolved: 0, failed: 0 });
+    expect(summary).toEqual({ scanned: 1, completed: 1, pending: 0, unresolved: 0, escalated: 0, failed: 0 });
     expect(ports.submitRepairResponse).toHaveBeenCalledTimes(1);
     expect(ports.submitRepairResponse).toHaveBeenCalledWith(expect.objectContaining({
       repairId: "repair-1",
