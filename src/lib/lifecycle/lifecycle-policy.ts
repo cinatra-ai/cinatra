@@ -345,6 +345,83 @@ export function buildRepairFindingsText(findings: readonly RepairFindingText[]):
   return [REPAIR_FINDINGS_TEXT_LEAD, lines.join("\n")].join("\n\n");
 }
 
+/** The id of the finding that carries the review floor's Note (the review
+ *  store records the Note field's words under it). */
+export const REVIEW_NOTE_FINDING_ID = "prompt-window";
+
+/**
+ * The reviewer's note of a Regenerate (cinatra#4264): the message of the one
+ * `prompt-window` finding, exactly as recorded, or null when there is no such
+ * finding, more than one, or its message is blank. Read from a stored value,
+ * fail-soft. No other finding stands in for it, and the words are never
+ * wrapped in the findings text: the producing step works from the Note
+ * field's words as they are.
+ */
+export function readRegenerateNote(findings: unknown): string | null {
+  return readWindowFinding(findings, REVIEW_NOTE_FINDING_ID);
+}
+
+/** The id of the finding that carries a picture review's prompt: the recorded
+ *  prompt the floor sends back beside the note (cinatra#3080 item 5). */
+export const PICTURE_PROMPT_FINDING_ID = "picture-prompt";
+
+/** The message of the one finding with `id`, or null when there is none, more
+ *  than one, or its message is blank. */
+function readWindowFinding(findings: unknown, id: string): string | null {
+  if (!Array.isArray(findings)) return null;
+  const matching = findings.filter(
+    (finding): finding is { message?: unknown } =>
+      !!finding && typeof finding === "object" && (finding as { id?: unknown }).id === id,
+  );
+  if (matching.length !== 1) return null;
+  const message = matching[0].message;
+  return typeof message === "string" && message.trim().length > 0 ? message : null;
+}
+
+/** What a Regenerate hands the producing step's one declared input. */
+export type RegenerateDelivery = {
+  /** The recorded words the declared input receives, exactly as recorded. */
+  value: string;
+  /** The findings whose recorded words are exactly `value`: the findings the
+   *  run is given. Every other finding reaches no input of the run. */
+  deliveredFindingIds: string[];
+};
+
+/**
+ * The value of the producing step's declared input for a Regenerate, and the
+ * findings it delivers (cinatra#4264). Which review field fills the input is
+ * a fact of the reviewed work, never of the input's name: the review store
+ * records the picture's prompt (`picture-prompt`) only when the reviewed
+ * revision is a picture with a recorded prompt, read on the server from the
+ * finalized ledger row of that revision (`recordReviewSurfaceChangesRequested`).
+ * So a request that carries that finding regenerates the step that made a
+ * picture, and its prompt fills the declared input whatever that input is
+ * called; the Note never stands in for a malformed or repeated prompt. Every
+ * other request carries the Note (`prompt-window`) alone, and the Note fills
+ * the input whatever that input is called. A finding is delivered when its
+ * words are exactly the value given. Null when the field's finding is
+ * missing, repeated or blank.
+ */
+export function routeRegenerateFindings(findings: unknown): RegenerateDelivery | null {
+  if (!Array.isArray(findings)) return null;
+  const hasPrompt = findings.some(
+    (finding) =>
+      !!finding && typeof finding === "object" && (finding as { id?: unknown }).id === PICTURE_PROMPT_FINDING_ID,
+  );
+  const value = readWindowFinding(findings, hasPrompt ? PICTURE_PROMPT_FINDING_ID : REVIEW_NOTE_FINDING_ID);
+  if (value === null) return null;
+  const deliveredFindingIds = findings
+    .filter(
+      (finding): finding is { id: string; message: string } =>
+        !!finding &&
+        typeof finding === "object" &&
+        typeof (finding as { id?: unknown }).id === "string" &&
+        (finding as { message?: unknown }).message === value,
+    )
+    .map((finding) => finding.id);
+  return { value, deliveredFindingIds };
+}
+
 /**
  * The input a producer's compiled lifecycle declares for its repair findings,
  * or null when it declares none, or names an input that is not admissible (the

@@ -1,6 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 import { writeStepSnapshotRow, type StepSnapshotWriter } from "./step-snapshots";
+import { routeRegenerateFindings } from "@/lib/lifecycle/lifecycle-policy";
 import {
   PLATFORM_SUPPLIED_FLOW_INPUTS,
   PLATFORM_SUPPLIED_RUN_TOKEN_KEY,
@@ -100,6 +101,63 @@ export function segmentRepairIdFromRunId(runId: string | null | undefined): stri
   const id = runId.slice(SEGMENT_REPAIR_RUN_PREFIX.length);
   return id.length > 0 ? id : null;
 }
+
+/** The sentinel an escalated repair carries on `change_summary`; read it only
+ *  through `dispatchEscalationReason` (`./lifecycle-repair-dispatch-store`,
+ *  which re-exports it). It lives here so the run start reaches the escalation
+ *  below without the dispatch store (route-graph ratchet). */
+export const DISPATCH_ESCALATION_PREFIX = "[escalated] ";
+
+/** Why a Regenerate repair whose run is not in the declared-input form
+ *  (`segmentInputsInDeclaredForm`) is escalated (cinatra#4264). */
+export const REGENERATE_RUN_NOT_DECLARED_FORM =
+  "the Regenerate's repair run was made with other inputs than the reviewer's words in the step's declared input, so it is not run and its work is not applied";
+
+/** The escalation of a finished Regenerate run whose signed receipt names
+ *  another segment (another step or node) than the run's recorded input. */
+export const REGENERATE_RECEIPT_NOT_RECORDED_SEGMENT =
+  "the Regenerate's repair run finished a segment other than the step its dispatch recorded, so its work is not applied";
+
+/**
+ * cinatra#4264: escalate the Regenerate repair of a run whose inputs are not
+ * the declared-input form. One rule for both readers of such a run: the
+ * worker's run start, which fails the run (`resolveRegenerateSegment` refuses
+ * it), and the completer, which finds it finished. During a rolling deployment
+ * an older dispatcher can create the run in the earlier form and mark its
+ * repair `dispatched`; the dispatch drain reads only `requested` repairs, so
+ * the escalation takes a `requested` or a `dispatched` repair. Only a repair
+ * that names a Regenerate node is taken. A compare-and-set, as the dispatch
+ * store's `escalateRepair` (the same transaction carries a declared review's
+ * latest decision): a second call for the same repair changes nothing and
+ * returns false. Its modules load lazily: the run start's module graph stays
+ * as it was (route-graph ratchet).
+ */
+export async function escalateRegenerateRepairOfUndeclaredRun(
+  repairId: string,
+  reason: string = REGENERATE_RUN_NOT_DECLARED_FORM,
+): Promise<boolean> {
+  const [{ carryDeclaredReviewDecision }, { db }, { lifecycleRepair }, { and, eq, inArray, isNotNull, sql }] =
+    await Promise.all([import("./lifecycle-repair-store"), import("./db"), import("./schema"), import("drizzle-orm")]);
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .update(lifecycleRepair)
+      .set({
+        status: "escalated",
+        changeSummary: `${DISPATCH_ESCALATION_PREFIX}${reason}`,
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(
+          eq(lifecycleRepair.id, repairId),
+          and(inArray(lifecycleRepair.status, ["requested", "dispatched"]), isNotNull(lifecycleRepair.regenerateNodeId)),
+        ),
+      )
+      .returning({ lineageId: lifecycleRepair.lineageId });
+    if (rows.length !== 1) return false;
+    await carryDeclaredReviewDecision(tx, rows[0].lineageId);
+    return true;
+  });
+}
 const FENCE_TIMEOUT_MS = 10_000;
 
 function nonEmptyString(value: unknown): value is string {
@@ -169,6 +227,9 @@ export type RegenerateRepairIntent = {
   regenerateNodeId: string | null;
   baseArtifactId: string;
   baseRepresentationRevisionId: string;
+  /** The repair's recorded findings: what the run's declared input must hold
+   *  (`segmentInputsInDeclaredForm`). */
+  findings?: unknown;
 };
 
 export type StoredStepSnapshot = {
@@ -196,7 +257,10 @@ export type RegenerateSegmentPlan = {
 export type RegenerateSegmentResolution =
   | { kind: "ordinary" }
   | { kind: "segment"; plan: RegenerateSegmentPlan }
-  | { kind: "refused"; reason: string };
+  /** `inputsNotDeclared`: the refusal is the run's own inputs, which are not
+   *  the declared-input form (`segmentInputsInDeclaredForm`). The run start
+   *  then escalates the run's repair as well. */
+  | { kind: "refused"; reason: string; inputsNotDeclared?: true };
 
 export type RegenerateSegmentDeps = {
   /** The repair a repair-run id belongs to (null: not a repair run, or no row). */
@@ -297,6 +361,7 @@ async function defaultRegenerateSegmentDeps(): Promise<RegenerateSegmentDeps> {
         regenerateNodeId: repair.regenerateNodeId ?? null,
         baseArtifactId: repair.baseArtifactId,
         baseRepresentationRevisionId: repair.baseRepresentationRevisionId,
+        findings: repair.findings,
       };
     },
     readVerifiedFilingNode: (input) => readVerifiedFilingNode(input),
@@ -320,15 +385,123 @@ function refused(reason: string): RegenerateSegmentResolution {
 }
 
 /**
+ * The declared input a Regenerate's dispatch wrote its run for (cinatra#4264),
+ * recorded in the run's typed request under `regenerateInput` when the run is
+ * created: the repaired node, its step, the input the step declares and the
+ * flow's start output that feeds it. It carries no words. The run start and
+ * the completer read the run against it; the completer reads only it and the
+ * repair's findings, never the template or the installed flow, which can
+ * change after the run was made. A run made by an earlier build has none.
+ */
+export type RegenerateInputRecord = {
+  artifactNode: string;
+  step: string;
+  noteInput: string;
+  startOutput: string;
+};
+
+/** The typed request's key of the `RegenerateInputRecord`. */
+export const REGENERATE_INPUT_RECORD_KEY = "regenerateInput";
+
+function parseInputParams(inputParams: unknown): Record<string, unknown> | null {
+  let params: unknown = inputParams;
+  if (typeof inputParams === "string") {
+    try {
+      params = JSON.parse(inputParams);
+    } catch {
+      return null;
+    }
+  }
+  return plainObject(params) ? params : null;
+}
+
+function readInputRecord(request: unknown): RegenerateInputRecord | null {
+  if (!plainObject(request)) return null;
+  const record = request[REGENERATE_INPUT_RECORD_KEY];
+  if (!plainObject(record)) return null;
+  const { artifactNode, step, noteInput, startOutput } = record;
+  if (!nonEmptyString(artifactNode) || !nonEmptyString(step) || !nonEmptyString(noteInput)) return null;
+  if (!usableNoteKey(startOutput as string | null)) return null;
+  if (Object.keys(record).length !== 4) return null;
+  return { artifactNode, step, noteInput, startOutput: startOutput as string };
+}
+
+/**
+ * Whether a segment run's input params are the declared-input form the drain
+ * writes for `expected` (cinatra#4264): exactly the start output and the typed
+ * request; the start output holding the value `routeRegenerateFindings` gives
+ * for the repair's findings; the request holding no
+ * findings and recording exactly `expected`. A run made in the earlier form
+ * (the generic findings text, the request with all its findings, no record)
+ * is not, and is never sent. `inputParams` is the stored JSON text or its
+ * parsed object.
+ */
+export function segmentInputsInDeclaredForm(
+  inputParams: unknown,
+  expected: RegenerateInputRecord,
+  findings: unknown,
+): boolean {
+  const params = parseInputParams(inputParams);
+  if (!params) return false;
+  const keys = Object.keys(params).sort();
+  const want = [expected.startOutput, LIFECYCLE_REPAIR_REQUEST_INPUT].sort();
+  if (keys.length !== 2 || keys[0] !== want[0] || keys[1] !== want[1]) return false;
+  const request = params[LIFECYCLE_REPAIR_REQUEST_INPUT];
+  if (!plainObject(request) || !Array.isArray(request.findings) || request.findings.length !== 0) return false;
+  const record = readInputRecord(request);
+  if (
+    !record ||
+    record.artifactNode !== expected.artifactNode ||
+    record.step !== expected.step ||
+    record.noteInput !== expected.noteInput ||
+    record.startOutput !== expected.startOutput
+  ) {
+    return false;
+  }
+  const delivery = routeRegenerateFindings(findings);
+  return !!delivery && params[expected.startOutput] === delivery.value;
+}
+
+/**
+ * The declared input a finished Regenerate run was made for, read for the
+ * completer from the run's own stored inputs (cinatra#4264): the record its
+ * dispatch wrote, when it names the repair's node and the run is in the
+ * declared-input form for it and the repair's findings
+ * (`segmentInputsInDeclaredForm`). Null otherwise, and for a run made by an
+ * earlier build (no record). Nothing else is read: a template or flow that
+ * changed after the run was made, or is not mounted now, never decides.
+ */
+export function recordedRegenerateInput(input: {
+  regenerateNodeId: string;
+  findings: unknown;
+  inputParams: unknown;
+}): RegenerateInputRecord | null {
+  const params = parseInputParams(input.inputParams);
+  const record = params ? readInputRecord(params[LIFECYCLE_REPAIR_REQUEST_INPUT]) : null;
+  if (!record || record.artifactNode !== input.regenerateNodeId) return null;
+  return segmentInputsInDeclaredForm(params, record, input.findings) ? record : null;
+}
+
+/**
  * Whether `run` is a Regenerate segment run, and its plan. `ordinary` for a
  * run that is not a lifecycle repair run, a repair run whose id names no
  * repair, and a repair whose `regenerate_node_id` is NULL (both run as before).
  * `refused` for every disagreement of the re-derivation and for a read fault
- * (fail closed: the run is failed before anything is sent).
+ * (fail closed: the run is failed before anything is sent). When the caller
+ * passes the run's `inputParams` (the worker's run start does), a run whose
+ * inputs are not the declared-input form (`segmentInputsInDeclaredForm`) is
+ * refused too: a run made in the earlier form, dispatched before this check
+ * existed, never runs with the findings text.
  */
 export async function resolveRegenerateSegment(
   input: {
-    run: { id: string; orgId: string | null; sourceType?: string | null; templateId: string };
+    run: {
+      id: string;
+      orgId: string | null;
+      sourceType?: string | null;
+      templateId: string;
+      inputParams?: unknown;
+    };
     lifecycleConfig: unknown;
     /** The template's package: its installed flow names the note's start output. */
     packageName: string | null;
@@ -370,6 +543,20 @@ export async function resolveRegenerateSegment(
     });
     if (!usableNoteKey(noteStartOutput)) {
       return refused("no single start output of the agent's flow feeds the step's note input");
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(run, "inputParams") &&
+      !segmentInputsInDeclaredForm(
+        run.inputParams,
+        { artifactNode: nodeId, step: entry.step, noteInput: entry.noteInput, startOutput: noteStartOutput },
+        repair.findings,
+      )
+    ) {
+      return {
+        kind: "refused",
+        reason: `${REGENERATE_SEGMENT_REFUSED}: the run's inputs are not the reviewer's words in the step's declared input alone`,
+        inputsNotDeclared: true,
+      };
     }
     const nodes = [...new Set([entry.step, nodeId])].sort();
     const rows = await d.readStepSnapshots({ orgId: repair.orgId, runId: provenance.runId, nodeIds: nodes });
@@ -531,6 +718,19 @@ export type SegmentDispatchPlan =
  * its input params hold the note, under the flow's start output that feeds
  * the entry's `noteInput`, and the typed request only. A provenance that cannot be proven, or another filing node,
  * refuses (the drain escalates the repair; nothing is dispatched).
+ *
+ * THE WORDS APPEAR ONCE (cinatra#4264). The declared input takes the recorded
+ * value of the review field that belongs to the step being regenerated
+ * (`routeRegenerateFindings`: the picture's prompt when the review store
+ * recorded one, which it does only for a picture with a recorded prompt, and
+ * the Note otherwise; the input's name never decides), never a findings text;
+ * a blank or absent value refuses, and a field that does not belong to the
+ * step is never sent.
+ * The typed request is carried with no findings and records the declared
+ * input the run is made for (`RegenerateInputRecord`), so the words reach the
+ * declared input and no other place of the run's input. The repair row keeps
+ * the findings for the record, and the completer marks applied only the
+ * findings those words deliver.
  */
 export async function planSegmentDispatch(
   input: {
@@ -538,7 +738,9 @@ export async function planSegmentDispatch(
     templateId: string;
     packageName: string | null;
     lifecycleConfig: unknown;
-    note: string;
+    /** The repair's recorded findings: the step's declared input takes its
+     *  own field's words from them (`routeRegenerateFindings`). */
+    findings: unknown;
     request: Record<string, unknown>;
   },
   deps?: Pick<RegenerateSegmentDeps, "readVerifiedFilingNode" | "readNoteStartOutput">,
@@ -573,10 +775,23 @@ export async function planSegmentDispatch(
       reason: "Regenerate refused: no single start output of the agent's flow feeds the step's note input",
     };
   }
+  const note = routeRegenerateFindings(input.findings)?.value;
+  if (typeof note !== "string") {
+    return { kind: "refused", reason: "Regenerate refused: the repair carries no reviewer's words for the step's declared input" };
+  }
+  const record: RegenerateInputRecord = {
+    artifactNode: nodeId,
+    step: entry.step,
+    noteInput: entry.noteInput,
+    startOutput: noteStartOutput,
+  };
   return {
     kind: "segment",
     parentRunId: provenance.runId,
-    inputParams: { [noteStartOutput]: input.note, [LIFECYCLE_REPAIR_REQUEST_INPUT]: input.request },
+    inputParams: {
+      [noteStartOutput]: note,
+      [LIFECYCLE_REPAIR_REQUEST_INPUT]: { ...input.request, findings: [], [REGENERATE_INPUT_RECORD_KEY]: record },
+    },
   };
 }
 
@@ -767,16 +982,26 @@ export type SegmentClaimDeps = {
   readReceiptRow: (orgId: string, runId: string) => Promise<StoredStepSnapshot | null>;
 };
 
+/** `claimSegmentProduction`'s refusal of a valid receipt that is not the
+ *  recorded segment: the repair is escalated, never left open. */
+export const SEGMENT_RECEIPT_MISMATCH = "receipt-not-the-recorded-segment" as const;
+
 /**
  * The production a segment run answered with, or null (the repair stays
  * open): exactly one non-CMS production; exactly one finalized ledger row of
- * that revision in this run, whose verified step is `regenerateNodeId`; and a
- * valid persisted receipt naming that node.
+ * that revision in this run, whose verified step is the recorded node; and a
+ * valid persisted receipt. One verified ledger row of another node is
+ * `SEGMENT_RECEIPT_MISMATCH` as well. The receipt is bound to the run's recorded
+ * declaration (`recordedRegenerateInput`): every field it attests that the
+ * record also holds (the node and the step) must equal the record. A valid
+ * receipt that names another step or node (a worker that ran another segment,
+ * e.g. an older build that re-derived the step from an updated template) is
+ * `SEGMENT_RECEIPT_MISMATCH`, and its work is never applied.
  */
 export async function claimSegmentProduction(
-  input: { orgId: string; runId: string; regenerateNodeId: string; key?: string | null },
+  input: { orgId: string; runId: string; record: RegenerateInputRecord; key?: string | null },
   deps: SegmentClaimDeps,
-): Promise<{ artifactId: string; representationRevisionId: string } | null> {
+): Promise<{ artifactId: string; representationRevisionId: string } | typeof SEGMENT_RECEIPT_MISMATCH | null> {
   const productions = await deps.listProductions(input.orgId, input.runId);
   if (productions.length !== 1) return null;
   const production = productions[0]!;
@@ -786,12 +1011,20 @@ export async function claimSegmentProduction(
     artifactId: production.artifactId,
     representationRevisionId: production.representationRevisionId,
   });
-  if (steps.length !== 1 || steps[0] !== input.regenerateNodeId) return null;
+  if (steps.length !== 1) return null;
+  // One verified ledger row that names another node than the recorded one: the run filed its work from another
+  // segment. That is a mismatch to escalate, never a repair left open forever; an unverified row (no step) stays open.
+  if (steps[0] !== input.record.artifactNode) {
+    return typeof steps[0] === "string" && steps[0] !== "" ? SEGMENT_RECEIPT_MISMATCH : null;
+  }
   const receipt = readStoredSegmentReceipt({
     runId: input.runId,
     row: await deps.readReceiptRow(input.orgId, input.runId),
     key: input.key,
   });
-  if (!receipt || receipt.artifactNode !== input.regenerateNodeId) return null;
+  if (!receipt) return null;
+  if (receipt.artifactNode !== input.record.artifactNode || receipt.step !== input.record.step) {
+    return SEGMENT_RECEIPT_MISMATCH;
+  }
   return { artifactId: production.artifactId, representationRevisionId: production.representationRevisionId };
 }

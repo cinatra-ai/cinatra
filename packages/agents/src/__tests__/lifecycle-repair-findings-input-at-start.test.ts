@@ -52,9 +52,15 @@ const segmentMock = vi.hoisted(() => ({
   fenceRegenerateRuntime: vi.fn(async (): Promise<boolean> => false),
   classifyRegenerateSegmentRun: vi.fn(async (): Promise<"segment" | "ordinary" | "unreadable"> => "ordinary"),
 }));
+// cinatra#4264: the escalation of the repair whose run start refuses a run
+// that is not in the declared-input form (a compare-and-set on the repair row).
+const escalationMock = vi.hoisted(() => ({
+  escalateRegenerateRepairOfUndeclaredRun: vi.fn(async (_repairId: string): Promise<boolean> => true),
+}));
 vi.mock("../regenerate-segment", async (orig) => ({
   ...(await orig<typeof import("../regenerate-segment")>()),
   ...segmentMock,
+  ...escalationMock,
 }));
 
 vi.mock("../trigger-store", () => ({
@@ -403,7 +409,13 @@ describe("a Regenerate segment run is resolved and fenced before anything is sen
     }
     expect(segmentMock.resolveRegenerateSegment).toHaveBeenCalledWith(
       expect.objectContaining({
-        run: expect.objectContaining({ id: RUN_ID, sourceType: "lifecycle_repair", templateId: "tmpl-4424" }),
+        run: expect.objectContaining({
+          id: RUN_ID,
+          sourceType: "lifecycle_repair",
+          templateId: "tmpl-4424",
+          // The run's own inputs, so the resolution checks their form.
+          inputParams: expect.objectContaining({ instructions: "Old producing instructions" }),
+        }),
         packageName: null,
       }),
     );
@@ -411,6 +423,44 @@ describe("a Regenerate segment run is resolved and fenced before anything is sen
     expect(edges()).toEqual(["queued->failed"]);
     const failure = storeMock.transitionRunStatus.mock.calls[0] as unknown as [string, string, string, { error: string }];
     expect(failure[3].error).toBe("REGENERATE_SEGMENT_REFUSED: the reviewed revision was filed by another step");
+  });
+
+  // During a rolling deployment an older dispatcher can create the run in the
+  // earlier findings form and mark its repair `dispatched`. The dispatch drain
+  // reads only `requested` repairs, so the run start that refuses such a run
+  // escalates its repair too: the review gets its escalation and is never left
+  // waiting on a run that never answers.
+  // red-first-expect: expected "vi.fn()" to be called with arguments: [ 'repair-4424' ]
+  it("a run whose inputs are not the declared-input form is failed and its repair escalated", async () => {
+    arrange(
+      makeRun({ prompt: "A reviewer requested changes", lifecycleRepairRequest: request() }),
+      makeTemplate(declares("instructions")),
+    );
+    const refusal = {
+      kind: "refused",
+      reason: "REGENERATE_SEGMENT_REFUSED: the run's inputs are not the reviewer's words in the step's declared input alone",
+      inputsNotDeclared: true,
+    };
+    segmentMock.resolveRegenerateSegment.mockResolvedValue(refusal);
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await runAgentBuilderExecutionJob({ runId: RUN_ID }, "job-4424");
+      expect(escalationMock.escalateRegenerateRepairOfUndeclaredRun).toHaveBeenCalledWith("repair-4424");
+      expect(edges()).toEqual(["queued->failed"]);
+      expect(storeMock.updateAgentRunInputParams).not.toHaveBeenCalled();
+
+      // A refusal for another reason fails the run only.
+      escalationMock.escalateRegenerateRepairOfUndeclaredRun.mockClear();
+      segmentMock.resolveRegenerateSegment.mockResolvedValue({
+        kind: "refused",
+        reason: "REGENERATE_SEGMENT_REFUSED: the reviewed revision was filed by another step",
+      });
+      await runAgentBuilderExecutionJob({ runId: RUN_ID }, "job-4424");
+      expect(escalationMock.escalateRegenerateRepairOfUndeclaredRun).not.toHaveBeenCalled();
+    } finally {
+      error.mockRestore();
+      segmentMock.resolveRegenerateSegment.mockImplementation(async () => ({ kind: "ordinary" }));
+    }
   });
 
   it("a segment run on a runtime without the capability fails REGENERATE_RUNTIME_UNSUPPORTED and sends nothing", async () => {

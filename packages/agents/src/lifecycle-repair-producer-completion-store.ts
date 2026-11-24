@@ -60,20 +60,33 @@ import { db } from "./db";
 import { agentRunStepSnapshots, agentRuns, artifactProducedOutbox, lifecycleRepair } from "./schema";
 import { TERMINAL_RUN_STATUSES, type AgentRunStatus } from "./run-status";
 import { readRepair, submitRepairResponse } from "./lifecycle-repair-store";
-import { repairRunId, readDeliveredRepairRequest } from "./lifecycle-repair-dispatch-store";
+import {
+  escalateRegenerateRepairOfUndeclaredRun,
+  repairRunId,
+  readDeliveredRepairRequest,
+} from "./lifecycle-repair-dispatch-store";
 import {
   claimSegmentProduction,
   hasRegenerateIntent,
+  recordedRegenerateInput,
+  REGENERATE_RECEIPT_NOT_RECORDED_SEGMENT,
+  SEGMENT_RECEIPT_MISMATCH,
   SEGMENT_RECEIPT_NODE_ID,
   type SegmentClaimDeps,
 } from "./regenerate-segment";
 
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
+import { routeRegenerateFindings } from "@/lib/lifecycle/lifecycle-policy";
 import {
   advanceArtifactPointerOntoRevision,
   refileRevisionOntoArtifact,
   SemanticArtifactRevisionAppendRefusal,
 } from "@/lib/artifacts/artifact-revision-append";
+
+/** Why a Regenerate's finding is reported skipped: its words reached no input
+ *  of the segment run (cinatra#4264). */
+export const REGENERATE_FINDING_NOT_DELIVERED =
+  "the producing step declares no input for this field, so the run was not given these words";
 
 /** The CMS-snapshot capture emitter, the one emitter this drain does not claim.
  * Its rows were the answers the CMS bridge's retired completer matched on a
@@ -208,6 +221,11 @@ export interface ProducerRepairCompletionSummary {
    * pin already occupied). The repair stays OPEN rather than finalizing wrong.
    */
   unresolved: number;
+  /**
+   * A Regenerate repair whose finished run's inputs are not the declared-input
+   * form (cinatra#4264): escalated, its run's work never applied.
+   */
+  escalated: number;
   failed: number;
 }
 
@@ -317,6 +335,7 @@ export async function completeDispatchedProducerRepairs(opts?: {
     completed: 0,
     pending: 0,
     unresolved: 0,
+    escalated: 0,
     failed: 0,
   };
 
@@ -398,7 +417,7 @@ export async function completeDispatchedProducerRepairs(opts?: {
       // past, with no way back. A run that is still going has not answered yet:
       // it is `pending`, and the next pass asks again.
       const [run] = await db
-        .select({ status: agentRuns.status })
+        .select({ status: agentRuns.status, inputParams: agentRuns.inputParams })
         .from(agentRuns)
         .where(eq(agentRuns.id, runId))
         .limit(1);
@@ -445,12 +464,47 @@ export async function completeDispatchedProducerRepairs(opts?: {
         );
         continue;
       }
-      const production = segmentIntent && regenerateNodeId
+      // cinatra#4264: a Regenerate run is accepted only when its stored inputs
+      // are the declared-input form its dispatch recorded in them
+      // (`recordedRegenerateInput`: the record the dispatch wrote, and the
+      // repair's own findings; the template and the installed flow are not
+      // read, so an agent updated after the run was made never decides). A
+      // run an older build made in the earlier form (no record: an older
+      // dispatcher during a rolling deployment) is never applied, and one the
+      // run start failed is never left `dispatched` with no successor: the
+      // repair is escalated, by the rule the run start follows
+      // (`escalateRegenerateRepairOfUndeclaredRun`). A second pass finds the
+      // repair escalated and writes nothing.
+      const regenerateInput =
+        segmentIntent && regenerateNodeId
+          ? recordedRegenerateInput({ regenerateNodeId, findings: repair.findings, inputParams: run.inputParams })
+          : null;
+      if (segmentIntent && regenerateNodeId && !regenerateInput) {
+        if (await escalateRegenerateRepairOfUndeclaredRun(repair.id)) summary.escalated += 1;
+        console.error(
+          `[lifecycle-repair-producer-completion-store] the run of repair ${repair.id} was not made in the ` +
+            `declared-input form; the repair is escalated and the run's work is not applied.`,
+        );
+        continue;
+      }
+      // A Regenerate's receipt is bound to the recorded declaration: a
+      // valid receipt for another step or node escalates the repair.
+      const production = segmentIntent && regenerateInput
         ? await claimSegmentProduction(
-            { orgId: repair.orgId, runId, regenerateNodeId },
+            { orgId: repair.orgId, runId, record: regenerateInput },
             segmentClaimDeps,
           )
         : await claimProduction(repair.orgId, runId);
+      if (production === SEGMENT_RECEIPT_MISMATCH) {
+        if (await escalateRegenerateRepairOfUndeclaredRun(repair.id, REGENERATE_RECEIPT_NOT_RECORDED_SEGMENT)) {
+          summary.escalated += 1;
+        }
+        console.error(
+          `[lifecycle-repair-producer-completion-store] the run of repair ${repair.id} finished another segment ` +
+            `than its recorded step; the repair is escalated and the run's work is not applied.`,
+        );
+        continue;
+      }
       if (!production) {
         summary.unresolved += 1;
         continue;
@@ -575,6 +629,32 @@ export async function completeDispatchedProducerRepairs(opts?: {
         refiledOntoBase = true;
       }
 
+      // The producing step carries no per-finding "which one did I fix"
+      // channel: it was handed the words and made the work again. An ordinary
+      // repair run is handed every finding, so each is reported applied. A
+      // Regenerate segment run is handed only the words of the review field
+      // that belongs to the reviewed work (`routeRegenerateFindings`,
+      // cinatra#4264): the picture's prompt, which the review store records
+      // only for a picture with a recorded prompt, or else the Note. So only
+      // the findings those words deliver are reported applied; a
+      // finding that reached no input of the run is reported skipped. This is
+      // an annotation, not a security boundary: the post-change verification
+      // is what measures the produced revision against what the review
+      // authorized.
+      const deliveredFindingIds = segmentIntent
+        ? new Set(
+            regenerateInput
+              ? (routeRegenerateFindings(repair.findings)?.deliveredFindingIds ?? [])
+              : [],
+          )
+        : null;
+      const findingOutcomes = repair.findings.map((f) =>
+        deliveredFindingIds === null || deliveredFindingIds.has(f.id)
+          ? { findingId: f.id, applied: true }
+          : { findingId: f.id, applied: false, skipReason: REGENERATE_FINDING_NOT_DELIVERED },
+      );
+      const appliedCount = findingOutcomes.filter((o) => o.applied).length;
+
       const result = await submitRepairResponse({
         repairId: repair.id,
         currentBaseRevisionId,
@@ -593,13 +673,8 @@ export async function completeDispatchedProducerRepairs(opts?: {
             artifactId: successorTarget.artifactId,
             representationRevisionId: successorTarget.representationRevisionId,
           },
-          // The producing step carries no per-finding "which one did I fix"
-          // channel — it was handed the note and made the work again — so every
-          // requested finding is reported applied. This is an annotation, not a
-          // security boundary: the post-change verification is what measures the
-          // produced revision against what the review authorized.
-          findingOutcomes: repair.findings.map((f) => ({ findingId: f.id, applied: true })),
-          changeSummary: `The producing step ran again from the reviewer's note and answered ${repair.findings.length} requested change(s).`,
+          findingOutcomes,
+          changeSummary: `The producing step ran again from the reviewer's note and answered ${appliedCount} requested change(s).`,
           producerProvenance: { runId, agentId: null },
         },
       });
