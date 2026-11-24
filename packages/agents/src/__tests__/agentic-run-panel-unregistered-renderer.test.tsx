@@ -6,8 +6,10 @@
  * binding declares any more (its package dropped the declaration). The panel
  * drew "Waiting for input — no renderer configured for this step." and no
  * Continue, so the step could not be answered. It now draws the stored schema
- * through the schema floor, whose Continue sends the answer to the gate's
- * review task.
+ * through the schema floor, whose Continue sends the floor's approval, with
+ * the written note as the resume text, to the gate's review task. A
+ * tombstoned gate (a retired review gate) still draws no renderer and no
+ * Continue.
  *
  * Harness mirrors agentic-run-panel.hitl.test.tsx.
  *
@@ -19,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { fieldRendererRegistry } from "../field-renderer-registry";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
+import * as midRun from "../orchestrator-mid-run-hitl";
 
 vi.mock("@cinatra-ai/sdk-ui", () => ({
   LoadingSpinner: () => null,
@@ -111,6 +114,9 @@ const TASK_ID = "wayflow-task-dropped";
 /** An id a package declared once and no longer declares. */
 const DROPPED_ID = "@cinatra-test/retired-pack-agent:draft-confirm";
 
+/** The gate's renderer id the mocked stream hands the panel. */
+const gateId = vi.hoisted(() => ({ current: "@cinatra-test/retired-pack-agent:draft-confirm" }));
+
 vi.mock("../use-ag-ui-run-stream", () => ({
   useAgUiRunStream: vi.fn(() => ({
     status: "pending_approval",
@@ -119,7 +125,7 @@ vi.mock("../use-ag-ui-run-stream", () => ({
     isLive: true,
     interruptContext: {
       schema: { type: "object", properties: { note: { type: "string", title: "Note" } } },
-      xRenderer: "@cinatra-test/retired-pack-agent:draft-confirm",
+      xRenderer: gateId.current,
       values: {},
       reviewTaskId: "wayflow-task-dropped",
     },
@@ -141,7 +147,20 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  gateId.current = DROPPED_ID;
 });
+
+function mountPanel(AgenticRunPanel: typeof import("../agentic-run-panel").AgenticRunPanel) {
+  return render(
+    <AgenticRunPanel
+      runId="run-dropped"
+      initialStatus="pending_approval"
+      initialError={null}
+      initialMessages={[]}
+      agUiEnabled={true}
+    />,
+  );
+}
 
 describe("AgenticRunPanel — a gate whose renderer id no binding declares", () => {
   // red-first-expect: expected null not to be null
@@ -165,8 +184,31 @@ describe("AgenticRunPanel — a gate whose renderer id no binding declares", () 
     await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
     const call = hitlActions.approveReviewTask.mock.calls[0] as unknown[];
     expect(call[0]).toBe(TASK_ID);
-    expect(call[1]).toEqual(expect.objectContaining({ note: "Go ahead." }));
+    // The floor's approval: the note is the resume text the run receives
+    // (`userResponse`), not the bare "[Approved by operator]" marker.
+    expect(call[1]).toMatchObject({
+      note: "Go ahead.",
+      approved: true,
+      userResponse: "Go ahead.",
+      userResponseFieldName: "note",
+    });
+    expect(call[2]).toBeUndefined();
     await new Promise((r) => setTimeout(r, 20));
     expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("AgenticRunPanel — a tombstoned gate stays unanswerable", () => {
+  // red-first-expect: TOMBSTONED_HITL_RENDERER_IDS is not iterable
+  it("shows the no-renderer paragraph and no Continue for every tombstoned id", async () => {
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    for (const id of midRun.TOMBSTONED_HITL_RENDERER_IDS) {
+      gateId.current = id;
+      mountPanel(AgenticRunPanel);
+      await waitFor(() => expect(document.body.textContent ?? "", id).toMatch(/no renderer configured/));
+      expect(document.getElementById("field-note"), id).toBeNull();
+      expect(continues(), id).toHaveLength(0);
+      cleanup();
+    }
   });
 });

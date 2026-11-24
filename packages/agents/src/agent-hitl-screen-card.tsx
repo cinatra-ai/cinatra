@@ -135,7 +135,12 @@ import {
 } from "./agent-hitl-screen";
 import { getAgentHitlScreenStateAction } from "./agent-hitl-screen-actions";
 import { continueAwaitsAPick, type FieldRendererContext } from "./field-renderer-registry";
-import { hasMidRunHitlBinding, resolveHitlGateRenderer } from "./orchestrator-mid-run-hitl";
+import {
+  gateDrawnBySchemaFloor,
+  hasMidRunHitlBinding,
+  isTombstonedHitlRendererId,
+  resolveHitlGateRenderer,
+} from "./orchestrator-mid-run-hitl";
 import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
 import { DispatchRenderer, type PresentationHint } from "./result-renderers";
 import { approveReviewTask } from "./hitl-actions";
@@ -152,7 +157,7 @@ import {
   setupFieldRendererValue,
   withContextSelectorEnvelope,
   withDeclaredRendererValues,
-  wrapPrimitiveSetupPayload,
+  buildFieldGateAnswer,
 } from "./hitl-gate-submit";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
 import type { LifecycleCardHost } from "@cinatra-ai/agent-ui-protocol/renderable-views";
@@ -548,7 +553,10 @@ function classifyHitlGate(gate: AgentHitlScreenGate): {
   isGroupedSetup: boolean;
 } {
   return {
-    isMidRun: gate.xRenderer.endsWith(":output") || hasMidRunHitlBinding(gate.xRenderer),
+    // A tombstoned gate is never mid-run, so the card draws no Continue for it.
+    isMidRun:
+      !isTombstonedHitlRendererId(gate.xRenderer) &&
+      (gate.xRenderer.endsWith(":output") || hasMidRunHitlBinding(gate.xRenderer)),
     isGroupedSetup: isGroupedSetupRenderer(gate.xRenderer),
   };
 }
@@ -873,14 +881,19 @@ export function AgentHitlScreenFields({
                   // merge keys off `fieldName` to know which input slot to
                   // fill, and a raw value with no field name silently no-ops
                   // and re-emits the same gate for ever.
-                  const { payload, payloadFieldName } = wrapPrimitiveSetupPayload(
-                    gate.fieldName ?? undefined,
+                  // A non-setup gate the schema floor draws (its own id, or an
+                  // unclaimed id the floor took over) is answered with the
+                  // floor's approval instead, so the run receives what was
+                  // written (`buildFieldGateAnswer`).
+                  const { payload, payloadFieldName } = buildFieldGateAnswer({
+                    drawnByFloor: gateDrawnBySchemaFloor(gate.xRenderer, entry),
+                    reviewTaskId: gate.reviewTaskId,
+                    fieldName: gate.fieldName ?? undefined,
                     next,
-                    {
-                      objectTypedField:
-                        (renderSchema as { type?: string } | undefined)?.type === "object",
-                    },
-                  );
+                    schema: gate.inputSchema,
+                    objectTypedField:
+                      (renderSchema as { type?: string } | undefined)?.type === "object",
+                  });
                   // The field goes on showing what the reader put in it while
                   // the card holds the send (cinatra#3532, finding 1).
                   if (hideRendererSubmit === true) {

@@ -134,6 +134,9 @@ import { approveReviewTaskInternal } from "../review-task-actions";
 import * as gateSubmit from "../hitl-gate-submit";
 import { applyAttachmentEnvelope } from "../attachment-envelope-payload";
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
+import * as midRun from "../orchestrator-mid-run-hitl";
+import { fieldRendererRegistry } from "../field-renderer-registry";
+import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 
 const REF = {
   artifactId: "art-1",
@@ -285,5 +288,59 @@ describe("a list step's picks reach the run (cinatra#3562)", () => {
     const envelope = JSON.parse(sentText()!) as { text: string; attachments: unknown[] };
     expect(envelope.attachments).toEqual([REF]);
     expect(JSON.parse(envelope.text)).toMatchObject({ type: "list", listIds: ["L1"] });
+  });
+});
+
+// A gate whose renderer id no binding declares any more is drawn by the schema
+// floor. END TO END from the answer a host builds for it (the floor's own
+// payload, decided by the drawn entry, not by the original id) to the text
+// WayFlow receives: the written note, not "[Approved by operator]".
+describe("a gate the schema floor draws for an unclaimed id resumes with the written note", () => {
+  const DROPPED_ID = "@cinatra-ai/some-retired-agent:old-screen";
+  const SCHEMA = { type: "object", properties: { note: { type: "string", title: "Note" } } };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupRun();
+    fieldRendererRegistry.clear();
+    fieldRendererRegistry.register({
+      id: SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+      priority: 1,
+      condition: (_f, schema) => schema["x-renderer"] === SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+      renderer: () => null,
+      drawsOwnSubmit: true,
+    });
+  });
+
+  function sentText(): string | undefined {
+    const call = sendTaskMock.mock.calls[0]?.[0] as unknown as {
+      message?: { parts?: Array<{ kind?: string; text?: string }> };
+    };
+    return call?.message?.parts?.[0]?.text;
+  }
+
+  // red-first-expect: resolveHitlGateRenderer is not a function
+  it("the host's answer for the floor-drawn gate reaches WayFlow as the note", async () => {
+    const entry = midRun.resolveHitlGateRenderer(
+      "hitl",
+      { ...SCHEMA, "x-renderer": DROPPED_ID },
+      { connectedApps: [] },
+    );
+    const { payload, payloadFieldName } = gateSubmit.buildFieldGateAnswer({
+      drawnByFloor: midRun.gateDrawnBySchemaFloor(DROPPED_ID, entry),
+      reviewTaskId: "wayflow-task-r1",
+      fieldName: undefined,
+      next: { note: "Go ahead." },
+      schema: SCHEMA,
+    });
+    expect(payloadFieldName).toBeUndefined();
+    await approveReviewTaskInternal("wayflow-task-r1", "actor-1", payload as Record<string, unknown>);
+    expect(sendTaskMock).toHaveBeenCalledTimes(1);
+    expect(sentText()).toBe("Go ahead.");
+  });
+
+  it("the raw field answer (the setup-loop shape) would resume with the bare marker", async () => {
+    await approveReviewTaskInternal("wayflow-task-r1", "actor-1", { note: "Go ahead." });
+    expect(sentText()).toBe("[Approved by operator]");
   });
 });

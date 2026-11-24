@@ -7,7 +7,9 @@
  * drew "Waiting for input — no renderer configured for this step." and no
  * Continue on every host, so the step could not be answered. It now draws the
  * stored schema through the schema floor, with one Continue that sends the
- * answer to the gate's review task.
+ * floor's approval, with the written note as the resume text, to the gate's
+ * review task. A tombstoned gate (a retired review gate) still draws no
+ * renderer and no Continue.
  *
  * Harness mirrors agent-hitl-screen-card-boolean-4310.test.tsx.
  *
@@ -44,6 +46,7 @@ import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 import { fieldRendererRegistry } from "../field-renderer-registry";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import { AgentHitlScreenCard } from "../agent-hitl-screen-card";
+import * as midRun from "../orchestrator-mid-run-hitl";
 
 const RUN_ID = "run-dropped";
 const TASK_ID = "wayflow-task-dropped";
@@ -121,9 +124,40 @@ describe("AgentHitlScreenCard — a gate whose renderer id no binding declares",
       fireEvent.click(continues(container)[0]!);
       await waitFor(() => expect(approveMock).toHaveBeenCalledTimes(1));
       expect(approveMock.mock.calls[0]![0]).toBe(TASK_ID);
-      expect(approveMock.mock.calls[0]![1]).toEqual(expect.objectContaining({ note: "Go ahead." }));
+      // The floor's approval: the note is the resume text the run receives
+      // (`userResponse`), not the bare "[Approved by operator]" marker.
+      expect(approveMock.mock.calls[0]![1]).toMatchObject({
+        note: "Go ahead.",
+        approved: true,
+        userResponse: "Go ahead.",
+        userResponseFieldName: "note",
+      });
+      expect(approveMock.mock.calls[0]![2]).toBeUndefined();
       await settle();
       expect(approveMock).toHaveBeenCalledTimes(1);
+    });
+  }
+});
+
+describe("AgentHitlScreenCard — a tombstoned gate stays unanswerable", () => {
+  for (const host of ["run_card", "chat_thread"] as LifecycleCardHost[]) {
+    // red-first-expect: TOMBSTONED_HITL_RENDERER_IDS is not iterable
+    it(`${host}: shows the no-renderer paragraph and no Continue for every tombstoned id`, async () => {
+      for (const id of midRun.TOMBSTONED_HITL_RENDERER_IDS) {
+        const asking = { ...ASKING, gate: { ...ASKING.gate, xRenderer: id } };
+        screenStateMock.mockImplementation(async () => asking);
+        globalThis.fetch = (async () =>
+          new Response(JSON.stringify(asking), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          })) as unknown as typeof fetch;
+        const { container } = mountOn(host);
+        await settle();
+        await waitFor(() => expect(container.textContent ?? "", id).toMatch(/no renderer configured/));
+        expect(container.querySelector("#field-note"), id).toBeNull();
+        expect(continues(container), id).toHaveLength(0);
+        cleanup();
+      }
     });
   }
 });

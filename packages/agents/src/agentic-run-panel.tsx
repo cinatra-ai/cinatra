@@ -107,7 +107,7 @@ import {
   setupFieldRendererValue,
   withContextSelectorEnvelope,
   withDeclaredRendererValues,
-  wrapPrimitiveSetupPayload,
+  buildFieldGateAnswer,
   type GateValidityStore,
 } from "./hitl-gate-submit";
 import {
@@ -144,7 +144,11 @@ import {
   type HitlDerivationState,
 } from "./hitl-recovery-state";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
-import { hasMidRunHitlBinding, resolveHitlGateRenderer } from "./orchestrator-mid-run-hitl";
+import {
+  gateDrawnBySchemaFloor,
+  hasMidRunHitlBinding,
+  resolveHitlGateRenderer,
+} from "./orchestrator-mid-run-hitl";
 import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
 import { getAgentBuilderTask, type TaskSnapshot } from "./a2a-actions";
 import { useAgUiRunStream } from "./use-ag-ui-run-stream";
@@ -3390,15 +3394,24 @@ export function AgenticRunPanel({
                         // and re-emits the same gate forever.
                         // An object-typed setup input emits the whole object —
                         // it still belongs under `fieldName` (cinatra#2484).
-                        const { payload, payloadFieldName } = wrapPrimitiveSetupPayload(
-                          effectiveHitlContext.fieldName,
+                        //
+                        // A non-setup gate the schema floor draws (its own id,
+                        // or an unclaimed id the floor took over) is answered
+                        // with the floor's approval instead, so the run
+                        // receives what was written (`buildFieldGateAnswer`).
+                        const { payload, payloadFieldName } = buildFieldGateAnswer({
+                          drawnByFloor: gateDrawnBySchemaFloor(
+                            effectiveHitlContext.xRenderer,
+                            hitlRendererEntry.entry,
+                          ),
+                          reviewTaskId: effectiveHitlContext.reviewTaskId,
+                          fieldName: effectiveHitlContext.fieldName,
                           next,
-                          {
-                            objectTypedField:
-                              (hitlRendererEntry.fieldSchema as { type?: string } | undefined)
-                                ?.type === "object",
-                          },
-                        );
+                          schema: effectiveHitlContext.inputSchema,
+                          objectTypedField:
+                            (hitlRendererEntry.fieldSchema as { type?: string } | undefined)
+                              ?.type === "object",
+                        });
                         if (productOwnsSetupSend) {
                           // cinatra#3532 — STAGE, do not send. The Continue
                           // below is this field's send, and it submits exactly

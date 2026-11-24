@@ -35,8 +35,11 @@ describe("orchestrator-stepper-panel — isGenericObjectSchema Continue button",
     // A missing type check would incorrectly show Continue for non-object schemas.
     // The id is centralized (identity-surface ruling): the panel references the
     // SCHEMA_FIELD_FALLBACK_RENDERER_ID constant rather than the inline literal.
+    // The panel reads it through `gateDrawnBySchemaFloor`, which also covers an
+    // unclaimed id the floor draws.
     const referencesFallback =
       /SCHEMA_FIELD_FALLBACK_RENDERER_ID/.test(SRC) ||
+      /gateDrawnBySchemaFloor\(/.test(SRC) ||
       SRC.includes(`"${SCHEMA_FIELD_FALLBACK_RENDERER_ID}"`);
     expect(referencesFallback, "panel must reference the schema-field-fallback id").toBe(true);
     expect(SCHEMA_FIELD_FALLBACK_RENDERER_ID).toBe("@cinatra-ai/agent-builder:schema-field-fallback");

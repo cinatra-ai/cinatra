@@ -15,9 +15,13 @@
  *     inline (the artifact-review redirect, the trigger wait);
  *   - the registry's own `resolve` still answers null for the id, so a field
  *     inside a form is never drawn with the floor's Continue;
+ *   - a TOMBSTONED id (a retired review gate) and an id of a review or mid-run
+ *     kind never take the floor, and a tombstoned binding never registers;
  *   - on the orchestrator stepper the gate draws its stored schema's field and
- *     one Continue, and the Continue sends the approval to the gate's review
- *     task once.
+ *     one Continue, and the Continue sends the floor's approval, carrying the
+ *     written note as the resume text, to the gate's review task once;
+ *   - on the stepper a tombstoned gate still shows "no renderer configured"
+ *     and no Continue.
  *
  * Harness mirrors orchestrator-stepper-panel-next-input-gate-4244.test.tsx.
  *
@@ -34,6 +38,7 @@ import {
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
   TRIGGER_WAIT_STATUS_RENDERER_ID,
 } from "../agent-builder-ids";
+import * as registration from "../register-default-renderers";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import { fieldRendererRegistry, type FieldRendererContext } from "../field-renderer-registry";
 import * as midRun from "../orchestrator-mid-run-hitl";
@@ -199,6 +204,55 @@ describe("resolveHitlGateRenderer", () => {
     }
     expect(midRun.resolveHitlGateRenderer("hitl", { ...STORED_SCHEMA }, CONTEXT)).toBeNull();
   });
+
+  // red-first-expect: TOMBSTONED_HITL_RENDERER_IDS is not iterable
+  it("gives no floor to any tombstoned id", () => {
+    const tombstoned = [...midRun.TOMBSTONED_HITL_RENDERER_IDS];
+    expect(tombstoned.length).toBeGreaterThan(0);
+    for (const id of tombstoned) {
+      expect(fieldRendererRegistry.resolve("hitl", gateSchema(id), CONTEXT), id).toBeNull();
+      expect(midRun.resolveHitlGateRenderer("hitl", gateSchema(id), CONTEXT), id).toBeNull();
+    }
+  });
+
+  // red-first-expect: resolveHitlGateRenderer is not a function
+  it("gives no floor to an id of the retired scope or of a review or mid-run kind", () => {
+    for (const id of [
+      "@cinatra/some-retired-agent:old-screen",
+      "@cinatra-ai/some-retired-agent:old-review",
+      "@cinatra-ai/some-retired-agent:review-panel",
+      "@cinatra-ai/some-retired-agent:output",
+      "@cinatra-ai/some-retired-agent:drafts-output",
+      "@cinatra-ai/some-retired-agent:list-picker",
+      "@cinatra-ai/some-retired-agent:setup-form",
+    ]) {
+      expect(midRun.resolveHitlGateRenderer("hitl", gateSchema(id), CONTEXT), id).toBeNull();
+    }
+  });
+
+  // red-first-expect: resolveHitlGateRenderer is not a function
+  it("still gives a plainly retired screen id the floor", () => {
+    for (const id of [DROPPED_ID, "@cinatra-ai/some-retired-agent:old-screen"]) {
+      expect(midRun.resolveHitlGateRenderer("hitl", gateSchema(id), CONTEXT)?.id, id).toBe(
+        SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+      );
+    }
+  });
+
+  // red-first-expect: expected true to be false
+  it("never registers a binding whose id is tombstoned", () => {
+    const tombstoned = "@cinatra/email-reviewer-agent:ai-review-panel";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    registration.registerFieldRendererBindings([
+      { id: tombstoned, kind: "cta", priority: 90 },
+      { id: "@cinatra-ai/some-live-agent:screen", kind: "cta", priority: 90 },
+    ]);
+    warn.mockRestore();
+    const ids = fieldRendererRegistry.list().map((e) => e.id);
+    expect(ids.includes(tombstoned)).toBe(false);
+    expect(ids.includes("@cinatra-ai/some-live-agent:screen")).toBe(true);
+    expect(midRun.resolveHitlGateRenderer("hitl", gateSchema(tombstoned), CONTEXT)).toBeNull();
+  });
 });
 
 describe("OrchestratorStepperPanel - a gate whose renderer id no binding declares", () => {
@@ -212,6 +266,7 @@ describe("OrchestratorStepperPanel - a gate whose renderer id no binding declare
     await waitFor(() => expect(continues()).toHaveLength(1));
   });
 
+  // red-first-expect: expected null not to be null
   it("sends the written answer to the gate's review task once", async () => {
     INTERRUPT = { schema: STORED_SCHEMA, xRenderer: DROPPED_ID, values: {}, reviewTaskId: TASK_ID };
     const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
@@ -222,8 +277,37 @@ describe("OrchestratorStepperPanel - a gate whose renderer id no binding declare
     fireEvent.click(continues()[0]!);
     await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
     expect((hitlActions.approveReviewTask.mock.calls[0] as unknown[])[0]).toBe(TASK_ID);
-    expect((hitlActions.approveReviewTask.mock.calls[0] as unknown[])[1]).toEqual({ [NOTE_FIELD]: "Go ahead." });
+    // The floor's approval: the note is the resume text the run receives
+    // (`userResponse`), not the bare "[Approved by operator]" marker.
+    expect((hitlActions.approveReviewTask.mock.calls[0] as unknown[])[1]).toMatchObject({
+      [NOTE_FIELD]: "Go ahead.",
+      approved: true,
+      userResponse: "Go ahead.",
+      userResponseFieldName: NOTE_FIELD,
+    });
+    expect((hitlActions.approveReviewTask.mock.calls[0] as unknown[])[2]).toBeUndefined();
     await new Promise((r) => setTimeout(r, 20));
     expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("OrchestratorStepperPanel - a tombstoned gate stays unanswerable", () => {
+  // red-first-expect: TOMBSTONED_HITL_RENDERER_IDS is not iterable
+  it("shows the no-renderer paragraph and no Continue for every tombstoned id", async () => {
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    for (const id of midRun.TOMBSTONED_HITL_RENDERER_IDS) {
+      INTERRUPT = { schema: STORED_SCHEMA, xRenderer: id, values: {}, reviewTaskId: TASK_ID };
+      const props = baseProps();
+      render(
+        <OrchestratorStepperPanel
+          {...props}
+          stepperSteps={[{ index: 1, stepNumber: 0, label: "Confirm", xRenderer: id }]}
+        />,
+      );
+      await waitFor(() => expect(document.body.textContent ?? "", id).toMatch(/no renderer configured/));
+      expect(document.getElementById(`field-${NOTE_FIELD}`), id).toBeNull();
+      expect(continues(), id).toHaveLength(0);
+      cleanup();
+    }
   });
 });

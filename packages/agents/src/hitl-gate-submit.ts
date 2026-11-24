@@ -80,6 +80,34 @@ export function isGroupedSetupRenderer(
 }
 
 /**
+ * The answer a field renderer's `onChange` hands a host on a gate that is not
+ * mid-run. A NON-SETUP gate the schema floor draws (`drawnByFloor`: the
+ * floor's own id, or an unclaimed id the floor took over) is a WayFlow gate:
+ * its answer is the floor's approval with the declared answers in it
+ * (`buildSchemaFieldGatePayload`), so the run receives what was written, not
+ * "[Approved by operator]". Every other gate keeps the setup-loop shape
+ * (`wrapPrimitiveSetupPayload`).
+ */
+export function buildFieldGateAnswer(args: {
+  drawnByFloor: boolean;
+  reviewTaskId: string;
+  fieldName: string | undefined;
+  next: unknown;
+  schema: unknown;
+  objectTypedField?: boolean;
+}): { payload: unknown; payloadFieldName: string | undefined } {
+  if (args.drawnByFloor && !isSetupGateTaskId(args.reviewTaskId)) {
+    return {
+      payload: buildSchemaFieldGatePayload({ schema: args.schema, next: args.next }),
+      payloadFieldName: undefined,
+    };
+  }
+  return wrapPrimitiveSetupPayload(args.fieldName, args.next, {
+    objectTypedField: args.objectTypedField === true,
+  });
+}
+
+/**
  * "Review task … already resolved" is an expected race (double-click,
  * external resolution, chat + form submitting the same gate), tolerated
  * at every submit site — same message-matching idiom in both panels.

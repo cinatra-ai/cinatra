@@ -70,7 +70,11 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { LoadingSpinner } from "@cinatra-ai/sdk-ui";
 
-import { classifyMidRunHitl, resolveHitlGateRenderer } from "./orchestrator-mid-run-hitl";
+import {
+  classifyMidRunHitl,
+  gateDrawnBySchemaFloor,
+  resolveHitlGateRenderer,
+} from "./orchestrator-mid-run-hitl";
 import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
 import { useRunWindowScreen } from "./run-window-screen-context";
 import { useRunWindowConversation } from "./use-run-window-conversation";
@@ -163,10 +167,7 @@ import { useRunRowWatch } from "./use-run-row-watch";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext, FieldRendererProps } from "./field-renderer-registry";
-import {
-  ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
-  SCHEMA_FIELD_FALLBACK_RENDERER_ID,
-} from "./agent-builder-ids";
+import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
 import type { RunStepRailEntry } from "./run-step-rail";
 // DOES THE RUN SURFACE'S FRAME ALREADY DRAW THE RAIL (cinatra#3478)? Asked of
 // the composition itself, so this column and the frame's can never both draw.
@@ -1198,12 +1199,15 @@ function HitlApprovalCard({
   // submits through `submitSchemaFieldGate` below. A MALFORMED schema fails
   // closed: no renderer and no Continue, only the "no renderer configured"
   // paragraph - an approval is never sent for a gate nobody could read.
+  //
+  // A gate the floor draws because no entry claims its id is answered the same
+  // way: the drawn entry decides, not the original `x-renderer` id.
   const gateReading = readSchemaFieldGate(interruptContext.schema);
+  const drawnByFloor = gateDrawnBySchemaFloor(interruptContext.xRenderer, entry);
   const onNonSetupFallbackGate =
-    interruptContext.xRenderer === SCHEMA_FIELD_FALLBACK_RENDERER_ID &&
-    !isSetupGateTaskId(interruptContext.reviewTaskId);
+    drawnByFloor && !isSetupGateTaskId(interruptContext.reviewTaskId);
   const isGenericObjectSchema =
-    interruptContext.xRenderer === SCHEMA_FIELD_FALLBACK_RENDERER_ID &&
+    drawnByFloor &&
     (interruptContext.schema as { type?: string })?.type === "object" &&
     !isSetupGateTaskId(interruptContext.reviewTaskId) &&
     gateReading.kind === "bare";
