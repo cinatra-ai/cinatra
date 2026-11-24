@@ -64,6 +64,24 @@ describe("a verified step the template lists as publishing", () => {
     expect(await publishCallAllowed(RUN, "publish")).toBe(false);
   });
 
+  // red-first-expect: expected true to be false
+  it("a decision read with no generation before a reset stamped it is read again under the lock and refuses the newer attempt", async () => {
+    // Before the lock: a released row written with no generation. Under the lock the reset has stamped it with the
+    // attempt it ended, so the current attempt has no released decision of its own.
+    decisions.readDecisionForRunNode.mockImplementation(async (_runId: string, _nodeId: string, executor?: unknown) =>
+      executor === TX ? null : { ...row("released"), runGeneration: null });
+    decisions.withRunRowLock.mockImplementationOnce(async (_runId: string, fn: (tx: unknown, run: unknown) => Promise<unknown>) =>
+      fn(TX, { orgId: "org-1", resetGeneration: 1 }));
+    reviewSeam.listReviews.mockResolvedValue([{ ...APPROVED_REVIEW, runGeneration: 1 }]);
+    expect(await publishCallAllowed(RUN, "publish")).toBe(false);
+    // A row with no generation still current under the lock is served under the run's own generation.
+    decisions.readDecisionForRunNode.mockImplementation(async () => ({ ...row("released"), runGeneration: null }));
+    decisions.withRunRowLock.mockImplementationOnce(async (_runId: string, fn: (tx: unknown, run: unknown) => Promise<unknown>) =>
+      fn(TX, { orgId: "org-1", resetGeneration: 1 }));
+    expect(await publishCallAllowed(RUN, "publish")).toBe(true);
+    expect(decisions.readDecisionForRunNode).toHaveBeenCalledWith("run-1", "publish", TX);
+  });
+
   it("is served once its newest decision is released", async () => {
     decisions.readDecisionForRunNode.mockResolvedValue(row("released"));
     expect(await publishCallAllowed(RUN, "publish")).toBe(true);

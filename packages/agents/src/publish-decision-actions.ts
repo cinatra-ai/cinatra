@@ -627,11 +627,16 @@ export async function publishCallAllowed(run: { id: string; templateId: string }
     const row = await readDecisionForRunNode(run.id, verifiedStepId);
     if (row) {
       if (row.status !== "released") return false;
-      // The decision was read before the lock: a reset since then moved the run to a newer attempt, whose own approval
-      // this decision is not. Under the lock, a decision of another attempt than the run's current one refuses the call.
-      return await withRunRowLock(run.id, async (tx, locked) => !!locked &&
-        (row.runGeneration == null || row.runGeneration === locked.resetGeneration) &&
-        reviewFenceHolds({ runId: run.id, orgId: locked.orgId, generation: row.runGeneration ?? locked.resetGeneration, executor: tx }));
+      // The decision read before the lock may be stale: a reset since then stamped it with the attempt it ended (a row
+      // read with no generation included) and moved the run to a newer attempt, whose own approval it is not. Under the
+      // lock the decision is read again; only that reading decides, and it must still be the same released row.
+      return await withRunRowLock(run.id, async (tx, locked) => {
+        if (!locked) return false;
+        const current = await readDecisionForRunNode(run.id, verifiedStepId, tx);
+        if (!current || current.id !== row.id || current.status !== "released") return false;
+        if (current.runGeneration != null && current.runGeneration !== locked.resetGeneration) return false;
+        return reviewFenceHolds({ runId: run.id, orgId: locked.orgId, generation: current.runGeneration ?? locked.resetGeneration, executor: tx });
+      });
     }
     return template !== null && !listed.includes(verifiedStepId);
   } catch (err) {

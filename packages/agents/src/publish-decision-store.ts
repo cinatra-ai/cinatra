@@ -367,8 +367,13 @@ export async function readDispatchedPublishRows(runId: string, nodeId: string): 
 }
 
 /** The newest decision of this step in the run's current attempt, whatever its status. */
-export async function readDecisionForRunNode(runId: string, nodeId: string): Promise<PublishDecisionRow | null> {
-  const [row] = await db
+/** `executor`: a transaction to read in (withRunRowLock's), so the read sees the run's attempt as the lock holds it. */
+export async function readDecisionForRunNode(
+  runId: string,
+  nodeId: string,
+  executor: Pick<typeof db, "select"> = db,
+): Promise<PublishDecisionRow | null> {
+  const [row] = await executor
     .select()
     .from(agentRunPublishDecisions)
     .where(
