@@ -15,13 +15,17 @@
  *   D5 a revision a gate decided against, one an open gate still pins, and one
  *      a repair names as its base are refused
  *   D6 a text cut at the read cap is refused
- *   D7 the decision-state query is scoped to the organization, the artifact and
- *      the revision
+ *   D7 the decision-state query is scoped to the organization, the artifact,
+ *      the revision and the run
+ *   D8 an actor that may not read the artifact gets exactly the refusal of an
+ *      artifact that does not exist, and nothing else is read
+ *   D9 an artifact the run never filed is refused
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getObjectByIdMock, runQueriesMock, readTextMock } = vi.hoisted(() => ({
+const { getObjectByIdMock, getArtifactMock, runQueriesMock, readTextMock } = vi.hoisted(() => ({
   getObjectByIdMock: vi.fn(),
+  getArtifactMock: vi.fn(),
   runQueriesMock: vi.fn(),
   readTextMock: vi.fn(),
 }));
@@ -34,15 +38,26 @@ vi.mock("@/lib/postgres-config", () => ({
 }));
 vi.mock("@/lib/postgres-schema-init", () => ({ ensurePostgresSchema: vi.fn() }));
 vi.mock("../extension-artifact-reads", () => ({ readArtifactRepresentationText: readTextMock }));
+vi.mock("../artifact-service", () => ({ getArtifact: getArtifactMock }));
 
 // red-first-expect: Cannot find module '/src/lib/artifacts/current-decided-revision-read'
 import { readCurrentDecidedRevision } from "../current-decided-revision-read";
 
 const BODY_TYPE = "@cinatra-ai/email:body";
-const ref = { orgId: "org-1", artifactId: "art-1", representationRevisionId: "rev-2", objectTypeId: BODY_TYPE };
+const actor = { principalId: "user-1", principalType: "user", organizationId: "org-1" } as never;
+const ref = {
+  orgId: "org-1",
+  actor,
+  runId: "run-1",
+  artifactId: "art-1",
+  representationRevisionId: "rev-2",
+  objectTypeId: BODY_TYPE,
+};
+const UNSEEN = "artifact art-1 is not an artifact this organisation can see";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  getArtifactMock.mockReturnValue({ artifactId: "art-1", objectType: BODY_TYPE });
   getObjectByIdMock.mockReturnValue({
     id: "art-1",
     type: BODY_TYPE,
@@ -50,7 +65,7 @@ beforeEach(() => {
     data: { latestRepresentationRevisionId: "rev-2", subject: "Hello", contactId: "c1" },
   });
   runQueriesMock.mockResolvedValue([
-    { rows: [{ decided_against: false, open_gate: false, repaired: false }] },
+    { rows: [{ decided_against: false, open_gate: false, repaired: false, filed_in_run: true }] },
   ]);
   readTextMock.mockResolvedValue({
     artifactId: "art-1",
@@ -73,16 +88,18 @@ describe("cinatra#3089 — readCurrentDecidedRevision", () => {
       text: "The approved body",
       data: { latestRepresentationRevisionId: "rev-2", subject: "Hello", contactId: "c1" },
     });
-    expect(getObjectByIdMock).toHaveBeenCalledWith("art-1", { orgId: "org-1" });
+    expect(getArtifactMock).toHaveBeenCalledWith({ artifactId: "art-1", orgId: "org-1", actor });
+    expect(getObjectByIdMock).toHaveBeenCalledWith("art-1", { orgId: "org-1" }, actor);
     expect(readTextMock).toHaveBeenCalledWith(
-      expect.objectContaining({ orgId: "org-1", artifactId: "art-1", representationRevisionId: "rev-2" }),
+      expect.objectContaining({ orgId: "org-1", actor, artifactId: "art-1", representationRevisionId: "rev-2" }),
     );
   });
 
   it("D2 refuses an artifact that is not a live row of the organization", async () => {
+    getArtifactMock.mockReturnValue(null);
     getObjectByIdMock.mockReturnValue(null);
     const read = await readCurrentDecidedRevision(ref);
-    expect(read).toEqual({ ok: false, error: "artifact art-1 is not a live artifact of organization org-1" });
+    expect(read).toEqual({ ok: false, error: UNSEEN });
     expect(readTextMock).not.toHaveBeenCalled();
   });
 
@@ -120,7 +137,7 @@ describe("cinatra#3089 — readCurrentDecidedRevision", () => {
       ["repaired", "has a repair filed against it"],
     ] as const) {
       runQueriesMock.mockResolvedValueOnce([
-        { rows: [{ decided_against: false, open_gate: false, repaired: false, [flag]: true }] },
+        { rows: [{ decided_against: false, open_gate: false, repaired: false, filed_in_run: true, [flag]: true }] },
       ]);
       const read = await readCurrentDecidedRevision(ref);
       expect(read.ok).toBe(false);
@@ -148,7 +165,7 @@ describe("cinatra#3089 — readCurrentDecidedRevision", () => {
     await readCurrentDecidedRevision(ref);
     const [{ queries }] = runQueriesMock.mock.calls[0] as [{ queries: Array<{ text: string; values: unknown[] }> }];
     expect(queries).toHaveLength(1);
-    expect(queries[0]!.values).toEqual(["org-1", "art-1", "rev-2"]);
+    expect(queries[0]!.values).toEqual(["org-1", "art-1", "rev-2", "run-1"]);
     const sql = queries[0]!.text;
     expect(sql).toContain(`"public"."artifact_review_audit"`);
     expect(sql).toContain("a.disposition IN ('reject', 'changes_requested')");
@@ -156,5 +173,32 @@ describe("cinatra#3089 — readCurrentDecidedRevision", () => {
     expect(sql).toContain("g.pinned_targets @> jsonb_build_array(");
     expect(sql).toContain(`"public"."lifecycle_repair"`);
     expect(sql).toContain("r.base_representation_revision_id = $3");
+    expect(sql).toContain(`"public"."artifact_materializations" m`);
+    expect(sql).toContain("m.org_id = $1 AND m.run_id = $4 AND m.artifact_id = $2");
+  });
+
+  it("D8 an actor that may not read the artifact gets the refusal of an absent artifact, and nothing else is read", async () => {
+    // The row exists in the organization (an organization-only lookup finds
+    // it), but the actor-scoped read does not admit this actor.
+    getArtifactMock.mockReturnValue(null);
+    const read = await readCurrentDecidedRevision(ref);
+    // red-first-expect: Cannot find module '/src/lib/artifacts/current-decided-revision-read'
+    expect(read).toEqual({ ok: false, error: UNSEEN });
+    expect(getArtifactMock).toHaveBeenCalledWith({ artifactId: "art-1", orgId: "org-1", actor });
+    expect(runQueriesMock).not.toHaveBeenCalled();
+    expect(readTextMock).not.toHaveBeenCalled();
+    // The same answer when the row does not exist at all: nothing tells the two apart.
+    getObjectByIdMock.mockReturnValue(null);
+    expect(await readCurrentDecidedRevision(ref)).toEqual(read);
+  });
+
+  it("D9 refuses an artifact the run never filed", async () => {
+    runQueriesMock.mockResolvedValueOnce([
+      { rows: [{ decided_against: false, open_gate: false, repaired: false, filed_in_run: false }] },
+    ]);
+    const read = await readCurrentDecidedRevision(ref);
+    // red-first-expect: Cannot find module '/src/lib/artifacts/current-decided-revision-read'
+    expect(read).toEqual({ ok: false, error: "artifact art-1 was not filed in run run-1" });
+    expect(readTextMock).not.toHaveBeenCalled();
   });
 });

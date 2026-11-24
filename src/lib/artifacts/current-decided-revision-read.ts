@@ -7,8 +7,17 @@ import "server-only";
 // a person decided on) names the revision it was handed and reads it here. The
 // read refuses, by name, every revision that is not safe to act on:
 //
-//   - the artifact is not a live row of the caller's organisation, or is not of
-//     the declared object type the caller expects;
+//   - the ACTING actor may not read the artifact: the lookup is the artifact
+//     read surface's own actor-scoped read (`getArtifact` with the actor: the
+//     objects ownership filter in SQL plus the kernel `object.read` decision),
+//     the same admission `artifact_content_read` reads a representation under.
+//     A row the actor may not read and a row that does not exist get the SAME
+//     refusal, so the answer never tells that an artifact exists;
+//   - the artifact is not of the declared object type the caller expects;
+//   - the artifact was not filed in the caller's run: no finalized row of the
+//     materialization ledger links the artifact to that run (the drafting
+//     step's mid-run filing, or a message bound in an earlier drive of the
+//     same run). A body of another run is not a body of this send;
 //   - the revision is not the artifact's CURRENT revision: the objects row
 //     points at its latest representation (`latestRepresentationRevisionId`,
 //     moved by every append and refile, artifact-revision-append.ts), so a body
@@ -29,6 +38,7 @@ import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-conf
 import { runPostgresQueriesAsync } from "@/lib/postgres-async";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import { getObjectById } from "@/lib/objects-store";
+import type { ActorContext } from "@/lib/authz/actor-context";
 
 export type CurrentDecidedRevisionRead =
   | {
@@ -49,17 +59,26 @@ export type CurrentDecidedRevisionRead =
  */
 export async function readCurrentDecidedRevision(input: {
   orgId: string;
+  /** The acting actor: the read is admitted for this actor or refused. */
+  actor: ActorContext;
+  /** The run the artifact must have been filed in. */
+  runId: string;
   artifactId: string;
   representationRevisionId: string;
   objectTypeId: string;
 }): Promise<CurrentDecidedRevisionRead> {
-  const { orgId, artifactId, representationRevisionId, objectTypeId } = input;
+  const { orgId, actor, runId, artifactId, representationRevisionId, objectTypeId } = input;
   const name = `revision ${representationRevisionId} of artifact ${artifactId}`;
+  // One answer for "absent" and "not readable by this actor".
+  const unseen: CurrentDecidedRevisionRead = {
+    ok: false,
+    error: `artifact ${artifactId} is not an artifact this organisation can see`,
+  };
   try {
-    const rec = getObjectById(artifactId, { orgId });
-    if (!rec) {
-      return { ok: false, error: `artifact ${artifactId} is not a live artifact of organization ${orgId}` };
-    }
+    const { getArtifact } = await import("./artifact-service");
+    if (!getArtifact({ artifactId, orgId, actor })) return unseen;
+    const rec = getObjectById(artifactId, { orgId }, actor);
+    if (!rec) return unseen;
     if (rec.type !== objectTypeId) {
       return {
         ok: false,
@@ -104,15 +123,28 @@ export async function readCurrentDecidedRevision(input: {
     SELECT 1 FROM "${s}"."lifecycle_repair" r
      WHERE r.org_id = $1 AND r.base_artifact_id = $2
        AND r.base_representation_revision_id = $3
-  ) AS repaired`,
-          values: [orgId, artifactId, representationRevisionId],
+  ) AS repaired,
+  EXISTS (
+    SELECT 1 FROM "${s}"."artifact_materializations" m
+     WHERE m.org_id = $1 AND m.run_id = $4 AND m.artifact_id = $2
+       AND m.phase = 'finalized'
+  ) AS filed_in_run`,
+          values: [orgId, artifactId, representationRevisionId, runId],
         },
       ],
     });
     const row = (res?.rows?.[0] ?? null) as
-      | { decided_against?: boolean; open_gate?: boolean; repaired?: boolean }
+      | {
+          decided_against?: boolean;
+          open_gate?: boolean;
+          repaired?: boolean;
+          filed_in_run?: boolean;
+        }
       | null;
     if (!row) return { ok: false, error: `the decision state of ${name} could not be read` };
+    if (row.filed_in_run !== true) {
+      return { ok: false, error: `artifact ${artifactId} was not filed in run ${runId}` };
+    }
     if (row.decided_against === true) {
       return { ok: false, error: `${name} was decided against (rejected or sent back for changes)` };
     }
@@ -126,6 +158,7 @@ export async function readCurrentDecidedRevision(input: {
     const { readArtifactRepresentationText } = await import("./extension-artifact-reads");
     const read = await readArtifactRepresentationText({
       orgId,
+      actor,
       artifactId,
       representationRevisionId,
       knownLatestRevisionId: latest,

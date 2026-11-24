@@ -101,12 +101,13 @@ export type TriggerEmailSendDeps = {
   // is warned and the send goes on. Defaults to the ledger-backed materializer.
   emitEmailFanout?: (args: EmailFanoutArgs) => Promise<EmailFanoutResult>;
   // Read one approved body revision the send start was handed (cinatra#3089):
-  // its text and the body's declared fields, only while it is the artifact's
-  // current, undisputed revision of the declared body type in the actor's
-  // organization; else a named refusal. Defaults to the host's
+  // its text and the body's declared fields, only while the ACTING actor may
+  // read the artifact, the run named by `runId` filed it, and it is the
+  // artifact's current, undisputed revision of the declared body type in the
+  // actor's organization; else a named refusal. Defaults to the host's
   // current-revision reader (`readCurrentDecidedRevision`).
   readDecidedBody?: (
-    ref: { artifactId: string; representationRevisionId: string },
+    ref: { artifactId: string; representationRevisionId: string; runId: string },
     actor: PrimitiveActorContext,
   ) => Promise<DecidedBodyRead>;
 };
@@ -207,8 +208,19 @@ function buildLazyDefaultDeps(): TriggerEmailSendDeps {
       if (!orgId) {
         return { ok: false, error: "the sending actor carries no organization, so no body can be read" };
       }
-      const { readCurrentDecidedRevision } = await import("./artifacts/current-decided-revision-read");
-      return readCurrentDecidedRevision({ orgId, ...ref, objectTypeId: EMAIL_BODY_TYPE_ID });
+      // The kernel actor the objects reads build for this tool actor
+      // (`objects_get` reads the bundle under the same one), so the body is
+      // admitted exactly as any other read this actor makes of the artifact.
+      const [{ kernelActorForRead }, { readCurrentDecidedRevision }] = await Promise.all([
+        import("./authz/enforce-resource-access"),
+        import("./artifacts/current-decided-revision-read"),
+      ]);
+      return readCurrentDecidedRevision({
+        orgId,
+        actor: kernelActorForRead(actor, orgId),
+        ...ref,
+        objectTypeId: EMAIL_BODY_TYPE_ID,
+      });
     },
   };
 }
@@ -635,9 +647,17 @@ async function loadDefaultEmitEmailFanout(): Promise<
     try {
       const listed = (await client.typesList()) as { types?: Array<{ type: string }> };
       registeredTypes = new Set((listed?.types ?? []).map((t) => t.type));
-    } catch {
-      // If type discovery fails, stay dormant rather than risk a misclassified
-      // write — the projection is best-effort and must never break the send.
+    } catch (err) {
+      // The approved form needs every message bound to its revision before
+      // any mail, so a failed discovery refuses that send (cinatra#3089).
+      if (args.approvedBodies) {
+        throw new EmailBodyRefusedError(
+          `the registered object types could not be read, so no message can be bound to its approved body: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      // The reference-only form keeps its behaviour: if type discovery fails,
+      // stay dormant rather than risk a misclassified write — the projection
+      // is best-effort there and must never break the send.
       registeredTypes = new Set();
     }
     return materializeEmailFanout(
@@ -776,6 +796,7 @@ async function runInitialSend(args: {
     }
     const drafts = asDraftArray(draftEnv.data);
     const recipients = asRecipientArray(recipEnv.data);
+    const runScopeId = resolveRunScopeId(draftEnv, recipEnv);
     if (drafts.length === 0) {
       return {
         status: "failed",
@@ -800,6 +821,13 @@ async function runInitialSend(args: {
       const refuse = (reason: string): never => {
         throw new Error(`The send was refused before any email went out: ${reason}`);
       };
+      // Each message is bound to its approved revision under the run before
+      // any mail, so a send without a run has nothing to bind under.
+      if (!runScopeId) {
+        throw new EmailBodyRefusedError(
+          "The send was refused before any email went out: the campaign bundles carry no run id, so no message can be bound to its approved body",
+        );
+      }
       const textOf = (value: unknown): string | undefined =>
         typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
       const contactOf = (draft: DraftRow): string | undefined =>
@@ -853,7 +881,11 @@ async function runInitialSend(args: {
       approvedByIndex = new Map();
       for (const [contact, body] of bodyByContact) {
         const read = await readDecidedBody(
-          { artifactId: body.artifactId, representationRevisionId: body.representationRevisionId },
+          {
+            artifactId: body.artifactId,
+            representationRevisionId: body.representationRevisionId,
+            runId: runScopeId,
+          },
           actor,
         );
         if (!read.ok) {
@@ -881,15 +913,50 @@ async function runInitialSend(args: {
     // ledgered writer refuses is a visible failure of the send (cinatra#3089):
     // it is let through to the outer catch, so nothing is sent and the refusal
     // is named. Any other projection failure is warned and the send goes on.
-    const runScopeId = resolveRunScopeId(draftEnv, recipEnv);
-    if (runScopeId) {
+    //
+    // THE APPROVED FORM binds EVERY message to its approved revision on the
+    // ledger here, all before the first mail below: any failure (a refused or
+    // skipped binding, a failed fan-out) refuses the send with nothing mailed.
+    // A retry after a failed mail finds the same bindings (the ledger row of
+    // each message is read back, `bindFanoutMessageRevision`) and mails again.
+    // The reference-only form keeps its best-effort projection unchanged.
+    if (approvedByIndex && runScopeId) {
+      let fanout: EmailFanoutResult;
+      try {
+        fanout = await emitEmailFanout({
+          runScopeId,
+          campaignId: input.campaignId,
+          drafts,
+          recipients,
+          approvedBodies: approvedByIndex,
+          actor,
+        });
+      } catch (fanoutErr) {
+        if (fanoutErr instanceof EmailBodyRefusedError) throw fanoutErr;
+        throw new EmailBodyRefusedError(
+          `The send was refused before any email went out: the messages could not be bound to their approved bodies: ${fanoutErr instanceof Error ? fanoutErr.message : String(fanoutErr)}`,
+        );
+      }
+      if (fanout.skipped.bodies) {
+        throw new EmailBodyRefusedError(
+          `The send was refused before any email went out: the body type ${EMAIL_BODY_TYPE_ID} is not registered, so no message was bound to its approved body`,
+        );
+      }
+      const boundIds = new Set(fanout.bodies.map((b) => b.objectId));
+      for (const [index, body] of approvedByIndex) {
+        if (!boundIds.has(body.artifactId)) {
+          throw new EmailBodyRefusedError(
+            `The send was refused before any email went out: draft ${index + 1} of the bundle was not bound to its approved body`,
+          );
+        }
+      }
+    } else if (runScopeId) {
       try {
         await emitEmailFanout({
           runScopeId,
           campaignId: input.campaignId,
           drafts,
           recipients,
-          ...(approvedByIndex ? { approvedBodies: approvedByIndex } : {}),
           actor,
         });
       } catch (fanoutErr) {
