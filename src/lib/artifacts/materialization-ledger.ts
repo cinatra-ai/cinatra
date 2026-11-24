@@ -338,7 +338,8 @@ function onlyPrompt(rows: Array<Record<string, unknown>>): string | null {
  * revision) and its source (the revision the run wrote). The prompt of a
  * refiled revision is the one recorded for that source, read only through
  * exactly one `repaired` repair of the org that names the revision as its
- * successor and records a source. A revision no repair names (a direct write,
+ * successor and records a source; two such repairs are ambiguous and read
+ * nothing. A revision no repair names (a direct write,
  * with a ledger row or without one) never reads another revision's prompt,
  * whatever bytes it shares. The repair link is read only when the revision
  * has no prompt row of its own, and it too must name exactly one row.
@@ -355,30 +356,34 @@ export async function readRevisionImagePrompt(
   db: RevisionImagePromptDb = ledgerDb(),
 ): Promise<string | null> {
   const s = db.schema.replaceAll('"', '""');
-  const values = [input.orgId, input.artifactId, input.representationRevisionId];
-  const exact = await db.query(
-    `SELECT image_prompt FROM "${s}"."artifact_materializations"
-     WHERE org_id = $1 AND artifact_id = $2 AND representation_revision_id = $3
-       AND phase = 'finalized' AND image_prompt IS NOT NULL
-     LIMIT 2`,
-    values,
-  );
+  const ownPrompt = (artifactId: string, revisionId: string) =>
+    db.query(
+      `SELECT image_prompt FROM "${s}"."artifact_materializations"
+       WHERE org_id = $1 AND artifact_id = $2 AND representation_revision_id = $3
+         AND phase = 'finalized' AND image_prompt IS NOT NULL
+       LIMIT 2`,
+      [input.orgId, artifactId, revisionId],
+    );
+  const exact = await ownPrompt(input.artifactId, input.representationRevisionId);
   if (exact.rows.length > 0) return onlyPrompt(exact.rows);
-  const refiled = await db.query(
-    `SELECT m.image_prompt
+  // The repair links are counted before any prompt is read: two repairs naming
+  // the revision are ambiguous provenance, whatever their sources recorded.
+  const links = await db.query(
+    `SELECT rr.source_artifact_id, rr.source_representation_revision_id
        FROM "${s}"."lifecycle_repair" rr
-       JOIN "${s}"."artifact_materializations" m
-         ON m.org_id = rr.org_id AND m.artifact_id = rr.source_artifact_id
-        AND m.representation_revision_id = rr.source_representation_revision_id
       WHERE rr.org_id = $1 AND rr.successor_artifact_id = $2
         AND rr.successor_representation_revision_id = $3
         AND rr.status = 'repaired'
         AND rr.source_artifact_id IS NOT NULL AND rr.source_representation_revision_id IS NOT NULL
-        AND m.phase = 'finalized' AND m.image_prompt IS NOT NULL
       LIMIT 2`,
-    values,
+    [input.orgId, input.artifactId, input.representationRevisionId],
   );
-  return onlyPrompt(refiled.rows);
+  if (links.rows.length !== 1) return null;
+  const source = links.rows[0];
+  const sourceArtifactId: unknown = source?.source_artifact_id;
+  const sourceRevisionId: unknown = source?.source_representation_revision_id;
+  if (typeof sourceArtifactId !== "string" || typeof sourceRevisionId !== "string") return null;
+  return onlyPrompt((await ownPrompt(sourceArtifactId, sourceRevisionId)).rows);
 }
 
 /**

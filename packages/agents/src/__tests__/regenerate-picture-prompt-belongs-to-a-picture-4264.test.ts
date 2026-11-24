@@ -273,6 +273,9 @@ describe("a refiled successor keeps its picture's prompt on the next Regenerate"
   // The repair that finalized the successor records it and the revision its run wrote.
   const repairs: Repair[] = [
     { orgId: ORG, status: "repaired", successorArtifactId: SUCCESSOR.artifactId, successorRevisionId: SUCCESSOR.representationRevisionId, sourceArtifactId: WRITE.artifactId, sourceRevisionId: WRITE.representationRevisionId },
+    // Two repairs naming one successor: one source recorded a prompt, the other none.
+    { orgId: ORG, status: "repaired", successorArtifactId: "art-4264-twice", successorRevisionId: "rev-4264-twice", sourceArtifactId: WRITE.artifactId, sourceRevisionId: WRITE.representationRevisionId },
+    { orgId: ORG, status: "repaired", successorArtifactId: "art-4264-twice", successorRevisionId: "rev-4264-twice", sourceArtifactId: "art-4264-direct-note", sourceRevisionId: "rev-4264-direct-note" },
   ];
   const ledger: LedgerRow[] = [
     { orgId: ORG, runId: RUN, artifactId: BASE.artifactId, revisionId: BASE.representationRevisionId, phase: "finalized", imagePrompt: FIRST_PROMPT },
@@ -288,15 +291,16 @@ describe("a refiled successor keeps its picture's prompt on the next Regenerate"
     if (!text.includes('"lifecycle_repair" rr')) {
       return { rows: prompts(ledger.filter((m) => m.orgId === orgId && m.artifactId === artifactId && m.revisionId === revisionId)) };
     }
-    const named = repairs.filter(
-      (rr) =>
-        rr.orgId === orgId && rr.successorArtifactId === artifactId && rr.successorRevisionId === revisionId &&
-        rr.status === "repaired" && rr.sourceArtifactId !== null && rr.sourceRevisionId !== null,
-    );
+    // The repair links themselves, every one of them, before any prompt is read.
     return {
-      rows: prompts(
-        ledger.filter((m) => named.some((rr) => m.orgId === rr.orgId && m.artifactId === rr.sourceArtifactId && m.revisionId === rr.sourceRevisionId)),
-      ),
+      rows: repairs
+        .filter(
+          (rr) =>
+            rr.orgId === orgId && rr.successorArtifactId === artifactId && rr.successorRevisionId === revisionId &&
+            rr.status === "repaired" && rr.sourceArtifactId !== null && rr.sourceRevisionId !== null,
+        )
+        .slice(0, 2)
+        .map((rr) => ({ source_artifact_id: rr.sourceArtifactId, source_representation_revision_id: rr.sourceRevisionId })),
     };
   }
 
@@ -368,5 +372,11 @@ describe("a refiled successor keeps its picture's prompt on the next Regenerate"
     expect(
       await readRevisionImagePrompt({ orgId: ORG, artifactId: "art-4264-direct-picture", representationRevisionId: "rev-4264-direct-picture" }),
     ).toBe("a fox drawn twice");
+  });
+
+  it("a revision two repairs name reads no prompt, even when only one source recorded one", async () => {
+    ports.pool = tables;
+    const { readRevisionImagePrompt } = await import("@/lib/artifacts/materialization-ledger");
+    expect(await readRevisionImagePrompt({ orgId: ORG, artifactId: "art-4264-twice", representationRevisionId: "rev-4264-twice" })).toBeNull();
   });
 });
