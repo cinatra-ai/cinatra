@@ -17,7 +17,7 @@ import "server-only";
 // deterministic snapshot. The scan is a bounded readdir over
 // extensions/<scope>/<name>/package.json with a short TTL cache.
 
-import { createHash } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -35,6 +35,7 @@ import type { FieldRendererBindingInput } from "./register-default-renderers";
 import {
   DECLARED_SCREEN_PIN_KEY,
   DECLARED_SCREEN_PIN_NONE,
+  DECLARED_SCREEN_SEAL_KEY,
   DECLARED_SCREEN_PIN_UNVERIFIED,
   readDeclaredScreenPin,
   stepPinAdmits,
@@ -66,6 +67,17 @@ type InstalledScan = {
   entries: CollectedBinding[];
   refusedScreenIds: string[];
   complete: boolean;
+  /**
+   * The installed packages that could not be read cleanly, by the identity
+   * their mount folder gives them (`@<scope>/<dir>`): a manifest unreadable,
+   * torn (unparsable), naming another package than its folder, or declaring
+   * its renderers in a form the validator refuses whole. `@<scope>/` stands
+   * for every package of a scope that could not be listed, and `*` for every
+   * package when the mount could not be listed. Such a package may be the
+   * owner of a bundled id and declare another screen for it than the
+   * generated binding (`bundledOwnerUnread`).
+   */
+  unreadPackages: string[];
 };
 
 let cache: ({ at: number } & InstalledScan) | null = null;
@@ -164,6 +176,7 @@ function collectInstalled(opts?: { fresh?: boolean }): InstalledScan {
   const refused = new Set<string>();
   const generatedById = new Map(GENERATED_FIELD_RENDERER_BINDINGS.map((b) => [b.id, b]));
   let complete = true;
+  const unread = new Set<string>();
   const scan = (): void => {
     let installDir: string;
     try {
@@ -171,6 +184,7 @@ function collectInstalled(opts?: { fresh?: boolean }): InstalledScan {
     } catch (err) {
       warnUnread("the agent runtime mount", err);
       complete = false;
+      unread.add("*");
       return;
     }
     // SORTED traversal — first-declarer-wins among runtime duplicates must be
@@ -184,6 +198,7 @@ function collectInstalled(opts?: { fresh?: boolean }): InstalledScan {
       if (errorCode(err) === "ENOENT") return;
       warnUnread("the agent runtime mount", err);
       complete = false;
+      unread.add("*");
       return;
     }
     for (const scope of scopes) {
@@ -194,9 +209,11 @@ function collectInstalled(opts?: { fresh?: boolean }): InstalledScan {
         if (isAbsence(err)) continue;
         warnUnread(`the installed scope ${scope}`, err);
         complete = false;
+        unread.add(`@${scope}/`);
         continue;
       }
       for (const dir of dirs) {
+        const mountedAs = `@${scope}/${dir}`;
         let text: string;
         try {
           text = readFileSync(join(installDir, scope, dir, "package.json"), "utf8");
@@ -204,6 +221,7 @@ function collectInstalled(opts?: { fresh?: boolean }): InstalledScan {
           if (isAbsence(err)) continue; // not a package dir
           warnUnread(`the manifest of ${scope}/${dir}`, err);
           complete = false;
+          unread.add(mountedAs);
           continue;
         }
         let pkg: {
@@ -215,10 +233,18 @@ function collectInstalled(opts?: { fresh?: boolean }): InstalledScan {
         } catch (err) {
           warnUnread(`the manifest of ${scope}/${dir}`, err);
           complete = false;
+          unread.add(mountedAs);
           continue;
         }
         const packageName = typeof pkg?.name === "string" ? pkg.name : null;
         const declared = pkg?.cinatra?.fieldRenderers;
+        // A manifest that does not name the package its folder holds, or
+        // that declares its renderers in a form refused whole, is not a clean
+        // read of that package: if it owns a bundled id, what it declares for
+        // that id is not known.
+        if (packageName !== mountedAs || (declared !== undefined && !Array.isArray(declared))) {
+          unread.add(mountedAs);
+        }
         if (!packageName || declared === undefined) continue;
         const { entries, errors, refusedScreenIds } = validateFieldRendererDeclarations(
           packageName,
@@ -230,7 +256,6 @@ function collectInstalled(opts?: { fresh?: boolean }): InstalledScan {
         // A bundled id is declared at runtime only by the package that owns
         // it (`ownsBundledId`): any other package's declaration of it, or
         // refusal of its screen, is refused and never reaches the merge.
-        const mountedAs = `@${scope}/${dir}`;
         const owned = (id: string): boolean => {
           const generated = generatedById.get(id);
           if (generated === undefined || ownsBundledId(generated, mountedAs, packageName)) return true;
@@ -256,8 +281,32 @@ function collectInstalled(opts?: { fresh?: boolean }): InstalledScan {
     entries: merged,
     refusedScreenIds: [...refused].filter((id) => !registered.has(id)).sort(),
     complete,
+    unreadPackages: [...unread].sort(),
   };
   return cache;
+}
+
+/**
+ * Could the package that owns a bundled id (`declaredBy`, `@<vendor>/<slug>`)
+ * not be read cleanly by `scan` (cinatra#3470)? Its installed manifest may
+ * then declare another screen for the id than the generated binding, so the
+ * generated binding is no proof of what the id declares: every reader holds
+ * the id as could not be loaded until the package reads cleanly. A bundled id
+ * whose owner was read cleanly, or has no installed package at all, is not.
+ */
+function bundledOwnerUnread(scan: InstalledScan, declaredBy: string): boolean {
+  if (scan.unreadPackages.length === 0) return false;
+  const unread = new Set(scan.unreadPackages);
+  if (unread.has("*") || unread.has(declaredBy)) return true;
+  const slash = declaredBy.indexOf("/");
+  return slash > 0 && unread.has(declaredBy.slice(0, slash + 1));
+}
+
+/** The bundled ids whose owning package `scan` could not read cleanly (`bundledOwnerUnread`). */
+function bundledIdsWithUnreadOwner(scan: InstalledScan): string[] {
+  return GENERATED_FIELD_RENDERER_BINDINGS.filter((b) => bundledOwnerUnread(scan, b.declaredBy))
+    .map((b) => b.id)
+    .sort();
 }
 
 /** What the run page's runtime bindings fetch answers (cinatra#3470). */
@@ -265,6 +314,12 @@ export type RuntimeFieldRendererBindingsPayload = {
   bindings: FieldRendererBindingInput[];
   /** Installed ids whose declared screen was refused (`collectInstalledRefusedScreenIds`). */
   refusedScreenIds: string[];
+  /**
+   * Bundled ids whose owning package could not be read cleanly
+   * (`bundledOwnerUnread`): the binding compiled into the page may not be
+   * what the id declares now, so each is held as could not be loaded.
+   */
+  unreadOwnerIds?: string[];
   /**
    * Present when a part of the installed agents could not be read: the
    * answer names only what was read, and an id it does not name may still
@@ -291,7 +346,9 @@ export type RuntimeFieldRendererBindingsPayload = {
 export function runtimeFieldRendererBindingsPayload(
   opts?: { fresh?: boolean },
 ): RuntimeFieldRendererBindingsPayload {
-  const { refusedScreenIds, complete } = collectInstalled({ fresh: opts?.fresh === true });
+  const scan = collectInstalled({ fresh: opts?.fresh === true });
+  const { refusedScreenIds, complete } = scan;
+  const unreadOwnerIds = bundledIdsWithUnreadOwner(scan);
   const merged = getMergedFieldRendererBindings();
   const generated = new Set<unknown>(GENERATED_FIELD_RENDERER_BINDINGS);
   return {
@@ -307,10 +364,11 @@ export function runtimeFieldRendererBindingsPayload(
         ...(screen !== undefined ? { screen } : {}),
       })),
     refusedScreenIds,
+    ...(unreadOwnerIds.length > 0 ? { unreadOwnerIds } : {}),
     ...(complete ? {} : { incomplete: true as const }),
     screenPins: Object.fromEntries(
       merged
-        .filter((b) => b.screen !== undefined)
+        .filter((b) => b.screen !== undefined && !unreadOwnerIds.includes(b.id))
         .map((b) => [b.id, declaredScreenPin(b)]),
     ),
   };
@@ -397,7 +455,46 @@ export function stepDeclarationStanding(
 ): "matches" | "changed" | "unknown" {
   const current = currentDeclaredScreenPin(xRenderer, opts);
   if (current === null) return "unknown";
-  return stepPinAdmits(readDeclaredScreenPin(stepSchema), current) ? "matches" : "changed";
+  return stepPinAdmits(readSealedDeclaredScreenPin(xRenderer, stepSchema), current)
+    ? "matches"
+    : "changed";
+}
+
+// The key of the host's pin seals: derived from the app secret under its own
+// label, as the host's other signatures are (the lifecycle refs, the hold
+// ref), so a seal is never valid as any other host token, or the reverse.
+const DECLARED_SCREEN_SEAL_KEY_INFO = "cinatra:declared-screen-pin-seal:v1";
+
+function declaredScreenSealKey(): Buffer | null {
+  const secret = process.env.BETTER_AUTH_SECRET;
+  if (!secret) return null;
+  return createHmac("sha256", secret).update(DECLARED_SCREEN_SEAL_KEY_INFO).digest();
+}
+
+/**
+ * The host's seal over the pin `pin` of a step of the gate drawn by
+ * `xRenderer` (cinatra#3470), or null with no app secret. Only the host can
+ * make it: an agent's schema can name any pin, but never seal one. It binds
+ * the renderer id, so a seal never vouches for a pin under another id.
+ */
+function sealDeclaredScreenPin(xRenderer: string, pin: string): string | null {
+  const key = declaredScreenSealKey();
+  if (key === null) return null;
+  const mac = createHmac("sha256", key).update(`h1\n${xRenderer}\n${pin}`, "utf8").digest("hex");
+  return `h1:${mac}`;
+}
+
+/**
+ * The pin a parked step's gate schema carries, read only when the host sealed
+ * it for this renderer (`DECLARED_SCREEN_SEAL_KEY`): any other pin reads as
+ * no screen (`readDeclaredScreenPin`), never as the pin it names.
+ */
+export function readSealedDeclaredScreenPin(xRenderer: string, stepSchema: unknown): string {
+  return readDeclaredScreenPin(stepSchema, (pin, seal) => {
+    const expected = sealDeclaredScreenPin(xRenderer, pin);
+    if (expected === null || expected.length !== seal.length) return false;
+    return timingSafeEqual(Buffer.from(expected, "utf8"), Buffer.from(seal, "utf8"));
+  });
 }
 
 /**
@@ -408,8 +505,10 @@ export function stepDeclarationStanding(
  * drawn for it. A declaration that cannot be read is never written as no
  * screen: the pin then says the step's declaration is unverified
  * (`DECLARED_SCREEN_PIN_UNVERIFIED`), and the step is held until it reads
- * cleanly (`stepDeclarationStanding`). A pin the gate's
- * own schema carries is dropped: only the host writes one. The pin is read
+ * cleanly (`stepDeclarationStanding`). A pin or seal the gate's own schema
+ * carries is dropped: only the host writes one, sealed with a key derived
+ * from the app secret (`DECLARED_SCREEN_SEAL_KEY`), and a reader reads only a
+ * pin the host sealed. The pin is read
  * FRESH past the bindings cache, as the check before an answer is sent reads
  * it: a cached declaration can be one updated since, and a step pinned to it
  * would refuse every answer to the screen installed when it opened.
@@ -418,10 +517,19 @@ export function withDeclaredScreenPin(
   schema: Record<string, unknown>,
   xRenderer: string,
 ): Record<string, unknown> {
-  const { [DECLARED_SCREEN_PIN_KEY]: _held, ...rest } = schema;
+  const { [DECLARED_SCREEN_PIN_KEY]: _held, [DECLARED_SCREEN_SEAL_KEY]: _heldSeal, ...rest } = schema;
   void _held;
+  void _heldSeal;
   const pin = currentDeclaredScreenPin(xRenderer, { fresh: true }) ?? DECLARED_SCREEN_PIN_UNVERIFIED;
-  return pin === DECLARED_SCREEN_PIN_NONE ? rest : { ...rest, [DECLARED_SCREEN_PIN_KEY]: pin };
+  if (pin === DECLARED_SCREEN_PIN_NONE) return rest;
+  const seal = sealDeclaredScreenPin(xRenderer, pin);
+  if (seal === null) {
+    // No app secret: no pin can be sealed, and an unsealed pin reads as no
+    // screen, so the step is held as changed when its renderer declares one.
+    console.warn(`[field-renderer-bindings] no app secret: the step of ${xRenderer} is parked without a sealed pin`);
+    return rest;
+  }
+  return { ...rest, [DECLARED_SCREEN_PIN_KEY]: pin, [DECLARED_SCREEN_SEAL_KEY]: seal };
 }
 
 /**
@@ -525,6 +633,10 @@ export function isRefusedDeclaredScreen(xRenderer: string): boolean {
  * installed agents are scanned again, and only that answer reads as none.
  * NOR DOES AN INCOMPLETE SCAN: when a part of the installed agents could not be
  * read, an id it does not name is `unknown` (could not be loaded), never none.
+ * NOR DOES A GENERATED BINDING WHOSE OWNER WAS NOT READ CLEANLY: a bundled id
+ * whose owning package's manifest could not be read cleanly
+ * (`bundledOwnerUnread`) is `unknown` too, since that manifest may declare
+ * another screen for it than the generated binding.
  * `fresh` scans the installed agents first, whatever the cache holds: the
  * check before an answer is sent reads it, since a cached binding can be one
  * updated or uninstalled since.
@@ -536,6 +648,13 @@ export function lookupFieldRendererBinding(
   const read = () => {
     const binding = getMergedFieldRendererBindings().find((b) => b.id === xRenderer);
     const scan = collectInstalled();
+    if (
+      binding !== undefined &&
+      (GENERATED_FIELD_RENDERER_BINDINGS as ReadonlyArray<unknown>).includes(binding) &&
+      bundledOwnerUnread(scan, binding.declaredBy)
+    ) {
+      return { binding: undefined, refused: false, unknown: true };
+    }
     const refused = binding === undefined && scan.refusedScreenIds.includes(xRenderer);
     return { binding, refused, unknown: binding === undefined && !refused && !scan.complete };
   };

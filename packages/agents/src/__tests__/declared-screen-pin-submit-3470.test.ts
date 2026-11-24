@@ -24,6 +24,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 
 import { RunTransitionError } from "../run-status";
 
+// The host seals each pin it writes with a key derived from the app secret.
+process.env.BETTER_AUTH_SECRET ??= "x3470-placeholder-not-a-credential";
+
 const mount = vi.hoisted(() => ({ dir: "" }));
 vi.mock("../agent-runtime-mount", () => ({
   resolveAgentRuntimeMountDir: () => {
@@ -54,6 +57,7 @@ vi.mock("../publish-decision-store", async (orig) => ({
 const gateRow = vi.hoisted(() => ({
   inputSchema: {} as Record<string, unknown>,
   read: "row" as "row" | "missing" | "throws",
+  xRenderer: "@acme-test/pin-submit-agent:confirm",
 }));
 vi.mock("../agent-run-hitl-prompts", () => ({
   captureHitlPromptForContinue: async () => "captured-prompt",
@@ -63,7 +67,7 @@ vi.mock("../agent-run-hitl-prompts", () => ({
     return {
       runId,
       reviewTaskId,
-      xRenderer: "@acme-test/pin-submit-agent:confirm",
+      xRenderer: gateRow.xRenderer,
       inputSchema: gateRow.inputSchema,
       values: {},
       materializedAt: "2026-01-01T00:00:00.000Z",
@@ -246,6 +250,7 @@ afterAll(() => {
 beforeEach(() => {
   vi.clearAllMocks();
   gateRow.read = "row";
+  gateRow.xRenderer = ID;
   arrange();
 });
 
@@ -335,5 +340,43 @@ describe("an answer is sent only under the declared screen its step opened under
     gateRow.inputSchema = { type: "object" };
     expect(await answer()).toBe("sent");
     expect(sendTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("a step parked before the upgrade whose own schema names an 'unknown' pin is never answered under a declared screen", async () => {
+    install("Fixture screen installed after the park");
+    // The agent's schema carried the key; the park of that time kept it, unsealed.
+    gateRow.inputSchema = { type: "object", "x-declared-screen": "unknown" };
+    // red-first-expect: expected 'sent' to contain 'changed after the step opened'
+    expect(await answer()).toContain("changed after the step opened");
+    expectRefusedAndGivenBack();
+  });
+
+  it("a step parked before the upgrade whose own schema names an 'unknown' pin is sent while its renderer declares no screen", async () => {
+    install(null);
+    gateRow.inputSchema = { type: "object", "x-declared-screen": "unknown" };
+    expect(await answer()).toBe("sent");
+    expect(sendTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("a bundled renderer id whose owning package's manifest is torn refuses the answer as could not be loaded", async () => {
+    // A bundled id with no declared screen; the step opened under it with no pin.
+    gateRow.xRenderer = "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm";
+    gateRow.inputSchema = { type: "object" };
+    const owner = join(mount.dir, "cinatra-ai", "blog-wordpress-publish-agent");
+    mkdirSync(owner, { recursive: true });
+    writeFileSync(join(owner, "package.json"), '{"name": "@cinatra-ai/blog-wordpress-publish-agent", "cinatra": {');
+    server.__clearInstalledFieldRendererBindingsCache();
+    try {
+      // red-first-expect: expected 'sent' to contain 'could not be loaded'
+      expect(await answer()).toContain("could not be loaded");
+      expectRefusedAndGivenBack();
+    } finally {
+      rmSync(join(mount.dir, "cinatra-ai"), { recursive: true, force: true });
+      server.__clearInstalledFieldRendererBindingsCache();
+    }
+    // Once the owner is read cleanly (here: not installed), the answer is sent.
+    vi.clearAllMocks();
+    arrange();
+    expect(await answer()).toBe("sent");
   });
 });

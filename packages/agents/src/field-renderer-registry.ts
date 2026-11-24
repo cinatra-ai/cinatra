@@ -297,16 +297,52 @@ export function stepPinAdmits(stepPin: string, current: string): boolean {
 }
 
 /**
+ * The gate schema key of the host's SEAL over a step's pin: an HMAC under a
+ * key derived from the app secret over the gate's renderer id and the pin
+ * (`sealDeclaredScreenPin`, server side). An agent's own schema can carry a
+ * key named `x-declared-screen` (a step parked before the host wrote pins
+ * kept whatever the agent's schema held), but never a seal the host made: a
+ * pin without one is no pin.
+ */
+export const DECLARED_SCREEN_SEAL_KEY = "x-declared-screen-seal";
+
+/** The form of a host seal: a version tag and a 64-digit hex HMAC. */
+const DECLARED_SCREEN_SEAL_FORM = /^h1:[0-9a-f]{64}$/;
+
+/** Is `seal` in the form the host writes its seals in? */
+export function hasDeclaredScreenSealForm(seal: unknown): seal is string {
+  return typeof seal === "string" && DECLARED_SCREEN_SEAL_FORM.test(seal);
+}
+
+/**
  * The pin a step's gate schema carries. A schema without one (a step parked
  * before pins were written, or by a park that writes none) opened with no
  * declared screen: screens did not exist before pins did.
+ *
+ * ONLY A SEALED PIN IS READ (cinatra#3470). A pin without the host's seal
+ * (`DECLARED_SCREEN_SEAL_KEY`) is agent-authored content of a step parked
+ * before the host wrote pins, or of a park that writes none: it reads as
+ * `DECLARED_SCREEN_PIN_NONE`, the pin such a step really opened under, so it
+ * is answered only while its renderer declares no screen, as it was before
+ * the upgrade. It is never read as the pin it names, and never as
+ * `DECLARED_SCREEN_PIN_UNVERIFIED`, which would admit any declaration.
+ * `sealAdmits` checks the seal (the server verifies the HMAC); without it,
+ * only the seal's form is checked (the browser holds no secret, and every
+ * answer it sends is checked on the server with the HMAC).
  */
-export function readDeclaredScreenPin(schema: unknown): string {
+export function readDeclaredScreenPin(
+  schema: unknown,
+  sealAdmits?: (pin: string, seal: string) => boolean,
+): string {
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
     return DECLARED_SCREEN_PIN_NONE;
   }
   const pin = (schema as Record<string, unknown>)[DECLARED_SCREEN_PIN_KEY];
-  return typeof pin === "string" && pin.length > 0 ? pin : DECLARED_SCREEN_PIN_NONE;
+  if (typeof pin !== "string" || pin.length === 0) return DECLARED_SCREEN_PIN_NONE;
+  const seal = (schema as Record<string, unknown>)[DECLARED_SCREEN_SEAL_KEY];
+  if (!hasDeclaredScreenSealForm(seal)) return DECLARED_SCREEN_PIN_NONE;
+  if (sealAdmits !== undefined && !sealAdmits(pin, seal)) return DECLARED_SCREEN_PIN_NONE;
+  return pin;
 }
 
 // ---------------------------------------------------------------------------
@@ -616,7 +652,13 @@ export async function readRuntimeRendererBindings(freshFor?: string): Promise<bo
       settleRuntimeRendererBindings({ ok: false, freshFor: readFor });
       return false;
     }
-    const refusedIds = refusedScreenIds.filter((id): id is string => typeof id === "string");
+    // A bundled id whose owning package could not be read cleanly is held as
+    // a refused one is: the binding compiled into this page may not be what
+    // the id declares now.
+    const unreadOwnerIds = Array.isArray(answer?.unreadOwnerIds) ? answer.unreadOwnerIds : [];
+    const refusedIds = [...refusedScreenIds, ...unreadOwnerIds].filter(
+      (id): id is string => typeof id === "string",
+    );
     const incomplete = answer?.incomplete === true;
     if (bindings.length > 0 || runtimeRegisteredEntries.size > 0) {
       const { registerFieldRendererBindings } = await import(

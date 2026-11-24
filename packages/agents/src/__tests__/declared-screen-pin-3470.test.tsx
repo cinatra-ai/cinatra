@@ -30,6 +30,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen as dom, waitFor, within } from "@testing-library/react";
 
+// The host seals each pin it writes with a key derived from the app secret.
+process.env.BETTER_AUTH_SECRET ??= "x3470-placeholder-not-a-credential";
+
 const mount = vi.hoisted(() => ({ dir: "" }));
 vi.mock("../agent-runtime-mount", () => ({
   resolveAgentRuntimeMountDir: () => {
@@ -223,11 +226,20 @@ describe("a parked step keeps the declared screen it opened under (cinatra#3470)
     expect(server.readDeclaredHitlCard?.(ID, openedUnderLater)).toBe("unavailable");
     // Only the host writes the pin: one the gate's schema carries is replaced.
     install(EARLIER);
-    expect(server.withDeclaredScreenPin?.({ "x-declared-screen": "forged" }, ID)).toEqual({
+    const forgedSeal = `h1:${"0".repeat(64)}`;
+    expect(
+      server.withDeclaredScreenPin?.({ "x-declared-screen": "forged", "x-declared-screen-seal": forgedSeal }, ID),
+    ).toEqual({
       "x-declared-screen": openedUnderEarlier["x-declared-screen"],
+      "x-declared-screen-seal": openedUnderEarlier["x-declared-screen-seal"],
     });
     uninstall();
-    expect(server.withDeclaredScreenPin?.({ type: "object", "x-declared-screen": "forged" }, ID)).toEqual({
+    expect(
+      server.withDeclaredScreenPin?.(
+        { type: "object", "x-declared-screen": "forged", "x-declared-screen-seal": forgedSeal },
+        ID,
+      ),
+    ).toEqual({
       type: "object",
     });
   });

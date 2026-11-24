@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { createHmac } from "node:crypto";
 
 let FIXTURE_DIR = "";
 
@@ -18,6 +19,9 @@ let FIXTURE_DIR = "";
  * ending in `path` throws an error with `code`. Every other call is the real
  * one, so the collector's own error handling is what runs.
  */
+// The host seals each pin it writes with a key derived from the app secret.
+process.env.BETTER_AUTH_SECRET ??= "x3470-placeholder-not-a-credential";
+
 const fsFault = vi.hoisted(() => ({
   readdir: null as { path: string; code: string } | null,
   readFile: null as { path: string; code: string } | null,
@@ -58,12 +62,21 @@ import {
 } from "../field-renderer-bindings.server";
 import * as installedBindings from "../field-renderer-bindings.server";
 import { GENERATED_FIELD_RENDERER_BINDINGS } from "@/lib/generated/agent-bindings";
+import { rendererStepOf } from "../field-renderer-registry";
 import { A2UI_MID_RUN_TRANSLATOR_KINDS } from "@cinatra-ai/agent-ui-protocol/server";
 
 function writePkg(scope: string, name: string, pkg: Record<string, unknown>) {
   const dir = join(FIXTURE_DIR, scope, name);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "package.json"), JSON.stringify(pkg));
+}
+
+/** The seal the host writes over a step's pin (an HMAC under the app secret's derived key). */
+function hostSeal(xRenderer: string, pin: string): string {
+  const key = createHmac("sha256", String(process.env.BETTER_AUTH_SECRET))
+    .update("cinatra:declared-screen-pin-seal:v1")
+    .digest();
+  return `h1:${createHmac("sha256", key).update(`h1\n${xRenderer}\n${pin}`, "utf8").digest("hex")}`;
 }
 
 beforeEach(() => {
@@ -363,13 +376,17 @@ describe("a declared screen installed after a scan was cached is never read as n
     const pinOf = (installedBindings as unknown as {
       declaredScreenPin?: (b: Record<string, unknown>) => string;
     }).declaredScreenPin;
-    const opened = {
-      "x-declared-screen": pinOf?.({
+    const pin = String(
+      pinOf?.({
         id: "@s/late-screen-agent:card",
         kind: "linkedin-draft-review",
         midRunHitl: true,
         screen: CARD_SCREEN,
       }),
+    );
+    const opened = {
+      "x-declared-screen": pin,
+      "x-declared-screen-seal": hostSeal("@s/late-screen-agent:card", pin),
     };
     const readCard = (installedBindings as unknown as {
       readDeclaredHitlCard?: (x: string, stepSchema: unknown) => unknown;
@@ -487,5 +504,126 @@ describe("a binding collection error is never read as 'no screen' (cinatra#3470)
     // A package folder with no manifest is not a package: still complete.
     mkdirSync(join(FIXTURE_DIR, "s", "empty-folder"), { recursive: true });
     expect(payload({ fresh: true }).incomplete).toBeUndefined();
+  });
+});
+
+describe("a bundled id whose owning package was not read cleanly is held, never matched (cinatra#3470)", () => {
+  // A bundled (generated) id with no declared screen, and the mount folder of
+  // the package that owns it.
+  const BUNDLED = "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm";
+  const OWNER = ["cinatra-ai", "blog-wordpress-publish-agent"] as const;
+  const mod = installedBindings as unknown as {
+    stepDeclarationStanding?: (x: string, schema: unknown, o?: { fresh?: boolean }) => string;
+    isRefusedDeclaredScreen?: (x: string) => boolean;
+    runtimeFieldRendererBindingsPayload?: (o?: { fresh?: boolean }) => { unreadOwnerIds?: string[] };
+  };
+  // A step opened under the generated binding: it declared no screen, so the
+  // park wrote no pin.
+  const standing = () => mod.stepDeclarationStanding?.(BUNDLED, { type: "object" }, { fresh: true });
+
+  it("a torn manifest of the owning package holds the bundled id as could not be loaded", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const dir = join(FIXTURE_DIR, ...OWNER);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "package.json"), '{"name": "@cinatra-ai/blog-wordpress-publish-agent", "cinatra": {');
+    // red-first-expect: expected undefined to be 'unknown'
+    expect(standing()).toBe("unknown");
+    expect(mod.isRefusedDeclaredScreen?.(BUNDLED)).toBe(true);
+    expect(mod.runtimeFieldRendererBindingsPayload?.({ fresh: true }).unreadOwnerIds).toContain(BUNDLED);
+  });
+
+  it("an unreadable manifest (EACCES) or scope of the owning package holds the bundled id too", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    writePkg(OWNER[0], OWNER[1], { name: "@cinatra-ai/blog-wordpress-publish-agent" });
+    fsFault.readFile = { path: join(OWNER[1], "package.json"), code: "EACCES" };
+    // red-first-expect: expected undefined to be 'unknown'
+    expect(standing()).toBe("unknown");
+    fsFault.readFile = null;
+    fsFault.readdir = { path: join(FIXTURE_DIR, OWNER[0]), code: "EACCES" };
+    expect(standing()).toBe("unknown");
+    fsFault.readdir = null;
+    // Once the owner reads cleanly (it declares nothing for the id), the step matches.
+    expect(standing()).toBe("matches");
+  });
+
+  it("a bundled id whose owner reads cleanly, or is not installed, matches beside an unreadable other package", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const dir = join(FIXTURE_DIR, "s", "torn-agent");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "package.json"), '{"name": "@s/torn-agent", "cinatra": {');
+    // red-first-expect: expected undefined to be 'matches'
+    expect(standing()).toBe("matches");
+    writePkg(OWNER[0], OWNER[1], { name: "@cinatra-ai/blog-wordpress-publish-agent" });
+    expect(standing()).toBe("matches");
+    expect(mod.runtimeFieldRendererBindingsPayload?.({ fresh: true }).unreadOwnerIds).toBeUndefined();
+  });
+});
+
+describe("a pin the host did not seal is never read as a pin (cinatra#3470)", () => {
+  const ID = "@s/legacy-agent:card";
+  const CARD_SCREEN = {
+    layout: "card",
+    title: "Fixture title",
+    sections: [{ type: "field", key: "answer", label: "Fixture answer" }],
+  };
+  const mod = installedBindings as unknown as {
+    stepDeclarationStanding?: (x: string, schema: unknown, o?: { fresh?: boolean }) => string;
+    currentDeclaredScreenPin?: (x: string, o?: { fresh?: boolean }) => string | null;
+    readDeclaredHitlCard?: (x: string, schema: unknown) => unknown;
+  };
+  function install(screen: boolean) {
+    writePkg("s", "legacy-agent", {
+      name: "@s/legacy-agent",
+      cinatra: {
+        fieldRenderers: [
+          {
+            id: ID,
+            kind: "linkedin-draft-review",
+            priority: 90,
+            midRunHitl: true,
+            ...(screen ? { screen: CARD_SCREEN } : {}),
+          },
+        ],
+      },
+    });
+    __clearInstalledFieldRendererBindingsCache();
+  }
+
+  it("an agent-authored 'unknown' pin of a step parked before the upgrade admits no declared screen", () => {
+    install(true);
+    // The step's own schema named the pin: no seal, so it opened with no screen.
+    const legacy = { type: "object", "x-declared-screen": "unknown" };
+    // red-first-expect: expected undefined to be 'changed'
+    expect(mod.stepDeclarationStanding?.(ID, legacy, { fresh: true })).toBe("changed");
+    expect(mod.readDeclaredHitlCard?.(ID, legacy)).toBe("unavailable");
+    // The browser reads it as no screen too.
+    expect(rendererStepOf("task-legacy", legacy).pin).toBe("none");
+    // While its renderer declares no screen, it is answered as before the upgrade.
+    install(false);
+    expect(mod.stepDeclarationStanding?.(ID, legacy, { fresh: true })).toBe("matches");
+  });
+
+  it("a forged pin of the current declaration, unsealed or with a seal the host did not make, is never matched", () => {
+    install(true);
+    const current = String(mod.currentDeclaredScreenPin?.(ID, { fresh: true }));
+    const forged = [
+      { "x-declared-screen": current },
+      { "x-declared-screen": current, "x-declared-screen-seal": `h1:${"0".repeat(64)}` },
+      // A seal the host made for another renderer id.
+      { "x-declared-screen": current, "x-declared-screen-seal": hostSeal("@s/other-agent:card", current) },
+      { "x-declared-screen": "unknown", "x-declared-screen-seal": hostSeal("@s/other-agent:card", "unknown") },
+    ];
+    for (const schema of forged) {
+      // red-first-expect: expected undefined to be 'changed'
+      expect(mod.stepDeclarationStanding?.(ID, schema, { fresh: true })).toBe("changed");
+    }
+    // The seal the host makes for this id is read.
+    expect(
+      mod.stepDeclarationStanding?.(
+        ID,
+        { "x-declared-screen": current, "x-declared-screen-seal": hostSeal(ID, current) },
+        { fresh: true },
+      ),
+    ).toBe("matches");
   });
 });
