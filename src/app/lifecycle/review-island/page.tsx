@@ -29,8 +29,10 @@ import "server-only";
 // authorized by the host).
 //
 // THE FRAME IS CONTAINMENT, NOT A TRUST BOUNDARY. The embedding card sets
-// `sandbox="allow-scripts allow-same-origin"`, which — with both tokens — does
-// not isolate a same-origin document from its opener. That is deliberate and
+// `sandbox="allow-scripts allow-same-origin allow-downloads"`, which — with the
+// first two tokens — does not isolate a same-origin document from its opener.
+// (`allow-downloads` lets the download links this document draws work; the
+// owner decided that one permission, cinatra#3459.) That is deliberate and
 // harmless BECAUSE the authorization is here: a reader is required, the ref is
 // decoded server-side (it is authenticated-encrypted; a forged one does not
 // decode), and `loadReviewGateSurface` re-runs the reader's run access and reads
@@ -152,6 +154,7 @@ import { ReviewGateLoading } from "@cinatra-ai/agents/review-gate-states";
 
 import { resolveReviewActorContext } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-actor";
 import { ReviewTargetPanel } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-target-panel";
+import { PdfShellFrameProvider } from "@cinatra-ai/sdk-ui/artifacts/pdf-detail-shell";
 import { IslandHeightReporter } from "./island-height-reporter";
 
 /** Never cached, never statically rendered — the reader is resolved per request. */
@@ -458,29 +461,36 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
           decision is all-or-nothing across the gate. */}
       {/* Keyed by POSITION as well as by target, so the same target pinned
           twice still draws two panels. */}
-      {drawn.map((stream, index) => (
-        <Suspense
-          key={reviewTargetStreamKey(index, stream.target)}
-          fallback={<ReviewGateLoading />}
-        >
-          <StreamedReviewTarget
-            prepared={stream.prepared}
-            capturePair={stream.capturePair}
-            // ONE BORDER PER TARGET (cinatra#3441). A document that draws ONE
-            // target is framed by the CARD — that target's header over this
-            // document inside one panel — so a border here too would be the
-            // nested body card §IV does not draw. That is a gate that pins one
-            // target, and each frame of a gate the card draws as pairs, which
-            // names its one target (cinatra#4129). Only a document that still
-            // draws several targets frames each of its panels here, as before.
-            framed={drawn.length > 1}
-            // The TRUSTED organization scope, from the reader this island just
-            // authorized — never from the query string and never from the
-            // display props. The form rung reads the pinned bytes under it.
-            orgId={actorCtx.orgId}
-          />
-        </Suspense>
-      ))}
+      {/* THIS DOCUMENT IS ONLY EVER SERVED INTO THE CARD'S SANDBOXED FRAME, where
+          the browser will not run its PDF viewer. Declaring it lets the shared
+          pdf shell paint its download floor on the server render, so the frame
+          never shows an empty embed before the page hydrates; once it runs, the
+          shell reads the real frame. */}
+      <PdfShellFrameProvider frame="sandboxed">
+        {drawn.map((stream, index) => (
+          <Suspense
+            key={reviewTargetStreamKey(index, stream.target)}
+            fallback={<ReviewGateLoading />}
+          >
+            <StreamedReviewTarget
+              prepared={stream.prepared}
+              capturePair={stream.capturePair}
+              // ONE BORDER PER TARGET (cinatra#3441). A document that draws ONE
+              // target is framed by the CARD — that target's header over this
+              // document inside one panel — so a border here too would be the
+              // nested body card §IV does not draw. That is a gate that pins one
+              // target, and each frame of a gate the card draws as pairs, which
+              // names its one target (cinatra#4129). Only a document that still
+              // draws several targets frames each of its panels here, as before.
+              framed={drawn.length > 1}
+              // The TRUSTED organization scope, from the reader this island just
+              // authorized — never from the query string and never from the
+              // display props. The form rung reads the pinned bytes under it.
+              orgId={actorCtx.orgId}
+            />
+          </Suspense>
+        ))}
+      </PdfShellFrameProvider>
 
       {/* THE HEIGHT THIS DOCUMENT ACTUALLY DREW, named to the frame that holds
           it. Last, and drawing nothing: `hidden` keeps it out of the flex flow,

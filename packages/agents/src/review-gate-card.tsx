@@ -50,12 +50,16 @@
 // authenticated, DISPLAY-ONLY island that renders the ladder server-side.
 //
 // THE FRAME IS A RENDERING MECHANISM, NOT AN ISOLATION BOUNDARY, and nothing
-// here relies on it being one. `sandbox="allow-scripts allow-same-origin"` with
-// BOTH tokens set is not isolation: the framed document shares this origin, can
-// reach the parent DOM, and could remove its own sandbox and reload. What the
-// tokens do buy is the withholding of the capabilities the island has no use
-// for — top-level navigation, form submission, popups, pointer lock — so a fault
-// inside a type renderer cannot navigate the app away from the conversation.
+// here relies on it being one. `sandbox="allow-scripts allow-same-origin
+// allow-downloads"` with the first two tokens set is not isolation: the framed
+// document shares this origin, can reach the parent DOM, and could remove its
+// own sandbox and reload. What the sandbox does buy is the withholding of the
+// capabilities the island has no use for — top-level navigation, form
+// submission, popups, pointer lock — so a fault inside a type renderer cannot
+// navigate the app away from the conversation. `allow-downloads` is the one
+// capability the island does use: the download links its targets draw (the pdf
+// shell's download floor, the download card) are dead without it. The owner
+// decided that one permission and nothing more (cinatra#3459).
 // The renderer trust model is UNCHANGED from the review page: the island runs
 // the same first-party code the page runs, against the same authorization. If
 // renderer isolation ever becomes a requirement, it needs a separate origin, not
@@ -2503,8 +2507,9 @@ function ReviewTargetIsland({
           title="Review target"
           // NOT an isolation boundary — see the module header. These tokens
           // withhold top-navigation, form submission and popups from a document
-          // that needs none of them; the authorization is the island's own.
-          sandbox="allow-scripts allow-same-origin"
+          // that needs none of them, and grant the downloads its links offer;
+          // the authorization is the island's own.
+          sandbox="allow-scripts allow-same-origin allow-downloads"
           referrerPolicy="same-origin"
           // A CREDENTIALED src is a perishable bearer: it is minted by the resolve
           // this render came from and dies shortly after, so it cannot wait for a

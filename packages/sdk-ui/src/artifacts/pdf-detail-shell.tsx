@@ -18,8 +18,8 @@
  *   stream-friendly, and no heavy client code is shipped to read a document.
  *
  *   THE DOWNLOAD FLOOR. Where there is nothing to preview - no materialized
- *   representation at all, or an embed the engine refused to load - the shell
- *   draws the floor instead: the words the drawing gives it and the download
+ *   representation at all, an embed the engine refused to load, or a frame the
+ *   browser will not run its PDF viewer in - the shell draws the floor instead: the words the drawing gives it and the download
  *   affordance beside them. The affordance itself degrades to a plain note when
  *   there is nothing to download, so the panel is never blank in any state.
  *
@@ -45,8 +45,8 @@
  * nothing else.
  */
 
-import { useState } from "react";
-import type { ReactElement } from "react";
+import { createContext, useContext, useState, useSyncExternalStore } from "react";
+import type { ReactElement, ReactNode } from "react";
 
 import { DownloadLink } from "../ui/download-link";
 
@@ -66,7 +66,123 @@ export type PdfShellSlot = "detail" | "preview";
 export type PdfShellByteRoad = "island" | "session" | "none";
 
 /** Why a floor was drawn - closed and named, so a surface can say which. */
-export type PdfShellFloorReason = "no-representation" | "preview-failed";
+export type PdfShellFloorReason =
+  | "no-representation"
+  | "preview-failed"
+  | "sandboxed-frame";
+
+/**
+ * WHETHER THE DOCUMENT SITS IN A FRAME THE BROWSER'S PDF VIEWER WILL RUN IN.
+ *
+ * Chromium never starts its bundled PDF viewer inside a sandboxed frame, and it
+ * says nothing when it declines: the `<embed>` fires neither `load` nor `error`,
+ * so the failure signal below never arrives and the panel stays blank. The
+ * review card draws its target in exactly such a frame (the island iframe
+ * carries a `sandbox` attribute). So the shell asks the frame first, and in a
+ * sandboxed one it draws the floor - the words and the download - instead of an
+ * embed that can only stay empty.
+ */
+export type PdfShellFrame = "sandboxed" | "unsandboxed";
+
+/**
+ * Bound on the ancestor walk. Real pages nest a handful of frames at most; a
+ * walk that has not reached the top by here is treated as unreadable.
+ */
+const PDF_SHELL_FRAME_WALK_LIMIT = 16;
+
+/** The part of a window the frame reading uses - so it can be read in a test. */
+export interface PdfShellFrameWindow {
+  readonly parent: PdfShellFrameWindow;
+  readonly frameElement: { hasAttribute(name: string): boolean } | null;
+}
+
+/**
+ * THE RULE. Walk from this document up to the top-level one:
+ *
+ *   - a document that is its own parent is the top: nothing above it is
+ *     sandboxed, so the answer is `unsandboxed`;
+ *   - an ancestor frame element that carries a `sandbox` attribute (any value,
+ *     even empty) means `sandboxed` - sandbox flags are inherited by every
+ *     frame nested inside it, so one sandboxed ancestor is enough;
+ *   - a frame element we cannot read - `frameElement` is null although there
+ *     is a parent (the parent is another origin), or the accessor throws - is
+ *     read as `sandboxed`.
+ *
+ * WHY "CANNOT TELL" READS AS SANDBOXED. This application's pages declare
+ * `frame-ancestors 'self'`; the only road that frames one cross-origin is the
+ * widget, whose embedding site sandboxes its frame. So an unreadable parent is,
+ * in practice, a sandboxed one. And the two mistakes are not equal: the floor in
+ * a frame that could have shown the viewer still names the document and offers
+ * its download, while the embed in a frame that cannot show it is a blank plate.
+ */
+export function readPdfShellFrame(win: PdfShellFrameWindow): PdfShellFrame {
+  let current = win;
+  for (let depth = 0; depth < PDF_SHELL_FRAME_WALK_LIMIT; depth += 1) {
+    try {
+      const parent = current.parent;
+      if (parent === current) {
+        return "unsandboxed";
+      }
+      const host = current.frameElement;
+      if (host === null || host.hasAttribute("sandbox")) {
+        return "sandboxed";
+      }
+      current = parent;
+    } catch {
+      return "sandboxed";
+    }
+  }
+  return "sandboxed";
+}
+
+/**
+ * WHAT THE SERVER PAINTS, DECLARED BY THE PAGE THAT SERVES IT.
+ *
+ * A server render cannot see the frame its document will land in. Left alone it
+ * paints the embed, the browser shows that empty embed until the page hydrates,
+ * and only then would the client reading swap it for the floor. A page that is
+ * ONLY ever served into a sandboxed frame - the review island - says so with
+ * this provider, so its server render already draws the floor and the client
+ * reading agrees on the first pass: no blank embed is ever painted, and the
+ * hydrated markup matches the served markup.
+ *
+ * The declaration is only the first paint. Once the page runs, the shell reads
+ * the frame it is actually in (`readPdfShellFrame`) and that reading decides.
+ */
+const PdfShellFrameContext = createContext<PdfShellFrame>("unsandboxed");
+
+export function PdfShellFrameProvider({
+  frame,
+  children,
+}: {
+  readonly frame: PdfShellFrame;
+  readonly children?: ReactNode;
+}): ReactElement {
+  return (
+    <PdfShellFrameContext.Provider value={frame}>
+      {children}
+    </PdfShellFrameContext.Provider>
+  );
+}
+
+/** The frame never changes under a mounted document: nothing to subscribe to. */
+function subscribeToNothing(): () => void {
+  return () => undefined;
+}
+
+function readThisFrame(): PdfShellFrame {
+  return readPdfShellFrame(window as unknown as PdfShellFrameWindow);
+}
+
+/**
+ * The frame this shell draws in: the page's declaration during the server
+ * render and hydration, and the frame's own answer from then on. A mismatch
+ * between the two is a re-render, never a hydration error.
+ */
+function usePdfShellFrame(): PdfShellFrame {
+  const declared = useContext(PdfShellFrameContext);
+  return useSyncExternalStore(subscribeToNothing, readThisFrame, () => declared);
+}
 
 /** The resolved reading: the embedded viewer, or the floor beneath it. */
 export type PdfShellView =
@@ -115,11 +231,15 @@ export function resolvePdfShellView(input: {
   readonly previewHref: string | null;
   readonly downloadHref: string | null;
   readonly previewFailed?: boolean;
+  readonly frame?: PdfShellFrame;
 }): PdfShellView {
   const previewHref = normalizePdfShellHref(input.previewHref);
   const downloadHref = normalizePdfShellHref(input.downloadHref);
   if (previewHref === null) {
     return { kind: "floor", reason: "no-representation", downloadHref };
+  }
+  if (input.frame === "sandboxed") {
+    return { kind: "floor", reason: "sandboxed-frame", downloadHref };
   }
   if (input.previewFailed === true) {
     return { kind: "floor", reason: "preview-failed", downloadHref };
@@ -128,7 +248,7 @@ export function resolvePdfShellView(input: {
 }
 
 /**
- * What the floor says. Both reasons read the same sentence to the person - the
+ * What the floor says. Every reason reads the same sentence to the person - the
  * distinction is for the surface and the capture, not for the reader, who only
  * ever learns that this document is not previewable here and how to get it.
  */
@@ -136,6 +256,7 @@ const PDF_SHELL_FLOOR_MESSAGES: Readonly<Record<PdfShellFloorReason, string>> =
   Object.freeze({
     "no-representation": "This PDF cannot be previewed here.",
     "preview-failed": "This PDF cannot be previewed here.",
+    "sandboxed-frame": "This PDF cannot be previewed here.",
   });
 
 export function pdfShellFloorMessage(reason: PdfShellFloorReason): string {
@@ -194,11 +315,13 @@ export function PdfDetailShell({
   // instance is reused as a surface moves from one artifact or revision to the
   // next, and a flag would strand the next document on the first one's floor.
   const [failedHref, setFailedHref] = useState<string | null>(null);
+  const frame = usePdfShellFrame();
 
   const view = resolvePdfShellView({
     previewHref,
     downloadHref,
     previewFailed: pdfShellPreviewFailed({ failedHref, previewHref }),
+    frame,
   });
 
   if (view.kind === "floor") {

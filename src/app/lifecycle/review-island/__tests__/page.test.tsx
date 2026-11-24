@@ -74,6 +74,7 @@ import {
   REVIEW_ISLAND_COLOR_SCHEME_PARAM,
 } from "../island-color-scheme";
 import ReviewTargetIslandPage from "../page";
+import { PdfShellFrameProvider } from "@cinatra-ai/sdk-ui/artifacts/pdf-detail-shell";
 
 const REF = encodeLifecycleGateRef({ runId: "run-1", reviewTaskId: "task-1" })!;
 
@@ -220,6 +221,30 @@ describe("the island draws §III's ladder for the gate the ref names", () => {
 // target(s), kept for the run's audit trail." The decided card frames this same
 // island, so this document draws a resolved gate's frozen set exactly as it
 // draws a pending one's — with no decision chrome on either reading.
+describe("the island tells the pdf shell it is served into a sandboxed frame (cinatra#3459)", () => {
+  // The browser runs no PDF viewer in the card's sandboxed frame, so a served
+  // embed is a blank plate until the page hydrates. Declared here, the shell's
+  // server render already draws its download floor.
+  // red-first-expect: expected undefined to be 'sandboxed'
+  it("draws every target panel inside the sandboxed-frame declaration", async () => {
+    loadReviewGateSurface.mockResolvedValue({
+      kind: "ready",
+      agentSummary: null,
+      targets: [target("a1"), target("a2")],
+      permissions: Promise.resolve({ canDecide: true, canComment: true }),
+    });
+    const el = await renderIsland(REF);
+    const children = (el.props as { children: unknown[] }).children.flat();
+    const provider = children.find(
+      (node): node is ReactElement =>
+        !!node && typeof node === "object" && (node as ReactElement).type === PdfShellFrameProvider,
+    );
+    expect((provider?.props as { frame?: string } | undefined)?.frame).toBe("sandboxed");
+    expect(panelProps(provider!)).toHaveLength(2);
+    expect(panelProps(el)).toHaveLength(2);
+  });
+});
+
 describe("a DECIDED gate keeps its reviewed target(s), read-only", () => {
   function settledSurface(targets: ReturnType<typeof target>[]) {
     return { kind: "settled", agentSummary: null, targets };
