@@ -5,7 +5,11 @@
  * publish decision in front of the step, cinatra#4150) and records its one consumption in the same transaction. The
  * graph is the repository's synthetic agent fixture with two declared steps, read by the host's real declaration
  * reader. The guarded transaction is a stand-in that keeps the rows of each table in memory; the consumption table
- * behaves as its primary key does (an insert of a used key inserts nothing).
+ * behaves as its primary key does (an insert of a used key inserts nothing). The decision read behaves as the database
+ * does: it keeps the rows of the run and step in the run's current attempt (a row with no generation counts as current),
+ * orders them by the creation time at microsecond precision (`createdAtMicros`, which a JavaScript Date cannot hold),
+ * then id, newest first, and applies the limit. The test also checks that the read uses the publish-decision store's own
+ * current-attempt predicate and order, so the stand-in and the store cannot differ.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
@@ -25,6 +29,9 @@ const h = vi.hoisted(() => ({
   fail: null as Error | null,
   // Set by the concurrent case: every consumption read waits until both calls reached it.
   barrier: null as null | { arrive: () => Promise<void> },
+  // The arguments of the decision read's where and orderBy calls.
+  decisionWhere: [] as unknown[],
+  decisionOrder: [] as unknown[][],
 }));
 
 vi.mock("../db", () => ({ db: { transaction: () => { throw Error("must use the guarded seam"); } } }));
@@ -37,14 +44,21 @@ vi.mock("../org-write-run-seam", () => ({
     const tx = {
       select: (columns?: Record<string, unknown>) => ({
         from: (table: unknown) => {
+          let ordered = false; let limit = Infinity;
           const chain = {
-            where: () => chain, orderBy: () => chain,
+            where: (cond: unknown) => { if (table === agentRunPublishDecisions) h.decisionWhere.push(cond); return chain; },
+            orderBy: (...by: unknown[]) => {
+              if (table === agentRunPublishDecisions) { h.decisionOrder.push(by); ordered = true; }
+              return chain;
+            },
+            limit: (n: number) => { limit = n; return chain; },
             for: (mode: string) => { h.calls.push(`lock:${tableName(table)}:${mode}`); return chain; },
             then: async (resolve: (v: unknown) => unknown, reject: (e: unknown) => unknown) => {
               try {
                 if (h.fail) throw h.fail;
                 if (table === artifactReviewActionConsumptions && h.barrier) await h.barrier.arrive();
-                const rows = rowsOf(table).map((r) => ({ ...r }));
+                let rows = rowsOf(table).map((r) => ({ ...r }));
+                if (table === agentRunPublishDecisions) rows = databaseDecisionRead(rows, ordered).slice(0, limit);
                 return resolve(columns ? rows.map((r) => ({ gateId: r.gateId })) : rows);
               } catch (e) { return reject(e); }
             },
@@ -70,6 +84,30 @@ vi.mock("../org-write-run-seam", () => ({
     return body(tx);
   },
 }));
+
+/** The decision read as the database runs it for run-1 and the proof's step: the current attempt's rows (the run's
+ *  reset generation, or no generation at all), newest first by microsecond creation time, then id. */
+function databaseDecisionRead(rows: Row[], ordered: boolean): Row[] {
+  const run = (h.tables.get(agentRuns) ?? []).find((r) => r.id === "run-1");
+  const micros = (r: Row) => (r.createdAtMicros as number | undefined) ?? (r.createdAt as Date).getTime() * 1000;
+  const kept = rows.filter((r) => r.runId === "run-1" && r.nodeId === SEND_STEP && run !== undefined &&
+    (r.runGeneration ?? run.resetGeneration) === run.resetGeneration);
+  if (!ordered) return kept;
+  return kept.sort((a, b) => {
+    const ma = micros(a), mb = micros(b);
+    if (ma !== mb) return ma > mb ? -1 : 1;
+    return String(a.id) > String(b.id) ? -1 : String(a.id) < String(b.id) ? 1 : 0;
+  });
+}
+
+/** True when the drizzle SQL value holds `needle` itself among its chunks, at any depth. */
+function holdsChunk(value: unknown, needle: unknown, seen = new Set<unknown>()): boolean {
+  if (value === needle) return true;
+  if (!value || typeof value !== "object" || seen.has(value)) return false;
+  seen.add(value);
+  const chunks = (value as { queryChunks?: unknown[] }).queryChunks;
+  return Array.isArray(chunks) && chunks.some((c) => holdsChunk(c, needle, seen));
+}
 
 function tableName(table: unknown): string {
   if (table === agentRuns) return "run";
@@ -111,7 +149,7 @@ const decision = (over: Row = {}): Row => ({ id: "decision-1", orgId: "org-1", r
 const consumptions = () => h.tables.get(artifactReviewActionConsumptions) ?? [];
 
 beforeEach(() => {
-  h.calls = []; h.fail = null; h.barrier = null;
+  h.calls = []; h.fail = null; h.barrier = null; h.decisionWhere = []; h.decisionOrder = [];
   h.tables = new Map<unknown, Row[]>([
     [agentRuns, [{ id: "run-1", orgId: "org-1", status: "running", executionAttemptId: "attempt-1", a2aContextId: "ctx", resetGeneration: 0 }]],
     [agentRunOutwardActionPolicies, [{ runId: "run-1", orgId: "org-1", executionAttemptId: "attempt-1", policy }]],
@@ -212,13 +250,49 @@ describe("the person's affirmative decision for the run's action, used once", ()
 
   it("refuses a decision of another run, organization or attempt", async () => {
     await loadModule();
-    for (const over of [{ runId: "run-2" }, { runGeneration: 1 }, { runGeneration: null }]) {
+    for (const over of [{ runId: "run-2" }, { runGeneration: 1 }, { runGeneration: -1 }]) {
       h.tables.set(agentRunPublishDecisions, [decision(over)]);
       await expect(consume(input())).rejects.toMatchObject({ code: "action_person_decision_missing" });
     }
     h.tables.set(agentRunPublishDecisions, [decision({ orgId: "org-2" })]);
     await expect(consume(input())).rejects.toMatchObject({ code: "action_person_decision_invalid" });
     expect(consumptions()).toEqual([]);
+  });
+
+  it("consumes once a released decision with no generation: a row of an older node is current until a reset", async () => {
+    await loadModule();
+    h.tables.set(agentRunPublishDecisions, [decision({ runGeneration: null })]);
+    // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
+    const result = await consume(input());
+    expect(result).toMatchObject({ consumptionKey: "publish_decision:decision-1", decidedBy: "user-7" });
+    await expect(consume(input())).rejects.toMatchObject({ code: "action_person_decision_already_consumed" });
+    expect(consumptions()).toHaveLength(1);
+    // The read judges the attempt by the publish-decision store's own predicate.
+    const { CURRENT_ATTEMPT } = await import("../publish-decision-store");
+    expect(h.decisionWhere.length).toBeGreaterThan(0);
+    for (const where of h.decisionWhere) expect(holdsChunk(where, CURRENT_ATTEMPT)).toBe(true);
+  });
+
+  it("picks the database's newest of two decisions inside one millisecond, never a re-sort at millisecond precision", async () => {
+    await loadModule();
+    // The same millisecond for JavaScript; the database holds the open one 400 microseconds later. Its id sorts below the
+    // older released one, so a millisecond re-sort with an id tiebreak would wrongly pick the released decision.
+    const ms = new Date("2026-11-24T11:00:00.123Z");
+    const base = ms.getTime() * 1000; // microseconds, within the safe integer range
+    h.tables.set(agentRunPublishDecisions, [
+      decision({ id: "decision-b", createdAt: ms, createdAtMicros: base + 100 }),
+      decision({ id: "decision-a", gateTaskId: "gate-task-2", status: "parked", decidedBy: null, decidedAt: null,
+        createdAt: ms, createdAtMicros: base + 500 }),
+    ]);
+    // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
+    await expect(consume(input())).rejects.toMatchObject({ code: "action_person_decision_open" });
+    expect(consumptions()).toEqual([]);
+    // The read orders as the store does (created_at, then id, newest first) and takes one row.
+    const { PgDialect } = await import("drizzle-orm/pg-core");
+    const { sql } = await import("drizzle-orm");
+    const order = h.decisionOrder.at(-1) ?? [];
+    expect(new PgDialect().sqlToQuery(sql.join(order as never[], sql`, `)).sql)
+      .toBe('"cinatra"."agent_run_publish_decisions"."created_at" desc, "cinatra"."agent_run_publish_decisions"."id" desc');
   });
 
   it("refuses a released decision that names no person", async () => {

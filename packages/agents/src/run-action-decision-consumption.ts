@@ -43,6 +43,7 @@ import {
   agentRuns,
   artifactReviewActionConsumptions,
 } from "./schema";
+import { CURRENT_ATTEMPT } from "./publish-decision-store";
 
 /** The tool that would act and the loaded extension version that owns it (the loaded identity's fields). */
 export type RunActionToolIdentity = {
@@ -136,21 +137,16 @@ export async function consumeRunActionDecision(input: ConsumeRunActionDecisionIn
         executedSourceSha256: p.executedSourceSha256, stepId: p.stepId, toolName: action.toolName });
       if (reading.kind !== "declared") refuse("action_decision_step_undeclared");
 
-      // The newest decision of exactly this step in the run's current attempt; every row is checked again here, so a
-      // row of another run, step, organization or attempt never counts.
-      const rows = await tx.select().from(agentRunPublishDecisions)
+      // The newest decision of exactly this step in the run's current attempt, chosen by the database: the store's own
+      // current-attempt predicate (a row with no generation, written by an older node, is current until a reset stamps
+      // it) and the store's order (created_at, then id, both descending), at the database's full timestamp precision.
+      const [decision] = await tx.select().from(agentRunPublishDecisions)
         .where(and(eq(agentRunPublishDecisions.runId, runId), eq(agentRunPublishDecisions.nodeId, p.stepId),
-          eq(agentRunPublishDecisions.runGeneration, run.resetGeneration)))
+          CURRENT_ATTEMPT))
         .orderBy(desc(agentRunPublishDecisions.createdAt), desc(agentRunPublishDecisions.id))
+        .limit(1)
         .for("update");
-      const current = rows.filter((r) => r.runId === runId && r.nodeId === p.stepId &&
-        typeof r.runGeneration === "number" && r.runGeneration === run.resetGeneration);
-      const decision = current.reduce<(typeof current)[number] | undefined>((newest, r) => {
-        if (!newest) return r;
-        const a = r.createdAt.getTime(), b = newest.createdAt.getTime();
-        return a > b || (a === b && r.id > newest.id) ? r : newest;
-      }, undefined);
-      if (!decision) return refuse("action_person_decision_missing");
+      if (!decision || decision.runId !== runId || decision.nodeId !== p.stepId) return refuse("action_person_decision_missing");
       if (decision.status === "parked") refuse("action_person_decision_open");
       if (decision.status !== "released") refuse("action_person_decision_not_affirmative");
       if (decision.orgId !== orgId || !fieldValid(decision.decidedBy) || !(decision.decidedAt instanceof Date) ||
