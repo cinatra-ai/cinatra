@@ -57,6 +57,13 @@ describe("a verified step the template lists as publishing", () => {
     expect(decisions.readDecisionForRunNode).toHaveBeenCalledWith("run-1", "publish");
   });
 
+  it("is refused when a reset moved the run to a newer attempt after the released decision was read", async () => {
+    decisions.readDecisionForRunNode.mockResolvedValue(row("released"));
+    decisions.withRunRowLock.mockImplementationOnce(async (_runId: string, fn: (tx: unknown, run: unknown) => Promise<unknown>) =>
+      fn(TX, { orgId: "org-1", resetGeneration: 1 }));
+    expect(await publishCallAllowed(RUN, "publish")).toBe(false);
+  });
+
   it("is served once its newest decision is released", async () => {
     decisions.readDecisionForRunNode.mockResolvedValue(row("released"));
     expect(await publishCallAllowed(RUN, "publish")).toBe(true);

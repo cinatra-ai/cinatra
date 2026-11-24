@@ -625,7 +625,10 @@ export async function publishCallAllowed(run: { id: string; templateId: string }
     const row = await readDecisionForRunNode(run.id, verifiedStepId);
     if (row) {
       if (row.status !== "released") return false;
+      // The decision was read before the lock: a reset since then moved the run to a newer attempt, whose own approval
+      // this decision is not. Under the lock, a decision of another attempt than the run's current one refuses the call.
       return await withRunRowLock(run.id, async (tx, locked) => !!locked &&
+        (row.runGeneration == null || row.runGeneration === locked.resetGeneration) &&
         reviewFenceHolds({ runId: run.id, orgId: locked.orgId, generation: row.runGeneration ?? locked.resetGeneration, executor: tx }));
     }
     return template !== null && !listed.includes(verifiedStepId);
