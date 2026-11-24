@@ -58,6 +58,7 @@ import {
   buildFinalizeMaterializationQuery,
   buildImageGenerationProvenanceQuery,
   claimMaterialization,
+  restampReusedRevision,
   type ImageGenerationProvenance,
 } from "./materialization-ledger";
 import { appendRepresentationWithExpectedBase } from "./representation-store";
@@ -280,6 +281,25 @@ export async function appendArtifactRevision(input: {
         error:
           "the materialization ledger already carries a different write under this append's " +
           "identity — refusing to report another write's revision as this one's",
+      };
+    }
+    // cinatra#4762: a retry of identical bytes appends nothing; the revision's
+    // event records this attempt, so an approval of these bytes counts for it.
+    try {
+      await restampReusedRevision({
+        runId: input.runId,
+        orgId: input.orgId,
+        artifactId: claim.artifactId,
+        representationRevisionId: claim.representationRevisionId,
+      });
+    } catch (err) {
+      if (!isPublishCallInFlightAbort(err)) throw err;
+      return {
+        ok: false,
+        reason: PUBLISH_CALL_IN_FLIGHT_CODE,
+        error:
+          `a publishing call of run ${input.runId} is in flight; append the ` +
+          "revision again once it has ended",
       };
     }
     const revRow = await sql(

@@ -18,7 +18,9 @@ vi.mock("@/lib/database", () => ({
   ensurePostgresSchema: () => {},
   postgresSchema: "cinatra",
 }));
-vi.mock("@/lib/artifacts/materialization-ledger", () => ({
+vi.mock("@/lib/artifacts/materialization-ledger", async () => ({
+  // cinatra#4762: the reused revision's restamp, as the module ships it.
+  restampReusedRevision: (await vi.importActual<typeof import("@/lib/artifacts/materialization-ledger")>("@/lib/artifacts/materialization-ledger")).restampReusedRevision,
   claimMaterialization: mock.claim, buildFinalizeMaterializationQuery: mock.finalize,
   isMaterializationFinalizeConflict: (e: Error) => e.message === "finalize-conflict", readFinalizedMaterialization: mock.winner,
 }));

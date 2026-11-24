@@ -88,7 +88,9 @@ vi.mock("../resolve-bound-artifact-type", () => ({
 vi.mock("../artifact-creation", () => ({
   createSemanticArtifact: createSemanticArtifactMock,
 }));
-vi.mock("../materialization-ledger", () => ({
+vi.mock("../materialization-ledger", async () => ({
+  // cinatra#4762: the reused revision's restamp, as the module ships it.
+  restampReusedRevision: (await vi.importActual<typeof import("../materialization-ledger")>("../materialization-ledger")).restampReusedRevision,
   claimMaterialization: claimMaterializationMock,
   buildFinalizeMaterializationQuery: buildFinalizeMaterializationQueryMock,
   readFinalizedMaterialization: readFinalizedMaterializationMock,
@@ -345,6 +347,30 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
     // Only the revision's existing event is restamped: a reused revision that never had one gains none.
     const [text] = poolQueryMock.mock.calls.find(([t]) => String(t).includes("artifact_produced_outbox"))!;
     expect(String(text).replace(/\s+/g, " ")).toContain(`AND (EXISTS (SELECT 1 FROM "public"."artifact_produced_outbox" WHERE event_id = $1::text))`);
+  });
+
+  // red-first-expect: expected [] to deeply equal [ { eventOf: 'rep-w', generation: 1 } ]
+  it("A6 the loser of a concurrent double drive restamps the winner's revision for its own attempt (cinatra#4762)", async () => {
+    const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
+    const { MATERIALIZATION_FINALIZE_CONFLICT_MARKER } = await vi.importActual<typeof import("../materialization-ledger")>("../materialization-ledger");
+    const events = () => poolQueryMock.mock.calls
+      .filter(([text]) => String(text).includes("artifact_produced_outbox"))
+      .map(([, values]) => ({ eventOf: (values as unknown[])[3], generation: (values as unknown[])[11] }));
+    // Attempt 1 claims fresh, but a parallel drive of the same claim finalized first: this write's transaction rolled
+    // back, and the winner's revision is the output.
+    claimMaterializationMock.mockResolvedValueOnce({ kind: "claimed", ledgerId: "ledger-1" });
+    createSemanticArtifactMock.mockRejectedValueOnce(new Error(`${MATERIALIZATION_FINALIZE_CONFLICT_MARKER}: rows=0`));
+    readFinalizedMaterializationMock.mockResolvedValueOnce({ artifactId: "art-w", representationRevisionId: "rep-w" });
+    const out = await mcpRequestContextStorage.run({ runAttempt: { runId: "run-1", resetGeneration: 1 } } as never, () => writeClaimedArtifact({
+      runId: "run-1", orgId: "org-a", createdBy: "user-1", outputId: "persist_draft", nodeId: "persist_draft",
+      path: "materialize_tool", extension: EXT, title: "T", mime: "text/markdown", content: "# x",
+      ownership: { ownerLevel: "organization", ownerId: "org-a", visibility: "organization", projectId: null },
+      resolvedTarget: { objectTypeId: BODY_TYPE, acceptedFileMimeTypes: ["text/markdown"] },
+      mimeDescription: "the call declared MIME",
+    }));
+    expect(out).toEqual({ ok: true, artifactId: "art-w", representationRevisionId: "rep-w", deduped: true });
+    // The winner's event now records attempt 1, so an approval of those bytes counts for it.
+    expect(events()).toEqual([{ eventOf: "rep-w", generation: 1 }]);
   });
 
   // red-first-expect: expected [] to deeply equal [ Array(4) ]

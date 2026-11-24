@@ -27,12 +27,6 @@ import {
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import { createSemanticArtifact } from "./artifact-creation";
 import {
-  maybeBuildProducedEventInsertOp,
-  producerAttemptForRun,
-  producerRunLockOps,
-  publishCallInFlightOr,
-} from "@/lib/lifecycle/lifecycle-emit";
-import {
   MAX_AUTHORED_CONTENT_BYTES,
   TEXT_AUTHORING_COMPATIBLE_MIMES,
 } from "./artifact-authoring";
@@ -45,6 +39,7 @@ import {
   findFinalizedFanoutMessageMaterialization,
   findFinalizedMidRunMaterialization,
   recordFanoutReuseMaterialization,
+  restampReusedRevision,
   type MaterializationDetection,
 } from "./materialization-ledger";
 
@@ -331,55 +326,6 @@ function pool(): Pool {
     name: "run-artifact-materializer",
     connectionString: () => getPostgresConnectionString(),
   });
-}
-
-/**
- * cinatra#4762 — a write that reuses a revision this run already wrote (a retry that reproduced identical bytes)
- * writes no artifact, so the creation path emits no produced event. The revision's event is written again here for
- * the attempt the write runs in: the same event id as the creation path's, so a newer attempt only restamps it with
- * its generation (lifecycle-emit buildProducedEventInsertOp), and a review of exactly these bytes counts for that
- * attempt (artifact-review-gate-store listReviewLineageForRun). Only an existing event is restamped: a revision that
- * never had one gains none here. Nothing when the review orchestration is off.
- *
- * One transaction of two statements: the run row FOR KEY SHARE first (producerRunLockOps), then the event statement.
- * A publish check holds that row FOR UPDATE until its in-flight claim commits; in one statement the claim lookup would
- * keep the snapshot taken before the lock wait and miss that claim, so the restamp could move an older review into
- * the current attempt during the checked call. The event statement starts after the lock is held, so under READ
- * COMMITTED it sees the committed claim and refuses (PublishCallInFlightError).
- */
-async function recordReusedRevision(input: {
-  runId: string;
-  orgId: string;
-  artifactId: string;
-  representationRevisionId: string;
-  originKind: "agent_generated" | "live_generator";
-}): Promise<void> {
-  const schema = postgresSchema.replaceAll('"', '""');
-  const op = maybeBuildProducedEventInsertOp(schema, {
-    orgId: input.orgId,
-    artifactId: input.artifactId,
-    representationRevisionId: input.representationRevisionId,
-    emitter: "createSemanticArtifact",
-    originKind: input.originKind,
-    producerRunId: input.runId,
-    producerAgentId: null,
-    producerAttempt: producerAttemptForRun(input.runId),
-  }, {
-    whereExistsSql: `EXISTS (SELECT 1 FROM "${schema}"."artifact_produced_outbox" WHERE event_id = $1::text)`,
-  });
-  if (!op) return;
-  const client = await pool().connect();
-  try {
-    await client.query("BEGIN");
-    for (const lock of producerRunLockOps(schema, input.runId, op)) await client.query(lock.text, lock.values);
-    await client.query(op.text, op.values);
-    await client.query("COMMIT");
-  } catch (err) {
-    await client.query("ROLLBACK").catch(() => {});
-    throw publishCallInFlightOr(err);
-  } finally {
-    client.release();
-  }
 }
 
 // Published package versions are immutable, so bindings for a PINNED
@@ -1010,12 +956,12 @@ export async function writeClaimedArtifact(input: {
     };
   }
   if (claim.kind === "finalized") {
-    await recordReusedRevision({
+    // cinatra#4762: a retry of identical bytes writes nothing; the revision's event records this attempt.
+    await restampReusedRevision({
       runId: input.runId,
       orgId: input.orgId,
       artifactId: claim.artifactId,
       representationRevisionId: claim.representationRevisionId,
-      originKind: input.originKind ?? "agent_generated",
     });
     return {
       ok: true,
@@ -1079,6 +1025,8 @@ export async function writeClaimedArtifact(input: {
         ledgerId: claim.ledgerId,
       });
       if (winner) {
+        // cinatra#4762: the winner's revision is this write's; its event records this attempt.
+        await restampReusedRevision({ runId: input.runId, orgId: input.orgId, ...winner });
         return {
           ok: true,
           artifactId: winner.artifactId,
@@ -1855,7 +1803,7 @@ export async function materializeFanoutMessageRevision(input: {
       outputId: input.outputId,
     });
     if (own) {
-      await recordReusedRevision({ runId: input.runId, orgId: input.orgId, ...own, originKind: "live_generator" });
+      await restampReusedRevision({ runId: input.runId, orgId: input.orgId, ...own });
       return { ok: true, ...own, deduped: true };
     }
     // A mid-run body not yet bound to another message is bound to this one.
@@ -1866,7 +1814,7 @@ export async function materializeFanoutMessageRevision(input: {
         outputId: input.outputId,
         ...prefiled,
       });
-      await recordReusedRevision({ runId: input.runId, orgId: input.orgId, ...prefiled, originKind: "live_generator" });
+      await restampReusedRevision({ runId: input.runId, orgId: input.orgId, ...prefiled });
       return { ok: true, ...prefiled, deduped: true };
     }
 

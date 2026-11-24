@@ -65,15 +65,36 @@ vi.mock("../local-disk-blob-store", () => ({
     deleteByStorageKey: async () => undefined,
   }),
 }));
+// The claim a test sets: fresh by default, or the revision an earlier attempt finalized.
+const ledger: { claim: Record<string, unknown> } = { claim: { kind: "claimed", ledgerId: "ledger-1" } };
 vi.mock("../materialization-ledger", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../materialization-ledger")>()),
-  claimMaterialization: async () => ({ kind: "claimed", ledgerId: "ledger-1" }),
+  claimMaterialization: async () => ledger.claim,
+}));
+// cinatra#4762: the reused revision's restamp runs on its own pooled connection; its statements are recorded, and the
+// event statement aborts with the in-flight fence while `db.publishCallInFlight` is set.
+const restamp: Query[] = [];
+vi.mock("@/lib/db/pooled", async () => ({
+  ...(await vi.importActual<typeof import("@/lib/db/pooled")>("@/lib/db/pooled")),
+  getPooledDb: () => ({
+    connect: async () => ({
+      query: async (text: string, values: unknown[] = []) => {
+        restamp.push({ text, values });
+        const fence = /THEN '([^']+)' ELSE '1' END\)::integer = 1/.exec(text);
+        if (fence && db.publishCallInFlight) throw Object.assign(new Error(`invalid input syntax for type integer: "${fence[1]}"`), { code: "22P02" });
+        return { rows: [], rowCount: 0 };
+      },
+      release: () => {},
+    }),
+  }),
 }));
 
 beforeEach(() => {
   asyncCalls.length = 0;
+  restamp.length = 0;
   db.publishCallInFlight = false;
   db.abort = null;
+  ledger.claim = { kind: "claimed", ledgerId: "ledger-1" };
 });
 
 describe("cinatra#4762: a write refused by the in-flight publishing-call fence says so", () => {
@@ -111,6 +132,46 @@ describe("cinatra#4762: a write refused by the in-flight publishing-call fence s
       additionalOps: () => [{ text: `SELECT (CASE WHEN true THEN 'cinatra_publish_call_in_flight' ELSE '1' END)::integer = 1`, values: [] }],
     });
     await expect(run()).rejects.toMatchObject({ name: "PublishCallInFlightError", code: "publish_call_in_flight", retryable: true });
+  });
+});
+
+describe("cinatra#4762: a retry of an append that reproduces identical bytes counts the approval of those bytes", () => {
+  const appendInAttempt = async (resetGeneration: number) => {
+    const [{ appendArtifactRevision }, { mcpRequestContextStorage }] = await Promise.all([
+      import("../artifact-revision-append"),
+      import("@cinatra-ai/mcp-server/request-context"),
+    ]);
+    return mcpRequestContextStorage.run({ runAttempt: { runId: "run-1", resetGeneration } } as never, () => appendArtifactRevision({
+      orgId: "org-1", runId: "run-1", nodeId: "draft", artifactId: "art-1", baseRepresentationRevisionId: "rev-1",
+      content: "hello", mime: "text/markdown", createdBy: null, extension: "@cinatra-ai/post",
+    }));
+  };
+  const steps = () => restamp.map(({ text, values }) => {
+    const t = text.replace(/\s+/g, " ");
+    if (t.includes("artifact_produced_outbox")) return `event ${values[3]} generation ${values[11]}`;
+    if (t.includes("FOR KEY SHARE")) return `lock ${values[0]}`;
+    return t;
+  });
+
+  // red-first-expect: expected [] to deeply equal [ 'BEGIN', 'lock run-1', …(2) ]
+  it("appends nothing and restamps the finalized revision's event with the retry's attempt", async () => {
+    // Attempt 0 appended rev-2 and the ledger finalized it; attempt 1 reproduces the same bytes.
+    ledger.claim = { kind: "finalized", artifactId: "art-1", representationRevisionId: "rev-2", path: "materialize_tool" };
+    expect(await appendInAttempt(1)).toMatchObject({ ok: true, representationRevisionId: "rev-2", deduped: true });
+    expect(asyncCalls.flat().some((q) => q.text.includes('INSERT INTO "cinatra"."representation"'))).toBe(false);
+    // The run row first, in its own statement, then only the existing event's generation (attempt 1), so the review
+    // gate's lineage read counts a review of exactly these bytes for attempt 1.
+    expect(steps()).toEqual(["BEGIN", "lock run-1", "event rev-2 generation 1", "COMMIT"]);
+    expect(restamp.find((q) => q.text.includes("artifact_produced_outbox"))!.text.replace(/\s+/g, " "))
+      .toMatch(/AND \(EXISTS \(SELECT 1 FROM "[^"]+"\."artifact_produced_outbox" WHERE event_id = \$1::text\)\)/);
+  });
+
+  // red-first-expect: to match object { ok: false, …(1) }
+  it("a publishing call in flight refuses the restamp as that call, and nothing commits", async () => {
+    ledger.claim = { kind: "finalized", artifactId: "art-1", representationRevisionId: "rev-2", path: "materialize_tool" };
+    db.publishCallInFlight = true;
+    expect(await appendInAttempt(1)).toMatchObject({ ok: false, reason: "publish_call_in_flight" });
+    expect(steps()).toEqual(["BEGIN", "lock run-1", "event rev-2 generation 1", "ROLLBACK"]);
   });
 });
 
