@@ -160,9 +160,15 @@ export async function stepScreenAnswer(
  *     Continue holds for (`hasUsableListPick`);
  *   - a grouped setup form: the answer passes the step's own schema by the
  *     validation the form runs before it sends (`jsonSchemaToZod`), read from
- *     the values the screen sent, else from the text sent.
- * The bare approval marker and an empty answer hold neither. Every other kind
- * requires no input of its own and is sent as before.
+ *     the values the screen sent, else from the text sent;
+ *   - a context selector: the text sent is the selection envelope its screen
+ *     emits, read by the parser `/api/context-finalize` applies to it
+ *     (`parseUserResponseEnvelope`), so an answer that route refuses is never
+ *     sent and the run stays parked.
+ * The bare approval marker and an empty answer hold none of them.
+ *
+ * IT FAILS CLOSED. Only a kind listed in `KIND_SCREENS_WITHOUT_INPUT` is sent
+ * without a check of its own; any other kind with no check here is refused.
  */
 async function kindScreenAnswered(
   kind: string,
@@ -177,8 +183,28 @@ async function kindScreenAnswered(
     const { jsonSchemaToZod } = await import("./json-schema-to-zod");
     return jsonSchemaToZod(stepSchema).safeParse(values).success;
   }
-  return true;
+  if (kind === "context-selector") {
+    const { parseUserResponseEnvelope } = await import("@/lib/artifacts/context-route-support");
+    try {
+      parseUserResponseEnvelope(answer.resumeText);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return KIND_SCREENS_WITHOUT_INPUT.has(kind);
 }
+
+/**
+ * The "kind" screens whose answer is the approval itself: each confirms what
+ * the run already holds (the recipients the run saved, the drafts it wrote),
+ * and its Continue sends no input the step requires. A kind that is not
+ * listed here and has no check in `kindScreenAnswered` is refused.
+ */
+const KIND_SCREENS_WITHOUT_INPUT: ReadonlySet<string> = new Set([
+  "campaign-recipients-review",
+  "email-drafts-review",
+]);
 
 /**
  * The resume text of a declared card's whole answer, rebuilt by the card's

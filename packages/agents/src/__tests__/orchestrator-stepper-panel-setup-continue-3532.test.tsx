@@ -51,7 +51,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
-import { fieldRendererRegistry } from "../field-renderer-registry";
+import { fieldRendererRegistry, settleRuntimeRendererBindings } from "../field-renderer-registry";
 import type { FieldRendererProps } from "../field-renderer-registry";
 import { ensureOrCheckRunNameAction } from "../run-name-actions";
 import { RunPageChrome } from "../run-page-chrome";
@@ -972,6 +972,9 @@ describe("OrchestratorStepperPanel — a renderer that reports its value unsenda
     // the way an extension-shipped component does, which keeps its own send
     // (`drawsOwnSubmit: true`, the map-first branch of the default renderers).
     expect(fieldRendererRegistry.list().some((e) => e.id === OUTREACH_LIST_PICKER_ID)).toBe(true);
+    // A bundled id is drawn only once the run page's read of the installed
+    // bindings answered (here: no installed revision declares a screen).
+    settleRuntimeRendererBindings({ ok: true, screenIds: [], screenPins: {} });
     fieldRendererRegistry.register({
       id: OUTREACH_LIST_PICKER_ID,
       priority: 90,

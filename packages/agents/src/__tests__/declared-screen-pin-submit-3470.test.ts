@@ -743,6 +743,46 @@ describe("an answer is sent only under the declared screen its step opened under
       installKindScreen("email-drafts-review");
       // red-first-expect: expected undefined to deeply equal
       expect(await resumedWithNoResponse()).toEqual({ send: "[Approved by operator]" });
+      installKindScreen("campaign-recipients-review");
+      expect(await resumedWithNoResponse()).toEqual({ send: "[Approved by operator]" });
+    });
+
+    /** The selection envelope the context selector's screen emits. */
+    const SELECTION = JSON.stringify({
+      slotId: "brief",
+      resolutionMode: "override",
+      selectedRefs: [{ artifactId: "a-1", representationRevisionId: "r-1", semanticAssertionId: "s-1" }],
+    });
+
+    it("agent_run_resume with no response is refused for a context selector", async () => {
+      installKindScreen("context-selector");
+      const result = await resumedWithNoResponse();
+      // red-first-expect: expected 'undefined' to be 'string'
+      expect(typeof result?.refusal).toBe("string");
+      expect(result?.send).toBeUndefined();
+    });
+
+    it("agent_run_resume is refused for a context selector whose envelope names no slot", async () => {
+      installKindScreen("context-selector");
+      const noSlot = JSON.stringify({ resolutionMode: "override", selectedRefs: [] });
+      // red-first-expect: expected 'undefined' to be 'string'
+      expect(typeof (await resumeStepScreenAnswer?.(RUN, template, noSlot))?.refusal).toBe("string");
+    });
+
+    it("agent_run_resume with a selection envelope is sent for a context selector", async () => {
+      installKindScreen("context-selector");
+      expect(await resumeStepScreenAnswer?.(RUN, template, SELECTION)).toEqual({ send: SELECTION });
+    });
+
+    it("a bare approval through the approval core is refused for a context selector: the pause is given back", async () => {
+      installKindScreen("context-selector");
+      // red-first-expect: expected 'sent' to contain 'did not give'
+      expect(await answer({ approved: true })).toContain("did not give");
+      expectRefusedAndGivenBack();
+      vi.clearAllMocks();
+      arrange();
+      expect(await answer({ approved: true, approvalNote: SELECTION })).toBe("sent");
+      expect(sendTask).toHaveBeenCalledTimes(1);
     });
   });
 

@@ -257,6 +257,10 @@ async function mountAsTheRunPage() {
   // after the first imports a fresh one (`vi.resetModules` below).
   const { ensureDefaultFieldRenderersRegistered } = await import("../register-default-renderers");
   ensureDefaultFieldRenderersRegistered();
+  // The context step's renderer is a bundled id: it is drawn once the run
+  // page's read of the installed bindings answered (no installed screen here).
+  const { settleRuntimeRendererBindings } = await import("../field-renderer-registry");
+  settleRuntimeRendererBindings({ ok: true, screenIds: [], screenPins: {} });
   const { AgenticRunPanel } = await import("../agentic-run-panel");
   return render(
     <AgenticRunPanel

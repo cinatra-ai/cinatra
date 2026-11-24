@@ -37,6 +37,7 @@ import {
   type RendererStep,
 } from "./field-renderer-registry";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
+import { GENERATED_FIELD_RENDERER_BINDINGS } from "@/lib/generated/agent-bindings";
 import { isSetupInterruptTaskId } from "./run-surface-status";
 import { readSentUserEnvelope, wrapUserResponseWithAttachments } from "./wayflow-user-response-envelope";
 
@@ -359,6 +360,9 @@ export function continueApprovalFlag(staged: Record<string, unknown>, xRenderer?
   return staged.approved !== false;
 }
 
+/** The ids of the generated (bundled) bindings, which the host registers before any source answered. */
+const BUNDLED_RENDERER_IDS: ReadonlySet<string> = new Set(GENERATED_FIELD_RENDERER_BINDINGS.map((b) => b.id));
+
 /** The reason a mid-run Continue shows while the gate's screen is loading. */
 export const SCREEN_LOADING_HOLD_REASON = "This step's screen is still loading.";
 /** The reason a mid-run Continue shows when the gate's screen failed to load. */
@@ -390,7 +394,9 @@ export const SCREEN_CHANGED_HOLD_REASON =
  * for its id than the step opened under (`DECLARED_SCREEN_PIN_KEY`): first as
  * loading, until a fresh read made for that step answered, then as changed.
  * A step that opened under a declared screen is held until an answer with
- * pins has loaded, even over a binding registered under its id.
+ * pins has loaded, even over a binding registered under its id. Any parked
+ * step of a bundled id, one pinned "no screen" included, is held while the
+ * source has not answered, even over the generated binding registered under it.
  */
 export function rendererBindingHoldReason(
   xRenderer: string,
@@ -418,6 +424,16 @@ export function rendererBindingHoldReason(
   // surface's revision of it. The host's own bindings are its build's.
   if (bindings.status === "failed" && isRendererBoundByRuntimeRead(xRenderer)) {
     return SCREEN_FAILED_HOLD_REASON;
+  }
+  // A PARKED STEP IS NOT DRAWN BY A GENERATED BINDING THE SOURCE HAS NOT
+  // PROVED. The generated (bundled) bindings register at once, but the
+  // package that owns a bundled id may have installed a revision that
+  // declares a screen since the build; a step pinned "no screen" would then
+  // be drawn by the stale entry and refused on the server as changed. Until
+  // the source answered, the step is held as loading, or as could not be
+  // loaded once the source failed.
+  if (step !== undefined && bindings.status !== "loaded" && BUNDLED_RENDERER_IDS.has(xRenderer)) {
+    return bindings.status === "loading" ? SCREEN_LOADING_HOLD_REASON : SCREEN_FAILED_HOLD_REASON;
   }
   if (isRendererBound(xRenderer)) return null;
   if (bindings.status === "loading") return SCREEN_LOADING_HOLD_REASON;

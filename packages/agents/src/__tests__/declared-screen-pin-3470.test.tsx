@@ -535,6 +535,24 @@ describe("an installed screen of a bundled renderer id supersedes its generated 
     expect(server.readDeclaredHitlCard?.(BUNDLED_ID, { type: "object" })).toBeNull();
   });
 
+  it("a step opened under the generated binding is held while the binding read is loading or has failed", () => {
+    ensureDefaultFieldRenderersRegistered();
+    // The generated binding is registered at once, before any read answered.
+    expect(registry.fieldRendererRegistry.list().some((e) => e.id === BUNDLED_ID)).toBe(true);
+    // A step parked with no screen (no pin): an installed revision may declare one now.
+    const step = reg.rendererStepOf?.("task-bundled-unread", { type: "object" });
+    const at = (status: "loading" | "failed") =>
+      submitRules.rendererBindingHoldReason?.(
+        BUNDLED_ID,
+        { status, announcedIds: new Set<string>(), freshlyReadIds: new Set<string>(), refusedIds: new Set<string>() },
+        step,
+      ) ?? null;
+    // red-first-expect: expected null to be 'This step\'s screen is still loading.'
+    expect(at("loading")).toBe("This step's screen is still loading.");
+    // red-first-expect: expected null to be 'This step\'s screen could not be load
+    expect(at("failed")).toBe("This step's screen could not be loaded. Reload the page to try again.");
+  });
+
   it("a refused installed screen of a bundled id holds its step, never the generated binding", async () => {
     // A card with no title: the validator refuses the installed declaration.
     install({ layout: "card" }, BUNDLED_ID);

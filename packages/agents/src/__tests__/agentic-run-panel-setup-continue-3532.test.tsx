@@ -36,7 +36,7 @@ import {
 } from "../agent-builder-ids";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import { RunPageChrome } from "../run-page-chrome";
-import { fieldRendererRegistry } from "../field-renderer-registry";
+import { fieldRendererRegistry, settleRuntimeRendererBindings } from "../field-renderer-registry";
 import type { FieldRendererProps } from "../field-renderer-registry";
 import { makeExtensionFieldRenderer } from "../extension-field-renderer";
 import {
@@ -1085,6 +1085,9 @@ describe("AgenticRunPanel — every send of a held gate sends nothing (cinatra#3
     const shipped = fieldRendererRegistry.list().filter((e) => e.id === OUTREACH_LIST_PICKER_ID);
     expect(shipped).toHaveLength(1);
     expect(shipped[0]!.midRunHitl).not.toBe(true);
+    // A bundled id is drawn only once the run page's read of the installed
+    // bindings answered (here: no installed revision declares a screen).
+    settleRuntimeRendererBindings({ ok: true, screenIds: [], screenPins: {} });
     // The stand-in takes its place the way an extension-shipped component does,
     // which keeps its own send (`drawsOwnSubmit: true`, the map-first branch).
     fieldRendererRegistry.register({
