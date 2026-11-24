@@ -10,6 +10,7 @@ import {
   readFinalizedMaterialization,
   restampReusedRevision,
 } from "@/lib/artifacts/materialization-ledger";
+import { isPublishCallInFlightAbort, publishCallInFlightOr } from "@/lib/lifecycle/lifecycle-emit";
 import type { ResolvedArtifactTarget } from "@/lib/artifacts/resolve-bound-artifact-type";
 import type { ScopeDerivedOwnership } from "@/lib/artifacts/run-artifact-materializer";
 
@@ -143,6 +144,9 @@ export async function fileFirstArtifactWrite<S>(input: FirstArtifactFilingInput<
       const winner = await readFinalizedMaterialization({ orgId: run.orgId, ledgerId: claim.ledgerId });
       if (winner) return { kind: "served", answer: await serveReused(input, refsOf(winner)) };
     }
+    // cinatra#4762: a publishing call of the run is in flight. Nothing was filed and the same write is taken once
+    // that call has ended, so it reaches the caller's catch as the typed, retryable refusal, never a failed write.
+    if (isPublishCallInFlightAbort(err)) throw publishCallInFlightOr(err);
     // A payload the type's schema rejects is a different answer from a write that failed: restating
     // the data is the fix. Both answers are the caller's fixed texts.
     const schemaRefusal = isSchemaRefusal(err);

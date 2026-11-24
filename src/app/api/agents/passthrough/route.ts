@@ -711,7 +711,10 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
         if (!outcome.ok) {
           // Fail the calling node visibly (validation OR infra) — the flow
           // author decides whether the node failure gates the run.
-          return NextResponse.json({ error: outcome.error }, { status: 400 });
+          // cinatra#4762: a publishing call in flight is a conflict the node may retry.
+          return outcome.reason === "publish_call_in_flight"
+            ? NextResponse.json({ error: outcome.error, reason: outcome.reason }, { status: 409 })
+            : NextResponse.json({ error: outcome.error }, { status: 400 });
         }
         result = {
           artifactId: outcome.artifactId,
@@ -784,7 +787,8 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
         url: shaped.url,
       });
       if (!outcome.ok) {
-        return NextResponse.json({ error: outcome.error, reason: outcome.reason }, { status: 400 });
+        return NextResponse.json({ error: outcome.error, reason: outcome.reason },
+          { status: outcome.reason === "publish_call_in_flight" ? 409 : 400 });
       }
       result = {
         artifactId: outcome.artifactId,

@@ -356,7 +356,7 @@ describe("cinatra#4762 - the attempt the job dispatches is the one its frame nam
     expect(await dispatchesOf(true)).toEqual([{ frame: 0, cas: 0 }]);
   });
 
-  // red-first-expect: to deeply equal [ { frame: +0, cas: +0 } ]
+  // red-first-expect: to deeply equal [ { frame: +0, cas: +0 }, …(1) ]
   it("a read that fails after a lost dispatch starts the job again, so a queued newer attempt is never left without a job", async () => {
     // The CAS finds the run reset; the read that would show it queued at 1 fails once, the next one succeeds.
     storeMock.readAgentRunById

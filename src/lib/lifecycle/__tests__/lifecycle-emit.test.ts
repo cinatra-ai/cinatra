@@ -159,7 +159,7 @@ describe("buildProducedEventInsertOp — op shape", () => {
     // That call read the review fence without this output; the event's cast of the fence's sentinel aborts the writer's
     // transaction, its artifact rows included. The writer's earlier lock statement (producerRunLockOps) makes this read
     // see every claim committed before it.
-    const CALL = `(CASE WHEN EXISTS (SELECT 1 FROM "cinatra"."agent_run_publish_decisions" call_claim JOIN "cinatra"."agent_runs" claim_run ON claim_run.id = call_claim.run_id WHERE call_claim.run_id = $7::text AND call_claim.calls_in_flight > 0 AND coalesce(call_claim.run_generation, claim_run.reset_generation) = claim_run.reset_generation AND call_claim.id IS DISTINCT FROM $14::text) THEN 'cinatra_publish_call_in_flight' ELSE '1' END)::integer = 1`;
+    const CALL = `(CASE WHEN EXISTS (SELECT 1 FROM "cinatra"."agent_run_publish_decisions" call_claim JOIN "cinatra"."agent_runs" claim_run ON claim_run.id = call_claim.run_id WHERE call_claim.run_id = $7::text AND call_claim.calls_in_flight > 0 AND coalesce(call_claim.run_generation, claim_run.reset_generation) = claim_run.reset_generation AND (call_claim.id IS DISTINCT FROM $14::text OR call_claim.calls_in_flight > 1)) THEN 'cinatra_publish_call_in_flight' ELSE '1' END)::integer = 1`;
     for (const op of [
       buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 0 } }),
       buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 0 } }, { whereExistsSql: "EXISTS (SELECT 1)" }),
@@ -181,7 +181,7 @@ describe("buildProducedEventInsertOp — op shape", () => {
     // The call's own write: the claim the route carried, bound as $14, which the fence's EXISTS does not count.
     expect(claimOf(call, "run-9")).toEqual({ read: "decision-1", bound: "decision-1" });
     expect(inFrame(call, () => buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 0 } }).text)
-      .replace(/\s+/g, " ")).toContain("AND call_claim.id IS DISTINCT FROM $14::text) THEN 'cinatra_publish_call_in_flight'");
+      .replace(/\s+/g, " ")).toContain("AND (call_claim.id IS DISTINCT FROM $14::text OR call_claim.calls_in_flight > 1)) THEN 'cinatra_publish_call_in_flight'");
     // A write under no claim (no frame, a frame with none, no run named) binds null: every claim of the run refuses it.
     expect(claimOf(null, "run-9")).toEqual({ read: null, bound: null });
     expect(claimOf({ runId: "run-9" }, "run-9")).toEqual({ read: null, bound: null });

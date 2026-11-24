@@ -185,6 +185,18 @@ beforeEach(() => {
 });
 
 describe("materializeToolArtifact", () => {
+  // red-first-expect: expected { ok: false, …(1) } to deeply equal { ok: false, …(2) }
+  it("answers a create the in-flight fence refuses with the retryable reason, never a failed write (cinatra#4762)", async () => {
+    createSemanticArtifactMock.mockRejectedValueOnce(
+      Object.assign(new Error('invalid input syntax for type integer: "cinatra_publish_call_in_flight"'), { code: "22P02" }),
+    );
+    expect(await materializeToolArtifact(BASE_INPUT)).toEqual({
+      ok: false,
+      reason: "publish_call_in_flight",
+      error: "a publishing call of this run is in flight; try again once it has ended",
+    });
+  });
+
   it("writes through createSemanticArtifact under the materialize_tool ledger identity", async () => {
     const outcome = await materializeToolArtifact(BASE_INPUT);
     expect(outcome).toEqual({

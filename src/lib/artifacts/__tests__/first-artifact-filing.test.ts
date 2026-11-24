@@ -343,6 +343,17 @@ describe("fileFirstArtifactWrite (cinatra#4223)", () => {
     expect(h.restamp).toEqual([]);
   });
 
+  // red-first-expect: promise resolved "{ kind: 'refused', …(2) }" instead of rejecting
+  it("lets the in-flight fence's refusal reach the caller's catch as the typed, retryable refusal (cinatra#4762)", async () => {
+    // The fence's database abort, as the writer's transaction raises it.
+    h.createSemanticArtifact.mockRejectedValueOnce(
+      Object.assign(new Error('invalid input syntax for type integer: "cinatra_publish_call_in_flight"'), { code: "22P02" }),
+    );
+    await expect(fileFirstArtifactWrite(filingInput())).rejects.toMatchObject({
+      name: "PublishCallInFlightError", code: "publish_call_in_flight", retryable: true,
+    });
+  });
+
   it("lets a throw of the claim reach the caller's own catch", async () => {
     h.claimMaterialization.mockRejectedValueOnce(new Error(SECRET));
     await expect(fileFirstArtifactWrite(filingInput())).rejects.toThrow();

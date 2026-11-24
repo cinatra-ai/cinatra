@@ -736,8 +736,13 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     expect(await store.decide(parked.decision.id, { from: "parked", to: "released", actor: REVIEWER })).toMatchObject({ outcome: "won" });
     const inFlight = async () =>
       (await admin.query(`SELECT calls_in_flight FROM ${TABLE} WHERE id = $1`, [parked.decision.id])).rows[0].calls_in_flight as number | null;
-    /** A writer's whole output transaction: its run lock first, then its produced event (the rows between are elided). */
-    const writeOutput = async () => {
+    /** A writer's whole output transaction: its run lock first, then its produced event (the rows between are elided).
+     *  `claim`: the decision whose publishing call the write runs under (the call's frame), else none. */
+    const writeOutput = async (claim?: string): Promise<void> => {
+      if (claim) {
+        const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
+        return mcpRequestContextStorage.run({ publishCallClaim: { runId, decisionId: claim } } as never, () => writeOutput());
+      }
       const op = buildProducedEventInsertOp(q(TEST_SCHEMA), { orgId: ORG, artifactId: `art-${randomUUID()}`,
         representationRevisionId: "rev-1", emitter: "createSemanticArtifact", originKind: "agent_generated", producerRunId: runId,
         producerAttempt: { generation: 0 } });
@@ -768,8 +773,13 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     // A second call of the step runs beside it; the count holds until both end.
     expect(await publishCallAllowed(run, "publish", hold)).toBe(true);
     expect(await inFlight()).toBe(2);
+    // Two calls of the one decision: neither call's own output is taken while the other is in flight.
+    await expect(writeOutput(parked.decision.id)).rejects.toMatchObject({ code: "22P02", message: expect.stringContaining("cinatra_publish_call_in_flight") });
     await releases[1]!();
     expect(await inFlight()).toBe(1);
+    // One call left: its own output is taken; a write under no claim is still refused.
+    await expect(writeOutput()).rejects.toMatchObject({ code: "22P02" });
+    await writeOutput(parked.decision.id);
     // The release resolves only once its write is committed: the count reads 0 right after it.
     await releases[0]!();
     expect(await inFlight()).toBe(0);

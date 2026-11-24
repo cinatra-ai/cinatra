@@ -402,7 +402,7 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
       }
       return base(text, values);
     });
-    expect(await reuse()).toEqual({ ok: false, error: expect.stringContaining("A publishing call of this run is in flight") });
+    expect(await reuse()).toEqual({ ok: false, reason: "publish_call_in_flight", error: expect.stringContaining("a publishing call of this run is in flight") });
     expect(steps()).toEqual(["BEGIN", "lock run-1", "event", "ROLLBACK"]);
   });
 

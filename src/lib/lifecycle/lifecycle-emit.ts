@@ -232,13 +232,17 @@ export function buildProducedEventInsertOp(
   // which each writer surfaces as PublishCallInFlightError. The writer took the run row before its first write
   // (producerRunLockOps), in an earlier statement, so this read sees every claim committed before that lock.
   // The claim the write itself runs under ($14, publishCallClaimForRun: the server's claim, carried in the call's frame)
-  // is not counted: that call's own output is what it publishes. A write under no claim ($14 null) counts every claim.
+  // is not counted while it holds exactly one call (that call's own output is what it publishes). The count is one per
+  // decision, not one per call, so with two or more calls of the same decision in flight the row cannot tell this
+  // call's output from another's, and the write is refused (retryable) until only one call remains. The trade-off:
+  // concurrent calls of one released step serialize their output writes instead of interleaving them. A write under
+  // no claim ($14 null) counts every claim.
   const ownClaim = input.producerRunId ? publishCallClaimForRun(input.producerRunId) : null;
   const noPublishCall = `(CASE WHEN EXISTS (SELECT 1 FROM "${schema}"."agent_run_publish_decisions" call_claim
           JOIN "${schema}"."agent_runs" claim_run ON claim_run.id = call_claim.run_id
           WHERE call_claim.run_id = $7::text AND call_claim.calls_in_flight > 0
             AND coalesce(call_claim.run_generation, claim_run.reset_generation) = claim_run.reset_generation
-            AND call_claim.id IS DISTINCT FROM $14::text)
+            AND (call_claim.id IS DISTINCT FROM $14::text OR call_claim.calls_in_flight > 1))
         THEN '${PUBLISH_CALL_IN_FLIGHT_SENTINEL}' ELSE '1' END)::integer = 1`;
   return {
     text: `INSERT INTO "${schema}"."artifact_produced_outbox"

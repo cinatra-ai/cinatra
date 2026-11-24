@@ -22,13 +22,19 @@ const db: { publishCallInFlight: boolean; abort: unknown; finalizedWinner: strin
   publishCallInFlight: false, abort: null, finalizedWinner: null, claimsInFlight: [],
 };
 // What the fence's EXISTS finds for one event statement: `publishCallInFlight` is a claim no write runs under;
-// `claimsInFlight` are the decisions with a call in flight, and a statement that binds its own claim as $14 (the
-// `call_claim.id IS DISTINCT FROM $14::text` term) does not count that one.
+// `claimsInFlight` holds one entry per call in flight, named by its decision (a decision named twice has two calls,
+// its row's calls_in_flight = 2). A statement that binds its own claim as $14 does not count that decision's row
+// when the statement's term excludes it: with `call_claim.calls_in_flight > 1` in the term, only while that row
+// holds one call; without it, whatever the row holds.
 const fenceRefuses = (q: Query): boolean => {
   if (!/THEN '[^']+' ELSE '1' END\)::integer = 1/.test(q.text)) return false;
   if (db.publishCallInFlight) return true;
-  const own = q.text.includes("call_claim.id IS DISTINCT FROM $14::text") ? q.values[13] : null;
-  return db.claimsInFlight.some((claim) => own == null || claim !== own);
+  const text = q.text.replace(/\s+/g, " ");
+  const own = text.includes("call_claim.id IS DISTINCT FROM $14::text") ? q.values[13] : null;
+  const perCallCount = text.includes("call_claim.id IS DISTINCT FROM $14::text OR call_claim.calls_in_flight > 1");
+  const counts = new Map<string, number>();
+  for (const claim of db.claimsInFlight) counts.set(claim, (counts.get(claim) ?? 0) + 1);
+  return [...counts].some(([claim, calls]) => own == null || claim !== own || (perCallCount && calls > 1));
 };
 vi.mock("@/lib/postgres-async", () => ({
   runPostgresQueriesAsync: async (input: { transaction?: boolean; queries: Query[] }) => {
@@ -247,13 +253,25 @@ describe("cinatra#4762: a released publishing call's own write passes the in-fli
   });
 
   // red-first-expect: to match object { ok: false, …(1) }
-  it("a write under another claim is refused, and so is the call's own write while another call is in flight", async () => {
+  it("a write under another claim is refused, and so is the call's own write while a call of another decision is in flight", async () => {
     db.claimsInFlight = ["decision-1"];
     expect(await appendUnder("decision-2")).toMatchObject({ ok: false, reason: "publish_call_in_flight" });
     expect(eventClaims()).toEqual(["decision-2"]);
     asyncCalls.length = 0;
     db.claimsInFlight = ["decision-1", "decision-2"];
     expect(await appendUnder("decision-1")).toMatchObject({ ok: false, reason: "publish_call_in_flight" });
+  });
+
+  // red-first-expect: to match object { ok: false, …(1) }
+  it("two concurrent calls of the one decision: each call's own write is refused while both are in flight", async () => {
+    // Both calls hold decision-1, so its row counts 2 calls; neither call's output can be told from the other's.
+    db.claimsInFlight = ["decision-1", "decision-1"];
+    expect(await appendUnder("decision-1")).toMatchObject({ ok: false, reason: "publish_call_in_flight" });
+    expect(await appendUnder("decision-1")).toMatchObject({ ok: false, reason: "publish_call_in_flight" });
+    expect(eventClaims()).toEqual(["decision-1", "decision-1"]);
+    // One of them ends: the remaining call's own write is taken.
+    db.claimsInFlight = ["decision-1"];
+    expect(await appendUnder("decision-1")).toMatchObject({ ok: true, representationRevisionId: "rev-new" });
   });
 });
 

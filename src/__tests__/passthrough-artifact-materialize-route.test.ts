@@ -175,6 +175,18 @@ describe("POST /api/agents/passthrough — artifact_materialize", () => {
     expect(body.error).toContain("cinatra.produces");
   });
 
+  // red-first-expect: expected 400 to be 409
+  it("answers 409 with its reason when the create is refused while a publishing call of the run is in flight (cinatra#4762)", async () => {
+    materializeToolArtifactMock.mockResolvedValue({
+      ok: false,
+      reason: "publish_call_in_flight",
+      error: "a publishing call of this run is in flight; try again once it has ended",
+    });
+    const res = await POST(post(materializeBody()));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ reason: "publish_call_in_flight" });
+  });
+
   it("still fails closed on a broken run binding BEFORE any materialization", async () => {
     bindBridgeRunIdMock.mockResolvedValue({
       ok: false,

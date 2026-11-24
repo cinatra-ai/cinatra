@@ -191,6 +191,18 @@ describe("cinatra#4223 POST /api/agents/passthrough — artifact_page_capture", 
     });
   });
 
+  // red-first-expect: expected 400 to be 409
+  it("answers 409 with its reason while a publishing call of the run is in flight (cinatra#4762)", async () => {
+    captureArtifactPageMock.mockResolvedValue({
+      ok: false,
+      reason: "publish_call_in_flight",
+      error: "a publishing call of this run is in flight; try again once it has ended",
+    });
+    const res = await POST(post(captureBody()));
+    expect(res.status).toBe(409);
+    expect((await res.json()).reason).toBe("publish_call_in_flight");
+  });
+
   it("answers a budget refusal with 400 and its reason", async () => {
     captureArtifactPageMock.mockResolvedValue({
       ok: false,
