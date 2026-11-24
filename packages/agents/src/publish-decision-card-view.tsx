@@ -350,8 +350,13 @@ export function PublishDecisionCard({
     onDecision(decisionId, { sending: true, failed: false });
     const sentNote = answer === "decline" ? note : "";
     const outcome = await decide({ runId: state.runId, decisionId, answer, note: sentNote }).catch(() => "failed" as const);
-    // A reply for a decision the card no longer shows is dropped: it never speaks for the decision drawn now.
-    if (current.current !== decisionId) return;
+    // A reply for a decision the card no longer shows is dropped: it never speaks for the decision drawn now. It still
+    // ends the send it belongs to, so when a read that briefly drew no decision draws the same decision again its
+    // controls are live (onDecision changes nothing when the card holds another decision).
+    if (current.current !== decisionId) {
+      onDecision(decisionId, { sending: false });
+      return;
+    }
     // A late answer is never sent again: the request is no longer open, and the reader is told so. An answer that did
     // not land is told too: the request stays open, and the reader may answer again.
     onDecision(decisionId, { sending: false, noLongerOpen: outcome === "not_open", failed: outcome === "failed" });

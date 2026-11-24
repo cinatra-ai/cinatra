@@ -665,6 +665,43 @@ describe("the decide door", () => {
     }
   });
 
+  // red-first-expect: expected true to be false
+  it("a reply that lands while a read briefly drew no decision leaves the controls live when the same decision returns", async () => {
+    const replies: Array<(outcome: "failed") => void> = [];
+    const decide = vi.fn<PublishDecisionDecide>(() => new Promise((resolve) => replies.push(resolve)));
+    const read = (state: unknown) => ({ state: state as never, refreshing: false, reload: () => undefined });
+    const card = (state: unknown) => (
+      <LifecycleCardSurfaceProvider host="run_card">
+        <PublishDecisionCard runId={RUN_ID} decide={decide} read={read(state)} />
+      </LifecycleCardSurfaceProvider>
+    );
+    const mounted = render(card(PENDING));
+    await act(async () => {
+      fireEvent.click((await rootOf(mounted)).querySelector(APPROVE)!);
+    });
+    expect(decide).toHaveBeenCalledTimes(1);
+    // A read fault answers "none" while the answer is in flight; the answer then fails.
+    await act(async () => {
+      mounted.rerender(card({ state: "none" }));
+    });
+    await settle();
+    await act(async () => {
+      replies[0]!("failed");
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await settle();
+    // The next read draws the same open decision again: its controls are live.
+    await act(async () => {
+      mounted.rerender(card(PENDING));
+    });
+    await settle();
+    const after = await rootOf(mounted);
+    expect(after.querySelector<HTMLButtonElement>(APPROVE)?.disabled).toBe(false);
+    expect(after.querySelector<HTMLButtonElement>(DECLINE)?.disabled).toBe(false);
+    mounted.unmount();
+  });
+
   it("a decision allowed whose run did not go on offers Allow only, with no note and no Do not allow", async () => {
     stateMock.mockImplementation(async () => ({ ...PENDING, resumeOnly: true }));
     const root = await rootOf(mountOn("run_card", okDoor()));
