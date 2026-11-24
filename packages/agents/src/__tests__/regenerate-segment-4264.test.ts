@@ -306,6 +306,68 @@ describe("resolveRegenerateSegment (T11)", () => {
   });
 });
 
+describe("resolveRegenerateSegment checks the run's inputs at its start", () => {
+  // The worker hands the run's input params to the resolution. A segment run
+  // whose inputs are not the declared-input form (the reviewer's words under
+  // the note's start output, and the request with no findings) is refused
+  // before anything is sent, so a run made in the earlier form by an older
+  // build is never executed with the findings text.
+  const NOTE = "Make the sky brighter";
+  const PROMPT = "A lighthouse at dusk, wide angle";
+  const FINDINGS = [
+    { id: "prompt-window", message: NOTE },
+    { id: "picture-prompt", message: PROMPT },
+  ];
+  const withFindings = () => deps({ readRepairForRun: vi.fn(async () => ({ ...intent(), findings: FINDINGS })) });
+  const runWith = (inputParams: unknown) => ({ ...RUN_ROW, inputParams }) as typeof RUN_ROW;
+
+  // red-first-expect: expected 'segment' to be 'refused' // Object.is equality
+  it("refuses a run that holds the earlier findings form", async () => {
+    const earlier = {
+      imagePrompt: "Apply these review findings:\n\n1. Make the sky brighter\n2. A lighthouse at dusk, wide angle",
+      lifecycleRepairRequest: { kind: "lifecycle_repair_request", repairId: "repair-1", findings: FINDINGS },
+    };
+    const refusal = await resolve(withFindings(), runWith(earlier));
+    expectRefused(refusal);
+    // Marked, so the run start escalates the run's repair as well.
+    expect(refusal).toMatchObject({ inputsNotDeclared: true });
+    // The words alone are not enough: the request must hold no findings.
+    expectRefused(
+      await resolve(
+        withFindings(),
+        runWith({ imagePrompt: PROMPT, lifecycleRepairRequest: { repairId: "repair-1", findings: FINDINGS } }),
+      ),
+    );
+    // Nor is another field's words in the declared input.
+    expectRefused(
+      await resolve(withFindings(), runWith({ imagePrompt: NOTE, lifecycleRepairRequest: { findings: [] } })),
+    );
+  });
+
+  it("a refusal for another reason than the run's inputs is not marked", async () => {
+    const other = await resolve(deps({ readVerifiedFilingNode: vi.fn(async () => null) }), runWith({}));
+    expectRefused(other);
+    expect(other).not.toHaveProperty("inputsNotDeclared");
+  });
+
+  const RECORD = { artifactNode: "file_image", step: "image_flow", noteInput: "prompt", startOutput: "imagePrompt" };
+
+  it("resolves a run in the declared-input form, from the stored text or the parsed object", async () => {
+    const form = { imagePrompt: PROMPT, lifecycleRepairRequest: { repairId: "repair-1", findings: [], regenerateInput: RECORD } };
+    expect((await resolve(withFindings(), runWith(form))).kind).toBe("segment");
+    expect((await resolve(withFindings(), runWith(JSON.stringify(form)))).kind).toBe("segment");
+  });
+
+  it("refuses a run whose request records no declared input, or another one than the step declares now", async () => {
+    const form = (record: unknown) => ({ imagePrompt: PROMPT, lifecycleRepairRequest: { findings: [], regenerateInput: record } });
+    expectRefused(await resolve(withFindings(), runWith({ imagePrompt: PROMPT, lifecycleRepairRequest: { findings: [] } })));
+    expectRefused(await resolve(withFindings(), runWith(form({ ...RECORD, noteInput: "note" }))));
+    expectRefused(await resolve(withFindings(), runWith(form({ ...RECORD, startOutput: "otherPrompt" }))));
+    expectRefused(await resolve(withFindings(), runWith(form({ ...RECORD, artifactNode: "write_draft" }))));
+    expectRefused(await resolve(withFindings(), runWith(form({ ...RECORD, extra: "x" }))));
+  });
+});
+
 describe("isRegenerateSegmentRun", () => {
   it("is true for a repair run whose repair names a node, and for a fault (fail closed)", async () => {
     const read = (r: RegenerateRepairIntent | null) => ({ readRepairForRun: vi.fn(async () => r) });
@@ -465,7 +527,7 @@ describe("the platform-owned input names", () => {
           templateId: "tpl-1",
           packageName: PACKAGE,
           lifecycleConfig: LIFECYCLE,
-          note: "n",
+          findings: [{ id: "prompt-window", message: "n" }],
           request: {},
         },
         {
@@ -663,18 +725,19 @@ describe("the receipt", () => {
 
 describe("claimSegmentProduction", () => {
   const PRODUCTION = { artifactId: "artifact-1", representationRevisionId: "rev-2" };
-  function receiptRow(node = "file_image"): StoredStepSnapshot {
+  const RECORD = { artifactNode: "file_image", step: "image_flow", noteInput: "prompt", startOutput: "imagePrompt" };
+  function receiptRow(node = "file_image", step = "image_flow"): StoredStepSnapshot {
     const json = JSON.stringify({
       artifactNode: node,
-      attestation: segmentReceiptAttestation(KEY, RUN, "image_flow", node, FLOW),
+      attestation: segmentReceiptAttestation(KEY, RUN, step, node, FLOW),
       flowSha256: FLOW,
-      step: "image_flow",
+      step,
     });
     return { nodeId: SEGMENT_RECEIPT_NODE_ID, inputsJson: json, inputsSha256: sha(json), flowSha256: FLOW, ambiguous: false };
   }
   const claim = (over: Partial<Parameters<typeof claimSegmentProduction>[1]> = {}) =>
     claimSegmentProduction(
-      { orgId: "org-1", runId: RUN, regenerateNodeId: "file_image", key: KEY },
+      { orgId: "org-1", runId: RUN, record: RECORD, key: KEY },
       {
         listProductions: vi.fn(async () => [PRODUCTION]),
         readVerifiedSteps: vi.fn(async () => ["file_image"]),
@@ -690,11 +753,31 @@ describe("claimSegmentProduction", () => {
   it("leaves the repair open for two writes, another step, two ledger rows or no receipt", async () => {
     expect(await claim({ listProductions: vi.fn(async () => [PRODUCTION, { ...PRODUCTION, artifactId: "a2" }]) })).toBeNull();
     expect(await claim({ listProductions: vi.fn(async () => []) })).toBeNull();
-    expect(await claim({ readVerifiedSteps: vi.fn(async () => ["image_flow"]) })).toBeNull();
     expect(await claim({ readVerifiedSteps: vi.fn(async () => [null]) })).toBeNull();
     expect(await claim({ readVerifiedSteps: vi.fn(async () => ["file_image", "file_image"]) })).toBeNull();
     expect(await claim({ readReceiptRow: vi.fn(async () => null) })).toBeNull();
-    expect(await claim({ readReceiptRow: vi.fn(async () => receiptRow("write_draft")) })).toBeNull();
+  });
+
+  // red-first-expect: to be 'receipt-not-the-recorded-segment'
+  it("refuses a valid receipt whose step or node is not the run's recorded declaration", async () => {
+    expect(await claim({ readReceiptRow: vi.fn(async () => receiptRow("file_image", "draft_flow")) })).toBe(
+      "receipt-not-the-recorded-segment",
+    );
+    expect(await claim({ readReceiptRow: vi.fn(async () => receiptRow("write_draft")) })).toBe(
+      "receipt-not-the-recorded-segment",
+    );
+  });
+
+  // red-first-expect: expected null to be 'receipt-not-the-recorded-segment'
+  it("refuses a run whose one verified ledger row and valid receipt both name another node", async () => {
+    expect(
+      await claim({
+        readVerifiedSteps: vi.fn(async () => ["write_draft"]),
+        readReceiptRow: vi.fn(async () => receiptRow("write_draft", "draft_flow")),
+      }),
+    ).toBe("receipt-not-the-recorded-segment");
+    // One verified row of another node is enough: its work is never applied, and the repair is not left open.
+    expect(await claim({ readVerifiedSteps: vi.fn(async () => ["image_flow"]) })).toBe("receipt-not-the-recorded-segment");
   });
 });
 
@@ -704,7 +787,7 @@ describe("planSegmentDispatch", () => {
     templateId: "tpl-1",
     packageName: PACKAGE,
     lifecycleConfig: LIFECYCLE,
-    note: "brighter picture",
+    findings: [{ id: "picture-prompt", message: "brighter picture" }],
     request: { kind: "lifecycle_repair" },
   };
 
@@ -716,7 +799,15 @@ describe("planSegmentDispatch", () => {
     expect(await planSegmentDispatch(base, { readVerifiedFilingNode: read, readNoteStartOutput })).toEqual({
       kind: "segment",
       parentRunId: PROVENANCE_RUN,
-      inputParams: { imagePrompt: "brighter picture", lifecycleRepairRequest: { kind: "lifecycle_repair" } },
+      // The request travels without findings: the note is in the declared input only.
+      inputParams: {
+        imagePrompt: "brighter picture",
+        lifecycleRepairRequest: {
+          kind: "lifecycle_repair",
+          findings: [],
+          regenerateInput: { artifactNode: "file_image", step: "image_flow", noteInput: "prompt", startOutput: "imagePrompt" },
+        },
+      },
     });
     expect(readNoteStartOutput).toHaveBeenCalledWith({ packageName: PACKAGE, step: "image_flow", noteInput: "prompt" });
   });
@@ -862,7 +953,7 @@ describe("a blank non-NULL intent is refused, never run as an ordinary repair (r
         templateId: "tpl-1",
         packageName: PACKAGE,
         lifecycleConfig: LIFECYCLE,
-        note: "n",
+        findings: [{ id: "prompt-window", message: "n" }],
         request: {},
       },
       { readVerifiedFilingNode, readNoteStartOutput: vi.fn(async () => "imagePrompt") },
@@ -871,14 +962,23 @@ describe("a blank non-NULL intent is refused, never run as an ordinary repair (r
     expect(readVerifiedFilingNode).not.toHaveBeenCalled();
   });
 
-  it("the dispatch drain plans every non-NULL intent, blank included", () => {
+  it("the dispatch drain plans every non-NULL intent with no run yet, and judges an existing run by its record only", () => {
     const source = readFileSync(path.resolve(__dirname, "../lifecycle-repair-dispatch-store.ts"), "utf8");
-    // The deterministic-run read comes first; only a repair with no run is planned.
+    // The deterministic-run read comes first. A Regenerate whose run exists is
+    // judged by the inputs that run recorded (a retry plans nothing); one with
+    // no run yet, a blank intent included, is planned.
     const runRead = source.indexOf("const [already] = await db");
-    const gate = source.indexOf("if (!already && hasRegenerateIntent(row.regenerateNodeId)) {");
+    const existing = source.indexOf("if (hasRegenerateIntent(row.regenerateNodeId) && already) {", runRead);
+    const fresh = source.indexOf("} else if (hasRegenerateIntent(row.regenerateNodeId)) {", existing);
     expect(runRead).toBeGreaterThan(0);
-    expect(gate).toBeGreaterThan(runRead);
-    expect(source.indexOf("await planSegmentDispatch(", gate)).toBeGreaterThan(gate);
+    expect(existing).toBeGreaterThan(runRead);
+    expect(fresh).toBeGreaterThan(existing);
+    const existingBranch = source.slice(existing, fresh);
+    expect(existingBranch).toContain("recordedRegenerateInput(");
+    expect(existingBranch).not.toContain("planSegmentDispatch(");
+    const plan = source.indexOf("await planSegmentDispatch(", fresh);
+    expect(plan).toBeGreaterThan(fresh);
+    expect(source.indexOf("await planSegmentDispatch(")).toBe(plan);
     expect(source).not.toContain("if (row.regenerateNodeId) {");
   });
 

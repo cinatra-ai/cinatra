@@ -236,17 +236,28 @@ function continuePlan(
 }
 
 /** The ledger row of the write that filed `base` on `runId`, naming the filing
- *  node the runtime verified (`verified_step_id`, cinatra#4264). Idempotent. */
-async function seedFiling(runId: string, base: Target, node: string | null = FILING_NODE): Promise<void> {
+ *  node the runtime verified (`verified_step_id`, cinatra#4264), and, for a
+ *  picture, the prompt it was made from (`image_prompt`). Idempotent: the
+ *  first write of a revision stands. */
+async function seedFiling(
+  runId: string,
+  base: Target,
+  node: string | null = FILING_NODE,
+  imagePrompt: string | null = null,
+): Promise<void> {
   await client.query(
     `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_materializations"
        (id, org_id, run_id, output_id, node_id, path, extension, content_hash,
-        artifact_id, representation_revision_id, phase, verified_step_id)
-     VALUES ($1, $2, $3, $4, $4, 'materialize_tool', '@cinatra-ai/review-floor-fixture', $5, $6, $5, 'finalized', $7)
+        artifact_id, representation_revision_id, phase, verified_step_id, image_prompt)
+     VALUES ($1, $2, $3, $4, $4, 'materialize_tool', '@cinatra-ai/review-floor-fixture', $5, $6, $5, 'finalized', $7, $8)
      ON CONFLICT DO NOTHING`,
-    [`mat-${randomUUID()}`, ORG, runId, node ?? FILING_NODE, base.representationRevisionId, base.artifactId, node],
+    [`mat-${randomUUID()}`, ORG, runId, node ?? FILING_NODE, base.representationRevisionId, base.artifactId, node, imagePrompt],
   );
 }
+
+/** The prompt a reviewed picture records: the store keeps a submitted prompt
+ *  only for a revision that records one (cinatra#4264). */
+const RECORDED_PROMPT = "the prompt the picture was made from";
 
 async function regenerate(
   runId: string,
@@ -254,9 +265,13 @@ async function regenerate(
   base: Target,
   note: string,
   prompt?: string,
+  opts?: { recordsPrompt?: boolean },
 ) {
-  // The reviewed revision was filed by the fixture's filing node, verified.
-  await seedFiling(runId, base);
+  // The reviewed revision was filed by the fixture's filing node, verified. A
+  // request that carries a prompt reviews a picture with a recorded prompt,
+  // unless the case says the work records none.
+  const recordsPrompt = opts?.recordsPrompt ?? prompt !== undefined;
+  await seedFiling(runId, base, FILING_NODE, recordsPrompt ? RECORDED_PROMPT : null);
   return changesRequested.recordReviewSurfaceChangesRequested({
     runId,
     reviewTaskId,
@@ -826,6 +841,18 @@ describe.skipIf(!HAS_DB)("item 5 — the note and the picture's prompt are two v
     expect(findings.find((f) => f.id === "picture-prompt")?.message).toBe(
       "a red bicycle at golden hour",
     );
+  });
+
+  it("keeps no prompt for work that records none: the request is the one without a prompt (cinatra#4264)", async () => {
+    const runId = await seedRun();
+    const base = target();
+    const reviewTaskId = await emitLifecycleGate(runId, [base]);
+
+    const result = await regenerate(runId, reviewTaskId, base, "warmer light", "a red bicycle", { recordsPrompt: false });
+    expect(result.ok).toBe(true);
+    const after = await gateRow(runId, reviewTaskId);
+    const [repair] = await repairRowsFor(after!.id);
+    expect(repair.findings).toEqual([{ id: "prompt-window", message: "warmer light" }]);
   });
 
   it("records ONE finding when there is no prompt — byte-identical to before the field existed", async () => {

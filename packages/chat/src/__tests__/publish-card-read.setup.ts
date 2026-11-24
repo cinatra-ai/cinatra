@@ -8,4 +8,5 @@ import { vi } from "vitest";
 
 vi.mock("../../../agents/src/publish-decision-card-actions", () => ({
   getPublishDecisionCardStateAction: async () => ({ state: "none" }),
+  decidePublishDecisionCardAction: async () => "failed",
 }));

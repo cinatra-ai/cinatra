@@ -915,8 +915,8 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
       publishDecisionRunGenerationDdlSql: string;
       runDispatchPublishRowsDdlSql: string;
     };
-    // cinatra#4762: core__0134's columns too, the publishing calls in flight included.
-    const next = (await import("../../../../migrations/core/core__0134_review-gate-run-generation.mjs")) as unknown as Record<string, string>;
+    // cinatra#4762: core__0135's columns too, the publishing calls in flight included.
+    const next = (await import("../../../../migrations/core/core__0135_review-gate-run-generation.mjs")) as unknown as Record<string, string>;
     await admin.query(`SET search_path TO "${q(TEST_SCHEMA)}"`);
     try {
       for (const ddl of [mod.runResetGenerationDdlSql, mod.publishDecisionRunGenerationDdlSql, mod.runDispatchPublishRowsDdlSql,

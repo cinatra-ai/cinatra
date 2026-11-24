@@ -7,7 +7,7 @@
 // broker GET on the widget), and draws NOTHING when there is no open decision.
 
 import React from "react";
-import { act, cleanup } from "@testing-library/react";
+import { act, cleanup, fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("lucide-react", () => {
@@ -48,8 +48,10 @@ vi.mock("../../../agents/src/agent-hitl-screen-actions", () => ({
 }));
 // The publish card's own session entry (cinatra#4150); "none" unless its own arm runs.
 const publishStateMock = vi.fn(async () => ({ state: "none" }) as Record<string, unknown>);
+const publishDecideMock = vi.fn<(input: unknown) => Promise<string>>(async () => "decided");
 vi.mock("../../../agents/src/publish-decision-card-actions", () => ({
   getPublishDecisionCardStateAction: () => publishStateMock(),
+  decidePublishDecisionCardAction: (input: unknown) => publishDecideMock(input),
 }));
 vi.mock("../../../agents/src/hitl-actions", () => ({
   approveReviewTask: vi.fn(async () => undefined),
@@ -140,6 +142,7 @@ const PENDING = {
   runId: HELD_RUN_ID,
   agentName: "Proof agent",
   rows: [{ label: "Title", value: "Spring launch" }],
+  decisionId: "d1",
   mayDecide: true,
 } as Record<string, unknown>;
 
@@ -193,11 +196,11 @@ describe("the publish card on the conversation hosts (cinatra#4150)", () => {
     // The run's own slot, and never inside the inline run card's subtree.
     expect(card.closest(`[data-agent-run-slot="${HELD_RUN_ID}"]`)).not.toBeNull();
     expect(card.closest('[data-lifecycle-card-host="run_card"]')).toBeNull();
-    // Both controls are drawn; no host passes a decide door yet, so neither can send.
+    // Both controls are drawn, and live for a reader who may decide: the host passes its decide door (cinatra#4758).
     for (const action of ["decline-publish -> declined", "approve-publish -> released"]) {
       const control = card.querySelector<HTMLButtonElement>(`[data-action="${action}"]`);
       expect(control, action).not.toBeNull();
-      expect(control!.disabled, action).toBe(true);
+      expect(control!.disabled, action).toBe(false);
     }
   });
 
@@ -465,4 +468,76 @@ describe("the publish card on the conversation hosts (cinatra#4150)", () => {
     expect(reads[0]!.init.body).toBeUndefined();
     expect(publishStateMock).not.toHaveBeenCalled();
   });
+
+  // cinatra#4758: THE DECIDE DOOR on the conversation hosts. /chat answers through the session action; the widget
+  // answers through the broker POST with its own credential, never the session action and never a cookie.
+  const allow = (root: HTMLElement) =>
+    [...root.querySelectorAll<HTMLButtonElement>(`${CARD} button`)].find((b) => b.textContent === "Allow")!;
+  const decline = (root: HTMLElement) =>
+    [...root.querySelectorAll<HTMLButtonElement>(`${CARD} button`)].find((b) => b.textContent === "Do not allow")!;
+
+  it("/chat: Allow is live for a reader who may approve and answers through the session action, never the broker", async () => {
+    const root = await mountArm("chat", true);
+    expect(allow(root).disabled).toBe(false);
+    expect(decline(root).disabled).toBe(false);
+    await act(async () => {
+      fireEvent.click(allow(root));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(publishDecideMock).toHaveBeenCalledWith({ runId: HELD_RUN_ID, decisionId: "d1", answer: "approve", note: "" });
+    expect((stub?.calls ?? []).some((c) => c.url.startsWith(`${BROKER}/decide`))).toBe(false);
+  });
+
+  it("the widget: Do not allow answers through the broker POST with its own credential, the note in the body", async () => {
+    const root = await mountArm("widget", true);
+    expect(decline(root).disabled).toBe(false);
+    const note = root.querySelector<HTMLTextAreaElement>(`${CARD} textarea`)!;
+    fireEvent.change(note, { target: { value: "Not ready yet." } });
+    await act(async () => {
+      fireEvent.click(decline(root));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    const posts = (stub?.calls ?? []).filter((c) => c.url === `${BROKER}/decide`);
+    expect(posts).toHaveLength(1);
+    expect(posts[0]!.init.method).toBe("POST");
+    expect(posts[0]!.init.credentials).toBe("omit");
+    expect(JSON.parse(String(posts[0]!.init.body))).toEqual({ runId: HELD_RUN_ID, decisionId: "d1", answer: "decline", note: "Not ready yet." });
+    expect(publishDecideMock).not.toHaveBeenCalled();
+  });
+
+  it("the widget: a second answer the broker reports as no longer open is reported on the card", async () => {
+    publishStateMock.mockImplementation(async () => PENDING);
+    stub = installWidgetServiceStub({ publishDecision: () => PENDING, publishDecide: () => "not_open" });
+    const mounted = await mountSurface("widget", { messages: lifecycleHeldTranscript() });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    const root = mounted.container.querySelector<HTMLElement>('[data-parity-surface="widget"]')!;
+    await act(async () => {
+      fireEvent.click(allow(root));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(root.querySelector(CARD)!.getAttribute("data-lifecycle-card-state")).toBe("no_longer_open");
+    expect(root.textContent).toContain("This request is no longer open");
+  });
+
+  it.each(["chat", "widget"] as const)(
+    "%s: the controls follow the reader: live for one who may approve, disabled with the reason for one who may only view",
+    async (surface) => {
+      const decider = await mountArm(surface, true);
+      expect(allow(decider).disabled).toBe(false);
+      cleanup();
+      stub?.restore();
+      publishStateMock.mockImplementation(async () => ({ ...PENDING, mayDecide: false }));
+      stub = installWidgetServiceStub({ publishDecision: () => ({ ...PENDING, mayDecide: false }) });
+      const mounted = await mountSurface(surface, { messages: lifecycleHeldTranscript() });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      const root = mounted.container.querySelector<HTMLElement>(`[data-parity-surface="${surface}"]`)!;
+      expect(allow(root).disabled).toBe(true);
+      expect(decline(root).disabled).toBe(true);
+      expect(root.textContent).toContain("Deciding whether this change is made needs approve access on the run");
+    },
+  );
 });

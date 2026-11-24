@@ -1,4 +1,4 @@
-// core__0134 — the attempt a review gate belongs to, on `artifact_review_gates`
+// core__0135 — the attempt a review gate belongs to, on `artifact_review_gates`
 // (cinatra#4762). Operator-upgrade twin of the fresh-install bootstrap DDL (the
 // gate-store extension lines in src/lib/artifacts/artifact-review-gate-schema.ts),
 // shipped in the SAME change (the core__0130 precedent).
@@ -49,9 +49,9 @@
 // DOWN drops the three columns and what they hold. Safe only once no
 // deployed code reads the column.
 //
-// SEQ 0134: 0133 is the highest sequence on main (2026-11-23). A rename-only
-// renumber at merge is normal. Unqualified names ride the runner's search_path
-// (the app schema).
+// SEQ 0135: 0134 is the highest sequence on main (2026-11-24; renumbered from
+// 0134 at the forward onto it). A rename-only renumber at merge is normal.
+// Unqualified names ride the runner's search_path (the app schema).
 
 /** Idempotent DDL mirroring the bootstrap leaf — safe to run after it. */
 export const reviewGateRunGenerationDdlSql = `ALTER TABLE artifact_review_gates ADD COLUMN IF NOT EXISTS run_generation integer`;

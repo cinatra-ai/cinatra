@@ -150,6 +150,8 @@ describe("blog-image-generator-agent OAS validates against agent schema and meta
       "imagePromptContextParentPackageName",
       "imagePromptContextSlotId",
       "projectId",
+      // The hidden prompt a Regenerate of the picture fills (cinatra#4264).
+      "prompt",
     ]);
     const inputs = start!.inputs as Array<Record<string, unknown>>;
     const inputTitles = new Set(inputs.map((i) => i.title as string));
@@ -163,7 +165,24 @@ describe("blog-image-generator-agent OAS validates against agent schema and meta
       ...(meta?.hidden as string[]),
     ]);
     expect(union).toEqual(inputTitles);
-    expect(union.size).toBe(7);
+    expect(union.size).toBe(8);
+    // The prompt reaches the picture: exactly one data edge runs from the
+    // start node's `prompt` output to the generating node's declared `prompt`
+    // input; both endpoints are read from this OAS.
+    const startRef = (oas.start_node as { $component_ref: string }).$component_ref;
+    expect(refs[startRef]?.component_type).toBe("StartNode");
+    const promptEdges = (oas.data_flow_connections as Array<Record<string, unknown>>).filter(
+      (c) =>
+        (c.source_node as { $component_ref?: string } | undefined)?.$component_ref === startRef &&
+        c.source_output === "prompt",
+    );
+    expect(promptEdges).toHaveLength(1);
+    const generatorRef = (promptEdges[0].destination_node as { $component_ref: string }).$component_ref;
+    expect(generatorRef).toBe("generate");
+    expect(promptEdges[0].destination_input).toBe("prompt");
+    const generator = refs[generatorRef];
+    expect(generator?.component_type).toBe("ApiNode");
+    expect((generator.inputs as Array<{ title: string }>).map((i) => i.title)).toContain("prompt");
   });
 
   it("fixes the placement at the featured image", () => {

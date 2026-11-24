@@ -114,8 +114,18 @@ export interface ReviewIslandCredentialPayload {
   agentSlug: string;
   /** The gate this credential is scoped to — run half. */
   runId: string;
-  /** The gate this credential is scoped to — gate half. */
+  /** The gate this credential is scoped to — gate half. For a publish-decision
+   *  credential, the decision row's subject key (`publishDecisionIslandSubjectKey`). */
   reviewTaskId: string;
+  /**
+   * WHAT the credential paints (cinatra#4150 W4 C1b). ABSENT is a review gate,
+   * exactly as every credential minted before this field existed. `publish-decision`
+   * is one artifacts row of a publish card: its `reviewTaskId` slot holds that
+   * row's subject key, and the serving path accepts it ONLY beside a
+   * publish-decision island ref with the same run and subject, never a gate ref.
+   * Sealed like every other field, so a holder cannot turn one kind into the other.
+   */
+  subject?: "publish-decision";
 }
 
 /** A verified credential: the sealed payload plus its own expiry. */
@@ -153,6 +163,8 @@ type SealedShape = {
   r: string;
   g: string;
   x: number;
+  /** Present only on a publish-decision credential (`"pd"`). */
+  k?: "pd";
 };
 
 /**
@@ -180,6 +192,7 @@ export function mintReviewIslandCredential(
     payload.reviewTaskId,
   ];
   if (!fields.every((f) => boundedId(f))) return null;
+  if (payload.subject !== undefined && payload.subject !== "publish-decision") return null;
 
   const now = Math.floor(options?.nowSeconds ?? Date.now() / 1000);
   const ttl = options?.ttlSeconds ?? REVIEW_ISLAND_CREDENTIAL_TTL_SECONDS;
@@ -203,6 +216,8 @@ export function mintReviewIslandCredential(
     r: payload.runId,
     g: payload.reviewTaskId,
     x: now + ttl,
+    // OMITTED for a gate, so a gate credential seals exactly what it always did.
+    ...(payload.subject === "publish-decision" ? { k: "pd" as const } : {}),
   };
 
   try {
@@ -271,6 +286,9 @@ export function verifyReviewIslandCredential(
     return null;
   }
   if (typeof s.x !== "number" || !Number.isFinite(s.x)) return null;
+  // The subject is present and ours, or absent (a gate): any other value is not
+  // a credential this codec minted.
+  if (Object.prototype.hasOwnProperty.call(s, "k") && s.k !== "pd") return null;
 
   const now = Math.floor(options?.nowSeconds ?? Date.now() / 1000);
   // Expiry against the SERVER clock, never a value the holder supplies, and
@@ -291,6 +309,7 @@ export function verifyReviewIslandCredential(
     runId: s.r,
     reviewTaskId: s.g,
     expiresAt: s.x,
+    ...(s.k === "pd" ? { subject: "publish-decision" as const } : {}),
   };
 }
 

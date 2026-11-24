@@ -14,6 +14,13 @@ import { types } from "node:util";
 import { and, asc, desc, eq, getTableColumns, gt, inArray, lte, sql } from "drizzle-orm";
 
 import { db } from "./db";
+import {
+  isPublishRowDeclaration,
+  isPublishRowInput,
+  PUBLISH_DECISION_MAX_NOTE_LENGTH,
+  PUBLISH_ROW_INPUT_MAX,
+  type PublishRowDeclaration,
+} from "./publish-decision-card";
 import { agentRunOutwardActionPolicies, agentRunPublishDecisions, agentRuns } from "./schema";
 
 /** A decision of the run's current attempt: its run_generation equals the run's reset_generation, read in the same
@@ -31,14 +38,15 @@ export const PUBLISH_DECISION_DEFAULT_TTL_MS = 24 * 60 * 60 * 1000;
 export const PUBLISH_DECISION_MAX_DUE_PAGE = 1000;
 // Caps. Text is stored as given, never trimmed: an id is matched by equality.
 export const PUBLISH_DECISION_MAX_ID_LENGTH = 256;
-export const PUBLISH_DECISION_MAX_NOTE_LENGTH = 2000;
+export { PUBLISH_DECISION_MAX_NOTE_LENGTH };
 export const PUBLISH_DECISION_MAX_SURFACED_BYTES = 64 * 1024;
 /** The most rows one declaration may hold, and the longest label or input name in one. */
 export const PUBLISH_DECISION_MAX_DECLARED_ROWS = 32;
-export const PUBLISH_DECISION_MAX_DECLARED_TEXT = 256;
+export const PUBLISH_DECISION_MAX_DECLARED_TEXT = PUBLISH_ROW_INPUT_MAX;
 
-/** One row the template declared for a publishing node: the pack's label over one of the node's inputs. */
-export type PublishDeclaredRow = { label: string; input: string };
+/** One row the template declared for a publishing node: the pack's label over one of the node's inputs, in one of the
+ *  shapes the compiler writes (a text row, a list row with its columns, or an artifacts row; publish-decision-card.ts). */
+export type PublishDeclaredRow = PublishRowDeclaration;
 
 export class PublishDecisionError extends Error {
   readonly code: "invalid-input" | "invalid-transition" | "malformed-row" | "not-found" | "conflict" | "stale-attempt";
@@ -62,6 +70,9 @@ export interface PublishDecisionRow {
   declaredRows: PublishDeclaredRow[] | null;
   /** The run's reset generation at the park; -1 = an ended attempt; null = a row older than the column (read as 0). */
   runGeneration: number | null;
+  /** The run's pause generation at which the Allow released this row (written in the releasing UPDATE); null = not
+   *  released, or released by code older than the column. */
+  releasedPauseGeneration: number | null;
   decidedBy: string | null;
   decidedAt: Date | null;
   decisionNote: string | null;
@@ -98,21 +109,32 @@ function deserialize(row: StoredRow): PublishDecisionRow {
     declaredRows = declaredRowsOf(parsed);
     if (declaredRows === null) throw new PublishDecisionError("malformed-row", "a stored decision has unreadable declared rows");
   }
+  const releasedPauseGeneration = row.releasedPauseGeneration ?? null;
+  if (releasedPauseGeneration !== null && (!Number.isSafeInteger(releasedPauseGeneration) || releasedPauseGeneration < 0)) {
+    throw new PublishDecisionError("malformed-row", "a stored decision has an unreadable released pause generation");
+  }
   // The count of publishing calls in flight is the call check's own state (claimPublishCall), never part of the record.
   const { callsInFlight: _inFlight, ...record } = row;
-  return { ...record, status: row.status, surfacedValues, declaredRows, runGeneration: row.runGeneration ?? null };
+  return { ...record, status: row.status, surfacedValues, declaredRows, runGeneration: row.runGeneration ?? null, releasedPauseGeneration };
 }
 
-/** A declaration as plain rows of two texts each, within the caps; null for any other shape. */
+/** A declaration as plain rows in a shape the compiler writes (isPublishRowDeclaration: a text, list or artifacts row),
+ *  each label and input within the caps; null for any other shape. A row is copied field by field, so the stored text
+ *  holds only the fields its shape names. */
 function declaredRowsOf(value: unknown): PublishDeclaredRow[] | null {
   if (!Array.isArray(value) || value.length > PUBLISH_DECISION_MAX_DECLARED_ROWS) return null;
   const rows: PublishDeclaredRow[] = [];
   for (const row of value as unknown[]) {
-    if (!isPlainObject(row)) return null;
+    if (!isPlainObject(row) || !isPublishRowDeclaration(row)) return null;
     const { label, input } = row;
-    if (typeof label !== "string" || typeof input !== "string" || label.length === 0 || input.length === 0
-      || label.length > PUBLISH_DECISION_MAX_DECLARED_TEXT || input.length > PUBLISH_DECISION_MAX_DECLARED_TEXT) return null;
-    rows.push({ label, input });
+    if (label.length === 0 || label.length > PUBLISH_DECISION_MAX_DECLARED_TEXT || !isPublishRowInput(input)) return null;
+    if (row.kind === "list") {
+      rows.push({ kind: "list", label, input, columns: row.columns.map(({ label: l, field }) => ({ label: l, field })) });
+    } else if (row.kind === "artifacts") {
+      rows.push({ kind: "artifacts", label, input });
+    } else {
+      rows.push({ label, input });
+    }
   }
   return rows;
 }
@@ -260,9 +282,14 @@ export interface DecideInput {
   actor: string | null;
   /** Only a decline carries a note. */
   note?: string | null;
+  /** Only a release carries it: the run's pause generation the releasing claim holds, stored with the release in the
+   *  same UPDATE, so a later read can tell a run still parked at this pause from one that went on. */
+  pauseGeneration?: number;
   /** Wins only while no newer decision of the same run exists and the row belongs to the run's current attempt, checked in
    *  the same UPDATE (the expiry's rule): a decision of an ended attempt never stops the attempt a retry started. */
   newestOnly?: boolean;
+  /** Wins only while the row belongs to this run, checked in the same UPDATE; a row of another run is not found. */
+  ofRun?: string;
 }
 
 export type DecideResult =
@@ -270,9 +297,16 @@ export type DecideResult =
   | { outcome: "lost"; currentStatus: PublishDecisionStatus };
 
 /** Refuses every combination the record does not admit, before any write. */
-function requireTransition(input: DecideInput): { actor: string | null; note: string | null } {
+function requireTransition(input: DecideInput): { actor: string | null; note: string | null; pauseGeneration: number | null } {
   if (input.from !== "parked") {
     throw new PublishDecisionError("invalid-transition", "a decision leaves only the parked status");
+  }
+  const pauseGeneration = input.pauseGeneration ?? null;
+  if (pauseGeneration !== null) {
+    if (input.to !== "released") throw new PublishDecisionError("invalid-transition", "only a release records a pause generation");
+    if (!Number.isSafeInteger(pauseGeneration) || pauseGeneration < 0) {
+      throw new PublishDecisionError("invalid-input", "pauseGeneration must be a non-negative safe integer");
+    }
   }
   const note = input.note == null ? null : requireText(input.note, "note", PUBLISH_DECISION_MAX_NOTE_LENGTH);
   switch (input.to) {
@@ -282,14 +316,14 @@ function requireTransition(input: DecideInput): { actor: string | null; note: st
       if (input.to === "released" && note !== null) {
         throw new PublishDecisionError("invalid-transition", "only a decline carries a note");
       }
-      return { actor, note };
+      return { actor, note, pauseGeneration };
     }
     case "expired":
     case "run_ended":
       if (input.actor !== null || note !== null) {
         throw new PublishDecisionError("invalid-transition", `${input.to} names no person and carries no note`);
       }
-      return { actor: null, note: null };
+      return { actor: null, note: null, pauseGeneration: null };
     default:
       throw new PublishDecisionError("invalid-transition", "unknown decision outcome");
   }
@@ -328,21 +362,23 @@ export async function withRunRowLock<T>(
 /** `executor`: a transaction to write in (withRunRowLock's); the write then runs in a savepoint of it. */
 export async function decide(id: string, input: DecideInput, executor: Pick<typeof db, "transaction"> = db): Promise<DecideResult> {
   const decisionId = requireText(id, "id");
-  const { actor, note } = requireTransition(input);
+  const { actor, note, pauseGeneration } = requireTransition(input);
+  const ofRun = input.ofRun === undefined ? undefined : eq(agentRunPublishDecisions.runId, requireText(input.ofRun, "ofRun"));
 
   return executor.transaction(async (tx): Promise<DecideResult> => {
     const [won] = await tx
       .update(agentRunPublishDecisions)
-      .set({ status: input.to, decidedBy: actor, decidedAt: sql`now()`, decisionNote: note })
+      .set({ status: input.to, decidedBy: actor, decidedAt: sql`now()`, decisionNote: note,
+        ...(pauseGeneration !== null ? { releasedPauseGeneration: pauseGeneration } : {}) })
       .where(and(eq(agentRunPublishDecisions.id, decisionId), eq(agentRunPublishDecisions.status, "parked"),
-        ...(input.newestOnly ? [NO_NEWER_DECISION, CURRENT_ATTEMPT] : [])))
+        ...(ofRun ? [ofRun] : []), ...(input.newestOnly ? [NO_NEWER_DECISION, CURRENT_ATTEMPT] : [])))
       .returning();
     if (won) return { outcome: "won", decision: deserialize(won) };
 
     const [current] = await tx
       .select()
       .from(agentRunPublishDecisions)
-      .where(eq(agentRunPublishDecisions.id, decisionId))
+      .where(and(eq(agentRunPublishDecisions.id, decisionId), ofRun))
       .limit(1);
     if (!current) throw new PublishDecisionError("not-found", "no decision has this id");
     return { outcome: "lost", currentStatus: deserialize(current).status };

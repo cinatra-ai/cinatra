@@ -99,6 +99,7 @@ import {
   publishDecisionIsSettled,
   publishGateIsOpen,
   usePublishDecisionCardRead,
+  usePublishDecisionDecide,
 } from "./publish-decision-card-view";
 // The review screen's PLACEHOLDER (cinatra#2997) — the same one the agentic
 // panel draws, so a run's terminal card reads the same on both panels.
@@ -3247,10 +3248,12 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   // The read alone decides it, never also this panel's status (the agentic panel's rule: the decision is written before
   // the run's status moves, so a `running` status beside a `pending` read is the same pause).
   const parkedAtPublishGate = publishGateIsOpen(publishRead, status);
+  // THE DECIDE DOOR (cinatra#4758) for this panel's transport: Allow and Do not allow go live for a reader who may decide.
+  const publishDecide = usePublishDecisionDecide(ambientLifecycleAuth);
   // Keyed by the run alone under this panel's own `run_card` declaration; it draws nothing with no decision.
   const publishCard = panelMountsPublishCard ? (
     <LifecycleCardSurfaceProvider host="run_card">
-      <PublishDecisionCard runId={runId} read={publishRead} />
+      <PublishDecisionCard runId={runId} read={publishRead} decide={publishDecide} />
     </LifecycleCardSurfaceProvider>
   ) : null;
 
@@ -3670,7 +3673,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   }
 
   return (
-    <div className="flex items-start gap-6">
+    <div className="flex items-start gap-6 max-[620px]:flex-col max-[620px]:items-stretch" data-run-frame="">
       <StepperColumn
         stepperSteps={stepperSteps}
         activeStep={pausedActiveStep}

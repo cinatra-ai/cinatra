@@ -166,6 +166,18 @@ describe("the mint", () => {
     expect(tokenSetHas(decideAud, WIDGET_LIFECYCLE_PUBLISH_DECISION_ROUTE_PATH)).toBe(false);
   });
 
+  it("the PUBLISH CARD decide audience joined the decide grant WITH its sentence, and the read grant has none of it", () => {
+    // cinatra#4758. Answering the publish card (Allow or Do not allow) changes the run, so it joins `lifecycle.decide`
+    // with its consent sentence in the same edit, and a read-only token cannot reach it.
+    const path = "/api/lifecycle-views/publish-decision/decide";
+    const decide = WIDGET_EXTENSION_SCOPES[WIDGET_LIFECYCLE_DECIDE_SCOPE];
+    expect(decide.audiences).toContain(path);
+    expect(decide.consentCopy).toContain("allow or not allow an agent to publish what it made");
+    expect(WIDGET_EXTENSION_SCOPES[WIDGET_LIFECYCLE_READ_SCOPE].audiences).not.toContain(path);
+    expect(tokenSetHas(mintWidgetTokenAudience([WIDGET_LIFECYCLE_DECIDE_SCOPE]), path)).toBe(true);
+    expect(tokenSetHas(mintWidgetTokenAudience([WIDGET_LIFECYCLE_READ_SCOPE]), path)).toBe(false);
+  });
+
   it("a sign-in grants the whole set this build defines — nothing more, nothing less", () => {
     // The two LIFECYCLE grants (reading work that waits on you, and deciding it)
     // plus the three CONVERSATION grants cinatra#2683 added, which are what let

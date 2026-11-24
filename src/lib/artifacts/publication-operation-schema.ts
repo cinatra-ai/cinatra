@@ -135,9 +135,15 @@ export function publishDecisionSchemaQueries(schemaName: string): { text: string
       text: `ALTER TABLE "${q}"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS run_generation integer`,
     },
     {
+      // released_pause_generation: the run's pause_generation at which the Allow released the decision, written in the
+      // releasing UPDATE. NULLABLE, no default, no backfill: null = not released, or released by older code.
+      // Operator-upgrade twin in migrations/core/core__0134.
+      text: `ALTER TABLE "${q}"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS released_pause_generation bigint`,
+    },
+    {
       // calls_in_flight (cinatra#4762): the publishing calls of a released decision now in flight; while a decision of
       // the run's current attempt has one, no output or review of the run is written. NULLABLE, no default: null =
-      // none. Operator-upgrade twin in migrations/core/core__0134.
+      // none. Operator-upgrade twin in migrations/core/core__0135.
       text: `ALTER TABLE "${q}"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS calls_in_flight integer`,
     },
   ];

@@ -735,10 +735,10 @@ export const CHECKBOX_CALL_SITE_READINGS: FileReading[] = [
     tokens: 0,
     sites: [],
     loads: {
-      count: 1,
+      count: 2,
       modules: "drizzle-orm",
       reading:
-        "the database query library loaded beside the run store's modules for its and, eq and inArray operators, read by name in one snapshot query: it draws nothing",
+        "the database query library, loaded twice beside the run store's modules: once for its and, eq and inArray operators, read by name in one snapshot query, and once for its and, eq, inArray, isNotNull and sql operators, read by name in the repair escalation's update: it draws nothing",
     },
   },
   {

@@ -712,7 +712,7 @@ export const artifactReviewGates = cinatraSchema.table("artifact_review_gates", 
   // Added additively by artifact-review-gate-schema.ts + core__0079.
   expiresAt:     timestamp("expires_at", { withTimezone: true }),
   reopenCount:   integer("reopen_count").notNull().default(0),
-  // cinatra#4762 (core__0134): the run's reset_generation when the gate was raised, read from the run row in the
+  // cinatra#4762 (core__0135): the run's reset_generation when the gate was raised, read from the run row in the
   // insert; -1 when the run was not executing then (no attempt of its own). A publish gate counts only the reviews of
   // its own attempt. null = raised by code older than the column, or from an event that names no attempt: read as
   // generation 0 once settled; while open it holds every attempt's publish fence.
@@ -883,7 +883,7 @@ export const artifactProducedOutbox = cinatraSchema.table("artifact_produced_out
   status:                   text("status").notNull().default("pending"), // pending | processed | reconciled
   createdAt:                timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   processedAt:              timestamp("processed_at", { withTimezone: true }),
-  // cinatra#4762 (core__0134): the producing run's reset_generation when the event was written (read from the run
+  // cinatra#4762 (core__0135): the producing run's reset_generation when the event was written (read from the run
   // row in the insert while it executes, else -1). The review the event raises carries it. null = an event written
   // by code older than the column, of an unknown attempt: while pending it holds every attempt's publish fence, and
   // its review is stamped null.
@@ -959,7 +959,11 @@ export const agentRunPublishDecisions = cinatraSchema.table("agent_run_publish_d
   // this equals agent_runs.reset_generation. -1 = an attempt already ended (a park of a run not held at a gate, or a
   // legacy row the migration found stale); null = a row written by code older than the column, read as generation 0.
   runGeneration:  integer("run_generation"),
-  // cinatra#4762 (core__0134): the publishing calls of this released decision now in flight (publish-decision-store
+  // The run's pause_generation at which the Allow released this decision (core__0134), written in the releasing UPDATE.
+  // A run still pending_approval at this generation waits at the very pause released here; any other generation means
+  // the run went on. null = not released, or released by code older than the column.
+  releasedPauseGeneration: bigint("released_pause_generation", { mode: "number" }),
+  // cinatra#4762 (core__0135): the publishing calls of this released decision now in flight (publish-decision-store
   // claimPublishCall). While a decision of the run's current attempt has one, no output or review of the run is
   // written. null = none.
   callsInFlight:  integer("calls_in_flight"),
