@@ -37,7 +37,7 @@ import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuc
 // kernel guard instead of directly on the module `db` (owner ruling 2026-07-26,
 // ruling 1: "now").
 import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
-import { readWayflowSubmittedValues } from "./hitl-gate-submit";
+import { readWayflowSubmittedValues, readListStepRefreshAsk, listStepRefreshAccepted } from "./hitl-gate-submit";
 // cinatra#2484: the setup-resume path is the LAST place a type-violating setup
 // value can be stopped before it becomes `agent_runs.inputParams` and reaches
 // the run. It needs the SAME effective schema the setup loop rendered from —
@@ -315,6 +315,12 @@ export async function approveReviewTaskInternal(
   //   (d) re-enqueues AGENT_BUILDER_EXECUTION so the setup loop re-evaluates
   //       pending fields (may emit another INTERRUPT or fall through to dispatch)
   // ---------------------------------------------------------------------------
+  // A list step's refresh request (cinatra#3562) answers a WayFlow gate only;
+  // the WayFlow branch below checks it against the gate's binding.
+  const listStepRefreshAsk = readListStepRefreshAsk(values);
+  if (listStepRefreshAsk !== undefined && !reviewTaskId.startsWith("wayflow-")) {
+    throw new Error(`[approveReviewTaskInternal] gate ${reviewTaskId} takes no list step refresh`);
+  }
   if (reviewTaskId.startsWith("setup-")) {
     // setup-* path exits before writeHitlPrompt — schemaSnapshot has no effect here.
     // writeHitlPrompt is not called on this path (schema replay is a WayFlow-gate-only feature).
@@ -966,6 +972,23 @@ export async function approveReviewTaskInternal(
     }
     const resumeAuthority = sessionAuthorityFromResolvedRole(run.orgId, resumeRole);
 
+    // THE LIST STEP'S TRY AGAIN (cinatra#3562). A refresh request is taken only
+    // for a list step whose binding declares that refresh value
+    // (`params.refreshValue`); the gate's renderer is read from its durable
+    // record. Refused before the claim, so nothing is held or sent.
+    if (listStepRefreshAsk !== undefined) {
+      const gate = await readDurableHitlGateForContinue(run.id, reviewTaskId).catch(() => null);
+      let declaredRefreshValue: unknown = undefined;
+      if (gate) {
+        const { getMergedFieldRendererBindings } = await import("./field-renderer-bindings.server");
+        const binding = getMergedFieldRendererBindings().find((b) => b.id === gate.xRenderer);
+        declaredRefreshValue = (binding?.params as { refreshValue?: unknown } | undefined)?.refreshValue;
+      }
+      if (!listStepRefreshAccepted({ reviewTaskId, gateXRenderer: gate?.xRenderer, declaredRefreshValue, requested: listStepRefreshAsk })) {
+        throw new Error(`WayFlow approval rejected: gate ${taskId} on run ${run.id} takes no such list step refresh`);
+      }
+    }
+
     // -------------------------------------------------------------------
     // THE GATE IS DECIDED ONCE (cinatra#3423).
     // -------------------------------------------------------------------
@@ -1057,7 +1080,10 @@ export async function approveReviewTaskInternal(
     const trimmedNote = typeof approvalNoteRaw === "string" ? approvalNoteRaw.trim() : "";
 
     let resumeText: string;
-    if (typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0) {
+    if (typeof listStepRefreshAsk === "string") {
+      // Accepted above: the refresh value is the resume text, exactly.
+      resumeText = listStepRefreshAsk;
+    } else if (typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0) {
       resumeText = userResponseRaw;
     } else if (trimmedNote.length > 0) {
       resumeText = trimmedNote;

@@ -134,6 +134,8 @@ import {
   isGroupedSetupRenderer,
   isSetupGateTaskId,
   liftRendererApprovalNote,
+  buildListStepRefreshPayload,
+  listStepRefreshRequest,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
@@ -1163,6 +1165,47 @@ function HitlApprovalCard({
     }
   };
 
+  // THE LIST STEP'S TRY AGAIN (cinatra#3562). A mid-run list step's write that
+  // carries `refresh` is sent at once as the step's answer, with the refresh
+  // value as the resume text (`buildListStepRefreshPayload`): no Continue, no
+  // pick, no approval note. One send per gate at a time, so a double press
+  // sends once; a write for a gate that is no longer on screen sends nothing.
+  // The renderer reports its value unsendable while it offers no list, so the
+  // validity hold (the Continue's) is not read; the run-name check is, as on
+  // every send of this panel. The server checks the run's access, the pause it
+  // waits at and the binding's declared value.
+  const listStepRefreshInFlightRef = useRef<string | null>(null);
+  const sendListStepRefresh = async (forGate: string, refresh: string) => {
+    if (!isGateOnScreen(forGate)) return;
+    if (listStepRefreshInFlightRef.current === forGate) return;
+    listStepRefreshInFlightRef.current = forGate;
+    try {
+      if (!(await checkRunName())) return;
+      if (!isGateOnScreen(forGate)) return;
+      const payload = buildListStepRefreshPayload(refresh);
+      onApproved?.();
+      setIsApproving(true);
+      try {
+        const outcome = await approveReviewTask(interruptContext.reviewTaskId, payload, undefined, interruptContext.schema as Record<string, unknown> | undefined);
+        if (!outcome.ok) {
+          onApproveRejected?.();
+          setGateBlocked(outcome.blocked);
+          return;
+        }
+        onApprovalSubmitted?.(payload, interruptContext.schema as Record<string, unknown> | undefined, interruptContext.xRenderer);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "unknown";
+        if (isAlreadyResolvedError(msg)) return;
+        onApproveRejected?.();
+        toast.error("Could not continue this run.");
+      } finally {
+        setIsApproving(false);
+      }
+    } finally {
+      listStepRefreshInFlightRef.current = null;
+    }
+  };
+
   const RendererComponent = entry?.renderer;
   // Generic step-confirmation interrupts (no custom xRenderer, object schema with only
   // { approved: boolean }) must bypass the schema-field-fallback renderer: its text-input
@@ -1561,6 +1604,16 @@ function HitlApprovalCard({
                       if (isGateOnScreen(rendererGateKey)) {
                         setBufferedHitlValue(nextBuffered); // visual update
                       }
+                    }
+                    // A list step's Try again (cinatra#3562) is sent now.
+                    const listStepRefresh = listStepRefreshRequest(
+                      interruptContext.xRenderer,
+                      interruptContext.reviewTaskId,
+                      next,
+                    );
+                    if (listStepRefresh !== null) {
+                      await sendListStepRefresh(rendererGateKey, listStepRefresh);
+                      return;
                     }
                     if (isGroupedSetup) {
                       // Held (cinatra#3562): the form's own submit sends

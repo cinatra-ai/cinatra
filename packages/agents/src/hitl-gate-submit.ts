@@ -534,6 +534,87 @@ export function applyRendererApprovalNote(
 }
 
 // ---------------------------------------------------------------------------
+// THE LIST STEP'S TRY AGAIN (cinatra#3562)
+// ---------------------------------------------------------------------------
+//
+// With no list to pick (an empty read or a failed one, design
+// specs/app-artifact-review.html I.1, the failed-read alert), a list step whose
+// binding declares `params.refreshValue` draws Try again. A press writes
+// `{ listIds: [], listNames: [], refresh: <refreshValue> }` and reports its
+// value unsendable, so the Continue stays unavailable. The host reads that
+// write and sends it at once as the step's answer, with the refresh value as
+// the resume text: the flow's branching step maps that text to the branch that
+// reads the lists again. It is never a pick: the payload carries no approval
+// note and no list. The server takes it only for a list step whose binding
+// declares the same refresh value (`listStepRefreshAccepted`).
+
+/** The payload key that marks an answer as the list step's refresh request. */
+export const LIST_STEP_REFRESH_KEY = "listStepRefresh";
+
+/**
+ * The refresh value a list step's write asks to send, or null. Only a mid-run
+ * list step (`isMidRunListStepGate`: a `:list-picker` gate that is not a setup
+ * gate) asks, and only with a `refresh` that is a nonblank string. The write is
+ * the renderer's own `onChange` value, not the merged buffer, so each press is
+ * read once.
+ */
+export function listStepRefreshRequest(
+  xRenderer: string,
+  reviewTaskId: string,
+  written: unknown,
+): string | null {
+  if (!isMidRunListStepGate(xRenderer, reviewTaskId)) return null;
+  if (written === null || typeof written !== "object" || Array.isArray(written)) return null;
+  const refresh = (written as { refresh?: unknown }).refresh;
+  return typeof refresh === "string" && refresh.trim().length > 0 ? refresh : null;
+}
+
+/**
+ * The answer a refresh request sends: the refresh value as the resume text
+ * (`userResponse`) and under `LIST_STEP_REFRESH_KEY`, with no approval note and
+ * no list. `now` is injectable for tests.
+ */
+export function buildListStepRefreshPayload(
+  refresh: string,
+  now: string = new Date().toISOString(),
+): Record<string, unknown> {
+  return { approved: true, approvedAt: now, userResponse: refresh, [LIST_STEP_REFRESH_KEY]: refresh };
+}
+
+/**
+ * The refresh value an answer asks for: `undefined` when the answer carries no
+ * `LIST_STEP_REFRESH_KEY` (it is no refresh request), else the value as sent
+ * (any type; `listStepRefreshAccepted` decides).
+ */
+export function readListStepRefreshAsk(values: unknown): unknown {
+  if (values === null || typeof values !== "object" || Array.isArray(values)) return undefined;
+  if (!Object.prototype.hasOwnProperty.call(values, LIST_STEP_REFRESH_KEY)) return undefined;
+  return (values as Record<string, unknown>)[LIST_STEP_REFRESH_KEY];
+}
+
+/**
+ * Whether the server takes a refresh request: the gate is a mid-run list step
+ * (`gateXRenderer` from the gate's durable record), its binding declares a
+ * nonblank `refreshValue`, and the request names exactly that value. Every
+ * other case is refused: no gate record, another renderer, a setup gate, no
+ * declared value, or another value.
+ */
+export function listStepRefreshAccepted(args: {
+  reviewTaskId: string;
+  gateXRenderer: string | null | undefined;
+  declaredRefreshValue: unknown;
+  requested: unknown;
+}): boolean {
+  const { reviewTaskId, gateXRenderer, declaredRefreshValue, requested } = args;
+  if (typeof gateXRenderer !== "string") return false;
+  if (!isMidRunListStepGate(gateXRenderer, reviewTaskId)) return false;
+  if (typeof declaredRefreshValue !== "string" || declaredRefreshValue.trim().length === 0) {
+    return false;
+  }
+  return requested === declaredRefreshValue;
+}
+
+// ---------------------------------------------------------------------------
 // Chat-gate submit payload (AgenticRunPanel — the single discriminated
 // resume-payload builder behind submitActiveGate / ChatGateDescriptor.submit)
 // ---------------------------------------------------------------------------

@@ -142,7 +142,9 @@ import { approveReviewTask } from "./hitl-actions";
 import { getFieldRendererContextForAgentBuilderAction } from "./server-actions";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
+  buildListStepRefreshPayload,
   gateAwaitsRendererValue,
+  listStepRefreshRequest,
   hitlGateIdentityKey,
   hitlRendererFieldName,
   isAlreadyResolvedError,
@@ -723,6 +725,7 @@ export function AgentHitlScreenFields({
   onBuffer,
   onSubmitField,
   onSubmitBuffer,
+  onSubmitRefresh,
   withholdRenderer,
   rendererContext,
   hideRendererSubmit,
@@ -740,6 +743,9 @@ export function AgentHitlScreenFields({
   onSubmitField: (payload: unknown, payloadFieldName: string | undefined) => Promise<void>;
   /** The grouped-setup form owns its own submit — this is what it lands on. */
   onSubmitBuffer: (next: Record<string, unknown>) => Promise<void>;
+  /** A list step's Try again (cinatra#3562): its refresh answer is sent here at
+   *  once, never staged and never buffered for a Continue. */
+  onSubmitRefresh?: (payload: Record<string, unknown>) => Promise<void>;
   /** This renderer talks to the server on its OWN cookie and this host has no
    *  session — see the header. The region is drawn; the renderer is not. */
   withholdRenderer?: boolean;
@@ -802,6 +808,16 @@ export function AgentHitlScreenFields({
   const registerRendererFlush = registerFlush
     ? (fn: () => Promise<void>) => registerFlush(flushKey, fn)
     : undefined;
+  // A LIST STEP'S TRY AGAIN (cinatra#3562) is sent at once, as the step's
+  // answer with the refresh value as its resume text, on either road below
+  // (this card draws a list step on the setup-loop road); every other write
+  // takes its road unchanged.
+  const sendingRefreshFirst =
+    (road: (next: unknown) => Promise<void>) => async (next: unknown) => {
+      const listStepRefresh = listStepRefreshRequest(gate.xRenderer, gate.reviewTaskId, next);
+      if (listStepRefresh === null) return road(next);
+      await onSubmitRefresh?.(buildListStepRefreshPayload(listStepRefresh));
+    };
 
   return (
     <div
@@ -854,7 +870,7 @@ export function AgentHitlScreenFields({
                   renderSchema,
                 )
           }
-          onChange={
+          onChange={sendingRefreshFirst(
             isMidRun
               ? async (next: unknown) => {
                   // MID-RUN: buffer into the outer Continue. A grouped-setup
@@ -888,7 +904,7 @@ export function AgentHitlScreenFields({
                   }
                   await onSubmitField(payload, payloadFieldName);
                 }
-          }
+          )}
           context={context}
           mode="edit"
           // A boolean field on a mid-run gate is told the same (cinatra#4310):
@@ -1439,6 +1455,24 @@ export function AgentHitlScreenCard({
     }
   }, [submit, gateKey, takeSetupAnswer]);
 
+  // A LIST STEP'S TRY AGAIN (cinatra#3562): its refresh answer goes through the
+  // one submit core (the identity checks, the answered register, the re-read).
+  // ONE PRESS AT A TIME, on a ref for the reason `onContinueSetup` gives, so a
+  // double press sends once.
+  const refreshPressRef = useRef(false);
+  const onSubmitRefresh = useCallback(
+    async (payload: Record<string, unknown>) => {
+      if (refreshPressRef.current) return;
+      refreshPressRef.current = true;
+      try {
+        await submit(payload, undefined);
+      } finally {
+        refreshPressRef.current = false;
+      }
+    },
+    [submit],
+  );
+
   // The grouped-setup form's own submit lands here: the SAME approved envelope
   // the Continue builds, from the buffer the form just wrote.
   const onSubmitBuffer = useCallback(
@@ -1486,6 +1520,7 @@ export function AgentHitlScreenCard({
           onBuffer={onBuffer}
           onSubmitField={cardOwnsSetupSend ? stageSetupAnswer : submit}
           onSubmitBuffer={onSubmitBuffer}
+          onSubmitRefresh={onSubmitRefresh}
           withholdRenderer={withholdRenderer}
           rendererContext={rendererContext}
           hideRendererSubmit={cardOwnsSetupSend}
@@ -1527,6 +1562,7 @@ export function AgentHitlScreenCard({
     onContinue,
     onContinueSetup,
     onSubmitBuffer,
+    onSubmitRefresh,
     registerRendererFlush,
     stageSetupAnswer,
     rendererFloored,

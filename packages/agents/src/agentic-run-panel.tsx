@@ -102,6 +102,8 @@ import {
   isMidRunListStepGate,
   isSetupGateTaskId,
   liftRendererApprovalNote,
+  buildListStepRefreshPayload,
+  listStepRefreshRequest,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
@@ -1786,6 +1788,37 @@ export function AgenticRunPanel({
     [],
   );
 
+  // THE LIST STEP'S TRY AGAIN (cinatra#3562). A mid-run list step's write that
+  // carries `refresh` is sent at once as the step's answer, with the refresh
+  // value as the resume text (`buildListStepRefreshPayload`): no Continue, no
+  // pick, no approval note. One send per gate at a time, so a double press
+  // sends once; a write for a gate that is no longer on screen sends nothing.
+  // The renderer reports its value unsendable while it offers no list, so the
+  // send passes no `holdKey`: that hold is the Continue's. The server checks
+  // the run's access, the pause it waits at and the binding's declared value.
+  const listStepRefreshInFlightRef = useRef<string | null>(null);
+  const sendListStepRefresh = useCallback(
+    async (gate: { reviewTaskId: string; xRenderer: string }, forGate: string, refresh: string) => {
+      if (!isHitlGateOnScreen(forGate)) return;
+      if (listStepRefreshInFlightRef.current === forGate) return;
+      listStepRefreshInFlightRef.current = forGate;
+      try {
+        await performGateSubmit({
+          reviewTaskId: gate.reviewTaskId,
+          xRenderer: gate.xRenderer,
+          payload: buildListStepRefreshPayload(refresh),
+          trackApproving: true,
+          suppressGate: true,
+          clearAttachmentsOnSuccess: false,
+          errorMode: "toast",
+        });
+      } finally {
+        listStepRefreshInFlightRef.current = null;
+      }
+    },
+    [isHitlGateOnScreen, performGateSubmit],
+  );
+
   // cinatra#3423 — the resume re-read described above, wired where the gate
   // context is known. `parkedWithNoGate` is the run saying it is standing at a
   // gate while this surface, which WAS holding one, holds none to draw.
@@ -3361,6 +3394,16 @@ export function AgenticRunPanel({
                           if (isHitlGateOnScreen(rendererGateKey)) {
                             setBufferedHitlValue(nextBuffered); // visual update
                           }
+                        }
+                        // A list step's Try again (cinatra#3562) is sent now.
+                        const listStepRefresh = listStepRefreshRequest(
+                          effectiveHitlContext.xRenderer,
+                          effectiveHitlContext.reviewTaskId,
+                          next,
+                        );
+                        if (listStepRefresh !== null) {
+                          await sendListStepRefresh(effectiveHitlContext, rendererGateKey, listStepRefresh);
+                          return;
                         }
                         // Grouped-setup forms: approve immediately on form submit so the
                         // user only ever sees one Continue button (no separate row below).
