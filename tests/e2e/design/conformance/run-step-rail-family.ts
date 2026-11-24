@@ -401,15 +401,15 @@ export const RUN_STEP_RAIL_ROWS_BY_SURFACE: Readonly<
     mounted: false,
     unshippedAspects: [],
     evidence: {
-      absentAnchors: ["run-outputs-list"],
+      absentAnchors: [],
       absentActions: [
         { name: "open-output", outcome: "artifact-page" },
       ],
-      shippedFiles: [],
+      shippedFiles: ["packages/agents/src/run-made-step-surface.tsx"],
       unexportedModules: [],
     },
     readiness:
-      "the run's last step — one row per artifact the run wrote, and the artifact it consumed marked used — is not in the tree: no element carries the run-outputs-list anchor, no control declares open-output to artifact-page, and the name-to-artifact.displayTitle binding this surface shares with the two review steps is a literal in no file under src/ or packages/",
+      "the run's last step — one row per artifact the run wrote, and the artifact it consumed marked used — IS shipped, and its step page carries the run-outputs-list anchor in both readings (packages/agents/src/run-made-step-surface.tsx), but the harness cannot mount it: the rows are read from the run's ledger behind a session by the run page's server screen. And no control declares open-output to artifact-page, and the name-to-artifact.displayTitle binding this surface shares with the two review steps is a literal in no file under src/ or packages/",
   },
   "run-review-step-post": {
     surface: "run-review-step-post",
