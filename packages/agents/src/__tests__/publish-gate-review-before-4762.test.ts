@@ -409,7 +409,7 @@ describe("a publish card opens only after an approved review earlier in the same
     expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
   });
 
-  // red-first-expect: expected [ { from: 'running', …(2) } ] to deeply equal [ { from: 'running', …(2) } ]
+  // red-first-expect: expected [ …(7) ] to deeply equal [ …(7) ]
   it("the lineage clears a change request only through successors of this attempt that end in a person's approval", async () => {
     const laterB = approved(9);
     const cases: Array<{ label: string; reviews: Review[] }> = [];

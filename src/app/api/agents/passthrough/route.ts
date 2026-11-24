@@ -382,19 +382,20 @@ TOOL_INPUT_SHAPERS.email_outreach_recipients_update = (raw) =>
 // anything but a plain object (the shaper-throw contract answers HTTP 400).
 TOOL_INPUT_SHAPERS.objects_update = (raw) => shapeObjectsUpdateInput(raw);
 
-/** cinatra#4762: the call's end, settled once its answer is built, whatever it is: a publishing call holds its released
- *  decision until then (publishCallAllowed), so no output or review of its run is written while its effect runs. */
+/** cinatra#4762: a publishing call holds its released decision until its answer is built, whatever it is
+ *  (publishCallAllowed), so no output or review of its run is written while its effect runs. The release is awaited
+ *  before the answer goes back: the run's next node cannot write while it is still pending. A release that cannot be
+ *  written is logged and the answer still goes back, since the call's effect has already happened. */
 export async function POST(req: Request): Promise<Response> {
-  let endCall!: () => void;
-  const callEnded = new Promise<void>((resolve) => { endCall = resolve; });
+  const releases: Array<() => Promise<void>> = [];
   try {
-    return await handlePassthrough(req, callEnded);
+    return await handlePassthrough(req, (release) => { releases.push(release); });
   } finally {
-    endCall();
+    for (const release of releases) await release();
   }
 }
 
-async function handlePassthrough(req: Request, callEnded: Promise<unknown>): Promise<Response> {
+async function handlePassthrough(req: Request, holdRelease: (release: () => Promise<void>) => void): Promise<Response> {
   if (!isAuthorizedBridgeRequest(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
@@ -506,7 +507,7 @@ async function handlePassthrough(req: Request, callEnded: Promise<unknown>): Pro
   }
   // cinatra#4150 — no publish without a released decision, enforced at the call,
   // before any tool runs: the run the binding proved, the verified step or none.
-  if (!(await publishCallAllowed(run, verifiedStepId, callEnded))) {
+  if (!(await publishCallAllowed(run, verifiedStepId, holdRelease))) {
     return NextResponse.json(
       { error: "This call waits for a publish decision.", code: "publish_not_released" },
       { status: 403 },

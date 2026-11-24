@@ -613,22 +613,33 @@ export async function approvePublishDecision(input: DecideInput): Promise<Publis
   return { ok: true, resumed: true };
 }
 
+/** The release of a publishing call's claim: it resolves once the release is written, or logged as not written. */
+export type PublishCallRelease = () => Promise<void>;
+
 /**
  * The call-site check of the model bridge and the passthrough road (A6): may this call of `run` go on? `verifiedStepId`
  * is the step the runtime signed for the call, or undefined when the call carries no verified step.
  *   - A verified step with a decision row is served only while that row (its newest) reads `released` and the review
  *     fence of its attempt still holds (reviewFenceHolds, read under the run row's lock, cinatra#4762): an output of the
  *     attempt written after the release, or a review of it opened since, refuses the call until it is approved. In the
- *     same transaction the call takes the decision (claimPublishCall): until `callEnded` settles, no output or review of
+ *     same transaction the call takes the decision (claimPublishCall): until its release is written, no output or review of
  *     the run is written, so nothing the fence did not see comes before the call's effect. A claim that cannot be
- *     taken refuses the call. The caller settles `callEnded` once the call is done, whatever its outcome.
+ *     taken refuses the call. The claim is handed to `holdRelease` as its release: the caller runs it once the call is
+ *     done, whatever its outcome, and awaits it before it answers, so the next node of the run never writes an output or
+ *     opens a review while the release is still pending. The release never rejects: a release that cannot be written is
+ *     logged, and the claim stays counted, so the attempt's later outputs and reviews stay refused until a retry's reset
+ *     (fail closed).
  *   - A verified step with no row is refused when the template lists it as a publishing step.
  *   - A call with no verified step is refused when the template lists any publishing step.
  *   - A template that is not found cannot prove that it publishes nothing; a list stored as null (a template compiled
  *     before the list existed) lists none, so only a decision row holds such a run.
  * A read error refuses the call; it is logged by the error's name only.
  */
-export async function publishCallAllowed(run: { id: string; templateId: string }, verifiedStepId: string | undefined, callEnded: Promise<unknown>): Promise<boolean> {
+export async function publishCallAllowed(
+  run: { id: string; templateId: string },
+  verifiedStepId: string | undefined,
+  holdRelease: (release: PublishCallRelease) => void,
+): Promise<boolean> {
   try {
     const template = await readAgentTemplateById(run.templateId);
     const listed = template?.publishingSteps ?? [];
@@ -648,11 +659,11 @@ export async function publishCallAllowed(run: { id: string; templateId: string }
         return claimPublishCall(current.id, tx);
       });
       if (claimed) {
-        const end = () => endPublishCall(row.id).catch((err: unknown) => {
+        let released: Promise<void> | undefined;
+        holdRelease(() => (released ??= endPublishCall(row.id).catch((err: unknown) => {
           // The count stays up: the run's output stays refused until a retry's reset (fail closed).
           console.warn(`[publish-decision] the end of a publishing call could not be written: ${nameOf(err)}`);
-        });
-        void callEnded.then(end, end);
+        })));
       }
       return claimed;
     }

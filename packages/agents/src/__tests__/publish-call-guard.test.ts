@@ -31,8 +31,8 @@ vi.mock("../publish-decision-store", () => decisions);
 import { publishCallAllowed } from "../publish-decision-actions";
 
 const RUN = { id: "run-1", templateId: "tmpl-1" };
-/** The end of a call that is already over. */
-const ENDED = Promise.resolve();
+/** The holder of a call that is already over: it runs the release it is handed at once. */
+const ENDED = (release: () => Promise<void>) => { void release(); };
 const template = (publishingSteps: string[] | null | undefined) => ({ id: "tmpl-1", publishingSteps });
 const row = (status: string) => ({ id: "d1", orgId: "org-1", runId: "run-1", nodeId: "publish", status, runGeneration: 0 });
 
@@ -97,9 +97,8 @@ describe("a verified step the template lists as publishing", () => {
   // red-first-expect: to be called with arguments: [ 'd1', …(1) ]
   it("a served call takes its released decision in the lock's transaction, after the fence, and gives it back only when it ends (cinatra#4762)", async () => {
     decisions.readDecisionForRunNode.mockResolvedValue(row("released"));
-    let endCall!: () => void;
-    const callEnded = new Promise<void>((resolve) => { endCall = resolve; });
-    expect(await publishCallAllowed(RUN, "publish", callEnded)).toBe(true);
+    const releases: Array<() => Promise<void>> = [];
+    expect(await publishCallAllowed(RUN, "publish", (release) => { releases.push(release); })).toBe(true);
     // Taken in the transaction where the fence was read, after that read: no output or review of the run is written
     // from here until the call ends, so none can come after the fence and before the call's effect.
     expect(decisions.claimPublishCall).toHaveBeenCalledWith("d1", TX);
@@ -108,8 +107,9 @@ describe("a verified step the template lists as publishing", () => {
     expect(reviewSeam.hasPendingProducedReview.mock.invocationCallOrder.every((at) => at < claimedAt)).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(decisions.endPublishCall).not.toHaveBeenCalled();
-    endCall();
-    await vi.waitFor(() => expect(decisions.endPublishCall).toHaveBeenCalledWith("d1"));
+    expect(releases).toHaveLength(1);
+    await releases[0]!();
+    expect(decisions.endPublishCall).toHaveBeenCalledWith("d1");
     // A claim that cannot be taken (the row left `released`, or the write failed) refuses the call; nothing is given back.
     decisions.endPublishCall.mockClear();
     decisions.claimPublishCall.mockResolvedValueOnce(false);
@@ -128,6 +128,36 @@ describe("a verified step the template lists as publishing", () => {
     reviewSeam.hasPendingProducedReview.mockResolvedValue(true);
     expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(false);
     expect(decisions.claimPublishCall).not.toHaveBeenCalled();
+  });
+
+  // red-first-expect: expected [] to have a length of 1 but got +0
+  it("the release it hands back resolves only once the end of the call is written, and once even when that write fails (cinatra#4762)", async () => {
+    decisions.readDecisionForRunNode.mockResolvedValue(row("released"));
+    let writeEnd!: () => void;
+    decisions.endPublishCall.mockImplementationOnce(() => new Promise<undefined>((resolve) => { writeEnd = () => resolve(undefined); }));
+    const releases: Array<() => Promise<void>> = [];
+    expect(await publishCallAllowed(RUN, "publish", (release) => { releases.push(release); })).toBe(true);
+    expect(releases).toHaveLength(1);
+    let done = false;
+    const released = releases[0]!().then(() => { done = true; });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(done).toBe(false);
+    writeEnd();
+    await released;
+    expect(done).toBe(true);
+    // Run again, the release writes nothing more.
+    await releases[0]!();
+    expect(decisions.endPublishCall).toHaveBeenCalledTimes(1);
+    // A failed write is logged and the release still resolves; the claim stays counted (fail closed).
+    decisions.endPublishCall.mockRejectedValueOnce(new Error("db down"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(await publishCallAllowed(RUN, "publish", (release) => { releases.push(release); })).toBe(true);
+      await expect(releases[1]!()).resolves.toBeUndefined();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("the end of a publishing call could not be written"));
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("is refused when it has no decision row", async () => {

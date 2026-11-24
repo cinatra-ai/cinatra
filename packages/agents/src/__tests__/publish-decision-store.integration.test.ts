@@ -755,9 +755,9 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
       targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }], runGeneration: 0 });
 
     // The call passes its fence and takes its released decision.
-    let endCall!: () => void;
-    const callEnded = new Promise<void>((resolve) => { endCall = resolve; });
-    expect(await publishCallAllowed(run, "publish", callEnded)).toBe(true);
+    const releases: Array<() => Promise<void>> = [];
+    const hold = (release: () => Promise<void>) => { releases.push(release); };
+    expect(await publishCallAllowed(run, "publish", hold)).toBe(true);
     expect(await inFlight()).toBe(1);
     // While it runs, an output and a review of the run are refused, and nothing of either is written.
     const gatesBefore = (await admin.query(`SELECT count(*)::int AS n FROM ${GATES} WHERE run_id = $1`, [runId])).rows[0].n;
@@ -766,13 +766,17 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     expect((await admin.query(`SELECT count(*)::int AS n FROM ${GATES} WHERE run_id = $1`, [runId])).rows[0].n).toBe(gatesBefore);
     expect((await admin.query(`SELECT count(*)::int AS n FROM "${q(TEST_SCHEMA)}"."artifact_produced_outbox" WHERE producer_run_id = $1`, [runId])).rows[0].n).toBe(0);
     // A second call of the step runs beside it; the count holds until both end.
-    expect(await publishCallAllowed(run, "publish", Promise.resolve())).toBe(true);
-    await expect.poll(inFlight).toBe(1);
-    endCall();
-    await expect.poll(inFlight).toBe(0);
+    expect(await publishCallAllowed(run, "publish", hold)).toBe(true);
+    expect(await inFlight()).toBe(2);
+    await releases[1]!();
+    expect(await inFlight()).toBe(1);
+    // The release resolves only once its write is committed: the count reads 0 right after it.
+    await releases[0]!();
+    expect(await inFlight()).toBe(0);
     // The call ended: the output is written, and the next call reads it in its fence and is refused.
     await writeOutput();
-    expect(await publishCallAllowed(run, "publish", Promise.resolve())).toBe(false);
+    expect(await publishCallAllowed(run, "publish", hold)).toBe(false);
+    expect(releases).toHaveLength(2);
     expect(await inFlight()).toBe(0);
     // A claim of an attempt a retry's reset ended holds nothing: the next attempt's review opens.
     await admin.query(`UPDATE ${TABLE} SET calls_in_flight = 1 WHERE id = $1`, [parked.decision.id]);
