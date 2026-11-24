@@ -160,7 +160,8 @@ export async function stepScreenAnswer(
  *     Continue holds for (`hasUsableListPick`);
  *   - a grouped setup form: the text sent (the JSON of the form's values,
  *     `withSetupFormAnswer`) passes the step's own schema by the validation
- *     the form runs before it sends (`jsonSchemaToZod`), so the step is
+ *     the form runs before it sends (`jsonSchemaToZod`) and by the schema's
+ *     full constraints (`satisfiesDeclaredJsonSchema`), so the step is
  *     resumed with the values that were checked, never with the bare marker
  *     while other values pass;
  *   - a context selector: the text sent, unwrapped as the step reads it (the
@@ -183,7 +184,8 @@ async function kindScreenAnswered(
   if (kind === "wayflow-setup-form") {
     if (sent === null) return false;
     const { jsonSchemaToZod } = await import("./json-schema-to-zod");
-    return jsonSchemaToZod(stepSchema).safeParse(sent).success;
+    if (!jsonSchemaToZod(stepSchema).safeParse(sent).success) return false;
+    return await satisfiesDeclaredJsonSchema(stepSchema, sent);
   }
   if (kind === "context-selector") {
     if (sent === null) return false;
@@ -196,6 +198,46 @@ async function kindScreenAnswered(
     }
   }
   return KIND_SCREENS_WITHOUT_INPUT.has(kind);
+}
+
+/**
+ * Keywords that constrain a value but that the JSON-Schema validator below
+ * does not implement. A step schema that carries one anywhere is refused, so
+ * an assertion is never silently skipped.
+ */
+const UNSUPPORTED_ASSERTION_KEYWORDS: ReadonlySet<string> = new Set(["$dynamicRef", "$dynamicAnchor"]);
+
+function carriesUnsupportedAssertion(node: unknown, depth = 0): boolean {
+  if (depth > 64) return true;
+  if (Array.isArray(node)) return node.some((item) => carriesUnsupportedAssertion(item, depth + 1));
+  if (node === null || typeof node !== "object") return false;
+  return Object.entries(node).some(
+    ([key, value]) => UNSUPPORTED_ASSERTION_KEYWORDS.has(key) || carriesUnsupportedAssertion(value, depth + 1),
+  );
+}
+
+/**
+ * Whether a setup form's answer satisfies the step's declared JSON Schema in
+ * full, by a standards validator (`@cfworker/json-schema`, draft 2019-09
+ * semantics). It honours
+ * every assertion keyword of the standard: `type`, `enum`, `const`,
+ * `minLength`/`maxLength`, `pattern`, `format`, `minimum`/`maximum` and their
+ * exclusive forms, `multipleOf`, `required`, `properties`,
+ * `additionalProperties`, `items`, `minItems`/`maxItems`, `uniqueItems`,
+ * `allOf`/`anyOf`/`oneOf`/`not`, `if`/`then`/`else`, `dependentRequired` and
+ * local `$ref`. A keyword outside the standard is an annotation and asserts
+ * nothing. IT FAILS CLOSED: a schema with a keyword the validator does not
+ * implement (`UNSUPPORTED_ASSERTION_KEYWORDS`), a `$ref` it cannot resolve, or
+ * any validator error refuses the answer.
+ */
+async function satisfiesDeclaredJsonSchema(schema: Record<string, unknown>, value: unknown): Promise<boolean> {
+  if (carriesUnsupportedAssertion(schema)) return false;
+  try {
+    const { Validator } = await import("@cfworker/json-schema");
+    return new Validator(schema as ConstructorParameters<typeof Validator>[0]).validate(value).valid;
+  } catch {
+    return false;
+  }
 }
 
 /**

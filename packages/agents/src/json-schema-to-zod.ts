@@ -64,7 +64,14 @@ export function jsonSchemaToZod(
       if (isRequired && (propSchema as { type?: string }).type === "string") {
         propZod = z.string().min(1, { message: "Required" });
       }
-      shape[key] = isRequired ? propZod : propZod.optional();
+      // An own property for every key: `shape[key] = ...` would call the
+      // prototype setter for a field named `__proto__` and drop it.
+      Object.defineProperty(shape, key, {
+        value: isRequired ? propZod : propZod.optional(),
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
     }
     return z.object(shape);
   }

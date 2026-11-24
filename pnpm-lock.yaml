@@ -2231,6 +2231,9 @@ importers:
 
   packages/agents:
     dependencies:
+      '@cfworker/json-schema':
+        specifier: ^4.1.1
+        version: 4.1.1
       '@cinatra-ai/a2a':
         specifier: workspace:*
         version: link:../a2a

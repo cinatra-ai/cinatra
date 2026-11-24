@@ -767,6 +767,59 @@ describe("an answer is sent only under the declared screen its step opened under
       expect(await resumeStepScreenAnswer?.(RUN, template, filled)).toEqual({ send: filled });
     });
 
+    describe("a grouped setup form's answer is held to every constraint its schema declares", () => {
+      const CONSTRAINED_SCHEMA = {
+        type: "object",
+        properties: {
+          mode: { type: "string", enum: ["safe"] },
+          code: { type: "string", pattern: "^[A-Z]{3}$" },
+          seats: { type: "integer", minimum: 1 },
+          tags: { type: "array", items: { type: "string", minLength: 2 } },
+          owner: { type: "object", properties: { kind: { type: "string", const: "team" } }, required: ["kind"] },
+        },
+        required: ["mode"],
+      };
+
+      it("a value outside the declared enum is refused", async () => {
+        installKindScreen("wayflow-setup-form", CONSTRAINED_SCHEMA);
+        const unsafe = JSON.stringify({ mode: "unsafe" });
+        const result = await resumeStepScreenAnswer?.(RUN, template, unsafe);
+        // red-first-expect: expected 'undefined' to be 'string'
+        expect(typeof result?.refusal).toBe("string");
+        expect(result?.send).toBeUndefined();
+      });
+
+      it("a value inside every declared constraint is sent", async () => {
+        installKindScreen("wayflow-setup-form", CONSTRAINED_SCHEMA);
+        const valid = JSON.stringify({ mode: "safe", code: "ABC", seats: 2, tags: ["ab"], owner: { kind: "team" } });
+        // red-first-expect: expected undefined to deeply equal
+        expect(await resumeStepScreenAnswer?.(RUN, template, valid)).toEqual({ send: valid });
+      });
+
+      it.each([
+        ["a pattern", { mode: "safe", code: "abc" }],
+        ["a minimum", { mode: "safe", seats: 0 }],
+        ["an item's minLength", { mode: "safe", tags: ["a"] }],
+        ["a nested const", { mode: "safe", owner: { kind: "person" } }],
+      ])("a value that breaks %s is refused", async (_name, values) => {
+        installKindScreen("wayflow-setup-form", CONSTRAINED_SCHEMA);
+        const result = await resumeStepScreenAnswer?.(RUN, template, JSON.stringify(values));
+        // red-first-expect: expected 'undefined' to be 'string'
+        expect(typeof result?.refusal).toBe("string");
+      });
+
+      it("a schema with a keyword the validator does not implement is refused, never read as no constraint", async () => {
+        installKindScreen("wayflow-setup-form", {
+          type: "object",
+          properties: { mode: { type: "string", $dynamicRef: "#mode" } },
+          required: ["mode"],
+        });
+        const result = await resumeStepScreenAnswer?.(RUN, template, JSON.stringify({ mode: "safe" }));
+        // red-first-expect: expected 'undefined' to be 'string'
+        expect(typeof result?.refusal).toBe("string");
+      });
+    });
+
     it("a bare approval through the approval core is refused for a list step: the pause is given back", async () => {
       installKindScreen("list-picker");
       // red-first-expect: expected 'sent' to contain 'did not give'
@@ -835,6 +888,43 @@ describe("an answer is sent only under the declared screen its step opened under
         expect(sendTask).toHaveBeenCalledTimes(1);
         // red-first-expect: expected '[Approved by operator]' to be '{"projectName":"Fixture project"}'
         expect(resumedWith()).toBe(JSON.stringify({ projectName: "Fixture project" }));
+      } finally {
+        const held = fieldRendererRegistry as { unregisterEntry?: (entry: unknown) => void };
+        for (const entry of fieldRendererRegistry.list().filter((e) => e.id === ID)) held.unregisterEntry?.(entry);
+      }
+    });
+
+    it("a declared setup form field named __proto__ reaches the resume text, and no prototype is changed", async () => {
+      const PROTO_SCHEMA = JSON.parse(
+        '{"type":"object","properties":{"__proto__":{"type":"object"}},"required":["__proto__"]}',
+      ) as Record<string, unknown>;
+      installKindScreen("wayflow-setup-form", PROTO_SCHEMA);
+      const { registerFieldRendererBindings } = await import("../register-default-renderers");
+      const { fieldRendererRegistry } = await import("../field-renderer-registry");
+      registerFieldRendererBindings([
+        { id: ID, kind: "wayflow-setup-form", priority: 80, midRunHitl: true, screen: { layout: "kind" } },
+      ]);
+      const prototypeKeys = Object.getOwnPropertyNames(Object.prototype).sort();
+      try {
+        const { withSetupFormAnswer } = (await import("../hitl-gate-submit")) as unknown as {
+          withSetupFormAnswer?: (
+            gate: { reviewTaskId: string; xRenderer: string },
+            stepSchema: Record<string, unknown>,
+            formValues: Record<string, unknown>,
+            payload: Record<string, unknown>,
+          ) => Record<string, unknown>;
+        };
+        const formValues = JSON.parse('{"__proto__":{"polluted":"yes"}}') as Record<string, unknown>;
+        const submitted = { ...formValues, approved: true, approvedAt: "2026-01-01T00:00:00.000Z" };
+        const payload: Record<string, unknown> =
+          withSetupFormAnswer?.({ reviewTaskId: GATE, xRenderer: ID }, PROTO_SCHEMA, formValues, submitted) ?? submitted;
+        // red-first-expect: expected undefined to be '{"__proto__":{"polluted":"yes"}}'
+        expect(payload.userResponse).toBe('{"__proto__":{"polluted":"yes"}}');
+        expect(await answer(payload)).toBe("sent");
+        expect(resumedWith()).toBe('{"__proto__":{"polluted":"yes"}}');
+        expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+        expect(Object.getOwnPropertyNames(Object.prototype).sort()).toEqual(prototypeKeys);
+        expect(Object.getPrototypeOf({})).toBe(Object.prototype);
       } finally {
         const held = fieldRendererRegistry as { unregisterEntry?: (entry: unknown) => void };
         for (const entry of fieldRendererRegistry.list().filter((e) => e.id === ID)) held.unregisterEntry?.(entry);

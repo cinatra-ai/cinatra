@@ -670,11 +670,10 @@ function reconcileRuntimeRegistrations(
 /** The pins of an answer: an object of strings, else none. */
 function readScreenPins(value: unknown): Record<string, string> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const pins: Record<string, string> = {};
-  for (const [id, pin] of Object.entries(value as Record<string, unknown>)) {
-    if (typeof pin === "string") pins[id] = pin;
-  }
-  return pins;
+  // `Object.fromEntries` defines every id as an own property, `__proto__` included.
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === "string"),
+  );
 }
 
 /** How many times a step's fresh read is made at most before a reload. */

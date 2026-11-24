@@ -134,6 +134,7 @@
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
+    "@cfworker/json-schema": "^4.1.1",
     "@cinatra-ai/a2a": "workspace:*",
     "@cinatra-ai/extension-types": "workspace:*",
     "@cinatra-ai/llm": "workspace:*",

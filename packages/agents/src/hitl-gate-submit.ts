@@ -816,14 +816,14 @@ export function declaredHitlFormSchema(screen: DeclaredHitlCard): Record<string,
   const fields = declaredHitlFieldKeys(screen);
   const properties: Record<string, unknown> = {};
   if (fields.length > 0) {
-    for (const k of fields) properties[k] = { type: "string" };
+    for (const k of fields) setOwn(properties, k, { type: "string" });
   } else {
     for (const k of declaredHitlControls(screen)) {
       const values: unknown[] = [];
       for (const d of screen.decisions ?? []) {
         if (Object.hasOwn(d.answer, k) && !values.some((v) => Object.is(v, d.answer[k]))) values.push(d.answer[k]);
       }
-      properties[k] = { enum: values };
+      setOwn(properties, k, { enum: values });
     }
   }
   return { type: "object", properties };
@@ -848,8 +848,8 @@ export function declaredHitlFillChange(
     for (const k of fields) {
       if (!Object.hasOwn(requested, k) || requested[k] === undefined) continue;
       const v = requested[k];
-      if (typeof v === "string") change[k] = v;
-      else if (v === null) change[k] = "";
+      if (typeof v === "string") setOwn(change, k, v);
+      else if (v === null) setOwn(change, k, "");
       else unusable.push(k);
     }
     return { change, notFields, unusable };
@@ -1187,7 +1187,7 @@ export function withSetupFormAnswer(
     fields.length > 0 ? fields.includes(key) : !SETUP_FORM_TRANSPORT_KEYS.has(key);
   const answer: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(formValues)) {
-    if (isField(key)) answer[key] = value;
+    if (isField(key)) setOwn(answer, key, value);
   }
   return { ...payload, userResponse: JSON.stringify(answer) };
 }
@@ -1541,7 +1541,7 @@ export function withDeclaredRendererValues(
     const value = written[key];
     if (isBlankRendererValue(value)) continue;
     if (sent === payload) sent = { ...payload };
-    sent[key] = value;
+    setOwn(sent, key, value);
   }
   return sent;
 }
