@@ -126,8 +126,9 @@ export type ReviewTargetHeadersReading = {
   pinnedCount: number;
   complete: boolean;
   /** The media form (mime, lower case, no parameters) of the gate's ONE pinned
-   *  target, read from its row; `null` unless the gate pins exactly one target
-   *  and the reading is complete (cinatra#3033). */
+   *  target, read from the PINNED REVISION through the same membership read the
+   *  target's preview renders from; `null` unless the gate pins exactly one
+   *  target, the reading is complete and that revision answers (cinatra#3033). */
   onlyTargetForm: string | null;
 };
 
@@ -267,7 +268,9 @@ export async function readReviewTargetHeadersReading(
           : null;
       const revision = projectReviewTargetHeaderRevision(target.representationRevisionId);
       if (!revision.exact) allExact = false;
-      forms.push(mediaForm(artifact.mime));
+      if (pinnedCount === 1) {
+        forms.push(await readPinnedRevisionForm(actorCtx.orgId, actor, target, state.state === "settled"));
+      }
       headers.push({
         title: clamp(artifact.title ?? artifact.artifactId, artifact.artifactId),
         typeLabel: artifact.objectType
@@ -307,6 +310,44 @@ export async function readReviewTargetHeadersReading(
   } catch {
     // The reading is lost, never the card.
     return NO_HEADERS;
+  }
+}
+
+/**
+ * THE FORM OF THE PINNED REVISION, NOT OF THE ROW'S LATEST ONE (cinatra#3033).
+ *
+ * The row's own mime is its CURRENT revision's. The target's preview renders the
+ * revision the gate pinned, and reads its mime through the membership port of
+ * the artifact-side review binder. This reads the form through that SAME port,
+ * bound to the same organization and the same actor-scoped context, with the
+ * same live or historical bound the preview takes on this reading. So the form
+ * named here and the revision drawn there cannot disagree when the row's latest
+ * revision has moved on to another form.
+ *
+ * It runs only after the actor-scoped artifact read above answered `ok`, as the
+ * preview's own membership read does. A revision that is not a member, and a
+ * read that throws, name no form: no form, no reading drawn from it.
+ *
+ * DYNAMIC on purpose, the resolve route's `readReviewGateRecordedPrompt`
+ * posture: the binder module carries the display resolution, and this leaf
+ * keeps it off the static graph of every route that reaches the header.
+ */
+async function readPinnedRevisionForm(
+  orgId: string,
+  actor: ReturnType<typeof buildActorContextFromPrimitive>,
+  target: { artifactId: string; representationRevisionId: string },
+  settled: boolean,
+): Promise<string | null> {
+  try {
+    const { bindArtifactReviewPorts } = await import("@/app/artifacts/[id]/review-target-prepare");
+    const ports = bindArtifactReviewPorts({ orgId, actor });
+    const member =
+      settled && typeof ports.revisionMemberHistorical === "function"
+        ? await ports.revisionMemberHistorical(target.artifactId, target.representationRevisionId)
+        : await ports.revisionMember(target.artifactId, target.representationRevisionId);
+    return mediaForm(member?.mime);
+  } catch {
+    return null;
   }
 }
 
