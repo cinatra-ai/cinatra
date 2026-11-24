@@ -35,7 +35,6 @@ const INSTALL = { packageName: PKG, version: "1.2.0", installId: "install-1", di
 const stamp = (input: Record<string, unknown> = INSTALL) =>
   (registry as unknown as { recordLoadedExtensionIdentity: (v: unknown) => registry.LoadedExtensionIdentity })
     .recordLoadedExtensionIdentity(input);
-// red-first-expect: assertOutwardActionLoadedIdentity is not a function
 const check = (identity: unknown) =>
   (hostContext as unknown as { assertOutwardActionLoadedIdentity: (v: unknown) => unknown })
     .assertOutwardActionLoadedIdentity(identity);
