@@ -307,27 +307,83 @@ export async function readFinalizedMaterialization(input: {
   };
 }
 
+/** The query seam of `readRevisionImagePrompt`: this module's pool by default,
+ * a caller's own client (and the schema it reads) else. */
+export type RevisionImagePromptDb = {
+  query: (text: string, values: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }>;
+  /** The application schema the tables live in (unquoted). */
+  schema: string;
+};
+
+function ledgerDb(): RevisionImagePromptDb {
+  ensurePostgresSchema();
+  return { query: (text, values) => pool().query(text, values), schema: postgresSchema };
+}
+
+function onlyPrompt(rows: Array<Record<string, unknown>>): string | null {
+  if (rows.length !== 1) return null;
+  const prompt: unknown = rows[0]?.image_prompt;
+  return typeof prompt === "string" && prompt.trim().length > 0 ? prompt : null;
+}
+
 /** Producer prompt on the exact FINALIZED revision the gate pinned (§VI).
  * Authorization belongs to the caller's artifact/run read ladder. This query
  * never substitutes the current revision, another org, or an unfinalized claim.
- * Ambiguous provenance is absent rather than guessed. */
-export async function readRevisionImagePrompt(input: {
-  orgId: string;
-  artifactId: string;
-  representationRevisionId: string;
-}): Promise<string | null> {
-  ensurePostgresSchema();
-  const s = schema();
-  const res = await pool().query(
-    `SELECT image_prompt FROM "${s}"."artifact_materializations"
-     WHERE org_id = $1 AND artifact_id = $2 AND representation_revision_id = $3
-       AND phase = 'finalized' AND image_prompt IS NOT NULL
-     LIMIT 2`,
+ * Ambiguous provenance is absent rather than guessed.
+ *
+ * A REFILED REVISION (cinatra#4264). A repair's answer is written by its run
+ * on an artifact of its own and then refiled onto the reviewed artifact
+ * (`refileRevisionOntoArtifact`): a new representation row and no ledger row.
+ * The repair that finalized it records both ends: its successor (the refiled
+ * revision) and its source (the revision the run wrote). The prompt of a
+ * refiled revision is the one recorded for that source, read only through
+ * exactly one `repaired` repair of the org that names the revision as its
+ * successor and records a source; two such repairs are ambiguous and read
+ * nothing. A revision no repair names (a direct write,
+ * with a ledger row or without one) never reads another revision's prompt,
+ * whatever bytes it shares. The repair link is read only when the revision
+ * has no prompt row of its own, and it too must name exactly one row.
+ *
+ * The one rule for the review surface's prefill and for the review store,
+ * which keeps a submitted prompt exactly when this read returns one. A read
+ * fault throws. */
+export async function readRevisionImagePrompt(
+  input: {
+    orgId: string;
+    artifactId: string;
+    representationRevisionId: string;
+  },
+  db: RevisionImagePromptDb = ledgerDb(),
+): Promise<string | null> {
+  const s = db.schema.replaceAll('"', '""');
+  const ownPrompt = (artifactId: string, revisionId: string) =>
+    db.query(
+      `SELECT image_prompt FROM "${s}"."artifact_materializations"
+       WHERE org_id = $1 AND artifact_id = $2 AND representation_revision_id = $3
+         AND phase = 'finalized' AND image_prompt IS NOT NULL
+       LIMIT 2`,
+      [input.orgId, artifactId, revisionId],
+    );
+  const exact = await ownPrompt(input.artifactId, input.representationRevisionId);
+  if (exact.rows.length > 0) return onlyPrompt(exact.rows);
+  // The repair links are counted before any prompt is read: two repairs naming
+  // the revision are ambiguous provenance, whatever their sources recorded.
+  const links = await db.query(
+    `SELECT rr.source_artifact_id, rr.source_representation_revision_id
+       FROM "${s}"."lifecycle_repair" rr
+      WHERE rr.org_id = $1 AND rr.successor_artifact_id = $2
+        AND rr.successor_representation_revision_id = $3
+        AND rr.status = 'repaired'
+        AND rr.source_artifact_id IS NOT NULL AND rr.source_representation_revision_id IS NOT NULL
+      LIMIT 2`,
     [input.orgId, input.artifactId, input.representationRevisionId],
   );
-  if (res.rows.length !== 1) return null;
-  const prompt: unknown = res.rows[0]?.image_prompt;
-  return typeof prompt === "string" && prompt.trim().length > 0 ? prompt : null;
+  if (links.rows.length !== 1) return null;
+  const source = links.rows[0];
+  const sourceArtifactId: unknown = source?.source_artifact_id;
+  const sourceRevisionId: unknown = source?.source_representation_revision_id;
+  if (typeof sourceArtifactId !== "string" || typeof sourceRevisionId !== "string") return null;
+  return onlyPrompt((await ownPrompt(sourceArtifactId, sourceRevisionId)).rows);
 }
 
 /**

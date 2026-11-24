@@ -1714,6 +1714,10 @@ export interface GateMaintenanceSummary {
   producerRepairsCompleted: number;
   /** A repair the generic completer would not finalize on what it found. */
   producerRepairsUnresolved: number;
+  /** A Regenerate repair the generic completer escalated: its finished run
+   *  was not made in the declared-input form, so its work is not applied
+   *  (cinatra#4264). */
+  producerRepairsEscalated: number;
 }
 
 /**
@@ -1745,6 +1749,7 @@ export async function sweepLifecycleGateMaintenance(opts?: {
     repairsEscalated: 0,
     producerRepairsCompleted: 0,
     producerRepairsUnresolved: 0,
+    producerRepairsEscalated: 0,
   };
   if (!isLifecycleReviewOrchestrationActive()) return summary;
   const limit = Math.max(1, Math.min(opts?.limit ?? 100, 500));
@@ -1800,6 +1805,7 @@ async function completeProducerRepairs(summary: GateMaintenanceSummary): Promise
     const completion = await completeDispatchedProducerRepairs();
     summary.producerRepairsCompleted += completion.completed;
     summary.producerRepairsUnresolved += completion.unresolved;
+    summary.producerRepairsEscalated += completion.escalated;
   } catch (err) {
     console.error(
       `[lifecycle-review-orchestration] producer repair completion drain failed: ${

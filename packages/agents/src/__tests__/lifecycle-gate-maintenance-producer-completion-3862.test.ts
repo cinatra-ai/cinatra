@@ -69,7 +69,7 @@ beforeEach(() => {
   vi.doMock("../lifecycle-repair-producer-completion-store", () => ({
     completeDispatchedProducerRepairs: async () => {
       order.push("generic");
-      return { completed: 2, unresolved: 1 };
+      return { completed: 2, unresolved: 1, escalated: 3 };
     },
   }));
 });
@@ -91,5 +91,14 @@ describe("cinatra#3862 leg 7 — the maintenance sweep completes repairs through
     expect(summary.producerRepairsCompleted).toBe(2);
     expect(summary.producerRepairsUnresolved).toBe(1);
     expect(Object.keys(summary).filter((key) => /cms/i.test(key))).toEqual([]);
+  });
+
+  // cinatra#4264: a Regenerate repair the completer escalated (its run was not
+  // made in the declared-input form) is counted in the maintenance summary.
+  // red-first-expect: expected undefined to be 3 // Object.is equality
+  it("carries the completer's escalations into the summary", async () => {
+    const { sweepLifecycleGateMaintenance } = await import("../lifecycle-review-orchestration-store");
+    const summary = await sweepLifecycleGateMaintenance();
+    expect(summary.producerRepairsEscalated).toBe(3);
   });
 });
