@@ -95,7 +95,7 @@ vi.mock("../hitl-actions", () => hitlActions);
 
 /** What the page's fetch of the installed agents' bindings answers. */
 const runtimeBindings = vi.hoisted(() => ({
-  fetch: vi.fn(async (): Promise<unknown> => []),
+  fetch: vi.fn(async (): Promise<unknown> => ({ bindings: [], refusedScreenIds: [] })),
 }));
 
 vi.mock("../server-actions", () => ({
@@ -223,17 +223,20 @@ describe("OrchestratorStepperPanel — a screen whose binding has not loaded hol
   });
 
   it("holds the Continue when the gate's declared screen did not register", async () => {
-    runtimeBindings.fetch.mockImplementation(async () => [
-      // A screen the registration refuses: a card with no title and no sections.
-      { id: RUNTIME_ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: { layout: "card" } },
-    ]);
+    runtimeBindings.fetch.mockImplementation(async () => ({
+      bindings: [
+        // A screen the registration refuses: a card with no title and no sections.
+        { id: RUNTIME_ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: { layout: "card" } },
+      ],
+      refusedScreenIds: [],
+    }));
     await mountGate();
-    // red-first-expect: expected 2 to be less than or equal to 1
+    // red-first-expect: expected false to be true // Object.is equality
     await expectHeld(HOLD_FAILED);
   });
 
   it("continues as before once the bindings loaded with nothing for the gate", async () => {
-    runtimeBindings.fetch.mockImplementation(async () => []);
+    runtimeBindings.fetch.mockImplementation(async () => ({ bindings: [], refusedScreenIds: [] }));
     // Another agent's gate: the page still knows the refused screen above.
     await mountGate("@cinatra-test/other-agent:output");
     await waitFor(() => expect(outerContinue()?.disabled).toBe(false));

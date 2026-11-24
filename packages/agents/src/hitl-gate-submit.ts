@@ -532,10 +532,12 @@ export function declaredHitlChosenDecision(
 }
 
 /**
- * The approval flag of a declared card's answer: `false` only when the
- * operator CHOSE a decision whose declared answer says `approved: false`. A
- * field card, a card with no controls and a card with nothing chosen continue
- * as an approval; no carried run value and no other staged key decides.
+ * The approval flag of a declared card's answer: `false` when the operator
+ * CHOSE a decision whose declared answer sets `approved` to anything but the
+ * boolean `true` (the schema admits only booleans; any other value never
+ * reads as an approval). A field card, a card with no controls, a card with
+ * nothing chosen and a chosen decision that sets no `approved` continue as an
+ * approval; no carried run value and no other staged key decides.
  */
 export function declaredHitlApprovalFlag(
   screen: Pick<DeclaredHitlCard, "decisions" | "carry">,
@@ -543,7 +545,8 @@ export function declaredHitlApprovalFlag(
 ): boolean {
   const picked = declaredHitlChosenDecision(screen, staged);
   if (picked === null) return true;
-  return (screen.decisions ?? [])[picked]!.answer.approved !== false;
+  const answer = (screen.decisions ?? [])[picked]!.answer;
+  return !Object.hasOwn(answer, "approved") || answer.approved === true;
 }
 
 /** Every `requires` key that is not a field holds non-blank run-value text. */

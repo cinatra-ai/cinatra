@@ -108,7 +108,7 @@ vi.mock("../server-actions", () => ({
   })),
   getSkillsForAgentAction: vi.fn(async () => []),
   // The page's installed bindings: none beyond the build (cinatra#3470).
-  getRuntimeFieldRendererBindingsAction: vi.fn(async () => []),
+  getRuntimeFieldRendererBindingsAction: vi.fn(async () => ({ bindings: [], refusedScreenIds: [] })),
 }));
 
 vi.mock("../agent-ui-override-registry", () => ({

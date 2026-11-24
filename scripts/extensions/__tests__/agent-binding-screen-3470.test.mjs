@@ -53,6 +53,28 @@ describe("the binding validator carries a declared screen", () => {
     }
   });
 
+  it("refuses a 'kind' screen on cta: its bare-text answer cannot be sent at a mid-run step", () => {
+    const { entries, errors } = validateFieldRendererDeclarations(PKG, [
+      { ...BINDING, kind: "cta", screen: { layout: "kind" } },
+    ]);
+    expect(entries).toEqual([]);
+    expect(errors.join("\n")).toMatch(
+      /cinatra\.fieldRenderers\[0\]\.screen: a "kind" screen cannot use kind "cta".*declare the step as a card with a field section/,
+    );
+  });
+
+  it("names every refused entry that declared a screen, and no other", () => {
+    const { entries, refusedScreenIds } = validateFieldRendererDeclarations(PKG, [
+      { ...BINDING, id: `${PKG}:no-title`, screen: { layout: "card" } },
+      { ...BINDING, id: `${PKG}:bad-kind`, kind: "no-such-kind", screen: CARD },
+      { ...BINDING, id: `${PKG}:bad-flag`, screen: { ...CARD, decisions: [{ label: "x", answer: { approved: "false" } }] } },
+      { ...BINDING, id: `${PKG}:no-screen`, kind: "no-such-kind" },
+      { ...BINDING, id: `${PKG}:fine`, screen: CARD },
+    ]);
+    expect(entries.map((e) => e.id)).toEqual([`${PKG}:fine`]);
+    expect(refusedScreenIds).toEqual([`${PKG}:no-title`, `${PKG}:bad-kind`, `${PKG}:bad-flag`]);
+  });
+
   it("a duplicate id that disagrees on the screen is a conflict", () => {
     const a = validateFieldRendererDeclarations(PKG, [{ ...BINDING, screen: CARD }]).entries;
     const b = validateFieldRendererDeclarations("@acme-test/other", [BINDING]).entries;

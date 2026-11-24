@@ -66,7 +66,12 @@ import {
 import { hasUsableListPick } from "./hitl-gate-submit";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: dependency-free .mjs validation module (allowJs)
-import { MID_RUN_ONLY_MESSAGE, validateHitlScreen } from "../../../scripts/extensions/agent-hitl-screen-schema.mjs";
+import {
+  KIND_SCREEN_REFUSED_KINDS,
+  MID_RUN_ONLY_MESSAGE,
+  kindScreenRefusedMessage,
+  validateHitlScreen,
+} from "../../../scripts/extensions/agent-hitl-screen-schema.mjs";
 
 // ---------------------------------------------------------------------------
 // The normalized binding shape this module registers from. Mirrors
@@ -326,7 +331,12 @@ function registerDeclaredScreen(b: FieldRendererBindingInput): void {
     // The host's Continue waits for a declared choice and every required value.
     const declared = card;
     continueReady = ({ runValue, staged }) => declaredHitlScreenReady(declared, runValue, staged);
-  } else if (kindEntry && checked.screen?.layout === "kind" && kindEntry.renderer !== SchemaOnlyFloorRenderer) {
+  } else if (
+    kindEntry &&
+    checked.screen?.layout === "kind" &&
+    kindEntry.renderer !== SchemaOnlyFloorRenderer &&
+    !(KIND_SCREEN_REFUSED_KINDS as readonly string[]).includes(b.kind)
+  ) {
     renderer = kindEntry.renderer;
     // The same hold as a card (cinatra#3470): a kind whose untouched answer
     // answers nothing holds the host's Continue until it is ready.
@@ -340,7 +350,9 @@ function registerDeclaredScreen(b: FieldRendererBindingInput): void {
       ? checked.errors.join("; ")
       : midRunOnly
         ? MID_RUN_ONLY_MESSAGE
-        : `the host has no component of its own for kind "${b.kind}"`;
+        : checked.screen?.layout === "kind" && (KIND_SCREEN_REFUSED_KINDS as readonly string[]).includes(b.kind)
+          ? (kindScreenRefusedMessage(b.kind) as string)
+          : `the host has no component of its own for kind "${b.kind}"`;
     console.error(`[field-renderers] declared screen of ${b.id} refused: ${reason}`);
     return;
   }

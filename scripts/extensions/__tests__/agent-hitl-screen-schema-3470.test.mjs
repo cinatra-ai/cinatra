@@ -122,6 +122,8 @@ describe("validateHitlScreen refuses by name", () => {
     // Only the operator's chosen decision sets the approval flag: a field or a
     // carried run value never does, and the host's approval note and step
     // number are its own too.
+    ["a text approval flag in a decision's answer", { ...CARD, decisions: [{ label: "x", answer: { approved: "false" } }] }, /decisions\[0\]\.answer: "approved" must be true or false/],
+    ["a number approval flag in a decision's answer", { ...CARD, decisions: [{ label: "x", answer: { approved: 0 } }] }, /decisions\[0\]\.answer: "approved" must be true or false/],
     ["a carried approval flag", { ...FIELD_CARD, carry: ["approved"] }, /carry: "approved" is written by the host/],
     ["a field under the approval flag's key", { ...FIELD_CARD, sections: [{ type: "field", key: "approved", label: "x" }] }, /"approved" is written by the host/],
     ["a carried approval note", { ...FIELD_CARD, carry: ["approvalNote"] }, /"approvalNote" is written by the host/],

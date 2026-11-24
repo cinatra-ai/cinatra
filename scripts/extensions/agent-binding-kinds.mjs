@@ -21,7 +21,12 @@
 // Dependency-free on purpose (imported by build scripts, TS host code via
 // `allowJs`, and tests).
 
-import { MID_RUN_ONLY_MESSAGE, validateHitlScreen } from "./agent-hitl-screen-schema.mjs";
+import {
+  KIND_SCREEN_REFUSED_KINDS,
+  MID_RUN_ONLY_MESSAGE,
+  kindScreenRefusedMessage,
+  validateHitlScreen,
+} from "./agent-hitl-screen-schema.mjs";
 
 export const KNOWN_FIELD_RENDERER_KINDS = Object.freeze([
   "blog-idea-selection",
@@ -83,18 +88,30 @@ function isPlainObject(v) {
 
 /**
  * Validate one `cinatra.fieldRenderers` array. Returns
- * `{ entries: [...normalized], errors: [...strings] }`. Callers decide the
- * failure posture (generator: any error -> throw; runtime collector: any
- * error -> skip entry + warn).
+ * `{ entries: [...normalized], errors: [...strings], refusedScreenIds }`.
+ * Callers decide the failure posture (generator: any error -> throw; runtime
+ * collector: any error -> skip entry + warn). `refusedScreenIds` names every
+ * refused entry that declared a screen and a text id (cinatra#3470): its gate
+ * is a declared screen the host cannot draw, never a gate with no screen.
  */
 export function validateFieldRendererDeclarations(packageName, raw) {
   const errors = [];
   const entries = [];
-  if (raw === undefined || raw === null) return { entries, errors };
+  const refusedScreenIds = [];
+  if (raw === undefined || raw === null) return { entries, errors, refusedScreenIds };
   if (!Array.isArray(raw)) {
-    return { entries, errors: [`${packageName}: cinatra.fieldRenderers must be an array`] };
+    return { entries, errors: [`${packageName}: cinatra.fieldRenderers must be an array`], refusedScreenIds };
   }
   raw.forEach((e, i) => {
+    const kept = entries.length;
+    validateOne(e, i);
+    if (entries.length === kept && isPlainObject(e) && Object.hasOwn(e, "screen") && typeof e.id === "string") {
+      refusedScreenIds.push(e.id);
+    }
+  });
+  return { entries, errors, refusedScreenIds };
+
+  function validateOne(e, i) {
     const where = `${packageName} cinatra.fieldRenderers[${i}]`;
     if (!isPlainObject(e)) {
       errors.push(`${where}: entry must be an object`);
@@ -203,6 +220,10 @@ export function validateFieldRendererDeclarations(packageName, raw) {
         errors.push(`${where}.screen: ${MID_RUN_ONLY_MESSAGE}`);
         return;
       }
+      if (checked.screen.layout === "kind" && KIND_SCREEN_REFUSED_KINDS.includes(kind)) {
+        errors.push(`${where}.screen: ${kindScreenRefusedMessage(kind)}`);
+        return;
+      }
       normalizedScreen = checked.screen;
     }
     entries.push({
@@ -216,8 +237,7 @@ export function validateFieldRendererDeclarations(packageName, raw) {
       ...(normalizedScreen !== undefined ? { screen: normalizedScreen } : {}),
       declaredBy: packageName,
     });
-  });
-  return { entries, errors };
+  }
 }
 
 /**

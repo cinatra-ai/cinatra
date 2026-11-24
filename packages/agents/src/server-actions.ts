@@ -25,8 +25,7 @@ import {
   buildActorContextFromPrimitive,
   type ActorRoleHints,
 } from "@/lib/authz/build-actor-context";
-import type { FieldRendererBindingInput } from "./register-default-renderers";
-import { GENERATED_FIELD_RENDERER_BINDINGS } from "@/lib/generated/agent-bindings";
+import type { RuntimeFieldRendererBindingsPayload } from "./field-renderer-bindings.server";
 // Request-aware recommendation (cinatra#2041 S3): the CORE chip-row surface,
 // re-homed into core off the now-retired recommender agent binding.
 import { getRunRecommendationsForReader } from "./recommendation-interception";
@@ -99,39 +98,25 @@ export async function getFieldRendererContextForAgentBuilderAction(): Promise<{
 // (useRuntimeFieldRendererBindings), giving runtime-installed agents their
 // bespoke renderers on prod images where they are not bundled.
 //
-// Security: requires a valid session — unauthenticated callers receive [].
-// Output is PUBLIC renderer metadata (validated, size-capped plain JSON ids/
-// kinds/params — never secrets); enumeration-only, no writes.
+// Security: requires a valid session — unauthenticated callers receive no
+// bindings. Output is PUBLIC renderer metadata (validated, size-capped plain
+// JSON ids/kinds/params — never secrets); enumeration-only, no writes.
 // A collection error → null, never a crash: the panel records the failure,
 // and a mid-run screen whose binding is missing holds its Continue
 // (cinatra#3470) instead of reading the error as "no binding declared".
+// `refusedScreenIds` names the installed bindings whose declared screen the
+// validator refused: their gates are held too, never drawn as no screen.
 // ---------------------------------------------------------------------------
 export async function getRuntimeFieldRendererBindingsAction(): Promise<
-  FieldRendererBindingInput[] | null
+  RuntimeFieldRendererBindingsPayload | null
 > {
   const session = await requireAuthSession().catch(() => null);
-  if (!session?.user?.id) return [];
+  if (!session?.user?.id) return { bindings: [], refusedScreenIds: [] };
   try {
-    const { collectInstalledFieldRendererBindings } = await import(
+    const { runtimeFieldRendererBindingsPayload } = await import(
       "./field-renderer-bindings.server"
     );
-    const generatedIds = new Set(
-      GENERATED_FIELD_RENDERER_BINDINGS.map((b) => b.id),
-    );
-    // Runtime-only ids: the generated (build-time) bindings are already
-    // compiled into the client registry — re-sending them would only churn
-    // registration order.
-    return collectInstalledFieldRendererBindings()
-      .filter((b) => !generatedIds.has(b.id))
-      .map(({ id, kind, priority, midRunHitl, a2uiTranslator, params, screen }) => ({
-        id,
-        kind,
-        priority,
-        ...(midRunHitl === true ? { midRunHitl: true } : {}),
-        ...(a2uiTranslator !== undefined ? { a2uiTranslator } : {}),
-        ...(params !== undefined ? { params } : {}),
-        ...(screen !== undefined ? { screen } : {}),
-      }));
+    return runtimeFieldRendererBindingsPayload();
   } catch {
     return null;
   }

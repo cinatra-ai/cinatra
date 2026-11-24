@@ -41,7 +41,7 @@ vi.mock("../server-actions", () => ({
   getFieldRendererContextForAgentBuilderAction: vi.fn(async () => ({ connectedApps: [], gmailAliases: [], runId: "run-1" })),
   getAuditAvailabilityAction: vi.fn(async () => ({ visible: false, promptCount: 0, skillCount: 0 })),
   getSkillsForAgentAction: vi.fn(async () => []),
-  getRuntimeFieldRendererBindingsAction: vi.fn(async () => []),
+  getRuntimeFieldRendererBindingsAction: vi.fn(async () => ({ bindings: [], refusedScreenIds: [] })),
 }));
 vi.mock("../agent-ui-override-registry", () => ({ agentUIOverrideRegistry: { resolve: () => null } }));
 

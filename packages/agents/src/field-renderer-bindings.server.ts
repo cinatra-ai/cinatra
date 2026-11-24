@@ -43,7 +43,7 @@ import {
 type CollectedBinding = FieldRendererBindingInput & { declaredBy: string };
 
 const CACHE_TTL_MS = 10_000;
-let cache: { at: number; entries: CollectedBinding[] } | null = null;
+let cache: { at: number; entries: CollectedBinding[]; refusedScreenIds: string[] } | null = null;
 
 /** Test hook — drop the TTL cache. */
 export function __clearInstalledFieldRendererBindingsCache(): void {
@@ -57,13 +57,28 @@ export function __clearInstalledFieldRendererBindingsCache(): void {
  * trees) — absence of runtime bindings is a NORMAL state.
  */
 export function collectInstalledFieldRendererBindings(): CollectedBinding[] {
-  if (cache && Date.now() - cache.at < CACHE_TTL_MS) return cache.entries;
+  return collectInstalled().entries;
+}
+
+/**
+ * The ids of installed bindings that declared a HITL screen the validator
+ * refused (cinatra#3470), apart from any id another installed binding still
+ * registers. Such a gate is a declared screen the host cannot draw: the run
+ * page holds its Continue instead of reading it as a gate with no screen.
+ */
+export function collectInstalledRefusedScreenIds(): string[] {
+  return collectInstalled().refusedScreenIds;
+}
+
+function collectInstalled(): { entries: CollectedBinding[]; refusedScreenIds: string[] } {
+  if (cache && Date.now() - cache.at < CACHE_TTL_MS) return cache;
   const all: CollectedBinding[] = [];
+  const refused = new Set<string>();
   let installDir: string;
   try {
     installDir = resolveAgentRuntimeMountDir();
   } catch {
-    return [];
+    return { entries: [], refusedScreenIds: [] };
   }
   // SORTED traversal — first-declarer-wins among runtime duplicates must be
   // deterministic (alphabetical), never filesystem-order dependent (the
@@ -72,7 +87,7 @@ export function collectInstalledFieldRendererBindings(): CollectedBinding[] {
   try {
     scopes = readdirSync(installDir).sort();
   } catch {
-    return [];
+    return { entries: [], refusedScreenIds: [] };
   }
   for (const scope of scopes) {
     let dirs: string[] = [];
@@ -96,14 +111,15 @@ export function collectInstalledFieldRendererBindings(): CollectedBinding[] {
       const packageName = typeof pkg.name === "string" ? pkg.name : null;
       const declared = pkg.cinatra?.fieldRenderers;
       if (!packageName || declared === undefined) continue;
-      const { entries, errors } = validateFieldRendererDeclarations(
+      const { entries, errors, refusedScreenIds } = validateFieldRendererDeclarations(
         packageName,
         declared,
-      ) as { entries: CollectedBinding[]; errors: string[] };
+      ) as { entries: CollectedBinding[]; errors: string[]; refusedScreenIds: string[] };
       for (const err of errors) {
         console.warn(`[field-renderer-bindings] skipped invalid declaration: ${err}`);
       }
       all.push(...entries);
+      for (const id of refusedScreenIds) refused.add(id);
     }
   }
   const { merged, errors: mergeErrors } = mergeFieldRendererBindings(all) as {
@@ -113,8 +129,44 @@ export function collectInstalledFieldRendererBindings(): CollectedBinding[] {
   for (const err of mergeErrors) {
     console.warn(`[field-renderer-bindings] conflicting declarations (first declarer wins): ${err}`);
   }
-  cache = { at: Date.now(), entries: merged };
-  return merged;
+  const registered = new Set(merged.map((b) => b.id));
+  cache = {
+    at: Date.now(),
+    entries: merged,
+    refusedScreenIds: [...refused].filter((id) => !registered.has(id)).sort(),
+  };
+  return cache;
+}
+
+/** What the run page's runtime bindings fetch answers (cinatra#3470). */
+export type RuntimeFieldRendererBindingsPayload = {
+  bindings: FieldRendererBindingInput[];
+  /** Installed ids whose declared screen was refused (`collectInstalledRefusedScreenIds`). */
+  refusedScreenIds: string[];
+};
+
+/**
+ * The runtime-only bindings the client registers, and the ids of declared
+ * screens the validator refused. Generated (build-time) bindings are already
+ * compiled into the client registry, so neither list names one.
+ */
+export function runtimeFieldRendererBindingsPayload(): RuntimeFieldRendererBindingsPayload {
+  const generatedIds = new Set(GENERATED_FIELD_RENDERER_BINDINGS.map((b) => b.id));
+  const { entries, refusedScreenIds } = collectInstalled();
+  return {
+    bindings: entries
+      .filter((b) => !generatedIds.has(b.id))
+      .map(({ id, kind, priority, midRunHitl, a2uiTranslator, params, screen }) => ({
+        id,
+        kind,
+        priority,
+        ...(midRunHitl === true ? { midRunHitl: true } : {}),
+        ...(a2uiTranslator !== undefined ? { a2uiTranslator } : {}),
+        ...(params !== undefined ? { params } : {}),
+        ...(screen !== undefined ? { screen } : {}),
+      })),
+    refusedScreenIds: refusedScreenIds.filter((id) => !generatedIds.has(id)),
+  };
 }
 
 /**

@@ -26,13 +26,16 @@
 //     writes into the staged answer or the Continue itself
 //     (RESERVED_ANSWER_KEYS): the card stages `userResponse` as the JSON of
 //     its whole answer. The one exception is `approved` (CHOSEN_ANSWER_KEYS):
-//     a decision's declared answer may set it, because only the operator's
-//     choice says decline; a field or a carried run value never does.
+//     a decision's declared answer may set it, as a boolean only, because
+//     only the operator's choice says decline; a field or a carried run value
+//     never does.
 //     requires: keys that must hold non-blank text before the host's
 //     Continue can send; a choice also waits for them. Every field is a
 //     required value, and a card with decisions holds the Continue until
 //     one of them is chosen.
-//   - "kind": { layout } - the host's own component for the binding's kind.
+//   - "kind": { layout } - the host's own component for the binding's kind;
+//     never a kind in KIND_SCREEN_REFUSED_KINDS (its component answers with
+//     bare text, which a mid-run step cannot send).
 //
 // A declared screen belongs to a MID-RUN gate only: the binding that carries
 // it must declare `midRunHitl: true` (MID_RUN_ONLY_MESSAGE). Every host then
@@ -47,6 +50,15 @@ export const HITL_SCREEN_KEY_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 export const MAX_HITL_SCREEN_BYTES = 8192;
 export const MID_RUN_ONLY_MESSAGE =
   "a declared screen is drawn only at a mid-run gate: the binding must declare midRunHitl: true (a setup gate takes no declared screen)";
+// The kinds a "kind" layout never names (cinatra#3470). A mid-run host
+// stages a renderer's answer only as an object of keys; the cta component
+// answers with bare text (it is one field of a setup form), so its typed or
+// picked value would never reach the agent. A cta step is declared as a card
+// with a field section, which stages its text under the declared key.
+export const KIND_SCREEN_REFUSED_KINDS = Object.freeze(["cta"]);
+export function kindScreenRefusedMessage(kind) {
+  return `a "kind" screen cannot use kind ${JSON.stringify(kind)}: its component answers with bare text, which a mid-run step cannot send; declare the step as a card with a field section instead`;
+}
 const MAX_TEXT = 600;
 const MAX_LIST = 8;
 const MAX_SECTIONS = 16;
@@ -229,6 +241,11 @@ function checkAnswer(where, answer, errors) {
         (typeof v === "number" && Number.isFinite(v)) ||
         (typeof v === "string" && v.length <= MAX_TEXT));
     if (!ok) errors.push(`${where}: key ${JSON.stringify(k)} must be a key with text, a number or a boolean`);
+    // The approval flag is a real boolean: a text "false" or a 0 would read
+    // as an approval at the Continue.
+    else if (k === "approved" && typeof v !== "boolean") {
+      errors.push(`${where}: "approved" must be true or false`);
+    }
     checkNotReserved(where, k, errors, { chosenAnswer: true });
   }
 }

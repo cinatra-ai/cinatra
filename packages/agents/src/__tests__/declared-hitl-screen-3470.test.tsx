@@ -46,7 +46,7 @@ vi.mock("../agent-hitl-screen-actions", () => ({
 }));
 vi.mock("../server-actions", () => ({
   getFieldRendererContextForAgentBuilderAction: async () => ({ connectedApps: [], gmailAliases: [] }),
-  getRuntimeFieldRendererBindingsAction: async () => [],
+  getRuntimeFieldRendererBindingsAction: async () => ({ bindings: [], refusedScreenIds: [] }),
 }));
 vi.mock("../list-picker-actions", () => ({
   fetchAvailableLists: vi.fn(async () => []),
@@ -66,12 +66,12 @@ import {
   __resetFieldRendererComponentMapForTests,
   __setFieldRendererComponentMapForTests,
 } from "../field-renderer-components";
-import { CtaRenderer } from "../cta-renderer";
+import { ContextSelectorRenderer } from "../context-selector-renderer";
 import { SchemaOnlyFloorRenderer } from "../schema-field-renderer";
 import { AgentHitlScreenCard } from "../agent-hitl-screen-card";
 import { parseAgentHitlScreenState } from "../agent-hitl-screen";
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
-import { continueApprovalFlag, continueHeldByRenderer } from "../hitl-gate-submit";
+import { continueApprovalFlag, continueHeldByRenderer, declaredHitlApprovalFlag } from "../hitl-gate-submit";
 
 /** The gate of `ID` once the host's bindings loaded. */
 const LOADED_GATE = { xRenderer: "@acme-test/publish-agent:confirm", bindings: { status: "loaded" as const, announcedIds: new Set<string>() } };
@@ -522,9 +522,26 @@ describe("a declared card holds the host's Continue (cinatra#3470)", () => {
     expect(continueApprovalFlag(staged({ itemId: "item-1", revisionId: "rev-1", approved: true }), ID)).toBe(true);
   });
 
+  it("a chosen decision whose answer sets approved to anything but true never continues as an approval", () => {
+    // Past the schema (which refuses a non-boolean flag): the submission
+    // reads only a literal true as an approval.
+    const card = {
+      ...CARD,
+      decisions: [
+        { label: "Fixture text no", answer: { approved: "false", mode: "a" } },
+        { label: "Fixture number no", answer: { approved: 0, mode: "b" } },
+        { label: "Fixture plain", answer: { mode: "c" } },
+      ],
+    };
+    // red-first-expect: declaredHitlApprovalFlag is not a function
+    expect(declaredHitlApprovalFlag(card, { itemId: "item-1", mode: "a", approved: "false" })).toBe(false);
+    expect(declaredHitlApprovalFlag(card, { itemId: "item-1", mode: "b", approved: 0 })).toBe(false);
+    expect(declaredHitlApprovalFlag(card, { itemId: "item-1", mode: "c" })).toBe(true);
+  });
+
   it("a 'kind' layout whose untouched answer is an answer, and a binding without a screen, never hold the Continue", () => {
     registerFieldRendererBindings([
-      { id: ID, kind: "cta", priority: 80, midRunHitl: true, screen: { layout: "kind" } },
+      { id: ID, kind: "context-selector", priority: 80, midRunHitl: true, screen: { layout: "kind" } },
     ]);
     expect(entryOf()).toBeDefined();
     expect(entryOf()?.continueReady).toBeUndefined();
@@ -565,7 +582,7 @@ describe("a declared card holds the host's Continue (cinatra#3470)", () => {
     registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: CARD }]);
     expect(entryOf()?.stagesWholeAnswer).toBe(true);
     registerFieldRendererBindings([
-      { id: ID, kind: "cta", priority: 80, midRunHitl: true, screen: { layout: "kind" } },
+      { id: ID, kind: "context-selector", priority: 80, midRunHitl: true, screen: { layout: "kind" } },
     ]);
     expect(entryOf()?.stagesWholeAnswer).toBeUndefined();
     registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90 }]);
@@ -576,10 +593,21 @@ describe("a declared card holds the host's Continue (cinatra#3470)", () => {
 describe("registration validates the declaration again (cinatra#3470)", () => {
   it("a 'kind' layout registers the host's own component for that kind", () => {
     registerFieldRendererBindings([
+      { id: ID, kind: "context-selector", priority: 80, midRunHitl: true, screen: { layout: "kind" } },
+    ]);
+    expect(entryOf()?.renderer).toBe(ContextSelectorRenderer);
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it("a 'kind' layout on cta registers nothing and says why: its bare-text answer would never be sent", () => {
+    registerFieldRendererBindings([
       { id: ID, kind: "cta", priority: 80, midRunHitl: true, screen: { layout: "kind" } },
     ]);
-    expect(entryOf()?.renderer).toBe(CtaRenderer);
-    expect(errorSpy).not.toHaveBeenCalled();
+    // red-first-expect: expected { …(8) } to be undefined
+    expect(entryOf()).toBeUndefined();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining(`declared screen of ${ID} refused: a "kind" screen cannot use kind "cta"`),
+    );
   });
 
   it("a 'kind' layout on blog-idea-selection registers nothing: the host keeps no idea chooser of its own (cinatra#4429)", () => {
@@ -602,7 +630,7 @@ describe("registration validates the declaration again (cinatra#3470)", () => {
   });
 
   it("a declared screen on a binding that is not mid-run registers nothing, and says why", () => {
-    for (const [kind, screen] of [["linkedin-draft-review", CARD], ["cta", { layout: "kind" }]] as const) {
+    for (const [kind, screen] of [["linkedin-draft-review", CARD], ["context-selector", { layout: "kind" }]] as const) {
       for (const midRunHitl of [undefined, false]) {
         fieldRendererRegistry.clear();
         errorSpy.mockClear();

@@ -38,8 +38,10 @@ export function useRuntimeFieldRendererBindings(): void {
         const { getRuntimeFieldRendererBindingsAction } = await import(
           "./server-actions"
         );
-        const bindings = await getRuntimeFieldRendererBindingsAction();
-        if (!Array.isArray(bindings)) {
+        const answer = await getRuntimeFieldRendererBindingsAction();
+        const bindings = answer?.bindings;
+        const refusedScreenIds = answer?.refusedScreenIds;
+        if (!Array.isArray(bindings) || !Array.isArray(refusedScreenIds)) {
           settleRuntimeRendererBindings({ ok: false });
           return;
         }
@@ -49,11 +51,16 @@ export function useRuntimeFieldRendererBindings(): void {
           );
           registerFieldRendererBindings(bindings);
         }
-        // The bindings that declare a screen: one that is still unregistered
-        // after this was refused, and its gate stays held.
+        // The bindings that declare a screen, and the declared screens the
+        // server's validator refused: one of them that is still unregistered
+        // after this is a declared screen the host cannot draw, and its gate
+        // stays held (never read as a gate with no screen).
         settleRuntimeRendererBindings({
           ok: true,
-          screenIds: bindings.filter((b) => b.screen !== undefined).map((b) => b.id),
+          screenIds: [
+            ...bindings.filter((b) => b.screen !== undefined).map((b) => b.id),
+            ...refusedScreenIds.filter((id): id is string => typeof id === "string"),
+          ],
         });
         if (!cancelled) setVersion((v) => v + 1);
       } catch {

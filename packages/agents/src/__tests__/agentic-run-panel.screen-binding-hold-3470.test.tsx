@@ -16,6 +16,9 @@
  *   - after the fetch failed, the same;
  *   - when the fetch named a declared screen for the gate that the
  *     registration refused, the same;
+ *   - when an installed agent declared a screen for the gate that the
+ *     server's own validator refused, the same: the real server action
+ *     reads the installed package from disk and names the refused screen;
  *   - once the fetch answered with nothing for the gate, it continues as before.
  *
  * The tests run in this order on purpose: the bindings' state belongs to the
@@ -27,6 +30,9 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import { fieldRendererRegistry } from "../field-renderer-registry";
@@ -73,8 +79,36 @@ vi.mock("../a2a-actions", () => ({
 
 /** What the page's fetch of the installed agents' bindings answers. */
 const runtimeBindings = vi.hoisted(() => ({
-  fetch: vi.fn(async (): Promise<unknown> => []),
+  fetch: vi.fn(async (): Promise<unknown> => ({ bindings: [], refusedScreenIds: [] })),
 }));
+
+/**
+ * The installed agents' folder the real server action reads, and a signed-in
+ * reader for it. Only the folder, the session and the host's side-effect
+ * imports are stubbed: the action, the collector and the validator are real.
+ */
+const installed = vi.hoisted(() => ({ dir: "" }));
+vi.mock("../agent-runtime-mount", () => ({
+  resolveAgentRuntimeMountDir: () => {
+    if (!installed.dir) throw new Error("fixture: no installed agents folder");
+    return installed.dir;
+  },
+}));
+vi.mock("@/lib/register-host-connector-services", () => ({}));
+vi.mock("@/lib/auth-session", () => ({
+  requireAuthSession: vi.fn(async () => ({ user: { id: "user-3470" } })),
+  requireActorContext: vi.fn(async () => {
+    throw new Error("fixture: not used here");
+  }),
+}));
+
+/** The real `getRuntimeFieldRendererBindingsAction`, past the panel's mock. */
+async function realRuntimeBindingsAction(): Promise<unknown> {
+  const { __clearInstalledFieldRendererBindingsCache } = await import("../field-renderer-bindings.server");
+  __clearInstalledFieldRendererBindingsCache();
+  const actual = await vi.importActual<typeof import("../server-actions")>("../server-actions");
+  return actual.getRuntimeFieldRendererBindingsAction();
+}
 
 vi.mock("../server-actions", () => ({
   getFieldRendererContextForAgentBuilderAction: vi.fn(async () => ({
@@ -188,19 +222,58 @@ describe("AgenticRunPanel — a screen whose binding has not loaded holds its Co
   });
 
   it("holds the Continue when the gate's declared screen did not register", async () => {
-    runtimeBindings.fetch.mockImplementation(async () => [
-      // A screen the registration refuses: a card with no title and no sections.
-      { id: RUNTIME_ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: { layout: "card" } },
-    ]);
+    runtimeBindings.fetch.mockImplementation(async () => ({
+      bindings: [
+        // A screen the registration refuses: a card with no title and no sections.
+        { id: RUNTIME_ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: { layout: "card" } },
+      ],
+      refusedScreenIds: [],
+    }));
     const published = await mountGate();
     // red-first-expect: promise resolved "undefined" instead of rejecting
     await expectHeld(HOLD_FAILED, published);
   });
 
+  it("holds the Continue when the server's validator refused the gate's declared screen", async () => {
+    // Another installed agent: the screen above stays known to the page.
+    gate.xRenderer = "@cinatra-test/refused-agent:output";
+    installed.dir = mkdtempSync(join(tmpdir(), "hold-3470-"));
+    try {
+      const pkgDir = join(installed.dir, "@cinatra-test", "refused-agent");
+      mkdirSync(pkgDir, { recursive: true });
+      writeFileSync(
+        join(pkgDir, "package.json"),
+        JSON.stringify({
+          name: "@cinatra-test/refused-agent",
+          cinatra: {
+            fieldRenderers: [
+              // A card with no title: the server's validator drops it.
+              { id: gate.xRenderer, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: { layout: "card" } },
+            ],
+          },
+        }),
+      );
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      let answered: Promise<unknown> | null = null;
+      runtimeBindings.fetch.mockImplementation(() => (answered = realRuntimeBindingsAction()));
+      const published = await mountGate();
+      // The page knew the bindings before (the tests above): wait until the
+      // real action answered this page, as the operator's press would.
+      await waitFor(() => expect(answered).not.toBeNull());
+      // red-first-expect: expected [] to deeply equal { bindings: Any<Array>, …(1) }
+      expect(await answered).toEqual({ bindings: expect.any(Array), refusedScreenIds: [gate.xRenderer] });
+      await expectHeld(HOLD_FAILED, published);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("title is required"));
+    } finally {
+      rmSync(installed.dir, { recursive: true, force: true });
+      installed.dir = "";
+    }
+  });
+
   it("continues as before once the bindings loaded with nothing for the gate", async () => {
     // Another agent's gate: the page still knows the refused screen above.
     gate.xRenderer = "@cinatra-test/other-agent:output";
-    runtimeBindings.fetch.mockImplementation(async () => []);
+    runtimeBindings.fetch.mockImplementation(async () => ({ bindings: [], refusedScreenIds: [] }));
     const published = await mountGate();
     await waitFor(() => expect(published.submit).not.toBeNull());
     await waitFor(() => expect(document.body.textContent).toContain("no renderer configured"));
