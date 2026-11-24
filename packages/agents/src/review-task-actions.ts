@@ -42,9 +42,13 @@ import {
   DECLARED_CARD_ANSWER_KEY,
   declineAwareUserResponse,
   recordedContinueAnswer,
-  hasUsableListPick,
-  isCampaignRecipientsReviewAnswer,
-  isEmailDraftsReviewAnswer,
+  campaignRecipientsReviewAnswer,
+  contextSelectionAnswer,
+  emailDraftsReviewAnswer,
+  listStepAnswer,
+  recordedAnswerWithoutMetadata,
+  setupFormAnswerField,
+  setupFormDeclaredFields,
   SCREEN_FAILED_HOLD_REASON,
   declaredHitlScreenReady,
   declaredHitlStage,
@@ -107,9 +111,9 @@ export const DECLARED_SCREEN_CHANGED_REFUSAL =
  * (`declaredCardCanonicalAnswer`). What is sent is that rebuilt answer, never
  * the caller's text. A generic approval, an empty answer or an answer the
  * card cannot hold is refused, whatever the caller marked. A step drawn by a
- * "kind" screen is sent `resumeText` only when it holds what that kind's own
- * screen requires (`kindScreenAnswered`): never the bare approval marker for
- * a list step or a grouped setup form. A step that opened with no screen,
+ * "kind" screen is sent only the answer that kind's own screen stages, read
+ * with exactly its keys and written back (`kindScreenAnswer`): never the bare
+ * approval marker, and never a key the screen does not stage. A step that opened with no screen,
  * whose renderer is verified to declare none now, matches and sends
  * `resumeText` as before.
  */
@@ -144,9 +148,8 @@ export async function stepScreenAnswer(
   if (answer.answersDeclaredCard && !declaresCard) return { refusal: UNDECLARED_CARD_ANSWER_REFUSAL };
   if (card === "kind-screen") {
     if (screenKind === undefined) return { refusal: SCREEN_FAILED_HOLD_REASON };
-    return (await kindScreenAnswered(screenKind, gate.inputSchema, answer))
-      ? { send: answer.resumeText }
-      : { refusal: KIND_SCREEN_ANSWER_INCOMPLETE_REFUSAL };
+    const send = await kindScreenAnswer(screenKind, gate.inputSchema, answer);
+    return send === null ? { refusal: KIND_SCREEN_ANSWER_INCOMPLETE_REFUSAL } : { send };
   }
   if (!declaresCard) return { send: answer.resumeText };
   const send = declaredCardCanonicalAnswer(card as DeclaredHitlCard, gate.values ?? {}, answer.resumeText);
@@ -154,29 +157,62 @@ export async function stepScreenAnswer(
 }
 
 /**
- * Whether an answer to a step drawn by a "kind" screen (cinatra#3470) holds
- * what that kind's own screen requires before it sends, read on the server so
- * a direct road (`agent_run_resume`, a hand-made approval) cannot send past it:
- *   - a list step: the text sent (the pick snapshot, inside the attachment
- *     envelope when a file goes with it) names a usable pick, as the screen's
- *     Continue holds for (`hasUsableListPick`);
- *   - a grouped setup form: the text sent (the JSON of the form's values,
- *     `withSetupFormAnswer`) passes the step's own schema by the validation
- *     the form runs before it sends (`jsonSchemaToZod`) and by the schema's
- *     full constraints (`satisfiesDeclaredJsonSchema`), so the step is
- *     resumed with the values that were checked, never with the bare marker
- *     while other values pass;
- *   - a context selector: the text sent, unwrapped as the step reads it (the
- *     attachment envelope removed, `readWayflowSubmittedValues`), is the
- *     selection envelope its screen emits, read by the parser
+ * The answer a step drawn by a "kind" screen sends (cinatra#3470), read from
+ * its resume text as the step reads it (`readWayflowSubmittedValues`). When
+ * the text is the attachment envelope this host sends with a file
+ * (`readSentUserEnvelope`), the files the reader records beside the answer
+ * are left out by the one reading of a recorded answer without its record's
+ * keys (`recordedAnswerWithoutMetadata`), so a file never reads as a key of
+ * the answer. `resend` writes the accepted answer back as the resume text,
+ * inside the same envelope, so the files still go with it. Null when the
+ * text holds no answer object.
+ */
+function readKindScreenAnswer(
+  resumeText: string,
+  declared: ReadonlySet<string> = new Set(),
+): { answer: Record<string, unknown>; resend: (accepted: Record<string, unknown>) => string } | null {
+  const sent = readWayflowSubmittedValues({ userResponse: resumeText });
+  if (sent === null) return null;
+  let envelope: Record<string, unknown> | null = null;
+  try {
+    const outer: unknown = JSON.parse(resumeText);
+    if (readSentUserEnvelope(outer) !== null) envelope = outer as Record<string, unknown>;
+  } catch {
+    envelope = null;
+  }
+  return {
+    answer: envelope !== null ? recordedAnswerWithoutMetadata(sent, declared) : sent,
+    resend: (accepted) =>
+      envelope !== null ? JSON.stringify({ ...envelope, text: JSON.stringify(accepted) }) : JSON.stringify(accepted),
+  };
+}
+
+/**
+ * The resume text a step drawn by a "kind" screen (cinatra#3470) is sent, or
+ * null when the answer is not what that kind's own screen stages. It is read
+ * on the server so a direct road (`agent_run_resume`, a hand-made approval)
+ * cannot send past it. Each kind's answer is read EXACTLY: a key its screen
+ * never stages is refused, and what is sent is the accepted answer written
+ * back (`readKindScreenAnswer`), never the caller's text, so no key that was
+ * not checked reaches the agent or the steps after it:
+ *   - a list step: the pick snapshot its Continue lifts (`listStepAnswer`);
+ *   - a grouped setup form: only the keys the form sends
+ *     (`setupFormAnswerField`: the fields its schema declares, or for a
+ *     schema with none, every key but those a Continue adds), passing the
+ *     step's own schema by the validation the form runs before it sends
+ *     (`jsonSchemaToZod`) and by the schema's full constraints
+ *     (`satisfiesDeclaredJsonSchema`), so the step is resumed with the values
+ *     that were checked, never with the bare marker while other values pass;
+ *   - a context selector: the selection envelope its screen emits
+ *     (`contextSelectionAnswer`), read too by the parser
  *     `/api/context-finalize` applies to it (`parseUserResponseEnvelope`), so
  *     an answer that route refuses is never sent and the run stays parked;
- *   - a recipients review: the text sent is the answer its screen stages once
- *     the recipients are shown, with the campaign id the drafts step reads
- *     (`isCampaignRecipientsReviewAnswer`);
- *   - a drafts review: the text sent is the answer its screen stages once the
- *     drafts are shown, naming the drafts approved and those edited
- *     (`isEmailDraftsReviewAnswer`).
+ *   - a recipients review: the answer its screen stages once the recipients
+ *     are shown, with the campaign id the drafts step reads and no removal
+ *     (`campaignRecipientsReviewAnswer`);
+ *   - a drafts review: the answer its screen stages once the drafts are
+ *     shown, naming the drafts approved and those edited and no draft text
+ *     (`emailDraftsReviewAnswer`).
  * The bare approval marker and an empty answer hold none of them, so a step
  * resumed with one stays parked; each answer that is sent is a structured
  * `userResponse`, which the answered-gate record below binds.
@@ -184,32 +220,39 @@ export async function stepScreenAnswer(
  * IT FAILS CLOSED. Only a kind listed in `KIND_SCREENS_WITHOUT_INPUT` is sent
  * without a check of its own; any other kind with no check here is refused.
  */
-async function kindScreenAnswered(
+async function kindScreenAnswer(
   kind: string,
   stepSchema: Record<string, unknown>,
   answer: { resumeText: string; values?: Record<string, unknown> | null },
-): Promise<boolean> {
-  const sent = readWayflowSubmittedValues({ userResponse: answer.resumeText });
-  if (kind === "list-picker") return hasUsableListPick(sent);
+): Promise<string | null> {
+  const exactOf: Record<string, (a: Record<string, unknown>) => Record<string, unknown> | null> = {
+    "list-picker": listStepAnswer,
+    "campaign-recipients-review": campaignRecipientsReviewAnswer,
+    "email-drafts-review": emailDraftsReviewAnswer,
+    "context-selector": contextSelectionAnswer,
+  };
   if (kind === "wayflow-setup-form") {
-    if (sent === null) return false;
+    const read = readKindScreenAnswer(answer.resumeText, new Set(setupFormDeclaredFields(stepSchema)));
+    if (read === null || !Object.keys(read.answer).every(setupFormAnswerField(stepSchema))) return null;
     const { jsonSchemaToZod } = await import("./json-schema-to-zod");
-    if (!jsonSchemaToZod(stepSchema).safeParse(sent).success) return false;
-    return await satisfiesDeclaredJsonSchema(stepSchema, sent);
+    if (!jsonSchemaToZod(stepSchema).safeParse(read.answer).success) return null;
+    return (await satisfiesDeclaredJsonSchema(stepSchema, read.answer)) ? read.resend(read.answer) : null;
   }
-  if (kind === "campaign-recipients-review") return isCampaignRecipientsReviewAnswer(sent);
-  if (kind === "email-drafts-review") return isEmailDraftsReviewAnswer(sent);
-  if (kind === "context-selector") {
-    if (sent === null) return false;
-    const { parseUserResponseEnvelope } = await import("@/lib/artifacts/context-route-support");
-    try {
-      parseUserResponseEnvelope(JSON.stringify(sent));
-      return true;
-    } catch {
-      return false;
+  if (Object.hasOwn(exactOf, kind)) {
+    const read = readKindScreenAnswer(answer.resumeText);
+    const accepted = read === null ? null : exactOf[kind](read.answer);
+    if (read === null || accepted === null) return null;
+    if (kind === "context-selector") {
+      const { parseUserResponseEnvelope } = await import("@/lib/artifacts/context-route-support");
+      try {
+        parseUserResponseEnvelope(JSON.stringify(accepted));
+      } catch {
+        return null;
+      }
     }
+    return read.resend(accepted);
   }
-  return KIND_SCREENS_WITHOUT_INPUT.has(kind);
+  return KIND_SCREENS_WITHOUT_INPUT.has(kind) ? answer.resumeText : null;
 }
 
 /**
@@ -256,7 +299,7 @@ async function satisfiesDeclaredJsonSchema(schema: Record<string, unknown>, valu
  * The "kind" screens whose answer is the approval itself, with no input the
  * step requires. None does today: every kind a "kind" screen may name
  * (KIND_SCREEN_SUPPORTED_KINDS) has a check of its own in
- * `kindScreenAnswered`. A kind that is not listed here and has no check there
+ * `kindScreenAnswer`. A kind that is not listed here and has no check there
  * is refused.
  */
 const KIND_SCREENS_WITHOUT_INPUT: ReadonlySet<string> = new Set<string>([]);

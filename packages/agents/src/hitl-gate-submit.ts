@@ -1004,38 +1004,183 @@ export function hasUsableListPick(buffered: Record<string, unknown> | null | und
 }
 
 /**
- * Whether `answer` is what the host's recipients review
- * (campaign-recipients-review-renderer.tsx) stages once its recipients are
- * shown: `{ campaignId, approved: true, approvedAt }`. `campaignId` is the
- * field the drafts step after it reads to find the campaign, so it must be a
- * usable id. The bare approval marker parses to no object and holds none of it.
+ * The answer with exactly the keys a host screen stages (cinatra#3470): null
+ * when it has an own key outside `allowed` or lacks one in `required`, else a
+ * copy of its own keys in their order. A key the screen never stages is
+ * refused, never dropped, so the server sends only what it checked.
  */
-export function isCampaignRecipientsReviewAnswer(answer: Record<string, unknown> | null | undefined): boolean {
-  if (!answer) return false;
-  const own = (key: string): unknown => (Object.hasOwn(answer, key) ? answer[key] : undefined);
-  return isUsableListId(own("campaignId")) && own("approved") === true && typeof own("approvedAt") === "string";
+function exactAnswer(
+  answer: Record<string, unknown> | null | undefined,
+  allowed: readonly string[],
+  required: readonly string[] = allowed,
+): Record<string, unknown> | null {
+  if (!answer) return null;
+  const keys = Object.keys(answer);
+  if (!keys.every((k) => allowed.includes(k))) return null;
+  if (!required.every((k) => Object.hasOwn(answer, k))) return null;
+  const out: Record<string, unknown> = {};
+  for (const k of keys) setOwn(out, k, answer[k]);
+  return out;
 }
 
+/** Usable ids, each once. */
+const areUniqueUsableIds = (ids: unknown): ids is string[] =>
+  Array.isArray(ids) && ids.every(isUsableListId) && new Set(ids).size === ids.length;
+
+/** The keys the host's recipients review stages, all of them always. */
+const RECIPIENTS_REVIEW_ANSWER_KEYS = ["campaignId", "approved", "approvedAt"] as const;
+
 /**
- * Whether `answer` is what the host's drafts review
- * (email-drafts-review-renderer.tsx) stages once its drafts are shown:
- * `{ campaignId?, approvedDraftIds, edited, editedIds }`. `approvedDraftIds`
- * names every draft shown (at least one, the screen stages nothing for none),
- * `editedIds` the drafts among them that were edited, and `edited` says
- * whether there are any. `campaignId` is left out when the screen found the
- * drafts by the run alone (no campaign id in its value, its previous approval
- * or its setup values); when present it is text.
+ * The answer the host's recipients review (campaign-recipients-review-
+ * renderer.tsx) stages once its recipients are shown, read exactly, or null:
+ * `{ campaignId, approved: true, approvedAt }` and no other key. The screen
+ * stages no removal in its answer (its removals are flushed by its own save,
+ * `removeEmailOutreachRecipients`), so an answer that names one, or any other
+ * key, is refused. `campaignId` is the field the drafts step after it reads
+ * to find the campaign, so it must be a usable id. The bare approval marker
+ * parses to no object and holds none of it.
  */
+export function campaignRecipientsReviewAnswer(
+  answer: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null {
+  const exact = exactAnswer(answer, RECIPIENTS_REVIEW_ANSWER_KEYS);
+  if (exact === null) return null;
+  const { campaignId, approved, approvedAt } = exact;
+  return isUsableListId(campaignId) &&
+    approved === true &&
+    typeof approvedAt === "string" &&
+    !Number.isNaN(Date.parse(approvedAt))
+    ? exact
+    : null;
+}
+
+/** Whether `answer` is exactly what the host's recipients review stages (`campaignRecipientsReviewAnswer`). */
+export function isCampaignRecipientsReviewAnswer(answer: Record<string, unknown> | null | undefined): boolean {
+  return campaignRecipientsReviewAnswer(answer) !== null;
+}
+
+/** The keys the host's drafts review stages; `campaignId` only when it has one. */
+const DRAFTS_REVIEW_ANSWER_KEYS = ["campaignId", "approvedDraftIds", "edited", "editedIds"] as const;
+
+/**
+ * The answer the host's drafts review (email-drafts-review-renderer.tsx)
+ * stages once its drafts are shown, read exactly, or null:
+ * `{ campaignId?, approvedDraftIds, edited, editedIds }` and no other key (a
+ * draft's text is never part of it: the screen saves its edits itself).
+ * `approvedDraftIds` names every draft shown (at least one, each once; the
+ * screen stages nothing for none), `editedIds` the drafts among them that
+ * were edited, each once, and `edited` says whether there are any.
+ * `campaignId` is left out when the screen found the drafts by the run alone
+ * (no campaign id in its value, its previous approval or its setup values);
+ * when present it is text.
+ */
+export function emailDraftsReviewAnswer(
+  answer: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null {
+  const exact = exactAnswer(answer, DRAFTS_REVIEW_ANSWER_KEYS, DRAFTS_REVIEW_ANSWER_KEYS.slice(1));
+  if (exact === null) return null;
+  const { campaignId, approvedDraftIds: ids, edited, editedIds } = exact;
+  if (campaignId !== undefined && typeof campaignId !== "string") return null;
+  if (!areUniqueUsableIds(ids) || ids.length === 0) return null;
+  if (!areUniqueUsableIds(editedIds) || !editedIds.every((id) => ids.includes(id))) return null;
+  return edited === editedIds.length > 0 ? exact : null;
+}
+
+/** Whether `answer` is exactly what the host's drafts review stages (`emailDraftsReviewAnswer`). */
 export function isEmailDraftsReviewAnswer(answer: Record<string, unknown> | null | undefined): boolean {
-  if (!answer) return false;
-  const own = (key: string): unknown => (Object.hasOwn(answer, key) ? answer[key] : undefined);
-  const campaignId = own("campaignId");
-  const ids = own("approvedDraftIds");
-  const editedIds = own("editedIds");
-  if (campaignId !== undefined && typeof campaignId !== "string") return false;
-  if (!Array.isArray(ids) || ids.length === 0 || !ids.every(isUsableListId)) return false;
-  if (!Array.isArray(editedIds) || !editedIds.every((id) => isUsableListId(id) && ids.includes(id))) return false;
-  return own("edited") === editedIds.length > 0;
+  return emailDraftsReviewAnswer(answer) !== null;
+}
+
+/** The keys of a list step's snapshot of several picks (`liftRendererApprovalNote`). */
+const LIST_PICKS_ANSWER_KEYS = ["type", "listIds", "listNames", "snapshotAt"] as const;
+/** The keys of a list step's snapshot of one pick (`liftRendererApprovalNote`). */
+const LIST_PICK_ANSWER_KEYS = ["type", "listId", "listName", "memberCount", "snapshotAt"] as const;
+
+/**
+ * The answer a list step sends, read exactly, or null: the snapshot its
+ * Continue lifts into the resume text (`liftRendererApprovalNote`), either of
+ * several picks `{ type: "list", listIds, listNames, snapshotAt }` (each id
+ * usable and once, a name for each) or of one
+ * `{ type: "list", listId, listName, memberCount, snapshotAt }` (a usable id),
+ * and no other key.
+ */
+export function listStepAnswer(answer: Record<string, unknown> | null | undefined): Record<string, unknown> | null {
+  if (!answer || answer.type !== "list") return null;
+  if (Object.hasOwn(answer, "listIds")) {
+    const exact = exactAnswer(answer, LIST_PICKS_ANSWER_KEYS);
+    if (exact === null) return null;
+    const { listIds, listNames, snapshotAt } = exact;
+    return areUniqueUsableIds(listIds) &&
+      listIds.length > 0 &&
+      Array.isArray(listNames) &&
+      listNames.length === listIds.length &&
+      listNames.every((n) => typeof n === "string") &&
+      typeof snapshotAt === "string"
+      ? exact
+      : null;
+  }
+  const exact = exactAnswer(answer, LIST_PICK_ANSWER_KEYS);
+  if (exact === null) return null;
+  const { listId, listName, memberCount, snapshotAt } = exact;
+  return isUsableListId(listId) &&
+    typeof listName === "string" &&
+    typeof memberCount === "number" &&
+    Number.isInteger(memberCount) &&
+    memberCount >= 0 &&
+    typeof snapshotAt === "string"
+    ? exact
+    : null;
+}
+
+/** The keys of the selection envelope a context selector emits; `resolutionMode` only when its slot has one. */
+const CONTEXT_SELECTION_ANSWER_KEYS = ["slotId", "resolutionMode", "selectedRefs"] as const;
+/** The keys of a context candidate (`ContextSelectorCandidate`), every one text. */
+const CONTEXT_CANDIDATE_KEYS: readonly string[] = [
+  "artifactId",
+  "representationRevisionId",
+  "semanticAssertionId",
+  "extension",
+  "sourceScope",
+  "ownerId",
+  "displayName",
+  "description",
+];
+const CONTEXT_REF_KEYS = ["artifactId", "representationRevisionId", "semanticAssertionId"] as const;
+
+/**
+ * The selection envelope a context selector emits (context-selector-
+ * renderer.tsx `emit`, or `withContextSelectorEnvelope`), read exactly, or
+ * null: `{ slotId, resolutionMode?, selectedRefs }` and no other key, with a
+ * usable slot id, a declared resolution mode, and each selected ref a
+ * candidate that names its artifact, revision and assertion as text. A ref
+ * carries the candidate the run handed the screen, so a key of a ref that is
+ * no candidate key is dropped (the run, not the person, wrote it, and
+ * /api/context-finalize reads only the three ids and replaces the ref by the
+ * trusted candidate); a candidate key that is not text refuses the answer.
+ */
+export function contextSelectionAnswer(
+  answer: Record<string, unknown> | null | undefined,
+): Record<string, unknown> | null {
+  const exact = exactAnswer(answer, CONTEXT_SELECTION_ANSWER_KEYS, ["slotId", "selectedRefs"]);
+  if (exact === null) return null;
+  const { slotId, resolutionMode, selectedRefs } = exact;
+  if (!isUsableListId(slotId) || !Array.isArray(selectedRefs)) return null;
+  if (resolutionMode !== undefined && resolutionMode !== "override" && resolutionMode !== "accumulate") return null;
+  const refs: Record<string, unknown>[] = [];
+  for (const ref of selectedRefs) {
+    if (ref === null || typeof ref !== "object" || Array.isArray(ref)) return null;
+    const own = ref as Record<string, unknown>;
+    const kept: Record<string, unknown> = {};
+    for (const k of Object.keys(own)) {
+      if (!CONTEXT_CANDIDATE_KEYS.includes(k)) continue;
+      if (typeof own[k] !== "string") return null;
+      setOwn(kept, k, own[k]);
+    }
+    if (!CONTEXT_REF_KEYS.every((k) => Object.hasOwn(kept, k))) return null;
+    refs.push(kept);
+  }
+  setOwn(exact, "selectedRefs", refs);
+  return exact;
 }
 
 /**
@@ -1192,6 +1337,30 @@ const SETUP_FORM_TRANSPORT_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * The fields a step's schema declares (its `properties`), each once, in order.
+ */
+export function setupFormDeclaredFields(stepSchema: Record<string, unknown> | null | undefined): string[] {
+  const properties = stepSchema?.properties;
+  return properties !== null && typeof properties === "object" && !Array.isArray(properties)
+    ? Object.keys(properties)
+    : [];
+}
+
+/**
+ * Whether `key` can be a value of a mid-run setup form's answer
+ * (`withSetupFormAnswer`): a field the step's schema declares, or, for a
+ * schema that declares none, any key but those a Continue adds. The server
+ * reads an answer with the same reading, so it refuses a key the form never
+ * sends.
+ */
+export function setupFormAnswerField(
+  stepSchema: Record<string, unknown> | null | undefined,
+): (key: string) => boolean {
+  const fields = setupFormDeclaredFields(stepSchema);
+  return (key) => (fields.length > 0 ? fields.includes(key) : !SETUP_FORM_TRANSPORT_KEYS.has(key));
+}
+
+/**
  * A MID-RUN GROUPED SETUP FORM IS ANSWERED WITH ITS VALUES (cinatra#3470). The
  * server resumes the step from `userResponse` alone (else the bare approval
  * marker), and a setup-form step reads its answer as the JSON object of the
@@ -1213,13 +1382,7 @@ export function withSetupFormAnswer(
 ): Record<string, unknown> {
   if (isSetupGateTaskId(gate.reviewTaskId)) return payload;
   if (!rendererReadsAsKind(gate.xRenderer, "wayflow-setup-form", ":setup-form")) return payload;
-  const properties = stepSchema?.properties;
-  const fields =
-    properties !== null && typeof properties === "object" && !Array.isArray(properties)
-      ? Object.keys(properties)
-      : [];
-  const isField = (key: string): boolean =>
-    fields.length > 0 ? fields.includes(key) : !SETUP_FORM_TRANSPORT_KEYS.has(key);
+  const isField = setupFormAnswerField(stepSchema);
   const answer: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(formValues)) {
     if (isField(key)) setOwn(answer, key, value);

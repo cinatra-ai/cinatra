@@ -3,7 +3,7 @@
  * cinatra#3470: a step declared with a "kind" screen of the recipients or the
  * drafts review is sent only the answer that screen stages (the server's check
  * is `isCampaignRecipientsReviewAnswer` / `isEmailDraftsReviewAnswer`, read in
- * `kindScreenAnswered`). This suite draws the host's own screens and reads
+ * `kindScreenAnswer`). This suite draws the host's own screens and reads
  * what they stage: that answer passes the server's check, and the host's
  * Continue is held until it is staged, so a Continue never sends the bare
  * approval marker the server refuses.
@@ -89,6 +89,29 @@ describe("the drafts review stages the answer the server sends (cinatra#3470)", 
     const staged = await stagedBy(EmailDraftsReviewRenderer as never, { drafts: DRAFTS });
     expect(sent(staged)).toEqual({ approvedDraftIds: ["d-1"], edited: false, editedIds: [] });
     expect(isEmailDraftsReviewAnswer(sent(staged))).toBe(true);
+  });
+});
+
+describe("a recipients or drafts review answer is read with exactly the keys its screen stages (cinatra#3470)", () => {
+  it("the recipients screen stages no removal, and an answer that adds one, or any other key, is refused", async () => {
+    const staged = await stagedBy(CampaignRecipientsReviewRenderer as never, {
+      recipients: RECIPIENTS,
+      campaignId: "camp-1",
+    });
+    const answer = sent(staged)!;
+    expect(Object.keys(answer).sort()).toEqual(["approved", "approvedAt", "campaignId"]);
+    // red-first-expect: isCampaignRecipientsReviewAnswer is not a function
+    expect(isCampaignRecipientsReviewAnswer({ ...answer, removedRecipients: [{ startupId: "acct-1" }] })).toBe(false);
+    expect(isCampaignRecipientsReviewAnswer({ ...answer, note: "x" })).toBe(false);
+  });
+
+  it("the drafts screen stages no draft text, and an answer that adds it, a removal or any other key, is refused", async () => {
+    const staged = await stagedBy(EmailDraftsReviewRenderer as never, { drafts: DRAFTS, campaignId: "camp-1" });
+    const answer = sent(staged)!;
+    // red-first-expect: isEmailDraftsReviewAnswer is not a function
+    expect(isEmailDraftsReviewAnswer({ ...answer, drafts: [{ id: "d-1", body: "Changed" }] })).toBe(false);
+    expect(isEmailDraftsReviewAnswer({ ...answer, removedRecipients: [] })).toBe(false);
+    expect(isEmailDraftsReviewAnswer({ ...answer, note: "x" })).toBe(false);
   });
 });
 

@@ -742,7 +742,12 @@ describe("an answer is sent only under the declared screen its step opened under
 
     it("agent_run_resume with a usable pick is sent for a list step", async () => {
       installKindScreen("list-picker");
-      const picked = JSON.stringify({ type: "list", listIds: ["list-1"], listNames: ["One"] });
+      const picked = JSON.stringify({
+        type: "list",
+        listIds: ["list-1"],
+        listNames: ["One"],
+        snapshotAt: "2026-01-01T00:00:00.000Z",
+      });
       // red-first-expect: expected undefined to deeply equal
       expect(await resumeStepScreenAnswer?.(RUN, template, picked)).toEqual({ send: picked });
     });
@@ -997,6 +1002,128 @@ describe("an answer is sent only under the declared screen its step opened under
         expect(resumedWith()).toBe(text);
         const { rememberAnsweredGateSubmission } = await import("@cinatra-ai/a2a");
         expect(rememberAnsweredGateSubmission).toHaveBeenCalledWith(RUN.id, expect.any(String), text);
+      });
+    });
+
+    describe("a kind screen's answer is read with exactly the keys its screen stages", () => {
+      const RECIPIENTS = { campaignId: "camp-1", approved: true, approvedAt: "2026-01-01T00:00:00.000Z" };
+      const DRAFTS = { campaignId: "camp-1", approvedDraftIds: ["d-1", "d-2"], edited: true, editedIds: ["d-2"] };
+      /** A removal naming a contact of the run, as the pack's own review stages it. */
+      const REMOVAL = { removedRecipients: [{ startupId: "acct-1", contactEmail: "ada@example.com" }] };
+      const continueWith = (staged: Record<string, unknown>) => ({
+        ...staged,
+        userResponse: JSON.stringify(staged),
+        approved: true,
+        approvedAt: "2026-01-01T00:00:01.000Z",
+      });
+
+      it.each([
+        ["campaign-recipients-review", "a removal", { ...RECIPIENTS, ...REMOVAL }],
+        ["campaign-recipients-review", "another key", { ...RECIPIENTS, note: "x" }],
+        ["email-drafts-review", "a removal", { ...DRAFTS, ...REMOVAL }],
+        ["email-drafts-review", "a draft's text", { ...DRAFTS, drafts: [{ id: "d-2", body: "Changed" }] }],
+      ])("an answer to a %s step that adds %s is refused, and nothing is sent", async (kind, _what, staged) => {
+        installKindScreen(kind);
+        // red-first-expect: expected 'undefined' to be 'string'
+        expect(typeof (await resumeStepScreenAnswer?.(RUN, template, JSON.stringify(staged)))?.refusal).toBe("string");
+        expect(await answer(continueWith(staged))).toContain("did not give");
+        expectRefusedAndGivenBack();
+      });
+
+      it("a removal added to a recipients review never reaches the persist seam; the screen's answer reaches it with no removal", async () => {
+        const { shapeRecipientsReviewResumeInput } = await import(
+          "@/app/api/agents/passthrough/recipients-review-seam"
+        );
+        installKindScreen("campaign-recipients-review");
+        // red-first-expect: expected 'sent' to contain 'did not give'
+        expect(await answer(continueWith({ ...RECIPIENTS, ...REMOVAL }))).toContain("did not give");
+        expect(sendTask).not.toHaveBeenCalled();
+        vi.clearAllMocks();
+        arrange();
+        expect(await answer(continueWith(RECIPIENTS))).toBe("sent");
+        // The text the agent was sent is what its apply step forwards: it names
+        // no removal, so the seam projects none (it refuses the payload).
+        expect(JSON.parse(resumedWith())).toEqual(RECIPIENTS);
+        expect(() => shapeRecipientsReviewResumeInput({ resumePayloadJson: resumedWith() })).toThrow(
+          /removedRecipients/,
+        );
+      });
+
+      it("a list step's snapshot is read exactly: the staged snapshot of each kind is sent, an added key is refused", async () => {
+        installKindScreen("list-picker");
+        const { liftRendererApprovalNote } = await import("../hitl-gate-submit");
+        const at = "2026-01-01T00:00:00.000Z";
+        // The lift every host's Continue applies to a list step (read here under an id of the kind).
+        const lift = (buffered: Record<string, unknown>) =>
+          liftRendererApprovalNote("@acme-test/lift-agent:list-picker", buffered, at)?.approvalNote ?? "";
+        const several = lift({ listIds: ["l-1", "l-2"], listNames: ["One", "Two"] });
+        const one = lift({ scope: "list", listId: "l-1", listName: "One", memberCount: 3 });
+        expect(JSON.parse(several)).toEqual({ type: "list", listIds: ["l-1", "l-2"], listNames: ["One", "Two"], snapshotAt: at });
+        expect(JSON.parse(one)).toEqual({ type: "list", listId: "l-1", listName: "One", memberCount: 3, snapshotAt: at });
+        for (const text of [several, one]) {
+          // red-first-expect: expected undefined to deeply equal
+          expect(await resumeStepScreenAnswer?.(RUN, template, text)).toEqual({ send: text });
+          for (const added of [REMOVAL, { note: "x" }]) {
+            const tampered = JSON.stringify({ ...JSON.parse(text), ...added });
+            expect(typeof (await resumeStepScreenAnswer?.(RUN, template, tampered))?.refusal).toBe("string");
+          }
+        }
+      });
+
+      it("a context selection is read exactly: an added key is refused, and a ref's own extra key is not sent", async () => {
+        installKindScreen("context-selector");
+        const emitted = {
+          slotId: "brief",
+          resolutionMode: "override",
+          selectedRefs: [
+            {
+              artifactId: "a-1",
+              representationRevisionId: "r-1",
+              semanticAssertionId: "s-1",
+              extension: "@acme-test/brief",
+              sourceScope: "user",
+              ownerId: "u-1",
+              displayName: "Brief",
+            },
+          ],
+        };
+        const text = JSON.stringify(emitted);
+        // red-first-expect: expected undefined to deeply equal
+        expect(await resumeStepScreenAnswer?.(RUN, template, text)).toEqual({ send: text });
+        for (const added of [REMOVAL, { note: "x" }]) {
+          const tampered = JSON.stringify({ ...emitted, ...added });
+          expect(typeof (await resumeStepScreenAnswer?.(RUN, template, tampered))?.refusal).toBe("string");
+        }
+        const withRefKey = {
+          ...emitted,
+          selectedRefs: [{ ...emitted.selectedRefs[0], removedRecipients: ["acct-1"] }],
+        };
+        expect(await resumeStepScreenAnswer?.(RUN, template, JSON.stringify(withRefKey))).toEqual({ send: text });
+      });
+
+      it("a grouped setup form refuses a key its schema does not declare as a field", async () => {
+        installKindScreen("wayflow-setup-form", SETUP_SCHEMA);
+        for (const added of [REMOVAL, { extra: "x" }]) {
+          const text = JSON.stringify({ senderName: "Ada", ...added });
+          // red-first-expect: expected 'undefined' to be 'string'
+          expect(typeof (await resumeStepScreenAnswer?.(RUN, template, text))?.refusal).toBe("string");
+        }
+      });
+
+      it("a strict grouped setup form answered with a file resumes, with the file; an unknown field is still refused", async () => {
+        const STRICT_SCHEMA = { ...SETUP_SCHEMA, additionalProperties: false };
+        installKindScreen("wayflow-setup-form", STRICT_SCHEMA);
+        const filled = withFile(JSON.stringify({ senderName: "Ada" }));
+        // red-first-expect: expected undefined to deeply equal
+        expect(await resumeStepScreenAnswer?.(RUN, template, filled)).toEqual({ send: filled });
+        expect(await answer({ senderName: "Ada", approved: true, userResponse: filled })).toBe("sent");
+        expect(resumedWith()).toBe(filled);
+        vi.clearAllMocks();
+        arrange();
+        const extra = withFile(JSON.stringify({ senderName: "Ada", extra: "x" }));
+        expect(typeof (await resumeStepScreenAnswer?.(RUN, template, extra))?.refusal).toBe("string");
+        expect(await answer({ senderName: "Ada", approved: true, userResponse: extra })).toContain("did not give");
+        expectRefusedAndGivenBack();
       });
     });
 
