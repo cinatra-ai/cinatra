@@ -482,6 +482,18 @@ export async function POST(req: Request): Promise<Response> {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 400 });
   }
+  // cinatra#3089: a list call files one artifact per member, so it has no
+  // single id to answer under `result_id_field`. A step that names one expects
+  // ONE id; it is refused here, before anything is filed, never answered with a
+  // null or the first member's id. A list answers `artifacts` and `reviewTargets`.
+  if (tool === "artifact_materialize" && input.members !== undefined && body.result_id_field !== undefined) {
+    return NextResponse.json({
+      error:
+        "artifact_materialize: a list call files one artifact per member and has no single id; " +
+        "remove result_id_field and read artifacts (or reviewTargets) from the answer",
+      code: "materialize_list_result_id_field",
+    }, { status: 400 });
+  }
 
   // Resolve actor from the agent_run row — same authority the originating
   // run had. This is critical for tools that authorize on run ownership
@@ -1000,10 +1012,13 @@ export async function POST(req: Request): Promise<Response> {
               : {})
           : input;
       const savedObjectId = tool === "objects_save" ? resultObj.objectId : undefined;
-      const shaped: Record<string, unknown> = {
-        ...echoFields,
-        [idField]: resultObj.id ?? resultObj[idField] ?? savedObjectId ?? null,
-      };
+      // cinatra#3089: a filed list keeps its whole answer beside the echo — the
+      // artifacts and the review targets the next review step reads — and gets
+      // no id field (a list has no single id; a named one is refused above).
+      const filedList = tool === "artifact_materialize" && input.members !== undefined;
+      const shaped: Record<string, unknown> = filedList
+        ? { ...echoFields, artifacts: resultObj.artifacts, reviewTargets: resultObj.reviewTargets }
+        : { ...echoFields, [idField]: resultObj.id ?? resultObj[idField] ?? savedObjectId ?? null };
       // THE FILED REVIEW SET RIDES OUT ON THE ECHO, for every extension alike:
       // a declared module that filed review targets gets them back at the top
       // level under the dispatch's reserved key, as JSON TEXT, because a marked

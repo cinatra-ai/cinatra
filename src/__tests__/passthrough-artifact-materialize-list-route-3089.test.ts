@@ -250,6 +250,58 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
     expect(h.materializeToolArtifact).not.toHaveBeenCalled();
   });
 
+  // red-first-expect: expected 400 to be 200
+  it("answers the artifacts and the review targets beside the echoed inputs when the call asks for its inputs back", async () => {
+    const res = await POST(post({ ...listBody(), result_input_passthrough: true }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const artifacts = [1, 2, 3].map((i) => ({ artifactId: `art-${i}`, representationRevisionId: `rep-${i}` }));
+    expect(h.materializeToolArtifact).toHaveBeenCalledTimes(3);
+    expect(body.artifacts).toEqual(artifacts);
+    expect(body.reviewTargets).toBe(JSON.stringify(artifacts));
+    // The echoed inputs, as a single filing echoes them.
+    expect(body).toMatchObject({ extension: EXT, declaredMime: "text/markdown", nodeId: NODE });
+    // A list has no single id: no id field, and never a null one.
+    expect(body).not.toHaveProperty("id");
+  });
+
+  // red-first-expect: expected { Object (error) } to deeply equal
+  it("refuses a list call that names one result id field before anything is filed", async () => {
+    const res = await POST(
+      post({ ...listBody(), result_input_passthrough: true, result_id_field: "artifactId" }),
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error:
+        "artifact_materialize: a list call files one artifact per member and has no single id; " +
+        "remove result_id_field and read artifacts (or reviewTargets) from the answer",
+      code: "materialize_list_result_id_field",
+    });
+    expect(h.materializeToolArtifact).not.toHaveBeenCalled();
+  });
+
+  it("keeps the single call with its inputs and its id field echoed as it was", async () => {
+    const res = await POST(
+      post({
+        tool: "artifact_materialize",
+        agent_run_id: "run-1",
+        input: { extension: EXT, content: "# Hi", declaredMime: "text/markdown", title: "T", node_id: NODE },
+        result_input_passthrough: true,
+        result_id_field: "artifactId",
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      extension: EXT,
+      content: "# Hi",
+      declaredMime: "text/markdown",
+      title: "T",
+      nodeId: NODE,
+      artifactId: "art-1",
+    });
+    expect(h.materializeToolArtifact).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the single call as it was", async () => {
     const res = await POST(
       post({
