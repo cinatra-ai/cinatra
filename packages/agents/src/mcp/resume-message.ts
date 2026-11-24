@@ -11,7 +11,12 @@
 // the approval note delivered to WayFlow must embed it inside the JSON payload.
 //
 // Payload extraction: the MCP input has no structured `valuesObj`, so on a parse
-// failure (or a JSON value that is no object) submittedValues stays null.
+// failure (or a JSON value that is no object) submittedValues stays null. The
+// values are read as the UI approve reads them (`readWayflowSubmittedValues`,
+// cinatra#3470): an answer sent inside the attachment envelope is recorded as
+// that inner answer (its files under `attachments`), never as the envelope.
+import { readWayflowSubmittedValues } from "../hitl-gate-submit";
+
 export function resumeMessageFromInput(
   userResponse: unknown,
   approvalNote: unknown,
@@ -25,16 +30,9 @@ export function resumeMessageFromInput(
   } else {
     resumeText = "[Approved by operator]";
   }
-  let submittedValues: Record<string, unknown> | null = null;
-  if (typeof userResponse === "string" && userResponse.trim().length > 0) {
-    try {
-      const parsed = JSON.parse(userResponse);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        submittedValues = parsed as Record<string, unknown>;
-      }
-    } catch {
-      // No structured fallback in MCP path — leave null.
-    }
-  }
+  const submittedValues =
+    typeof userResponse === "string" && userResponse.trim().length > 0
+      ? readWayflowSubmittedValues({ userResponse })
+      : null;
   return { resumeText, trimmedNote, submittedValues };
 }

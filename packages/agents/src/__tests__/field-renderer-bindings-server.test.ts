@@ -150,10 +150,8 @@ describe("collectInstalledFieldRendererBindings", () => {
     expect(collectInstalledFieldRendererBindings()).toEqual([]);
   });
 
-  it("first-declarer-wins among DIVERGENT runtime duplicates is ALPHABETICAL (sorted traversal), never filesystem-order", () => {
+  it("an id named for a package neither declarer is, is registered by neither (cinatra#3470)", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    // Write the alphabetically-LATER package first so insertion order would
-    // pick the wrong winner if traversal were unsorted.
     writePkg("s", "zz-agent", {
       name: "@s/zz-agent",
       cinatra: { fieldRenderers: [{ id: "@s/shared:gate", kind: "cta", priority: 10 }] },
@@ -163,13 +161,9 @@ describe("collectInstalledFieldRendererBindings", () => {
       cinatra: { fieldRenderers: [{ id: "@s/shared:gate", kind: "cta", priority: 90 }] },
     });
     const entries = collectInstalledFieldRendererBindings();
-    const hit = entries.filter((e) => e.id === "@s/shared:gate");
-    expect(hit).toHaveLength(1);
-    expect(hit[0].declaredBy).toBe("@s/aa-agent");
-    expect(hit[0].priority).toBe(90);
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("conflicting declarations"),
-    );
+    // red-first-expect: expected [ { id: '@s/shared:gate', …(3) } ] to have a length of +0 but got 1
+    expect(entries.filter((e) => e.id === "@s/shared:gate")).toHaveLength(0);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("only the package @s/shared may declare"));
     warn.mockRestore();
   });
 
@@ -182,6 +176,91 @@ describe("collectInstalledFieldRendererBindings", () => {
     expect(collectInstalledFieldRendererBindings()).toEqual([]); // cached
     __clearInstalledFieldRendererBindingsCache();
     expect(collectInstalledFieldRendererBindings()).toHaveLength(1);
+  });
+});
+
+describe("a runtime-only id is declared only by the package it names (cinatra#3470)", () => {
+  const CARD_SCREEN = {
+    layout: "card",
+    title: "Fixture title",
+    sections: [{ type: "field", key: "answer", label: "Fixture answer" }],
+  };
+  const VICTIM_ID = "@s/victim-agent:confirm";
+  const victimDeclares = () =>
+    writePkg("s", "victim-agent", {
+      name: "@s/victim-agent",
+      cinatra: {
+        fieldRenderers: [
+          { id: VICTIM_ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: CARD_SCREEN },
+        ],
+      },
+    });
+  const pin = (id: string): unknown =>
+    (installedBindings as { currentDeclaredScreenPin?: (x: string) => unknown }).currentDeclaredScreenPin?.(id);
+
+  it("an earlier package declaring the id with no screen neither suppresses nor replaces the owner's screen", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    writePkg("s", "aa-intruder", {
+      name: "@s/aa-intruder",
+      cinatra: { fieldRenderers: [{ id: VICTIM_ID, kind: "linkedin-draft-review", priority: 99, midRunHitl: true }] },
+    });
+    victimDeclares();
+    const hit = getMergedFieldRendererBindings().filter((b) => b.id === VICTIM_ID);
+    expect(hit).toHaveLength(1);
+    // red-first-expect: expected '@s/aa-intruder' to be '@s/victim-agent'
+    expect(hit[0].declaredBy).toBe("@s/victim-agent");
+    expect(hit[0].screen).toMatchObject({ layout: "card", title: "Fixture title" });
+    expect(readOpenedUnderCurrent(VICTIM_ID)).toMatchObject({ layout: "card", title: "Fixture title" });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("@s/aa-intruder"));
+    warn.mockRestore();
+  });
+
+  it("an earlier package declaring the id with another screen does not replace the owner's screen", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    writePkg("s", "aa-intruder", {
+      name: "@s/aa-intruder",
+      cinatra: {
+        fieldRenderers: [
+          {
+            id: VICTIM_ID,
+            kind: "linkedin-draft-review",
+            priority: 99,
+            midRunHitl: true,
+            screen: { ...CARD_SCREEN, title: "Fixture other title" },
+          },
+        ],
+      },
+    });
+    victimDeclares();
+    const hit = getMergedFieldRendererBindings().filter((b) => b.id === VICTIM_ID);
+    // red-first-expect: expected undefined to be 'Fixture title'
+    expect((hit[0]?.screen as { title?: string } | undefined)?.title).toBe("Fixture title");
+  });
+
+  it("a package naming itself the owner from another folder is not the owner", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    writePkg("s", "aa-intruder", {
+      name: "@s/victim-agent",
+      cinatra: { fieldRenderers: [{ id: VICTIM_ID, kind: "linkedin-draft-review", priority: 99, midRunHitl: true }] },
+    });
+    // red-first-expect: expected [ { …(5) } ] to have a length of +0 but got 1
+    expect(collectInstalledFieldRendererBindings().filter((b) => b.id === VICTIM_ID)).toHaveLength(0);
+  });
+
+  it("the owner declaring its id twice, divergently, leaves the id unknown, never first-wins", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    writePkg("s", "victim-agent", {
+      name: "@s/victim-agent",
+      cinatra: {
+        fieldRenderers: [
+          { id: VICTIM_ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true },
+          { id: VICTIM_ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: CARD_SCREEN },
+        ],
+      },
+    });
+    // red-first-expect: expected [ { …(5) } ] to have a length of +0 but got 1
+    expect(getMergedFieldRendererBindings().filter((b) => b.id === VICTIM_ID)).toHaveLength(0);
+    expect(pin(VICTIM_ID)).toBeNull();
   });
 });
 

@@ -102,12 +102,31 @@ function ownsBundledId(
   return mountedAs === generated.declaredBy && packageName === mountedAs;
 }
 
-function warnForeignDeclaration(id: string, packageName: string, mountedAs: string, owner: string): void {
+/**
+ * May the package mounted at `<scope>/<dir>` that names itself `packageName`
+ * declare the RUNTIME-ONLY id `id` (one the generated map does not carry,
+ * cinatra#3470)? Only the package the id names. A renderer id has the form
+ * `@scope/package:local-id` (`BINDING_ID_RE` of the shared validator), and its
+ * part before the colon is the package that owns it. The owner is read from
+ * the same mount-folder identity as a bundled id's owner (`ownsBundledId`):
+ * the folder the installer projected the package to, with the manifest's own
+ * name agreeing with it. So no installed package can declare, replace or
+ * suppress another package's runtime-only id, and since one mount folder holds
+ * one package, no two installed packages can both own the same id.
+ */
+function ownsRuntimeId(id: string, mountedAs: string, packageName: string): boolean {
+  const colon = id.indexOf(":");
+  return colon > 0 && id.slice(0, colon) === mountedAs && packageName === mountedAs;
+}
+
+function warnForeignDeclaration(id: string, packageName: string, mountedAs: string, owner: string, bundled: boolean): void {
   if (warnedForeignDeclaration.has(id)) return;
   warnedForeignDeclaration.add(id);
   console.warn(
     `[field-renderer-bindings] installed package ${packageName} (mounted as ${mountedAs}) declares ${id}, ` +
-      `which the bundled package ${owner} owns: the declaration is refused and the generated binding wins`,
+      (bundled
+        ? `which the bundled package ${owner} owns: the declaration is refused and the generated binding wins`
+        : `which only the package ${owner} may declare: the declaration is refused`),
   );
 }
 
@@ -187,9 +206,10 @@ function collectInstalled(opts?: { fresh?: boolean }): InstalledScan {
       unread.add("*");
       return;
     }
-    // SORTED traversal — first-declarer-wins among runtime duplicates must be
-    // deterministic (alphabetical), never filesystem-order dependent (the
-    // converged "generated-then-alphabetical" merge order).
+    // SORTED traversal: the scan is deterministic (alphabetical), never
+    // filesystem-order dependent. Each id is declared by its one owner only
+    // (`ownsRuntimeId`, `ownsBundledId`), so no declaration wins over another
+    // package's by its place in that order.
     let scopes: string[];
     try {
       scopes = readdirSync(installDir).sort();
@@ -256,17 +276,47 @@ function collectInstalled(opts?: { fresh?: boolean }): InstalledScan {
         for (const err of errors) {
           console.warn(`[field-renderer-bindings] skipped invalid declaration: ${err}`);
         }
-        // A bundled id is declared at runtime only by the package that owns
-        // it (`ownsBundledId`): any other package's declaration of it, or
-        // refusal of its screen, is refused and never reaches the merge.
+        // An id is declared at runtime only by the package that owns it: a
+        // bundled id by its generated declarer (`ownsBundledId`), any other
+        // id by the package it names (`ownsRuntimeId`). Any other package's
+        // declaration of it, or refusal of its screen, is refused and never
+        // reaches the merge.
         const owned = (id: string): boolean => {
           const generated = generatedById.get(id);
-          if (generated === undefined || ownsBundledId(generated, mountedAs, packageName)) return true;
-          warnForeignDeclaration(id, packageName, mountedAs, generated.declaredBy);
+          if (generated !== undefined) {
+            if (ownsBundledId(generated, mountedAs, packageName)) return true;
+            warnForeignDeclaration(id, packageName, mountedAs, generated.declaredBy, true);
+            return false;
+          }
+          if (ownsRuntimeId(id, mountedAs, packageName)) return true;
+          const colon = id.indexOf(":");
+          warnForeignDeclaration(id, packageName, mountedAs, colon > 0 ? id.slice(0, colon) : id, false);
           return false;
         };
-        all.push(...entries.filter((e) => owned(e.id)));
-        for (const id of refusedScreenIds) if (owned(id)) refused.add(id);
+        const ownEntries = entries.filter((e) => owned(e.id));
+        // The owner declaring one id twice, divergently, does not say which
+        // declaration is the id's: neither is merged, and the package is not
+        // a clean read, so the id reads as could not be loaded, never as the
+        // first of the two.
+        const byId = new Map<string, CollectedBinding[]>();
+        for (const e of ownEntries) byId.set(e.id, [...(byId.get(e.id) ?? []), e]);
+        const contested = new Set<string>();
+        for (const [id, list] of byId) {
+          const forms = new Set(list.map((e) => comparableFieldRendererBinding(e)));
+          // A declaration of the id whose screen was refused beside one that
+          // was kept diverges too.
+          if (forms.size > 1 || refusedScreenIds.includes(id)) contested.add(id);
+        }
+        if (contested.size > 0) {
+          console.warn(
+            `[field-renderer-bindings] installed package ${packageName} declares ${[...contested].sort().join(", ")} ` +
+              `more than once, divergently: neither declaration is used`,
+          );
+          complete = false;
+          unread.add(mountedAs);
+        }
+        all.push(...ownEntries.filter((e) => !contested.has(e.id)));
+        for (const id of refusedScreenIds) if (owned(id) && !contested.has(id)) refused.add(id);
       }
     }
   };

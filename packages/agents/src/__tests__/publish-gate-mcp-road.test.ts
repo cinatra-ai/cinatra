@@ -200,8 +200,11 @@ const declared = vi.hoisted(() => ({
   card: null as null | Record<string, unknown>,
   stepDeclares: null as null | string,
 }));
+// The durable prompt row the resume records (its submitted values).
+const promptCapture = vi.hoisted(() => vi.fn(async (_input: unknown) => "prompt-fixture"));
 vi.mock("../agent-run-hitl-prompts", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
+  captureHitlPromptForContinue: promptCapture,
   readDurableHitlGateForContinue: vi.fn(async (runId: string, reviewTaskId: string) => {
     if (declared.gateRead === "throws") throw new Error("fixture gate store down");
     return declared.gate === null
@@ -639,6 +642,22 @@ describe("agent_run_resume on a step that declares a card", () => {
     // red-first-expect: to contain 'did not give'
     expect(String(answer.error)).toContain("did not give");
     expect(sendTaskSpy).not.toHaveBeenCalled();
+  });
+
+  it("an answer sent with a file is recorded as the card's answer with its files, never as the envelope", async () => {
+    const file = {
+      artifactId: "artifact-fixture",
+      representationRevisionId: "revision-fixture",
+      digest: "sha256:fixture",
+      mime: "text/plain",
+      originKind: "upload",
+    };
+    await resume({ userResponse: JSON.stringify({ text: JSON.stringify({ post: true }), attachments: [file] }) });
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+    expect(promptCapture).toHaveBeenCalledTimes(1);
+    const recorded = (promptCapture.mock.calls[0]?.[0] as { submittedValues?: unknown } | undefined)?.submittedValues;
+    // red-first-expect: expected { text: '{"post":true}', …(1) } to deeply equal { post: true, …(1) }
+    expect(recorded).toEqual({ post: true, attachments: [file] });
   });
 
   it("the agent is sent the card's answer as its one writer builds it, never the caller's text", async () => {

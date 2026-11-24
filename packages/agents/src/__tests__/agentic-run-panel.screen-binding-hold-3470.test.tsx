@@ -263,7 +263,8 @@ describe("AgenticRunPanel — a screen whose binding has not loaded holds its Co
     gate.xRenderer = "@cinatra-test/refused-agent:output";
     installed.dir = mkdtempSync(join(tmpdir(), "hold-3470-"));
     try {
-      const pkgDir = join(installed.dir, "@cinatra-test", "refused-agent");
+      // The installer's mount layout: `<mount>/<vendor>/<slug>`.
+      const pkgDir = join(installed.dir, "cinatra-test", "refused-agent");
       mkdirSync(pkgDir, { recursive: true });
       writeFileSync(
         join(pkgDir, "package.json"),
