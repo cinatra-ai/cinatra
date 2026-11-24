@@ -154,7 +154,7 @@ import { getFieldRendererContextForAgentBuilderAction } from "./server-actions";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
   applyRendererApprovalNote,
-  gateAwaitsRendererValue,
+  continueAwaitsRawRendererValue,
   hasUsableListPick,
   isMidRunListStepGate,
   liftRendererApprovalNote,
@@ -1001,9 +1001,13 @@ export function AgentHitlScreenContinue({
   held = false,
   holdReason = null,
   awaitsPick,
+  entry = null,
   onContinue,
 }: {
   gate: AgentHitlScreenGate;
+  /** The registry entry that draws the gate: a declared card is held by its
+   *  own readiness alone (`held`), never by the raw schema's `x-required`. */
+  entry?: { declaredScreen?: unknown } | null;
   buffered: Record<string, unknown>;
   submitting: boolean;
   /** Why the Continue is held while the gate's screen binding is missing. */
@@ -1031,7 +1035,8 @@ export function AgentHitlScreenContinue({
       // A gate that carries a presentation hint is drawn through the generic
       // dispatch renderer, which writes nothing, so it is out of the rule.
       awaitingRendererValue={
-        presentationHintOf(gate) === null && gateAwaitsRendererValue(gate.inputSchema, buffered)
+        presentationHintOf(gate) === null &&
+        continueAwaitsRawRendererValue(entry, gate.inputSchema, buffered)
       }
       onPress={async () => {
         // THE LIST STEP (cinatra#3562, cinatra#3470), as on the run panel: a
@@ -1730,6 +1735,7 @@ export function AgentHitlScreenCard({
             gate={gate}
             buffered={activeBuffered}
             submitting={submitting}
+            entry={resolveHitlGateEntry(runId, gate)}
             held={continueHeldByRenderer(
               resolveHitlGateEntry(runId, gate),
               gate.currentValues,

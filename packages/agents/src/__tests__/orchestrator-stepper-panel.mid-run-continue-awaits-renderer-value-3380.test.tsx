@@ -466,13 +466,13 @@ describe("OrchestratorStepperPanel — a mid-run Continue waits for the renderer
 describe("OrchestratorStepperPanel — a declared card's Continue sends exactly the staged answer (cinatra#3470)", () => {
   const DECLARED_ID = "@cinatra-test/declared-agent:confirm";
 
-  async function mountDeclared(screen: Record<string, unknown>) {
+  async function mountDeclared(screen: Record<string, unknown>, schema: Record<string, unknown> = { type: "object" }) {
     const { registerFieldRendererBindings } = await import("../register-default-renderers");
     registerFieldRendererBindings([
       { id: DECLARED_ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen },
     ]);
     INTERRUPT = {
-      schema: { type: "object" },
+      schema,
       xRenderer: DECLARED_ID,
       values: { itemId: "item-1" },
       reviewTaskId: REVIEW_TASK_ID,
@@ -526,5 +526,26 @@ describe("OrchestratorStepperPanel — a declared card's Continue sends exactly 
     const payload = await sent();
     expect(payload.userResponse).toBe(JSON.stringify({ itemId: "item-1", answer: "revise this" }));
     expect(payload.answer).toBe("revise this");
+  });
+
+  it("a card is ready by its own answer alone, whatever its gate schema requires", async () => {
+    // The gate schema requires a value the card never stages: only the card's
+    // readiness holds its Continue.
+    await mountDeclared(
+      {
+        layout: "card",
+        title: "Fixture schema question",
+        sections: [{ type: "field", key: "answer", label: "Fixture answer" }],
+        carry: ["itemId"],
+      },
+      {
+        type: "object",
+        properties: { selectedIdeaJson: { type: "string", "x-required": true } },
+      },
+    );
+    await waitFor(() => expect(document.querySelector("input")).not.toBeNull());
+    fireEvent.change(document.querySelector("input")!, { target: { value: "revise this" } });
+    const payload = await sent();
+    expect(payload.userResponse).toBe(JSON.stringify({ itemId: "item-1", answer: "revise this" }));
   });
 });

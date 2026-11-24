@@ -2162,17 +2162,19 @@ async function handleAgentBuilderRunResume(
         fetchImpl: createWayflowFetch(),
       });
       // The resume message and its submitted values (precedence: ./resume-message, as the UI approve).
-      const { resumeText, trimmedNote, submittedValues } = resumeMessageFromInput(userResponse, approvalNote);
-      // cinatra#3470: a step that declares a screen is answered here only as the
-      // approval core answers it (`stepScreenRefusal`): under the screen it opened
-      // under, and for a declared card only with the card's whole, ready answer.
-      // A step whose gate row cannot be read keeps this road's earlier behavior.
-      const { readDurableHitlGateForContinue } = await import("../agent-run-hitl-prompts");
-      const stepGate = await readDurableHitlGateForContinue(run.id, `wayflow-${run.a2aTaskId}`).catch(() => null);
-      if (stepGate !== null) {
-        const { stepScreenRefusal } = await import("../review-task-actions");
-        const refusal = await stepScreenRefusal(stepGate, { answersDeclaredCard: false, resumeText });
-        if (refusal !== null) return { error: refusal };
+      const resumeMessage = resumeMessageFromInput(userResponse, approvalNote);
+      const { trimmedNote } = resumeMessage;
+      let { resumeText, submittedValues } = resumeMessage;
+      // cinatra#3470: a step is answered here only as the approval core answers it:
+      // under the screen it opened under, and a declared card only with its whole,
+      // ready answer, sent as the card's one writer rebuilds it. It fails closed
+      // (`resumeStepScreenAnswer`): a refusal is answered before the claim, so the
+      // pause stays as it was.
+      const { resumeStepScreenAnswer } = await import("../review-task-actions");
+      const screenAnswer = await resumeStepScreenAnswer({ id: run.id, a2aTaskId: run.a2aTaskId }, template, resumeText);
+      if ("refusal" in screenAnswer) return { error: screenAnswer.refusal };
+      if (screenAnswer.send !== resumeText) {
+        ({ resumeText, submittedValues } = resumeMessageFromInput(screenAnswer.send, approvalNote));
       }
 
       // cinatra#4245: claim, token and message, fence, prompt, send, answer, settle.

@@ -102,6 +102,7 @@ import {
   buildChatGateSubmitPayload,
   createGateValidityStore,
   gateAwaitsRendererValue,
+  continueAwaitsRawRendererValue,
   gateCarriesPresentationHint,
   hasUsableListPick,
   hitlRendererFieldName,
@@ -3631,7 +3632,8 @@ export function AgenticRunPanel({
                     {isMidRunHitl &&
                       !isGroupedSetup &&
                       renderApprovalActionsRow({
-                        awaitingRendererValue: gateAwaitsRendererValue(
+                        awaitingRendererValue: continueAwaitsRawRendererValue(
+                          hitlRendererEntry.entry,
                           hitlRendererEntry.fieldSchema,
                           bufferedHitlValue,
                         ),

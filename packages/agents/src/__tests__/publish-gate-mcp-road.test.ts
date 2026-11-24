@@ -191,19 +191,23 @@ vi.mock("../publish-decision-store", async (orig) => ({
   readLatestDecisionForRun: decisions.readLatestDecisionForRun,
 }));
 
-// cinatra#3470: the step's gate row and its declared card. No row by default: a
-// step whose gate row is not found keeps this road's earlier behavior.
+// cinatra#3470: the step's gate row and its declared card. No row by default:
+// the resume then reads the agent's own renderer-gate steps, which declare no
+// screen unless a case says so (`declared.stepDeclares`).
 const declared = vi.hoisted(() => ({
   gate: null as null | { xRenderer: string; inputSchema: Record<string, unknown>; values: Record<string, unknown> },
+  gateRead: "row" as "row" | "throws",
   card: null as null | Record<string, unknown>,
+  stepDeclares: null as null | string,
 }));
 vi.mock("../agent-run-hitl-prompts", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
-  readDurableHitlGateForContinue: vi.fn(async (runId: string, reviewTaskId: string) =>
-    declared.gate === null
+  readDurableHitlGateForContinue: vi.fn(async (runId: string, reviewTaskId: string) => {
+    if (declared.gateRead === "throws") throw new Error("fixture gate store down");
+    return declared.gate === null
       ? null
-      : { runId, reviewTaskId, materializedAt: "2026-01-01T00:00:00.000Z", ...declared.gate },
-  ),
+      : { runId, reviewTaskId, materializedAt: "2026-01-01T00:00:00.000Z", ...declared.gate };
+  }),
 }));
 vi.mock("../field-renderer-bindings.server", async (orig) => {
   const actual = await orig<Record<string, (...a: unknown[]) => unknown>>();
@@ -213,6 +217,10 @@ vi.mock("../field-renderer-bindings.server", async (orig) => {
       declared.card !== null ? "matches" : actual.stepDeclarationStanding!(...a),
     readDeclaredHitlCard: (...a: unknown[]) =>
       declared.card !== null ? declared.card : actual.readDeclaredHitlCard!(...a),
+    currentDeclaredScreenPin: (...a: unknown[]) =>
+      declared.stepDeclares !== null && a[0] === declared.stepDeclares
+        ? "sha256:fixture-declared-card"
+        : actual.currentDeclaredScreenPin!(...a),
   };
 });
 
@@ -541,7 +549,9 @@ describe("agent_run_resume on a step that declares a card", () => {
 
   afterEach(() => {
     declared.gate = null;
+    declared.gateRead = "row";
     declared.card = null;
+    declared.stepDeclares = null;
   });
 
   it("a generic approval is refused and nothing is sent", async () => {
@@ -568,10 +578,76 @@ describe("agent_run_resume on a step that declares a card", () => {
   });
 
   it("a step whose renderer declares no screen is resumed as before", async () => {
+    // The gate row is present; its renderer is read through the production
+    // lookup, and it declares no screen.
     declared.card = null;
-    declared.gate = null;
+    declared.gate = { xRenderer: "@acme-test/plain-agent:confirm", inputSchema: { type: "object" }, values: {} };
     const answer = (await resume({ approvalNote: "go on" })) as { error?: string };
     expect(String(answer.error)).not.toContain("did not give");
+    expect(String(answer.error)).not.toContain("could not be loaded");
     expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("a gate row that cannot be read refuses the resume before the claim: nothing is sent", async () => {
+    declared.gateRead = "throws";
+    const answer = (await resume({ approvalNote: "go on" })) as { error?: string };
+    // red-first-expect: to contain 'could not be loaded'
+    expect(String(answer.error)).toContain("could not be loaded");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(pauseClaimFake.claimPause).not.toHaveBeenCalled();
+  });
+
+  it("an absent gate row of an agent whose renderer-gate step declares a card refuses the resume", async () => {
+    declared.gate = null;
+    declared.card = null;
+    declared.stepDeclares = "@acme-test/card-agent:confirm";
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tmpl-1",
+      packageName: "@cinatra-ai/web-research-agent",
+      sourceType: "internal",
+      agentAuthPolicy: null,
+      approvalPolicy: { steps: [{ stepNumber: 1, xRenderer: "@acme-test/card-agent:confirm" }] },
+    });
+    const answer = (await resume({ userResponse: JSON.stringify({ post: true }) })) as { error?: string };
+    // red-first-expect: to contain 'could not be loaded'
+    expect(String(answer.error)).toContain("could not be loaded");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(pauseClaimFake.claimPause).not.toHaveBeenCalled();
+  });
+
+  it("an absent gate row of an agent whose renderer-gate steps declare no screen is resumed as before", async () => {
+    declared.gate = null;
+    declared.card = null;
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tmpl-1",
+      packageName: "@cinatra-ai/web-research-agent",
+      sourceType: "internal",
+      agentAuthPolicy: null,
+      approvalPolicy: { steps: [{ stepNumber: 1, xRenderer: "@acme-test/plain-agent:confirm" }] },
+    });
+    const answer = (await resume({ approvalNote: "go on" })) as { error?: string };
+    expect(String(answer.error)).not.toContain("could not be loaded");
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("a carried value that is not the gate's own is refused", async () => {
+    declared.card = { ...declared.card, carry: ["itemId"] };
+    declared.gate = { ...declared.gate!, values: { itemId: "item-A" } };
+    const answer = (await resume({ userResponse: JSON.stringify({ itemId: "item-B", post: true }) })) as {
+      error?: string;
+    };
+    // red-first-expect: expected 'undefined' to contain 'did not give'
+    expect(String(answer.error)).toContain("did not give");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+  });
+
+  it("the agent is sent the card's answer as its one writer builds it, never the caller's text", async () => {
+    declared.card = { ...declared.card, carry: ["itemId"] };
+    declared.gate = { ...declared.gate!, values: { itemId: "item-A" } };
+    await resume({ userResponse: JSON.stringify({ post: true, itemId: "item-A" }) });
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+    const sent = sendTaskSpy.mock.calls[0]?.[0] as { message?: { parts?: Array<{ text?: string }> } } | undefined;
+    // red-first-expect: expected '{"post":true,"itemId":"item-A"}' to be '{"itemId":"item-A","post":true}'
+    expect(sent?.message?.parts?.[0]?.text).toBe(JSON.stringify({ itemId: "item-A", post: true }));
   });
 });

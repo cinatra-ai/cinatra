@@ -1401,6 +1401,24 @@ export function gateAwaitsRendererValue(
 }
 
 /**
+ * The raw-schema hold of a host's mid-run Continue (cinatra#3380), for the
+ * entry that draws the gate. A DECLARED CARD HAS ONE READINESS PREDICATE
+ * (cinatra#3470): its own (`continueHeldByRenderer`, which reads
+ * `declaredHitlScreenReady`). The card stages its declared answer, never the
+ * gate schema's `x-required` keys, so that hold never applies to it: it would
+ * keep the Continue unavailable after the card's answer is ready. Every other
+ * entry, and no entry at all, is held by `gateAwaitsRendererValue` as before.
+ */
+export function continueAwaitsRawRendererValue(
+  entry: { declaredScreen?: unknown } | null | undefined,
+  schema: Record<string, unknown> | null | undefined,
+  buffered: Record<string, unknown> | null | undefined,
+): boolean {
+  if (entry?.declaredScreen !== undefined) return false;
+  return gateAwaitsRendererValue(schema, buffered);
+}
+
+/**
  * THE RENDERER'S OWN VALUE OF A DECLARED KEY IS SENT AS IT WROTE IT
  * (cinatra#3380). Each surface builds its payload with host fields beside the
  * renderer's buffer: `approved` and `approvedAt`, and on the published submit a

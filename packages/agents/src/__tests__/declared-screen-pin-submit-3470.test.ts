@@ -63,6 +63,7 @@ const gateRow = vi.hoisted(() => ({
   inputSchema: {} as Record<string, unknown>,
   read: "row" as "row" | "missing" | "throws",
   xRenderer: "@acme-test/pin-submit-agent:confirm",
+  values: {} as Record<string, unknown>,
 }));
 vi.mock("../agent-run-hitl-prompts", () => ({
   captureHitlPromptForContinue: async () => "captured-prompt",
@@ -74,7 +75,7 @@ vi.mock("../agent-run-hitl-prompts", () => ({
       reviewTaskId,
       xRenderer: gateRow.xRenderer,
       inputSchema: gateRow.inputSchema,
-      values: {},
+      values: gateRow.values,
       materializedAt: "2026-01-01T00:00:00.000Z",
     };
   },
@@ -266,6 +267,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   gateRow.read = "row";
   gateRow.xRenderer = ID;
+  gateRow.values = {};
   arrange();
 });
 
@@ -431,6 +433,53 @@ describe("an answer is sent only under the declared screen its step opened under
     expect(await answer(filled)).toBe("sent");
     expect(sendTask).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(sendTask.mock.calls)).toContain("Hello");
+  });
+
+  describe("a card that carries a run value is answered only with its canonical whole answer", () => {
+    const CARRY_CARD = {
+      layout: "card",
+      title: "Fixture carry revision",
+      decisionLabel: "Fixture decision",
+      decisions: [{ label: "Fixture post", answer: { post: true } }],
+      carry: ["itemId"],
+    };
+    const withText = (whole: Record<string, unknown>) => ({ ...whole, userResponse: JSON.stringify(whole), approved: true });
+    /** The resume text the agent was sent. */
+    const sentText = (): string => {
+      const text = JSON.stringify(sendTask.mock.calls).match(/"text":"((?:[^"\\]|\\.)*)"/);
+      return text === null ? "" : (JSON.parse(`"${text[1]}"`) as string);
+    };
+
+    beforeEach(() => {
+      install("Fixture carry revision", CARRY_CARD);
+      park();
+      gateRow.values = { itemId: "item-A" };
+    });
+
+    it("a carried value that is not the gate's own is refused", async () => {
+      // red-first-expect: expected 'sent' to contain 'did not give'
+      expect(await answer(withText({ itemId: "item-B", post: true }))).toContain("did not give");
+      expectRefusedAndGivenBack();
+    });
+
+    it("an answer without the carried value is refused", async () => {
+      // red-first-expect: expected 'sent' to contain 'did not give'
+      expect(await answer(withText({ post: true }))).toContain("did not give");
+      expectRefusedAndGivenBack();
+    });
+
+    it("an answer with a key outside the card's answer is refused", async () => {
+      // red-first-expect: expected 'sent' to contain 'did not give'
+      expect(await answer(withText({ itemId: "item-A", post: true, extra: "x" }))).toContain("did not give");
+      expectRefusedAndGivenBack();
+    });
+
+    it("the agent is sent the answer as the card's one writer builds it, never the caller's text", async () => {
+      expect(await answer(withText({ post: true, itemId: "item-A" }))).toBe("sent");
+      expect(sendTask).toHaveBeenCalledTimes(1);
+      // red-first-expect: expected '{"post":true,"itemId":"item-A"}' to be '{"itemId":"item-A","post":true}'
+      expect(sentText()).toBe(JSON.stringify({ itemId: "item-A", post: true }));
+    });
   });
 
   it("a step parked before the upgrade whose own schema names an 'unknown' pin is never answered under a declared screen", async () => {

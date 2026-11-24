@@ -127,6 +127,14 @@ vi.mock("@cinatra-ai/agent-ui-protocol/server", async (orig) => {
     },
   };
 });
+// The step's gate row is absent (cinatra#3470): the resume reads the agent's
+// own steps, which declare no screen here. A row that cannot
+// be read refuses the resume, so the read is answered rather than left to a
+// store this harness does not have.
+vi.mock("../agent-run-hitl-prompts", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readDurableHitlGateForContinue: vi.fn(async () => null),
+}));
 vi.mock("@/lib/artifacts/run-artifact-materializer", () => ({
   materializeRunArtifacts: materializeSpy,
 }));

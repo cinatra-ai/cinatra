@@ -825,6 +825,47 @@ describe("the conversation hosts draw the declared card (cinatra#3470, V.1)", ()
     });
   }
 
+  it("chat_thread: a card is ready by its own answer alone, whatever its gate schema requires", async () => {
+    // The gate schema requires a value the card never stages: only the card's
+    // readiness holds its Continue.
+    const fieldAsking = {
+      ...ASKING,
+      gate: {
+        ...ASKING.gate,
+        inputSchema: {
+          type: "object",
+          properties: { selectedIdeaJson: { type: "string", "x-required": true } },
+        },
+      },
+      declaredScreen: {
+        ...DECLARED,
+        screen: {
+          layout: "card",
+          title: "Fixture schema question",
+          sections: [{ type: "field", key: "answer", label: "Fixture answer" }],
+          carry: ["itemId"],
+        },
+      },
+    };
+    screenStateMock.mockImplementation(async () => fieldAsking);
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify(fieldAsking), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })) as unknown as typeof fetch;
+    const { container } = mountOn("chat_thread");
+    const input = await waitFor(() => within(container).getByRole("textbox"));
+    fireEvent.change(input, { target: { value: "revise this" } });
+    const press = within(container).getByRole("button", { name: /^continue$/i }) as HTMLButtonElement;
+    await waitFor(() => expect(press.disabled).toBe(false));
+    fireEvent.click(press);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    expect(hitlActions.approveReviewTask.mock.calls[0]![1]).toMatchObject({
+      userResponse: JSON.stringify({ itemId: "item-1", answer: "revise this" }),
+    });
+    hitlActions.approveReviewTask.mockClear();
+  });
+
   it("the read keeps only the declared binding of its own gate's renderer", () => {
     const kept = parseAgentHitlScreenState(ASKING);
     expect(kept?.state === "asking" && kept.declaredScreen).toEqual(DECLARED);

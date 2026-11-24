@@ -127,7 +127,7 @@ import {
   applyRendererApprovalNote,
   createGateValidityStore,
   buildSchemaFieldGatePayload,
-  gateAwaitsRendererValue,
+  continueAwaitsRawRendererValue,
   hitlRendererFieldName,
   isAlreadyResolvedError,
   hitlGateIdentityKey,
@@ -1024,7 +1024,7 @@ function HitlApprovalCard({
   // until the renderer has written one. A gate that declares none is held by
   // nothing.
   const continueAwaitsRendererValue =
-    isMidRunHitl && gateAwaitsRendererValue(renderSchema, bufferedHitlValue);
+    isMidRunHitl && continueAwaitsRawRendererValue(entry, renderSchema, bufferedHitlValue);
   // The gate this card's renderer is drawn for (cinatra#3380).
   const rendererGateKey = hitlGateIdentityKey(interruptContext);
 

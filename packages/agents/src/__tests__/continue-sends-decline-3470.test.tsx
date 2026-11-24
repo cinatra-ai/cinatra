@@ -110,12 +110,16 @@ const storeMock = vi.hoisted(() => ({
   transitionRunStatus: vi.fn(async () => undefined),
 }));
 vi.mock("../store", () => storeMock);
+// The step the asking read draws: its renderer and the run values its gate row holds.
+const askingGate = vi.hoisted(() => ({ xRenderer: "", values: {} as Record<string, unknown> }));
 vi.mock("../agent-run-hitl-prompts", () => ({
   // cinatra#3470: the gate row of a step that opened with no declared screen (no
   // pin, a renderer id no binding declares); a missing row refuses the answer.
+  // Its run values are the ones the screen drew: a declared card's carried
+  // values are checked against them.
   readDurableHitlGateForContinue: async (runId: string, reviewTaskId: string) => ({
     runId, reviewTaskId, xRenderer: "fixture-test/no-declared-screen",
-    inputSchema: {}, values: {}, materializedAt: "2026-01-01T00:00:00.000Z",
+    inputSchema: {}, values: askingGate.values, materializedAt: "2026-01-01T00:00:00.000Z",
   }),
   captureHitlPromptForContinue: async (input: never) => {
     await storeMock.writeHitlPrompt(input);
@@ -125,11 +129,22 @@ vi.mock("../agent-run-hitl-prompts", () => ({
   continueBindingDigest: () => "",
   continueGateDigest: () => "",
 }));
-// The step's renderer declares a card on the server: a declared card's answer
-// (marked as one by every host) is sent only to such a step.
+// The server reads the card the screen of the asking step drew (the test's own
+// registry, handed over once it is imported): the card's answer is rebuilt
+// from that declaration. A step whose screen is no declared card declares none.
+const serverRead = vi.hoisted(() => ({
+  registry: null as null | { list(): ReadonlyArray<{ id: string; declaredScreen?: unknown }> },
+}));
 vi.mock("../field-renderer-bindings.server", async (orig) => ({
   ...(await orig<typeof import("../field-renderer-bindings.server")>()),
-  readDeclaredHitlCard: () => ({ layout: "card", title: "Fixture server card" }),
+  readDeclaredHitlCard: () =>
+    serverRead.registry
+      ?.list()
+      .find(
+        (e) =>
+          (e.id === askingGate.xRenderer || e.id.startsWith(`${askingGate.xRenderer}--`)) &&
+          e.declaredScreen !== undefined,
+      )?.declaredScreen ?? null,
 }));
 vi.mock("../wayflow-url", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
@@ -175,6 +190,8 @@ import {
 } from "../declared-hitl-screen-renderer";
 import { Button } from "@/components/ui/button";
 
+serverRead.registry = fieldRendererRegistry;
+
 const RUN_ID = "run-3470";
 const TASK_ID = "wayflow-task-3470";
 const PROBE_ID = "@acme-test/probe-agent:confirm";
@@ -190,6 +207,8 @@ function DeclineProbe({ onChange }: FieldRendererProps) {
 }
 
 function asking(xRenderer: string, currentValues: Record<string, unknown> = {}) {
+  askingGate.xRenderer = xRenderer;
+  askingGate.values = currentValues;
   return {
     state: "asking" as const,
     runId: RUN_ID,
