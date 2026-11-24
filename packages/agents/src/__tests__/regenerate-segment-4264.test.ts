@@ -753,7 +753,6 @@ describe("claimSegmentProduction", () => {
   it("leaves the repair open for two writes, another step, two ledger rows or no receipt", async () => {
     expect(await claim({ listProductions: vi.fn(async () => [PRODUCTION, { ...PRODUCTION, artifactId: "a2" }]) })).toBeNull();
     expect(await claim({ listProductions: vi.fn(async () => []) })).toBeNull();
-    expect(await claim({ readVerifiedSteps: vi.fn(async () => ["image_flow"]) })).toBeNull();
     expect(await claim({ readVerifiedSteps: vi.fn(async () => [null]) })).toBeNull();
     expect(await claim({ readVerifiedSteps: vi.fn(async () => ["file_image", "file_image"]) })).toBeNull();
     expect(await claim({ readReceiptRow: vi.fn(async () => null) })).toBeNull();
@@ -767,6 +766,18 @@ describe("claimSegmentProduction", () => {
     expect(await claim({ readReceiptRow: vi.fn(async () => receiptRow("write_draft")) })).toBe(
       "receipt-not-the-recorded-segment",
     );
+  });
+
+  // red-first-expect: expected null to be 'receipt-not-the-recorded-segment'
+  it("refuses a run whose one verified ledger row and valid receipt both name another node", async () => {
+    expect(
+      await claim({
+        readVerifiedSteps: vi.fn(async () => ["write_draft"]),
+        readReceiptRow: vi.fn(async () => receiptRow("write_draft", "draft_flow")),
+      }),
+    ).toBe("receipt-not-the-recorded-segment");
+    // One verified row of another node is enough: its work is never applied, and the repair is not left open.
+    expect(await claim({ readVerifiedSteps: vi.fn(async () => ["image_flow"]) })).toBe("receipt-not-the-recorded-segment");
   });
 });
 

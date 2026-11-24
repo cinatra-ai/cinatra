@@ -990,7 +990,8 @@ export const SEGMENT_RECEIPT_MISMATCH = "receipt-not-the-recorded-segment" as co
  * The production a segment run answered with, or null (the repair stays
  * open): exactly one non-CMS production; exactly one finalized ledger row of
  * that revision in this run, whose verified step is the recorded node; and a
- * valid persisted receipt. The receipt is bound to the run's recorded
+ * valid persisted receipt. One verified ledger row of another node is
+ * `SEGMENT_RECEIPT_MISMATCH` as well. The receipt is bound to the run's recorded
  * declaration (`recordedRegenerateInput`): every field it attests that the
  * record also holds (the node and the step) must equal the record. A valid
  * receipt that names another step or node (a worker that ran another segment,
@@ -1010,7 +1011,12 @@ export async function claimSegmentProduction(
     artifactId: production.artifactId,
     representationRevisionId: production.representationRevisionId,
   });
-  if (steps.length !== 1 || steps[0] !== input.record.artifactNode) return null;
+  if (steps.length !== 1) return null;
+  // One verified ledger row that names another node than the recorded one: the run filed its work from another
+  // segment. That is a mismatch to escalate, never a repair left open forever; an unverified row (no step) stays open.
+  if (steps[0] !== input.record.artifactNode) {
+    return typeof steps[0] === "string" && steps[0] !== "" ? SEGMENT_RECEIPT_MISMATCH : null;
+  }
   const receipt = readStoredSegmentReceipt({
     runId: input.runId,
     row: await deps.readReceiptRow(input.orgId, input.runId),
