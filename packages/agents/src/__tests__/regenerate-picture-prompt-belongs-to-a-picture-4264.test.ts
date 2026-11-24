@@ -263,15 +263,20 @@ describe("a refiled successor keeps its picture's prompt on the next Regenerate"
     // The refile: the same resource on the reviewed artifact, made by the repair run.
     { id: SUCCESSOR.representationRevisionId, orgId: ORG, artifactId: SUCCESSOR.artifactId, resourceId: "res-regenerated", createdByRunId: REPAIR_RUN },
     // One run writing the same bytes twice, on two artifacts of its own: once
-    // without a prompt (a note) and once with one (a picture). Content
-    // deduplication gives both revisions one resource; neither is a refile.
+    // directly with no ledger row at all (as a preview capture writes an image)
+    // and once as a picture with a prompt. Content deduplication gives both
+    // revisions one resource; no repair names either, so neither is a refile.
     { id: "rev-4264-direct-note", orgId: ORG, artifactId: "art-4264-direct-note", resourceId: "res-same-bytes", createdByRunId: "run-4264-direct" },
     { id: "rev-4264-direct-picture", orgId: ORG, artifactId: "art-4264-direct-picture", resourceId: "res-same-bytes", createdByRunId: "run-4264-direct" },
+  ];
+  type Repair = { orgId: string; status: string; successorArtifactId: string; successorRevisionId: string; sourceArtifactId: string | null; sourceRevisionId: string | null };
+  // The repair that finalized the successor records it and the revision its run wrote.
+  const repairs: Repair[] = [
+    { orgId: ORG, status: "repaired", successorArtifactId: SUCCESSOR.artifactId, successorRevisionId: SUCCESSOR.representationRevisionId, sourceArtifactId: WRITE.artifactId, sourceRevisionId: WRITE.representationRevisionId },
   ];
   const ledger: LedgerRow[] = [
     { orgId: ORG, runId: RUN, artifactId: BASE.artifactId, revisionId: BASE.representationRevisionId, phase: "finalized", imagePrompt: FIRST_PROMPT },
     { orgId: ORG, runId: REPAIR_RUN, artifactId: WRITE.artifactId, revisionId: WRITE.representationRevisionId, phase: "finalized", imagePrompt: REGENERATED_PROMPT },
-    { orgId: ORG, runId: "run-4264-direct", artifactId: "art-4264-direct-note", revisionId: "rev-4264-direct-note", phase: "finalized", imagePrompt: null },
     { orgId: ORG, runId: "run-4264-direct", artifactId: "art-4264-direct-picture", revisionId: "rev-4264-direct-picture", phase: "finalized", imagePrompt: "a fox drawn twice" },
   ];
 
@@ -280,20 +285,17 @@ describe("a refiled successor keeps its picture's prompt on the next Regenerate"
     const [orgId, artifactId, revisionId] = values as string[];
     const prompts = (rows: LedgerRow[]) =>
       rows.filter((m) => m.phase === "finalized" && m.imagePrompt !== null).slice(0, 2).map((m) => ({ image_prompt: m.imagePrompt }));
-    if (!text.includes('"representation" r')) {
+    if (!text.includes('"lifecycle_repair" rr')) {
       return { rows: prompts(ledger.filter((m) => m.orgId === orgId && m.artifactId === artifactId && m.revisionId === revisionId)) };
     }
-    const r = representations.find((x) => x.orgId === orgId && x.artifactId === artifactId && x.id === revisionId && x.createdByRunId);
-    if (!r) return { rows: [] };
-    // The NOT EXISTS clause: a revision with a finalized ledger row of its own is no refile.
-    const ownRow = ledger.some((m) => m.orgId === r.orgId && m.artifactId === r.artifactId && m.revisionId === r.id && m.phase === "finalized");
-    if (text.includes("NOT EXISTS") && ownRow) return { rows: [] };
-    const sources = representations.filter((p) => p.orgId === r.orgId && p.resourceId === r.resourceId && p.artifactId !== r.artifactId);
+    const named = repairs.filter(
+      (rr) =>
+        rr.orgId === orgId && rr.successorArtifactId === artifactId && rr.successorRevisionId === revisionId &&
+        rr.status === "repaired" && rr.sourceArtifactId !== null && rr.sourceRevisionId !== null,
+    );
     return {
       rows: prompts(
-        ledger.filter((m) =>
-          sources.some((p) => m.orgId === p.orgId && m.artifactId === p.artifactId && m.revisionId === p.id && m.runId === r.createdByRunId),
-        ),
+        ledger.filter((m) => named.some((rr) => m.orgId === rr.orgId && m.artifactId === rr.sourceArtifactId && m.revisionId === rr.sourceRevisionId)),
       ),
     };
   }
@@ -357,8 +359,8 @@ describe("a refiled successor keeps its picture's prompt on the next Regenerate"
     expect(await readRevisionImagePrompt({ orgId: "org-other", ...SUCCESSOR })).toBeNull();
   });
 
-  // The refile link must not reach a revision written directly (main has no refile link, so this holds there).
-  it("a revision written directly without a prompt never borrows the prompt of the same run's identical bytes elsewhere", async () => {
+  // A direct write no repair names never borrows a prompt (main has no repair link, so this holds there).
+  it("a revision written directly, with no ledger row, never borrows the prompt of the same run's identical bytes elsewhere", async () => {
     ports.pool = tables;
     const { readRevisionImagePrompt } = await import("@/lib/artifacts/materialization-ledger");
     const note = { artifactId: "art-4264-direct-note", representationRevisionId: "rev-4264-direct-note" };

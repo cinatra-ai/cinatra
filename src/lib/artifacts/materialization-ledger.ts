@@ -333,17 +333,15 @@ function onlyPrompt(rows: Array<Record<string, unknown>>): string | null {
  *
  * A REFILED REVISION (cinatra#4264). A repair's answer is written by its run
  * on an artifact of its own and then refiled onto the reviewed artifact
- * (`refileRevisionOntoArtifact`): a new representation row that binds the same
- * `resource` and names the run in `created_by_run_id`, and no ledger row. Its
- * prompt is the one recorded for the run's own write: the finalized ledger row
- * of that same run whose revision, on another artifact of the org, binds that
- * same resource. Both facts are written by the application, never taken from a
- * request. The refile link is read only when the revision has no prompt row of
- * its own, and it too must name exactly one row. A refile writes no ledger
- * row, so a revision with ANY finalized ledger row of its own (a prompt or
- * none) was written directly and is never read as a refile: a run that wrote
- * the same bytes twice, once with a prompt and once without, never lends the
- * one write's prompt to the other.
+ * (`refileRevisionOntoArtifact`): a new representation row and no ledger row.
+ * The repair that finalized it records both ends: its successor (the refiled
+ * revision) and its source (the revision the run wrote). The prompt of a
+ * refiled revision is the one recorded for that source, read only through
+ * exactly one `repaired` repair of the org that names the revision as its
+ * successor and records a source. A revision no repair names (a direct write,
+ * with a ledger row or without one) never reads another revision's prompt,
+ * whatever bytes it shares. The repair link is read only when the revision
+ * has no prompt row of its own, and it too must name exactly one row.
  *
  * The one rule for the review surface's prefill and for the review store,
  * which keeps a submitted prompt exactly when this read returns one. A read
@@ -368,19 +366,15 @@ export async function readRevisionImagePrompt(
   if (exact.rows.length > 0) return onlyPrompt(exact.rows);
   const refiled = await db.query(
     `SELECT m.image_prompt
-       FROM "${s}"."representation" r
-       JOIN "${s}"."representation" p
-         ON p.org_id = r.org_id AND p.resource_id = r.resource_id AND p.artifact_id <> r.artifact_id
+       FROM "${s}"."lifecycle_repair" rr
        JOIN "${s}"."artifact_materializations" m
-         ON m.org_id = p.org_id AND m.artifact_id = p.artifact_id
-        AND m.representation_revision_id = p.id AND m.run_id = r.created_by_run_id
-      WHERE r.org_id = $1 AND r.artifact_id = $2 AND r.id = $3
-        AND r.created_by_run_id IS NOT NULL
+         ON m.org_id = rr.org_id AND m.artifact_id = rr.source_artifact_id
+        AND m.representation_revision_id = rr.source_representation_revision_id
+      WHERE rr.org_id = $1 AND rr.successor_artifact_id = $2
+        AND rr.successor_representation_revision_id = $3
+        AND rr.status = 'repaired'
+        AND rr.source_artifact_id IS NOT NULL AND rr.source_representation_revision_id IS NOT NULL
         AND m.phase = 'finalized' AND m.image_prompt IS NOT NULL
-        AND NOT EXISTS (
-          SELECT 1 FROM "${s}"."artifact_materializations" own
-           WHERE own.org_id = r.org_id AND own.artifact_id = r.artifact_id
-             AND own.representation_revision_id = r.id AND own.phase = 'finalized')
       LIMIT 2`,
     values,
   );
