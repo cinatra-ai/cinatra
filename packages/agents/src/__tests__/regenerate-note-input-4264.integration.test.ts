@@ -19,6 +19,10 @@
  *   NOTHING    a step that declares nothing refuses with the same plain reason,
  *              the gate stays pending and nothing is written, even when the
  *              agent says `repairCapable: true`.
+ *   AGAIN      a picture regenerated once, its run's write refiled onto the
+ *              reviewed artifact by the real refile, offers the successor the
+ *              prompt that write was made from, and a second Regenerate with a
+ *              new prompt records that prompt beside the note.
  *
  * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided (CI runs it
  * through `pnpm test:integration`).
@@ -55,6 +59,8 @@ const NOTE_INPUT = "note";
  *  the input's own name. */
 const NOTE_START_OUTPUT = "draftNote";
 const NOTE = "Open with the harbour at dawn, not the market";
+/** An object type the registry does not narrow, so a picture may be refiled onto it. */
+const PICTURE_TYPE = "regen_fixture_picture";
 
 /** The `lifecycle_config` an install writes for this block, after the strict
  *  manifest parse. */
@@ -175,6 +181,37 @@ async function gatesPinning(artifactId: string, representationRevisionId: string
     [JSON.stringify([{ artifactId, representationRevisionId }])],
   );
   return r.rows as Array<{ id: string; review_task_id: string; status: string; disposition: string | null }>;
+}
+
+/** A picture written by `runId` on an artifact of its own: its object row (a
+ *  type the registry does not narrow), substance, representation and the
+ *  finalized ledger row recording the prompt it was made from. */
+async function seedPictureWrite(runId: string, prompt: string): Promise<{ artifactId: string; representationRevisionId: string }> {
+  const artifactId = `art-${randomUUID()}`;
+  const representationRevisionId = `rev-${randomUUID()}`;
+  const resourceId = `res-${randomUUID()}`;
+  await pool(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."objects" (id, type, data, org_id) VALUES ($1, $2, '{}'::jsonb, $3)`,
+    [artifactId, PICTURE_TYPE, ORG],
+  );
+  await pool(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."resource" (id, org_id, kind, substance_key, mime, size_bytes, created_by, metadata)
+     VALUES ($1, $2, 'blob', $3, 'image/png', 11, NULL, '{}'::jsonb)`,
+    [resourceId, ORG, `blob:picture-${artifactId}`],
+  );
+  await pool(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."representation" (id, org_id, artifact_id, resource_id, revision, form, created_by_run_id)
+     VALUES ($1, $2, $3, $4, 1, 'file', $5)`,
+    [representationRevisionId, ORG, artifactId, resourceId, runId],
+  );
+  await pool(
+    `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_materializations"
+       (id, org_id, run_id, output_id, node_id, path, extension, content_hash,
+        artifact_id, representation_revision_id, phase, verified_step_id, image_prompt)
+     VALUES ($1, $2, $3, $4, $4, 'materialize_tool', '@regen-fixture/ledger', $5, $6, $5, 'finalized', $4, $7)`,
+    [`mat-${randomUUID()}`, ORG, runId, FILING_NODE, representationRevisionId, artifactId, prompt],
+  );
+  return { artifactId, representationRevisionId };
 }
 
 /** A produced, auto-gated, verified-filed revision of a run of `templateId`. */
@@ -364,5 +401,103 @@ describe.skipIf(!HAS_DB)("cinatra#4264: Regenerate puts the note into the declar
       );
       expect(repairs.rows).toHaveLength(0);
     }
+  });
+
+  it("AGAIN: a refiled successor offers its picture's prompt, and a second Regenerate keeps a new prompt", async () => {
+    const FIRST_PROMPT = "a harbour at noon";
+    const REGENERATED_PROMPT = "a harbour at dawn, mist on the water";
+    const NEXT_PROMPT = "a harbour at night, lanterns lit";
+    const { templateId } = await seedTemplate(
+      compiledLifecycleConfig({ regenerate: [{ artifactNode: FILING_NODE, step: STEP, noteInput: NOTE_INPUT }] }),
+    );
+    const reviewed = await reviewedRevision(templateId);
+    // The reviewed work is a picture with the prompt it was made from.
+    await pool(`UPDATE "${q(TEST_SCHEMA)}"."objects" SET type = $1 WHERE id = $2`, [PICTURE_TYPE, reviewed.base.artifactId]);
+    await pool(
+      `UPDATE "${q(TEST_SCHEMA)}"."artifact_materializations" SET image_prompt = $1 WHERE artifact_id = $2`,
+      [FIRST_PROMPT, reviewed.base.artifactId],
+    );
+    const { readRevisionImagePrompt } = await import("@/lib/artifacts/materialization-ledger");
+    const ledgerDb = { query: (text: string, values: unknown[]) => pool(text, values), schema: TEST_SCHEMA };
+
+    const first = await crStore.recordReviewSurfaceChangesRequested({
+      runId: reviewed.producerRunId,
+      reviewTaskId: reviewed.reviewTaskId,
+      baseTarget: { artifactId: reviewed.base.artifactId, representationRevisionId: reviewed.base.representationRevisionId },
+      currentBaseRevisionId: reviewed.base.representationRevisionId,
+      feedback: NOTE,
+      prompt: REGENERATED_PROMPT,
+      decidedBy: MEMBER_USER,
+      origin: "regenerate",
+    });
+    if (!first.ok) throw new Error(`Regenerate refused: ${first.error}`);
+    const firstIntent = await pool(
+      `SELECT findings FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE gate_id = $1`,
+      [reviewed.gateId],
+    );
+    await dispatchStore.dispatchPendingProducerRepairs();
+    const repairRunId = dispatchStore.repairRunId(first.repairId);
+
+    // The segment run writes its picture on an artifact of its own; the
+    // completer refiles it onto the reviewed artifact and answers the repair.
+    const write = await seedPictureWrite(repairRunId, REGENERATED_PROMPT);
+    const { refileRevisionOntoArtifact } = await import("@/lib/artifacts/artifact-revision-append");
+    const refiled = refileRevisionOntoArtifact({
+      orgId: ORG,
+      targetArtifactId: reviewed.base.artifactId,
+      sourceArtifactId: write.artifactId,
+      sourceRepresentationRevisionId: write.representationRevisionId,
+      createdBy: MEMBER_USER,
+      createdByRunId: repairRunId,
+      advancePointer: false,
+    });
+    const successor = { artifactId: refiled.artifactId, representationRevisionId: refiled.representationRevisionId };
+    const ledgerRowsOfSuccessor = await pool(
+      `SELECT id FROM "${q(TEST_SCHEMA)}"."artifact_materializations" WHERE representation_revision_id = $1`,
+      [successor.representationRevisionId],
+    );
+    expect(ledgerRowsOfSuccessor.rows).toHaveLength(0);
+    const answered = await repairStore.submitRepairResponse({
+      repairId: first.repairId,
+      sourceTarget: write,
+      currentBaseRevisionId: reviewed.base.representationRevisionId,
+      reauthorized: true,
+      response: {
+        gateId: reviewed.gateId,
+        baseTarget: { artifactId: reviewed.base.artifactId, representationRevisionId: reviewed.base.representationRevisionId },
+        successorTarget: successor,
+        findingOutcomes: (firstIntent.rows[0].findings as Array<{ id: string }>).map((f) => ({ findingId: f.id, applied: true })),
+        changeSummary: "regenerated from the prompt",
+        producerProvenance: { runId: repairRunId, agentId: null },
+      },
+    });
+    if (!answered.ok) throw new Error(`repair response failed: ${answered.error}`);
+    const [successorGate] = await gatesPinning(successor.artifactId, successor.representationRevisionId);
+    expect(successorGate).toMatchObject({ id: answered.successorGateId, status: "pending" });
+
+    // The review surface offers the successor the prompt its picture was made from.
+    expect(await readRevisionImagePrompt({ orgId: ORG, ...successor }, ledgerDb)).toBe(REGENERATED_PROMPT);
+
+    const second = await crStore.recordReviewSurfaceChangesRequested({
+      runId: reviewed.producerRunId,
+      reviewTaskId: successorGate!.review_task_id,
+      baseTarget: successor,
+      currentBaseRevisionId: successor.representationRevisionId,
+      feedback: NOTE,
+      prompt: NEXT_PROMPT,
+      decidedBy: MEMBER_USER,
+      origin: "regenerate",
+    });
+    if (!second.ok) throw new Error(`second Regenerate refused: ${second.error}`);
+    const secondIntent = await pool(
+      `SELECT regenerate_node_id, findings FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE gate_id = $1`,
+      [answered.successorGateId],
+    );
+    expect(secondIntent.rows).toHaveLength(1);
+    expect(secondIntent.rows[0].regenerate_node_id).toBe(FILING_NODE);
+    expect(secondIntent.rows[0].findings).toEqual([
+      { id: "prompt-window", message: NOTE },
+      { id: "picture-prompt", message: NEXT_PROMPT },
+    ]);
   });
 });

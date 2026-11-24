@@ -37,12 +37,12 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import { createHash } from "node:crypto";
-import { and, eq, isNotNull } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 import { pgSchema, text } from "drizzle-orm/pg-core";
 
-import { db } from "./db";
-import { agentRuns, agentTemplates } from "./schema";
+import { agentBuilderPool, db } from "./db";
+import { agentRuns, agentTemplates, lifecycleRepair } from "./schema";
 import {
   coreRepairsObjectType,
   readProducingStepNoteInput,
@@ -65,6 +65,7 @@ import {
   isDeclaredReviewLeg,
   isDeclaredReviewTaskId,
 } from "@/lib/artifacts/artifact-review-target";
+import { readRevisionImagePrompt } from "@/lib/artifacts/materialization-ledger";
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
 import { sessionAuthorityFromResolvedRole } from "@/lib/org-write/authority";
 import { producedEventId, type ContinuationMode } from "@/lib/lifecycle/lifecycle-produced-event";
@@ -162,7 +163,8 @@ export interface RecordReviewSurfaceChangesRequestedInput {
 // SAME app schema), exactly as the orchestration store does for its own context
 // read, so this agents-package store reads `objects.type` without depending on
 // the host objects-store drizzle table.
-const appSchemaRef = pgSchema(process.env.SUPABASE_SCHEMA?.trim() ?? "cinatra");
+const APP_SCHEMA = process.env.SUPABASE_SCHEMA?.trim() ?? "cinatra";
+const appSchemaRef = pgSchema(APP_SCHEMA);
 const objectsTypeRef = appSchemaRef.table("objects", {
   id: text("id").primaryKey(),
   type: text("type").notNull(),
@@ -180,43 +182,36 @@ const materializationLedgerRef = appSchemaRef.table("artifact_materializations",
   path: text("path"),
   phase: text("phase"),
   verifiedStepId: text("verified_step_id"),
-  imagePrompt: text("image_prompt"),
 });
+
+/** The bound of the filing-node walk across refiled successors; the dispatch's
+ * provenance read walks as far (`REGENERATE_PROVENANCE_MAX_DEPTH`). */
+const REGENERATE_FILING_WALK_MAX_DEPTH = 64;
 
 /** What a person reads when the reviewed work could not be checked for a recorded prompt. */
 const PICTURE_PROMPT_UNREADABLE = "The picture's prompt could not be checked. Nothing was sent; try Regenerate again.";
 
 /**
  * Is the reviewed revision a picture with a recorded prompt (cinatra#4264)?
- * True exactly when one finalized ledger row of (org, artifact, revision)
- * records a non-blank prompt: the scope of the review surface's prefill read
- * (`readRevisionImagePrompt`), so the store keeps the picture's prompt exactly
- * when the surface offered it. Read on the server, never from the request.
- * Only a read that succeeded decides: no row, two rows or a blank prompt
- * yield false (the work is not a picture with a recorded prompt). A read
- * fault yields null: the person's prompt is never dropped on a fault, the
- * request is refused before anything is recorded, and a retry may succeed.
+ * True exactly when the review surface's prefill read (`readRevisionImagePrompt`,
+ * the one rule for both) returns a prompt for it, so the store keeps the
+ * picture's prompt exactly when the surface offered it, a refiled successor of
+ * an earlier Regenerate included. Read on the server, never from the request.
+ * Only a read that succeeded decides: no prompt yields false (the work is not
+ * a picture with a recorded prompt). A read fault yields null: the person's
+ * prompt is never dropped on a fault, the request is refused before anything
+ * is recorded, and a retry may succeed.
  */
 async function revisionRecordsAPrompt(
   orgId: string,
   target: { artifactId: string; representationRevisionId: string },
 ): Promise<boolean | null> {
   try {
-    const rows = await db
-      .select({ imagePrompt: materializationLedgerRef.imagePrompt })
-      .from(materializationLedgerRef)
-      .where(
-        and(
-          eq(materializationLedgerRef.orgId, orgId),
-          eq(materializationLedgerRef.artifactId, target.artifactId),
-          eq(materializationLedgerRef.representationRevisionId, target.representationRevisionId),
-          eq(materializationLedgerRef.phase, "finalized"),
-          isNotNull(materializationLedgerRef.imagePrompt),
-        ),
-      )
-      .limit(2);
-    const prompt = rows.length === 1 ? rows[0].imagePrompt : null;
-    return typeof prompt === "string" && prompt.trim().length > 0;
+    const prompt = await readRevisionImagePrompt(
+      { orgId, artifactId: target.artifactId, representationRevisionId: target.representationRevisionId },
+      { query: (text, values) => agentBuilderPool.query(text, values), schema: APP_SCHEMA },
+    );
+    return prompt !== null;
   } catch {
     return null;
   }
@@ -228,6 +223,15 @@ async function revisionRecordsAPrompt(
  * (org, producing run, artifact, revision), read through the pure
  * `readVerifiedFilingNode`. Fail-soft toward refusal: no row, an unverified row,
  * two rows or a read fault all yield NULL, and Regenerate is then refused.
+ *
+ * A REFILED SUCCESSOR has no ledger row of its own: the repair answer was
+ * refiled onto the reviewed artifact. Like the dispatch's provenance read
+ * (`readVerifiedFilingNode` in `@/lib/artifacts/regenerate-provenance`), the
+ * read then continues at the base revision of the one `repaired` repair that
+ * names this revision as its successor, and stops with NULL on zero or two
+ * such repairs or past `REGENERATE_FILING_WALK_MAX_DEPTH` steps. So a
+ * Regenerate of a regenerated revision is admitted exactly when the dispatch
+ * can rerun the step that filed it.
  */
 async function resolveVerifiedFilingNode(
   orgId: string,
@@ -235,21 +239,42 @@ async function resolveVerifiedFilingNode(
   target: { artifactId: string; representationRevisionId: string },
 ): Promise<string | null> {
   try {
-    const rows = await db
-      .select({ verifiedStepId: materializationLedgerRef.verifiedStepId })
-      .from(materializationLedgerRef)
-      .where(
-        and(
-          eq(materializationLedgerRef.orgId, orgId),
-          eq(materializationLedgerRef.runId, producerRunId),
-          eq(materializationLedgerRef.artifactId, target.artifactId),
-          eq(materializationLedgerRef.representationRevisionId, target.representationRevisionId),
-          eq(materializationLedgerRef.path, "materialize_tool"),
-          eq(materializationLedgerRef.phase, "finalized"),
-        ),
-      )
-      .limit(2);
-    return readVerifiedFilingNode(rows.map((row) => row.verifiedStepId ?? null));
+    let at = target;
+    for (let depth = 0; depth <= REGENERATE_FILING_WALK_MAX_DEPTH; depth += 1) {
+      const rows = await db
+        .select({ verifiedStepId: materializationLedgerRef.verifiedStepId })
+        .from(materializationLedgerRef)
+        .where(
+          and(
+            eq(materializationLedgerRef.orgId, orgId),
+            eq(materializationLedgerRef.runId, producerRunId),
+            eq(materializationLedgerRef.artifactId, at.artifactId),
+            eq(materializationLedgerRef.representationRevisionId, at.representationRevisionId),
+            eq(materializationLedgerRef.path, "materialize_tool"),
+            eq(materializationLedgerRef.phase, "finalized"),
+          ),
+        )
+        .limit(2);
+      if (rows.length > 0) return readVerifiedFilingNode(rows.map((row) => row.verifiedStepId ?? null));
+      const repairs = await db
+        .select({
+          baseArtifactId: lifecycleRepair.baseArtifactId,
+          baseRepresentationRevisionId: lifecycleRepair.baseRepresentationRevisionId,
+        })
+        .from(lifecycleRepair)
+        .where(
+          and(
+            eq(lifecycleRepair.orgId, orgId),
+            eq(lifecycleRepair.status, "repaired"),
+            eq(lifecycleRepair.successorArtifactId, at.artifactId),
+            eq(lifecycleRepair.successorRepresentationRevisionId, at.representationRevisionId),
+          ),
+        )
+        .limit(2);
+      if (repairs.length !== 1) return null;
+      at = { artifactId: repairs[0].baseArtifactId, representationRevisionId: repairs[0].baseRepresentationRevisionId };
+    }
+    return null;
   } catch {
     return null;
   }

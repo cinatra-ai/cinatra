@@ -25,7 +25,13 @@ describe("approved app-artifact-review §VI pinned producer words", () => {
     db.query.mockResolvedValue({ rows: [] });
     await readRevisionImagePrompt(pin);
     await readRevisionImagePrompt({ ...pin, orgId: "other-org", representationRevisionId: "other-pin" });
-    expect(db.query.mock.calls[1][1]).toEqual(["other-org", "artifact", "other-pin"]);
+    // No prompt row of its own: each read also asks the refile link, under its own keys.
+    expect(db.query.mock.calls.map((call) => call[1])).toEqual([
+      ["org", "artifact", "pinned-old-revision"],
+      ["org", "artifact", "pinned-old-revision"],
+      ["other-org", "artifact", "other-pin"],
+      ["other-org", "artifact", "other-pin"],
+    ]);
   });
 });
 

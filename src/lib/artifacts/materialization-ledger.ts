@@ -307,27 +307,76 @@ export async function readFinalizedMaterialization(input: {
   };
 }
 
+/** The query seam of `readRevisionImagePrompt`: this module's pool by default,
+ * a caller's own client (and the schema it reads) else. */
+export type RevisionImagePromptDb = {
+  query: (text: string, values: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }>;
+  /** The application schema the tables live in (unquoted). */
+  schema: string;
+};
+
+function ledgerDb(): RevisionImagePromptDb {
+  ensurePostgresSchema();
+  return { query: (text, values) => pool().query(text, values), schema: postgresSchema };
+}
+
+function onlyPrompt(rows: Array<Record<string, unknown>>): string | null {
+  if (rows.length !== 1) return null;
+  const prompt: unknown = rows[0]?.image_prompt;
+  return typeof prompt === "string" && prompt.trim().length > 0 ? prompt : null;
+}
+
 /** Producer prompt on the exact FINALIZED revision the gate pinned (§VI).
  * Authorization belongs to the caller's artifact/run read ladder. This query
  * never substitutes the current revision, another org, or an unfinalized claim.
- * Ambiguous provenance is absent rather than guessed. */
-export async function readRevisionImagePrompt(input: {
-  orgId: string;
-  artifactId: string;
-  representationRevisionId: string;
-}): Promise<string | null> {
-  ensurePostgresSchema();
-  const s = schema();
-  const res = await pool().query(
+ * Ambiguous provenance is absent rather than guessed.
+ *
+ * A REFILED REVISION (cinatra#4264). A repair's answer is written by its run
+ * on an artifact of its own and then refiled onto the reviewed artifact
+ * (`refileRevisionOntoArtifact`): a new representation row that binds the same
+ * `resource` and names the run in `created_by_run_id`, and no ledger row. Its
+ * prompt is the one recorded for the run's own write: the finalized ledger row
+ * of that same run whose revision, on another artifact of the org, binds that
+ * same resource. Both facts are written by the application, never taken from a
+ * request. The refile link is read only when the revision has no prompt row of
+ * its own, and it too must name exactly one row.
+ *
+ * The one rule for the review surface's prefill and for the review store,
+ * which keeps a submitted prompt exactly when this read returns one. A read
+ * fault throws. */
+export async function readRevisionImagePrompt(
+  input: {
+    orgId: string;
+    artifactId: string;
+    representationRevisionId: string;
+  },
+  db: RevisionImagePromptDb = ledgerDb(),
+): Promise<string | null> {
+  const s = db.schema.replaceAll('"', '""');
+  const values = [input.orgId, input.artifactId, input.representationRevisionId];
+  const exact = await db.query(
     `SELECT image_prompt FROM "${s}"."artifact_materializations"
      WHERE org_id = $1 AND artifact_id = $2 AND representation_revision_id = $3
        AND phase = 'finalized' AND image_prompt IS NOT NULL
      LIMIT 2`,
-    [input.orgId, input.artifactId, input.representationRevisionId],
+    values,
   );
-  if (res.rows.length !== 1) return null;
-  const prompt: unknown = res.rows[0]?.image_prompt;
-  return typeof prompt === "string" && prompt.trim().length > 0 ? prompt : null;
+  if (exact.rows.length > 0) return onlyPrompt(exact.rows);
+  const refiled = await db.query(
+    `SELECT m.image_prompt
+       FROM "${s}"."representation" r
+       JOIN "${s}"."representation" p
+         ON p.org_id = r.org_id AND p.resource_id = r.resource_id AND p.artifact_id <> r.artifact_id
+       JOIN "${s}"."artifact_materializations" m
+         ON m.org_id = p.org_id AND m.artifact_id = p.artifact_id
+        AND m.representation_revision_id = p.id AND m.run_id = r.created_by_run_id
+      WHERE r.org_id = $1 AND r.artifact_id = $2 AND r.id = $3
+        AND r.created_by_run_id IS NOT NULL
+        AND m.phase = 'finalized' AND m.image_prompt IS NOT NULL
+      LIMIT 2`,
+    values,
+  );
+  return onlyPrompt(refiled.rows);
 }
 
 /**
