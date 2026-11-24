@@ -466,7 +466,7 @@ export function ensureDefaultFieldRenderersRegistered(): void {
   //
   // Both aliases, and the retired reviewer and auditor bindings, are listed in
   // `TOMBSTONED_HITL_RENDERER_IDS` (orchestrator-mid-run-hitl.ts): the binding
-  // registration below skips them and the live-gate floor refuses them.
+  // registration below skips them, and no host classifies one as mid-run.
 
   // -------------------------------------------------------------------------
   // Manifest-driven entries: the generated build-time bindings (presence-

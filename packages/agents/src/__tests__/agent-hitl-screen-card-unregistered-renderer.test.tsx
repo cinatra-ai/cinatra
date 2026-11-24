@@ -1,15 +1,18 @@
 // @vitest-environment jsdom
 /**
- * THE HITL SCREEN CARD DRAWS A GATE WHOSE RENDERER ID NO BINDING DECLARES.
+ * THE HITL SCREEN CARD DRAWS A PLAIN-FORM STEP AND REFUSES A STEP WHOSE SCREEN
+ * IS GONE.
  *
- * A run parked at a step whose stored schema names an `x-renderer` id that no
- * binding declares any more (its package dropped the declaration). The card
- * drew "Waiting for input — no renderer configured for this step." and no
- * Continue on every host, so the step could not be answered. It now draws the
- * stored schema through the schema floor, with one Continue that sends the
- * floor's approval, with the written note as the resume text, to the gate's
- * review task. A tombstoned gate (a retired review gate) still draws no
- * renderer and no Continue.
+ * A step recorded under the plain form's own id (a step that declares no
+ * screen of its own) is drawn through the schema floor, with one Continue
+ * that sends the floor's approval, with the entered value as the resume text,
+ * to the gate's review task.
+ *
+ * A step whose renderer id no binding declares any more (its package dropped
+ * the declaration) is refused: the card shows "no renderer configured for this
+ * step", no field and no Continue, and nothing is sent. A former decision or
+ * picker step is never drawn as a free-text form. A tombstoned gate (a
+ * retired review gate) is refused the same way.
  *
  * Harness mirrors agent-hitl-screen-card-boolean-4310.test.tsx.
  *
@@ -42,16 +45,35 @@ vi.mock("../hitl-actions", () => ({
   rejectReviewTask: vi.fn(async () => undefined),
 }));
 
+/**
+ * Mid-run decision and picker steps whose packages dropped the declarations:
+ * the generated bindings no longer list them.
+ */
+const DROPPED = vi.hoisted(() => [
+  "@cinatra-ai/blog-pipeline-agent:idea-selection",
+  "@cinatra-ai/context-selection-agent:context-selector",
+  "@cinatra-ai/email-delivery-agent:send-confirmation",
+  "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm",
+]);
+vi.mock("@/lib/generated/agent-bindings", async (orig) => {
+  const real = await orig<typeof import("@/lib/generated/agent-bindings")>();
+  return {
+    ...real,
+    GENERATED_FIELD_RENDERER_BINDINGS: real.GENERATED_FIELD_RENDERER_BINDINGS.filter(
+      (b) => !DROPPED.includes(b.id),
+    ),
+  };
+});
+
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 import { fieldRendererRegistry } from "../field-renderer-registry";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import { AgentHitlScreenCard } from "../agent-hitl-screen-card";
 import * as midRun from "../orchestrator-mid-run-hitl";
+import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 
 const RUN_ID = "run-dropped";
 const TASK_ID = "wayflow-task-dropped";
-/** An id a package declared once and no longer declares. */
-const DROPPED_ID = "@cinatra-test/retired-pack-agent:draft-confirm";
 
 const ASKING = {
   state: "asking" as const,
@@ -59,7 +81,7 @@ const ASKING = {
   screenRef: "hitl-screen-ref-dropped",
   gate: {
     reviewTaskId: TASK_ID,
-    xRenderer: DROPPED_ID,
+    xRenderer: SCHEMA_FIELD_FALLBACK_RENDERER_ID,
     inputSchema: { type: "object", properties: { note: { type: "string", title: "Note" } } },
     currentValues: {},
     fieldName: undefined,
@@ -111,9 +133,9 @@ function continues(container: HTMLElement): HTMLButtonElement[] {
   );
 }
 
-describe("AgentHitlScreenCard — a gate whose renderer id no binding declares", () => {
+describe("AgentHitlScreenCard — a step recorded under the plain form's own id", () => {
   for (const host of ["run_card", "chat_thread"] as LifecycleCardHost[]) {
-    // red-first-expect: expected null not to be null
+    // red-first-expect: expected { note: 'Go ahead.' } to match object { note: 'Go ahead.', …(3) }
     it(`${host}: draws the stored schema's field and one Continue, which sends the answer once`, async () => {
       const { container } = mountOn(host);
       await settle();
@@ -139,7 +161,7 @@ describe("AgentHitlScreenCard — a gate whose renderer id no binding declares",
   }
 });
 
-/** One-value gates the floor draws on a retired id, with what is typed and what the run receives. */
+/** One-value plain-form gates, with what is typed and what the run receives. */
 const ONE_VALUE_GATES: Array<{ shape: string; schema: Record<string, unknown>; typed: string; text: string }> = [
   { shape: "string", schema: { type: "string", title: "Answer" }, typed: "Ship it.", text: "Ship it." },
   { shape: "number", schema: { type: "number", title: "Answer" }, typed: "42", text: "42" },
@@ -151,10 +173,10 @@ const ONE_VALUE_GATES: Array<{ shape: string; schema: Record<string, unknown>; t
   },
 ];
 
-describe("AgentHitlScreenCard — a one-value gate on a retired id sends the entered value", () => {
+describe("AgentHitlScreenCard — a one-value plain-form gate sends the entered value", () => {
   for (const host of ["run_card", "chat_thread"] as LifecycleCardHost[]) {
     for (const g of ONE_VALUE_GATES) {
-      // red-first-expect: expected null not to be null
+      // red-first-expect: to match object { approved: true,
       it(`${host}: a ${g.shape} gate resumes with the entered value, not the approval marker`, async () => {
         const asking = { ...ASKING, gate: { ...ASKING.gate, inputSchema: g.schema, fieldName: "answer" } };
         screenStateMock.mockImplementation(async () => asking);
@@ -175,6 +197,60 @@ describe("AgentHitlScreenCard — a one-value gate on a retired id sends the ent
         expect(approveMock.mock.calls[0]![2]).toBeUndefined();
       });
     }
+  }
+});
+
+/** Refused: the no-renderer paragraph, no field, no Continue, nothing sent. */
+async function expectRefused(container: HTMLElement, id: string) {
+  await waitFor(() => expect(container.textContent ?? "", id).toMatch(/no renderer configured/));
+  expect(container.querySelector("#field-note"), id).toBeNull();
+  expect(container.querySelector("#field-selectedIdeaJson"), id).toBeNull();
+  expect(container.querySelector("textarea, input[type='text']"), id).toBeNull();
+  expect(continues(container), id).toHaveLength(0);
+  expect(approveMock, id).not.toHaveBeenCalled();
+}
+
+describe("AgentHitlScreenCard — a step whose screen is no longer declared is refused", () => {
+  for (const host of ["run_card", "chat_thread"] as LifecycleCardHost[]) {
+    it(`${host}: a former decision or picker step is not drawn as a free-text form`, async () => {
+      for (const id of DROPPED) {
+        const asking = {
+          ...ASKING,
+          gate: {
+            ...ASKING.gate,
+            xRenderer: id,
+            inputSchema: {
+              type: "object",
+              properties: { selectedIdeaJson: { type: "string", title: "Selected idea" } },
+            },
+          },
+        };
+        screenStateMock.mockImplementation(async () => asking);
+        globalThis.fetch = (async () =>
+          new Response(JSON.stringify(asking), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          })) as unknown as typeof fetch;
+        const { container } = mountOn(host);
+        await settle();
+        await expectRefused(container, id);
+        cleanup();
+      }
+    });
+
+    it(`${host}: a renderer id the host has never seen is refused`, async () => {
+      const id = "@cinatra-test/never-seen-agent:screen";
+      const asking = { ...ASKING, gate: { ...ASKING.gate, xRenderer: id } };
+      screenStateMock.mockImplementation(async () => asking);
+      globalThis.fetch = (async () =>
+        new Response(JSON.stringify(asking), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })) as unknown as typeof fetch;
+      const { container } = mountOn(host);
+      await settle();
+      await expectRefused(container, id);
+    });
   }
 });
 

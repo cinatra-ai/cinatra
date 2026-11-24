@@ -1,27 +1,32 @@
 // @vitest-environment jsdom
 /**
- * A GATE WHOSE RENDERER ID NO BINDING DECLARES ANY MORE IS STILL ANSWERABLE.
+ * A STEP WHOSE SCREEN IS NO LONGER DECLARED IS REFUSED, NEVER DRAWN AS A
+ * PLAIN FORM.
  *
  * A run parks at a mid-run step whose stored schema names an `x-renderer` id.
- * When the package that declared that id drops the declaration (a later
- * version no longer draws that screen), the registry resolves nothing for the
- * id. Every live host then drew "Waiting for input — no renderer configured
- * for this step." and no Continue, so the parked run could not be answered.
+ * The step's durable record holds that id, the schema, the values and the
+ * field name, but no kind and no `midRunHitl` flag. When the package that
+ * declared the id drops the declaration, the host knows nothing more about
+ * the id than about one it has never seen, and the schema does not tell a
+ * confirmation from a decision or a picker. So the plain form never stands in
+ * for such a step.
  *
  * Pinned here:
- *   - `resolveHitlGateRenderer` gives such a gate the schema floor (the entry
- *     registered under the schema-field-fallback id), keeps a claimed id's own
- *     entry, and gives no floor to an empty or bare id or to an id a host draws
- *     inline (the artifact-review redirect, the trigger wait);
- *   - the registry's own `resolve` still answers null for the id, so a field
- *     inside a form is never drawn with the floor's Continue;
- *   - a TOMBSTONED id (a retired review gate) and an id of a review or mid-run
- *     kind never take the floor, and a tombstoned binding never registers;
- *   - on the orchestrator stepper the gate draws its stored schema's field and
- *     one Continue, and the Continue sends the floor's approval, carrying the
- *     written note as the resume text, to the gate's review task once;
- *   - on the stepper a tombstoned gate still shows "no renderer configured"
- *     and no Continue.
+ *   - `resolveHitlGateRenderer` answers exactly as the registry does: a
+ *     claimed id keeps its own entry, the plain form's own id is drawn by the
+ *     plain form, and an id no entry claims gets no renderer (a former
+ *     decision or picker step such as an idea selection, a context selector,
+ *     a send confirmation or a publish confirmation, and an id the host has
+ *     never seen);
+ *   - on the orchestrator stepper such a step shows "no renderer configured",
+ *     no field and no Continue, and nothing is sent;
+ *   - a step recorded under the plain form's own id draws its stored schema's
+ *     field and one Continue, and the Continue sends the floor's approval,
+ *     carrying the entered value as the resume text, to the gate's review
+ *     task once;
+ *   - a TOMBSTONED id (a retired review gate) never resolves, a tombstoned
+ *     binding never registers, and on the stepper the gate shows "no renderer
+ *     configured" and no Continue.
  *
  * Harness mirrors orchestrator-stepper-panel-next-input-gate-4244.test.tsx.
  *
@@ -33,11 +38,7 @@ import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 
-import {
-  ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
-  SCHEMA_FIELD_FALLBACK_RENDERER_ID,
-  TRIGGER_WAIT_STATUS_RENDERER_ID,
-} from "../agent-builder-ids";
+import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 import * as registration from "../register-default-renderers";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import { fieldRendererRegistry, type FieldRendererContext } from "../field-renderer-registry";
@@ -105,8 +106,35 @@ vi.mock("../use-runtime-field-renderer-bindings", () => ({
   useRuntimeFieldRendererBindings: () => ({ bindings: {}, loading: false }),
 }));
 
-/** An id a package declared once and no longer declares. */
-const DROPPED_ID = "@cinatra-test/retired-pack-agent:draft-confirm";
+/**
+ * Mid-run decision and picker steps whose packages dropped the declarations:
+ * the generated bindings no longer list them.
+ */
+const DROPPED = vi.hoisted(() => [
+  "@cinatra-ai/blog-pipeline-agent:idea-selection",
+  "@cinatra-ai/context-selection-agent:context-selector",
+  "@cinatra-ai/email-delivery-agent:send-confirmation",
+  "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm",
+]);
+vi.mock("@/lib/generated/agent-bindings", async (orig) => {
+  const real = await orig<typeof import("@/lib/generated/agent-bindings")>();
+  return {
+    ...real,
+    GENERATED_FIELD_RENDERER_BINDINGS: real.GENERATED_FIELD_RENDERER_BINDINGS.filter(
+      (b) => !DROPPED.includes(b.id),
+    ),
+  };
+});
+
+/** An id no binding has ever declared. */
+const NEVER_SEEN_ID = "@cinatra-test/never-seen-agent:screen";
+/** The plain form's own id: a step that declares no screen of its own. */
+const FLOOR_ID = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
+/** The idea selection's answer field, as its step asks for it. */
+const PICK_SCHEMA = {
+  type: "object",
+  properties: { selectedIdeaJson: { type: "string", title: "Selected idea" } },
+};
 const TASK_ID = "wayflow-task-dropped";
 const NOTE_FIELD = "note";
 const STORED_SCHEMA = {
@@ -142,7 +170,7 @@ function baseProps(): PanelProps {
     agUiEnabled: false as boolean | null,
     agentPackageName: "@cinatra-test/retired-pack-agent",
     inputParams: {},
-    stepperSteps: [{ index: 1, stepNumber: 0, label: "Confirm", xRenderer: DROPPED_ID }],
+    stepperSteps: [{ index: 1, stepNumber: 0, label: "Confirm", xRenderer: FLOOR_ID }],
     agentId: "cinatra-test/retired-pack-agent",
     lgThreadId: null,
     templateId: "tmpl-dropped",
@@ -181,63 +209,45 @@ afterEach(() => {
 
 describe("resolveHitlGateRenderer", () => {
   // red-first-expect: resolveHitlGateRenderer is not a function
-  it("gives a gate whose id no entry claims the schema floor", () => {
-    expect(fieldRendererRegistry.resolve("hitl", gateSchema(DROPPED_ID), CONTEXT)).toBeNull();
-    expect(midRun.resolveHitlGateRenderer("hitl", gateSchema(DROPPED_ID), CONTEXT)?.id).toBe(
-      SCHEMA_FIELD_FALLBACK_RENDERER_ID,
-    );
+  it("refuses a former decision or picker step whose declaration is gone", () => {
+    for (const id of DROPPED) {
+      expect(fieldRendererRegistry.list().some((e) => e.id === id), id).toBe(false);
+      for (const schema of [PICK_SCHEMA, STORED_SCHEMA, { type: "object" }, { type: "string" }]) {
+        expect(midRun.resolveHitlGateRenderer("hitl", { ...schema, "x-renderer": id }, CONTEXT), id).toBeNull();
+      }
+    }
+  });
+
+  // red-first-expect: resolveHitlGateRenderer is not a function
+  it("refuses a renderer id the host has never seen", () => {
+    for (const id of [NEVER_SEEN_ID, "@cinatra-ai/some-retired-agent:old-screen", "never-seen"]) {
+      expect(midRun.resolveHitlGateRenderer("hitl", gateSchema(id), CONTEXT), id).toBeNull();
+    }
+  });
+
+  // red-first-expect: resolveHitlGateRenderer is not a function
+  it("draws a step recorded under the plain form's own id with the plain form", () => {
+    expect(midRun.resolveHitlGateRenderer("hitl", gateSchema(FLOOR_ID), CONTEXT)?.id).toBe(FLOOR_ID);
   });
 
   // red-first-expect: resolveHitlGateRenderer is not a function
   it("keeps a claimed id's own entry", () => {
     fieldRendererRegistry.register({
-      id: DROPPED_ID,
+      id: NEVER_SEEN_ID,
       priority: 90,
-      condition: (_f, schema) => schema["x-renderer"] === DROPPED_ID,
+      condition: (_f, schema) => schema["x-renderer"] === NEVER_SEEN_ID,
       renderer: () => null,
     });
-    expect(midRun.resolveHitlGateRenderer("hitl", gateSchema(DROPPED_ID), CONTEXT)?.id).toBe(DROPPED_ID);
-  });
-
-  // red-first-expect: resolveHitlGateRenderer is not a function
-  it("gives no floor to an empty or bare id, or to an id a host draws inline", () => {
-    for (const id of ["", "draft-confirm", ARTIFACT_REVIEW_REDIRECT_RENDERER_ID, TRIGGER_WAIT_STATUS_RENDERER_ID]) {
-      expect(midRun.resolveHitlGateRenderer("hitl", gateSchema(id), CONTEXT), id).toBeNull();
-    }
-    expect(midRun.resolveHitlGateRenderer("hitl", { ...STORED_SCHEMA }, CONTEXT)).toBeNull();
+    expect(midRun.resolveHitlGateRenderer("hitl", gateSchema(NEVER_SEEN_ID), CONTEXT)?.id).toBe(NEVER_SEEN_ID);
   });
 
   // red-first-expect: TOMBSTONED_HITL_RENDERER_IDS is not iterable
-  it("gives no floor to any tombstoned id", () => {
+  it("gives no renderer to any tombstoned id", () => {
     const tombstoned = [...midRun.TOMBSTONED_HITL_RENDERER_IDS];
     expect(tombstoned.length).toBeGreaterThan(0);
     for (const id of tombstoned) {
       expect(fieldRendererRegistry.resolve("hitl", gateSchema(id), CONTEXT), id).toBeNull();
       expect(midRun.resolveHitlGateRenderer("hitl", gateSchema(id), CONTEXT), id).toBeNull();
-    }
-  });
-
-  // red-first-expect: resolveHitlGateRenderer is not a function
-  it("gives no floor to an id of the retired scope or of a review or mid-run kind", () => {
-    for (const id of [
-      "@cinatra/some-retired-agent:old-screen",
-      "@cinatra-ai/some-retired-agent:old-review",
-      "@cinatra-ai/some-retired-agent:review-panel",
-      "@cinatra-ai/some-retired-agent:output",
-      "@cinatra-ai/some-retired-agent:drafts-output",
-      "@cinatra-ai/some-retired-agent:list-picker",
-      "@cinatra-ai/some-retired-agent:setup-form",
-    ]) {
-      expect(midRun.resolveHitlGateRenderer("hitl", gateSchema(id), CONTEXT), id).toBeNull();
-    }
-  });
-
-  // red-first-expect: resolveHitlGateRenderer is not a function
-  it("still gives a plainly retired screen id the floor", () => {
-    for (const id of [DROPPED_ID, "@cinatra-ai/some-retired-agent:old-screen"]) {
-      expect(midRun.resolveHitlGateRenderer("hitl", gateSchema(id), CONTEXT)?.id, id).toBe(
-        SCHEMA_FIELD_FALLBACK_RENDERER_ID,
-      );
     }
   });
 
@@ -257,10 +267,29 @@ describe("resolveHitlGateRenderer", () => {
   });
 });
 
-describe("OrchestratorStepperPanel - a gate whose renderer id no binding declares", () => {
-  // red-first-expect: expected null not to be null
+describe("OrchestratorStepperPanel - a step whose screen is no longer declared is refused", () => {
+  it("a former decision or picker step shows no field and no Continue, and nothing is sent", async () => {
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    for (const id of [...DROPPED, NEVER_SEEN_ID]) {
+      INTERRUPT = { schema: PICK_SCHEMA, xRenderer: id, values: {}, reviewTaskId: TASK_ID };
+      render(
+        <OrchestratorStepperPanel
+          {...baseProps()}
+          stepperSteps={[{ index: 1, stepNumber: 0, label: "Pick", xRenderer: id }]}
+        />,
+      );
+      await waitFor(() => expect(document.body.textContent ?? "", id).toMatch(/no renderer configured/));
+      expect(document.getElementById("field-selectedIdeaJson"), id).toBeNull();
+      expect(continues(), id).toHaveLength(0);
+      expect(hitlActions.approveReviewTask, id).not.toHaveBeenCalled();
+      cleanup();
+    }
+  });
+});
+
+describe("OrchestratorStepperPanel - a step recorded under the plain form's own id", () => {
   it("draws the stored schema's field and one Continue, not the no-renderer paragraph", async () => {
-    INTERRUPT = { schema: STORED_SCHEMA, xRenderer: DROPPED_ID, values: {}, reviewTaskId: TASK_ID };
+    INTERRUPT = { schema: STORED_SCHEMA, xRenderer: FLOOR_ID, values: {}, reviewTaskId: TASK_ID };
     const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
     render(<OrchestratorStepperPanel {...baseProps()} />);
     await waitFor(() => expect(document.getElementById(`field-${NOTE_FIELD}`)).not.toBeNull());
@@ -268,9 +297,8 @@ describe("OrchestratorStepperPanel - a gate whose renderer id no binding declare
     await waitFor(() => expect(continues()).toHaveLength(1));
   });
 
-  // red-first-expect: expected null not to be null
   it("sends the written answer to the gate's review task once", async () => {
-    INTERRUPT = { schema: STORED_SCHEMA, xRenderer: DROPPED_ID, values: {}, reviewTaskId: TASK_ID };
+    INTERRUPT = { schema: STORED_SCHEMA, xRenderer: FLOOR_ID, values: {}, reviewTaskId: TASK_ID };
     const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
     render(<OrchestratorStepperPanel {...baseProps()} />);
     await waitFor(() => expect(document.getElementById(`field-${NOTE_FIELD}`)).not.toBeNull());
@@ -293,7 +321,7 @@ describe("OrchestratorStepperPanel - a gate whose renderer id no binding declare
   });
 });
 
-/** One-value gates the floor draws on a retired id, with what is typed and what the run receives. */
+/** One-value plain-form gates, with what is typed and what the run receives. */
 const ONE_VALUE_GATES: Array<{ shape: string; schema: Record<string, unknown>; typed: string; text: string }> = [
   { shape: "string", schema: { type: "string", title: "Answer" }, typed: "Ship it.", text: "Ship it." },
   { shape: "number", schema: { type: "number", title: "Answer" }, typed: "42", text: "42" },
@@ -305,13 +333,13 @@ const ONE_VALUE_GATES: Array<{ shape: string; schema: Record<string, unknown>; t
   },
 ];
 
-describe("OrchestratorStepperPanel - a one-value gate on a retired id sends the entered value", () => {
+describe("OrchestratorStepperPanel - a one-value plain-form gate sends the entered value", () => {
   for (const g of ONE_VALUE_GATES) {
-    // red-first-expect: expected null not to be null
+    // red-first-expect: to match object { approved: true,
     it(`a ${g.shape} gate resumes with the entered value, not the approval marker`, async () => {
       INTERRUPT = {
         schema: g.schema,
-        xRenderer: DROPPED_ID,
+        xRenderer: FLOOR_ID,
         values: {},
         reviewTaskId: TASK_ID,
         fieldName: "answer",
@@ -338,9 +366,8 @@ describe("OrchestratorStepperPanel - a bare object gate", () => {
   const OWN_ID = "@cinatra-test/live-pack-agent:confirm-screen";
   const BARE = { type: "object" };
 
-  // red-first-expect: expected [] to have a length of 1 but got +0
   it("the floor draws it as the Continue-only confirmation, which sends the approval", async () => {
-    INTERRUPT = { schema: BARE, xRenderer: DROPPED_ID, values: {}, reviewTaskId: TASK_ID };
+    INTERRUPT = { schema: BARE, xRenderer: FLOOR_ID, values: {}, reviewTaskId: TASK_ID };
     const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
     render(<OrchestratorStepperPanel {...baseProps()} />);
     await waitFor(() => expect(continues()).toHaveLength(1));

@@ -1157,39 +1157,6 @@ export function buildSchemaFieldGatePayload(args: {
   return payload;
 }
 
-/** Schema types whose answer the schema floor draws a control for. */
-const FLOOR_SCALAR_TYPES: ReadonlySet<string> = new Set(["string", "number", "integer", "boolean"]);
-
-/**
- * Can the schema floor answer a gate of this schema with a value of the right
- * shape? The floor draws:
- *
- *   - an object: its declared fields, or a bare confirmation (not a malformed
- *     object schema, `readSchemaFieldGate`);
- *   - a string, a number, an integer or a boolean, a schema with no `type`
- *     (a text box) and an enum (a pick);
- *   - an array of text, one entry per line (no `items`, or `items` that
- *     declare no type or the string type).
- *
- * Any other shape (an array whose items are objects, numbers or booleans, a
- * `type` list, an unknown type, a non-object schema) would be answered with a
- * value of the wrong shape, so it gets no floor.
- */
-export function schemaFloorCanAnswer(schema: unknown): boolean {
-  if (!isPlainSchemaObject(schema)) return false;
-  const type = ownValue(schema, "type");
-  if (type === undefined) return true;
-  if (typeof type !== "string") return false;
-  if (type === "object") return readSchemaFieldGate(schema).kind !== "malformed";
-  if (FLOOR_SCALAR_TYPES.has(type)) return true;
-  if (type !== "array") return false;
-  const items = ownValue(schema, "items");
-  if (items === undefined) return true;
-  if (!isPlainSchemaObject(items)) return false;
-  const itemType = ownValue(items, "type");
-  return itemType === undefined || itemType === "string";
-}
-
 /** Keys of the approval itself: a field of one of these names is never written beside it. */
 const FLOOR_RESERVED_KEYS: ReadonlySet<string> = new Set([
   "approved",
@@ -1201,19 +1168,21 @@ const FLOOR_RESERVED_KEYS: ReadonlySet<string> = new Set([
 
 /**
  * The approval payload for a NON-SETUP gate the schema floor draws, for every
- * shape the floor answers (`schemaFloorCanAnswer`). The server forwards
+ * shape the floor answers. The server forwards
  * `userResponse` to the paused WayFlow node as its resume text; without it the
  * node is handed "[Approved by operator]".
  *
  *  - An OBJECT schema: `buildSchemaFieldGatePayload` (its declared fields; a
  *    bare confirmation sends the marker).
  *  - Any other schema, the one value the floor emits:
- *      - a text: the text verbatim; with the gate's `fieldName` it is also
- *        written under that name and named in `userResponseFieldName`, so the
- *        server records the answer under it (`readWayflowSubmittedValues`);
+ *      - a text: the text verbatim;
  *      - a number or a boolean: its JSON text (`42`, `true`, `false`); a
  *        number that is not finite is refused with `NonFiniteAnswerError`;
  *      - a list: its JSON text (`["a","b"]`).
+ *    With the gate's `fieldName`, the value itself (of whatever type) is also
+ *    written under that name and the name is given in `userResponseFieldName`,
+ *    so the server records the answer under it (`readWayflowSubmittedValues`).
+ *    The resume text is the same with or without the name.
  *    A blank text, an empty list and no value carry no resume text, so the
  *    flow receives the marker, as for an object gate answered with nothing.
  */
@@ -1242,25 +1211,24 @@ export function buildSchemaFloorGatePayload(args: {
     !FLOOR_RESERVED_KEYS.has(args.fieldName)
       ? args.fieldName
       : null;
+  let resumeText: string;
   if (typeof value === "string") {
     if (value.trim() === "") return payload;
-    payload.userResponse = value;
-    if (field !== null) {
-      setOwn(payload, field, value);
-      payload.userResponseFieldName = field;
-    }
-    return payload;
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
+    resumeText = value;
+  } else if (typeof value === "number" || typeof value === "boolean") {
     if (holdsNonFiniteNumber(value)) throw new NonFiniteAnswerError(field ?? "answer");
-    payload.userResponse = JSON.stringify(value);
-    return payload;
-  }
-  if (Array.isArray(value)) {
+    resumeText = JSON.stringify(value);
+  } else if (Array.isArray(value)) {
     if (value.length === 0) return payload;
     if (holdsNonFiniteNumber(value)) throw new NonFiniteAnswerError(field ?? "answer");
-    payload.userResponse = JSON.stringify(value);
+    resumeText = JSON.stringify(value);
+  } else {
     return payload;
+  }
+  payload.userResponse = resumeText;
+  if (field !== null) {
+    setOwn(payload, field, value);
+    payload.userResponseFieldName = field;
   }
   return payload;
 }
@@ -1274,13 +1242,15 @@ export function buildSchemaFloorGatePayload(args: {
  * answer (cinatra#4244). The resume text itself (`userResponse`) goes to the
  * flow verbatim; this reading only decides what is recorded beside it.
  *
- *  1. A NAMED SINGLE TEXT ANSWER. A schema-drawn gate that asks for one text
- *     field sends that text verbatim as `userResponse` and names its field in
- *     `userResponseFieldName`. When the values carry that field as an own key
- *     whose value IS the resume text, the answer is recorded under that field
- *     alone - even when the text reads as JSON (`42`, `{"tone":"warm"}`), which
- *     the reading below would otherwise take for the submitted values. A name
- *     whose value is not the resume text is not believed.
+ *  1. A NAMED SINGLE ANSWER. A schema-drawn gate that asks for one value
+ *     sends it as `userResponse` (a text verbatim, a number, a boolean or a
+ *     list as its JSON text) and names its field in `userResponseFieldName`.
+ *     When the values carry that field as an own key whose value IS the resume
+ *     text (a text), or whose JSON text IS the resume text (a number, a
+ *     boolean, a list), the answer is recorded under that field alone, with
+ *     the value of its own type - even when a text reads as JSON (`42`,
+ *     `{"tone":"warm"}`), and although the reading below keeps only a JSON
+ *     object. A name whose value is not the resume text is not believed.
  *  2. Otherwise, as before: a `userResponse` that parses as a JSON object is the
  *     submitted values; one that is not JSON leaves the values without
  *     `userResponse`; no `userResponse` leaves the values themselves; nothing
@@ -1302,15 +1272,18 @@ export function readWayflowSubmittedValues(values: unknown): Record<string, unkn
   const userResponseRaw = own("userResponse");
   if (typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0) {
     const fieldName = own("userResponseFieldName");
+    const named = typeof fieldName === "string" ? own(fieldName) : undefined;
     if (
       typeof fieldName === "string" &&
       fieldName !== "userResponse" &&
       fieldName !== "userResponseFieldName" &&
-      own(fieldName) === userResponseRaw
+      (named === userResponseRaw ||
+        ((typeof named === "number" || typeof named === "boolean" || Array.isArray(named)) &&
+          JSON.stringify(named) === userResponseRaw))
     ) {
       const recorded: Record<string, unknown> = {};
       Object.defineProperty(recorded, fieldName, {
-        value: userResponseRaw,
+        value: named,
         enumerable: true,
         writable: true,
         configurable: true,

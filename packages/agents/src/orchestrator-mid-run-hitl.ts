@@ -15,16 +15,10 @@
 
 import {
   fieldRendererRegistry,
-  RENDERER_NAMESPACE_RE,
   type FieldRendererContext,
   type FieldRendererEntry,
 } from "./field-renderer-registry";
-import {
-  ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
-  SCHEMA_FIELD_FALLBACK_RENDERER_ID,
-  TRIGGER_WAIT_STATUS_RENDERER_ID,
-} from "./agent-builder-ids";
-import { schemaFloorCanAnswer } from "./hitl-gate-submit";
+import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "./agent-builder-ids";
 
 /**
  * Manifest-declared strict classification: does a registered binding flag
@@ -63,12 +57,6 @@ export function classifyMidRunHitl(xRenderer: string): boolean {
   );
 }
 
-/** Gate ids a host draws inline, never through a field renderer: no floor for them. */
-const HOST_INLINE_GATE_IDS: ReadonlySet<string> = new Set([
-  ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
-  TRIGGER_WAIT_STATUS_RENDERER_ID,
-]);
-
 /**
  * THE TOMBSTONED RENDERER IDS: retired review and action-boundary gates that
  * must stay unresumable. A stored interrupt that carries one of them shows
@@ -85,8 +73,8 @@ const HOST_INLINE_GATE_IDS: ReadonlySet<string> = new Set([
  *     package refs at zero in the whole tree.
  *
  * ONE LIST, READ IN TWO PLACES: `registerFieldRendererBindings` never
- * registers a tombstoned id, and `resolveHitlGateRenderer` never gives one
- * the schema floor.
+ * registers a tombstoned id, and the hosts classify none as mid-run
+ * (`classifyMidRunHitl`, the HITL screen card).
  */
 const RETIRED_SCOPE_PREFIX = "@cinatra/";
 const RETIRED_PACKAGE_PREFIXES: readonly string[] = [
@@ -117,69 +105,47 @@ export function isTombstonedHitlRendererId(xRenderer: string): boolean {
 }
 
 /**
- * Does the id name a review or a mid-run kind? The floor's Continue only
- * approves, so it must never stand in for a review decision. The same suffixes
- * the hosts read to classify a gate (`classifyMidRunHitl`, the list step, the
- * grouped setup form) and any local name that says "review" are refused. A
- * refused id keeps no renderer: the gate stays unanswerable, never approved by
- * a form that was not its own. As a side effect, every id that does take the
- * floor is classified by those suffix rules exactly as the floor's own id is.
- */
-function namesReviewOrMidRunKind(xRenderer: string): boolean {
-  const local = xRenderer.slice(xRenderer.lastIndexOf(":") + 1);
-  return (
-    local.includes("review") ||
-    local === "output" ||
-    local.endsWith("-output") ||
-    local === "list-picker" ||
-    local === "setup-form"
-  );
-}
-
-/**
- * The entry a LIVE HITL gate is drawn with. A gate whose `x-renderer` id no
- * entry claims (a package dropped the binding while a run was parked at that
- * step) falls to the schema floor, the entry registered under
- * `SCHEMA_FIELD_FALLBACK_RENDERER_ID`, so the person can still answer the
- * step from its stored schema and the run can resume. This is the floor a
- * not-in-build binding of a known kind already draws.
+ * The entry a LIVE HITL gate is drawn with: the entry the registry resolves for
+ * the gate's recorded `x-renderer` id, and nothing else.
  *
- * Fail-safe: only a namespaced id gets the floor. An empty or bare id, an id
- * a host draws inline, a tombstoned id, an id of a review or mid-run kind and
- * a schema the floor cannot answer with a value of the right shape
- * (`schemaFloorCanAnswer`: a malformed object, an array of objects, numbers
- * or booleans, a `type` list or an unknown type) keep no renderer. The registry's own `resolve` is unchanged, so a field
- * inside a form never takes the floor's Continue.
+ * THE PLAIN FORM IS NEVER A STAND-IN FOR A SCREEN THE HOST CANNOT NAME. A
+ * parked step's durable record (`agent_run_hitl_gates`: the renderer id, the
+ * schema, the values and the field name; the event log's interrupt frame
+ * holds the same four) records no kind and no `midRunHitl` flag. When a
+ * package stops declaring a screen, the host loses everything it knew about
+ * that id: the generated bindings, the kind and the `midRunHitl` flag go with
+ * the declaration. Such an id cannot be told apart from an id the host has
+ * never seen, and the schema does not tell a confirmation from a decision (a
+ * screen can draw its choices from the values with a bare object schema, and
+ * a picker can ask for one text field). So:
  *
- * A host that draws a gate with the floor answers it with the floor's own
- * submit semantics (`gateDrawnBySchemaFloor`), never with those of the
- * original id.
+ *   - a step recorded under the plain form's own id
+ *     (`SCHEMA_FIELD_FALLBACK_RENDERER_ID`, the id the flow compiler gives a
+ *     step that declares no screen) is drawn by the plain form, as before;
+ *   - a step whose id a registered entry claims is drawn by that entry;
+ *   - a step whose id no entry claims is REFUSED: no renderer, so the hosts
+ *     show "no renderer configured for this step" and no Continue, the run
+ *     stays parked and nothing is sent. A former decision or picker step is
+ *     never answered through a free-text form.
+ *
+ * Closed against ids the host has never seen: the floor is reached only by
+ * the floor's own id or by an id a registered entry claims, and an id a
+ * package can write into a step without a registered binding claims nothing.
+ * The registry's own `resolve` is the whole answer, so a field inside a form
+ * and a live gate resolve alike.
  */
 export function resolveHitlGateRenderer(
   fieldName: string,
   schema: Record<string, unknown>,
   context: FieldRendererContext,
 ): FieldRendererEntry | null {
-  const entry = fieldRendererRegistry.resolve(fieldName, schema, context);
-  if (entry !== null) return entry;
-  const xRenderer = schema["x-renderer"];
-  if (
-    typeof xRenderer !== "string" ||
-    !RENDERER_NAMESPACE_RE.test(xRenderer) ||
-    HOST_INLINE_GATE_IDS.has(xRenderer) ||
-    isTombstonedHitlRendererId(xRenderer) ||
-    namesReviewOrMidRunKind(xRenderer) ||
-    !schemaFloorCanAnswer(schema)
-  ) {
-    return null;
-  }
-  return fieldRendererRegistry.list().find((e) => e.id === SCHEMA_FIELD_FALLBACK_RENDERER_ID) ?? null;
+  return fieldRendererRegistry.resolve(fieldName, schema, context);
 }
 
 /**
- * Is the gate drawn by the schema floor? True for the floor's own id and for an
- * unclaimed id that `resolveHitlGateRenderer` gave the floor. A host decides
- * the answer's shape from this, not from the gate's original `x-renderer` id.
+ * Is the gate drawn by the schema floor? True for the floor's own id and for a
+ * gate the resolved entry is the floor for. A host decides the answer's shape
+ * from this.
  */
 export function gateDrawnBySchemaFloor(
   xRenderer: string,

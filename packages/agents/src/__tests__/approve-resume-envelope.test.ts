@@ -90,11 +90,17 @@ const storeMock = vi.hoisted(() => ({
   transitionRunStatus: vi.fn(async () => undefined),
 }));
 vi.mock("../store", () => storeMock);
+const continueMock = vi.hoisted(() => ({
+  // No durable gate by default: the Continue receipt is not written.
+  readDurableHitlGateForContinue: vi.fn(async (): Promise<unknown> => null),
+  recordSuccessfulContinue: vi.fn(async (_input: { submittedValues: unknown }) => {}),
+}));
 vi.mock("../agent-run-hitl-prompts", () => ({
   captureHitlPromptForContinue: async (input: never) => {
     await storeMock.writeHitlPrompt(input); return "captured-prompt";
   },
-  recordSuccessfulContinue: async () => {},
+  readDurableHitlGateForContinue: continueMock.readDurableHitlGateForContinue,
+  recordSuccessfulContinue: continueMock.recordSuccessfulContinue,
   continueBindingDigest: () => "", continueGateDigest: () => "",
 }));
 
@@ -291,43 +297,49 @@ describe("a list step's picks reach the run (cinatra#3562)", () => {
   });
 });
 
-// A gate whose renderer id no binding declares any more is drawn by the schema
+// A step recorded under the plain form's own id (a step that declares no screen
+// of its own, as the publish packs' review step does) is drawn by the schema
 // floor. END TO END from the answer a host builds for it (the floor's own
-// payload, decided by the drawn entry, not by the original id) to the text
-// WayFlow receives: the written note, not "[Approved by operator]".
-describe("a gate the schema floor draws for an unclaimed id resumes with the written note", () => {
-  const DROPPED_ID = "@cinatra-ai/some-retired-agent:old-screen";
+// payload) to the text WayFlow receives: the written note, not
+// "[Approved by operator]". A step whose id no entry claims gets no renderer.
+const FLOOR_ID = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
+
+function registerFloorOnly(): void {
+  fieldRendererRegistry.clear();
+  fieldRendererRegistry.register({
+    id: FLOOR_ID,
+    priority: 1,
+    condition: (_f, schema) => schema["x-renderer"] === FLOOR_ID,
+    renderer: () => null,
+    drawsOwnSubmit: true,
+  });
+}
+
+function wayflowText(): string | undefined {
+  const call = sendTaskMock.mock.calls[0]?.[0] as unknown as {
+    message?: { parts?: Array<{ kind?: string; text?: string }> };
+  };
+  return call?.message?.parts?.[0]?.text;
+}
+
+const floorFor = (schema: Record<string, unknown>, xRenderer: string = FLOOR_ID) =>
+  midRun.resolveHitlGateRenderer("hitl", { ...schema, "x-renderer": xRenderer }, { connectedApps: [] });
+
+describe("a gate the schema floor draws resumes with the written note", () => {
   const SCHEMA = { type: "object", properties: { note: { type: "string", title: "Note" } } };
 
   beforeEach(() => {
     vi.clearAllMocks();
     setupRun();
-    fieldRendererRegistry.clear();
-    fieldRendererRegistry.register({
-      id: SCHEMA_FIELD_FALLBACK_RENDERER_ID,
-      priority: 1,
-      condition: (_f, schema) => schema["x-renderer"] === SCHEMA_FIELD_FALLBACK_RENDERER_ID,
-      renderer: () => null,
-      drawsOwnSubmit: true,
-    });
+    registerFloorOnly();
   });
-
-  function sentText(): string | undefined {
-    const call = sendTaskMock.mock.calls[0]?.[0] as unknown as {
-      message?: { parts?: Array<{ kind?: string; text?: string }> };
-    };
-    return call?.message?.parts?.[0]?.text;
-  }
 
   // red-first-expect: resolveHitlGateRenderer is not a function
   it("the host's answer for the floor-drawn gate reaches WayFlow as the note", async () => {
-    const entry = midRun.resolveHitlGateRenderer(
-      "hitl",
-      { ...SCHEMA, "x-renderer": DROPPED_ID },
-      { connectedApps: [] },
-    );
+    const entry = floorFor(SCHEMA);
+    expect(entry?.id).toBe(FLOOR_ID);
     const { payload, payloadFieldName } = gateSubmit.buildFieldGateAnswer({
-      drawnByFloor: midRun.gateDrawnBySchemaFloor(DROPPED_ID, entry),
+      drawnByFloor: midRun.gateDrawnBySchemaFloor(FLOOR_ID, entry),
       reviewTaskId: "wayflow-task-r1",
       fieldName: undefined,
       next: { note: "Go ahead." },
@@ -336,45 +348,37 @@ describe("a gate the schema floor draws for an unclaimed id resumes with the wri
     expect(payloadFieldName).toBeUndefined();
     await approveReviewTaskInternal("wayflow-task-r1", "actor-1", payload as Record<string, unknown>);
     expect(sendTaskMock).toHaveBeenCalledTimes(1);
-    expect(sentText()).toBe("Go ahead.");
+    expect(wayflowText()).toBe("Go ahead.");
   });
 
   it("the raw field answer (the setup-loop shape) would resume with the bare marker", async () => {
     await approveReviewTaskInternal("wayflow-task-r1", "actor-1", { note: "Go ahead." });
-    expect(sentText()).toBe("[Approved by operator]");
+    expect(wayflowText()).toBe("[Approved by operator]");
+  });
+
+  // red-first-expect: resolveHitlGateRenderer is not a function
+  it("a step whose id no entry claims gets no renderer, so no answer is built for it", () => {
+    for (const id of [
+      "@cinatra-test/never-seen-agent:screen",
+      "@cinatra-ai/blog-pipeline-agent:idea-selection",
+    ]) {
+      expect(floorFor(SCHEMA, id), id).toBeNull();
+    }
   });
 });
 
-// Every shape the schema floor answers, on a retired id: the answer each host
-// builds (the run panel and the card through `buildFieldGateAnswer`, the
-// stepper through `buildSchemaFloorGatePayload`) is the same, and through the
-// real server boundary WayFlow receives the entered value, never the marker.
-describe("a retired-id gate the schema floor draws resumes with the entered value, for every shape", () => {
-  const DROPPED_ID = "@cinatra-ai/some-retired-agent:old-screen";
+// Every shape the schema floor answers: the answer each host builds (the run
+// panel and the card through `buildFieldGateAnswer`, the stepper through
+// `buildSchemaFloorGatePayload`) is the same, and through the real server
+// boundary WayFlow receives the entered value, never the marker.
+describe("a gate the schema floor draws resumes with the entered value, for every shape", () => {
   const TASK = "wayflow-task-r1";
 
   beforeEach(() => {
     vi.clearAllMocks();
     setupRun();
-    fieldRendererRegistry.clear();
-    fieldRendererRegistry.register({
-      id: SCHEMA_FIELD_FALLBACK_RENDERER_ID,
-      priority: 1,
-      condition: (_f, schema) => schema["x-renderer"] === SCHEMA_FIELD_FALLBACK_RENDERER_ID,
-      renderer: () => null,
-      drawsOwnSubmit: true,
-    });
+    registerFloorOnly();
   });
-
-  function sentText(): string | undefined {
-    const call = sendTaskMock.mock.calls[0]?.[0] as unknown as {
-      message?: { parts?: Array<{ kind?: string; text?: string }> };
-    };
-    return call?.message?.parts?.[0]?.text;
-  }
-
-  const floorFor = (schema: Record<string, unknown>) =>
-    midRun.resolveHitlGateRenderer("hitl", { ...schema, "x-renderer": DROPPED_ID }, { connectedApps: [] });
 
   const CASES: Array<{ shape: string; schema: Record<string, unknown>; next: unknown; text: string }> = [
     { shape: "string", schema: { type: "string", title: "Answer" }, next: "Ship it.", text: "Ship it." },
@@ -402,10 +406,10 @@ describe("a retired-id gate the schema floor draws resumes with the entered valu
     // red-first-expect: resolveHitlGateRenderer is not a function
     it(`a ${c.shape} gate delivers the entered value, and the three hosts build the same answer`, async () => {
       const entry = floorFor(c.schema);
-      expect(entry?.id).toBe(SCHEMA_FIELD_FALLBACK_RENDERER_ID);
+      expect(entry?.id).toBe(FLOOR_ID);
       // The run panel and the card.
       const { payload, payloadFieldName } = gateSubmit.buildFieldGateAnswer({
-        drawnByFloor: midRun.gateDrawnBySchemaFloor(DROPPED_ID, entry),
+        drawnByFloor: midRun.gateDrawnBySchemaFloor(FLOOR_ID, entry),
         reviewTaskId: TASK,
         fieldName: undefined,
         next: c.next,
@@ -422,7 +426,7 @@ describe("a retired-id gate the schema floor draws resumes with the entered valu
       expect(hostAnswer).toMatchObject({ approved: true, userResponse: c.text });
       await approveReviewTaskInternal(TASK, "actor-1", payload as Record<string, unknown>);
       expect(sendTaskMock).toHaveBeenCalledTimes(1);
-      expect(sentText()).toBe(c.text);
+      expect(wayflowText()).toBe(c.text);
     });
   }
 
@@ -430,7 +434,7 @@ describe("a retired-id gate the schema floor draws resumes with the entered valu
   it("a text gate with a field name records the answer under it", async () => {
     const schema = { type: "string", title: "Answer" };
     const { payload } = gateSubmit.buildFieldGateAnswer({
-      drawnByFloor: midRun.gateDrawnBySchemaFloor(DROPPED_ID, floorFor(schema)),
+      drawnByFloor: midRun.gateDrawnBySchemaFloor(FLOOR_ID, floorFor(schema)),
       reviewTaskId: TASK,
       fieldName: "answer",
       next: "Ship it.",
@@ -443,7 +447,7 @@ describe("a retired-id gate the schema floor draws resumes with the entered valu
     });
     expect(gateSubmit.readWayflowSubmittedValues(payload)).toEqual({ answer: "Ship it." });
     await approveReviewTaskInternal(TASK, "actor-1", payload as Record<string, unknown>);
-    expect(sentText()).toBe("Ship it.");
+    expect(wayflowText()).toBe("Ship it.");
   });
 
   // red-first-expect: buildSchemaFloorGatePayload is not a function
@@ -458,17 +462,65 @@ describe("a retired-id gate the schema floor draws resumes with the entered valu
       }),
     ).not.toHaveProperty("userResponse");
   });
+});
 
-  // red-first-expect: resolveHitlGateRenderer is not a function
-  it("a shape the floor cannot answer gets no floor", () => {
-    for (const schema of [
-      { type: "array", items: { type: "object", properties: { a: { type: "string" } } } },
-      { type: "array", items: { type: "number" } },
-      { type: "object", properties: { a: { type: "string" } }, required: ["missing"] },
-      { type: ["string", "null"] },
-      { type: "null" },
-    ]) {
-      expect(floorFor(schema), JSON.stringify(schema)).toBeNull();
+// A NAMED number, boolean or list answer keeps its field in the durable record,
+// as a named text does: the prompt record's submitted values and the Continue
+// receipt carry `{ answer: <value> }`, while WayFlow receives the same resume
+// text as without the name.
+describe("a named number, boolean or list answer survives in the durable record", () => {
+  const TASK = "wayflow-task-r1";
+  const GATE = {
+    runId: "run-r1",
+    reviewTaskId: TASK,
+    xRenderer: FLOOR_ID,
+    inputSchema: {},
+    values: {},
+    materializedAt: "2026-11-24T00:00:00.000Z",
+  };
+  const NAMED: Array<{ shape: string; schema: Record<string, unknown>; value: unknown; text: string }> = [
+    { shape: "number", schema: { type: "number" }, value: 42, text: "42" },
+    { shape: "boolean", schema: { type: "boolean" }, value: false, text: "false" },
+    { shape: "list", schema: { type: "array", items: { type: "string" } }, value: ["a"], text: '["a"]' },
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupRun();
+    registerFloorOnly();
+    continueMock.readDurableHitlGateForContinue.mockResolvedValue({ ...GATE });
+  });
+
+  for (const c of NAMED) {
+    // red-first-expect: buildSchemaFloorGatePayload is not a function
+    it(`a ${c.shape} answer under a field name is written, read back and receipted under that name`, async () => {
+      const payload = gateSubmit.buildSchemaFloorGatePayload({
+        schema: c.schema,
+        next: c.value,
+        fieldName: "answer",
+      });
+      expect(payload).toMatchObject({ userResponse: c.text, userResponseFieldName: "answer" });
+      expect(gateSubmit.readWayflowSubmittedValues(payload)).toEqual({ answer: c.value });
+      // A read of a stored copy (the record is JSON in the database).
+      expect(gateSubmit.readWayflowSubmittedValues(JSON.parse(JSON.stringify(payload)))).toEqual({
+        answer: c.value,
+      });
+      await approveReviewTaskInternal(TASK, "actor-1", payload);
+      expect(wayflowText()).toBe(c.text);
+      const written = storeMock.writeHitlPrompt.mock.calls[0]?.[0] as { submittedValues?: unknown };
+      expect(written?.submittedValues).toEqual({ answer: c.value });
+      expect(continueMock.recordSuccessfulContinue).toHaveBeenCalledTimes(1);
+      const receipted = continueMock.recordSuccessfulContinue.mock.calls[0]?.[0];
+      expect(receipted?.submittedValues).toEqual({ answer: c.value });
+    });
+  }
+
+  // red-first-expect: buildSchemaFloorGatePayload is not a function
+  it("without a field name the resume text is the same and nothing is named", async () => {
+    for (const c of NAMED) {
+      const payload = gateSubmit.buildSchemaFloorGatePayload({ schema: c.schema, next: c.value });
+      expect(payload.userResponse).toBe(c.text);
+      expect(payload).not.toHaveProperty("userResponseFieldName");
     }
   });
 });

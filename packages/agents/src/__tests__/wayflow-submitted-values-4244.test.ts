@@ -44,6 +44,23 @@ describe("readWayflowSubmittedValues (cinatra#4244)", () => {
     }
   });
 
+  // red-first-expect: expected null to deeply equal { answer: 42 }
+  it("records a named number, boolean or list answer under its field, with its own type", async () => {
+    const read = await reader();
+    for (const [value, text] of [
+      [42, "42"],
+      [false, "false"],
+      [["a"], '["a"]'],
+    ] as const) {
+      expect(
+        read({ answer: value, ...STAMP, userResponse: text, userResponseFieldName: "answer" }),
+        text,
+      ).toEqual({ answer: value });
+    }
+    // A named value whose JSON text is not the resume text is not believed.
+    expect(read({ answer: 41, ...STAMP, userResponse: "42", userResponseFieldName: "answer" })).toBeNull();
+  });
+
   it("records a named answer to a field called __proto__ as an own key", async () => {
     const read = await reader();
     const values = JSON.parse(

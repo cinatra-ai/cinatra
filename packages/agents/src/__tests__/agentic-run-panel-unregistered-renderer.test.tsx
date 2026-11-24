@@ -1,15 +1,18 @@
 // @vitest-environment jsdom
 /**
- * THE AGENTIC RUN PANEL DRAWS A GATE WHOSE RENDERER ID NO BINDING DECLARES.
+ * THE AGENTIC RUN PANEL DRAWS A PLAIN-FORM STEP AND REFUSES A STEP WHOSE
+ * SCREEN IS GONE.
  *
- * A run parked at a step whose stored schema names an `x-renderer` id that no
- * binding declares any more (its package dropped the declaration). The panel
- * drew "Waiting for input — no renderer configured for this step." and no
- * Continue, so the step could not be answered. It now draws the stored schema
- * through the schema floor, whose Continue sends the floor's approval, with
- * the written note as the resume text, to the gate's review task. A
- * tombstoned gate (a retired review gate) still draws no renderer and no
- * Continue.
+ * A step recorded under the plain form's own id (a step that declares no
+ * screen of its own) is drawn through the schema floor, whose Continue sends
+ * the floor's approval, with the entered value as the resume text, to the
+ * gate's review task.
+ *
+ * A step whose renderer id no binding declares any more (its package dropped
+ * the declaration) is refused: "no renderer configured for this step", no
+ * field, no Continue, nothing sent. A former decision or picker step is never
+ * drawn as a free-text form. A tombstoned gate (a retired review gate) is
+ * refused the same way.
  *
  * Harness mirrors agentic-run-panel.hitl.test.tsx.
  *
@@ -22,6 +25,27 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { fieldRendererRegistry } from "../field-renderer-registry";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import * as midRun from "../orchestrator-mid-run-hitl";
+import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
+
+/**
+ * Mid-run decision and picker steps whose packages dropped the declarations:
+ * the generated bindings no longer list them.
+ */
+const DROPPED = vi.hoisted(() => [
+  "@cinatra-ai/blog-pipeline-agent:idea-selection",
+  "@cinatra-ai/context-selection-agent:context-selector",
+  "@cinatra-ai/email-delivery-agent:send-confirmation",
+  "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm",
+]);
+vi.mock("@/lib/generated/agent-bindings", async (orig) => {
+  const real = await orig<typeof import("@/lib/generated/agent-bindings")>();
+  return {
+    ...real,
+    GENERATED_FIELD_RENDERER_BINDINGS: real.GENERATED_FIELD_RENDERER_BINDINGS.filter(
+      (b) => !DROPPED.includes(b.id),
+    ),
+  };
+});
 
 vi.mock("@cinatra-ai/sdk-ui", () => ({
   LoadingSpinner: () => null,
@@ -111,11 +135,11 @@ vi.mock("../agent-ui-override-registry", () => ({
 }));
 
 const TASK_ID = "wayflow-task-dropped";
-/** An id a package declared once and no longer declares. */
-const DROPPED_ID = "@cinatra-test/retired-pack-agent:draft-confirm";
+/** The plain form's own id: a step that declares no screen of its own. */
+const FLOOR_ID = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
 
 /** The gate's renderer id the mocked stream hands the panel. */
-const gateId = vi.hoisted(() => ({ current: "@cinatra-test/retired-pack-agent:draft-confirm" }));
+const gateId = vi.hoisted(() => ({ current: "" }));
 /** The gate's stored schema and field name the mocked stream hands the panel. */
 const gateShape = vi.hoisted(() => ({
   schema: null as Record<string, unknown> | null,
@@ -150,13 +174,14 @@ function continues(): HTMLButtonElement[] {
 
 beforeEach(() => {
   cleanup();
+  gateId.current = FLOOR_ID;
   fieldRendererRegistry.clear();
   ensureDefaultFieldRenderersRegistered();
 });
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
-  gateId.current = DROPPED_ID;
+  gateId.current = FLOOR_ID;
   gateShape.schema = null;
   gateShape.fieldName = undefined;
 });
@@ -173,10 +198,9 @@ function mountPanel(AgenticRunPanel: typeof import("../agentic-run-panel").Agent
   );
 }
 
-describe("AgenticRunPanel — a gate whose renderer id no binding declares", () => {
-  // red-first-expect: expected null not to be null
+describe("AgenticRunPanel — a step recorded under the plain form's own id", () => {
+  // red-first-expect: expected { note: 'Go ahead.' } to match object { note: 'Go ahead.', …(3) }
   it("draws the stored schema's field and one Continue, which sends the answer once", async () => {
-    expect(fieldRendererRegistry.list().some((e) => e.id === DROPPED_ID)).toBe(false);
     const { AgenticRunPanel } = await import("../agentic-run-panel");
     render(
       <AgenticRunPanel
@@ -209,7 +233,7 @@ describe("AgenticRunPanel — a gate whose renderer id no binding declares", () 
   });
 });
 
-/** One-value gates the floor draws on a retired id, with what is typed and what the run receives. */
+/** One-value plain-form gates, with what is typed and what the run receives. */
 const ONE_VALUE_GATES: Array<{ shape: string; schema: Record<string, unknown>; typed: string; text: string }> = [
   { shape: "string", schema: { type: "string", title: "Answer" }, typed: "Ship it.", text: "Ship it." },
   { shape: "number", schema: { type: "number", title: "Answer" }, typed: "42", text: "42" },
@@ -221,9 +245,9 @@ const ONE_VALUE_GATES: Array<{ shape: string; schema: Record<string, unknown>; t
   },
 ];
 
-describe("AgenticRunPanel — a one-value gate on a retired id sends the entered value", () => {
+describe("AgenticRunPanel — a one-value plain-form gate sends the entered value", () => {
   for (const g of ONE_VALUE_GATES) {
-    // red-first-expect: expected null not to be null
+    // red-first-expect: to match object { approved: true,
     it(`a ${g.shape} gate resumes with the entered value, not the approval marker`, async () => {
       gateShape.schema = g.schema;
       gateShape.fieldName = "answer";
@@ -240,6 +264,39 @@ describe("AgenticRunPanel — a one-value gate on a retired id sends the entered
       expect(call[2]).toBeUndefined();
     });
   }
+});
+
+/** Refused: the no-renderer paragraph, no field, no Continue, nothing sent. */
+async function expectRefused(id: string) {
+  await waitFor(() => expect(document.body.textContent ?? "", id).toMatch(/no renderer configured/));
+  expect(document.getElementById("field-note"), id).toBeNull();
+  expect(document.getElementById("field-selectedIdeaJson"), id).toBeNull();
+  expect(continues(), id).toHaveLength(0);
+  expect(hitlActions.approveReviewTask, id).not.toHaveBeenCalled();
+}
+
+describe("AgenticRunPanel — a step whose screen is no longer declared is refused", () => {
+  it("a former decision or picker step is not drawn as a free-text form", async () => {
+    gateShape.schema = {
+      type: "object",
+      properties: { selectedIdeaJson: { type: "string", title: "Selected idea" } },
+    };
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    for (const id of DROPPED) {
+      expect(fieldRendererRegistry.list().some((e) => e.id === id), id).toBe(false);
+      gateId.current = id;
+      mountPanel(AgenticRunPanel);
+      await expectRefused(id);
+      cleanup();
+    }
+  });
+
+  it("a renderer id the host has never seen is refused", async () => {
+    gateId.current = "@cinatra-test/never-seen-agent:screen";
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    mountPanel(AgenticRunPanel);
+    await expectRefused(gateId.current);
+  });
 });
 
 describe("AgenticRunPanel — a tombstoned gate stays unanswerable", () => {
