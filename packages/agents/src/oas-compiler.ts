@@ -1681,6 +1681,7 @@ export function collectPublishRows(
 // publishing step must go to one of these. Only the exact template form counts: the loader sends the run's token and
 // the step's signature only to the CINATRA_BASE_URL host, and a host route outside this list does not check the call.
 const PUBLISH_CALL_ROUTES = new Set(["{{CINATRA_BASE_URL}}/api/llm-bridge", "{{CINATRA_BASE_URL}}/api/agents/passthrough"]);
+const PUBLISH_ADDRESS_KEY = /(?:url|uri|endpoint)$/i;
 
 /** Every component of a publishing step that carries a `url` (the step itself, and each component inside it, a subflow
  *  its `$component_ref` names included, resolved in the nearest enclosing `$referenced_components` first) must name a
@@ -1705,9 +1706,18 @@ export function checkPublishingCallRoutes(
       const comp = value as Record<string, unknown>;
       const own = comp.$referenced_components;
       const scopes = own && typeof own === "object" && !Array.isArray(own) ? [own as Scope, ...outer] : outer;
-      if (typeof comp.component_type === "string" && hasOwn(comp, "url") && !PUBLISH_CALL_ROUTES.has(comp.url as string)) {
+      if (typeof comp.component_type === "string") {
         const who = typeof comp.id === "string" ? comp.id : step;
-        return { ok: false, error: `PUBLISH_CALL_UNCHECKED: node ${quoteNodeId(who)} of publishing step ${quoteNodeId(step)} calls a URL that is not the host's model bridge or passthrough, so its call would skip the publish check` };
+        const fail = (what: string) => ({ ok: false as const, error: `PUBLISH_CALL_UNCHECKED: node ${quoteNodeId(who)} of publishing step ${quoteNodeId(step)} ${what}, so its call would skip the publish check` });
+        if (hasOwn(comp, "url") && !PUBLISH_CALL_ROUTES.has(comp.url as string)) {
+          return fail("calls a URL that is not the host's model bridge or passthrough");
+        }
+        // An A2AAgent's calls go straight to its agent_url (agent card and send_message), never through ApiCallStep or a
+        // host route, so no host route checks them; any other address field (agent_url, base_url, an *_uri or endpoint)
+        // is an outward call form the routes above do not cover either.
+        if (comp.component_type === "A2AAgent" || Object.keys(comp).some((k) => k !== "url" && PUBLISH_ADDRESS_KEY.test(k))) {
+          return fail("calls a remote agent or address that is not the host's model bridge or passthrough");
+        }
       }
       if (typeof comp.$component_ref === "string") {
         const ref = comp.$component_ref;

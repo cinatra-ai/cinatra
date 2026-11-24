@@ -61,7 +61,7 @@ const {
 
 vi.mock("@/lib/db/pooled", async () => ({
   ...await vi.importActual<typeof import("@/lib/db/pooled")>("@/lib/db/pooled"),
-  getPooledDb: () => ({ query: poolQueryMock }),
+  getPooledDb: () => ({ query: poolQueryMock, connect: async () => ({ query: poolQueryMock, release: () => {} }) }),
 }));
 vi.mock("@/lib/postgres-config", () => ({
   getPostgresConnectionString: () => "postgres://test",
@@ -345,6 +345,39 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
     // Only the revision's existing event is restamped: a reused revision that never had one gains none.
     const [text] = poolQueryMock.mock.calls.find(([t]) => String(t).includes("artifact_produced_outbox"))!;
     expect(String(text).replace(/\s+/g, " ")).toContain(`AND (EXISTS (SELECT 1 FROM "public"."artifact_produced_outbox" WHERE event_id = $1::text))`);
+  });
+
+  // red-first-expect: expected [] to deeply equal [ Array(4) ]
+  it("A5 the reuse restamp takes the run row in its own statement before the event statement, and a claim seen there refuses it (cinatra#4762)", async () => {
+    const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
+    const reuse = async () => {
+      findFinalizedFanoutMessageMaterializationMock.mockResolvedValueOnce({ artifactId: "art-2", representationRevisionId: "rep-2" });
+      return mcpRequestContextStorage.run({ runAttempt: { runId: "run-1", resetGeneration: 1 } } as never, () => materializeFanoutMessageRevision(bodyInput(MESSAGES[0])));
+    };
+    const steps = () => poolQueryMock.mock.calls.map(([text, values]) => {
+      const t = String(text).replace(/\s+/g, " ");
+      if (t === "BEGIN" || t === "COMMIT" || t === "ROLLBACK") return t;
+      if (t.includes("FOR KEY SHARE") && !t.includes("artifact_produced_outbox")) return `lock ${(values as unknown[])[0]}`;
+      if (t.includes("artifact_produced_outbox")) return "event";
+      return null;
+    }).filter((step) => step !== null);
+    poolQueryMock.mockClear();
+    await reuse();
+    // The event statement starts only after the lock statement holds the run row, so it reads a claim committed while
+    // the lock waited (READ COMMITTED takes a new snapshot per statement).
+    expect(steps()).toEqual(["BEGIN", "lock run-1", "event", "COMMIT"]);
+
+    // The publishing call's claim committed while the lock waited: the event statement's fence aborts, nothing commits.
+    poolQueryMock.mockClear();
+    const base = poolQueryMock.getMockImplementation()!;
+    poolQueryMock.mockImplementation(async (text: string, values?: unknown[]) => {
+      if (String(text).includes("artifact_produced_outbox")) {
+        throw Object.assign(new Error('invalid input syntax for type integer: "cinatra_publish_call_in_flight"'), { code: "22P02" });
+      }
+      return base(text, values);
+    });
+    expect(await reuse()).toEqual({ ok: false, error: expect.stringContaining("A publishing call of this run is in flight") });
+    expect(steps()).toEqual(["BEGIN", "lock run-1", "event", "ROLLBACK"]);
   });
 
   it("B1 a fan-out over a body already filed under the same identity key returns that artifact and writes no second one", async () => {

@@ -505,6 +505,25 @@ describe("cinatra#4762 — a publishing step calls only the host routes that che
     }
   });
 
+  const agentNode = (agent: Node): Node => ({ component_type: "AgentNode", id: "publish", name: "publish", agent, outputs: [], metadata: { cinatra: { publishes: true } } });
+
+  // red-first-expect: expected true to be false
+  it("a publishing AgentNode that wraps an external A2A agent is refused, and the error never echoes its agent_url", async () => {
+    const error = await compileError(buildFlow({ middle: [agentNode({ component_type: "A2AAgent", id: "remote_peer", name: "remote_peer", agent_url: "https://peer.example.invalid/api/a2a" })] }));
+    expect(error).toMatch(/^PUBLISH_CALL_UNCHECKED: node "remote_peer" of publishing step "publish" calls a remote agent/);
+    expect(error).not.toContain("peer.example.invalid");
+  });
+
+  // red-first-expect: checkPublishingCallRoutes is not a function
+  it("any other address field inside a publishing step is refused, while a local child agent stays allowed", () => {
+    for (const key of ["agent_url", "base_url", "baseUrl", "api_spec_uri", "service_endpoint"]) {
+      const doc = buildFlow({ middle: [agentNode({ component_type: "Agent", id: "child", name: "child", llm_config: { component_type: "SomeLlmConfig", id: "cfg", name: "cfg", [key]: "https://x.example.invalid" } })] });
+      expect(checkPublishingCallRoutes(doc, ["publish"])).toEqual({ ok: false, error: expect.stringMatching(/^PUBLISH_CALL_UNCHECKED: node "cfg" of publishing step "publish" /) });
+    }
+    const local = buildFlow({ middle: [agentNode({ component_type: "Agent", id: "child", name: "child", system_prompt: "write", tools: [] })] });
+    expect(checkPublishingCallRoutes(local, ["publish"])).toEqual({ ok: true });
+  });
+
   it("a node that does not publish may still call another host", async () => {
     expect(await publishingStepsOf(buildFlow({ middle: [apiNode("draft"), apiNode("publish", { publishes: true })] }))).toEqual(["publish"]);
   });

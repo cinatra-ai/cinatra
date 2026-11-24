@@ -551,25 +551,6 @@ export async function listReviewGatesForRun(runId: string, executor: GateStoreEx
     .from(artifactReviewGates)
     .where(eq(artifactReviewGates.runId, runId))
     .orderBy(artifactReviewGates.createdAt);
-  const events = rows.length === 0 ? [] : await executor
-    .select({
-      orgId: artifactProducedOutbox.orgId,
-      artifactId: artifactProducedOutbox.artifactId,
-      representationRevisionId: artifactProducedOutbox.representationRevisionId,
-      generation: artifactProducedOutbox.producerRunGeneration,
-    })
-    .from(artifactProducedOutbox)
-    .where(eq(artifactProducedOutbox.producerRunId, runId));
-  const reproducedGeneration = (row: (typeof rows)[number]): number | null => {
-    const own = row.runGeneration;
-    if (own == null) return null;
-    const pinned = (row.pinnedTargets ?? []) as PinnedReviewTargetRow[];
-    const stamps = pinned.map((t) => Math.max(-1, ...events
-      .filter((e) => e.orgId === row.orgId && e.artifactId === t.artifactId && e.representationRevisionId === t.representationRevisionId)
-      .map((e) => e.generation ?? -1)));
-    const [first] = stamps;
-    return first !== undefined && first > own && stamps.every((g) => g === first) ? first : null;
-  };
   return rows.map((row) => ({
     id: row.id,
     runId: row.runId,

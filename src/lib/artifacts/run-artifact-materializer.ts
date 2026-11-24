@@ -29,6 +29,7 @@ import { createSemanticArtifact } from "./artifact-creation";
 import {
   maybeBuildProducedEventInsertOp,
   producerAttemptForRun,
+  producerRunLockOps,
   publishCallInFlightOr,
 } from "@/lib/lifecycle/lifecycle-emit";
 import {
@@ -338,8 +339,13 @@ function pool(): Pool {
  * the attempt the write runs in: the same event id as the creation path's, so a newer attempt only restamps it with
  * its generation (lifecycle-emit buildProducedEventInsertOp), and a review of exactly these bytes counts for that
  * attempt (artifact-review-gate-store listReviewLineageForRun). Only an existing event is restamped: a revision that
- * never had one gains none here. One statement, which takes the run row itself. Nothing when the review orchestration
- * is off.
+ * never had one gains none here. Nothing when the review orchestration is off.
+ *
+ * One transaction of two statements: the run row FOR KEY SHARE first (producerRunLockOps), then the event statement.
+ * A publish check holds that row FOR UPDATE until its in-flight claim commits; in one statement the claim lookup would
+ * keep the snapshot taken before the lock wait and miss that claim, so the restamp could move an older review into
+ * the current attempt during the checked call. The event statement starts after the lock is held, so under READ
+ * COMMITTED it sees the committed claim and refuses (PublishCallInFlightError).
  */
 async function recordReusedRevision(input: {
   runId: string;
@@ -362,10 +368,17 @@ async function recordReusedRevision(input: {
     whereExistsSql: `EXISTS (SELECT 1 FROM "${schema}"."artifact_produced_outbox" WHERE event_id = $1::text)`,
   });
   if (!op) return;
+  const client = await pool().connect();
   try {
-    await pool().query(op.text, op.values);
+    await client.query("BEGIN");
+    for (const lock of producerRunLockOps(schema, input.runId, op)) await client.query(lock.text, lock.values);
+    await client.query(op.text, op.values);
+    await client.query("COMMIT");
   } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
     throw publishCallInFlightOr(err);
+  } finally {
+    client.release();
   }
 }
 
