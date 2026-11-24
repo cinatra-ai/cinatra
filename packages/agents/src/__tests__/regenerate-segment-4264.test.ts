@@ -725,18 +725,19 @@ describe("the receipt", () => {
 
 describe("claimSegmentProduction", () => {
   const PRODUCTION = { artifactId: "artifact-1", representationRevisionId: "rev-2" };
-  function receiptRow(node = "file_image"): StoredStepSnapshot {
+  const RECORD = { artifactNode: "file_image", step: "image_flow", noteInput: "prompt", startOutput: "imagePrompt" };
+  function receiptRow(node = "file_image", step = "image_flow"): StoredStepSnapshot {
     const json = JSON.stringify({
       artifactNode: node,
-      attestation: segmentReceiptAttestation(KEY, RUN, "image_flow", node, FLOW),
+      attestation: segmentReceiptAttestation(KEY, RUN, step, node, FLOW),
       flowSha256: FLOW,
-      step: "image_flow",
+      step,
     });
     return { nodeId: SEGMENT_RECEIPT_NODE_ID, inputsJson: json, inputsSha256: sha(json), flowSha256: FLOW, ambiguous: false };
   }
   const claim = (over: Partial<Parameters<typeof claimSegmentProduction>[1]> = {}) =>
     claimSegmentProduction(
-      { orgId: "org-1", runId: RUN, regenerateNodeId: "file_image", key: KEY },
+      { orgId: "org-1", runId: RUN, record: RECORD, key: KEY },
       {
         listProductions: vi.fn(async () => [PRODUCTION]),
         readVerifiedSteps: vi.fn(async () => ["file_image"]),
@@ -756,7 +757,16 @@ describe("claimSegmentProduction", () => {
     expect(await claim({ readVerifiedSteps: vi.fn(async () => [null]) })).toBeNull();
     expect(await claim({ readVerifiedSteps: vi.fn(async () => ["file_image", "file_image"]) })).toBeNull();
     expect(await claim({ readReceiptRow: vi.fn(async () => null) })).toBeNull();
-    expect(await claim({ readReceiptRow: vi.fn(async () => receiptRow("write_draft")) })).toBeNull();
+  });
+
+  // red-first-expect: to be 'receipt-not-the-recorded-segment'
+  it("refuses a valid receipt whose step or node is not the run's recorded declaration", async () => {
+    expect(await claim({ readReceiptRow: vi.fn(async () => receiptRow("file_image", "draft_flow")) })).toBe(
+      "receipt-not-the-recorded-segment",
+    );
+    expect(await claim({ readReceiptRow: vi.fn(async () => receiptRow("write_draft")) })).toBe(
+      "receipt-not-the-recorded-segment",
+    );
   });
 });
 

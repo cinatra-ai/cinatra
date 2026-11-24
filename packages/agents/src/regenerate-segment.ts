@@ -113,6 +113,11 @@ export const DISPATCH_ESCALATION_PREFIX = "[escalated] ";
 export const REGENERATE_RUN_NOT_DECLARED_FORM =
   "the Regenerate's repair run was made with other inputs than the reviewer's words in the step's declared input, so it is not run and its work is not applied";
 
+/** The escalation of a finished Regenerate run whose signed receipt names
+ *  another segment (another step or node) than the run's recorded input. */
+export const REGENERATE_RECEIPT_NOT_RECORDED_SEGMENT =
+  "the Regenerate's repair run finished a segment other than the step its dispatch recorded, so its work is not applied";
+
 /**
  * cinatra#4264: escalate the Regenerate repair of a run whose inputs are not
  * the declared-input form. One rule for both readers of such a run: the
@@ -127,7 +132,10 @@ export const REGENERATE_RUN_NOT_DECLARED_FORM =
  * returns false. Its modules load lazily: the run start's module graph stays
  * as it was (route-graph ratchet).
  */
-export async function escalateRegenerateRepairOfUndeclaredRun(repairId: string): Promise<boolean> {
+export async function escalateRegenerateRepairOfUndeclaredRun(
+  repairId: string,
+  reason: string = REGENERATE_RUN_NOT_DECLARED_FORM,
+): Promise<boolean> {
   const [{ carryDeclaredReviewDecision }, { db }, { lifecycleRepair }, { and, eq, inArray, isNotNull, sql }] =
     await Promise.all([import("./lifecycle-repair-store"), import("./db"), import("./schema"), import("drizzle-orm")]);
   return db.transaction(async (tx) => {
@@ -135,7 +143,7 @@ export async function escalateRegenerateRepairOfUndeclaredRun(repairId: string):
       .update(lifecycleRepair)
       .set({
         status: "escalated",
-        changeSummary: `${DISPATCH_ESCALATION_PREFIX}${REGENERATE_RUN_NOT_DECLARED_FORM}`,
+        changeSummary: `${DISPATCH_ESCALATION_PREFIX}${reason}`,
         updatedAt: sql`now()`,
       })
       .where(
@@ -974,16 +982,25 @@ export type SegmentClaimDeps = {
   readReceiptRow: (orgId: string, runId: string) => Promise<StoredStepSnapshot | null>;
 };
 
+/** `claimSegmentProduction`'s refusal of a valid receipt that is not the
+ *  recorded segment: the repair is escalated, never left open. */
+export const SEGMENT_RECEIPT_MISMATCH = "receipt-not-the-recorded-segment" as const;
+
 /**
  * The production a segment run answered with, or null (the repair stays
  * open): exactly one non-CMS production; exactly one finalized ledger row of
- * that revision in this run, whose verified step is `regenerateNodeId`; and a
- * valid persisted receipt naming that node.
+ * that revision in this run, whose verified step is the recorded node; and a
+ * valid persisted receipt. The receipt is bound to the run's recorded
+ * declaration (`recordedRegenerateInput`): every field it attests that the
+ * record also holds (the node and the step) must equal the record. A valid
+ * receipt that names another step or node (a worker that ran another segment,
+ * e.g. an older build that re-derived the step from an updated template) is
+ * `SEGMENT_RECEIPT_MISMATCH`, and its work is never applied.
  */
 export async function claimSegmentProduction(
-  input: { orgId: string; runId: string; regenerateNodeId: string; key?: string | null },
+  input: { orgId: string; runId: string; record: RegenerateInputRecord; key?: string | null },
   deps: SegmentClaimDeps,
-): Promise<{ artifactId: string; representationRevisionId: string } | null> {
+): Promise<{ artifactId: string; representationRevisionId: string } | typeof SEGMENT_RECEIPT_MISMATCH | null> {
   const productions = await deps.listProductions(input.orgId, input.runId);
   if (productions.length !== 1) return null;
   const production = productions[0]!;
@@ -993,12 +1010,15 @@ export async function claimSegmentProduction(
     artifactId: production.artifactId,
     representationRevisionId: production.representationRevisionId,
   });
-  if (steps.length !== 1 || steps[0] !== input.regenerateNodeId) return null;
+  if (steps.length !== 1 || steps[0] !== input.record.artifactNode) return null;
   const receipt = readStoredSegmentReceipt({
     runId: input.runId,
     row: await deps.readReceiptRow(input.orgId, input.runId),
     key: input.key,
   });
-  if (!receipt || receipt.artifactNode !== input.regenerateNodeId) return null;
+  if (!receipt) return null;
+  if (receipt.artifactNode !== input.record.artifactNode || receipt.step !== input.record.step) {
+    return SEGMENT_RECEIPT_MISMATCH;
+  }
   return { artifactId: production.artifactId, representationRevisionId: production.representationRevisionId };
 }

@@ -69,6 +69,8 @@ import {
   claimSegmentProduction,
   hasRegenerateIntent,
   recordedRegenerateInput,
+  REGENERATE_RECEIPT_NOT_RECORDED_SEGMENT,
+  SEGMENT_RECEIPT_MISMATCH,
   SEGMENT_RECEIPT_NODE_ID,
   type SegmentClaimDeps,
 } from "./regenerate-segment";
@@ -485,12 +487,24 @@ export async function completeDispatchedProducerRepairs(opts?: {
         );
         continue;
       }
-      const production = segmentIntent && regenerateNodeId
+      // A Regenerate's receipt is bound to the recorded declaration: a
+      // valid receipt for another step or node escalates the repair.
+      const production = segmentIntent && regenerateInput
         ? await claimSegmentProduction(
-            { orgId: repair.orgId, runId, regenerateNodeId },
+            { orgId: repair.orgId, runId, record: regenerateInput },
             segmentClaimDeps,
           )
         : await claimProduction(repair.orgId, runId);
+      if (production === SEGMENT_RECEIPT_MISMATCH) {
+        if (await escalateRegenerateRepairOfUndeclaredRun(repair.id, REGENERATE_RECEIPT_NOT_RECORDED_SEGMENT)) {
+          summary.escalated += 1;
+        }
+        console.error(
+          `[lifecycle-repair-producer-completion-store] the run of repair ${repair.id} finished another segment ` +
+            `than its recorded step; the repair is escalated and the run's work is not applied.`,
+        );
+        continue;
+      }
       if (!production) {
         summary.unresolved += 1;
         continue;

@@ -350,3 +350,69 @@ describe("a Regenerate run that is not in the declared-input form is escalated, 
     expect(ports.escalateRegenerateRepairOfUndeclaredRun).not.toHaveBeenCalled();
   });
 });
+
+describe("the completer binds the run's signed receipt to the step its dispatch recorded", () => {
+  // During a rolling deployment an older worker can run the step an updated
+  // template names now (step B) for a run whose dispatch recorded step A. Its
+  // receipt is validly signed for the run, but names B. The REAL segment claim
+  // reads the receipt against the record the completer hands it: a receipt
+  // for another step escalates the repair and its work is never applied.
+  const KEY = "receipt-key-4264";
+  const FLOW = "a".repeat(64);
+  const FINDINGS = [{ id: "prompt-window", message: NOTE }, { id: "picture-prompt", message: PROMPT }];
+
+  async function completeWithReceipt(step: string) {
+    const actual = await vi.importActual<typeof import("../regenerate-segment")>("../regenerate-segment");
+    const { createHash } = await import("node:crypto");
+    const json = JSON.stringify({
+      artifactNode: "file_image",
+      attestation: actual.segmentReceiptAttestation(KEY, RUN, step, "file_image", FLOW),
+      flowSha256: FLOW,
+      step,
+    });
+    const row = {
+      nodeId: actual.SEGMENT_RECEIPT_NODE_ID,
+      inputsJson: json,
+      inputsSha256: createHash("sha256").update(json, "utf8").digest("hex"),
+      flowSha256: FLOW,
+      ambiguous: false,
+    };
+    ports.claimSegmentProduction.mockImplementation((input: Parameters<typeof actual.claimSegmentProduction>[0]) =>
+      actual.claimSegmentProduction({ ...input, key: KEY }, {
+        listProductions: async () => [{ artifactId: "art-base", representationRevisionId: "rev-run" }],
+        readVerifiedSteps: async () => ["file_image"],
+        readReceiptRow: async () => row,
+      }),
+    );
+    ports.readRepair.mockResolvedValue(repairRow(FINDINGS, "file_image"));
+    ports.escalateRegenerateRepairOfUndeclaredRun.mockResolvedValueOnce(true);
+    const { completeDispatchedProducerRepairs } = await import("../lifecycle-repair-producer-completion-store");
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      return await completeDispatchedProducerRepairs();
+    } finally {
+      error.mockRestore();
+    }
+  }
+
+  // red-first-expect: expected "vi.fn()" to not be called at all, but actually been called 1 times
+  it("a valid receipt for another step than the recorded one is escalated, not applied", async () => {
+    const summary = await completeWithReceipt("draft_flow");
+    expect(ports.submitRepairResponse).not.toHaveBeenCalled();
+    expect(ports.claimSegmentProduction).toHaveBeenCalledWith(
+      expect.objectContaining({ record: PICTURE_RECORD }),
+      expect.anything(),
+    );
+    expect(ports.escalateRegenerateRepairOfUndeclaredRun).toHaveBeenCalledWith(
+      "repair-1",
+      "the Regenerate's repair run finished a segment other than the step its dispatch recorded, so its work is not applied",
+    );
+    expect(summary).toMatchObject({ completed: 0, escalated: 1, unresolved: 0 });
+  });
+
+  it("a valid receipt for the recorded step is applied", async () => {
+    const summary = await completeWithReceipt("image_flow");
+    expect(ports.escalateRegenerateRepairOfUndeclaredRun).not.toHaveBeenCalled();
+    expect(summary).toMatchObject({ completed: 1, escalated: 0 });
+  });
+});
