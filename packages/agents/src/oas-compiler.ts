@@ -1684,31 +1684,35 @@ const PUBLISH_CALL_ROUTES = new Set(["{{CINATRA_BASE_URL}}/api/llm-bridge", "{{C
 const PUBLISH_ADDRESS_KEY = /(?:url|uri|endpoint)$/i;
 
 /** Every component of a publishing step that carries a `url` (the step itself, and each component inside it, a subflow
- *  its `$component_ref` names included, resolved in the nearest enclosing `$referenced_components` first) must name a
- *  PUBLISH_CALL_ROUTES route; any other value refuses the compile. The error names the node id only, never the URL. */
+ *  or agent its `$component_ref` names included) must name a PUBLISH_CALL_ROUTES route; any other value refuses the
+ *  compile. A reference resolves where the compile later resolves it: the nearest enclosing `$referenced_components`
+ *  first, then the global registry. A reference that resolves nowhere refuses the compile too, because the component
+ *  it names cannot be checked. The error names the node id only, never the URL. */
 export function checkPublishingCallRoutes(
   parsed: Record<string, unknown>,
   publishingSteps: readonly string[],
+  globalRegistry: Record<string, unknown>,
 ): { ok: true } | { ok: false; error: string } {
   type Scope = Record<string, unknown>;
   const rootRefs = (parsed.$referenced_components as Scope | undefined) ?? {};
   for (const step of publishingSteps) {
     const seen = new Set<object>();
-    const stack: Array<[unknown, Scope[]]> = [[rootRefs[step], [rootRefs]]];
+    // Each entry: the value, its reference scopes (nearest first, the global registry last), the nearest component id.
+    const stack: Array<[unknown, Scope[], string]> = [[rootRefs[step], [rootRefs, globalRegistry], step]];
     while (stack.length > 0) {
-      const [value, outer] = stack.pop()!;
+      const [value, outer, owner] = stack.pop()!;
       if (!value || typeof value !== "object" || seen.has(value)) continue;
       seen.add(value);
       if (Array.isArray(value)) {
-        for (const item of value) stack.push([item, outer]);
+        for (const item of value) stack.push([item, outer, owner]);
         continue;
       }
       const comp = value as Record<string, unknown>;
       const own = comp.$referenced_components;
       const scopes = own && typeof own === "object" && !Array.isArray(own) ? [own as Scope, ...outer] : outer;
+      const who = typeof comp.component_type === "string" && typeof comp.id === "string" ? comp.id : owner;
+      const fail = (what: string) => ({ ok: false as const, error: `PUBLISH_CALL_UNCHECKED: node ${quoteNodeId(who)} of publishing step ${quoteNodeId(step)} ${what}, so its call would skip the publish check` });
       if (typeof comp.component_type === "string") {
-        const who = typeof comp.id === "string" ? comp.id : step;
-        const fail = (what: string) => ({ ok: false as const, error: `PUBLISH_CALL_UNCHECKED: node ${quoteNodeId(who)} of publishing step ${quoteNodeId(step)} ${what}, so its call would skip the publish check` });
         if (hasOwn(comp, "url") && !PUBLISH_CALL_ROUTES.has(comp.url as string)) {
           return fail("calls a URL that is not the host's model bridge or passthrough");
         }
@@ -1719,12 +1723,14 @@ export function checkPublishingCallRoutes(
           return fail("calls a remote agent or address that is not the host's model bridge or passthrough");
         }
       }
-      if (typeof comp.$component_ref === "string") {
+      if (hasOwn(comp, "$component_ref")) {
         const ref = comp.$component_ref;
-        const scope = scopes.find((s) => hasOwn(s, ref));
-        if (scope) stack.push([scope[ref], scopes]);
+        const scope = typeof ref === "string" ? scopes.find((s) => hasOwn(s, ref)) : undefined;
+        const target = scope ? scope[ref as string] : undefined;
+        if (!target || typeof target !== "object") return fail("references a component that resolves nowhere");
+        stack.push([target, scopes, who]);
       }
-      for (const child of Object.values(comp)) stack.push([child, scopes]);
+      for (const child of Object.values(comp)) stack.push([child, scopes, who]);
     }
   }
   return { ok: true };
@@ -1846,7 +1852,9 @@ export async function compileOasAgentJson(opts: {
   if (!publishRows.ok) {
     return { ok: false, error: publishRows.error };
   }
-  const publishRoutes = checkPublishingCallRoutes(parsed, publishing.steps);
+  // The route check resolves references against the same global registry the compile reads below.
+  const globalRegistry = await loadGlobalRegistry(opts.registryPath);
+  const publishRoutes = checkPublishingCallRoutes(parsed, publishing.steps, globalRegistry);
   if (!publishRoutes.ok) {
     return { ok: false, error: publishRoutes.error };
   }
@@ -1879,8 +1887,7 @@ export async function compileOasAgentJson(opts: {
     }
   }
 
-  // 4. Load registries
-  const globalRegistry = await loadGlobalRegistry(opts.registryPath);
+  // 4. Load registries (the global registry was loaded for the publishing route check above)
   const localRefs = (parsed.$referenced_components as Record<string, unknown>) ?? {};
 
   // 5. Topology: derive step order via BFS from StartNode following control_flow_connections
