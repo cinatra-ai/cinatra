@@ -26,7 +26,7 @@ const ORG = "org-fixture";
 const PARENT = "@fixture-scope/fixture-parent-agent";
 const CHILD = "@fixture-scope/fixture-child-agent";
 const PARENT_VERSION = "2.0.0";
-const CHILD_VERSION = "0.1.4";
+const CHILD_VERSION = "0.2.2";
 const PARENT_SRC = "/fixture-source/fixture-parent-agent";
 const CHILD_SRC = "/fixture-source/fixture-child-agent";
 const TOOL = "child_tool";
@@ -68,7 +68,7 @@ const parentFlow = (): Doc => ({
   },
 });
 
-const dependency = (range = "^0.1.0", kind = "agent") => ({
+const dependency = (range = "^0.2.2", kind = "agent") => ({
   packageName: CHILD, kind, edgeType: "runtime", requirement: "required",
   versionConstraint: { kind: "semver-range", range },
 });
@@ -169,7 +169,7 @@ describe("an embedded child step on a development installation", () => {
     const cases: [Doc[], string][] = [
       [[], "not-a-dependency"],
       [[dependency(), dependency()], "dependency-duplicate"],
-      [[dependency("^0.1.0", "artifact")], "dependency-wrong-kind"],
+      [[dependency("^0.2.2", "artifact")], "dependency-wrong-kind"],
     ];
     for (const [dependencies, code] of cases) {
       const world = makeWorld((w) => {
@@ -181,12 +181,18 @@ describe("an embedded child step on a development installation", () => {
   });
 
   it("refuses a child source whose version the parent's range does not admit", async () => {
-    const world = makeWorld((w) => {
-      w.versions[CHILD] = "0.2.1";
-      w.roots[`${CHILD}@0.2.1`] = CHILD_SRC;
-    });
-    await refusedWith(resolve(world), "edge-constraint-unmet");
-    expect(world.deps.readFlowDocument).not.toHaveBeenCalledWith(CHILD_SRC);
+    // A caret range below 1.0.0 holds the minor: ^0.2.2 admits 0.2.x from 0.2.2 on, and neither an
+    // older patch nor the next minor. Each source is a real package at its own version; only the
+    // parent's range turns it away, before the child's flow is read.
+    for (const outside of ["0.2.1", "0.3.0"]) {
+      const world = makeWorld((w) => {
+        w.versions[CHILD] = outside;
+        w.roots[`${CHILD}@${outside}`] = CHILD_SRC;
+        w.manifests[CHILD_SRC].version = outside;
+      });
+      await refusedWith(resolve(world), "edge-constraint-unmet");
+      expect(world.deps.readFlowDocument).not.toHaveBeenCalledWith(CHILD_SRC);
+    }
   });
 
   it("refuses a child with no source version or no root at it", async () => {
@@ -197,7 +203,7 @@ describe("an embedded child step on a development installation", () => {
   });
 
   it("refuses a manifest that is not the package at that version", async () => {
-    await refusedWith(resolve(makeWorld((w) => { w.manifests[CHILD_SRC].version = "0.1.5"; })),
+    await refusedWith(resolve(makeWorld((w) => { w.manifests[CHILD_SRC].version = "0.2.3"; })),
       "child-manifest-mismatch");
     await refusedWith(resolve(makeWorld((w) => { w.manifests[CHILD_SRC].name = PARENT; })),
       "child-manifest-mismatch");
