@@ -20,6 +20,12 @@ import "server-only";
 //     with a fixed name, the request names exactly that tool, and the child's
 //     own declaration marks the tool `embeddable: true`.
 //
+// A DEVELOPMENT installation never materializes a source-tree package, so it has
+// no install row, edge or anchor to bind. There, and only there, the parent and
+// the child are read by name off the same name-and-version root road, the child
+// at the version its source carries, which must meet the parent's own declared
+// range. Every other check above holds unchanged on that road.
+//
 // The step is never read from the request: only `verifiedStepId`, which the
 // route verified from the runtime's signed pair. Each refusal is a fixed
 // sentence carrying a fixed code, never a path, an install id, a digest or a
@@ -33,6 +39,7 @@ import { declaredToolIsEmbeddable, parseDeclaredTools } from "@cinatra-ai/sdk-ex
 import {
   bindChildInstall,
   bindParentInstall,
+  satisfiesConstraint,
   selectChildEdge,
   type InstallBindingCode,
   type InstallBindingDeps,
@@ -73,8 +80,8 @@ export class ExtensionToolOriginRefusal extends Error {
 export type ExtensionToolOrigin =
   /** The run package's own code, on today's road. */
   | { kind: "parent" }
-  /** The embedded child's code, from the exact child installation. */
-  | { kind: "child"; context: RunExtensionContext; install: ExactInstallBinding; codeInstallId: string };
+  /** The embedded child's code, from the exact child installation (null on the development road). */
+  | { kind: "child"; context: RunExtensionContext; install: ExactInstallBinding | null; codeInstallId: string | null };
 
 export type ExtensionToolOriginRun = {
   id: string;
@@ -93,6 +100,8 @@ export type ExtensionToolOriginDeps = InstallBindingDeps & {
   isDevelopmentMode?: () => boolean | Promise<boolean>;
   /** The name-and-version root road, used only for a development parent with no store record. */
   resolveDevelopmentRoot?: PinnedPackageRootResolver;
+  /** The version a development installation's source of a package carries; null when it has none. */
+  readDevelopmentVersion?: (packageName: string) => Promise<string | null>;
 };
 
 const refuse = (code: ExtensionToolOriginCode): never => {
@@ -245,78 +254,30 @@ const withoutId = (o: Record<string, unknown>): Record<string, unknown> => {
   return rest;
 };
 
-/**
- * The origin of one `extension_tool` call. `context` is the run package's
- * context as today's road resolves it. Throws `ExtensionToolOriginRefusal`.
- */
-export async function resolveExtensionToolOrigin(
-  input: { run: ExtensionToolOriginRun; context: RunExtensionContext; request: Record<string, unknown> },
-  deps: ExtensionToolOriginDeps = {},
-): Promise<ExtensionToolOrigin> {
-  const { run, context } = input;
-  const proven = run.verifiedStepId;
-  if (!nonEmpty(proven)) return refuse("step-unproven");
-  const stepId: string = proven;
-
-  const readFlow =
-    deps.readFlowDocument ??
-    (async (root: string) => JSON.parse(await readFile(path.join(root, "cinatra", "oas.json"), "utf8")));
-  const isDevelopment =
-    deps.isDevelopmentMode ??
-    (async () => (await import("@/lib/runtime-mode")).isAppDevelopmentMode());
-  const derive =
-    deps.deriveDependentInstallId ??
-    (async (r: ExtensionToolOriginRun) =>
-      (await import("@/lib/extension-edge-bound-serving")).deriveDependentInstallIdForRun(r));
-  const resolveRoot = deps.resolveDevelopmentRoot ?? resolvePinnedPackageRoot;
-
-  // A development parent with no store record: its flow is read by name and version; no child is reachable.
-  const developmentRoad = async (otherwise: ExtensionToolOriginCode): Promise<ExtensionToolOrigin> => {
-    if ((await guarded("development-mode", isDevelopment)) !== true) return refuse(otherwise);
-    const root = await guarded("package-root", () =>
-      resolveRoot({ packageName: context.packageName, packageVersion: context.packageVersion, orgId: run.orgId }),
-    );
-    if (root === null) return refuse("parent-not-materialized");
-    // A root the resolver already checked as a real path is read at that path.
-    const rootDir = typeof root === "string" ? root : root.realRoot;
-    const g = graphOf(await guarded("flow-document", () => readFlow(rootDir)), "");
-    return classify(g, stepId, context.packageName).label === null
-      ? { kind: "parent" }
-      : refuse("child-not-materialized");
-  };
-
-  let installId = nonEmpty(run.dependentInstallId) ? run.dependentInstallId : null;
-  if (installId === null) {
-    const derived = await guarded("derive-install", () => derive(run));
-    if (derived.kind === "ambiguous") return refuse("parent-install-ambiguous");
-    if (derived.kind === "none") return developmentRoad("parent-install-unresolved");
-    installId = derived.id;
-  }
-
-  const parentInput = { installId, packageName: context.packageName, packageVersion: context.packageVersion, orgId: run.orgId };
-  const parent = await bindParentInstall(parentInput, deps);
-  if (!parent.ok) {
-    return parent.code === "parent-not-materialized" ? developmentRoad(parent.code) : refuse(parent.code);
-  }
-
-  const graph = graphOf(await guarded("flow-document", () => readFlow(parent.value.root)), "");
-  const { step, label } = classify(graph, stepId, context.packageName);
-  if (label === null) return { kind: "parent" };
-
-  // The exact parent manifest declares the child once, as an agent.
-  const declared: unknown = parent.value.cinatra.dependencies;
+/** The exact parent manifest declares the child once, as an agent: that declaration. */
+function agentDependencyOf(parentCinatra: Record<string, unknown>, label: string): Record<string, unknown> {
+  const declared: unknown = parentCinatra.dependencies;
   const forLabel = Array.isArray(declared)
     ? declared.filter((d) => isPlainObject(d) && d.packageName === label)
     : [];
   if (forLabel.length === 0) refuse("not-a-dependency");
   if (forLabel.length > 1) refuse("dependency-duplicate");
-  if ((forLabel[0] as Record<string, unknown>).kind !== "agent") refuse("dependency-wrong-kind");
+  const dependency = forLabel[0] as Record<string, unknown>;
+  if (dependency.kind !== "agent") refuse("dependency-wrong-kind");
+  return dependency;
+}
 
-  const child = await bindChildInstall({ parent: parent.value, childPackageName: label, orgId: run.orgId }, deps);
-  if (!child.ok) return refuse(child.code);
-
-  // The step replays, apart from its id, exactly one ApiNode of the child's own flow.
-  const childGraph = graphOf(await guarded("flow-document", () => readFlow(child.value.root)), "child-");
+/**
+ * The step replays, apart from its id, exactly one ApiNode of the child's own flow, that node names
+ * one fixed tool, the request names that tool, and the child's own declaration marks it embeddable.
+ */
+async function proveChildTool(
+  input: { step: Record<string, unknown>; stepId: string; label: string; childRoot: string;
+    childCinatra: Record<string, unknown>; request: Record<string, unknown> },
+  readFlow: (root: string) => Promise<unknown>,
+): Promise<void> {
+  const { step, stepId, label } = input;
+  const childGraph = graphOf(await guarded("flow-document", () => readFlow(input.childRoot)), "child-");
   const stepBody = withoutId(step);
   const copies = childGraph.nodes.filter(
     ({ obj }) =>
@@ -343,7 +304,7 @@ export async function resolveExtensionToolOrigin(
   // reaches a response; the dispatch then re-parses the same declaration, which parsed here.
   const tools = ((): ReturnType<typeof parseDeclaredTools> | null => {
     try {
-      return parseDeclaredTools(child.value.cinatra.tools, label);
+      return parseDeclaredTools(input.childCinatra.tools, label);
     } catch {
       return null;
     }
@@ -352,6 +313,115 @@ export async function resolveExtensionToolOrigin(
   const tool = tools.find((t) => t.name === requested);
   if (tool === undefined) return refuse("child-tool-undeclared");
   if (!declaredToolIsEmbeddable(tool)) refuse("not-embeddable");
+}
+
+/**
+ * The origin of one `extension_tool` call. `context` is the run package's
+ * context as today's road resolves it. Throws `ExtensionToolOriginRefusal`.
+ */
+export async function resolveExtensionToolOrigin(
+  input: { run: ExtensionToolOriginRun; context: RunExtensionContext; request: Record<string, unknown> },
+  deps: ExtensionToolOriginDeps = {},
+): Promise<ExtensionToolOrigin> {
+  const { run, context } = input;
+  const proven = run.verifiedStepId;
+  if (!nonEmpty(proven)) return refuse("step-unproven");
+  const stepId: string = proven;
+
+  const readFlow =
+    deps.readFlowDocument ??
+    (async (root: string) => JSON.parse(await readFile(path.join(root, "cinatra", "oas.json"), "utf8")));
+  const isDevelopment =
+    deps.isDevelopmentMode ??
+    (async () => (await import("@/lib/runtime-mode")).isAppDevelopmentMode());
+  const derive =
+    deps.deriveDependentInstallId ??
+    (async (r: ExtensionToolOriginRun) =>
+      (await import("@/lib/extension-edge-bound-serving")).deriveDependentInstallIdForRun(r));
+  const resolveRoot = deps.resolveDevelopmentRoot ?? resolvePinnedPackageRoot;
+  const readPackageJson =
+    deps.readPackageJson ??
+    (async (root: string) => JSON.parse(await readFile(path.join(root, "package.json"), "utf8")));
+  const readDevelopmentVersion =
+    deps.readDevelopmentVersion ??
+    (async (packageName: string) => {
+      const { STATIC_EXTENSION_MANIFEST } = await import("@/lib/generated/extensions.server");
+      const version: unknown = (STATIC_EXTENSION_MANIFEST as Record<string, { version?: unknown } | undefined>)[
+        packageName
+      ]?.version;
+      return typeof version === "string" ? version : null;
+    });
+
+  /** A package root by name and version on the development road, at its real path when already checked. */
+  const developmentRootOf = async (packageName: string, packageVersion: string): Promise<string | null> => {
+    const root = await guarded("package-root", () => resolveRoot({ packageName, packageVersion, orgId: run.orgId }));
+    return root === null ? null : typeof root === "string" ? root : root.realRoot;
+  };
+  /** The `cinatra` block of the package.json at a development root, checked against the name and version. */
+  const developmentManifest = async (
+    root: string, packageName: string, packageVersion: string, side: "parent" | "child",
+  ): Promise<Record<string, unknown>> => {
+    const manifest: unknown = await guarded("package-json", () => readPackageJson(root));
+    if (!isPlainObject(manifest) || !isPlainObject(manifest.cinatra)) {
+      return refuse(side === "parent" ? "parent-manifest-invalid" : "child-manifest-invalid");
+    }
+    if (manifest.name !== packageName || manifest.version !== packageVersion) {
+      return refuse(side === "parent" ? "parent-manifest-mismatch" : "child-manifest-mismatch");
+    }
+    return manifest.cinatra;
+  };
+
+  // A development parent with no store record: its flow and its children are read by name and version.
+  const developmentRoad = async (otherwise: ExtensionToolOriginCode): Promise<ExtensionToolOrigin> => {
+    if ((await guarded("development-mode", isDevelopment)) !== true) return refuse(otherwise);
+    const rootDir = await developmentRootOf(context.packageName, context.packageVersion);
+    if (rootDir === null) return refuse("parent-not-materialized");
+    const g = graphOf(await guarded("flow-document", () => readFlow(rootDir)), "");
+    const { step, label } = classify(g, stepId, context.packageName);
+    if (label === null) return { kind: "parent" };
+    const parentCinatra = await developmentManifest(rootDir, context.packageName, context.packageVersion, "parent");
+    const dependency = agentDependencyOf(parentCinatra, label);
+    const childVersion = await guarded("development-version", () => readDevelopmentVersion(label));
+    if (!nonEmpty(childVersion)) return refuse("child-not-materialized");
+    if (!satisfiesConstraint(childVersion, dependency.versionConstraint)) return refuse("edge-constraint-unmet");
+    const childRoot = await developmentRootOf(label, childVersion);
+    if (childRoot === null) return refuse("child-not-materialized");
+    const childCinatra = await developmentManifest(childRoot, label, childVersion, "child");
+    await proveChildTool({ step, stepId, label, childRoot, childCinatra, request: input.request }, readFlow);
+    return {
+      kind: "child",
+      codeInstallId: null,
+      context: { packageName: label, packageVersion: childVersion, cinatra: childCinatra },
+      install: null,
+    };
+  };
+
+  let installId = nonEmpty(run.dependentInstallId) ? run.dependentInstallId : null;
+  if (installId === null) {
+    const derived = await guarded("derive-install", () => derive(run));
+    if (derived.kind === "ambiguous") return refuse("parent-install-ambiguous");
+    if (derived.kind === "none") return developmentRoad("parent-install-unresolved");
+    installId = derived.id;
+  }
+
+  const parentInput = { installId, packageName: context.packageName, packageVersion: context.packageVersion, orgId: run.orgId };
+  const parent = await bindParentInstall(parentInput, deps);
+  if (!parent.ok) {
+    return parent.code === "parent-not-materialized" ? developmentRoad(parent.code) : refuse(parent.code);
+  }
+
+  const graph = graphOf(await guarded("flow-document", () => readFlow(parent.value.root)), "");
+  const { step, label } = classify(graph, stepId, context.packageName);
+  if (label === null) return { kind: "parent" };
+
+  agentDependencyOf(parent.value.cinatra, label);
+
+  const child = await bindChildInstall({ parent: parent.value, childPackageName: label, orgId: run.orgId }, deps);
+  if (!child.ok) return refuse(child.code);
+  await proveChildTool(
+    { step, stepId, label, childRoot: child.value.root, childCinatra: child.value.cinatra, request: input.request },
+    readFlow,
+  );
 
   // Just before the import, after the loader's child anchor check: the same live parent row at the same anchor,
   // root and manifest, its one edge for the child still on this install, its flow still placing this step under

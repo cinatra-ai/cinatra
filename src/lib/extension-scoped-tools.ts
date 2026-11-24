@@ -564,7 +564,7 @@ async function runExtensionTool(
     cinatra: context.cinatra,
     request: input.input,
     ports,
-    ...(origin.kind === "child" ? { install: origin.install } : {}),
+    ...(origin.kind === "child" && origin.install !== null ? { install: origin.install } : {}),
   });
 }
 
