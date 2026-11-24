@@ -310,7 +310,6 @@ describe("Publish (A7)", () => {
   it("after a resume that failed before its send, the card still offers Allow, and that Allow resumes the run once", async () => {
     const who = { actor: ACTOR, roleHints: ROLE_HINTS };
     prepareWayflowResume.mockRejectedValueOnce(new Error("wayflow down"));
-    // red-first-expect: decidePublishDecisionCardForActor is not a function
     expect(await decidePublishDecisionCardForActor({ runId: "run-1", decisionId: "d1", answer: "approve" }, who)).toBe("failed");
     expect(decisions.decide).toHaveBeenCalledTimes(1);
     expect(sendWayflowResume).not.toHaveBeenCalled();
@@ -331,7 +330,6 @@ describe("Publish (A7)", () => {
   // still waits at that pause. Allow stays, and it resumes the run exactly once, with no second decision write, under a
   // pause claim bound to that gate task (cinatra#4758). Red first at 7ca04b14: the claim named the generation only. On
   // the base, which has no retry reading, the card reads Approved:
-  // red-first-expect: expected { state: 'approved', …(4) } to match object { state: 'pending', …(3) }
   it("a released decision whose run row and latest-task key both name its gate keeps Allow, and Allow resumes the run exactly once under a claim bound to that gate", async () => {
     const who = { actor: ACTOR, roleHints: ROLE_HINTS };
     decisions.readOpenDecisionForRun.mockResolvedValue(null);
@@ -352,7 +350,6 @@ describe("Publish (A7)", () => {
   // went on; it now waits at gate B, a later pause, but a2a_task_id still names A and the key has expired. For such a
   // decision the row alone cannot tell A's pause from B's: no card (never Allow, never Approved), and an Allow resumes
   // nothing, so B is never answered. A release that recorded its pause is read durably instead (the cases below).
-  // red-first-expect: to deeply equal { state: 'none' }
   it("with a stale run row and no latest-task key, a decision released with no recorded pause offers no Allow and its Allow resumes nothing", async () => {
     const who = { actor: ACTOR, roleHints: ROLE_HINTS };
     decisions.readOpenDecisionForRun.mockResolvedValue(null);
@@ -374,7 +371,6 @@ describe("Publish (A7)", () => {
   // that generation, so it still waits at gate A: the card keeps Allow, and that Allow resumes the run exactly once,
   // under a claim taken at the recorded generation, with no second decision write and no latest-task read. Red first at
   // 88b3c621: the release recorded no pause generation (expected undefined to be 3). On the base, which has no card door:
-  // red-first-expect: decidePublishDecisionCardForActor is not a function
   it("a crash at gate A with the latest-task key lost: the recorded pause keeps Allow, and Allow resumes the run once", async () => {
     const who = { actor: ACTOR, roleHints: ROLE_HINTS };
     claims.claimPause.mockImplementation(async (ref: { generation: number }) => ({ ...CLAIMED, generation: ref.generation }));
@@ -402,7 +398,6 @@ describe("Publish (A7)", () => {
   // the release recorded, while its row still names A's task and the latest-task key is lost. The record tells the two
   // apart: A's decision is settled (Approved, no Allow), and an Allow on it claims nothing at B and sends nothing. Red
   // first at 88b3c621: the card read { state: 'none' }. On the base, which has no card door:
-  // red-first-expect: decidePublishDecisionCardForActor is not a function
   it("moved on to gate B with the latest-task key lost: the recorded pause offers no Allow, and nothing resumes", async () => {
     const who = { actor: ACTOR, roleHints: ROLE_HINTS };
     const atGateB = run({ a2aTaskId: "task-1", pauseGeneration: 6 });
@@ -433,7 +428,6 @@ describe("Publish (A7)", () => {
     decisions.readOpenDecisionForRun.mockResolvedValue(null);
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released", decidedBy: "user-a" }));
     resolveLatestWayflowGateTaskId.mockRejectedValue(new Error("redis down"));
-    // red-first-expect: to deeply equal { state: 'none' }
     expect(await publishDecisionCardStateForRun(run() as never, who)).toEqual({ state: "none" });
   });
 
