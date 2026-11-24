@@ -243,8 +243,7 @@ describe("cinatra#3562 — the list step's Try again resumes the run with the de
     expect(text).not.toContain("listIds");
     const { rememberAnsweredGateSubmission } = await import("@cinatra-ai/a2a");
     expect(rememberAnsweredGateSubmission).not.toHaveBeenCalled();
-    // Only the note that the next pause is this list step again; no answered-gate digest.
-    expect([...redis.store.keys()]).toEqual([`cinatra:wayflow:renderer-gate-repeat:${RUN.id}`]);
+    expect(redis.store.size).toBe(0);
   });
 
   it("refuses a refresh the binding does not declare, before anything is held or sent", async () => {
@@ -443,8 +442,7 @@ describe("cinatra#3562 — a refresh carries nothing but its value and mints no 
     expect(rememberAnsweredGateSubmission).not.toHaveBeenCalled();
     expect(rememberLatestWayflowGateTask).not.toHaveBeenCalled();
     expect(storeMock.writeHitlPrompt).not.toHaveBeenCalled();
-    // Only the note that the next pause is this list step again; no answered-gate digest.
-    expect([...redis.store.keys()]).toEqual([`cinatra:wayflow:renderer-gate-repeat:${RUN.id}`]);
+    expect(redis.store.size).toBe(0);
     for (const presented of ["refresh", JSON.stringify(payload)]) {
       const decision = await persistWith(presented);
       expect(decision.ok).toBe(false);

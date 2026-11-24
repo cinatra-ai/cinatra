@@ -120,27 +120,35 @@ vi.mock("@/lib/auth-session", async (orig) => ({
 }));
 vi.mock("../wayflow-run-token-carrier", () => ({ mintResumeRunTokenMetadata: vi.fn(async () => ({ token: "t" })) }));
 
-/** An in-memory `ioredis` double with the string and list commands the gate sequence uses. */
+/**
+ * An in-memory `ioredis` double with the string and list commands the gate
+ * sequence uses. It keeps each key's time to live in seconds as last set
+ * (no clock runs), and answers `ttl` as Redis does: -2 absent, -1 none.
+ */
 const redis = vi.hoisted(() => {
   const store = new Map<string, string>();
   const lists = new Map<string, string[]>();
+  const ttls = new Map<string, number>();
   class FakeRedis {
-    async set(key: string, value: string): Promise<"OK"> {
+    async set(key: string, value: string, mode?: string, seconds?: number): Promise<"OK"> {
       store.set(key, value);
+      if (mode === "EX" && typeof seconds === "number") ttls.set(key, seconds);
+      else ttls.delete(key);
       return "OK";
     }
     async get(key: string): Promise<string | null> {
       return store.get(key) ?? null;
     }
     async del(key: string): Promise<number> {
+      ttls.delete(key);
       return (store.delete(key) ? 1 : 0) + (lists.delete(key) ? 1 : 0);
     }
     async lrange(key: string): Promise<string[]> {
       return [...(lists.get(key) ?? [])];
     }
-    async rpush(key: string, value: string): Promise<number> {
+    async rpush(key: string, ...values: string[]): Promise<number> {
       const list = lists.get(key) ?? [];
-      list.push(value);
+      list.push(...values);
       lists.set(key, list);
       return list.length;
     }
@@ -150,8 +158,14 @@ const redis = vi.hoisted(() => {
       list[index] = value;
       return "OK";
     }
-    async expire(): Promise<number> {
+    async expire(key: string, seconds: number): Promise<number> {
+      if (!store.has(key) && !lists.has(key)) return 0;
+      ttls.set(key, seconds);
       return 1;
+    }
+    async ttl(key: string): Promise<number> {
+      if (!store.has(key) && !lists.has(key)) return -2;
+      return ttls.get(key) ?? -1;
     }
     async eval(): Promise<string> {
       return "absent";
@@ -163,7 +177,7 @@ const redis = vi.hoisted(() => {
       return this;
     }
   }
-  return { store, lists, FakeRedis };
+  return { store, lists, ttls, FakeRedis };
 });
 vi.mock("ioredis", () => ({ Redis: redis.FakeRedis, default: redis.FakeRedis }));
 
@@ -257,6 +271,9 @@ function arrange() {
   row.a2aTaskId = null;
   redis.store.clear();
   redis.lists.clear();
+  redis.ttls.clear();
+  // A refused send leaves its queued answer behind: drop it.
+  sendTask.mockReset();
   durableGate.value = null;
   storeMock.readAgentRunByTaskId.mockImplementation(async () => liveRun());
   storeMock.readAgentRunById.mockImplementation(async () => liveRun());
@@ -302,5 +319,61 @@ describe("cinatra#3562 — a refreshed list step keeps its own renderer", () => 
 
     await pick("task-list-3", "task-second-1");
     expect(renderers()).toEqual([LIST_STEP_ID, LIST_STEP_ID, LIST_STEP_ID, SECOND_STEP_ID]);
+  });
+});
+
+const RENDERER_GATES_KEY = `cinatra:wayflow:renderer-gates:${RUN.id}`;
+const SEVEN_DAYS_S = 7 * 24 * 3600;
+
+describe("cinatra#3562 — a refreshed list step keeps its place when the run's step list expires", () => {
+  it("the list expires between the refresh and the next pause: the pause still carries the list step's renderer", async () => {
+    await firstPause("task-list-1");
+    // The list expires while the refresh's resume is under way.
+    sendTask.mockImplementationOnce(async () => {
+      redis.lists.delete(RENDERER_GATES_KEY);
+      redis.ttls.delete(RENDERER_GATES_KEY);
+      return pauseTask("task-list-2");
+    });
+    durableGate.value = listStepGate("task-list-1");
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await approveReviewTaskInternal("wayflow-task-list-1", RUN.runBy, buildListStepRefreshPayload("refresh"));
+    expect(renderers()).toEqual([LIST_STEP_ID, LIST_STEP_ID]);
+
+    await pick("task-list-2", "task-second-1");
+    expect(renderers()).toEqual([LIST_STEP_ID, LIST_STEP_ID, SECOND_STEP_ID]);
+    expect(row.status).toBe("pending_approval");
+  });
+
+  it("the list is already gone when the refresh is asked: the refresh is refused, nothing is sent, the step stays answerable", async () => {
+    await firstPause("task-list-1");
+    redis.lists.delete(RENDERER_GATES_KEY);
+    redis.ttls.delete(RENDERER_GATES_KEY);
+
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await expect(refresh("task-list-1", "task-list-2")).rejects.toThrow("its place in the run's steps is not known");
+    expect(sendTask).not.toHaveBeenCalled();
+    expect(redis.store.has(`cinatra:wayflow:renderer-gate-repeat:${RUN.id}`)).toBe(false);
+    expect(row.status).toBe("pending_approval");
+    expect(renderers()).toEqual([LIST_STEP_ID]);
+
+    await pick("task-list-1", "task-second-1");
+    expect(sendTask).toHaveBeenCalledTimes(1);
+    expect(row.status).toBe("pending_approval");
+  });
+
+  it("writing the refresh note renews the list's time to live before the resume is sent", async () => {
+    await firstPause("task-list-1");
+    // The list was written long ago: one minute is left.
+    redis.ttls.set(RENDERER_GATES_KEY, 60);
+    const ttlAtSend: number[] = [];
+    sendTask.mockImplementationOnce(async () => {
+      ttlAtSend.push(await new redis.FakeRedis().ttl(RENDERER_GATES_KEY));
+      return pauseTask("task-list-2");
+    });
+    durableGate.value = listStepGate("task-list-1");
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await approveReviewTaskInternal("wayflow-task-list-1", RUN.runBy, buildListStepRefreshPayload("refresh"));
+    expect(ttlAtSend).toEqual([SEVEN_DAYS_S]);
+    expect(renderers()).toEqual([LIST_STEP_ID, LIST_STEP_ID]);
   });
 });

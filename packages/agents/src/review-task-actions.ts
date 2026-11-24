@@ -39,6 +39,7 @@ import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuc
 import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
 import { readWayflowSubmittedValues } from "./hitl-gate-submit";
 import { readListStepRefreshAsk, listStepRefreshAccepted, listStepRefreshIsRequest, isListStepRefreshPayloadShape } from "./hitl-gate-submit";
+import { stepFiresRendererGate, type RendererGateStepShape } from "./orchestrator-gate-predicate";
 // cinatra#2484: the setup-resume path is the LAST place a type-violating setup
 // value can be stopped before it becomes `agent_runs.inputParams` and reaches
 // the run. It needs the SAME effective schema the setup loop rendered from —
@@ -1219,11 +1220,16 @@ export async function approveReviewTaskInternal(
       // authorize a draft or recipient write that the operator never answered.
       // A refresh records instead that the next pause is this list step again, so
       // that pause keeps this step's renderer (`getOrAddWayflowRendererGateIndex`).
-      // Its failure is handled as the mint's is: nothing is sent, the gate is put back.
+      // A flow with one renderer step does not map pauses by place, so nothing is
+      // recorded there. A failure, or a place that is not known, is handled as the
+      // mint's failure is: nothing is sent, the gate is put back.
       if (listStepRefreshAsk !== undefined || (typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0)) {
         try {
           if (listStepRefreshAsk !== undefined) {
-            await (await import("@cinatra-ai/a2a")).rememberWayflowRendererGateRepeat(run.id, taskId);
+            const policySteps = (template.approvalPolicy?.steps ?? []) as RendererGateStepShape[];
+            if (policySteps.filter(stepFiresRendererGate).length > 1) {
+              await (await import("@cinatra-ai/a2a")).rememberWayflowRendererGateRepeat(run.id, taskId);
+            }
           } else {
             const { rememberAnsweredGateSubmission, rememberLatestWayflowGateTask } =
               await import("@cinatra-ai/a2a");

@@ -427,18 +427,34 @@ export async function getOrAddWayflowRendererGateIndex(
   // again. Its fresh task id takes the refreshed task's place in the list, so
   // the position does not advance. A read fault throws: no later index is guessed.
   const repeatKey = rendererGateRepeatKey(runId);
-  const repeatOf = await r.get(repeatKey);
+  const repeatRaw = await r.get(repeatKey);
   if (existing !== -1) {
-    if (repeatOf === taskId) await r.del(repeatKey);
+    if (repeatRaw !== null && readRendererGateRepeat(repeatRaw)?.taskId === taskId) await r.del(repeatKey);
+    else if (repeatRaw !== null) await r.expire(repeatKey, GATE_SEQUENCE_TTL_S);
+    await r.expire(key, GATE_SEQUENCE_TTL_S);
     return existing;
   }
-  if (repeatOf !== null) {
+  if (repeatRaw !== null) {
     await r.del(repeatKey);
-    const at = list.length - 1;
-    if (at < 0 || list[at] !== repeatOf) {
-      throw new Error(`renderer gate ${taskId} on run ${runId} follows a refresh of a task that is not the last renderer gate`);
+    const repeat = readRendererGateRepeat(repeatRaw);
+    if (repeat === null) {
+      throw new Error(`renderer gate ${taskId} on run ${runId} follows a refresh whose position cannot be read`);
     }
-    await r.lset(key, at, taskId);
+    const at = repeat.index;
+    if (list.length > at) {
+      // The list is still there: the refreshed task must be its last entry.
+      if (at !== list.length - 1 || list[at] !== repeat.taskId) {
+        throw new Error(`renderer gate ${taskId} on run ${runId} follows a refresh of a task that is not the last renderer gate`);
+      }
+      await r.lset(key, at, taskId);
+    } else {
+      // The list expired (or lost its tail) after the refresh: the position is
+      // restored from the note. Only this function reads the list, and only by
+      // `indexOf(taskId)` and by length, so the earlier places it cannot know
+      // are filled with a value that is never a task id.
+      const vacant = Array.from({ length: at - list.length }, () => VACANT_RENDERER_GATE);
+      await r.rpush(key, ...vacant, taskId);
+    }
     await r.expire(key, GATE_SEQUENCE_TTL_S);
     return at;
   }
@@ -447,22 +463,49 @@ export async function getOrAddWayflowRendererGateIndex(
   return list.length; // new renderer-gate index = old list length
 }
 
+/** Fills a renderer gate place whose task id is not known; never equal to a task id. */
+const VACANT_RENDERER_GATE = "";
+
 function rendererGateRepeatKey(runId: string): string {
   return `cinatra:wayflow:renderer-gate-repeat:${runId}`;
+}
+
+function readRendererGateRepeat(raw: string): { taskId: string; index: number } | null {
+  try {
+    const parsed = JSON.parse(raw) as { taskId?: unknown; index?: unknown };
+    if (typeof parsed?.taskId !== "string" || parsed.taskId.length === 0) return null;
+    if (typeof parsed.index !== "number" || !Number.isInteger(parsed.index) || parsed.index < 0) return null;
+    return { taskId: parsed.taskId, index: parsed.index };
+  } catch {
+    return null;
+  }
 }
 
 /**
  * cinatra#3562: record that the resume about to be sent for the renderer gate
  * `taskId` is a list step's refresh, so the run parks at the same step again.
- * The next renderer pause of the run reads this once, clears it and keeps the
- * refreshed step's index (`getOrAddWayflowRendererGateIndex`).
+ * The note carries the task id and its place in the run's renderer gate list,
+ * so the next renderer pause keeps that place even when the list has expired
+ * in between (`getOrAddWayflowRendererGateIndex`). The list's time to live is
+ * renewed with the note's, so a live run keeps both.
+ *
+ * Throws, and writes nothing, when `taskId` is not the last entry of the list
+ * (the list is gone, or the task is not the current renderer gate): the place
+ * of the next pause cannot be known, so the caller must not send the refresh.
  */
 export async function rememberWayflowRendererGateRepeat(
   runId: string,
   taskId: string,
 ): Promise<void> {
+  const key = `cinatra:wayflow:renderer-gates:${runId}`;
   const r = getPublisher();
-  await r.set(rendererGateRepeatKey(runId), taskId, "EX", GATE_SEQUENCE_TTL_S);
+  const list = (await r.lrange(key, 0, -1)) as string[];
+  const index = list.length - 1;
+  if (index < 0 || list[index] !== taskId) {
+    throw new Error(`the refresh of renderer gate ${taskId} on run ${runId} was not sent: its place in the run's steps is not known`);
+  }
+  await r.expire(key, GATE_SEQUENCE_TTL_S);
+  await r.set(rendererGateRepeatKey(runId), JSON.stringify({ taskId, index }), "EX", GATE_SEQUENCE_TTL_S);
 }
 
 /**
