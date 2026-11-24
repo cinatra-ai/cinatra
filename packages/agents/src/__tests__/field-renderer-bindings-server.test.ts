@@ -486,6 +486,17 @@ describe("a binding collection error is never read as 'no screen' (cinatra#3470)
     expect(read("@s/torn-agent:card")).toBe("unavailable");
   });
 
+  it("a readable manifest whose fieldRenderers is not a list makes the read incomplete", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    installReadable();
+    const dir = join(FIXTURE_DIR, "s", "shapeless-agent");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "@s/shapeless-agent", cinatra: { fieldRenderers: { id: "card" } } }));
+    // A renderer this manifest may declare is never known to hold no screen.
+    expect(payload({ fresh: true }).incomplete).toBe(true);
+    expect(read("@s/shapeless-agent:card")).toBe("unavailable");
+  });
+
   it("an unreadable mount (EACCES) makes the read incomplete", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     installReadable();
