@@ -396,6 +396,9 @@ async function resolveSettledServerTree(
 
 // The decided island streams each target under its own boundary, so this case
 // finds the target inside its boundary and reads the panel through it.
+// Before the fix the streamed body still unwraps a pinned pair with React's
+// `use`, and the target this case hands it carries none:
+// red-first-expect: An unsupported type was passed to use(): undefined
 describe("the settled review island composes the actual pinned markdown display", () => {
   it("keeps Preview and Code on one frozen read-only target, with one panel and no save", async () => {
     process.env.BETTER_AUTH_SECRET ??= "native-settled-markdown-ref-secret";

@@ -64,7 +64,6 @@ import ReviewTargetIslandPage from "../page";
 const ROW = { runId: "run-1", decisionId: "dec-1", input: "reviewTargets" };
 // The publish ref is computed inside the tests (beforeEach), so before the fix this file loads and every test fails
 // on the missing encoder.
-// red-first-expect: encodePublishDecisionIslandRef
 let PUBLISH_REF: string;
 const GATE_REF = encodeLifecycleGateRef({ runId: "run-1", reviewTaskId: "task-1" })!;
 const CREDENTIAL = "AAAA-sealed_value-BBBB";

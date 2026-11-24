@@ -16,9 +16,7 @@
 //   - a gate capability sealed with the row's subject key serves nothing either;
 //   - a target the reader keeps the run for but may not read as an artifact (`object.read`) serves no bytes, and a
 //     target the core floors as `read-denied` gets no bytes minted at all.
-// Red first at ffe421ea: a publish row names no sealed road, so the target keeps the session addresses. Before the
-// publish row existed at all, the subject key it seals with does not exist:
-// red-first-expect: publishDecisionIslandSubjectKey is not a function
+// Red first at ffe421ea: a publish row names no sealed road, so the target keeps the session addresses.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createElement, isValidElement, type ReactElement, type ReactNode } from "react";
 

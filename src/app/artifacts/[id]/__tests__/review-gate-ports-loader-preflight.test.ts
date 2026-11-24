@@ -13,6 +13,13 @@
  *
  * No browser, database or timer timeout is the negative control: a loader that
  * awaits the whole set answers `returned === false` here.
+ *
+ * They pass before the fix and with it: the fix removes the pair and keeps this
+ * loader behaviour, so each case is declared as a pin.
+ * red-first-pin: releases the pending multi-target surface before artifact reads finish
+ * red-first-pin: releases the resolved multi-target surface before artifact reads finish
+ * red-first-pin: run-access refusal performs no target I/O
+ * red-first-pin: a substituted pinned set remains blocked before any target I/O
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 

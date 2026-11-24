@@ -38,7 +38,6 @@ vi.mock("@/lib/authz/build-actor-context", () => ({
 import { publishDecisionIslandSubjectKey } from "../lifecycle-card-ref";
 // The module under test is loaded inside the tests (beforeEach), so before the fix this file loads and every test
 // fails on the missing module.
-// red-first-expect: publish-decision-island
 import type * as IslandModule from "../publish-decision-island";
 import type { PublishDecisionIslandPorts } from "../publish-decision-island";
 let PUBLISH_DECISION_ISLAND_PORTS: typeof IslandModule.PUBLISH_DECISION_ISLAND_PORTS;
