@@ -107,12 +107,14 @@ const STARTED = new Date("2026-11-20T10:00:00Z");
 const REASON = "No approved review came before this change outside Cinatra.";
 
 type Review = {
-  status: string; disposition: string | null; createdAt: Date; createdAtMicros?: string | null; resolvedBy?: string | null; runGeneration?: number | null;
-  fingerprint?: string | null;
+  id?: string; status: string; disposition: string | null; createdAt: Date; resolvedBy?: string | null; runGeneration?: number | null;
+  fingerprint?: string | null; successorGateId?: string | null;
 };
 /** The fingerprint a person's decision stamps on its review (the decision core's sha256). */
 const HUMAN_DECISION = "d".repeat(64);
 const listReviews = vi.fn(async (_runId: string) => [] as Review[]);
+/** Does an output of the attempt still wait for the review orchestration (a pending produced event of it)? */
+const hasPendingProducedReview = vi.fn(async (_input: { orgId: string; runId: string; generation: number }) => false);
 
 function sign(node: string) {
   return { node, attestation: `g1:${createHmac("sha256", KEY).update(`g1\n${CONTEXT}\n${TASK}\n${node}`).digest("hex")}` };
@@ -156,10 +158,14 @@ async function reachPublishGate(stored: AgentRunRecord = makeRun(), held: AgentR
 }
 
 const at = (minutes: number) => new Date(STARTED.getTime() + minutes * 60_000);
+let gateSeq = 0;
+const gateId = () => `gate-${++gateSeq}`;
 const approved = (minutes: number, resolvedBy = "user-reviewer", runGeneration: number | null = 0): Review =>
-  ({ status: "resolved", disposition: "approve", createdAt: at(minutes), resolvedBy, runGeneration, fingerprint: HUMAN_DECISION });
-const changesRequested = (minutes: number, runGeneration: number | null = 0): Review =>
-  ({ status: "resolved", disposition: "changes_requested", createdAt: at(minutes), runGeneration });
+  ({ id: gateId(), status: "resolved", disposition: "approve", createdAt: at(minutes), resolvedBy, runGeneration, fingerprint: HUMAN_DECISION, successorGateId: null });
+/** A review settled changes requested; `successor` is the gate its repair recorded as the successor (none: no repair
+ *  of it has finished). */
+const changesRequested = (minutes: number, runGeneration: number | null = 0, successor?: Review): Review =>
+  ({ id: gateId(), status: "resolved", disposition: "changes_requested", createdAt: at(minutes), runGeneration, fingerprint: HUMAN_DECISION, successorGateId: successor?.id ?? null });
 
 const transitions = () =>
   (storeMock.transitionRunStatus.mock.calls as unknown as Array<[string, string, string, { error?: string; completedAt?: Date } | undefined]>)
@@ -170,7 +176,7 @@ const seamSlot = globalThis as { __cinatraArtifactReviewGateSeam?: unknown };
 const previousSeam = seamSlot.__cinatraArtifactReviewGateSeam;
 beforeAll(() => {
   process.env.CINATRA_CONTEXT_ATTEST_KEY = KEY;
-  seamSlot.__cinatraArtifactReviewGateSeam = { listReviews };
+  seamSlot.__cinatraArtifactReviewGateSeam = { listReviews, hasPendingProducedReview };
 });
 afterAll(() => {
   if (previousKey === undefined) delete process.env.CINATRA_CONTEXT_ATTEST_KEY;
@@ -183,6 +189,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   listReviews.mockReset();
   listReviews.mockResolvedValue([]);
+  hasPendingProducedReview.mockReset();
+  hasPendingProducedReview.mockResolvedValue(false);
   storeMock.readAgentTemplateById.mockResolvedValue(template);
   storeMock.transitionRunStatus.mockResolvedValue(undefined);
   decisions.insertParkedDecision.mockResolvedValue({ inserted: true, current: true, decision: { id: "dec-1", runId: "run-4762", nodeId: "publish", status: "parked" } });
@@ -239,7 +247,8 @@ describe("a publish card opens only after an approved review earlier in the same
     }
     // A Regenerate settles the first review; its successor, approved, opens the publish card.
     vi.clearAllMocks();
-    listReviews.mockResolvedValue([{ status: "resolved", disposition: "changes_requested", createdAt: at(4) }, approved(5)]);
+    const successor = approved(5);
+    listReviews.mockResolvedValue([changesRequested(4, 0, successor), successor]);
     await reachPublishGate();
     expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
   });
@@ -347,16 +356,20 @@ describe("a publish card opens only after an approved review earlier in the same
   });
 
   // red-first-expect: expected [ { from: 'running', …(2) } ] to deeply equal [ { from: 'running', …(2) } ]
-  it("reviews raised in one transaction (one created_at) resolve the same in any row order", async () => {
-    // A family member settled changes requested beside an approved sibling: no approval came after it, in either order.
-    for (const reviews of [[changesRequested(5), approved(5)], [approved(5), changesRequested(5)]]) {
+  it("a change request is cleared only by its own repair successor, never by another review approved later", async () => {
+    // Artifact A's review was settled changes requested and nothing repaired it; artifact B's review, raised later in the
+    // same attempt, was approved. B is no successor of A: A's request stands, unchanged A is never published.
+    const unrepaired = changesRequested(5);
+    const laterB = approved(9);
+    for (const reviews of [[unrepaired, laterB], [laterB, unrepaired]]) {
       vi.clearAllMocks();
       listReviews.mockResolvedValue(reviews);
       await reachPublishGate();
       expectStoppedWithoutWriting();
     }
-    // Its successor, raised after it and approved, opens the card in any order.
-    for (const reviews of [[changesRequested(5), approved(5), approved(9)], [approved(9), approved(5), changesRequested(5)]]) {
+    // A's repair recorded A2 as its successor; A2 approved clears A's request, in any row order, beside B.
+    const a2 = approved(7);
+    for (const reviews of [[changesRequested(5, 0, a2), a2, laterB], [laterB, a2, changesRequested(5, 0, a2)]]) {
       vi.clearAllMocks();
       listReviews.mockResolvedValue(reviews);
       await reachPublishGate();
@@ -367,6 +380,76 @@ describe("a publish card opens only after an approved review earlier in the same
     listReviews.mockResolvedValue([approved(5), approved(5)]);
     await reachPublishGate();
     expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
+  });
+
+  // red-first-expect: expected [ { from: 'running', …(2) } ] to deeply equal [ { from: 'running', …(2) } ]
+  it("the lineage clears a change request only through successors of this attempt that end in a person's approval", async () => {
+    const laterB = approved(9);
+    const cases: Array<{ label: string; reviews: Review[] }> = [];
+    // The successor is still open.
+    const open: Review = { id: gateId(), status: "pending", disposition: null, createdAt: at(6), runGeneration: 0, successorGateId: null };
+    cases.push({ label: "open successor", reviews: [changesRequested(5, 0, open), open, laterB] });
+    // The successor was settled by the optional review's expiry, with no person.
+    const expired: Review = { ...approved(6), fingerprint: "expiry:gate-optional" };
+    cases.push({ label: "expired successor", reviews: [changesRequested(5, 0, expired), expired, laterB] });
+    // The successor was declined.
+    const declined: Review = { ...approved(6), disposition: "reject" };
+    cases.push({ label: "declined successor", reviews: [changesRequested(5, 0, declined), declined, laterB] });
+    // The successor belongs to another attempt (it is not among this attempt's reviews).
+    const elsewhere = approved(6, "user-reviewer", 1);
+    cases.push({ label: "successor of another attempt", reviews: [changesRequested(5, 0, elsewhere), elsewhere, laterB] });
+    // The repair names a gate this run does not own.
+    cases.push({ label: "unknown successor", reviews: [{ ...changesRequested(5), successorGateId: "gate-elsewhere" }, laterB] });
+    // The successor was itself settled changes requested and nothing repaired it.
+    const again = changesRequested(6);
+    cases.push({ label: "successor changed again", reviews: [changesRequested(5, 0, again), again, laterB] });
+    // A lineage that names itself again clears nothing.
+    const loopA: Review = { ...changesRequested(5), id: "loop-a", successorGateId: "loop-b" };
+    const loopB: Review = { ...changesRequested(6), id: "loop-b", successorGateId: "loop-a" };
+    cases.push({ label: "a lineage loop", reviews: [loopA, loopB, laterB] });
+    const outcomes: Array<{ label: string; to: string[] }> = [];
+    for (const { label, reviews } of cases) {
+      vi.clearAllMocks();
+      listReviews.mockResolvedValue(reviews);
+      await reachPublishGate();
+      outcomes.push({ label, to: transitions().map((m) => m.to) });
+    }
+    expect(outcomes).toEqual(cases.map(({ label }) => ({ label, to: ["stopped"] })));
+    // A successor changed again whose own successor a person approved clears the whole lineage.
+    const last = approved(8);
+    const middle = changesRequested(6, 0, last);
+    vi.clearAllMocks();
+    listReviews.mockResolvedValue([changesRequested(5, 0, middle), middle, last]);
+    await reachPublishGate();
+    expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
+  });
+
+  // red-first-expect: expected [ { from: 'running', …(2) } ] to deeply equal [ { from: 'running', …(2) } ]
+  it("an output of the attempt still waiting for the review orchestration holds the card back, as an open review does", async () => {
+    // One review is approved; another output of the same attempt is still a pending produced event the drain has not
+    // reached. The review it may raise is not settled, so no card opens and nothing is written.
+    listReviews.mockResolvedValue([approved(5)]);
+    hasPendingProducedReview.mockResolvedValue(true);
+    await reachPublishGate();
+    expectStoppedWithoutWriting();
+    expect(hasPendingProducedReview).toHaveBeenCalledWith({ orgId: "org-test", runId: "run-4762", generation: 0 });
+    // The read names the attempt that reached the gate.
+    vi.clearAllMocks();
+    listReviews.mockResolvedValue([approved(5, "user-reviewer", 1)]);
+    await reachPublishGate(makeRun({ resetGeneration: 1 }));
+    expect(hasPendingProducedReview).toHaveBeenCalledWith({ orgId: "org-test", runId: "run-4762", generation: 1 });
+    // Once the drain settled it (no event of the attempt pending), the approved review opens the card.
+    vi.clearAllMocks();
+    hasPendingProducedReview.mockResolvedValue(false);
+    listReviews.mockResolvedValue([approved(5)]);
+    await reachPublishGate();
+    expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
+    // A fault of that read ends the run failed, as an unreadable review does.
+    vi.clearAllMocks();
+    hasPendingProducedReview.mockRejectedValue(new Error("db down"));
+    await reachPublishGate();
+    expect(transitions().map((m) => `${m.from}->${m.to}:${(m.error ?? "").split(":")[0]}`)).toEqual(["running->failed:publish_review_unread"]);
+    expect(decisions.insertParkedDecision).not.toHaveBeenCalled();
   });
 
   it("an unreadable review ends the run failed and opens no decision row", async () => {
@@ -393,26 +476,6 @@ describe("a publish card opens only after an approved review earlier in the same
     expect(resolveOrgRoleForUser).toHaveBeenCalledWith("org-test", "user-decider");
     const [runId, from, to] = storeMock.transitionRunStatus.mock.calls[0] as unknown as [string, string, string];
     expect([runId, from, to]).toEqual(["run-4762", "pending_approval", "stopped"]);
-  });
-
-  // red-first-expect: expected [ { from: 'running', …(2) } ] to deeply equal [ { from: 'running', …(2) } ]
-  it("reviews raised within one millisecond are ordered by their exact microseconds", async () => {
-    // Both reviews read as the same millisecond; the store's exact time says the approval came 800 microseconds later.
-    const ms = at(5);
-    const micros = (offset: number) => (BigInt(ms.getTime()) * BigInt(1000) + BigInt(offset)).toString();
-    const changed: Review = { ...changesRequested(5), createdAt: ms, createdAtMicros: micros(100) };
-    const successor: Review = { ...approved(5), createdAt: ms, createdAtMicros: micros(900) };
-    for (const reviews of [[changed, successor], [successor, changed]]) {
-      vi.clearAllMocks();
-      listReviews.mockResolvedValue(reviews);
-      await reachPublishGate();
-      expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
-    }
-    // An approval raised BEFORE the change request, within the same millisecond, is no successor.
-    vi.clearAllMocks();
-    listReviews.mockResolvedValue([{ ...successor, createdAtMicros: micros(100) }, { ...changed, createdAtMicros: micros(900) }]);
-    await reachPublishGate();
-    expectStoppedWithoutWriting();
   });
 
   // red-first-expect: expected [] to deeply equal [ { from: 'pending_approval', …(2) } ]

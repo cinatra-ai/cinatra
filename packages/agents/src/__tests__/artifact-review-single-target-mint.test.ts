@@ -274,3 +274,22 @@ describe("the attempt a review gate belongs to (cinatra#4762)", () => {
     expect(storage.generations[2]).not.toBeNull();
   });
 });
+
+describe("a successor of a review raised before the generation column (cinatra#4762)", () => {
+  /** The statement text an SQL value renders to; a plain value renders as itself. */
+  const rendered = async (value: unknown): Promise<string> => {
+    const { PgDialect } = await import("drizzle-orm/pg-core");
+    const { SQL } = await import("drizzle-orm");
+    return value instanceof SQL ? new PgDialect().sqlToQuery(value).sql.replace(/\s+/g, " ") : String(value);
+  };
+
+  // red-first-expect: to match /coalesce\(\(select coalesce\(prior_ga
+  it("takes generation 0, the generation the publish gate reads for that review, never -1", async () => {
+    // The review it continues has no stored generation (null): the publish gate reads it as generation 0, so its repair
+    // successor is stamped 0 and can clear the change request. A review this run does not own still stamps -1.
+    await emitArtifactReviewGate({ ...input([A]), reviewTaskId: "repair-successor", successorOfGateId: "gate-old" });
+    expect(await rendered(storage.generations[0])).toMatch(
+      /coalesce\(\(select coalesce\(prior_gate\.run_generation, 0\) from \S+ prior_gate where prior_gate\.id = \$\d+ and prior_gate\.run_id = \$\d+\), -1\)/,
+    );
+  });
+});

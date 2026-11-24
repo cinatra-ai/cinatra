@@ -524,6 +524,82 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     expect(await approvedReviewPrecedes(runId, 0)).toBe(true);
   });
 
+  it("cinatra#4762: a change request is cleared only by its own repair successor; a pending output of the attempt holds the fence", async () => {
+    const { bindArtifactReviewGateSeam } = await import("../artifact-review-gate-seam");
+    const { emitArtifactReviewGate } = await import("../artifact-review-gate-store");
+    const { approvedReviewPrecedes, reviewFenceHolds } = await import("../publish-decision-actions");
+    bindArtifactReviewGateSeam();
+    const GATES = `"${q(TEST_SCHEMA)}"."artifact_review_gates"`;
+    const REPAIRS = `"${q(TEST_SCHEMA)}"."lifecycle_repair"`;
+    const OUTBOX = `"${q(TEST_SCHEMA)}"."artifact_produced_outbox"`;
+    const runId = await seedRun(`run-${randomUUID()}`, "running");
+    const raise = async (extra: { runGeneration?: number; successorOfGateId?: string } = { runGeneration: 0 }) =>
+      (await emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: `review-${randomUUID()}`,
+        targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }], ...extra })).gateId;
+    const settle = async (gateId: string, disposition: string) => {
+      const s = resolvedGate(disposition);
+      await admin.query(`UPDATE ${GATES} SET status = $2, disposition = $3, fingerprint = $4, resolved_at = now() WHERE id = $1`,
+        [gateId, s.status, s.disposition, s.fingerprint]);
+    };
+    /** The repair of `gateId` finished and recorded `successorGateId`, as submitRepairResponse writes it. */
+    const repaired = async (gateId: string, successorGateId: string, producerRunId = runId) => {
+      const id = `repair-${randomUUID()}`;
+      await admin.query(
+        `INSERT INTO ${REPAIRS} (id, lineage_id, gate_id, org_id, producer_run_id, base_artifact_id, base_representation_revision_id,
+           expected_base_revision_id, findings, continuation_mode, attempt, route, status, successor_gate_id, idempotency_key)
+         VALUES ($1, $1, $2, $3, $4, 'art', 'rev', 'rev', '[]', 'checkpointed', 1, 'producer_repair', 'repaired', $5, $1)`,
+        [id, gateId, ORG, producerRunId, successorGateId]);
+    };
+    const generationOf = async (gateId: string) =>
+      (await admin.query(`SELECT run_generation FROM ${GATES} WHERE id = $1`, [gateId])).rows[0].run_generation as number | null;
+
+    // Artifact A's review: changes requested. Artifact B's review, raised later: approved. B clears nothing of A.
+    const a = await raise();
+    await settle(a, "changes_requested");
+    const b = await raise();
+    await settle(b, "approve");
+    expect(await approvedReviewPrecedes(runId, 0)).toBe(false);
+    // A's repair successor continues A's attempt; while it is open the fence does not hold, approved it clears A.
+    const a2 = await raise({ successorOfGateId: a });
+    expect(await generationOf(a2)).toBe(0);
+    await repaired(a, a2);
+    expect(await approvedReviewPrecedes(runId, 0)).toBe(false);
+    await settle(a2, "approve");
+    expect(await approvedReviewPrecedes(runId, 0)).toBe(true);
+    expect(await reviewFenceHolds({ runId, orgId: ORG, generation: 0 })).toBe(true);
+
+    // A review raised before the generation column (null, read as 0): its repair successor is stamped 0, so it clears.
+    const legacyRun = await seedRun(`run-${randomUUID()}`, "running");
+    const legacy = (await emitArtifactReviewGate({ runId: legacyRun, orgId: ORG, reviewTaskId: `review-${randomUUID()}`,
+      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }], runGeneration: 0 })).gateId;
+    await admin.query(`UPDATE ${GATES} SET run_generation = NULL WHERE id = $1`, [legacy]);
+    await settle(legacy, "changes_requested");
+    const legacySuccessor = (await emitArtifactReviewGate({ runId: legacyRun, orgId: ORG, reviewTaskId: `review-${randomUUID()}`,
+      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }], successorOfGateId: legacy })).gateId;
+    expect(await generationOf(legacySuccessor)).toBe(0);
+    await repaired(legacy, legacySuccessor, legacyRun);
+    await settle(legacySuccessor, "approve");
+    expect(await approvedReviewPrecedes(legacyRun, 0)).toBe(true);
+
+    // A produced event of the attempt still pending holds the fence; one of another attempt, or one processed, does not.
+    const event = async (generation: number, status: string) => {
+      const eventId = `evt-${randomUUID()}`;
+      await admin.query(
+        `INSERT INTO ${OUTBOX} (event_id, org_id, artifact_id, representation_revision_id, emitter, producer_run_id, origin_kind,
+           destination_class, continuation_mode, status, producer_run_generation)
+         VALUES ($1, $2, $3, 'rev-1', 'createSemanticArtifact', $4, 'agent_produced', 'none', 'checkpointed', $5, $6)`,
+        [eventId, ORG, `art-${randomUUID()}`, runId, status, generation]);
+      return eventId;
+    };
+    await event(1, "pending");
+    await event(0, "processed");
+    expect(await reviewFenceHolds({ runId, orgId: ORG, generation: 0 })).toBe(true);
+    const pending = await event(0, "pending");
+    expect(await reviewFenceHolds({ runId, orgId: ORG, generation: 0 })).toBe(false);
+    await admin.query(`UPDATE ${OUTBOX} SET status = 'processed', processed_at = now() WHERE event_id = $1`, [pending]);
+    expect(await reviewFenceHolds({ runId, orgId: ORG, generation: 0 })).toBe(true);
+  });
+
   it("cinatra#4762: a produced event records the generation its attempt carries; a delayed writer of an ended attempt keeps its own", async () => {
     const { buildProducedEventInsertOp, producerAttemptForRun } = await import("@/lib/lifecycle/lifecycle-emit");
     const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");

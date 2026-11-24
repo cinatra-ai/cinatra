@@ -22,7 +22,9 @@ import "server-only";
 import {
   emitArtifactReviewGate,
   emitDeclaredReviewGateFamily,
+  hasPendingProducedEventForAttempt,
   listReviewGatesForRun,
+  listReviewLineageForRun,
   readReviewGate,
   ArtifactReviewGateError,
 } from "./artifact-review-gate-store";
@@ -68,11 +70,17 @@ export type ArtifactReviewGateSeam = {
    *  the run's own gate list can say which that is. */
   listGates(runId: string): Promise<Array<{ reviewTaskId: string; status: string }>>;
   /** cinatra#4762 — every review this run owns, projected to what the publish gate needs to see that an approved review
-   *  came before it in the attempt that reached it: the status, the settled disposition, when the review was raised,
-   *  in microseconds since the epoch as the store's exact decimal text (createdAtMicros; a Date keeps milliseconds only),
-   *  the run's reset generation at that raise (null: raised before the column existed), and the resolving fingerprint
-   *  (a person's decision, or the optional review's synthetic expiry; null while pending). */
-  listReviews(runId: string): Promise<Array<{ status: string; disposition: string | null; createdAt: Date; createdAtMicros: string | null; runGeneration: number | null; fingerprint: string | null }>>;
+   *  came before it in the attempt that reached it: the gate's id, the status, the settled disposition, when the review
+   *  was raised, the run's reset generation at that raise (null: raised before the column existed), the resolving
+   *  fingerprint (a person's decision, or the optional review's synthetic expiry; null while pending) and the successor
+   *  gate its repair recorded (null: none), the lineage that clears a change request. */
+  listReviews(runId: string): Promise<Array<{
+    id: string; status: string; disposition: string | null; createdAt: Date; runGeneration: number | null;
+    fingerprint: string | null; successorGateId: string | null;
+  }>>;
+  /** cinatra#4762 — does a produced event of this attempt still wait for the review orchestration (a review it may raise
+   *  is not settled yet)? */
+  hasPendingProducedReview(input: { orgId: string; runId: string; generation: number }): Promise<boolean>;
 };
 
 /** Boot-time binding (idempotent, last write wins). Binds the run executor's
@@ -116,11 +124,14 @@ export function bindArtifactReviewGateSeam(): void {
       return gates.map((gate) => ({ reviewTaskId: gate.reviewTaskId, status: gate.status }));
     },
     async listReviews(runId) {
-      const gates = await listReviewGatesForRun(runId);
+      const gates = await listReviewLineageForRun(runId);
       return gates.map((gate) => ({
-        status: gate.status, disposition: gate.disposition, createdAt: gate.createdAt, createdAtMicros: gate.createdAtMicros ?? null,
-        runGeneration: gate.runGeneration ?? null, fingerprint: gate.fingerprint ?? null,
+        id: gate.id, status: gate.status, disposition: gate.disposition, createdAt: gate.createdAt,
+        runGeneration: gate.runGeneration ?? null, fingerprint: gate.fingerprint ?? null, successorGateId: gate.successorGateId ?? null,
       }));
+    },
+    async hasPendingProducedReview(input) {
+      return hasPendingProducedEventForAttempt(input);
     },
   };
   (

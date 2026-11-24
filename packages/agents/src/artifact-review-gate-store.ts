@@ -70,6 +70,7 @@ import {
   gateAdvisoryComments,
   artifactVerificationRecords,
   artifactProducedOutbox,
+  lifecycleRepair,
   type PinnedReviewTargetRow,
 } from "./schema";
 import {
@@ -215,8 +216,9 @@ export async function emitArtifactReviewGate(input: {
    *  caller with no attempt identity, or an event of an older build) is stamped -1, which never counts. */
   runGeneration?: number | null;
   /** cinatra#4762: a gate that continues a review of the same attempt (a failed verification's reopen, a repair's
-   *  successor) takes the generation of the gate it continues, on the same run, read in the insert; a missing gate, one
-   *  of another run or one with no generation stamps -1. Wins over runGeneration. */
+   *  successor) takes the generation of the gate it continues, on the same run, read in the insert: the generation the
+   *  publish gate reads for that gate, so a gate raised before the column existed (null, read as 0) passes 0. A missing
+   *  gate, or one of another run, stamps -1. Wins over runGeneration. */
   successorOfGateId?: string;
 }, executor: GateStoreExecutor = db, plan?: DeclaredReviewPlan): Promise<EmitReviewGateResult> {
   const normalized = normalizeReviewTargets(input.targets);
@@ -270,7 +272,7 @@ export async function emitArtifactReviewGate(input: {
       // the next attempt there. A retry's reset raises the generation once, so a review of an ended attempt never
       // counts again. No attempt identity: -1.
       runGeneration: typeof input.successorOfGateId === "string"
-        ? sql`coalesce((select prior_gate.run_generation from ${artifactReviewGates} prior_gate where prior_gate.id = ${input.successorOfGateId} and prior_gate.run_id = ${input.runId}), -1)`
+        ? sql`coalesce((select coalesce(prior_gate.run_generation, 0) from ${artifactReviewGates} prior_gate where prior_gate.id = ${input.successorOfGateId} and prior_gate.run_id = ${input.runId}), -1)`
         : Number.isSafeInteger(input.runGeneration) ? (input.runGeneration as number) : -1,
     })
     // One gate per (run, task) — the run_task_uniq index.
@@ -366,6 +368,63 @@ export interface ReviewGateRow {
   /** cinatra#4312 — `created_at` in microseconds since the epoch, as decimal text,
    * signed before 1970 (`createdAtMicrosSql`); set by `listReviewGatesForRun`. */
   createdAtMicros?: string;
+}
+
+/** cinatra#4762 — a review of a run with the gate that continues it after a change request: the successor the repair of
+ *  this gate recorded in the gate's org (`lifecycle_repair.successor_gate_id`, one repair per gate), or null when no
+ *  repair of it has finished. */
+export type ReviewGateLineageRow = ReviewGateRow & { successorGateId: string | null };
+
+/** cinatra#4762 — every gate a run owns, as `listReviewGatesForRun` lists it, each with the successor gate its repair
+ *  recorded, read in one statement. A plain read; authorization is the caller's job, as for listReviewGatesForRun. */
+export async function listReviewLineageForRun(runId: string, executor: GateStoreExecutor = db): Promise<ReviewGateLineageRow[]> {
+  const rows = await executor
+    .select({
+      ...getTableColumns(artifactReviewGates),
+      createdAtMicros: createdAtMicrosSql(artifactReviewGates.createdAt),
+      successorGateId: lifecycleRepair.successorGateId,
+    })
+    .from(artifactReviewGates)
+    .leftJoin(lifecycleRepair, and(eq(lifecycleRepair.gateId, artifactReviewGates.id), eq(lifecycleRepair.orgId, artifactReviewGates.orgId)))
+    .where(eq(artifactReviewGates.runId, runId))
+    .orderBy(artifactReviewGates.createdAt);
+  return rows.map((row) => ({
+    id: row.id,
+    runId: row.runId,
+    orgId: row.orgId,
+    reviewTaskId: row.reviewTaskId,
+    status: row.status as "pending" | "resolved",
+    pinnedTargets: row.pinnedTargets as PinnedReviewTargetRow[],
+    disposition: row.disposition,
+    fingerprint: row.fingerprint,
+    resolvedBy: row.resolvedBy,
+    resolvedAt: row.resolvedAt,
+    createdAt: row.createdAt,
+    createdAtMicros: row.createdAtMicros,
+    runGeneration: row.runGeneration,
+    successorGateId: row.successorGateId ?? null,
+  }));
+}
+
+/** cinatra#4762 — does an output of this attempt still wait for the review orchestration? A produced event of the run,
+ *  in its org, stamped with the attempt's generation and still pending, may yet raise a review of the attempt (only the
+ *  drain's planner can say it will not), so it counts as a review not yet settled. Events of another attempt, or of an
+ *  older build (no generation), raise reviews no publish gate of this attempt counts, so they are not read. */
+export async function hasPendingProducedEventForAttempt(
+  input: { orgId: string; runId: string; generation: number },
+  executor: GateStoreExecutor = db,
+): Promise<boolean> {
+  const [row] = await executor
+    .select({ eventId: artifactProducedOutbox.eventId })
+    .from(artifactProducedOutbox)
+    .where(and(
+      eq(artifactProducedOutbox.status, "pending"),
+      eq(artifactProducedOutbox.orgId, input.orgId),
+      eq(artifactProducedOutbox.producerRunId, input.runId),
+      eq(artifactProducedOutbox.producerRunGeneration, input.generation),
+    ))
+    .limit(1);
+  return row !== undefined;
 }
 
 export async function readReviewGate(

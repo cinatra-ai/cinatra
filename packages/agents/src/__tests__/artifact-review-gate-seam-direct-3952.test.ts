@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const store = vi.hoisted(() => ({
   readReviewGate: vi.fn(),
   listReviewGatesForRun: vi.fn(),
+  listReviewLineageForRun: vi.fn(),
+  hasPendingProducedEventForAttempt: vi.fn(),
   emitArtifactReviewGate: vi.fn(),
   emitDeclaredReviewGateFamily: vi.fn(),
   decideDeclaredReviewForGate: vi.fn(),
@@ -13,6 +15,8 @@ const store = vi.hoisted(() => ({
 vi.mock("../artifact-review-gate-store", () => ({
   readReviewGate: store.readReviewGate,
   listReviewGatesForRun: store.listReviewGatesForRun,
+  listReviewLineageForRun: store.listReviewLineageForRun,
+  hasPendingProducedEventForAttempt: store.hasPendingProducedEventForAttempt,
   emitArtifactReviewGate: store.emitArtifactReviewGate,
   emitDeclaredReviewGateFamily: store.emitDeclaredReviewGateFamily,
   ArtifactReviewGateError: class extends Error {},
@@ -132,28 +136,43 @@ describe("the run's reviews, as the publish gate reads them (cinatra#4762)", () 
   // red-first-expect: expected [ undefined, undefined, undefined ] to deeply equal [ 'expiry:gate-1', …(2) ]
   it("carry each review's resolving fingerprint, so the publish gate can tell a person's approval from an expiry", async () => {
     const createdAt = new Date("2026-11-20T10:05:00.000Z");
-    store.listReviewGatesForRun.mockResolvedValue([
-      { reviewTaskId: "r1", status: "resolved", disposition: "approve", createdAt, runGeneration: 0, fingerprint: "expiry:gate-1" },
-      { reviewTaskId: "r2", status: "resolved", disposition: "approve", createdAt, runGeneration: 0, fingerprint: HUMAN },
-      { reviewTaskId: "r3", status: "pending", disposition: null, createdAt, runGeneration: 0, fingerprint: null },
-    ]);
+    const rows = [
+      { id: "g1", reviewTaskId: "r1", status: "resolved", disposition: "approve", createdAt, runGeneration: 0, fingerprint: "expiry:gate-1", successorGateId: null },
+      { id: "g2", reviewTaskId: "r2", status: "resolved", disposition: "approve", createdAt, runGeneration: 0, fingerprint: HUMAN, successorGateId: null },
+      { id: "g3", reviewTaskId: "r3", status: "pending", disposition: null, createdAt, runGeneration: 0, fingerprint: null, successorGateId: null },
+    ];
+    // The plain gate list answers the same rows: only the lineage read carries the successor, whichever the seam reads.
+    store.listReviewLineageForRun.mockResolvedValue(rows);
+    store.listReviewGatesForRun.mockResolvedValue(rows);
     const seam = slot.__cinatraArtifactReviewGateSeam! as unknown as { listReviews?: (runId: string) => Promise<Array<{ fingerprint?: unknown }>> };
     const listed = typeof seam.listReviews === "function" ? await seam.listReviews(runId) : [{}, {}, {}];
     expect(listed.map((r) => r.fingerprint)).toEqual(["expiry:gate-1", HUMAN, null]);
   });
 
   // red-first-expect: seam.listReviews is not a function
-  it("carry the store's exact microseconds, which a Date would cut to milliseconds", async () => {
+  it("carry each gate's identity and the successor its repair recorded, read in one statement of the store", async () => {
     const createdAt = new Date("2026-11-20T10:05:00.000Z");
-    store.listReviewGatesForRun.mockResolvedValue([
-      { reviewTaskId: "r1", status: "resolved", disposition: "changes_requested", createdAt, createdAtMicros: "1795169100000100", runGeneration: 0, fingerprint: HUMAN },
-      { reviewTaskId: "r2", status: "resolved", disposition: "approve", createdAt, createdAtMicros: "1795169100000900", runGeneration: 0, fingerprint: HUMAN },
-    ]);
+    const rows = [
+      { id: "g1", reviewTaskId: "r1", status: "resolved", disposition: "changes_requested", createdAt, createdAtMicros: "1795169100000100", runGeneration: null, fingerprint: HUMAN, successorGateId: "g2" },
+      { id: "g2", reviewTaskId: "r2", status: "resolved", disposition: "approve", createdAt, createdAtMicros: "1795169100000900", runGeneration: 0, fingerprint: HUMAN, successorGateId: null },
+    ];
+    store.listReviewLineageForRun.mockResolvedValue(rows);
+    store.listReviewGatesForRun.mockResolvedValue(rows.map(({ successorGateId: _successor, ...gate }) => gate));
     const seam = slot.__cinatraArtifactReviewGateSeam!;
     expect(await seam.listReviews(runId)).toEqual([
-      { status: "resolved", disposition: "changes_requested", createdAt, createdAtMicros: "1795169100000100", runGeneration: 0, fingerprint: HUMAN },
-      { status: "resolved", disposition: "approve", createdAt, createdAtMicros: "1795169100000900", runGeneration: 0, fingerprint: HUMAN },
+      { id: "g1", status: "resolved", disposition: "changes_requested", createdAt, runGeneration: null, fingerprint: HUMAN, successorGateId: "g2" },
+      { id: "g2", status: "resolved", disposition: "approve", createdAt, runGeneration: 0, fingerprint: HUMAN, successorGateId: null },
     ]);
-    expect(store.listReviewGatesForRun).toHaveBeenCalledWith(runId);
+    expect(store.listReviewLineageForRun).toHaveBeenCalledWith(runId);
+    expect(store.listReviewGatesForRun).not.toHaveBeenCalled();
+  });
+
+  // red-first-expect: expected 'undefined' to be 'function'
+  it("ask the store whether an output of the attempt still waits for the review orchestration", async () => {
+    store.hasPendingProducedEventForAttempt.mockResolvedValue(true);
+    const seam = slot.__cinatraArtifactReviewGateSeam!;
+    expect(typeof seam.hasPendingProducedReview).toBe("function");
+    expect(await seam.hasPendingProducedReview({ orgId, runId, generation: 2 })).toBe(true);
+    expect(store.hasPendingProducedEventForAttempt).toHaveBeenCalledWith({ orgId, runId, generation: 2 });
   });
 });

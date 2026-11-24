@@ -3,7 +3,7 @@
 // double, so these cases pin the order: the authority, the claim, the gate read under it, ONE released decision, the
 // preparation, the fence, then ONE send. Since cinatra#4245 the claim is the pause claim (a double here: its rules are
 // pinned by run-pause-claim's own suites) and the fence is the one move pending_approval -> running.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AuthzError } from "@/lib/authz/errors";
 
@@ -63,6 +63,25 @@ import {
   approvePublishDecision,
   declinePublishDecision,
 } from "../publish-decision-actions";
+
+// cinatra#4762: the review store, as the boot-bound gate seam answers it. By default the attempt holds a review a person
+// approved and no output of it waits for the review orchestration, so the Publish cases below pass the review fence.
+const reviewSeam = {
+  listReviews: vi.fn(),
+  hasPendingProducedReview: vi.fn(),
+};
+const APPROVED_REVIEW = { id: "gate-1", status: "resolved", disposition: "approve", createdAt: new Date("2026-11-01T00:00:00Z"),
+  runGeneration: 0, fingerprint: "e".repeat(64), successorGateId: null };
+const seamSlot = globalThis as { __cinatraArtifactReviewGateSeam?: unknown };
+const previousSeam = seamSlot.__cinatraArtifactReviewGateSeam;
+beforeAll(() => { seamSlot.__cinatraArtifactReviewGateSeam = reviewSeam; });
+afterAll(() => { seamSlot.__cinatraArtifactReviewGateSeam = previousSeam; });
+beforeEach(() => {
+  reviewSeam.listReviews.mockReset();
+  reviewSeam.listReviews.mockResolvedValue([APPROVED_REVIEW]);
+  reviewSeam.hasPendingProducedReview.mockReset();
+  reviewSeam.hasPendingProducedReview.mockResolvedValue(false);
+});
 
 const ACTOR = { actorType: "human" as const, source: "ui" as const, userId: "user-a" };
 const ROLE_HINTS = { actorOrganizationId: "org-9" };
@@ -457,6 +476,72 @@ describe("Publish (A7)", () => {
     expect(err.code).toBe("publish_decision_unavailable");
     expect(err.message).not.toMatch(/db down|d1|run-1/);
     expect(sendWayflowResume).not.toHaveBeenCalled();
+  });
+});
+
+describe("the review fence, read again at Publish (cinatra#4762)", () => {
+  /** Nothing was released, moved or sent, and the claim was given back. */
+  function expectNothingReleased() {
+    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(moves()).toEqual([]);
+    expect(prepareWayflowResume).not.toHaveBeenCalled();
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+    expect(claims.releasePauseClaim).toHaveBeenCalledWith({ runId: "run-1", orgId: "org-1", token: "tok-1" }, expect.anything());
+  }
+
+  // red-first-expect: expected { ok: true, resumed: true } to deeply equal { ok: false, …(1) }
+  it("an output of the attempt the drain reached only after the park refuses the Publish until its review is approved", async () => {
+    // The card opened on one approved review; another produced event of the same attempt still waits for the drain.
+    reviewSeam.hasPendingProducedReview.mockResolvedValue(true);
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: false, code: "publish_review_not_approved" });
+    expect(reviewSeam.hasPendingProducedReview).toHaveBeenCalledWith({ orgId: "org-1", runId: "run-1", generation: 0 });
+    expectNothingReleased();
+    // The drain raised its review, still open: refused again, and the fence is read under the claim.
+    vi.clearAllMocks();
+    claims.claimPause.mockResolvedValue(CLAIMED);
+    reviewSeam.hasPendingProducedReview.mockResolvedValue(false);
+    const raised = { ...APPROVED_REVIEW, id: "gate-2", status: "pending", disposition: null, fingerprint: null };
+    reviewSeam.listReviews.mockResolvedValue([APPROVED_REVIEW, raised]);
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: false, code: "publish_review_not_approved" });
+    expectNothingReleased();
+    expect(claims.claimPause.mock.invocationCallOrder[0]!).toBeLessThan(reviewSeam.listReviews.mock.invocationCallOrder[0]!);
+    // A person approves that review: the Publish goes on, ONE release and ONE send.
+    vi.clearAllMocks();
+    claims.claimPause.mockResolvedValue(CLAIMED);
+    reviewSeam.listReviews.mockResolvedValue([APPROVED_REVIEW, { ...APPROVED_REVIEW, id: "gate-2" }]);
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: true });
+    expect(decisions.decide).toHaveBeenCalledTimes(1);
+    expect(sendWayflowResume).toHaveBeenCalledTimes(1);
+  });
+
+  // red-first-expect: expected { ok: true, resumed: true } to deeply equal { ok: false, …(1) }
+  it("a review of the attempt settled changes requested since the park, with no successor approved, refuses the Publish", async () => {
+    reviewSeam.listReviews.mockResolvedValue([APPROVED_REVIEW,
+      { ...APPROVED_REVIEW, id: "gate-2", disposition: "changes_requested" }]);
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: false, code: "publish_review_not_approved" });
+    expectNothingReleased();
+    // A released decision (a resume that failed before its send) is read again the same way before its send.
+    vi.clearAllMocks();
+    claims.claimPause.mockResolvedValue(CLAIMED);
+    decisions.readOpenDecisionForRun.mockResolvedValue(null);
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released" }));
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: false, code: "publish_review_not_approved" });
+    expectNothingReleased();
+  });
+
+  it("a decision of an attempt other than the run's current one is refused", async () => {
+    storeMock.readAgentRunById.mockResolvedValue(run({ resetGeneration: 1 }));
+    reviewSeam.listReviews.mockResolvedValue([{ ...APPROVED_REVIEW, runGeneration: 1 }]);
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: false, code: "publish_review_not_approved" });
+    expectNothingReleased();
+  });
+
+  it("a fence that cannot be read gives the claim back and answers the fixed text; nothing is sent", async () => {
+    reviewSeam.listReviews.mockRejectedValue(new Error("db down: run-1"));
+    const err = (await approvePublishDecision({ runId: "run-1", actorContext: ACTOR }).catch((e: unknown) => e)) as Error & { code?: string };
+    expect(err.code).toBe("publish_decision_unavailable");
+    expect(err.message).not.toMatch(/db down|run-1/);
+    expectNothingReleased();
   });
 });
 
