@@ -56,6 +56,9 @@ import {
   // cinatra#2762: which implementation is in service. Descriptive only —
   // co-located in that registry so it costs no new route-graph module.
   recordServingImplementation,
+  // cinatra#3745: the loaded identity of a verified install.
+  recordLoadedExtensionIdentity,
+  retireLoadedExtensionIdentity,
 } from "@/lib/extension-capabilities-registry";
 
 /**
@@ -632,8 +635,24 @@ export async function loadRuntimePackageExtensions(
       // the edge-bound consume seams must bind this row's edges, never a
       // same-shape sibling's). Absent on legacy anchors → identity-less
       // consult semantics (composite alias / package-level derivation).
-      const installId =
-        anchorByIdentity.get(identityKey(packageName, record.version))?.installId ?? null;
+      const anchor = anchorByIdentity.get(identityKey(packageName, record.version));
+      const installId = anchor?.installId ?? null;
+      // cinatra#3745: the loaded identity of this verified install (the driver
+      // verified the bytes against this anchor before the import). Only an
+      // anchor with an install id and a digest stamps one; any other load keeps
+      // none, so an outward run action of it is refused.
+      if (anchor?.installId && anchor.digest && record.version) {
+        try {
+          recordLoadedExtensionIdentity({
+            packageName,
+            version: record.version,
+            installId: anchor.installId,
+            digest: anchor.digest,
+          });
+        } catch {
+          retireLoadedExtensionIdentity(packageName, record.version);
+        }
+      }
       if (record.isDefault === false) {
         let sink: VersionKeyedRegistrationSink | undefined;
         if (record.version) {
@@ -668,6 +687,9 @@ export async function loadRuntimePackageExtensions(
       if (registered && record.isDefault !== false) {
         servingVersionByPackage.set(record.packageName, record.version ?? null);
       }
+      // cinatra#3745: a record that did not register serves nothing, so its
+      // loaded identity is retired.
+      if (!registered) retireLoadedExtensionIdentity(record.packageName, record.version);
       const sink = pendingSinks.get(record);
       if (!sink) return;
       pendingSinks.delete(record);

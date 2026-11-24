@@ -47,6 +47,8 @@ import { devFixtureProvenanceKey } from "@/lib/extension-fixture-provenance";
 import {
   registerCapabilityProvider,
   resolveCapabilityProviders,
+  isLoadedExtensionIdentityCurrent,
+  type LoadedExtensionIdentity,
 } from "@/lib/extension-capabilities-registry";
 // The host-internal SYSTEM capability id(s) — fenced behind the `/internal`
 // subpath (host modules are the sanctioned value-importer; see
@@ -1693,6 +1695,27 @@ export function immutableActionJson(value: unknown): ActionJson {
 }
 export class OutwardActionRefusal extends Error {
   constructor(readonly code: string) { super(code); this.name = "OutwardActionRefusal"; }
+}
+
+/** cinatra#3745: the loaded-identity check of an outward run action. The owner
+ * of the tool that would act (the extension version that registered it) must
+ * carry a loaded identity that the host's loader stamped from a verified install
+ * id and digest, and that identity must still be the current one of its package
+ * version. Refuses `action_loaded_identity_missing_or_stale` when there is no
+ * such identity (a legacy, dev or bundled load has none; any other value), and
+ * `action_loaded_identity_stale` for an identity that was replaced, retired or
+ * torn down. Returns the checked identity. It is one step of the admission
+ * only: it admits nothing by itself, and `enforceMcpBoundary` still refuses
+ * every outward call on a run frame. */
+export function assertOutwardActionLoadedIdentity(identity: unknown): LoadedExtensionIdentity {
+  const pinned = typeof identity === "object" && identity !== null &&
+    ["installId", "digest"].every((name) => {
+      const d = Object.getOwnPropertyDescriptor(identity, name);
+      return !!d && "value" in d && typeof d.value === "string" && d.value.length > 0;
+    });
+  if (!pinned) throw new OutwardActionRefusal("action_loaded_identity_missing_or_stale");
+  if (!isLoadedExtensionIdentityCurrent(identity)) throw new OutwardActionRefusal("action_loaded_identity_stale");
+  return identity as LoadedExtensionIdentity;
 }
 
 /** cinatra#3745: the code of an error of one of the three classes that refuse a
