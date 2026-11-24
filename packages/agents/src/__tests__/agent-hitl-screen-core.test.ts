@@ -28,8 +28,12 @@ vi.mock("../store", () => ({
 // cinatra#3470: the installed agents' field-renderer bindings, read for the
 // binding that declares the gate's screen.
 const mergedBindings = vi.fn((): unknown[] => []);
+// The installed declared screens the server's validator refused.
+const refusedScreenIds = vi.fn((): string[] => []);
 vi.mock("../field-renderer-bindings.server", () => ({
   getMergedFieldRendererBindings: () => mergedBindings(),
+  isRefusedDeclaredScreen: (id: string) =>
+    !mergedBindings().some((b) => (b as { id?: string }).id === id) && refusedScreenIds().includes(id),
 }));
 
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "../agent-builder-ids";
@@ -211,5 +215,23 @@ describe("the declared screen of the gate's renderer (cinatra#3470)", () => {
     const failed = await agentHitlScreenStateForRun(RUN);
     expect(failed.state).toBe("asking");
     expect(failed.state === "asking" && "declaredScreen" in failed).toBe(false);
+  });
+
+  it("holds a gate whose declared screen the validator refused, as the run panel does", async () => {
+    deriveRunHitlContext.mockResolvedValue({ ...GATE, xRenderer: DECLARED_ID });
+    mergedBindings.mockReturnValue([]);
+    refusedScreenIds.mockReturnValue([DECLARED_ID]);
+    const refused = await agentHitlScreenStateForRun(RUN);
+    // A refused screen is declared but cannot be drawn: never "none declared".
+    // red-first-expect: expected { state: 'asking', …(3) } to match object { state: 'asking', …(1) }
+    expect(refused).toMatchObject({ state: "asking", declaredScreenUnavailable: true });
+    expect(refused.state === "asking" && "declaredScreen" in refused).toBe(false);
+    // An ordinary gate with no declared screen is unchanged.
+    deriveRunHitlContext.mockResolvedValue({ ...GATE });
+    const plain = await agentHitlScreenStateForRun(RUN);
+    expect(plain.state).toBe("asking");
+    expect(plain.state === "asking" && "declaredScreenUnavailable" in plain).toBe(false);
+    expect(plain.state === "asking" && "declaredScreen" in plain).toBe(false);
+    refusedScreenIds.mockReturnValue([]);
   });
 });

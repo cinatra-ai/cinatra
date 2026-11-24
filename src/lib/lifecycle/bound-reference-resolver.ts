@@ -148,6 +148,13 @@ export type BoundHitlScreen = {
     /** The card's rows in words, for the turn that names them. */
     readonly rows: readonly string[];
   };
+  /**
+   * The gate's renderer names a declared screen this server cannot read: the
+   * validator refused it, or the declaration read failed (cinatra#3470). The
+   * screen lends no fill and no submit, and `form` carries no schema: the gate's
+   * raw input schema is never offered in place of the declared card.
+   */
+  readonly declaredUnavailable?: true;
 };
 
 /**
@@ -333,10 +340,14 @@ export type BoundReferencePorts = {
   readonly readPinnedTargets: typeof readGatePinnedTargets;
   readonly readParkedScreen: typeof readLatestDurableHitlGateArtifact;
   /**
-   * The declared HITL card of a gate's renderer (cinatra#3470), or null: the
-   * installed binding's own declaration, validated again.
+   * The declared HITL card of a gate's renderer (cinatra#3470): the installed
+   * binding's own declaration, validated again. `null` for a gate that declares
+   * no card; "unavailable" for a declared screen that was refused or could not
+   * be read.
    */
-  readonly readDeclaredCard: (xRenderer: string) => Promise<DeclaredHitlCard | null>;
+  readonly readDeclaredCard: (
+    xRenderer: string,
+  ) => Promise<DeclaredHitlCard | "unavailable" | null>;
   readonly readRunTrigger: typeof readRunTriggerByRunId;
   /**
    * The skills hold, for one verified reader — the SAME read the chip row and
@@ -670,8 +681,22 @@ export async function resolveBoundReference(input: {
     if (screen && screen.reviewTaskId === payload.reviewTaskId) {
       // A DECLARED CARD (cinatra#3470) offers its own fields and decisions, not
       // the gate's input schema: a fill names them, and the submit sends the
-      // card's staged whole answer. A failed read leaves the screen as before.
-      const card = await ports.readDeclaredCard(screen.xRenderer).catch(() => null);
+      // card's staged whole answer. A declared screen that was refused, or a
+      // failed read, FAILS CLOSED: the screen lends nothing, and the gate's raw
+      // schema never stands in for the card the person is shown.
+      const card = await ports
+        .readDeclaredCard(screen.xRenderer)
+        .catch(() => "unavailable" as const);
+      if (card === "unavailable") {
+        return {
+          kind: "hitl_screen",
+          runId: payload.runId,
+          screenRef: payload.reviewTaskId,
+          xRenderer: screen.xRenderer,
+          form: { schema: {}, values: {} },
+          declaredUnavailable: true,
+        };
+      }
       if (card) {
         const answer = await loadDeclaredAnswer();
         return {
@@ -787,7 +812,10 @@ export function controlsLentBy(
   resolution: BoundReferenceResolution,
 ): readonly LentCardControl[] {
   if (resolution.kind === "review") return ["comment", "regenerate", "approve"];
-  if (resolution.kind === "hitl_screen") return ["fill", "submit"];
+  // A declared screen this server cannot read lends nothing (cinatra#3470).
+  if (resolution.kind === "hitl_screen") {
+    return resolution.declaredUnavailable ? [] : ["fill", "submit"];
+  }
   if (resolution.kind === "schedule_form") return ["fill"];
   if (resolution.kind === "recommendation_hold") return ["confirm", "skip"];
   if (resolution.kind === "schedule_proposal")

@@ -540,7 +540,9 @@ export function primaryControlFor(
   // placed a fill on that screen. An induced bare press therefore does nothing,
   // and the fill an induced press would have to make first appears in the
   // person's own fields, in front of them, before anything is sent.
-  if (resolution.kind === "hitl_screen") return "submit";
+  if (resolution.kind === "hitl_screen") {
+    return controlsLentBy(resolution).includes("submit") ? "submit" : null;
+  }
   // AN ARMED SCHEDULE'S FORM MINTS `save`, on exactly the same terms
   // (cinatra#2934, the armed-trigger tab). Issue 2934's own acceptance — "an
   // armed one-off changed before firing and refused after" — needs the second

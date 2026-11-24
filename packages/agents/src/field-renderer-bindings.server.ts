@@ -211,24 +211,44 @@ export function getMergedFieldRendererBindings(): ReadonlyArray<CollectedBinding
 }
 
 /**
- * The declared HITL CARD of a gate's renderer (cinatra#3470), or null: the
- * merged binding with exactly this id, declared mid-run, whose screen is a
- * "card" that passes the same validation the client registration runs. The
- * server's bound-screen fill and lent-action submit read the card's answer
- * from it, never from the gate's input schema. Any failure reads as no card.
+ * Whether a gate's renderer names a declared screen the host cannot draw
+ * (cinatra#3470): an installed binding declared a screen for this id, the
+ * validator refused it, and no binding registers the id. This is the run
+ * page's rule (`useRuntimeFieldRendererBindings` holds such a gate), read here
+ * for the conversation core and the bound-card resolver, so no host reads a
+ * refused screen as a gate with no screen.
  */
-export function readDeclaredHitlCard(xRenderer: string): DeclaredHitlCard | null {
+export function isRefusedDeclaredScreen(xRenderer: string): boolean {
+  if (getMergedFieldRendererBindings().some((b) => b.id === xRenderer)) return false;
+  return collectInstalled().refusedScreenIds.includes(xRenderer);
+}
+
+/**
+ * The declared HITL CARD of a gate's renderer (cinatra#3470): the merged
+ * binding with exactly this id, declared mid-run, whose screen is a "card"
+ * that passes the same validation the client registration runs. The server's
+ * bound-screen fill and lent-action submit read the card's answer from it,
+ * never from the gate's input schema.
+ *
+ * `null` only for a gate that declares no card screen. A declared screen the
+ * validator refused, a declaration that does not validate again, or a failed
+ * read is "unavailable": the caller lends nothing for that screen and never
+ * falls back to the gate's raw schema.
+ */
+export function readDeclaredHitlCard(xRenderer: string): DeclaredHitlCard | "unavailable" | null {
   try {
     const binding = getMergedFieldRendererBindings().find((b) => b.id === xRenderer);
-    if (!binding || binding.midRunHitl !== true || binding.screen === undefined) return null;
+    if (!binding) return isRefusedDeclaredScreen(xRenderer) ? "unavailable" : null;
+    if (binding.midRunHitl !== true || binding.screen === undefined) return null;
     const checked = validateHitlScreen(binding.screen, `${binding.id} screen`) as {
       screen?: { layout?: string };
       errors: string[];
     };
-    if (checked.errors.length > 0 || checked.screen?.layout !== "card") return null;
+    if (checked.errors.length > 0) return "unavailable";
+    if (checked.screen?.layout !== "card") return null;
     return checked.screen as DeclaredHitlCard;
   } catch {
-    return null;
+    return "unavailable";
   }
 }
 

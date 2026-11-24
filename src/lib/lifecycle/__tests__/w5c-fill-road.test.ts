@@ -958,6 +958,10 @@ describe("a declared card is filled and sent through its own answer (cinatra#347
   const RUN_VALUES = { itemId: "item-1", content: "Fixture words" };
 
   function resolveDeclared(card: unknown) {
+    return resolveWithReader(async (xRenderer: string) => (xRenderer === DECLARED_ID ? card : null));
+  }
+
+  function resolveWithReader(readDeclaredCard: (xRenderer: string) => Promise<unknown>) {
     return (async (input: { ref: string; actorCtx: ReviewActorContext }) =>
       resolveBoundReference({
         ...input,
@@ -973,23 +977,31 @@ describe("a declared card is filled and sent through its own answer (cinatra#347
               values: RUN_VALUES,
               fieldName: null,
             }) as never,
-          readDeclaredCard: async (xRenderer: string) => (xRenderer === DECLARED_ID ? card : null) as never,
+          readDeclaredCard: readDeclaredCard as never,
         } as never,
       }));
   }
 
   async function fill(card: unknown, values: Record<string, unknown>) {
+    return fillThrough(resolveDeclared(card), values);
+  }
+
+  async function fillThrough(resolve: unknown, values: Record<string, unknown>) {
     return recordBoundScreenFill({
       ref: REF,
       values,
       actorCtx: ACTOR,
       messageId: "msg_1",
       claimGrant: async () => true,
-      deps: { resolve: resolveDeclared(card) as never, surface: "run-page" },
+      deps: { resolve: resolve as never, surface: "run-page" },
     });
   }
 
   async function submit(card: unknown) {
+    return submitThrough(resolveDeclared(card));
+  }
+
+  async function submitThrough(resolve: unknown) {
     frame.store = {
       userId: PERSON.userId,
       orgId: PERSON.orgId,
@@ -998,7 +1010,7 @@ describe("a declared card is filled and sent through its own answer (cinatra#347
     return handleLentAction(
       { ref: REF, control: "submit" },
       {
-        resolve: resolveDeclared(card) as never,
+        resolve: resolve as never,
         resolveActor: resolveActor as never,
         consume: (async () => ({ outcome: "consumed", messageText: "fill it and send it" })) as never,
       },
@@ -1059,6 +1071,41 @@ describe("a declared card is filled and sent through its own answer (cinatra#347
     const res = await submit(CHOICE_CARD);
     expect((res.structuredContent as { ok: boolean }).ok).toBe(false);
     expect(approveReviewTaskInternal).not.toHaveBeenCalled();
+  });
+
+  it("a declared screen that was refused or could not be read lends no fill or submit; an undeclared gate still does", async () => {
+    const unreadable = resolveWithReader(async () => {
+      throw new Error("fixture: the declaration read failed");
+    });
+    const bound = await unreadable({ ref: REF, actorCtx: ACTOR });
+    // red-first-expect: expected [ 'fill', 'submit' ] to deeply equal []
+    expect(controlsLentBy(bound)).toEqual([]);
+    // Never the gate's raw input schema in place of the declared card.
+    expect(JSON.stringify(bound)).not.toContain('"content"');
+    expect(await fillThrough(unreadable, { content: "Fixture words" })).toEqual({ kind: "unavailable" });
+    expect(appended).toHaveLength(0);
+    const pressed = await submitThrough(unreadable);
+    expect((pressed.structuredContent as { ok: boolean }).ok).toBe(false);
+    expect(approveReviewTaskInternal).not.toHaveBeenCalled();
+
+    // A screen the validator refused reads back as unavailable: the same answer.
+    const refused = resolveWithReader(async () => "unavailable");
+    expect(controlsLentBy(await refused({ ref: REF, actorCtx: ACTOR }))).toEqual([]);
+    expect(await fillThrough(refused, { content: "Fixture words" })).toEqual({ kind: "unavailable" });
+    expect(appended).toHaveLength(0);
+
+    // An ordinary gate with no declared screen keeps its schema, its fill and its submit.
+    const undeclared = resolveDeclared(null);
+    const plain = await undeclared({ ref: REF, actorCtx: ACTOR });
+    expect(controlsLentBy(plain)).toEqual(["fill", "submit"]);
+    expect((plain as unknown as { form: { schema: { properties: unknown } } }).form.schema.properties).toEqual({
+      content: { type: "string" },
+    });
+    expect(await fillThrough(undeclared, { content: "new words" })).toEqual({
+      kind: "filled",
+      ref: REF,
+      applied: ["content"],
+    });
   });
 
   it("a card with no controls is not sent by asking; its own Continue sends its carried values", async () => {

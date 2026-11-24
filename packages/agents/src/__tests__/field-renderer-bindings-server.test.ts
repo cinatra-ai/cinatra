@@ -27,6 +27,7 @@ import {
   buildA2UiMidRunTranslatorResolver,
   __clearInstalledFieldRendererBindingsCache,
 } from "../field-renderer-bindings.server";
+import * as installedBindings from "../field-renderer-bindings.server";
 import { GENERATED_FIELD_RENDERER_BINDINGS } from "@/lib/generated/agent-bindings";
 import { A2UI_MID_RUN_TRANSLATOR_KINDS } from "@cinatra-ai/agent-ui-protocol/server";
 
@@ -194,5 +195,37 @@ describe("buildA2UiMidRunTranslatorResolver", () => {
     const resolve = buildA2UiMidRunTranslatorResolver();
     expect(resolve("@cinatra-ai/agent-builder:grouped-setup-form")).toBeUndefined();
     expect(resolve("@cinatra-ai/blog-pipeline-agent:idea-selection")).toBeUndefined();
+  });
+});
+
+describe("readDeclaredHitlCard — a refused declared screen is unavailable (cinatra#3470)", () => {
+  it("answers unavailable for a screen the validator refused, and null for a gate with no screen", () => {
+    // Read through the module, so a tree without the reader answers as "no card".
+    const readDeclaredHitlCard = (id: string): unknown =>
+      (installedBindings as { readDeclaredHitlCard?: (x: string) => unknown }).readDeclaredHitlCard?.(id) ?? null;
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    writePkg("s", "screen-agent", {
+      name: "@s/screen-agent",
+      cinatra: {
+        fieldRenderers: [
+          // A card with no title: the validator refuses the whole entry.
+          { id: "@s/screen-agent:refused", kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: { layout: "card" } },
+          { id: "@s/screen-agent:plain", kind: "cta", priority: 70 },
+          {
+            id: "@s/screen-agent:card",
+            kind: "linkedin-draft-review",
+            priority: 90,
+            midRunHitl: true,
+            screen: { layout: "card", title: "Fixture title", sections: [{ type: "field", key: "answer", label: "Fixture answer" }] },
+          },
+        ],
+      },
+    });
+    // red-first-expect: expected null to be 'unavailable'
+    expect(readDeclaredHitlCard("@s/screen-agent:refused")).toBe("unavailable");
+    // An ordinary gate, declared without a screen or not declared at all, is unchanged.
+    expect(readDeclaredHitlCard("@s/screen-agent:plain")).toBeNull();
+    expect(readDeclaredHitlCard("@s/screen-agent:not-declared")).toBeNull();
+    expect(readDeclaredHitlCard("@s/screen-agent:card")).toMatchObject({ layout: "card", title: "Fixture title" });
   });
 });

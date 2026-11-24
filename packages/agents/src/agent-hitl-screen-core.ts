@@ -155,17 +155,22 @@ export async function agentHitlScreenStateForRun(
  * so without it the chat thread and the site widget found no renderer for a
  * gate the run page draws. Only a binding that declares a `screen` is handed
  * over: that card is drawn by the host from the declaration alone. A failure
- * of the read, or a declared screen that does not read back, is
- * "unavailable", never "none declared": the card then holds the gate's
- * Continue (cinatra#3470).
+ * of the read, a declared screen that does not read back, or one the
+ * validator refused, is "unavailable", never "none declared": the card then
+ * holds the gate's Continue (cinatra#3470).
  */
 async function declaredScreenBindingOf(
   xRenderer: string,
 ): Promise<AgentHitlDeclaredScreenBinding | "unavailable" | null> {
   try {
-    const { getMergedFieldRendererBindings } = await import("./field-renderer-bindings.server");
+    const { getMergedFieldRendererBindings, isRefusedDeclaredScreen } = await import(
+      "./field-renderer-bindings.server"
+    );
     const binding = getMergedFieldRendererBindings().find((b) => b.id === xRenderer);
-    if (!binding || binding.screen === undefined) return null;
+    // A screen the validator refused is declared but cannot be drawn: the run
+    // page holds it, and so does a conversation host (the same shared rule).
+    if (!binding) return isRefusedDeclaredScreen(xRenderer) ? "unavailable" : null;
+    if (binding.screen === undefined) return null;
     const parsed = parseDeclaredScreenBinding(
       {
         id: binding.id,
