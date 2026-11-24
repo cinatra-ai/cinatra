@@ -75,11 +75,12 @@ export type ArtifactReviewGateSeam = {
    *  was raised, the run's reset generation at that raise (null: raised before the column existed), the resolving
    *  fingerprint (a terminal decision's, or the optional review's synthetic expiry; null while pending), the decider of
    *  record (`resolved_by`: the deciding user's id, null for a carrier with no user id or the expiry) and the successor
-   *  gate its repair recorded (null: none), the lineage that clears a change request. `executor`: a transaction of
-   *  the publish store to read in (its run-row lock), else the pool. */
+   *  gate its repair recorded (null: none), the lineage that clears a change request, and the later attempt that
+   *  reproduced exactly the gate's pinned revisions (null: none; listReviewLineageForRun). `executor`: a transaction
+   *  of the publish store to read in (its run-row lock), else the pool. */
   listReviews(runId: string, executor?: unknown): Promise<Array<{
     id: string; status: string; disposition: string | null; createdAt: Date; runGeneration: number | null;
-    fingerprint: string | null; resolvedBy: string | null; successorGateId: string | null;
+    fingerprint: string | null; resolvedBy: string | null; successorGateId: string | null; reproducedGeneration: number | null;
   }>>;
   /** cinatra#4762 — does a produced event of this attempt still wait for the review orchestration (a review it may raise
    *  is not settled yet)? An event with no generation (written before the column existed) counts for every attempt.
@@ -134,7 +135,7 @@ export function bindArtifactReviewGateSeam(): void {
       return gates.map((gate) => ({
         id: gate.id, status: gate.status, disposition: gate.disposition, createdAt: gate.createdAt,
         runGeneration: gate.runGeneration ?? null, fingerprint: gate.fingerprint ?? null, resolvedBy: gate.resolvedBy ?? null,
-        successorGateId: gate.successorGateId ?? null,
+        successorGateId: gate.successorGateId ?? null, reproducedGeneration: gate.reproducedGeneration ?? null,
       }));
     },
     async hasPendingProducedReview(input, executor) {

@@ -302,7 +302,7 @@ describe("0.13 — the produced event is emitted at the mint", () => {
     // cinatra#4762: the guard is ANDed to the producing run's row lock and its publishing-call check.
     expect(op.text).toContain("FOR KEY SHARE) locked_run) >= 0 AND (CASE WHEN EXISTS");
     expect(op.text).toContain("THEN 'cinatra_publish_call_in_flight' ELSE '1' END)::integer = 1 AND (EXISTS");
-    expect(op.text).toContain("ON CONFLICT (event_id) DO NOTHING");
+    expect(op.text).toContain("ON CONFLICT (event_id) DO UPDATE SET producer_run_generation");
     // The guard binds ONLY this builder's own parameters.
     expect(op.values[0]).toBe(producedEventId(OBJECT, "rev-minted", "artifact_produced"));
     expect(op.values[3]).toBe("rev-minted");

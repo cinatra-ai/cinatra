@@ -363,3 +363,41 @@ describe("an output of the attempt still waiting for the review orchestration (c
     expect(params).toEqual(["pending", "org", "run", 1]);
   });
 });
+
+describe("a review of exactly the bytes a later attempt wrote again (cinatra#4762)", () => {
+  /** The run's gates and its produced events, as the two reads of the lineage list return them. */
+  const reproducedOf = async (
+    gates: Array<{ id: string; runGeneration: number | null; pinnedTargets: Array<typeof A> }>,
+    events: Array<typeof A & { generation: number | null; orgId?: string }>,
+  ) => {
+    const executor = {
+      select: () => ({ from: () => ({
+        leftJoin: () => ({ where: () => ({ orderBy: async () => gates.map((g) => ({ ...g, orgId: "org", runId: "run", successorGateId: null })) }) }),
+        where: async () => events.map((e) => ({ orgId: "org", ...e })),
+      }) }),
+    };
+    const list = (gateStore as { listReviewLineageForRun?: (runId: string, executor: unknown) => Promise<Array<{ id: string; reproducedGeneration?: number | null }>> })
+      .listReviewLineageForRun;
+    const rows = list ? await list("run", executor) : [];
+    return rows.map((r) => [r.id, r.reproducedGeneration]);
+  };
+
+  // red-first-expect: expected [] to deeply equal [ [ 'g0', 1 ] ]
+  it("a gate of attempt 0 whose pinned revision attempt 1 wrote again carries attempt 1", async () => {
+    expect(await reproducedOf([{ id: "g0", runGeneration: 0, pinnedTargets: [A] }], [{ ...A, generation: 1 }])).toEqual([["g0", 1]]);
+  });
+
+  // red-first-expect: expected [] to deeply equal [ Array(4) ]
+  it("no later attempt: the revision not written again, only partly written again, of another org, or a gate with no generation", async () => {
+    expect(await reproducedOf([
+      { id: "g0", runGeneration: 0, pinnedTargets: [A] },
+      { id: "g1", runGeneration: 0, pinnedTargets: [A, B] },
+      { id: "g2", runGeneration: 0, pinnedTargets: [{ artifactId: "x", representationRevisionId: "x-r1" }] },
+      { id: "g3", runGeneration: null, pinnedTargets: [A] },
+    ], [
+      { ...A, generation: 0 },
+      { ...B, generation: 1 },
+      { artifactId: "x", representationRevisionId: "x-r1", generation: 1, orgId: "other-org" },
+    ])).toEqual([["g0", null], ["g1", null], ["g2", null], ["g3", null]]);
+  });
+});

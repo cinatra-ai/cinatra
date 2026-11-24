@@ -406,10 +406,15 @@ export interface ReviewGateRow {
 /** cinatra#4762 — a review of a run with the gate that continues it after a change request: the successor the repair of
  *  this gate recorded in the gate's org (`lifecycle_repair.successor_gate_id`, one repair per gate), or null when no
  *  repair of it has finished. */
-export type ReviewGateLineageRow = ReviewGateRow & { successorGateId: string | null };
+export type ReviewGateLineageRow = ReviewGateRow & { successorGateId: string | null; reproducedGeneration: number | null };
 
 /** cinatra#4762 — every gate a run owns, as `listReviewGatesForRun` lists it, each with the successor gate its repair
- *  recorded, read in one statement. A plain read; authorization is the caller's job, as for listReviewGatesForRun. */
+ *  recorded, read in one statement, and the later attempt that reproduced exactly its pinned revisions
+ *  (`reproducedGeneration`): the run's produced events of every pinned revision, in the gate's org, all stamped with
+ *  one generation newer than the gate's. A retry that writes identical bytes reuses the revision and only restamps its
+ *  event (lifecycle-emit buildProducedEventInsertOp), so the review of those bytes is a review of that attempt too.
+ *  Null when a pinned revision has no such event, the events disagree, or the gate has no generation.
+ *  A plain read; authorization is the caller's job, as for listReviewGatesForRun. */
 export async function listReviewLineageForRun(runId: string, executor: GateStoreExecutor = db): Promise<ReviewGateLineageRow[]> {
   const rows = await executor
     .select({
@@ -421,6 +426,25 @@ export async function listReviewLineageForRun(runId: string, executor: GateStore
     .leftJoin(lifecycleRepair, and(eq(lifecycleRepair.gateId, artifactReviewGates.id), eq(lifecycleRepair.orgId, artifactReviewGates.orgId)))
     .where(eq(artifactReviewGates.runId, runId))
     .orderBy(artifactReviewGates.createdAt);
+  const events = rows.length === 0 ? [] : await executor
+    .select({
+      orgId: artifactProducedOutbox.orgId,
+      artifactId: artifactProducedOutbox.artifactId,
+      representationRevisionId: artifactProducedOutbox.representationRevisionId,
+      generation: artifactProducedOutbox.producerRunGeneration,
+    })
+    .from(artifactProducedOutbox)
+    .where(eq(artifactProducedOutbox.producerRunId, runId));
+  const reproducedGeneration = (row: (typeof rows)[number]): number | null => {
+    const own = row.runGeneration;
+    if (own == null) return null;
+    const pinned = (row.pinnedTargets ?? []) as PinnedReviewTargetRow[];
+    const stamps = pinned.map((t) => Math.max(-1, ...events
+      .filter((e) => e.orgId === row.orgId && e.artifactId === t.artifactId && e.representationRevisionId === t.representationRevisionId)
+      .map((e) => e.generation ?? -1)));
+    const [first] = stamps;
+    return first !== undefined && first > own && stamps.every((g) => g === first) ? first : null;
+  };
   return rows.map((row) => ({
     id: row.id,
     runId: row.runId,
@@ -436,6 +460,7 @@ export async function listReviewLineageForRun(runId: string, executor: GateStore
     createdAtMicros: row.createdAtMicros,
     runGeneration: row.runGeneration,
     successorGateId: row.successorGateId ?? null,
+    reproducedGeneration: reproducedGeneration(row),
   }));
 }
 
@@ -526,6 +551,25 @@ export async function listReviewGatesForRun(runId: string, executor: GateStoreEx
     .from(artifactReviewGates)
     .where(eq(artifactReviewGates.runId, runId))
     .orderBy(artifactReviewGates.createdAt);
+  const events = rows.length === 0 ? [] : await executor
+    .select({
+      orgId: artifactProducedOutbox.orgId,
+      artifactId: artifactProducedOutbox.artifactId,
+      representationRevisionId: artifactProducedOutbox.representationRevisionId,
+      generation: artifactProducedOutbox.producerRunGeneration,
+    })
+    .from(artifactProducedOutbox)
+    .where(eq(artifactProducedOutbox.producerRunId, runId));
+  const reproducedGeneration = (row: (typeof rows)[number]): number | null => {
+    const own = row.runGeneration;
+    if (own == null) return null;
+    const pinned = (row.pinnedTargets ?? []) as PinnedReviewTargetRow[];
+    const stamps = pinned.map((t) => Math.max(-1, ...events
+      .filter((e) => e.orgId === row.orgId && e.artifactId === t.artifactId && e.representationRevisionId === t.representationRevisionId)
+      .map((e) => e.generation ?? -1)));
+    const [first] = stamps;
+    return first !== undefined && first > own && stamps.every((g) => g === first) ? first : null;
+  };
   return rows.map((row) => ({
     id: row.id,
     runId: row.runId,

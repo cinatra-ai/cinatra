@@ -27,6 +27,11 @@ import {
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import { createSemanticArtifact } from "./artifact-creation";
 import {
+  maybeBuildProducedEventInsertOp,
+  producerAttemptForRun,
+  publishCallInFlightOr,
+} from "@/lib/lifecycle/lifecycle-emit";
+import {
   MAX_AUTHORED_CONTENT_BYTES,
   TEXT_AUTHORING_COMPATIBLE_MIMES,
 } from "./artifact-authoring";
@@ -325,6 +330,43 @@ function pool(): Pool {
     name: "run-artifact-materializer",
     connectionString: () => getPostgresConnectionString(),
   });
+}
+
+/**
+ * cinatra#4762 — a write that reuses a revision this run already wrote (a retry that reproduced identical bytes)
+ * writes no artifact, so the creation path emits no produced event. The revision's event is written again here for
+ * the attempt the write runs in: the same event id as the creation path's, so a newer attempt only restamps it with
+ * its generation (lifecycle-emit buildProducedEventInsertOp), and a review of exactly these bytes counts for that
+ * attempt (artifact-review-gate-store listReviewLineageForRun). Only an existing event is restamped: a revision that
+ * never had one gains none here. One statement, which takes the run row itself. Nothing when the review orchestration
+ * is off.
+ */
+async function recordReusedRevision(input: {
+  runId: string;
+  orgId: string;
+  artifactId: string;
+  representationRevisionId: string;
+  originKind: "agent_generated" | "live_generator";
+}): Promise<void> {
+  const schema = postgresSchema.replaceAll('"', '""');
+  const op = maybeBuildProducedEventInsertOp(schema, {
+    orgId: input.orgId,
+    artifactId: input.artifactId,
+    representationRevisionId: input.representationRevisionId,
+    emitter: "createSemanticArtifact",
+    originKind: input.originKind,
+    producerRunId: input.runId,
+    producerAgentId: null,
+    producerAttempt: producerAttemptForRun(input.runId),
+  }, {
+    whereExistsSql: `EXISTS (SELECT 1 FROM "${schema}"."artifact_produced_outbox" WHERE event_id = $1::text)`,
+  });
+  if (!op) return;
+  try {
+    await pool().query(op.text, op.values);
+  } catch (err) {
+    throw publishCallInFlightOr(err);
+  }
 }
 
 // Published package versions are immutable, so bindings for a PINNED
@@ -955,6 +997,13 @@ export async function writeClaimedArtifact(input: {
     };
   }
   if (claim.kind === "finalized") {
+    await recordReusedRevision({
+      runId: input.runId,
+      orgId: input.orgId,
+      artifactId: claim.artifactId,
+      representationRevisionId: claim.representationRevisionId,
+      originKind: input.originKind ?? "agent_generated",
+    });
     return {
       ok: true,
       artifactId: claim.artifactId,
@@ -1792,7 +1841,10 @@ export async function materializeFanoutMessageRevision(input: {
       ...messageKey,
       outputId: input.outputId,
     });
-    if (own) return { ok: true, ...own, deduped: true };
+    if (own) {
+      await recordReusedRevision({ runId: input.runId, orgId: input.orgId, ...own, originKind: "live_generator" });
+      return { ok: true, ...own, deduped: true };
+    }
     // A mid-run body not yet bound to another message is bound to this one.
     const prefiled = await findFinalizedMidRunMaterialization(messageKey);
     if (prefiled) {
@@ -1801,6 +1853,7 @@ export async function materializeFanoutMessageRevision(input: {
         outputId: input.outputId,
         ...prefiled,
       });
+      await recordReusedRevision({ runId: input.runId, orgId: input.orgId, ...prefiled, originKind: "live_generator" });
       return { ok: true, ...prefiled, deduped: true };
     }
 

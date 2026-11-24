@@ -6,9 +6,10 @@
  * atomicity), from an ENUMERATED set of choke points. This module is the shared,
  * PURE builder the raw-SQL writers (`createSemanticArtifact`'s Tx2 query list, the
  * dashboards twin writer's substrate query list) splice into their existing
- * transaction: it returns a single idempotent `INSERT … ON CONFLICT (event_id) DO
- * NOTHING` op keyed by the DETERMINISTIC produced-event id, so the event row
- * commits/rolls-back atomically with the artifact and a replay is a no-op.
+ * transaction: it returns a single idempotent `INSERT … ON CONFLICT (event_id)`
+ * op keyed by the DETERMINISTIC produced-event id, so the event row
+ * commits/rolls-back atomically with the artifact and a replay is a no-op (a
+ * newer attempt of the same run only records itself, cinatra#4762).
  *
  * SWITCHED: `maybeBuildProducedEventInsertOp` returns `null` only when the
  * review-orchestration switch is explicitly OFF
@@ -204,6 +205,11 @@ export function buildProducedEventInsertOp(
   // read (and seen there) or begun after it ends; this insert's own lock covers a writer that writes nothing before
   // it. Ordinary run updates take FOR NO KEY UPDATE, which does not conflict. No run named ($7 null): no row, no lock.
   // The count is never negative: the guard only takes the lock.
+  // cinatra#4762: a replay writes nothing (the event id names the artifact revision). A NEWER attempt of the same run
+  // that writes the same revision again (a retry that reproduced identical bytes) records itself as the event's
+  // attempt; nothing else of the event changes. A review raised for an earlier attempt of exactly that revision then
+  // counts for the newer attempt too (artifact-review-gate-store listReviewLineageForRun, reproducedGeneration): a
+  // person approved exactly these bytes. An event with no generation keeps it; a writer of no attempt (-1) restamps nothing.
   const runLock = `(SELECT count(*) FROM (SELECT 1 FROM "${schema}"."agent_runs" run_lock
           WHERE run_lock.id = $7::text FOR KEY SHARE) locked_run) >= 0`;
   // cinatra#4762: no output of the run while a publishing call of its current attempt holds its released decision
@@ -223,7 +229,12 @@ export function buildProducedEventInsertOp(
    continuation_mode, continuation_address, status, producer_run_generation)
 SELECT ${bound}
 WHERE ${runLock} AND ${noPublishCall}${opts?.whereExistsSql ? ` AND (${opts.whereExistsSql})` : ""}
-ON CONFLICT (event_id) DO NOTHING`,
+ON CONFLICT (event_id) DO UPDATE SET producer_run_generation = EXCLUDED.producer_run_generation
+WHERE "${schema}"."artifact_produced_outbox".producer_run_id = EXCLUDED.producer_run_id
+  AND "${schema}"."artifact_produced_outbox".org_id = EXCLUDED.org_id
+  AND "${schema}"."artifact_produced_outbox".producer_run_generation IS NOT NULL
+  AND EXCLUDED.producer_run_generation >= 0
+  AND EXCLUDED.producer_run_generation > "${schema}"."artifact_produced_outbox".producer_run_generation`,
     values: [
       eventId,
       input.orgId,

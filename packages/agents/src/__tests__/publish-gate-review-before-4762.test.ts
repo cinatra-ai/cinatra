@@ -278,6 +278,28 @@ describe("a publish card opens only after an approved review earlier in the same
     expectStoppedWithoutWriting();
   });
 
+  // red-first-expect: expected [ { from: 'running', …(2) } ] to deeply equal [ { from: 'running', …(2) } ]
+  it("a retry that wrote exactly the bytes an earlier attempt's approved review pinned counts that approval; a decline of them holds", async () => {
+    // Attempt 0's output was approved, then the run failed before publishing. The retry (generation 1) wrote identical
+    // bytes: the revision was reused, its produced event restamped with generation 1, so no review of 1 was raised.
+    const reproduced = (review: Review): Review => ({ ...review, reproducedGeneration: 1 } as Review);
+    listReviews.mockResolvedValue([reproduced(approved(-30, "user-reviewer", 0))]);
+    await reachPublishGate(makeRun({ resetGeneration: 1 }));
+    expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
+    // Bytes a reviewer declined, written again, hold the retry's fence even beside an approval of the retry.
+    vi.clearAllMocks();
+    listReviews.mockResolvedValue([
+      reproduced({ ...approved(-30, "user-reviewer", 0), disposition: "reject" }), approved(5, "user-reviewer", 1),
+    ]);
+    await reachPublishGate(makeRun({ resetGeneration: 1 }));
+    expectStoppedWithoutWriting();
+    // An approval of bytes the retry did not write again (no reproducedGeneration) stays attempt 0's.
+    vi.clearAllMocks();
+    listReviews.mockResolvedValue([approved(-30, "user-reviewer", 0)]);
+    await reachPublishGate(makeRun({ resetGeneration: 1 }));
+    expectStoppedWithoutWriting();
+  });
+
   it("a retry whose start stamp a later cleanup cleared still counts its own approved review", async () => {
     // The reset raised the generation to 1; the retry's dispatch stamped its start and a cleanup cleared it again, so
     // the run row carries no start stamp. The review this attempt approved still opens the card.

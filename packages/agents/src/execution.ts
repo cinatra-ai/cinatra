@@ -3938,8 +3938,17 @@ async function runAgentBuilderExecutionJobInner(
       () => runAgentBuilderExecutionJobInner(data, jobId),
     );
   }
+  // A read that FAILS is not a read that found the run unchanged: the newer attempt may be queued with no job of its
+  // own, so the job starts again and its entry read decides (it skips a run that is not queued, and throws when the
+  // run cannot be read at all). Starting again is harmless when nothing is queued; skipping would strand the attempt.
   const supersededAttempt = async (): Promise<boolean> => {
-    const now = await readAgentRunById(runId).catch(() => null);
+    let now: Awaited<ReturnType<typeof readAgentRunById>>;
+    try {
+      now = await readAgentRunById(runId);
+    } catch (err) {
+      console.warn(`[agent-builder] run ${runId} unreadable after a stale dispatch (${thrownClassName(err)}) — starting the job again`);
+      return true;
+    }
     return now?.status === "queued" && (now.resetGeneration ?? 0) !== (run.resetGeneration ?? 0);
   };
   // cinatra#1939 wave 2 (§2b): mint the SYSTEM dispatch authority ONCE at job

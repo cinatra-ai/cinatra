@@ -176,9 +176,12 @@ describe("the run's reviews, as the publish gate reads them (cinatra#4762)", () 
     store.listReviewGatesForRun.mockResolvedValue(rows.map(({ successorGateId: _successor, ...gate }) => gate));
     const seam = slot.__cinatraArtifactReviewGateSeam!;
     expect(await seam.listReviews(runId)).toEqual([
-      { id: "g1", status: "resolved", disposition: "changes_requested", createdAt, runGeneration: null, fingerprint: HUMAN, resolvedBy: null, successorGateId: "g2" },
-      { id: "g2", status: "resolved", disposition: "approve", createdAt, runGeneration: 0, fingerprint: HUMAN, resolvedBy: null, successorGateId: null },
+      { id: "g1", status: "resolved", disposition: "changes_requested", createdAt, runGeneration: null, fingerprint: HUMAN, resolvedBy: null, successorGateId: "g2", reproducedGeneration: null },
+      { id: "g2", status: "resolved", disposition: "approve", createdAt, runGeneration: 0, fingerprint: HUMAN, resolvedBy: null, successorGateId: null, reproducedGeneration: null },
     ]);
+    // A review whose pinned revision a later attempt wrote again carries that attempt.
+    store.listReviewLineageForRun.mockResolvedValue([{ ...rows[1], reproducedGeneration: 1 }]);
+    expect((await seam.listReviews(runId)).map((r) => r.reproducedGeneration)).toEqual([1]);
     expect(store.listReviewLineageForRun).toHaveBeenCalledWith(runId);
     expect(store.listReviewGatesForRun).not.toHaveBeenCalled();
   });

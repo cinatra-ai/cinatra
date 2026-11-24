@@ -314,6 +314,39 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
     expect(second.every((o) => o.ok && o.deduped)).toBe(true);
   });
 
+  // red-first-expect: expected [] to deeply equal [ { eventOf: 'rep-1', …(1) }, …(2) ]
+  it("A4 a retry that reuses a revision writes that revision's produced event for its own attempt (cinatra#4762)", async () => {
+    const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
+    const events = () => poolQueryMock.mock.calls
+      .filter(([text]) => String(text).includes("artifact_produced_outbox"))
+      .map(([, values]) => ({ eventOf: (values as unknown[])[3], generation: (values as unknown[])[11] }));
+    // Attempt 1 of the run: each message's claim is finalized by attempt 0, the third message reuses a mid-run body.
+    claimMaterializationMock.mockImplementation(async (c: { outputId: string }) => ({
+      kind: "finalized", artifactId: "art-1", representationRevisionId: "rep-1", path: c.outputId === "persist_draft" ? "materialize_tool" : "email_fanout",
+    }));
+    await mcpRequestContextStorage.run({ runAttempt: { runId: "run-1", resetGeneration: 1 } } as never, async () => {
+      await writeClaimedArtifact({
+        runId: "run-1", orgId: "org-a", createdBy: "user-1", outputId: "persist_draft", nodeId: "persist_draft",
+        path: "materialize_tool", extension: EXT, title: "T", mime: "text/markdown", content: "# x",
+        ownership: { ownerLevel: "organization", ownerId: "org-a", visibility: "organization", projectId: null },
+        resolvedTarget: { objectTypeId: BODY_TYPE, acceptedFileMimeTypes: ["text/markdown"] },
+        mimeDescription: "the call declared MIME",
+      });
+      findFinalizedFanoutMessageMaterializationMock.mockResolvedValueOnce({ artifactId: "art-2", representationRevisionId: "rep-2" });
+      await materializeFanoutMessageRevision(bodyInput(MESSAGES[0]));
+      findFinalizedFanoutMessageMaterializationMock.mockResolvedValueOnce(null);
+      findFinalizedMidRunMaterializationMock.mockResolvedValueOnce({ artifactId: "art-3", representationRevisionId: "rep-3" });
+      await materializeFanoutMessageRevision(bodyInput(MESSAGES[1]));
+    });
+    expect(createSemanticArtifactMock).not.toHaveBeenCalled();
+    expect(events()).toEqual([
+      { eventOf: "rep-1", generation: 1 }, { eventOf: "rep-2", generation: 1 }, { eventOf: "rep-3", generation: 1 },
+    ]);
+    // Only the revision's existing event is restamped: a reused revision that never had one gains none.
+    const [text] = poolQueryMock.mock.calls.find(([t]) => String(t).includes("artifact_produced_outbox"))!;
+    expect(String(text).replace(/\s+/g, " ")).toContain(`AND (EXISTS (SELECT 1 FROM "public"."artifact_produced_outbox" WHERE event_id = $1::text))`);
+  });
+
   it("B1 a fan-out over a body already filed under the same identity key returns that artifact and writes no second one", async () => {
     findFinalizedMidRunMaterializationMock.mockResolvedValue({
       artifactId: "prefiled-1",

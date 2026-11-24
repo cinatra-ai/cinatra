@@ -175,6 +175,7 @@ export const PUBLISH_REVIEW_MISSING_REASON = "No approved review came before thi
 type ReviewOfRun = {
   id: string; status: string; disposition: string | null; createdAt?: Date; runGeneration: number | null;
   fingerprint?: string | null; resolvedBy?: string | null; successorGateId?: string | null;
+  reproducedGeneration?: number | null;
 };
 
 /** The gate seam's review reads, reached as the run executor reaches them (execution.ts): never imported here, so no
@@ -215,11 +216,17 @@ const personApproved = (g: ReviewOfRun): boolean =>
  * review of this attempt: while it is still open, or once it settled with anything but an approval (rejected, changes
  * requested), it counts as a review of this attempt, so it holds every attempt's fence (fail closed). Only a settled
  * approval with no generation is read as generation 0.
+ * A retry that writes exactly the bytes an earlier attempt's review pinned reuses that revision and raises no review
+ * of its own; the store reads that attempt as the review's (reproducedGeneration: every pinned revision's produced
+ * event restamped by that attempt). Such a review is a review of that attempt, whatever it settled: an approval counts,
+ * since a person approved exactly these bytes, and a decline or an open review holds the fence as any other.
  * An approval counts only with a person as its decider of record (personApproved); which person is not compared: the
  * reviewer and the person who answers the publish card may differ. A read error propagates.
  */
 export async function approvedReviewPrecedes(runId: string, generation: number, executor?: unknown): Promise<boolean> {
-  const all = await reviewSeam().listReviews(runId, ...via(executor));
+  const all = (await reviewSeam().listReviews(runId, ...via(executor))).map((g) =>
+    Number.isSafeInteger(g.reproducedGeneration) && g.runGeneration != null && (g.reproducedGeneration as number) > g.runGeneration
+      ? { ...g, runGeneration: g.reproducedGeneration as number } : g);
   if (all.some((g) => g.runGeneration == null && g.status !== "resolved")) return false;
   const reviews = all.filter((g) => (g.runGeneration ?? 0) === generation || (g.runGeneration == null && g.disposition !== "approve"));
   if (!reviews.some(personApproved)) return false;

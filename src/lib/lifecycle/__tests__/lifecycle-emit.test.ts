@@ -62,13 +62,25 @@ describe("buildProducedEventInsertOp — op shape", () => {
   it("emits an idempotent ON CONFLICT insert into artifact_produced_outbox with the deterministic id", () => {
     const op = buildProducedEventInsertOp("cinatra", base);
     expect(op.text).toContain(`"cinatra"."artifact_produced_outbox"`);
-    expect(op.text).toContain("ON CONFLICT (event_id) DO NOTHING");
+    expect(op.text).toContain("ON CONFLICT (event_id) DO UPDATE SET producer_run_generation");
     // 13 bound params ($1..$13; $12/$13 the producing attempt, cinatra#4762); continuation_address + status are SQL literals.
     expect(op.values).toHaveLength(13);
     expect(op.values[0]).toBe(
       producedEventId("art-1", "rev-1", "artifact_produced"),
     );
     expect(op.values[1]).toBe("org-1");
+  });
+
+  // red-first-expect: expected { restamps: false, onlyNewer: false } to deeply equal { restamps: true, onlyNewer: true }
+  it("a newer attempt of the same run that writes the same revision again records only its generation; a replay changes nothing", () => {
+    const text = buildProducedEventInsertOp("cinatra", base).text.replace(/\s+/g, " ");
+    const event = `"cinatra"."artifact_produced_outbox"`;
+    expect({
+      restamps: text.includes(`ON CONFLICT (event_id) DO UPDATE SET producer_run_generation = EXCLUDED.producer_run_generation WHERE ${event}.producer_run_id = EXCLUDED.producer_run_id AND ${event}.org_id = EXCLUDED.org_id`),
+      onlyNewer: text.includes(`AND ${event}.producer_run_generation IS NOT NULL AND EXCLUDED.producer_run_generation >= 0 AND EXCLUDED.producer_run_generation > ${event}.producer_run_generation`),
+    }).toEqual({ restamps: true, onlyNewer: true });
+    // Nothing but the generation is written on a conflict.
+    expect(text.slice(text.indexOf("ON CONFLICT")).match(/ = /g)).toHaveLength(3);
   });
 
   it("maps the physical ArtifactOriginKind onto the lattice provenance axis", () => {
