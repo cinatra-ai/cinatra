@@ -329,12 +329,17 @@ export function PublishDecisionCard({
   const onDecision = (decisionId: string, change: Partial<Omit<DecisionLocal, "decisionId">>) =>
     setLocal((now) => (now.decisionId === decisionId ? { ...now, ...change } : now));
   // The open decision the card SHOWS now: none once a re-read settled it (allowed, declined or expired), so a reply that
-  // comes back after that never replaces the settled reading.
+  // comes back after that is dropped. The ref follows the drawn decision only after a commit, so a reply that lands in
+  // the same batch as the settling re-read can still pass it; the render-time rule below holds the settled reading then.
   const current = useRef(shownId);
   useEffect(() => {
     current.current = shownId;
   }, [shownId]);
-  const { note, sending, failed, noLongerOpen } = local;
+  // "No longer open" and "failed" speak only for the decision they were recorded for, and only while the card shows it.
+  const ownsLocal = shownId !== null && shownId === local.decisionId;
+  const { note, sending } = local;
+  const failed = local.failed && ownsLocal;
+  const noLongerOpen = local.noLongerOpen && ownsLocal;
 
   // No host declaration, no authorized answer yet, or no open decision: NO DOM at all.
   if (host === null || state === null || state.state === "none") return null;

@@ -63,6 +63,9 @@ export interface PublishDecisionRow {
   declaredRows: PublishDeclaredRow[] | null;
   /** The run's reset generation at the park; -1 = an ended attempt; null = a row older than the column (read as 0). */
   runGeneration: number | null;
+  /** The run's pause generation at which the Allow released this row (written in the releasing UPDATE); null = not
+   *  released, or released by code older than the column. */
+  releasedPauseGeneration: number | null;
   decidedBy: string | null;
   decidedAt: Date | null;
   decisionNote: string | null;
@@ -99,7 +102,11 @@ function deserialize(row: StoredRow): PublishDecisionRow {
     declaredRows = declaredRowsOf(parsed);
     if (declaredRows === null) throw new PublishDecisionError("malformed-row", "a stored decision has unreadable declared rows");
   }
-  return { ...row, status: row.status, surfacedValues, declaredRows, runGeneration: row.runGeneration ?? null };
+  const releasedPauseGeneration = row.releasedPauseGeneration ?? null;
+  if (releasedPauseGeneration !== null && (!Number.isSafeInteger(releasedPauseGeneration) || releasedPauseGeneration < 0)) {
+    throw new PublishDecisionError("malformed-row", "a stored decision has an unreadable released pause generation");
+  }
+  return { ...row, status: row.status, surfacedValues, declaredRows, runGeneration: row.runGeneration ?? null, releasedPauseGeneration };
 }
 
 /** A declaration as plain rows of two texts each, within the caps; null for any other shape. */
@@ -237,6 +244,9 @@ export interface DecideInput {
   actor: string | null;
   /** Only a decline carries a note. */
   note?: string | null;
+  /** Only a release carries it: the run's pause generation the releasing claim holds, stored with the release in the
+   *  same UPDATE, so a later read can tell a run still parked at this pause from one that went on. */
+  pauseGeneration?: number;
   /** Wins only while no newer decision of the same run exists and the row belongs to the run's current attempt, checked in
    *  the same UPDATE (the expiry's rule): a decision of an ended attempt never stops the attempt a retry started. */
   newestOnly?: boolean;
@@ -249,9 +259,16 @@ export type DecideResult =
   | { outcome: "lost"; currentStatus: PublishDecisionStatus };
 
 /** Refuses every combination the record does not admit, before any write. */
-function requireTransition(input: DecideInput): { actor: string | null; note: string | null } {
+function requireTransition(input: DecideInput): { actor: string | null; note: string | null; pauseGeneration: number | null } {
   if (input.from !== "parked") {
     throw new PublishDecisionError("invalid-transition", "a decision leaves only the parked status");
+  }
+  const pauseGeneration = input.pauseGeneration ?? null;
+  if (pauseGeneration !== null) {
+    if (input.to !== "released") throw new PublishDecisionError("invalid-transition", "only a release records a pause generation");
+    if (!Number.isSafeInteger(pauseGeneration) || pauseGeneration < 0) {
+      throw new PublishDecisionError("invalid-input", "pauseGeneration must be a non-negative safe integer");
+    }
   }
   const note = input.note == null ? null : requireText(input.note, "note", PUBLISH_DECISION_MAX_NOTE_LENGTH);
   switch (input.to) {
@@ -261,14 +278,14 @@ function requireTransition(input: DecideInput): { actor: string | null; note: st
       if (input.to === "released" && note !== null) {
         throw new PublishDecisionError("invalid-transition", "only a decline carries a note");
       }
-      return { actor, note };
+      return { actor, note, pauseGeneration };
     }
     case "expired":
     case "run_ended":
       if (input.actor !== null || note !== null) {
         throw new PublishDecisionError("invalid-transition", `${input.to} names no person and carries no note`);
       }
-      return { actor: null, note: null };
+      return { actor: null, note: null, pauseGeneration: null };
     default:
       throw new PublishDecisionError("invalid-transition", "unknown decision outcome");
   }
@@ -279,13 +296,14 @@ const NO_NEWER_DECISION = sql`not exists (select 1 from ${agentRunPublishDecisio
 
 export async function decide(id: string, input: DecideInput): Promise<DecideResult> {
   const decisionId = requireText(id, "id");
-  const { actor, note } = requireTransition(input);
+  const { actor, note, pauseGeneration } = requireTransition(input);
   const ofRun = input.ofRun === undefined ? undefined : eq(agentRunPublishDecisions.runId, requireText(input.ofRun, "ofRun"));
 
   return db.transaction(async (tx): Promise<DecideResult> => {
     const [won] = await tx
       .update(agentRunPublishDecisions)
-      .set({ status: input.to, decidedBy: actor, decidedAt: sql`now()`, decisionNote: note })
+      .set({ status: input.to, decidedBy: actor, decidedAt: sql`now()`, decisionNote: note,
+        ...(pauseGeneration !== null ? { releasedPauseGeneration: pauseGeneration } : {}) })
       .where(and(eq(agentRunPublishDecisions.id, decisionId), eq(agentRunPublishDecisions.status, "parked"),
         ...(ofRun ? [ofRun] : []), ...(input.newestOnly ? [NO_NEWER_DECISION, CURRENT_ATTEMPT] : [])))
       .returning();

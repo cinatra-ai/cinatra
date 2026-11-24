@@ -631,6 +631,40 @@ describe("the decide door", () => {
     }
   });
 
+  // The settled re-read and the late reply land in ONE batch: the reply's guard still reads the open decision (the ref
+  // follows the drawn decision only after a commit), so the reply's reading is recorded. The card still draws the
+  // settled decision: "no longer open" and "failed" speak only for the decision the card shows.
+  // red-first-expect: expected 'no_longer_open' to be 'approved'
+  it("a settled re-read and a late reply in the same batch: the settled reading stands", async () => {
+    for (const [settled, outcome] of [[APPROVED, "not_open"], [DECLINED, "not_open"], [EXPIRED, "failed"]] as const) {
+      const replies: Array<(outcome: "not_open" | "failed") => void> = [];
+      const decide = vi.fn<PublishDecisionDecide>(() => new Promise((resolve) => replies.push(resolve)));
+      const read = (state: unknown) => ({ state: state as never, refreshing: false, reload: () => undefined });
+      const card = (state: unknown) => (
+        <LifecycleCardSurfaceProvider host="run_card">
+          <PublishDecisionCard runId={RUN_ID} decide={decide} read={read(state)} />
+        </LifecycleCardSurfaceProvider>
+      );
+      const mounted = render(card(PENDING));
+      await act(async () => {
+        fireEvent.click((await rootOf(mounted)).querySelector(APPROVE)!);
+      });
+      expect(decide).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        mounted.rerender(card(settled));
+        replies[0]!(outcome);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      await settle();
+      const after = await rootOf(mounted);
+      expect(after.getAttribute("data-lifecycle-card-state")).toBe(settled.state);
+      expect(after.textContent).not.toContain("no longer open");
+      expect(after.textContent).not.toContain("The decision could not be sent.");
+      mounted.unmount();
+    }
+  });
+
   it("a decision allowed whose run did not go on offers Allow only, with no note and no Do not allow", async () => {
     stateMock.mockImplementation(async () => ({ ...PENDING, resumeOnly: true }));
     const root = await rootOf(mountOn("run_card", okDoor()));

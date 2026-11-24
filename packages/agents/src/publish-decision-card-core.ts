@@ -128,10 +128,12 @@ async function cardStateForRun(
     }
     case "released": {
       // Allowed, but the run did not go on: the resume failed (or stopped) between the release and its fence, and the
-      // run still waits at this decision's pause (the run row and the latest-task key both name its gate). That is no
-      // settled Approved: the card keeps Allow, which resumes the run under a pause claim bound to that gate task
+      // run still waits at this decision's pause (the run is still pending_approval at the pause generation the release
+      // recorded; for a decision released by older code, the run row and the latest-task key both name its gate). That
+      // is no settled Approved: the card keeps Allow, which resumes the run under a pause claim bound to that gate task
       // without a second decision (approvePublishDecision takes a released decision). A reading that cannot tell this
-      // pause from a later one (no latest-task key, or a read that faults) draws no card: never Approved, never Allow.
+      // pause from a later one (an older release with no latest-task key, or a read that faults) draws no card: never
+      // Approved, never Allow.
       const awaits = await releasedPublishAwaitsResume(run, decision).catch(() => null);
       if (awaits === null) return PUBLISH_DECISION_CARD_NONE;
       if (awaits) {

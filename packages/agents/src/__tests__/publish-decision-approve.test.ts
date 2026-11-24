@@ -133,7 +133,7 @@ describe("Allow from the site widget (cinatra#4758)", () => {
   it("releases the decision as the widget's person and resumes the run to its publishing step, once", async () => {
     expect(await approveAsWidget({ runId: "run-1", actorContext: WIDGET })).toEqual({ ok: true, resumed: true });
     expect(enforceRunAccess.mock.calls.map((c) => (c as unknown[])[2])).toEqual(["execute", "approveHitl"]);
-    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "released", actor: "user-a" });
+    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "released", actor: "user-a", pauseGeneration: 4 });
     expect(sendWayflowResume).toHaveBeenCalledTimes(1);
   });
 
@@ -172,7 +172,7 @@ describe("a stale card never approves a newer gate", () => {
     decisions.readOpenDecisionForRun.mockResolvedValue(decision());
     resolveLatestWayflowGateTaskId.mockResolvedValue("task-1");
     expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR, decisionId: "d1" } as never)).toEqual({ ok: true, resumed: true });
-    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "released", actor: "user-a", ofRun: "run-1", newestOnly: true });
+    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "released", actor: "user-a", pauseGeneration: 4, ofRun: "run-1", newestOnly: true });
   });
 
   it("a stale card never resumes another decision released earlier", async () => {
@@ -193,7 +193,7 @@ describe("Publish (A7)", () => {
     expect(enforceRunAccess.mock.calls.map((c) => (c as unknown[])[2])).toEqual(["execute", "approveHitl"]);
     expect(assertAgentRunDispatchAuthorized).toHaveBeenCalledWith({ runId: "run-1", stage: "dispatch", actingUserId: "user-a" });
     expect(decisions.decide).toHaveBeenCalledTimes(1);
-    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "released", actor: "user-a" });
+    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "released", actor: "user-a", pauseGeneration: 4 });
     expect(claims.claimPause).toHaveBeenCalledTimes(1);
     expect((claims.claimPause.mock.calls[0] as unknown[])[0]).toEqual({ runId: "run-1", orgId: "org-1", generation: 3, taskId: "task-1" });
     expect(moves()).toEqual([["run-1", "pending_approval", "running"]]);
@@ -348,11 +348,12 @@ describe("Publish (A7)", () => {
 
   // The latest-task key lives seven days and can be lost, and the run row's task can still name an earlier gate visit
   // (event-log.ts: a pause entered without its own task write keeps the column, and that write can lose a race). Gate A
-  // (task-1) was released and the run went on; it now waits at gate B, a later pause, but a2a_task_id still names A and
-  // the key has expired. The row alone cannot tell A's pause from B's: no card (never Allow, never Approved), and an
-  // Allow resumes nothing, so B is never answered. Red first at 7ca04b14: the row alone was read as A's pause.
+  // (task-1) was released by code older than the recorded pause generation (releasedPauseGeneration absent) and the run
+  // went on; it now waits at gate B, a later pause, but a2a_task_id still names A and the key has expired. For such a
+  // decision the row alone cannot tell A's pause from B's: no card (never Allow, never Approved), and an Allow resumes
+  // nothing, so B is never answered. A release that recorded its pause is read durably instead (the cases below).
   // red-first-expect: to deeply equal { state: 'none' }
-  it("with a stale run row and no latest-task key, a released decision offers no Allow and its Allow resumes nothing", async () => {
+  it("with a stale run row and no latest-task key, a decision released with no recorded pause offers no Allow and its Allow resumes nothing", async () => {
     const who = { actor: ACTOR, roleHints: ROLE_HINTS };
     decisions.readOpenDecisionForRun.mockResolvedValue(null);
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released", decidedBy: "user-a" }));
@@ -365,6 +366,65 @@ describe("Publish (A7)", () => {
     expect(decisions.decide).not.toHaveBeenCalled();
     expect(prepareWayflowResume).not.toHaveBeenCalled();
     expect(moves()).toEqual([]);
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+  });
+
+  // A release records the run's pause generation its claim held, in the releasing write. The resume then died before its
+  // fence (the process crashed there), and the seven-day latest-task key was lost. The run is still pending_approval at
+  // that generation, so it still waits at gate A: the card keeps Allow, and that Allow resumes the run exactly once,
+  // under a claim taken at the recorded generation, with no second decision write and no latest-task read. Red first at
+  // 88b3c621: the release recorded no pause generation (expected undefined to be 3). On the base, which has no card door:
+  // red-first-expect: decidePublishDecisionCardForActor is not a function
+  it("a crash at gate A with the latest-task key lost: the recorded pause keeps Allow, and Allow resumes the run once", async () => {
+    const who = { actor: ACTOR, roleHints: ROLE_HINTS };
+    claims.claimPause.mockImplementation(async (ref: { generation: number }) => ({ ...CLAIMED, generation: ref.generation }));
+    prepareWayflowResume.mockRejectedValueOnce(new Error("process died before the fence"));
+    expect(await decidePublishDecisionCardForActor({ runId: "run-1", decisionId: "d1", answer: "approve" }, who)).toBe("failed");
+    expect(decisions.decide).toHaveBeenCalledTimes(1);
+    const recorded = ((decisions.decide.mock.calls[0] as unknown[])[1] as { pauseGeneration?: number }).pauseGeneration;
+    expect(recorded).toBe(3);
+
+    // What the store now holds: the decision released at pause generation 3; the run still pending_approval there.
+    decisions.readOpenDecisionForRun.mockResolvedValue(null);
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released", decidedBy: "user-a", releasedPauseGeneration: recorded }));
+    resolveLatestWayflowGateTaskId.mockResolvedValue(null);
+    resolveLatestWayflowGateTaskId.mockClear();
+    expect(await publishDecisionCardStateForRun(run() as never, who)).toMatchObject({ state: "pending", decisionId: "d1", mayDecide: true, resumeOnly: true });
+    expect(await decidePublishDecisionCardForActor({ runId: "run-1", decisionId: "d1", answer: "approve" }, who)).toBe("decided");
+    expect((claims.claimPause.mock.calls.at(-1) as unknown[])[0]).toEqual({ runId: "run-1", orgId: "org-1", generation: 3, taskId: "task-1" });
+    expect(resolveLatestWayflowGateTaskId).not.toHaveBeenCalled();
+    expect(decisions.decide).toHaveBeenCalledTimes(1);
+    expect(moves()).toEqual([["run-1", "pending_approval", "running"]]);
+    expect(sendWayflowResume).toHaveBeenCalledTimes(1);
+  });
+
+  // The same stored row, but the run went on from gate A and now waits at gate B: its pause generation moved past the one
+  // the release recorded, while its row still names A's task and the latest-task key is lost. The record tells the two
+  // apart: A's decision is settled (Approved, no Allow), and an Allow on it claims nothing at B and sends nothing. Red
+  // first at 88b3c621: the card read { state: 'none' }. On the base, which has no card door:
+  // red-first-expect: decidePublishDecisionCardForActor is not a function
+  it("moved on to gate B with the latest-task key lost: the recorded pause offers no Allow, and nothing resumes", async () => {
+    const who = { actor: ACTOR, roleHints: ROLE_HINTS };
+    const atGateB = run({ a2aTaskId: "task-1", pauseGeneration: 6 });
+    storeMock.readAgentRunById.mockResolvedValue(atGateB);
+    decisions.readOpenDecisionForRun.mockResolvedValue(null);
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released", decidedBy: "user-a", releasedPauseGeneration: 3 }));
+    resolveLatestWayflowGateTaskId.mockResolvedValue(null);
+    // The claim's own statement: it lands only at the generation it names.
+    claims.claimPause.mockImplementation(async (ref: { generation: number }) =>
+      ref.generation === atGateB.pauseGeneration ? { ...CLAIMED, generation: ref.generation } : refused("moved-on"));
+    expect(await publishDecisionCardStateForRun(atGateB as never, who)).toMatchObject({ state: "approved" });
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: false });
+    expect(await decidePublishDecisionCardForActor({ runId: "run-1", decisionId: "d1", answer: "approve" }, who)).not.toBe("decided");
+    expect(claims.claimPause.mock.calls.map((c) => ((c as unknown[])[0] as { generation: number }).generation)).toEqual([3, 3]);
+    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(prepareWayflowResume).not.toHaveBeenCalled();
+    expect(moves()).toEqual([]);
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+    // A claim that the double lets land anyway (a run row read at gate B) still resumes nothing: the row is checked too.
+    claims.claimPause.mockImplementation(async (ref: { generation: number }) => ({ ...CLAIMED, generation: ref.generation }));
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: false });
+    expect(claims.releasePauseClaim).toHaveBeenCalledTimes(1);
     expect(sendWayflowResume).not.toHaveBeenCalled();
   });
 

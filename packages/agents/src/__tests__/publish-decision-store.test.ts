@@ -308,6 +308,41 @@ describe("decide", () => {
     expect(calls.set[0]).toMatchObject({ decidedBy: "person-1", decisionNote: "not this week" });
   });
 
+  // A release records the run's pause generation its claim holds, in the same UPDATE that releases the row, so a later
+  // read tells a run still parked at that pause (its resume died before the fence) from one that went on.
+  // red-first-expect: expected { status: 'released', …(3) } to match object { status: 'released', …(3) }
+  it("a release records the pause generation in the same UPDATE, and the row reads it back", async () => {
+    answers.update = async () => [stored({ status: "released", decidedBy: "person-1", releasedPauseGeneration: 7 })];
+    const result = await decide("d1", { from: "parked", to: "released", actor: "person-1", pauseGeneration: 7 } as never);
+    expect(calls.set).toHaveLength(1);
+    expect(calls.set[0]).toMatchObject({ status: "released", decidedBy: "person-1", decisionNote: null, releasedPauseGeneration: 7 });
+    expect(result).toMatchObject({ outcome: "won", decision: { releasedPauseGeneration: 7 } });
+    answers.update = async () => [stored({ status: "declined" })];
+    await decide("d1", { from: "parked", to: "declined", actor: "person-1" });
+    expect(calls.set[1]).not.toHaveProperty("releasedPauseGeneration");
+  });
+
+  it("refuses a pause generation on anything but a release, or one that is not a whole number, before any write", async () => {
+    for (const [patch, code] of [
+      [{ to: "declined", actor: "person-1", pauseGeneration: 3 }, "invalid-transition"],
+      [{ to: "expired", actor: null, pauseGeneration: 3 }, "invalid-transition"],
+      [{ to: "released", actor: "person-1", pauseGeneration: -1 }, "invalid-input"],
+      [{ to: "released", actor: "person-1", pauseGeneration: 1.5 }, "invalid-input"],
+    ] as const) {
+      expect(await codeOf(decide("d1", { from: "parked", ...patch } as never))).toBe(code);
+    }
+    expect(calls.set).toHaveLength(0);
+  });
+
+  it("a stored released pause generation it cannot read is a malformed row; none reads as null", async () => {
+    answers.update = async () => [stored({ status: "released", releasedPauseGeneration: -4 })];
+    expect(await codeOf(decide("d1", { from: "parked", to: "released", actor: "person-1" }))).toBe("malformed-row");
+    answers.update = async () => [stored({ status: "released" })];
+    expect(await decide("d1", { from: "parked", to: "released", actor: "person-1" })).toMatchObject({
+      outcome: "won", decision: { releasedPauseGeneration: null },
+    });
+  });
+
   it.each(["expired", "run_ended"] as const)("%s names no person", async (to) => {
     answers.update = async () => [stored({ status: to })];
     await decide("d1", { from: "parked", to, actor: null });
