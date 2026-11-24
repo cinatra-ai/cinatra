@@ -1829,6 +1829,100 @@ export async function materializeFanoutMessageRevision(input: {
   }
 }
 
+/**
+ * Bind ONE message of a send to a body revision a person decided on, instead of
+ * writing a new body (cinatra#3089). The send that mails a decided revision
+ * files no body of its own: it records a finalized `email_fanout` ledger row
+ * under the message identity, keyed by the run, the declaring pack and the
+ * content hash of the text it mails, pointing at the decided artifact revision
+ * (`recordFanoutReuseMaterialization`). A retry finds that row and returns it.
+ * A message already bound to ANOTHER artifact or revision of the same bytes is
+ * refused, never re-pointed. The run must be an agent run of the organisation,
+ * and the pack is the organisation's winning claim over the declared type, as
+ * for a written body. Never throws: a refusal is a returned error.
+ */
+export async function bindFanoutMessageRevision(input: {
+  runId: string;
+  orgId: string;
+  /** The declared object type of the decided body. */
+  objectTypeId: string;
+  /** The message identity — the ledger output id. */
+  outputId: string;
+  /** The text the send mails: the decided revision's text. */
+  markdown: string;
+  artifactId: string;
+  representationRevisionId: string;
+}): Promise<ToolArtifactMaterialization> {
+  try {
+    ensurePostgresSchema();
+    const s = postgresSchema.replaceAll('"', '""');
+    const runRes = await pool().query(
+      `SELECT template_id FROM "${s}"."agent_runs" WHERE id = $1 AND org_id = $2 LIMIT 1`,
+      [input.runId, input.orgId],
+    );
+    const templateId = (runRes.rows[0] as { template_id?: string | null } | undefined)
+      ?.template_id;
+    if (typeof templateId !== "string" || templateId.length === 0) {
+      return {
+        ok: false,
+        error: `run ${input.runId} is not an agent run of organization ${input.orgId} — the message has no run to be bound under`,
+      };
+    }
+    const [{ readArtifactTypeClaimsForOrg }, { resolveClaimWinner }] = await Promise.all([
+      import("@/lib/objects/artifact-claim-store"),
+      import("@cinatra-ai/objects/claims"),
+    ]);
+    const winner = resolveClaimWinner(readArtifactTypeClaimsForOrg(input.orgId), {
+      orgId: input.orgId,
+      objectTypeId: input.objectTypeId,
+    });
+    if (!winner) {
+      return {
+        ok: false,
+        error: `no installed pack claims the object type "${input.objectTypeId}" for organization ${input.orgId}`,
+      };
+    }
+    const contentHash = createHash("sha256").update(input.markdown, "utf8").digest("hex");
+    const messageKey = {
+      orgId: input.orgId,
+      runId: input.runId,
+      extension: winner.extensionPackage,
+      contentHash,
+      outputId: input.outputId,
+    };
+    const sameRevision = (row: { artifactId: string; representationRevisionId: string }) =>
+      row.artifactId === input.artifactId &&
+      row.representationRevisionId === input.representationRevisionId;
+    const own = await findFinalizedFanoutMessageMaterialization(messageKey);
+    if (own) {
+      if (sameRevision(own)) return { ok: true, ...own, deduped: true };
+      return {
+        ok: false,
+        error: `message ${input.outputId} of run ${input.runId} is already bound to revision ${own.representationRevisionId} of artifact ${own.artifactId}`,
+      };
+    }
+    await recordFanoutReuseMaterialization({
+      ...messageKey,
+      artifactId: input.artifactId,
+      representationRevisionId: input.representationRevisionId,
+    });
+    // The insert does nothing on a conflict, so the row read back decides.
+    const bound = await findFinalizedFanoutMessageMaterialization(messageKey);
+    if (!bound || !sameRevision(bound)) {
+      return {
+        ok: false,
+        error: `message ${input.outputId} of run ${input.runId} could not be bound to revision ${input.representationRevisionId} of artifact ${input.artifactId}`,
+      };
+    }
+    return { ok: true, ...bound, deduped: false };
+  } catch (err) {
+    return {
+      ok: false,
+      error: `message body binding failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 // The default road's PURE pickup (cinatra#3029) types its ownership seam on
 // the same shape this module writes with.
 export type { ScopeDerivedOwnership };

@@ -1,6 +1,9 @@
 import type { PrimitiveActorContext, PrimitiveInvocationRequest } from "@cinatra-ai/mcp-client";
 import * as schemas from "./schemas";
 
+/** One approved email body the send start mails (see `approvedBodySchema`). */
+export type ApprovedBody = { artifactId: string; representationRevisionId: string; contactId: string };
+
 export type AsyncOperationState = {
   operationId: string;
   kind: string;
@@ -27,7 +30,17 @@ export type TriggerEmailSendNotSupported = {
 
 export type TriggerEmailSendUseCases = {
   sendTestEmail(input: { campaignId: string; recipientEmail: string; selectionMode: "random_initial" | "specific_initial" | "all_initial"; specificInitialDraftIds?: string[]; specificFollowUpDraftIds?: string[]; submissionId?: string }, actor: PrimitiveActorContext): Promise<Record<string, unknown>>;
-  startInitialSend(input: { serviceId: string; campaignId: string }, actor: PrimitiveActorContext): Promise<AsyncOperationState>;
+  startInitialSend(
+    input: {
+      serviceId: string;
+      campaignId: string;
+      approvedDraftBundleRef?: string;
+      confirmedRecipientsRef?: string;
+      senderEmail?: string;
+      approvedBodies?: ApprovedBody[];
+    },
+    actor: PrimitiveActorContext,
+  ): Promise<AsyncOperationState>;
   getInitialSendStatus(input: { campaignId: string }, actor: PrimitiveActorContext): Promise<AsyncOperationState>;
   cancelInitialSend(input: { campaignId: string }, actor: PrimitiveActorContext): Promise<AsyncOperationState>;
   runInitialSendWorker(input: { serviceId: string; campaignId: string; jobId: string }, actor: PrimitiveActorContext): Promise<{ ok: true; jobId: string } | TriggerEmailSendNotSupported>;

@@ -12,6 +12,27 @@ export const serviceAndCampaignIdSchema = z.object({
   approvedDraftBundleRef: z.string().uuid().optional(),
   confirmedRecipientsRef: z.string().uuid().optional(),
   senderEmail: z.string().email().optional(),
+  // The approved email bodies: each one an `email:body` artifact revision and
+  // the contact of the draft it is the body of (the draft's `contactId`, else
+  // its `recipientId`), which joins the body to its draft. When given, the send
+  // mails, for each draft with an address, the text of ITS approved revision,
+  // and refuses the whole send before any mail when a body is missing,
+  // unreadable, not the artifact's current revision, named twice or the body of
+  // no draft. At most 50: the cap of the publish card's artifacts row
+  // (PUBLISH_LIST_ROW_ITEMS_MAX), so every body the card showed fits one send.
+  approvedBodies: z
+    .array(
+      z
+        .object({
+          artifactId: z.string().min(1).max(200),
+          representationRevisionId: z.string().min(1).max(200),
+          contactId: z.string().trim().min(1).max(200),
+        })
+        .strict(),
+    )
+    .min(1)
+    .max(50)
+    .optional(),
 });
 
 export const workerServiceAndCampaignIdSchema = serviceAndCampaignIdSchema.extend({

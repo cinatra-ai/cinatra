@@ -100,7 +100,22 @@ export type TriggerEmailSendDeps = {
   // refuses fails the send visibly (cinatra#3089); any other projection failure
   // is warned and the send goes on. Defaults to the ledger-backed materializer.
   emitEmailFanout?: (args: EmailFanoutArgs) => Promise<EmailFanoutResult>;
+  // Read one approved body revision the send start was handed (cinatra#3089):
+  // its text and the body's declared fields, only while it is the artifact's
+  // current, undisputed revision of the declared body type in the actor's
+  // organization; else a named refusal. Defaults to the host's
+  // current-revision reader (`readCurrentDecidedRevision`).
+  readDecidedBody?: (
+    ref: { artifactId: string; representationRevisionId: string },
+    actor: PrimitiveActorContext,
+  ) => Promise<DecidedBodyRead>;
 };
+
+/** What `readDecidedBody` answers: the revision's whole text and the body's
+ *  declared fields (`subject`, `contactId`, …), or a named refusal. */
+export type DecidedBodyRead =
+  | { ok: true; text: string; data: Record<string, unknown> }
+  | { ok: false; error: string };
 
 // Lazy default deps — heavy imports happen only when the adapter is actually
 // invoked in production. Unit tests inject mocks via the factory's deps arg.
@@ -187,6 +202,14 @@ function buildLazyDefaultDeps(): TriggerEmailSendDeps {
     emitEmailFanout(args) {
       return defaultEmitEmailFanout(args);
     },
+    async readDecidedBody(ref, actor) {
+      const orgId = actor.orgId;
+      if (!orgId) {
+        return { ok: false, error: "the sending actor carries no organization, so no body can be read" };
+      }
+      const { readCurrentDecidedRevision } = await import("./artifacts/current-decided-revision-read");
+      return readCurrentDecidedRevision({ orgId, ...ref, objectTypeId: EMAIL_BODY_TYPE_ID });
+    },
   };
 }
 
@@ -256,6 +279,8 @@ type DraftRow = {
   draftId?: string;
   step?: string | number;
   contactId?: string;
+  /** The drafting step's name for the draft's contact (its contactId). */
+  recipientId?: string;
   recipientEmail?: string;
   email?: string;
   subject?: string;
@@ -427,7 +452,31 @@ export type EmailFanoutInput = {
   campaignId: string;
   drafts: readonly DraftRow[];
   recipients: readonly RecipientRow[];
+  /**
+   * The approved body of each mailed draft, by the draft's position in
+   * `drafts` (cinatra#3089). Given, the fan-out writes NO body: it binds each
+   * message to its approved revision through `bindBody` and files nothing for
+   * a draft without one.
+   */
+  approvedBodies?: ReadonlyMap<number, ApprovedFanoutBody>;
 };
+
+/** One approved body revision a message of the send is bound to, with the
+ *  text the send mails (the revision's own text). */
+export type ApprovedFanoutBody = {
+  artifactId: string;
+  representationRevisionId: string;
+  text: string;
+};
+
+/** Bind one message to its approved revision on the ledger (cinatra#3089). */
+export type EmailFanoutBodyBindFn = (input: {
+  runId: string;
+  outputId: string;
+  markdown: string;
+  artifactId: string;
+  representationRevisionId: string;
+}) => Promise<EmailFanoutBodyWriteResult>;
 
 export type EmailFanoutArgs = EmailFanoutInput & {
   actor: PrimitiveActorContext;
@@ -464,10 +513,11 @@ export async function materializeEmailFanout(
   input: EmailFanoutInput,
   deps: {
     writeBody?: EmailFanoutBodyWriteFn;
+    bindBody?: EmailFanoutBodyBindFn;
     registeredTypes: ReadonlySet<string>;
   },
 ): Promise<EmailFanoutResult> {
-  const { runScopeId, campaignId, drafts } = input;
+  const { runScopeId, campaignId, drafts, approvedBodies } = input;
   const bodies: EmailFanoutEmission[] = [];
 
   const canBody = deps.registeredTypes.has(EMAIL_BODY_TYPE_ID);
@@ -487,6 +537,41 @@ export async function materializeEmailFanout(
       const draftItemId = deriveDraftItemId(draft, index);
       index += 1;
       const externalId = emailBodyExternalId(runScopeId, draftItemId);
+      if (approvedBodies) {
+        // The approved form (cinatra#3089): the message is bound to the
+        // revision a person approved; no body of the bundle is filed.
+        const approved = approvedBodies.get(index - 1);
+        if (!approved) continue;
+        if (!deps.bindBody) {
+          throw new EmailBodyRefusedError(
+            `the email body ${externalId} cannot be bound: the fan-out has no binder for approved bodies`,
+          );
+        }
+        let bound: EmailFanoutBodyWriteResult;
+        try {
+          bound = await deps.bindBody({
+            runId: runScopeId,
+            outputId: externalId,
+            markdown: approved.text,
+            artifactId: approved.artifactId,
+            representationRevisionId: approved.representationRevisionId,
+          });
+        } catch (err) {
+          throw new EmailBodyRefusedError(
+            `the email body ${externalId} could not be bound: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        if (!bound.ok) {
+          throw new EmailBodyRefusedError(`the email body ${externalId} was refused: ${bound.error}`);
+        }
+        bodies.push({
+          typeId: EMAIL_BODY_TYPE_ID,
+          externalId,
+          objectId: bound.artifactId,
+          isNew: false,
+        });
+        continue;
+      }
       const contactId =
         typeof draft.contactId === "string" && draft.contactId.trim() !== ""
           ? draft.contactId.trim()
@@ -561,8 +646,22 @@ async function loadDefaultEmitEmailFanout(): Promise<
         campaignId: args.campaignId,
         drafts: args.drafts,
         recipients: args.recipients,
+        ...(args.approvedBodies ? { approvedBodies: args.approvedBodies } : {}),
       },
       {
+        bindBody: async (b) => {
+          const orgId = args.actor.orgId;
+          if (!orgId) {
+            return {
+              ok: false,
+              error: "the sending actor carries no organization, so the body cannot be bound on its run",
+            };
+          }
+          const { bindFanoutMessageRevision } = await import(
+            "./artifacts/run-artifact-materializer"
+          );
+          return bindFanoutMessageRevision({ ...b, orgId, objectTypeId: EMAIL_BODY_TYPE_ID });
+        },
         writeBody: async (w) => {
           const orgId = args.actor.orgId;
           if (!orgId) {
@@ -625,16 +724,22 @@ async function runInitialSend(args: {
     approvedDraftBundleRef?: string;
     confirmedRecipientsRef?: string;
     senderEmail?: string;
+    approvedBodies?: ReadonlyArray<{
+      artifactId: string;
+      representationRevisionId: string;
+      contactId: string;
+    }>;
   };
   actor: PrimitiveActorContext;
   sendEmail: TriggerEmailSendDeps["sendEmail"];
+  readDecidedBody: NonNullable<TriggerEmailSendDeps["readDecidedBody"]>;
   getObjectByRef: (
     ref: string,
     actor: PrimitiveActorContext,
   ) => Promise<ObjectsEnvelope | null>;
   emitEmailFanout: (args: EmailFanoutArgs) => Promise<EmailFanoutResult>;
 }): Promise<InitialSendStateRow> {
-  const { input, actor, sendEmail, getObjectByRef, emitEmailFanout } = args;
+  const { input, actor, sendEmail, getObjectByRef, emitEmailFanout, readDecidedBody } = args;
   const startedAt = new Date().toISOString();
   sendStateByCampaign.set(input.campaignId, {
     status: "running",
@@ -681,6 +786,93 @@ async function runInitialSend(args: {
       };
     }
 
+    // THE APPROVED FORM (cinatra#3089). Given `approvedBodies`, the send mails,
+    // for each draft with an address, the text of ITS approved body revision,
+    // never the bundle's body. A body joins its draft by the contact: the
+    // entry's `contactId` equals the draft's `contactId`, else its
+    // `recipientId`, and names exactly one draft of the bundle; a body that
+    // carries a contact of its own must carry the same one. Every check and
+    // every read runs before the fan-out and before any mail, and any failure
+    // refuses the whole send. Without `approvedBodies` the send reads the
+    // bundle exactly as before.
+    let approvedByIndex: Map<number, ApprovedFanoutBody & { subject?: string }> | null = null;
+    if (input.approvedBodies) {
+      const refuse = (reason: string): never => {
+        throw new Error(`The send was refused before any email went out: ${reason}`);
+      };
+      const textOf = (value: unknown): string | undefined =>
+        typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+      const contactOf = (draft: DraftRow): string | undefined =>
+        textOf(draft.contactId) ?? textOf(draft.recipientId);
+
+      const bodyByContact = new Map<
+        string,
+        { artifactId: string; representationRevisionId: string; position: number }
+      >();
+      const namedArtifacts = new Set<string>();
+      for (const [i, entry] of input.approvedBodies.entries()) {
+        const position = i + 1;
+        if (namedArtifacts.has(entry.artifactId)) {
+          refuse(`approved body ${position} names artifact ${entry.artifactId} a second time`);
+        }
+        namedArtifacts.add(entry.artifactId);
+        const contact = textOf(entry.contactId) ?? refuse(`approved body ${position} names no contact`);
+        const earlier = bodyByContact.get(contact);
+        if (earlier) {
+          refuse(`approved bodies ${earlier.position} and ${position} are both for contact ${contact}`);
+        }
+        bodyByContact.set(contact, {
+          artifactId: entry.artifactId,
+          representationRevisionId: entry.representationRevisionId,
+          position,
+        });
+      }
+
+      const draftsByContact = new Map<string, number[]>();
+      for (const [index, draft] of drafts.entries()) {
+        const contact = contactOf(draft);
+        if (contact) draftsByContact.set(contact, [...(draftsByContact.get(contact) ?? []), index]);
+      }
+      for (const [contact, body] of bodyByContact) {
+        const matches = draftsByContact.get(contact) ?? [];
+        if (matches.length === 0) {
+          refuse(`approved body ${body.position} is for contact ${contact}, which no draft of the bundle names`);
+        }
+        if (matches.length > 1) {
+          refuse(`approved body ${body.position} is for contact ${contact}, which ${matches.length} drafts of the bundle name`);
+        }
+      }
+      for (const [index, draft] of drafts.entries()) {
+        if (!recipientEmailFor(draft, recipients)) continue; // never mailed
+        const contact = contactOf(draft);
+        if (!contact || !bodyByContact.has(contact)) {
+          refuse(`draft ${index + 1} of the bundle has an address but no approved body`);
+        }
+      }
+
+      approvedByIndex = new Map();
+      for (const [contact, body] of bodyByContact) {
+        const read = await readDecidedBody(
+          { artifactId: body.artifactId, representationRevisionId: body.representationRevisionId },
+          actor,
+        );
+        if (!read.ok) {
+          return refuse(`approved body ${body.position}: ${read.error}`);
+        }
+        const ownContact = textOf(read.data.contactId);
+        if (ownContact !== undefined && ownContact !== contact) {
+          refuse(`approved body ${body.position} is the body of contact ${ownContact}, not of contact ${contact}`);
+        }
+        const subject = textOf(read.data.subject) !== undefined ? String(read.data.subject) : undefined;
+        approvedByIndex.set(draftsByContact.get(contact)![0]!, {
+          artifactId: body.artifactId,
+          representationRevisionId: body.representationRevisionId,
+          text: read.text,
+          ...(subject !== undefined ? { subject } : {}),
+        });
+      }
+    }
+
     // Durable per-item projection AT the fan-out boundary (cinatra#1455) —
     // where the run-scoped bundle is dissolved into individual items, BEFORE
     // the per-email send. `email:body` is draftable (the delivery agent files
@@ -697,6 +889,7 @@ async function runInitialSend(args: {
           campaignId: input.campaignId,
           drafts,
           recipients,
+          ...(approvedByIndex ? { approvedBodies: approvedByIndex } : {}),
           actor,
         });
       } catch (fanoutErr) {
@@ -715,11 +908,18 @@ async function runInitialSend(args: {
     }
 
     let sentCount = 0;
-    for (const draft of drafts) {
+    for (const [index, draft] of drafts.entries()) {
       const recipientEmail = recipientEmailFor(draft, recipients);
       if (!recipientEmail) continue;
-      const subject = draft.subject ?? "(no subject)";
-      const body = draft.body ?? draft.bodyHtml ?? "";
+      // The approved form mails the approved revision's text, under the body's
+      // own subject when it carries one; the checks above leave no mailed
+      // draft without its approved body.
+      const approved = approvedByIndex?.get(index);
+      if (approvedByIndex && !approved) {
+        throw new Error(`The send was refused: draft ${index + 1} of the bundle has no approved body`);
+      }
+      const subject = approved?.subject ?? draft.subject ?? "(no subject)";
+      const body = approved ? approved.text : (draft.body ?? draft.bodyHtml ?? "");
       // Thread campaign / contact / run correlation onto the send so the
       // facade's sent-email object writer lands a fully-correlated record for
       // the thread / campaign / contact views (cinatra#1456). `contactId` is
@@ -1017,7 +1217,10 @@ export function createTriggerEmailSendUseCases(
     //   1. Fetch the approved-email-draft-bundle by ref via objects_get.
     //   2. Fetch the confirmedRecipients by ref via objects_get.
     //   3. For each draft, look up the recipient (by contactId match, or
-    //      fall back to recipientEmail embedded on the draft).
+    //      fall back to recipientEmail embedded on the draft). Given
+    //      `approvedBodies` (cinatra#3089), each mailed draft's text is the
+    //      approved body revision joined to it by contact, read and checked
+    //      before any mail; the bundle's body is not mailed.
     //   4. sendGmailMessage for each pair — dev recipient override
     //      (packages/connector-gmail/src/index.ts:312) routes the
     //      outbound to the configured override address.
@@ -1036,6 +1239,7 @@ export function createTriggerEmailSendUseCases(
         // (e.g. a unit test) omits the optional fan-out seams.
         getObjectByRef: deps.getObjectByRef ?? fetchObjectsByRef,
         emitEmailFanout: deps.emitEmailFanout ?? defaultEmitEmailFanout,
+        readDecidedBody: deps.readDecidedBody ?? buildLazyDefaultDeps().readDecidedBody!,
       });
       sendStateByCampaign.set(input.campaignId, result);
       return {

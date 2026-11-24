@@ -25,6 +25,11 @@
  *   L1 the ledger reads and the reuse row the entry relies on, as SQL
  *   E1 the ledger's path CHECK admits the fan-out's path in the fresh-install
  *      bootstrap and in the operator-upgrade migration, whose down narrows back
+ *   P1 a message bound to an approved revision records the fan-out row under
+ *      the message identity, writes no artifact and no claim, and a retry
+ *      returns the same row
+ *   P2 a message already bound to another revision is refused, never re-pointed
+ *   P3 a run outside the organization, or a type no pack claims, binds nothing
  */
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -113,6 +118,7 @@ vi.mock("../artifact-authoring", () => ({
 }));
 
 import {
+  bindFanoutMessageRevision,
   materializeFanoutMessageRevision,
   writeClaimedArtifact,
 } from "../run-artifact-materializer";
@@ -485,5 +491,65 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
     );
     expect(downSql.join("\n")).not.toContain("email_fanout'");
     expect(downSql.join("\n")).not.toMatch(/DELETE/i);
+  });
+});
+
+describe("cinatra#3089 — a message bound to its approved revision", () => {
+  const approvedInput = {
+    runId: "run-1",
+    orgId: "org-a",
+    objectTypeId: BODY_TYPE,
+    outputId: "email-body:run-1:idx-0",
+    markdown: "Approved body one",
+    artifactId: "art-approved",
+    representationRevisionId: "rev-approved",
+  };
+
+  it("P1 records the fan-out row under the message identity, writes no artifact, and a retry returns the same row", async () => {
+    // red-first-expect: bindFanoutMessageRevision is not a function
+    const first = await bindFanoutMessageRevision(approvedInput);
+    expect(first).toEqual({
+      ok: true,
+      artifactId: "art-approved",
+      representationRevisionId: "rev-approved",
+      deduped: false,
+    });
+    expect(recordFanoutReuseMaterializationMock).toHaveBeenCalledWith({
+      orgId: "org-a",
+      runId: "run-1",
+      outputId: "email-body:run-1:idx-0",
+      extension: EXT,
+      contentHash: sha256("Approved body one"),
+      artifactId: "art-approved",
+      representationRevisionId: "rev-approved",
+    });
+    expect(createSemanticArtifactMock).not.toHaveBeenCalled();
+    expect(claimMaterializationMock).not.toHaveBeenCalled();
+    expect(findFinalizedMidRunMaterializationMock).not.toHaveBeenCalled();
+
+    const retry = await bindFanoutMessageRevision(approvedInput);
+    expect(retry).toEqual({ ...first, deduped: true });
+    expect(recordFanoutReuseMaterializationMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("P2 refuses a message already bound to another revision", async () => {
+    // red-first-expect: bindFanoutMessageRevision is not a function
+    await bindFanoutMessageRevision({ ...approvedInput, artifactId: "art-old", representationRevisionId: "rev-old" });
+    const refused = await bindFanoutMessageRevision(approvedInput);
+    expect(refused.ok).toBe(false);
+    expect(!refused.ok && refused.error).toContain("is already bound to revision rev-old of artifact art-old");
+    expect(recordFanoutReuseMaterializationMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("P3 binds nothing for a run outside the organization or a type no pack claims", async () => {
+    poolQueryMock.mockImplementation(async () => ({ rows: [] }));
+    // red-first-expect: bindFanoutMessageRevision is not a function
+    const noRun = await bindFanoutMessageRevision(approvedInput);
+    expect(!noRun.ok && noRun.error).toContain("is not an agent run of organization org-a");
+    poolQueryMock.mockImplementation(async () => ({ rows: [{ template_id: "tpl-1" }] }));
+    readArtifactTypeClaimsForOrgMock.mockReturnValue([]);
+    const noClaim = await bindFanoutMessageRevision(approvedInput);
+    expect(!noClaim.ok && noClaim.error).toContain("no installed pack claims the object type");
+    expect(recordFanoutReuseMaterializationMock).not.toHaveBeenCalled();
   });
 });
