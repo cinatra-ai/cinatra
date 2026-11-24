@@ -212,6 +212,36 @@ describe("the drawn card", () => {
     expect(root.querySelector("[data-publish-row-more]")).toBeNull();
   });
 
+  // cinatra#4738, spec XV.1 "a wide table scrolls inside its own frame": the rows sit in a grid track that can never
+  // be wider than the card's content box, so a wide table or the items panel cannot push past the card at 360 px.
+  // Before the fix the track was sized by its widest row's content:
+  // red-first-expect: to include 'grid-cols-[minmax(0,1fr)]'
+  it("the row track is minmax(0, 1fr) and no row can widen it", async () => {
+    stateMock.mockImplementation(async () => PENDING);
+    const root = await rootOf(mountOn("run_card", okDoor()));
+    await settle();
+    const dl = root.querySelector("dl")!;
+    expect(Array.from(dl.classList)).toContain("grid-cols-[minmax(0,1fr)]");
+    for (const row of Array.from(dl.children)) expect(Array.from(row.classList)).toContain("min-w-0");
+  });
+
+  // Before the list and items rows were read, the card drew nothing for them:
+  // red-first-expect: no card root
+  it("the table scrolls in its own frame and the items panel keeps to the card's content box", async () => {
+    const list = { kind: "list", label: "Recipients", columns: ["Name", "Email"], items: [["Ada", "ada@example.test"]], total: 1 };
+    const items = { kind: "artifacts", label: "Pages", ref: "Abc_123-xyz", islandSrc: null };
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ROWS[0], list, items] }));
+    const root = await rootOf(mountOn("run_card", okDoor()));
+    await settle();
+    const rows = Array.from(root.querySelector("dl")!.children) as HTMLElement[];
+    expect(rows).toHaveLength(3);
+    for (const row of rows) expect(Array.from(row.classList)).toContain("min-w-0");
+    const tableFrame = root.querySelector("table")!.parentElement!;
+    for (const token of ["min-w-0", "max-w-full", "overflow-x-auto"]) expect(Array.from(tableFrame.classList)).toContain(token);
+    const itemsValue = root.querySelector<HTMLElement>('dd[data-publish-row-kind="artifacts"]')!;
+    for (const token of ["min-w-0", "max-w-full"]) expect(Array.from(itemsValue.classList)).toContain(token);
+  });
+
   it("the three settled readings carry the spec's exact copy: the generic question and the marker, nothing more", async () => {
     // specs/app-lifecycle-cards.html section XV: one generic question on every settled card, and a marker that is a chip
     // followed by one line. No agent, site or service is named in the card's own words, and none says "published" (the agent\u2019s own display name is its own words).

@@ -260,14 +260,14 @@ function PublishRow({ row, onRetry }: { row: PublishDecisionCardRow; onRetry: ()
   switch (kind) {
     case "text":
       return (
-        <div data-conformance-id="publish-row-text">
+        <div className="min-w-0" data-conformance-id="publish-row-text">
           <dt className={KICK}>{row.label}</dt>
           <dd className="text-reading text-foreground">{(row as PublishDecisionCardTextRow).value}</dd>
         </div>
       );
     case "list":
       return (
-        <div data-conformance-id="publish-row-list">
+        <div className="min-w-0" data-conformance-id="publish-row-list">
           <dt className={KICK}>{row.label}</dt>
           {listRowValue(row as PublishDecisionCardListRow)}
         </div>
@@ -287,7 +287,7 @@ function listRowValue(row: PublishDecisionCardListRow): ReactElement {
   const more = row.total - row.items.length;
   return (
     <dd className="min-w-0" data-publish-row-kind="list">
-      <div className="mt-1 overflow-x-auto rounded-card border border-line">
+      <div className="mt-1 min-w-0 max-w-full overflow-x-auto rounded-card border border-line">
         <table className="w-full border-collapse text-left text-xs">
           <thead>
             <tr className="border-b border-line">
@@ -395,7 +395,7 @@ function ArtifactsRow({ row, onRetry }: { row: PublishDecisionCardArtifactsRow; 
   }, [askFresh, onRetry]);
   if (row.ref === null || src === null) {
     return (
-      <div data-conformance-id="publish-row-items-refused">
+      <div className="min-w-0" data-conformance-id="publish-row-items-refused">
         <dt className={KICK}>{row.label}</dt>
         <dd className="text-xs text-muted-foreground" data-publish-row-kind="artifacts" data-publish-row-unavailable="">
           These items could not be shown.
@@ -404,9 +404,9 @@ function ArtifactsRow({ row, onRetry }: { row: PublishDecisionCardArtifactsRow; 
     );
   }
   return (
-    <div data-conformance-id={empty ? "publish-row-items-empty" : "publish-row-items"}>
+    <div className="min-w-0" data-conformance-id={empty ? "publish-row-items-empty" : "publish-row-items"}>
       <dt className={KICK}>{row.label}</dt>
-      <dd className="mt-1 min-w-0" data-publish-row-kind="artifacts">
+      <dd className="mt-1 min-w-0 max-w-full" data-publish-row-kind="artifacts">
         <ReviewTargetFrame
           headers={null}
           islandSrc={src}
@@ -517,7 +517,7 @@ export function PublishDecisionCard({
           </p>
         </div>
         {state.rows.length > 0 ? (
-          <dl className="grid gap-2 px-3.5 py-3">
+          <dl className="grid grid-cols-[minmax(0,1fr)] gap-2 px-3.5 py-3">
             {state.rows.map((row, i) => (
               <PublishRow key={`${i}-${row.label}`} row={row} onRetry={reload} />
             ))}
