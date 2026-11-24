@@ -99,9 +99,10 @@ export const DECLARED_SCREEN_CHANGED_REFUSAL =
  * declares now, read fresh past the bindings cache. Only "matches" sends.
  * Another declaration refuses as changed. A step that cannot be verified
  * refuses as a screen that could not be loaded, which a reload retries: its
- * gate row unreadable, or missing with no event-log frame of the step
- * (`stepGateFromEventLog`), or a declaration that cannot be read
- * (refused, malformed, missing from an incomplete scan, a failed read).
+ * gate row unreadable, or a declaration that cannot be read (refused,
+ * malformed, missing from an incomplete scan, a failed read). A row missing
+ * with no event-log frame of the step (`stepGateFromEventLog`) is read from
+ * the step data that is left (`unrecordedStepScreenAnswer`).
  *
  * THE SERVER DECIDES WHETHER A DECLARED CARD WAS ANSWERED, AND WHAT IS SENT.
  * When the step declares a card, the text the agent is resumed with
@@ -419,22 +420,44 @@ async function stepGateFromEventLog(
  *     step with no screen: the agent that declared one can have been removed
  *     after the step parked. Only an id that no binding can take (a host
  *     renderer outside the binding id form) is read as declaring none.
+ *   - the run's agent (`packageName`) that declares a screen on any binding,
+ *     or cannot be read, refuses as well (`unrecordedStepScreenAnswer`).
  */
 export async function resumeStepScreenAnswer(
   run: { id: string; a2aTaskId: string },
-  template: { approvalPolicy?: unknown } | null | undefined,
+  template: { approvalPolicy?: unknown; packageName?: unknown } | null | undefined,
   resumeText: string,
 ): Promise<{ refusal: string } | { send: string }> {
-  const failed = { refusal: SCREEN_FAILED_HOLD_REASON };
   let gate: Awaited<ReturnType<typeof readDurableHitlGateForContinue>>;
   try {
     gate = await readDurableHitlGateForContinue(run.id, `wayflow-${run.a2aTaskId}`);
   } catch {
-    return failed;
+    return { refusal: SCREEN_FAILED_HOLD_REASON };
   }
   if (gate !== null) return stepScreenAnswer(gate, { answersDeclaredCard: false, resumeText });
   const frame = await stepGateFromEventLog(run.id, `wayflow-${run.a2aTaskId}`);
   if (frame !== null) return stepScreenAnswer(frame, { answersDeclaredCard: false, resumeText });
+  return unrecordedStepScreenAnswer(template, resumeText);
+}
+
+/**
+ * What an answer to a parked step with NEITHER a gate row NOR an event-log
+ * frame sends (cinatra#3470): the step data that is left establishes its
+ * screen, read fresh, for the approval core and `agent_run_resume` alike.
+ * The answer is sent as before only when every screen the step can have
+ * declares none: the template's renderer-gate steps, the host's context and
+ * fallback screens, and every binding of the run's agent (`packageName`). Any
+ * that declares a screen, or cannot be read, refuses as a screen that could
+ * not be loaded: which step is open, and so whether a declared card's whole
+ * answer is due, cannot be determined. An answer made on a declared card is
+ * refused there too, since no screen the step can have declares one.
+ */
+export async function unrecordedStepScreenAnswer(
+  template: { approvalPolicy?: unknown; packageName?: unknown } | null | undefined,
+  resumeText: string,
+  answersDeclaredCard = false,
+): Promise<{ refusal: string } | { send: string }> {
+  const failed = { refusal: SCREEN_FAILED_HOLD_REASON };
   try {
     const bindings = await import("./field-renderer-bindings.server");
     const { DECLARED_SCREEN_PIN_NONE } = await import("./field-renderer-registry");
@@ -457,6 +480,9 @@ export async function resumeStepScreenAnswer(
       if (read.binding === undefined && !hostIds.has(id) && RENDERER_NAMESPACE_RE.test(id)) return failed;
       if (bindings.currentDeclaredScreenPin(id, { read }) !== DECLARED_SCREEN_PIN_NONE) return failed;
     }
+    const packageName = template?.packageName;
+    if (typeof packageName === "string" && bindings.packageDeclaredScreenStanding(packageName) !== "none") return failed;
+    if (answersDeclaredCard) return { refusal: UNDECLARED_CARD_ANSWER_REFUSAL };
     return { send: resumeText };
   } catch {
     return failed;
@@ -1558,12 +1584,17 @@ export async function approveReviewTaskInternal(
       // refuses the answer before the fence, and the claim is given back.
       // A declared card's answer is sent as its one writer rebuilds it: the resume text,
       // the answered-gate digest and the recorded values all read those bytes.
+      // A step with neither a gate row nor a frame is read from the step data that is
+      // left (`unrecordedStepScreenAnswer`); only an unreadable row refuses outright.
       const screenGate = gateSnapshot ?? (gateRowMissing ? await stepGateFromEventLog(run.id, reviewTaskId) : null);
-      const screenAnswer = await stepScreenAnswer(screenGate, {
-        answersDeclaredCard,
-        resumeText,
-        values: valuesObj as Record<string, unknown> | null,
-      });
+      const screenAnswer =
+        screenGate === null && gateRowMissing
+          ? await unrecordedStepScreenAnswer(template, resumeText, answersDeclaredCard)
+          : await stepScreenAnswer(screenGate, {
+              answersDeclaredCard,
+              resumeText,
+              values: valuesObj as Record<string, unknown> | null,
+            });
       if ("refusal" in screenAnswer) throw new Error(screenAnswer.refusal);
       if (screenAnswer.send !== resumeText) {
         resumeText = screenAnswer.send;

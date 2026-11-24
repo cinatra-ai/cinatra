@@ -259,8 +259,9 @@ async function mountAsTheRunPage() {
   ensureDefaultFieldRenderersRegistered();
   // The context step's renderer is a bundled id: it is drawn once the run
   // page's read of the installed bindings answered (no installed screen here).
+  // A host without that read draws it at once, so the call is optional.
   const { settleRuntimeRendererBindings } = await import("../field-renderer-registry");
-  settleRuntimeRendererBindings({ ok: true, screenIds: [], screenPins: {} });
+  settleRuntimeRendererBindings?.({ ok: true, screenIds: [], screenPins: {} });
   const { AgenticRunPanel } = await import("../agentic-run-panel");
   return render(
     <AgenticRunPanel

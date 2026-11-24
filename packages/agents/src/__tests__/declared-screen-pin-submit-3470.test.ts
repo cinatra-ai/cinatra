@@ -415,6 +415,39 @@ describe("an answer is sent only under the declared screen its step opened under
     expectRefusedAndGivenBack();
   });
 
+  describe("a step with neither a gate row nor an event-log frame is read from the step data that is left", () => {
+    it("is sent as before when no screen the step can have declares one", async () => {
+      install(null);
+      gateRow.read = "missing";
+      expect(await answer()).toBe("sent");
+      expect(sendTask).toHaveBeenCalledTimes(1);
+    });
+
+    it("a later step's own error reaches the caller, never the screen refusal", async () => {
+      install(null);
+      gateRow.read = "missing";
+      const { mintResumeRunTokenMetadata } = await import("../wayflow-run-token-carrier");
+      vi.mocked(mintResumeRunTokenMetadata).mockRejectedValueOnce(new Error("fixture no carrier"));
+      expect(await answer()).toBe("fixture no carrier");
+      expect(sendTask).not.toHaveBeenCalled();
+      expect(pauseClaimFake.releasePauseClaim).toHaveBeenCalledTimes(1);
+    });
+
+    it("an answer made on a declared card is refused, since no screen the step can have declares one", async () => {
+      install(null);
+      gateRow.read = "missing";
+      expect(await answer(CARD_ANSWER)).toContain("does not declare");
+      expectRefusedAndGivenBack();
+    });
+
+    it("is refused when the run's agent declares a screen the template does not name", async () => {
+      install("Fixture unnamed revision");
+      gateRow.read = "missing";
+      expect(await answer(CARD_ANSWER)).toContain("could not be loaded");
+      expectRefusedAndGivenBack();
+    });
+  });
+
   describe("a step whose gate row could not be written at the park is answered from its event-log frame", () => {
     /**
      * The park as the WayFlow gate runs it (human-gate-park.ts): the frame is

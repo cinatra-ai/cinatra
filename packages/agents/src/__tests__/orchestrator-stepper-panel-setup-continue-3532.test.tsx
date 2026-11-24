@@ -973,8 +973,9 @@ describe("OrchestratorStepperPanel — a renderer that reports its value unsenda
     // (`drawsOwnSubmit: true`, the map-first branch of the default renderers).
     expect(fieldRendererRegistry.list().some((e) => e.id === OUTREACH_LIST_PICKER_ID)).toBe(true);
     // A bundled id is drawn only once the run page's read of the installed
-    // bindings answered (here: no installed revision declares a screen).
-    settleRuntimeRendererBindings({ ok: true, screenIds: [], screenPins: {} });
+    // bindings answered (here: no installed revision declares a screen). A
+    // host without that read draws it at once, so the call is optional.
+    settleRuntimeRendererBindings?.({ ok: true, screenIds: [], screenPins: {} });
     fieldRendererRegistry.register({
       id: OUTREACH_LIST_PICKER_ID,
       priority: 90,

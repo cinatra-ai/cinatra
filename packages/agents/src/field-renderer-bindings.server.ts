@@ -787,6 +787,30 @@ export function readDeclaredHitlCard(
 }
 
 /**
+ * Does the agent package `packageName` declare a HITL screen now
+ * (cinatra#3470)? Read past the bindings cache. "declares" when any binding
+ * that package owns (declared by it, or an id in its `@scope/package:` form)
+ * declares a screen, or had its declared screen refused; "none" when it owns
+ * none that does (an agent with no installed bindings declares none);
+ * "unknown" when that package, its scope or the mount could not be read
+ * cleanly, since it may declare a screen that was not read.
+ */
+export function packageDeclaredScreenStanding(packageName: string): "none" | "declares" | "unknown" {
+  try {
+    const scan = collectInstalled({ fresh: true });
+    if (bundledOwnerUnread(scan, packageName)) return "unknown";
+    const owns = (id: string, declaredBy?: string) => declaredBy === packageName || id.startsWith(`${packageName}:`);
+    if (scan.refusedScreenIds.some((id) => owns(id))) return "declares";
+    const declares = getMergedFieldRendererBindings().some(
+      (b) => owns(b.id, b.declaredBy) && declaredScreenPin(b) !== DECLARED_SCREEN_PIN_NONE,
+    );
+    return declares ? "declares" : "none";
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
  * Resolve the canonical renderer ID bound to a KIND (e.g. the reviewer
  * output-envelope check in execution.ts). `undefined` when no present/
  * installed package binds the kind — callers treat that as "gate class not

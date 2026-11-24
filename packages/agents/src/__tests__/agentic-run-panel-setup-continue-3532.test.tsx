@@ -1086,8 +1086,9 @@ describe("AgenticRunPanel — every send of a held gate sends nothing (cinatra#3
     expect(shipped).toHaveLength(1);
     expect(shipped[0]!.midRunHitl).not.toBe(true);
     // A bundled id is drawn only once the run page's read of the installed
-    // bindings answered (here: no installed revision declares a screen).
-    settleRuntimeRendererBindings({ ok: true, screenIds: [], screenPins: {} });
+    // bindings answered (here: no installed revision declares a screen). A
+    // host without that read draws it at once, so the call is optional.
+    settleRuntimeRendererBindings?.({ ok: true, screenIds: [], screenPins: {} });
     // The stand-in takes its place the way an extension-shipped component does,
     // which keeps its own send (`drawsOwnSubmit: true`, the map-first branch).
     fieldRendererRegistry.register({

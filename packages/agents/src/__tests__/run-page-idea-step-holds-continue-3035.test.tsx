@@ -45,10 +45,11 @@ vi.mock("../run-recommendation-actions", () => ({
 vi.mock("../run-name-actions", () => ({ ensureOrCheckRunNameAction: vi.fn(async () => ({ ok: true, title: "Run 1" })) }));
 vi.mock("../hitl-actions", () => ({ approveReviewTask: (...args: unknown[]) => gateSend.approveReviewTask(...args) }));
 // The page's installed bindings answered with nothing beyond the build: a gate
-// with no binding is then not held as still loading (cinatra#3470).
+// with no binding is then not held as still loading (cinatra#3470). A host
+// without that read never holds it, so the call is optional.
 vi.mock("../use-runtime-field-renderer-bindings", async () => {
   const { settleRuntimeRendererBindings } = await import("../field-renderer-registry");
-  settleRuntimeRendererBindings({ ok: true, screenIds: [] });
+  settleRuntimeRendererBindings?.({ ok: true, screenIds: [] });
   return { useRuntimeFieldRendererBindings: () => ({ bindings: {}, loading: false }) };
 });
 vi.mock("../use-ag-ui-run-stream", () => ({
