@@ -572,7 +572,12 @@ const PUBLISH_RESUME_TEXT = "[Publish approved]";
  * decision's own gate task (pauseIsDecisionGate: the run row, and the latest-task key when present; a released decision
  * is claimed at the pause generation its release recorded and read by releasedAtPause, or, released by older code, needs
  * the key), and the review fence of the decision's attempt must still hold (reviewFenceHolds, read again here: else the
- * claim is given back and the answer is publish_review_not_approved, cinatra#4762); then ONE decision
+ * claim is given back and the answer is publish_review_not_approved, cinatra#4762). Before that, under the claim, the
+ * graph the run is bound to execute (readRunBoundGraph) must pass the first dispatch's publishing route check
+ * (checkExecutedPublishingCallRoutes, cinatra#4762): a run bound before that check, or with no readable binding, is not
+ * released; it ends failed with the check's fixed PUBLISH_CALL_UNCHECKED text in the move that closes the attempt's
+ * parked decision and clears the claim (the claim is given back when that move loses), and the answer is
+ * publish_decision_not_open with the current status; then ONE decision
  * write (parked -> released, with that person and the pause generation the claim holds), the steps that can fail before the send (the client, the credential, the message id), the fence (the one move pending_approval -> running,
  * under the claim) and ONE message sent into the held context. A run at another gate or another pause generation than
  * the release recorded, a released decision with neither a recorded pause nor a latest-task key, or a latest-task read that faults gives the claim back and resumes nothing. A late answer is publish_decision_not_open with the current status. A resume
@@ -656,6 +661,21 @@ async function approveWith(enforce: DecisionAccess, input: DecideInput): Promise
         await giveBack();
         return { ok: true, resumed: false };
       }
+      // cinatra#4762: the graph the run is bound to execute is checked as the first dispatch checks it, before any
+      // release. A run first dispatched before that check keeps the graph it bound then, and no resume road selects a
+      // source again, so this is where its publishing calls are read. A run with no readable binding cannot be checked
+      // and is refused the same way. A refusal ends the run failed with the compiler's fixed text, in the move that
+      // also closes the attempt's parked decision and clears the claim; nothing is released or sent.
+      const generation = run.resetGeneration ?? 0;
+      const { checkExecutedPublishingCallRoutes } = await import("./oas-compiler");
+      const routes = checkExecutedPublishingCallRoutes((await readRunBoundGraph(run.id)) ?? "");
+      if (!routes.ok) {
+        const ended = await moveRun(run.id, "pending_approval", "failed",
+          { error: routes.error, completedAt: new Date(), attemptGeneration: generation, endParkedDecisions: true }, authority);
+        if (!ended) await giveBack();
+        const latest = await readLatestDecisionForRun(run.id);
+        return { ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: latest?.status ?? null };
+      }
       // cinatra#4762: the review fence is read again under the claim, and the release is written in the SAME transaction
       // as that read, under the run row's lock (withRunRowLock): no output of the run is in flight while it runs, so an
       // output of the attempt begun after the park is either committed and seen here (and refuses the Publish) or begins
@@ -664,7 +684,6 @@ async function approveWith(enforce: DecisionAccess, input: DecideInput): Promise
       // stays as it is; nothing is sent.
       // A decision with no generation (written by code older than the column) is the current attempt's, as the store reads
       // it (CURRENT_ATTEMPT): it is approved under the run's own generation, never read as attempt 0.
-      const generation = run.resetGeneration ?? 0;
       const answer = await withRunRowLock(run.id, async (tx, locked) => {
         if (locked?.resetGeneration !== generation || (target.runGeneration ?? generation) !== generation ||
           !(await reviewFenceHolds({ runId: run.id, orgId: run.orgId, generation, executor: tx }))) return null;

@@ -27,8 +27,29 @@ const decisions = vi.hoisted(() => ({
   readOpenDecisionForRun: vi.fn(),
   listDueParked: vi.fn(async () => [] as unknown[]),
   listSettledWithWaitingRun: vi.fn(async () => [] as unknown[]),
+  readRunBoundGraph: vi.fn(async (_runId: string): Promise<string | null> => null),
 }));
 vi.mock("../publish-decision-store", () => decisions);
+
+// cinatra#4762: the graph a run is bound to execute (its step tool policy's source), as the loader composed it: a publish
+// gate in front of a publishing ParallelFlowNode whose branches call `urls`. By default every call goes to a checked host
+// route, so the Publish cases below pass the route check.
+const boundGraph = (urls: string[]) => JSON.stringify({
+  component_type: "Flow", id: "pack", name: "pack", start_node: { $component_ref: "start" },
+  nodes: ["start", "cinatra_publish_gate__publish", "publish", "end"].map((id) => ({ $component_ref: id })),
+  control_flow_connections: [], data_flow_connections: [],
+  $referenced_components: {
+    start: { component_type: "StartNode", id: "start", name: "start" },
+    cinatra_publish_gate__publish: { component_type: "InputMessageNode", id: "cinatra_publish_gate__publish", name: "gate" },
+    publish: { component_type: "ParallelFlowNode", id: "publish", name: "publish", metadata: { cinatra: { publishes: true } },
+      subflows: urls.map((url, i) => ({ component_type: "Flow", id: `b${i}`, name: `b${i}`, start_node: { $component_ref: "s" },
+        nodes: [{ $component_ref: "s" }, { $component_ref: `call_${i}` }],
+        $referenced_components: { s: { component_type: "StartNode", id: "s", name: "s" },
+          [`call_${i}`]: { component_type: "ApiNode", id: `call_${i}`, name: `call_${i}`, url, http_method: "POST", data: {} } } })) },
+    end: { component_type: "EndNode", id: "end", name: "end" },
+  },
+});
+const CHECKED_GRAPH = boundGraph(["{{CINATRA_BASE_URL}}/api/agents/passthrough", "{{CINATRA_BASE_URL}}/api/llm-bridge"]);
 
 const enforceRunAccess = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../auth-policy", () => ({ enforceRunAccess, resolveEffectivePolicy: () => "owner-only" }));
@@ -118,7 +139,8 @@ beforeEach(() => {
   for (const m of [storeMock.readAgentRunById, storeMock.readAgentTemplateById, storeMock.transitionRunStatus,
     decisions.decide, decisions.readOpenDecisionForRun, decisions.readLatestDecisionForRun, sendWayflowResume,
     enforceRunAccess, resolveOrgRoleForUser, assertAgentRunDispatchAuthorized, resolveLatestWayflowGateTaskId,
-    prepareWayflowResume, claims.claimPause, claims.releasePauseClaim, claims.settlePauseSend]) m.mockReset();
+    prepareWayflowResume, claims.claimPause, claims.releasePauseClaim, claims.settlePauseSend, decisions.readRunBoundGraph]) m.mockReset();
+  decisions.readRunBoundGraph.mockResolvedValue(CHECKED_GRAPH);
   storeMock.readAgentRunById.mockResolvedValue(run());
   storeMock.readAgentTemplateById.mockResolvedValue({ id: "tmpl-1", packageName: "@acme/poster", sourceType: "internal", agentAuthPolicy: null });
   storeMock.readRunCoOwners.mockResolvedValue([]);
@@ -333,7 +355,6 @@ describe("Publish (A7)", () => {
   it("after a resume that failed before its send, the card still offers Allow, and that Allow resumes the run once", async () => {
     const who = { actor: ACTOR, roleHints: ROLE_HINTS };
     prepareWayflowResume.mockRejectedValueOnce(new Error("wayflow down"));
-    // red-first-expect: decidePublishDecisionCardForActor is not a function
     expect(await decidePublishDecisionCardForActor({ runId: "run-1", decisionId: "d1", answer: "approve" }, who)).toBe("failed");
     expect(decisions.decide).toHaveBeenCalledTimes(1);
     expect(sendWayflowResume).not.toHaveBeenCalled();
@@ -354,7 +375,6 @@ describe("Publish (A7)", () => {
   // still waits at that pause. Allow stays, and it resumes the run exactly once, with no second decision write, under a
   // pause claim bound to that gate task (cinatra#4758). Red first at 7ca04b14: the claim named the generation only. On
   // the base, which has no retry reading, the card reads Approved:
-  // red-first-expect: expected { state: 'approved', …(4) } to match object { state: 'pending', …(3) }
   it("a released decision whose run row and latest-task key both name its gate keeps Allow, and Allow resumes the run exactly once under a claim bound to that gate", async () => {
     const who = { actor: ACTOR, roleHints: ROLE_HINTS };
     decisions.readOpenDecisionForRun.mockResolvedValue(null);
@@ -375,7 +395,6 @@ describe("Publish (A7)", () => {
   // went on; it now waits at gate B, a later pause, but a2a_task_id still names A and the key has expired. For such a
   // decision the row alone cannot tell A's pause from B's: no card (never Allow, never Approved), and an Allow resumes
   // nothing, so B is never answered. A release that recorded its pause is read durably instead (the cases below).
-  // red-first-expect: to deeply equal { state: 'none' }
   it("with a stale run row and no latest-task key, a decision released with no recorded pause offers no Allow and its Allow resumes nothing", async () => {
     const who = { actor: ACTOR, roleHints: ROLE_HINTS };
     decisions.readOpenDecisionForRun.mockResolvedValue(null);
@@ -397,7 +416,6 @@ describe("Publish (A7)", () => {
   // that generation, so it still waits at gate A: the card keeps Allow, and that Allow resumes the run exactly once,
   // under a claim taken at the recorded generation, with no second decision write and no latest-task read. Red first at
   // 88b3c621: the release recorded no pause generation (expected undefined to be 3). On the base, which has no card door:
-  // red-first-expect: decidePublishDecisionCardForActor is not a function
   it("a crash at gate A with the latest-task key lost: the recorded pause keeps Allow, and Allow resumes the run once", async () => {
     const who = { actor: ACTOR, roleHints: ROLE_HINTS };
     claims.claimPause.mockImplementation(async (ref: { generation: number }) => ({ ...CLAIMED, generation: ref.generation }));
@@ -425,7 +443,6 @@ describe("Publish (A7)", () => {
   // the release recorded, while its row still names A's task and the latest-task key is lost. The record tells the two
   // apart: A's decision is settled (Approved, no Allow), and an Allow on it claims nothing at B and sends nothing. Red
   // first at 88b3c621: the card read { state: 'none' }. On the base, which has no card door:
-  // red-first-expect: decidePublishDecisionCardForActor is not a function
   it("moved on to gate B with the latest-task key lost: the recorded pause offers no Allow, and nothing resumes", async () => {
     const who = { actor: ACTOR, roleHints: ROLE_HINTS };
     const atGateB = run({ a2aTaskId: "task-1", pauseGeneration: 6 });
@@ -456,7 +473,6 @@ describe("Publish (A7)", () => {
     decisions.readOpenDecisionForRun.mockResolvedValue(null);
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released", decidedBy: "user-a" }));
     resolveLatestWayflowGateTaskId.mockRejectedValue(new Error("redis down"));
-    // red-first-expect: to deeply equal { state: 'none' }
     expect(await publishDecisionCardStateForRun(run() as never, who)).toEqual({ state: "none" });
   });
 
@@ -811,6 +827,77 @@ describe("the review fence, read again at Publish (cinatra#4762)", () => {
     expect(err.code).toBe("publish_decision_unavailable");
     expect(err.message).not.toMatch(/db down|run-1/);
     expectNothingReleased();
+  });
+});
+
+// cinatra#4762: a run first dispatched before the route check, parked at its publish gate, keeps the graph it bound then,
+// and no resume road selects a source again. Its Allow checks that bound graph as the first dispatch does.
+describe("the bound graph's publishing calls, checked at Publish (cinatra#4762)", () => {
+  const failedMoves = () => (storeMock.transitionRunStatus.mock.calls as unknown as Array<[string, string, string, Record<string, unknown>]>)
+    .filter(([, from, to]) => from === "pending_approval" && to === "failed").map(([, , , patch]) => patch);
+
+  it("a run bound to a publishing step with a direct external call is not released, and ends failed with the fixed text", async () => {
+    decisions.readRunBoundGraph.mockResolvedValue(boundGraph(["{{CINATRA_BASE_URL}}/api/agents/passthrough", "https://api.example.invalid/v2/posts"]));
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "run_ended" }));
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: "run_ended" });
+    expect(decisions.readRunBoundGraph).toHaveBeenCalledWith("run-1");
+    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(decisions.withRunRowLock).not.toHaveBeenCalled();
+    expect(prepareWayflowResume).not.toHaveBeenCalled();
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+    expect(moves()).toEqual([["run-1", "pending_approval", "failed"]]);
+    const [patch] = failedMoves();
+    expect(patch).toMatchObject({ attemptGeneration: 0, endParkedDecisions: true });
+    expect(patch?.error).toMatch(/^PUBLISH_CALL_UNCHECKED: node "call_1" of publishing step "publish" calls a URL /);
+    expect(patch?.error).not.toContain("example.invalid");
+    // The failed move clears the claim with the status; the claim is read under it before any release.
+    expect(claims.claimPause.mock.invocationCallOrder[0]!).toBeLessThan(decisions.readRunBoundGraph.mock.invocationCallOrder[0]!);
+    expect(claims.releasePauseClaim).not.toHaveBeenCalled();
+  });
+
+  it("a released decision whose resume failed before its send is checked again the same way, and nothing is sent", async () => {
+    decisions.readRunBoundGraph.mockResolvedValue(boundGraph(["https://api.example.invalid/v2/posts"]));
+    decisions.readOpenDecisionForRun.mockResolvedValue(null);
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released" }));
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: "released" });
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+    expect(moves()).toEqual([["run-1", "pending_approval", "failed"]]);
+  });
+
+  it("a run with no readable bound graph is refused the same way: its publishing calls cannot be checked", async () => {
+    decisions.readRunBoundGraph.mockResolvedValue(null);
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toMatchObject({ ok: false, code: PUBLISH_DECISION_NOT_OPEN });
+    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+    expect(failedMoves().map((p) => p.error)).toEqual([expect.stringMatching(/^PUBLISH_CALL_UNCHECKED: the executed source cannot be read/)]);
+  });
+
+  it("a failed move that loses to a stop gives the claim back and resumes nothing", async () => {
+    decisions.readRunBoundGraph.mockResolvedValue(boundGraph(["https://api.example.invalid/v2/posts"]));
+    storeMock.transitionRunStatus.mockRejectedValue(stale());
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "run_ended" }));
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: "run_ended" });
+    expect(claims.releasePauseClaim).toHaveBeenCalledWith({ runId: "run-1", orgId: "org-1", token: "tok-1" }, expect.anything());
+    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+  });
+
+  it("a bound graph that cannot be read gives the claim back and answers the fixed text; nothing is sent", async () => {
+    decisions.readRunBoundGraph.mockRejectedValue(new Error("db down: run-1"));
+    const err = (await approvePublishDecision({ runId: "run-1", actorContext: ACTOR }).catch((e: unknown) => e)) as Error & { code?: string };
+    expect(err.code).toBe("publish_decision_unavailable");
+    expect(err.message).not.toMatch(/db down|run-1/);
+    expect(claims.releasePauseClaim).toHaveBeenCalledTimes(1);
+    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+  });
+
+  it("a run bound to a graph whose publishing calls all go to checked host routes is released as before", async () => {
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: true });
+    expect(decisions.readRunBoundGraph).toHaveBeenCalledWith("run-1");
+    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "released", actor: "user-a", pauseGeneration: 4 }, TX);
+    expect(sendWayflowResume).toHaveBeenCalledTimes(1);
+    expect(failedMoves()).toEqual([]);
   });
 });
 
