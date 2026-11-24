@@ -277,13 +277,13 @@ function PackListStep({ bindingParams, onChange, onValidityChange }: FieldRender
     <div role="alert" data-testid="list-picker-read-failed">
       <p>This list could not be read.</p>
       {typeof refreshValue === "string" ? (
-        <button
+        <Button
           type="button"
           data-testid="list-picker-try-again"
           onClick={() => void onChange({ listIds: [], listNames: [], refresh: refreshValue })}
         >
           Try again
-        </button>
+        </Button>
       ) : null}
     </div>
   );
