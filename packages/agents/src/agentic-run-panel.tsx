@@ -45,6 +45,7 @@ import {
   publishDecisionIsSettled,
   publishGateIsOpen,
   usePublishDecisionCardRead,
+  usePublishDecisionDecide,
   type PublishDecisionCardRead,
 } from "./publish-decision-card-view";
 import { StatusPill } from "@/components/ui/status-pill";
@@ -2028,6 +2029,8 @@ export function AgenticRunPanel({
     runStatus: status,
   });
   const publishRead = hostPublishRead ?? ownPublishRead;
+  // THE DECIDE DOOR (cinatra#4758) for this panel's transport: Allow and Do not allow go live for a reader who may decide.
+  const publishDecide = usePublishDecisionDecide(ambientLifecycleAuth);
   // ONE HELD-RUN CARD: a run parked at its publish gate is parked there and nowhere else, so while the read POSITIVELY
   // answers `pending` any gate reading this panel still holds (a stream or row reading not yet caught up) is stale and
   // the publish card is the pause's only surface, the same rule the conversation turn applies to its hitl screen.
@@ -2975,7 +2978,7 @@ export function AgenticRunPanel({
   // exactly one of the two arms below.
   const publishCard = panelMountsHitlScreenCard ? (
     <LifecycleCardSurfaceProvider host="run_card">
-      <PublishDecisionCard runId={runId} read={publishRead} />
+      <PublishDecisionCard runId={runId} read={publishRead} decide={publishDecide} />
     </LifecycleCardSurfaceProvider>
   ) : null;
 

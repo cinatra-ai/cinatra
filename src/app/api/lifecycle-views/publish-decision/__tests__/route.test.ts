@@ -62,6 +62,7 @@ import type * as RouteModule from "../route";
 // The route the fix adds is loaded inside each test, not at the top of the
 // file: before the fix the file still loads and each test fails on the
 // missing module.
+// red-first-expect: expected { state: 'pending', …(4) } to deeply equal { state: 'pending', …(5) }
 let GET!: typeof RouteModule.GET;
 async function loadRoute(): Promise<void> {
   ({ GET } = await import("../route"));
@@ -85,6 +86,7 @@ const PENDING = {
   runId: RUN_ID,
   agentName: "Blog agent",
   rows: [{ label: "Title", value: "Spring launch" }],
+  decisionId: "d1",
   mayDecide: true,
 };
 
@@ -231,7 +233,6 @@ describe("may decide, for the widget door's own actor (source a2a)", () => {
 // carries its own credential. Before the fix the route answered the core's `islandSrc: null` unchanged, and no widget
 // publish card ever drew its artifacts row. These run the REAL core, the REAL ref codec, the REAL widget mint and the
 // REAL credential codec; only the stores and the single-use ledger are stubbed.
-// red-first-expect: expected null not to be null
 describe("the artifacts row's widget address", () => {
   const FULL_CLAIMS = {
     userId: "user-widget",

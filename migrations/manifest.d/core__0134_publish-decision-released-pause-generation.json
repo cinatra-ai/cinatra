@@ -1,0 +1,9 @@
+{
+  "seq": "0134",
+  "file": "core/core__0134_publish-decision-released-pause-generation.mjs",
+  "summary": "The pause a publish decision was released at (cinatra#4758). ONE additive nullable column: agent_run_publish_decisions.released_pause_generation bigint (the type of agent_runs.pause_generation): the run's pause generation at which the Allow released the decision, written in the same UPDATE that releases it, under the pause claim held at that generation. A run still pending_approval at that generation waits at the very pause the decision released (every entry into pending_approval and every fence raises the generation), so the publish card keeps Allow and Allow resumes it; any other generation means the run went on. This replaces the latest-task key (Redis, seven days) for that reading. null = not released, or released by code older than the column; those keep the earlier reading. No backfill, no default, no constraint: every existing row reads NULL. up runs outside a transaction with lock_timeout 5 s (set first, reset last), so an ALTER queued behind a long reader fails (55P03) and replays instead of stalling the table; the add itself is catalog-only. Idempotent ADD COLUMN IF NOT EXISTS twin of the fresh-install bootstrap DDL (publishDecisionSchemaQueries in src/lib/artifacts/publication-operation-schema.ts), shipped in the SAME change. down() drops the column and what it holds. SEQ IS PROVISIONAL: 0133 is the highest sequence on main (2026-11-24); a rename-only renumber at merge is normal.",
+  "destructive": false,
+  "tables": [
+    "agent_run_publish_decisions"
+  ]
+}
