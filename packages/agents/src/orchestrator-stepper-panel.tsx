@@ -141,6 +141,7 @@ import {
   stageAssistantFills,
   isSetupGateTaskId,
   liftRendererApprovalNote,
+  recordedContinueAnswer,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
@@ -3451,7 +3452,9 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
           const entry = stepperSteps.find((s) => (s as { xRenderer?: string }).xRenderer === xRenderer);
           if (entry) {
             setLiveSubmissionMap((prev) => new Map([...prev, [entry.index, {
-              submittedValues: values,
+              // The answer as the server records it, so the replay before a
+              // refresh reads what it reads after one (cinatra#3470).
+              submittedValues: recordedContinueAnswer(values),
               schemaSnapshot: schema ?? null,
               stepKey: "",
             }]]));

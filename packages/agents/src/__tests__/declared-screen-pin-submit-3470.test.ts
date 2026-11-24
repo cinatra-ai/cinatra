@@ -134,6 +134,7 @@ const handleWayflowTaskState = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../execution", () => ({ handleWayflowTaskState }));
 
 import * as reviewTaskActions from "../review-task-actions";
+import { resumeMessageFromInput } from "../mcp/resume-message";
 import { approveReviewTaskInternal } from "../review-task-actions";
 import * as claimModule from "../run-pause-claim";
 import * as bindingsServer from "../field-renderer-bindings.server";
@@ -648,6 +649,100 @@ describe("an answer is sent only under the declared screen its step opened under
       expect(sendTask).toHaveBeenCalledTimes(1);
       // red-first-expect: expected '{"post":true,"itemId":"item-A"}' to be '{"itemId":"item-A","post":true}'
       expect(sentText()).toBe(JSON.stringify({ itemId: "item-A", post: true }));
+    });
+  });
+
+  describe("a step drawn by a \"kind\" screen is sent only an answer that holds what its screen requires", () => {
+    /** Install the fixture agent with a "kind" screen of `kind`, and park the step with `base` as its schema. */
+    function installKindScreen(kind: string, base: Record<string, unknown> = { type: "object" }): void {
+      writeManifest(
+        JSON.stringify({
+          name: "@acme-test/pin-submit-agent",
+          cinatra: {
+            fieldRenderers: [{ id: ID, kind, priority: 90, midRunHitl: true, screen: { layout: "kind" } }],
+          },
+        }),
+      );
+      server.__clearInstalledFieldRendererBindingsCache();
+      gateRow.inputSchema = server.withDeclaredScreenPin?.(base, ID) ?? base;
+    }
+    const { resumeStepScreenAnswer } = reviewTaskActions as unknown as {
+      resumeStepScreenAnswer?: (run: unknown, template: unknown, text: string) => Promise<Record<string, string>>;
+    };
+    const template = { approvalPolicy: { steps: [{ xRenderer: ID }] } };
+    /** What agent_run_resume sends with no response: the fallback of its resume message. */
+    const resumedWithNoResponse = async () =>
+      resumeStepScreenAnswer?.(RUN, template, resumeMessageFromInput(undefined, undefined).resumeText);
+    const SETUP_SCHEMA = {
+      type: "object",
+      properties: { senderName: { type: "string" }, note: { type: "string" } },
+      required: ["senderName"],
+    };
+
+    it("agent_run_resume with no response is refused for a list step", async () => {
+      installKindScreen("list-picker");
+      const result = await resumedWithNoResponse();
+      // red-first-expect: expected 'undefined' to be 'string'
+      expect(typeof result?.refusal).toBe("string");
+      expect(result?.send).toBeUndefined();
+    });
+
+    it("agent_run_resume is refused for a list step whose snapshot names no usable pick", async () => {
+      installKindScreen("list-picker");
+      const empty = JSON.stringify({ type: "list", listId: "  ", listName: "", memberCount: 0 });
+      // red-first-expect: expected 'undefined' to be 'string'
+      expect(typeof (await resumeStepScreenAnswer?.(RUN, template, empty))?.refusal).toBe("string");
+    });
+
+    it("agent_run_resume with a usable pick is sent for a list step", async () => {
+      installKindScreen("list-picker");
+      const picked = JSON.stringify({ type: "list", listIds: ["list-1"], listNames: ["One"] });
+      // red-first-expect: expected undefined to deeply equal
+      expect(await resumeStepScreenAnswer?.(RUN, template, picked)).toEqual({ send: picked });
+    });
+
+    it("agent_run_resume with no response is refused for a grouped setup form", async () => {
+      installKindScreen("wayflow-setup-form", SETUP_SCHEMA);
+      // red-first-expect: expected 'undefined' to be 'string'
+      expect(typeof (await resumedWithNoResponse())?.refusal).toBe("string");
+    });
+
+    it("agent_run_resume is refused for a grouped setup form whose required field is blank", async () => {
+      installKindScreen("wayflow-setup-form", SETUP_SCHEMA);
+      const blank = JSON.stringify({ senderName: "", note: "x" });
+      // red-first-expect: expected 'undefined' to be 'string'
+      expect(typeof (await resumeStepScreenAnswer?.(RUN, template, blank))?.refusal).toBe("string");
+    });
+
+    it("agent_run_resume with every required field filled is sent for a grouped setup form", async () => {
+      installKindScreen("wayflow-setup-form", SETUP_SCHEMA);
+      const filled = JSON.stringify({ senderName: "Ada" });
+      // red-first-expect: expected undefined to deeply equal
+      expect(await resumeStepScreenAnswer?.(RUN, template, filled)).toEqual({ send: filled });
+    });
+
+    it("a bare approval through the approval core is refused for a list step: the pause is given back", async () => {
+      installKindScreen("list-picker");
+      // red-first-expect: expected 'sent' to contain 'did not give'
+      expect(await answer({ approved: true })).toContain("did not give");
+      expectRefusedAndGivenBack();
+    });
+
+    it("a grouped setup form's values that fail its schema are refused through the approval core", async () => {
+      installKindScreen("wayflow-setup-form", SETUP_SCHEMA);
+      // red-first-expect: expected 'sent' to contain 'did not give'
+      expect(await answer({ approved: true, approvalNote: JSON.stringify({ senderName: "Ada" }) })).toContain("did not give");
+      expectRefusedAndGivenBack();
+      vi.clearAllMocks();
+      arrange();
+      expect(await answer({ senderName: "Ada", approved: true, approvalNote: "{}" })).toBe("sent");
+      expect(sendTask).toHaveBeenCalledTimes(1);
+    });
+
+    it("a kind with no input of its own is sent as before", async () => {
+      installKindScreen("email-drafts-review");
+      // red-first-expect: expected undefined to deeply equal
+      expect(await resumedWithNoResponse()).toEqual({ send: "[Approved by operator]" });
     });
   });
 

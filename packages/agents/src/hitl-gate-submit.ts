@@ -1844,3 +1844,77 @@ export function readWayflowSubmittedValues(values: unknown): Record<string, unkn
   void _u;
   return Object.keys(rest).length > 0 ? rest : null;
 }
+
+/**
+ * THE WAYFLOW RESUME TEXT OF A DECLINE (cinatra#3470).
+ *
+ * A mid-run Continue sends `approved: false` when the screen staged a decline
+ * (a declared card's "Do not post"). The resume text is what the running
+ * agent reads, and a structured answer reaches it as the JSON string of the
+ * answer object (`{ ..., approved, approvedAt }`), so a decline must reach it
+ * as such a JSON object with `approved: false`. Without this, a decline that
+ * carries no `userResponse` fell through to the "[Approved by operator]"
+ * marker and the agent read it as an approval.
+ *
+ * Returns the `userResponse` to resume with:
+ *   - not a decline (`approved` is not exactly `false`): the caller's own
+ *     `userResponse`, unchanged;
+ *   - a decline with a JSON-object `userResponse`: that object with
+ *     `approved: false` set (inside the attachment envelope's `text` when the
+ *     object is exactly the envelope this host sends with a file,
+ *     `readSentUserEnvelope`);
+ *   - any other decline: the JSON of the values (without `userResponse`)
+ *     with `approved: false`; a plain-text `userResponse` rides along under
+ *     its own name, unless it is the approval marker itself (the attachment
+ *     envelope wraps that marker when nothing else was written).
+ */
+export function declineAwareUserResponse(values: Record<string, unknown> | null): unknown {
+  const raw = values?.userResponse;
+  if (!values || values.approved !== false) return raw;
+  const { userResponse: _u, ...rest } = values;
+  void _u;
+  const fromValues = (text: string | null): string =>
+    JSON.stringify({
+      ...rest,
+      ...(text !== null && text.trim().length > 0 && text !== "[Approved by operator]"
+        ? { userResponse: text }
+        : {}),
+      approved: false,
+    });
+  const withDecline = (text: string): string => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return fromValues(text);
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return fromValues(text);
+    const obj = parsed as Record<string, unknown>;
+    // Only the envelope this host sends with a file is an envelope; an answer
+    // object that merely holds a `text` key (and no file) is an answer.
+    const envelope = readSentUserEnvelope(obj);
+    if (envelope !== null) {
+      return JSON.stringify({ ...obj, text: withDecline(envelope.text) });
+    }
+    return JSON.stringify({ ...obj, approved: false });
+  };
+  return typeof raw === "string" && raw.trim().length > 0 ? withDecline(raw) : fromValues(null);
+}
+
+/**
+ * THE ANSWER A CONTINUE IS RECORDED AS (cinatra#3470): the one reading the
+ * approval core stores for a Continue's values (the captured prompt, which
+ * the completed step's replay reads after a refresh), and the run page keeps
+ * for that replay before one. The declared-card mark is dropped, a decline is
+ * read as the decline sent (`declineAwareUserResponse`), and the values are
+ * read as sent (`readWayflowSubmittedValues`): a structured answer is the
+ * answer object itself, never the transport around it (`approvedAt`, the
+ * mark, the resume text).
+ */
+export function recordedContinueAnswer(values: unknown): Record<string, unknown> | null {
+  if (!values || typeof values !== "object" || Array.isArray(values)) return readWayflowSubmittedValues(values);
+  const { [DECLARED_CARD_ANSWER_KEY]: _mark, ...unmarked } = values as Record<string, unknown>;
+  void _mark;
+  const userResponse = declineAwareUserResponse(unmarked);
+  return readWayflowSubmittedValues(userResponse !== unmarked.userResponse ? { ...unmarked, userResponse } : unmarked);
+}

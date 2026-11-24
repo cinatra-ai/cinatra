@@ -40,6 +40,9 @@ import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
 import { readWayflowSubmittedValues } from "./hitl-gate-submit";
 import {
   DECLARED_CARD_ANSWER_KEY,
+  declineAwareUserResponse,
+  recordedContinueAnswer,
+  hasUsableListPick,
   SCREEN_FAILED_HOLD_REASON,
   declaredHitlScreenReady,
   declaredHitlStage,
@@ -101,23 +104,29 @@ export const DECLARED_SCREEN_CHANGED_REFUSAL =
  * exactly the answer the card's one writer builds from it
  * (`declaredCardCanonicalAnswer`). What is sent is that rebuilt answer, never
  * the caller's text. A generic approval, an empty answer or an answer the
- * card cannot hold is refused, whatever the caller marked. A step that opened
- * with no screen, whose renderer is verified to declare none now, matches and
- * sends `resumeText` as before.
+ * card cannot hold is refused, whatever the caller marked. A step drawn by a
+ * "kind" screen is sent `resumeText` only when it holds what that kind's own
+ * screen requires (`kindScreenAnswered`): never the bare approval marker for
+ * a list step or a grouped setup form. A step that opened with no screen,
+ * whose renderer is verified to declare none now, matches and sends
+ * `resumeText` as before.
  */
 export async function stepScreenAnswer(
   gate: { xRenderer: string; inputSchema: Record<string, unknown>; values?: Record<string, unknown> } | null,
-  answer: { answersDeclaredCard: boolean; resumeText: string },
+  answer: { answersDeclaredCard: boolean; resumeText: string; values?: Record<string, unknown> | null },
 ): Promise<{ refusal: string } | { send: string }> {
   if (gate === null) return { refusal: SCREEN_FAILED_HOLD_REASON };
   let standing: "matches" | "changed" | "unknown";
   let card: DeclaredHitlCard | "kind-screen" | "unavailable" | null = null;
+  let screenKind: string | undefined;
   try {
-    const { stepDeclarationStanding, readDeclaredHitlCard } = await import(
+    const { stepDeclarationStanding, readDeclaredHitlCard, lookupFieldRendererBinding } = await import(
       "./field-renderer-bindings.server"
     );
     standing = stepDeclarationStanding(gate.xRenderer, gate.inputSchema, { fresh: true });
     if (standing === "matches") card = readDeclaredHitlCard(gate.xRenderer, gate.inputSchema, { fresh: true });
+    // The kind of a "kind" screen, from the scan the card was just read from.
+    if (card === "kind-screen") screenKind = lookupFieldRendererBinding(gate.xRenderer).binding?.kind;
   } catch {
     return { refusal: SCREEN_FAILED_HOLD_REASON };
   }
@@ -131,9 +140,44 @@ export async function stepScreenAnswer(
   // id; a step that declares none (or a "kind" screen) never asked for that
   // card's fields or decisions.
   if (answer.answersDeclaredCard && !declaresCard) return { refusal: UNDECLARED_CARD_ANSWER_REFUSAL };
+  if (card === "kind-screen") {
+    if (screenKind === undefined) return { refusal: SCREEN_FAILED_HOLD_REASON };
+    return (await kindScreenAnswered(screenKind, gate.inputSchema, answer))
+      ? { send: answer.resumeText }
+      : { refusal: KIND_SCREEN_ANSWER_INCOMPLETE_REFUSAL };
+  }
   if (!declaresCard) return { send: answer.resumeText };
   const send = declaredCardCanonicalAnswer(card as DeclaredHitlCard, gate.values ?? {}, answer.resumeText);
   return send === null ? { refusal: DECLARED_CARD_ANSWER_INCOMPLETE_REFUSAL } : { send };
+}
+
+/**
+ * Whether an answer to a step drawn by a "kind" screen (cinatra#3470) holds
+ * what that kind's own screen requires before it sends, read on the server so
+ * a direct road (`agent_run_resume`, a hand-made approval) cannot send past it:
+ *   - a list step: the text sent (the pick snapshot, inside the attachment
+ *     envelope when a file goes with it) names a usable pick, as the screen's
+ *     Continue holds for (`hasUsableListPick`);
+ *   - a grouped setup form: the answer passes the step's own schema by the
+ *     validation the form runs before it sends (`jsonSchemaToZod`), read from
+ *     the values the screen sent, else from the text sent.
+ * The bare approval marker and an empty answer hold neither. Every other kind
+ * requires no input of its own and is sent as before.
+ */
+async function kindScreenAnswered(
+  kind: string,
+  stepSchema: Record<string, unknown>,
+  answer: { resumeText: string; values?: Record<string, unknown> | null },
+): Promise<boolean> {
+  const sent = readWayflowSubmittedValues({ userResponse: answer.resumeText });
+  if (kind === "list-picker") return hasUsableListPick(sent);
+  if (kind === "wayflow-setup-form") {
+    const values = answer.values ?? sent;
+    if (values === null) return false;
+    const { jsonSchemaToZod } = await import("./json-schema-to-zod");
+    return jsonSchemaToZod(stepSchema).safeParse(values).success;
+  }
+  return true;
 }
 
 /**
@@ -287,66 +331,15 @@ export const DECLARED_CARD_ANSWER_INCOMPLETE_REFUSAL =
   "This step's screen asks for an answer this request did not give, so nothing was sent. " +
   "Answer the step on its own screen: choose a decision and fill every field it asks for.";
 
+/** The refusal of an answer that does not hold what a "kind" screen requires (cinatra#3470). */
+export const KIND_SCREEN_ANSWER_INCOMPLETE_REFUSAL =
+  "This step's screen asks for an answer this request did not give, so nothing was sent. " +
+  "Answer the step on its own screen: make the pick or fill every field it asks for.";
+
 /** The refusal of a declared card's answer to a step that declares no card (cinatra#3470). */
 export const UNDECLARED_CARD_ANSWER_REFUSAL =
   "This answer was made on a screen this step does not declare, so it was not sent. " +
   "Reload the page to answer the step on its own screen.";
-
-/**
- * THE WAYFLOW RESUME TEXT OF A DECLINE (cinatra#3470).
- *
- * A mid-run Continue sends `approved: false` when the screen staged a decline
- * (a declared card's "Do not post"). The resume text is what the running
- * agent reads, and a structured answer reaches it as the JSON string of the
- * answer object (`{ ..., approved, approvedAt }`), so a decline must reach it
- * as such a JSON object with `approved: false`. Without this, a decline that
- * carries no `userResponse` fell through to the "[Approved by operator]"
- * marker and the agent read it as an approval.
- *
- * Returns the `userResponse` to resume with:
- *   - not a decline (`approved` is not exactly `false`): the caller's own
- *     `userResponse`, unchanged;
- *   - a decline with a JSON-object `userResponse`: that object with
- *     `approved: false` set (inside the attachment envelope's `text` when the
- *     object is exactly the envelope this host sends with a file,
- *     `readSentUserEnvelope`);
- *   - any other decline: the JSON of the values (without `userResponse`)
- *     with `approved: false`; a plain-text `userResponse` rides along under
- *     its own name, unless it is the approval marker itself (the attachment
- *     envelope wraps that marker when nothing else was written).
- */
-export function declineAwareUserResponse(values: Record<string, unknown> | null): unknown {
-  const raw = values?.userResponse;
-  if (!values || values.approved !== false) return raw;
-  const { userResponse: _u, ...rest } = values;
-  void _u;
-  const fromValues = (text: string | null): string =>
-    JSON.stringify({
-      ...rest,
-      ...(text !== null && text.trim().length > 0 && text !== "[Approved by operator]"
-        ? { userResponse: text }
-        : {}),
-      approved: false,
-    });
-  const withDecline = (text: string): string => {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      return fromValues(text);
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return fromValues(text);
-    const obj = parsed as Record<string, unknown>;
-    // Only the envelope this host sends with a file is an envelope; an answer
-    // object that merely holds a `text` key (and no file) is an answer.
-    const envelope = readSentUserEnvelope(obj);
-    if (envelope !== null) {
-      return JSON.stringify({ ...obj, text: withDecline(envelope.text) });
-    }
-    return JSON.stringify({ ...obj, approved: false });
-  };
-  return typeof raw === "string" && raw.trim().length > 0 ? withDecline(raw) : fromValues(null);
-}
 
 /**
  * Reject a setup value that violates its input's DECLARED type (cinatra#2484).
@@ -1375,12 +1368,10 @@ export async function approveReviewTaskInternal(
     // cinatra#3470: it is read from the answer AS SENT. When a decline rewrote
     // the `userResponse` above, the recorded values (the captured prompt and
     // the Continue receipt's digest) read that rewritten text, never the
-    // caller's original, so the record and the agent hold one decision.
-    const answerAsSent: unknown =
-      valuesObj !== null && userResponseRaw !== valuesObj.userResponse
-        ? { ...valuesObj, userResponse: userResponseRaw }
-        : values;
-    let submittedValues = readWayflowSubmittedValues(answerAsSent);
+    // caller's original, so the record and the agent hold one decision. The
+    // run page keeps the same reading for the step's replay before a refresh
+    // (`recordedContinueAnswer`).
+    let submittedValues = recordedContinueAnswer(values);
 
     // THE CLAIM IS RELEASED WHEN THE ANSWER NEVER LEAVES (cinatra#3423).
     //
@@ -1415,7 +1406,11 @@ export async function approveReviewTaskInternal(
       // A declared card's answer is sent as its one writer rebuilds it: the resume text,
       // the answered-gate digest and the recorded values all read those bytes.
       const screenGate = gateSnapshot ?? (gateRowMissing ? await stepGateFromEventLog(run.id, reviewTaskId) : null);
-      const screenAnswer = await stepScreenAnswer(screenGate, { answersDeclaredCard, resumeText });
+      const screenAnswer = await stepScreenAnswer(screenGate, {
+        answersDeclaredCard,
+        resumeText,
+        values: valuesObj as Record<string, unknown> | null,
+      });
       if ("refusal" in screenAnswer) throw new Error(screenAnswer.refusal);
       if (screenAnswer.send !== resumeText) {
         resumeText = screenAnswer.send;

@@ -101,10 +101,15 @@ describe("approveReviewTaskInternal uses the reader (cinatra#4244)", () => {
   it("reads the submitted values through readWayflowSubmittedValues", () => {
     const src = readFileSync(join(__dirname, "..", "review-task-actions.ts"), "utf8");
     // cinatra#3470: the reader reads the answer as sent, which is the
-    // caller's values unless a decline rewrote their resume text.
-    expect(src).toMatch(/submittedValues\s*=\s*readWayflowSubmittedValues\(\s*answerAsSent\s*\)/);
-    expect(src).toMatch(/\{ \.\.\.valuesObj, userResponse: userResponseRaw \}\s*:\s*values;/);
+    // caller's values unless a decline rewrote their resume text. The core
+    // records it through the one reading the run page's replay keeps too.
+    // red-first-expect: to match /submittedValues\s*=\s*recordedContinu
+    expect(src).toMatch(/submittedValues\s*=\s*recordedContinueAnswer\(\s*values\s*\)/);
     expect(src).toMatch(/import \{ readWayflowSubmittedValues \} from "\.\/hitl-gate-submit";/);
+    const reader = readFileSync(join(__dirname, "..", "hitl-gate-submit.ts"), "utf8");
+    expect(reader).toMatch(
+      /return readWayflowSubmittedValues\(userResponse !== unmarked\.userResponse \? \{ \.\.\.unmarked, userResponse \} : unmarked\);/,
+    );
   });
 
   it("adds no module of its own for the reader or the gate's hold context", () => {

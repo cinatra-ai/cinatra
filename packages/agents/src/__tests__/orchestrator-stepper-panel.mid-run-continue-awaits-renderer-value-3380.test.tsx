@@ -514,6 +514,61 @@ describe("OrchestratorStepperPanel — a declared card's Continue sends exactly 
     expect(payload.userResponse).toBe(JSON.stringify({ itemId: "item-1", action: "revise" }));
   });
 
+  it("a completed step opened before the page refreshes shows the decision that was sent", async () => {
+    const { registerFieldRendererBindings } = await import("../register-default-renderers");
+    registerFieldRendererBindings([
+      {
+        id: DECLARED_ID,
+        kind: "linkedin-draft-review",
+        priority: 90,
+        midRunHitl: true,
+        screen: {
+          layout: "card",
+          title: "Fixture replay",
+          decisionLabel: "Fixture decision",
+          decisions: [
+            { label: "Fixture post", answer: { approved: true } },
+            { label: "Fixture revise", answer: { action: "revise" } },
+          ],
+          carry: ["itemId"],
+        },
+      },
+    ]);
+    const props: PanelProps = {
+      ...baseProps(),
+      stepperSteps: [
+        { index: 1, stepNumber: 0, label: "Confirm", xRenderer: DECLARED_ID },
+        { index: 2, stepNumber: 1, label: "Next", xRenderer: PICK_RENDERER_ID },
+      ],
+    };
+    INTERRUPT = {
+      schema: { type: "object" },
+      xRenderer: DECLARED_ID,
+      values: { itemId: "item-1", stepNumber: 0 },
+      reviewTaskId: REVIEW_TASK_ID,
+    };
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    const view = render(<OrchestratorStepperPanel {...props} />);
+    // red-first-expect: to have a length of 2 but got +0
+    await waitFor(() => expect(document.querySelectorAll('[role="radio"]')).toHaveLength(2));
+    fireEvent.click(radio(/Fixture revise/));
+    await sent();
+    // The run moves on to the next step; the stored submissions (mocked) hold
+    // nothing yet, so the replay reads what this page kept from the Continue.
+    INTERRUPT = {
+      schema: UNDECLARING_SCHEMA,
+      xRenderer: PICK_RENDERER_ID,
+      values: { stepNumber: 1 },
+      reviewTaskId: "wayflow-task-3470-next",
+    };
+    view.rerender(<OrchestratorStepperPanel {...props} />);
+    await waitFor(() => expect(document.querySelector('[aria-label="1 Confirm"]')).not.toBeNull());
+    fireEvent.click(document.querySelector('[aria-label="1 Confirm"]')!);
+    await waitFor(() => expect(document.querySelectorAll('fieldset [role="radio"]')).toHaveLength(2));
+    expect(radio(/Fixture revise/).getAttribute("aria-checked")).toBe("true");
+    expect(radio(/Fixture post/).getAttribute("aria-checked")).toBe("false");
+  });
+
   it("a typed field answer is sent as the resume text", async () => {
     await mountDeclared({
       layout: "card",
