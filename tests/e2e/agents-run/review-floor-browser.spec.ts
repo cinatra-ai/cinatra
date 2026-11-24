@@ -24,8 +24,8 @@
  *     (successor lineage) exists, and the floor stays live (on the chat card
  *     this last point is a known defect, pinned with `test.fail` below);
  *   - Continue: the gate resolves with the stored disposition `approve`, the
- *     floor reads "Continued", and the run is released (it leaves its parked
- *     status).
+ *     floor reads "Continued", and the run is released (its row still exists
+ *     and holds queued, running or completed: never parked, failed or gone).
  * Regenerate is not driven here: this fixture reviews uploaded artifacts, which
  * no producing step filed, so no `regenerate` entry exists for them and the
  * canonical operation refuses Regenerate before any write. A successor gate
@@ -63,13 +63,26 @@ const DATABASE_URL =
 const SCHEMA = process.env.SUPABASE_SCHEMA ?? "cinatra";
 const BASE_URL = process.env.E2E_AGENTS_RUN_BASE_URL ?? "http://localhost:3000";
 
-/** A run that has left its parked status is "released"; these are the parked ones. */
+/** The parked statuses: the run waits on a person while its gate is pending. */
 const PARKED_STATUSES = new Set(["pending_input", "pending_approval"]);
+/** The statuses a RELEASED run holds. Continue resumes the run (`pending_input`
+ *  -> `queued`), the WayFlow runtime executes the flow's remaining EndNode
+ *  (`running`) and the run ends `completed`; the fixture has no LLM and no
+ *  other step. `failed`, `stopped` and every other status are NOT a release: a
+ *  Continue that failed or ended the run must not pass. */
+const RELEASED_STATUSES = /^(queued|running|completed)$/;
 
 const FLOOR = '[data-conformance-id="review-decision-bar"]';
 const COMMENT = '[data-action="comment-review -> annotated"]';
 const REGENERATE = '[data-action="regenerate-review -> successor-gate-opened"]';
 const CONTINUE = '[data-action="continue-review -> resolved"]';
+/** Every `data-action` anchor the floor draws, as the attribute's own words:
+ *  the three decision buttons, in the sorted order `expectTheFloor` compares. */
+const FLOOR_ACTIONS = [
+  "comment-review -> annotated",
+  "continue-review -> resolved",
+  "regenerate-review -> successor-gate-opened",
+];
 
 async function withPg<T>(fn: (client: Client) => Promise<T>): Promise<T> {
   const client = new Client({ connectionString: DATABASE_URL, connectionTimeoutMillis: 5_000 });
@@ -115,12 +128,16 @@ async function readGateState(gate: SeededReviewGate): Promise<GateState> {
     );
     const row = g.rows[0];
     if (!row) throw new Error(`gate ${gate.gateId} is gone from the store`);
+    // A run row that is gone is a failure of its own: a destructive press that
+    // deleted the run must never read as a status that passes a check.
+    const run = r.rows[0];
+    if (!run) throw new Error(`run ${gate.runId} is gone from the store`);
     return {
       id: row.id,
       status: row.status,
       disposition: row.disposition,
       pinnedTargets: JSON.stringify(row.pinned_targets),
-      runStatus: r.rows[0]?.status ?? "<no run>",
+      runStatus: run.status,
       gateCount: Number(n.rows[0]?.n ?? 0),
       repairs: Number(repairs.rows[0]?.n ?? 0),
       notes: notes.rows.map((x) => x.body),
@@ -262,16 +279,26 @@ async function continueResolvesTheGate(surface: Locator, floor: Locator, gate: S
   const after = await readGateState(gate);
   expect(after.disposition, "Continue keeps storing the disposition approve").toBe("approve");
   expect(after.repairs).toBe(0);
+  // The run row still exists (readGateState throws on a missing run) and holds
+  // a released status: not parked, and not failed or stopped either.
   await expect
-    .poll(async () => PARKED_STATUSES.has((await readGateState(gate)).runStatus), {
+    .poll(async () => (await readGateState(gate)).runStatus, {
       timeout: 90_000,
-      message: "Continue must release the run",
+      message: "Continue must release the run into queued, running or completed",
     })
-    .toBe(false);
+    .toMatch(RELEASED_STATUSES);
 }
 
-/** The three actions and no fourth, on a pending gate. */
+/** The three actions and no fourth, on a pending gate: exactly three
+ *  `data-action` anchors whose words are the three decision actions, and exactly
+ *  three buttons, so a fourth control fails whether or not it carries the anchor. */
 async function expectTheFloor(floor: Locator): Promise<void> {
+  await expect(floor.locator("[data-action]")).toHaveCount(FLOOR_ACTIONS.length);
+  await expect(floor.getByRole("button")).toHaveCount(FLOOR_ACTIONS.length);
+  const actions = await floor.locator("[data-action]").evaluateAll((els) =>
+    els.map((el) => el.getAttribute("data-action") ?? "").sort(),
+  );
+  expect(actions, "the floor's action anchors").toEqual(FLOOR_ACTIONS);
   await expect(floor.locator(COMMENT)).toHaveText("Comment");
   await expect(floor.locator(REGENERATE)).toHaveText("Regenerate");
   await expect(floor.locator(CONTINUE)).toHaveText("Continue");
