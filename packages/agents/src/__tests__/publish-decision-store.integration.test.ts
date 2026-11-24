@@ -761,7 +761,7 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     expect(await inFlight()).toBe(1);
     // While it runs, an output and a review of the run are refused, and nothing of either is written.
     const gatesBefore = (await admin.query(`SELECT count(*)::int AS n FROM ${GATES} WHERE run_id = $1`, [runId])).rows[0].n;
-    await expect(writeOutput()).rejects.toThrow(/division by zero/);
+    await expect(writeOutput()).rejects.toMatchObject({ code: "22P02", message: expect.stringContaining("cinatra_publish_call_in_flight") });
     await expect(raiseReview()).rejects.toMatchObject({ code: "publish_call_in_flight" });
     expect((await admin.query(`SELECT count(*)::int AS n FROM ${GATES} WHERE run_id = $1`, [runId])).rows[0].n).toBe(gatesBefore);
     expect((await admin.query(`SELECT count(*)::int AS n FROM "${q(TEST_SCHEMA)}"."artifact_produced_outbox" WHERE producer_run_id = $1`, [runId])).rows[0].n).toBe(0);
