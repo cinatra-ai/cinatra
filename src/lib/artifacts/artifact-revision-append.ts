@@ -44,7 +44,13 @@ import {
 import { runPostgresQueriesAsync } from "@/lib/postgres-async";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { registerAllObjectTypes } from "@/lib/register-all-object-types";
-import { maybeBuildProducedEventInsertOp, producerAttemptForRun, producerRunLockOps } from "@/lib/lifecycle/lifecycle-emit";
+import {
+  isPublishCallInFlightAbort,
+  maybeBuildProducedEventInsertOp,
+  PUBLISH_CALL_IN_FLIGHT_CODE,
+  producerAttemptForRun,
+  producerRunLockOps,
+} from "@/lib/lifecycle/lifecycle-emit";
 
 import { buildArtifactWriterWitnessOp } from "./artifact-writer-witness";
 import { createLocalDiskBlobStore } from "./local-disk-blob-store";
@@ -72,7 +78,9 @@ export type ArtifactRevisionAppendRefusal =
   | "stale_base"
   | "accepts_mismatch"
   | "type_mismatch"
-  | "ledger_conflict";
+  | "ledger_conflict"
+  /** cinatra#4762: a publishing call of the run is in flight; temporary, append again once it has ended. */
+  | typeof PUBLISH_CALL_IN_FLIGHT_CODE;
 
 /**
  * THE APPEND'S OWN LEDGER IDENTITY (convergence round, cinatra#3030).
@@ -549,6 +557,21 @@ ON CONFLICT (org_id, artifact_id, representation_revision_id) DO NOTHING`,
       },
     });
   } catch (err) {
+    if (isPublishCallInFlightAbort(err)) {
+      // cinatra#4762: a publishing call of the run is in flight; the append's
+      // transaction rolled back whole. Temporary: the same append is taken
+      // once the call has ended, so it leaves nothing behind, the claim
+      // included, and is never read as an unknown or stale base.
+      await discardStaged();
+      await releaseClaim();
+      return {
+        ok: false,
+        reason: PUBLISH_CALL_IN_FLIGHT_CODE,
+        error:
+          `a publishing call of run ${input.runId} is in flight; append the ` +
+          "revision again once it has ended",
+      };
+    }
     // The bytes are (probably) unreferenced now; the reachability-guarded delete
     // keeps anything a live row still points at.
     await discardBlob();

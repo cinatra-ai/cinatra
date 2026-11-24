@@ -201,6 +201,28 @@ describe("(b) the writer trusts a run only in the same organization (cinatra#309
     expect(produced?.params).toContain("agent_produced");
   });
 
+  // red-first-expect: promise resolved "undefined" instead of rejecting
+  it("the registered writer surfaces the in-flight fence of its event as the typed publishing-call refusal (cinatra#4762)", async () => {
+    // A publishing call of the run holds its decision: Postgres aborts the event's cast of the fence's sentinel, and
+    // the query builder wraps the database error as its cause.
+    const rendered: string[] = [];
+    const tx: TwinTx = {
+      execute: async (q: SQL) => {
+        const { sql } = dialect.sqlToQuery(q);
+        rendered.push(sql);
+        const fence = /THEN '([^']+)' ELSE '1' END\)::integer = 1/.exec(sql);
+        if (fence) {
+          const cause = Object.assign(new Error(`invalid input syntax for type integer: "${fence[1]}"`), { code: "22P02" });
+          throw new Error(`Failed query: ${sql}`, { cause });
+        }
+        if (sql.includes('"agent_runs"') && sql.includes("org_id")) return { rows: [{ id: "run-1" }] };
+        return { rows: [] };
+      },
+    };
+    await expect(dashboardArtifactTwinWriter(tx, runCtx)).rejects.toMatchObject({ name: "PublishCallInFlightError", code: "publish_call_in_flight", retryable: true });
+    expect(rendered.some((sql) => sql.includes('"artifact_produced_outbox"'))).toBe(true);
+  });
+
   it("the registered writer drops a cross-organization run: the event names none", async () => {
     const { tx, rendered } = fakeTx([]);
     await dashboardArtifactTwinWriter(tx, runCtx);

@@ -35,6 +35,55 @@ import { isLifecycleReviewOrchestrationActive } from "./lifecycle-activation";
 import type { ArtifactOriginKind } from "@cinatra-ai/artifacts";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server/request-context";
 
+/**
+ * cinatra#4762 — the in-flight fence's abort. The produced-event insert casts this text to integer while a publishing
+ * call of the run holds its decision, so Postgres raises SQLSTATE 22P02 with the message
+ * `invalid input syntax for type integer: "<this text>"`: an error no other statement of a writer raises, so it is
+ * never read as a division by zero (an unknown base, a lost compare-and-set) or as any other refusal.
+ */
+export const PUBLISH_CALL_IN_FLIGHT_SENTINEL = "cinatra_publish_call_in_flight";
+const PUBLISH_CALL_IN_FLIGHT_MESSAGE = `invalid input syntax for type integer: "${PUBLISH_CALL_IN_FLIGHT_SENTINEL}"`;
+
+/** cinatra#4762 — the code of the refusal, as the review store's own in-flight refusal carries it. */
+export const PUBLISH_CALL_IN_FLIGHT_CODE = "publish_call_in_flight";
+
+/**
+ * cinatra#4762 — a write of the run's output refused because a publishing call of the run's current attempt is in
+ * flight. Temporary: the same write succeeds once the call has ended. Nothing of the write was committed.
+ */
+export class PublishCallInFlightError extends Error {
+  readonly code = PUBLISH_CALL_IN_FLIGHT_CODE;
+  readonly retryable = true;
+  constructor() {
+    super("A publishing call of this run is in flight; the write is refused until it ends. Try again.");
+    this.name = "PublishCallInFlightError";
+  }
+}
+
+/**
+ * cinatra#4762 — whether `error` is the in-flight fence's abort: the typed error, an error carrying its code, or the
+ * database error the fence raises (22P02 with the fence's own message; the code may be lost by a bridge that keeps
+ * the message). Causes are followed.
+ */
+export function isPublishCallInFlightAbort(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  for (let e = error; e && typeof e === "object" && !seen.has(e); e = (e as { cause?: unknown }).cause) {
+    seen.add(e);
+    if (e instanceof PublishCallInFlightError) return true;
+    const { code, message } = e as { code?: unknown; message?: unknown };
+    if (code === PUBLISH_CALL_IN_FLIGHT_CODE) return true;
+    if ((code === undefined || code === "22P02") && typeof message === "string" && message.includes(PUBLISH_CALL_IN_FLIGHT_MESSAGE)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** cinatra#4762 — the error a writer rethrows: the typed in-flight refusal for the fence's abort, else `error` itself. */
+export function publishCallInFlightOr(error: unknown): unknown {
+  return isPublishCallInFlightAbort(error) && !(error instanceof PublishCallInFlightError) ? new PublishCallInFlightError() : error;
+}
+
 /** A raw parameterised SQL op — the shape both writers' query lists already use. */
 export interface ProducedEventInsertOp {
   text: string;
@@ -158,14 +207,15 @@ export function buildProducedEventInsertOp(
   const runLock = `(SELECT count(*) FROM (SELECT 1 FROM "${schema}"."agent_runs" run_lock
           WHERE run_lock.id = $7::text FOR KEY SHARE) locked_run) >= 0`;
   // cinatra#4762: no output of the run while a publishing call of its current attempt holds its released decision
-  // (publish-decision-store claimPublishCall): that call read the review fence without this output, so the division
-  // by zero aborts the writer's whole transaction. The writer took the run row before its first write
+  // (publish-decision-store claimPublishCall): that call read the review fence without this output, so the cast of the
+  // fence's sentinel (PUBLISH_CALL_IN_FLIGHT_SENTINEL) aborts the writer's whole transaction with an error of its own,
+  // which each writer surfaces as PublishCallInFlightError. The writer took the run row before its first write
   // (producerRunLockOps), in an earlier statement, so this read sees every claim committed before that lock.
-  const noPublishCall = `1 / (CASE WHEN EXISTS (SELECT 1 FROM "${schema}"."agent_run_publish_decisions" call_claim
+  const noPublishCall = `(CASE WHEN EXISTS (SELECT 1 FROM "${schema}"."agent_run_publish_decisions" call_claim
           JOIN "${schema}"."agent_runs" claim_run ON claim_run.id = call_claim.run_id
           WHERE call_claim.run_id = $7::text AND call_claim.calls_in_flight > 0
             AND coalesce(call_claim.run_generation, claim_run.reset_generation) = claim_run.reset_generation)
-        THEN 0 ELSE 1 END) = 1`;
+        THEN '${PUBLISH_CALL_IN_FLIGHT_SENTINEL}' ELSE '1' END)::integer = 1`;
   return {
     text: `INSERT INTO "${schema}"."artifact_produced_outbox"
   (event_id, org_id, artifact_id, representation_revision_id, event_kind, emitter,

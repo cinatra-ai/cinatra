@@ -10,7 +10,12 @@ import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 
 import { parseClaimDispositions } from "@cinatra-ai/objects/claims";
 
-import { maybeBuildProducedEventInsertOp, producerAttemptForRun, producerRunLockOps } from "@/lib/lifecycle/lifecycle-emit";
+import {
+  maybeBuildProducedEventInsertOp,
+  producerAttemptForRun,
+  producerRunLockOps,
+  publishCallInFlightOr,
+} from "@/lib/lifecycle/lifecycle-emit";
 import type { ArtifactOriginKind } from "@cinatra-ai/artifacts";
 
 import { canonicalJSONStringify, deriveSubstanceKey } from "./resource-store";
@@ -422,6 +427,15 @@ LIMIT 1`,
   };
 }
 
+/** cinatra#4762: run a write, rethrowing the in-flight fence's abort as PublishCallInFlightError. */
+function typedInFlight<T>(write: () => T): T {
+  try {
+    return write();
+  } catch (err) {
+    throw publishCallInFlightOr(err);
+  }
+}
+
 /**
  * Capture (or reuse) the content snapshot for one typed object row.
  *
@@ -560,7 +574,9 @@ export async function captureObjectContentSnapshot(input: {
     // candidate still matches AND no snapshot already exists for the key.
     // results: [0]=lock, then the run lock when one is taken, then the dead-key
     // delete, the capture CTE and the mint's produced event when one was asked for.
-    const capRes = runPostgresQueriesSync({
+    // cinatra#4762: the in-flight fence of the mint's event is surfaced typed
+    // (PublishCallInFlightError); any other failure is thrown as it was.
+    const capRes = typedInFlight(() => runPostgresQueriesSync({
       connectionString: conn(),
       transaction: true,
       queries: [
@@ -695,7 +711,7 @@ SELECT
         // the guard is false and nothing is emitted: a reuse is not a mint.
         ...(mintEventOp ? [mintEventOp] : []),
       ],
-    })[2 + runLockOps.length];
+    }))[2 + runLockOps.length];
 
     const out = capRes?.rows?.[0] as
       | {

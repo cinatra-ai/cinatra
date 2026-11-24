@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { runPostgresQueriesAsync } from "@/lib/postgres-async";
 import { getPostgresConnectionString, ensurePostgresSchema, postgresSchema } from "@/lib/database";
+import { isPublishCallInFlightAbort, publishCallInFlightOr } from "@/lib/lifecycle/lifecycle-emit";
 
 // ---------------------------------------------------------------------------
 // Representation binding (APPEND-ONLY).
@@ -389,6 +390,10 @@ RETURNING id, org_id, artifact_id, resource_id, revision, form, created_by, crea
     }
     return { kind: "appended", record: toRec(row) };
   } catch (error) {
+    // cinatra#4762: the in-flight fence of a leading or follow-on op (the
+    // produced event) is the run's temporary publishing-call refusal, never a
+    // base or compare-and-set reading: it is rethrown typed.
+    if (isPublishCallInFlightAbort(error)) throw publishCallInFlightOr(error);
     const code = errorCode(error);
     if (code === UNIQUE_VIOLATION) {
       // A NAMED constraint that is not the revision index is not this function's

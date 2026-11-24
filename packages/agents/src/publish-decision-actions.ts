@@ -678,34 +678,88 @@ const declaresPublishes = (comp: FlowComponent): boolean => {
 
 /** The publishing step of `stepId` in a flow document: the step itself when it is a publishing node, else the one
  *  publishing node it lies inside, else the step as unrelated to any publishing node. The publishing nodes are the
- *  template's list and every component the document itself declares `publishes: true`. null: inside more than one. */
+ *  template's list and every component the document itself declares `publishes: true`. null: inside more than one.
+ *
+ *  One component carries two names: the key it is declared under in a `$referenced_components` map, which the compiler
+ *  records in the template's list and under which the decision is stored, and its own `id`, which the runtime signs for
+ *  its calls. Both names resolve to the one component, and a publishing step is always named canonically: the listed
+ *  name it carries, else its key, else its own id (an inline component). A name that two components carry (a shared id,
+ *  or an id equal to another component's key) resolves only when the same publishing step governs every component it
+ *  names; otherwise it is ambiguous and refused (null), as is a publishing component that carries two listed names or
+ *  whose canonical name another component also carries. */
 function publishingStepInGraph(
   document: FlowComponent,
   stepId: string,
   listed: readonly string[],
 ): { step: string; publishing: boolean } | null {
   const { byKey, byId } = indexComponents(document);
-  const containers = new Set(listed);
-  for (const [name, comps] of [...byKey, ...byId]) if (comps.some(declaresPublishes)) containers.add(name);
-  if (containers.has(stepId)) return { step: stepId, publishing: true };
-  // One publishing component may carry two names (its key and its own id); the step's decision is the one component's.
-  const holders = new Map<FlowComponent, string>();
-  for (const name of [...listed, ...containers]) {
-    for (const comp of [...(byKey.get(name) ?? []), ...(byId.get(name) ?? [])]) {
-      if (!holders.has(comp) && idsInside(comp, byKey).has(stepId)) holders.set(comp, name);
+  const keyOf = new Map<FlowComponent, string>();
+  for (const [key, comps] of byKey) for (const comp of comps) keyOf.set(comp, key);
+  const namesOf = (comp: FlowComponent): string[] =>
+    [...new Set([keyOf.get(comp), typeof comp.id === "string" ? comp.id : undefined])].filter((name): name is string => name !== undefined);
+  const named = (name: string): FlowComponent[] => [...new Set([...(byKey.get(name) ?? []), ...(byId.get(name) ?? [])])];
+  const AMBIGUOUS = Symbol("ambiguous");
+  const canonical = (comp: FlowComponent): string | typeof AMBIGUOUS => {
+    const listedNames = namesOf(comp).filter((name) => listed.includes(name));
+    if (listedNames.length > 1) return AMBIGUOUS;
+    const name = listedNames[0] ?? keyOf.get(comp) ?? (typeof comp.id === "string" ? comp.id : undefined);
+    // The decision stored under the name must be this component's alone.
+    return name !== undefined && named(name).length === 1 ? name : AMBIGUOUS;
+  };
+  const containers = new Set<FlowComponent>();
+  for (const name of listed) for (const comp of named(name)) containers.add(comp);
+  for (const comps of [...byKey.values(), ...byId.values()]) for (const comp of comps) if (declaresPublishes(comp)) containers.add(comp);
+
+  // The publishing step that governs one component (or, for a name no component carries, that name): the component
+  // itself when it is a publishing node, else the one publishing node it lies inside, else none (undefined).
+  const governing = (comp: FlowComponent | null): string | undefined | typeof AMBIGUOUS => {
+    if (comp !== null && containers.has(comp)) return canonical(comp);
+    const holders = new Set<string | typeof AMBIGUOUS>();
+    for (const container of containers) {
+      const inside = comp !== null ? componentsInside(container, byKey).has(comp) : idsInside(container, byKey).has(stepId);
+      if (inside) holders.add(canonical(container));
     }
+    if (holders.size > 1) return AMBIGUOUS;
+    const [holder] = holders;
+    return holder;
+  };
+
+  const comps = named(stepId);
+  const steps = new Set(comps.length === 0 ? [governing(null)] : comps.map(governing));
+  if (steps.size !== 1) return null;
+  const [step] = steps;
+  if (step === undefined) return { step: stepId, publishing: false };
+  return typeof step === "string" ? { step, publishing: true } : null; // the symbol: ambiguous
+}
+
+/** Every component below `root` (the root itself excluded), every `$component_ref` followed to each component its key
+ *  names. Over-reading is fail closed. */
+function componentsInside(root: FlowComponent, byKey: Map<string, FlowComponent[]>): Set<object> {
+  const found = new Set<object>();
+  const seen = new Set<object>([root]);
+  const stack: unknown[] = Object.values(root);
+  while (stack.length > 0) {
+    const value = stack.pop();
+    if (!value || typeof value !== "object" || seen.has(value)) continue;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      stack.push(...value);
+      continue;
+    }
+    const comp = value as FlowComponent;
+    found.add(comp);
+    if (typeof comp.$component_ref === "string") stack.push(...(byKey.get(comp.$component_ref) ?? []));
+    stack.push(...Object.values(comp));
   }
-  if (holders.size > 1) return null;
-  const [holder] = holders.values();
-  return holder !== undefined ? { step: holder, publishing: true } : { step: stepId, publishing: false };
+  return found;
 }
 
 /**
  * The publishing step whose decision governs a call of the verified step `stepId` (cinatra#4762). The runtime signs the
  * id of the step that executes, so a call made by a step nested inside a publishing FlowNode names that nested step,
  * while the decision is stored under the FlowNode. The ancestry is read from the graph the run is bound to execute
- * (readRunBoundGraph), never from the request. A step the template lists is its own. When the graph cannot be read, a
- * step with its own decision row is its own; any other step is refused (null) when the template lists a publishing step
+ * (readRunBoundGraph), never from the request, where a component's key and its own id name the same publishing step.
+ * When the graph cannot be read, a step the template lists, or a step with its own decision row, is its own; any other step is refused (null) when the template lists a publishing step
  * or the run's current attempt holds any decision, since it may lie inside a publishing node; else it is unrelated.
  * A read error propagates.
  */
@@ -714,7 +768,6 @@ async function resolvePublishingStep(
   stepId: string,
   listed: readonly string[],
 ): Promise<{ step: string; publishing: boolean } | null> {
-  if (listed.includes(stepId)) return { step: stepId, publishing: true };
   const source = await readRunBoundGraph(runId);
   let document: unknown = null;
   if (source !== null) {
@@ -723,6 +776,7 @@ async function resolvePublishingStep(
     } catch { /* unreadable: no graph */ }
   }
   if (isComponent(document)) return publishingStepInGraph(document, stepId, listed);
+  if (listed.includes(stepId)) return { step: stepId, publishing: true };
   if (await readDecisionForRunNode(runId, stepId)) return { step: stepId, publishing: true };
   if (listed.length > 0 || (await readLatestDecisionForRun(runId))) return null;
   return { step: stepId, publishing: false };

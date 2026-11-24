@@ -12,6 +12,7 @@ import {
   producerAttemptForRun,
   producerRunLockOps,
   producerRunLockOpsBeforeEvent,
+  publishCallInFlightOr,
 } from "@/lib/lifecycle/lifecycle-emit";
 import { PINNED_CONFIGURATION_SIGNAL_KEY } from "@/lib/artifacts/artifact-read";
 import {
@@ -404,8 +405,15 @@ export const dashboardArtifactTwinWriter: DashboardArtifactTwinWriter = async (
   ctx: DashboardTwinContext,
 ): Promise<void> => {
   const producerRunId = await readSameOrgProducerRunId(tx, ctx);
-  for (const q of buildDashboardTwinQueries(ctx, producerRunId)) {
-    await tx.execute(rawWithParams(q.text, q.values));
+  try {
+    for (const q of buildDashboardTwinQueries(ctx, producerRunId)) {
+      await tx.execute(rawWithParams(q.text, q.values));
+    }
+  } catch (err) {
+    // cinatra#4762: the in-flight fence of the twin's produced event is surfaced
+    // typed (PublishCallInFlightError); the dashboards transaction rolls back
+    // whole. Any other failure is thrown as it was.
+    throw publishCallInFlightOr(err);
   }
 };
 

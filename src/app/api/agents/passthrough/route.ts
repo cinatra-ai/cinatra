@@ -671,7 +671,9 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
         if (!appended.ok) {
           return NextResponse.json(
             { error: appended.error, reason: appended.reason },
-            { status: appended.reason === "stale_base" ? 409 : 400 },
+            // cinatra#4762: a publishing call in flight is temporary, answered as a
+            // conflict the node may retry, as a stale base is.
+            { status: appended.reason === "stale_base" || appended.reason === "publish_call_in_flight" ? 409 : 400 },
           );
         }
         // The SAME response shape a create answers with — the fields at the top
@@ -745,7 +747,7 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
       if (!outcome.ok) {
         return NextResponse.json(
           { error: outcome.error, reason: outcome.reason },
-          { status: outcome.reason === "stale_base" ? 409 : 400 },
+          { status: outcome.reason === "stale_base" || outcome.reason === "publish_call_in_flight" ? 409 : 400 },
         );
       }
       result = {
@@ -1087,6 +1089,16 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
     // sentence and the refusal's code, never with exception text.
     const refusal = await runActionRefusalCode(err).catch(() => null);
     if (refusal) return NextResponse.json({ error: RUN_ACTION_REFUSED, code: refusal }, { status: 403 });
+    // cinatra#4762: a writer refused because a publishing call of the run is in
+    // flight (lifecycle-emit PublishCallInFlightError, read by its code so the
+    // artifact stack stays out of this route's static graph): temporary, a
+    // conflict the node may retry, never a tool failure.
+    if ((err as { code?: unknown } | null)?.code === "publish_call_in_flight") {
+      return NextResponse.json(
+        { error: "A publishing call of this run is in flight; try again once it has ended.", code: "publish_call_in_flight" },
+        { status: 409 },
+      );
+    }
     // cinatra#4223, cinatra#4465: an error with the zod marker answers its
     // issues, and a primitive's stated refusal without it keeps its text when
     // that text is a string. Every other throw, a marked error with no readable

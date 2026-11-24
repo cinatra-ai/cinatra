@@ -25,7 +25,12 @@ import { createLocalDiskBlobStore } from "./local-disk-blob-store";
 import { deriveSubstanceKey } from "./resource-store";
 import { buildArtifactWriterWitnessOp } from "./artifact-writer-witness";
 import { buildObjectsWithOutboxQuery } from "@/lib/objects-store";
-import { maybeBuildProducedEventInsertOp, producerAttemptForRun, producerRunLockOps } from "@/lib/lifecycle/lifecycle-emit";
+import {
+  maybeBuildProducedEventInsertOp,
+  producerAttemptForRun,
+  producerRunLockOps,
+  publishCallInFlightOr,
+} from "@/lib/lifecycle/lifecycle-emit";
 import {
   type OwnerLevel,
   normalizeOwnerLevel,
@@ -1167,7 +1172,9 @@ VALUES ($1::text, $2::text, $3::text, $4::text)`,
         })
         .catch(() => {});
     }
-    throw err;
+    // cinatra#4762: the in-flight fence of the produced event is surfaced typed
+    // (PublishCallInFlightError); any other failure is thrown as it was.
+    throw publishCallInFlightOr(err);
   }
 
   // -------------------------------------------------------------------

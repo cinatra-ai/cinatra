@@ -7,8 +7,10 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
 import {
   buildProducedEventInsertOp,
+  isPublishCallInFlightAbort,
   maybeBuildProducedEventInsertOp,
   producerRunLockOps,
+  publishCallInFlightOr,
 } from "../lifecycle-emit";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "../lifecycle-activation";
 import { producedEventId } from "../lifecycle-produced-event";
@@ -139,10 +141,10 @@ describe("buildProducedEventInsertOp — op shape", () => {
 
   // red-first-expect: to match /calls_in_flight > 0/
   it("refuses the whole write while a publishing call of the run's current attempt holds its released decision (cinatra#4762)", () => {
-    // That call read the review fence without this output; the event's division by zero aborts the writer's
+    // That call read the review fence without this output; the event's cast of the fence's sentinel aborts the writer's
     // transaction, its artifact rows included. The writer's earlier lock statement (producerRunLockOps) makes this read
     // see every claim committed before it.
-    const CALL = `1 / (CASE WHEN EXISTS (SELECT 1 FROM "cinatra"."agent_run_publish_decisions" call_claim JOIN "cinatra"."agent_runs" claim_run ON claim_run.id = call_claim.run_id WHERE call_claim.run_id = $7::text AND call_claim.calls_in_flight > 0 AND coalesce(call_claim.run_generation, claim_run.reset_generation) = claim_run.reset_generation) THEN 0 ELSE 1 END) = 1`;
+    const CALL = `(CASE WHEN EXISTS (SELECT 1 FROM "cinatra"."agent_run_publish_decisions" call_claim JOIN "cinatra"."agent_runs" claim_run ON claim_run.id = call_claim.run_id WHERE call_claim.run_id = $7::text AND call_claim.calls_in_flight > 0 AND coalesce(call_claim.run_generation, claim_run.reset_generation) = claim_run.reset_generation) THEN 'cinatra_publish_call_in_flight' ELSE '1' END)::integer = 1`;
     for (const op of [
       buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 0 } }),
       buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 0 } }, { whereExistsSql: "EXISTS (SELECT 1)" }),
@@ -152,7 +154,32 @@ describe("buildProducedEventInsertOp — op shape", () => {
     }
   });
 
-  // red-first-expect: producerRunLockOps) is not a function
+  // red-first-expect: expected undefined to be defined
+  it("the in-flight abort is its own error, never a division by zero or another cast (cinatra#4762)", () => {
+    // What Postgres raises for the fence's cast, read from the op itself.
+    const op = buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 0 } });
+    const sentinel = /THEN '([^']+)' ELSE '1' END\)::integer = 1/.exec(op.text)?.[1];
+    expect(sentinel).toBeDefined();
+    const fence = Object.assign(new Error(`invalid input syntax for type integer: "${sentinel}"`), { code: "22P02" });
+    expect(isPublishCallInFlightAbort(fence)).toBe(true);
+    // A bridge that keeps only the message, and a query builder that wraps the database error as its cause.
+    expect(isPublishCallInFlightAbort(new Error(fence.message))).toBe(true);
+    expect(isPublishCallInFlightAbort(new Error(`Failed query: ${op.text}`, { cause: fence }))).toBe(true);
+    // The typed refusal a writer rethrows.
+    expect(publishCallInFlightOr(fence)).toMatchObject({ name: "PublishCallInFlightError", code: "publish_call_in_flight", retryable: true });
+    // Never: a division by zero (a writer's unknown base, a compare-and-set), another cast, or the statement's text.
+    for (const other of [
+      Object.assign(new Error("division by zero"), { code: "22012" }),
+      Object.assign(new Error('invalid input syntax for type integer: "abc"'), { code: "22P02" }),
+      Object.assign(new Error(fence.message), { code: "23505" }),
+      new Error(`Failed query: ${op.text}`),
+    ]) {
+      expect(isPublishCallInFlightAbort(other)).toBe(false);
+      expect(publishCallInFlightOr(other)).toBe(other);
+    }
+  });
+
+  // red-first-expect: producerRunLockOps is not a function
   it("a writer whose rows precede its event takes the producing run's row FOR KEY SHARE first, only when it splices the event (cinatra#4762)", () => {
     const event = maybeBuildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 0 } });
     expect(producerRunLockOps("cinatra", "run-9", event)).toEqual([

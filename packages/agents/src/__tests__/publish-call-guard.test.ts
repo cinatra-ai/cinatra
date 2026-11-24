@@ -333,6 +333,60 @@ describe("a step inside a publishing FlowNode", () => {
   });
 });
 
+// cinatra#4762: a component declared under one key with an `id` of its own. The compiler lists the key, the decision is
+// stored under the key, and the runtime signs the component's own id for its calls: both names are the one step.
+const ALIASED = {
+  component_type: "Flow",
+  id: "root",
+  nodes: [{ $component_ref: "draft" }, { $component_ref: "publish" }],
+  $referenced_components: {
+    draft: { component_type: "ApiNode", id: "draft" },
+    publish: { component_type: "ApiNode", id: "send", metadata: { cinatra: { publishes: true } } },
+  },
+};
+
+describe("a publishing component whose key differs from its own id", () => {
+  beforeEach(() => {
+    decisions.readRunBoundGraph.mockResolvedValue(JSON.stringify(ALIASED));
+  });
+
+  // red-first-expect: to be called with arguments: [ 'run-1', 'publish', …(1) ]
+  it("an approved call signed with the component's own id takes the decision stored under its key", async () => {
+    decisions.readDecisionForRunNode.mockImplementation(parentRow("released"));
+    expect(await publishCallAllowed(RUN, "send", ENDED)).toBe(true);
+    expect(decisions.readDecisionForRunNode).toHaveBeenCalledWith("run-1", "publish", TX);
+    expect(decisions.claimPublishCall).toHaveBeenCalledWith("d1", TX);
+    // Signed with the key, the same decision.
+    expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(true);
+    expect(decisions.claimPublishCall).toHaveBeenCalledTimes(2);
+  });
+
+  // red-first-expect: expected true to be false
+  it("a call signed with the component's own id is refused until its decision is released", async () => {
+    for (const status of ["parked", "declined", "expired", "run_ended"]) {
+      decisions.readDecisionForRunNode.mockImplementation(parentRow(status));
+      expect(await publishCallAllowed(RUN, "send", ENDED)).toBe(false);
+    }
+    decisions.readDecisionForRunNode.mockResolvedValue(null);
+    expect(await publishCallAllowed(RUN, "send", ENDED)).toBe(false);
+    expect(decisions.claimPublishCall).not.toHaveBeenCalled();
+  });
+
+  // red-first-expect: expected true to be false
+  it("a name two components carry is refused as ambiguous", async () => {
+    decisions.readDecisionForRunNode.mockImplementation(parentRow("released"));
+    // `send` is the publishing component's own id and the key of an unrelated step.
+    decisions.readRunBoundGraph.mockResolvedValue(JSON.stringify({ ...ALIASED, $referenced_components: { ...ALIASED.$referenced_components,
+      send: { component_type: "ApiNode", id: "other" } } }));
+    expect(await publishCallAllowed(RUN, "send", ENDED)).toBe(false);
+    // `publish`, the listed key, is also the own id of an unrelated step.
+    decisions.readRunBoundGraph.mockResolvedValue(JSON.stringify({ ...ALIASED, $referenced_components: { ...ALIASED.$referenced_components,
+      draft: { component_type: "ApiNode", id: "publish" } } }));
+    expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(false);
+    expect(decisions.claimPublishCall).not.toHaveBeenCalled();
+  });
+});
+
 describe("a call with no verified step", () => {
   it("is refused on a run whose template lists a publishing step, whatever the decision rows say", async () => {
     decisions.readDecisionForRunNode.mockResolvedValue(row("released"));

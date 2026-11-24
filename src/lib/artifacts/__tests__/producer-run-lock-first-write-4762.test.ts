@@ -16,9 +16,27 @@ vi.mock("@/lib/database", () => ({
   postgresSchema: "cinatra",
 }));
 vi.mock("@/lib/postgres-sync", () => ({ runPostgresQueriesSync: vi.fn() }));
+// The state a test sets: a publishing call of the run in flight, or a transaction Postgres aborts with `abort`.
+const db: { publishCallInFlight: boolean; abort: unknown } = { publishCallInFlight: false, abort: null };
 vi.mock("@/lib/postgres-async", () => ({
-  runPostgresQueriesAsync: async (input: { queries: Query[] }) => {
+  runPostgresQueriesAsync: async (input: { transaction?: boolean; queries: Query[] }) => {
     asyncCalls.push(input.queries);
+    if (!input.transaction) {
+      // One read or write of the append API before its transaction: the artifact, its base revision, the
+      // content-addressed resource. Any other statement (a claim's release) finds nothing.
+      const text = input.queries[0]?.text ?? "";
+      const row = text.includes('FROM "cinatra"."objects"') ? { type: "post" }
+        : text.includes('SELECT revision FROM "cinatra"."representation"') ? { revision: 1 }
+          : text.includes("resource_op") ? { resource_id: "res-1", is_new: false, storage_key: "blob-key" }
+            : null;
+      return [{ rows: row ? [row] : [], rowCount: row ? 1 : 0 }];
+    }
+    if (db.abort) throw db.abort;
+    if (db.publishCallInFlight) {
+      // What Postgres raises while a claim is counted: the produced event's cast of the in-flight fence's sentinel.
+      const fence = input.queries.map((q) => /THEN '([^']+)' ELSE '1' END\)::integer = 1/.exec(q.text)).find(Boolean);
+      if (fence) throw Object.assign(new Error(`invalid input syntax for type integer: "${fence[1]}"`), { code: "22P02" });
+    }
     // Only the revision insert returns a row; a reader at any other position finds none.
     return input.queries.map((q) => ({
       rows: q.text.includes('INSERT INTO "cinatra"."representation"')
@@ -38,8 +56,62 @@ const kind = (q: Query) =>
         : q.text.includes('INSERT INTO "cinatra"."representation"') ? "insert"
           : "follow-on";
 
+// The append API's own collaborators: no type declares accepts, the bytes land nowhere, the ledger claims fresh.
+vi.mock("@/lib/register-all-object-types", () => ({ registerAllObjectTypes: () => {} }));
+vi.mock("@cinatra-ai/objects/registry", () => ({ objectTypeRegistry: { resolve: () => undefined } }));
+vi.mock("../local-disk-blob-store", () => ({
+  createLocalDiskBlobStore: () => ({
+    put: async () => ({ storageKey: "blob-key", sha256: "a".repeat(64), mimeDetected: "text/markdown", sizeBytes: 5, blobId: "blob-1" }),
+    deleteByStorageKey: async () => undefined,
+  }),
+}));
+vi.mock("../materialization-ledger", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../materialization-ledger")>()),
+  claimMaterialization: async () => ({ kind: "claimed", ledgerId: "ledger-1" }),
+}));
+
 beforeEach(() => {
   asyncCalls.length = 0;
+  db.publishCallInFlight = false;
+  db.abort = null;
+});
+
+describe("cinatra#4762: a write refused by the in-flight publishing-call fence says so", () => {
+  const append = async () => {
+    const { appendArtifactRevision } = await import("../artifact-revision-append");
+    return appendArtifactRevision({
+      orgId: "org-1", runId: "run-1", nodeId: "draft", artifactId: "art-1", baseRepresentationRevisionId: "rev-1",
+      content: "hello", mime: "text/markdown", createdBy: null, extension: "@cinatra-ai/post",
+    });
+  };
+
+  // red-first-expect: to match object { ok: false, …(1) }
+  it("an append while a publishing call of its run is in flight is refused as that call, never as an unknown base", async () => {
+    db.publishCallInFlight = true;
+    const out = await append();
+    expect(out).toMatchObject({ ok: false, reason: "publish_call_in_flight" });
+    // Temporary, so it leaves nothing behind: the ledger claim is released for the retry.
+    expect(asyncCalls.flat().some((q) => q.text.includes('DELETE FROM "cinatra"."artifact_materializations"'))).toBe(true);
+    // Once the call has ended, the same append is taken.
+    db.publishCallInFlight = false;
+    expect(await append()).toMatchObject({ ok: true, representationRevisionId: "rev-new" });
+  });
+
+  it("a base the guard finds missing is still an unknown base", async () => {
+    db.abort = Object.assign(new Error("division by zero"), { code: "22012" });
+    expect(await append()).toMatchObject({ ok: false, reason: "unknown_base" });
+  });
+
+  // red-first-expect: expected Error: invalid input syntax for type inte
+  it("the store's append rethrows the fence's abort as the typed refusal, not as unknown-base", async () => {
+    const { appendRepresentationWithExpectedBase } = await import("../representation-store");
+    db.publishCallInFlight = true;
+    const run = () => appendRepresentationWithExpectedBase({
+      orgId: "org-1", artifactId: "art-1", baseRevisionId: "rev-1", resourceId: "res-1", form: "file", createdByRunId: "run-1",
+      additionalOps: () => [{ text: `SELECT (CASE WHEN true THEN 'cinatra_publish_call_in_flight' ELSE '1' END)::integer = 1`, values: [] }],
+    });
+    await expect(run()).rejects.toMatchObject({ name: "PublishCallInFlightError", code: "publish_call_in_flight", retryable: true });
+  });
 });
 
 describe("cinatra#4762: the revision append takes its leading locks before the base guard and the insert", () => {
@@ -92,6 +164,6 @@ describe("cinatra#4762: each writer splices the run lock before its first write 
     // The snapshot mint: the lock after the advisory lock, and the capture result read past it.
     const mint = read("object-content-snapshot.ts");
     expect(after(mint, "values: [input.objectId] },\n").trimStart().startsWith("...runLockOps,")).toBe(true);
-    expect(mint).toMatch(/\}\)\[2 \+ runLockOps\.length\];/);
+    expect(mint).toMatch(/\}\)\)\[2 \+ runLockOps\.length\];/);
   });
 });
