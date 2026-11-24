@@ -175,6 +175,7 @@ import { AgentHitlScreenCard, type AgentHitlScreenCarrier } from "../agent-hitl-
 import {
   continueApprovalFlag,
   continueHeldByRenderer,
+  declaredHitlChosenDecision,
   declaredHitlContinuePayload,
   declaredHitlStage,
   isGroupedSetupRenderer,
@@ -699,6 +700,9 @@ describe("a declared card's answer on the real wire (cinatra#3470)", () => {
     expect(wireText()).toBe(JSON.stringify({ text: sent, attachments: [FILE] }));
     // red-first-expect: Failed to resolve import "../declared-hitl-screen-renderer"
     expect(recorded()).toEqual({ itemId: "item-1", approved: false, reason: "Fixture reason", attachments: [FILE] });
+    // The replay of the completed step reads that record as the decline chosen.
+    // red-first-expect: Failed to resolve import "../declared-hitl-screen-renderer"
+    expect(declaredHitlChosenDecision(declaredHitlCardOf(DECLARED_ID)!, recorded() as Record<string, unknown>)).toBe(0);
   });
 
   it("a declared decline reaches the agent with its own keys, and is recorded as the same decline", async () => {

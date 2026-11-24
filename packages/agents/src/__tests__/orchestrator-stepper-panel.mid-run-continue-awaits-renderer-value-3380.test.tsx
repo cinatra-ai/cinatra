@@ -604,3 +604,114 @@ describe("OrchestratorStepperPanel — a declared card's Continue sends exactly 
     expect(payload.userResponse).toBe(JSON.stringify({ itemId: "item-1", answer: "revise this" }));
   });
 });
+
+// cinatra#3470: the read-only replay of a COMPLETED declared step, from the
+// stored submissions. It is drawn by the declared card only under the
+// declaration its pin names (the pin check a live step takes); otherwise the
+// recorded values are shown as they are. A decision recorded with its files
+// reads as that decision. These tests settle the page's bindings read, so they
+// stay last in this file.
+describe("OrchestratorStepperPanel — a completed declared step's replay (cinatra#3470)", () => {
+  const DECLARED_ID = "@cinatra-test/declared-agent:replay";
+  const SEAL = `h1:${"a".repeat(64)}`;
+  const FILE = {
+    artifactId: "art-3470",
+    representationRevisionId: "rev-file-3470",
+    digest: "sha256:fixture",
+    mime: "application/pdf",
+    originKind: "upload",
+    filename: "fixture.pdf",
+  };
+  const SCREEN = {
+    layout: "card",
+    title: "Fixture replay",
+    decisionLabel: "Fixture decision",
+    decisions: [
+      { label: "Fixture post", answer: { approved: true } },
+      { label: "Fixture revise", answer: { action: "revise" } },
+    ],
+    carry: ["itemId"],
+  };
+
+  function radio(name: RegExp): HTMLElement {
+    const row = Array.from(document.querySelectorAll("label")).find((l) => name.test(l.textContent ?? ""));
+    return row!.querySelector<HTMLElement>('[role="radio"]')!;
+  }
+
+  /** Open the completed first step, its answer read from the stored submissions. */
+  async function replay(opts: {
+    submittedValues: Record<string, unknown>;
+    stepPin?: string;
+    currentPin: string;
+  }) {
+    const { registerFieldRendererBindings } = await import("../register-default-renderers");
+    const { settleRuntimeRendererBindings } = await import("../field-renderer-registry");
+    registerFieldRendererBindings([
+      { id: DECLARED_ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: SCREEN },
+    ]);
+    settleRuntimeRendererBindings({
+      ok: true,
+      screenIds: [DECLARED_ID],
+      screenPins: { [DECLARED_ID]: opts.currentPin },
+    });
+    const schemaSnapshot: Record<string, unknown> = { type: "object" };
+    if (opts.stepPin !== undefined) {
+      schemaSnapshot["x-declared-screen"] = opts.stepPin;
+      schemaSnapshot["x-declared-screen-seal"] = SEAL;
+    }
+    INTERRUPT = {
+      schema: UNDECLARING_SCHEMA,
+      xRenderer: PICK_RENDERER_ID,
+      values: { stepNumber: 1 },
+      reviewTaskId: "wayflow-task-3470-next",
+    };
+    const props: PanelProps = {
+      ...baseProps(),
+      stepperSteps: [
+        { index: 1, stepNumber: 0, label: "Confirm", xRenderer: DECLARED_ID },
+        { index: 2, stepNumber: 1, label: "Next", xRenderer: PICK_RENDERER_ID },
+      ],
+      submissionMap: [[1, { submittedValues: opts.submittedValues, schemaSnapshot, stepKey: "step-3470" }]],
+    };
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    render(<OrchestratorStepperPanel {...props} />);
+    await waitFor(() => expect(document.querySelector('[aria-label="1 Confirm"]')).not.toBeNull());
+    fireEvent.click(document.querySelector('[aria-label="1 Confirm"]')!);
+  }
+
+  it("a decision recorded with a file shows that decision chosen", async () => {
+    await replay({
+      submittedValues: { itemId: "item-1", action: "revise", attachments: [FILE] },
+      stepPin: "pin-v1",
+      currentPin: "pin-v1",
+    });
+    // red-first-expect: settleRuntimeRendererBindings is not a function
+    await waitFor(() => expect(document.querySelectorAll('fieldset [role="radio"]')).toHaveLength(2));
+    expect(radio(/Fixture revise/).getAttribute("aria-checked")).toBe("true");
+    expect(radio(/Fixture post/).getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("a step whose pin matches the registered declaration is drawn by its declared screen", async () => {
+    await replay({ submittedValues: { itemId: "item-1", action: "revise" }, stepPin: "pin-v1", currentPin: "pin-v1" });
+    // red-first-expect: settleRuntimeRendererBindings is not a function
+    await waitFor(() => expect(document.querySelectorAll('fieldset [role="radio"]')).toHaveLength(2));
+    expect(radio(/Fixture revise/).getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("a screen upgraded under the same id since the step opened shows the recorded values, never the new screen", async () => {
+    await replay({ submittedValues: { itemId: "item-1", action: "revise" }, stepPin: "pin-v1", currentPin: "pin-v2" });
+    // red-first-expect: settleRuntimeRendererBindings is not a function
+    await waitFor(() => expect(document.body.textContent).toContain("revise"));
+    expect(document.querySelectorAll('[role="radio"]')).toHaveLength(0);
+    expect(document.body.textContent).not.toContain("Fixture revise");
+    expect(document.body.textContent).not.toContain("Fixture decision");
+  });
+
+  it("a step that opened with no screen shows the recorded values, never a screen declared since", async () => {
+    await replay({ submittedValues: { itemId: "item-1", action: "revise" }, currentPin: "pin-v1" });
+    // red-first-expect: settleRuntimeRendererBindings is not a function
+    await waitFor(() => expect(document.body.textContent).toContain("revise"));
+    expect(document.querySelectorAll('[role="radio"]')).toHaveLength(0);
+    expect(document.body.textContent).not.toContain("Fixture revise");
+  });
+});

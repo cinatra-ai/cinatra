@@ -2247,7 +2247,16 @@ function ReadOnlyHitlReplay(props: {
   error: string | null;
   runId: string;
   templateId: string;
+  stepKey?: string;
 }) {
+  // Where the run page's renderer bindings stand (cinatra#3470): a completed
+  // step is drawn by its declared screen only under the declaration it opened
+  // under, read by the same pin check a live step takes.
+  const rendererBindings = useSyncExternalStore(
+    subscribeRuntimeRendererBindings,
+    runtimeRendererBindingsLoad,
+    runtimeRendererBindingsLoad,
+  );
   if (props.isLoading) {
     return (
       <div
@@ -2278,7 +2287,20 @@ function ReadOnlyHitlReplay(props: {
   // schema_snapshot is persisted. Use the field-renderer path (mode="view"
   // inside <fieldset disabled>) when both xRenderer and schema are available.
   // Older rows (schema_snapshot IS NULL) fall through to key-value.
-  if (props.xRenderer && props.schema) {
+  //
+  // THE SCREEN-VERSION PIN (cinatra#3470). What is registered under the id now
+  // closes over the CURRENT declaration, so a step whose pin does not admit it
+  // (a screen upgraded under the same id, or a step that opened with no
+  // screen) falls through to the recorded values as they are, never drawn
+  // with the new revision's labels and options.
+  const replayStep =
+    props.xRenderer && props.schema ? rendererStepOf(props.stepKey ?? "", props.schema) : undefined;
+  const pinHolds =
+    props.xRenderer !== undefined &&
+    replayStep !== undefined &&
+    (stepScreenPinHolds(props.xRenderer, rendererBindings, replayStep) ||
+      rendererBindingHoldReason(props.xRenderer, rendererBindings, replayStep) !== null);
+  if (props.xRenderer && props.schema && !pinHolds) {
     const fieldSchema: Record<string, unknown> = {
       ...props.schema,
       "x-renderer": props.xRenderer,
@@ -2327,8 +2349,9 @@ function ReadOnlyHitlReplay(props: {
     }
   }
 
-  // Fallback: key-value summary for older submissions (schema_snapshot IS NULL)
-  // or when no renderer is registered for this xRenderer.
+  // Fallback: key-value summary for older submissions (schema_snapshot IS NULL),
+  // when no renderer is registered for this xRenderer, or when the registered
+  // screen is not the one the step's pin names.
   const INTERNAL_KEYS = new Set(["approved", "approvedAt", "stepNumber", "approvalNote"]);
   const displayEntries = Object.entries(props.submittedValues).filter(
     ([k]) => !INTERNAL_KEYS.has(k),
@@ -3727,6 +3750,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
         error={replayError}
         runId={runId}
         templateId={templateId}
+        stepKey={entry?.stepKey}
       />
     );
   } else {

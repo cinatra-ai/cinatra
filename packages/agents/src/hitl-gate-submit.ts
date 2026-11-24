@@ -614,15 +614,44 @@ export function declaredHitlFieldText(
 }
 
 /**
+ * The keys the RECORD of an answer adds beside it (`readWayflowSubmittedValues`):
+ * the files sent with the answer, under `attachments`, when the answer has no
+ * key of that name itself.
+ */
+export const RECORDED_ANSWER_METADATA_KEYS: readonly string[] = ["attachments"];
+
+/**
+ * THE RECORDED ANSWER WITHOUT WHAT ITS RECORD ADDED (cinatra#3470): the answer
+ * less every key the record adds beside it (`RECORDED_ANSWER_METADATA_KEYS`),
+ * unless the answer itself declares that key (`declared`). The server and the
+ * read-only replay of a completed step read a recorded answer through it, so
+ * a decision sent with a file reads as that decision.
+ */
+export function recordedAnswerWithoutMetadata(
+  recorded: Record<string, unknown>,
+  declared: ReadonlySet<string> = new Set(),
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(recorded)) {
+    if (RECORDED_ANSWER_METADATA_KEYS.includes(k) && !declared.has(k)) continue;
+    Object.defineProperty(out, k, { value: recorded[k], enumerable: true, writable: true, configurable: true });
+  }
+  return out;
+}
+
+/**
  * The chosen row: the index of the decision whose answer is EXACTLY the
- * answer's own keys (every key except the carried ones and `userResponse`),
- * or null. The run value never chooses for the person.
+ * answer's own keys (every key except the carried ones, `userResponse` and
+ * what the answer's record added beside it), or null. The run value never
+ * chooses for the person.
  */
 export function declaredHitlChosenDecision(
   screen: Pick<DeclaredHitlCard, "decisions" | "carry">,
-  staged: Record<string, unknown>,
+  recordedOrStaged: Record<string, unknown>,
 ): number | null {
   const carried = new Set(screen.carry ?? []);
+  const declared = new Set((screen.decisions ?? []).flatMap((d) => Object.keys(d.answer)));
+  const staged = recordedAnswerWithoutMetadata(recordedOrStaged, declared);
   const own = Object.keys(staged).filter((k) => k !== "userResponse" && !carried.has(k));
   const i = (screen.decisions ?? []).findIndex((d) => {
     const keys = Object.keys(d.answer);
