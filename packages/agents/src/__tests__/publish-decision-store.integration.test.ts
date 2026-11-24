@@ -720,6 +720,67 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     }
   });
 
+  it("cinatra#4762: an output or a review written after a publishing call passed its fence refuses until the call ends; then the next call is refused", async () => {
+    const { buildProducedEventInsertOp, producerRunLockOps } = await import("@/lib/lifecycle/lifecycle-emit");
+    const { bindArtifactReviewGateSeam } = await import("../artifact-review-gate-seam");
+    const { emitArtifactReviewGate } = await import("../artifact-review-gate-store");
+    const { publishCallAllowed } = await import("../publish-decision-actions");
+    bindArtifactReviewGateSeam();
+    const GATES = `"${q(TEST_SCHEMA)}"."artifact_review_gates"`;
+    const runId = await seedRun(`run-${randomUUID()}`, "running");
+    const run = { id: runId, templateId: `tpl-${randomUUID()}` };
+    const approved = (await emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: `review-${randomUUID()}`,
+      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }], runGeneration: 0 })).gateId;
+    await settleAsPerson(GATES, approved, "approve");
+    const parked = await store.insertParkedDecision(park({ runId, gateTaskId: "task-claim" }));
+    expect(await store.decide(parked.decision.id, { from: "parked", to: "released", actor: REVIEWER })).toMatchObject({ outcome: "won" });
+    const inFlight = async () =>
+      (await admin.query(`SELECT calls_in_flight FROM ${TABLE} WHERE id = $1`, [parked.decision.id])).rows[0].calls_in_flight as number | null;
+    /** A writer's whole output transaction: its run lock first, then its produced event (the rows between are elided). */
+    const writeOutput = async () => {
+      const op = buildProducedEventInsertOp(q(TEST_SCHEMA), { orgId: ORG, artifactId: `art-${randomUUID()}`,
+        representationRevisionId: "rev-1", emitter: "createSemanticArtifact", originKind: "agent_generated", producerRunId: runId,
+        producerAttempt: { generation: 0 } });
+      await admin.query("BEGIN");
+      try {
+        for (const lock of producerRunLockOps(q(TEST_SCHEMA), runId, op)) await admin.query(lock.text, lock.values);
+        await admin.query(op.text, op.values);
+        await admin.query("COMMIT");
+      } catch (err) {
+        await admin.query("ROLLBACK");
+        throw err;
+      }
+    };
+    const raiseReview = () => emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: `review-${randomUUID()}`,
+      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }], runGeneration: 0 });
+
+    // The call passes its fence and takes its released decision.
+    let endCall!: () => void;
+    const callEnded = new Promise<void>((resolve) => { endCall = resolve; });
+    expect(await publishCallAllowed(run, "publish", callEnded)).toBe(true);
+    expect(await inFlight()).toBe(1);
+    // While it runs, an output and a review of the run are refused, and nothing of either is written.
+    const gatesBefore = (await admin.query(`SELECT count(*)::int AS n FROM ${GATES} WHERE run_id = $1`, [runId])).rows[0].n;
+    await expect(writeOutput()).rejects.toThrow(/division by zero/);
+    await expect(raiseReview()).rejects.toMatchObject({ code: "publish_call_in_flight" });
+    expect((await admin.query(`SELECT count(*)::int AS n FROM ${GATES} WHERE run_id = $1`, [runId])).rows[0].n).toBe(gatesBefore);
+    expect((await admin.query(`SELECT count(*)::int AS n FROM "${q(TEST_SCHEMA)}"."artifact_produced_outbox" WHERE producer_run_id = $1`, [runId])).rows[0].n).toBe(0);
+    // A second call of the step runs beside it; the count holds until both end.
+    expect(await publishCallAllowed(run, "publish", Promise.resolve())).toBe(true);
+    await expect.poll(inFlight).toBe(1);
+    endCall();
+    await expect.poll(inFlight).toBe(0);
+    // The call ended: the output is written, and the next call reads it in its fence and is refused.
+    await writeOutput();
+    expect(await publishCallAllowed(run, "publish", Promise.resolve())).toBe(false);
+    expect(await inFlight()).toBe(0);
+    // A claim of an attempt a retry's reset ended holds nothing: the next attempt's review opens.
+    await admin.query(`UPDATE ${TABLE} SET calls_in_flight = 1 WHERE id = $1`, [parked.decision.id]);
+    await expect(raiseReview()).rejects.toMatchObject({ code: "publish_call_in_flight" });
+    await admin.query(`UPDATE ${RUNS_TABLE} SET reset_generation = 1 WHERE id = $1`, [runId]);
+    await expect(raiseReview()).resolves.toMatchObject({ idempotent: false });
+  });
+
   it("cinatra#4762: a produced event records the generation its attempt carries; a delayed writer of an ended attempt keeps its own", async () => {
     const { buildProducedEventInsertOp, producerAttemptForRun } = await import("@/lib/lifecycle/lifecycle-emit");
     const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
@@ -840,9 +901,13 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
       publishDecisionRunGenerationDdlSql: string;
       runDispatchPublishRowsDdlSql: string;
     };
+    // cinatra#4762: core__0134's columns too, the publishing calls in flight included.
+    const next = (await import("../../../../migrations/core/core__0134_review-gate-run-generation.mjs")) as unknown as Record<string, string>;
     await admin.query(`SET search_path TO "${q(TEST_SCHEMA)}"`);
     try {
-      for (const ddl of [mod.runResetGenerationDdlSql, mod.publishDecisionRunGenerationDdlSql, mod.runDispatchPublishRowsDdlSql]) {
+      for (const ddl of [mod.runResetGenerationDdlSql, mod.publishDecisionRunGenerationDdlSql, mod.runDispatchPublishRowsDdlSql,
+        next.reviewGateRunGenerationDdlSql, next.producedOutboxRunGenerationDdlSql, next.publishDecisionCallsInFlightDdlSql]) {
+        expect(ddl).toMatch(/^ALTER TABLE /);
         await expect(admin.query(ddl)).resolves.toBeDefined();
       }
     } finally {

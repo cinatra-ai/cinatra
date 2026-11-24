@@ -499,6 +499,25 @@ describe("a publish card opens only after an approved review earlier in the same
     expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
   });
 
+  // red-first-expect: expected [ { from: 'running', …(2) } ] to deeply equal [ { from: 'running', …(2) } ]
+  it("a review with no generation that settled with anything but an approval still holds the card back in every attempt", async () => {
+    // Raised before the generation column existed, during attempt 1, and rejected after the upgrade. Attempt 1 also has
+    // its own approved review. The rejection may be this attempt's, so it is never read as generation 0 and dropped.
+    const unknownRejected: Review = { id: gateId(), status: "resolved", disposition: "reject", createdAt: at(-30), runGeneration: null, fingerprint: HUMAN_DECISION, successorGateId: null };
+    listReviews.mockResolvedValue([approved(5, "user-reviewer", 1), unknownRejected]);
+    await reachPublishGate(makeRun({ resetGeneration: 1 }));
+    expectStoppedWithoutWriting();
+    // Changes requested with no generation holds it back the same way, and in the first attempt too.
+    vi.clearAllMocks();
+    listReviews.mockResolvedValue([approved(5, "user-reviewer", 1), changesRequested(-30, null)]);
+    await reachPublishGate(makeRun({ resetGeneration: 1 }));
+    expectStoppedWithoutWriting();
+    vi.clearAllMocks();
+    listReviews.mockResolvedValue([approved(5), { ...unknownRejected, id: gateId() }]);
+    await reachPublishGate();
+    expectStoppedWithoutWriting();
+  });
+
   it("an unreadable review ends the run failed and opens no decision row", async () => {
     listReviews.mockRejectedValue(new Error("db down"));
     await reachPublishGate();

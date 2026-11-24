@@ -131,13 +131,28 @@ describe("buildProducedEventInsertOp — op shape", () => {
     const plain = flat(buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 0 } }).text);
     const guarded = flat(buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 0 } },
       { whereExistsSql: "EXISTS (SELECT 1)" }).text);
-    expect({ locksRunRow: plain.includes(`WHERE ${LOCK} ON CONFLICT`), guardKept: guarded.includes(`WHERE ${LOCK} AND (EXISTS (SELECT 1)) ON CONFLICT`) })
+    expect({ locksRunRow: plain.includes(`WHERE ${LOCK} AND `), guardKept: guarded.includes(` AND (EXISTS (SELECT 1)) ON CONFLICT`) })
       .toEqual({ locksRunRow: true, guardKept: true });
     // The row is the producing run's own ($7): the lock never names another run.
     expect(buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: null }).values[6]).toBe("run-9");
   });
 
-  // red-first-expect: producerRunLockOps is not a function
+  // red-first-expect: to match /calls_in_flight > 0/
+  it("refuses the whole write while a publishing call of the run's current attempt holds its released decision (cinatra#4762)", () => {
+    // That call read the review fence without this output; the event's division by zero aborts the writer's
+    // transaction, its artifact rows included. The writer's earlier lock statement (producerRunLockOps) makes this read
+    // see every claim committed before it.
+    const CALL = `1 / (CASE WHEN EXISTS (SELECT 1 FROM "cinatra"."agent_run_publish_decisions" call_claim JOIN "cinatra"."agent_runs" claim_run ON claim_run.id = call_claim.run_id WHERE call_claim.run_id = $7::text AND call_claim.calls_in_flight > 0 AND coalesce(call_claim.run_generation, claim_run.reset_generation) = claim_run.reset_generation) THEN 0 ELSE 1 END) = 1`;
+    for (const op of [
+      buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 0 } }),
+      buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 0 } }, { whereExistsSql: "EXISTS (SELECT 1)" }),
+    ]) {
+      expect(op.text).toMatch(/calls_in_flight > 0/);
+      expect(op.text.replace(/\s+/g, " ")).toContain(` AND ${CALL}`);
+    }
+  });
+
+  // red-first-expect: producerRunLockOps) is not a function
   it("a writer whose rows precede its event takes the producing run's row FOR KEY SHARE first, only when it splices the event (cinatra#4762)", () => {
     const event = maybeBuildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 0 } });
     expect(producerRunLockOps("cinatra", "run-9", event)).toEqual([

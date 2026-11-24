@@ -17,6 +17,9 @@ const decisions = vi.hoisted(() => ({
   withRunRowLock: vi.fn(async (_runId: string, fn: (tx: unknown, run: unknown) => Promise<unknown>) =>
     fn("the run-row lock's transaction", { orgId: "org-1", resetGeneration: 0 })),
   decide: vi.fn(),
+  // cinatra#4762: a served publishing call takes its released decision, and gives it back when the call ends.
+  claimPublishCall: vi.fn(async () => true),
+  endPublishCall: vi.fn(async () => undefined),
   readDecisionForRunNode: vi.fn(),
   readLatestDecisionForRun: vi.fn(),
   readOpenDecisionForRun: vi.fn(),
@@ -28,6 +31,8 @@ vi.mock("../publish-decision-store", () => decisions);
 import { publishCallAllowed } from "../publish-decision-actions";
 
 const RUN = { id: "run-1", templateId: "tmpl-1" };
+/** The end of a call that is already over. */
+const ENDED = Promise.resolve();
 const template = (publishingSteps: string[] | null | undefined) => ({ id: "tmpl-1", publishingSteps });
 const row = (status: string) => ({ id: "d1", orgId: "org-1", runId: "run-1", nodeId: "publish", status, runGeneration: 0 });
 
@@ -46,6 +51,8 @@ beforeEach(() => {
   storeMock.readAgentTemplateById.mockReset().mockResolvedValue(template(["publish"]));
   decisions.readDecisionForRunNode.mockReset().mockResolvedValue(null);
   decisions.withRunRowLock.mockClear();
+  decisions.claimPublishCall.mockReset().mockResolvedValue(true);
+  decisions.endPublishCall.mockReset().mockResolvedValue(undefined);
   reviewSeam.listReviews.mockReset().mockResolvedValue([APPROVED_REVIEW]);
   reviewSeam.hasPendingProducedReview.mockReset().mockResolvedValue(false);
 });
@@ -53,7 +60,7 @@ beforeEach(() => {
 describe("a verified step the template lists as publishing", () => {
   it.each(["parked", "declined", "expired", "run_ended"])("is refused while its newest decision is %s", async (status) => {
     decisions.readDecisionForRunNode.mockResolvedValue(row(status));
-    expect(await publishCallAllowed(RUN, "publish")).toBe(false);
+    expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(false);
     expect(decisions.readDecisionForRunNode).toHaveBeenCalledWith("run-1", "publish");
   });
 
@@ -61,7 +68,7 @@ describe("a verified step the template lists as publishing", () => {
     decisions.readDecisionForRunNode.mockResolvedValue(row("released"));
     decisions.withRunRowLock.mockImplementationOnce(async (_runId: string, fn: (tx: unknown, run: unknown) => Promise<unknown>) =>
       fn(TX, { orgId: "org-1", resetGeneration: 1 }));
-    expect(await publishCallAllowed(RUN, "publish")).toBe(false);
+    expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(false);
   });
 
   // red-first-expect: expected true to be false
@@ -73,22 +80,58 @@ describe("a verified step the template lists as publishing", () => {
     decisions.withRunRowLock.mockImplementationOnce(async (_runId: string, fn: (tx: unknown, run: unknown) => Promise<unknown>) =>
       fn(TX, { orgId: "org-1", resetGeneration: 1 }));
     reviewSeam.listReviews.mockResolvedValue([{ ...APPROVED_REVIEW, runGeneration: 1 }]);
-    expect(await publishCallAllowed(RUN, "publish")).toBe(false);
+    expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(false);
     // A row with no generation still current under the lock is served under the run's own generation.
     decisions.readDecisionForRunNode.mockImplementation(async () => ({ ...row("released"), runGeneration: null }));
     decisions.withRunRowLock.mockImplementationOnce(async (_runId: string, fn: (tx: unknown, run: unknown) => Promise<unknown>) =>
       fn(TX, { orgId: "org-1", resetGeneration: 1 }));
-    expect(await publishCallAllowed(RUN, "publish")).toBe(true);
+    expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(true);
     expect(decisions.readDecisionForRunNode).toHaveBeenCalledWith("run-1", "publish", TX);
   });
 
   it("is served once its newest decision is released", async () => {
     decisions.readDecisionForRunNode.mockResolvedValue(row("released"));
-    expect(await publishCallAllowed(RUN, "publish")).toBe(true);
+    expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(true);
+  });
+
+  // red-first-expect: to be called with arguments: [ 'd1', …(1) ]
+  it("a served call takes its released decision in the lock's transaction, after the fence, and gives it back only when it ends (cinatra#4762)", async () => {
+    decisions.readDecisionForRunNode.mockResolvedValue(row("released"));
+    let endCall!: () => void;
+    const callEnded = new Promise<void>((resolve) => { endCall = resolve; });
+    expect(await publishCallAllowed(RUN, "publish", callEnded)).toBe(true);
+    // Taken in the transaction where the fence was read, after that read: no output or review of the run is written
+    // from here until the call ends, so none can come after the fence and before the call's effect.
+    expect(decisions.claimPublishCall).toHaveBeenCalledWith("d1", TX);
+    const claimedAt = decisions.claimPublishCall.mock.invocationCallOrder[0]!;
+    expect(reviewSeam.listReviews.mock.invocationCallOrder.every((at) => at < claimedAt)).toBe(true);
+    expect(reviewSeam.hasPendingProducedReview.mock.invocationCallOrder.every((at) => at < claimedAt)).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(decisions.endPublishCall).not.toHaveBeenCalled();
+    endCall();
+    await vi.waitFor(() => expect(decisions.endPublishCall).toHaveBeenCalledWith("d1"));
+    // A claim that cannot be taken (the row left `released`, or the write failed) refuses the call; nothing is given back.
+    decisions.endPublishCall.mockClear();
+    decisions.claimPublishCall.mockResolvedValueOnce(false);
+    expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(false);
+    decisions.claimPublishCall.mockRejectedValueOnce(new Error("db down"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(decisions.endPublishCall).not.toHaveBeenCalled();
+    // A fence that does not hold takes nothing.
+    decisions.claimPublishCall.mockClear();
+    reviewSeam.hasPendingProducedReview.mockResolvedValue(true);
+    expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(false);
+    expect(decisions.claimPublishCall).not.toHaveBeenCalled();
   });
 
   it("is refused when it has no decision row", async () => {
-    expect(await publishCallAllowed(RUN, "publish")).toBe(false);
+    expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(false);
   });
 
   // red-first-expect: expected true to be false
@@ -96,23 +139,23 @@ describe("a verified step the template lists as publishing", () => {
     decisions.readDecisionForRunNode.mockResolvedValue(row("released"));
     // An output of the attempt written after the release, still waiting for the review orchestration: refused.
     reviewSeam.hasPendingProducedReview.mockResolvedValue(true);
-    expect(await publishCallAllowed(RUN, "publish")).toBe(false);
+    expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(false);
     expect(reviewSeam.hasPendingProducedReview).toHaveBeenCalledWith({ orgId: "org-1", runId: "run-1", generation: 0 }, TX);
     // Its review raised and still open: refused.
     reviewSeam.hasPendingProducedReview.mockResolvedValue(false);
     reviewSeam.listReviews.mockResolvedValue([APPROVED_REVIEW, { ...APPROVED_REVIEW, id: "gate-2", status: "pending", disposition: null, fingerprint: null }]);
-    expect(await publishCallAllowed(RUN, "publish")).toBe(false);
+    expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(false);
     // A person approved it: served. Every fence read ran in the lock's transaction.
     reviewSeam.listReviews.mockResolvedValue([APPROVED_REVIEW, { ...APPROVED_REVIEW, id: "gate-2" }]);
-    expect(await publishCallAllowed(RUN, "publish")).toBe(true);
+    expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(true);
     expect(reviewSeam.listReviews.mock.calls.every((c) => c[1] === TX)).toBe(true);
     // A run whose row is gone, or a fence that cannot be read: refused.
     decisions.withRunRowLock.mockImplementationOnce(async (_runId: string, fn: (tx: unknown, run: unknown) => Promise<unknown>) => fn(TX, null));
-    expect(await publishCallAllowed(RUN, "publish")).toBe(false);
+    expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(false);
     reviewSeam.listReviews.mockRejectedValue(new Error("db down"));
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
-      expect(await publishCallAllowed(RUN, "publish")).toBe(false);
+      expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(false);
     } finally {
       warn.mockRestore();
     }
@@ -127,9 +170,9 @@ describe("a verified step the template does not list", () => {
   ])("on a template that %s is held by its decision row", async (_label, steps) => {
     storeMock.readAgentTemplateById.mockResolvedValue(template(steps));
     decisions.readDecisionForRunNode.mockResolvedValue(row("parked"));
-    expect(await publishCallAllowed(RUN, "publish")).toBe(false);
+    expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(false);
     decisions.readDecisionForRunNode.mockResolvedValue(row("released"));
-    expect(await publishCallAllowed(RUN, "publish")).toBe(true);
+    expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(true);
   });
 
   it.each([
@@ -138,11 +181,11 @@ describe("a verified step the template does not list", () => {
     ["was compiled before the list existed", null],
   ])("on a template that %s is served when it has no decision row", async (_label, steps) => {
     storeMock.readAgentTemplateById.mockResolvedValue(template(steps));
-    expect(await publishCallAllowed(RUN, "publish")).toBe(true);
+    expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(true);
   });
 
   it("a step of a publishing template that is not its publishing step is served", async () => {
-    expect(await publishCallAllowed(RUN, "draft")).toBe(true);
+    expect(await publishCallAllowed(RUN, "draft", ENDED)).toBe(true);
     expect(decisions.readDecisionForRunNode).toHaveBeenCalledWith("run-1", "draft");
   });
 });
@@ -150,7 +193,7 @@ describe("a verified step the template does not list", () => {
 describe("a call with no verified step", () => {
   it("is refused on a run whose template lists a publishing step, whatever the decision rows say", async () => {
     decisions.readDecisionForRunNode.mockResolvedValue(row("released"));
-    expect(await publishCallAllowed(RUN, undefined)).toBe(false);
+    expect(await publishCallAllowed(RUN, undefined, ENDED)).toBe(false);
   });
 
   it.each([
@@ -159,7 +202,7 @@ describe("a call with no verified step", () => {
     ["has no list field", undefined],
   ])("is served on a run whose template %s", async (_label, steps) => {
     storeMock.readAgentTemplateById.mockResolvedValue(template(steps));
-    expect(await publishCallAllowed(RUN, undefined)).toBe(true);
+    expect(await publishCallAllowed(RUN, undefined, ENDED)).toBe(true);
     expect(decisions.readDecisionForRunNode).not.toHaveBeenCalled();
   });
 });
@@ -167,10 +210,10 @@ describe("a call with no verified step", () => {
 describe("what cannot be read is a refusal", () => {
   it("a template that is not found cannot prove that it publishes nothing", async () => {
     storeMock.readAgentTemplateById.mockResolvedValue(null);
-    expect(await publishCallAllowed(RUN, undefined)).toBe(false);
-    expect(await publishCallAllowed(RUN, "publish")).toBe(false);
+    expect(await publishCallAllowed(RUN, undefined, ENDED)).toBe(false);
+    expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(false);
     decisions.readDecisionForRunNode.mockResolvedValue(row("released"));
-    expect(await publishCallAllowed(RUN, "publish")).toBe(true);
+    expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(true);
   });
 
   it.each([
@@ -181,7 +224,7 @@ describe("what cannot be read is a refusal", () => {
     fail();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     try {
-      expect(await publishCallAllowed(RUN, "send_post")).toBe(false);
+      expect(await publishCallAllowed(RUN, "send_post", ENDED)).toBe(false);
       const logged = warn.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
       expect(logged).not.toMatch(/db down|run-1|tmpl-1|send_post/);
     } finally {

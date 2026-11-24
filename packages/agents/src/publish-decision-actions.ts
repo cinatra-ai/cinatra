@@ -11,7 +11,9 @@ import { AuthzError } from "@/lib/authz/errors";
 import { sessionAuthorityFromResolvedRole } from "@/lib/org-write/authority";
 import type { ActorRoleHints } from "./auth-policy";
 import {
+  claimPublishCall,
   decide,
+  endPublishCall,
   insertParkedDecision,
   listDueParked,
   listSettledWithWaitingRun,
@@ -208,16 +210,17 @@ const personApproved = (g: ReviewOfRun): boolean =>
  * recorded (lifecycle_repair.successor_gate_id) is a review of this attempt that a person approved, or that was itself
  * settled changes requested and is cleared the same way. Another review approved later (a different artifact, a
  * sibling of the same family) never clears it, whenever it was raised.
- * A review with no generation (raised before the column existed, or from an output that names no attempt) is read as
- * generation 0 once it is settled; while it is still open it may be a review of this attempt, so it holds every
- * attempt's fence (fail closed).
+ * A review with no generation (raised before the column existed, or from an output that names no attempt) may be a
+ * review of this attempt: while it is still open, or once it settled with anything but an approval (rejected, changes
+ * requested), it counts as a review of this attempt, so it holds every attempt's fence (fail closed). Only a settled
+ * approval with no generation is read as generation 0.
  * An approval counts only with a person as its decider of record (personApproved); which person is not compared: the
  * reviewer and the person who answers the publish card may differ. A read error propagates.
  */
 export async function approvedReviewPrecedes(runId: string, generation: number, executor?: unknown): Promise<boolean> {
   const all = await reviewSeam().listReviews(runId, ...via(executor));
   if (all.some((g) => g.runGeneration == null && g.status !== "resolved")) return false;
-  const reviews = all.filter((g) => (g.runGeneration ?? 0) === generation);
+  const reviews = all.filter((g) => (g.runGeneration ?? 0) === generation || (g.runGeneration == null && g.disposition !== "approve"));
   if (!reviews.some(personApproved)) return false;
   const byId = new Map(reviews.map((g) => [g.id, g] as const));
   const cleared = (g: ReviewOfRun): boolean => {
@@ -615,14 +618,17 @@ export async function approvePublishDecision(input: DecideInput): Promise<Publis
  * is the step the runtime signed for the call, or undefined when the call carries no verified step.
  *   - A verified step with a decision row is served only while that row (its newest) reads `released` and the review
  *     fence of its attempt still holds (reviewFenceHolds, read under the run row's lock, cinatra#4762): an output of the
- *     attempt written after the release, or a review of it opened since, refuses the call until it is approved.
+ *     attempt written after the release, or a review of it opened since, refuses the call until it is approved. In the
+ *     same transaction the call takes the decision (claimPublishCall): until `callEnded` settles, no output or review of
+ *     the run is written, so nothing the fence did not see comes before the call's effect. A claim that cannot be
+ *     taken refuses the call. The caller settles `callEnded` once the call is done, whatever its outcome.
  *   - A verified step with no row is refused when the template lists it as a publishing step.
  *   - A call with no verified step is refused when the template lists any publishing step.
  *   - A template that is not found cannot prove that it publishes nothing; a list stored as null (a template compiled
  *     before the list existed) lists none, so only a decision row holds such a run.
  * A read error refuses the call; it is logged by the error's name only.
  */
-export async function publishCallAllowed(run: { id: string; templateId: string }, verifiedStepId: string | undefined): Promise<boolean> {
+export async function publishCallAllowed(run: { id: string; templateId: string }, verifiedStepId: string | undefined, callEnded: Promise<unknown>): Promise<boolean> {
   try {
     const template = await readAgentTemplateById(run.templateId);
     const listed = template?.publishingSteps ?? [];
@@ -633,13 +639,22 @@ export async function publishCallAllowed(run: { id: string; templateId: string }
       // The decision read before the lock may be stale: a reset since then stamped it with the attempt it ended (a row
       // read with no generation included) and moved the run to a newer attempt, whose own approval it is not. Under the
       // lock the decision is read again; only that reading decides, and it must still be the same released row.
-      return await withRunRowLock(run.id, async (tx, locked) => {
+      const claimed = await withRunRowLock(run.id, async (tx, locked) => {
         if (!locked) return false;
         const current = await readDecisionForRunNode(run.id, verifiedStepId, tx);
         if (!current || current.id !== row.id || current.status !== "released") return false;
         if (current.runGeneration != null && current.runGeneration !== locked.resetGeneration) return false;
-        return reviewFenceHolds({ runId: run.id, orgId: locked.orgId, generation: current.runGeneration ?? locked.resetGeneration, executor: tx });
+        if (!(await reviewFenceHolds({ runId: run.id, orgId: locked.orgId, generation: current.runGeneration ?? locked.resetGeneration, executor: tx }))) return false;
+        return claimPublishCall(current.id, tx);
       });
+      if (claimed) {
+        const end = () => endPublishCall(row.id).catch((err: unknown) => {
+          // The count stays up: the run's output stays refused until a retry's reset (fail closed).
+          console.warn(`[publish-decision] the end of a publishing call could not be written: ${nameOf(err)}`);
+        });
+        void callEnded.then(end, end);
+      }
+      return claimed;
     }
     return template !== null && !listed.includes(verifiedStepId);
   } catch (err) {

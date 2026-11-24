@@ -60,6 +60,7 @@ import { dispatchAutoGateResolved } from "./run-wait-notifier";
 // be able to answer the park from the run row it holds when a slot read fails.
 import { isParkedOnProducedReview } from "./run-produced-review-hold";
 import {
+  agentRunPublishDecisions,
   agentRuns,
   artifactReviewGates,
   artifactReviewAudit,
@@ -258,66 +259,94 @@ export async function emitArtifactReviewGate(input: {
       "A review gate must pin exactly one artifact revision. Open a separate review for each artifact.",
     );
   }
-  const gateId = randomUUID();
-  const [inserted] = await executor
-    .insert(artifactReviewGates)
-    .values({
-      id: gateId,
-      runId: input.runId,
-      orgId: input.orgId,
-      reviewTaskId: input.reviewTaskId,
-      status: "pending",
-      pinnedTargets: pinned,
-      expiresAt: input.expiresAt ?? null,
-      // cinatra#4762: the attempt the gate belongs to, as its caller carries it (see runGeneration and
-      // successorOfGateId), never the run row's state at the raise: a delayed writer of an ended attempt would read
-      // the next attempt there. A retry's reset raises the generation once, so a review of an ended attempt never
-      // counts again. No attempt identity: -1.
-      // -2 marks a continued gate with no generation inside the read; it is stored as null.
-      runGeneration: typeof input.successorOfGateId === "string"
-        ? sql`nullif(coalesce((select coalesce(prior_gate.run_generation, -2) from ${artifactReviewGates} prior_gate where prior_gate.id = ${input.successorOfGateId} and prior_gate.run_id = ${input.runId}), -1), -2)`
-        : input.runGeneration === "unknown" ? null
-        : Number.isSafeInteger(input.runGeneration) ? (input.runGeneration as number) : -1,
-    })
-    // One gate per (run, task) — the run_task_uniq index.
-    .onConflictDoNothing({
-      target: [artifactReviewGates.runId, artifactReviewGates.reviewTaskId],
-    })
-    .returning({ id: artifactReviewGates.id });
+  // cinatra#4762: the gate is written in one transaction (a savepoint of the caller's) that first takes the run row FOR
+  // KEY SHARE, as every writer of the run's output does (lifecycle-emit.ts producerRunLockOps). A publishing call's
+  // check reads the review fence and takes its decision under the same row FOR UPDATE, so this gate is committed before
+  // that read (and seen there), or this transaction reads the call's claim after the lock and refuses.
+  return executor.transaction(async (tx) => {
+    await tx.execute(sql`select 1 from ${agentRuns} where ${agentRuns.id} = ${input.runId} for key share`);
+    const gateId = randomUUID();
+    const [inserted] = await tx
+      .insert(artifactReviewGates)
+      .values({
+        id: gateId,
+        runId: input.runId,
+        orgId: input.orgId,
+        reviewTaskId: input.reviewTaskId,
+        status: "pending",
+        pinnedTargets: pinned,
+        expiresAt: input.expiresAt ?? null,
+        // cinatra#4762: the attempt the gate belongs to, as its caller carries it (see runGeneration and
+        // successorOfGateId), never the run row's state at the raise: a delayed writer of an ended attempt would read
+        // the next attempt there. A retry's reset raises the generation once, so a review of an ended attempt never
+        // counts again. No attempt identity: -1.
+        // -2 marks a continued gate with no generation inside the read; it is stored as null.
+        runGeneration: typeof input.successorOfGateId === "string"
+          ? sql`nullif(coalesce((select coalesce(prior_gate.run_generation, -2) from ${artifactReviewGates} prior_gate where prior_gate.id = ${input.successorOfGateId} and prior_gate.run_id = ${input.runId}), -1), -2)`
+          : input.runGeneration === "unknown" ? null
+          : Number.isSafeInteger(input.runGeneration) ? (input.runGeneration as number) : -1,
+      })
+      // One gate per (run, task) — the run_task_uniq index.
+      .onConflictDoNothing({
+        target: [artifactReviewGates.runId, artifactReviewGates.reviewTaskId],
+      })
+      .returning({ id: artifactReviewGates.id });
 
-  if (inserted) {
-    return { gateId: inserted.id, targets: rowsToTargets(pinned), idempotent: false };
-  }
+    if (inserted) {
+      // No new review while a publishing call of the run holds its released decision: that call read the review
+      // fence without this review (publish-decision-store claimPublishCall). Thrown inside the transaction, so the
+      // insert rolls back; not a gate refusal (ArtifactReviewGateError), so no caller falls back to another gate.
+      if (await publishCallInFlight(tx, input.runId)) {
+        throw Object.assign(new Error("A publishing call of this run is in flight; no review opens until it ends."),
+          { code: PUBLISH_CALL_IN_FLIGHT });
+      }
+      return { gateId: inserted.id, targets: rowsToTargets(pinned), idempotent: false };
+    }
 
-  // Conflict: a gate already exists for this (run, task). Idempotent iff the
-  // pinned set AND org match; otherwise fail closed (never re-pin / re-tag). The
-  // reconcile read runs on the SAME executor as the insert so an in-transaction
-  // re-emit resolves against the caller's own (possibly uncommitted) row.
-  const existing = await readReviewGateVia(executor, input.runId, input.reviewTaskId);
-  if (!existing) {
-    // Extremely narrow race (row vanished between insert-conflict and read).
-    throw new ArtifactReviewGateError(
-      "pin-conflict",
-      `Review gate ${input.reviewTaskId} on run ${input.runId} could not be reconciled.`,
-    );
-  }
-  if (existing.orgId !== input.orgId) {
-    throw new ArtifactReviewGateError(
-      "pin-conflict",
-      `Review gate ${input.reviewTaskId} on run ${input.runId} is bound to a different org.`,
-    );
-  }
-  const existingPinned = canonicalPinnedSet(rowsToTargets(existing.pinnedTargets));
-  if (plan && !sameDeclaredReviewPlan(pinnedDeclaredReviewPlan(existing.pinnedTargets), plan)) {
-    throw new ArtifactReviewGateError("pin-conflict", "The existing gate has no matching immutable declared review plan.");
-  }
-  if (pinnedSetKey(existingPinned) !== pinnedSetKey(pinned)) {
-    throw new ArtifactReviewGateError(
-      "pin-conflict",
-      `Review gate ${input.reviewTaskId} on run ${input.runId} already pinned a different target set.`,
-    );
-  }
-  return { gateId: existing.id, targets: rowsToTargets(existingPinned), idempotent: true };
+    // Conflict: a gate already exists for this (run, task). Idempotent iff the
+    // pinned set AND org match; otherwise fail closed (never re-pin / re-tag). The
+    // reconcile read runs on the SAME executor as the insert so an in-transaction
+    // re-emit resolves against the caller's own (possibly uncommitted) row.
+    const existing = await readReviewGateVia(tx, input.runId, input.reviewTaskId);
+    if (!existing) {
+      // Extremely narrow race (row vanished between insert-conflict and read).
+      throw new ArtifactReviewGateError(
+        "pin-conflict",
+        `Review gate ${input.reviewTaskId} on run ${input.runId} could not be reconciled.`,
+      );
+    }
+    if (existing.orgId !== input.orgId) {
+      throw new ArtifactReviewGateError(
+        "pin-conflict",
+        `Review gate ${input.reviewTaskId} on run ${input.runId} is bound to a different org.`,
+      );
+    }
+    const existingPinned = canonicalPinnedSet(rowsToTargets(existing.pinnedTargets));
+    if (plan && !sameDeclaredReviewPlan(pinnedDeclaredReviewPlan(existing.pinnedTargets), plan)) {
+      throw new ArtifactReviewGateError("pin-conflict", "The existing gate has no matching immutable declared review plan.");
+    }
+    if (pinnedSetKey(existingPinned) !== pinnedSetKey(pinned)) {
+      throw new ArtifactReviewGateError(
+        "pin-conflict",
+        `Review gate ${input.reviewTaskId} on run ${input.runId} already pinned a different target set.`,
+      );
+    }
+    return { gateId: existing.id, targets: rowsToTargets(existingPinned), idempotent: true };
+  });
+}
+
+/** cinatra#4762: the code of the refusal of a new review while a publishing call of its run is in flight. */
+export const PUBLISH_CALL_IN_FLIGHT = "publish_call_in_flight";
+
+/** cinatra#4762: a decision of the run's current attempt has a publishing call in flight (publish-decision-store
+ *  claimPublishCall). Read after the caller took the run row, so it sees every claim committed before that lock. */
+async function publishCallInFlight(tx: GateStoreExecutor, runId: string): Promise<boolean> {
+  const found = await tx.execute(sql`select 1 from ${agentRunPublishDecisions} call_claim
+    join ${agentRuns} claim_run on claim_run.id = call_claim.run_id
+    where call_claim.run_id = ${runId} and call_claim.calls_in_flight > 0
+      and coalesce(call_claim.run_generation, claim_run.reset_generation) = claim_run.reset_generation
+    limit 1`);
+  return found.rows.length > 0;
 }
 
 // ---------------------------------------------------------------------------

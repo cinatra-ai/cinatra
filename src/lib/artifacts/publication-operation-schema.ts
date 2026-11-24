@@ -134,6 +134,12 @@ export function publishDecisionSchemaQueries(schemaName: string): { text: string
       // backfill of existing rows is the operator-upgrade twin's, in migrations/core/core__0133.
       text: `ALTER TABLE "${q}"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS run_generation integer`,
     },
+    {
+      // calls_in_flight (cinatra#4762): the publishing calls of a released decision now in flight; while a decision of
+      // the run's current attempt has one, no output or review of the run is written. NULLABLE, no default: null =
+      // none. Operator-upgrade twin in migrations/core/core__0134.
+      text: `ALTER TABLE "${q}"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS calls_in_flight integer`,
+    },
   ];
 }
 

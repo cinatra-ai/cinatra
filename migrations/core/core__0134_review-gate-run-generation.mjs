@@ -22,6 +22,15 @@
 // before this column existed, of an unknown attempt: while pending it holds
 // every attempt's publish fence of its run, and its review is stamped null.
 //
+// And ONE additive nullable column, `calls_in_flight` (integer), on
+// `agent_run_publish_decisions`: the publishing calls of a released decision now
+// in flight. The call check takes one in the transaction where it reads the
+// review fence under the run row's lock, and the call ends it. While a decision
+// of the run's current attempt has one, no pending output or new review of the
+// run is written, so nothing changes the fence between its read and the call.
+// null = none in flight. Bootstrap twin: publishDecisionSchemaQueries in
+// src/lib/artifacts/publication-operation-schema.ts.
+//
 // No backfill, no default, no constraint change: every existing row reads NULL.
 // A run reset before the upgrade has its reviews read as generation 0, so they
 // do not count for its later attempt: such a run ends stopped at its publish
@@ -37,7 +46,7 @@
 // IDEMPOTENT. ADD COLUMN IF NOT EXISTS: a replay, or a run after the bootstrap
 // leaf, changes nothing.
 //
-// DOWN drops both columns and the generations they hold. Safe only once no
+// DOWN drops the three columns and what they hold. Safe only once no
 // deployed code reads the column.
 //
 // SEQ 0134: 0133 is the highest sequence on main (2026-11-23). A rename-only
@@ -50,9 +59,13 @@ export const reviewGateRunGenerationDdlSql = `ALTER TABLE artifact_review_gates 
 /** The produced-event twin, mirroring the bootstrap leaf — safe to run after it. */
 export const producedOutboxRunGenerationDdlSql = `ALTER TABLE artifact_produced_outbox ADD COLUMN IF NOT EXISTS producer_run_generation integer`;
 
+/** The publish decision twin, mirroring the bootstrap leaf — safe to run after it. */
+export const publishDecisionCallsInFlightDdlSql = `ALTER TABLE agent_run_publish_decisions ADD COLUMN IF NOT EXISTS calls_in_flight integer`;
+
 /** The statements of `down`: they remove only what `up` added. */
 export const reviewGateRunGenerationDownSql = `ALTER TABLE artifact_review_gates DROP COLUMN IF EXISTS run_generation`;
 export const producedOutboxRunGenerationDownSql = `ALTER TABLE artifact_produced_outbox DROP COLUMN IF EXISTS producer_run_generation`;
+export const publishDecisionCallsInFlightDownSql = `ALTER TABLE agent_run_publish_decisions DROP COLUMN IF EXISTS calls_in_flight`;
 
 /** The longest wait for the lock `up` takes (LOCK WAIT above), in ms. */
 export const REVIEW_GATE_RUN_GENERATION_LOCK_TIMEOUT_MS = 5_000;
@@ -65,11 +78,13 @@ export function up(pgm) {
   pgm.sql(`SET lock_timeout = ${REVIEW_GATE_RUN_GENERATION_LOCK_TIMEOUT_MS}`);
   pgm.sql(reviewGateRunGenerationDdlSql);
   pgm.sql(producedOutboxRunGenerationDdlSql);
+  pgm.sql(publishDecisionCallsInFlightDdlSql);
   pgm.sql("RESET lock_timeout");
 }
 
 /** @param {Pick<import("node-pg-migrate").MigrationBuilder, "sql">} pgm */
 export function down(pgm) {
+  pgm.sql(publishDecisionCallsInFlightDownSql);
   pgm.sql(producedOutboxRunGenerationDownSql);
   pgm.sql(reviewGateRunGenerationDownSql);
 }

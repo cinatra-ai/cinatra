@@ -959,6 +959,10 @@ export const agentRunPublishDecisions = cinatraSchema.table("agent_run_publish_d
   // this equals agent_runs.reset_generation. -1 = an attempt already ended (a park of a run not held at a gate, or a
   // legacy row the migration found stale); null = a row written by code older than the column, read as generation 0.
   runGeneration:  integer("run_generation"),
+  // cinatra#4762 (core__0134): the publishing calls of this released decision now in flight (publish-decision-store
+  // claimPublishCall). While a decision of the run's current attempt has one, no output or review of the run is
+  // written. null = none.
+  callsInFlight:  integer("calls_in_flight"),
 }, (t) => ({
   parkUniq: uniqueIndex("agent_run_publish_decisions_park_uniq").on(t.runId, t.nodeId, t.gateTaskId),
   dueIdx:   index("agent_run_publish_decisions_due_idx").on(t.expiresAt).where(sql`status = 'parked'`),

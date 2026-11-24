@@ -157,13 +157,22 @@ export function buildProducedEventInsertOp(
   // The count is never negative: the guard only takes the lock.
   const runLock = `(SELECT count(*) FROM (SELECT 1 FROM "${schema}"."agent_runs" run_lock
           WHERE run_lock.id = $7::text FOR KEY SHARE) locked_run) >= 0`;
+  // cinatra#4762: no output of the run while a publishing call of its current attempt holds its released decision
+  // (publish-decision-store claimPublishCall): that call read the review fence without this output, so the division
+  // by zero aborts the writer's whole transaction. The writer took the run row before its first write
+  // (producerRunLockOps), in an earlier statement, so this read sees every claim committed before that lock.
+  const noPublishCall = `1 / (CASE WHEN EXISTS (SELECT 1 FROM "${schema}"."agent_run_publish_decisions" call_claim
+          JOIN "${schema}"."agent_runs" claim_run ON claim_run.id = call_claim.run_id
+          WHERE call_claim.run_id = $7::text AND call_claim.calls_in_flight > 0
+            AND coalesce(call_claim.run_generation, claim_run.reset_generation) = claim_run.reset_generation)
+        THEN 0 ELSE 1 END) = 1`;
   return {
     text: `INSERT INTO "${schema}"."artifact_produced_outbox"
   (event_id, org_id, artifact_id, representation_revision_id, event_kind, emitter,
    producer_run_id, producer_agent_id, origin_kind, destination_class,
    continuation_mode, continuation_address, status, producer_run_generation)
 SELECT ${bound}
-WHERE ${runLock}${opts?.whereExistsSql ? ` AND (${opts.whereExistsSql})` : ""}
+WHERE ${runLock} AND ${noPublishCall}${opts?.whereExistsSql ? ` AND (${opts.whereExistsSql})` : ""}
 ON CONFLICT (event_id) DO NOTHING`,
     values: [
       eventId,

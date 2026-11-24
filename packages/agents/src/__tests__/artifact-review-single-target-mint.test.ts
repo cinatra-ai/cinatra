@@ -21,7 +21,16 @@ const storage = vi.hoisted(() => {
   let crashAfter: number | null = null;
   let readIdentity: { runId: string; reviewTaskId: string } | undefined;
   const key = (row: StoredGate) => `${row.runId}/${row.reviewTaskId}`;
+  /** cinatra#4762: the statements the store runs on `execute` (the run-row lock, the read of a publishing call in
+   *  flight), in order, each tagged with the insert count at that moment. */
+  const statements: Array<{ text: string; insertsBefore: number }> = [];
+  let publishCallInFlight = false;
   const executor = {
+    async execute(query: SQL) {
+      const text = new PgDialect().sqlToQuery(query).sql;
+      statements.push({ text, insertsBefore: inserts.length });
+      return { rows: /calls_in_flight > 0/.test(text) && publishCallInFlight ? [{ "?column?": 1 }] : [] };
+    },
     async transaction<T>(callback: (tx: unknown) => Promise<T>): Promise<T> {
       const before = new Map(rows);
       try { return await callback(executor); }
@@ -72,7 +81,7 @@ const storage = vi.hoisted(() => {
       };
     },
   };
-  return { rows, inserts, generations, executor, setLateConflict(row: StoredGate | null) { lateConflict = row; }, setReadFailure(value: boolean) { readFailure = value; }, setCrashAfter(n: number | null) { crashAfter = n; }, setReadKey(row: StoredGate) { readIdentity = row; } };
+  return { rows, inserts, generations, executor, statements, setPublishCallInFlight(value: boolean) { publishCallInFlight = value; }, setLateConflict(row: StoredGate | null) { lateConflict = row; }, setReadFailure(value: boolean) { readFailure = value; }, setCrashAfter(n: number | null) { crashAfter = n; }, setReadKey(row: StoredGate) { readIdentity = row; } };
 });
 
 vi.mock("../db", () => ({ db: storage.executor }));
@@ -90,7 +99,7 @@ const A = { artifactId: "post", representationRevisionId: "post-r1" };
 const B = { artifactId: "image", representationRevisionId: "image-r1" };
 const input = (targets: unknown) => ({ runId: "run", orgId: "org", reviewTaskId: "task", targets });
 
-beforeEach(() => { storage.rows.clear(); storage.inserts.length = 0; storage.generations.length = 0; storage.setCrashAfter(null); storage.setReadFailure(false); storage.setLateConflict(null); });
+beforeEach(() => { storage.rows.clear(); storage.inserts.length = 0; storage.generations.length = 0; storage.statements.length = 0; storage.setPublishCallInFlight(false); storage.setCrashAfter(null); storage.setReadFailure(false); storage.setLateConflict(null); });
 
 describe("new review gates freeze one artifact revision", () => {
   it.each([
@@ -250,6 +259,30 @@ describe("H1 atomic original-pause membership", () => {
 });
 
 describe("the attempt a review gate belongs to (cinatra#4762)", () => {
+  // red-first-expect: to match object { code: 'publish_call_in_flight' }
+  it("takes the run row before its insert and opens no review while a publishing call of the run is in flight (cinatra#4762)", async () => {
+    // A publishing call read the review fence and took its released decision under the run row FOR UPDATE. This
+    // review is written after: the store holds the run row FOR KEY SHARE first, reads the call's claim, and refuses.
+    storage.setPublishCallInFlight(true);
+    const refused: unknown = await emitArtifactReviewGate({ ...input([A]), runGeneration: 0 }).catch((err: unknown) => err);
+    expect(refused).toMatchObject({ code: "publish_call_in_flight" });
+    // Not a gate refusal: the run executor never falls back to another gate for it.
+    expect(refused).not.toBeInstanceOf(gateStore.ArtifactReviewGateError);
+    expect(storage.rows.size).toBe(0);
+    expect(storage.statements.map((st) =>
+      /for key share/.test(st.text) && st.insertsBefore === 0 ? "lock-before-insert"
+        : /calls_in_flight > 0/.test(st.text) && st.insertsBefore === 1 ? "claim-read-after-insert" : st.text))
+      .toEqual(["lock-before-insert", "claim-read-after-insert"]);
+    // The claim only counts for the run's current attempt; once the call ends, the review opens.
+    expect(storage.statements[1]!.text).toMatch(/coalesce\(call_claim\.run_generation, claim_run\.reset_generation\) = claim_run\.reset_generation/);
+    storage.setPublishCallInFlight(false);
+    expect((await emitArtifactReviewGate({ ...input([A]), runGeneration: 0 })).idempotent).toBe(false);
+    expect(storage.rows.size).toBe(1);
+    // A replay of an existing review writes nothing new, and stays idempotent even while a call is in flight.
+    storage.setPublishCallInFlight(true);
+    expect((await emitArtifactReviewGate({ ...input([A]), runGeneration: 0 })).idempotent).toBe(true);
+  });
+
   // red-first-expect: to deeply equal [ 3, -1, -1 ]
   it("a gate raised for a produced event carries the producing attempt's generation, never the run's live state", async () => {
     // The delayed drain names the generation the event was written with; an event of an older build carries none, and

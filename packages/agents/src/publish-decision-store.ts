@@ -98,7 +98,9 @@ function deserialize(row: StoredRow): PublishDecisionRow {
     declaredRows = declaredRowsOf(parsed);
     if (declaredRows === null) throw new PublishDecisionError("malformed-row", "a stored decision has unreadable declared rows");
   }
-  return { ...row, status: row.status, surfacedValues, declaredRows, runGeneration: row.runGeneration ?? null };
+  // The count of publishing calls in flight is the call check's own state (claimPublishCall), never part of the record.
+  const { callsInFlight: _inFlight, ...record } = row;
+  return { ...record, status: row.status, surfacedValues, declaredRows, runGeneration: row.runGeneration ?? null };
 }
 
 /** A declaration as plain rows of two texts each, within the caps; null for any other shape. */
@@ -345,6 +347,33 @@ export async function decide(id: string, input: DecideInput, executor: Pick<type
     if (!current) throw new PublishDecisionError("not-found", "no decision has this id");
     return { outcome: "lost", currentStatus: deserialize(current).status };
   });
+}
+
+/**
+ * cinatra#4762 — a publishing call of the step takes its released decision before it runs: one more call in flight
+ * (calls_in_flight), written in the caller's withRunRowLock transaction, right after the call check read the review
+ * fence there. While a decision of the run's current attempt has a call in flight, every writer of a pending output
+ * (lifecycle-emit.ts, the produced-event insert) or a new review (artifact-review-gate-store.ts) of that run refuses:
+ * each takes the run row FOR KEY SHARE before it reads the count, so it either committed before the fence read (and
+ * the fence saw it) or reads the count after this transaction committed. True when the row was taken: still
+ * `released`. A write error propagates.
+ */
+export async function claimPublishCall(decisionId: string, executor: Pick<typeof db, "update">): Promise<boolean> {
+  const taken = await executor
+    .update(agentRunPublishDecisions)
+    .set({ callsInFlight: sql`coalesce(${agentRunPublishDecisions.callsInFlight}, 0) + 1` })
+    .where(and(eq(agentRunPublishDecisions.id, requireText(decisionId, "decisionId")), eq(agentRunPublishDecisions.status, "released")))
+    .returning({ id: agentRunPublishDecisions.id });
+  return taken.length === 1;
+}
+
+/** The end of a call claimPublishCall took: one call fewer in flight, never below 0. A call that never ends it (a crash)
+ *  leaves its count up, and the writers of the run's output keep refusing until a retry's reset starts a new attempt. */
+export async function endPublishCall(decisionId: string): Promise<void> {
+  await db
+    .update(agentRunPublishDecisions)
+    .set({ callsInFlight: sql`greatest(coalesce(${agentRunPublishDecisions.callsInFlight}, 0) - 1, 0)` })
+    .where(eq(agentRunPublishDecisions.id, requireText(decisionId, "decisionId")));
 }
 
 /**
