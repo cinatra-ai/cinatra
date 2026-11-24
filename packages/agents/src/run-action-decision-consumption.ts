@@ -43,7 +43,7 @@ import {
   agentRuns,
   artifactReviewActionConsumptions,
 } from "./schema";
-import { CURRENT_ATTEMPT } from "./publish-decision-store";
+import { CURRENT_ATTEMPT, decodeStoredPublishDecision, type PublishDecisionRow } from "./publish-decision-store";
 
 /** The tool that would act and the loaded extension version that owns it (the loaded identity's fields). */
 export type RunActionToolIdentity = {
@@ -104,7 +104,8 @@ function readActionIdentity(value: unknown): RunActionToolIdentity {
  *   - `action_person_decision_missing`: no decision of this step in the run's current attempt;
  *   - `action_person_decision_open`: the newest such decision still waits for a person;
  *   - `action_person_decision_not_affirmative`: it was declined, expired or ended with the run;
- *   - `action_person_decision_invalid`: it reads released but names no person, or another organization;
+ *   - `action_person_decision_invalid`: the store cannot read the row, or it reads released but names no person, or
+ *     another organization;
  *   - `action_person_decision_already_consumed`: it was used before (by this or any other action);
  *   - `action_person_decision_unavailable`: a store failure.
  */
@@ -140,13 +141,21 @@ export async function consumeRunActionDecision(input: ConsumeRunActionDecisionIn
       // The newest decision of exactly this step in the run's current attempt, chosen by the database: the store's own
       // current-attempt predicate (a row with no generation, written by an older node, is current until a reset stamps
       // it) and the store's order (created_at, then id, both descending), at the database's full timestamp precision.
-      const [decision] = await tx.select().from(agentRunPublishDecisions)
+      const [stored] = await tx.select().from(agentRunPublishDecisions)
         .where(and(eq(agentRunPublishDecisions.runId, runId), eq(agentRunPublishDecisions.nodeId, p.stepId),
           CURRENT_ATTEMPT))
         .orderBy(desc(agentRunPublishDecisions.createdAt), desc(agentRunPublishDecisions.id))
         .limit(1)
         .for("update");
-      if (!decision || decision.runId !== runId || decision.nodeId !== p.stepId) return refuse("action_person_decision_missing");
+      if (!stored || stored.runId !== runId || stored.nodeId !== p.stepId) return refuse("action_person_decision_missing");
+      // The locked row is read through the store's own decoder: a row the store cannot read (an unknown status,
+      // unreadable surfaced values or declared rows) is refused with a fixed code and none of its stored text.
+      let decision: PublishDecisionRow;
+      try {
+        decision = decodeStoredPublishDecision(stored);
+      } catch {
+        return refuse("action_person_decision_invalid");
+      }
       if (decision.status === "parked") refuse("action_person_decision_open");
       if (decision.status !== "released") refuse("action_person_decision_not_affirmative");
       if (decision.orgId !== orgId || !fieldValid(decision.decidedBy) || !(decision.decidedAt instanceof Date) ||

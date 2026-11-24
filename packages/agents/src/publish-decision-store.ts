@@ -103,6 +103,10 @@ function deserialize(row: StoredRow): PublishDecisionRow {
   return { ...row, status: row.status, surfacedValues, declaredRows, runGeneration: row.runGeneration ?? null };
 }
 
+/** The store's own decoder of a stored row, for a reader that selects the row itself (for example under a row lock in
+ *  its own transaction): throws a malformed-row PublishDecisionError for every row this module cannot read. */
+export const decodeStoredPublishDecision: (row: StoredRow) => PublishDecisionRow = deserialize;
+
 /** A declaration as plain rows in a shape the compiler writes (isPublishRowDeclaration: a text, list or artifacts row),
  *  each label and input within the caps; null for any other shape. A row is copied field by field, so the stored text
  *  holds only the fields its shape names. */

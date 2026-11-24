@@ -145,7 +145,9 @@ const input = (over: Record<string, unknown> = {}) => ({ orgId: "org-1", runId: 
   authority: { orgId: "org-1" }, proof: proofFor(SEND_STEP), action, ...over });
 const decision = (over: Row = {}): Row => ({ id: "decision-1", orgId: "org-1", runId: "run-1", nodeId: SEND_STEP,
   gateTaskId: "gate-task-1", status: "released", decidedBy: "user-7", decidedAt: new Date("2026-11-24T10:00:00Z"),
-  createdAt: new Date("2026-11-24T09:00:00Z"), runGeneration: 0, ...over });
+  createdAt: new Date("2026-11-24T09:00:00Z"), runGeneration: 0, surfacedValues: JSON.stringify({ subject: "Hello" }),
+  declaredRows: JSON.stringify([{ label: "Subject", input: "subject" }]), a2aContextId: "ctx", decisionNote: null,
+  expiresAt: new Date("2026-11-25T09:00:00Z"), ...over });
 const consumptions = () => h.tables.get(artifactReviewActionConsumptions) ?? [];
 
 beforeEach(() => {
@@ -302,6 +304,25 @@ describe("the person's affirmative decision for the run's action, used once", ()
       await expect(consume(input())).rejects.toMatchObject({ code: "action_person_decision_invalid" });
     }
     expect(consumptions()).toEqual([]);
+  });
+
+  it("refuses a released decision whose stored surfaced values or declared rows the store cannot read", async () => {
+    await loadModule();
+    const malformed: Row[] = [{ surfacedValues: "{not json" }, { surfacedValues: JSON.stringify(["a"]) },
+      { declaredRows: "[{" }, { declaredRows: JSON.stringify([{ label: "Subject" }]) }];
+    for (const over of malformed) {
+      h.tables.set(agentRunPublishDecisions, [decision(over)]);
+      // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
+      const refused = await consume(input()).catch((e: unknown) => e as Error & { code?: string });
+      expect(refused).toMatchObject({ code: "action_person_decision_invalid" });
+      expect(String((refused as Error).message)).not.toMatch(/not json|Subject/);
+    }
+    expect(consumptions()).toEqual([]);
+    // A valid row, with or without recorded declared rows, is still consumed once.
+    h.tables.set(agentRunPublishDecisions, [decision({ declaredRows: null })]);
+    await expect(consume(input())).resolves.toMatchObject({ consumptionKey: "publish_decision:decision-1" });
+    await expect(consume(input())).rejects.toMatchObject({ code: "action_person_decision_already_consumed" });
+    expect(consumptions()).toHaveLength(1);
   });
 
   it("refuses a run that no longer runs under the proof's attempt, context and bound source", async () => {
