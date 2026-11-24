@@ -7,6 +7,12 @@
  * sends exactly that value as the resume text; any other request is refused
  * before the pause is claimed.
  *
+ * A refresh answers no step: the flow parks at the same list step again. So it
+ * stores no answer row, and the real submission walk
+ * (`buildSubmissionMapByStepIndex`, which ties rows to declared pauses by
+ * position) gives the later pick to the list step and leaves the next pause
+ * unanswered.
+ *
  * Harness mirrors resume-message-before-fence-4245.test.ts.
  *
  * Run: cd packages/agents && pnpm exec vitest run src/__tests__/list-step-refresh-resume-3562.test.ts
@@ -18,18 +24,35 @@ import { buildListStepRefreshPayload, listStepRefreshRequest } from "../hitl-gat
 
 const LIST_STEP_ID = "@cinatra-ai/email-outreach-agent:list-picker";
 const durableGate = vi.hoisted(() => ({ value: null as null | Record<string, unknown> }));
-const bindings = vi.hoisted(() => ({ list: [] as Array<Record<string, unknown>> }));
-vi.mock("../field-renderer-bindings.server", () => ({
-  getMergedFieldRendererBindings: () => bindings.list,
-}));
+/** `generated: true` reads the application's real generated bindings, unchanged. */
+const bindings = vi.hoisted(() => ({ list: [] as Array<Record<string, unknown>>, generated: false }));
+vi.mock("../field-renderer-bindings.server", async () => {
+  const { GENERATED_FIELD_RENDERER_BINDINGS } = await import("@/lib/generated/agent-bindings");
+  return {
+    getMergedFieldRendererBindings: () => (bindings.generated ? GENERATED_FIELD_RENDERER_BINDINGS : bindings.list),
+  };
+});
 
 const row = vi.hoisted(() => ({ status: "pending_approval" as string }));
+/** The answer rows the resume road stored, in capture order. */
+type StoredRow = { stepKey: string; submittedValues: Record<string, unknown> | null; schemaSnapshot: null; capturedAt: Date };
+const promptRows = vi.hoisted(() => ({ list: [] as StoredRow[] }));
 const storeMock = vi.hoisted(() => ({
   readAgentRunById: vi.fn(),
   readAgentRunByTaskId: vi.fn(),
   readAgentTemplateById: vi.fn(),
   readRunCoOwners: vi.fn(async () => []),
-  writeHitlPrompt: vi.fn(async () => undefined),
+  writeHitlPrompt: vi.fn(async (input: { stepKey: string; submittedValues?: Record<string, unknown> | null }) => {
+    promptRows.list.push({
+      stepKey: input.stepKey,
+      submittedValues: input.submittedValues ?? null,
+      schemaSnapshot: null,
+      capturedAt: new Date(Date.UTC(2026, 10, 24, 10, promptRows.list.length)),
+    });
+  }),
+  readAllHitlPromptsForRun: vi.fn(async () => promptRows.list),
+  readReviewGateTimesForRun: vi.fn(async () => []),
+  readAgentRunMessages: vi.fn(async () => []),
   transitionRunStatus: vi.fn(),
 }));
 vi.mock("../run-pause-claim", async (orig) => ({
@@ -79,6 +102,7 @@ vi.mock("../wayflow-url", async (orig) => ({
 vi.mock("@/lib/auth-session", async (orig) => ({
   ...(await orig<typeof import("@/lib/auth-session")>()),
   resolveOrgRoleForUser: vi.fn(async () => "member"),
+  requireAuthSession: vi.fn(async () => ({ user: { id: "reader-refresh" }, session: { activeOrganizationId: "org-1" } })),
 }));
 vi.mock("../wayflow-run-token-carrier", () => ({
   mintResumeRunTokenMetadata: vi.fn(async () => ({ token: "t" })),
@@ -96,6 +120,7 @@ const handleWayflowTaskState = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../execution", () => ({ handleWayflowTaskState }));
 
 import { approveReviewTaskInternal } from "../review-task-actions";
+import { buildSubmissionMapByStepIndex } from "../run-actions";
 
 const RUN = {
   id: "run-refresh-3562",
@@ -124,6 +149,8 @@ function listStepGate(xRenderer = LIST_STEP_ID) {
 
 function arrange() {
   row.status = "pending_approval";
+  promptRows.list = [];
+  bindings.generated = false;
   durableGate.value = listStepGate();
   bindings.list = [{ id: LIST_STEP_ID, kind: "list-picker", priority: 90, params: { refreshValue: "refresh" } }];
   storeMock.readAgentRunByTaskId.mockImplementation(async () => liveRun());
@@ -260,6 +287,21 @@ describe("cinatra#3562 — the list step's Try again resumes the run with the de
     expect(sentText()).toContain('"text":"refresh"');
   });
 
+  it("refuses every refresh with today's generated bindings, and claims nothing (no binding at the current pin declares refreshValue)", async () => {
+    bindings.generated = true;
+    const { GENERATED_FIELD_RENDERER_BINDINGS } = await import("@/lib/generated/agent-bindings");
+    expect(GENERATED_FIELD_RENDERER_BINDINGS.some((b) => b.id === LIST_STEP_ID)).toBe(true);
+    const { claimPause } = (await import("./pause-claim-test-fake")).pauseClaimFake;
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await expect(
+      approveReviewTaskInternal(TASK, RUN.runBy, buildListStepRefreshPayload("refresh")),
+    ).rejects.toThrow("takes no such list step refresh");
+    expect(claimPause).not.toHaveBeenCalled();
+    expect(sendTask).not.toHaveBeenCalled();
+    expect(storeMock.writeHitlPrompt).not.toHaveBeenCalled();
+    expect(row.status).toBe("pending_approval");
+  });
+
   it("leaves an answer without the refresh key as it was (guard)", async () => {
     await approveReviewTaskInternal(TASK, RUN.runBy, { approved: true, userResponse: "refresh" });
     expect(sentText()).toContain('"text":"refresh"');
@@ -277,5 +319,66 @@ describe("cinatra#3562 — which write is a refresh request", () => {
     expect(listStepRefreshRequest(LIST_STEP_ID, TASK, { refresh: "  " })).toBeNull();
     expect(listStepRefreshRequest(LIST_STEP_ID, TASK, { refresh: true })).toBeNull();
     expect(listStepRefreshRequest(LIST_STEP_ID, TASK, "refresh")).toBeNull();
+  });
+});
+
+describe("cinatra#3562 — a refresh is no answer of the list step in the run's answer history", () => {
+  /** The list step, then the next pause, as the policy declares them. */
+  const POLICY_STEPS = [
+    { stepNumber: 1, xRenderer: LIST_STEP_ID },
+    { stepNumber: 2, xRenderer: "schema-field" },
+  ];
+  const HITL_STEPS = [
+    { index: 1, stepNumber: 1 },
+    { index: 2, stepNumber: 2 },
+  ];
+  const PICK = {
+    approved: true,
+    userResponse: JSON.stringify({ listIds: ["list-a"], listNames: ["List A"] }),
+  };
+
+  /** One answer at a parked list step; the flow then parks again (a new task). */
+  async function answerAt(reviewTaskId: string, values: Record<string, unknown>) {
+    row.status = "pending_approval";
+    durableGate.value = { ...listStepGate(), reviewTaskId };
+    await approveReviewTaskInternal(reviewTaskId, RUN.runBy, values);
+  }
+
+  /** The real walk over the stored rows: step index -> the answer's step key. */
+  async function walk() {
+    const entries = await buildSubmissionMapByStepIndex(RUN.id, "@cinatra-ai/email-outreach-agent", POLICY_STEPS, HITL_STEPS);
+    return new Map(entries.map(([index, entry]) => [index, entry]));
+  }
+
+  it("gives the pick after a refresh to the list step and leaves the next pause unanswered", async () => {
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await answerAt("wayflow-task-list-1", buildListStepRefreshPayload("refresh"));
+    await answerAt("wayflow-task-list-2", PICK);
+    expect(sendTask).toHaveBeenCalledTimes(2);
+    const map = await walk();
+    expect(map.get(1)?.stepKey).toBe("task-list-2");
+    expect(map.get(1)?.submittedValues).toMatchObject({ listIds: ["list-a"] });
+    expect(map.has(2)).toBe(false);
+  });
+
+  it("gives the pick after two refreshes to the list step and leaves the next pause unanswered", async () => {
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await answerAt("wayflow-task-list-1", buildListStepRefreshPayload("refresh"));
+    await answerAt("wayflow-task-list-2", buildListStepRefreshPayload("refresh"));
+    await answerAt("wayflow-task-list-3", PICK);
+    expect(sendTask).toHaveBeenCalledTimes(3);
+    const map = await walk();
+    expect(map.get(1)?.stepKey).toBe("task-list-3");
+    expect(map.has(2)).toBe(false);
+  });
+
+  it("still ties a pick and the next pause's answer to their own steps (guard)", async () => {
+    await answerAt("wayflow-task-list-1", PICK);
+    durableGate.value = null;
+    row.status = "pending_approval";
+    await approveReviewTaskInternal("wayflow-task-next", RUN.runBy, { approved: true, userResponse: JSON.stringify({ note: "next" }) });
+    const map = await walk();
+    expect(map.get(1)?.stepKey).toBe("task-list-1");
+    expect(map.get(2)?.stepKey).toBe("task-next");
   });
 });

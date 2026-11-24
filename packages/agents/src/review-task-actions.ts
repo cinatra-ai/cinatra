@@ -978,6 +978,18 @@ export async function approveReviewTaskInternal(
     if (refreshKeyValue !== undefined) {
       const gate = await readDurableHitlGateForContinue(run.id, reviewTaskId).catch(() => null);
       if (gate && listStepRefreshIsRequest({ reviewTaskId, gate })) {
+        // Who declares the refresh value, and when:
+        // 1. No binding at the application's current pin declares
+        //    `refreshValue`, so every refresh is refused today. That is the
+        //    intended fail-closed state.
+        // 2. The first consumer is the email-outreach agent's own list-picker
+        //    component, which declares `params.refreshValue` and draws Try again.
+        // 3. That package is pinned after this change merges; regenerating the
+        //    bindings then gives its binding the `refreshValue`.
+        // 4. The host's bundled list-picker-renderer is not the product path for
+        //    a binding that ships its own component: such a binding mounts that
+        //    component (register-default-renderers.ts, the
+        //    `hasFieldRendererComponent` branch).
         const { getMergedFieldRendererBindings } = await import("./field-renderer-bindings.server");
         const binding = getMergedFieldRendererBindings().find((b) => b.id === gate.xRenderer);
         const declaredRefreshValue = (binding?.params as { refreshValue?: unknown } | undefined)?.refreshValue;
@@ -1250,9 +1262,13 @@ export async function approveReviewTaskInternal(
         }
       }
 
-      // UNCONDITIONAL write. Empty `message` is allowed (column NOT NULL accepts
-      // ""). Bare-approval flagged excluded=true.
-      capturedPromptId = await captureHitlPromptForContinue({
+      // Written for every answer but the list step's refresh. Empty `message` is
+      // allowed (column NOT NULL accepts ""). Bare-approval flagged excluded=true.
+      // A refresh (cinatra#3562) answers no step: the flow parks at the same list
+      // step again, and its pick comes later. `buildSubmissionMapByStepIndex`
+      // ties every row to the next declared pause by position, so a refresh row
+      // would take the list step's place and shift the pick onto the next step.
+      capturedPromptId = typeof listStepRefreshAsk === "string" ? null : await captureHitlPromptForContinue({
         runId: run.id,
         agentId: template.packageName,
         stepKey: taskId,

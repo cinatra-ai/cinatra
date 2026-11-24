@@ -59,9 +59,26 @@ vi.mock("../orchestrator-actions", () => ({
   resumeStoppedOrchestratorAction: vi.fn(async () => ({ ok: true })),
 }));
 
-vi.mock("../run-actions", () => ({
+/**
+ * THE RUN'S STORED ANSWERS, read by the REAL submission walk. A refresh stores
+ * no answer row (the flow parks at the same list step again), so the rows here
+ * are what the server road leaves: the later pick at the list step only.
+ */
+type StoredRow = { stepKey: string; submittedValues: Record<string, unknown> | null; schemaSnapshot: null; capturedAt: Date };
+const answers = vi.hoisted(() => ({ rows: [] as StoredRow[] }));
+vi.mock("@/lib/auth-session", async (orig) => ({
+  ...(await orig<typeof import("@/lib/auth-session")>()),
+  requireAuthSession: vi.fn(async () => ({ user: { id: "user-3562" } })),
+}));
+vi.mock("../store", () => ({
+  readAgentRunById: vi.fn(async () => ({ id: "run-3562", orgId: "org-3562", status: "pending_approval" })),
+  readAllHitlPromptsForRun: vi.fn(async () => answers.rows),
+  readReviewGateTimesForRun: vi.fn(async () => []),
+}));
+
+vi.mock("../run-actions", async (orig) => ({
+  ...(await orig<typeof import("../run-actions")>()),
   startDevChildPreviewRun: vi.fn(async () => ({ ok: false })),
-  buildSubmissionMapByStepIndex: vi.fn(async () => []),
   createAndTriggerRun: vi.fn(async () => ({ ok: true, runId: "run-next" })),
   readRunOutputEvidence: vi.fn(async () => ({
     ok: true,
@@ -163,7 +180,14 @@ async function mountOn(reviewTaskId: string) {
       agUiEnabled={false}
       agentPackageName="@cinatra-ai/email-outreach-agent"
       inputParams={{}}
-      stepperSteps={[{ index: 1, stepNumber: 1, label: "Account scope", xRenderer: LIST_STEP_ID }]}
+      stepperSteps={[
+        { index: 1, stepNumber: 1, label: "Account scope", xRenderer: LIST_STEP_ID },
+        { index: 2, stepNumber: 2, label: "Message", xRenderer: "schema-field" },
+      ]}
+      policySteps={[
+        { stepNumber: 1, xRenderer: LIST_STEP_ID },
+        { stepNumber: 2, xRenderer: "schema-field" },
+      ]}
       agentId="cinatra-ai/email-outreach-agent"
       lgThreadId={null}
       templateId="tmpl-3562"
@@ -198,6 +222,7 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   INTERRUPT = null;
+  answers.rows = [];
   fieldRendererRegistry.clear();
   ensureDefaultFieldRenderersRegistered();
 });
@@ -238,6 +263,25 @@ describe("OrchestratorStepperPanel — a list step's Try again (cinatra#3562)", 
     await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
     await act(async () => finish({ ok: true }));
     expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads the pick after a refresh as the list step's answer, never the next step's, through the real walk (guard)", async () => {
+    // The refresh stored no row; the later pick at the re-parked list step did.
+    answers.rows = [{
+      stepKey: "task-3562-again",
+      submittedValues: { listIds: ["list-a"], listNames: ["List A"] },
+      schemaSnapshot: null,
+      capturedAt: new Date("2026-11-24T10:00:00Z"),
+    }];
+    await mountOn(WAYFLOW_TASK);
+    const { buildSubmissionMapByStepIndex } = await import("../run-actions");
+    const entries = await buildSubmissionMapByStepIndex(
+      "run-3562",
+      "@cinatra-ai/email-outreach-agent",
+      [{ stepNumber: 1, xRenderer: LIST_STEP_ID }, { stepNumber: 2, xRenderer: "schema-field" }],
+      [{ index: 1, stepNumber: 1 }, { index: 2, stepNumber: 2 }],
+    );
+    expect(entries.map(([index, entry]) => [index, entry.stepKey])).toEqual([[1, "task-3562-again"]]);
   });
 
   it("sends nothing from a list step on a setup gate (guard)", async () => {
