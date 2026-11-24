@@ -298,6 +298,9 @@ export async function callHostPrimitive(
         delegatedRestricted: !!ctx?.delegatedRestricted,
         // The outward declaration of the captured primitive's planned entry.
         declaresOutward: captured.planned.declaredOutward !== null,
+        // cinatra#3745: the captured primitive's planned owner, for the guarded
+        // outward run action (null when the identity failed: refused).
+        outwardOwner: captured.planned.identityFailure === null ? captured.planned.dispatchTarget : null,
       });
     } catch (err) {
       // cinatra#3745: a refused run call keeps its refusal class and code (its
