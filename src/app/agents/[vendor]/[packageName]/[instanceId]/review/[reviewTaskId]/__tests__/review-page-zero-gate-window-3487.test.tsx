@@ -151,10 +151,6 @@ vi.mock("@/components/crumb-contributions", () => ({ CrumbContributions: () => n
 
 import AgentRunReviewPage from "../page";
 import type * as RunWindowOwnershipModule from "../../../../../../../../../tests/e2e/design/conformance/run-window-ownership";
-// The module the fix adds is loaded inside the tests that use it, through a
-// specifier the transform does not resolve when it loads this file: before the
-// fix the file still loads and those tests fail on the missing module.
-// red-first-expect: Cannot find module '/tests/e2e/design/conformance/run-window-ownership'
 const RUN_WINDOW_OWNERSHIP = "../../../../../../../../../tests/e2e/design/conformance/run-window-ownership";
 let assertRunWindowOwnership!: typeof RunWindowOwnershipModule.assertRunWindowOwnership;
 let readRunWindowOwnership!: typeof RunWindowOwnershipModule.readRunWindowOwnership;

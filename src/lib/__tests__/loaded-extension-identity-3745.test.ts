@@ -31,7 +31,6 @@ import { enforceMcpBoundary } from "@/lib/authz/mcp-boundary";
 const PKG = "@x/mailer";
 const INSTALL = { packageName: PKG, version: "1.2.0", installId: "install-1", digest: "d".repeat(64) };
 
-// red-first-expect: recordLoadedExtensionIdentity is not a function
 const stamp = (input: Record<string, unknown> = INSTALL) =>
   (registry as unknown as { recordLoadedExtensionIdentity: (v: unknown) => registry.LoadedExtensionIdentity })
     .recordLoadedExtensionIdentity(input);
@@ -51,7 +50,6 @@ const refusalCode = (identity: unknown): string | null => {
 beforeEach(() => registry.__resetCapabilityRegistry());
 
 describe("the loader's stamp", () => {
-  // red-first-expect: recordLoadedExtensionIdentity is not a function
   it("is frozen, carries the install, and a new stamp of the same install replaces it", () => {
     const first = stamp();
     expect(first).toMatchObject(INSTALL);
@@ -93,7 +91,6 @@ describe("the check of an outward action's owner", () => {
     expect(refusalCode(identity)).toBe("action_loaded_identity_missing_or_stale");
   });
 
-  // red-first-expect: recordLoadedExtensionIdentity is not a function
   it("refuses an unchanged copy of the current identity as missing", () => {
     const identity = stamp();
     expect(refusalCode({ ...identity })).toBe("action_loaded_identity_missing_or_stale");
@@ -101,7 +98,6 @@ describe("the check of an outward action's owner", () => {
     expect(check(identity)).toBe(identity);
   });
 
-  // red-first-expect: recordLoadedExtensionIdentity is not a function
   it("refuses a copy with another generation, install id or digest as missing", () => {
     const identity = stamp();
     expect(refusalCode({ ...identity, generation: identity.generation + 1 })).toBe("action_loaded_identity_missing_or_stale");
@@ -109,7 +105,6 @@ describe("the check of an outward action's owner", () => {
     expect(refusalCode({ ...identity, digest: "e".repeat(64) })).toBe("action_loaded_identity_missing_or_stale");
   });
 
-  // red-first-expect: to be an instance of OutwardActionRefusal
   it("refuses an identity the loader never stamped as missing", () => {
     expect(refusalCode({ ...INSTALL, generation: 1 })).toBe("action_loaded_identity_missing_or_stale");
   });
@@ -127,7 +122,6 @@ describe("the check of an outward action's owner", () => {
     expect(refusalCode(identity)).toBe("action_loaded_identity_stale");
   });
 
-  // red-first-expect: recordLoadedExtensionIdentity is not a function
   it("retires with an expected identity only while that identity is current", () => {
     const old = stamp();
     const next = stamp({ ...INSTALL, digest: "e".repeat(64) });

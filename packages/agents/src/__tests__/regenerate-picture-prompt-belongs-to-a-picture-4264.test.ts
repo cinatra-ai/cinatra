@@ -176,7 +176,6 @@ async function dispatchFor(entry: typeof PICTURE_ENTRY, findings: unknown, start
 }
 
 describe("the picture's prompt reaches a Regenerate only when the reviewed work is a picture with a recorded prompt", () => {
-  // red-first-expect: expected undefined to be 'a lighthouse at dusk, wide angle' // Object.is equality
   it("a picture step whose declared input is not named prompt is sent the picture's prompt", async () => {
     await arrange(PICTURE_ENTRY, ["the prompt the picture was made from"]);
     const { request, regenerateEntry } = await press(PROMPT);
@@ -191,7 +190,6 @@ describe("the picture's prompt reaches a Regenerate only when the reviewed work 
     expect(ports.reads).toHaveLength(0);
   });
 
-  // red-first-expect: expected [ { id: 'prompt-window', …(1) }, …(1) ] to deeply equal [ { id: 'prompt-window', …(1) } ]
   it("a text step whose declared input is named prompt is sent the Note; a submitted prompt is never recorded or sent", async () => {
     await arrange(TEXT_ENTRY, []);
     const withPrompt = await press(PROMPT);
@@ -304,7 +302,6 @@ describe("a refiled successor keeps its picture's prompt on the next Regenerate"
     };
   }
 
-  // red-first-expect: expected null to deeply equal { artifactNode: 'file_picture', …(2) }
   it("a second Regenerate with a prompt against the refiled successor records, keys and sends that prompt", async () => {
     ports.pool = tables;
     ports.readReviewGate.mockResolvedValue({
@@ -353,7 +350,6 @@ describe("a refiled successor keeps its picture's prompt on the next Regenerate"
     expect(ports.reads).toHaveLength(0);
   });
 
-  // red-first-expect: expected null to be 'a lighthouse at dusk, wide angle'
   it("the review surface offers the refiled successor the prompt its picture was made from", async () => {
     ports.pool = tables;
     const { readRevisionImagePrompt } = await import("@/lib/artifacts/materialization-ledger");
