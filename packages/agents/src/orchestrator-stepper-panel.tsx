@@ -696,6 +696,7 @@ function HitlApprovalCard({
   onApproved,
   onApproveRejected,
   onApprovalSubmitted,
+  onListStepRefreshSent,
   onSetupAnswerAccepted,
   embedMode = false,
 }: {
@@ -714,6 +715,9 @@ function HitlApprovalCard({
    *  the schema, and the xRenderer so the stepper can immediately populate the
    *  replay map without waiting for a DB refetch. */
   onApprovalSubmitted?: (values: Record<string, unknown>, schema: Record<string, unknown> | undefined, xRenderer: string) => void;
+  /** A list step's Try again was accepted (cinatra#3562). It is no submission:
+   *  the run parks at the same list step again and stores no answer row. */
+  onListStepRefreshSent?: () => void;
   /** cinatra#3532 (fix leg 3) — a staged setup answer this gate ACCEPTED, named
    *  by the gate's own identity. The panel holds it while it re-reads the run,
    *  so the question the run is asking now is drawn without a reload. Not
@@ -1192,7 +1196,9 @@ function HitlApprovalCard({
           setGateBlocked(outcome.blocked);
           return;
         }
-        onApprovalSubmitted?.(payload, interruptContext.schema as Record<string, unknown> | undefined, interruptContext.xRenderer);
+        // A refresh answers no step, so it is not reported as a submission:
+        // the replay map would show the retry as the step's pick.
+        onListStepRefreshSent?.();
       } catch (err) {
         const msg = err instanceof Error ? err.message : "unknown";
         if (isAlreadyResolvedError(msg)) return;
@@ -3423,6 +3429,9 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
           );
           setSetupGateReRead(null);
           setAnsweredSetupReading({ key: gateKey, ...answer });
+        }}
+        onListStepRefreshSent={() => {
+          if (!embedMode) router.refresh();
         }}
         onApprovalSubmitted={(values, schema, xRenderer) => {
           if (!embedMode) router.refresh();

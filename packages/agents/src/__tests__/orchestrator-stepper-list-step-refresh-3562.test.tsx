@@ -227,6 +227,64 @@ afterEach(() => {
   ensureDefaultFieldRenderersRegistered();
 });
 
+/**
+ * A list step that offers a list: Pick writes a real pick, Try again writes the
+ * refresh. Its replay (mode "view") prints the value it was handed.
+ */
+function PickOrRetryRenderer({ value, mode, onChange, onValidityChange }: FieldRendererProps) {
+  if (mode === "view") {
+    return <pre data-testid="list-step-replay">{JSON.stringify(value)}</pre>;
+  }
+  return (
+    <>
+      <Button
+        type="button"
+        data-testid="list-picker-pick"
+        onClick={() => {
+          onValidityChange?.(true);
+          void onChange({ listIds: ["list-a"], listNames: ["List A"] });
+        }}
+      >
+        Pick
+      </Button>
+      <Button
+        type="button"
+        data-testid="list-picker-try-again"
+        onClick={() => void onChange({ listIds: [], listNames: [], refresh: "refresh" })}
+      >
+        Try again
+      </Button>
+    </>
+  );
+}
+
+function twoListStepsPanel(
+  OrchestratorStepperPanel: typeof import("../orchestrator-stepper-panel").OrchestratorStepperPanel,
+) {
+  return (
+    <OrchestratorStepperPanel
+      runId="run-3562"
+      initialStatus="pending_approval"
+      initialError={null}
+      agUiEnabled={false}
+      agentPackageName="@cinatra-ai/email-outreach-agent"
+      inputParams={{}}
+      stepperSteps={[
+        { index: 1, stepNumber: 1, label: "Account scope", xRenderer: LIST_STEP_ID },
+        { index: 2, stepNumber: 2, label: "Second list", xRenderer: LIST_STEP_ID },
+      ]}
+      policySteps={[
+        { stepNumber: 1, xRenderer: LIST_STEP_ID },
+        { stepNumber: 2, xRenderer: LIST_STEP_ID },
+      ]}
+      agentId="cinatra-ai/email-outreach-agent"
+      lgThreadId={null}
+      templateId="tmpl-3562"
+      templateName="Email Outreach Agent"
+    />
+  );
+}
+
 describe("OrchestratorStepperPanel — a list step's Try again (cinatra#3562)", () => {
   it("sends the refresh value at once as the step's answer, never as a pick, and keeps Continue unavailable", async () => {
     const view = await mountOn(WAYFLOW_TASK);
@@ -289,5 +347,43 @@ describe("OrchestratorStepperPanel — a list step's Try again (cinatra#3562)", 
     fireEvent.click(await view.findByTestId("list-picker-try-again"));
     await act(async () => {});
     expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  });
+  it("keeps an earlier list step's replay as its real pick after a later list step's refresh, through the live submission map", async () => {
+    fieldRendererRegistry.clear();
+    ensureDefaultFieldRenderersRegistered();
+    fieldRendererRegistry.register({
+      id: LIST_STEP_ID,
+      priority: 100,
+      condition: (_fieldName, schema) =>
+        (schema as { "x-renderer"?: unknown })["x-renderer"] === LIST_STEP_ID,
+      renderer: PickOrRetryRenderer,
+      drawsOwnSubmit: true,
+    });
+    const schema = { type: "object", properties: { accountScope: { type: "string" } } };
+    INTERRUPT = { schema, xRenderer: LIST_STEP_ID, values: { stepNumber: 1 }, reviewTaskId: "wayflow-task-first" };
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    const view = render(twoListStepsPanel(OrchestratorStepperPanel));
+
+    // The first list step is answered with a real pick.
+    fireEvent.click(await view.findByTestId("list-picker-pick"));
+    await waitFor(() => expect(productContinue()!.disabled).toBe(false));
+    fireEvent.click(productContinue()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+
+    // The run parks at the second list step; its Try again is pressed.
+    INTERRUPT = { schema, xRenderer: LIST_STEP_ID, values: { stepNumber: 2 }, reviewTaskId: "wayflow-task-second" };
+    view.rerender(twoListStepsPanel(OrchestratorStepperPanel));
+    fireEvent.click(await view.findByTestId("list-picker-try-again"));
+    // red-first-expect: to be called 2 times, but got 1 times
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(2));
+    const refreshPayload = (hitlActions.approveReviewTask.mock.calls[1] as unknown as [string, Record<string, unknown>])[1];
+    expect(refreshPayload).toMatchObject({ listStepRefresh: "refresh" });
+    await act(async () => {});
+
+    // The first step's replay still shows its real pick.
+    fireEvent.click(document.querySelector<HTMLButtonElement>('button[aria-label="1 Account scope"]')!);
+    const replay = await view.findByTestId("list-step-replay");
+    expect(replay.textContent).toContain("list-a");
+    expect(replay.textContent).not.toContain("listStepRefresh");
   });
 });
