@@ -47,6 +47,7 @@ import { devFixtureProvenanceKey } from "@/lib/extension-fixture-provenance";
 import {
   registerCapabilityProvider,
   resolveCapabilityProviders,
+  currentLoadedExtensionIdentity,
   isLoadedExtensionIdentityCurrent,
   isLoadedExtensionIdentityMinted,
   type LoadedExtensionIdentity,
@@ -1641,9 +1642,11 @@ export function createNonDefaultVersionHostContext(
 // arguments are copied once into plain frozen JSON, the run's verified executing
 // source must still be current, and the step's bound source must declare the tool.
 import type { ActionJson } from "@cinatra-ai/sdk-extensions";
-import { parseVerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
+import { parseVerifiedExecutedRunSource, type VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server/request-context";
-import { assertRunStepToolAllowed, readCurrentRunStepToolPolicy, RunStepToolPolicyRefusal } from "@cinatra-ai/agents/store";
+import { assertRunStepToolAllowed, consumeRunActionDecision, readCurrentRunStepToolPolicy, RunStepToolPolicyRefusal,
+  type RunActionDecisionConsumption, type RunActionToolIdentity } from "@cinatra-ai/agents/store";
+import { HOST_PRIMITIVE_OWNER_PACKAGE } from "@cinatra-ai/mcp-server/capability-plan";
 import { isProxy } from "node:util/types";
 
 export class ArtifactActionCheckRefusal extends Error {
@@ -1707,8 +1710,8 @@ export class OutwardActionRefusal extends Error {
  * the very object the loader minted, a copy with equal fields included), and
  * `action_loaded_identity_stale` for a minted identity that was replaced,
  * retired or torn down. Returns the checked identity. It is one step of the admission
- * only: it admits nothing by itself, and `enforceMcpBoundary` still refuses
- * every outward call on a run frame. */
+ * only and admits nothing by itself: `checkOutwardRunAction` below runs it on the
+ * owner of an outward tool. */
 export function assertOutwardActionLoadedIdentity(identity: unknown): LoadedExtensionIdentity {
   if (!isLoadedExtensionIdentityMinted(identity)) throw new OutwardActionRefusal("action_loaded_identity_missing_or_stale");
   if (!isLoadedExtensionIdentityCurrent(identity)) throw new OutwardActionRefusal("action_loaded_identity_stale");
@@ -1767,4 +1770,117 @@ export async function prepareDeclaredRunToolArguments(toolName: string, args: un
     contextId: proof.contextId, executedSourceSha256: proof.executedSourceSha256,
     stepId: proof.stepId, toolName });
   return frozenArguments;
+}
+
+// ---------------------------------------------------------------------------
+// The guarded outward run action (cinatra#3745)
+// ---------------------------------------------------------------------------
+//
+// An outward tool (it sends or publishes on a person's behalf) called on a run
+// frame is admitted for exactly one call, and only in this order:
+//   1. the frame's verified executing source (the step proof) is taken;
+//   2. the tool's owner passes the loaded-identity check;
+//   3. the person's recorded, affirmative decision for this run, step and tool
+//      is consumed, once, before any effect;
+//   4. `enforceMcpBoundary` admits this one call.
+// Steps 1 and 2 are `checkOutwardRunAction`; step 3 is `consumeOutwardRunAction`,
+// which the boundary runs after its other rules admitted the call, so a call
+// that another rule refuses never uses the decision up. Every refusal is one of
+// the refusal classes with a fixed code (the fixed 403 of a refused run call);
+// no refusal carries store text.
+
+/** The owner of an outward tool as the registration's plan resolved it (the
+ * planned entry's dispatch target), or null when its identity failed. */
+export type OutwardActionOwner = Readonly<{ kind: string; packageName: string; version: string }>;
+
+/** The install id and digest of a host built-in tool's owner. A host built-in is
+ * part of the host build, not a loaded install, so it has no loaded identity;
+ * the consumption records it under this marker. Only a stamp-less registration
+ * is owned by the host package (a stamp that names it is refused by the plan). */
+export const HOST_BUILTIN_ACTION_OWNER = "host-builtin";
+
+/** The run write authority the consumption runs under (the frame's own). */
+type OrgWriteAuthority = Parameters<typeof consumeRunActionDecision>[0]["authority"];
+
+export type CheckedOutwardRunAction = Readonly<{
+  orgId: string;
+  runId: string;
+  authority: OrgWriteAuthority;
+  proof: VerifiedExecutedRunSource;
+  action: RunActionToolIdentity;
+}>;
+
+function ownString(value: object, key: string): string | undefined {
+  const d = Object.getOwnPropertyDescriptor(value, key);
+  return d && "value" in d && typeof d.value === "string" && d.value.length > 0 ? d.value : undefined;
+}
+
+/**
+ * Steps 1 and 2 of the guarded outward run action. `frame` is the request's
+ * run frame; `owner` is the planned owner of the tool. Throws
+ * `action_executed_source_missing_or_stale` (no current step proof on the
+ * frame), `action_write_authority_missing` (the frame carries no run write
+ * authority), `action_owner_unresolved` (no owner identity), or the loaded-
+ * identity refusals; returns the checked action otherwise. Reads no store.
+ */
+export function checkOutwardRunAction(input: {
+  frame: unknown; toolName: string; owner: OutwardActionOwner | null | undefined;
+}): CheckedOutwardRunAction {
+  const frame = input.frame;
+  if (!frame || typeof frame !== "object") throw new OutwardActionRefusal("action_executed_source_missing_or_stale");
+  const runId = ownString(frame, "runId");
+  const orgId = ownString(frame, "orgId");
+  const stepId = ownString(frame, "verifiedStepId");
+  const proof = parseVerifiedExecutedRunSource(Object.getOwnPropertyDescriptor(frame, "verifiedExecutedSource")?.value);
+  if (!runId || !orgId || !stepId || !proof || proof.stepId !== stepId) {
+    throw new OutwardActionRefusal("action_executed_source_missing_or_stale");
+  }
+  const authority = Object.getOwnPropertyDescriptor(frame, "orgWriteAuthority")?.value;
+  if (!authority || typeof authority !== "object") throw new OutwardActionRefusal("action_write_authority_missing");
+  const owner = input.owner;
+  if (typeof input.toolName !== "string" || input.toolName.length === 0 || !owner || typeof owner !== "object") {
+    throw new OutwardActionRefusal("action_owner_unresolved");
+  }
+  const kind = ownString(owner, "kind");
+  const packageName = ownString(owner, "packageName");
+  const version = ownString(owner, "version");
+  if (!kind || !packageName || !version) throw new OutwardActionRefusal("action_owner_unresolved");
+  let action: RunActionToolIdentity;
+  if (kind === "host" && packageName === HOST_PRIMITIVE_OWNER_PACKAGE) {
+    action = Object.freeze({ toolName: input.toolName, packageName, version,
+      installId: HOST_BUILTIN_ACTION_OWNER, digest: HOST_BUILTIN_ACTION_OWNER });
+  } else {
+    // Every other owner is an extension version (or a bundled module, which has
+    // no loaded identity and is refused here).
+    const identity = assertOutwardActionLoadedIdentity(currentLoadedExtensionIdentity(packageName, version));
+    action = Object.freeze({ toolName: input.toolName, packageName: identity.packageName, version: identity.version,
+      installId: identity.installId, digest: identity.digest });
+  }
+  return Object.freeze({ orgId, runId, authority: authority as OrgWriteAuthority, proof, action });
+}
+
+/**
+ * Step 3 of the guarded outward run action: consume the person's decision for
+ * the checked action, once. The owner's loaded identity is checked again right
+ * before the consumption (it may have been replaced or torn down meanwhile).
+ * Throws the consumption's refusal (its fixed code), and
+ * `action_person_decision_unavailable` for any other failure.
+ */
+export async function consumeOutwardRunAction(checked: CheckedOutwardRunAction): Promise<RunActionDecisionConsumption> {
+  const { action } = checked;
+  const hostBuiltin = action.packageName === HOST_PRIMITIVE_OWNER_PACKAGE &&
+    action.installId === HOST_BUILTIN_ACTION_OWNER && action.digest === HOST_BUILTIN_ACTION_OWNER;
+  if (!hostBuiltin) {
+    const identity = assertOutwardActionLoadedIdentity(currentLoadedExtensionIdentity(action.packageName, action.version));
+    if (identity.installId !== action.installId || identity.digest !== action.digest) {
+      throw new OutwardActionRefusal("action_loaded_identity_stale");
+    }
+  }
+  try {
+    return await consumeRunActionDecision({ orgId: checked.orgId, runId: checked.runId,
+      authority: checked.authority, proof: checked.proof, action });
+  } catch (err) {
+    if (runActionRefusalClassCode(err)) throw err;
+    throw new RunStepToolPolicyRefusal("action_person_decision_unavailable");
+  }
 }

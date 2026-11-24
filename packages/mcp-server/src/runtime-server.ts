@@ -387,6 +387,9 @@ export async function createMcpRuntimeServer(input: {
           delegatedRestricted: !!ctx?.delegatedRestricted,
           // The outward declaration planned at registration, never re-read here.
           declaresOutward: planned.declaredOutward !== null,
+          // cinatra#3745: the planned owner, so an outward call on a run frame takes
+          // the guarded outward run action (null when the identity failed: refused).
+          outwardOwner: planned.identityFailure === null ? planned.dispatchTarget : null,
         });
         if (!decision.allowed && decision.shouldBlock) {
           return {

@@ -30,9 +30,9 @@
 // with a fixed code; a store failure is refused with a fixed code too and never
 // passes its own text on.
 //
-// It opens no outward call by itself: nothing in production calls it yet, and
-// `enforceMcpBoundary` still refuses every outward call on a run frame. The
-// guarded invocation that calls it before the effect is a later part.
+// It opens no outward call by itself. Its one caller is the host's guarded
+// outward run action (`consumeOutwardRunAction` in `@/lib/extension-host-context`),
+// which `enforceMcpBoundary` runs last, just before it admits the one call.
 // ---------------------------------------------------------------------------
 import { and, desc, eq } from "drizzle-orm";
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
