@@ -183,19 +183,24 @@ const materializationLedgerRef = appSchemaRef.table("artifact_materializations",
   imagePrompt: text("image_prompt"),
 });
 
+/** What a person reads when the reviewed work could not be checked for a recorded prompt. */
+const PICTURE_PROMPT_UNREADABLE = "The picture's prompt could not be checked. Nothing was sent; try Regenerate again.";
+
 /**
  * Is the reviewed revision a picture with a recorded prompt (cinatra#4264)?
  * True exactly when one finalized ledger row of (org, artifact, revision)
  * records a non-blank prompt: the scope of the review surface's prefill read
  * (`readRevisionImagePrompt`), so the store keeps the picture's prompt exactly
  * when the surface offered it. Read on the server, never from the request.
- * Fail-soft toward no prompt: no row, two rows, a blank prompt or a read
- * fault all yield false, and the request then carries the Note alone.
+ * Only a read that succeeded decides: no row, two rows or a blank prompt
+ * yield false (the work is not a picture with a recorded prompt). A read
+ * fault yields null: the person's prompt is never dropped on a fault, the
+ * request is refused before anything is recorded, and a retry may succeed.
  */
 async function revisionRecordsAPrompt(
   orgId: string,
   target: { artifactId: string; representationRevisionId: string },
-): Promise<boolean> {
+): Promise<boolean | null> {
   try {
     const rows = await db
       .select({ imagePrompt: materializationLedgerRef.imagePrompt })
@@ -213,7 +218,7 @@ async function revisionRecordsAPrompt(
     const prompt = rows.length === 1 ? rows[0].imagePrompt : null;
     return typeof prompt === "string" && prompt.trim().length > 0;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -465,8 +470,12 @@ export async function recordReviewSurfaceChangesRequested(
   // made from; on any other work it belongs to no input of the step and is
   // dropped here, so it is never recorded, never keyed and never sent. A
   // request without one reads nothing more than before.
-  const prompt =
-    submittedPrompt.length > 0 && (await revisionRecordsAPrompt(gate.orgId, baseTarget)) ? submittedPrompt : "";
+  const recordsAPrompt = submittedPrompt.length > 0 ? await revisionRecordsAPrompt(gate.orgId, baseTarget) : false;
+  if (recordsAPrompt === null) {
+    // Nothing is recorded and the gate stays pending: the same request may be sent again.
+    return { ok: false, code: "regenerate-unavailable", error: PICTURE_PROMPT_UNREADABLE };
+  }
+  const prompt = recordsAPrompt ? submittedPrompt : "";
   const keyMaterial =
     prompt.length > 0
       ? `${gate.id} ${trimmed} ${prompt}`

@@ -187,6 +187,24 @@ describe("the picture's prompt reaches a Regenerate only when the reviewed work 
     expect(ports.reads).toHaveLength(0);
   });
 
+  it("a prompt read that faults refuses the Regenerate before anything is recorded, and never drops the prompt", async () => {
+    await arrange(PICTURE_ENTRY, []);
+    ports.reads.pop(); // the ledger prompt read faults (no queued result: the stubbed read throws)
+    const { recordReviewSurfaceChangesRequested } = await import("../lifecycle-review-changes-requested-store");
+    const result = await recordReviewSurfaceChangesRequested({
+      runId: RUN,
+      reviewTaskId: TASK,
+      baseTarget: BASE,
+      currentBaseRevisionId: BASE.representationRevisionId,
+      feedback: NOTE,
+      prompt: PROMPT,
+      decidedBy: "user-4264-picture",
+      origin: "regenerate",
+    });
+    expect(ports.recordChangesRequested).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: false, code: "regenerate-unavailable" });
+  });
+
   it("a recorded prompt that is blank, or recorded twice, keeps no submitted prompt", async () => {
     for (const recorded of [["   "], ["one", "two"]]) {
       await arrange(PICTURE_ENTRY, recorded);
