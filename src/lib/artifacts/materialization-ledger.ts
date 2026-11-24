@@ -339,7 +339,11 @@ function onlyPrompt(rows: Array<Record<string, unknown>>): string | null {
  * of that same run whose revision, on another artifact of the org, binds that
  * same resource. Both facts are written by the application, never taken from a
  * request. The refile link is read only when the revision has no prompt row of
- * its own, and it too must name exactly one row.
+ * its own, and it too must name exactly one row. A refile writes no ledger
+ * row, so a revision with ANY finalized ledger row of its own (a prompt or
+ * none) was written directly and is never read as a refile: a run that wrote
+ * the same bytes twice, once with a prompt and once without, never lends the
+ * one write's prompt to the other.
  *
  * The one rule for the review surface's prefill and for the review store,
  * which keeps a submitted prompt exactly when this read returns one. A read
@@ -373,6 +377,10 @@ export async function readRevisionImagePrompt(
       WHERE r.org_id = $1 AND r.artifact_id = $2 AND r.id = $3
         AND r.created_by_run_id IS NOT NULL
         AND m.phase = 'finalized' AND m.image_prompt IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM "${s}"."artifact_materializations" own
+           WHERE own.org_id = r.org_id AND own.artifact_id = r.artifact_id
+             AND own.representation_revision_id = r.id AND own.phase = 'finalized')
       LIMIT 2`,
     values,
   );
