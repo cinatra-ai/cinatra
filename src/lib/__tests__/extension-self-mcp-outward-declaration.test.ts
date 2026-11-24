@@ -94,4 +94,13 @@ describe("the in-process self-invocation hands the boundary the planned outward 
     expect(request?.primitiveName).toBe("example_plain_tool");
     expect(request?.declaresOutward).not.toBe(true);
   });
+
+  it("hands the boundary the captured primitive's planned owner as outwardOwner, for the guarded outward run action", async () => {
+    await callHostPrimitive("example_outward_tool", { a: 3 });
+    expect(hoisted.boundary).toHaveBeenCalledTimes(1);
+    // red-first-expect: expected undefined to deeply equal
+    expect(hoisted.boundary.mock.calls[0]?.[0]?.outwardOwner).toEqual({
+      kind: "host", packageName: "@example-org/host", version: "1.0.0", name: "example_outward_tool",
+    });
+  });
 });

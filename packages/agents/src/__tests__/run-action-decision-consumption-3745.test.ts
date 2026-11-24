@@ -29,6 +29,7 @@ import {
   artifactReviewActionConsumptions,
 } from "../schema";
 import { CURRENT_ATTEMPT, insertParkedDecision } from "../publish-decision-store";
+import { findPublishingAncestor } from "../validate-oas-runtime-invariants";
 
 type Row = Record<string, unknown>;
 const h = vi.hoisted(() => ({
@@ -579,5 +580,18 @@ describe("a tool step nested in a subflow is covered by its top-level publishing
       await expect(consume(bindOutreach(doc))).rejects.toMatchObject({ code: "action_decision_node_not_publishing" });
     }
     expect(consumptions()).toEqual([]);
+  });
+});
+
+describe("the reader of a tool step's top-level publishing node (findPublishingAncestor)", () => {
+  it("resolves a nested step to its top-level publishing node, a publishing node to itself, and a step outside any publishing node to none", () => {
+    // red-first-expect: is not a function
+    expect(findPublishingAncestor(outreachGraph(), OUTREACH_STEP)).toEqual({ kind: "resolved", nodeId: OUTREACH_NODE });
+    const doc = outreachGraph();
+    doc.$referenced_components[OUTREACH_NODE] = { ...structuredClone(bridgeStep), id: OUTREACH_NODE, name: OUTREACH_NODE,
+      metadata: { cinatra: { publishes: true } } };
+    expect(findPublishingAncestor(doc, OUTREACH_NODE)).toEqual({ kind: "resolved", nodeId: OUTREACH_NODE });
+    expect(findPublishingAncestor(outreachGraph(), "drafts-write")).toEqual({ kind: "not_publishing", nodeId: "drafts_flow" });
+    expect(findPublishingAncestor(outreachGraph(), "no-such-step")).toEqual({ kind: "unresolved" });
   });
 });
