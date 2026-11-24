@@ -265,9 +265,12 @@ function collectInstalled(opts?: { fresh?: boolean }): InstalledScan {
         if (packageName !== mountedAs || (declared !== undefined && !Array.isArray(declared))) {
           unread.add(mountedAs);
         }
-        // A declaration refused whole leaves every id it may name unknown, as
-        // an unparsable manifest does: the scan is not complete.
-        if (declared !== undefined && !Array.isArray(declared)) complete = false;
+        // A manifest that does not name its folder's package, or a declaration
+        // refused whole, leaves every id that package may name unknown, as an
+        // unparsable manifest does: the scan is not complete.
+        if (packageName !== mountedAs || (declared !== undefined && !Array.isArray(declared))) {
+          complete = false;
+        }
         if (!packageName || declared === undefined) continue;
         const { entries, errors, refusedScreenIds } = validateFieldRendererDeclarations(
           packageName,

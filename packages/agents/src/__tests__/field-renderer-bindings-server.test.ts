@@ -576,6 +576,23 @@ describe("a binding collection error is never read as 'no screen' (cinatra#3470)
     expect(read("@s/shapeless-agent:card")).toBe("unavailable");
   });
 
+  it("a manifest that names another package than its folder makes the read incomplete", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    installReadable();
+    const dir = join(FIXTURE_DIR, "s", "misnamed-agent");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({
+        name: "@s/other-name",
+        cinatra: { fieldRenderers: [{ id: "@s/misnamed-agent:review", layout: "card" }] },
+      }),
+    );
+    // A runtime-only id of the misnamed folder is never known to hold no screen.
+    expect(payload({ fresh: true }).incomplete).toBe(true);
+    expect(read("@s/misnamed-agent:review")).toBe("unavailable");
+  });
+
   it("an unreadable mount (EACCES) makes the read incomplete", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     installReadable();
