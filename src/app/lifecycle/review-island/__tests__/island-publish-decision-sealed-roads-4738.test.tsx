@@ -17,7 +17,6 @@
 //     pictures, and a target the core floors as `read-denied` gets no capture pair minted at all.
 // Red first at ffe421ea: a publish row names no sealed road, so the target keeps the session addresses. Before the
 // publish row existed at all, the subject key it seals with does not exist:
-// red-first-expect: publishDecisionIslandSubjectKey is not a function
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createElement, isValidElement, type ReactElement, type ReactNode } from "react";
 
