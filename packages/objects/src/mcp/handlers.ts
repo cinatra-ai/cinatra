@@ -3404,11 +3404,17 @@ export function createObjectsPrimitiveHandlers() {
       // existing row's type.
       const incomingData =
         (input.data as Record<string, unknown> | undefined) ?? {};
+      // An EMPTY patch (`data: {}`) changes no content: it runs no content
+      // gate and writes nothing (no new version, no history or outbox row).
+      // A flow whose write-back has nothing to write renders exactly this
+      // patch; writing it would record a revision that changes nothing.
+      const emptyPatch =
+        input.data !== undefined && Object.keys(incomingData).length === 0;
       let mergedData: Record<string, unknown> = {
         ...((existing.data as Record<string, unknown> | null) ?? {}),
         ...incomingData,
       };
-      if (input.data !== undefined) {
+      if (input.data !== undefined && !emptyPatch) {
         await enforceActivatedTypePayload(existing.type, orgId, mergedData);
         // Draftable lock (cinatra#1449/#1457): a content edit is the primary way
         // to mutate a locked draft, so reject it here BEFORE any commit (ahead of
@@ -3505,6 +3511,11 @@ export function createObjectsPrimitiveHandlers() {
         if (input.data === undefined) {
           return { ok: true as const };
         }
+      }
+      // The empty patch answers as a move-only call does, `{ ok: true }` with
+      // no change-set: nothing was written that an Undo could revert.
+      if (emptyPatch) {
+        return { ok: true as const };
       }
 
       const updated = upsertObjectAndEnqueue({
