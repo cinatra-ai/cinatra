@@ -571,19 +571,20 @@ describe("a declared card holds the host's Continue (cinatra#3470)", () => {
   });
 
   // The check of every other kind: a declared 'kind' registers only for a kind
-  // with a host component, and of those only the list step's untouched answer
-  // answers nothing (an empty snapshot). Context selection, the reviews and
-  // the call to action continue on what they draw; the grouped setup form
-  // sends from its own control.
-  it("of every kind a 'kind' layout can declare, only the list step holds the Continue", () => {
+  // with a host component. The list step's untouched answer answers nothing
+  // (an empty snapshot), and the recipients and drafts reviews stage their
+  // answer only once their rows are shown, so those three hold the Continue.
+  // Context selection and the call to action continue on what they draw; the
+  // grouped setup form sends from its own control.
+  it("of every kind a 'kind' layout can declare, only the list step and the two reviews hold the Continue", () => {
     const holding: string[] = [];
     for (const kind of knownFieldRendererKinds()) {
       fieldRendererRegistry.clear();
       registerFieldRendererBindings([{ id: ID, kind, priority: 80, midRunHitl: true, screen: { layout: "kind" } }]);
       if (entryOf()?.continueReady !== undefined) holding.push(kind);
     }
-    // red-first-expect: expected [] to deeply equal [ 'list-picker' ]
-    expect(holding).toEqual(["list-picker"]);
+    // red-first-expect: expected [] to deeply equal [
+    expect([...holding].sort()).toEqual(["campaign-recipients-review", "email-drafts-review", "list-picker"]);
   });
 
   // The grouped setup form sends from its own control, which validates the

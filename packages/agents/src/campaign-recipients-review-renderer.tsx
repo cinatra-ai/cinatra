@@ -377,11 +377,16 @@ export function CampaignRecipientsReviewRenderer({
       setServerRecipients(preloaded.recipients);
       setServerTotal(preloaded.recipients.length);
       setPhase("ready");
-      // Seed the parent buffer with campaignId so handleContinue can pass it
-      // through the approval payload. The preloaded path skips loadRecipients,
-      // so onChange must be called here or the resume payload loses campaignId.
-      if (persistedCampaignId) {
-        onChange({ campaignId: persistedCampaignId });
+      // Stage the same answer loadRecipients stages: the preloaded path skips
+      // it, so onChange must be called here or the resume text loses
+      // campaignId. It goes out as `userResponse` (the run's id when no
+      // campaign id was handed over, as in loadRecipients): a buffer without
+      // one resumes the step with the bare approval marker, which the server
+      // refuses for a declared recipients review (cinatra#3470).
+      const effectiveCId = persistedCampaignId ?? runId;
+      if (effectiveCId !== undefined) {
+        const payload = { campaignId: effectiveCId, approved: true, approvedAt: new Date().toISOString() };
+        onChange({ ...payload, userResponse: JSON.stringify(payload) });
       }
       return;
     }

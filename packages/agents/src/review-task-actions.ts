@@ -43,6 +43,8 @@ import {
   declineAwareUserResponse,
   recordedContinueAnswer,
   hasUsableListPick,
+  isCampaignRecipientsReviewAnswer,
+  isEmailDraftsReviewAnswer,
   SCREEN_FAILED_HOLD_REASON,
   declaredHitlScreenReady,
   declaredHitlStage,
@@ -168,8 +170,16 @@ export async function stepScreenAnswer(
  *     attachment envelope removed, `readWayflowSubmittedValues`), is the
  *     selection envelope its screen emits, read by the parser
  *     `/api/context-finalize` applies to it (`parseUserResponseEnvelope`), so
- *     an answer that route refuses is never sent and the run stays parked.
- * The bare approval marker and an empty answer hold none of them.
+ *     an answer that route refuses is never sent and the run stays parked;
+ *   - a recipients review: the text sent is the answer its screen stages once
+ *     the recipients are shown, with the campaign id the drafts step reads
+ *     (`isCampaignRecipientsReviewAnswer`);
+ *   - a drafts review: the text sent is the answer its screen stages once the
+ *     drafts are shown, naming the drafts approved and those edited
+ *     (`isEmailDraftsReviewAnswer`).
+ * The bare approval marker and an empty answer hold none of them, so a step
+ * resumed with one stays parked; each answer that is sent is a structured
+ * `userResponse`, which the answered-gate record below binds.
  *
  * IT FAILS CLOSED. Only a kind listed in `KIND_SCREENS_WITHOUT_INPUT` is sent
  * without a check of its own; any other kind with no check here is refused.
@@ -187,6 +197,8 @@ async function kindScreenAnswered(
     if (!jsonSchemaToZod(stepSchema).safeParse(sent).success) return false;
     return await satisfiesDeclaredJsonSchema(stepSchema, sent);
   }
+  if (kind === "campaign-recipients-review") return isCampaignRecipientsReviewAnswer(sent);
+  if (kind === "email-drafts-review") return isEmailDraftsReviewAnswer(sent);
   if (kind === "context-selector") {
     if (sent === null) return false;
     const { parseUserResponseEnvelope } = await import("@/lib/artifacts/context-route-support");
@@ -241,15 +253,13 @@ async function satisfiesDeclaredJsonSchema(schema: Record<string, unknown>, valu
 }
 
 /**
- * The "kind" screens whose answer is the approval itself: each confirms what
- * the run already holds (the recipients the run saved, the drafts it wrote),
- * and its Continue sends no input the step requires. A kind that is not
- * listed here and has no check in `kindScreenAnswered` is refused.
+ * The "kind" screens whose answer is the approval itself, with no input the
+ * step requires. None does today: every kind a "kind" screen may name
+ * (KIND_SCREEN_SUPPORTED_KINDS) has a check of its own in
+ * `kindScreenAnswered`. A kind that is not listed here and has no check there
+ * is refused.
  */
-const KIND_SCREENS_WITHOUT_INPUT: ReadonlySet<string> = new Set([
-  "campaign-recipients-review",
-  "email-drafts-review",
-]);
+const KIND_SCREENS_WITHOUT_INPUT: ReadonlySet<string> = new Set<string>([]);
 
 /**
  * The resume text of a declared card's whole answer, rebuilt by the card's

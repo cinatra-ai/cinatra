@@ -931,12 +931,73 @@ describe("an answer is sent only under the declared screen its step opened under
       }
     });
 
-    it("a kind with no input of its own is sent as before", async () => {
-      installKindScreen("email-drafts-review");
-      // red-first-expect: expected undefined to deeply equal
-      expect(await resumedWithNoResponse()).toEqual({ send: "[Approved by operator]" });
-      installKindScreen("campaign-recipients-review");
-      expect(await resumedWithNoResponse()).toEqual({ send: "[Approved by operator]" });
+    describe("a recipients or drafts review is sent only the answer its screen stages", () => {
+      // The answers the host's screens stage, in their exact shape:
+      // campaign-recipients-review-renderer.tsx (loadRecipients and the
+      // preloaded path) and email-drafts-review-renderer.tsx (the drafts effect;
+      // `campaignId` is left out when the screen found the drafts by the run).
+      const RECIPIENTS = { campaignId: "camp-1", approved: true, approvedAt: "2026-01-01T00:00:00.000Z" };
+      const DRAFTS = { campaignId: "camp-1", approvedDraftIds: ["d-1", "d-2"], edited: true, editedIds: ["d-2"] };
+      const DRAFTS_BY_RUN = { approvedDraftIds: ["d-1"], edited: false, editedIds: [] };
+      /** The Continue: the screen's staged answer, with the approval the host adds. */
+      const continueWith = (staged: Record<string, unknown>) => ({
+        ...staged,
+        userResponse: JSON.stringify(staged),
+        approved: true,
+        approvedAt: "2026-01-01T00:00:01.000Z",
+      });
+
+      it.each([["campaign-recipients-review"], ["email-drafts-review"]])(
+        "a bare approval through the approval core is refused for a %s step: the pause is given back",
+        async (kind) => {
+          installKindScreen(kind);
+          // red-first-expect: expected 'sent' to contain 'did not give'
+          expect(await answer({ approved: true })).toContain("did not give");
+          expectRefusedAndGivenBack();
+        },
+      );
+
+      it.each([["campaign-recipients-review"], ["email-drafts-review"]])(
+        "agent_run_resume with no response is refused for a %s step",
+        async (kind) => {
+          installKindScreen(kind);
+          const result = await resumedWithNoResponse();
+          // red-first-expect: expected 'undefined' to be 'string'
+          expect(typeof result?.refusal).toBe("string");
+          expect(result?.send).toBeUndefined();
+        },
+      );
+
+      it.each([
+        ["campaign-recipients-review", "with no campaign id", { approved: true, approvedAt: "2026-01-01T00:00:00.000Z" }],
+        ["campaign-recipients-review", "with a blank campaign id", { ...RECIPIENTS, campaignId: " " }],
+        ["email-drafts-review", "naming no draft", { ...DRAFTS, approvedDraftIds: [], editedIds: [], edited: false }],
+        ["email-drafts-review", "with an edited draft it does not approve", { ...DRAFTS, editedIds: ["d-9"] }],
+        ["email-drafts-review", "whose edit flag disagrees with its edits", { ...DRAFTS, edited: false }],
+      ])("an answer to a %s step %s is refused", async (kind, _what, staged) => {
+        installKindScreen(kind);
+        const text = JSON.stringify(staged);
+        // red-first-expect: expected 'undefined' to be 'string'
+        expect(typeof (await resumeStepScreenAnswer?.(RUN, template, text))?.refusal).toBe("string");
+        expect(await answer(continueWith(staged))).toContain("did not give");
+        expectRefusedAndGivenBack();
+      });
+
+      it.each([
+        ["campaign-recipients-review", RECIPIENTS],
+        ["email-drafts-review", DRAFTS],
+        ["email-drafts-review", DRAFTS_BY_RUN],
+      ])("the answer a %s screen stages is sent, and recorded for the step's persist", async (kind, staged) => {
+        installKindScreen(kind);
+        const text = JSON.stringify(staged);
+        // red-first-expect: expected undefined to deeply equal
+        expect(await resumeStepScreenAnswer?.(RUN, template, text)).toEqual({ send: text });
+        expect(await answer(continueWith(staged))).toBe("sent");
+        expect(sendTask).toHaveBeenCalledTimes(1);
+        expect(resumedWith()).toBe(text);
+        const { rememberAnsweredGateSubmission } = await import("@cinatra-ai/a2a");
+        expect(rememberAnsweredGateSubmission).toHaveBeenCalledWith(RUN.id, expect.any(String), text);
+      });
     });
 
     /** The selection envelope the context selector's screen emits. */

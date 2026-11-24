@@ -65,7 +65,12 @@ import {
   makeDeclaredHitlScreenRenderer,
   type DeclaredHitlCard,
 } from "./declared-hitl-screen-renderer";
-import { hasUsableListPick } from "./hitl-gate-submit";
+import {
+  hasUsableListPick,
+  isCampaignRecipientsReviewAnswer,
+  isEmailDraftsReviewAnswer,
+  readWayflowSubmittedValues,
+} from "./hitl-gate-submit";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: dependency-free .mjs validation module (allowJs)
 import {
@@ -153,9 +158,14 @@ const RENDERER_KIND_TABLE: Record<
   // chooser keeps the step's Continue held until a pick is made. The floor
   // below commits no pick, so a binding it draws does not hold.
   "blog-idea-selection": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true, drawsOwnSubmit: true, holdsContinueUntilPicked: true },
+  // A declared recipients or drafts review holds the host's Continue until
+  // its screen staged the answer the server sends (cinatra#3470): until then
+  // the Continue would send the bare approval marker, which the server refuses.
   "campaign-recipients-review": {
     renderer: CampaignRecipientsReviewRenderer,
     bareAliases: ["campaign-recipients-review"],
+    declaredContinueReady: ({ staged }) =>
+      isCampaignRecipientsReviewAnswer(readWayflowSubmittedValues({ userResponse: staged.userResponse })),
   },
   "context-selector": {
     renderer: ContextSelectorRenderer,
@@ -169,6 +179,8 @@ const RENDERER_KIND_TABLE: Record<
   "email-drafts-review": {
     renderer: EmailDraftsReviewRenderer,
     bareAliases: ["email-drafts-review"],
+    declaredContinueReady: ({ staged }) =>
+      isEmailDraftsReviewAnswer(readWayflowSubmittedValues({ userResponse: staged.userResponse })),
   },
   // scrape-schema-review + final-list-review: the COMPONENTS migrated into
   // @cinatra-ai/list-curator-agent (cinatra#1625 S8/M3). The KIND stays in the
