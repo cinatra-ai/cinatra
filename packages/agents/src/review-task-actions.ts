@@ -158,13 +158,16 @@ export async function stepScreenAnswer(
  *   - a list step: the text sent (the pick snapshot, inside the attachment
  *     envelope when a file goes with it) names a usable pick, as the screen's
  *     Continue holds for (`hasUsableListPick`);
- *   - a grouped setup form: the answer passes the step's own schema by the
- *     validation the form runs before it sends (`jsonSchemaToZod`), read from
- *     the values the screen sent, else from the text sent;
- *   - a context selector: the text sent is the selection envelope its screen
- *     emits, read by the parser `/api/context-finalize` applies to it
- *     (`parseUserResponseEnvelope`), so an answer that route refuses is never
- *     sent and the run stays parked.
+ *   - a grouped setup form: the text sent (the JSON of the form's values,
+ *     `withSetupFormAnswer`) passes the step's own schema by the validation
+ *     the form runs before it sends (`jsonSchemaToZod`), so the step is
+ *     resumed with the values that were checked, never with the bare marker
+ *     while other values pass;
+ *   - a context selector: the text sent, unwrapped as the step reads it (the
+ *     attachment envelope removed, `readWayflowSubmittedValues`), is the
+ *     selection envelope its screen emits, read by the parser
+ *     `/api/context-finalize` applies to it (`parseUserResponseEnvelope`), so
+ *     an answer that route refuses is never sent and the run stays parked.
  * The bare approval marker and an empty answer hold none of them.
  *
  * IT FAILS CLOSED. Only a kind listed in `KIND_SCREENS_WITHOUT_INPUT` is sent
@@ -178,15 +181,15 @@ async function kindScreenAnswered(
   const sent = readWayflowSubmittedValues({ userResponse: answer.resumeText });
   if (kind === "list-picker") return hasUsableListPick(sent);
   if (kind === "wayflow-setup-form") {
-    const values = answer.values ?? sent;
-    if (values === null) return false;
+    if (sent === null) return false;
     const { jsonSchemaToZod } = await import("./json-schema-to-zod");
-    return jsonSchemaToZod(stepSchema).safeParse(values).success;
+    return jsonSchemaToZod(stepSchema).safeParse(sent).success;
   }
   if (kind === "context-selector") {
+    if (sent === null) return false;
     const { parseUserResponseEnvelope } = await import("@/lib/artifacts/context-route-support");
     try {
-      parseUserResponseEnvelope(answer.resumeText);
+      parseUserResponseEnvelope(JSON.stringify(sent));
       return true;
     } catch {
       return false;

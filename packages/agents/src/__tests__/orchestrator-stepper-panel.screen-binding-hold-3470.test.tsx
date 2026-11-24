@@ -29,7 +29,7 @@
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
@@ -243,5 +243,43 @@ describe("OrchestratorStepperPanel — a screen whose binding has not loaded hol
     expect(holdReason()).toBeNull();
     fireEvent.click(outerContinue()!);
     await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+  });
+
+  it("a declared grouped setup form's submit sends the values entered as the step's answer", async () => {
+    const SETUP_ID = "@cinatra-test/setup-agent:details";
+    runtimeBindings.fetch.mockImplementation(async () => ({
+      bindings: [{ id: SETUP_ID, kind: "wayflow-setup-form", priority: 80, midRunHitl: true, screen: { layout: "kind" } }],
+      refusedScreenIds: [],
+    }));
+    INTERRUPT = {
+      schema: {
+        type: "object",
+        properties: { projectName: { type: "string", title: "Project name" } },
+        required: ["projectName"],
+      },
+      xRenderer: SETUP_ID,
+      values: { itemId: "item-1" },
+      reviewTaskId: REVIEW_TASK_ID,
+    };
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    render(<OrchestratorStepperPanel {...baseProps()} />);
+    const formSubmit = await waitFor(() => {
+      const button = [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) =>
+        /save & start run/i.test(b.textContent ?? ""),
+      );
+      // red-first-expect: expected undefined to be defined
+      expect(button).toBeDefined();
+      return button!;
+    });
+    const box = [...document.querySelectorAll<HTMLInputElement>("input")].find((i) => i.type !== "hidden" && i.type !== "file");
+    fireEvent.change(box!, { target: { value: "Fixture project" } });
+    await act(async () => {
+      fireEvent.click(formSubmit);
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const sent = (hitlActions.approveReviewTask.mock.calls[0] as unknown[])[1] as { userResponse?: unknown };
+    expect(typeof sent.userResponse).toBe("string");
+    expect(JSON.parse(sent.userResponse as string)).toEqual({ projectName: "Fixture project" });
   });
 });

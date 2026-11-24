@@ -731,12 +731,68 @@ describe("an answer is sent only under the declared screen its step opened under
     it("a grouped setup form's values that fail its schema are refused through the approval core", async () => {
       installKindScreen("wayflow-setup-form", SETUP_SCHEMA);
       // red-first-expect: expected 'sent' to contain 'did not give'
-      expect(await answer({ approved: true, approvalNote: JSON.stringify({ senderName: "Ada" }) })).toContain("did not give");
+      expect(await answer({ approved: true, userResponse: JSON.stringify({ note: "x" }) })).toContain("did not give");
       expectRefusedAndGivenBack();
       vi.clearAllMocks();
       arrange();
-      expect(await answer({ senderName: "Ada", approved: true, approvalNote: "{}" })).toBe("sent");
+      expect(
+        await answer({ senderName: "Ada", approved: true, userResponse: JSON.stringify({ senderName: "Ada" }) }),
+      ).toBe("sent");
       expect(sendTask).toHaveBeenCalledTimes(1);
+    });
+
+    /** The resume text the agent was sent. */
+    const resumedWith = (): string => {
+      const text = JSON.stringify(sendTask.mock.calls).match(/"text":"((?:[^"\\]|\\.)*)"/);
+      return text === null ? "" : (JSON.parse(`"${text[1]}"`) as string);
+    };
+
+    it("a grouped setup form whose values sit beside an answer that is not them is refused: the step is never resumed past its values", async () => {
+      installKindScreen("wayflow-setup-form", SETUP_SCHEMA);
+      // red-first-expect: expected 'sent' to contain 'did not give'
+      expect(await answer({ senderName: "Ada", approved: true, approvalNote: "{}" })).toContain("did not give");
+      expectRefusedAndGivenBack();
+      vi.clearAllMocks();
+      arrange();
+      expect(await answer({ senderName: "Ada", approved: true })).toContain("did not give");
+      expectRefusedAndGivenBack();
+    });
+
+    it("a declared setup form's submit resumes the step with the values entered, under any field name", async () => {
+      const PROJECT_SCHEMA = {
+        type: "object",
+        properties: { projectName: { type: "string" } },
+        required: ["projectName"],
+      };
+      installKindScreen("wayflow-setup-form", PROJECT_SCHEMA);
+      // The browser holds the installed binding, as every host registers it.
+      const { registerFieldRendererBindings } = await import("../register-default-renderers");
+      const { fieldRendererRegistry } = await import("../field-renderer-registry");
+      registerFieldRendererBindings([
+        { id: ID, kind: "wayflow-setup-form", priority: 80, midRunHitl: true, screen: { layout: "kind" } },
+      ]);
+      try {
+        const { withSetupFormAnswer } = (await import("../hitl-gate-submit")) as unknown as {
+          withSetupFormAnswer?: (
+            gate: { reviewTaskId: string; xRenderer: string },
+            stepSchema: Record<string, unknown>,
+            formValues: Record<string, unknown>,
+            payload: Record<string, unknown>,
+          ) => Record<string, unknown>;
+        };
+        // The form is seeded with a run value that is no field of the step.
+        const formValues = { projectName: "Fixture project", itemId: "item-1" };
+        const submitted = { ...formValues, approved: true, approvedAt: "2026-01-01T00:00:00.000Z" };
+        const payload =
+          withSetupFormAnswer?.({ reviewTaskId: GATE, xRenderer: ID }, PROJECT_SCHEMA, formValues, submitted) ?? submitted;
+        expect(await answer(payload)).toBe("sent");
+        expect(sendTask).toHaveBeenCalledTimes(1);
+        // red-first-expect: expected '[Approved by operator]' to be '{"projectName":"Fixture project"}'
+        expect(resumedWith()).toBe(JSON.stringify({ projectName: "Fixture project" }));
+      } finally {
+        const held = fieldRendererRegistry as { unregisterEntry?: (entry: unknown) => void };
+        for (const entry of fieldRendererRegistry.list().filter((e) => e.id === ID)) held.unregisterEntry?.(entry);
+      }
     });
 
     it("a kind with no input of its own is sent as before", async () => {
@@ -772,6 +828,35 @@ describe("an answer is sent only under the declared screen its step opened under
     it("agent_run_resume with a selection envelope is sent for a context selector", async () => {
       installKindScreen("context-selector");
       expect(await resumeStepScreenAnswer?.(RUN, template, SELECTION)).toEqual({ send: SELECTION });
+    });
+
+    /** The envelope a host sends when a file goes with the answer. */
+    const withFile = (text: string) =>
+      JSON.stringify({
+        text,
+        attachments: [
+          {
+            artifactId: "art-1",
+            representationRevisionId: "rev-1",
+            digest: "sha256:fixture",
+            mime: "text/plain",
+            originKind: "upload",
+          },
+        ],
+      });
+
+    it("a context selection sent with a file is accepted, and a wrapper with no slot is still refused", async () => {
+      installKindScreen("context-selector");
+      // red-first-expect: expected undefined to deeply equal
+      expect(await resumeStepScreenAnswer?.(RUN, template, withFile(SELECTION))).toEqual({ send: withFile(SELECTION) });
+      expect(await answer({ approved: true, userResponse: withFile(SELECTION) })).toBe("sent");
+      expect(resumedWith()).toBe(withFile(SELECTION));
+      vi.clearAllMocks();
+      arrange();
+      const noSlot = withFile(JSON.stringify({ resolutionMode: "override", selectedRefs: [] }));
+      expect(typeof (await resumeStepScreenAnswer?.(RUN, template, noSlot))?.refusal).toBe("string");
+      expect(await answer({ approved: true, userResponse: noSlot })).toContain("did not give");
+      expectRefusedAndGivenBack();
     });
 
     it("a bare approval through the approval core is refused for a context selector: the pause is given back", async () => {

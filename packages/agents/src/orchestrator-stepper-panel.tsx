@@ -141,6 +141,7 @@ import {
   stageAssistantFills,
   isSetupGateTaskId,
   liftRendererApprovalNote,
+  withSetupFormAnswer,
   recordedContinueAnswer,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
@@ -1654,6 +1655,13 @@ function HitlApprovalCard({
                         if (groupedLift) {
                           approvalPayload = { ...approvalPayload, ...groupedLift };
                         }
+                        // The form's values are the step's answer (`withSetupFormAnswer`).
+                        approvalPayload = withSetupFormAnswer(
+                          interruptContext,
+                          interruptContext.schema as Record<string, unknown> | undefined,
+                          nextBuffered,
+                          approvalPayload,
+                        );
                         // Wrap renderer-inline submit with the attachment
                         // envelope. The helper is a no-op on setup-* gates
                         // because the paperclip is hidden there, but guards

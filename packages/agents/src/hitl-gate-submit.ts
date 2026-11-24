@@ -1117,6 +1117,52 @@ export function applyRendererApprovalNote(
   return merged;
 }
 
+/** The keys a Continue adds around an answer: never one of the form's own values. */
+const SETUP_FORM_TRANSPORT_KEYS: ReadonlySet<string> = new Set([
+  "approved",
+  "approvedAt",
+  "approvalNote",
+  "userResponse",
+  "userResponseFieldName",
+  DECLARED_CARD_ANSWER_KEY,
+]);
+
+/**
+ * A MID-RUN GROUPED SETUP FORM IS ANSWERED WITH ITS VALUES (cinatra#3470). The
+ * server resumes the step from `userResponse` alone (else the bare approval
+ * marker), and a setup-form step reads its answer as the JSON object of the
+ * form's values, checked against the step's schema. So the values the form
+ * submitted (`formValues`) are sent as that JSON, whatever the fields are
+ * named: the fields the step's schema declares, or, for a schema that
+ * declares none, every value but the keys a Continue adds. A run value the
+ * form was seeded with that is no field of the step is not part of it. Every
+ * host's grouped-setup submit (run panel, stepper, conversation card) applies
+ * this, before any attachment wrap. A setup gate (`setup-` task id) is
+ * answered by the server's input merge, which reads no `userResponse`, so its
+ * payload is returned unchanged, as is any gate not drawn by a setup form.
+ */
+export function withSetupFormAnswer(
+  gate: { reviewTaskId: string; xRenderer: string },
+  stepSchema: Record<string, unknown> | null | undefined,
+  formValues: Record<string, unknown>,
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  if (isSetupGateTaskId(gate.reviewTaskId)) return payload;
+  if (!rendererReadsAsKind(gate.xRenderer, "wayflow-setup-form", ":setup-form")) return payload;
+  const properties = stepSchema?.properties;
+  const fields =
+    properties !== null && typeof properties === "object" && !Array.isArray(properties)
+      ? Object.keys(properties)
+      : [];
+  const isField = (key: string): boolean =>
+    fields.length > 0 ? fields.includes(key) : !SETUP_FORM_TRANSPORT_KEYS.has(key);
+  const answer: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(formValues)) {
+    if (isField(key)) answer[key] = value;
+  }
+  return { ...payload, userResponse: JSON.stringify(answer) };
+}
+
 // ---------------------------------------------------------------------------
 // Chat-gate submit payload (AgenticRunPanel — the single discriminated
 // resume-payload builder behind submitActiveGate / ChatGateDescriptor.submit)

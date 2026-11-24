@@ -995,6 +995,10 @@ describe("a declared grouped setup form sends only from its own control (cinatra
       projectName: "Fixture project",
       approved: true,
     });
+    // The values reach the step as its answer: the one field the server resumes from.
+    const sent = hitlActions.approveReviewTask.mock.calls[0]![1] as { userResponse?: unknown };
+    expect(typeof sent.userResponse).toBe("string");
+    expect(JSON.parse(sent.userResponse as string)).toEqual({ projectName: "Fixture project" });
   });
 });
 

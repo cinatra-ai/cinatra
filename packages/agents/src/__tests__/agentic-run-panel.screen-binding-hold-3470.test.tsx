@@ -363,6 +363,18 @@ describe("AgenticRunPanel — a screen whose binding has not loaded holds its Co
       await new Promise((r) => setTimeout(r, 20));
     });
     expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    // Filled in, the form's values are the step's answer, in the field the
+    // server resumes from.
+    const box = [...document.querySelectorAll<HTMLInputElement>("input")].find((i) => i.type !== "hidden" && i.type !== "file");
+    fireEvent.change(box!, { target: { value: "Fixture project" } });
+    await act(async () => {
+      fireEvent.click(formSubmit);
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const sent = (hitlActions.approveReviewTask.mock.calls[0] as unknown[])[1] as { userResponse?: unknown };
+    expect(typeof sent.userResponse).toBe("string");
+    expect(JSON.parse(sent.userResponse as string)).toEqual({ projectName: "Fixture project" });
   });
 
   // THE RUNTIME ANSWER IS THE WHOLE INSTALLED SET. An agent uninstalled, or a

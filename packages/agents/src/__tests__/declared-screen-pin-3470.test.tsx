@@ -672,6 +672,43 @@ describe("a declaration that could not be read at the park is never pinned as no
   });
 });
 
+describe("a conversation card follows its step's fresh read to the end (cinatra#3470)", () => {
+  it("a fresh read that fails and then succeeds on its own retry draws the step's screen", async () => {
+    install(LATER);
+    // A run page registered the declared screen under the renderer id.
+    await reg.readRuntimeRendererBindings?.();
+    // red-first-expect: expected undefined to match object { title: 'Fixture later revision' }
+    expect(reg.declaredHitlCardOf?.(ID)).toMatchObject({ title: "Fixture later revision" });
+    // The screen is removed; a later step of the id opens with none, and the
+    // card's first fresh read fails for a moment.
+    install(undefined);
+    const laterRun = runParkedOn("run-retry", "task-retry", parkedSchema());
+    screenStateMock.mockImplementation(async () => agentHitlScreenStateForRun(laterRun));
+    bindingReads.failFresh = true;
+    bindingReads.freshFailed = 0;
+    try {
+      const { container } = render(
+        <LifecycleCardSurfaceProvider host="chat_thread">
+          <AgentHitlScreenCard runId="run-retry" wireRef="task-retry" />
+        </LifecycleCardSurfaceProvider>,
+      );
+      const failed = () => (container.textContent ?? "").includes("could not be loaded");
+      await waitFor(() => expect(bindingReads.freshFailed).toBe(1));
+      await waitFor(() => expect(failed()).toBe(true));
+      // The read's own retry, after its wait, succeeds and drops the stale screen.
+      bindingReads.failFresh = false;
+      await waitFor(() => expect(reg.declaredHitlCardOf?.(ID)).toBeUndefined(), { timeout: 5_000 });
+      await waitFor(() => expect(failed()).toBe(false));
+      expect(within(container).getAllByRole("button", { name: /continue/i }).length).toBeGreaterThan(0);
+    } finally {
+      bindingReads.failFresh = false;
+      cleanup();
+      uninstall();
+      await reg.readRuntimeRendererBindings?.();
+    }
+  }, 15_000);
+});
+
 describe("a runtime registration gives back the entry it replaced (cinatra#3470)", () => {
   it("uninstalling the installed binding that shadowed a host-owned renderer restores that renderer", async () => {
     const HOST_ID = "@acme-test/host-owned:confirm";

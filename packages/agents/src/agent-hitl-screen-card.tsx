@@ -110,6 +110,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactElement,
   type ReactNode,
 } from "react";
@@ -141,6 +142,8 @@ import {
   isDeclaredScreenBoundByRuntimeRead,
   isRendererBound,
   readRuntimeRendererBindings,
+  runtimeRendererBindingsLoad,
+  subscribeRuntimeRendererBindings,
   wholeAnswerStageProps,
   type FieldRendererContext,
   type FieldRendererEntry,
@@ -158,6 +161,7 @@ import {
   hasUsableListPick,
   isMidRunListStepGate,
   liftRendererApprovalNote,
+  withSetupFormAnswer,
   hitlGateIdentityKey,
   hitlRendererFieldName,
   isAlreadyResolvedError,
@@ -1354,6 +1358,18 @@ export function AgentHitlScreenCard({
       ? freshReadKey(gate.xRenderer, gate.reviewTaskId)
       : null;
   const [staleScreenReadFor, setStaleScreenReadFor] = useState<string | null>(null);
+  // EVERY READ OF THE REGISTRY IS SEEN, as the run panel and the stepper see
+  // it: a failed fresh read retries itself in the background
+  // (`readRuntimeRendererBindings`), and the read that then succeeds settles
+  // the registry and notifies here. The card draws again and reads the gate
+  // as the registry stands now: once the stale entry is gone the screen is
+  // drawn, and the failure stays only while the entry the latest read left
+  // holds it.
+  useSyncExternalStore(
+    subscribeRuntimeRendererBindings,
+    runtimeRendererBindingsLoad,
+    runtimeRendererBindingsLoad,
+  );
   useEffect(() => {
     if (staleScreenStepKey === null) return;
     let live = true;
@@ -1653,9 +1669,16 @@ export function AgentHitlScreenCard({
   // the Continue builds, from the buffer the form just wrote.
   const onSubmitBuffer = useCallback(
     async (next: Record<string, unknown>) => {
-      await submit({ ...next, approved: true, approvedAt: new Date().toISOString() }, undefined);
+      const payload = { ...next, approved: true, approvedAt: new Date().toISOString() };
+      // The form's values are the step's answer (`withSetupFormAnswer`).
+      // Read through the card's own declared screen (its scoped id), as the
+      // form was classified; the step's schema names the form's fields.
+      await submit(
+        rendererGate === null ? payload : withSetupFormAnswer(rendererGate, rendererGate.inputSchema, next, payload),
+        undefined,
+      );
     },
-    [submit],
+    [submit, rendererGate],
   );
 
   const body = useMemo<ReactNode>(() => {

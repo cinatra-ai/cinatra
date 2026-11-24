@@ -122,6 +122,7 @@ import {
   isMidRunListStepGate,
   isSetupGateTaskId,
   liftRendererApprovalNote,
+  withSetupFormAnswer,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
@@ -3537,7 +3538,12 @@ export function AgenticRunPanel({
                           await performGateSubmit({
                             reviewTaskId: effectiveHitlContext.reviewTaskId,
                             xRenderer: effectiveHitlContext.xRenderer,
-                            payload: { ...nextBuffered, approved: true, approvedAt: new Date().toISOString() },
+                            // The form's values are the step's answer (`withSetupFormAnswer`).
+                            payload: withSetupFormAnswer(effectiveHitlContext, effectiveHitlContext.inputSchema, nextBuffered, {
+                              ...nextBuffered,
+                              approved: true,
+                              approvedAt: new Date().toISOString(),
+                            }),
                             trackApproving: true,
                             suppressGate: true,
                             clearAttachmentsOnSuccess: false,
