@@ -243,6 +243,43 @@ describe("the island tells the pdf shell it is served into a sandboxed frame (ci
     expect(panelProps(provider!)).toHaveLength(2);
     expect(panelProps(el)).toHaveLength(2);
   });
+
+  // WHETHER ITS DOWNLOAD ADDRESSES TAKE A LINK. The first-party card's session
+  // addresses do; the widget's sealed byte addresses refuse a link navigation,
+  // and the CMS frame around the widget withholds downloads anyway, so there
+  // the shell must draw no download control at all.
+  // red-first-expect: expected undefined to be 'link'
+  // red-first-expect: expected undefined to be 'none'
+  function declaredDownloads(el: ReactElement): string | undefined {
+    const children = (el.props as { children: unknown[] }).children.flat();
+    const provider = children.find(
+      (node): node is ReactElement =>
+        !!node && typeof node === "object" && (node as ReactElement).type === PdfShellFrameProvider,
+    );
+    return (provider?.props as { downloads?: string } | undefined)?.downloads;
+  }
+
+  it("declares link downloads for the first-party card, which reads by its session cookie", async () => {
+    loadReviewGateSurface.mockResolvedValue({ kind: "ready", agentSummary: null, targets: [target("a1")] });
+    expect(declaredDownloads(await renderIsland(REF))).toBe("link");
+  });
+
+  it("declares no downloads for a widget target, whose addresses are sealed capabilities", async () => {
+    resolveIslandCredentialReader.mockResolvedValue({
+      actorCtx: ACTOR,
+      runId: "run-1",
+      reviewTaskId: "task-1",
+      publishDecision: null,
+    });
+    loadReviewGateSurface.mockResolvedValue({ kind: "ready", agentSummary: null, targets: [target("a1")] });
+    expect(declaredDownloads(await renderIsland(REF, { ic: "AAAA-sealed_value-BBBB" }))).toBe("none");
+  });
+
+  it("declares no downloads for a same-site widget frame that reads by its cookie", async () => {
+    resolveVerifiedWidgetFrameOrigin.mockReturnValue("https://cms.example");
+    loadReviewGateSurface.mockResolvedValue({ kind: "ready", agentSummary: null, targets: [target("a1")] });
+    expect(declaredDownloads(await renderIsland(REF, { assistant: "a1", instanceId: "i1" }))).toBe("none");
+  });
 });
 
 describe("a DECIDED gate keeps its reviewed target(s), read-only", () => {

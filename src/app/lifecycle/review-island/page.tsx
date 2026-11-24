@@ -465,8 +465,17 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
           the browser will not run its PDF viewer. Declaring it lets the shared
           pdf shell paint its download floor on the server render, so the frame
           never shows an empty embed before the page hydrates; once it runs, the
-          shell reads the real frame. */}
-      <PdfShellFrameProvider frame="sandboxed">
+          shell reads the real frame.
+          WHETHER THE FLOOR MAY OFFER A DOWNLOAD is declared here too, because
+          only this page knows which addresses it handed out. The first-party
+          card's session addresses take a download link. A widget frame does
+          not: its sealed byte addresses refuse a link navigation, and the CMS
+          frame around it withholds downloads; so there the floor keeps its
+          words and draws no download control. */}
+      <PdfShellFrameProvider
+        frame="sandboxed"
+        downloads={credential || widgetFrame ? "none" : "link"}
+      >
         {drawn.map((stream, index) => (
           <Suspense
             key={reviewTargetStreamKey(index, stream.target)}

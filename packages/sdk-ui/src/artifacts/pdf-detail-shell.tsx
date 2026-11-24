@@ -19,9 +19,12 @@
  *
  *   THE DOWNLOAD FLOOR. Where there is nothing to preview - no materialized
  *   representation at all, an embed the engine refused to load, or a frame the
- *   browser will not run its PDF viewer in - the shell draws the floor instead: the words the drawing gives it and the download
- *   affordance beside them. The affordance itself degrades to a plain note when
- *   there is nothing to download, so the panel is never blank in any state.
+ *   browser will not run its PDF viewer in - the shell draws the floor instead:
+ *   the words the drawing gives it and the download affordance beside them. The
+ *   affordance itself degrades to a plain note when there is nothing to
+ *   download, so the panel is never blank in any state; and where a download
+ *   cannot work from here (`readPdfShellDownloads`), the floor keeps its words
+ *   and draws no affordance at all - never a control that does nothing.
  *
  * WHAT IT IS NOT. It renders no PDF itself: no inline page renderer, no worker,
  * no document/page tree. A reading this shell cannot show is a floor, never a
@@ -45,7 +48,7 @@
  * nothing else.
  */
 
-import { createContext, useContext, useState, useSyncExternalStore } from "react";
+import { createContext, useContext, useMemo, useState, useSyncExternalStore } from "react";
 import type { ReactElement, ReactNode } from "react";
 
 import { DownloadLink } from "../ui/download-link";
@@ -93,7 +96,10 @@ const PDF_SHELL_FRAME_WALK_LIMIT = 16;
 /** The part of a window the frame reading uses - so it can be read in a test. */
 export interface PdfShellFrameWindow {
   readonly parent: PdfShellFrameWindow;
-  readonly frameElement: { hasAttribute(name: string): boolean } | null;
+  readonly frameElement: {
+    hasAttribute(name: string): boolean;
+    getAttribute?(name: string): string | null;
+  } | null;
 }
 
 /**
@@ -136,6 +142,75 @@ export function readPdfShellFrame(win: PdfShellFrameWindow): PdfShellFrame {
 }
 
 /**
+ * WHETHER A DOWNLOAD STARTED IN THIS DOCUMENT CAN WORK.
+ *
+ * A download is subject to the sandbox of EVERY frame above the document: one
+ * frame up the chain without `allow-downloads` blocks it, whether it starts from
+ * a link or from a saved blob. So walk from this document up to the top-level
+ * one:
+ *
+ *   - a document that is its own parent is the top: `allowed`;
+ *   - a frame element with no `sandbox` attribute withholds nothing: go on up;
+ *   - a frame element whose `sandbox` value lists `allow-downloads` (tokens are
+ *     matched without regard to case, as the browser does): go on up;
+ *   - a sandboxed frame element without that token: `blocked`;
+ *   - a frame element we cannot read - `frameElement` is null although there is
+ *     a parent (the parent is another origin), its sandbox value cannot be read,
+ *     or an accessor throws - is `blocked`, because nothing proves the download
+ *     can work. The widget's CMS frame is exactly such a parent.
+ */
+export type PdfShellDownloads = "allowed" | "blocked";
+
+export function readPdfShellDownloads(win: PdfShellFrameWindow): PdfShellDownloads {
+  let current = win;
+  for (let depth = 0; depth < PDF_SHELL_FRAME_WALK_LIMIT; depth += 1) {
+    try {
+      const parent = current.parent;
+      if (parent === current) {
+        return "allowed";
+      }
+      const host = current.frameElement;
+      if (host === null) {
+        return "blocked";
+      }
+      if (host.hasAttribute("sandbox")) {
+        const tokens = host.getAttribute?.("sandbox");
+        if (typeof tokens !== "string") {
+          return "blocked";
+        }
+        const allows = tokens
+          .toLowerCase()
+          .split(/\s+/)
+          .includes("allow-downloads");
+        if (!allows) {
+          return "blocked";
+        }
+      }
+      current = parent;
+    } catch {
+      return "blocked";
+    }
+  }
+  return "blocked";
+}
+
+/**
+ * WHETHER THE PAGE'S DOWNLOAD ADDRESSES TAKE A LINK, declared by the page that
+ * serves the document - only the server knows which addresses it handed out.
+ *
+ *   - `link`: a plain download link to the address works - the host's session
+ *     routes, which the first-party card's document is handed;
+ *   - `none`: no download control may be drawn - the widget's sealed byte
+ *     capabilities, whose serving route refuses a link navigation, inside a CMS
+ *     frame the shell cannot read and whose sandbox withholds downloads.
+ *
+ * A page that declares nothing is a first-party page handed session routes, so
+ * the default is `link`; the frame reading above still withholds the control
+ * wherever a frame up the chain blocks the download or cannot be read.
+ */
+export type PdfShellDownloadRoad = "link" | "none";
+
+/**
  * WHAT THE SERVER PAINTS, DECLARED BY THE PAGE THAT SERVES IT.
  *
  * A server render cannot see the frame its document will land in. Left alone it
@@ -149,17 +224,28 @@ export function readPdfShellFrame(win: PdfShellFrameWindow): PdfShellFrame {
  * The declaration is only the first paint. Once the page runs, the shell reads
  * the frame it is actually in (`readPdfShellFrame`) and that reading decides.
  */
-const PdfShellFrameContext = createContext<PdfShellFrame>("unsandboxed");
+interface PdfShellFrameDeclaration {
+  readonly frame: PdfShellFrame;
+  readonly downloads: PdfShellDownloadRoad;
+}
+
+const PdfShellFrameContext = createContext<PdfShellFrameDeclaration>({
+  frame: "unsandboxed",
+  downloads: "link",
+});
 
 export function PdfShellFrameProvider({
   frame,
+  downloads,
   children,
 }: {
   readonly frame: PdfShellFrame;
+  readonly downloads: PdfShellDownloadRoad;
   readonly children?: ReactNode;
 }): ReactElement {
+  const value = useMemo(() => ({ frame, downloads }), [frame, downloads]);
   return (
-    <PdfShellFrameContext.Provider value={frame}>
+    <PdfShellFrameContext.Provider value={value}>
       {children}
     </PdfShellFrameContext.Provider>
   );
@@ -174,20 +260,42 @@ function readThisFrame(): PdfShellFrame {
   return readPdfShellFrame(window as unknown as PdfShellFrameWindow);
 }
 
+function readThisFrameDownloads(): PdfShellDownloads {
+  return readPdfShellDownloads(window as unknown as PdfShellFrameWindow);
+}
+
+function assumeDownloadsAllowed(): PdfShellDownloads {
+  return "allowed";
+}
+
 /**
- * The frame this shell draws in: the page's declaration during the server
- * render and hydration, and the frame's own answer from then on. A mismatch
- * between the two is a re-render, never a hydration error.
+ * The frame this shell draws in, and whether a download can work from it: the
+ * page's declaration during the server render and hydration, and the frame's
+ * own answer from then on. A mismatch between the two is a re-render, never a
+ * hydration error.
+ *
+ * Downloads are offered only where BOTH hold: the page declared `link`
+ * addresses, and (once the page runs) every frame up the chain can be read and
+ * allows downloads. The server cannot read the chain, so it trusts the page's
+ * declaration; a `none` declaration is final on the server and the client alike.
  */
-function usePdfShellFrame(): PdfShellFrame {
+function usePdfShellFrame(): { frame: PdfShellFrame; downloads: PdfShellDownloads } {
   const declared = useContext(PdfShellFrameContext);
-  return useSyncExternalStore(subscribeToNothing, readThisFrame, () => declared);
+  const frame = useSyncExternalStore(subscribeToNothing, readThisFrame, () => declared.frame);
+  const chain = useSyncExternalStore(subscribeToNothing, readThisFrameDownloads, assumeDownloadsAllowed);
+  return { frame, downloads: declared.downloads === "link" && chain === "allowed" ? "allowed" : "blocked" };
 }
 
 /** The resolved reading: the embedded viewer, or the floor beneath it. */
 export type PdfShellView =
   | { kind: "embedded"; previewHref: string; downloadHref: string | null }
-  | { kind: "floor"; reason: PdfShellFloorReason; downloadHref: string | null };
+  | {
+      kind: "floor";
+      reason: PdfShellFloorReason;
+      downloadHref: string | null;
+      /** Present only where a download cannot work from here: draw no control. */
+      download?: "blocked";
+    };
 
 /**
  * AN ADDRESS IS AN ADDRESS ONLY WHEN IT CARRIES SOMETHING. A blank or
@@ -232,17 +340,26 @@ export function resolvePdfShellView(input: {
   readonly downloadHref: string | null;
   readonly previewFailed?: boolean;
   readonly frame?: PdfShellFrame;
+  readonly downloads?: PdfShellDownloads;
 }): PdfShellView {
   const previewHref = normalizePdfShellHref(input.previewHref);
   const downloadHref = normalizePdfShellHref(input.downloadHref);
+  // THE RULE, in order: no address to preview, or a sandboxed frame, or a failed
+  // embed is the floor; anything else is the embedded viewer. A floor offers
+  // its download only where downloads are not blocked - a blocked floor carries
+  // no address at all, so nothing downstream can draw a link to it.
+  const floor = (reason: PdfShellFloorReason): PdfShellView =>
+    input.downloads === "blocked"
+      ? { kind: "floor", reason, downloadHref: null, download: "blocked" }
+      : { kind: "floor", reason, downloadHref };
   if (previewHref === null) {
-    return { kind: "floor", reason: "no-representation", downloadHref };
+    return floor("no-representation");
   }
   if (input.frame === "sandboxed") {
-    return { kind: "floor", reason: "sandboxed-frame", downloadHref };
+    return floor("sandboxed-frame");
   }
   if (input.previewFailed === true) {
-    return { kind: "floor", reason: "preview-failed", downloadHref };
+    return floor("preview-failed");
   }
   return { kind: "embedded", previewHref, downloadHref };
 }
@@ -315,13 +432,14 @@ export function PdfDetailShell({
   // instance is reused as a surface moves from one artifact or revision to the
   // next, and a flag would strand the next document on the first one's floor.
   const [failedHref, setFailedHref] = useState<string | null>(null);
-  const frame = usePdfShellFrame();
+  const { frame, downloads } = usePdfShellFrame();
 
   const view = resolvePdfShellView({
     previewHref,
     downloadHref,
     previewFailed: pdfShellPreviewFailed({ failedHref, previewHref }),
     frame,
+    downloads,
   });
 
   if (view.kind === "floor") {
@@ -337,7 +455,9 @@ export function PdfDetailShell({
         <p className="text-muted-foreground text-sm">
           {pdfShellFloorMessage(view.reason)}
         </p>
-        <PdfShellDownload downloadHref={view.downloadHref} />
+        {view.download === "blocked" ? null : (
+          <PdfShellDownload downloadHref={view.downloadHref} />
+        )}
       </article>
     );
   }
