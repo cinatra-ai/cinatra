@@ -192,6 +192,7 @@ const PUBLISH_PENDING = {
   runId: "run-held-2826",
   agentName: "Proof agent",
   rows: [{ label: "Title", value: "Spring launch" }],
+  decisionId: "d1",
   mayDecide: true,
 } as Record<string, unknown>;
 

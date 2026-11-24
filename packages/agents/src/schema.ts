@@ -949,6 +949,10 @@ export const agentRunPublishDecisions = cinatraSchema.table("agent_run_publish_d
   // this equals agent_runs.reset_generation. -1 = an attempt already ended (a park of a run not held at a gate, or a
   // legacy row the migration found stale); null = a row written by code older than the column, read as generation 0.
   runGeneration:  integer("run_generation"),
+  // The run's pause_generation at which the Allow released this decision (core__0134), written in the releasing UPDATE.
+  // A run still pending_approval at this generation waits at the very pause released here; any other generation means
+  // the run went on. null = not released, or released by code older than the column.
+  releasedPauseGeneration: bigint("released_pause_generation", { mode: "number" }),
 }, (t) => ({
   parkUniq: uniqueIndex("agent_run_publish_decisions_park_uniq").on(t.runId, t.nodeId, t.gateTaskId),
   dueIdx:   index("agent_run_publish_decisions_due_idx").on(t.expiresAt).where(sql`status = 'parked'`),
