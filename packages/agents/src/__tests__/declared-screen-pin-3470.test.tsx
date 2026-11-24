@@ -486,6 +486,58 @@ describe("an installed screen of a bundled renderer id supersedes its generated 
   });
 });
 
+describe("only the package that owns a bundled renderer id may supersede its screen (cinatra#3470)", () => {
+  const BUNDLED_ID = "@cinatra-ai/blog-linkedin-publish-agent:draft-review";
+  /** Mount `<vendor>/<slug>` with a manifest named `name` that declares `screen` for the bundled id. */
+  function mountForeign(vendor: string, slug: string, name: string): void {
+    const dir = join(mount.dir, vendor, slug);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "package.json"),
+      JSON.stringify({
+        name,
+        cinatra: {
+          fieldRenderers: [
+            { id: BUNDLED_ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: LATER },
+          ],
+        },
+      }),
+    );
+    server.__clearInstalledFieldRendererBindingsCache();
+  }
+
+  it("a foreign package's screen for a bundled id never supersedes the generated binding", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    ensureDefaultFieldRenderersRegistered();
+    const bundled = registry.fieldRendererRegistry.list().find((e) => e.id === BUNDLED_ID);
+    // Another package, and a manifest that claims the owner's name from another mount directory.
+    for (const [vendor, slug, name] of [
+      ["acme-test", "foreign-agent", "@acme-test/foreign-agent"],
+      ["acme-test", "forged-agent", "@cinatra-ai/blog-linkedin-publish-agent"],
+    ] as const) {
+      mountForeign(vendor, slug, name);
+      const parked = parkedSchema(BUNDLED_ID);
+      // red-first-expect: expected undefined to be null
+      expect(server.readDeclaredHitlCard?.(BUNDLED_ID, parked)).toBeNull();
+      expect(parked["x-declared-screen"]).toBeUndefined();
+      expect(server.stepDeclarationStanding?.(BUNDLED_ID, { type: "object" }, { fresh: true })).toBe("matches");
+      await reg.readRuntimeRendererBindings?.();
+      expect(registry.fieldRendererRegistry.list().filter((e) => e.id === BUNDLED_ID)).toEqual([bundled]);
+      expect(
+        submitRules.rendererBindingHoldReason?.(
+          BUNDLED_ID,
+          reg.runtimeRendererBindingsLoad?.(),
+          reg.rendererStepOf?.(`task-foreign-${slug}`, parked),
+        ),
+      ).toBeNull();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("the declaration is refused"));
+      rmSync(join(mount.dir, vendor), { recursive: true, force: true });
+      server.__clearInstalledFieldRendererBindingsCache();
+      warn.mockClear();
+    }
+  });
+});
+
 describe("a declaration that could not be read at the park is never pinned as no screen (cinatra#3470)", () => {
   const UNREAD_ID = "@acme-test/unread-agent:confirm";
   const hold = (step: unknown) =>

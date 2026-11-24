@@ -70,9 +70,39 @@ type InstalledScan = {
 
 let cache: ({ at: number } & InstalledScan) | null = null;
 
+/** The bundled ids already warned about a foreign installed declaration. */
+const warnedForeignDeclaration = new Set<string>();
+
+/**
+ * May the package mounted at `<scope>/<dir>` that names itself `packageName`
+ * declare the bundled (generated) id whose binding is `generated`
+ * (cinatra#3470)? Only the package that owns it: the generated binding's own
+ * declarer, read from the build. The installed package's identity is the
+ * mount directory the installer projected it to (`@<vendor>/<slug>` ->
+ * `<mount>/<vendor>/<slug>`), and the manifest's own name must agree with it:
+ * a manifest's name claim alone never makes a package the owner.
+ */
+function ownsBundledId(
+  generated: { declaredBy: string },
+  mountedAs: string,
+  packageName: string,
+): boolean {
+  return mountedAs === generated.declaredBy && packageName === mountedAs;
+}
+
+function warnForeignDeclaration(id: string, packageName: string, mountedAs: string, owner: string): void {
+  if (warnedForeignDeclaration.has(id)) return;
+  warnedForeignDeclaration.add(id);
+  console.warn(
+    `[field-renderer-bindings] installed package ${packageName} (mounted as ${mountedAs}) declares ${id}, ` +
+      `which the bundled package ${owner} owns: the declaration is refused and the generated binding wins`,
+  );
+}
+
 /** Test hook — drop the TTL cache. */
 export function __clearInstalledFieldRendererBindingsCache(): void {
   cache = null;
+  warnedForeignDeclaration.clear();
 }
 
 /**
@@ -132,6 +162,7 @@ function collectInstalled(opts?: { fresh?: boolean }): InstalledScan {
   if (opts?.fresh !== true && cache && scanIsCached()) return cache;
   const all: CollectedBinding[] = [];
   const refused = new Set<string>();
+  const generatedById = new Map(GENERATED_FIELD_RENDERER_BINDINGS.map((b) => [b.id, b]));
   let complete = true;
   const scan = (): void => {
     let installDir: string;
@@ -196,8 +227,18 @@ function collectInstalled(opts?: { fresh?: boolean }): InstalledScan {
         for (const err of errors) {
           console.warn(`[field-renderer-bindings] skipped invalid declaration: ${err}`);
         }
-        all.push(...entries);
-        for (const id of refusedScreenIds) refused.add(id);
+        // A bundled id is declared at runtime only by the package that owns
+        // it (`ownsBundledId`): any other package's declaration of it, or
+        // refusal of its screen, is refused and never reaches the merge.
+        const mountedAs = `@${scope}/${dir}`;
+        const owned = (id: string): boolean => {
+          const generated = generatedById.get(id);
+          if (generated === undefined || ownsBundledId(generated, mountedAs, packageName)) return true;
+          warnForeignDeclaration(id, packageName, mountedAs, generated.declaredBy);
+          return false;
+        };
+        all.push(...entries.filter((e) => owned(e.id)));
+        for (const id of refusedScreenIds) if (owned(id)) refused.add(id);
       }
     }
   };
@@ -390,8 +431,10 @@ export function withDeclaredScreenPin(
  * translator resolver, and kind-based ID lookups.
  *
  * AN INSTALLED DECLARED SCREEN SUPERSEDES THE GENERATED BINDING (cinatra#3470).
- * An installed binding of a generated id that declares a screen is the
- * installed truth of that id's screen: it takes the generated binding's place,
+ * An installed binding of a generated id that declares a screen, installed by
+ * the package that owns that id (the scan refuses every other package's
+ * declaration of a generated id, `ownsBundledId`), is the installed truth of
+ * that id's screen: it takes the generated binding's place,
  * so the run page draws it, the park pins it and the submit checks it, never
  * the generated metadata it replaced. A generated id whose installed screen the
  * validator refused is dropped: it reads as a refused screen, held, never as
