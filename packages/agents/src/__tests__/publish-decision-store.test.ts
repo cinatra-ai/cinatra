@@ -1049,7 +1049,8 @@ describe("round 20: a decision belongs to one reset generation of its run", () =
     const park = await insertParkedDecision(PARK);
     expect(park).toMatchObject({ inserted: true, current: true });
     const stamp = rendered(calls.values[0]!.runGeneration);
-    expect(stamp.sql).toMatch(/^coalesce\(\(select live_run\.reset_generation from "[^"]+"\."agent_runs" live_run where live_run\.id = \$1 and live_run\.status in \('running', 'pending_approval'\)\), -1\)$/);
+    // The read locks the run row FOR KEY SHARE until the park commits: the fence against a consumption (cinatra#3745).
+    expect(stamp.sql).toMatch(/^coalesce\(\(select case when live_run\.status in \('running', 'pending_approval'\) then live_run\.reset_generation end from "[^"]+"\."agent_runs" live_run where live_run\.id = \$1 for key share\), -1\)$/);
     expect(stamp.params).toEqual(["run-1"]);
     answers.insert = async () => [stored({ runGeneration: -1 })];
     expect(await insertParkedDecision(PARK)).toMatchObject({ inserted: true, current: false });

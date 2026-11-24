@@ -19,7 +19,14 @@
 //     consumptions exactly one commits.
 //
 // Everything runs in ONE org-write-guarded transaction; the rows read are locked
-// in the order run, binding, decision. Every refusal is a RunStepToolPolicyRefusal
+// in the order run, binding, decision. The run row's FOR UPDATE lock, taken by
+// the first statement, is also the fence against a NEW decision of the run: the
+// park (insertParkedDecision) takes a KEY SHARE lock on the same run row inside
+// its insert, which conflicts with FOR UPDATE and is held until the park
+// commits. Under READ COMMITTED each later statement here reads a fresh
+// snapshot, so a park that committed before the lock was granted is seen by the
+// decision read, and a park still waiting commits only after this transaction.
+// The decision chosen stays the newest until the consumption commits. Every refusal is a RunStepToolPolicyRefusal
 // with a fixed code; a store failure is refused with a fixed code too and never
 // passes its own text on.
 //

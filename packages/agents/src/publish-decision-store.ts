@@ -222,7 +222,11 @@ export async function insertParkedDecision(input: InsertParkedDecisionInput): Pr
       id: randomUUID(), orgId, runId, nodeId, gateTaskId, a2aContextId, status: "parked", surfacedValues: surfaced,
       declaredRows: declared,
       // The run's generation, read in this statement, only while the run is held at a gate; else -1 (an ended attempt).
-      runGeneration: sql`coalesce((select live_run.reset_generation from ${agentRuns} live_run where live_run.id = ${runId} and live_run.status in ('running', 'pending_approval')), -1)`,
+      // The read takes a KEY SHARE lock on the run row, held until this statement commits. It conflicts with the FOR
+      // UPDATE lock that the consumption of a decision holds for its whole transaction (cinatra#3745), so a new decision
+      // of the run commits either before that consumption reads the run's decisions or after the consumption commits;
+      // it never commits between the consumption's read and its write. It does not block a plain status update.
+      runGeneration: sql`coalesce((select case when live_run.status in ('running', 'pending_approval') then live_run.reset_generation end from ${agentRuns} live_run where live_run.id = ${runId} for key share), -1)`,
       expiresAt: sql`now() + (${ttlMs} || ' milliseconds')::interval`,
     })
     .onConflictDoNothing({
