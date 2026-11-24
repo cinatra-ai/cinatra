@@ -26,6 +26,7 @@ import {
   shapeArtifactMaterializeInput,
   type ShapedArtifactMaterializeInput,
 } from "./artifact-materialize-shaper";
+import { materializeArtifactList } from "./artifact-materialize-list";
 import {
   shapeArtifactImageInput,
   type ShapedArtifactImageInput,
@@ -605,12 +606,42 @@ export async function POST(req: Request): Promise<Response> {
       );
       const shaped = input as unknown as ShapedArtifactMaterializeInput;
 
+      // THE LIST MODE (cinatra#3089): one artifact per member, in order, each
+      // through the single create call below with the same node and verified
+      // step. A member that fails ends the call with a typed refusal and no
+      // artifacts; the ledger makes a retry reuse every member filed before.
+      if (shaped.members !== undefined) {
+        const listed = await materializeArtifactList(shaped.members, (member) =>
+          materializeToolArtifact({
+            runId: run.id,
+            orgId: run.orgId,
+            templateId: run.templateId,
+            packageVersion: run.packageVersion,
+            createdBy: run.runBy,
+            nodeId: shaped.nodeId,
+            ...(verifiedStepId ? { verifiedStepId } : {}),
+            extension: shaped.extension,
+            objectTypeId: shaped.objectTypeId,
+            title: member.title,
+            mime: shaped.declaredMime,
+            content: member.content,
+          }),
+        );
+        if (!listed.ok) {
+          return NextResponse.json(
+            { error: listed.error, code: listed.code,
+              failedMember: listed.failedMember, filedCount: listed.filedCount },
+            { status: 400 },
+          );
+        }
+        result = { artifacts: listed.artifacts, reviewTargets: listed.reviewTargets };
+
       // THE SAME-ARTIFACT REVISION (cinatra#3030, item 0.30). A call that names
       // an existing artifact AND the revision it read appends the next revision
       // instead of creating a second artifact. A base another write has already
       // built on is answered 409 — the caller re-reads and appends again; every
       // other refusal keeps the 400 the create path uses.
-      if (
+      } else if (
         typeof shaped.artifactId === "string" &&
         typeof shaped.baseRepresentationRevisionId === "string"
       ) {

@@ -698,6 +698,10 @@ export function resolveArtifactBindingObjectType(
 //       "contentJsonField": "body"                       // optional LITERAL: parse-then-project
 //     } }
 //
+// The LIST MODE (cinatra#3089) replaces `title` with two LITERALS,
+// `memberContentField` and `memberTitleField`: `content` is then a JSON array
+// and the call files one artifact per member, in order, under this node.
+//
 // The host materializes through the SAME core + idempotency ledger as the
 // run-completion path (`path:'materialize_tool'`, ledger `output_id` = the
 // calling node id). This collector is the compile-time validator: statics
@@ -947,9 +951,45 @@ export function collectArtifactMaterializeNodesFromOasDocument(
       );
     }
     const isAppend = hasArtifactId && hasBase;
+
+    // THE LIST MODE'S CALL GRAMMAR (cinatra#3089). `memberContentField` and
+    // `memberTitleField` name, as LITERALS, the content and the title field of
+    // each member of the JSON-array `content`; the call files one artifact per
+    // member. Together or not at all, and never with an append, with
+    // `contentJsonField` or with a top-level title (each member has its own).
+    const hasMemberContent = input.memberContentField !== undefined;
+    const hasMemberTitle = input.memberTitleField !== undefined;
+    if (hasMemberContent !== hasMemberTitle) {
+      fieldError(
+        hasMemberContent ? "memberTitleField" : "memberContentField",
+        "a list call names the content AND the title field of every member — " +
+          "declare both (memberContentField + memberTitleField) or neither",
+      );
+    }
+    const isList = hasMemberContent || hasMemberTitle;
+    for (const field of ["memberContentField", "memberTitleField"] as const) {
+      const value = input[field];
+      if (value !== undefined && (typeof value !== "string" || value.length === 0 || isTemplated(value))) {
+        fieldError(field, `when present, must be a literal field name (got ${JSON.stringify(value)})`);
+      }
+    }
+    if (isList) {
+      for (const field of ["artifactId", "baseRepresentationRevisionId", "contentJsonField", "title"] as const) {
+        if (input[field] !== undefined) {
+          fieldError(
+            field,
+            "cannot be combined with a list call (memberContentField + memberTitleField) — " +
+              "every member is a new artifact with its own title",
+          );
+        }
+      }
+    }
+
     const requiredStrings = isAppend
       ? (["content", "artifactId", "baseRepresentationRevisionId"] as const)
-      : (["content", "title"] as const);
+      : isList
+        ? (["content"] as const)
+        : (["content", "title"] as const);
     for (const field of requiredStrings) {
       const value = input[field];
       if (typeof value !== "string" || value.length === 0) {
