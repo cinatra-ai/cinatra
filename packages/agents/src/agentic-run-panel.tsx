@@ -1514,9 +1514,10 @@ export function AgenticRunPanel({
       const gateKey = hitlGateIdentityKey(ctx);
       if (gateValidity.isHeld(gateKey)) return;
       // A mid-run screen whose binding has not loaded, or failed to load, is
-      // held here as on its Continue (cinatra#3470).
+      // held here as on its Continue (cinatra#3470), whatever its local id: a
+      // declared screen may name any id, so the hold reads the binding state.
       const bindingHold =
-        ctx.xRenderer.endsWith(":output") && !isSetupGateTaskId(ctx.reviewTaskId)
+        !isSetupGateTaskId(ctx.reviewTaskId)
           ? rendererBindingHoldReason(ctx.xRenderer, rendererBindingsRef.current)
           : null;
       if (bindingHold !== null) throw new Error(bindingHold);

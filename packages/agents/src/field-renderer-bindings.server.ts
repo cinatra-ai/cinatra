@@ -34,7 +34,10 @@ import type { FieldRendererBindingInput } from "./register-default-renderers";
 import type { DeclaredHitlCard } from "./hitl-gate-submit";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: dependency-free .mjs validation module (allowJs)
-import { validateHitlScreen } from "../../../scripts/extensions/agent-hitl-screen-schema.mjs";
+import {
+  isUnsupportedKindScreen,
+  validateHitlScreen,
+} from "../../../scripts/extensions/agent-hitl-screen-schema.mjs";
 import {
   A2UI_MID_RUN_TRANSLATOR_KINDS,
   type MidRunTranslatorResolver,
@@ -211,15 +214,27 @@ export function getMergedFieldRendererBindings(): ReadonlyArray<CollectedBinding
 }
 
 /**
+ * Whether a binding's declared screen is a "kind" layout naming a kind outside
+ * the one supported-kind set (cinatra#3470) that the validator and the browser
+ * registration read too. Such a screen is never drawn, whatever its source
+ * (generated or installed), so it is refused here as there.
+ */
+export function isUndrawableDeclaredScreen(binding: { kind: string; screen?: unknown }): boolean {
+  return isUnsupportedKindScreen(binding.kind, binding.screen) as boolean;
+}
+
+/**
  * Whether a gate's renderer names a declared screen the host cannot draw
  * (cinatra#3470): an installed binding declared a screen for this id, the
- * validator refused it, and no binding registers the id. This is the run
- * page's rule (`useRuntimeFieldRendererBindings` holds such a gate), read here
- * for the conversation core and the bound-card resolver, so no host reads a
- * refused screen as a gate with no screen.
+ * validator refused it, and no binding registers the id; or the binding that
+ * registers it declares a "kind" screen of an unsupported kind. This is the
+ * run page's rule (`useRuntimeFieldRendererBindings` holds such a gate), read
+ * here for the conversation core and the bound-card resolver, so no host reads
+ * a refused screen as a gate with no screen.
  */
 export function isRefusedDeclaredScreen(xRenderer: string): boolean {
-  if (getMergedFieldRendererBindings().some((b) => b.id === xRenderer)) return false;
+  const binding = getMergedFieldRendererBindings().find((b) => b.id === xRenderer);
+  if (binding) return isUndrawableDeclaredScreen(binding);
   return collectInstalled().refusedScreenIds.includes(xRenderer);
 }
 
@@ -239,6 +254,7 @@ export function readDeclaredHitlCard(xRenderer: string): DeclaredHitlCard | "una
   try {
     const binding = getMergedFieldRendererBindings().find((b) => b.id === xRenderer);
     if (!binding) return isRefusedDeclaredScreen(xRenderer) ? "unavailable" : null;
+    if (isUndrawableDeclaredScreen(binding)) return "unavailable";
     if (binding.midRunHitl !== true || binding.screen === undefined) return null;
     const checked = validateHitlScreen(binding.screen, `${binding.id} screen`) as {
       screen?: { layout?: string };

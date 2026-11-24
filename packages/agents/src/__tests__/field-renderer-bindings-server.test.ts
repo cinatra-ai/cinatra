@@ -229,3 +229,42 @@ describe("readDeclaredHitlCard — a refused declared screen is unavailable (cin
     expect(readDeclaredHitlCard("@s/screen-agent:card")).toMatchObject({ layout: "card", title: "Fixture title" });
   });
 });
+
+describe("a 'kind' screen on a kind the host draws no component for is refused (cinatra#3470)", () => {
+  const read = (id: string): unknown =>
+    (installedBindings as { readDeclaredHitlCard?: (x: string) => unknown }).readDeclaredHitlCard?.(id) ?? null;
+  const refused = (id: string): unknown =>
+    (installedBindings as { isRefusedDeclaredScreen?: (x: string) => unknown }).isRefusedDeclaredScreen?.(id);
+
+  it("an installed declaration naming linkedin-draft-review holds: unavailable, never the raw gate schema", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    writePkg("s", "kind-agent", {
+      name: "@s/kind-agent",
+      cinatra: {
+        fieldRenderers: [
+          { id: "@s/kind-agent:floor", kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: { layout: "kind" } },
+          { id: "@s/kind-agent:drawn", kind: "context-selector", priority: 80, midRunHitl: true, screen: { layout: "kind" } },
+        ],
+      },
+    });
+    // red-first-expect: expected null to be 'unavailable'
+    expect(read("@s/kind-agent:floor")).toBe("unavailable");
+    expect(refused("@s/kind-agent:floor")).toBe(true);
+    // A kind the host draws stays a declared non-card screen.
+    expect(read("@s/kind-agent:drawn")).toBeNull();
+    expect(refused("@s/kind-agent:drawn")).toBe(false);
+  });
+
+  it("a merged binding that names an unsupported kind is undrawable, whatever its source", () => {
+    const undrawable = (installedBindings as {
+      isUndrawableDeclaredScreen?: (b: { kind: string; screen?: unknown }) => boolean;
+    }).isUndrawableDeclaredScreen;
+    // red-first-expect: expected 'undefined' to be 'function'
+    expect(typeof undrawable).toBe("function");
+    expect(undrawable!({ kind: "linkedin-draft-review", screen: { layout: "kind" } })).toBe(true);
+    expect(undrawable!({ kind: "cta", screen: { layout: "kind" } })).toBe(true);
+    expect(undrawable!({ kind: "context-selector", screen: { layout: "kind" } })).toBe(false);
+    expect(undrawable!({ kind: "linkedin-draft-review", screen: { layout: "card", title: "x" } })).toBe(false);
+    expect(undrawable!({ kind: "linkedin-draft-review" })).toBe(false);
+  });
+});

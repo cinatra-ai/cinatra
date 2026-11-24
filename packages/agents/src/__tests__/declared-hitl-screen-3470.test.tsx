@@ -610,6 +610,30 @@ describe("registration validates the declaration again (cinatra#3470)", () => {
     );
   });
 
+  it("a 'kind' layout registers for exactly the shared supported kinds the validator and the server read", async () => {
+    // Read by a dynamic import of a named path, so a tree without the module
+    // still loads this file and the case fails on its assertion.
+    const schemaPath = join(dirname(fileURLToPath(import.meta.url)), "../../../../scripts/extensions/agent-hitl-screen-schema.mjs");
+    const hitlScreenSchema: { KIND_SCREEN_SUPPORTED_KINDS?: readonly string[] } = await import(
+      /* @vite-ignore */ schemaPath
+    ).catch(() => ({}));
+    const supported = [...(hitlScreenSchema.KIND_SCREEN_SUPPORTED_KINDS ?? [])].sort();
+    // red-first-expect: expected 0 to be greater than 0
+    expect(supported.length).toBeGreaterThan(0);
+    const registered: string[] = [];
+    for (const kind of knownFieldRendererKinds()) {
+      fieldRendererRegistry.clear();
+      registerFieldRendererBindings([{ id: ID, kind, priority: 80, midRunHitl: true, screen: { layout: "kind" } }]);
+      const entry = entryOf();
+      if (entry) {
+        expect(entry.renderer).not.toBe(SchemaOnlyFloorRenderer);
+        registered.push(kind);
+      }
+    }
+    expect(registered).toEqual(supported);
+    expect(registered).not.toContain("linkedin-draft-review");
+  });
+
   it("a 'kind' layout on blog-idea-selection registers nothing: the host keeps no idea chooser of its own (cinatra#4429)", () => {
     registerFieldRendererBindings([
       { id: ID, kind: "blog-idea-selection", priority: 80, midRunHitl: true, screen: { layout: "kind" } },

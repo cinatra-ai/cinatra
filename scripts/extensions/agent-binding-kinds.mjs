@@ -22,8 +22,8 @@
 // `allowJs`, and tests).
 
 import {
-  KIND_SCREEN_REFUSED_KINDS,
   MID_RUN_ONLY_MESSAGE,
+  isUnsupportedKindScreen,
   kindScreenRefusedMessage,
   validateHitlScreen,
 } from "./agent-hitl-screen-schema.mjs";
@@ -220,7 +220,7 @@ export function validateFieldRendererDeclarations(packageName, raw) {
         errors.push(`${where}.screen: ${MID_RUN_ONLY_MESSAGE}`);
         return;
       }
-      if (checked.screen.layout === "kind" && KIND_SCREEN_REFUSED_KINDS.includes(kind)) {
+      if (isUnsupportedKindScreen(kind, checked.screen)) {
         errors.push(`${where}.screen: ${kindScreenRefusedMessage(kind)}`);
         return;
       }

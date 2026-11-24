@@ -9,8 +9,8 @@
  * screen with `{ approved: true }` alone, without its decision and its fields.
  * The run panel draws no Continue for a gate it resolves no renderer for, so
  * what is pinned is its published submit (the composer's road) and the
- * reason it shows, for a gate whose renderer id reads as mid-run (`:output`)
- * and has no binding registered:
+ * reason it shows, for a mid-run gate with no binding registered, whatever
+ * its local id (`:output`, `:confirm`):
  *   - while the fetch has not answered, no Continue is available, the screen
  *     says why, and the published submit refuses with that reason;
  *   - after the fetch failed, the same;
@@ -212,6 +212,15 @@ describe("AgenticRunPanel — a screen whose binding has not loaded holds its Co
     await expectHeld(HOLD_LOADING, published);
   });
 
+  it("holds the Continue of a declared screen whose id is not an :output id while the bindings are loading", async () => {
+    // A declared screen may name any local id: the hold reads the binding, not the suffix.
+    gate.xRenderer = "@cinatra-test/runtime-agent:confirm";
+    runtimeBindings.fetch.mockImplementation(() => new Promise(() => {}));
+    const published = await mountGate();
+    // red-first-expect: promise resolved "undefined" instead of rejecting
+    await expectHeld(HOLD_LOADING, published);
+  });
+
   it("holds the Continue after the bindings fetch failed", async () => {
     runtimeBindings.fetch.mockImplementation(async () => {
       throw new Error("fixture: the bindings fetch failed");
@@ -226,6 +235,19 @@ describe("AgenticRunPanel — a screen whose binding has not loaded holds its Co
       bindings: [
         // A screen the registration refuses: a card with no title and no sections.
         { id: RUNTIME_ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: { layout: "card" } },
+      ],
+      refusedScreenIds: [],
+    }));
+    const published = await mountGate();
+    // red-first-expect: promise resolved "undefined" instead of rejecting
+    await expectHeld(HOLD_FAILED, published);
+  });
+
+  it("holds the Continue when a declared :confirm screen did not register", async () => {
+    gate.xRenderer = "@cinatra-test/confirm-agent:confirm";
+    runtimeBindings.fetch.mockImplementation(async () => ({
+      bindings: [
+        { id: gate.xRenderer, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: { layout: "card" } },
       ],
       refusedScreenIds: [],
     }));

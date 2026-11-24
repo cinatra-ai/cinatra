@@ -34,8 +34,8 @@
 //     required value, and a card with decisions holds the Continue until
 //     one of them is chosen.
 //   - "kind": { layout } - the host's own component for the binding's kind;
-//     never a kind in KIND_SCREEN_REFUSED_KINDS (its component answers with
-//     bare text, which a mid-run step cannot send).
+//     only a kind in KIND_SCREEN_SUPPORTED_KINDS (a kind the host draws with
+//     a component of its own, whose answer a mid-run step can send).
 //
 // A declared screen belongs to a MID-RUN gate only: the binding that carries
 // it must declare `midRunHitl: true` (MID_RUN_ONLY_MESSAGE). Every host then
@@ -50,14 +50,41 @@ export const HITL_SCREEN_KEY_RE = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 export const MAX_HITL_SCREEN_BYTES = 8192;
 export const MID_RUN_ONLY_MESSAGE =
   "a declared screen is drawn only at a mid-run gate: the binding must declare midRunHitl: true (a setup gate takes no declared screen)";
-// The kinds a "kind" layout never names (cinatra#3470). A mid-run host
-// stages a renderer's answer only as an object of keys; the cta component
-// answers with bare text (it is one field of a setup form), so its typed or
-// picked value would never reach the agent. A cta step is declared as a card
-// with a field section, which stages its text under the declared key.
-export const KIND_SCREEN_REFUSED_KINDS = Object.freeze(["cta"]);
+// The kinds a "kind" layout may name (cinatra#3470): THE ONE SET the binding
+// validator, the server's availability read and the browser registration all
+// read. Each is a kind the host draws with a component of its own (a kind the
+// host keeps only the schema floor for draws nothing a step can answer). The
+// cta kind is not in it: its component answers with bare text (it is one
+// field of a setup form), which a mid-run host never stages, so a cta step is
+// declared as a card with a field section instead.
+export const KIND_SCREEN_SUPPORTED_KINDS = Object.freeze([
+  "campaign-recipients-review",
+  "context-selector",
+  "email-drafts-review",
+  "list-picker",
+  "wayflow-setup-form",
+]);
+export function isKindScreenSupported(kind) {
+  return typeof kind === "string" && KIND_SCREEN_SUPPORTED_KINDS.includes(kind);
+}
+/**
+ * Is a binding's declared screen one the host cannot draw for its kind: a
+ * "kind" layout naming a kind outside KIND_SCREEN_SUPPORTED_KINDS?
+ */
+export function isUnsupportedKindScreen(kind, screen) {
+  return (
+    screen !== null &&
+    typeof screen === "object" &&
+    !Array.isArray(screen) &&
+    screen.layout === "kind" &&
+    !isKindScreenSupported(kind)
+  );
+}
 export function kindScreenRefusedMessage(kind) {
-  return `a "kind" screen cannot use kind ${JSON.stringify(kind)}: its component answers with bare text, which a mid-run step cannot send; declare the step as a card with a field section instead`;
+  const prefix = `a "kind" screen cannot use kind ${JSON.stringify(kind)}`;
+  return kind === "cta"
+    ? `${prefix}: its component answers with bare text, which a mid-run step cannot send; declare the step as a card with a field section instead`
+    : `${prefix}: the host draws no component of its own for it (supported: ${KIND_SCREEN_SUPPORTED_KINDS.join(", ")}); declare the step as a card instead`;
 }
 const MAX_TEXT = 600;
 const MAX_LIST = 8;

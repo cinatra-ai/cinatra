@@ -167,10 +167,11 @@ async function declaredScreenBindingOf(
       "./field-renderer-bindings.server"
     );
     const binding = getMergedFieldRendererBindings().find((b) => b.id === xRenderer);
-    // A screen the validator refused is declared but cannot be drawn: the run
-    // page holds it, and so does a conversation host (the same shared rule).
-    if (!binding) return isRefusedDeclaredScreen(xRenderer) ? "unavailable" : null;
-    if (binding.screen === undefined) return null;
+    // A screen the validator refused, or a "kind" screen of a kind the host
+    // draws nothing for, is declared but cannot be drawn: the run page holds
+    // it, and so does a conversation host (the same shared rule).
+    if (isRefusedDeclaredScreen(xRenderer)) return "unavailable";
+    if (!binding || binding.screen === undefined) return null;
     const parsed = parseDeclaredScreenBinding(
       {
         id: binding.id,

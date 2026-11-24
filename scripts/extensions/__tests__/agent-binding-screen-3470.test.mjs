@@ -63,6 +63,18 @@ describe("the binding validator carries a declared screen", () => {
     );
   });
 
+  it("refuses a 'kind' screen on a kind the host draws no component for: linkedin-draft-review", () => {
+    const { entries, errors, refusedScreenIds } = validateFieldRendererDeclarations(PKG, [
+      { ...BINDING, kind: "linkedin-draft-review", screen: { layout: "kind" } },
+    ]);
+    // red-first-expect: expected [ { …(6) } ] to deeply equal []
+    expect(entries).toEqual([]);
+    expect(errors.join("\n")).toMatch(
+      /cinatra\.fieldRenderers\[0\]\.screen: a "kind" screen cannot use kind "linkedin-draft-review": the host draws no component of its own for it/,
+    );
+    expect(refusedScreenIds).toEqual([`${PKG}:confirm`]);
+  });
+
   it("names every refused entry that declared a screen, and no other", () => {
     const { entries, refusedScreenIds } = validateFieldRendererDeclarations(PKG, [
       { ...BINDING, id: `${PKG}:no-title`, screen: { layout: "card" } },
@@ -85,7 +97,9 @@ describe("the binding validator carries a declared screen", () => {
 
 describe("the generator emits the declared screen", () => {
   it("writes the screen into the bindings file and its type", () => {
-    const { entries } = validateFieldRendererDeclarations(PKG, [{ ...BINDING, screen: { layout: "kind" } }]);
+    const { entries } = validateFieldRendererDeclarations(PKG, [
+      { ...BINDING, kind: "context-selector", screen: { layout: "kind" } },
+    ]);
     const out = emitAgentBindings(entries, {});
     expect(out).toContain("  readonly screen?: Readonly<Record<string, unknown>>;\n");
     expect(out).toContain(`midRunHitl: true, screen: {"layout":"kind"}, declaredBy: "${PKG}" },`);

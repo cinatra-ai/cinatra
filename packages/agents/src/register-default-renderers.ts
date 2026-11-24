@@ -67,8 +67,8 @@ import { hasUsableListPick } from "./hitl-gate-submit";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: dependency-free .mjs validation module (allowJs)
 import {
-  KIND_SCREEN_REFUSED_KINDS,
   MID_RUN_ONLY_MESSAGE,
+  isKindScreenSupported,
   kindScreenRefusedMessage,
   validateHitlScreen,
 } from "../../../scripts/extensions/agent-hitl-screen-schema.mjs";
@@ -334,8 +334,9 @@ function registerDeclaredScreen(b: FieldRendererBindingInput): void {
   } else if (
     kindEntry &&
     checked.screen?.layout === "kind" &&
-    kindEntry.renderer !== SchemaOnlyFloorRenderer &&
-    !(KIND_SCREEN_REFUSED_KINDS as readonly string[]).includes(b.kind)
+    // The one supported-kind set the validator and the server read too: a
+    // kind outside it (the schema floor, or cta's bare text) is refused alike.
+    (isKindScreenSupported(b.kind) as boolean)
   ) {
     renderer = kindEntry.renderer;
     // The same hold as a card (cinatra#3470): a kind whose untouched answer
@@ -350,7 +351,7 @@ function registerDeclaredScreen(b: FieldRendererBindingInput): void {
       ? checked.errors.join("; ")
       : midRunOnly
         ? MID_RUN_ONLY_MESSAGE
-        : checked.screen?.layout === "kind" && (KIND_SCREEN_REFUSED_KINDS as readonly string[]).includes(b.kind)
+        : checked.screen?.layout === "kind" && kindEntry
           ? (kindScreenRefusedMessage(b.kind) as string)
           : `the host has no component of its own for kind "${b.kind}"`;
     console.error(`[field-renderers] declared screen of ${b.id} refused: ${reason}`);
