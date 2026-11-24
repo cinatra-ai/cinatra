@@ -48,6 +48,7 @@ import {
   registerCapabilityProvider,
   resolveCapabilityProviders,
   isLoadedExtensionIdentityCurrent,
+  isLoadedExtensionIdentityMinted,
   type LoadedExtensionIdentity,
 } from "@/lib/extension-capabilities-registry";
 // The host-internal SYSTEM capability id(s) — fenced behind the `/internal`
@@ -1702,20 +1703,16 @@ export class OutwardActionRefusal extends Error {
  * carry a loaded identity that the host's loader stamped from a verified install
  * id and digest, and that identity must still be the current one of its package
  * version. Refuses `action_loaded_identity_missing_or_stale` when there is no
- * such identity (a legacy, dev or bundled load has none; any other value), and
- * `action_loaded_identity_stale` for an identity that was replaced, retired or
- * torn down. Returns the checked identity. It is one step of the admission
+ * such identity (a legacy, dev or bundled load has none; any value that is not
+ * the very object the loader minted, a copy with equal fields included), and
+ * `action_loaded_identity_stale` for a minted identity that was replaced,
+ * retired or torn down. Returns the checked identity. It is one step of the admission
  * only: it admits nothing by itself, and `enforceMcpBoundary` still refuses
  * every outward call on a run frame. */
 export function assertOutwardActionLoadedIdentity(identity: unknown): LoadedExtensionIdentity {
-  const pinned = typeof identity === "object" && identity !== null &&
-    ["installId", "digest"].every((name) => {
-      const d = Object.getOwnPropertyDescriptor(identity, name);
-      return !!d && "value" in d && typeof d.value === "string" && d.value.length > 0;
-    });
-  if (!pinned) throw new OutwardActionRefusal("action_loaded_identity_missing_or_stale");
+  if (!isLoadedExtensionIdentityMinted(identity)) throw new OutwardActionRefusal("action_loaded_identity_missing_or_stale");
   if (!isLoadedExtensionIdentityCurrent(identity)) throw new OutwardActionRefusal("action_loaded_identity_stale");
-  return identity as LoadedExtensionIdentity;
+  return identity;
 }
 
 /** cinatra#3745: the code of an error of one of the three classes that refuse a

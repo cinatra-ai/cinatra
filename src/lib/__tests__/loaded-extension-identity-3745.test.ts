@@ -5,7 +5,8 @@
  * identity the host's loader stamped from a verified install id and digest,
  * and it must still be the current identity of its package version. Every
  * other owner is refused: no identity, an identity without an install id or a
- * digest, a forged or copied identity, and an identity that was replaced,
+ * digest, a forged or copied identity (also an unchanged copy: the check is
+ * by object, not by fields), and an identity that was replaced,
  * retired or torn down. The check admits nothing by itself: the boundary still
  * refuses every outward call on a run frame, also for an owner whose identity
  * is current.
@@ -51,12 +52,16 @@ const refusalCode = (identity: unknown): string | null => {
 beforeEach(() => registry.__resetCapabilityRegistry());
 
 describe("the loader's stamp", () => {
-  it("is frozen, carries the install, and is the same identity for the same install", () => {
+  // red-first-expect: recordLoadedExtensionIdentity is not a function
+  it("is frozen, carries the install, and a new stamp of the same install replaces it", () => {
     const first = stamp();
     expect(first).toMatchObject(INSTALL);
     expect(Object.isFrozen(first)).toBe(true);
-    expect(stamp()).toBe(first);
     expect(registry.currentLoadedExtensionIdentity(PKG, "1.2.0")).toBe(first);
+    const second = stamp();
+    expect(second).not.toBe(first);
+    expect(registry.currentLoadedExtensionIdentity(PKG, "1.2.0")).toBe(second);
+    expect(registry.isLoadedExtensionIdentityCurrent(first)).toBe(false);
   });
 
   it.each([
@@ -89,15 +94,25 @@ describe("the check of an outward action's owner", () => {
     expect(refusalCode(identity)).toBe("action_loaded_identity_missing_or_stale");
   });
 
-  it("refuses a copy with another generation, install id or digest as stale", () => {
+  // red-first-expect: recordLoadedExtensionIdentity is not a function
+  it("refuses an unchanged copy of the current identity as missing", () => {
     const identity = stamp();
-    expect(refusalCode({ ...identity, generation: identity.generation + 1 })).toBe("action_loaded_identity_stale");
-    expect(refusalCode({ ...identity, installId: "install-2" })).toBe("action_loaded_identity_stale");
-    expect(refusalCode({ ...identity, digest: "e".repeat(64) })).toBe("action_loaded_identity_stale");
+    expect(refusalCode({ ...identity })).toBe("action_loaded_identity_missing_or_stale");
+    expect(refusalCode(Object.freeze({ ...identity }))).toBe("action_loaded_identity_missing_or_stale");
+    expect(check(identity)).toBe(identity);
   });
 
-  it("refuses an identity the loader never stamped as stale", () => {
-    expect(refusalCode({ ...INSTALL, generation: 1 })).toBe("action_loaded_identity_stale");
+  // red-first-expect: recordLoadedExtensionIdentity is not a function
+  it("refuses a copy with another generation, install id or digest as missing", () => {
+    const identity = stamp();
+    expect(refusalCode({ ...identity, generation: identity.generation + 1 })).toBe("action_loaded_identity_missing_or_stale");
+    expect(refusalCode({ ...identity, installId: "install-2" })).toBe("action_loaded_identity_missing_or_stale");
+    expect(refusalCode({ ...identity, digest: "e".repeat(64) })).toBe("action_loaded_identity_missing_or_stale");
+  });
+
+  // red-first-expect: to be an instance of OutwardActionRefusal
+  it("refuses an identity the loader never stamped as missing", () => {
+    expect(refusalCode({ ...INSTALL, generation: 1 })).toBe("action_loaded_identity_missing_or_stale");
   });
 
   it("refuses an identity replaced by a stamp of another digest", () => {
@@ -111,6 +126,16 @@ describe("the check of an outward action's owner", () => {
     const identity = stamp();
     registry.retireLoadedExtensionIdentity(PKG, "1.2.0");
     expect(refusalCode(identity)).toBe("action_loaded_identity_stale");
+  });
+
+  // red-first-expect: recordLoadedExtensionIdentity is not a function
+  it("retires with an expected identity only while that identity is current", () => {
+    const old = stamp();
+    const next = stamp({ ...INSTALL, digest: "e".repeat(64) });
+    registry.retireLoadedExtensionIdentity(PKG, "1.2.0", old);
+    expect(check(next)).toBe(next);
+    registry.retireLoadedExtensionIdentity(PKG, "1.2.0", next);
+    expect(registry.currentLoadedExtensionIdentity(PKG, "1.2.0")).toBeUndefined();
   });
 
   it("refuses every identity of a package after its capability teardown, and keeps other packages", () => {

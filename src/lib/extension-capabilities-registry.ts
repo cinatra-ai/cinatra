@@ -406,10 +406,12 @@ export function __resetServingRecords(): void {
 // digest, for a record whose bytes were verified against that anchor. A legacy,
 // dev or bundled load has no install id or digest, so it has no loaded identity.
 //
-// One identity is current per (package, version). A later stamp with another
-// install id or digest replaces it, a failed registration retires it, and the
-// capability teardown above drops every identity of the package, so a kept
-// copy of an identity reads as stale from then on. An outward run action checks
+// One identity is current per (package, version). Each stamp mints a new frozen
+// object and replaces the current one; a failed attempt retires only the
+// identity it stamped itself (never a newer one), a successful load without an
+// install id or a digest retires the current one, and the capability teardown
+// above drops every identity of the package. The check accepts only the exact
+// object the loader minted, never a copy with equal fields. An outward run action checks
 // its owner's identity here (`assertOutwardActionLoadedIdentity` in
 // `@/lib/extension-host-context`). Co-located with the providers, because the
 // same teardown clears both.
@@ -423,13 +425,18 @@ export type LoadedExtensionIdentity = Readonly<{
 }>;
 
 const LOADED_IDENTITIES_KEY = Symbol.for("@cinatra-ai/host:loaded-extension-identities/v1");
-type LoadedIdentityRegistry = { next: number; current: Map<string, LoadedExtensionIdentity> };
+type LoadedIdentityRegistry = {
+  next: number;
+  current: Map<string, LoadedExtensionIdentity>;
+  minted: WeakSet<LoadedExtensionIdentity>;
+};
 const loadedIdentityHolder = globalThis as unknown as {
   [LOADED_IDENTITIES_KEY]?: LoadedIdentityRegistry;
 };
 const loadedIdentities: LoadedIdentityRegistry = (loadedIdentityHolder[LOADED_IDENTITIES_KEY] ??= {
   next: 0,
   current: new Map<string, LoadedExtensionIdentity>(),
+  minted: new WeakSet<LoadedExtensionIdentity>(),
 });
 
 function loadedIdentityKey(packageName: string, version: string): string {
@@ -461,9 +468,6 @@ export function recordLoadedExtensionIdentity(input: {
   ) {
     throw new Error("action_loaded_identity_invalid");
   }
-  const key = loadedIdentityKey(packageName, version);
-  const prior = loadedIdentities.current.get(key);
-  if (prior && prior.installId === installId && prior.digest === digest) return prior;
   const identity: LoadedExtensionIdentity = Object.freeze({
     packageName,
     version,
@@ -471,7 +475,8 @@ export function recordLoadedExtensionIdentity(input: {
     digest,
     generation: ++loadedIdentities.next,
   });
-  loadedIdentities.current.set(key, identity);
+  loadedIdentities.minted.add(identity);
+  loadedIdentities.current.set(loadedIdentityKey(packageName, version), identity);
   return identity;
 }
 
@@ -484,37 +489,36 @@ export function currentLoadedExtensionIdentity(
   return loadedIdentities.current.get(loadedIdentityKey(packageName, version));
 }
 
-/**
- * Whether a value is exactly the current loaded identity of its (package,
- * version): every field equal, the generation included. False for every other
- * value, a retired or replaced identity included. Reads own data fields only,
- * never a getter.
- */
-export function isLoadedExtensionIdentityCurrent(value: unknown): boolean {
-  if (typeof value !== "object" || value === null) return false;
-  const field = (name: string): unknown => {
-    const d = Object.getOwnPropertyDescriptor(value, name);
-    return d && "value" in d ? d.value : undefined;
-  };
-  const packageName = field("packageName");
-  const version = field("version");
-  if (!loadedIdentityFieldValid(packageName) || !loadedIdentityFieldValid(version)) return false;
-  const current = loadedIdentities.current.get(loadedIdentityKey(packageName, version));
-  return (
-    current !== undefined &&
-    current.installId === field("installId") &&
-    current.digest === field("digest") &&
-    current.generation === field("generation")
-  );
+/** Whether a value is an object the loader minted (current or not). */
+export function isLoadedExtensionIdentityMinted(value: unknown): value is LoadedExtensionIdentity {
+  return typeof value === "object" && value !== null && loadedIdentities.minted.has(value as LoadedExtensionIdentity);
 }
 
-/** Retire the loaded identity of one (package, version), for a failed registration. */
+/**
+ * Whether a value is the very object the loader minted and still the current
+ * loaded identity of its (package, version). Object identity, never field
+ * equality: a copy with equal fields is false, as is a retired or replaced
+ * identity. A minted identity is frozen, so its fields are its own.
+ */
+export function isLoadedExtensionIdentityCurrent(value: unknown): boolean {
+  if (!isLoadedExtensionIdentityMinted(value)) return false;
+  return loadedIdentities.current.get(loadedIdentityKey(value.packageName, value.version)) === value;
+}
+
+/**
+ * Retire the loaded identity of one (package, version). With `expected`, a
+ * compare-and-delete: it retires only while the current identity is that very
+ * object, so an attempt never retires an identity another attempt stamped.
+ */
 export function retireLoadedExtensionIdentity(
   packageName: string,
   version: string | null | undefined,
+  expected?: LoadedExtensionIdentity,
 ): void {
   if (!loadedIdentityFieldValid(version)) return;
-  loadedIdentities.current.delete(loadedIdentityKey(packageName, version));
+  const key = loadedIdentityKey(packageName, version);
+  if (expected !== undefined && loadedIdentities.current.get(key) !== expected) return;
+  loadedIdentities.current.delete(key);
 }
 
 function retireLoadedExtensionIdentitiesForPackage(packageName: string): void {

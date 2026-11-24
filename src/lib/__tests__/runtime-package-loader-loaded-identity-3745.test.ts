@@ -3,7 +3,9 @@ import type { PackageStoreRecord, ActivationResult, ExtensionHostContext } from 
 
 // cinatra#3745 — the runtime loader stamps the loaded identity of a verified
 // install: only an anchor with an install id and a digest stamps one, a record
-// that fails to register keeps none, and the capability teardown retires it.
+// that fails to register keeps none, a successful unpinned reload retires an
+// older one, a failed attempt never retires a concurrent attempt's newer one,
+// and the capability teardown retires it.
 // DI-unit: the SDK driver is a FAKE that drives makeContext/onRegisterSettled
 // like the real one (which verifies the bytes against the anchor and imports
 // the entry before makeContext); the identity registry is REAL.
@@ -145,5 +147,48 @@ describe("loadRuntimePackageExtensions — the loaded identity of a verified ins
     const identity = current();
     registry.invalidateProvidersForPackage(PKG);
     expect(registry.isLoadedExtensionIdentityCurrent(identity)).toBe(false);
+  });
+
+  // red-first-expect: currentLoadedExtensionIdentity is not a function
+  it.each([
+    ["no install id", { installId: null }],
+    ["no digest", { digest: null }],
+  ])("a successful reload with %s retires the older pinned identity", async (_label, overrides) => {
+    driveWith(true);
+    await loadRuntimePackageExtensions("/store", { resolveInstallAnchors: async () => [anchor()] as never });
+    const pinned = current();
+    expect(pinned).toBeDefined();
+    await loadRuntimePackageExtensions("/store", {
+      resolveInstallAnchors: async () => [anchor(overrides)] as never,
+    });
+    expect(current()).toBeUndefined();
+    expect(registry.isLoadedExtensionIdentityCurrent(pinned)).toBe(false);
+  });
+
+  // red-first-expect: currentLoadedExtensionIdentity is not a function
+  it("a failed attempt keeps the identity a concurrent attempt stamped and registered", async () => {
+    let releaseA!: () => void;
+    const aStamped = new Promise<void>((resolveStamped) => {
+      runRuntimePackageActivation.mockImplementationOnce(async (_root, deps) => {
+        const record = (deps.records ?? [])[0];
+        deps.makeContext(record.packageName, record.requestedHostPorts ?? [], record);
+        resolveStamped();
+        await new Promise<void>((r) => (releaseA = r));
+        deps.onRegisterSettled?.(record, false);
+        return [{ packageName: record.packageName, status: "failed" } as ActivationResult];
+      });
+    });
+    const attemptA = loadRuntimePackageExtensions("/store", {
+      resolveInstallAnchors: async () => [anchor()] as never,
+    });
+    await aStamped;
+    driveWith(true);
+    await loadRuntimePackageExtensions("/store", { resolveInstallAnchors: async () => [anchor()] as never });
+    const b = current();
+    expect(b).toBeDefined();
+    releaseA();
+    await attemptA;
+    expect(current()).toBe(b);
+    expect(registry.isLoadedExtensionIdentityCurrent(b)).toBe(true);
   });
 });
