@@ -62,7 +62,6 @@ import type * as RouteModule from "../route";
 // The route the fix adds is loaded inside each test, not at the top of the
 // file: before the fix the file still loads and each test fails on the
 // missing module.
-// red-first-expect: expected { state: 'pending', …(4) } to deeply equal { state: 'pending', …(5) }
 let GET!: typeof RouteModule.GET;
 async function loadRoute(): Promise<void> {
   ({ GET } = await import("../route"));

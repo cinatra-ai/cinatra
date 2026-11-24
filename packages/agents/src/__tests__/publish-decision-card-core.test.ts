@@ -109,8 +109,6 @@ describe("which card a run shows", () => {
     });
   });
 
-  // Before the fix the widget read does not exist yet, so this test fails on the missing export.
-  // red-first-expect: expected { state: 'pending', …(4) } to deeply equal { state: 'pending', …(5) }
   it("the site widget's card asks the widget reader's rights, never the decide check", async () => {
     const widget = { ...WHO, actor: { actorType: "human" as const, source: "a2a" as const, userId: "user-a" } };
     for (const answer of [true, false]) {
@@ -138,7 +136,6 @@ describe("which card a run shows", () => {
   it("a released decision whose run still waits at its gate keeps Allow open on that decision, and draws no Approved", async () => {
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released", decidedBy: "user-b", gateTaskId: "task-1" }));
     access.releasedPublishAwaitsResume.mockResolvedValue(true);
-    // red-first-expect: expected { state: 'approved', …(4) } to match object { state: 'pending', …(3) }
     expect(await read()).toMatchObject({ state: "pending", decisionId: "d1", mayDecide: true, resumeOnly: true });
     expect(access.releasedPublishAwaitsResume).toHaveBeenCalledWith(RUN, expect.objectContaining({ id: "d1", status: "released" }));
     access.releasedPublishAwaitsResume.mockResolvedValue(false);
@@ -150,7 +147,6 @@ describe("which card a run shows", () => {
   it("a released decision whose waiting check faults draws no card, never Approved", async () => {
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released", decidedBy: "user-b", gateTaskId: "task-1" }));
     access.releasedPublishAwaitsResume.mockRejectedValue(new Error("read failed"));
-    // red-first-expect: expected { state: 'approved', …(4) } to deeply equal { state: 'none' }
     expect(await read()).toEqual({ state: "none" });
     expect(names.readDeciderName).not.toHaveBeenCalled();
   });
