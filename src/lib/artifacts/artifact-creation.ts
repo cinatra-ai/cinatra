@@ -25,7 +25,7 @@ import { createLocalDiskBlobStore } from "./local-disk-blob-store";
 import { deriveSubstanceKey } from "./resource-store";
 import { buildArtifactWriterWitnessOp } from "./artifact-writer-witness";
 import { buildObjectsWithOutboxQuery } from "@/lib/objects-store";
-import { maybeBuildProducedEventInsertOp } from "@/lib/lifecycle/lifecycle-emit";
+import { maybeBuildProducedEventInsertOp, producerAttemptForRun } from "@/lib/lifecycle/lifecycle-emit";
 import {
   type OwnerLevel,
   normalizeOwnerLevel,
@@ -1131,6 +1131,7 @@ VALUES ($1::text, $2::text, $3::text, $4::text)`,
             originKind,
             producerRunId: persistedRunId,
             producerAgentId: null,
+            producerAttempt: producerAttemptForRun(persistedRunId),
           });
           return op ? [op] : [];
         })(),

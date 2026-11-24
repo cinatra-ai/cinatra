@@ -121,6 +121,8 @@ type ArtifactReviewGateSeam = {
     orgId: string;
     reviewTaskId: string;
     targets: unknown;
+    /** cinatra#4762: the reset generation of the attempt this handler serves (see the gate store). */
+    runGeneration: number | null;
   }): Promise<
     | { ok: true }
     | { ok: false; code: "invalid-targets" | "pin-conflict"; message: string }
@@ -2707,6 +2709,9 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           : [];
         type GateEmitResult = Awaited<ReturnType<typeof gateSeam.emit>>;
         let emitResult: GateEmitResult;
+        // cinatra#4762: the gate belongs to the attempt this handler serves, as the run record its caller read for the
+        // attempt names it (the publish gate reads the same value), never a later read of the run row.
+        const runGeneration = run.resetGeneration ?? 0;
         // A gate from before singleton minting keeps its complete original pins.
         // Read it BEFORE emitting any leg: a conflict on the first scalar must
         // never be followed by a new sibling overlapping that combined review.
@@ -2757,14 +2762,14 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           // pending/resolved gate and its decision/outbox untouched. Never mint
           // scalar legs or replace the caller's set with the stored set to make
           // a mismatched request pass. The route describes the actual old gate.
-          emitResult = await gateSeam.emit({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets });
+          emitResult = await gateSeam.emit({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets, runGeneration });
           pinnedTargets = originalPins.targets;
         } else if (legs.length > 1) {
           // Freeze the whole original pause through the existing store transaction.
           // A later refusal leaves no newly-visible actionable partial family.
           // Older bundles without this binding fail before any singleton mint.
           if (!gateSeam.emitFamily) throw new TypeError("declared review atomic family seam unavailable");
-          emitResult = await gateSeam.emitFamily({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets });
+          emitResult = await gateSeam.emitFamily({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets, runGeneration });
           if (!emitResult.ok) {
             // An old combined review may commit after the preflight. The atomic
             // attempt inserted nothing; only the same complete original pins
@@ -2774,7 +2779,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
             if (!racedPins?.ok || racedPins.targets.length < 2) {
               throw new Error(`Declared review family could not be pinned: ${emitResult.message}`);
             }
-            emitResult = await gateSeam.emit({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets });
+            emitResult = await gateSeam.emit({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets, runGeneration });
             if (!emitResult.ok) throw new Error(`Declared review family could not be pinned: ${emitResult.message}`);
             pinnedTargets = racedPins.targets;
           } else {
@@ -2786,13 +2791,14 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           if (legs.length === 1) pinnedTargets = legs[0].targets;
           if (legs.length === 1 && !original) {
             if (!gateSeam.emitFamily) throw new TypeError("declared review atomic family seam unavailable");
-            emitResult = await gateSeam.emitFamily({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets });
+            emitResult = await gateSeam.emitFamily({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets, runGeneration });
           } else emitResult = coreDecision.review
             ? await gateSeam.emit({
                 runId,
                 orgId: run.orgId,
                 reviewTaskId,
                 targets: pinnedTargets,
+                runGeneration,
               })
             : ({
                 ok: false as const,
@@ -3809,9 +3815,12 @@ export async function runAgentBuilderExecutionJob(
     return;
   }
   const prev = mcpRequestContextStorage.getStore();
+  // cinatra#4762: the attempt this job executes, captured once here from the same read. Every produced event the
+  // run's writers record inside this frame carries it (producerAttemptForRun), never a later read of the run row.
   const next: McpRequestContext = {
     ...(prev ?? {}),
     projectContext: { projectId: probeRun.projectId ?? null },
+    runAttempt: { runId, resetGeneration: probeRun.resetGeneration ?? 0 },
   };
   return mcpRequestContextStorage.run(next, () =>
     runAgentBuilderExecutionJobInner(data, jobId),

@@ -50,6 +50,9 @@ export type ArtifactReviewGateSeam = {
     orgId: string;
     reviewTaskId: string;
     targets: unknown;
+    /** cinatra#4762 — the reset generation of the attempt raising the gate, as the run record the executor read for
+     *  the attempt names it. Required, so every raise names its attempt; null stamps -1, which never counts. */
+    runGeneration: number | null;
   }): Promise<
     | { ok: true }
     | { ok: false; code: "invalid-targets" | "pin-conflict"; message: string }

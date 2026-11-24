@@ -18,7 +18,8 @@
  * idempotent INSERT per enumerated write.
  *
  * PURE (no DB / server-only): a `{text, values}` op is all it returns; the caller
- * owns the connection + transaction. The deterministic id + emitter enumeration
+ * owns the connection + transaction. (`producerAttemptForRun` reads only the
+ * caller's request frame, never the database.) The deterministic id + emitter enumeration
  * come from the S0 contract (`lifecycle-produced-event.ts`).
  */
 
@@ -32,11 +33,49 @@ import {
 import { lifecycleOriginKind, type DestinationClass } from "./lifecycle-policy";
 import { isLifecycleReviewOrchestrationActive } from "./lifecycle-activation";
 import type { ArtifactOriginKind } from "@cinatra-ai/artifacts";
+import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server/request-context";
 
 /** A raw parameterised SQL op — the shape both writers' query lists already use. */
 export interface ProducedEventInsertOp {
   text: string;
   values: unknown[];
+}
+
+/**
+ * cinatra#4762 — the identity of the attempt that produced the output, as the attempt itself carries it:
+ *   - `{ generation }`: the run's reset_generation the run worker captured when the attempt started executing (the
+ *     run's frame, `runAttempt`); recorded as is.
+ *   - `{ executionAttemptId }`: a verified dispatch of the attempt (an agent-run token's attempt claim, a verified
+ *     executing source); the generation is read in the insert only while that dispatch is still the run's current one,
+ *     so a dispatch a retry replaced records -1.
+ * `null`: no attempt identity; the event records -1, which never counts as the attempt's output.
+ */
+export type ProducerAttempt = { generation: number } | { executionAttemptId: string };
+
+/**
+ * cinatra#4762 — the attempt a writer's produced event belongs to, from the frame the write runs in, never from a read
+ * of the run row when the writer runs (a delayed writer of an ended attempt would read the next attempt there):
+ *   1. the run worker's frame for this run (`runAttempt`): the reset generation captured when the attempt started;
+ *   2. a verified dispatch of this run: the executing source a run-bound seam verified, or the agent-run token's
+ *      attempt claim; the insert reads the generation only while that dispatch is the run's current one;
+ *   3. anything else: no attempt identity (null), recorded as -1, and no review of it ever counts.
+ * Kept in this module (not a new one) so no locked route's first-party graph grows.
+ */
+export function producerAttemptForRun(runId: string | null | undefined): ProducerAttempt | null {
+  if (!runId) return null;
+  const frame = mcpRequestContextStorage.getStore();
+  if (!frame) return null;
+  const carried = frame.runAttempt;
+  if (carried && carried.runId === runId && Number.isSafeInteger(carried.resetGeneration)) {
+    return { generation: carried.resetGeneration };
+  }
+  const source = frame.verifiedExecutedSource?.executionAttemptId;
+  if (source && (frame.verifiedRunScopeId === runId || frame.runId === runId)) return { executionAttemptId: source };
+  const actor = frame.delegatedActor;
+  if (actor?.delegation === "agent_run" && actor.runId === runId && actor.executionAttemptId) {
+    return { executionAttemptId: actor.executionAttemptId };
+  }
+  return null;
 }
 
 export interface BuildProducedEventInsertInput {
@@ -61,6 +100,8 @@ export interface BuildProducedEventInsertInput {
    * decision 3); a per-flow opt-in passes `checkpointed`. */
   continuationMode?: ContinuationMode;
   eventKind?: ProducedEventKind;
+  /** cinatra#4762: the producing attempt (see ProducerAttempt). Required, so every writer names it; null records -1. */
+  producerAttempt: ProducerAttempt | null;
 }
 
 /**
@@ -94,15 +135,20 @@ export function buildProducedEventInsertOp(
   }
   const eventKind = input.eventKind ?? "artifact_produced";
   const eventId = producedEventId(input.artifactId, input.representationRevisionId, eventKind);
-  // cinatra#4762: the producing attempt's reset generation, read from the run row in this statement (at production
-  // time, inside the writer's transaction): the run's reset_generation while it executes (running or
-  // pending_approval), else -1. The review the event later raises carries THIS value, never the run's state when the
-  // delayed drain consumes the event, so output of an ended attempt never counts as a review of the next one.
+  // cinatra#4762: the producing attempt's reset generation, as the attempt carries it ($12), never the run row's
+  // state when the writer runs: a delayed writer of an ended attempt would read the next attempt there. A verified
+  // dispatch ($13) reads it only while that dispatch is the run's current one. No run, or no attempt identity: -1. The
+  // review the event later raises carries THIS value, so output of an ended attempt never counts for the next one.
+  const attempt = input.producerRunId ? input.producerAttempt : null;
+  const generation = attempt && "generation" in attempt && Number.isSafeInteger(attempt.generation) ? attempt.generation : null;
+  const dispatch = attempt && "executionAttemptId" in attempt && typeof attempt.executionAttemptId === "string" && attempt.executionAttemptId
+    ? attempt.executionAttemptId : null;
   const bound = `$1::text, $2::text, $3::text, $4::text, $5::text, $6::text,
         $7::text, $8::text, $9::text, $10::text,
         $11::text, NULL, 'pending',
-        coalesce((SELECT live_run.reset_generation FROM "${schema}"."agent_runs" live_run
-          WHERE live_run.id = $7::text AND live_run.status IN ('running', 'pending_approval')), -1)`;
+        coalesce($12::integer, (SELECT live_run.reset_generation FROM "${schema}"."agent_runs" live_run
+          WHERE live_run.id = $7::text AND live_run.execution_attempt_id = $13::text
+            AND live_run.status IN ('running', 'pending_approval')), -1)`;
   return {
     text: `INSERT INTO "${schema}"."artifact_produced_outbox"
   (event_id, org_id, artifact_id, representation_revision_id, event_kind, emitter,
@@ -122,6 +168,8 @@ ON CONFLICT (event_id) DO NOTHING`,
       lifecycleOriginKind(input.originKind),
       input.destinationClass ?? "none",
       input.continuationMode ?? "async_effects_gated",
+      generation,
+      dispatch,
     ],
   };
 }

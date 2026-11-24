@@ -292,6 +292,7 @@ describe("0.13 — the produced event is emitted at the mint", () => {
         representationRevisionId: "rev-minted",
         emitter: "object_snapshot_mint",
         originKind: "upload",
+        producerAttempt: null,
       },
       {
         whereExistsSql: `EXISTS (SELECT 1 FROM "app"."representation" WHERE id = $4::text AND org_id = $2::text AND artifact_id = $3::text)`,
@@ -312,6 +313,7 @@ describe("0.13 — the produced event is emitted at the mint", () => {
       representationRevisionId: "rev-minted",
       emitter: "createSemanticArtifact",
       originKind: "agent_generated",
+      producerAttempt: null,
     });
     expect(op.text).toContain("VALUES ($1::text");
     expect(op.text).not.toContain("WHERE EXISTS");

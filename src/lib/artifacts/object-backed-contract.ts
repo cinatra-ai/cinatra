@@ -371,6 +371,8 @@ export async function serverObjectBackedReviewPorts(opts: {
           representationRevisionId,
           emitter: "object_snapshot_mint",
           originKind: opts.originKind,
+          // cinatra#4762: a reused snapshot's event names no producing run, so no attempt.
+          producerAttempt: null,
         },
       );
       if (!op) return;

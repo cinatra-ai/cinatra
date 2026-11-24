@@ -7,7 +7,7 @@ import { deriveDashboardScopeTuple } from "@/lib/dashboards/dashboard-scope-tupl
 import { buildBindingReconcileQueries } from "@/lib/objects/binding-write-path";
 import { buildObjectsWithOutboxQuery, buildSoftDeleteObjectQuery } from "@/lib/objects-store";
 import { buildAssertSemanticTypeQueries } from "@/lib/artifacts/semantic-assertion-store";
-import { maybeBuildProducedEventInsertOp } from "@/lib/lifecycle/lifecycle-emit";
+import { maybeBuildProducedEventInsertOp, producerAttemptForRun } from "@/lib/lifecycle/lifecycle-emit";
 import { PINNED_CONFIGURATION_SIGNAL_KEY } from "@/lib/artifacts/artifact-read";
 import {
   setDashboardArtifactTwinWriter,
@@ -336,6 +336,7 @@ export function buildDashboardTwinQueries(
     originKind: ctx.extensionId != null || producerRunId != null ? "agent_generated" : "upload",
     producerRunId,
     producerAgentId: null,
+    producerAttempt: producerAttemptForRun(producerRunId),
   });
 
   return [

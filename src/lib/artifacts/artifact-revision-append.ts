@@ -44,7 +44,7 @@ import {
 import { runPostgresQueriesAsync } from "@/lib/postgres-async";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { registerAllObjectTypes } from "@/lib/register-all-object-types";
-import { maybeBuildProducedEventInsertOp } from "@/lib/lifecycle/lifecycle-emit";
+import { maybeBuildProducedEventInsertOp, producerAttemptForRun } from "@/lib/lifecycle/lifecycle-emit";
 
 import { buildArtifactWriterWitnessOp } from "./artifact-writer-witness";
 import { createLocalDiskBlobStore } from "./local-disk-blob-store";
@@ -458,6 +458,7 @@ SELECT r.id AS resource_id, r.is_new AS is_new, r.metadata->>'storageKey' AS sto
           originKind: "live_generator",
           producerRunId: input.runId,
           producerAgentId: null,
+          producerAttempt: producerAttemptForRun(input.runId),
         });
         return [
           {

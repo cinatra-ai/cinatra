@@ -262,6 +262,7 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
       originKind: "live_generator",
       producerRunId: "run-1",
       producerAgentId: null,
+      producerAttempt: null,
     });
     expect(op.values[8]).toBe("intermediate");
 

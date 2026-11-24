@@ -30,6 +30,7 @@ const base = {
   representationRevisionId: "rev-1",
   emitter: "createSemanticArtifact" as const,
   originKind: "agent_generated" as const,
+  producerAttempt: null,
 };
 
 describe("maybeBuildProducedEventInsertOp — the activation switch (#2047: DEFAULT ON)", () => {
@@ -59,8 +60,8 @@ describe("buildProducedEventInsertOp — op shape", () => {
     const op = buildProducedEventInsertOp("cinatra", base);
     expect(op.text).toContain(`"cinatra"."artifact_produced_outbox"`);
     expect(op.text).toContain("ON CONFLICT (event_id) DO NOTHING");
-    // 11 bound params ($1..$11); continuation_address + status are SQL literals.
-    expect(op.values).toHaveLength(11);
+    // 13 bound params ($1..$13; $12/$13 the producing attempt, cinatra#4762); continuation_address + status are SQL literals.
+    expect(op.values).toHaveLength(13);
     expect(op.values[0]).toBe(
       producedEventId("art-1", "rev-1", "artifact_produced"),
     );
@@ -92,22 +93,34 @@ describe("buildProducedEventInsertOp — op shape", () => {
   });
 
   // red-first-expect: to contain 'producer_run_generation'
-  it("stamps the producing attempt's reset generation, read from the run row when the event is written (cinatra#4762)", () => {
+  it("records the producing attempt's reset generation as the attempt carries it, never the run row's live state (cinatra#4762)", () => {
     // The delayed drain raises the event's review later, perhaps after a retry's reset began the next attempt: the
-    // event itself carries the generation of the attempt that produced it, read in this insert, in both insert shapes.
+    // event itself carries the generation of the attempt that produced it, in both insert shapes.
     for (const op of [
-      buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9" }),
-      buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9" }, { whereExistsSql: "true" }),
+      buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 0 } }),
+      buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 0 } }, { whereExistsSql: "true" }),
     ]) {
       expect(op.text).toContain("producer_run_generation");
       expect(op.text).toMatch(/continuation_address, status, producer_run_generation\)/);
-      // While the run executes, its reset_generation; else -1, which never counts. No run named ($7 null): -1.
+      // The carried generation ($12) wins; only a verified dispatch ($13) that is still the run's current one reads it.
       expect(op.text.replace(/\s+/g, " ")).toContain(
-          `coalesce((SELECT live_run.reset_generation FROM "cinatra"."agent_runs" live_run WHERE live_run.id = $7::text AND live_run.status IN ('running', 'pending_approval')), -1)`,
+        `coalesce($12::integer, (SELECT live_run.reset_generation FROM "cinatra"."agent_runs" live_run WHERE live_run.id = $7::text AND live_run.execution_attempt_id = $13::text AND live_run.status IN ('running', 'pending_approval')), -1)`,
       );
       expect(op.values[6]).toBe("run-9");
-      expect(op.values).toHaveLength(11);
+      expect(op.values.slice(11)).toEqual([0, null]);
     }
+  });
+
+  // red-first-expect: expected [] to deeply equal [ null, 'attempt-7' ]
+  it("a verified dispatch names its attempt id; no attempt identity, or no run, records -1 (cinatra#4762)", () => {
+    const dispatched = buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { executionAttemptId: "attempt-7" } });
+    expect(dispatched.values.slice(11)).toEqual([null, "attempt-7"]);
+    // Neither parameter set: the coalesce falls through to -1.
+    expect(buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: null }).values.slice(11)).toEqual([null, null]);
+    // A carried attempt with no run named is no attempt of any run.
+    expect(buildProducedEventInsertOp("cinatra", { ...base, producerRunId: null, producerAttempt: { generation: 3 } }).values.slice(11)).toEqual([null, null]);
+    // A generation that is no safe integer is none.
+    expect(buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 1.5 } }).values.slice(11)).toEqual([null, null]);
   });
 
   it("rejects an unknown emitter (the closed emitter set)", () => {

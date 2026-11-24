@@ -439,11 +439,13 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     const { approvedReviewPrecedes } = await import("../publish-decision-actions");
     bindArtifactReviewGateSeam();
     const GATES = `"${q(TEST_SCHEMA)}"."artifact_review_gates"`;
-    /** A review raised by the real emitter (which records the run's generation), then settled as the store settles it. */
-    const review = async (runId: string, disposition: string | null) => {
+    /** A review raised by the real emitter for the attempt that names its generation (none: no attempt identity), then
+     *  settled as the store settles it. */
+    const review = async (runId: string, disposition: string | null, runGeneration?: number) => {
       const reviewTaskId = `review-${randomUUID()}`;
       const { gateId } = await emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId,
-        targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }] });
+        targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }],
+        ...(runGeneration === undefined ? {} : { runGeneration }) });
       if (disposition) {
         const settled = resolvedGate(disposition);
         await admin.query(`UPDATE ${GATES} SET status = $2, disposition = $3, fingerprint = $4, resolved_at = now() WHERE id = $1`,
@@ -454,7 +456,7 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     const runId = await seedRun(`run-${randomUUID()}`, "running");
     // The first attempt: no review yet, then an approved one, recorded at generation 0.
     expect(await approvedReviewPrecedes(runId, 0)).toBe(false);
-    const first = await review(runId, "approve");
+    const first = await review(runId, "approve", 0);
     expect((await admin.query(`SELECT run_generation FROM ${GATES} WHERE id = $1`, [first])).rows[0]).toEqual({ run_generation: 0 });
     expect(await approvedReviewPrecedes(runId, 0)).toBe(true);
     // The attempt fails and is reset: generation 1. The reset leaves the start stamp to the dispatch.
@@ -465,10 +467,10 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     await admin.query(`UPDATE ${RUNS_TABLE} SET status = 'running', started_at = NULL WHERE id = $1`, [runId]);
     expect(await approvedReviewPrecedes(runId, 1)).toBe(false);
     // Its own approved review counts, with no start stamp at all.
-    await review(runId, "approve");
+    await review(runId, "approve", 1);
     expect(await approvedReviewPrecedes(runId, 1)).toBe(true);
-    // A gate raised while the run is not executing belongs to no attempt.
-    const idle = await seedRun(`run-${randomUUID()}`, "pending_input");
+    // A gate raised by a caller that names no attempt belongs to none, whatever the run row says.
+    const idle = await seedRun(`run-${randomUUID()}`, "running");
     const stray = await review(idle, "approve");
     expect((await admin.query(`SELECT run_generation FROM ${GATES} WHERE id = $1`, [stray])).rows[0]).toEqual({ run_generation: -1 });
     expect(await approvedReviewPrecedes(idle, 0)).toBe(false);
@@ -510,7 +512,7 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     const GATES = `"${q(TEST_SCHEMA)}"."artifact_review_gates"`;
     const runId = await seedRun(`run-${randomUUID()}`, "running");
     const raise = async () => (await emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: `review-${randomUUID()}`,
-      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }] })).gateId;
+      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }], runGeneration: 0 })).gateId;
     const expired = await raise();
     // The expiry's own write shape: approve, a synthetic fingerprint, no person.
     await admin.query(`UPDATE ${GATES} SET status = 'resolved', disposition = 'approve', fingerprint = $2, resolved_at = now() WHERE id = $1`,
@@ -522,30 +524,61 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     expect(await approvedReviewPrecedes(runId, 0)).toBe(true);
   });
 
-  it("cinatra#4762: a produced event carries its attempt's generation, and the review the drain raises later keeps it", async () => {
-    const { buildProducedEventInsertOp } = await import("@/lib/lifecycle/lifecycle-emit");
+  it("cinatra#4762: a produced event records the generation its attempt carries; a delayed writer of an ended attempt keeps its own", async () => {
+    const { buildProducedEventInsertOp, producerAttemptForRun } = await import("@/lib/lifecycle/lifecycle-emit");
+    const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
+    const { bindArtifactReviewGateSeam } = await import("../artifact-review-gate-seam");
     const { emitArtifactReviewGate } = await import("../artifact-review-gate-store");
+    const { approvedReviewPrecedes } = await import("../publish-decision-actions");
+    bindArtifactReviewGateSeam();
     const OUTBOX = `"${q(TEST_SCHEMA)}"."artifact_produced_outbox"`;
     const GATES = `"${q(TEST_SCHEMA)}"."artifact_review_gates"`;
     const runId = await seedRun(`run-${randomUUID()}`, "running");
-    const produce = async () => {
+    /** A writer of the run, in the frame it runs in: the attempt identity comes from that frame, as the writers take it. */
+    const produce = (frame: Record<string, unknown>) => mcpRequestContextStorage.run(frame as never, async () => {
       const artifactId = `art-${randomUUID()}`;
       const op = buildProducedEventInsertOp(q(TEST_SCHEMA), { orgId: ORG, artifactId, representationRevisionId: "rev-1",
-        emitter: "createSemanticArtifact", originKind: "agent_generated", producerRunId: runId });
+        emitter: "createSemanticArtifact", originKind: "agent_generated", producerRunId: runId,
+        producerAttempt: producerAttemptForRun(runId) });
       await admin.query(op.text, op.values);
       return (await admin.query(`SELECT producer_run_generation FROM ${OUTBOX} WHERE artifact_id = $1`, [artifactId])).rows[0].producer_run_generation as number;
-    };
-    // Attempt 0 writes its output; the attempt fails and a retry's reset raises the run to generation 1.
-    const produced = await produce();
-    expect(produced).toBe(0);
+    });
+    // Attempt A: the run worker captured generation 0 when it started; A writes its output.
+    const frameA = { runAttempt: { runId, resetGeneration: 0 } };
+    expect(await produce(frameA)).toBe(0);
+    // A fails; a retry's reset raises the run to generation 1 and attempt B runs, dispatched as att-b.
     await setRun(runId, "failed");
     await reset(runId, 0);
-    await setRun(runId, "running");
-    expect(await produce()).toBe(1);
-    // The drain consumes attempt 0's event during attempt 1: the review keeps generation 0, never the live 1.
+    await admin.query(`UPDATE ${RUNS_TABLE} SET status = 'running', execution_attempt_id = 'att-b' WHERE id = $1`, [runId]);
+    // A's delayed writer runs now, in A's frame: it records A's generation, never the live 1.
+    const late = await produce(frameA);
+    expect(late).toBe(0);
+    // B's own writer records B's.
+    expect(await produce({ runAttempt: { runId, resetGeneration: 1 } })).toBe(1);
+    // A verified dispatch records the generation only while it is the run's current dispatch; A's old one records -1.
+    expect(await produce({ runId, verifiedExecutedSource: { executionAttemptId: "att-b" } })).toBe(1);
+    expect(await produce({ runId, verifiedExecutedSource: { executionAttemptId: "att-a" } })).toBe(-1);
+    expect(await produce({ delegatedActor: { delegation: "agent_run", runId, executionAttemptId: "att-a" } })).toBe(-1);
+    // No attempt identity: -1.
+    expect(await produce({})).toBe(-1);
+    // The drain raises the review of A's late event with the event's generation; a person approves it. It is no review
+    // of B: B's publish gate does not count it.
     const { gateId } = await emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: `auto-${randomUUID()}`,
-      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-1" }], runGeneration: produced });
+      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-1" }], runGeneration: late });
     expect((await admin.query(`SELECT run_generation FROM ${GATES} WHERE id = $1`, [gateId])).rows[0]).toEqual({ run_generation: 0 });
+    const settled = resolvedGate("approve");
+    await admin.query(`UPDATE ${GATES} SET status = $2, disposition = $3, fingerprint = $4, resolved_at = now() WHERE id = $1`,
+      [gateId, settled.status, settled.disposition, settled.fingerprint]);
+    expect(await approvedReviewPrecedes(runId, 1)).toBe(false);
+    // A failed verification's reopen of that review continues A's review: it keeps generation 0 on the same run.
+    const reopen = await emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: `reopen-${randomUUID()}`,
+      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-2" }], successorOfGateId: gateId });
+    expect((await admin.query(`SELECT run_generation FROM ${GATES} WHERE id = $1`, [reopen.gateId])).rows[0]).toEqual({ run_generation: 0 });
+    // The same continuation named on another run takes nothing from it: -1.
+    const other = await seedRun(`run-${randomUUID()}`, "running");
+    const foreign = await emitArtifactReviewGate({ runId: other, orgId: ORG, reviewTaskId: `reopen-${randomUUID()}`,
+      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-3" }], successorOfGateId: gateId });
+    expect((await admin.query(`SELECT run_generation FROM ${GATES} WHERE id = $1`, [foreign.gateId])).rows[0]).toEqual({ run_generation: -1 });
   });
 
   it("round 21, finding 1: a row an old node parks with no generation after a reset holds, and the next reset ends it", async () => {

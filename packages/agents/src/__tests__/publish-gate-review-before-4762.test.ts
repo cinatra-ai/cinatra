@@ -441,4 +441,42 @@ describe("a publish card opens only after an approved review earlier in the same
     expect(rows).toEqual([{ id: "dec-old", status: "run_ended" }]);
     expect(decisions.insertParkedDecision).not.toHaveBeenCalled();
   });
+
+  // red-first-expect: expected [ undefined ] to deeply equal [ +0 ]
+  it("a delayed writer of attempt A, run after B's reset, records A's generation: a person's approval of its review opens no card for B", async () => {
+    const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
+    const emitModule = await import("@/lib/lifecycle/lifecycle-emit");
+    const { buildProducedEventInsertOp } = emitModule;
+    const attemptOf = (emitModule as { producerAttemptForRun?: (runId: string) => unknown }).producerAttemptForRun ?? (() => null);
+    /** A writer of the attempt whose frame the run worker opened: the generation its produced event records. */
+    const produce = (resetGeneration: number) => mcpRequestContextStorage.run(
+      { runAttempt: { runId: "run-4762", resetGeneration } } as never,
+      () => {
+        const op = buildProducedEventInsertOp("cinatra", {
+          orgId: "org-test", artifactId: "art-post", representationRevisionId: `rev-${resetGeneration}`,
+          emitter: "createSemanticArtifact", originKind: "agent_generated", producerRunId: "run-4762",
+          producerAttempt: attemptOf("run-4762") as never,
+        });
+        return { text: op.text, generation: op.values[11] as number | undefined };
+      },
+    );
+    // Attempt A (generation 0) started; its writer runs late, after a retry's reset began B (generation 1). It records
+    // A's generation, which the drain stamps on the review it raises for the event.
+    const writtenA = produce(0);
+    const stampedA = writtenA.generation;
+    expect([stampedA]).toEqual([0]);
+    // The insert records the carried generation ($12) first; the run row is never read for it.
+    expect(writtenA.text.replace(/\s+/g, " ")).toContain("coalesce($12::integer,");
+    // A person approves that review. B reaches its publish gate: A's approval is no review of B, so the run ends stopped.
+    listReviews.mockResolvedValue([approved(5, "user-reviewer", stampedA as number)]);
+    await reachPublishGate(makeRun({ resetGeneration: 1 }));
+    expectStoppedWithoutWriting();
+    // B's own writer records B's generation, and a person's approval of its review opens B's card.
+    vi.clearAllMocks();
+    const stampedB = produce(1).generation;
+    expect(stampedB).toBe(1);
+    listReviews.mockResolvedValue([approved(5, "user-reviewer", stampedA as number), approved(6, "user-reviewer", stampedB as number)]);
+    await reachPublishGate(makeRun({ resetGeneration: 1 }));
+    expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
+  });
 });

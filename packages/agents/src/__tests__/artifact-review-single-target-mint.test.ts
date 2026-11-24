@@ -257,9 +257,20 @@ describe("the attempt a review gate belongs to (cinatra#4762)", () => {
     await emitArtifactReviewGate({ ...input([A]), reviewTaskId: "produced-old", runGeneration: null });
     await emitArtifactReviewGate({ ...input([A]), reviewTaskId: "produced-bad", runGeneration: 1.5 });
     expect(storage.generations).toEqual([3, -1, -1]);
-    // A gate the run raises itself names none: the statement reads the run row (an SQL expression, not a number).
+  });
+
+  // red-first-expect: to be -1 // Object.is equality
+  it("a gate whose caller names no attempt is stamped -1: the run row is never read at the raise", async () => {
+    // A delayed caller of an ended attempt would read the next attempt's generation there.
     await emitArtifactReviewGate({ ...input([A]), reviewTaskId: "own" });
-    expect(typeof storage.generations[3]).toBe("object");
-    expect(storage.generations[3]).not.toBeNull();
+    expect(storage.generations[0]).toBe(-1);
+    // The executor names the attempt it serves.
+    await emitArtifactReviewGate({ ...input([A]), reviewTaskId: "executor", runGeneration: 2 });
+    expect(storage.generations[1]).toBe(2);
+    // A continuation of a review (a failed verification's reopen, a repair's successor) takes the generation of the
+    // gate it continues, read in the insert: an SQL expression, not a number, and it wins over a named generation.
+    await emitArtifactReviewGate({ ...input([A]), reviewTaskId: "reopen", successorOfGateId: "gate-1", runGeneration: 5 });
+    expect(typeof storage.generations[2]).toBe("object");
+    expect(storage.generations[2]).not.toBeNull();
   });
 });

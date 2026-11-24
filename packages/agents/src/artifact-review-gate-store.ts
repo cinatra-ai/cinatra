@@ -209,11 +209,15 @@ export async function emitArtifactReviewGate(input: {
    * none (null — the expiry drain never touches it). Set only on the INSERT: a
    * re-emit onto an existing gate never re-stamps the expiry (idempotent pin). */
   expiresAt?: Date | null;
-  /** cinatra#4762: the reset generation of the attempt that PRODUCED the reviewed output, for a gate raised after that
-   *  attempt by a delayed consumer (the produced-event drain passes the event's producer_run_generation). Present: the
-   *  gate is stamped with it, and a null (an event of an older build, with no generation) is stamped -1, which never
-   *  counts. Absent: a gate raised by the run itself, stamped from the run row in the insert. */
+  /** cinatra#4762: the reset generation of the attempt the gate belongs to, carried by that attempt, never read from
+   *  the run row at the raise: the executor passes the generation of the run record it read for the attempt; the
+   *  produced-event drain passes the event's producer_run_generation. A null, a non-integer or an absent value (a
+   *  caller with no attempt identity, or an event of an older build) is stamped -1, which never counts. */
   runGeneration?: number | null;
+  /** cinatra#4762: a gate that continues a review of the same attempt (a failed verification's reopen, a repair's
+   *  successor) takes the generation of the gate it continues, on the same run, read in the insert; a missing gate, one
+   *  of another run or one with no generation stamps -1. Wins over runGeneration. */
+  successorOfGateId?: string;
 }, executor: GateStoreExecutor = db, plan?: DeclaredReviewPlan): Promise<EmitReviewGateResult> {
   const normalized = normalizeReviewTargets(input.targets);
   if (!normalized.ok) {
@@ -261,14 +265,13 @@ export async function emitArtifactReviewGate(input: {
       status: "pending",
       pinnedTargets: pinned,
       expiresAt: input.expiresAt ?? null,
-      // cinatra#4762: the attempt the gate belongs to. A delayed consumer names the producing attempt's generation
-      // (input.runGeneration, -1 when the event carries none). Else it is read from the run row in this statement (the
-      // decision park's rule): the run's reset_generation while it executes (running or pending_approval), else -1. A
-      // retry's reset raises the generation once, and nothing else writes it, so a review of an ended attempt never
-      // counts again.
-      runGeneration: "runGeneration" in input
-        ? (Number.isSafeInteger(input.runGeneration) ? (input.runGeneration as number) : -1)
-        : sql`coalesce((select live_run.reset_generation from ${agentRuns} live_run where live_run.id = ${input.runId} and live_run.status in ('running', 'pending_approval')), -1)`,
+      // cinatra#4762: the attempt the gate belongs to, as its caller carries it (see runGeneration and
+      // successorOfGateId), never the run row's state at the raise: a delayed writer of an ended attempt would read
+      // the next attempt there. A retry's reset raises the generation once, so a review of an ended attempt never
+      // counts again. No attempt identity: -1.
+      runGeneration: typeof input.successorOfGateId === "string"
+        ? sql`coalesce((select prior_gate.run_generation from ${artifactReviewGates} prior_gate where prior_gate.id = ${input.successorOfGateId} and prior_gate.run_id = ${input.runId}), -1)`
+        : Number.isSafeInteger(input.runGeneration) ? (input.runGeneration as number) : -1,
     })
     // One gate per (run, task) — the run_task_uniq index.
     .onConflictDoNothing({
@@ -320,6 +323,8 @@ export async function emitArtifactReviewGate(input: {
  * Replays cannot change a previously frozen plan or accept a different revision. */
 export async function emitDeclaredReviewGateFamily(input: {
   runId: string; orgId: string; reviewTaskId: string; targets: unknown;
+  /** cinatra#4762: the raising attempt's reset generation; every leg carries it (see emitArtifactReviewGate). */
+  runGeneration?: number | null;
 }): Promise<void> {
   const plan = declaredReviewPlan(input);
   if (!plan) throw new ArtifactReviewGateError("invalid-targets", "The declared review set cannot form exact singleton legs.");

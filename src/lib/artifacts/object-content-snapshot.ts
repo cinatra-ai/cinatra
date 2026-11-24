@@ -10,7 +10,7 @@ import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 
 import { parseClaimDispositions } from "@cinatra-ai/objects/claims";
 
-import { maybeBuildProducedEventInsertOp } from "@/lib/lifecycle/lifecycle-emit";
+import { maybeBuildProducedEventInsertOp, producerAttemptForRun } from "@/lib/lifecycle/lifecycle-emit";
 import type { ArtifactOriginKind } from "@cinatra-ai/artifacts";
 
 import { canonicalJSONStringify, deriveSubstanceKey } from "./resource-store";
@@ -538,6 +538,7 @@ export async function captureObjectContentSnapshot(input: {
             originKind: input.emitProducedEventAtMint.originKind,
             producerRunId: input.emitProducedEventAtMint.producerRunId ?? input.createdByRunId ?? null,
             producerAgentId: input.emitProducedEventAtMint.producerAgentId ?? null,
+            producerAttempt: producerAttemptForRun(input.emitProducedEventAtMint.producerRunId ?? input.createdByRunId ?? null),
           },
           {
             whereExistsSql: `EXISTS (SELECT 1 FROM "${schema}"."representation" WHERE id = $4::text AND org_id = $2::text AND artifact_id = $3::text)`,
