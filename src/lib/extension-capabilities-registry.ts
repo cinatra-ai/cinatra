@@ -115,6 +115,7 @@ export function resolveCapabilityProviders(capability: string): CapabilityProvid
  * commits — so a removed extension leaves no stale provider.
  */
 export function invalidateProvidersForPackage(packageName: string): void {
+  retireLoadedExtensionIdentitiesForPackage(packageName);
   for (const byPackage of registry.values()) {
     byPackage.delete(packageName);
   }
@@ -157,6 +158,7 @@ export function __resetCapabilityRegistry(): void {
   registry.clear();
   signedTrustedRegistry.clear();
   servingRecords.clear();
+  loadedIdentities.current.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -391,4 +393,136 @@ export function clearServingRecordForPackage(packageName: string): boolean {
 /** Test/teardown helper — clears every serving record. */
 export function __resetServingRecords(): void {
   servingRecords.clear();
+}
+
+// ---------------------------------------------------------------------------
+// Loaded extension identities (cinatra#3745)
+// ---------------------------------------------------------------------------
+//
+// The identity of an extension version that the host's runtime loader really
+// loaded: the package, its version, the canonical install row and the digest
+// of the verified bytes, plus a generation the host assigns. Only the loader
+// stamps one, from a trusted install anchor that carries an install id and a
+// digest, for a record whose bytes were verified against that anchor. A legacy,
+// dev or bundled load has no install id or digest, so it has no loaded identity.
+//
+// One identity is current per (package, version). Each stamp mints a new frozen
+// object and replaces the current one; a failed attempt retires only the
+// identity it stamped itself (never a newer one), a successful load without an
+// install id or a digest retires the current one, and the capability teardown
+// above drops every identity of the package. The check accepts only the exact
+// object the loader minted, never a copy with equal fields. An outward run action checks
+// its owner's identity here (`assertOutwardActionLoadedIdentity` in
+// `@/lib/extension-host-context`). Co-located with the providers, because the
+// same teardown clears both.
+
+export type LoadedExtensionIdentity = Readonly<{
+  packageName: string;
+  version: string;
+  installId: string;
+  digest: string;
+  generation: number;
+}>;
+
+const LOADED_IDENTITIES_KEY = Symbol.for("@cinatra-ai/host:loaded-extension-identities/v1");
+type LoadedIdentityRegistry = {
+  next: number;
+  current: Map<string, LoadedExtensionIdentity>;
+  minted: WeakSet<LoadedExtensionIdentity>;
+};
+const loadedIdentityHolder = globalThis as unknown as {
+  [LOADED_IDENTITIES_KEY]?: LoadedIdentityRegistry;
+};
+const loadedIdentities: LoadedIdentityRegistry = (loadedIdentityHolder[LOADED_IDENTITIES_KEY] ??= {
+  next: 0,
+  current: new Map<string, LoadedExtensionIdentity>(),
+  minted: new WeakSet<LoadedExtensionIdentity>(),
+});
+
+function loadedIdentityKey(packageName: string, version: string): string {
+  return `${packageName}\u0000${version}`;
+}
+
+function loadedIdentityFieldValid(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && !/[\u0000\r\n]/.test(value);
+}
+
+/**
+ * Stamp the loaded identity of one verified install. Host loader only; a
+ * provider or a tool never calls it. Throws `action_loaded_identity_invalid`
+ * when a field is missing or malformed, so no identity exists without an
+ * install id and a digest.
+ */
+export function recordLoadedExtensionIdentity(input: {
+  packageName: unknown;
+  version: unknown;
+  installId: unknown;
+  digest: unknown;
+}): LoadedExtensionIdentity {
+  const { packageName, version, installId, digest } = input;
+  if (
+    !loadedIdentityFieldValid(packageName) ||
+    !loadedIdentityFieldValid(version) ||
+    !loadedIdentityFieldValid(installId) ||
+    !loadedIdentityFieldValid(digest)
+  ) {
+    throw new Error("action_loaded_identity_invalid");
+  }
+  const identity: LoadedExtensionIdentity = Object.freeze({
+    packageName,
+    version,
+    installId,
+    digest,
+    generation: ++loadedIdentities.next,
+  });
+  loadedIdentities.minted.add(identity);
+  loadedIdentities.current.set(loadedIdentityKey(packageName, version), identity);
+  return identity;
+}
+
+/** The current loaded identity of one (package, version), or undefined. */
+export function currentLoadedExtensionIdentity(
+  packageName: string,
+  version: string | null | undefined,
+): LoadedExtensionIdentity | undefined {
+  if (!loadedIdentityFieldValid(packageName) || !loadedIdentityFieldValid(version)) return undefined;
+  return loadedIdentities.current.get(loadedIdentityKey(packageName, version));
+}
+
+/** Whether a value is an object the loader minted (current or not). */
+export function isLoadedExtensionIdentityMinted(value: unknown): value is LoadedExtensionIdentity {
+  return typeof value === "object" && value !== null && loadedIdentities.minted.has(value as LoadedExtensionIdentity);
+}
+
+/**
+ * Whether a value is the very object the loader minted and still the current
+ * loaded identity of its (package, version). Object identity, never field
+ * equality: a copy with equal fields is false, as is a retired or replaced
+ * identity. A minted identity is frozen, so its fields are its own.
+ */
+export function isLoadedExtensionIdentityCurrent(value: unknown): boolean {
+  if (!isLoadedExtensionIdentityMinted(value)) return false;
+  return loadedIdentities.current.get(loadedIdentityKey(value.packageName, value.version)) === value;
+}
+
+/**
+ * Retire the loaded identity of one (package, version). With `expected`, a
+ * compare-and-delete: it retires only while the current identity is that very
+ * object, so an attempt never retires an identity another attempt stamped.
+ */
+export function retireLoadedExtensionIdentity(
+  packageName: string,
+  version: string | null | undefined,
+  expected?: LoadedExtensionIdentity,
+): void {
+  if (!loadedIdentityFieldValid(version)) return;
+  const key = loadedIdentityKey(packageName, version);
+  if (expected !== undefined && loadedIdentities.current.get(key) !== expected) return;
+  loadedIdentities.current.delete(key);
+}
+
+function retireLoadedExtensionIdentitiesForPackage(packageName: string): void {
+  for (const [key, identity] of loadedIdentities.current) {
+    if (identity.packageName === packageName) loadedIdentities.current.delete(key);
+  }
 }
