@@ -1,9 +1,11 @@
 /**
  * cinatra#3562 — a list step's Try again reaches the run as the flow's refresh
- * answer. The server takes a refresh request (`listStepRefresh`) only for a
- * list step whose binding declares the same `params.refreshValue`, read from
- * the gate's durable record, and sends exactly that value as the resume text.
- * Every other request is refused before the pause is claimed.
+ * answer. The key `listStepRefresh` is a refresh request only on a list step
+ * (read from the gate's durable record) whose schema declares no field of that
+ * name; anywhere else it is an ordinary answer value. A request is taken only
+ * when the list step's binding declares the same `params.refreshValue`, and
+ * sends exactly that value as the resume text; any other request is refused
+ * before the pause is claimed.
  *
  * Harness mirrors resume-message-before-fence-4245.test.ts.
  *
@@ -184,27 +186,78 @@ describe("cinatra#3562 — the list step's Try again resumes the run with the de
     expect(sendTask).not.toHaveBeenCalled();
   });
 
-  it("refuses a refresh on a gate that is not a list step, or whose record is missing", async () => {
+  it("reads the key as an ordinary value on a gate that is not a list step, or whose record is missing (guard)", async () => {
     durableGate.value = listStepGate("@cinatra-ai/email-outreach-agent:output");
-    bindings.list = [
-      { id: "@cinatra-ai/email-outreach-agent:output", kind: "output", priority: 90, params: { refreshValue: "refresh" } },
-    ];
-    // red-first-expect: buildListStepRefreshPayload is not a function
-    await expect(
-      approveReviewTaskInternal(TASK, RUN.runBy, buildListStepRefreshPayload("refresh")),
-    ).rejects.toThrow("takes no such list step refresh");
+    bindings.list = [];
+    await approveReviewTaskInternal(TASK, RUN.runBy, {
+      approved: true,
+      userResponse: JSON.stringify({ listStepRefresh: "keep me" }),
+      listStepRefresh: "keep me",
+    });
+    expect(sentText()).toContain("keep me");
+    vi.clearAllMocks();
+    arrange();
     durableGate.value = null;
-    await expect(
-      approveReviewTaskInternal(TASK, RUN.runBy, buildListStepRefreshPayload("refresh")),
-    ).rejects.toThrow("takes no such list step refresh");
-    expect(sendTask).not.toHaveBeenCalled();
+    bindings.list = [];
+    await approveReviewTaskInternal(TASK, RUN.runBy, { approved: true, listStepRefresh: "keep me" });
+    expect(sendTask).toHaveBeenCalledTimes(1);
   });
 
-  it("refuses a refresh on a setup gate", async () => {
+  it("submits a field named like the key on a list step whose schema declares it (guard)", async () => {
+    durableGate.value = {
+      ...listStepGate(),
+      inputSchema: { type: "object", properties: { listStepRefresh: { type: "string" } } },
+    };
+    bindings.list = [{ id: LIST_STEP_ID, kind: "list-picker", priority: 90, params: {} }];
+    await approveReviewTaskInternal(TASK, RUN.runBy, {
+      approved: true,
+      userResponse: JSON.stringify({ listStepRefresh: "a real answer" }),
+      listStepRefresh: "a real answer",
+    });
+    expect(sentText()).toContain("a real answer");
+  });
+
+  it("submits a setup field named like the key normally (guard)", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: RUN.templateId,
+      packageName: "@cinatra-ai/email-outreach-agent",
+      sourceType: "internal",
+      agentAuthPolicy: null,
+      inputSchema: { type: "object", properties: { listStepRefresh: { type: "string" } } },
+    });
+    const { resumeRunFromSetupApproval } = await import("../resume-run-from-setup-approval");
+    await approveReviewTaskInternal(`setup-${RUN.id}`, RUN.runBy, {
+      approved: true,
+      listStepRefresh: "a setup answer",
+    });
+    expect(resumeRunFromSetupApproval).toHaveBeenCalledTimes(1);
+    // The merge fragment carries the field's value as one of its parameters.
+    const merge = (resumeRunFromSetupApproval as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
+      queryChunks: unknown[];
+    };
+    expect(merge.queryChunks.some((chunk) => typeof chunk === "string" && chunk.includes("a setup answer"))).toBe(true);
+  });
+
+  it("takes the refresh with the binding the pack's own declaration yields", async () => {
+    // The pack declares `params.refreshValue` on its list step's binding; the
+    // generator and the runtime collector both pass it through this validator.
+    const { validateFieldRendererDeclarations } = await import(
+      "../../../../scripts/extensions/agent-binding-kinds.mjs"
+    );
+    const { entries, errors } = validateFieldRendererDeclarations("@cinatra-ai/email-outreach-agent", [
+      {
+        id: LIST_STEP_ID,
+        kind: "list-picker",
+        priority: 90,
+        params: { selection: "multiple", minSelected: 1, refreshValue: "refresh" },
+        component: { entry: "./src/renderers/list-picker.ts", propsApiVersion: 1 },
+      },
+    ]);
+    expect(errors).toEqual([]);
+    bindings.list = entries as Array<Record<string, unknown>>;
     // red-first-expect: buildListStepRefreshPayload is not a function
-    await expect(
-      approveReviewTaskInternal(`setup-${RUN.id}`, RUN.runBy, buildListStepRefreshPayload("refresh")),
-    ).rejects.toThrow("takes no list step refresh");
+    await approveReviewTaskInternal(TASK, RUN.runBy, buildListStepRefreshPayload("refresh"));
+    expect(sentText()).toContain('"text":"refresh"');
   });
 
   it("leaves an answer without the refresh key as it was (guard)", async () => {

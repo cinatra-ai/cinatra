@@ -37,7 +37,7 @@ import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuc
 // kernel guard instead of directly on the module `db` (owner ruling 2026-07-26,
 // ruling 1: "now").
 import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
-import { readWayflowSubmittedValues, readListStepRefreshAsk, listStepRefreshAccepted } from "./hitl-gate-submit";
+import { readWayflowSubmittedValues, readListStepRefreshAsk, listStepRefreshAccepted, listStepRefreshIsRequest } from "./hitl-gate-submit";
 // cinatra#2484: the setup-resume path is the LAST place a type-violating setup
 // value can be stopped before it becomes `agent_runs.inputParams` and reaches
 // the run. It needs the SAME effective schema the setup loop rendered from —
@@ -315,12 +315,6 @@ export async function approveReviewTaskInternal(
   //   (d) re-enqueues AGENT_BUILDER_EXECUTION so the setup loop re-evaluates
   //       pending fields (may emit another INTERRUPT or fall through to dispatch)
   // ---------------------------------------------------------------------------
-  // A list step's refresh request (cinatra#3562) answers a WayFlow gate only;
-  // the WayFlow branch below checks it against the gate's binding.
-  const listStepRefreshAsk = readListStepRefreshAsk(values);
-  if (listStepRefreshAsk !== undefined && !reviewTaskId.startsWith("wayflow-")) {
-    throw new Error(`[approveReviewTaskInternal] gate ${reviewTaskId} takes no list step refresh`);
-  }
   if (reviewTaskId.startsWith("setup-")) {
     // setup-* path exits before writeHitlPrompt — schemaSnapshot has no effect here.
     // writeHitlPrompt is not called on this path (schema replay is a WayFlow-gate-only feature).
@@ -972,20 +966,25 @@ export async function approveReviewTaskInternal(
     }
     const resumeAuthority = sessionAuthorityFromResolvedRole(run.orgId, resumeRole);
 
-    // THE LIST STEP'S TRY AGAIN (cinatra#3562). A refresh request is taken only
-    // for a list step whose binding declares that refresh value
-    // (`params.refreshValue`); the gate's renderer is read from its durable
-    // record. Refused before the claim, so nothing is held or sent.
-    if (listStepRefreshAsk !== undefined) {
+    // THE LIST STEP'S TRY AGAIN (cinatra#3562). The refresh key is read as a
+    // refresh request only when the gate's durable record proves a list step
+    // whose schema declares no field of that name (`listStepRefreshIsRequest`);
+    // on every other step it is an ordinary answer value. A request is taken
+    // only when the list step's binding declares that refresh value
+    // (`params.refreshValue`), and refused before the claim, so nothing is held
+    // or sent.
+    let listStepRefreshAsk: unknown = undefined;
+    const refreshKeyValue = readListStepRefreshAsk(values);
+    if (refreshKeyValue !== undefined) {
       const gate = await readDurableHitlGateForContinue(run.id, reviewTaskId).catch(() => null);
-      let declaredRefreshValue: unknown = undefined;
-      if (gate) {
+      if (gate && listStepRefreshIsRequest({ reviewTaskId, gate })) {
         const { getMergedFieldRendererBindings } = await import("./field-renderer-bindings.server");
         const binding = getMergedFieldRendererBindings().find((b) => b.id === gate.xRenderer);
-        declaredRefreshValue = (binding?.params as { refreshValue?: unknown } | undefined)?.refreshValue;
-      }
-      if (!listStepRefreshAccepted({ reviewTaskId, gateXRenderer: gate?.xRenderer, declaredRefreshValue, requested: listStepRefreshAsk })) {
-        throw new Error(`WayFlow approval rejected: gate ${taskId} on run ${run.id} takes no such list step refresh`);
+        const declaredRefreshValue = (binding?.params as { refreshValue?: unknown } | undefined)?.refreshValue;
+        if (!listStepRefreshAccepted({ reviewTaskId, gateXRenderer: gate.xRenderer, declaredRefreshValue, requested: refreshKeyValue })) {
+          throw new Error(`WayFlow approval rejected: gate ${taskId} on run ${run.id} takes no such list step refresh`);
+        }
+        listStepRefreshAsk = refreshKeyValue;
       }
     }
 

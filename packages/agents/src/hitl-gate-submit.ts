@@ -593,6 +593,38 @@ export function readListStepRefreshAsk(values: unknown): unknown {
 }
 
 /**
+ * Whether an answer's `LIST_STEP_REFRESH_KEY` is the list step's refresh
+ * request or an ordinary answer value. The key is no reserved word: a setup
+ * step or any other step may declare a field of that name, and its value is
+ * then submitted like every other value. So the key is read as the refresh
+ * request only when the gate's durable record proves a mid-run list step
+ * (`isMidRunListStepGate`) whose schema declares no field of that name (no
+ * such property and no such single field). No record, another renderer, a
+ * setup gate, or a declared field: an ordinary value.
+ */
+export function listStepRefreshIsRequest(args: {
+  reviewTaskId: string;
+  gate: { xRenderer: string; inputSchema?: unknown; fieldName?: string } | null | undefined;
+}): boolean {
+  const { reviewTaskId, gate } = args;
+  if (!gate || typeof gate.xRenderer !== "string") return false;
+  if (!isMidRunListStepGate(gate.xRenderer, reviewTaskId)) return false;
+  if (gate.fieldName === LIST_STEP_REFRESH_KEY) return false;
+  const schema = gate.inputSchema;
+  if (schema !== null && typeof schema === "object" && !Array.isArray(schema)) {
+    const properties = (schema as { properties?: unknown }).properties;
+    if (
+      properties !== null &&
+      typeof properties === "object" &&
+      Object.prototype.hasOwnProperty.call(properties, LIST_STEP_REFRESH_KEY)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
  * Whether the server takes a refresh request: the gate is a mid-run list step
  * (`gateXRenderer` from the gate's durable record), its binding declares a
  * nonblank `refreshValue`, and the request names exactly that value. Every

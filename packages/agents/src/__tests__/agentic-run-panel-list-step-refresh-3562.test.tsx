@@ -20,7 +20,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 
 import { Button } from "@/components/ui/button";
-import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
+import {
+  ensureDefaultFieldRenderersRegistered,
+  registerFieldRendererBindings,
+} from "../register-default-renderers";
+import {
+  __resetFieldRendererComponentMapForTests,
+  __setFieldRendererComponentMapForTests,
+} from "../field-renderer-components";
 import { fieldRendererRegistry } from "../field-renderer-registry";
 import type { FieldRendererProps } from "../field-renderer-registry";
 
@@ -247,6 +254,84 @@ describe("AgenticRunPanel — a list step's Try again (cinatra#3562)", () => {
     const view = await renderPanelOn("setup-run-3562");
     fireEvent.click(await view.findByTestId("list-picker-try-again"));
     await act(async () => {});
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The list step as the pack ships it: its binding declares a component
+ * (`cinatra.fieldRenderers[].component`, email-outreach-agent
+ * src/renderers/list-picker.ts), so the generated component map holds the
+ * binding and the host mounts the pack's component through the extension
+ * wrapper, with the binding's params as `bindingParams`. This stand-in keeps
+ * the pack component's no-list branch: the failed-read alert (design
+ * specs/app-artifact-review.html I.1) with Try again only when the binding
+ * declares `refreshValue`, and the pack's write.
+ */
+function PackListStep({ bindingParams, onChange, onValidityChange }: FieldRendererProps) {
+  const refreshValue = bindingParams?.refreshValue;
+  React.useEffect(() => {
+    onValidityChange?.(false);
+  }, [onValidityChange]);
+  return (
+    <div role="alert" data-testid="list-picker-read-failed">
+      <p>This list could not be read.</p>
+      {typeof refreshValue === "string" ? (
+        <button
+          type="button"
+          data-testid="list-picker-try-again"
+          onClick={() => void onChange({ listIds: [], listNames: [], refresh: refreshValue })}
+        >
+          Try again
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+describe("AgenticRunPanel — the pack's list step, mounted through the binding's component (cinatra#3562)", () => {
+  function mountPackListStep(params: Record<string, unknown>) {
+    fieldRendererRegistry.clear();
+    __setFieldRendererComponentMapForTests({
+      [LIST_STEP_ID]: {
+        resolution: "guardedOptional",
+        packageName: "@cinatra-ai/email-outreach-agent",
+        propsApiVersion: 1,
+        load: async () => ({ default: PackListStep }),
+      },
+    });
+    ensureDefaultFieldRenderersRegistered();
+    registerFieldRendererBindings([{ id: LIST_STEP_ID, kind: "list-picker", priority: 90, params }]);
+  }
+
+  afterEach(() => {
+    __resetFieldRendererComponentMapForTests();
+  });
+
+  it("sends the refresh value the binding declares when the failed-read alert's Try again is pressed", async () => {
+    mountPackListStep({ selection: "multiple", minSelected: 1, refreshValue: "refresh" });
+    const view = await renderPanelOn(WAYFLOW_TASK);
+    const tryAgain = await view.findByTestId("list-picker-try-again");
+    expect(view.getByTestId("list-picker-read-failed").contains(tryAgain)).toBe(true);
+    await waitFor(() => expect(productContinue()!.disabled).toBe(true));
+
+    fireEvent.click(tryAgain);
+    // red-first-expect: to be called 1 times, but got 0 times
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, payload] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(taskId).toBe(WAYFLOW_TASK);
+    expect(payload).toMatchObject({ userResponse: "refresh", listStepRefresh: "refresh" });
+    expect(payload).not.toHaveProperty("listIds");
+  });
+
+  it("draws no Try again when the binding declares no refresh value (guard)", async () => {
+    mountPackListStep({ selection: "multiple", minSelected: 1 });
+    const view = await renderPanelOn(WAYFLOW_TASK);
+    await view.findByTestId("list-picker-read-failed");
+    expect(view.queryByTestId("list-picker-try-again")).toBeNull();
     expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
   });
 });
