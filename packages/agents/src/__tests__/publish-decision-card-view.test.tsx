@@ -12,6 +12,7 @@ vi.mock("../publish-decision-card-actions", () => ({
 }));
 
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
+import { REVIEW_ISLAND_EMPTY_MARKER } from "../review-gate-card";
 import {
   PublishDecisionCard,
   publishDecisionIsSettled,
@@ -778,5 +779,88 @@ describe("the XV.1 row anchors", () => {
     expect(settled.querySelector('[data-conformance-id="publish-card-rows"]')).not.toBeNull();
     expect(settled.querySelector('[data-conformance-id="publish-row-list"]')).not.toBeNull();
     expect(settled.querySelector('[data-conformance-id="publish-card-approved"]')).not.toBeNull();
+  });
+});
+
+// cinatra#4738: design spec XV.1 draws an items row whose island settled empty (none of the named items is the run's own,
+// or any other refusal: the island draws one empty document for all of them) as the panel's frame with nothing in it,
+// under publish-row-items-empty. Before the fix the card read the island's empty document as a preview that did not
+// load, and drew "The preview did not load" with Try again under publish-row-items.
+// red-first-expect: no card root
+describe("the XV.1 empty items panel", () => {
+  const REF = "Abc_123-xyz";
+  const ITEMS = { kind: "artifacts", label: "Proposed page", ref: REF, islandSrc: null };
+  const frameOf = async (root: HTMLElement) => {
+    await waitFor(() => expect(root.querySelector("iframe")).not.toBeNull());
+    return root.querySelector("iframe") as HTMLIFrameElement;
+  };
+  // The island's one empty document, standing in for the document jsdom does not fetch: the card asks the frame one
+  // marker question, and this answers it as the served empty document does.
+  const serveEmpty = (frame: HTMLIFrameElement) =>
+    Object.defineProperty(frame, "contentDocument", {
+      configurable: true,
+      get: () => ({
+        querySelector: (selector: string) => (selector.includes(REVIEW_ISLAND_EMPTY_MARKER) ? ({} as Element) : null),
+      }),
+    });
+
+  it("an island that settled empty draws the panel frame with nothing in it, under the empty anchor, on the host page", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
+    const root = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    const frame = await frameOf(root);
+    serveEmpty(frame);
+    await act(async () => {
+      frame.dispatchEvent(new Event("load"));
+    });
+    await settle();
+    expect(root.textContent).not.toContain("The preview did not load");
+    expect(root.querySelector('[data-conformance-id="review-target-island-timeout"]')).toBeNull();
+    expect(root.querySelector('[data-conformance-id="publish-row-items"]')).toBeNull();
+    const empty = root.querySelector('[data-conformance-id="publish-row-items-empty"]');
+    expect(empty?.querySelector("dt")?.textContent).toBe("Proposed page");
+    // The panel keeps its frame and draws nothing: no words, no skeleton, no control.
+    const panel = empty?.querySelector('[data-conformance-id="review-target-island"]');
+    expect(panel?.getAttribute("data-island-load-state")).toBe("empty");
+    expect(panel?.className).toContain("border");
+    expect(empty?.querySelector("dd")?.textContent).toBe("");
+    expect(empty?.querySelector("button")).toBeNull();
+    expect(empty?.querySelector('[data-conformance-id="review-target-island-skeleton"]')).toBeNull();
+    // The same frame stays mounted, so a later document of the same row is not a new load.
+    expect(root.querySelector("iframe")).toBe(frame);
+    expect(frame.className).toContain("opacity-0");
+  });
+
+  it("an island that drew the run's items keeps the items anchor", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
+    const root = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    const frame = await frameOf(root);
+    await act(async () => {
+      frame.dispatchEvent(new Event("load"));
+    });
+    await settle();
+    expect(root.querySelector('[data-conformance-id="publish-row-items-empty"]')).toBeNull();
+    expect(root.querySelector('[data-conformance-id="publish-row-items"]')).not.toBeNull();
+    expect(root.querySelector('[data-conformance-id="review-target-island"]')?.getAttribute("data-island-load-state")).toBe("loaded");
+  });
+
+  it("a frame that never answers still shows the failure state with Try again, never the empty panel", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
+      const root = await rootOf(mountOn("run_card", okDoor()));
+      await settle();
+      await frameOf(root);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(13_000);
+      });
+      expect(root.querySelector('[data-conformance-id="review-target-island-timeout"]')).not.toBeNull();
+      expect(root.textContent).toContain("The preview did not load");
+      expect(root.querySelector('[data-conformance-id="publish-row-items-empty"]')).toBeNull();
+      expect(root.querySelector('[data-conformance-id="publish-row-items"]')).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

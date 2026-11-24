@@ -323,6 +323,11 @@ const HOST_FRAME: Record<LifecycleCardHost, string> = {
  */
 const ISLAND_MIN_HEIGHT = 380;
 
+/** The box of a panel whose island settled EMPTY on a host that draws that
+ *  reading (`onSettledEmpty`): the frame of the panel, with nothing in it
+ *  (design `specs/app-lifecycle-cards.html` XV.1, `publish-row-items-empty`). */
+const ISLAND_EMPTY_HEIGHT = 36;
+
 /**
  * THE FRAME ENDS WHERE THE LAST BODY ENDS (the twelfth proof round's counted
  * defect on cinatra#3143, 2026-09-10).
@@ -525,7 +530,7 @@ function islandCredentialsOf(
 // this fixes.
 // ---------------------------------------------------------------------------
 
-type IslandLoadState = "loading" | "loaded" | "timed-out";
+type IslandLoadState = "loading" | "loaded" | "timed-out" | "empty";
 
 /**
  * Bounded wait for the iframe's `load` event before treating a hang as a
@@ -2210,6 +2215,7 @@ function ReviewTargetIsland({
   awaiting = false,
   onRetryResolve,
   inPanel = false,
+  onSettledEmpty,
 }: {
   src: string;
   /** True when this `src` carries a server-minted, expiring credential. */
@@ -2227,6 +2233,9 @@ function ReviewTargetIsland({
   /** Drawn inside the target's one panel (cinatra#3441), whose border is the
    *  frame: the island then draws no border and no rounding of its own. */
   inPanel?: boolean;
+  /** See `ReviewTargetFrame`: the host draws the island's empty document as
+   *  an empty panel, and is told when the island settles that way. */
+  onSettledEmpty?: (empty: boolean) => void;
 }): ReactElement {
   // One state bag KEYED BY `src`, reset IN-RENDER rather than in an effect —
   // the same shape `useLifecycleCardState` uses above for the identical
@@ -2263,9 +2272,12 @@ function ReviewTargetIsland({
     ready: false,
     /** How many panels it has reported since — the idle bound's restart count. */
     progress: 0,
+    /** The frame served the island's one empty document, on a host that draws
+     *  that reading as an empty panel (`onSettledEmpty`). */
+    empty: false,
   });
   if (load.identity !== identity) {
-    setLoad({ identity, attempt: 0, loaded: false, timedOut: false, ready: false, progress: 0 });
+    setLoad({ identity, attempt: 0, loaded: false, timedOut: false, ready: false, progress: 0, empty: false });
   }
 
   const frameRef = useRef<HTMLIFrameElement | null>(null);
@@ -2403,11 +2415,20 @@ function ReviewTargetIsland({
   const state: IslandLoadState = refused
     ? "timed-out"
     : load.loaded
-      ? "loaded"
+      ? load.empty
+        ? "empty"
+        : "loaded"
       : load.timedOut
         ? "timed-out"
         : "loading";
   const height = Math.max(ISLAND_MIN_HEIGHT, measured.height ?? ISLAND_MIN_HEIGHT);
+  // The host learns ONE bit: the island stands settled empty, or it does not.
+  // The empty document is the same element for every denial and every absence,
+  // so this tells the host nothing about why.
+  const settledEmpty = state === "empty";
+  useEffect(() => {
+    onSettledEmpty?.(settledEmpty);
+  }, [onSettledEmpty, settledEmpty]);
   // A refused island and one that awaits its address mount no frame at all.
   const framed = !refused && !waits;
   // A frame that mounts on a credential records it in its card's framings under
@@ -2461,6 +2482,9 @@ function ReviewTargetIsland({
           ? "relative overflow-hidden bg-surface-strong"
           : "relative overflow-hidden rounded-control border border-line bg-surface-strong"
       }
+      // An island settled empty keeps the panel's frame and draws nothing in it.
+      // The frame stays mounted underneath, so the same row is never loaded twice.
+      style={settledEmpty ? { height: ISLAND_EMPTY_HEIGHT } : undefined}
     >
       {!framed ? null : (
         <iframe
@@ -2490,7 +2514,7 @@ function ReviewTargetIsland({
           // several of these off screen without fetching them all.
           loading={credentialed ? "eager" : "lazy"}
           className={`w-full border-0 bg-surface-strong transition-opacity duration-200 ${
-            load.loaded ? "opacity-100" : "pointer-events-none opacity-0"
+            load.loaded && !load.empty ? "opacity-100" : "pointer-events-none opacity-0"
           }`}
           style={{ height }}
           onLoad={(event) => {
@@ -2503,6 +2527,7 @@ function ReviewTargetIsland({
             // render comes after the dispatch, and a read inside the updater got
             // `null`: the denial was then taken for a drawn target.
             const servedTheDenial = islandFrameServedTheDenial(event.currentTarget);
+            const emptyIsSettled = onSettledEmpty !== undefined;
             setLoad((current) =>
               current.identity === identity
                 ? // LOADED IS NOT THE SAME AS DREW (cinatra#2853, the picture
@@ -2520,9 +2545,17 @@ function ReviewTargetIsland({
                   // one thing that changes is the one case that produced a blank
                   // panel. A preview that is not there is drawn as a preview that
                   // is not there, which is a state that HAS a drawing.
+                  //
+                  // A HOST WHOSE DRAWING HAS AN EMPTY READING (`onSettledEmpty`,
+                  // the publish card's items row, cinatra#4738) draws that same
+                  // document as its empty panel: it is settled, not failed, and
+                  // it has nothing to retry. A frame that never answers still
+                  // reaches the failed state through the bound above.
                   servedTheDenial
-                  ? { ...current, loaded: false, timedOut: true }
-                  : { ...current, loaded: true }
+                  ? emptyIsSettled
+                    ? { ...current, loaded: true, timedOut: false, empty: true }
+                    : { ...current, loaded: false, timedOut: true, empty: false }
+                  : { ...current, loaded: true, empty: false }
                 : current,
             );
           }}
@@ -2533,7 +2566,7 @@ function ReviewTargetIsland({
           iframe stays mounted underneath while timed out: a late `onLoad`
           self-heals the display instead of leaving a reviewer stuck on a
           retry panel for content that did, eventually, arrive. */}
-      {state !== "loaded" ? (
+      {state !== "loaded" && state !== "empty" ? (
         // An island with no frame has nothing to overlay, so its panel holds the box.
         <div className={framed ? "absolute inset-x-0 top-0" : undefined} style={{ height }}>
           {state === "loading" ? (
@@ -2557,6 +2590,7 @@ function ReviewTargetIsland({
                   // answered yet, and the old one's messages no longer name it.
                   ready: false,
                   progress: 0,
+                  empty: false,
                 }));
               }}
             />
@@ -2832,11 +2866,18 @@ export function ReviewTargetFrame({
   refused = false,
   awaiting = false,
   paired = false,
+  onSettledEmpty,
 }: {
   headers: readonly LifecycleTargetHeader[] | null;
   islandSrc: string;
   islandCredentialed: boolean;
   onRetryResolve: () => void;
+  /** Given by a host whose drawing has an EMPTY reading (the publish card's
+   *  items row, cinatra#4738): the island's one empty document is then drawn
+   *  as the panel's frame with nothing in it, and this is told whether the
+   *  island currently stands settled empty. Absent (the review gate), that
+   *  document stays a preview that did not arrive, as it always was. */
+  onSettledEmpty?: (empty: boolean) => void;
   /** This pair's own address is missing, failed or bound to another target
    *  (cinatra#4129): its island draws the failed state and frames nothing. */
   refused?: boolean;
@@ -2879,6 +2920,7 @@ export function ReviewTargetFrame({
         awaiting={awaiting}
         onRetryResolve={onRetryResolve}
         inPanel={Boolean(only)}
+        onSettledEmpty={onSettledEmpty}
       />
     </div>
   );

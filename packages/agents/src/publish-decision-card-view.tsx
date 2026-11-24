@@ -376,6 +376,11 @@ function useHeldArtifactsAddress(
  * with its own credential frames the server-minted address its read carried, and only when that address names this
  * row's ref. A row with no ref, or an address that cannot be composed, says the items could not be shown: the row
  * never vanishes, so no one decides on content they were not shown. The retry re-reads the card for a fresh address.
+ *
+ * AN ISLAND THAT SETTLED EMPTY (cinatra#4738, XV.1 `publish-row-items-empty`): the island draws one empty document for
+ * every refusal and every absence, for example when one of the named items is not the run's own. The row draws that as
+ * the panel's frame with nothing in it, under the empty anchor on this page; it never learns why the island is empty.
+ * A frame that never answers still draws the review card's failed state with its retry.
  */
 function ArtifactsRow({ row, onRetry }: { row: PublishDecisionCardArtifactsRow; onRetry: () => void }): ReactElement {
   const frame = useLifecycleCardFrame();
@@ -383,6 +388,7 @@ function ArtifactsRow({ row, onRetry }: { row: PublishDecisionCardArtifactsRow; 
   const held = useHeldArtifactsAddress(row, colorScheme, onRetry);
   const src = row.ref === null ? null : reviewTargetIslandSrc(row.ref, frame, held.islandSrc, held.scheme);
   const { askFresh } = held;
+  const [empty, setEmpty] = useState(false);
   const retry = useCallback(() => {
     askFresh();
     onRetry();
@@ -398,7 +404,7 @@ function ArtifactsRow({ row, onRetry }: { row: PublishDecisionCardArtifactsRow; 
     );
   }
   return (
-    <div data-conformance-id="publish-row-items">
+    <div data-conformance-id={empty ? "publish-row-items-empty" : "publish-row-items"}>
       <dt className={KICK}>{row.label}</dt>
       <dd className="mt-1 min-w-0" data-publish-row-kind="artifacts">
         <ReviewTargetFrame
@@ -406,6 +412,7 @@ function ArtifactsRow({ row, onRetry }: { row: PublishDecisionCardArtifactsRow; 
           islandSrc={src}
           islandCredentialed={reviewIslandAddressCredential(held.islandSrc, row.ref) !== null}
           onRetryResolve={retry}
+          onSettledEmpty={setEmpty}
         />
       </dd>
     </div>
