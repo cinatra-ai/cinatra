@@ -294,6 +294,7 @@ describe("a publish row's byte capability", () => {
   const PUBLISH = { ...PAYLOAD, reviewTaskId: "publish-decision:subject", subject: "publish-decision" as const };
   const pinned = [{ artifactId: PAYLOAD.artifactId, representationRevisionId: PAYLOAD.representationRevisionId }];
 
+  // red-first-expect: expected undefined to be 'publish-decision'
   it("seals its kind, and a gate capability seals none", () => {
     expect(verifyReviewIslandByteCapability(mintReviewIslandByteCapability(PUBLISH))?.subject).toBe("publish-decision");
     expect(Object.prototype.hasOwnProperty.call(verifyReviewIslandByteCapability(capability), "subject")).toBe(false);
