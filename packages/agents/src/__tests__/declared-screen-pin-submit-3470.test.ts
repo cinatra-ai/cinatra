@@ -86,6 +86,12 @@ vi.mock("../agent-run-hitl-prompts", () => ({
   continueBindingDigest: () => "",
   continueGateDigest: () => "",
 }));
+// The run's event log: the latest gate frame the park emitted, or none.
+const eventLog = vi.hoisted(() => ({ frame: null as Record<string, unknown> | null }));
+vi.mock("@cinatra-ai/agent-ui-protocol/server", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readLatestAgUiInterrupt: async () => eventLog.frame,
+}));
 vi.mock("../db", () => {
   const query: Record<string, unknown> = {};
   query.from = () => query;
@@ -273,6 +279,7 @@ beforeEach(() => {
   gateRow.read = "row";
   gateRow.xRenderer = ID;
   gateRow.values = {};
+  eventLog.frame = null;
   arrange();
 });
 
@@ -405,6 +412,113 @@ describe("an answer is sent only under the declared screen its step opened under
     // red-first-expect: expected 'sent' to contain 'could not be loaded'
     expect(await answer()).toContain("could not be loaded");
     expectRefusedAndGivenBack();
+  });
+
+  describe("a step whose gate row could not be written at the park is answered from its event-log frame", () => {
+    /**
+     * The park as the WayFlow gate runs it (human-gate-park.ts): the frame is
+     * emitted and read back, the gate row's insert fails, and the run parks.
+     * Returns the park's outcome.
+     */
+    async function parkWithRowInsertFailing(): Promise<string> {
+      const { parkRunOnHumanGate } = await import("../human-gate-park");
+      row.status = "running";
+      gateRow.read = "missing";
+      const base = { type: "object" };
+      const outcome = await parkRunOnHumanGate({
+        runId: RUN.id,
+        gateLabel: `WayFlow gate ${GATE}`,
+        alreadyParked: false,
+        buildArtifact: async () => ({
+          schema: server.withDeclaredScreenPin?.(base, ID) ?? base,
+          xRenderer: ID,
+          values: {},
+          reviewTaskId: GATE,
+        }),
+        emitInterrupt: (artifact) => {
+          eventLog.frame = {
+            xRenderer: artifact.xRenderer,
+            schema: artifact.schema,
+            values: artifact.values,
+            reviewTaskId: artifact.reviewTaskId,
+          };
+        },
+        readBackGate: async () => eventLog.frame as { reviewTaskId: string; xRenderer: string } | null,
+        persistArtifact: async () => {
+          throw new Error("fixture gate row insert failed");
+        },
+        parkRun: async () => {
+          row.status = "pending_approval";
+        },
+        failRun: async (error) => {
+          throw new Error(error);
+        },
+        attempts: 1,
+        delayMs: 0,
+      });
+      return outcome.outcome;
+    }
+
+    beforeEach(() => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.spyOn(console, "log").mockImplementation(() => {});
+    });
+
+    it("the step parks, and the card's answer is sent once under the screen the frame pins", async () => {
+      install("Fixture frame revision");
+      expect(await parkWithRowInsertFailing()).toBe("parked");
+      expect(await answer(CARD_ANSWER)).toBe("sent");
+      expect(sendTask).toHaveBeenCalledTimes(1);
+      expect(fenceCalls()).toHaveLength(1);
+      expect(pauseClaimFake.releasePauseClaim).not.toHaveBeenCalled();
+    });
+
+    it("a renderer updated after that park refuses the answer as changed", async () => {
+      install("Fixture frame earlier revision");
+      await parkWithRowInsertFailing();
+      install("Fixture frame later revision");
+      // red-first-expect: expected 'sent' to contain 'changed after the step opened'
+      expect(await answer(CARD_ANSWER)).toContain("changed after the step opened");
+      expectRefusedAndGivenBack();
+    });
+
+    it("a frame whose schema carries no host pin is never answered under a declared screen", async () => {
+      install("Fixture frame unpinned revision");
+      await parkWithRowInsertFailing();
+      eventLog.frame = { ...eventLog.frame, schema: { type: "object" } };
+      // red-first-expect: expected 'sent' to contain 'changed after the step opened'
+      expect(await answer(CARD_ANSWER)).toContain("changed after the step opened");
+      expectRefusedAndGivenBack();
+    });
+
+    it("the latest frame of another step refuses the answer", async () => {
+      install("Fixture frame other-step revision");
+      await parkWithRowInsertFailing();
+      eventLog.frame = { ...eventLog.frame, reviewTaskId: "wayflow-another-step" };
+      // red-first-expect: expected 'sent' to contain 'could not be loaded'
+      expect(await answer(CARD_ANSWER)).toContain("could not be loaded");
+      expectRefusedAndGivenBack();
+    });
+
+    it("the agent_run_resume road reads the same frame", async () => {
+      install("Fixture frame resume revision");
+      eventLog.frame = null;
+      const base = { type: "object" };
+      eventLog.frame = {
+        xRenderer: ID,
+        schema: server.withDeclaredScreenPin?.(base, ID) ?? base,
+        values: {},
+        reviewTaskId: `wayflow-${RUN.a2aTaskId}`,
+      };
+      gateRow.read = "missing";
+      const { resumeStepScreenAnswer } = reviewTaskActions as unknown as {
+        resumeStepScreenAnswer?: (run: unknown, template: unknown, text: string) => Promise<unknown>;
+      };
+      const text = JSON.stringify({ approved: true });
+      const template = { approvalPolicy: { steps: [{ xRenderer: ID }] } };
+      // red-first-expect: expected undefined to deeply equal
+      expect(await resumeStepScreenAnswer?.(RUN, template, text)).toEqual({ send: text });
+    });
   });
 
   it("a step that opened with no screen, whose renderer declares none, is sent as before", async () => {

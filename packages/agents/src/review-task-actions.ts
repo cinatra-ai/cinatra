@@ -90,7 +90,8 @@ export const DECLARED_SCREEN_CHANGED_REFUSAL =
  * declares now, read fresh past the bindings cache. Only "matches" sends.
  * Another declaration refuses as changed. A step that cannot be verified
  * refuses as a screen that could not be loaded, which a reload retries: its
- * gate row missing or unreadable, or a declaration that cannot be read
+ * gate row unreadable, or missing with no event-log frame of the step
+ * (`stepGateFromEventLog`), or a declaration that cannot be read
  * (refused, malformed, missing from an incomplete scan, a failed read).
  *
  * THE SERVER DECIDES WHETHER A DECLARED CARD WAS ANSWERED, AND WHAT IS SENT.
@@ -195,13 +196,50 @@ function canonicalJsonText(value: unknown): string {
   return JSON.stringify(sorted(value)) ?? "undefined";
 }
 
+/** How long an answer waits for the run event log, as the park's own read-back does. */
+const STEP_FRAME_READ_TIMEOUT_MS = 3000;
+
+/**
+ * The step's gate as its event-log frame carries it, for a step whose gate
+ * row is absent (cinatra#3470), or null. The park writes the row only after it
+ * read the frame back, and it parks even when that write fails
+ * (human-gate-park.ts): the frame is then the step's one artifact, and its
+ * schema carries the same host-sealed pin. The frame is read as the park
+ * verified it: the run's latest gate frame, for this step, with a renderer.
+ * A frame of another step, one with no renderer, a failed read or a read past
+ * the park's time budget gives null, and the answer is refused.
+ */
+async function stepGateFromEventLog(
+  runId: string,
+  reviewTaskId: string,
+): Promise<{ xRenderer: string; inputSchema: Record<string, unknown>; values: Record<string, unknown> } | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const { readLatestAgUiInterrupt } = await import("@cinatra-ai/agent-ui-protocol/server");
+    const frame = await Promise.race([
+      readLatestAgUiInterrupt(runId),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), STEP_FRAME_READ_TIMEOUT_MS);
+      }),
+    ]);
+    if (!frame || frame.reviewTaskId !== reviewTaskId || !frame.xRenderer) return null;
+    return { xRenderer: frame.xRenderer, inputSchema: frame.schema ?? {}, values: frame.values ?? {} };
+  } catch {
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 /**
  * What `agent_run_resume` sends to a run parked at the WayFlow step of
  * `a2aTaskId` (cinatra#3470), read as the approval core reads it
  * (`stepScreenAnswer`). IT FAILS CLOSED, as the approval core does:
  *   - a gate row that cannot be read refuses, before the pause is claimed;
  *   - a gate row that is present is checked by the step's own pin and values;
- *   - a gate row that is absent leaves only the agent's own step data: the
+ *   - a gate row that is absent leaves the step's event-log frame, checked
+ *     the same way (`stepGateFromEventLog`);
+ *   - with neither, only the agent's own step data is left: the
  *     step's renderer is one of the template's renderer-gate steps (or the
  *     host's context or fallback screen). Only when every one of them is read
  *     fresh to declare no screen is the answer sent as before. Any that
@@ -221,6 +259,8 @@ export async function resumeStepScreenAnswer(
     return failed;
   }
   if (gate !== null) return stepScreenAnswer(gate, { answersDeclaredCard: false, resumeText });
+  const frame = await stepGateFromEventLog(run.id, `wayflow-${run.a2aTaskId}`);
+  if (frame !== null) return stepScreenAnswer(frame, { answersDeclaredCard: false, resumeText });
   try {
     const bindings = await import("./field-renderer-bindings.server");
     const { DECLARED_SCREEN_PIN_NONE } = await import("./field-renderer-registry");
@@ -1356,8 +1396,9 @@ export async function approveReviewTaskInternal(
     // section exists to prevent.
     // Read only THIS pre-dispatch materialization, never the latest gate later.
     let gateSnapshot: Awaited<ReturnType<typeof readDurableHitlGateForContinue>> = null;
-    // A missing or unreadable row leaves it null: the step's screen is then unverified and the answer is refused below.
-    try { gateSnapshot = await readDurableHitlGateForContinue(run.id,reviewTaskId); } catch { gateSnapshot = null; }
+    // An unreadable row leaves it null and the answer is refused below. A missing one leaves the step's event-log frame (stepGateFromEventLog).
+    let gateRowMissing = false;
+    try { gateSnapshot = await readDurableHitlGateForContinue(run.id,reviewTaskId); gateRowMissing = gateSnapshot === null; } catch { gateSnapshot = null; }
     let dispatchStarted = false;
     let fencedAt = 0;
     let settled = false;
@@ -1373,7 +1414,8 @@ export async function approveReviewTaskInternal(
       // refuses the answer before the fence, and the claim is given back.
       // A declared card's answer is sent as its one writer rebuilds it: the resume text,
       // the answered-gate digest and the recorded values all read those bytes.
-      const screenAnswer = await stepScreenAnswer(gateSnapshot, { answersDeclaredCard, resumeText });
+      const screenGate = gateSnapshot ?? (gateRowMissing ? await stepGateFromEventLog(run.id, reviewTaskId) : null);
+      const screenAnswer = await stepScreenAnswer(screenGate, { answersDeclaredCard, resumeText });
       if ("refusal" in screenAnswer) throw new Error(screenAnswer.refusal);
       if (screenAnswer.send !== resumeText) {
         resumeText = screenAnswer.send;
