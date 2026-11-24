@@ -38,7 +38,12 @@ import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuc
 // ruling 1: "now").
 import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
 import { readWayflowSubmittedValues } from "./hitl-gate-submit";
-import { DECLARED_CARD_ANSWER_KEY, SCREEN_FAILED_HOLD_REASON } from "./hitl-gate-submit";
+import {
+  DECLARED_CARD_ANSWER_KEY,
+  SCREEN_FAILED_HOLD_REASON,
+  declaredHitlScreenReady,
+  type DeclaredHitlCard,
+} from "./hitl-gate-submit";
 import { readSentUserEnvelope } from "./wayflow-user-response-envelope";
 // cinatra#2484: the setup-resume path is the LAST place a type-violating setup
 // value can be stopped before it becomes `agent_runs.inputParams` and reaches
@@ -77,45 +82,91 @@ export const DECLARED_SCREEN_CHANGED_REFUSAL =
 
 /**
  * Why an answer to a parked step may not be sent (cinatra#3470), or null when
- * it may. The step is answered only under the declared screen it opened under:
- * the pin the park wrote into its gate schema is compared with what its
- * renderer declares now, read fresh past the bindings cache. Only "matches"
- * sends. Another declaration refuses as changed. A step that cannot be
- * verified refuses as a screen that could not be loaded, which a reload
- * retries: its gate row missing or unreadable, or a declaration that cannot be
- * read (refused, malformed, missing from an incomplete scan, a failed read).
+ * it may. Every road that answers a mid-run step reads it (the approval core
+ * and `agent_run_resume`). The step is answered only under the declared screen
+ * it opened under: the pin the park wrote into its gate schema is compared
+ * with what its renderer declares now, read fresh past the bindings cache.
+ * Only "matches" sends. Another declaration refuses as changed. A step that
+ * cannot be verified refuses as a screen that could not be loaded, which a
+ * reload retries: its gate row missing or unreadable, or a declaration that
+ * cannot be read (refused, malformed, missing from an incomplete scan, a
+ * failed read).
+ *
+ * THE SERVER DECIDES WHETHER A DECLARED CARD WAS ANSWERED. When the step
+ * declares a card, the text the agent is resumed with (`resumeText`, as sent)
+ * must be the card's whole answer, ready by the same reading the screen's
+ * Continue applies (`declaredHitlScreenReady`): a decision chosen, every field
+ * filled, every required run value held. A generic approval, an empty answer
+ * or an answer the card cannot hold is refused, whatever the caller marked.
  * A step that opened with no screen, whose renderer is verified to declare
  * none now, matches and is sent as before.
  */
-async function stepScreenRefusal(
-  gate: { xRenderer: string; inputSchema: Record<string, unknown> } | null,
-  answersDeclaredCard: boolean,
+export async function stepScreenRefusal(
+  gate: { xRenderer: string; inputSchema: Record<string, unknown>; values?: Record<string, unknown> } | null,
+  answer: { answersDeclaredCard: boolean; resumeText: string },
 ): Promise<string | null> {
   if (gate === null) return SCREEN_FAILED_HOLD_REASON;
   let standing: "matches" | "changed" | "unknown";
-  let declaresCard = false;
+  let card: DeclaredHitlCard | "kind-screen" | "unavailable" | null = null;
   try {
     const { stepDeclarationStanding, readDeclaredHitlCard } = await import(
       "./field-renderer-bindings.server"
     );
     standing = stepDeclarationStanding(gate.xRenderer, gate.inputSchema, { fresh: true });
-    if (standing === "matches" && answersDeclaredCard) {
-      const card = readDeclaredHitlCard(gate.xRenderer, gate.inputSchema);
-      declaresCard = card !== null && typeof card === "object";
-    }
+    if (standing === "matches") card = readDeclaredHitlCard(gate.xRenderer, gate.inputSchema, { fresh: true });
   } catch {
     return SCREEN_FAILED_HOLD_REASON;
   }
   if (standing !== "matches") {
     return standing === "changed" ? DECLARED_SCREEN_CHANGED_REFUSAL : SCREEN_FAILED_HOLD_REASON;
   }
+  if (card === "unavailable") return SCREEN_FAILED_HOLD_REASON;
+  const declaresCard = card !== null && typeof card === "object";
   // AN ANSWER MADE ON A DECLARED CARD IS SENT ONLY TO A STEP THAT DECLARES
   // ONE. A browser can still hold a card an earlier read registered under the
   // id; a step that declares none (or a "kind" screen) never asked for that
   // card's fields or decisions.
-  if (answersDeclaredCard && !declaresCard) return UNDECLARED_CARD_ANSWER_REFUSAL;
+  if (answer.answersDeclaredCard && !declaresCard) return UNDECLARED_CARD_ANSWER_REFUSAL;
+  if (declaresCard && !declaredCardAnswerReady(card as DeclaredHitlCard, gate.values ?? {}, answer.resumeText)) {
+    return DECLARED_CARD_ANSWER_INCOMPLETE_REFUSAL;
+  }
   return null;
 }
+
+/**
+ * Is `resumeText` a declared card's whole, ready answer? It must be the JSON
+ * object of the answer (inside the attachment envelope this host sends with a
+ * file), read as the screen stages it: that object, with `userResponse` the
+ * text itself.
+ */
+function declaredCardAnswerReady(
+  card: DeclaredHitlCard,
+  runValue: Record<string, unknown>,
+  resumeText: string,
+): boolean {
+  const parseObject = (text: string): Record<string, unknown> | null => {
+    try {
+      const parsed: unknown = JSON.parse(text);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : null;
+    } catch {
+      return null;
+    }
+  };
+  const outer = parseObject(resumeText);
+  if (outer === null) return false;
+  const envelope = readSentUserEnvelope(outer);
+  const text = envelope !== null ? envelope.text : resumeText;
+  const whole = envelope !== null ? parseObject(envelope.text) : outer;
+  if (whole === null) return false;
+  return declaredHitlScreenReady(card, runValue, { ...whole, userResponse: text });
+}
+
+/** The refusal of an answer that does not answer the step's declared card (cinatra#3470). */
+export const DECLARED_CARD_ANSWER_INCOMPLETE_REFUSAL =
+  "This step's screen asks for an answer this request did not give, so nothing was sent. " +
+  "Answer the step on its own screen: choose a decision and fill every field it asks for.";
 
 /** The refusal of a declared card's answer to a step that declares no card (cinatra#3470). */
 export const UNDECLARED_CARD_ANSWER_REFUSAL =
@@ -1159,8 +1210,9 @@ export async function approveReviewTaskInternal(
     // string through VERBATIM — that is the byte-identical legacy
     // invariant, NOT a bug.
     // A DECLARED CARD'S ANSWER SAYS SO (cinatra#3470, `DECLARED_CARD_ANSWER_KEY`).
-    // The mark is checked against the step's declaration below and never sent
-    // on or recorded.
+    // The mark is only a hint, never sent on or recorded: it refuses a card's
+    // answer to a step that declares none. Whether a declared card was
+    // answered is read from the answer itself (`stepScreenRefusal`).
     let answersDeclaredCard = false;
     if (
       values &&
@@ -1240,7 +1292,7 @@ export async function approveReviewTaskInternal(
       // cinatra#3470: a step is answered only under the screen it opened under. A renderer
       // updated or uninstalled while the step waited, or a screen that cannot be verified,
       // refuses the answer before the fence, and the claim is given back.
-      const screenRefusal = await stepScreenRefusal(gateSnapshot, answersDeclaredCard);
+      const screenRefusal = await stepScreenRefusal(gateSnapshot, { answersDeclaredCard, resumeText });
       if (screenRefusal !== null) throw new Error(screenRefusal);
       // The shared WayFlow resume (cinatra#4150) is prepared before the fence and
       // sent after it (cinatra#4245): the client with its 24h ceiling and the

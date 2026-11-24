@@ -14,6 +14,11 @@
  * The check reads the declaration past the bindings cache. Read through the
  * production lookup over a temporary runtime mount.
  *
+ * The server, not the screen, decides whether a declared card was answered:
+ * an answer to a step whose card asks for a decision or a field is sent only
+ * when it is the card's whole, ready answer, marked or not. A generic approval
+ * or an empty answer is refused and the pause is given back.
+ *
  * Run: cd packages/agents && pnpm exec vitest run src/__tests__/declared-screen-pin-submit-3470.test.ts
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -112,6 +117,8 @@ vi.mock("@cinatra-ai/a2a", async (orig) => ({
   createExternalA2AClient: vi.fn(async () => ({ sendTask })),
   resolveRunIdByWayflowTaskId: vi.fn(async () => null),
   resolveLatestWayflowGateTaskId: vi.fn(async () => null),
+  rememberLatestWayflowGateTask: vi.fn(async () => {}),
+  rememberAnsweredGateSubmission: vi.fn(async () => {}),
 }));
 const handleWayflowTaskState = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../execution", () => ({ handleWayflowTaskState }));
@@ -153,7 +160,7 @@ function writeManifest(manifest: string): void {
 }
 
 /** The fixture manifest: a declared card titled `title`, or no screen at all. */
-function manifest(title: string | null): string {
+function manifest(title: string | null, screen?: Record<string, unknown>): string {
   return JSON.stringify({
     name: "@acme-test/pin-submit-agent",
     cinatra: {
@@ -166,7 +173,7 @@ function manifest(title: string | null): string {
           ...(title === null
             ? {}
             : {
-                screen: {
+                screen: screen ?? {
                   layout: "card",
                   title,
                   decisionLabel: "Fixture decision",
@@ -180,14 +187,22 @@ function manifest(title: string | null): string {
 }
 
 /** Install (or update) the fixture agent with `title` on its declared card. */
-function install(title: string | null): void {
-  writeManifest(manifest(title));
+function install(title: string | null, screen?: Record<string, unknown>): void {
+  writeManifest(manifest(title, screen));
   server.__clearInstalledFieldRendererBindingsCache();
 }
 
-/** Answer the gate: "sent", or the refusal's text. */
-function answer(): Promise<string> {
-  return approveReviewTaskInternal(GATE, RUN.runBy, { approved: true }).then(
+/** What the card's Continue sends for its one decision: the whole answer, marked. */
+const CARD_ANSWER = {
+  approved: true,
+  userResponse: JSON.stringify({ approved: true }),
+  approvedAt: "2026-01-01T00:00:00.000Z",
+  "x-declared-card-answer": true,
+};
+
+/** Answer the gate with `values` (a generic approval by default): "sent", or the refusal's text. */
+function answer(values: unknown = { approved: true }): Promise<string> {
+  return approveReviewTaskInternal(GATE, RUN.runBy, values).then(
     () => "sent",
     (err: unknown) => (err instanceof Error ? err.message : String(err)),
   );
@@ -274,7 +289,7 @@ describe("an answer is sent only under the declared screen its step opened under
   it("an answer to a step whose declaration is unchanged is sent once", async () => {
     install("Fixture current revision");
     park();
-    await approveReviewTaskInternal(GATE, RUN.runBy, { approved: true });
+    await approveReviewTaskInternal(GATE, RUN.runBy, CARD_ANSWER);
     expect(fenceCalls()).toHaveLength(1);
     expect(sendTask).toHaveBeenCalledTimes(1);
     expect(pauseClaimFake.releasePauseClaim).not.toHaveBeenCalled();
@@ -303,7 +318,7 @@ describe("an answer is sent only under the declared screen its step opened under
     expect(pinned).toMatch(/^sha256:/);
     expect(pinned).not.toBe(cachedPin);
     expect(pinned).toBe(server.currentDeclaredScreenPin?.(ID, { fresh: true }));
-    expect(await answer()).toBe("sent");
+    expect(await answer(CARD_ANSWER)).toBe("sent");
     expect(sendTask).toHaveBeenCalledTimes(1);
   });
 
@@ -360,9 +375,62 @@ describe("an answer is sent only under the declared screen its step opened under
   it("an answer made on the declared card the step opened under is sent, without the mark", async () => {
     install("Fixture marked revision");
     park();
-    await approveReviewTaskInternal(GATE, RUN.runBy, { approved: true, "x-declared-card-answer": true });
+    await approveReviewTaskInternal(GATE, RUN.runBy, CARD_ANSWER);
     expect(sendTask).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(sendTask.mock.calls)).not.toContain("x-declared-card-answer");
+  });
+
+  it("a generic approval of a step whose card asks for a decision is refused: the pause is given back and nothing is sent", async () => {
+    install("Fixture decision revision");
+    park();
+    // red-first-expect: expected 'sent' to contain 'did not give'
+    expect(await answer({ approved: true })).toContain("did not give");
+    expectRefusedAndGivenBack();
+  });
+
+  it("an answer with no values is refused for a step whose card asks for a decision", async () => {
+    install("Fixture empty revision");
+    park();
+    // red-first-expect: expected 'sent' to contain 'did not give'
+    expect(await answer(undefined)).toContain("did not give");
+    expectRefusedAndGivenBack();
+  });
+
+  it("an answer that carries only the declared-card mark is refused for a step whose card asks for a decision", async () => {
+    install("Fixture mark-only revision");
+    park();
+    // red-first-expect: expected 'sent' to contain 'did not give'
+    expect(await answer({ "x-declared-card-answer": true })).toContain("did not give");
+    expectRefusedAndGivenBack();
+  });
+
+  it("an answer that names no declared decision is refused, even when marked", async () => {
+    install("Fixture undeclared-decision revision");
+    park();
+    const other = { route: "elsewhere" };
+    const values = { ...other, userResponse: JSON.stringify(other), "x-declared-card-answer": true };
+    // red-first-expect: expected 'sent' to contain 'did not give'
+    expect(await answer(values)).toContain("did not give");
+    expectRefusedAndGivenBack();
+  });
+
+  it("a card with a field is answered only with the field filled", async () => {
+    install("Fixture field revision", {
+      layout: "card",
+      title: "Fixture field revision",
+      sections: [{ type: "field", key: "postText", label: "Post text" }],
+    });
+    park();
+    const blank = { postText: "  ", userResponse: JSON.stringify({ postText: "  " }), approved: true };
+    // red-first-expect: expected 'sent' to contain 'did not give'
+    expect(await answer(blank)).toContain("did not give");
+    expectRefusedAndGivenBack();
+    vi.clearAllMocks();
+    arrange();
+    const filled = { postText: "Hello", userResponse: JSON.stringify({ postText: "Hello" }), approved: true };
+    expect(await answer(filled)).toBe("sent");
+    expect(sendTask).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(sendTask.mock.calls)).toContain("Hello");
   });
 
   it("a step parked before the upgrade whose own schema names an 'unknown' pin is never answered under a declared screen", async () => {

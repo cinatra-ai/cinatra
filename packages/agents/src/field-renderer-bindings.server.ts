@@ -687,16 +687,20 @@ export function lookupFieldRendererBinding(
  * validates them before it sends; a list step sends a pick). The server has no
  * faithful reading of that logic, so the caller lends no generic fill or
  * submit for it either: the person answers it on its own screen.
+ *
+ * `fresh` reads the declaration past the bindings cache, as the answer that
+ * is sent reads it (`stepDeclarationStanding`).
  */
 export function readDeclaredHitlCard(
   xRenderer: string,
   stepSchema: unknown,
+  opts?: { fresh?: boolean },
 ): DeclaredHitlCard | "kind-screen" | "unavailable" | null {
   try {
     // The step is answered only under the declaration it opened under: a
     // renderer changed since then lends nothing, not even the raw schema.
-    if (stepDeclarationStanding(xRenderer, stepSchema) === "changed") return "unavailable";
-    const { binding, refused, unknown } = lookupFieldRendererBinding(xRenderer);
+    if (stepDeclarationStanding(xRenderer, stepSchema, opts) === "changed") return "unavailable";
+    const { binding, refused, unknown } = lookupFieldRendererBinding(xRenderer, opts);
     if (!binding) return refused || unknown ? "unavailable" : null;
     if (binding.screen === undefined) return null;
     if (isUndrawableDeclaredScreen(binding)) return "unavailable";

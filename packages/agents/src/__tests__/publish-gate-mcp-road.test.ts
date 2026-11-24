@@ -4,7 +4,7 @@
 // Since cinatra#4245 the road takes the pause claim before its fence; the hold is read
 // before the claim and, on a publishing template or for a run with a decision, again
 // under the claim and before the fence.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { pauseClaimFake } from "./pause-claim-test-fake";
 
 // cinatra#4245: the resume road's pause claim always wins here unless a case says otherwise.
@@ -191,6 +191,31 @@ vi.mock("../publish-decision-store", async (orig) => ({
   readLatestDecisionForRun: decisions.readLatestDecisionForRun,
 }));
 
+// cinatra#3470: the step's gate row and its declared card. No row by default: a
+// step whose gate row is not found keeps this road's earlier behavior.
+const declared = vi.hoisted(() => ({
+  gate: null as null | { xRenderer: string; inputSchema: Record<string, unknown>; values: Record<string, unknown> },
+  card: null as null | Record<string, unknown>,
+}));
+vi.mock("../agent-run-hitl-prompts", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readDurableHitlGateForContinue: vi.fn(async (runId: string, reviewTaskId: string) =>
+    declared.gate === null
+      ? null
+      : { runId, reviewTaskId, materializedAt: "2026-01-01T00:00:00.000Z", ...declared.gate },
+  ),
+}));
+vi.mock("../field-renderer-bindings.server", async (orig) => {
+  const actual = await orig<Record<string, (...a: unknown[]) => unknown>>();
+  return {
+    ...actual,
+    stepDeclarationStanding: (...a: unknown[]) =>
+      declared.card !== null ? "matches" : actual.stepDeclarationStanding!(...a),
+    readDeclaredHitlCard: (...a: unknown[]) =>
+      declared.card !== null ? declared.card : actual.readDeclaredHitlCard!(...a),
+  };
+});
+
 const ACTOR = { actorType: "human" as const, source: "ui" as const, userId: "user-a" };
 
 function pausedRun() {
@@ -210,12 +235,12 @@ function pausedRun() {
   };
 }
 
-async function resume(): Promise<unknown> {
+async function resume(input: Record<string, unknown> = {}): Promise<unknown> {
   const { createAgentBuilderPrimitiveHandlers } = await import("../mcp/handlers");
   const handlers = createAgentBuilderPrimitiveHandlers();
   return handlers.agent_run_resume({
     primitiveName: "agent_run_resume",
-    input: { runId: "run-1" },
+    input: { runId: "run-1", ...input },
     actor: ACTOR,
     mode: "deterministic",
   } as never);
@@ -473,6 +498,80 @@ describe("agent_run_resume on a template that lists no publishing step, for a ru
     expect(decisions.readLatestDecisionForRun).toHaveBeenCalledTimes(1);
     expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
     expect(moves()[0]).toEqual(["run-1", "pending_approval", "running"]);
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// cinatra#3470: a step that declares a card is answered through `agent_run_resume`
+// only with the card's whole, ready answer, as the approval core reads it. A
+// generic approval is refused before the claim, and nothing is sent.
+describe("agent_run_resume on a step that declares a card", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    pauseClaimFake.claimPause.mockReset().mockImplementation(async () => ({ kind: "claimed", token: "tok-fake", generation: 1, expiresAt: new Date(0) }));
+    authSessionMock.resolveOrgRoleForUser.mockResolvedValue("member");
+    enforceRunAccessSpy.mockResolvedValue(undefined);
+    storeMock.readAgentRunById.mockResolvedValue(pausedRun());
+    storeMock.transitionRunStatus.mockReset().mockResolvedValue(undefined);
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tmpl-1",
+      packageName: "@cinatra-ai/web-research-agent",
+      sourceType: "internal",
+      agentAuthPolicy: null,
+    });
+    sendTaskSpy.mockReset().mockResolvedValue({
+      id: "task-1",
+      contextId: "ctx-1",
+      status: { state: "completed", message: { parts: [] } },
+      metadata: {},
+      history: [{ role: "agent", parts: [{ kind: "text", text: "done" }] }],
+    });
+    holdSpy.mockResolvedValue({ held: false, reason: "no-review" });
+    decisions.readLatestDecisionForRun.mockResolvedValue(null);
+    declared.gate = { xRenderer: "@acme-test/card-agent:confirm", inputSchema: { type: "object" }, values: {} };
+    declared.card = {
+      layout: "card",
+      title: "Fixture card",
+      decisions: [
+        { label: "Fixture post", answer: { post: true } },
+        { label: "Fixture do not post", answer: { post: false, approved: false } },
+      ],
+    };
+  });
+
+  afterEach(() => {
+    declared.gate = null;
+    declared.card = null;
+  });
+
+  it("a generic approval is refused and nothing is sent", async () => {
+    const answer = (await resume({ approvalNote: "go on" })) as { error?: string };
+    // red-first-expect: expected 'undefined' to contain 'did not give'
+    expect(String(answer.error)).toContain("did not give");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(pauseClaimFake.claimPause).not.toHaveBeenCalled();
+  });
+
+  it("an answer that names no declared decision is refused", async () => {
+    const answer = (await resume({ userResponse: JSON.stringify({ post: "maybe" }) })) as { error?: string };
+    // red-first-expect: expected 'undefined' to contain 'did not give'
+    expect(String(answer.error)).toContain("did not give");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+  });
+
+  it("the card's declared answer is sent", async () => {
+    // The resumed leg's own bookkeeping needs a store this harness does not have.
+    const answer = (await resume({ userResponse: JSON.stringify({ post: true }) })) as { error?: string };
+    expect(String(answer.error)).not.toContain("did not give");
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(sendTaskSpy.mock.calls)).toContain('\\"post\\":true');
+  });
+
+  it("a step whose renderer declares no screen is resumed as before", async () => {
+    declared.card = null;
+    declared.gate = null;
+    const answer = (await resume({ approvalNote: "go on" })) as { error?: string };
+    expect(String(answer.error)).not.toContain("did not give");
     expect(sendTaskSpy).toHaveBeenCalledTimes(1);
   });
 });

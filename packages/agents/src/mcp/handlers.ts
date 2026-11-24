@@ -2163,6 +2163,17 @@ async function handleAgentBuilderRunResume(
       });
       // The resume message and its submitted values (precedence: ./resume-message, as the UI approve).
       const { resumeText, trimmedNote, submittedValues } = resumeMessageFromInput(userResponse, approvalNote);
+      // cinatra#3470: a step that declares a screen is answered here only as the
+      // approval core answers it (`stepScreenRefusal`): under the screen it opened
+      // under, and for a declared card only with the card's whole, ready answer.
+      // A step whose gate row cannot be read keeps this road's earlier behavior.
+      const { readDurableHitlGateForContinue } = await import("../agent-run-hitl-prompts");
+      const stepGate = await readDurableHitlGateForContinue(run.id, `wayflow-${run.a2aTaskId}`).catch(() => null);
+      if (stepGate !== null) {
+        const { stepScreenRefusal } = await import("../review-task-actions");
+        const refusal = await stepScreenRefusal(stepGate, { answersDeclaredCard: false, resumeText });
+        if (refusal !== null) return { error: refusal };
+      }
 
       // cinatra#4245: claim, token and message, fence, prompt, send, answer, settle.
       // cinatra#3745: the fence is bound to the gate read here (its a2a task and
