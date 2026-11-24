@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   buildProducedEventInsertOp,
   maybeBuildProducedEventInsertOp,
+  producerRunLockOps,
 } from "../lifecycle-emit";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "../lifecycle-activation";
 import { producedEventId } from "../lifecycle-produced-event";
@@ -134,6 +135,21 @@ describe("buildProducedEventInsertOp — op shape", () => {
       .toEqual({ locksRunRow: true, guardKept: true });
     // The row is the producing run's own ($7): the lock never names another run.
     expect(buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: null }).values[6]).toBe("run-9");
+  });
+
+  // red-first-expect: producerRunLockOps is not a function
+  it("a writer whose rows precede its event takes the producing run's row FOR KEY SHARE first, only when it splices the event (cinatra#4762)", () => {
+    const event = maybeBuildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 0 } });
+    expect(producerRunLockOps("cinatra", "run-9", event)).toEqual([
+      { text: `SELECT 1 FROM "cinatra"."agent_runs" WHERE id = $1::text FOR KEY SHARE`, values: ["run-9"] },
+    ]);
+    // No run named: no row to lock.
+    expect(producerRunLockOps("cinatra", null, event)).toEqual([]);
+    // The switch OFF splices no event, and the transaction stays the pre-flip one: no lock either.
+    process.env[ENV] = "off";
+    const off = maybeBuildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 0 } });
+    expect(off).toBeNull();
+    expect(producerRunLockOps("cinatra", "run-9", off)).toEqual([]);
   });
 
   it("rejects an unknown emitter (the closed emitter set)", () => {

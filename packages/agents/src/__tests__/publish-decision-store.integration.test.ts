@@ -643,8 +643,8 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     expect(await reviewFenceHolds({ runId, orgId: ORG, generation: 0 })).toBe(true);
   });
 
-  it("cinatra#4762: a produced-event insert and the run-row lock serialize, in both orders", async () => {
-    const { buildProducedEventInsertOp } = await import("@/lib/lifecycle/lifecycle-emit");
+  it("cinatra#4762: a writer that has begun its rows blocks the locked check until it commits, which then refuses; a lock taken first holds the writer back", async () => {
+    const { buildProducedEventInsertOp, producerRunLockOps } = await import("@/lib/lifecycle/lifecycle-emit");
     const { bindArtifactReviewGateSeam } = await import("../artifact-review-gate-seam");
     const { emitArtifactReviewGate } = await import("../artifact-review-gate-store");
     const { reviewFenceHolds } = await import("../publish-decision-actions");
@@ -662,14 +662,23 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
       reviewFenceHolds({ runId, orgId: locked!.orgId, generation: locked!.resetGeneration, executor: tx }));
     expect(await fenceUnderLock()).toBe(true);
 
-    // A writer's output in flight (inserted, not committed): the locked read waits for it, then sees it.
+    // A writer has begun its output: the run lock (its first statement) and an artifact row are written, and its
+    // produced event (the last statement of a writer's transaction) is not yet. The locked check waits for it; once
+    // the writer inserts its event and commits, the check sees the event and refuses.
     await admin.query("BEGIN");
     try {
       const op = insertOp();
-      await admin.query(op.text, op.values);
+      for (const lock of producerRunLockOps(q(TEST_SCHEMA), runId, op)) await admin.query(lock.text, lock.values);
+      await admin.query(
+        `INSERT INTO "${q(TEST_SCHEMA)}"."representation" (id, org_id, artifact_id, resource_id, revision, form, created_by_run_id)
+         VALUES ($1, $2, $3, 'res-1', 1, 'file', $4)`,
+        [`rev-${randomUUID()}`, ORG, op.values[2], runId]);
       let read = false;
       const fence = fenceUnderLock().then((holds) => { read = true; return holds; });
       await pause(300);
+      expect(read).toBe(false);
+      await admin.query(op.text, op.values);
+      await pause(100);
       expect(read).toBe(false);
       await admin.query("COMMIT");
       expect(await fence).toBe(false);
@@ -679,20 +688,30 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     }
     await admin.query(`UPDATE "${q(TEST_SCHEMA)}"."artifact_produced_outbox" SET status = 'processed', processed_at = now() WHERE producer_run_id = $1`, [runId]);
 
-    // The lock taken first: a writer's insert waits until the locked transaction ends.
+    // The lock taken first: a writer waits at its first statement, before any row is written, until the locked
+    // transaction ends.
     let open!: () => void;
     const held = new Promise<void>((resolve) => { open = resolve; });
     const locked = store.withRunRowLock(runId, async () => { await held; return true; });
     await pause(200);
-    let written = false;
+    let started = false;
     const op = insertOp();
-    const write = admin.query(op.text, op.values).then(() => { written = true; });
-    await pause(300);
-    expect(written).toBe(false);
-    open();
-    await locked;
-    await write;
-    expect(written).toBe(true);
+    const [lock] = producerRunLockOps(q(TEST_SCHEMA), runId, op);
+    await admin.query("BEGIN");
+    try {
+      const begin = admin.query(lock.text, lock.values).then(() => { started = true; });
+      await pause(300);
+      expect(started).toBe(false);
+      open();
+      await locked;
+      await begin;
+      expect(started).toBe(true);
+      await admin.query(op.text, op.values);
+      await admin.query("COMMIT");
+    } catch (err) {
+      await admin.query("ROLLBACK").catch(() => undefined);
+      throw err;
+    }
   });
 
   it("cinatra#4762: a produced event records the generation its attempt carries; a delayed writer of an ended attempt keeps its own", async () => {

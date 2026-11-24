@@ -44,7 +44,7 @@ import {
 import { runPostgresQueriesAsync } from "@/lib/postgres-async";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { registerAllObjectTypes } from "@/lib/register-all-object-types";
-import { maybeBuildProducedEventInsertOp, producerAttemptForRun } from "@/lib/lifecycle/lifecycle-emit";
+import { maybeBuildProducedEventInsertOp, producerAttemptForRun, producerRunLockOps } from "@/lib/lifecycle/lifecycle-emit";
 
 import { buildArtifactWriterWitnessOp } from "./artifact-writer-witness";
 import { createLocalDiskBlobStore } from "./local-disk-blob-store";
@@ -437,18 +437,14 @@ SELECT r.id AS resource_id, r.is_new AS is_new, r.metadata->>'storageKey' AS sto
   // projection, the writer witness, the ledger finalize, the produced event and
   // the satisfaction row. A lost compare-and-set aborts all of it.
   // ------------------------------------------------------------------
-  let result;
-  try {
-    result = await appendRepresentationWithExpectedBase({
-      orgId: input.orgId,
-      artifactId: input.artifactId,
-      baseRevisionId: input.baseRepresentationRevisionId,
-      resourceId,
-      form: "file",
-      createdBy: input.createdBy,
-      createdByRunId: input.runId,
-      additionalOps: (representationRevisionId) => {
-        const producedEventOp = maybeBuildProducedEventInsertOp(schema, {
+  // The append's produced event, built once per revision id: it decides both
+  // the run lock taken before the first write and the insert appended last.
+  let producedEvent: { revisionId: string; op: ReturnType<typeof maybeBuildProducedEventInsertOp> } | null = null;
+  const producedEventOpFor = (representationRevisionId: string) => {
+    if (producedEvent?.revisionId !== representationRevisionId) {
+      producedEvent = {
+        revisionId: representationRevisionId,
+        op: maybeBuildProducedEventInsertOp(schema, {
           orgId: input.orgId,
           artifactId: input.artifactId,
           representationRevisionId,
@@ -459,7 +455,29 @@ SELECT r.id AS resource_id, r.is_new AS is_new, r.metadata->>'storageKey' AS sto
           producerRunId: input.runId,
           producerAgentId: null,
           producerAttempt: producerAttemptForRun(input.runId),
-        });
+        }),
+      };
+    }
+    return producedEvent.op;
+  };
+  let result;
+  try {
+    result = await appendRepresentationWithExpectedBase({
+      orgId: input.orgId,
+      artifactId: input.artifactId,
+      baseRevisionId: input.baseRepresentationRevisionId,
+      resourceId,
+      form: "file",
+      createdBy: input.createdBy,
+      createdByRunId: input.runId,
+      // cinatra#4762: the producing run's row FOR KEY SHARE before the first
+      // write, held to commit, so a Publish's locked fence read never runs
+      // while this revision is written but its event (below) is not. Empty when
+      // no event is spliced or no run is named (see `producerRunLockOps`).
+      leadingOps: (representationRevisionId) =>
+        producerRunLockOps(schema, input.runId, producedEventOpFor(representationRevisionId)),
+      additionalOps: (representationRevisionId) => {
+        const producedEventOp = producedEventOpFor(representationRevisionId);
         return [
           {
             // The projection mirror follows the revision it points at. Only the

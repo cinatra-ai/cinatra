@@ -150,9 +150,11 @@ export function buildProducedEventInsertOp(
             AND live_run.status IN ('running', 'pending_approval')), -1)`;
   // cinatra#4762: the insert takes the producing run's row FOR KEY SHARE and holds it until the writer's transaction
   // ends. A Publish writes its release, and the call-site check reads the review fence, under the same row FOR UPDATE
-  // (publish-decision-store withRunRowLock); the two modes conflict, so this output is either committed before that
-  // read (and seen there) or written after it ends. Ordinary run updates take FOR NO KEY UPDATE, which does not
-  // conflict. No run named ($7 null): no row, no lock. The count is never negative: the guard only takes the lock.
+  // (publish-decision-store withRunRowLock); the two modes conflict. A writer whose artifact rows precede this insert
+  // takes the same lock before its first write (producerRunLockOps), so its output is either committed before that
+  // read (and seen there) or begun after it ends; this insert's own lock covers a writer that writes nothing before
+  // it. Ordinary run updates take FOR NO KEY UPDATE, which does not conflict. No run named ($7 null): no row, no lock.
+  // The count is never negative: the guard only takes the lock.
   const runLock = `(SELECT count(*) FROM (SELECT 1 FROM "${schema}"."agent_runs" run_lock
           WHERE run_lock.id = $7::text FOR KEY SHARE) locked_run) >= 0`;
   return {
@@ -179,6 +181,25 @@ ON CONFLICT (event_id) DO NOTHING`,
       dispatch,
     ],
   };
+}
+
+/**
+ * cinatra#4762 — the ops a writer runs BEFORE its first write when it splices `eventOp`: the producing run's row FOR
+ * KEY SHARE, held until the writer's transaction ends. The event insert takes the same lock, but it runs LAST, after
+ * the writer's artifact rows; without this op a Publish's locked fence read (FOR UPDATE, publish-decision-store
+ * withRunRowLock) could run while those rows are already written and see no event. With it, an output whose rows have
+ * begun is committed before that read (and seen there), or that read ran before its first write.
+ * `[]` when no event op is spliced (CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION=off: the transaction stays the pre-flip
+ * one, as the event is) or no run is named (no row to lock). KEY SHARE conflicts only with FOR UPDATE: ordinary run
+ * updates (FOR NO KEY UPDATE) and other writers of the run (KEY SHARE) never wait on it.
+ */
+export function producerRunLockOps(
+  schema: string,
+  producerRunId: string | null | undefined,
+  eventOp: ProducedEventInsertOp | null,
+): ProducedEventInsertOp[] {
+  if (!eventOp || !producerRunId) return [];
+  return [{ text: `SELECT 1 FROM "${schema}"."agent_runs" WHERE id = $1::text FOR KEY SHARE`, values: [producerRunId] }];
 }
 
 /**

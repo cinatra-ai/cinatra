@@ -213,9 +213,10 @@ describe("artifact storage-spine DDL", () => {
     // Retired: the generic default-floor rebalance write no longer exists in
     // the creation path.
     expect(floorPos).toBe(-1);
-    // parseResult invoked at the documented offset (lock+objects+
-    // representation+audit = 4, then 2 ops per producer).
-    expect(src).toMatch(/PRODUCER_OPS_OFFSET\s*=\s*4/);
+    // parseResult invoked at the documented offset (lock + the run lock when
+    // one is taken (cinatra#4762) + objects + representation + audit, then 2
+    // ops per producer).
+    expect(src).toMatch(/PRODUCER_OPS_OFFSET\s*=\s*4 \+ runLockOps\.length/);
     expect(src).toMatch(/parseResult\([\s\S]{0,80}?PRODUCER_OPS_OFFSET \+ i \* 2/);
     // The producer-outcome parse MUST be POST-COMMIT (after Tx2 + its catch),
     // wrapped in its own try/catch so a parse/offset throw is NOT conflated with

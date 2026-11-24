@@ -10,7 +10,7 @@ import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 
 import { parseClaimDispositions } from "@cinatra-ai/objects/claims";
 
-import { maybeBuildProducedEventInsertOp, producerAttemptForRun } from "@/lib/lifecycle/lifecycle-emit";
+import { maybeBuildProducedEventInsertOp, producerAttemptForRun, producerRunLockOps } from "@/lib/lifecycle/lifecycle-emit";
 import type { ArtifactOriginKind } from "@cinatra-ai/artifacts";
 
 import { canonicalJSONStringify, deriveSubstanceKey } from "./resource-store";
@@ -545,17 +545,27 @@ export async function captureObjectContentSnapshot(input: {
           },
         )
       : null;
+    // cinatra#4762: the producing run's row FOR KEY SHARE before the first write
+    // (the dead-key delete), held to commit, so a Publish's locked fence read
+    // never runs while this mint's rows are written but its event (last) is
+    // not. Empty when no event is spliced or no run is named.
+    const runLockOps = producerRunLockOps(
+      schema,
+      input.emitProducedEventAtMint?.producerRunId ?? input.createdByRunId ?? null,
+      mintEventOp,
+    );
 
     // ONE advisory-locked transaction: re-read under the lock (the `cur`/`valid`
     // CTEs) and write resource+blob+representation+snapshot ONLY when the
     // candidate still matches AND no snapshot already exists for the key.
-    // results: [0]=lock, [1]=dead-key delete, [2]=capture CTE, [3]=the mint's
-    // produced event when one was asked for.
-    const [, , capRes] = runPostgresQueriesSync({
+    // results: [0]=lock, then the run lock when one is taken, then the dead-key
+    // delete, the capture CTE and the mint's produced event when one was asked for.
+    const capRes = runPostgresQueriesSync({
       connectionString: conn(),
       transaction: true,
       queries: [
         { text: `SELECT pg_advisory_xact_lock(hashtext($1))`, values: [input.objectId] },
+        ...runLockOps,
         // Dead-key cleanup (separate statement so the subsequent INSERT's
         // unique-index check sees the delete): a keying row whose backing
         // resource was GC-reclaimed (resource gone; the append-only
@@ -685,7 +695,7 @@ SELECT
         // the guard is false and nothing is emitted: a reuse is not a mint.
         ...(mintEventOp ? [mintEventOp] : []),
       ],
-    });
+    })[2 + runLockOps.length];
 
     const out = capRes?.rows?.[0] as
       | {

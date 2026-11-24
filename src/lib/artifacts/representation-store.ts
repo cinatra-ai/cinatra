@@ -317,11 +317,19 @@ export async function appendRepresentationWithExpectedBase(input: {
    * row can name it. They run AFTER the insert, so a refusal takes them with it.
    */
   additionalOps?: (representationRevisionId: string) => RepresentationAppendOp[];
+  /**
+   * Ops to run right after the artifact's advisory lock, BEFORE the base guard
+   * and the insert — locks the transaction must hold from its first write
+   * (cinatra#4762: the producing run's row, see `producerRunLockOps`). Called
+   * with the same revision id as `additionalOps`. Their results are never read.
+   */
+  leadingOps?: (representationRevisionId: string) => RepresentationAppendOp[];
 }): Promise<AppendWithExpectedBaseResult> {
   ensurePostgresSchema();
   const id = randomUUID();
   const schema = q();
 
+  const leading = input.leadingOps?.(id) ?? [];
   try {
     const res = await runPostgresQueriesAsync({
       connectionString: conn(),
@@ -330,6 +338,7 @@ export async function appendRepresentationWithExpectedBase(input: {
         // Decide one save at a time on this artifact (see the header — this is
         // ordering, not the compare-and-set).
         { text: `SELECT pg_advisory_xact_lock(hashtext($1))`, values: [input.artifactId] },
+        ...leading,
         {
           // THE BASE MUST EXIST, on THIS artifact and in THIS organization, or
           // the whole transaction aborts here — before the insert and before any
@@ -370,7 +379,8 @@ RETURNING id, org_id, artifact_id, resource_id, revision, form, created_by, crea
       ],
     });
 
-    const row = (res?.[2]?.rows?.[0] ?? null) as Row | null;
+    // The insert follows the lock, the leading ops and the base guard.
+    const row = (res?.[2 + leading.length]?.rows?.[0] ?? null) as Row | null;
     if (!row) {
       // Unreachable: the guard above already proved the base row exists, and the
       // table is append-only inside the transaction's snapshot. Refuse rather

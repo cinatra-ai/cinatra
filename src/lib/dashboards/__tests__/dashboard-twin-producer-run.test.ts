@@ -109,6 +109,24 @@ describe("(a) the builder records a validated producing run (cinatra#3092)", () 
   });
 });
 
+describe("cinatra#4762: the twin takes the producing run's row before its first write", () => {
+  const isRunLock = (q: Op) => /"agent_runs"[\s\S]*FOR KEY SHARE/.test(q.text) && !q.text.includes('"artifact_produced_outbox"');
+
+  // red-first-expect: expected -1 to be 1 // Object.is equality
+  it("a run's twin locks the run row FOR KEY SHARE right after the advisory lock, before any write", () => {
+    const ops = buildDashboardTwinQueries(ctx, "run-1");
+    expect(ops.findIndex(isRunLock)).toBe(1);
+    expect(ops[1].values).toEqual(["run-1"]);
+    expect(ops[0].text).toContain("pg_advisory_xact_lock");
+  });
+
+  it("no run, or the review orchestration switched off, takes no run lock", () => {
+    expect(buildDashboardTwinQueries(ctx).some(isRunLock)).toBe(false);
+    process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV] = "off";
+    expect(buildDashboardTwinQueries(ctx, "run-1").some(isRunLock)).toBe(false);
+  });
+});
+
 describe("(b) the writer trusts a run only in the same organization (cinatra#3092)", () => {
   function fakeTx(runRows: unknown[]): { tx: TwinTx; rendered: Array<{ sql: string; params: unknown[] }> } {
     const rendered: Array<{ sql: string; params: unknown[] }> = [];

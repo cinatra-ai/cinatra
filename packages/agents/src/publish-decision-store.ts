@@ -300,11 +300,13 @@ const NO_NEWER_DECISION = sql`not exists (select 1 from ${agentRunPublishDecisio
 export type RunRowLockTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 /**
- * cinatra#4762 — runs `fn` in ONE transaction that first takes the run row FOR UPDATE. Every produced-event insert of the
- * run takes the same row FOR KEY SHARE in its own statement (lifecycle-emit.ts) and holds it until its transaction ends,
- * and the two lock modes conflict. So while `fn` runs, no output of the run is in flight: each insert committed before
- * the lock (and is visible to every statement of `fn`), or it waits until this transaction ends. `run` is the locked
- * row's org and reset generation, or null when the run is gone.
+ * cinatra#4762 — runs `fn` in ONE transaction that first takes the run row FOR UPDATE. Every writer of the run's output
+ * takes the same row FOR KEY SHARE before its first write (lifecycle-emit.ts producerRunLockOps; the produced-event
+ * insert takes it too) and holds it until its transaction ends, and the two lock modes conflict. So while `fn` runs, no
+ * output of the run is in flight: each writer that began writing before the lock committed first (its event is
+ * visible to every statement of `fn`), and any other waits for this transaction to end before its first write. With
+ * the review orchestration switched off no event is written and no writer takes the lock. `run` is the locked row's
+ * org and reset generation, or null when the run is gone.
  */
 export async function withRunRowLock<T>(
   runId: string,

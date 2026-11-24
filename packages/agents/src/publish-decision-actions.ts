@@ -551,8 +551,8 @@ export async function approvePublishDecision(input: DecideInput): Promise<Publis
       }
       // cinatra#4762: the review fence is read again under the claim, and the release is written in the SAME transaction
       // as that read, under the run row's lock (withRunRowLock): no output of the run is in flight while it runs, so an
-      // output of the attempt written after the park is either seen here (and refuses the Publish) or is written after
-      // the release commits, where the call-site check (publishCallAllowed) reads the fence again. A review of the
+      // output of the attempt begun after the park is either committed and seen here (and refuses the Publish) or begins
+      // after the release commits, where the call-site check (publishCallAllowed) reads the fence again. A review of the
       // attempt raised or settled otherwise since the park refuses it too. The claim is given back and the decision
       // stays as it is; nothing is sent.
       // A decision with no generation (written by code older than the column) is the current attempt's, as the store reads

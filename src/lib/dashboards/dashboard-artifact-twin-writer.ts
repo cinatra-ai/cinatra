@@ -7,7 +7,7 @@ import { deriveDashboardScopeTuple } from "@/lib/dashboards/dashboard-scope-tupl
 import { buildBindingReconcileQueries } from "@/lib/objects/binding-write-path";
 import { buildObjectsWithOutboxQuery, buildSoftDeleteObjectQuery } from "@/lib/objects-store";
 import { buildAssertSemanticTypeQueries } from "@/lib/artifacts/semantic-assertion-store";
-import { maybeBuildProducedEventInsertOp, producerAttemptForRun } from "@/lib/lifecycle/lifecycle-emit";
+import { maybeBuildProducedEventInsertOp, producerAttemptForRun, producerRunLockOps } from "@/lib/lifecycle/lifecycle-emit";
 import { PINNED_CONFIGURATION_SIGNAL_KEY } from "@/lib/artifacts/artifact-read";
 import {
   setDashboardArtifactTwinWriter,
@@ -341,6 +341,11 @@ export function buildDashboardTwinQueries(
 
   return [
     lock,
+    // cinatra#4762: the producing run's row FOR KEY SHARE before the twin's first
+    // write, held to commit, so a Publish's locked fence read never runs while
+    // the twin's rows are written but its event (last) is not. Empty when no
+    // event is spliced or no run is named (see `producerRunLockOps`).
+    ...producerRunLockOps(s, producerRunId, producedEventOp),
     buildDashboardResourceQuery(schema, ctx),
     objectsOutbox,
     buildDashboardRepresentationQuery(schema, ctx, representationRevisionId, producerRunId),
