@@ -31,7 +31,7 @@ import {
 } from "./field-renderer-registry";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
 import { isSetupInterruptTaskId } from "./run-surface-status";
-import { readBridgeUserEnvelope, wrapUserResponseWithAttachments } from "./wayflow-user-response-envelope";
+import { readSentUserEnvelope, wrapUserResponseWithAttachments } from "./wayflow-user-response-envelope";
 
 // ---------------------------------------------------------------------------
 // Gate classification
@@ -1653,14 +1653,15 @@ export function buildSchemaFieldGatePayload(args: {
  *     the reading below would otherwise take for the submitted values. A name
  *     whose value is not the resume text is not believed.
  *  2. THE ATTACHMENT ENVELOPE (cinatra#3470). A `userResponse` that is exactly
- *     the `{ text, attachments }` envelope the bridge accepts
- *     (`readBridgeUserEnvelope`) carries the answer in `text`, and the agent
+ *     the `{ text, attachments }` envelope this host sends with at least one
+ *     file (`readSentUserEnvelope`) carries the answer in `text`, and the agent
  *     reads that text with the files beside it. When the text is a structured
  *     answer (rule 1, or a JSON object), that answer is recorded, with the
  *     files under `attachments` (unless the answer has a key of that name).
  *     A plain-text answer keeps the envelope as its record, as before. So a
  *     declared card's answer sent with a file is recorded as that answer, never
- *     as the transport envelope.
+ *     as the transport envelope. A `{ text }` with no file is never the
+ *     host's envelope: it is an answer with a `text` key, recorded as it is.
  *  3. Otherwise, as before: a `userResponse` that parses as a JSON object is the
  *     submitted values; one that is not JSON leaves the values without
  *     `userResponse`; no `userResponse` leaves the values themselves; nothing
@@ -1709,7 +1710,7 @@ export function readWayflowSubmittedValues(values: unknown): Record<string, unkn
     if (named !== null) return named;
     try {
       const parsed = JSON.parse(userResponseRaw);
-      const envelope = readBridgeUserEnvelope(parsed);
+      const envelope = readSentUserEnvelope(parsed);
       if (envelope !== null) {
         let inner = namedAnswer(envelope.text);
         if (inner === null) {

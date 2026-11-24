@@ -69,6 +69,34 @@ describe("readWayflowSubmittedValues (cinatra#4244)", () => {
   });
 });
 
+describe("an answer is never mistaken for the attachment envelope (cinatra#3470)", () => {
+  it("an answer whose only key is text stays that answer, even when its text reads as JSON", async () => {
+    const read = await reader();
+    // A declared card with a field named `text`: its staged answer is sent as
+    // its JSON. The host's own envelope always carries a file, so this is no
+    // envelope and is recorded as the person answered it.
+    const answer = { text: '{"foo":"bar"}' };
+    expect(read({ ...answer, ...STAMP, userResponse: JSON.stringify(answer) })).toEqual(answer);
+    expect(read({ ...STAMP, userResponse: JSON.stringify({ text: "plain words" }) })).toEqual({
+      text: "plain words",
+    });
+  });
+
+  it("the envelope the host sends with a file is still read as its answer and the file", async () => {
+    const read = await reader();
+    const file = {
+      artifactId: "art-1",
+      representationRevisionId: "rev-1",
+      digest: "sha256:fixture",
+      mime: "text/plain",
+      originKind: "upload",
+    };
+    const answer = { text: '{"foo":"bar"}' };
+    const userResponse = JSON.stringify({ text: JSON.stringify(answer), attachments: [file] });
+    expect(read({ ...STAMP, userResponse })).toEqual({ ...answer, attachments: [file] });
+  });
+});
+
 describe("approveReviewTaskInternal uses the reader (cinatra#4244)", () => {
   it("reads the submitted values through readWayflowSubmittedValues", () => {
     const src = readFileSync(join(__dirname, "..", "review-task-actions.ts"), "utf8");

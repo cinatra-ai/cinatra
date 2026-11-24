@@ -844,8 +844,8 @@ describe("the conversation hosts draw the declared card (cinatra#3470, V.1)", ()
 
   it("a 'kind' list picker registered from the transport answer keeps its declared question", async () => {
     // The site widget reads the gate over the transport (fetch, then the
-    // client parse), and its registration replaces any earlier entry of the
-    // binding. The params must survive that road to reach the component.
+    // client parse), and the card registers the binding it was handed. The
+    // params must survive that road to reach the component.
     const LIST_ID = "@acme-test/list-agent:pick-list";
     const listAsking = {
       ...ASKING,
@@ -865,9 +865,12 @@ describe("the conversation hosts draw the declared card (cinatra#3470, V.1)", ()
         headers: { "Content-Type": "application/json" },
       })) as unknown as typeof fetch;
     mountOn("site_widget");
-    await waitFor(() => expect(entryOf(LIST_ID)).toBeDefined());
+    // The card's own registration of the binding it was handed (under an id
+    // scoped to the card, never the binding's id).
+    const scopedEntry = () => fieldRendererRegistry.list().find((e) => e.id.startsWith(`${LIST_ID}--`));
+    await waitFor(() => expect(scopedEntry()).toBeDefined());
+    const Picker = scopedEntry()!.renderer;
     cleanup();
-    const Picker = entryOf(LIST_ID)!.renderer;
     render(
       <Picker
         {...({
@@ -951,5 +954,120 @@ describe("a declared grouped setup form sends only from its own control (cinatra
       projectName: "Fixture project",
       approved: true,
     });
+  });
+});
+
+describe("each conversation card draws the declared screen it was handed (cinatra#3470)", () => {
+  // Two open gates of the same binding id across a package revision: the
+  // earlier gate's read handed over the earlier declaration, the later one
+  // the later. Each card must draw and send with its own.
+  const EARLIER = {
+    layout: "card",
+    title: "Fixture earlier revision",
+    decisionLabel: "Fixture earlier decision",
+    decisions: [
+      { label: "Fixture earlier hold", answer: { approved: false } },
+      { label: "Fixture earlier send", answer: { approved: true } },
+    ],
+    carry: ["itemId"],
+  };
+  const LATER = {
+    layout: "card",
+    title: "Fixture later revision",
+    decisionLabel: "Fixture later decision",
+    decisions: [{ label: "Fixture later send", answer: { approved: true, route: "later" } }],
+    carry: ["revisionId"],
+  };
+  function askingFor(runId: string, reviewTaskId: string, screen: unknown) {
+    return {
+      state: "asking" as const,
+      runId,
+      screenRef: null,
+      gate: { reviewTaskId, xRenderer: ID, inputSchema: { type: "object" }, currentValues: VALUE, fieldName: null },
+      declaredScreen: { id: ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen },
+    };
+  }
+
+  beforeEach(() => {
+    screenStateMock.mockImplementation(async (input: { runId: string }) =>
+      input.runId === "run-earlier"
+        ? askingFor("run-earlier", "task-earlier", EARLIER)
+        : askingFor("run-later", "task-later", LATER),
+    );
+    hitlActions.approveReviewTask.mockClear();
+  });
+
+  it("two cards of one screen id with different declarations each draw and send their own, and leave no global entry", async () => {
+    const view = render(
+      <LifecycleCardSurfaceProvider host="chat_thread">
+        <div data-testid="earlier">
+          <AgentHitlScreenCard runId="run-earlier" wireRef="task-earlier" />
+        </div>
+        <div data-testid="later">
+          <AgentHitlScreenCard runId="run-later" wireRef="task-later" />
+        </div>
+      </LifecycleCardSurfaceProvider>,
+    );
+    const earlier = within(dom.getByTestId("earlier"));
+    const later = within(dom.getByTestId("later"));
+    // red-first-expect: expected 0 to be greater than 0
+    await waitFor(() => expect(earlier.queryAllByRole("radio").length).toBeGreaterThan(0));
+    await waitFor(() => expect(later.queryAllByRole("radio").length).toBeGreaterThan(0));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(earlier.getByText("Fixture earlier decision")).toBeTruthy();
+    expect(earlier.queryByText("Fixture later decision")).toBeNull();
+    expect(earlier.getAllByRole("radio")).toHaveLength(2);
+    expect(later.getByText("Fixture later decision")).toBeTruthy();
+    expect(later.queryByText("Fixture earlier decision")).toBeNull();
+    expect(later.getAllByRole("radio")).toHaveLength(1);
+
+    fireEvent.click(earlier.getByRole("radio", { name: "Fixture earlier hold" }));
+    await act(async () => {
+      fireEvent.click(earlier.getByRole("button", { name: /^continue$/i }));
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    fireEvent.click(later.getByRole("radio", { name: "Fixture later send" }));
+    await act(async () => {
+      fireEvent.click(later.getByRole("button", { name: /^continue$/i }));
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(2));
+    const sent = new Map(
+      hitlActions.approveReviewTask.mock.calls.map((c) => [c[0] as string, c[1] as Record<string, unknown>]),
+    );
+    // The earlier card sends its own decline with its own carried key.
+    expect(sent.get("task-earlier")).toMatchObject({ itemId: "item-1", approved: false });
+    expect(sent.get("task-earlier")).not.toHaveProperty("route");
+    expect(sent.get("task-earlier")).not.toHaveProperty("revisionId");
+    // The later card sends the later declaration's answer.
+    expect(sent.get("task-later")).toMatchObject({ revisionId: "rev-1", route: "later", approved: true });
+    expect(sent.get("task-later")).not.toHaveProperty("itemId");
+
+    view.unmount();
+    // No card's declaration is left behind for any other surface to resolve.
+    expect(fieldRendererRegistry.list().filter((e) => e.id.startsWith(ID))).toEqual([]);
+  });
+
+  it("a card's declaration never replaces a binding registered under the same id by another source", async () => {
+    // The run page registered the installed agent's current binding.
+    registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: LATER }]);
+    const pageEntry = entryOf();
+    // red-first-expect: expected undefined to match object { title: 'Fixture later revision' }
+    expect(pageEntry?.declaredScreen).toMatchObject({ title: "Fixture later revision" });
+    const view = render(
+      <LifecycleCardSurfaceProvider host="chat_thread">
+        <AgentHitlScreenCard runId="run-earlier" wireRef="task-earlier" />
+      </LifecycleCardSurfaceProvider>,
+    );
+    await waitFor(() => expect(dom.queryAllByRole("radio").length).toBeGreaterThan(0));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(entryOf()).toBe(pageEntry);
+    expect(dom.getByText("Fixture earlier decision")).toBeTruthy();
+    view.unmount();
+    expect(entryOf()).toBe(pageEntry);
   });
 });

@@ -263,6 +263,34 @@ describe("a decline reaches the running agent as a decline (cinatra#3470)", () =
     expect(JSON.parse(envelope.text)).toEqual({ itemId: "item-1", approved: false });
   });
 
+  it("a declined answer whose only key is text is that answer, not the attachment envelope", async () => {
+    const answer = { text: '{"foo":"bar"}' };
+    await approveReviewTaskInternal("wayflow-task-r1", "actor-1", {
+      userResponse: JSON.stringify(answer),
+      approved: false,
+    });
+    // red-first-expect: expected { text: '{"foo":"bar"}' } to deeply equal { text: '{"foo":"bar"}', …(1) }
+    expect(JSON.parse(wireText())).toEqual({ text: '{"foo":"bar"}', approved: false });
+    const prompt = storeMock.writeHitlPrompt.mock.calls[0]?.[0] as { submittedValues?: unknown };
+    expect(prompt?.submittedValues).toEqual({ text: '{"foo":"bar"}', approved: false });
+  });
+
+  it("end to end: a declared field named text holding JSON-looking text is recorded as typed", async () => {
+    const card: DeclaredHitlCard = {
+      layout: "card",
+      title: "Fixture question",
+      sections: [{ type: "field", key: "text", label: "Fixture words" }],
+    };
+    // red-first-expect: declaredHitlStage is not a function
+    const payload = continuePayloadOf(card, { text: '{"foo":"bar"}' });
+    await approveReviewTaskInternal("wayflow-task-r1", "actor-1", payload);
+    expect(wireText()).toBe(JSON.stringify({ text: '{"foo":"bar"}' }));
+    // The captured prompt (and so the receipt's digest input) holds the
+    // person's answer, never the text unwrapped as if it were an envelope.
+    const prompt = storeMock.writeHitlPrompt.mock.calls[0]?.[0] as { submittedValues?: unknown };
+    expect(prompt?.submittedValues).toEqual({ text: '{"foo":"bar"}' });
+  });
+
   it("a plain-text userResponse rides along under its own name", async () => {
     await approveReviewTaskInternal("wayflow-task-r1", "actor-1", {
       userResponse: "not now",

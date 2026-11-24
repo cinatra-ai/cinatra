@@ -189,12 +189,11 @@ export function tryParseWrappedUserResponse(
 }
 
 /**
- * THE ONE ENVELOPE PREDICATE: is the already-parsed `parsed` exactly the
+ * THE BRIDGE'S ENVELOPE PREDICATE: is the already-parsed `parsed` exactly the
  * `{ text, attachments? }` envelope the bridge accepts? Returns it read back,
- * or `null`. Shared by `tryParseWrappedUserResponse` and by every reader that
- * must tell an envelope from an answer object that merely holds `text` and
- * `attachments` keys (the decline rewrite, cinatra#3470), so the two cannot
- * drift apart.
+ * or `null`. A bare `{ text }` passes, as the bridge accepts it. A reader that
+ * must tell the host's own envelope from an answer object uses
+ * `readSentUserEnvelope` (cinatra#3470), which builds on this one.
  */
 export function readBridgeUserEnvelope(
   parsed: unknown,
@@ -237,6 +236,26 @@ export function readBridgeUserEnvelope(
     refs.push(strict);
   }
   return { text: obj.text, attachments: refs };
+}
+
+/**
+ * THE ENVELOPE THIS HOST SENDS, read back from a submitted answer (cinatra#3470),
+ * or `null`. `wrapUserResponseWithAttachments` wraps ONLY when at least one
+ * valid file rides along, so a `{ text }` with no file is never one of its
+ * envelopes: it is an answer whose key happens to be `text` (a declared card's
+ * field, say), and reading it as an envelope would record its text, unwrapped,
+ * in place of the answer. Every reader that must tell the host's envelope from
+ * an answer object uses this, never the bridge's wider acceptance
+ * (`readBridgeUserEnvelope`), which also takes a bare `{ text }`. A declared
+ * screen can never stage an `attachments` key (RESERVED_ANSWER_KEYS in
+ * scripts/extensions/agent-hitl-screen-schema.mjs), so no declared answer can
+ * take this shape either.
+ */
+export function readSentUserEnvelope(
+  parsed: unknown,
+): { text: string; attachments: LlmAttachmentRef[] } | null {
+  const envelope = readBridgeUserEnvelope(parsed);
+  return envelope !== null && envelope.attachments.length > 0 ? envelope : null;
 }
 
 const REF_KEYS_ALLOWED = new Set([

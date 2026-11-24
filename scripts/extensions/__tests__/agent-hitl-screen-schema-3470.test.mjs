@@ -119,6 +119,12 @@ describe("validateHitlScreen refuses by name", () => {
     ["a field under the resume text's key", { ...FIELD_CARD, sections: [{ type: "field", key: "userResponse", label: "x" }] }, /"userResponse" is written by the host/],
     ["an answer key the host writes", { ...CARD, decisions: [{ label: "x", answer: { approvedAt: "now" } }] }, /"approvedAt" is written by the host/],
     ["a carried key the host writes", { ...CARD, carry: ["userResponseFieldName"] }, /"userResponseFieldName" is written by the host/],
+    // The host records the files sent with an answer under `attachments`, so
+    // no declared answer may hold that key: it could then take the shape of
+    // the attachment envelope.
+    ["a carried attachments key", { ...CARD, carry: ["attachments"] }, /carry: "attachments" is written by the host/],
+    ["a field under the attachments key", { ...FIELD_CARD, sections: [{ type: "field", key: "attachments", label: "x" }] }, /"attachments" is written by the host/],
+    ["an answer under the attachments key", { ...CARD, decisions: [{ label: "x", answer: { attachments: "x" } }] }, /"attachments" is written by the host/],
     // Only the operator's chosen decision sets the approval flag: a field or a
     // carried run value never does, and the host's approval note and step
     // number are its own too.

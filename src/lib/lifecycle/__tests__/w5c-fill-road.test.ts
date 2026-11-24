@@ -1109,7 +1109,7 @@ describe("a declared card is filled and sent through its own answer (cinatra#347
     });
   });
 
-  it("a declared kind screen lends no generic fill or submit, and a press by asking sends the person to its page", async () => {
+  it("a declared kind screen lends no generic fill or submit, so asking binds it to no turn and mints no grant; a submit grant from elsewhere is refused and names its page", async () => {
     // A grouped setup form declared as a "kind" screen: its own component
     // flushes and validates its fields before it sends. The gate's schema
     // requires a value the assistant could leave blank.
@@ -1123,6 +1123,41 @@ describe("a declared card is filled and sent through its own answer (cinatra#347
     expect(JSON.stringify(bound)).not.toContain('"content"');
     expect(await fillThrough(kindScreen, { content: "Fixture words" })).toEqual({ kind: "unavailable" });
     expect(appended).toHaveLength(0);
+    // THE PRODUCTION ROAD: a turn asking about the run binds no card that
+    // lends no control, so the turn gets no grant and the assistant can press
+    // nothing.
+    const binding = await resolveBoundCard({
+      claim: { candidateRefs: [], focusedRef: null, screenRunIds: [RUN] },
+      actorCtx: ACTOR,
+      resolve: kindScreen as never,
+      countOpenCards: (async () => ({ count: 0, complete: true })) as never,
+      mintScreenRef: async (runId) => (runId === RUN ? REF : null),
+    });
+    expect(binding.kind).toBe("none");
+    const { issueTurnLentActionGrant } = await import("../bound-card-binding");
+    const turn = await issueTurnLentActionGrant({
+      claim: { candidateRefs: [], focusedRef: null, screenRunIds: [RUN] },
+      userId: PERSON.userId,
+      orgId: PERSON.orgId,
+      messageId: "msg_1",
+      messageText: "send it",
+      deps: {
+        resolveActor: (async () => ACTOR) as never,
+        resolveBinding: (async (input: Parameters<typeof resolveBoundCard>[0]) =>
+          resolveBoundCard({
+            ...input,
+            resolve: kindScreen as never,
+            countOpenCards: (async () => ({ count: 0, complete: true })) as never,
+            mintScreenRef: async (runId) => (runId === RUN ? REF : null),
+          })) as never,
+        record: (async () => true) as never,
+        sweep: (async () => undefined) as never,
+      },
+    });
+    expect(turn).toEqual({ grant: null, systemContext: "" });
+    // DEFENCE IN DEPTH: a submit grant minted outside that road (a stale one,
+    // or one for an earlier screen of the run) is still refused, and the
+    // refusal names the screen's own page.
     const pressed = await submitThrough(kindScreen);
     expect(pressed.structuredContent).toMatchObject({
       ok: false,

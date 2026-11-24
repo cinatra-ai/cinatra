@@ -139,6 +139,7 @@ import {
   fieldRendererRegistry,
   wholeAnswerStageProps,
   type FieldRendererContext,
+  type FieldRendererEntry,
   type RendererBindingsLoad,
 } from "./field-renderer-registry";
 import { hasMidRunHitlBinding } from "./orchestrator-mid-run-hitl";
@@ -1251,36 +1252,56 @@ export function AgentHitlScreenCard({
 
   const gate = state !== null && state.state === "asking" ? state.gate : null;
 
-  // THE GATE'S DECLARED SCREEN, REGISTERED FROM THE AUTHORIZED READ
-  // (cinatra#3470). The run page registers the installed agents' bindings
-  // itself; this card has only the run id, so the read hands it the one
-  // binding its gate names, and the card registers it before it resolves the
-  // gate's renderer. The registration validates the screen again, and the
-  // bump re-draws the card with the registered entry.
+  // THE GATE'S DECLARED SCREEN, BOUND TO THIS CARD (cinatra#3470). The run
+  // page registers the installed agents' bindings itself; this card has only
+  // the run id, so the read hands it the one binding its gate names. That
+  // binding is THIS card's: another open gate of the same id may have been
+  // handed another revision of it. So the card registers it under an id of
+  // its own (`registerScopedDeclaredScreen`), never the binding's id, reads its
+  // gate's renderer through that id, and unregisters it when it unmounts or
+  // is handed another declaration. The registration validates the screen
+  // again, and the bump re-draws the card with the registered entry.
   const declaredScreen =
     state !== null && state.state === "asking" ? (state.declaredScreen ?? null) : null;
   const declaredScreenKey = declaredScreen === null ? null : JSON.stringify(declaredScreen);
-  const [registeredScreenKey, setRegisteredScreenKey] = useState<string | null>(null);
+  const [registeredScreen, setRegisteredScreen] = useState<{
+    key: string;
+    /** The scoped id the card's entry is registered under; null when refused. */
+    scopedId: string | null;
+  } | null>(null);
+  const registeredScreenKey = registeredScreen?.key ?? null;
   useEffect(() => {
     if (declaredScreen === null || declaredScreenKey === null) return;
     let live = true;
+    let entry: FieldRendererEntry | null = null;
     void import("./register-default-renderers")
-      .then(({ registerFieldRendererBindings }) => {
+      .then(({ registerScopedDeclaredScreen }) => {
         if (!live) return;
-        registerFieldRendererBindings([declaredScreen]);
-        setRegisteredScreenKey(declaredScreenKey);
+        entry = registerScopedDeclaredScreen(declaredScreen);
+        setRegisteredScreen({ key: declaredScreenKey, scopedId: entry?.id ?? null });
       })
       .catch(() => {
         // Nothing registered: the gate keeps the drawing it had.
-        if (live) setRegisteredScreenKey(declaredScreenKey);
+        if (live) setRegisteredScreen({ key: declaredScreenKey, scopedId: null });
       });
     return () => {
       live = false;
+      if (entry !== null) fieldRendererRegistry.unregisterEntry(entry);
     };
     // The key carries the binding's content; a re-read with the same binding
     // registers nothing new.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [declaredScreenKey]);
+  // The gate as this card's registry readings see it: under the scoped id of
+  // its own declared screen once that is registered. Its identity (the buffer,
+  // the answered register, the submit) stays the gate's own.
+  const rendererGate = useMemo(() => {
+    const scopedId =
+      registeredScreen !== null && registeredScreen.key === declaredScreenKey
+        ? registeredScreen.scopedId
+        : null;
+    return gate !== null && scopedId !== null ? { ...gate, xRenderer: scopedId } : gate;
+  }, [gate, registeredScreen, declaredScreenKey]);
 
   // WHERE THIS GATE'S BINDING STANDS (cinatra#3470), as the run page reads its
   // own: the read could not tell (failed), the declared screen it handed over
@@ -1568,7 +1589,10 @@ export function AgentHitlScreenCard({
     if (hostSuppliesScreen) return screen;
     // No declared host, no fields region: the treatment §I asks for is a fact
     // about the surface, and there is no surface to read it off.
-    if (host === null || !gate) return null;
+    if (host === null || !rendererGate) return null;
+    // Every registry reading below goes through the card's own declared screen
+    // (its scoped id); the gate's identity is read outside this block.
+    const gate = rendererGate;
     // THE CONTINUE IS DRAWN WHERE THE PANEL DRAWS IT: on a mid-run gate that is
     // not a grouped-setup form. A grouped-setup form carries its own submit, and
     // a setup-loop field submits on change — a second Continue on either would
@@ -1655,7 +1679,7 @@ export function AgentHitlScreenCard({
     rendererFloored,
     setRendererFloored,
     // A declared screen registered after the read re-resolves the renderer.
-    registeredScreenKey,
+    rendererGate,
     gateBindings,
   ]);
 

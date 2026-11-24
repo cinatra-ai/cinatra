@@ -93,8 +93,11 @@ const MAX_DECISIONS = 3;
 
 // The keys the host writes into a staged answer or the Continue itself: the
 // resume text, the name of a single text answer, the approval flag, the time
-// of the Continue, and the approval note and step number of the host's
-// approval envelope (review-task-actions RESERVED_APPROVAL_ENVELOPE_KEYS).
+// of the Continue, the approval note and step number of the host's approval
+// envelope (review-task-actions RESERVED_APPROVAL_ENVELOPE_KEYS), and the
+// files sent with the answer, which the host records under `attachments`
+// (readWayflowSubmittedValues). A declared answer holding `attachments` could
+// take the shape of the attachment envelope (readSentUserEnvelope).
 export const RESERVED_ANSWER_KEYS = [
   "userResponse",
   "userResponseFieldName",
@@ -102,6 +105,7 @@ export const RESERVED_ANSWER_KEYS = [
   "approvedAt",
   "approvalNote",
   "stepNumber",
+  "attachments",
 ];
 
 // The reserved keys a decision's declared answer may still set: the operator

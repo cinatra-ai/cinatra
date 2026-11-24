@@ -389,6 +389,34 @@ function registerDeclaredScreen(b: FieldRendererBindingInput): void {
   });
 }
 
+/** Each scoped registration's own number: no two cards share one. */
+let scopedDeclaredScreenSeq = 0;
+
+/**
+ * Register ONE CARD'S declared screen under an id of its own (cinatra#3470),
+ * and return the entry, or null when the declaration is refused. A
+ * conversation card is handed its gate's binding by its own authorized read,
+ * and that binding is the card's alone: two open gates of one binding id can
+ * span a package revision, and a declaration removed since must not outlive
+ * the card that was handed it. So the card's entry never takes the binding's
+ * own id (it would replace another card's, or the run page's, entry) and its
+ * condition matches only its scoped id, which no gate carries: nothing but the
+ * card that holds the id resolves it. The card unregisters the entry when it
+ * unmounts or is handed another declaration. The declaration is validated
+ * exactly as every other registration validates it.
+ */
+export function registerScopedDeclaredScreen(
+  binding: FieldRendererBindingInput,
+): FieldRendererEntry | null {
+  if (binding.screen === undefined) return null;
+  scopedDeclaredScreenSeq += 1;
+  // The binding's id with a suffix of word characters, so it stays in the
+  // namespaced form and still names the binding in a log line.
+  const id = `${binding.id}--card-scope-${scopedDeclaredScreenSeq}`;
+  registerDeclaredScreen({ ...binding, id });
+  return fieldRendererRegistry.list().find((e) => e.id === id) ?? null;
+}
+
 /**
  * Register normalized manifest bindings into the client registry.
  * Idempotent (registry replace-by-id). Unknown kinds are SKIPPED with a
