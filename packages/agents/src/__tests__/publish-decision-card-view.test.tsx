@@ -702,6 +702,52 @@ describe("the decide door", () => {
     mounted.unmount();
   });
 
+  // red-first-expect: expected 'no_longer_open' to be 'pending'
+  it("the same decision allowed by another person whose run did not go on offers Allow again, whatever the open request's reply said", async () => {
+    for (const replyFirst of [true, false]) {
+      const replies: Array<(outcome: "not_open") => void> = [];
+      const decide = vi.fn<PublishDecisionDecide>(() => new Promise((resolve) => replies.push(resolve)));
+      const read = (state: unknown) => ({ state: state as never, refreshing: false, reload: () => undefined });
+      const card = (state: unknown) => (
+        <LifecycleCardSurfaceProvider host="run_card">
+          <PublishDecisionCard runId={RUN_ID} decide={decide} read={read(state)} />
+        </LifecycleCardSurfaceProvider>
+      );
+      const mounted = render(card(PENDING));
+      await act(async () => {
+        fireEvent.click((await rootOf(mounted)).querySelector(APPROVE)!);
+      });
+      const reply = async () => {
+        await act(async () => {
+          replies[0]!("not_open");
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        await settle();
+      };
+      const allowAgain = async () => {
+        await act(async () => {
+          mounted.rerender(card({ ...PENDING, resumeOnly: true }));
+        });
+        await settle();
+      };
+      // Another person allowed the same decision and its resume failed: the next read draws it as Allow again.
+      if (replyFirst) {
+        await reply();
+        await allowAgain();
+      } else {
+        await allowAgain();
+        await reply();
+      }
+      const after = await rootOf(mounted);
+      expect(after.getAttribute("data-lifecycle-card-state"), String(replyFirst)).toBe("pending");
+      expect(after.textContent).not.toContain("no longer open");
+      expect(after.textContent).toContain("Allow again to let it go on.");
+      expect(after.querySelector<HTMLButtonElement>(APPROVE)?.disabled).toBe(false);
+      mounted.unmount();
+    }
+  });
+
   it("a decision allowed whose run did not go on offers Allow only, with no note and no Do not allow", async () => {
     stateMock.mockImplementation(async () => ({ ...PENDING, resumeOnly: true }));
     const root = await rootOf(mountOn("run_card", okDoor()));

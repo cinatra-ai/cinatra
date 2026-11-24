@@ -298,8 +298,17 @@ function settledMarker(state: PublishDecisionCardState): ReactElement | null {
 }
 
 /** What the card holds for ONE open decision (the one `decisionId` names): never carried over to another decision. */
-type DecisionLocal = { decisionId: string | null; note: string; sending: boolean; failed: boolean; noLongerOpen: boolean };
-const blankLocal = (decisionId: string | null): DecisionLocal => ({ decisionId, note: "", sending: false, failed: false, noLongerOpen: false });
+type DecisionLocal = {
+  decisionId: string | null;
+  /** The phase of that decision the card drew: open for an answer, or allowed and waiting for Allow again. */
+  resumeOnly: boolean;
+  note: string;
+  sending: boolean;
+  failed: boolean;
+  noLongerOpen: boolean;
+};
+const blankLocal = (decisionId: string | null, resumeOnly = false): DecisionLocal =>
+  ({ decisionId, resumeOnly, note: "", sending: false, failed: false, noLongerOpen: false });
 
 export function PublishDecisionCard({
   runId,
@@ -324,10 +333,17 @@ export function PublishDecisionCard({
   // same render (never one frame of the earlier decision's note or reading on the newer one), and a reply that comes
   // back for the earlier decision changes nothing.
   const shownId = state?.state === "pending" ? state.decisionId : null;
-  const [local, setLocal] = useState<DecisionLocal>(() => blankLocal(shownId));
-  if (shownId !== null && shownId !== local.decisionId) setLocal(blankLocal(shownId));
-  const onDecision = (decisionId: string, change: Partial<Omit<DecisionLocal, "decisionId">>) =>
-    setLocal((now) => (now.decisionId === decisionId ? { ...now, ...change } : now));
+  // The same decision in another phase (another person allowed it, but the run did not go on) starts over as well: a
+  // reading recorded for the open request ("no longer open", "failed") never covers the Allow again it now offers.
+  const shownResumeOnly = state?.state === "pending" && state.resumeOnly === true;
+  const [local, setLocal] = useState<DecisionLocal>(() => blankLocal(shownId, shownResumeOnly));
+  if (shownId !== null && (shownId !== local.decisionId || shownResumeOnly !== local.resumeOnly)) {
+    setLocal(blankLocal(shownId, shownResumeOnly));
+  }
+  // A change speaks only for the decision AND the phase it was made in: a reply to the open request never lands on the
+  // Allow again of the same decision.
+  const onDecision = (decisionId: string, change: Partial<Omit<DecisionLocal, "decisionId" | "resumeOnly">>, resumeOnly = shownResumeOnly) =>
+    setLocal((now) => (now.decisionId === decisionId && now.resumeOnly === resumeOnly ? { ...now, ...change } : now));
   // The open decision the card SHOWS now: none once a re-read settled it (allowed, declined or expired), so a reply that
   // comes back after that is dropped. The ref follows the drawn decision only after a commit, so a reply that lands in
   // the same batch as the settling re-read can still pass it; the render-time rule below holds the settled reading then.
@@ -336,7 +352,7 @@ export function PublishDecisionCard({
     current.current = shownId;
   }, [shownId]);
   // "No longer open" and "failed" speak only for the decision they were recorded for, and only while the card shows it.
-  const ownsLocal = shownId !== null && shownId === local.decisionId;
+  const ownsLocal = shownId !== null && shownId === local.decisionId && shownResumeOnly === local.resumeOnly;
   const { note, sending } = local;
   const failed = local.failed && ownsLocal;
   const noLongerOpen = local.noLongerOpen && ownsLocal;
@@ -347,19 +363,20 @@ export function PublishDecisionCard({
   const send = async (answer: "approve" | "decline") => {
     if (!decide || sending || state.state !== "pending") return;
     const decisionId = state.decisionId;
-    onDecision(decisionId, { sending: true, failed: false });
+    const phase = shownResumeOnly;
+    onDecision(decisionId, { sending: true, failed: false }, phase);
     const sentNote = answer === "decline" ? note : "";
     const outcome = await decide({ runId: state.runId, decisionId, answer, note: sentNote }).catch(() => "failed" as const);
     // A reply for a decision the card no longer shows is dropped: it never speaks for the decision drawn now. It still
     // ends the send it belongs to, so when a read that briefly drew no decision draws the same decision again its
     // controls are live (onDecision changes nothing when the card holds another decision).
     if (current.current !== decisionId) {
-      onDecision(decisionId, { sending: false });
+      onDecision(decisionId, { sending: false }, phase);
       return;
     }
     // A late answer is never sent again: the request is no longer open, and the reader is told so. An answer that did
     // not land is told too: the request stays open, and the reader may answer again.
-    onDecision(decisionId, { sending: false, noLongerOpen: outcome === "not_open", failed: outcome === "failed" });
+    onDecision(decisionId, { sending: false, noLongerOpen: outcome === "not_open", failed: outcome === "failed" }, phase);
     if (outcome === "decided") reload();
   };
   const pending = state.state === "pending";
