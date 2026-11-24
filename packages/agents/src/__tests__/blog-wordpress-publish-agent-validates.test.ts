@@ -118,6 +118,26 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
     const gateMeta = (gate.metadata as Record<string, unknown>).cinatra as Record<string, unknown>;
     expect(gateMeta.artifactReview).toEqual({ targetsInput: "reviewTargets" });
     expect(gateMeta.requiresApproval).toBe(true);
+    // artifacts_get answers only `{ artifact }`. The target set reaches the gate
+    // only because the host echoes the call's input back on this flag, so the
+    // gather step's declared output and its edge into the gate's marked input
+    // are what carry it. The real echo is driven with this node in
+    // src/__tests__/passthrough-wordpress-review-gate-gets-its-targets.test.ts.
+    expect((gatherData as { result_input_passthrough?: unknown }).result_input_passthrough).toBe(true);
+    expect((gather.outputs as Array<{ title: string }>).map((o) => o.title)).toContain("reviewTargets");
+    const targetEdges = (
+      oas.data_flow_connections as Array<{
+        source_node: Ref;
+        source_output: string;
+        destination_node: Ref;
+        destination_input: string;
+      }>
+    ).filter((e) => e.destination_node.$component_ref === "review_post");
+    expect(
+      targetEdges.map(
+        (e) => `${e.source_node.$component_ref}.${e.source_output}->${e.destination_input}`,
+      ),
+    ).toEqual(["gather_review_target.reviewTargets->reviewTargets"]);
     const control = (
       oas.control_flow_connections as Array<{ from_node: Ref; to_node: Ref }>
     ).map((e) => `${e.from_node.$component_ref}->${e.to_node.$component_ref}`);
@@ -306,8 +326,10 @@ describe("blog-wordpress-publish-agent — the published address reaches the art
     expect(data.input?.objectId).toBe("{{ postArtifactId }}");
     // red-first-expect: to contain '(
     // The leaf writes the patch only when each of its three members is
-    // present and non-empty; the empty patch of a run that published nothing
-    // renders as {}, which merges nothing onto the artifact.
+    // present and non-empty. A run that published nothing renders the empty
+    // patch {}, and that patch still reaches objects_update. objects_update
+    // writes nothing for an empty patch (no new version, no history or outbox
+    // row) once the host's empty-patch fix is on main; this pin merges after it.
     const leaf = String(data.input?.data ?? "");
     expect(leaf.startsWith("{# pyagentspec-input-hint: {{ addressPatch }} #}")).toBe(true);
     for (const member of MEMBERS) {

@@ -218,8 +218,11 @@ describe("resolution parity with the retired hand map", () => {
   // cinatra#3650 / #4150: the WordPress publish pack declares no field renderer
   // any more (the host's review card, then its publish card, replace its
   // draft-confirm screen), and its kind left the host's vocabulary. A stored
-  // interrupt that still carries the old id resolves to NO renderer, the same
-  // accepted dead-end as every other retired id: "no renderer configured".
+  // interrupt that still carries the old id resolves to NO renderer in this
+  // registry. A run parked on that id before the upgrade stays answerable only
+  // because cinatra#4777 (a parked step with a retired renderer id falls to the
+  // application's schema form, with its Continue) merges BEFORE this pin; this
+  // pin must not merge without it.
   it("the retired WordPress draft-confirm id resolves to no renderer, and its kind is gone", () => {
     // red-first-expect: expected { …(7) } to be null
     const id = "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm";
