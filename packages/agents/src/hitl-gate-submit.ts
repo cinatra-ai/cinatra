@@ -364,15 +364,22 @@ export const SCREEN_FAILED_HOLD_REASON =
  * binding registered under its exact id is held while the host's bindings
  * are still loading, after they failed to load, when the source named a
  * declared screen for it that did not register, and until a fresh read of
- * the source answered for it (`awaitsFreshRendererBindingRead`). It FAILS CLOSED: the
- * fallback such a gate draws can only approve, so a press would resume a
- * declared screen without its decision and its fields.
+ * the source answered for it (`awaitsFreshRendererBindingRead`), and after a
+ * source that could not read every installed agent answered without it. It
+ * FAILS CLOSED: the fallback such a gate draws can only approve, so a press
+ * would resume a declared screen without its decision and its fields.
+ *
+ * A REFUSED SCREEN HOLDS FIRST: an id the source names as refused is held even
+ * when a binding is registered under it, so a binding an earlier read
+ * registered never outlives the source's refusal.
  */
 export function rendererBindingHoldReason(
   xRenderer: string,
   bindings: RendererBindingsLoad,
 ): string | null {
-  if (xRenderer === "" || isRendererBound(xRenderer)) return null;
+  if (xRenderer === "") return null;
+  if (bindings.refusedIds?.has(xRenderer)) return SCREEN_FAILED_HOLD_REASON;
+  if (isRendererBound(xRenderer)) return null;
   if (bindings.status === "loading") return SCREEN_LOADING_HOLD_REASON;
   if (bindings.status === "failed" || bindings.announcedIds.has(xRenderer)) {
     return SCREEN_FAILED_HOLD_REASON;
@@ -381,6 +388,9 @@ export function rendererBindingHoldReason(
   // Until one answered for it, the answer may be a scan cached before its
   // agent was installed, and the gate is held as still loading.
   if (awaitsFreshRendererBindingRead(xRenderer, bindings)) return SCREEN_LOADING_HOLD_REASON;
+  // An answer that could not read every installed agent is no proof that
+  // this gate declares nothing.
+  if (bindings.incomplete === true) return SCREEN_FAILED_HOLD_REASON;
   return null;
 }
 

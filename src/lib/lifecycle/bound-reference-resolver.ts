@@ -155,6 +155,14 @@ export type BoundHitlScreen = {
    * raw input schema is never offered in place of the declared card.
    */
   readonly declaredUnavailable?: true;
+  /**
+   * The gate's renderer declares a "kind" screen (cinatra#3470): the kind's own
+   * component draws it with its own submission logic (a grouped setup form
+   * flushes and validates its fields before it sends). This server has no
+   * faithful reading of that logic, so the screen lends no fill and no submit,
+   * and `form` carries no schema: the person answers it on its own screen.
+   */
+  readonly declaredKindScreen?: true;
 };
 
 /**
@@ -342,12 +350,13 @@ export type BoundReferencePorts = {
   /**
    * The declared HITL card of a gate's renderer (cinatra#3470): the installed
    * binding's own declaration, validated again. `null` for a gate that declares
-   * no card; "unavailable" for a declared screen that was refused or could not
+   * no screen; "kind-screen" for a declared screen its kind's own component
+   * draws; "unavailable" for a declared screen that was refused or could not
    * be read.
    */
   readonly readDeclaredCard: (
     xRenderer: string,
-  ) => Promise<DeclaredHitlCard | "unavailable" | null>;
+  ) => Promise<DeclaredHitlCard | "kind-screen" | "unavailable" | null>;
   readonly readRunTrigger: typeof readRunTriggerByRunId;
   /**
    * The skills hold, for one verified reader — the SAME read the chip row and
@@ -697,6 +706,16 @@ export async function resolveBoundReference(input: {
           declaredUnavailable: true,
         };
       }
+      if (card === "kind-screen") {
+        return {
+          kind: "hitl_screen",
+          runId: payload.runId,
+          screenRef: payload.reviewTaskId,
+          xRenderer: screen.xRenderer,
+          form: { schema: {}, values: {} },
+          declaredKindScreen: true,
+        };
+      }
       if (card) {
         const answer = await loadDeclaredAnswer();
         return {
@@ -812,9 +831,10 @@ export function controlsLentBy(
   resolution: BoundReferenceResolution,
 ): readonly LentCardControl[] {
   if (resolution.kind === "review") return ["comment", "regenerate", "approve"];
-  // A declared screen this server cannot read lends nothing (cinatra#3470).
+  // A declared screen this server cannot read, or one its kind's own
+  // component answers, lends nothing (cinatra#3470).
   if (resolution.kind === "hitl_screen") {
-    return resolution.declaredUnavailable ? [] : ["fill", "submit"];
+    return resolution.declaredUnavailable || resolution.declaredKindScreen ? [] : ["fill", "submit"];
   }
   if (resolution.kind === "schedule_form") return ["fill"];
   if (resolution.kind === "recommendation_hold") return ["confirm", "skip"];

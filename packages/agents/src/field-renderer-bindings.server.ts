@@ -46,7 +46,21 @@ import {
 type CollectedBinding = FieldRendererBindingInput & { declaredBy: string };
 
 const CACHE_TTL_MS = 10_000;
-let cache: { at: number; entries: CollectedBinding[]; refusedScreenIds: string[] } | null = null;
+
+/**
+ * One scan of the installed agents. `complete` is false when a part of the
+ * mount could not be read (cinatra#3470): the mount unreadable, or a package
+ * manifest unreadable or unparsable. Such a scan does not say that an id it
+ * does not name declares nothing, so every reader of an absent id answers
+ * "could not be loaded", never "no screen".
+ */
+type InstalledScan = {
+  entries: CollectedBinding[];
+  refusedScreenIds: string[];
+  complete: boolean;
+};
+
+let cache: ({ at: number } & InstalledScan) | null = null;
 
 /** Test hook — drop the TTL cache. */
 export function __clearInstalledFieldRendererBindingsCache(): void {
@@ -55,9 +69,10 @@ export function __clearInstalledFieldRendererBindingsCache(): void {
 
 /**
  * Enumerate `<agentInstallDir>/<scope>/<name>/package.json` and collect the
- * validated `cinatra.fieldRenderers` declarations. Returns [] on any
- * environment where the install dir is unreadable (build contexts, fresh
- * trees) — absence of runtime bindings is a NORMAL state.
+ * validated `cinatra.fieldRenderers` declarations. A missing mount directory
+ * (no agents installed, build contexts, fresh trees) is a NORMAL state and
+ * answers []. A mount or manifest that could not be read answers the
+ * bindings that were read; the scan is then incomplete (`collectInstalled`).
  */
 export function collectInstalledFieldRendererBindings(): CollectedBinding[] {
   return collectInstalled().entries;
@@ -78,65 +93,107 @@ function scanIsCached(): boolean {
   return cache !== null && Date.now() - cache.at < CACHE_TTL_MS;
 }
 
+/** The error code of a failed file-system call, if it carries one. */
+function errorCode(err: unknown): string | undefined {
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === "string" ? code : undefined;
+}
+
+/**
+ * Is a failed read of a path only its absence (cinatra#3470)? ENOENT: nothing
+ * is there. ENOTDIR: a file stands where a directory was looked for (a stray
+ * file beside the package folders). Every other error (EACCES, EIO, …) is a
+ * collection error: something may be declared there that was not read.
+ */
+function isAbsence(err: unknown): boolean {
+  const code = errorCode(err);
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+function warnUnread(what: string, err: unknown): void {
+  const reason = errorCode(err) ?? (err instanceof Error ? err.message : String(err));
+  console.warn(`[field-renderer-bindings] could not read ${what}: ${reason}`);
+}
+
 /**
  * The installed bindings and the refused screen ids. `fresh` scans past the
  * cache: an answer that must not miss an agent installed within the TTL
  * (cinatra#3470) asks for it.
  */
-function collectInstalled(
-  opts?: { fresh?: boolean },
-): { entries: CollectedBinding[]; refusedScreenIds: string[] } {
+function collectInstalled(opts?: { fresh?: boolean }): InstalledScan {
   if (opts?.fresh !== true && cache && scanIsCached()) return cache;
   const all: CollectedBinding[] = [];
   const refused = new Set<string>();
-  let installDir: string;
-  try {
-    installDir = resolveAgentRuntimeMountDir();
-  } catch {
-    return { entries: [], refusedScreenIds: [] };
-  }
-  // SORTED traversal — first-declarer-wins among runtime duplicates must be
-  // deterministic (alphabetical), never filesystem-order dependent (the
-  // converged "generated-then-alphabetical" merge order).
-  let scopes: string[] = [];
-  try {
-    scopes = readdirSync(installDir).sort();
-  } catch {
-    return { entries: [], refusedScreenIds: [] };
-  }
-  for (const scope of scopes) {
-    let dirs: string[] = [];
+  let complete = true;
+  const scan = (): void => {
+    let installDir: string;
     try {
-      dirs = readdirSync(join(installDir, scope)).sort();
-    } catch {
-      continue;
+      installDir = resolveAgentRuntimeMountDir();
+    } catch (err) {
+      warnUnread("the agent runtime mount", err);
+      complete = false;
+      return;
     }
-    for (const dir of dirs) {
-      let pkg: {
-        name?: unknown;
-        cinatra?: { fieldRenderers?: unknown };
-      };
+    // SORTED traversal — first-declarer-wins among runtime duplicates must be
+    // deterministic (alphabetical), never filesystem-order dependent (the
+    // converged "generated-then-alphabetical" merge order).
+    let scopes: string[];
+    try {
+      scopes = readdirSync(installDir).sort();
+    } catch (err) {
+      // No mount directory: no agents are installed.
+      if (errorCode(err) === "ENOENT") return;
+      warnUnread("the agent runtime mount", err);
+      complete = false;
+      return;
+    }
+    for (const scope of scopes) {
+      let dirs: string[];
       try {
-        pkg = JSON.parse(
-          readFileSync(join(installDir, scope, dir, "package.json"), "utf8"),
-        );
-      } catch {
-        continue; // not a package dir
+        dirs = readdirSync(join(installDir, scope)).sort();
+      } catch (err) {
+        if (isAbsence(err)) continue;
+        warnUnread(`the installed scope ${scope}`, err);
+        complete = false;
+        continue;
       }
-      const packageName = typeof pkg.name === "string" ? pkg.name : null;
-      const declared = pkg.cinatra?.fieldRenderers;
-      if (!packageName || declared === undefined) continue;
-      const { entries, errors, refusedScreenIds } = validateFieldRendererDeclarations(
-        packageName,
-        declared,
-      ) as { entries: CollectedBinding[]; errors: string[]; refusedScreenIds: string[] };
-      for (const err of errors) {
-        console.warn(`[field-renderer-bindings] skipped invalid declaration: ${err}`);
+      for (const dir of dirs) {
+        let text: string;
+        try {
+          text = readFileSync(join(installDir, scope, dir, "package.json"), "utf8");
+        } catch (err) {
+          if (isAbsence(err)) continue; // not a package dir
+          warnUnread(`the manifest of ${scope}/${dir}`, err);
+          complete = false;
+          continue;
+        }
+        let pkg: {
+          name?: unknown;
+          cinatra?: { fieldRenderers?: unknown };
+        };
+        try {
+          pkg = JSON.parse(text);
+        } catch (err) {
+          warnUnread(`the manifest of ${scope}/${dir}`, err);
+          complete = false;
+          continue;
+        }
+        const packageName = typeof pkg?.name === "string" ? pkg.name : null;
+        const declared = pkg?.cinatra?.fieldRenderers;
+        if (!packageName || declared === undefined) continue;
+        const { entries, errors, refusedScreenIds } = validateFieldRendererDeclarations(
+          packageName,
+          declared,
+        ) as { entries: CollectedBinding[]; errors: string[]; refusedScreenIds: string[] };
+        for (const err of errors) {
+          console.warn(`[field-renderer-bindings] skipped invalid declaration: ${err}`);
+        }
+        all.push(...entries);
+        for (const id of refusedScreenIds) refused.add(id);
       }
-      all.push(...entries);
-      for (const id of refusedScreenIds) refused.add(id);
     }
-  }
+  };
+  scan();
   const { merged, errors: mergeErrors } = mergeFieldRendererBindings(all) as {
     merged: CollectedBinding[];
     errors: string[];
@@ -149,6 +206,7 @@ function collectInstalled(
     at: Date.now(),
     entries: merged,
     refusedScreenIds: [...refused].filter((id) => !registered.has(id)).sort(),
+    complete,
   };
   return cache;
 }
@@ -158,6 +216,12 @@ export type RuntimeFieldRendererBindingsPayload = {
   bindings: FieldRendererBindingInput[];
   /** Installed ids whose declared screen was refused (`collectInstalledRefusedScreenIds`). */
   refusedScreenIds: string[];
+  /**
+   * Present when a part of the installed agents could not be read: the
+   * answer names only what was read, and an id it does not name may still
+   * declare a screen (held as "could not be loaded", never as no screen).
+   */
+  incomplete?: true;
 };
 
 /**
@@ -169,7 +233,7 @@ export function runtimeFieldRendererBindingsPayload(
   opts?: { fresh?: boolean },
 ): RuntimeFieldRendererBindingsPayload {
   const generatedIds = new Set(GENERATED_FIELD_RENDERER_BINDINGS.map((b) => b.id));
-  const { entries, refusedScreenIds } = collectInstalled({ fresh: opts?.fresh === true });
+  const { entries, refusedScreenIds, complete } = collectInstalled({ fresh: opts?.fresh === true });
   return {
     bindings: entries
       .filter((b) => !generatedIds.has(b.id))
@@ -183,6 +247,7 @@ export function runtimeFieldRendererBindingsPayload(
         ...(screen !== undefined ? { screen } : {}),
       })),
     refusedScreenIds: refusedScreenIds.filter((id) => !generatedIds.has(id)),
+    ...(complete ? {} : { incomplete: true as const }),
   };
 }
 
@@ -247,9 +312,9 @@ export function isUndrawableDeclaredScreen(binding: { kind: string; screen?: unk
  * a refused screen as a gate with no screen.
  */
 export function isRefusedDeclaredScreen(xRenderer: string): boolean {
-  const { binding, refused } = lookupFieldRendererBinding(xRenderer);
+  const { binding, refused, unknown } = lookupFieldRendererBinding(xRenderer);
   if (binding) return isUndrawableDeclaredScreen(binding);
-  return refused;
+  return refused || unknown;
 }
 
 /**
@@ -258,16 +323,17 @@ export function isRefusedDeclaredScreen(xRenderer: string): boolean {
  * NOTHING: the scan is cached for a few seconds, and an agent installed within
  * them is missing from it. When the cached scan names the id neither way, the
  * installed agents are scanned again, and only that answer reads as none.
+ * NOR DOES AN INCOMPLETE SCAN: when a part of the installed agents could not be
+ * read, an id it does not name is `unknown` (could not be loaded), never none.
  */
 export function lookupFieldRendererBinding(
   xRenderer: string,
-): { binding: CollectedBinding | undefined; refused: boolean } {
+): { binding: CollectedBinding | undefined; refused: boolean; unknown: boolean } {
   const read = () => {
     const binding = getMergedFieldRendererBindings().find((b) => b.id === xRenderer);
-    return {
-      binding,
-      refused: binding === undefined && collectInstalled().refusedScreenIds.includes(xRenderer),
-    };
+    const scan = collectInstalled();
+    const refused = binding === undefined && scan.refusedScreenIds.includes(xRenderer);
+    return { binding, refused, unknown: binding === undefined && !refused && !scan.complete };
   };
   const wasCached = scanIsCached();
   const first = read();
@@ -283,23 +349,34 @@ export function lookupFieldRendererBinding(
  * bound-screen fill and lent-action submit read the card's answer from it,
  * never from the gate's input schema.
  *
- * `null` only for a gate that declares no card screen. A declared screen the
- * validator refused, a declaration that does not validate again, or a failed
- * read is "unavailable": the caller lends nothing for that screen and never
- * falls back to the gate's raw schema.
+ * `null` only for a gate that declares no screen at all. A declared screen the
+ * validator refused, a declaration that does not validate again, an id an
+ * incomplete scan does not name, or a failed read is "unavailable": the caller
+ * lends nothing for that screen and never falls back to the gate's raw schema.
+ *
+ * A valid "kind" screen is `"kind-screen"`: the kind's own component draws it,
+ * with its own submission logic (a grouped setup form flushes its fields and
+ * validates them before it sends; a list step sends a pick). The server has no
+ * faithful reading of that logic, so the caller lends no generic fill or
+ * submit for it either: the person answers it on its own screen.
  */
-export function readDeclaredHitlCard(xRenderer: string): DeclaredHitlCard | "unavailable" | null {
+export function readDeclaredHitlCard(
+  xRenderer: string,
+): DeclaredHitlCard | "kind-screen" | "unavailable" | null {
   try {
-    const { binding, refused } = lookupFieldRendererBinding(xRenderer);
-    if (!binding) return refused ? "unavailable" : null;
+    const { binding, refused, unknown } = lookupFieldRendererBinding(xRenderer);
+    if (!binding) return refused || unknown ? "unavailable" : null;
+    if (binding.screen === undefined) return null;
     if (isUndrawableDeclaredScreen(binding)) return "unavailable";
-    if (binding.midRunHitl !== true || binding.screen === undefined) return null;
+    // A screen belongs to a mid-run gate only; the validator refuses any other.
+    if (binding.midRunHitl !== true) return "unavailable";
     const checked = validateHitlScreen(binding.screen, `${binding.id} screen`) as {
       screen?: { layout?: string };
       errors: string[];
     };
     if (checked.errors.length > 0) return "unavailable";
-    if (checked.screen?.layout !== "card") return null;
+    if (checked.screen?.layout === "kind") return "kind-screen";
+    if (checked.screen?.layout !== "card") return "unavailable";
     return checked.screen as DeclaredHitlCard;
   } catch {
     return "unavailable";

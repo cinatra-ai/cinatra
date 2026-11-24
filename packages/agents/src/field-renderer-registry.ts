@@ -4,6 +4,7 @@ import type {
   FieldRendererContext,
 } from "@cinatra-ai/sdk-ui/field-renderer-props";
 import type { DeclaredHitlCard } from "./hitl-gate-submit";
+import type { FieldRendererBindingInput } from "./register-default-renderers";
 
 // ---------------------------------------------------------------------------
 // Public props contract (cinatra#1625, epic #1620 S8 — M3)
@@ -200,6 +201,14 @@ class FieldRendererRegistryImpl {
     return this.entries;
   }
 
+  /**
+   * Remove exactly this entry object (cinatra#3470). An entry registered
+   * since under the same id, by another source, stays.
+   */
+  unregisterEntry(entry: FieldRendererEntry): void {
+    this.entries = this.entries.filter((e) => e !== entry);
+  }
+
   clear(): void {
     this.entries = [];
   }
@@ -265,6 +274,18 @@ export type RendererBindingsLoad = {
   status: "loading" | "loaded" | "failed";
   announcedIds: ReadonlySet<string>;
   /**
+   * The ids whose declared screen the source refused. Each is held as a
+   * screen that could not be loaded, even over a binding an earlier read
+   * registered under the same id.
+   */
+  refusedIds?: ReadonlySet<string>;
+  /**
+   * The source's last answer could not read every installed agent: an id it
+   * names nothing for may still declare a screen, so a gate with no binding
+   * registered is held as could not be loaded, never read as no screen.
+   */
+  incomplete?: boolean;
+  /**
    * The ids a FRESH read of the source answered for. A loaded answer may be a
    * scan cached before the gate's agent was installed, so an id it does not
    * announce reads as declaring nothing only once a fresh read answered for
@@ -283,6 +304,8 @@ let runtimeBindingsLoad: RendererBindingsLoad = {
   status: "loading",
   announcedIds: new Set(),
   freshlyReadIds: new Set(),
+  refusedIds: new Set(),
+  incomplete: false,
 };
 const runtimeBindingsListeners = new Set<() => void>();
 
@@ -301,21 +324,40 @@ export function runtimeRendererBindingsLoad(): RendererBindingsLoad {
  * ids a fresh read was asked for: its answer is theirs. A fresh read that
  * failed leaves each of them a screen that could not be loaded (held, never
  * read as declaring nothing).
+ *
+ * AN ANSWER IS THE WHOLE INSTALLED SET (cinatra#3470): what it announces and
+ * refuses REPLACES what an earlier answer did, so a screen uninstalled or
+ * refused since is no longer read as declared. A failed read changes neither.
  */
 export function settleRuntimeRendererBindings(
   outcome:
-    | { ok: true; screenIds: ReadonlyArray<string>; freshFor?: ReadonlyArray<string> }
+    | {
+        ok: true;
+        screenIds: ReadonlyArray<string>;
+        refusedIds?: ReadonlyArray<string>;
+        incomplete?: boolean;
+        freshFor?: ReadonlyArray<string>;
+      }
     | { ok: false; freshFor?: ReadonlyArray<string> },
 ): void {
   const freshFor = outcome.freshFor ?? [];
   const announcedIds = outcome.ok
-    ? new Set([...runtimeBindingsLoad.announcedIds, ...outcome.screenIds])
+    ? new Set(outcome.screenIds)
     : new Set([...runtimeBindingsLoad.announcedIds, ...freshFor]);
   const read = runtimeBindingsLoad.freshlyReadIds;
   const freshlyReadIds =
     read === "every" || !outcome.ok ? read : new Set([...read, ...freshFor]);
   const status = outcome.ok || runtimeBindingsLoad.status === "loaded" ? "loaded" : "failed";
-  runtimeBindingsLoad = { status, announcedIds, freshlyReadIds };
+  const refusedIds = outcome.ok
+    ? new Set(outcome.refusedIds ?? [])
+    : (runtimeBindingsLoad.refusedIds ?? new Set<string>());
+  const incomplete = outcome.ok
+    ? outcome.incomplete === true
+    : runtimeBindingsLoad.incomplete === true;
+  // A gate whose fresh read failed may ask again once a later answer leaves it
+  // unannounced (`requestFreshRendererBindingRead`).
+  if (!outcome.ok) for (const id of freshFor) freshReadsAsked.delete(id);
+  runtimeBindingsLoad = { status, announcedIds, freshlyReadIds, refusedIds, incomplete };
   for (const listener of runtimeBindingsListeners) listener();
 }
 
@@ -330,6 +372,7 @@ export function awaitsFreshRendererBindingRead(
 ): boolean {
   if (xRenderer === "" || isRendererBound(xRenderer)) return false;
   if (bindings.status !== "loaded" || bindings.announcedIds.has(xRenderer)) return false;
+  if (bindings.refusedIds?.has(xRenderer)) return false;
   const read = bindings.freshlyReadIds;
   return read !== "every" && !read.has(xRenderer);
 }
@@ -357,6 +400,48 @@ function serverActions(): Promise<typeof import("./server-actions")> {
 }
 
 /**
+ * The entries THIS read road registered, by id (cinatra#3470). A runtime answer
+ * is authoritative for exactly these: an id a complete answer no longer names,
+ * or names as refused, is unregistered. Static and first-party registrations
+ * (the generated bindings, the host's own entries, a conversation card's
+ * registration) are never in it, so a runtime answer never touches them.
+ */
+const runtimeRegisteredEntries = new Map<string, FieldRendererEntry>();
+
+/**
+ * Make the registry hold what a runtime answer says (cinatra#3470). Every entry
+ * this road registered before is dropped when the answer names its id again
+ * (it is registered anew, or not at all when the registration refuses it),
+ * names it refused, or, being complete, names it not at all. An incomplete
+ * answer is no proof that an id is gone, so an entry it does not name stays.
+ */
+function reconcileRuntimeRegistrations(
+  register: (bindings: ReadonlyArray<FieldRendererBindingInput>) => void,
+  bindings: ReadonlyArray<FieldRendererBindingInput>,
+  refusedIds: ReadonlyArray<string>,
+  incomplete: boolean,
+): void {
+  const named = new Set(bindings.map((b) => b.id));
+  const refused = new Set(refusedIds);
+  for (const [id, entry] of runtimeRegisteredEntries) {
+    if (named.has(id) || refused.has(id) || !incomplete) {
+      fieldRendererRegistry.unregisterEntry(entry);
+      runtimeRegisteredEntries.delete(id);
+    }
+  }
+  if (bindings.length === 0) return;
+  const entryOf = (id: string) => fieldRendererRegistry.list().find((e) => e.id === id);
+  const before = new Map(bindings.map((b) => [b.id, entryOf(b.id)]));
+  register(bindings);
+  for (const b of bindings) {
+    // Only an entry this registration made: one it refused leaves another
+    // source's entry in place, and that entry is not this road's to remove.
+    const entry = entryOf(b.id);
+    if (entry !== undefined && entry !== before.get(b.id)) runtimeRegisteredEntries.set(b.id, entry);
+  }
+}
+
+/**
  * Read the installed agents' bindings, register them and record the answer.
  * `freshFor` names a gate id the read is asked for: the server scans past its
  * cache, and the answer is recorded as that id's fresh read. True when the
@@ -375,22 +460,27 @@ export async function readRuntimeRendererBindings(freshFor?: string): Promise<bo
       settleRuntimeRendererBindings({ ok: false, freshFor: readFor });
       return false;
     }
-    if (bindings.length > 0) {
+    const refusedIds = refusedScreenIds.filter((id): id is string => typeof id === "string");
+    const incomplete = answer?.incomplete === true;
+    if (bindings.length > 0 || runtimeRegisteredEntries.size > 0) {
       const { registerFieldRendererBindings } = await import(
         "./register-default-renderers"
       );
-      registerFieldRendererBindings(bindings);
+      reconcileRuntimeRegistrations(registerFieldRendererBindings, bindings, refusedIds, incomplete);
     }
     // The bindings that declare a screen, and the declared screens the
     // server's validator refused: one of them that is still unregistered
     // after this is a declared screen the host cannot draw, and its gate
-    // stays held (never read as a gate with no screen).
+    // stays held (never read as a gate with no screen). A refused id is held
+    // even over a binding registered under it some other way.
     settleRuntimeRendererBindings({
       ok: true,
       screenIds: [
         ...bindings.filter((b) => b.screen !== undefined).map((b) => b.id),
-        ...refusedScreenIds.filter((id): id is string => typeof id === "string"),
+        ...refusedIds,
       ],
+      refusedIds,
+      incomplete,
       freshFor: readFor,
     });
     return true;

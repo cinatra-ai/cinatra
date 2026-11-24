@@ -108,6 +108,7 @@ import {
   buildScreenSubmitValues,
   handleLentAction,
   buildDeclaredScreenSubmitValues,
+  LENT_ACTION_DECLARED_SCREEN_ANSWERED_ON_ITS_PAGE,
 } from "../lent-action-mcp";
 import { resolveBoundCard } from "../bound-card-binding";
 import { submitReviewDecisionAction } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/actions";
@@ -1106,6 +1107,29 @@ describe("a declared card is filled and sent through its own answer (cinatra#347
       ref: REF,
       applied: ["content"],
     });
+  });
+
+  it("a declared kind screen lends no generic fill or submit, and a press by asking sends the person to its page", async () => {
+    // A grouped setup form declared as a "kind" screen: its own component
+    // flushes and validates its fields before it sends. The gate's schema
+    // requires a value the assistant could leave blank.
+    const kindScreen = resolveWithReader(async () => "kind-screen");
+    const bound = await kindScreen({ ref: REF, actorCtx: ACTOR });
+    // red-first-expect: expected undefined to be true
+    expect((bound as { declaredKindScreen?: unknown }).declaredKindScreen).toBe(true);
+    expect(bound.kind).toBe("hitl_screen");
+    expect(controlsLentBy(bound)).toEqual([]);
+    // Never the gate's raw input schema in place of the kind's own screen.
+    expect(JSON.stringify(bound)).not.toContain('"content"');
+    expect(await fillThrough(kindScreen, { content: "Fixture words" })).toEqual({ kind: "unavailable" });
+    expect(appended).toHaveLength(0);
+    const pressed = await submitThrough(kindScreen);
+    expect(pressed.structuredContent).toMatchObject({
+      ok: false,
+      outcome: { kind: "refused" },
+      message: LENT_ACTION_DECLARED_SCREEN_ANSWERED_ON_ITS_PAGE,
+    });
+    expect(approveReviewTaskInternal).not.toHaveBeenCalled();
   });
 
   it("a card with no controls is not sent by asking; its own Continue sends its carried values", async () => {

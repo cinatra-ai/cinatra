@@ -106,6 +106,8 @@ export async function getFieldRendererContextForAgentBuilderAction(): Promise<{
 // (cinatra#3470) instead of reading the error as "no binding declared".
 // `refusedScreenIds` names the installed bindings whose declared screen the
 // validator refused: their gates are held too, never drawn as no screen.
+// `incomplete` marks an answer that could not read every installed agent (an
+// unreadable mount or manifest): a gate it names nothing for is held too.
 // ---------------------------------------------------------------------------
 // `fresh` scans the installed agents past the collector's short cache: the run
 // page asks for it when a gate names a screen its earlier answer did not, so

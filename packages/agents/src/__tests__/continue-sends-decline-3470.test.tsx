@@ -432,8 +432,21 @@ describe("continueHeldByRenderer (cinatra#3470)", () => {
     ).toBe(false);
     // A source that reads each gate's own binding fresh answers for every id.
     expect(continueHeldByRenderer(null, {}, {}, at({ ...loaded, freshlyReadIds: "every" }))).toBe(false);
-    // A registered binding is never held by the load, whatever its status.
+    // A registered binding is not held by a load that failed: it was registered.
     expect(continueHeldByRenderer(null, {}, {}, { xRenderer: PROBE_ID, bindings: { status: "failed", announcedIds: new Set(), freshlyReadIds: new Set() } })).toBe(false);
+  });
+
+  it("holds a registered binding the source refused, and a gate an incomplete answer does not name", () => {
+    // A refused id overrides a binding an earlier read registered under it.
+    const refusedLoad = { ...loaded, freshlyReadIds: "every" as const, refusedIds: new Set([PROBE_ID]) };
+    // red-first-expect: expected false to be true
+    expect(continueHeldByRenderer(null, {}, {}, { xRenderer: PROBE_ID, bindings: refusedLoad })).toBe(true);
+    // A source that could not read every installed agent proves no unnamed id declares nothing.
+    const unbound = "@acme-test/unread-agent:output";
+    const incomplete = { ...loaded, freshlyReadIds: new Set([unbound]), incomplete: true };
+    expect(continueHeldByRenderer(null, {}, {}, { xRenderer: unbound, bindings: incomplete })).toBe(true);
+    // A registered binding is not held by an incomplete answer.
+    expect(continueHeldByRenderer(null, {}, {}, { xRenderer: PROBE_ID, bindings: incomplete })).toBe(false);
   });
 });
 
@@ -471,6 +484,34 @@ describe("the HITL screen card holds a screen whose binding failed to load (cina
     const { container } = mount();
     await settle();
     await waitFor(() => expect(continueButton(container)).not.toBeNull());
+    expect(continueButton(container)!.disabled).toBe(true);
+    expect(holdReason(container)).toBe(HOLD_FAILED);
+    fireEvent.click(continueButton(container)!);
+    await settle();
+    expect(approveMock).not.toHaveBeenCalled();
+  });
+
+  it("holds the Continue of a refused screen even over a binding registered earlier under its id", async () => {
+    // An earlier read registered a drawable card for the id …
+    registerFieldRendererBindings([
+      {
+        id: RUNTIME_ID,
+        kind: "linkedin-draft-review",
+        priority: 90,
+        midRunHitl: true,
+        screen: { layout: "card", title: "Fixture earlier card" },
+      },
+    ]);
+    // … and the card's read now names its screen as refused.
+    current = {
+      ...asking(RUNTIME_ID, { itemId: "item-1" }),
+      declaredScreenUnavailable: true,
+      declaredScreenRefused: true,
+    } as typeof current;
+    const { container } = mount();
+    await settle();
+    await waitFor(() => expect(continueButton(container)).not.toBeNull());
+    // red-first-expect: expected false to be true
     expect(continueButton(container)!.disabled).toBe(true);
     expect(holdReason(container)).toBe(HOLD_FAILED);
     fireEvent.click(continueButton(container)!);

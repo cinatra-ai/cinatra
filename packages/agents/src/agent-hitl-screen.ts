@@ -78,6 +78,10 @@ export type AgentHitlScreenState =
       /** The read could not tell whether the gate's renderer declares a
        *  screen (cinatra#3470): the card holds the gate's Continue. */
       declaredScreenUnavailable?: true;
+      /** The gate's renderer declared a screen the host refuses to draw
+       *  (cinatra#3470): the card holds its Continue even over a binding an
+       *  earlier read registered under the same id. */
+      declaredScreenRefused?: true;
     };
 
 export const AGENT_HITL_SCREEN_NONE: AgentHitlScreenState = Object.freeze({
@@ -134,12 +138,16 @@ export function parseAgentHitlScreenState(data: unknown): AgentHitlScreenState |
   const declaredScreenUnavailable =
     (data as { declaredScreenUnavailable?: unknown }).declaredScreenUnavailable === true ||
     (rawDeclaredScreen !== undefined && rawDeclaredScreen !== null && declaredScreen === null);
+  const declaredScreenRefused =
+    declaredScreenUnavailable &&
+    (data as { declaredScreenRefused?: unknown }).declaredScreenRefused === true;
   return {
     state: "asking",
     runId,
     screenRef: typeof screenRef === "string" ? screenRef : null,
     ...(declaredScreen ? { declaredScreen } : {}),
     ...(declaredScreenUnavailable ? { declaredScreenUnavailable: true as const } : {}),
+    ...(declaredScreenRefused ? { declaredScreenRefused: true as const } : {}),
     gate: {
       reviewTaskId,
       xRenderer,

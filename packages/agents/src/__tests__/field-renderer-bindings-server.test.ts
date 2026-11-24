@@ -13,6 +13,35 @@ import { tmpdir } from "node:os";
 
 let FIXTURE_DIR = "";
 
+/**
+ * A file-system fault the collector meets (cinatra#3470): a read of a path
+ * ending in `path` throws an error with `code`. Every other call is the real
+ * one, so the collector's own error handling is what runs.
+ */
+const fsFault = vi.hoisted(() => ({
+  readdir: null as { path: string; code: string } | null,
+  readFile: null as { path: string; code: string } | null,
+}));
+
+vi.mock("node:fs", async (importOriginal) => {
+  const real = await importOriginal<typeof import("node:fs")>();
+  const faulted = (fault: { path: string; code: string } | null, target: unknown) => {
+    if (fault === null || !String(target).endsWith(fault.path)) return;
+    throw Object.assign(new Error(`${fault.code}: fixture fault, open '${String(target)}'`), {
+      code: fault.code,
+    });
+  };
+  const readdirSync = ((target: unknown, ...rest: unknown[]) => {
+    faulted(fsFault.readdir, target);
+    return (real.readdirSync as (...a: unknown[]) => unknown)(target, ...rest);
+  }) as typeof real.readdirSync;
+  const readFileSync = ((target: unknown, ...rest: unknown[]) => {
+    faulted(fsFault.readFile, target);
+    return (real.readFileSync as (...a: unknown[]) => unknown)(target, ...rest);
+  }) as typeof real.readFileSync;
+  return { ...real, default: { ...real, readdirSync, readFileSync }, readdirSync, readFileSync };
+});
+
 vi.mock("../agent-runtime-mount", () => ({
   resolveAgentRuntimeMountDir: () => {
     if (!FIXTURE_DIR) throw new Error("fixture dir unset");
@@ -43,6 +72,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  fsFault.readdir = null;
+  fsFault.readFile = null;
   rmSync(FIXTURE_DIR, { recursive: true, force: true });
   FIXTURE_DIR = "";
   __clearInstalledFieldRendererBindingsCache();
@@ -250,9 +281,28 @@ describe("a 'kind' screen on a kind the host draws no component for is refused (
     // red-first-expect: expected null to be 'unavailable'
     expect(read("@s/kind-agent:floor")).toBe("unavailable");
     expect(refused("@s/kind-agent:floor")).toBe(true);
-    // A kind the host draws stays a declared non-card screen.
-    expect(read("@s/kind-agent:drawn")).toBeNull();
+    // A kind the host draws is not refused.
     expect(refused("@s/kind-agent:drawn")).toBe(false);
+  });
+
+  it("a valid 'kind' screen reads as a kind screen, never as a gate that declares none", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    writePkg("s", "setup-agent", {
+      name: "@s/setup-agent",
+      cinatra: {
+        fieldRenderers: [
+          { id: "@s/setup-agent:details", kind: "wayflow-setup-form", priority: 80, midRunHitl: true, screen: { layout: "kind" } },
+          { id: "@s/setup-agent:pick", kind: "context-selector", priority: 80, midRunHitl: true, screen: { layout: "kind" } },
+        ],
+      },
+    });
+    // The kind's own component draws it with its own submission logic (the
+    // grouped setup form flushes and validates its fields): the server lends
+    // no generic fill or submit for it, so it must not read as no screen.
+    // red-first-expect: expected null to be 'kind-screen'
+    expect(read("@s/setup-agent:details")).toBe("kind-screen");
+    expect(read("@s/setup-agent:pick")).toBe("kind-screen");
+    expect(refused("@s/setup-agent:details")).toBe(false);
   });
 
   it("a merged binding that names an unsupported kind is undrawable, whatever its source", () => {
@@ -323,3 +373,86 @@ describe("a declared screen installed after a scan was cached is never read as n
   });
 });
 
+
+describe("a binding collection error is never read as 'no screen' (cinatra#3470)", () => {
+  const read = (id: string): unknown =>
+    (installedBindings as { readDeclaredHitlCard?: (x: string) => unknown }).readDeclaredHitlCard?.(id) ?? null;
+  // Read through the module, so a tree without the payload answers nothing.
+  const payload = (opts?: { fresh?: boolean }): { bindings?: Array<{ id: string }>; incomplete?: unknown } =>
+    (installedBindings as {
+      runtimeFieldRendererBindingsPayload?: (o?: { fresh?: boolean }) => {
+        bindings: Array<{ id: string }>;
+        incomplete?: unknown;
+      };
+    }).runtimeFieldRendererBindingsPayload?.(opts) ?? {};
+  const CARD_SCREEN = {
+    layout: "card",
+    title: "Fixture title",
+    sections: [{ type: "field", key: "answer", label: "Fixture answer" }],
+  };
+
+  function installReadable() {
+    writePkg("s", "readable-agent", {
+      name: "@s/readable-agent",
+      cinatra: {
+        fieldRenderers: [
+          { id: "@s/readable-agent:card", kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: CARD_SCREEN },
+        ],
+      },
+    });
+  }
+
+  it("an unreadable package manifest (EACCES) makes the read incomplete, and an id it may declare unavailable", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    installReadable();
+    writePkg("s", "locked-agent", {
+      name: "@s/locked-agent",
+      cinatra: {
+        fieldRenderers: [
+          { id: "@s/locked-agent:card", kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: CARD_SCREEN },
+        ],
+      },
+    });
+    fsFault.readFile = { path: join("locked-agent", "package.json"), code: "EACCES" };
+    const answer = payload({ fresh: true });
+    // red-first-expect: expected undefined to be true
+    expect(answer.incomplete).toBe(true);
+    // What was read is still answered.
+    expect(answer.bindings?.map((b) => b.id)).toEqual(["@s/readable-agent:card"]);
+    // The id the unreadable manifest may declare holds: never "no screen".
+    expect(read("@s/locked-agent:card")).toBe("unavailable");
+    expect(read("@s/readable-agent:card")).toMatchObject({ layout: "card" });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("EACCES"));
+  });
+
+  it("an unparsable package manifest makes the read incomplete", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    installReadable();
+    const dir = join(FIXTURE_DIR, "s", "torn-agent");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "package.json"), '{"name": "@s/torn-agent", "cinatra": {');
+    // red-first-expect: expected undefined to be true
+    expect(payload({ fresh: true }).incomplete).toBe(true);
+    expect(read("@s/torn-agent:card")).toBe("unavailable");
+  });
+
+  it("an unreadable mount (EACCES) makes the read incomplete", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    installReadable();
+    fsFault.readdir = { path: FIXTURE_DIR, code: "EACCES" };
+    // red-first-expect: expected undefined to be true
+    expect(payload({ fresh: true }).incomplete).toBe(true);
+    expect(read("@s/readable-agent:card")).toBe("unavailable");
+  });
+
+  it("a missing mount directory is no agents installed: a complete, empty read", () => {
+    rmSync(FIXTURE_DIR, { recursive: true, force: true });
+    const answer = payload({ fresh: true });
+    expect(answer.incomplete).toBeUndefined();
+    expect(answer.bindings ?? []).toEqual([]);
+    expect(read("@s/readable-agent:card")).toBeNull();
+    // A package folder with no manifest is not a package: still complete.
+    mkdirSync(join(FIXTURE_DIR, "s", "empty-folder"), { recursive: true });
+    expect(payload({ fresh: true }).incomplete).toBeUndefined();
+  });
+});

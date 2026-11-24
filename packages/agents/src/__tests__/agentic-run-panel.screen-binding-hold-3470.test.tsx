@@ -359,4 +359,61 @@ describe("AgenticRunPanel — a screen whose binding has not loaded holds its Co
     });
     expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
   });
+
+  // THE RUNTIME ANSWER IS THE WHOLE INSTALLED SET. An agent uninstalled, or a
+  // screen refused, since an earlier read in the same page lifetime leaves no
+  // usable renderer behind it; a registration this road did not make stays.
+  it("unregisters a runtime binding a later answer no longer names, and keeps a static one", async () => {
+    const removed = "@cinatra-test/removed-agent:output";
+    const staticId = "@cinatra-test/static-agent:output";
+    gate.xRenderer = removed;
+    runtimeBindings.fetch.mockImplementation(async () => ({
+      bindings: [{ id: removed, kind: "linkedin-draft-review", priority: 90, midRunHitl: true }],
+      refusedScreenIds: [],
+    }));
+    await mountGate();
+    const bound = (id: string) => fieldRendererRegistry.list().some((e) => e.id === id);
+    // A tree whose read answers another shape registers nothing here.
+    // red-first-expect: expected false to be true
+    await waitFor(() => expect(bound(removed)).toBe(true));
+    cleanup();
+    // A registration the runtime road did not make.
+    const { registerFieldRendererBindings } = await import("../register-default-renderers");
+    registerFieldRendererBindings([{ id: staticId, kind: "linkedin-draft-review", priority: 90, midRunHitl: true }]);
+    // The agent is uninstalled: the next answer names nothing.
+    runtimeBindings.fetch.mockImplementation(async () => ({ bindings: [], refusedScreenIds: [] }));
+    await mountGate();
+    await waitFor(() => expect(runtimeBindings.fetch).toHaveBeenCalled());
+    await waitFor(() => expect(bound(removed)).toBe(false));
+    expect(bound(staticId)).toBe(true);
+  });
+
+  it("holds a screen the answer now refuses, over the binding an earlier answer registered", async () => {
+    const refusedLater = "@cinatra-test/refused-later-agent:output";
+    gate.xRenderer = refusedLater;
+    // An earlier version of the agent declared a binding with no screen.
+    runtimeBindings.fetch.mockImplementation(async () => ({
+      bindings: [{ id: refusedLater, kind: "linkedin-draft-review", priority: 90, midRunHitl: true }],
+      refusedScreenIds: [],
+    }));
+    await mountGate();
+    // red-first-expect: expected false to be true
+    await waitFor(() => expect(fieldRendererRegistry.list().some((e) => e.id === refusedLater)).toBe(true));
+    cleanup();
+    // The agent is upgraded to a screen the server's validator refuses.
+    runtimeBindings.fetch.mockImplementation(async () => ({ bindings: [], refusedScreenIds: [refusedLater] }));
+    const published = await mountGate();
+    await waitFor(() => expect(holdReason()).toBe(HOLD_FAILED));
+    await expectHeld(HOLD_FAILED, published);
+  });
+
+  it("holds a gate an answer that could not read every installed agent does not name", async () => {
+    gate.xRenderer = "@cinatra-test/unread-agent:output";
+    runtimeBindings.fetch.mockImplementation(async () => ({ bindings: [], refusedScreenIds: [], incomplete: true }));
+    const published = await mountGate();
+    // red-first-expect: expected null to be 'This step
+    await waitFor(() => expect(holdReason()).toBe(HOLD_FAILED));
+    expect(runtimeBindings.fetch).toHaveBeenCalledWith({ fresh: true });
+    await expectHeld(HOLD_FAILED, published);
+  });
 });

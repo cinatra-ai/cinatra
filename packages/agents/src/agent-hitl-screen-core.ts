@@ -133,7 +133,9 @@ export async function agentHitlScreenStateForRun(
     state: "asking",
     runId: run.id,
     screenRef: runStatesHitlMoment(run) ? (run.lifecycleCardRef ?? null) : null,
-    ...(declaredScreen === "unavailable"
+    ...(declaredScreen === "refused"
+      ? { declaredScreenUnavailable: true as const, declaredScreenRefused: true as const }
+      : declaredScreen === "unavailable"
       ? { declaredScreenUnavailable: true as const }
       : declaredScreen
         ? { declaredScreen }
@@ -155,23 +157,26 @@ export async function agentHitlScreenStateForRun(
  * so without it the chat thread and the site widget found no renderer for a
  * gate the run page draws. Only a binding that declares a `screen` is handed
  * over: that card is drawn by the host from the declaration alone. A failure
- * of the read, a declared screen that does not read back, or one the
- * validator refused, is "unavailable", never "none declared": the card then
- * holds the gate's Continue (cinatra#3470).
+ * of the read, a declared screen that does not read back, or an id a scan
+ * that could not read every installed agent does not name, is "unavailable",
+ * never "none declared": the card then holds the gate's Continue
+ * (cinatra#3470). One the validator refused is "refused": the card holds it
+ * even over a binding an earlier read registered under the same id.
  */
 async function declaredScreenBindingOf(
   xRenderer: string,
-): Promise<AgentHitlDeclaredScreenBinding | "unavailable" | null> {
+): Promise<AgentHitlDeclaredScreenBinding | "refused" | "unavailable" | null> {
   try {
     const { lookupFieldRendererBinding, isUndrawableDeclaredScreen } = await import(
       "./field-renderer-bindings.server"
     );
     // A cached scan never reads as "none declared" (`lookupFieldRendererBinding`).
-    const { binding, refused } = lookupFieldRendererBinding(xRenderer);
+    const { binding, refused, unknown } = lookupFieldRendererBinding(xRenderer);
     // A screen the validator refused, or a "kind" screen of a kind the host
     // draws nothing for, is declared but cannot be drawn: the run page holds
     // it, and so does a conversation host (the same shared rule).
-    if (binding ? isUndrawableDeclaredScreen(binding) : refused) return "unavailable";
+    if (binding ? isUndrawableDeclaredScreen(binding) : refused) return "refused";
+    if (unknown) return "unavailable";
     if (!binding || binding.screen === undefined) return null;
     const parsed = parseDeclaredScreenBinding(
       {

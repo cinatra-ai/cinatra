@@ -415,6 +415,15 @@ export const LENT_ACTION_DECLARED_CARD_INCOMPLETE =
   "That screen is not ready to send yet, so nothing was submitted. " +
   "Make its choice or fill its fields first, or press the screen's own button yourself.";
 
+/**
+ * A declared screen its kind's own component answers (cinatra#3470): the
+ * assistant cannot send it faithfully, so it sends nothing and points the
+ * person to the screen.
+ */
+export const LENT_ACTION_DECLARED_SCREEN_ANSWERED_ON_ITS_PAGE =
+  "That screen is answered with its own controls, so nothing was submitted. " +
+  "Open the run page to answer it.";
+
 export const LENT_ACTION_NOTHING_PLACED_TO_SAVE =
   "Nothing has been placed in that form to save, so nothing was changed. " +
   "Describe the change first, or press Save changes on the form yourself.";
@@ -708,6 +717,15 @@ export async function handleLentAction(
   const resolve = deps.resolve ?? resolveBoundReference;
   const bound = await resolve({ ref: parsed.data.ref, actorCtx });
   if (bound.kind === "absent") return refuseCardUnavailable();
+  // A declared screen its kind's own component answers lends nothing: it is
+  // refused here, before any spend, in words that send the person to it.
+  if (bound.kind === "hitl_screen" && bound.declaredKindScreen) {
+    return say({
+      ok: false,
+      outcome: { kind: "refused" },
+      message: LENT_ACTION_DECLARED_SCREEN_ANSWERED_ON_ITS_PAGE,
+    });
+  }
   const lent = controlsLentBy(bound);
   if (!isLentActionControl(control) || !lent.includes(control)) {
     return refuseCardUnavailable();

@@ -1288,6 +1288,10 @@ export function AgentHitlScreenCard({
   // register is then named as failed by `rendererBindingHoldReason`).
   const declaredScreenUnavailable =
     state !== null && state.state === "asking" && state.declaredScreenUnavailable === true;
+  const refusedScreenId =
+    state !== null && state.state === "asking" && state.declaredScreenRefused === true
+      ? state.gate.xRenderer
+      : null;
   const gateBindings = useMemo<RendererBindingsLoad>(
     () => ({
       status: declaredScreenUnavailable
@@ -1300,9 +1304,11 @@ export function AgentHitlScreenCard({
       // the installed agents before it answers "none" for an id
       // (`lookupFieldRendererBinding`): what it says is fresh.
       freshlyReadIds: "every",
+      // A refused screen holds even over a binding registered earlier.
+      refusedIds: new Set(refusedScreenId === null ? [] : [refusedScreenId]),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [declaredScreenUnavailable, declaredScreenKey, registeredScreenKey],
+    [declaredScreenUnavailable, refusedScreenId, declaredScreenKey, registeredScreenKey],
   );
 
   // THE BUFFER BELONGS TO ONE GATE, AND ONLY TO IT.
