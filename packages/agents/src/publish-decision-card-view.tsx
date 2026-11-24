@@ -392,7 +392,7 @@ export function PublishDecisionCard({
   } else {
     body = (
       <>
-        <div className={FRAME} data-conformance-id={restricted ? "publish-state-restricted" : undefined}>
+        <div className={FRAME} data-conformance-id={restricted ? "publish-state-restricted" : resumeOnly ? "publish-card-allow-again" : undefined}>
           <div className="border-b border-line px-3.5 py-2.5">
             <span className="text-row-title font-bold text-foreground">Allow this change outside Cinatra?</span>
             <p className="mt-1 font-mono text-fact-line text-muted-foreground">

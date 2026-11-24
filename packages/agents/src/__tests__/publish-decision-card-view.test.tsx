@@ -675,6 +675,13 @@ describe("the decide door", () => {
     expect(root.textContent).toContain("Allow again to let it go on.");
   });
 
+  // red-first-expect: to have a length of 1 but got +0
+  it("the Allow-again card carries the anchor the approved design names for it (app-lifecycle-cards.html XV)", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, resumeOnly: true }));
+    const root = await rootOf(mountOn("run_card", okDoor()));
+    expect(root.querySelectorAll('[data-conformance-id="publish-card-allow-again"]')).toHaveLength(1);
+  });
+
   it("an answer that did not land says so under the controls, keeps them live, and clears on the next answer", async () => {
     let answer: "failed" | "decided" = "failed";
     const mounted = mountOn("run_card", vi.fn<PublishDecisionDecide>(async () => answer));
