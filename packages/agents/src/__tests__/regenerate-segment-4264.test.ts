@@ -941,15 +941,23 @@ describe("a blank non-NULL intent is refused, never run as an ordinary repair (r
     expect(readVerifiedFilingNode).not.toHaveBeenCalled();
   });
 
-  it("the dispatch drain plans every non-NULL intent, blank included", () => {
+  it("the dispatch drain plans every non-NULL intent with no run yet, and judges an existing run by its record only", () => {
     const source = readFileSync(path.resolve(__dirname, "../lifecycle-repair-dispatch-store.ts"), "utf8");
-    // The deterministic-run read comes first; every Regenerate is then planned,
-    // an existing run included (it is checked against the plan).
+    // The deterministic-run read comes first. A Regenerate whose run exists is
+    // judged by the inputs that run recorded (a retry plans nothing); one with
+    // no run yet, a blank intent included, is planned.
     const runRead = source.indexOf("const [already] = await db");
-    const gate = source.indexOf("if (hasRegenerateIntent(row.regenerateNodeId)) {", runRead);
+    const existing = source.indexOf("if (hasRegenerateIntent(row.regenerateNodeId) && already) {", runRead);
+    const fresh = source.indexOf("} else if (hasRegenerateIntent(row.regenerateNodeId)) {", existing);
     expect(runRead).toBeGreaterThan(0);
-    expect(gate).toBeGreaterThan(runRead);
-    expect(source.indexOf("await planSegmentDispatch(", gate)).toBeGreaterThan(gate);
+    expect(existing).toBeGreaterThan(runRead);
+    expect(fresh).toBeGreaterThan(existing);
+    const existingBranch = source.slice(existing, fresh);
+    expect(existingBranch).toContain("recordedRegenerateInput(");
+    expect(existingBranch).not.toContain("planSegmentDispatch(");
+    const plan = source.indexOf("await planSegmentDispatch(", fresh);
+    expect(plan).toBeGreaterThan(fresh);
+    expect(source.indexOf("await planSegmentDispatch(")).toBe(plan);
     expect(source).not.toContain("if (row.regenerateNodeId) {");
   });
 
