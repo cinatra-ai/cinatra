@@ -72,7 +72,8 @@ const RESERVED_APPROVAL_ENVELOPE_KEYS = new Set<string>([
 
 /** The refusal of an answer to a step whose declared screen changed since it opened (cinatra#3470). */
 export const DECLARED_SCREEN_CHANGED_REFUSAL =
-  "This step's screen was changed after the step opened, so the answer was not sent.";
+  "This step's screen was changed after the step opened, so the answer was not sent. " +
+  "The step can be answered only with the agent version it opened under; stop the run to end it.";
 
 /**
  * Why an answer to a parked step may not be sent (cinatra#3470), or null when

@@ -510,6 +510,17 @@ function serverActions(): Promise<typeof import("./server-actions")> {
 const runtimeRegisteredEntries = new Map<string, FieldRendererEntry>();
 
 /**
+ * Is the entry registered under exactly this id one a runtime answer (an
+ * installed agent's declaration) registered (cinatra#3470)? Such an entry can
+ * be another revision of the id than a step opened under, so a source that
+ * failed never vouches for it.
+ */
+export function isRendererBoundByRuntimeRead(xRenderer: string): boolean {
+  const entry = runtimeRegisteredEntries.get(xRenderer);
+  return entry !== undefined && fieldRendererRegistry.list().includes(entry);
+}
+
+/**
  * Make the registry hold what a runtime answer says (cinatra#3470). Every entry
  * this road registered before is dropped when the answer names its id again
  * (it is registered anew, or not at all when the registration refuses it),

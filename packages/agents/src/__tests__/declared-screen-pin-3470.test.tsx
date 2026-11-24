@@ -307,7 +307,7 @@ describe("the run page reads its bindings fresh for each step (cinatra#3470)", (
     expect(reg.declaredHitlCardOf?.(FRESH_ID)).toMatchObject({ title: "Fixture later revision" });
     // The earlier step opened with no screen: the one installed since is not its own.
     expect(hold(stepBefore)).toBe(
-      "This step's screen was changed after the step opened, so it cannot be answered here.",
+      "This step's screen was changed after the step opened, so it cannot be answered. Stop the run to end it.",
     );
   });
 });
@@ -368,5 +368,67 @@ describe("a conversation card never reads a registration it gave up (cinatra#347
     await waitFor(() => expect(card.queryAllByRole("radio").length).toBeGreaterThan(0));
     expect(drawnAtRegistration).toEqual(["held"]);
     expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  });
+});
+
+describe("a conversation card never resolves a binding registered under its step's renderer id (cinatra#3470)", () => {
+  it("a run page's registration of the later revision is not drawn for a step opened under the earlier one", async () => {
+    install(EARLIER);
+    const earlierRun = runParkedOn("run-collide", "task-collide", parkedSchema());
+    install(LATER);
+    // A run page read the installed agents: the later revision is registered
+    // under the renderer id itself, for every surface of this browser.
+    await reg.readRuntimeRendererBindings?.();
+    screenStateMock.mockImplementation(async () => agentHitlScreenStateForRun(earlierRun));
+    try {
+      const { container } = render(
+        <LifecycleCardSurfaceProvider host="chat_thread">
+          <AgentHitlScreenCard runId="run-collide" wireRef="task-collide" />
+        </LifecycleCardSurfaceProvider>,
+      );
+      const card = within(container);
+      // red-first-expect: Unable to find role="button" and name `/^continue$/i`
+      await waitFor(() => expect(card.getByRole("button", { name: /^continue$/i })).toBeTruthy());
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 20));
+      });
+      expect(card.queryByText("Fixture later decision")?.textContent ?? null).toBeNull();
+      expect(card.queryAllByRole("radio")).toHaveLength(0);
+      expect(card.getByText(/could not be loaded/i)).toBeTruthy();
+      const held = card.getByRole("button", { name: /^continue$/i }) as HTMLButtonElement;
+      expect(held.disabled).toBe(true);
+      await act(async () => {
+        fireEvent.click(held);
+        await new Promise((r) => setTimeout(r, 20));
+      });
+      expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+      // The run page's registration is withdrawn by its next complete read.
+      uninstall();
+      await reg.readRuntimeRendererBindings?.();
+    }
+  });
+
+  it("a failed binding read holds the Continue even over a binding registered under the id", async () => {
+    install(LATER);
+    await reg.readRuntimeRendererBindings?.();
+    try {
+      const failed = {
+        status: "failed",
+        announcedIds: new Set<string>(),
+        freshlyReadIds: "every",
+        refusedIds: new Set<string>(),
+      };
+      // red-first-expect: expected null to be 'This step\'s screen could not be load
+      expect(submitRules.rendererBindingHoldReason?.(ID, failed) ?? null).toBe(
+        "This step's screen could not be loaded. Reload the page to try again.",
+      );
+      // The binding was registered under the id: the hold is not its absence.
+      expect(registry.fieldRendererRegistry.list().some((e) => e.id === ID)).toBe(true);
+    } finally {
+      uninstall();
+      await reg.readRuntimeRendererBindings?.();
+    }
   });
 });

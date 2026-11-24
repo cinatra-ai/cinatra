@@ -24,6 +24,7 @@ import {
   declaredHitlCardOf,
   isListPickerRenderer,
   isRendererBound,
+  isRendererBoundByRuntimeRead,
   rendererReadsAsKind,
   awaitsFreshRendererBindingRead,
   answeredScreenPin,
@@ -362,7 +363,7 @@ export const SCREEN_FAILED_HOLD_REASON =
   "This step's screen could not be loaded. Reload the page to try again.";
 /** The reason a mid-run Continue shows when the step's screen changed since it opened. */
 export const SCREEN_CHANGED_HOLD_REASON =
-  "This step's screen was changed after the step opened, so it cannot be answered here.";
+  "This step's screen was changed after the step opened, so it cannot be answered. Stop the run to end it.";
 
 /**
  * Why the mid-run Continue of the gate drawn by `xRenderer` is held because
@@ -377,7 +378,9 @@ export const SCREEN_CHANGED_HOLD_REASON =
  *
  * A REFUSED SCREEN HOLDS FIRST: an id the source names as refused is held even
  * when a binding is registered under it, so a binding an earlier read
- * registered never outlives the source's refusal.
+ * registered never outlives the source's refusal. A source that FAILED holds
+ * the same way over a binding an installed agent's read registered, before it
+ * is read as healthy.
  *
  * THE STEP IS DRAWN ONLY UNDER ITS OWN DECLARATION. A host that names the
  * parked `step` holds it while the source's answer pins another declaration
@@ -399,6 +402,12 @@ export function rendererBindingHoldReason(
     return awaitsFreshRendererBindingRead(xRenderer, bindings, step)
       ? SCREEN_LOADING_HOLD_REASON
       : SCREEN_CHANGED_HOLD_REASON;
+  }
+  // A FAILED SOURCE HOLDS BEFORE AN INSTALLED AGENT'S BINDING IS READ AS
+  // HEALTHY: what a runtime read registered under the id may be another
+  // surface's revision of it. The host's own bindings are its build's.
+  if (bindings.status === "failed" && isRendererBoundByRuntimeRead(xRenderer)) {
+    return SCREEN_FAILED_HOLD_REASON;
   }
   if (isRendererBound(xRenderer)) return null;
   if (bindings.status === "loading") return SCREEN_LOADING_HOLD_REASON;

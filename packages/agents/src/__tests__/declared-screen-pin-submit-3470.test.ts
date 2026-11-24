@@ -138,6 +138,7 @@ const pauseClaimFake = claimModule as unknown as Record<
 const server = bindingsServer as unknown as {
   __clearInstalledFieldRendererBindingsCache: () => void;
   withDeclaredScreenPin?: (schema: Record<string, unknown>, x: string) => Record<string, unknown>;
+  currentDeclaredScreenPin?: (x: string, opts?: { fresh?: boolean }) => string | null;
 };
 
 /** Write the fixture agent's manifest; the bindings cache is left as it is. */
@@ -283,6 +284,22 @@ describe("an answer is sent only under the declared screen its step opened under
     // red-first-expect: expected 'sent' to contain 'changed after the step opened'
     expect(await answer()).toContain("changed after the step opened");
     expectRefusedAndGivenBack();
+  });
+
+  it("a step that parks while the bindings cache still holds an earlier declaration is pinned to the one installed, and is answered", async () => {
+    install("Fixture cached before park");
+    // A read made before the park: the cache holds this declaration.
+    const cachedPin = server.currentDeclaredScreenPin?.(ID);
+    // The agent is updated, and the cache is not cleared before the run parks.
+    writeManifest(manifest("Fixture installed at park"));
+    park();
+    const pinned = gateRow.inputSchema["x-declared-screen"];
+    // red-first-expect: expected undefined to match /^sha256:/
+    expect(pinned).toMatch(/^sha256:/);
+    expect(pinned).not.toBe(cachedPin);
+    expect(pinned).toBe(server.currentDeclaredScreenPin?.(ID, { fresh: true }));
+    expect(await answer()).toBe("sent");
+    expect(sendTask).toHaveBeenCalledTimes(1);
   });
 
   it("a declaration that can no longer be read (a malformed manifest) refuses the answer", async () => {

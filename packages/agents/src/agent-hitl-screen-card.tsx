@@ -163,6 +163,8 @@ import {
   continueApprovalFlag,
   continueHeldByRenderer,
   rendererBindingHoldReason,
+  SCREEN_FAILED_HOLD_REASON,
+  SCREEN_LOADING_HOLD_REASON,
   stageRendererAnswer,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
@@ -1310,13 +1312,14 @@ export function AgentHitlScreenCard({
   // The gate as this card's registry readings see it: under the scoped id of
   // its own declared screen once that is registered. Its identity (the buffer,
   // the answered register, the submit) stays the gate's own.
-  const rendererGate = useMemo(() => {
-    const scopedId =
-      liveRegistration !== null && liveRegistration.key === declaredScreenKey
-        ? liveRegistration.scopedId
-        : null;
-    return gate !== null && scopedId !== null ? { ...gate, xRenderer: scopedId } : gate;
-  }, [gate, liveRegistration, declaredScreenKey]);
+  const ownScopedId =
+    liveRegistration !== null && liveRegistration.key === declaredScreenKey
+      ? liveRegistration.scopedId
+      : null;
+  const rendererGate = useMemo(
+    () => (gate !== null && ownScopedId !== null ? { ...gate, xRenderer: ownScopedId } : gate),
+    [gate, ownScopedId],
+  );
 
   // WHERE THIS GATE'S BINDING STANDS (cinatra#3470), as the run page reads its
   // own: the read could not tell (failed), the declared screen it handed over
@@ -1346,6 +1349,15 @@ export function AgentHitlScreenCard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [declaredScreenUnavailable, refusedScreenId, declaredScreenKey, registeredScreenKey],
   );
+  // A GATE WITHOUT ITS OWN DRAWABLE DECLARATION RESOLVES NOTHING (cinatra#3470).
+  // Its declared screen is unavailable (refused, unreadable, or changed since
+  // the step opened), or is not registered under this card's scoped id. The
+  // registry can still hold a binding under the gate's own renderer id (one a
+  // run page registered, possibly another revision of it), so that id is never
+  // read: the card draws the empty region and its Continue holds, with the
+  // reason of the binding's standing.
+  const screenWithheld =
+    declaredScreenUnavailable || (declaredScreenKey !== null && ownScopedId === null);
 
   // THE BUFFER BELONGS TO ONE GATE, AND ONLY TO IT.
   //
@@ -1612,18 +1624,21 @@ export function AgentHitlScreenCard({
     // not a grouped-setup form. A grouped-setup form carries its own submit, and
     // a setup-loop field submits on change — a second Continue on either would
     // be a control the run page does not offer.
-    const { isMidRun: midRunByRenderer, isGroupedSetup } = classifyHitlGate(gate);
+    const { isMidRun: midRunByRenderer, isGroupedSetup } = screenWithheld
+      ? { isMidRun: false, isGroupedSetup: false }
+      : classifyHitlGate(gate);
     // A STEP WHOSE DECLARED SCREEN IS UNAVAILABLE (cinatra#3470: refused,
     // unreadable, or changed since the step opened) draws the held Continue
     // with its reason, whatever its id: never a control that sends, and never
     // a gate that silently shows no renderer.
     const isMidRun =
-      midRunByRenderer || (declaredScreenUnavailable && !isSetupGateTaskId(gate.reviewTaskId));
+      midRunByRenderer || (screenWithheld && !isSetupGateTaskId(gate.reviewTaskId));
     // A renderer that is not declared safe without a session is withheld
     // wherever there is no session — see the header. The condition is the
     // ABSENCE of a session rather than the presence of a credential, so a host
     // that declares neither is covered by it too.
-    const withholdRenderer = !cookieSession && !gateRendererIsSessionFree(runId, gate);
+    const withholdRenderer =
+      !screenWithheld && !cookieSession && !gateRendererIsSessionFree(runId, gate);
     // §I "NO SEND" — see `cardOwnsTheSetupSend` and
     // `gateMountsAnAnsweringRenderer`. On a conversation host the SETUP gate's
     // send is the CARD'S: the card draws its own Continue outside the region and
@@ -1633,6 +1648,7 @@ export function AgentHitlScreenCard({
     // resolves to no renderer at all keeps whatever control it has, and the card
     // draws none of its own there.
     const cardOwnsSetupSend =
+      !screenWithheld &&
       cardOwnsTheSetupSend(host, gate, gateRendererDrawsOwnSubmit(runId, gate)) &&
       !withholdRenderer &&
       gateMountsAnAnsweringRenderer(runId, gate);
@@ -1647,14 +1663,28 @@ export function AgentHitlScreenCard({
           onBuffer={onBuffer}
           onSubmitField={cardOwnsSetupSend ? stageSetupAnswer : submit}
           onSubmitBuffer={onSubmitBuffer}
-          withholdRenderer={withholdRenderer}
+          withholdRenderer={withholdRenderer || screenWithheld}
           rendererContext={rendererContext}
           hideRendererSubmit={cardOwnsSetupSend}
           registerFlush={cardOwnsSetupSend ? registerRendererFlush : undefined}
           gateKey={gateKey ?? ""}
         />
         </RendererFloorReportContext.Provider>
-        {isMidRun && !isGroupedSetup ? (
+        {isMidRun && screenWithheld ? (
+          // Held with the reason of the binding's standing; nothing is resolved.
+          <AgentHitlScreenContinue
+            gate={gate}
+            buffered={activeBuffered}
+            submitting={submitting}
+            held
+            holdReason={
+              gateBindings.status === "loading" ? SCREEN_LOADING_HOLD_REASON : SCREEN_FAILED_HOLD_REASON
+            }
+            blocked={!cookieSession && auth === null}
+            awaitsPick={false}
+            onContinue={onContinue}
+          />
+        ) : isMidRun && !isGroupedSetup ? (
           <AgentHitlScreenContinue
             gate={gate}
             buffered={activeBuffered}
@@ -1702,7 +1732,7 @@ export function AgentHitlScreenCard({
     // A declared screen registered after the read re-resolves the renderer.
     rendererGate,
     gateBindings,
-    declaredScreenUnavailable,
+    screenWithheld,
   ]);
 
   // Nothing before an authorized read, and NO DOM AT ALL for `none` — the

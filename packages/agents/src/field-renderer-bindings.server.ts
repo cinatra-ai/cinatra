@@ -355,7 +355,10 @@ export function stepDeclarationStanding(
  * declaration that cannot be read, writes no pin (the schema of every gate
  * without a screen stays as it was): the step then reads as opened with no
  * screen, and a screen declared later is never drawn for it. A pin the gate's
- * own schema carries is dropped: only the host writes one.
+ * own schema carries is dropped: only the host writes one. The pin is read
+ * FRESH past the bindings cache, as the check before an answer is sent reads
+ * it: a cached declaration can be one updated since, and a step pinned to it
+ * would refuse every answer to the screen installed when it opened.
  */
 export function withDeclaredScreenPin(
   schema: Record<string, unknown>,
@@ -363,7 +366,7 @@ export function withDeclaredScreenPin(
 ): Record<string, unknown> {
   const { [DECLARED_SCREEN_PIN_KEY]: _held, ...rest } = schema;
   void _held;
-  const pin = currentDeclaredScreenPin(xRenderer);
+  const pin = currentDeclaredScreenPin(xRenderer, { fresh: true });
   return pin === null || pin === DECLARED_SCREEN_PIN_NONE
     ? rest
     : { ...rest, [DECLARED_SCREEN_PIN_KEY]: pin };
