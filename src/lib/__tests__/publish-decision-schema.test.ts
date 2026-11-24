@@ -88,7 +88,7 @@ describe("agent_run_publish_decisions — DDL parity", () => {
     });
   });
 
-  // red-first-expect: expected [ Array(15) ] to deeply equal [ Array(16) ]
+  // red-first-expect: expected [ Array(16) ] to deeply equal [ Array(17) ]
   it("the Drizzle table matches the DDL's columns, nullability and indexes", async () => {
     const mod = await loadMigration();
     const config = getTableConfig(agentRunPublishDecisions);

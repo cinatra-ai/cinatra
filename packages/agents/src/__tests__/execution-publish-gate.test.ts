@@ -262,8 +262,9 @@ describe("a run that reaches a publish gate (A4 without the moment)", () => {
 
   // cinatra#4758: the pause records its own gate task in the compare-and-set that enters it, so the run row names this
   // gate's task for exactly this pause, and a Publish's claim bound to that task lands only here.
-  // Red first at 7ca04b14: the park move named no task.
-  // red-first-expect: expected undefined to deeply equal { pauseTaskId: 'task-gate-1' }
+  // Red first at 7ca04b14: the park move named no task. Red now against main without cinatra#4762: the move names no
+  // attempt generation.
+  // red-first-expect: expected { pauseTaskId: 'task-gate-1' } to deeply equal { attemptGeneration: +0, …(1) }
   it("the park move writes the gate's own task id with the pause", async () => {
     await pause(sign(GATE));
     // cinatra#4762: the move also carries the reset generation of the attempt that reached the gate.
