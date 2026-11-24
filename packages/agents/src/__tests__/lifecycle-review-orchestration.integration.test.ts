@@ -1186,6 +1186,9 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
       // three counters are gone.
       producerRepairsCompleted: 0,
       producerRepairsUnresolved: 0,
+      // The completer's escalation of a Regenerate run in another input form;
+      // same fence, same short-circuit.
+      producerRepairsEscalated: 0,
     });
     // The event stays pending (unprocessed) while the fence is off.
     const row = await readEventRow(ev.eventId);

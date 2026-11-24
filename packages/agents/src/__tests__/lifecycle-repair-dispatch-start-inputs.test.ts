@@ -462,6 +462,51 @@ describe("input data cannot become repair authorization", () => {
     expect(ports.writes.at(-1)!.values.status).toBe("dispatched");
   });
 
+  // The worker can finish the run before the pass that enqueued it marks the
+  // repair dispatched. A retry that finds the run completed, exactly as the
+  // plan writes it, marks the repair dispatched with no second create and no
+  // second job, so the completer takes the run's output. A completed run in
+  // another form is escalated; there is nothing to stop.
+  // red-first-expect: expected { scanned: 1, dispatched: +0, …(3) } to match object { scanned: 1, dispatched: 1, …(2) }
+  it("a Regenerate retry whose run already completed as the plan writes it is marked dispatched: no second create and no second job", async () => {
+    const created = await firstPassCreatesAndEnqueuesTheRun();
+    ports.writes = []; // the first pass's failed mark
+
+    arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG);
+    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
+    ports.reads[3] = [{ id: repairRunId("repair-current"), status: "completed",
+      inputParams: JSON.stringify(created.inputParams), parentRunId: created.parentRunId }];
+    const result = await dispatchPendingProducerRepairs();
+    expect(result).toMatchObject({ scanned: 1, dispatched: 1, escalated: 0, failed: 0 });
+    expect(segmentPlan.calls).toHaveLength(2);
+    expect(ports.created).toHaveLength(1);
+    expect(ports.queued).toHaveBeenCalledOnce(); // the first pass's call only
+    expect(ports.transitions).toHaveLength(0);
+    expect(ports.writes.map((w) => w.values.status)).toEqual(["dispatched"]);
+    const condition = ports.writes[0].condition as Parameters<PgDialect["sqlToQuery"]>[0];
+    expect(new PgDialect().sqlToQuery(condition).params).toEqual(["repair-current", "requested"]);
+    expect(ports.reads).toHaveLength(0);
+  });
+
+  it("a Regenerate retry whose run already completed in another form than the plan writes is escalated, never marked dispatched", async () => {
+    const created = await firstPassCreatesAndEnqueuesTheRun();
+    ports.writes = []; // the first pass's failed mark
+
+    arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG);
+    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
+    ports.reads[3] = [{ id: repairRunId("repair-current"), status: "completed",
+      inputParams: JSON.stringify({ ...created.inputParams as Record<string, unknown>, draftNote: "another note" }),
+      parentRunId: created.parentRunId }];
+    ports.updateResults = [[{ lineageId: "lineage-current" }]];
+    const result = await dispatchPendingProducerRepairs();
+    expect(result).toMatchObject({ scanned: 1, dispatched: 0, escalated: 1, failed: 0 });
+    expect(ports.queued).toHaveBeenCalledOnce(); // the first pass's call only
+    expect(ports.transitions).toHaveLength(0);
+    expect(ports.writes.map((w) => w.values.status)).toEqual(["escalated"]);
+    expect(String(ports.writes[0].values.changeSummary)).toContain(dispatchStore.REGENERATE_RUN_NOT_DECLARED_FORM);
+    expect(ports.reads).toHaveLength(0);
+  });
+
   // red-first-expect: expected { scanned: 1, dispatched: 1, …(3) } to match object { scanned: 1, dispatched: +0, …(2) }
   it("a Regenerate retry whose run already exists and whose new plan refuses stops the run, then escalates: no second create, no second job", async () => {
     const created = await firstPassCreatesAndEnqueuesTheRun();
@@ -785,7 +830,7 @@ describe("input data cannot become repair authorization", () => {
     expect(ports.writes.map((w) => w.values.status)).not.toContain("escalated");
   });
 
-  it("a Regenerate retry whose run is already terminal moves nothing and escalates", async () => {
+  it("a Regenerate retry whose run already failed moves nothing and escalates", async () => {
     await firstPassCreatesTheRunButNoJob(); ports.run = { status: "failed" };
     arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG); ports.role = undefined;
     ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];

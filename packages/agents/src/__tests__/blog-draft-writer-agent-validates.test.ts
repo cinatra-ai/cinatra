@@ -185,6 +185,24 @@ describe("blog-draft-writer-agent OAS validates against L1, LLM metadata, and St
     // control-flow connection (18 / 3 before it).
     // 21 data edges: the Regenerate note (cinatra#4264) adds one from the start to the writer.
     expect(dfc.length).toBe(21);
+    // That edge runs from the flow's start node's `note` output to the writer's
+    // declared `note` input; both endpoints are read from this OAS.
+    const startRef = (oas.start_node as { $component_ref: string }).$component_ref;
+    expect(refs[startRef]?.component_type).toBe("StartNode");
+    expect((refs[startRef].inputs as Array<{ title: string }>).map((i) => i.title)).toContain("note");
+    const noteEdges = (dfc as Array<Record<string, unknown>>).filter(
+      (c) =>
+        (c.source_node as { $component_ref?: string } | undefined)?.$component_ref === startRef &&
+        c.source_output === "note",
+    );
+    expect(noteEdges).toHaveLength(1);
+    const writerRef = (noteEdges[0].destination_node as { $component_ref: string }).$component_ref;
+    expect(writerRef).toBe("write");
+    expect(noteEdges[0].destination_input).toBe("note");
+    const writer = refs[writerRef];
+    expect(writer?.component_type).toBe("ApiNode");
+    expect(writer.url).toBe(BRIDGE_URL);
+    expect((writer.inputs as Array<{ title: string }>).map((i) => i.title)).toContain("note");
     const cfc = oas.control_flow_connections as unknown[];
     expect(cfc.length).toBe(4);
   });

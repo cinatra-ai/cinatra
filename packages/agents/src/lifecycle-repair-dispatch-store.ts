@@ -494,10 +494,15 @@ async function deliverRepair(row: typeof lifecycleRepair.$inferSelect): Promise<
   // run first too, so an escalated Regenerate never leaves a live run or job
   // behind it.
   //
-  // A Regenerate whose existing run is already terminal is escalated here,
-  // never enqueued or marked dispatched: a pass that stopped the run and
-  // died before its escalation leaves a stopped run and a `requested`
-  // repair, and the check that stopped it may pass on this pass.
+  // A Regenerate whose existing run already failed or was stopped is
+  // escalated here, never enqueued or marked dispatched: a pass that stopped
+  // the run and died before its escalation leaves a stopped run and a
+  // `requested` repair, and the check that stopped it may pass on this pass.
+  // A run that already COMPLETED (the worker finished it before an earlier
+  // pass marked the repair dispatched) is planned like any existing run: when
+  // it is exactly what the plan writes, the repair is marked dispatched with
+  // no second job, so the completer takes its output as the successor; a
+  // refused plan or another form escalates it.
   const [already] = await db
     .select({
       id: agentRuns.id,
@@ -511,7 +516,8 @@ async function deliverRepair(row: typeof lifecycleRepair.$inferSelect): Promise<
   if (
     already &&
     hasRegenerateIntent(row.regenerateNodeId) &&
-    TERMINAL_RUN_STATUSES.has(already.status as AgentRunStatus)
+    TERMINAL_RUN_STATUSES.has(already.status as AgentRunStatus) &&
+    already.status !== "completed"
   ) {
     const escalated = await escalateRepair(
       row.id,
@@ -540,19 +546,29 @@ async function deliverRepair(row: typeof lifecycleRepair.$inferSelect): Promise<
       findings: request.findings,
       request: request as unknown as Record<string, unknown>,
     });
+    // A completed run has nothing left to stop.
+    const completed = already?.status === "completed";
     if (segment.kind === "refused") {
       // An existing run is stopped first; with none, nothing is left to stop.
-      const escalated = already
+      const escalated = already && !completed
         ? await escalateRepairBeforeRunRead(row, segment.reason)
         : await escalateRepair(row.id, segment.reason);
       return escalated ? "escalated" : "raced";
     }
     if (already && !existingRunMatchesPlan(already, segment)) {
-      const escalated = await escalateRepairBeforeRunRead(
-        row,
-        "the Regenerate's repair run was made with other inputs than the reviewer's words in the step's declared input, so it is stopped and not sent",
-      );
+      const escalated = completed
+        ? await escalateRepair(row.id, REGENERATE_RUN_NOT_DECLARED_FORM)
+        : await escalateRepairBeforeRunRead(
+            row,
+            "the Regenerate's repair run was made with other inputs than the reviewer's words in the step's declared input, so it is stopped and not sent",
+          );
       return escalated ? "escalated" : "raced";
+    }
+    if (completed) {
+      // The planned run already finished: the same compare-and-set as below,
+      // and no job, because the run is not started again.
+      const moved = await markRepairDispatched(row.id);
+      return moved ? "dispatched" : "raced";
     }
     segmentParentRunId = segment.parentRunId;
     segmentInputParams = segment.inputParams;
