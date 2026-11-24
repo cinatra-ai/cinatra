@@ -153,8 +153,10 @@ export function buildIslandArtifactByteMinter(params: {
   principal: IslandBytePrincipal;
   runId: string;
   reviewTaskId: string;
+  /** A publish row's road (cinatra#4738 round 2): `reviewTaskId` is the row's subject key. Absent ⇒ a gate. */
+  subject?: "publish-decision";
 }): ArtifactByteUrlMinter {
-  const { principal, runId, reviewTaskId } = params;
+  const { principal, runId, reviewTaskId, subject } = params;
   const seal = (
     artifactId: string,
     representationRevisionId: string,
@@ -173,6 +175,7 @@ export function buildIslandArtifactByteMinter(params: {
       artifactId,
       representationRevisionId,
       disposition,
+      ...(subject ? { subject } : {}),
     });
     return sealed ? reviewIslandByteUrl(sealed) : null;
   };

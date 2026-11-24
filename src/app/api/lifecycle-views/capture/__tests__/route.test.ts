@@ -31,6 +31,20 @@ vi.mock("@/lib/artifacts/cms-preview-capture-store", () => ({
 vi.mock("@/lib/lifecycle/widget-capture-principal", () => ({
   readLiveWidgetCapturePrincipal: (jti: string) => readLiveWidgetCapturePrincipal(jti),
 }));
+// The artifact read (`object.read`) the route re-proves for each pinned target, as the sealed user with that
+// person's live standing (cinatra#4738).
+const readArtifactForDetail = vi.fn();
+vi.mock("@/lib/lifecycle/widget-lifecycle-frame-actor", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/lifecycle/widget-lifecycle-frame-actor")>()),
+  resolveWidgetLifecycleStanding: async ({ userId, orgId }: { userId: string; orgId: string }) => ({
+    ok: true,
+    actorCtx: { actor: { actorType: "human", source: "a2a", userId, orgId }, orgId, roleHints: { actorOrganizationId: orgId } },
+  }),
+}));
+vi.mock("@/lib/artifacts/artifact-service", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/artifacts/artifact-service")>()),
+  readArtifactForDetail: (input: unknown) => readArtifactForDetail(input),
+}));
 vi.mock("@/lib/artifacts/local-disk-blob-store", () => ({
   createLocalDiskBlobStore: () => ({ openByStorageKey }),
 }));
@@ -93,6 +107,8 @@ describe("GET /api/lifecycle-views/capture", () => {
     readPinnedPreviewCapture.mockReset();
     readLiveWidgetCapturePrincipal.mockReset();
     openByStorageKey.mockReset();
+    readArtifactForDetail.mockReset();
+    readArtifactForDetail.mockReturnValue({ kind: "ok", artifact: { id: "art-1" } });
 
     readLiveWidgetCapturePrincipal.mockReturnValue({
       userId: "user-1",
@@ -269,5 +285,17 @@ describe("GET /api/lifecycle-views/capture", () => {
     });
     expect((await GET()).status).toBe(404);
     expect(openByStorageKey).not.toHaveBeenCalled();
+  });
+
+  // Red first at 611f33ba: the gate's pinned set answered without the artifact read, so this served 200.
+  // red-first-expect: expected 200 to be 404
+  it("a gate capture for a target the reader may not read as an artifact 404s, though the run stays readable", async () => {
+    expect((await GET()).status).toBe(200);
+    readArtifactForDetail.mockReturnValue({ kind: "denied" });
+    const res = await GET();
+    expect(res.status).toBe(404);
+    expect(readArtifactForDetail).toHaveBeenLastCalledWith(
+      expect.objectContaining({ artifactId: "art-1", orgId: "org-1", actor: expect.objectContaining({ principalId: "user-1" }) }),
+    );
   });
 });

@@ -3670,7 +3670,7 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   }
 
   return (
-    <div className="flex items-start gap-6">
+    <div className="flex items-start gap-6 max-[620px]:flex-col max-[620px]:items-stretch" data-run-frame="">
       <StepperColumn
         stepperSteps={stepperSteps}
         activeStep={pausedActiveStep}

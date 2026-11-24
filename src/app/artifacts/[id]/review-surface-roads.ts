@@ -107,6 +107,12 @@ export interface ReviewIslandRoad {
   principal: IslandBytePrincipal;
   runId: string;
   reviewTaskId: string;
+  /**
+   * A PUBLISH ROW'S ROAD (cinatra#4738 round 2). Absent is a review gate. `publish-decision` is one artifacts row of a
+   * publish card: `reviewTaskId` is the row's subject key, and every capability minted on the road seals that it is a
+   * publish row's, so its serving path proves the target against that row's own set and never a gate's.
+   */
+  subject?: "publish-decision";
 }
 
 /** Everything a surface may hand the shared preparation path. */

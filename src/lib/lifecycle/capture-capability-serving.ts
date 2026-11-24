@@ -106,11 +106,24 @@ export interface CaptureServePorts {
     userId: string;
     orgId: string;
   }) => Promise<boolean>;
-  /** The gate's FROZEN pinned target set — null when the gate is absent. */
+  /** The gate's FROZEN pinned targets the sealed reader may still read (`object.read`) — null when the gate is absent. */
   readGatePinnedTargets: (
     runId: string,
     reviewTaskId: string,
+    /** The sealed reader: the set answered is the targets this reader may still read as artifacts. */
+    reader: { userId: string; orgId: string },
   ) => Promise<readonly CaptureGateTarget[] | null>;
+  /**
+   * A PUBLISH ROW'S proven target set (cinatra#4738 round 2), for a capability sealed as a publish row's: the row its
+   * subject key names on the run's newest decision, read as the sealed principal — null when there is none. A port
+   * set that names no reader here refuses every publish-row capability.
+   */
+  readPublishDecisionPinnedTargets?: (input: {
+    runId: string;
+    subjectKey: string;
+    userId: string;
+    orgId: string;
+  }) => Promise<readonly CaptureGateTarget[] | null>;
   /** One capture row, by id, scoped to the org. */
   readCapture: (orgId: string, captureArtifactId: string) => CaptureRecordFacts | null;
   /** The blob facts for the capture's PNG representation. */
@@ -216,10 +229,22 @@ export async function decideCaptureCapabilityServe(params: {
 
     // 5. The gate binding. The gate's pinned set is FROZEN at emission, so this
     //    is the authoritative answer to "is this picture part of this gate?".
-    const targets = await ports.readGatePinnedTargets(
-      capability.runId,
-      capability.reviewTaskId,
-    );
+    //    A PUBLISH ROW'S capability (cinatra#4738 round 2) is proven against that row's own set instead, and never
+    //    against a gate's: the sealed kind decides which set is read, so neither can stand in for the other.
+    const targets =
+      capability.subject === "publish-decision"
+        ? ports.readPublishDecisionPinnedTargets
+          ? await ports.readPublishDecisionPinnedTargets({
+              runId: capability.runId,
+              subjectKey: capability.reviewTaskId,
+              userId: capability.userId,
+              orgId: capability.orgId,
+            })
+          : null
+        : await ports.readGatePinnedTargets(capability.runId, capability.reviewTaskId, {
+            userId: capability.userId,
+            orgId: capability.orgId,
+          });
     if (!targets || targets.length === 0) return REFUSED;
 
     const capture = ports.readCapture(capability.orgId, capability.captureArtifactId);

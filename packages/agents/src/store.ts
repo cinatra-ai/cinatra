@@ -1,4 +1,5 @@
 import { eq, ne, desc, max, asc, and, or, ilike, sql, inArray, isNull, isNotNull, type SQL } from "drizzle-orm";
+import type { PublishRowsMap } from "./publish-decision-card";
 import type { AgentIOSpec } from "@cinatra-ai/objects";
 import { listSavedNangoConnections } from "@/lib/nango-system";
 import { randomUUID } from "node:crypto";
@@ -270,7 +271,7 @@ export type AgentTemplateRecord = {
   publishingSteps?: string[] | null;
   // The publish card's rows per declared node (cinatra#4150), from
   // `metadata.cinatra.publishRows`; null = unknown, as publishingSteps.
-  publishRows?: Record<string, Array<{ label: string; input: string }>> | null;
+  publishRows?: PublishRowsMap | null;
   // template-level default AgentAuthPolicy. null = use
   // DEFAULT_AGENT_AUTH_POLICY from auth-policy.ts. Persisted as JSON-as-text
   // in agent_templates.agent_auth_policy.
@@ -355,7 +356,7 @@ export type CreateAgentTemplateInput = {
   publishingSteps?: string[] | null;
   // The publish card's rows per declared node (cinatra#4150). null clears it
   // back to "unknown"; omit to leave the column unchanged.
-  publishRows?: Record<string, Array<{ label: string; input: string }>> | null;
+  publishRows?: PublishRowsMap | null;
   // template-level default policy; pass null or omit to leave unset
   // (resolves to DEFAULT_AGENT_AUTH_POLICY at read time).
   agentAuthPolicy?: AgentAuthPolicy | null;
