@@ -3,7 +3,7 @@ import { verifyRunExecutedSource } from "@cinatra-ai/agents/store";
 import "server-only";
 import { NextResponse } from "next/server";
 
-import { publishCallAllowed, readAgentRunById } from "@cinatra-ai/agents";
+import { publishCallAllowed, publishingStepCallReleased, readAgentRunById } from "@cinatra-ai/agents";
 import { collectAllPrimitiveHandlers } from "@/lib/primitive-handlers";
 import { isAuthorizedBridgeRequest } from "@/lib/wayflow-bridge-auth";
 import { bindBridgeRunId } from "@/lib/authz/bridge-run-binding";
@@ -56,6 +56,10 @@ import { EXTENSION_TOOL_REVIEW_TARGETS_KEY } from "@/lib/extension-tool-dispatch
 import { EXTENSION_TOOL_STEP_UNPROVEN } from "@/lib/extension-scoped-tools-refusals";
 import { RUN_FOLDER_TOOLS } from "@/lib/run-folder-tools";
 import {
+  declaresPassthroughPublishingStep,
+  loadPassthroughPublishingStepHandler,
+} from "@/lib/passthrough-publishing-step-tools";
+import {
   PASSTHROUGH_ACTOR_CONTEXT_ERROR,
   passthroughFailureText,
   passthroughFixedFailureText,
@@ -89,6 +93,14 @@ import { RUN_ACTION_REFUSED, runActionRefusalCode } from "@/lib/run-action-refus
  * Allowlist: only deterministic-dispatch primitives are exposed. Anything
  * not on the list returns 403 (defense-in-depth even though the bridge
  * token is required).
+ *
+ * The publishing-step declaration (cinatra#3089): a primitive whose owning
+ * package declares `passthroughPublishingStep: true` in its own metadata
+ * (@/lib/passthrough-publishing-step-tools) is admitted without a name on the
+ * list, and only as the call of a declared publishing step: the verified
+ * calling step must be listed in the run's compiled `publishingSteps` and its
+ * newest publish decision must read `released`. The road names no package and
+ * no tool for it; every other check below applies to it unchanged.
  */
 
 const ALLOWED_TOOLS = new Set([
@@ -398,7 +410,11 @@ export async function POST(req: Request): Promise<Response> {
   if (!tool) {
     return NextResponse.json({ error: "`tool` is required" }, { status: 400 });
   }
-  if (!ALLOWED_TOOLS.has(tool)) {
+  // cinatra#3089: a tool off the list is admitted only by its owning package's
+  // publishing-step declaration, and then only as a declared publishing step's
+  // call (checked below, once the run and the step are proven).
+  const publishingStepTool = !ALLOWED_TOOLS.has(tool) && declaresPassthroughPublishingStep(tool);
+  if (!ALLOWED_TOOLS.has(tool) && !publishingStepTool) {
     return NextResponse.json(
       {
         error: `Tool "${tool}" is not on the deterministic-passthrough allowlist. ` +
@@ -497,6 +513,15 @@ export async function POST(req: Request): Promise<Response> {
   if (!(await publishCallAllowed(run, verifiedStepId))) {
     return NextResponse.json(
       { error: "This call waits for a publish decision.", code: "publish_not_released" },
+      { status: 403 },
+    );
+  }
+  // cinatra#3089: a declared publishing-step tool is served only to a verified
+  // step the run's compiled flow lists as publishing, whose newest decision is
+  // released. A step that is not listed is refused whatever its rows say.
+  if (publishingStepTool && !(await publishingStepCallReleased(run, verifiedStepId))) {
+    return NextResponse.json(
+      { error: "This tool is served only as a declared publishing step's call.", code: "publishing_step_required" },
       { status: 403 },
     );
   }
@@ -842,6 +867,20 @@ export async function POST(req: Request): Promise<Response> {
         );
       }
       result = outcome.result;
+    } else if (publishingStepTool) {
+      // cinatra#3089: the declared tool's handler, from its owning package, as
+      // the run PROVEN above: the run owner's actor and the run's organisation,
+      // inside the run's frame (run, verified step, executing-source proof and
+      // run write authority). The MCP boundary is not crossed; this road is the
+      // one road for a run's outward call, and it is gated above by the step's
+      // released decision.
+      const handler = await loadPassthroughPublishingStepHandler(tool);
+      if (!handler) {
+        return NextResponse.json({ error: `Tool "${tool}" has no registered handler.` }, { status: 404 });
+      }
+      result = await withActorContext(alsActorContext, () =>
+        handler({ primitiveName: tool, input, actor, mode: "agentic" }),
+      );
     } else {
       const handlers = await collectAllPrimitiveHandlers();
       const handler = handlers[tool];

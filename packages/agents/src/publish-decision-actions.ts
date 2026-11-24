@@ -673,6 +673,27 @@ export async function publishCallAllowed(run: { id: string; templateId: string }
   }
 }
 
+/**
+ * The call-site check of a tool its owning package declares as servable on the passthrough road only as a declared
+ * publishing step's call (cinatra#3089): true only when the verified step is listed in the run's compiled
+ * `publishingSteps` AND that step's newest decision reads `released`. Unlike publishCallAllowed, a step that is not
+ * listed is refused whatever its decision rows say, and so is a call with no verified step, a template that is not
+ * found and a list stored as null. A read error refuses the call; it is logged by the error's name only.
+ */
+export async function publishingStepCallReleased(run: { id: string; templateId: string }, verifiedStepId: string | undefined): Promise<boolean> {
+  if (typeof verifiedStepId !== "string" || verifiedStepId === "") return false;
+  try {
+    const template = await readAgentTemplateById(run.templateId);
+    const listed = template?.publishingSteps;
+    if (!Array.isArray(listed) || !listed.includes(verifiedStepId)) return false;
+    const row = await readDecisionForRunNode(run.id, verifiedStepId);
+    return row?.status === "released";
+  } catch (err) {
+    console.warn(`[publish-decision] a publishing step's call could not check its publish decision: ${nameOf(err)}`);
+    return false;
+  }
+}
+
 export interface PublishExpirySweepSummary {
   due: number;
   expired: number;
