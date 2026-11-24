@@ -99,6 +99,11 @@ export default defineConfig({
         root,
         "packages/agents/src/agent-hitl-screen-card.tsx",
       ),
+      // cinatra#4150 -- the publish card, mounted beside it. Subpath alias, above the bare entry.
+      "@cinatra-ai/agents/publish-decision-card-view": path.join(
+        root,
+        "packages/agents/src/publish-decision-card-view.tsx",
+      ),
       "@cinatra-ai/agents/agent-hitl-screen": path.join(
         root,
         "packages/agents/src/agent-hitl-screen.ts",
@@ -213,6 +218,8 @@ export default defineConfig({
     testTimeout: 30_000,
     hookTimeout: 30_000,
     environment: "node",
+    // cinatra#4150 -- the publish card's read answers "no open decision" in every suite that does not mock it itself.
+    setupFiles: ["./src/__tests__/publish-card-read.setup.ts"],
     include: ["src/**/__tests__/**/*.test.ts", "src/**/__tests__/**/*.test.tsx"],
     // @ts-ignore — environmentMatchGlobs is a valid vitest option but missing from InlineConfig types
     environmentMatchGlobs: [["src/**/__tests__/**/*.test.tsx", "jsdom"]],

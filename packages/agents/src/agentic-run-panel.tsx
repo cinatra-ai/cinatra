@@ -40,6 +40,13 @@ import {
   hitlFieldPresentationFor,
 } from "./agent-hitl-screen-card";
 import type { AgentRunMessageBody } from "./store";
+import {
+  PublishDecisionCard,
+  publishDecisionIsSettled,
+  publishGateIsOpen,
+  usePublishDecisionCardRead,
+  type PublishDecisionCardRead,
+} from "./publish-decision-card-view";
 import { StatusPill } from "@/components/ui/status-pill";
 import {
   continueAwaitsAPick,
@@ -352,6 +359,21 @@ export type AgenticRunPanelProps = {
    * deliberately does not read. Absent on a host that does not ask.
    */
   onReviewReadingChange?: (runId: string, drawsReview: boolean) => void;
+  /**
+   * The publish card read's CHANGE SIGNAL as this panel computes it (cinatra#4150), reported on every change: the
+   * run's status, the gate it waits at, and, while it waits with no gate context, each reading of the run (see
+   * `publishReadSignal`). A host that mounts a run-keyed card OUTSIDE this panel (the conversation column's publish
+   * card) uses it as that card's `wireRef`, so the card re-reads when the run moves, including to another gate under
+   * the same status. `status` is the run status the panel draws: the host hands it to the shared read, which keeps
+   * re-reading while the run has not finished. Absent on a host that does not ask.
+   */
+  onRunChangeSignal?: (runId: string, signal: string, status: string) => void;
+  /**
+   * The run's publish card read the HOST already resolved (cinatra#4150): the conversation turn reads once and hands
+   * the same answer to its own card and to this panel, so the approval banner here and the card there cannot
+   * disagree. Absent, the panel reads once itself and hands that answer to the card it mounts.
+   */
+  publishRead?: PublishDecisionCardRead;
 };
 
 export type ChatGateField = {
@@ -584,6 +606,8 @@ export function AgenticRunPanel({
   refreshReviewRail,
   readReviewSlot,
   onReviewReadingChange,
+  onRunChangeSignal,
+  publishRead: hostPublishRead,
   inputStepInRail = false,
   railDrawsTheFrame = false,
 }: AgenticRunPanelProps) {
@@ -2064,6 +2088,52 @@ export function AgenticRunPanel({
     }
   }, [refetchDerivedContext]);
 
+  // A PUBLISH GATE IS NOT A GENERIC APPROVAL (cinatra#4150). A run parked at a publish gate is `pending_approval` with
+  // no gate context and no generic review task (publish-decision-actions.ts, `holdRunAtPublishGate`), so the generic
+  // approval branch below would draw its "Review approval" link, its loading line and its Re-check beside the card.
+  //
+  // ONE READ DECIDES BOTH. The banner's stand-down and the card's drawing come from the SAME resolved read: the
+  // host's (a conversation turn), or else this panel's own, which it also hands to the card it mounts, so that card
+  // reads nothing itself. Two reads could disagree (a transient fault reads as `none` on one), and then either both
+  // surfaces drew or neither did. THE FAILURE RULE: the banner stands down only when the read POSITIVELY answers
+  // `pending`, and that same answer draws the card. A read that has not landed, failed with no earlier answer, or
+  // answered `none` keeps today's banner and draws no card, so a paused run always shows exactly one surface. A
+  // failed re-read keeps the last answer for both.
+  //
+  // THE READ'S CHANGE SIGNAL IS PER GATE, NOT PER STATUS. A run can move from one pause to another with no status
+  // change any reading sees: it resumes from an ordinary approval gate (or from a settled publish gate) and parks at
+  // its publish gate before a poll observes the running state between them. Keyed on the status alone, the read kept
+  // its earlier answer (`none`, or the settled gate's) and the wrong surface stood until a focus or a reload. So the
+  // signal names the gate the run waits at, and a pause with NO gate context, the publish gate's own shape (it has no
+  // gate context and no task id this panel can see), moves with every reading of the run, so the card's state
+  // follows the run at the panel's existing cadence. A run parked on its produced output's review is a known pause
+  // that is not a publish gate, so it does not tick.
+  const publishReadSignal = !isPendingApproval
+    ? status
+    : effectiveHitlContext
+      ? `${status}:gate:${effectiveHitlContext.reviewTaskId ?? ""}:${effectiveHitlContext.xRenderer}:${effectiveHitlContext.fieldName ?? ""}`
+      : parkedOnProducedReview
+        ? `${status}:produced-review`
+        : `${status}:no-gate:${heardFromRun}`;
+  const ownPublishRead = usePublishDecisionCardRead({
+    runId: hostPublishRead ? "" : runId,
+    auth: ambientLifecycleAuth,
+    wireRef: publishReadSignal,
+    runStatus: status,
+  });
+  const publishRead = hostPublishRead ?? ownPublishRead;
+  // ONE HELD-RUN CARD: a run parked at its publish gate is parked there and nowhere else, so while the read POSITIVELY
+  // answers `pending` any gate reading this panel still holds (a stream or row reading not yet caught up) is stale and
+  // the publish card is the pause's only surface, the same rule the conversation turn applies to its hitl screen.
+  // THE READ ALONE DECIDES IT, never also this panel's status: the decision is written before the run's status moves
+  // and the status is refreshed apart from the read, so a `running` status beside a `pending` read is the same pause.
+  const parkedAtPublishGate = publishGateIsOpen(publishRead, status);
+  const onRunChangeSignalRef = useRef(onRunChangeSignal);
+  onRunChangeSignalRef.current = onRunChangeSignal;
+  useEffect(() => {
+    onRunChangeSignalRef.current?.(runId, publishReadSignal, status);
+  }, [runId, publishReadSignal, status]);
+
   // Is this paused run degraded (no usable gate context) rather than merely
   // hydrating? Bounded — see hitl-recovery-state.ts.
   // `parkedPause` — the park and its unheard window, read beside the park above.
@@ -2857,7 +2927,10 @@ export function AgenticRunPanel({
   // card resolved to would have to come from the card, which is a wire this
   // change does not open; so the value is read for what it is, and a host that
   // needs the stronger question asks it of the card.
-  const panelDrawsReview = Boolean(reviewRefInTheBox);
+  // AN OPEN PUBLISH DECISION IS THE RUN'S ONE HELD-RUN READING (cinatra#4150): a review reference the shared reader
+  // still retains (its flag and ref survive dropped readings by design) is stale while the publish read POSITIVELY
+  // answers `pending`, so this panel draws no review over it and reports none to its host.
+  const panelDrawsReview = Boolean(reviewRefInTheBox) && !parkedAtPublishGate;
   const reviewTaskId = !panelDrawsReview
     ? null
     : markedReviewGate
@@ -2950,7 +3023,7 @@ export function AgenticRunPanel({
   // (see the publish effect above), so this mount adds no second resume path.
   const conversationHostedReview =
     ambientLifecycleHost === "chat_thread" || ambientLifecycleHost === "site_widget" || ambientDeclarationRefused;
-  const reviewScreenNode: ReactNode = reviewRefInTheBox ? (
+  const reviewScreenNode: ReactNode = reviewRefInTheBox && !parkedAtPublishGate ? (
     conversationHostedReview ? (
       <ReviewGateCard
         view={{
@@ -3006,7 +3079,8 @@ export function AgenticRunPanel({
     });
     observer.observe(box, { childList: true });
     return () => observer.disconnect();
-  }, [reviewRefInTheBox]);
+    // The box leaves while an open publish decision holds the panel, and a new box stands when it closes: observe it.
+  }, [reviewRefInTheBox, parkedAtPublishGate]);
   const reviewCardDrawn =
     reviewScreenNode !== null && reviewCardDrawnFor === reviewRefInTheBox;
   // The hand-over's one latch (fix leg 20, above): the reference the card has
@@ -3020,9 +3094,25 @@ export function AgenticRunPanel({
     setHeldReview({ runId, ref: reviewRefInTheBox, heardAt: null });
   }
 
-  if (reviewScreenNode !== null || runIsWorking) {
+  // THE PUBLISH CARD (cinatra#4150), keyed by the run under this panel's own `run_card` declaration. It stands down
+  // inside a conversation host for the hitl screen's reason, and draws nothing with no decision. ONE element, drawn by
+  // exactly one of the two arms below.
+  const publishCard = panelMountsHitlScreenCard ? (
+    <LifecycleCardSurfaceProvider host="run_card">
+      <PublishDecisionCard runId={runId} read={publishRead} />
+    </LifecycleCardSurfaceProvider>
+  ) : null;
+
+  // THE PUBLISH ARM IS ASKED FIRST (cinatra#4150): an open publish decision draws the plate below with its card and
+  // nothing else, so neither the review screen nor the working placeholder (a produced-review park or a review hold
+  // the reader still retains) may return ahead of it. Any other publish reading leaves this arm exactly as it was.
+  if (!parkedAtPublishGate && (reviewScreenNode !== null || runIsWorking)) {
+    // A SETTLED publish decision (approved, declined, expired) is a record, not a held card: it keeps its reading above
+    // the working or review surface while the run resumes, as on the stepper; with no decision nothing is drawn here.
+    const settledPublishCard = publishDecisionIsSettled(publishRead) ? publishCard : null;
     return (
       <>
+        {settledPublishCard}
         <section
           // The rail owns the two-column layout; this slot owns the one
           // .runcard frame and strong ground in both working and review readings
@@ -3162,7 +3252,14 @@ export function AgenticRunPanel({
           of what the panel still takes from that interaction, is above the
           review-screen mount. */}
 
-      {isPendingApproval &&
+      {/* THE PUBLISH CARD (cinatra#4150): the one element above, open or settled, in this plate. */}
+      {publishCard}
+
+      {parkedAtPublishGate ? (
+        // The publish card above is this pause's one surface (cinatra#4150): no hitl screen and no generic approval
+        // banner beside it, whatever stale gate reading the panel still holds.
+        null
+      ) : isPendingApproval &&
       effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID ? (
         // A MARKED artifact-review gate NEVER draws here any more (cinatra#2997).
         // The review screen is the whole card now — it is mounted by the slot

@@ -76,6 +76,12 @@ import {
   AgentHitlScreenCard,
   type AgentHitlScreenCarry,
 } from "@cinatra-ai/agents/agent-hitl-screen-card";
+// The ONE renderer of `publish_decision` (cinatra#4150), by its own subpath for the same reason.
+import {
+  PublishDecisionCard,
+  publishGateIsOpen,
+  usePublishDecisionCardRead,
+} from "@cinatra-ai/agents/publish-decision-card-view";
 // The turn's own register for the settled schedule card (cinatra#3174), reached
 // by the same subpath the host declaration is.
 import { SettledScheduleRegisterProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
@@ -88,6 +94,7 @@ import {
   ScheduleReadingReport,
   useRunMomentCard,
   useLifecycleCardHost,
+  useLifecycleCardAuth,
   runMomentCardDrawsAReview,
   type RunMomentCardReader,
   type ScheduleCardReading,
@@ -653,6 +660,7 @@ function AgentRunTurnSlot({
   // site widget included, whose run card draws the review in its own slot
   // (cinatra#3051).
   const ambientLifecycleHost = useLifecycleCardHost();
+  const ambientLifecycleAuth = useLifecycleCardAuth();
   const runCardDrawsAReview = runMomentCardDrawsAReview(
     momentCard,
     ambientLifecycleHost,
@@ -798,7 +806,35 @@ function AgentRunTurnSlot({
   // never read by anything else, and it dies with the turn - see
   // `AgentHitlScreenCarry` for why that is deliberately not a cache.
   const screenCarrier = useRef<AgentHitlScreenCarry | null>(null);
-  const hitlScreen = (
+  // THE PUBLISH CARD (cinatra#4150), mounted beside the screen above, in the same placement, but carried by its read:
+  // keyed by the run alone, it self-gates, so a run with no open publish decision draws nothing here. A publish gate
+  // has no gate context, so the gate signal above stays quiet for it; the panel's publish-read signal (the run's
+  // status, the gate it waits at and, at a pause with no gate context, each reading of the run) is this card's change
+  // signal instead, so a decision opened after the first read draws without a reload or focus, also when the run
+  // reaches it from another gate under the same status.
+  // The panel's run status rides beside it: the shared read keeps re-reading while the run has not finished.
+  const [runChange, setRunChange] = useState<{ signal: string; status: string | null } | null>(null);
+  const onRunChangeSignal = useCallback(
+    (changedRunId: string, signal: string, status?: string) => {
+      if (changedRunId === runId) setRunChange({ signal, status: status ?? null });
+    },
+    [runId],
+  );
+  // ONE READ for the turn: the card draws it and the run panel decides its approval banner from it, so the two can
+  // never disagree (see the panel's failure rule).
+  const publishRead = usePublishDecisionCardRead({
+    runId: ambientLifecycleHost === null ? "" : runId,
+    auth: ambientLifecycleAuth,
+    wireRef: runChange?.signal ?? null,
+    runStatus: runChange?.status ?? null,
+  });
+  const publishCard = <PublishDecisionCard runId={runId} read={publishRead} />;
+  // ONE HELD-RUN CARD PER TURN (cinatra#4150), by the run panels' own rule (`publishGateIsOpen`): a run parked at its
+  // publish gate is parked there and nowhere else, so while the shared read POSITIVELY answers `pending` the hitl
+  // screen for this run is a stale reading (its own read landed first, or a failed re-read kept its last answer) and
+  // the publish card is the turn's only card. Any other publish reading (not landed, failed, `none`, settled) leaves
+  // the screen exactly as it was. The screen is withheld, not blanked: its own stale-on-failed-refresh rule stands.
+  const hitlScreen = publishGateIsOpen(publishRead) ? null : (
     <AgentHitlScreenCard runId={runId} wireRef={gateSignal} carrier={screenCarrier} />
   );
 
@@ -808,6 +844,8 @@ function AgentRunTurnSlot({
       runId={runId}
       onActiveGateChange={onGateChange}
       onReviewReadingChange={onPanelReviewReadingChange}
+      onRunChangeSignal={onRunChangeSignal}
+      publishRead={publishRead}
       recommendationDecided={decided}
     />
   );
@@ -827,7 +865,12 @@ function AgentRunTurnSlot({
   // still drawing its working placeholder, so it reports no review while a
   // decision is already owed — the case cinatra#3080's own suite pins with a
   // review gate read as `ref: null, awaiting: true`.
-  const turnOwesTheReaderAReview = panelDrawsReview || runCardDrawsAReview;
+  // AND AN OPEN PUBLISH DECISION OWES NO REVIEW (cinatra#4150): while the shared read POSITIVELY answers `pending` the
+  // publish card is the turn's one held-run card, so a review reading (the panel's report or the run row's) does not
+  // reveal the stood-down panel beside it. Any other publish reading leaves this exactly as it was.
+  const publishDecisionIsOpen = publishGateIsOpen(publishRead);
+  const turnOwesTheReaderAReview =
+    !publishDecisionIsOpen && (panelDrawsReview || runCardDrawsAReview);
 
   const turn = (
     // THE REGISTER THIS CONTAINER LISTENS ON (cinatra#3174), around the whole
@@ -954,6 +997,7 @@ function AgentRunTurnSlot({
           construction above for why the person's half-typed answer travels
           with it rather than living inside the instance that moves. */}
       {turnCarriesSettledSchedule ? null : hitlScreen}
+      {turnCarriesSettledSchedule ? null : publishCard}
       {/* THE RUN-PROGRESS PANEL IS NOT DRAWN FOR A SETTLED SCHEDULE CARD - AND
           IS NOT UNMOUNTED EITHER (cinatra#3174, criterion 1, as converged).
 
@@ -1080,7 +1124,7 @@ function AgentRunTurnSlot({
   if (!turnCarriesSettledSchedule) return turn;
   if (turnLevelSettledSchedule && scheduleTurn?.screenContainer) {
     return <>{turn}{createPortal(
-      <div data-agent-run-screen-slot={runId}>{hitlScreen}</div>,
+      <div data-agent-run-screen-slot={runId}>{hitlScreen}{publishCard}</div>,
       scheduleTurn.screenContainer,
       runId,
     )}</>;
@@ -1088,7 +1132,7 @@ function AgentRunTurnSlot({
   return (
     <>
       {turn}
-      <div data-agent-run-screen-slot={runId}>{hitlScreen}</div>
+      <div data-agent-run-screen-slot={runId}>{hitlScreen}{publishCard}</div>
     </>
   );
 }

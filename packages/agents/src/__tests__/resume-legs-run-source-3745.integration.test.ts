@@ -555,7 +555,10 @@ describe.skipIf(!HAS_DB)("a failed run retried under a fresh attempt (reset, the
    *  claimed `queued -> running` by the canonical dispatch under a fresh attempt B, before its select and bind. */
   async function retried() {
     const attemptA = await seedDispatchedRun("failed");
-    await transitions.transitionRunStatus(h.runId, "failed", "pending_input", undefined, AUTHORITY as never);
+    // The reset names the reset generation it read (cinatra#4150), as resetAgentRun does.
+    const read = await pool(`SELECT reset_generation FROM "${q(TEST_SCHEMA)}"."agent_runs" WHERE id = $1`, [h.runId]);
+    const resetGeneration = (read.rows[0] as { reset_generation: number }).reset_generation;
+    await transitions.transitionRunStatus(h.runId, "failed", "pending_input", { resetGeneration }, AUTHORITY as never);
     await transitions.transitionRunStatus(h.runId, "pending_input", "queued", undefined, AUTHORITY as never);
     const attemptB = randomUUID();
     await transitions.transitionRunStatus(h.runId, "queued", "running", { dispatch: { attemptId: attemptB } }, AUTHORITY as never);

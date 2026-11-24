@@ -533,7 +533,8 @@ describe("the two host cells with no reachable subject are recorded, with the re
     expect(captureHostAdmissibility(KIND, "run_card").capturable).toBe(true);
     expect(captureHostAdmissibility(KIND, "site_widget").capturable).toBe(false);
     expect(captureHostAdmissibility(KIND, "page_gate_region").capturable).toBe(false);
-    for (const other of LIFECYCLE_KINDS.filter((k) => k !== KIND)) {
+    // The publish card (cinatra#4150) declares its own composition-only gate region; capture-host-admissibility pins it.
+    for (const other of LIFECYCLE_KINDS.filter((k) => k !== KIND && k !== "publish_decision")) {
       for (const host of ["chat_thread", "run_card", "site_widget", "page_gate_region"]) {
         expect(captureHostAdmissibility(other, host).capturable, `${other}/${host}`).toBe(true);
       }

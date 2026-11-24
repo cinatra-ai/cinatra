@@ -370,6 +370,16 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // streamed_text precedent); NULL means "not parked on a produced review".
   // Migration: see src/lib/drizzle-store.ts produced_review_park entry.
   producedReviewPark: text("produced_review_park"),
+  // cinatra#4150: the publish rows map ({ node: [{ label, input }] }, JSON-as-text) of the template object the worker
+  // dispatched this run's current attempt with (the pinned overlay included), written by the queued -> running CAS; a
+  // publish decision copies its node's rows from here, so a recompile between dispatch and park never relabels it. null =
+  // not recorded (a dispatch before core__0133, or a dispatch road that records none). DDL: drizzle-store.ts + core__0133.
+  dispatchPublishRows: text("dispatch_publish_rows"),
+  // cinatra#4150: the run's RESET GENERATION. A retry's reset (failed -> pending_input) raises it by 1 in the same
+  // compare-and-set, so each attempt a reset starts has its own number. A publish decision stamps it at the park
+  // (agent_run_publish_decisions.run_generation) and belongs to the current attempt only while the two are equal.
+  // A row from before the column reads 0. DDL: drizzle-store.ts + core__0133.
+  resetGeneration: integer("reset_generation").notNull().default(0),
   // authPolicy: per-run override of the template's agentAuthPolicy (JSON-as-text).
   // Nullable; null = inherit from agent_templates.agentAuthPolicy (or DEFAULT_AGENT_AUTH_POLICY).
   authPolicy: text("auth_policy"),
@@ -932,6 +942,13 @@ export const agentRunPublishDecisions = cinatraSchema.table("agent_run_publish_d
   decisionNote:   text("decision_note"),
   createdAt:      timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   expiresAt:      timestamp("expires_at", { withTimezone: true }).notNull(),
+  // The rows the template declared for this node at the park ([{ label, input }], JSON-as-text); null = not recorded
+  // (a row older than core__0133, or a park whose template could not be read).
+  declaredRows:   text("declared_rows"),
+  // The run's reset_generation at the park (core__0133): the decision belongs to the run's current attempt only while
+  // this equals agent_runs.reset_generation. -1 = an attempt already ended (a park of a run not held at a gate, or a
+  // legacy row the migration found stale); null = a row written by code older than the column, read as generation 0.
+  runGeneration:  integer("run_generation"),
 }, (t) => ({
   parkUniq: uniqueIndex("agent_run_publish_decisions_park_uniq").on(t.runId, t.nodeId, t.gateTaskId),
   dueIdx:   index("agent_run_publish_decisions_due_idx").on(t.expiresAt).where(sql`status = 'parked'`),

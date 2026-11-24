@@ -441,8 +441,13 @@ export async function resetAgentRun(
   }
 
   const authority = await verifySessionAuthority(userId, run.orgId);
+  // cinatra#4150: the reset ends the failed attempt at the generation read above, in ONE guarded transaction: the
+  // compare-and-set lands only while the run is still failed at that generation and raises it by 1, and the attempt's
+  // open publish decisions close run_ended in the same transaction, so none holds, labels or stops the next attempt. A
+  // reset that lost to another (a newer failure has a newer generation), or that the org-write kernel refused, writes
+  // nothing.
   try {
-    await transitionRunStatus(args.runId, "failed", "pending_input", undefined, authority);
+    await transitionRunStatus(args.runId, "failed", "pending_input", { resetGeneration: run.resetGeneration ?? 0 }, authority);
   } catch (err) {
     if (err instanceof RunTransitionError && err.code === "stale_from_status") {
       return { ok: false, error: "run is not in failed state" };

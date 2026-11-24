@@ -105,6 +105,8 @@ import {
   WIDGET_CHAT_THREADS_ROUTE_PATH,
   WIDGET_CONVERSATION_READ_SCOPE,
   WIDGET_CONVERSATION_WRITE_SCOPE,
+  WIDGET_LIFECYCLE_PUBLISH_DECISION_ROUTE_PATH,
+  formatTokenSet,
   displayedScopesAgree,
   screenRecordAdmitsArrival,
   widgetDisplayedScopesToken,
@@ -1250,6 +1252,55 @@ describe("lifecycle-read scope + audience (cinatra#2574)", () => {
         agentSlug: "wordpress-content-editor",
         routePath: CHAT_PATH,
         requestOrigin: SITE_A.siteOrigin,
+      }).ok,
+    ).toBe(true);
+  });
+
+  it("a code issued under an EARLIER audience mapping is refused at redemption, so a rollout cannot widen consent (cinatra#4150)", () => {
+    // The publish card's read joined `lifecycle.read` with a new consent sentence. A code an older node issued
+    // records the same scope NAMES, but its person read the older sentence; the redeem derives audiences from the
+    // CURRENT mapping, so without a record of what was consented to, that code would gain the publish read.
+    const t = newTxn(SITE_A);
+    if (!t.ok) throw new Error("txn");
+    const issued = issueUserAuthCode({ authSessionId: SESSION_A,
+      txnId: t.txnId,
+      userId: "user-1",
+      grantedScopes: WIDGET_SIGNIN_GRANTED_SCOPES,
+    });
+    if (!issued.ok) throw new Error("issue");
+    const row = codeStore.get(__testing.sha256Base64Url(issued.code));
+    if (!row) throw new Error("code row");
+    // The form an older node writes: the bare, sorted scope names and nothing that binds its audience mapping.
+    row.granted_scopes = formatTokenSet([...WIDGET_SIGNIN_GRANTED_SCOPES].sort());
+    expect(
+      redeemUserAuthCode({ code: issued.code, codeVerifier: VERIFIER, site: SITE_A, issuerBaseUrl: "https://cinatra.test" }),
+    ).toEqual({ ok: false, reason: "invalid_grant" });
+
+    // A consent record for a DIFFERENT mapping is refused the same way.
+    const t2 = newTxn(SITE_A);
+    if (!t2.ok) throw new Error("txn");
+    const issued2 = issueUserAuthCode({ authSessionId: SESSION_A,
+      txnId: t2.txnId,
+      userId: "user-1",
+      grantedScopes: WIDGET_SIGNIN_GRANTED_SCOPES,
+    });
+    if (!issued2.ok) throw new Error("issue");
+    const row2 = codeStore.get(__testing.sha256Base64Url(issued2.code));
+    if (!row2) throw new Error("code row");
+    row2.granted_scopes = `${formatTokenSet([...WIDGET_SIGNIN_GRANTED_SCOPES].sort())} (consent:${"0".repeat(32)})`;
+    expect(
+      redeemUserAuthCode({ code: issued2.code, codeVerifier: VERIFIER, site: SITE_A, issuerBaseUrl: "https://cinatra.test" }),
+    ).toEqual({ ok: false, reason: "invalid_grant" });
+
+    // A code issued under the CURRENT mapping redeems, and its token reaches the publish read.
+    const minted = mintTokenWithGrant(WIDGET_SIGNIN_GRANTED_SCOPES);
+    expect(
+      consumeUserWidgetToken({
+        token: minted.token,
+        agentSlug: "wordpress-content-editor",
+        routePath: WIDGET_LIFECYCLE_PUBLISH_DECISION_ROUTE_PATH,
+        requestOrigin: SITE_A.siteOrigin,
+        requiredScopes: [WIDGET_LIFECYCLE_READ_SCOPE],
       }).ok,
     ).toBe(true);
   });

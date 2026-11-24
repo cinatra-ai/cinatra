@@ -351,6 +351,10 @@ function row15CensusProblems(gap, index, walkPlan) {
       [/^and the two page hosts recorded as composition-only with their reasons/, () => {
         compositionOnly[kind] = [...PAGE_HOSTS];
       }],
+      // One host on its own (cinatra#4150: the publish card's gate region), named by its host token.
+      [/^and (\w+) recorded as composition-only with its reason/, (m) => {
+        compositionOnly[kind] = [m[1]];
+      }],
     ];
     let rest = clause.slice(head[0].length);
     while (rest.length) {
@@ -857,6 +861,13 @@ describe("the REAL manifest", () => {
       expect(noteEntry(mutant, head), head).not.toMatch(/NO RECORDED ANCHOR CHANGED/);
       expect(mutant.slice(mutant.indexOf(head)), head).toMatch(/NO RECORDED ANCHOR CHANGED/);
     }
+    // The sixth kind's entry (cinatra#4150) records anchors that DID change, so it never
+    // carries the no-change phrase, and it stands last in the note.
+    const kindHead = "RE-RATIFIED 2026-11-21 (cinatra#4150";
+    const kindEntry = noteEntry(contractNote, kindHead);
+    expect(kindEntry, kindHead).toMatch(/`publish_decision`/);
+    expect(contractNote.endsWith(kindEntry), kindHead).toBe(true);
+    expect(kindEntry, kindHead).not.toMatch(/NO RECORDED ANCHOR CHANGED/);
     // The contract records the bare capture selector `[data-action]`, which
     // names no value and so reads every drawn control. The entry of 2026-10-27
     // named the selector and the value of the two Sign in buttons it added; the
