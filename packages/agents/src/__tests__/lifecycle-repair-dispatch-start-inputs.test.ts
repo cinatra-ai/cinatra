@@ -504,7 +504,6 @@ describe("input data cannot become repair authorization", () => {
   // The worker validated and started the run; the template was then
   // reinstalled in place before the retry. The run is judged by its record,
   // so it is carried to the mark, never stopped.
-  // red-first-expect: expected { scanned: 1, dispatched: +0, …(3) } to match object { scanned: 1, dispatched: 1, …(2) }
   it("a Regenerate retry whose running run was made before its template changed is marked dispatched, not stopped", async () => {
     const created = await firstPassCreatesARecordedRun();
     const firstJobId = ports.queued.mock.calls[0][1].jobId;
@@ -528,7 +527,6 @@ describe("input data cannot become repair authorization", () => {
   // dispatched with no second create and no second job, so the completer
   // takes the run's output. A completed run with no valid record is
   // escalated; there is nothing to stop.
-  // red-first-expect: expected { scanned: 1, dispatched: +0, …(3) } to match object { scanned: 1, dispatched: 1, …(2) }
   it("a Regenerate retry whose completed run was made before its template changed is marked dispatched: no second create and no second job", async () => {
     const created = await firstPassCreatesARecordedRun();
 
@@ -547,7 +545,6 @@ describe("input data cannot become repair authorization", () => {
 
   // A run with no record is escalated even when a rebuilt plan would match
   // it byte for byte: the plan never decides for an existing run.
-  // red-first-expect: expected { scanned: 1, dispatched: 1, …(3) } to match object { scanned: 1, dispatched: +0, …(2) }
   it("a Regenerate retry whose existing run carries no record is stopped and escalated, even when the rebuilt plan matches it", async () => {
     const created = await firstPassCreatesAndEnqueuesTheRun();
     ports.writes = []; // the first pass's failed mark
@@ -591,7 +588,6 @@ describe("input data cannot become repair authorization", () => {
   // start output and the request with all its findings, as an older build
   // writes it) that a pass created before a crash, or during a rolling
   // deployment, is never sent in that form: the retry stops it and escalates.
-  // red-first-expect: expected { scanned: 1, dispatched: 1, …(3) } to match object { scanned: 1, dispatched: +0, …(2) }
   it("a Regenerate retry whose existing run holds the earlier findings form is stopped and escalated, never enqueued in that form", async () => {
     const note = "Open with the harbour, not the market";
     const findings = [{ id: "prompt-window", message: note }];
@@ -636,7 +632,6 @@ describe("input data cannot become repair authorization", () => {
   // step declares its prompt, so the prompt's words (not the note's) reach
   // that input, once; the draft step declares its note, so the Note's words
   // reach that input, once. Neither text appears anywhere else in the run.
-  // red-first-expect: expected 'A reviewer requested changes to the w…' to be 'A lighthouse at dusk, wide angle' // Object.is equality
   it("a note and a picture prompt with different words each reach only their own declared input, once", async () => {
     const note = "Make the sky brighter";
     const prompt = "A lighthouse at dusk, wide angle";
@@ -687,7 +682,6 @@ describe("input data cannot become repair authorization", () => {
   // field fills that input. The review store records a picture's prompt only
   // for a picture with a recorded prompt; a picture step whose prompt input
   // has another name is sent that prompt, and the Note reaches no input.
-  // red-first-expect: expected 'A reviewer requested changes to the w…' to be 'A lighthouse at dusk, wide angle' // Object.is equality
   it("a picture step whose declared input is not named prompt is sent the picture's prompt; the Note reaches no input", async () => {
     const note = "Make the sky brighter";
     const prompt = "A lighthouse at dusk, wide angle";
@@ -1047,7 +1041,6 @@ describe("the escalation of a Regenerate repair whose run is not in the declared
   // dispatcher marked it), so the compare-and-set takes a `requested` or a
   // `dispatched` Regenerate repair, and only one that names a Regenerate node.
   // A second escalation of the same repair matches no row and writes nothing.
-  // red-first-expect: to have property "escalateRegenerateRepairOfUndeclaredRun"
   it("moves a dispatched Regenerate repair to escalated with the reason, once", async () => {
     expect(dispatchStore).toHaveProperty("escalateRegenerateRepairOfUndeclaredRun");
     ports.updateResults = [[{ lineageId: "lineage-current" }], []];
