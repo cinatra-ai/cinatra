@@ -139,6 +139,45 @@ describe("AgentHitlScreenCard — a gate whose renderer id no binding declares",
   }
 });
 
+/** One-value gates the floor draws on a retired id, with what is typed and what the run receives. */
+const ONE_VALUE_GATES: Array<{ shape: string; schema: Record<string, unknown>; typed: string; text: string }> = [
+  { shape: "string", schema: { type: "string", title: "Answer" }, typed: "Ship it.", text: "Ship it." },
+  { shape: "number", schema: { type: "number", title: "Answer" }, typed: "42", text: "42" },
+  {
+    shape: "array",
+    schema: { type: "array", title: "Answer", items: { type: "string" } },
+    typed: "alpha\nbeta",
+    text: '["alpha","beta"]',
+  },
+];
+
+describe("AgentHitlScreenCard — a one-value gate on a retired id sends the entered value", () => {
+  for (const host of ["run_card", "chat_thread"] as LifecycleCardHost[]) {
+    for (const g of ONE_VALUE_GATES) {
+      // red-first-expect: expected null not to be null
+      it(`${host}: a ${g.shape} gate resumes with the entered value, not the approval marker`, async () => {
+        const asking = { ...ASKING, gate: { ...ASKING.gate, inputSchema: g.schema, fieldName: "answer" } };
+        screenStateMock.mockImplementation(async () => asking);
+        globalThis.fetch = (async () =>
+          new Response(JSON.stringify(asking), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          })) as unknown as typeof fetch;
+        const { container } = mountOn(host);
+        await settle();
+        await waitFor(() => expect(container.querySelector("#field-answer")).not.toBeNull());
+        fireEvent.change(container.querySelector("#field-answer")!, { target: { value: g.typed } });
+        await waitFor(() => expect(continues(container)).toHaveLength(1));
+        fireEvent.click(continues(container)[0]!);
+        await waitFor(() => expect(approveMock).toHaveBeenCalledTimes(1));
+        expect(approveMock.mock.calls[0]![0]).toBe(TASK_ID);
+        expect(approveMock.mock.calls[0]![1]).toMatchObject({ approved: true, userResponse: g.text });
+        expect(approveMock.mock.calls[0]![2]).toBeUndefined();
+      });
+    }
+  }
+});
+
 describe("AgentHitlScreenCard — a tombstoned gate stays unanswerable", () => {
   for (const host of ["run_card", "chat_thread"] as LifecycleCardHost[]) {
     // red-first-expect: TOMBSTONED_HITL_RENDERER_IDS is not iterable

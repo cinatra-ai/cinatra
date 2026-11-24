@@ -30,22 +30,13 @@ const SRC = readFileSync(
 );
 
 describe("orchestrator-stepper-panel — isGenericObjectSchema Continue button", () => {
-  it("defines isGenericObjectSchema as schema-field-fallback xRenderer combined with object type", () => {
-    // The condition must check BOTH the xRenderer id AND the schema type.
-    // A missing type check would incorrectly show Continue for non-object schemas.
-    // The id is centralized (identity-surface ruling): the panel references the
-    // SCHEMA_FIELD_FALLBACK_RENDERER_ID constant rather than the inline literal.
-    // The panel reads it through `gateDrawnBySchemaFloor`, which also covers an
-    // unclaimed id the floor draws.
-    const referencesFallback =
-      /SCHEMA_FIELD_FALLBACK_RENDERER_ID/.test(SRC) ||
-      /gateDrawnBySchemaFloor\(/.test(SRC) ||
-      SRC.includes(`"${SCHEMA_FIELD_FALLBACK_RENDERER_ID}"`);
-    expect(referencesFallback, "panel must reference the schema-field-fallback id").toBe(true);
+  // The conjunction itself (a gate the floor draws AND an object schema) is
+  // pinned by mounting the panel, not by reading this file:
+  // unregistered-renderer-falls-to-floor.test.tsx, "a bare object gate" (the
+  // floor's bare object gate is the Continue-only confirmation; a registered
+  // renderer's bare object gate is drawn by that renderer).
+  it("declares isGenericObjectSchema from the interrupt", () => {
     expect(SCHEMA_FIELD_FALLBACK_RENDERER_ID).toBe("@cinatra-ai/agent-builder:schema-field-fallback");
-    expect(SRC).toMatch(/type.*===.*"object"|"object".*===.*type/);
-
-    // isGenericObjectSchema must be a const derived from interruptContext
     expect(SRC).toMatch(/isGenericObjectSchema\s*=/);
   });
 

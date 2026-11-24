@@ -131,7 +131,7 @@ import { applyAttachmentEnvelope } from "./attachment-envelope-payload";
 import {
   applyRendererApprovalNote,
   createGateValidityStore,
-  buildSchemaFieldGatePayload,
+  buildSchemaFloorGatePayload,
   gateAwaitsRendererValue,
   hitlRendererFieldName,
   isAlreadyResolvedError,
@@ -1215,6 +1215,10 @@ function HitlApprovalCard({
   const fallbackGateIsMalformed = onNonSetupFallbackGate && gateReading.kind === "malformed";
   const fallbackGateRenderSchema =
     fallbackGateAsksForFields && gateReading.kind === "fields" ? gateReading.renderSchema : null;
+  // A non-setup floor gate whose schema is not an object (a text, a number, a
+  // boolean, a list) asks for one value: it is answered as an approval with
+  // that value as the resume text, never through the setup-loop wrap.
+  const fallbackGateAsksForOneValue = onNonSetupFallbackGate && gateReading.kind === "not-object";
   // Keep the outer Continue button for last-step gates whose renderer doesn't
   // own a button, including the text-envelope branch in ReviewerAgentOutputRenderer
   // and schema-field-fallback when no renderer matches. The outer Continue is
@@ -1340,7 +1344,8 @@ function HitlApprovalCard({
   // answer, and the spinner released when the send is refused or fails. A
   // failed send is told the way that card told it (a toast), because the
   // field that pressed was unmounted behind the spinner. The payload is the
-  // approval with every declared answer in it (`buildSchemaFieldGatePayload`).
+  // approval with every declared answer in it, or, for a gate that asks for one
+  // value, that value as the resume text (`buildSchemaFloorGatePayload`).
   // ONE SEND PER GATE AT A TIME: the field sets its own `submitting` only after
   // its flush, so two presses in one tick both reach here; the ref (keyed by
   // the gate, so the next gate on this mounted card is never refused) turns
@@ -1355,7 +1360,11 @@ function HitlApprovalCard({
       // that is not finite) is refused here, the card stays, nothing is sent.
       let gatePayload: Record<string, unknown>;
       try {
-        gatePayload = buildSchemaFieldGatePayload({ schema: interruptContext.schema, next });
+        gatePayload = buildSchemaFloorGatePayload({
+          schema: interruptContext.schema,
+          next,
+          fieldName: interruptContext.fieldName,
+        });
       } catch {
         toast.error("Could not continue this run.");
         return;
@@ -1619,9 +1628,9 @@ function HitlApprovalCard({
                   }
                 : async (next: unknown) => {
                     // cinatra#4244 - a non-setup gate whose declared fields the
-                    // fallback draws is answered as an approval, never through
-                    // the setup-loop wrap below.
-                    if (fallbackGateAsksForFields) {
+                    // fallback draws, or whose one value it draws, is answered
+                    // as an approval, never through the setup-loop wrap below.
+                    if (fallbackGateAsksForFields || fallbackGateAsksForOneValue) {
                       await submitSchemaFieldGate(next);
                       return;
                     }

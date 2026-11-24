@@ -83,10 +83,10 @@ export function isGroupedSetupRenderer(
  * The answer a field renderer's `onChange` hands a host on a gate that is not
  * mid-run. A NON-SETUP gate the schema floor draws (`drawnByFloor`: the
  * floor's own id, or an unclaimed id the floor took over) is a WayFlow gate:
- * its answer is the floor's approval with the declared answers in it
- * (`buildSchemaFieldGatePayload`), so the run receives what was written, not
- * "[Approved by operator]". Every other gate keeps the setup-loop shape
- * (`wrapPrimitiveSetupPayload`).
+ * its answer is the floor's approval with the written answer as the resume
+ * text (`buildSchemaFloorGatePayload`, for every shape the floor draws), so
+ * the run receives what was written, not "[Approved by operator]". Every
+ * other gate keeps the setup-loop shape (`wrapPrimitiveSetupPayload`).
  */
 export function buildFieldGateAnswer(args: {
   drawnByFloor: boolean;
@@ -98,7 +98,11 @@ export function buildFieldGateAnswer(args: {
 }): { payload: unknown; payloadFieldName: string | undefined } {
   if (args.drawnByFloor && !isSetupGateTaskId(args.reviewTaskId)) {
     return {
-      payload: buildSchemaFieldGatePayload({ schema: args.schema, next: args.next }),
+      payload: buildSchemaFloorGatePayload({
+        schema: args.schema,
+        next: args.next,
+        fieldName: args.fieldName,
+      }),
       payloadFieldName: undefined,
     };
   }
@@ -1150,6 +1154,114 @@ export function buildSchemaFieldGatePayload(args: {
     }
   }
   payload.userResponse = JSON.stringify(answered);
+  return payload;
+}
+
+/** Schema types whose answer the schema floor draws a control for. */
+const FLOOR_SCALAR_TYPES: ReadonlySet<string> = new Set(["string", "number", "integer", "boolean"]);
+
+/**
+ * Can the schema floor answer a gate of this schema with a value of the right
+ * shape? The floor draws:
+ *
+ *   - an object: its declared fields, or a bare confirmation (not a malformed
+ *     object schema, `readSchemaFieldGate`);
+ *   - a string, a number, an integer or a boolean, a schema with no `type`
+ *     (a text box) and an enum (a pick);
+ *   - an array of text, one entry per line (no `items`, or `items` that
+ *     declare no type or the string type).
+ *
+ * Any other shape (an array whose items are objects, numbers or booleans, a
+ * `type` list, an unknown type, a non-object schema) would be answered with a
+ * value of the wrong shape, so it gets no floor.
+ */
+export function schemaFloorCanAnswer(schema: unknown): boolean {
+  if (!isPlainSchemaObject(schema)) return false;
+  const type = ownValue(schema, "type");
+  if (type === undefined) return true;
+  if (typeof type !== "string") return false;
+  if (type === "object") return readSchemaFieldGate(schema).kind !== "malformed";
+  if (FLOOR_SCALAR_TYPES.has(type)) return true;
+  if (type !== "array") return false;
+  const items = ownValue(schema, "items");
+  if (items === undefined) return true;
+  if (!isPlainSchemaObject(items)) return false;
+  const itemType = ownValue(items, "type");
+  return itemType === undefined || itemType === "string";
+}
+
+/** Keys of the approval itself: a field of one of these names is never written beside it. */
+const FLOOR_RESERVED_KEYS: ReadonlySet<string> = new Set([
+  "approved",
+  "approvedAt",
+  "userResponse",
+  "userResponseFieldName",
+  "__proto__",
+]);
+
+/**
+ * The approval payload for a NON-SETUP gate the schema floor draws, for every
+ * shape the floor answers (`schemaFloorCanAnswer`). The server forwards
+ * `userResponse` to the paused WayFlow node as its resume text; without it the
+ * node is handed "[Approved by operator]".
+ *
+ *  - An OBJECT schema: `buildSchemaFieldGatePayload` (its declared fields; a
+ *    bare confirmation sends the marker).
+ *  - Any other schema, the one value the floor emits:
+ *      - a text: the text verbatim; with the gate's `fieldName` it is also
+ *        written under that name and named in `userResponseFieldName`, so the
+ *        server records the answer under it (`readWayflowSubmittedValues`);
+ *      - a number or a boolean: its JSON text (`42`, `true`, `false`); a
+ *        number that is not finite is refused with `NonFiniteAnswerError`;
+ *      - a list: its JSON text (`["a","b"]`).
+ *    A blank text, an empty list and no value carry no resume text, so the
+ *    flow receives the marker, as for an object gate answered with nothing.
+ */
+export function buildSchemaFloorGatePayload(args: {
+  schema: unknown;
+  next: unknown;
+  fieldName?: string;
+  now?: string;
+}): Record<string, unknown> {
+  const value = args.next;
+  if (
+    (isPlainSchemaObject(args.schema) && args.schema.type === "object") ||
+    isPlainSchemaObject(value)
+  ) {
+    return buildSchemaFieldGatePayload({ schema: args.schema, next: value, now: args.now });
+  }
+  const payload: Record<string, unknown> = {
+    approved: true,
+    approvedAt: args.now ?? new Date().toISOString(),
+  };
+  if (value === undefined || value === null) return payload;
+  const field =
+    typeof args.fieldName === "string" &&
+    args.fieldName !== "" &&
+    args.fieldName !== HITL_PLACEHOLDER_FIELD_NAME &&
+    !FLOOR_RESERVED_KEYS.has(args.fieldName)
+      ? args.fieldName
+      : null;
+  if (typeof value === "string") {
+    if (value.trim() === "") return payload;
+    payload.userResponse = value;
+    if (field !== null) {
+      setOwn(payload, field, value);
+      payload.userResponseFieldName = field;
+    }
+    return payload;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    if (holdsNonFiniteNumber(value)) throw new NonFiniteAnswerError(field ?? "answer");
+    payload.userResponse = JSON.stringify(value);
+    return payload;
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return payload;
+    if (holdsNonFiniteNumber(value)) throw new NonFiniteAnswerError(field ?? "answer");
+    payload.userResponse = JSON.stringify(value);
+    return payload;
+  }
   return payload;
 }
 

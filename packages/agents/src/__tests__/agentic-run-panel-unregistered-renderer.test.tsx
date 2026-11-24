@@ -116,6 +116,11 @@ const DROPPED_ID = "@cinatra-test/retired-pack-agent:draft-confirm";
 
 /** The gate's renderer id the mocked stream hands the panel. */
 const gateId = vi.hoisted(() => ({ current: "@cinatra-test/retired-pack-agent:draft-confirm" }));
+/** The gate's stored schema and field name the mocked stream hands the panel. */
+const gateShape = vi.hoisted(() => ({
+  schema: null as Record<string, unknown> | null,
+  fieldName: undefined as string | undefined,
+}));
 
 vi.mock("../use-ag-ui-run-stream", () => ({
   useAgUiRunStream: vi.fn(() => ({
@@ -124,8 +129,12 @@ vi.mock("../use-ag-ui-run-stream", () => ({
     presentationHint: null,
     isLive: true,
     interruptContext: {
-      schema: { type: "object", properties: { note: { type: "string", title: "Note" } } },
+      schema: gateShape.schema ?? {
+        type: "object",
+        properties: { note: { type: "string", title: "Note" } },
+      },
       xRenderer: gateId.current,
+      fieldName: gateShape.fieldName,
       values: {},
       reviewTaskId: "wayflow-task-dropped",
     },
@@ -148,6 +157,8 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   gateId.current = DROPPED_ID;
+  gateShape.schema = null;
+  gateShape.fieldName = undefined;
 });
 
 function mountPanel(AgenticRunPanel: typeof import("../agentic-run-panel").AgenticRunPanel) {
@@ -196,6 +207,39 @@ describe("AgenticRunPanel — a gate whose renderer id no binding declares", () 
     await new Promise((r) => setTimeout(r, 20));
     expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1);
   });
+});
+
+/** One-value gates the floor draws on a retired id, with what is typed and what the run receives. */
+const ONE_VALUE_GATES: Array<{ shape: string; schema: Record<string, unknown>; typed: string; text: string }> = [
+  { shape: "string", schema: { type: "string", title: "Answer" }, typed: "Ship it.", text: "Ship it." },
+  { shape: "number", schema: { type: "number", title: "Answer" }, typed: "42", text: "42" },
+  {
+    shape: "array",
+    schema: { type: "array", title: "Answer", items: { type: "string" } },
+    typed: "alpha\nbeta",
+    text: '["alpha","beta"]',
+  },
+];
+
+describe("AgenticRunPanel — a one-value gate on a retired id sends the entered value", () => {
+  for (const g of ONE_VALUE_GATES) {
+    // red-first-expect: expected null not to be null
+    it(`a ${g.shape} gate resumes with the entered value, not the approval marker`, async () => {
+      gateShape.schema = g.schema;
+      gateShape.fieldName = "answer";
+      const { AgenticRunPanel } = await import("../agentic-run-panel");
+      mountPanel(AgenticRunPanel);
+      await waitFor(() => expect(document.getElementById("field-answer")).not.toBeNull());
+      fireEvent.change(document.getElementById("field-answer")!, { target: { value: g.typed } });
+      await waitFor(() => expect(continues()).toHaveLength(1));
+      fireEvent.click(continues()[0]!);
+      await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+      const call = hitlActions.approveReviewTask.mock.calls[0] as unknown[];
+      expect(call[0]).toBe(TASK_ID);
+      expect(call[1]).toMatchObject({ approved: true, userResponse: g.text });
+      expect(call[2]).toBeUndefined();
+    });
+  }
 });
 
 describe("AgenticRunPanel — a tombstoned gate stays unanswerable", () => {

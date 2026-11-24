@@ -24,6 +24,7 @@ import {
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
   TRIGGER_WAIT_STATUS_RENDERER_ID,
 } from "./agent-builder-ids";
+import { schemaFloorCanAnswer } from "./hitl-gate-submit";
 
 /**
  * Manifest-declared strict classification: does a registered binding flag
@@ -144,8 +145,10 @@ function namesReviewOrMidRunKind(xRenderer: string): boolean {
  * not-in-build binding of a known kind already draws.
  *
  * Fail-safe: only a namespaced id gets the floor. An empty or bare id, an id
- * a host draws inline, a tombstoned id and an id of a review or mid-run kind
- * keep no renderer. The registry's own `resolve` is unchanged, so a field
+ * a host draws inline, a tombstoned id, an id of a review or mid-run kind and
+ * a schema the floor cannot answer with a value of the right shape
+ * (`schemaFloorCanAnswer`: a malformed object, an array of objects, numbers
+ * or booleans, a `type` list or an unknown type) keep no renderer. The registry's own `resolve` is unchanged, so a field
  * inside a form never takes the floor's Continue.
  *
  * A host that draws a gate with the floor answers it with the floor's own
@@ -165,7 +168,8 @@ export function resolveHitlGateRenderer(
     !RENDERER_NAMESPACE_RE.test(xRenderer) ||
     HOST_INLINE_GATE_IDS.has(xRenderer) ||
     isTombstonedHitlRendererId(xRenderer) ||
-    namesReviewOrMidRunKind(xRenderer)
+    namesReviewOrMidRunKind(xRenderer) ||
+    !schemaFloorCanAnswer(schema)
   ) {
     return null;
   }

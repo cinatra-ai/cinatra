@@ -52,6 +52,7 @@ describe("classifyMidRunHitl — strict-equality renderer IDs", () => {
     expect(classifyMidRunHitl("@cinatra-ai/whatever:setup-form")).toBe(true);
   });
 
+  // red-first-expect: expected true to be false
   it("a tombstoned id is never mid-run, whatever its suffix", () => {
     // `@cinatra/...` is the retired scope: its review gates stay unresumable,
     // so no host draws an outer Continue for them.

@@ -188,6 +188,7 @@ describe("resolveHitlGateRenderer", () => {
     );
   });
 
+  // red-first-expect: resolveHitlGateRenderer is not a function
   it("keeps a claimed id's own entry", () => {
     fieldRendererRegistry.register({
       id: DROPPED_ID,
@@ -198,6 +199,7 @@ describe("resolveHitlGateRenderer", () => {
     expect(midRun.resolveHitlGateRenderer("hitl", gateSchema(DROPPED_ID), CONTEXT)?.id).toBe(DROPPED_ID);
   });
 
+  // red-first-expect: resolveHitlGateRenderer is not a function
   it("gives no floor to an empty or bare id, or to an id a host draws inline", () => {
     for (const id of ["", "draft-confirm", ARTIFACT_REVIEW_REDIRECT_RENDERER_ID, TRIGGER_WAIT_STATUS_RENDERER_ID]) {
       expect(midRun.resolveHitlGateRenderer("hitl", gateSchema(id), CONTEXT), id).toBeNull();
@@ -288,6 +290,85 @@ describe("OrchestratorStepperPanel - a gate whose renderer id no binding declare
     expect((hitlActions.approveReviewTask.mock.calls[0] as unknown[])[2]).toBeUndefined();
     await new Promise((r) => setTimeout(r, 20));
     expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1);
+  });
+});
+
+/** One-value gates the floor draws on a retired id, with what is typed and what the run receives. */
+const ONE_VALUE_GATES: Array<{ shape: string; schema: Record<string, unknown>; typed: string; text: string }> = [
+  { shape: "string", schema: { type: "string", title: "Answer" }, typed: "Ship it.", text: "Ship it." },
+  { shape: "number", schema: { type: "number", title: "Answer" }, typed: "42", text: "42" },
+  {
+    shape: "array",
+    schema: { type: "array", title: "Answer", items: { type: "string" } },
+    typed: "alpha\nbeta",
+    text: '["alpha","beta"]',
+  },
+];
+
+describe("OrchestratorStepperPanel - a one-value gate on a retired id sends the entered value", () => {
+  for (const g of ONE_VALUE_GATES) {
+    // red-first-expect: expected null not to be null
+    it(`a ${g.shape} gate resumes with the entered value, not the approval marker`, async () => {
+      INTERRUPT = {
+        schema: g.schema,
+        xRenderer: DROPPED_ID,
+        values: {},
+        reviewTaskId: TASK_ID,
+        fieldName: "answer",
+      };
+      const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+      render(<OrchestratorStepperPanel {...baseProps()} />);
+      await waitFor(() => expect(document.getElementById("field-answer")).not.toBeNull());
+      fireEvent.change(document.getElementById("field-answer")!, { target: { value: g.typed } });
+      await waitFor(() => expect(continues()).toHaveLength(1));
+      fireEvent.click(continues()[0]!);
+      await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+      const call = hitlActions.approveReviewTask.mock.calls[0] as unknown[];
+      expect(call[0]).toBe(TASK_ID);
+      expect(call[1]).toMatchObject({ approved: true, userResponse: g.text });
+      expect(call[2]).toBeUndefined();
+    });
+  }
+});
+
+// The generic-object confirmation (a bare object schema, nothing to fill in, a
+// Continue alone) is the FLOOR's: it holds for a gate the floor draws and
+// never for a gate whose own registered renderer claims it.
+describe("OrchestratorStepperPanel - a bare object gate", () => {
+  const OWN_ID = "@cinatra-test/live-pack-agent:confirm-screen";
+  const BARE = { type: "object" };
+
+  // red-first-expect: expected [] to have a length of 1 but got +0
+  it("the floor draws it as the Continue-only confirmation, which sends the approval", async () => {
+    INTERRUPT = { schema: BARE, xRenderer: DROPPED_ID, values: {}, reviewTaskId: TASK_ID };
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    render(<OrchestratorStepperPanel {...baseProps()} />);
+    await waitFor(() => expect(continues()).toHaveLength(1));
+    expect(document.body.textContent ?? "").not.toMatch(/no renderer configured/);
+    fireEvent.click(continues()[0]!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    expect((hitlActions.approveReviewTask.mock.calls[0] as unknown[])[0]).toBe(TASK_ID);
+    expect((hitlActions.approveReviewTask.mock.calls[0] as unknown[])[1]).toMatchObject({ approved: true });
+  });
+
+  it("a registered renderer that claims it draws its own screen, with no Continue-only confirmation", async () => {
+    fieldRendererRegistry.register({
+      id: OWN_ID,
+      priority: 90,
+      condition: (_f, schema) => schema["x-renderer"] === OWN_ID,
+      renderer: () => <div data-testid="own-renderer">Own screen</div>,
+      drawsOwnSubmit: true,
+    });
+    INTERRUPT = { schema: BARE, xRenderer: OWN_ID, values: {}, reviewTaskId: TASK_ID };
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    render(
+      <OrchestratorStepperPanel
+        {...baseProps()}
+        stepperSteps={[{ index: 1, stepNumber: 0, label: "Confirm", xRenderer: OWN_ID }]}
+      />,
+    );
+    await waitFor(() => expect(document.querySelector('[data-testid="own-renderer"]')).not.toBeNull());
+    expect(continues()).toHaveLength(0);
   });
 });
 
