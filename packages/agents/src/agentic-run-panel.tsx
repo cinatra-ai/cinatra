@@ -52,6 +52,7 @@ import {
   continueAwaitsAPick,
   declaredHitlCardOf,
   fieldRendererRegistry,
+  rendererStepOf,
   requestFreshRendererBindingRead,
   runtimeRendererBindingsLoad,
   subscribeRuntimeRendererBindings,
@@ -109,6 +110,7 @@ import {
   continueApprovalFlag,
   continueHeldByRenderer,
   rendererBindingHoldReason,
+  stepScreenPinHolds,
   stageRendererAnswer,
   stageAssistantFill,
   stageAssistantFills,
@@ -1260,13 +1262,26 @@ export function AgenticRunPanel({
     : suppression.context;
   // A mid-run gate the page's bindings answer does not name waits for a fresh
   // read of them before it reads as declaring no screen (cinatra#3470).
+  // Each STEP reads fresh for itself, and is drawn only under the declaration
+  // it opened under (its schema's pin).
   const freshReadGateId =
     effectiveHitlContext !== null && !isSetupGateTaskId(effectiveHitlContext.reviewTaskId)
       ? effectiveHitlContext.xRenderer
       : null;
+  const rendererStep =
+    freshReadGateId !== null && effectiveHitlContext !== null
+      ? rendererStepOf(effectiveHitlContext.reviewTaskId, effectiveHitlContext.inputSchema)
+      : undefined;
+  const rendererStepKey = rendererStep?.key ?? null;
+  const rendererStepPin = rendererStep?.pin ?? null;
   useEffect(() => {
-    requestFreshRendererBindingRead(freshReadGateId);
-  }, [freshReadGateId, rendererBindings]);
+    requestFreshRendererBindingRead(
+      freshReadGateId,
+      rendererStepKey !== null && rendererStepPin !== null
+        ? { key: rendererStepKey, pin: rendererStepPin }
+        : undefined,
+    );
+  }, [freshReadGateId, rendererStepKey, rendererStepPin, rendererBindings]);
 
   // THE BADGE READS THE RUN'S OWN MOMENT (cinatra#2930, epic #2926 W3).
   //
@@ -1552,7 +1567,11 @@ export function AgenticRunPanel({
       // declared screen may name any id, so the hold reads the binding state.
       const bindingHold =
         !isSetupGateTaskId(ctx.reviewTaskId)
-          ? rendererBindingHoldReason(ctx.xRenderer, rendererBindingsRef.current)
+          ? rendererBindingHoldReason(
+              ctx.xRenderer,
+              rendererBindingsRef.current,
+              rendererStepOf(ctx.reviewTaskId, ctx.inputSchema),
+            )
           : null;
       if (bindingHold !== null) throw new Error(bindingHold);
       // A DECLARED CARD (cinatra#3470): what the caller hands in is a change to
@@ -2178,6 +2197,13 @@ export function AgenticRunPanel({
   // Resolve renderer entry for inline HITL bubble.
   const hitlRendererEntry = (() => {
     if (!isPendingApproval || !effectiveHitlContext?.xRenderer) return null;
+    // A step is never drawn with a screen it did not open under (cinatra#3470).
+    if (
+      rendererStep !== undefined &&
+      stepScreenPinHolds(effectiveHitlContext.xRenderer, rendererBindings, rendererStep)
+    ) {
+      return null;
+    }
     const fieldSchema: Record<string, unknown> = {
       ...(effectiveHitlContext.inputSchema ?? {}),
       "x-renderer": effectiveHitlContext.xRenderer,
@@ -2326,9 +2352,9 @@ export function AgenticRunPanel({
   }): ReactNode => effectiveHitlContext && (
     <div className="flex justify-end items-center gap-2 pt-2 border-t border-line">
       {!opts?.withReject &&
-      rendererBindingHoldReason(effectiveHitlContext.xRenderer, rendererBindings) !== null ? (
+      rendererBindingHoldReason(effectiveHitlContext.xRenderer, rendererBindings, rendererStep) !== null ? (
         <span className="text-xs text-muted-foreground" data-continue-hold-reason="">
-          {rendererBindingHoldReason(effectiveHitlContext.xRenderer, rendererBindings)}
+          {rendererBindingHoldReason(effectiveHitlContext.xRenderer, rendererBindings, rendererStep)}
         </span>
       ) : null}
       {opts?.withReject ? (
@@ -2401,7 +2427,7 @@ export function AgenticRunPanel({
               hitlRendererEntry?.entry,
               effectiveHitlContext.currentValues,
               bufferedHitlValue,
-              { xRenderer: effectiveHitlContext.xRenderer, bindings: rendererBindings },
+              { xRenderer: effectiveHitlContext.xRenderer, bindings: rendererBindings, step: rendererStep },
             )) ||
           opts?.awaitingRendererValue === true ||
           (!rendererFloored && continueAwaitsAPick(hitlRendererEntry?.entry, bufferedHitlValue))
@@ -2423,6 +2449,7 @@ export function AgenticRunPanel({
             rendererBindingHoldReason(
               effectiveHitlContext.xRenderer,
               rendererBindingsRef.current,
+              rendererStep,
             ) !== null
           ) {
             return;
@@ -3638,9 +3665,9 @@ export function AgenticRunPanel({
               className="soft-panel rounded-panel p-4 bg-surface-muted"
               data-conformance-id="hitl-screen-fields"
             >
-              {rendererBindingHoldReason(effectiveHitlContext.xRenderer, rendererBindings) !== null ? (
+              {rendererBindingHoldReason(effectiveHitlContext.xRenderer, rendererBindings, rendererStep) !== null ? (
                 <p className="text-sm text-muted-foreground" data-continue-hold-reason="">
-                  {rendererBindingHoldReason(effectiveHitlContext.xRenderer, rendererBindings)}
+                  {rendererBindingHoldReason(effectiveHitlContext.xRenderer, rendererBindings, rendererStep)}
                 </p>
               ) : (
                 <p className="text-sm text-muted-foreground">

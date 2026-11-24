@@ -41,6 +41,9 @@ vi.mock("../field-renderer-bindings.server", () => ({
   },
   // Every fixture binding here names a kind the host draws.
   isUndrawableDeclaredScreen: () => false,
+  // Every step here opened under the declaration installed now; the pin itself
+  // is read through the production lookup in declared-hitl-screen-3470.
+  stepDeclarationStanding: () => "matches",
 }));
 
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "../agent-builder-ids";

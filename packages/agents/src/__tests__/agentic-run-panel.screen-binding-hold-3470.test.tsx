@@ -284,8 +284,12 @@ describe("AgenticRunPanel — a screen whose binding has not loaded holds its Co
       // The page knew the bindings before (the tests above): wait until the
       // real action answered this page, as the operator's press would.
       await waitFor(() => expect(answered).not.toBeNull());
-      // red-first-expect: expected [] to deeply equal { bindings: Any<Array>, …(1) }
-      expect(await answered).toEqual({ bindings: expect.any(Array), refusedScreenIds: [gate.xRenderer] });
+      // red-first-expect: expected [] to deeply equal { bindings: Any<Array>, …(2) }
+      expect(await answered).toEqual({
+        bindings: expect.any(Array),
+        refusedScreenIds: [gate.xRenderer],
+        screenPins: {},
+      });
       await expectHeld(HOLD_FAILED, published);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("title is required"));
     } finally {

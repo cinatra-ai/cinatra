@@ -17,6 +17,7 @@ import "server-only";
 // deterministic snapshot. The scan is a bounded readdir over
 // extensions/<scope>/<name>/package.json with a short TTL cache.
 
+import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -31,6 +32,11 @@ import {
 } from "@/lib/generated/agent-bindings";
 import { resolveAgentRuntimeMountDir } from "./agent-runtime-mount";
 import type { FieldRendererBindingInput } from "./register-default-renderers";
+import {
+  DECLARED_SCREEN_PIN_KEY,
+  DECLARED_SCREEN_PIN_NONE,
+  readDeclaredScreenPin,
+} from "./field-renderer-registry";
 import type { DeclaredHitlCard } from "./hitl-gate-submit";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: dependency-free .mjs validation module (allowJs)
@@ -222,6 +228,13 @@ export type RuntimeFieldRendererBindingsPayload = {
    * declare a screen (held as "could not be loaded", never as no screen).
    */
   incomplete?: true;
+  /**
+   * The pin (`declaredScreenPin`) of every merged binding that declares a
+   * screen, generated ones included, by id. The run page draws a parked step
+   * only under the declaration its own pin names. Absent from an answer
+   * that read no bindings (no session): a pinned step is then held.
+   */
+  screenPins?: Record<string, string>;
 };
 
 /**
@@ -248,7 +261,106 @@ export function runtimeFieldRendererBindingsPayload(
       })),
     refusedScreenIds: refusedScreenIds.filter((id) => !generatedIds.has(id)),
     ...(complete ? {} : { incomplete: true as const }),
+    screenPins: Object.fromEntries(
+      getMergedFieldRendererBindings()
+        .filter((b) => b.screen !== undefined)
+        .map((b) => [b.id, declaredScreenPin(b)]),
+    ),
   };
+}
+
+/** The JSON of a value with every object's keys in order. */
+function canonicalJson(value: unknown): string {
+  const sort = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(sort);
+    if (v && typeof v === "object") {
+      return Object.fromEntries(
+        Object.keys(v as Record<string, unknown>)
+          .sort()
+          .map((k) => [k, sort((v as Record<string, unknown>)[k])]),
+      );
+    }
+    return v;
+  };
+  return JSON.stringify(sort(value)) ?? "null";
+}
+
+/**
+ * THE PIN OF A BINDING'S DECLARED SCREEN (cinatra#3470): a digest of what
+ * draws the screen and reads its answer (the id, the kind, the mid-run flag,
+ * the params and the screen itself), or `DECLARED_SCREEN_PIN_NONE` for a
+ * binding that declares none. The host writes it into a gate's schema when
+ * it parks the run (`DECLARED_SCREEN_PIN_KEY`), and every reader compares it
+ * with the binding installed now.
+ */
+export function declaredScreenPin(binding: {
+  id: string;
+  kind: string;
+  midRunHitl?: boolean;
+  params?: unknown;
+  screen?: unknown;
+}): string {
+  if (binding.screen === undefined) return DECLARED_SCREEN_PIN_NONE;
+  const declaration = canonicalJson({
+    id: binding.id,
+    kind: binding.kind,
+    midRunHitl: binding.midRunHitl === true,
+    params: binding.params ?? null,
+    screen: binding.screen,
+  });
+  return `sha256:${createHash("sha256").update(declaration).digest("hex")}`;
+}
+
+/**
+ * The pin of what `xRenderer` declares now, or null when that cannot be read
+ * (a refused declaration, an id an incomplete scan does not name, a failed
+ * read): those are held as unavailable on their own.
+ */
+export function currentDeclaredScreenPin(xRenderer: string): string | null {
+  try {
+    const { binding, refused, unknown } = lookupFieldRendererBinding(xRenderer);
+    if (binding === undefined) return refused || unknown ? null : DECLARED_SCREEN_PIN_NONE;
+    return declaredScreenPin(binding);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Does the parked step whose gate schema is `stepSchema` still have the
+ * declaration it opened under (cinatra#3470)? "matches"; "changed" when the
+ * renderer installed now declares another screen, or a screen where the step
+ * opened with none, or none where it opened with one; "unknown" when what is
+ * declared now cannot be read. A step is drawn, filled and submitted only on
+ * "matches".
+ */
+export function stepDeclarationStanding(
+  xRenderer: string,
+  stepSchema: unknown,
+): "matches" | "changed" | "unknown" {
+  const current = currentDeclaredScreenPin(xRenderer);
+  if (current === null) return "unknown";
+  return current === readDeclaredScreenPin(stepSchema) ? "matches" : "changed";
+}
+
+/**
+ * A gate schema with the pin of the screen its renderer declares now, written
+ * when the host parks the run on it. A renderer that declares no screen, or a
+ * declaration that cannot be read, writes no pin (the schema of every gate
+ * without a screen stays as it was): the step then reads as opened with no
+ * screen, and a screen declared later is never drawn for it. A pin the gate's
+ * own schema carries is dropped: only the host writes one.
+ */
+export function withDeclaredScreenPin(
+  schema: Record<string, unknown>,
+  xRenderer: string,
+): Record<string, unknown> {
+  const { [DECLARED_SCREEN_PIN_KEY]: _held, ...rest } = schema;
+  void _held;
+  const pin = currentDeclaredScreenPin(xRenderer);
+  return pin === null || pin === DECLARED_SCREEN_PIN_NONE
+    ? rest
+    : { ...rest, [DECLARED_SCREEN_PIN_KEY]: pin };
 }
 
 /**
@@ -345,7 +457,8 @@ export function lookupFieldRendererBinding(
 /**
  * The declared HITL CARD of a gate's renderer (cinatra#3470): the merged
  * binding with exactly this id, declared mid-run, whose screen is a "card"
- * that passes the same validation the client registration runs. The server's
+ * that passes the same validation the client registration runs, and is the
+ * declaration the parked step (`stepSchema`, its gate schema) opened under. The server's
  * bound-screen fill and lent-action submit read the card's answer from it,
  * never from the gate's input schema.
  *
@@ -362,8 +475,12 @@ export function lookupFieldRendererBinding(
  */
 export function readDeclaredHitlCard(
   xRenderer: string,
+  stepSchema: unknown,
 ): DeclaredHitlCard | "kind-screen" | "unavailable" | null {
   try {
+    // The step is answered only under the declaration it opened under: a
+    // renderer changed since then lends nothing, not even the raw schema.
+    if (stepDeclarationStanding(xRenderer, stepSchema) === "changed") return "unavailable";
     const { binding, refused, unknown } = lookupFieldRendererBinding(xRenderer);
     if (!binding) return refused || unknown ? "unavailable" : null;
     if (binding.screen === undefined) return null;

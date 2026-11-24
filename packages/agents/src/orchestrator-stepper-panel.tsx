@@ -135,6 +135,7 @@ import {
   continueApprovalFlag,
   continueHeldByRenderer,
   rendererBindingHoldReason,
+  stepScreenPinHolds,
   stageRendererAnswer,
   stageAssistantFill,
   stageAssistantFills,
@@ -169,6 +170,7 @@ import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import {
   continueAwaitsAPick,
   fieldRendererRegistry,
+  rendererStepOf,
   requestFreshRendererBindingRead,
   runtimeRendererBindingsLoad,
   subscribeRuntimeRendererBindings,
@@ -963,12 +965,6 @@ function HitlApprovalCard({
   // (e.g. the gmail-sender whitelist) start CHANGING which component renders a
   // gate, which is a different behaviour change than fixing a label. Only the
   // rendered field IDENTITY below carries the real name.
-  const entry = fieldRendererRegistry.resolve(
-    HITL_PLACEHOLDER_FIELD_NAME,
-    fieldSchema,
-    context,
-  );
-  fillTargetRef.current = { entry, runValue: interruptContext.values ?? {} };
   // Where the run page's renderer bindings stand (cinatra#3470): a mid-run
   // screen whose binding has not loaded, or failed to load, holds its Continue.
   const rendererBindings = useSyncExternalStore(
@@ -976,17 +972,43 @@ function HitlApprovalCard({
     runtimeRendererBindingsLoad,
     runtimeRendererBindingsLoad,
   );
-  const continueGate = { xRenderer: interruptContext.xRenderer, bindings: rendererBindings };
-  const bindingHoldReason = rendererBindingHoldReason(interruptContext.xRenderer, rendererBindings);
+  // The parked step, drawn only under the declaration it opened under, and
+  // read fresh for itself (cinatra#3470). A setup gate is no such step.
+  const rendererStep = isSetupGateTaskId(interruptContext.reviewTaskId)
+    ? undefined
+    : rendererStepOf(interruptContext.reviewTaskId, interruptContext.schema);
+  const entry =
+    rendererStep !== undefined &&
+    stepScreenPinHolds(interruptContext.xRenderer, rendererBindings, rendererStep)
+      ? null
+      : fieldRendererRegistry.resolve(HITL_PLACEHOLDER_FIELD_NAME, fieldSchema, context);
+  fillTargetRef.current = { entry, runValue: interruptContext.values ?? {} };
+  const continueGate = {
+    xRenderer: interruptContext.xRenderer,
+    bindings: rendererBindings,
+    step: rendererStep,
+  };
+  const bindingHoldReason = rendererBindingHoldReason(
+    interruptContext.xRenderer,
+    rendererBindings,
+    rendererStep,
+  );
   const { "x-renderer": _xr, ...renderSchema } = fieldSchema;
   void _xr;
 
   const isMidRunHitl = classifyMidRunHitl(interruptContext.xRenderer);
   // A gate the page's bindings answer does not name waits for a fresh read of
   // them before it reads as declaring no screen (cinatra#3470).
+  const rendererStepKey = rendererStep?.key ?? null;
+  const rendererStepPin = rendererStep?.pin ?? null;
   useEffect(() => {
-    requestFreshRendererBindingRead(interruptContext.xRenderer);
-  }, [interruptContext.xRenderer, rendererBindings]);
+    requestFreshRendererBindingRead(
+      interruptContext.xRenderer,
+      rendererStepKey !== null && rendererStepPin !== null
+        ? { key: rendererStepKey, pin: rendererStepPin }
+        : undefined,
+    );
+  }, [interruptContext.xRenderer, rendererStepKey, rendererStepPin, rendererBindings]);
   // Narrower classifier than isMidRunHitl: matches output renderers only,
   // excluding input forms. Drives the `data-hitl-output` attribute on the
   // HitlApprovalCard root Card element, which AgentPageLayout's outer wrapper

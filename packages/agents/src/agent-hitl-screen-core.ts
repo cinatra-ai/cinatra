@@ -128,7 +128,7 @@ export async function agentHitlScreenStateForRun(
   // the panel and this reader cannot drift into two ideas of what a park is. It
   // costs no read: the record is already in hand.
   if (isParkedOnProducedReview(run)) return AGENT_HITL_SCREEN_NONE;
-  const declaredScreen = await declaredScreenBindingOf(context.xRenderer);
+  const declaredScreen = await declaredScreenBindingOf(context.xRenderer, context.inputSchema);
   return {
     state: "asking",
     runId: run.id,
@@ -162,14 +162,22 @@ export async function agentHitlScreenStateForRun(
  * never "none declared": the card then holds the gate's Continue
  * (cinatra#3470). One the validator refused is "refused": the card holds it
  * even over a binding an earlier read registered under the same id.
+ *
+ * THE STEP'S OWN DECLARATION, NEVER THE ONE INSTALLED SINCE. The parked step
+ * carries the pin of the declaration it opened under in its gate schema
+ * (`stepSchema`). A renderer changed or uninstalled since, or one that
+ * declares a screen where the step opened with none, is "unavailable": the
+ * card holds the step, and never draws the new revision's screen or the
+ * fallback Continue for it.
  */
 async function declaredScreenBindingOf(
   xRenderer: string,
+  stepSchema: Record<string, unknown> | undefined,
 ): Promise<AgentHitlDeclaredScreenBinding | "refused" | "unavailable" | null> {
   try {
-    const { lookupFieldRendererBinding, isUndrawableDeclaredScreen } = await import(
-      "./field-renderer-bindings.server"
-    );
+    const { lookupFieldRendererBinding, isUndrawableDeclaredScreen, stepDeclarationStanding } =
+      await import("./field-renderer-bindings.server");
+    if (stepDeclarationStanding(xRenderer, stepSchema) === "changed") return "unavailable";
     // A cached scan never reads as "none declared" (`lookupFieldRendererBinding`).
     const { binding, refused, unknown } = lookupFieldRendererBinding(xRenderer);
     // A screen the validator refused, or a "kind" screen of a kind the host

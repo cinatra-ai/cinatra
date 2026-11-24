@@ -960,7 +960,7 @@ describe("a declared grouped setup form sends only from its own control (cinatra
 describe("each conversation card draws the declared screen it was handed (cinatra#3470)", () => {
   // Two open gates of the same binding id across a package revision: the
   // earlier gate's read handed over the earlier declaration, the later one
-  // the later. Each card must draw and send with its own.
+  // the later.
   const EARLIER = {
     layout: "card",
     title: "Fixture earlier revision",
@@ -997,58 +997,8 @@ describe("each conversation card draws the declared screen it was handed (cinatr
     hitlActions.approveReviewTask.mockClear();
   });
 
-  it("two cards of one screen id with different declarations each draw and send their own, and leave no global entry", async () => {
-    const view = render(
-      <LifecycleCardSurfaceProvider host="chat_thread">
-        <div data-testid="earlier">
-          <AgentHitlScreenCard runId="run-earlier" wireRef="task-earlier" />
-        </div>
-        <div data-testid="later">
-          <AgentHitlScreenCard runId="run-later" wireRef="task-later" />
-        </div>
-      </LifecycleCardSurfaceProvider>,
-    );
-    const earlier = within(dom.getByTestId("earlier"));
-    const later = within(dom.getByTestId("later"));
-    // red-first-expect: expected 0 to be greater than 0
-    await waitFor(() => expect(earlier.queryAllByRole("radio").length).toBeGreaterThan(0));
-    await waitFor(() => expect(later.queryAllByRole("radio").length).toBeGreaterThan(0));
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 20));
-    });
-    expect(earlier.getByText("Fixture earlier decision")).toBeTruthy();
-    expect(earlier.queryByText("Fixture later decision")).toBeNull();
-    expect(earlier.getAllByRole("radio")).toHaveLength(2);
-    expect(later.getByText("Fixture later decision")).toBeTruthy();
-    expect(later.queryByText("Fixture earlier decision")).toBeNull();
-    expect(later.getAllByRole("radio")).toHaveLength(1);
-
-    fireEvent.click(earlier.getByRole("radio", { name: "Fixture earlier hold" }));
-    await act(async () => {
-      fireEvent.click(earlier.getByRole("button", { name: /^continue$/i }));
-      await new Promise((r) => setTimeout(r, 20));
-    });
-    fireEvent.click(later.getByRole("radio", { name: "Fixture later send" }));
-    await act(async () => {
-      fireEvent.click(later.getByRole("button", { name: /^continue$/i }));
-      await new Promise((r) => setTimeout(r, 20));
-    });
-    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(2));
-    const sent = new Map(
-      hitlActions.approveReviewTask.mock.calls.map((c) => [c[0] as string, c[1] as Record<string, unknown>]),
-    );
-    // The earlier card sends its own decline with its own carried key.
-    expect(sent.get("task-earlier")).toMatchObject({ itemId: "item-1", approved: false });
-    expect(sent.get("task-earlier")).not.toHaveProperty("route");
-    expect(sent.get("task-earlier")).not.toHaveProperty("revisionId");
-    // The later card sends the later declaration's answer.
-    expect(sent.get("task-later")).toMatchObject({ revisionId: "rev-1", route: "later", approved: true });
-    expect(sent.get("task-later")).not.toHaveProperty("itemId");
-
-    view.unmount();
-    // No card's declaration is left behind for any other surface to resolve.
-    expect(fieldRendererRegistry.list().filter((e) => e.id.startsWith(ID))).toEqual([]);
-  });
+  // Two cards of one id across a package revision, read through the
+  // production lookup, are pinned in declared-screen-pin-3470.test.tsx.
 
   it("a card's declaration never replaces a binding registered under the same id by another source", async () => {
     // The run page registered the installed agent's current binding.

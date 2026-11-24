@@ -512,6 +512,7 @@ import { parkRunOnHumanGate } from "./human-gate-park";
 import {
   buildA2UiMidRunTranslatorResolver,
   resolveRendererIdForKind,
+  withDeclaredScreenPin,
 } from "./field-renderer-bindings.server";
 import { stepFiresRendererGate } from "./orchestrator-gate-predicate";
 import {
@@ -3040,11 +3041,19 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       gateLabel: `WayFlow gate ${wayflowGateId}`,
       alreadyParked: fromStatus === "pending_approval",
       buildArtifact: async () => ({
-        schema: await enrichSchemaWithResolvedData(
-          gateKeysNotFromRunInputs.length > 0
-            ? { ...gateSchemaBase, [GATE_KEYS_NOT_FROM_RUN_INPUTS]: gateKeysNotFromRunInputs }
-            : gateSchemaBase,
-          enrichmentContextFor(run.runBy),
+        // THE STEP IS PINNED TO THE SCREEN ITS RENDERER DECLARES NOW
+        // (cinatra#3470). Every reader draws, fills and submits it only under
+        // that declaration: a renderer updated or uninstalled while the step
+        // waits makes its screen unavailable, never the new one's. Only the
+        // host writes the pin: one the gate's own schema carries is dropped.
+        schema: withDeclaredScreenPin(
+          await enrichSchemaWithResolvedData(
+            gateKeysNotFromRunInputs.length > 0
+              ? { ...gateSchemaBase, [GATE_KEYS_NOT_FROM_RUN_INPUTS]: gateKeysNotFromRunInputs }
+              : gateSchemaBase,
+            enrichmentContextFor(run.runBy),
+          ),
+          wayflowXRenderer,
         ),
         xRenderer: wayflowXRenderer,
         values: enrichedValues,

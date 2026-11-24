@@ -261,8 +261,49 @@ export function continueAwaitsAPick(
 }
 
 // ---------------------------------------------------------------------------
+// THE DECLARATION A STEP OPENED UNDER (cinatra#3470)
+// ---------------------------------------------------------------------------
+
+/**
+ * The gate schema key that pins a parked step to the screen its renderer
+ * declared when the step opened. The host writes it when it parks the run
+ * (`x-` hint road: the event log and the durable gate row store the schema
+ * whole), as a digest of the declaration, or `DECLARED_SCREEN_PIN_NONE` when
+ * the renderer declared no screen. A reader draws, fills and submits a step
+ * only with the declaration its pin names: a renderer changed or uninstalled
+ * since the step opened makes the step's screen unavailable, never the new
+ * revision's screen and never the fallback Continue.
+ */
+export const DECLARED_SCREEN_PIN_KEY = "x-declared-screen";
+/** The pin of a step whose renderer declared no screen when it opened. */
+export const DECLARED_SCREEN_PIN_NONE = "none";
+
+/**
+ * The pin a step's gate schema carries. A schema without one (a step parked
+ * before pins were written, or by a park that writes none) opened with no
+ * declared screen: screens did not exist before pins did.
+ */
+export function readDeclaredScreenPin(schema: unknown): string {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+    return DECLARED_SCREEN_PIN_NONE;
+  }
+  const pin = (schema as Record<string, unknown>)[DECLARED_SCREEN_PIN_KEY];
+  return typeof pin === "string" && pin.length > 0 ? pin : DECLARED_SCREEN_PIN_NONE;
+}
+
+// ---------------------------------------------------------------------------
 // WHERE THE GATE'S RENDERER BINDING STANDS (cinatra#3470)
 // ---------------------------------------------------------------------------
+
+/**
+ * The key a fresh read is recorded under: the gate id AND the step it was
+ * read for. A read made for one step says nothing about a step opened later
+ * under the same id, so each step reads fresh for itself. A host that names
+ * no step keys the read by the id alone.
+ */
+export function freshReadKey(xRenderer: string, stepKey?: string | null): string {
+  return typeof stepKey === "string" && stepKey.length > 0 ? `${xRenderer}\u0000${stepKey}` : xRenderer;
+}
 
 /**
  * Where a host's renderer bindings stand. `status` is `loading` until the
@@ -286,13 +327,22 @@ export type RendererBindingsLoad = {
    */
   incomplete?: boolean;
   /**
-   * The ids a FRESH read of the source answered for. A loaded answer may be a
-   * scan cached before the gate's agent was installed, so an id it does not
-   * announce reads as declaring nothing only once a fresh read answered for
-   * it. `"every"`: the source reads each gate's own binding fresh (the
-   * conversation card's read), so every id it answered for is.
+   * The steps a FRESH read of the source answered for, by `freshReadKey`. A
+   * loaded answer may be a scan cached before the gate's agent was installed,
+   * so an id it does not announce reads as declaring nothing only once a
+   * fresh read answered for THAT step: a read made for an earlier step of the
+   * same id is older than any install since. `"every"`: the source reads each
+   * gate's own binding fresh (the conversation card's read), so every step it
+   * answered for is.
    */
   freshlyReadIds: ReadonlySet<string> | "every";
+  /**
+   * The pin (`DECLARED_SCREEN_PIN_KEY`) of every binding the source answered
+   * with a declared screen, by id. A step is drawn only under the declaration
+   * its own pin names (`rendererBindingHoldReason`). Absent for a source that
+   * pins each gate's declaration itself (the conversation card's read).
+   */
+  screenPins?: ReadonlyMap<string, string>;
 };
 
 /** Is a binding registered under exactly this id? */
@@ -320,10 +370,10 @@ export function runtimeRendererBindingsLoad(): RendererBindingsLoad {
 }
 
 /**
- * Record what the runtime bindings fetch answered. `freshFor` names the gate
- * ids a fresh read was asked for: its answer is theirs. A fresh read that
- * failed leaves each of them a screen that could not be loaded (held, never
- * read as declaring nothing).
+ * Record what the runtime bindings fetch answered. `freshFor` names the steps
+ * a fresh read was asked for (`freshReadKey`): its answer is theirs. A fresh
+ * read that failed leaves each of their gates a screen that could not be
+ * loaded (held, never read as declaring nothing).
  *
  * AN ANSWER IS THE WHOLE INSTALLED SET (cinatra#3470): what it announces and
  * refuses REPLACES what an earlier answer did, so a screen uninstalled or
@@ -337,13 +387,14 @@ export function settleRuntimeRendererBindings(
         refusedIds?: ReadonlyArray<string>;
         incomplete?: boolean;
         freshFor?: ReadonlyArray<string>;
+        screenPins?: Readonly<Record<string, string>>;
       }
     | { ok: false; freshFor?: ReadonlyArray<string> },
 ): void {
   const freshFor = outcome.freshFor ?? [];
   const announcedIds = outcome.ok
     ? new Set(outcome.screenIds)
-    : new Set([...runtimeBindingsLoad.announcedIds, ...freshFor]);
+    : new Set([...runtimeBindingsLoad.announcedIds, ...freshFor.map(gateIdOfFreshReadKey)]);
   const read = runtimeBindingsLoad.freshlyReadIds;
   const freshlyReadIds =
     read === "every" || !outcome.ok ? read : new Set([...read, ...freshFor]);
@@ -356,25 +407,75 @@ export function settleRuntimeRendererBindings(
     : runtimeBindingsLoad.incomplete === true;
   // A gate whose fresh read failed may ask again once a later answer leaves it
   // unannounced (`requestFreshRendererBindingRead`).
-  if (!outcome.ok) for (const id of freshFor) freshReadsAsked.delete(id);
-  runtimeBindingsLoad = { status, announcedIds, freshlyReadIds, refusedIds, incomplete };
+  if (!outcome.ok) for (const key of freshFor) freshReadsAsked.delete(key);
+  // The pins go with the answer they came in: a failed read keeps the last.
+  const screenPins = outcome.ok
+    ? outcome.screenPins === undefined
+      ? undefined
+      : new Map(Object.entries(outcome.screenPins))
+    : runtimeBindingsLoad.screenPins;
+  runtimeBindingsLoad = {
+    status,
+    announcedIds,
+    freshlyReadIds,
+    refusedIds,
+    incomplete,
+    ...(screenPins === undefined ? {} : { screenPins }),
+  };
   for (const listener of runtimeBindingsListeners) listener();
+}
+
+/** The gate id a `freshReadKey` was made for. */
+function gateIdOfFreshReadKey(key: string): string {
+  const at = key.indexOf("\u0000");
+  return at < 0 ? key : key.slice(0, at);
+}
+
+/**
+ * The parked step a host draws (cinatra#3470): its identity (the gate's review
+ * task id) and the pin of the declaration it opened under
+ * (`readDeclaredScreenPin`).
+ */
+export type RendererStep = { readonly key: string; readonly pin: string };
+
+/** The step of a gate, from its review task id and its schema. */
+export function rendererStepOf(
+  reviewTaskId: string,
+  schema: Record<string, unknown> | null | undefined,
+): RendererStep {
+  return { key: reviewTaskId, pin: readDeclaredScreenPin(schema) };
+}
+
+/**
+ * The pin of what the source's answer declares for `xRenderer` now, or null
+ * when the answer carries no pins (a source that pins each gate itself).
+ */
+export function answeredScreenPin(xRenderer: string, bindings: RendererBindingsLoad): string | null {
+  if (bindings.screenPins === undefined) return null;
+  return bindings.screenPins.get(xRenderer) ?? DECLARED_SCREEN_PIN_NONE;
 }
 
 /**
  * Does the gate drawn by `xRenderer` wait for a fresh read of its bindings
- * (cinatra#3470)? Only a gate with no binding registered, on an answer that
- * loaded, did not announce it, and was not read fresh for it.
+ * (cinatra#3470)? Only on an answer that loaded, and only while no fresh read
+ * answered for the gate's STEP (`step`; a host that names none is keyed by
+ * the id alone): a gate with no binding registered that the answer did not
+ * announce, and a step whose pin the answer does not match. Either may be an
+ * answer older than an install made since, so neither is final before a read
+ * made for that step.
  */
 export function awaitsFreshRendererBindingRead(
   xRenderer: string,
   bindings: RendererBindingsLoad,
+  step?: RendererStep,
 ): boolean {
-  if (xRenderer === "" || isRendererBound(xRenderer)) return false;
-  if (bindings.status !== "loaded" || bindings.announcedIds.has(xRenderer)) return false;
+  if (xRenderer === "" || bindings.status !== "loaded") return false;
   if (bindings.refusedIds?.has(xRenderer)) return false;
   const read = bindings.freshlyReadIds;
-  return read !== "every" && !read.has(xRenderer);
+  if (read === "every" || read.has(freshReadKey(xRenderer, step?.key))) return false;
+  const answered = step === undefined ? null : answeredScreenPin(xRenderer, bindings);
+  if (answered !== null && answered !== step?.pin) return true;
+  return !isRendererBound(xRenderer) && !bindings.announcedIds.has(xRenderer);
 }
 
 // ---------------------------------------------------------------------------
@@ -441,11 +542,21 @@ function reconcileRuntimeRegistrations(
   }
 }
 
+/** The pins of an answer: an object of strings, else none. */
+function readScreenPins(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const pins: Record<string, string> = {};
+  for (const [id, pin] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof pin === "string") pins[id] = pin;
+  }
+  return pins;
+}
+
 /**
  * Read the installed agents' bindings, register them and record the answer.
- * `freshFor` names a gate id the read is asked for: the server scans past its
- * cache, and the answer is recorded as that id's fresh read. True when the
- * read answered.
+ * `freshFor` names the step a read is asked for (`freshReadKey`): the server
+ * scans past its cache, and the answer is recorded as that step's fresh read.
+ * True when the read answered.
  */
 export async function readRuntimeRendererBindings(freshFor?: string): Promise<boolean> {
   const readFor = freshFor === undefined ? undefined : [freshFor];
@@ -482,6 +593,7 @@ export async function readRuntimeRendererBindings(freshFor?: string): Promise<bo
       refusedIds,
       incomplete,
       freshFor: readFor,
+      screenPins: readScreenPins(answer?.screenPins),
     });
     return true;
   } catch {
@@ -490,21 +602,27 @@ export async function readRuntimeRendererBindings(freshFor?: string): Promise<bo
   }
 }
 
-/** The gate ids this page has asked a fresh read for: each is asked once. */
+/** The steps this page has asked a fresh read for (`freshReadKey`): each is asked once. */
 const freshReadsAsked = new Set<string>();
 
 /**
- * Ask for THE GATE'S FRESH READ (cinatra#3470), once per id, when the gate
+ * Ask for THE STEP'S FRESH READ (cinatra#3470), once per step, when the gate
  * drawn by `xRenderer` waits for one (`awaitsFreshRendererBindingRead`). A
- * host calls it from an effect. A read that fails leaves the gate held as a
- * screen that could not be loaded.
+ * step opened later under the same id asks again: a read made for an earlier
+ * step is no proof about an install made since. A host calls it from an
+ * effect. A read that fails leaves the gate held as a screen that could not
+ * be loaded.
  */
-export function requestFreshRendererBindingRead(xRenderer: string | null | undefined): void {
+export function requestFreshRendererBindingRead(
+  xRenderer: string | null | undefined,
+  step?: RendererStep,
+): void {
   if (typeof xRenderer !== "string") return;
-  if (!awaitsFreshRendererBindingRead(xRenderer, runtimeBindingsLoad)) return;
-  if (freshReadsAsked.has(xRenderer)) return;
-  freshReadsAsked.add(xRenderer);
-  void readRuntimeRendererBindings(xRenderer);
+  if (!awaitsFreshRendererBindingRead(xRenderer, runtimeBindingsLoad, step)) return;
+  const key = freshReadKey(xRenderer, step?.key);
+  if (freshReadsAsked.has(key)) return;
+  freshReadsAsked.add(key);
+  void readRuntimeRendererBindings(key);
 }
 
 /**

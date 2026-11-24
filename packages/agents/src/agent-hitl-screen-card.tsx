@@ -137,6 +137,7 @@ import { getAgentHitlScreenStateAction } from "./agent-hitl-screen-actions";
 import {
   continueAwaitsAPick,
   fieldRendererRegistry,
+  isRendererBound,
   wholeAnswerStageProps,
   type FieldRendererContext,
   type FieldRendererEntry,
@@ -158,6 +159,7 @@ import {
   hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
+  isSetupGateTaskId,
   continueApprovalFlag,
   continueHeldByRenderer,
   rendererBindingHoldReason,
@@ -1269,8 +1271,21 @@ export function AgentHitlScreenCard({
     /** The scoped id the card's entry is registered under; null when refused. */
     scopedId: string | null;
   } | null>(null);
-  const registeredScreenKey = registeredScreen?.key ?? null;
+  // A REGISTRATION IS READ ONLY WHILE ITS ENTRY IS LIVE. The cleanup below
+  // unregisters the entry when the declaration goes away or changes, so the
+  // scoped id it recorded is dead from then on: a declaration that comes back
+  // with the same content must not read that id as loaded before its own
+  // registration is made. Until then the gate is loading, and its Continue
+  // holds.
+  const liveRegistration =
+    registeredScreen !== null &&
+    (registeredScreen.scopedId === null || isRendererBound(registeredScreen.scopedId))
+      ? registeredScreen
+      : null;
+  const registeredScreenKey = liveRegistration?.key ?? null;
   useEffect(() => {
+    // Every declaration, and no declaration, starts unregistered.
+    setRegisteredScreen(null);
     if (declaredScreen === null || declaredScreenKey === null) return;
     let live = true;
     let entry: FieldRendererEntry | null = null;
@@ -1297,11 +1312,11 @@ export function AgentHitlScreenCard({
   // the answered register, the submit) stays the gate's own.
   const rendererGate = useMemo(() => {
     const scopedId =
-      registeredScreen !== null && registeredScreen.key === declaredScreenKey
-        ? registeredScreen.scopedId
+      liveRegistration !== null && liveRegistration.key === declaredScreenKey
+        ? liveRegistration.scopedId
         : null;
     return gate !== null && scopedId !== null ? { ...gate, xRenderer: scopedId } : gate;
-  }, [gate, registeredScreen, declaredScreenKey]);
+  }, [gate, liveRegistration, declaredScreenKey]);
 
   // WHERE THIS GATE'S BINDING STANDS (cinatra#3470), as the run page reads its
   // own: the read could not tell (failed), the declared screen it handed over
@@ -1597,7 +1612,13 @@ export function AgentHitlScreenCard({
     // not a grouped-setup form. A grouped-setup form carries its own submit, and
     // a setup-loop field submits on change — a second Continue on either would
     // be a control the run page does not offer.
-    const { isMidRun, isGroupedSetup } = classifyHitlGate(gate);
+    const { isMidRun: midRunByRenderer, isGroupedSetup } = classifyHitlGate(gate);
+    // A STEP WHOSE DECLARED SCREEN IS UNAVAILABLE (cinatra#3470: refused,
+    // unreadable, or changed since the step opened) draws the held Continue
+    // with its reason, whatever its id: never a control that sends, and never
+    // a gate that silently shows no renderer.
+    const isMidRun =
+      midRunByRenderer || (declaredScreenUnavailable && !isSetupGateTaskId(gate.reviewTaskId));
     // A renderer that is not declared safe without a session is withheld
     // wherever there is no session — see the header. The condition is the
     // ABSENCE of a session rather than the presence of a credential, so a host
@@ -1681,6 +1702,7 @@ export function AgentHitlScreenCard({
     // A declared screen registered after the read re-resolves the renderer.
     rendererGate,
     gateBindings,
+    declaredScreenUnavailable,
   ]);
 
   // Nothing before an authorized read, and NO DOM AT ALL for `none` — the

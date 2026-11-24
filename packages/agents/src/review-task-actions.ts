@@ -69,6 +69,23 @@ const RESERVED_APPROVAL_ENVELOPE_KEYS = new Set<string>([
   "approvalNote",
 ]);
 
+/** The refusal of an answer to a step whose declared screen changed since it opened (cinatra#3470). */
+export const DECLARED_SCREEN_CHANGED_REFUSAL =
+  "This step's screen was changed after the step opened, so the answer was not sent.";
+
+/**
+ * Did the renderer of a parked step change its declared screen since the step
+ * opened (cinatra#3470)? Read from the pin the park wrote into the step's gate
+ * schema. Only a read that positively finds another declaration says so.
+ */
+async function stepScreenChangedSinceItOpened(gate: {
+  xRenderer: string;
+  inputSchema: Record<string, unknown>;
+}): Promise<boolean> {
+  const { stepDeclarationStanding } = await import("./field-renderer-bindings.server");
+  return stepDeclarationStanding(gate.xRenderer, gate.inputSchema) === "changed";
+}
+
 /**
  * THE WAYFLOW RESUME TEXT OF A DECLINE (cinatra#3470).
  *
@@ -1168,6 +1185,12 @@ export async function approveReviewTaskInternal(
       // seen and nothing is sent; a refusal gives the claim back. A hold that cannot be read answers one
       // fixed text that names no run and carries no store error.
       await assertNoOpenPublishDecision(run.id).catch((err: unknown) => { throw publishHoldFault(err); });
+      // cinatra#3470: a step is answered only under the screen it opened under. A renderer
+      // updated or uninstalled while the step waited refuses the answer before the fence, and
+      // the claim is given back: the answer was made on a screen the step never asked with.
+      if (gateSnapshot !== null && (await stepScreenChangedSinceItOpened(gateSnapshot))) {
+        throw new Error(DECLARED_SCREEN_CHANGED_REFUSAL);
+      }
       // The shared WayFlow resume (cinatra#4150) is prepared before the fence and
       // sent after it (cinatra#4245): the client with its 24h ceiling and the
       // runtime's long header/body timeouts, this leg's credential and the message.

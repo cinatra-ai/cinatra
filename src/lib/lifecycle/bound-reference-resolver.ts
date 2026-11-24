@@ -352,10 +352,12 @@ export type BoundReferencePorts = {
    * binding's own declaration, validated again. `null` for a gate that declares
    * no screen; "kind-screen" for a declared screen its kind's own component
    * draws; "unavailable" for a declared screen that was refused or could not
-   * be read.
+   * be read, or for a step whose renderer changed since it opened (its gate
+   * schema, `stepSchema`, pins the declaration it opened under).
    */
   readonly readDeclaredCard: (
     xRenderer: string,
+    stepSchema: Record<string, unknown>,
   ) => Promise<DeclaredHitlCard | "kind-screen" | "unavailable" | null>;
   readonly readRunTrigger: typeof readRunTriggerByRunId;
   /**
@@ -439,7 +441,8 @@ const DEFAULT_PORTS: BoundReferencePorts = {
   },
   readPinnedTargets: readGatePinnedTargets,
   readParkedScreen: readLatestDurableHitlGateArtifact,
-  readDeclaredCard: async (xRenderer) => (await loadDeclaredCardReader())(xRenderer),
+  readDeclaredCard: async (xRenderer, stepSchema) =>
+    (await loadDeclaredCardReader())(xRenderer, stepSchema),
   readRunTrigger: readRunTriggerByRunId,
   readRecommendationHold: async (input) =>
     (await loadHoldReader())(input as never) as unknown as HoldStateRead,
@@ -694,7 +697,7 @@ export async function resolveBoundReference(input: {
       // failed read, FAILS CLOSED: the screen lends nothing, and the gate's raw
       // schema never stands in for the card the person is shown.
       const card = await ports
-        .readDeclaredCard(screen.xRenderer)
+        .readDeclaredCard(screen.xRenderer, screen.inputSchema)
         .catch(() => "unavailable" as const);
       if (card === "unavailable") {
         return {

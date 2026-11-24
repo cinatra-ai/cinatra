@@ -962,7 +962,9 @@ describe("a declared card is filled and sent through its own answer (cinatra#347
     return resolveWithReader(async (xRenderer: string) => (xRenderer === DECLARED_ID ? card : null));
   }
 
-  function resolveWithReader(readDeclaredCard: (xRenderer: string) => Promise<unknown>) {
+  function resolveWithReader(
+    readDeclaredCard: (xRenderer: string, stepSchema?: unknown) => Promise<unknown>,
+  ) {
     return (async (input: { ref: string; actorCtx: ReviewActorContext }) =>
       resolveBoundReference({
         ...input,
@@ -1022,6 +1024,22 @@ describe("a declared card is filled and sent through its own answer (cinatra#347
     expect(approveReviewTaskInternal).toHaveBeenCalledTimes(1);
     return (approveReviewTaskInternal.mock.calls[0] as unknown as unknown[])[2] as Record<string, unknown>;
   }
+
+  it("the declared card is read for the step's own gate schema, which pins the declaration it opened under", async () => {
+    const asked: unknown[] = [];
+    // The reader answers for the step it is handed: here, a step whose
+    // renderer changed since it opened.
+    const resolve = resolveWithReader(async (_xRenderer, stepSchema) => {
+      asked.push(stepSchema);
+      return "unavailable";
+    });
+    const bound = await resolve({ ref: REF, actorCtx: ACTOR });
+    // red-first-expect: expected [] to deeply equal [ { type: 'object', …(1) } ]
+    expect(asked).toEqual([{ type: "object", properties: { content: { type: "string" } } }]);
+    expect(bound).toMatchObject({ kind: "hitl_screen", declaredUnavailable: true });
+    // Such a step lends no fill: the gate's raw schema never stands in.
+    expect(await fillThrough(resolve, { content: "new" })).not.toMatchObject({ kind: "filled" });
+  });
 
   it("the bound screen's controls are the card's own fields, not the gate's input schema", async () => {
     const bound = await resolveDeclared(FIELD_CARD)({ ref: REF, actorCtx: ACTOR });

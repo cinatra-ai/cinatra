@@ -79,6 +79,20 @@ afterEach(() => {
   __clearInstalledFieldRendererBindingsCache();
 });
 
+
+/**
+ * The declared card of a gate whose step opened under the declaration
+ * installed now: its gate schema carries the pin the park writes
+ * (`withDeclaredScreenPin`).
+ */
+function readOpenedUnderCurrent(id: string): unknown {
+  const mod = installedBindings as unknown as {
+    readDeclaredHitlCard?: (x: string, stepSchema: unknown) => unknown;
+    withDeclaredScreenPin?: (schema: Record<string, unknown>, x: string) => Record<string, unknown>;
+  };
+  return mod.readDeclaredHitlCard?.(id, mod.withDeclaredScreenPin?.({}, id) ?? {}) ?? null;
+}
+
 describe("collectInstalledFieldRendererBindings", () => {
   it("collects validated declarations from materialized packages", () => {
     writePkg("custom-scope", "future-agent", {
@@ -233,7 +247,7 @@ describe("readDeclaredHitlCard — a refused declared screen is unavailable (cin
   it("answers unavailable for a screen the validator refused, and null for a gate with no screen", () => {
     // Read through the module, so a tree without the reader answers as "no card".
     const readDeclaredHitlCard = (id: string): unknown =>
-      (installedBindings as { readDeclaredHitlCard?: (x: string) => unknown }).readDeclaredHitlCard?.(id) ?? null;
+      readOpenedUnderCurrent(id);
     vi.spyOn(console, "warn").mockImplementation(() => {});
     writePkg("s", "screen-agent", {
       name: "@s/screen-agent",
@@ -263,7 +277,7 @@ describe("readDeclaredHitlCard — a refused declared screen is unavailable (cin
 
 describe("a 'kind' screen on a kind the host draws no component for is refused (cinatra#3470)", () => {
   const read = (id: string): unknown =>
-    (installedBindings as { readDeclaredHitlCard?: (x: string) => unknown }).readDeclaredHitlCard?.(id) ?? null;
+    readOpenedUnderCurrent(id);
   const refused = (id: string): unknown =>
     (installedBindings as { isRefusedDeclaredScreen?: (x: string) => unknown }).isRefusedDeclaredScreen?.(id);
 
@@ -321,7 +335,7 @@ describe("a 'kind' screen on a kind the host draws no component for is refused (
 
 describe("a declared screen installed after a scan was cached is never read as none (cinatra#3470)", () => {
   const read = (id: string): unknown =>
-    (installedBindings as { readDeclaredHitlCard?: (x: string) => unknown }).readDeclaredHitlCard?.(id) ?? null;
+    readOpenedUnderCurrent(id);
   const refused = (id: string): unknown =>
     (installedBindings as { isRefusedDeclaredScreen?: (x: string) => unknown }).isRefusedDeclaredScreen?.(id);
   const CARD_SCREEN = {
@@ -344,8 +358,27 @@ describe("a declared screen installed after a scan was cached is never read as n
         ],
       },
     });
+    // The step opened under this declaration: its pin is the declaration's
+    // own, made without a scan, so the read below is what rescans.
+    const pinOf = (installedBindings as unknown as {
+      declaredScreenPin?: (b: Record<string, unknown>) => string;
+    }).declaredScreenPin;
+    const opened = {
+      "x-declared-screen": pinOf?.({
+        id: "@s/late-screen-agent:card",
+        kind: "linkedin-draft-review",
+        midRunHitl: true,
+        screen: CARD_SCREEN,
+      }),
+    };
+    const readCard = (installedBindings as unknown as {
+      readDeclaredHitlCard?: (x: string, stepSchema: unknown) => unknown;
+    }).readDeclaredHitlCard;
     // red-first-expect: expected null to match object { layout: 'card'
-    expect(read("@s/late-screen-agent:card")).toMatchObject({ layout: "card", title: "Fixture title" });
+    expect(readCard?.("@s/late-screen-agent:card", opened) ?? null).toMatchObject({
+      layout: "card",
+      title: "Fixture title",
+    });
     expect(refused("@s/late-screen-agent:refused")).toBe(true);
     expect(read("@s/late-screen-agent:refused")).toBe("unavailable");
   });
@@ -376,7 +409,7 @@ describe("a declared screen installed after a scan was cached is never read as n
 
 describe("a binding collection error is never read as 'no screen' (cinatra#3470)", () => {
   const read = (id: string): unknown =>
-    (installedBindings as { readDeclaredHitlCard?: (x: string) => unknown }).readDeclaredHitlCard?.(id) ?? null;
+    readOpenedUnderCurrent(id);
   // Read through the module, so a tree without the payload answers nothing.
   const payload = (opts?: { fresh?: boolean }): { bindings?: Array<{ id: string }>; incomplete?: unknown } =>
     (installedBindings as {

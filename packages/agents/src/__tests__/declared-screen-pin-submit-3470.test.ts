@@ -1,0 +1,238 @@
+/**
+ * cinatra#3470: an answer is sent only for the declared screen its step opened
+ * under.
+ *
+ * Every door that answers a mid-run step (the run page's Continue, the
+ * conversation card, the assistant's lent submit) reaches the one approval
+ * core. The core reads the step's gate row, and its schema carries the pin the
+ * park wrote (`withDeclaredScreenPin`). When the renderer installed now
+ * declares another screen, the answer was made on a screen the step never
+ * asked with: it is refused before the fence, the pause is given back and
+ * nothing is sent. Read through the production lookup over a temporary
+ * runtime mount.
+ *
+ * Run: cd packages/agents && pnpm exec vitest run src/__tests__/declared-screen-pin-submit-3470.test.ts
+ */
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { RunTransitionError } from "../run-status";
+
+const mount = vi.hoisted(() => ({ dir: "" }));
+vi.mock("../agent-runtime-mount", () => ({
+  resolveAgentRuntimeMountDir: () => {
+    if (!mount.dir) throw new Error("fixture mount unset");
+    return mount.dir;
+  },
+}));
+
+const row = vi.hoisted(() => ({ status: "pending_approval" as string }));
+const storeMock = vi.hoisted(() => ({
+  readAgentRunById: vi.fn(),
+  readAgentRunByTaskId: vi.fn(),
+  readAgentTemplateById: vi.fn(),
+  readRunCoOwners: vi.fn(async () => []),
+  writeHitlPrompt: vi.fn(async () => undefined),
+  transitionRunStatus: vi.fn(),
+}));
+vi.mock("../run-pause-claim", async (orig) => ({
+  ...(await orig<typeof import("../run-pause-claim")>()),
+  ...(await import("./pause-claim-test-fake")).pauseClaimFake,
+}));
+vi.mock("../store", () => storeMock);
+vi.mock("../publish-decision-store", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readLatestDecisionForRun: async () => null,
+}));
+// The step's gate row, as the park wrote it.
+const gateRow = vi.hoisted(() => ({ inputSchema: {} as Record<string, unknown> }));
+vi.mock("../agent-run-hitl-prompts", () => ({
+  captureHitlPromptForContinue: async () => "captured-prompt",
+  readDurableHitlGateForContinue: async (runId: string, reviewTaskId: string) => ({
+    runId,
+    reviewTaskId,
+    xRenderer: "@acme-test/pin-submit-agent:confirm",
+    inputSchema: gateRow.inputSchema,
+    values: {},
+    materializedAt: "2026-01-01T00:00:00.000Z",
+  }),
+  recordSuccessfulContinue: async () => {},
+  continueBindingDigest: () => "",
+  continueGateDigest: () => "",
+}));
+vi.mock("../db", () => {
+  const query: Record<string, unknown> = {};
+  query.from = () => query;
+  query.where = () => query;
+  query.limit = async () => [];
+  return {
+    db: { select: () => query },
+    agentBuilderPool: { on: () => {}, listenerCount: () => 1 },
+  };
+});
+vi.mock("../resume-run-from-setup-approval", () => ({
+  resumeRunFromSetupApproval: vi.fn(async () => undefined),
+}));
+vi.mock("@/lib/background-jobs", () => ({
+  enqueueBackgroundJob: vi.fn(async () => undefined),
+  BACKGROUND_JOB_NAMES: { AGENT_BUILDER_EXECUTION: "agent-builder-execution" },
+}));
+vi.mock("../wayflow-url", async (orig) => ({
+  ...(await orig<typeof import("../wayflow-url")>()),
+  resolveWayflowUrl: vi.fn(() => "http://wayflow.test"),
+  createWayflowFetch: vi.fn(() => globalThis.fetch),
+}));
+vi.mock("@/lib/auth-session", async (orig) => ({
+  ...(await orig<typeof import("@/lib/auth-session")>()),
+  resolveOrgRoleForUser: vi.fn(async () => "member"),
+}));
+vi.mock("../wayflow-run-token-carrier", () => ({
+  mintResumeRunTokenMetadata: vi.fn(async () => ({ token: "t" })),
+}));
+const sendTask = vi.hoisted(() => vi.fn());
+vi.mock("@cinatra-ai/a2a", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  createExternalA2AClient: vi.fn(async () => ({ sendTask })),
+  resolveRunIdByWayflowTaskId: vi.fn(async () => null),
+  resolveLatestWayflowGateTaskId: vi.fn(async () => null),
+}));
+const handleWayflowTaskState = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock("../execution", () => ({ handleWayflowTaskState }));
+
+import { approveReviewTaskInternal } from "../review-task-actions";
+import * as claimModule from "../run-pause-claim";
+import * as bindingsServer from "../field-renderer-bindings.server";
+
+const ID = "@acme-test/pin-submit-agent:confirm";
+const RUN = {
+  id: "run-pin-submit",
+  templateId: "tpl-pin-submit",
+  orgId: "org-1",
+  runBy: "reader-pin",
+  authPolicy: null,
+  a2aContextId: "ctx-pin-submit",
+  a2aTaskId: "task-pin-submit",
+  pauseGeneration: 1,
+};
+const GATE = "wayflow-gate-pin-submit";
+const liveRun = () => ({ ...RUN, status: row.status });
+const fenceCalls = () =>
+  storeMock.transitionRunStatus.mock.calls.filter((c) => c[1] === "pending_approval" && c[2] === "running");
+const pauseClaimFake = claimModule as unknown as Record<
+  "releasePauseClaim" | "settlePauseSend",
+  ReturnType<typeof vi.fn>
+>;
+const server = bindingsServer as unknown as {
+  __clearInstalledFieldRendererBindingsCache: () => void;
+  withDeclaredScreenPin?: (schema: Record<string, unknown>, x: string) => Record<string, unknown>;
+};
+
+/** Install (or update) the fixture agent with `title` on its declared card. */
+function install(title: string): void {
+  const dir = join(mount.dir, "acme-test", "pin-submit-agent");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "package.json"),
+    JSON.stringify({
+      name: "@acme-test/pin-submit-agent",
+      cinatra: {
+        fieldRenderers: [
+          {
+            id: ID,
+            kind: "linkedin-draft-review",
+            priority: 90,
+            midRunHitl: true,
+            screen: {
+              layout: "card",
+              title,
+              decisionLabel: "Fixture decision",
+              decisions: [{ label: "Fixture send", answer: { approved: true } }],
+            },
+          },
+        ],
+      },
+    }),
+  );
+  server.__clearInstalledFieldRendererBindingsCache();
+}
+
+/** The park: the step's gate row carries the pin of what is installed now. */
+function park(): void {
+  const base = { type: "object" };
+  gateRow.inputSchema = server.withDeclaredScreenPin?.(base, ID) ?? base;
+}
+
+function arrange() {
+  row.status = "pending_approval";
+  storeMock.readAgentRunByTaskId.mockImplementation(async () => liveRun());
+  storeMock.readAgentRunById.mockImplementation(async () => liveRun());
+  storeMock.readAgentTemplateById.mockResolvedValue({
+    id: RUN.templateId,
+    packageName: "@acme-test/pin-submit-agent",
+    sourceType: "internal",
+    agentAuthPolicy: null,
+  });
+  storeMock.transitionRunStatus.mockImplementation(async (runId: string, from: string, to: string) => {
+    if (row.status !== from) {
+      throw new RunTransitionError({ code: "stale_from_status", runId, from: from as never, to: to as never });
+    }
+    row.status = to;
+  });
+  sendTask.mockImplementation(async () => ({
+    id: "task-next",
+    contextId: RUN.a2aContextId,
+    status: { state: "input-required" },
+  }));
+}
+
+beforeAll(async () => {
+  mount.dir = mkdtempSync(join(tmpdir(), "declared-screen-pin-submit-"));
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  // Continue reaches its collaborators through dynamic imports: one answer is
+  // driven through the whole road first, so the module registry is warm.
+  install("Fixture warm-up");
+  park();
+  arrange();
+  await approveReviewTaskInternal(GATE, RUN.runBy, { approved: true }).catch(() => undefined);
+}, 60_000);
+
+afterAll(() => {
+  rmSync(mount.dir, { recursive: true, force: true });
+  mount.dir = "";
+  server.__clearInstalledFieldRendererBindingsCache();
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  arrange();
+});
+
+describe("an answer is sent only under the declared screen its step opened under (cinatra#3470)", () => {
+  it("a renderer updated while the step waited refuses the answer: the pause is given back and nothing is sent", async () => {
+    install("Fixture earlier revision");
+    park();
+    install("Fixture later revision");
+    const sent = approveReviewTaskInternal(GATE, RUN.runBy, { approved: true }).then(
+      () => "sent",
+      (err: unknown) => (err instanceof Error ? err.message : String(err)),
+    );
+    // red-first-expect: expected 'sent' to contain 'changed after the step opened'
+    expect(await sent).toContain("changed after the step opened");
+    expect(sendTask).not.toHaveBeenCalled();
+    expect(fenceCalls()).toEqual([]);
+    expect(pauseClaimFake.releasePauseClaim).toHaveBeenCalledTimes(1);
+    expect(row.status).toBe("pending_approval");
+  });
+
+  it("an answer to a step whose declaration is unchanged is sent once", async () => {
+    install("Fixture current revision");
+    park();
+    await approveReviewTaskInternal(GATE, RUN.runBy, { approved: true });
+    expect(fenceCalls()).toHaveLength(1);
+    expect(sendTask).toHaveBeenCalledTimes(1);
+    expect(pauseClaimFake.releasePauseClaim).not.toHaveBeenCalled();
+  });
+});

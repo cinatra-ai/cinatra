@@ -26,8 +26,11 @@ import {
   isRendererBound,
   rendererReadsAsKind,
   awaitsFreshRendererBindingRead,
+  answeredScreenPin,
   midRunBindingReadsAsKind,
+  DECLARED_SCREEN_PIN_NONE,
   type RendererBindingsLoad,
+  type RendererStep,
 } from "./field-renderer-registry";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
 import { isSetupInterruptTaskId } from "./run-surface-status";
@@ -357,6 +360,9 @@ export const SCREEN_LOADING_HOLD_REASON = "This step's screen is still loading."
 /** The reason a mid-run Continue shows when the gate's screen failed to load. */
 export const SCREEN_FAILED_HOLD_REASON =
   "This step's screen could not be loaded. Reload the page to try again.";
+/** The reason a mid-run Continue shows when the step's screen changed since it opened. */
+export const SCREEN_CHANGED_HOLD_REASON =
+  "This step's screen was changed after the step opened, so it cannot be answered here.";
 
 /**
  * Why the mid-run Continue of the gate drawn by `xRenderer` is held because
@@ -372,13 +378,28 @@ export const SCREEN_FAILED_HOLD_REASON =
  * A REFUSED SCREEN HOLDS FIRST: an id the source names as refused is held even
  * when a binding is registered under it, so a binding an earlier read
  * registered never outlives the source's refusal.
+ *
+ * THE STEP IS DRAWN ONLY UNDER ITS OWN DECLARATION. A host that names the
+ * parked `step` holds it while the source's answer pins another declaration
+ * for its id than the step opened under (`DECLARED_SCREEN_PIN_KEY`): first as
+ * loading, until a fresh read made for that step answered, then as changed.
+ * A step that opened under a declared screen is held until an answer with
+ * pins has loaded, even over a binding registered under its id.
  */
 export function rendererBindingHoldReason(
   xRenderer: string,
   bindings: RendererBindingsLoad,
+  step?: RendererStep,
 ): string | null {
   if (xRenderer === "") return null;
   if (bindings.refusedIds?.has(xRenderer)) return SCREEN_FAILED_HOLD_REASON;
+  if (step !== undefined && stepScreenPinHolds(xRenderer, bindings, step)) {
+    if (bindings.status === "loading") return SCREEN_LOADING_HOLD_REASON;
+    if (answeredScreenPin(xRenderer, bindings) === null) return SCREEN_FAILED_HOLD_REASON;
+    return awaitsFreshRendererBindingRead(xRenderer, bindings, step)
+      ? SCREEN_LOADING_HOLD_REASON
+      : SCREEN_CHANGED_HOLD_REASON;
+  }
   if (isRendererBound(xRenderer)) return null;
   if (bindings.status === "loading") return SCREEN_LOADING_HOLD_REASON;
   if (bindings.status === "failed" || bindings.announcedIds.has(xRenderer)) {
@@ -387,11 +408,29 @@ export function rendererBindingHoldReason(
   // Loaded, and not announced: only a fresh read says it declares nothing.
   // Until one answered for it, the answer may be a scan cached before its
   // agent was installed, and the gate is held as still loading.
-  if (awaitsFreshRendererBindingRead(xRenderer, bindings)) return SCREEN_LOADING_HOLD_REASON;
+  if (awaitsFreshRendererBindingRead(xRenderer, bindings, step)) return SCREEN_LOADING_HOLD_REASON;
   // An answer that could not read every installed agent is no proof that
   // this gate declares nothing.
   if (bindings.incomplete === true) return SCREEN_FAILED_HOLD_REASON;
   return null;
+}
+
+/**
+ * Is the parked `step` held because the bindings cannot show the declaration
+ * it opened under (cinatra#3470)? When their answer pins another declaration
+ * for its id, and, for a step that opened under a declared screen, while no
+ * answer with pins has loaded. A host draws no renderer for such a step: what
+ * is registered under its id is not the screen it asked with.
+ */
+export function stepScreenPinHolds(
+  xRenderer: string,
+  bindings: RendererBindingsLoad,
+  step: RendererStep,
+): boolean {
+  if (xRenderer === "") return false;
+  const answered = bindings.status === "loaded" ? answeredScreenPin(xRenderer, bindings) : null;
+  if (answered !== null) return answered !== step.pin;
+  return step.pin !== DECLARED_SCREEN_PIN_NONE;
 }
 
 /**
@@ -412,9 +451,9 @@ export function continueHeldByRenderer(
   } | null | undefined,
   runValue: Record<string, unknown> | null | undefined,
   staged: Record<string, unknown>,
-  gate: { xRenderer: string; bindings: RendererBindingsLoad },
+  gate: { xRenderer: string; bindings: RendererBindingsLoad; step?: RendererStep },
 ): boolean {
-  if (rendererBindingHoldReason(gate.xRenderer, gate.bindings) !== null) return true;
+  if (rendererBindingHoldReason(gate.xRenderer, gate.bindings, gate.step) !== null) return true;
   if (typeof entry?.continueReady !== "function") return false;
   return entry.continueReady({ runValue: runValue ?? {}, staged }) === false;
 }
