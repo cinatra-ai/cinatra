@@ -113,6 +113,18 @@ describe("cinatra#3862 leg 8 l8b: the review surfaces draw no stored capture pai
     expect(hits.sort()).toEqual([]);
   });
 
+  it("no surface under src/app draws the capture pair's marker", () => {
+    // The pair component drew its picture pair under `data-capture-pair`; with
+    // it gone, no code or test under src/app writes or looks for that marker,
+    // so no review surface can draw a capture pair. (A render of the
+    // verification view cannot show this: before the fix it draws a pair only
+    // when given the retired prop, which this suite forbids naming.)
+    const hits = scannedFiles(path.join(REPO_ROOT, "src/app"))
+      .filter((file) => readFileSync(file, "utf8").includes("data-capture-pair"))
+      .map((file) => path.relative(REPO_ROOT, file));
+    expect(hits.sort()).toEqual([]);
+  });
+
   it("a streamed review target carries its identity and its preparation only", () => {
     const model = read(SURFACE_MODEL);
     const body = /export interface ReviewTargetStream \{([\s\S]*?)\n\}/.exec(model)?.[1];
