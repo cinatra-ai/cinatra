@@ -22,10 +22,10 @@
  *   - Comment: the note is filed on the gate, the gate stays pending, the run
  *     stays parked where it was, the pinned revision is unchanged, no repair
  *     (successor lineage) exists, and the floor stays live (on the chat card
- *     this last point is a known defect, pinned with `test.fail` below);
+ *     this last point is a known defect, pinned by the last test below);
  *   - Continue: the gate resolves with the stored disposition `approve`, the
- *     floor reads "Continued", and the run is released (its row still exists
- *     and holds queued, running or completed: never parked, failed or gone).
+ *     floor reads "Continued", and the run is released and ends `completed`
+ *     (`failed` or `stopped` fails at once; a run row that is gone fails too).
  * Regenerate is not driven here: this fixture reviews uploaded artifacts, which
  * no producing step filed, so no `regenerate` entry exists for them and the
  * canonical operation refuses Regenerate before any write. A successor gate
@@ -36,7 +36,9 @@
  * (`stageReviewGateFixture`) BEFORE the server boots, so the dev boot registers
  * its template and the WayFlow runtime mounts it; the spec fails, with that
  * instruction, when the template row is missing. It depends on the `setup`
- * project (the signed-in admin and its active organization).
+ * project (the signed-in admin and its active organization). Before the run,
+ * stage the fixture with `stageReviewGateFixture` (`./review-gate-fixture.ts`)
+ * into the checkout the dev server and the WayFlow runtime boot from.
  *
  *   E2E_REUSE_SERVER=1 pnpm exec playwright test \
  *     -c tests/e2e/config/agents-run.config.ts --project review-floor-browser
@@ -65,12 +67,13 @@ const BASE_URL = process.env.E2E_AGENTS_RUN_BASE_URL ?? "http://localhost:3000";
 
 /** The parked statuses: the run waits on a person while its gate is pending. */
 const PARKED_STATUSES = new Set(["pending_input", "pending_approval"]);
-/** The statuses a RELEASED run holds. Continue resumes the run (`pending_input`
- *  -> `queued`), the WayFlow runtime executes the flow's remaining EndNode
- *  (`running`) and the run ends `completed`; the fixture has no LLM and no
- *  other step. `failed`, `stopped` and every other status are NOT a release: a
- *  Continue that failed or ended the run must not pass. */
-const RELEASED_STATUSES = /^(queued|running|completed)$/;
+/** The terminal statuses a released run must NOT reach. Continue resumes the
+ *  run, the WayFlow runtime executes the flow's remaining EndNode and the run
+ *  ends `completed`; the fixture has no LLM and no other step, so it is
+ *  deterministic. `running` is written before WayFlow returns
+ *  (artifact-review-resume-delivery.ts), so it is NOT proof of a release: a
+ *  WayFlow failure after it turns the run `failed` (execution.ts). */
+const FAILED_TERMINAL_STATUSES = new Set(["failed", "stopped"]);
 
 const FLOOR = '[data-conformance-id="review-decision-bar"]';
 const COMMENT = '[data-action="comment-review -> annotated"]';
@@ -264,6 +267,23 @@ async function expectTheFloorLive(floor: Locator): Promise<void> {
   await expect(floor.getByTestId("review-rationale")).toBeEditable();
 }
 
+/** How long the known-defect pin gives the chat card's floor to become live
+ *  after a Comment (the review page's floor clears at once). */
+const LIVENESS_BOUND_MS = 30_000;
+
+/** One reading of the floor's liveness: every decision control is attached
+ *  and enabled, and the note is editable. A missing control reads not live. */
+async function floorIsLive(floor: Locator): Promise<boolean> {
+  const readings = await Promise.all(
+    [floor.locator(CONTINUE), floor.locator(REGENERATE), floor.locator(COMMENT)].map(async (l) =>
+      (await l.count()) === 1 ? l.isEnabled() : false,
+    ),
+  );
+  const note = floor.getByTestId("review-rationale");
+  const noteEditable = (await note.count()) === 1 ? await note.isEditable() : false;
+  return readings.every(Boolean) && noteEditable;
+}
+
 /** Press Continue and prove item 2 on the store: resolved, `approve`, released.
  *  `surface` is the host the card lives in: once the decision lands the host
  *  refreshes and the card draws its settled reading in place of the floor. */
@@ -279,14 +299,26 @@ async function continueResolvesTheGate(surface: Locator, floor: Locator, gate: S
   const after = await readGateState(gate);
   expect(after.disposition, "Continue keeps storing the disposition approve").toBe("approve");
   expect(after.repairs).toBe(0);
-  // The run row still exists (readGateState throws on a missing run) and holds
-  // a released status: not parked, and not failed or stopped either.
-  await expect
-    .poll(async () => (await readGateState(gate)).runStatus, {
-      timeout: 90_000,
-      message: "Continue must release the run into queued, running or completed",
-    })
-    .toMatch(RELEASED_STATUSES);
+  await expectRunCompleted(gate);
+}
+
+/** Poll the run until it is `completed`. `failed` or `stopped` fails at once;
+ *  a run row that is gone fails at once (readGateState throws); a run that is
+ *  still queued or running when the bound expires fails with its last status. */
+async function expectRunCompleted(gate: SeededReviewGate, timeoutMs = 90_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let status = "";
+  for (;;) {
+    status = (await readGateState(gate)).runStatus;
+    if (status === "completed") return;
+    if (FAILED_TERMINAL_STATUSES.has(status)) {
+      throw new Error(`Continue must complete run ${gate.runId}, but it ended ${status}`);
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`run ${gate.runId} did not complete within ${timeoutMs} ms after Continue (last status: ${status})`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
 }
 
 /** The three actions and no fourth, on a pending gate: exactly three
@@ -422,14 +454,35 @@ test.describe("the review floor on a real gate, in the browser (cinatra#3080 ite
   // ("Comment recorded. The gate stays open"), Comment, Continue and the Note
   // stay disabled (the floor's own pending state never clears; observed for
   // 90 s on a warm development server while the review page's floor clears at
-  // once). A reader has to reload the thread to Continue. `test.fail` keeps
-  // the expectation written down and turns red the day it is fixed, so the
-  // marker is removed with the fix.
-  test("chat card: the floor stays live after a Comment", async ({ page, request }) => {
-    test.fail(true, "the chat card's floor stays disabled after a Comment lands");
+  // once). A reader has to reload the thread to Continue.
+  //
+  // The pin covers ONLY the liveness reading. The gate, the render and the
+  // Comment (with its full store reading) are hard assertions: any failure
+  // there fails this test. Then the floor is given LIVENESS_BOUND_MS to become
+  // live; the test FAILS if it does (the defect is fixed: remove this pin and
+  // assert `expectTheFloorLive` in the chat card test above) and passes while
+  // the floor stays drawn with Continue disabled.
+  test("chat card: the floor stays disabled after a Comment (known defect pin)", async ({ page, request }) => {
     const gate = await parkRunOnGate(request, "chat-live");
     const { floor } = await floorOnChatCard(page, request, gate);
+    await expectTheFloor(floor);
     await commentKeepsTheGateOpen(floor, gate, { floorStaysLive: false });
-    await expectTheFloorLive(floor);
+
+    const becameLive = await expect
+      .poll(() => floorIsLive(floor), { timeout: LIVENESS_BOUND_MS })
+      .toBe(true)
+      .then(
+        () => true,
+        () => false,
+      );
+    expect(
+      becameLive,
+      "KNOWN DEFECT FIXED: the chat card's floor became live after a Comment. Remove this pin " +
+        "and assert expectTheFloorLive after the Comment in the chat card test.",
+    ).toBe(false);
+    // The defect's own reading: the floor is still drawn and Continue is
+    // disabled (a floor that vanished is a different failure, not the defect).
+    await expect(floor.locator(CONTINUE)).toHaveCount(1);
+    await expect(floor.locator(CONTINUE)).toBeDisabled();
   });
 });
