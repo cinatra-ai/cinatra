@@ -33,7 +33,7 @@ import {
 } from "./store";
 import { resolveWayflowUrl } from "./wayflow-url";
 import { claimPause, releasePauseClaim, settlePauseSend } from "./run-pause-claim";
-import { isHumanDecisionFingerprint } from "./declared-review-pause";
+import { isHumanDecisionFingerprint, isPersonDecider } from "./declared-review-pause";
 
 /** The id prefix of the gate the flow runtime inserts in front of a publishing step. The
  *  compiler reserves the same prefix (oas-compiler.ts, PUBLISH_GATE_ID_PREFIX). */
@@ -171,7 +171,7 @@ export const PUBLISH_REVIEW_MISSING_REASON = "No approved review came before thi
 /** One review of a run, as the gate seam's listReviews answers it. */
 type ReviewOfRun = {
   id: string; status: string; disposition: string | null; createdAt?: Date; runGeneration: number | null;
-  fingerprint?: string | null; successorGateId?: string | null;
+  fingerprint?: string | null; resolvedBy?: string | null; successorGateId?: string | null;
 };
 
 /** The gate seam's review reads, reached as the run executor reaches them (execution.ts): never imported here, so no
@@ -190,10 +190,12 @@ function reviewSeam(): ReviewSeamReads {
   return { listReviews: seam.listReviews, hasPendingProducedReview: seam.hasPendingProducedReview };
 }
 
-/** A review a person approved: settled 'approve' with a decision fingerprint. The optional review's expiry also settles
- *  a gate 'approve', with a synthetic fingerprint and no person; the decision-fact read refuses the same rows. */
+/** A review a person approved: settled 'approve' with a decision fingerprint AND a person as its decider of record.
+ *  Every terminal decision carries a fingerprint, also one a non-human carrier submits (it records no decider); the
+ *  optional review's expiry settles 'approve' with a synthetic fingerprint and no decider. Neither is a person's. */
 const personApproved = (g: ReviewOfRun): boolean =>
-  g.status === "resolved" && g.disposition === "approve" && isHumanDecisionFingerprint(g.fingerprint);
+  g.status === "resolved" && g.disposition === "approve" && isHumanDecisionFingerprint(g.fingerprint)
+    && isPersonDecider(g.resolvedBy);
 
 /**
  * cinatra#4762 (design app-lifecycle-cards §XV): did an approved review card (§II) come earlier in the attempt that
@@ -209,7 +211,8 @@ const personApproved = (g: ReviewOfRun): boolean =>
  * A review with no generation (raised before the column existed, or from an output that names no attempt) is read as
  * generation 0 once it is settled; while it is still open it may be a review of this attempt, so it holds every
  * attempt's fence (fail closed).
- * Who reviewed is not read: the reviewer and the person who answers the publish card may differ. A read error propagates.
+ * An approval counts only with a person as its decider of record (personApproved); which person is not compared: the
+ * reviewer and the person who answers the publish card may differ. A read error propagates.
  */
 export async function approvedReviewPrecedes(runId: string, generation: number, executor?: unknown): Promise<boolean> {
   const all = await reviewSeam().listReviews(runId, ...via(executor));

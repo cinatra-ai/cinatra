@@ -75,7 +75,7 @@ const reviewSeam = {
   hasPendingProducedReview: vi.fn(),
 };
 const APPROVED_REVIEW = { id: "gate-1", status: "resolved", disposition: "approve", createdAt: new Date("2026-11-01T00:00:00Z"),
-  runGeneration: 0, fingerprint: "e".repeat(64), successorGateId: null };
+  runGeneration: 0, fingerprint: "e".repeat(64), resolvedBy: "user-reviewer", successorGateId: null };
 const seamSlot = globalThis as { __cinatraArtifactReviewGateSeam?: unknown };
 const previousSeam = seamSlot.__cinatraArtifactReviewGateSeam;
 beforeAll(() => { seamSlot.__cinatraArtifactReviewGateSeam = reviewSeam; });

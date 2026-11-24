@@ -7,11 +7,18 @@ import { deriveDashboardScopeTuple } from "@/lib/dashboards/dashboard-scope-tupl
 import { buildBindingReconcileQueries } from "@/lib/objects/binding-write-path";
 import { buildObjectsWithOutboxQuery, buildSoftDeleteObjectQuery } from "@/lib/objects-store";
 import { buildAssertSemanticTypeQueries } from "@/lib/artifacts/semantic-assertion-store";
-import { maybeBuildProducedEventInsertOp, producerAttemptForRun, producerRunLockOps } from "@/lib/lifecycle/lifecycle-emit";
+import {
+  maybeBuildProducedEventInsertOp,
+  producerAttemptForRun,
+  producerRunLockOps,
+  producerRunLockOpsBeforeEvent,
+} from "@/lib/lifecycle/lifecycle-emit";
 import { PINNED_CONFIGURATION_SIGNAL_KEY } from "@/lib/artifacts/artifact-read";
 import {
   setDashboardArtifactTwinWriter,
+  setDashboardTwinProducerRunLock,
   type DashboardArtifactTwinWriter,
+  type DashboardTwinProducerRunLock,
   type DashboardTwinContext,
   type TwinTx,
 } from "@cinatra-ai/dashboards/twin-writer-seam";
@@ -402,10 +409,25 @@ export const dashboardArtifactTwinWriter: DashboardArtifactTwinWriter = async (
   }
 };
 
-/** Register the host twin writer into the dashboards seam. Idempotent for the
- *  same reference (delta D4) — the boot phase may re-import this module. */
+/** cinatra#4762 — the producing-run lock a content writer takes before its
+ *  first dashboards write (the seam's `lockTwinProducerRun`): the run row FOR
+ *  KEY SHARE when the review orchestration is active, else nothing, as the
+ *  twin's own `producerRunLockOps`. */
+export const dashboardTwinProducerRunLock: DashboardTwinProducerRunLock = async (
+  tx: TwinTx,
+  producerRunId: string,
+): Promise<void> => {
+  for (const q of producerRunLockOpsBeforeEvent(postgresSchema.replaceAll('"', '""'), producerRunId)) {
+    await tx.execute(rawWithParams(q.text, q.values));
+  }
+};
+
+/** Register the host twin writer (and its producing-run lock) into the
+ *  dashboards seam. Idempotent for the same reference (delta D4) — the boot
+ *  phase may re-import this module. */
 export function registerDashboardArtifactTwinWriter(): void {
   setDashboardArtifactTwinWriter(dashboardArtifactTwinWriter);
+  setDashboardTwinProducerRunLock(dashboardTwinProducerRunLock);
 }
 
 // Self-register on import (mirrors extension-dashboard-lifecycle-wiring): a

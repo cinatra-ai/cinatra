@@ -23,6 +23,17 @@ export function isHumanDecisionFingerprint(fingerprint: unknown): fingerprint is
   return typeof fingerprint === "string" && /^[a-f0-9]{64}$/.test(fingerprint);
 }
 
+/**
+ * cinatra#4762 — the decider of record a person leaves on a gate (`artifact_review_gates.resolved_by`): the user id the
+ * decision core resolved from the verified session. Every terminal decision carries a sha256 fingerprint, also one a
+ * non-human carrier submits; a carrier with no user id (an A2A or system principal) records null, and a system
+ * principal's id is `system:`-prefixed (the host's system actors). Neither is a person. The publish gate's
+ * approved-review read (approvedReviewPrecedes) asks this beside isHumanDecisionFingerprint.
+ */
+export function isPersonDecider(resolvedBy: unknown): resolvedBy is string {
+  return typeof resolvedBy === "string" && resolvedBy.trim().length > 0 && !resolvedBy.startsWith("system:");
+}
+
 type GateTime = { reviewTaskId: string; createdAt?: Date | null; createdAtMicros?: string | null };
 
 const MICROS = /^\d{1,20}$/;

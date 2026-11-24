@@ -35,7 +35,7 @@ const row = (status: string) => ({ id: "d1", orgId: "org-1", runId: "run-1", nod
 // a review a person approved and no output of it waits for the review orchestration.
 const TX = "the run-row lock's transaction";
 const APPROVED_REVIEW = { id: "gate-1", status: "resolved", disposition: "approve", createdAt: new Date("2026-11-01T00:00:00Z"),
-  runGeneration: 0, fingerprint: "e".repeat(64), successorGateId: null };
+  runGeneration: 0, fingerprint: "e".repeat(64), resolvedBy: "user-reviewer", successorGateId: null };
 const reviewSeam = { listReviews: vi.fn(), hasPendingProducedReview: vi.fn() };
 const seamSlot = globalThis as { __cinatraArtifactReviewGateSeam?: unknown };
 const previousSeam = seamSlot.__cinatraArtifactReviewGateSeam;

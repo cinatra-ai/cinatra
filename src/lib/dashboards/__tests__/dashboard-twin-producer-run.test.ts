@@ -127,6 +127,37 @@ describe("cinatra#4762: the twin takes the producing run's row before its first 
   });
 });
 
+describe("cinatra#4762: the host lock a content writer takes before its first dashboards write", () => {
+  function recordingTx(): { tx: TwinTx; rendered: Array<{ sql: string; params: unknown[] }> } {
+    const rendered: Array<{ sql: string; params: unknown[] }> = [];
+    return {
+      tx: { execute: async (q: SQL) => { const { sql, params } = dialect.sqlToQuery(q); rendered.push({ sql, params }); return { rows: [] }; } },
+      rendered,
+    };
+  }
+  // The seam's port, as the dashboards mutation service reaches it; importing the host writer registers the lock.
+  const port = () => (globalThis as { __cinatraDashboardArtifactTwinRunLock?: (tx: TwinTx, runId: string | null | undefined) => Promise<void> })
+    .__cinatraDashboardArtifactTwinRunLock;
+
+  // red-first-expect: expected [] to deeply equal [ { …(2) } ]
+  it("locks the named run's row FOR KEY SHARE through the seam's port", async () => {
+    const { tx, rendered } = recordingTx();
+    await port()?.(tx, "run-1");
+    expect(rendered).toEqual([
+      { sql: 'SELECT 1 FROM "cinatra"."agent_runs" WHERE id = $1::text FOR KEY SHARE', params: ["run-1"] },
+    ]);
+  });
+
+  it("no run, or the review orchestration switched off, takes no lock", async () => {
+    const { tx, rendered } = recordingTx();
+    await port()?.(tx, null);
+    await port()?.(tx, "");
+    process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV] = "off";
+    await port()?.(tx, "run-1");
+    expect(rendered).toEqual([]);
+  });
+});
+
 describe("(b) the writer trusts a run only in the same organization (cinatra#3092)", () => {
   function fakeTx(runRows: unknown[]): { tx: TwinTx; rendered: Array<{ sql: string; params: unknown[] }> } {
     const rendered: Array<{ sql: string; params: unknown[] }> = [];

@@ -149,6 +149,22 @@ describe("the run's reviews, as the publish gate reads them (cinatra#4762)", () 
     expect(listed.map((r) => r.fingerprint)).toEqual(["expiry:gate-1", HUMAN, null]);
   });
 
+  // red-first-expect: expected [ undefined, undefined, undefined ] to deeply equal [ 'user-reviewer', null, null ]
+  it("carry each review's decider of record, so the publish gate counts only a person's approval", async () => {
+    const createdAt = new Date("2026-11-20T10:05:00.000Z");
+    const rows = [
+      { id: "g1", reviewTaskId: "r1", status: "resolved", disposition: "approve", createdAt, runGeneration: 0, fingerprint: HUMAN, resolvedBy: "user-reviewer", successorGateId: null },
+      // A non-human carrier's approval: the decision fingerprint, no decider.
+      { id: "g2", reviewTaskId: "r2", status: "resolved", disposition: "approve", createdAt, runGeneration: 0, fingerprint: HUMAN, resolvedBy: null, successorGateId: null },
+      { id: "g3", reviewTaskId: "r3", status: "pending", disposition: null, createdAt, runGeneration: 0, fingerprint: null, successorGateId: null },
+    ];
+    store.listReviewLineageForRun.mockResolvedValue(rows);
+    store.listReviewGatesForRun.mockResolvedValue(rows);
+    const seam = slot.__cinatraArtifactReviewGateSeam! as unknown as { listReviews?: (runId: string) => Promise<Array<{ resolvedBy?: unknown }>> };
+    const listed = typeof seam.listReviews === "function" ? await seam.listReviews(runId) : [{}, {}, {}];
+    expect(listed.map((r) => r.resolvedBy)).toEqual(["user-reviewer", null, null]);
+  });
+
   // red-first-expect: seam.listReviews is not a function
   it("carry each gate's identity and the successor its repair recorded, read in one statement of the store", async () => {
     const createdAt = new Date("2026-11-20T10:05:00.000Z");
@@ -160,8 +176,8 @@ describe("the run's reviews, as the publish gate reads them (cinatra#4762)", () 
     store.listReviewGatesForRun.mockResolvedValue(rows.map(({ successorGateId: _successor, ...gate }) => gate));
     const seam = slot.__cinatraArtifactReviewGateSeam!;
     expect(await seam.listReviews(runId)).toEqual([
-      { id: "g1", status: "resolved", disposition: "changes_requested", createdAt, runGeneration: null, fingerprint: HUMAN, successorGateId: "g2" },
-      { id: "g2", status: "resolved", disposition: "approve", createdAt, runGeneration: 0, fingerprint: HUMAN, successorGateId: null },
+      { id: "g1", status: "resolved", disposition: "changes_requested", createdAt, runGeneration: null, fingerprint: HUMAN, resolvedBy: null, successorGateId: "g2" },
+      { id: "g2", status: "resolved", disposition: "approve", createdAt, runGeneration: 0, fingerprint: HUMAN, resolvedBy: null, successorGateId: null },
     ]);
     expect(store.listReviewLineageForRun).toHaveBeenCalledWith(runId);
     expect(store.listReviewGatesForRun).not.toHaveBeenCalled();

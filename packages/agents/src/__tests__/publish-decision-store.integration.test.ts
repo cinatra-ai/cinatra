@@ -515,7 +515,7 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     expect(await rowOf(own.decision.id)).toMatchObject({ status: "parked", run_generation: 1 });
   });
 
-  it("cinatra#4762: an optional review its expiry settled 'approve' is no approval; a person's is", async () => {
+  it("cinatra#4762: an optional review its expiry settled 'approve', or a carrier with no decider, is no approval; a person's is", async () => {
     const { bindArtifactReviewGateSeam } = await import("../artifact-review-gate-seam");
     const { emitArtifactReviewGate } = await import("../artifact-review-gate-store");
     const { approvedReviewPrecedes } = await import("../publish-decision-actions");
@@ -528,6 +528,12 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     // The expiry's own write shape: approve, a synthetic fingerprint, no person.
     await admin.query(`UPDATE ${GATES} SET status = 'resolved', disposition = 'approve', fingerprint = $2, resolved_at = now() WHERE id = $1`,
       [expired, `expiry:${expired}`]);
+    expect(await approvedReviewPrecedes(runId, 0)).toBe(false);
+    // A non-human carrier's approval, as the approve path writes it for a carrier with no user id: the decision
+    // fingerprint and no decider (resolved_by NULL). It is no person's approval either.
+    const carrier = await raise();
+    await admin.query(`UPDATE ${GATES} SET status = 'resolved', disposition = 'approve', fingerprint = $2, resolved_at = now() WHERE id = $1`,
+      [carrier, createHash("sha256").update(randomUUID()).digest("hex")]);
     expect(await approvedReviewPrecedes(runId, 0)).toBe(false);
     // A person's approval, as the approve path writes it: the decision fingerprint and the deciding person.
     const person = await raise();

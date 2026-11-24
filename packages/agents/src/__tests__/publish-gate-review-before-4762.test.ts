@@ -355,6 +355,33 @@ describe("a publish card opens only after an approved review earlier in the same
     expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
   });
 
+  // red-first-expect: expected [ { label: 'no decider', …(1) }, …(3) ] to deeply equal [ { label: 'no decider', …(1) }, …(3) ]
+  it("an approval with no person as its decider is no person's approval, even with a decision fingerprint", async () => {
+    // A non-human carrier (an A2A or system principal with no user id) settles the review 'approve': the decision core
+    // stamps its sha256 fingerprint and records no decider. A system principal's id is no person either.
+    const cases: Array<{ label: string; reviews: Review[] }> = [
+      { label: "no decider", reviews: [approved(5, null as unknown as string)] },
+      { label: "empty decider", reviews: [approved(5, " ")] },
+      { label: "system decider", reviews: [approved(5, "system:dashboard-twin-backfill")] },
+    ];
+    // A change request whose repair successor a non-human carrier approved stays uncleared beside a person's approval.
+    const carrierSuccessor = approved(6, null as unknown as string);
+    cases.push({ label: "carrier-approved successor", reviews: [changesRequested(5, 0, carrierSuccessor), carrierSuccessor, approved(7)] });
+    const outcomes: Array<{ label: string; to: string[] }> = [];
+    for (const { label, reviews } of cases) {
+      vi.clearAllMocks();
+      listReviews.mockResolvedValue(reviews);
+      await reachPublishGate();
+      outcomes.push({ label, to: transitions().map((m) => m.to) });
+    }
+    expect(outcomes).toEqual(cases.map(({ label }) => ({ label, to: ["stopped"] })));
+    // The same review with a person as its decider opens the card.
+    vi.clearAllMocks();
+    listReviews.mockResolvedValue([approved(5, "user-reviewer")]);
+    await reachPublishGate();
+    expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
+  });
+
   // red-first-expect: expected [ { from: 'running', …(2) } ] to deeply equal [ { from: 'running', …(2) } ]
   it("a change request is cleared only by its own repair successor, never by another review approved later", async () => {
     // Artifact A's review was settled changes requested and nothing repaired it; artifact B's review, raised later in the

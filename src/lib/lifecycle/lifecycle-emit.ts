@@ -199,7 +199,24 @@ export function producerRunLockOps(
   eventOp: ProducedEventInsertOp | null,
 ): ProducedEventInsertOp[] {
   if (!eventOp || !producerRunId) return [];
-  return [{ text: `SELECT 1 FROM "${schema}"."agent_runs" WHERE id = $1::text FOR KEY SHARE`, values: [producerRunId] }];
+  return [runRowKeyShareOp(schema, producerRunId)];
+}
+
+/**
+ * cinatra#4762 — the same lock for a writer that takes it before it has built its event (a dashboards content
+ * writer, whose twin builds the event after the dashboards rows): the lock when the review orchestration is active
+ * (the event will be spliced) and a run is named, else `[]`, as `producerRunLockOps`.
+ */
+export function producerRunLockOpsBeforeEvent(
+  schema: string,
+  producerRunId: string | null | undefined,
+): ProducedEventInsertOp[] {
+  if (!isLifecycleReviewOrchestrationActive() || !producerRunId) return [];
+  return [runRowKeyShareOp(schema, producerRunId)];
+}
+
+function runRowKeyShareOp(schema: string, producerRunId: string): ProducedEventInsertOp {
+  return { text: `SELECT 1 FROM "${schema}"."agent_runs" WHERE id = $1::text FOR KEY SHARE`, values: [producerRunId] };
 }
 
 /**
