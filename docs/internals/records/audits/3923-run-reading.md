@@ -57,8 +57,36 @@ agent and a repair run of the Drupal agent each start with the producing run's o
     `9cbeef57-01a4-4aee-8717-7b370b96a2dc`, 16:28:29Z). So it is the outward-effect write policy at the edit step. It is
     not a missing repair input.
 
-## Drupal agent — reading not taken
+## Drupal agent — reading attempted 2026-11-24, blocked at the site read
 
-The Drupal reading was not taken. A fresh development boot of the same main came up with the development Drupal site
-(node 3) connected. The run was stopped before the connector instance was wired, because the shared lane host was
-needed for other work. The boot was stopped and nothing was recorded for the Drupal agent.
+The Drupal repair reading was not reached. The producing run could not read the node, so no review gate and no repair run
+came into being.
+
+- **Boot:** a fresh development boot of current main `b3417537` (the merge of #4774) on a lane host. Main had moved two
+  commits past `1fe61a6f` (#4766, #4774). The agent was pinned at `@cinatra-ai/drupal-agent` `a070884f`, and the site
+  module `cinatra-ai/drupal-module` at `c8309f1d`.
+  - The first start came up with the development Drupal site (node 3) connected.
+  - The second start kept the development server, because it was below the memory bound. So the connector instance was
+    not wired yet.
+  - The development server was ended through the stop road's server-only form. The next start then wired it: connector
+    instance `2ec57e69-b881-41d8-8b21-a60845b1b3af` for the site on port 8082. The app log says
+    `dev-auto-setup:@cinatra-ai/drupal-mcp-connector ✓ wired … (remote-key rotated)`.
+- **Set-up done through the product's own screens:** the same two `review` bounds as for WordPress (`*` / `none` /
+  `agent_produced` and `*` / `none` / `intermediate`, both `required`). The Drupal connector page has no tool-policy card,
+  and the tool-policy table stayed empty.
+- **Producing run:** `013afeac-2b7c-477e-84d2-3daaf0b24401` (source `agent_builder`), started at 18:50:48Z with:
+  - `instanceId` = `2ec57e69-b881-41d8-8b21-a60845b1b3af`;
+  - `nodeId` = `3`;
+  - `instructions` = "Rewrite the first paragraph of the body so it is one sentence shorter and keeps the same meaning."
+- **What stopped it:** the first step, `read_node`, failed at 18:52:42Z.
+  - The audit row `drupal_node_get` was allowed (boundary `mcp_handler_dispatch`).
+  - The site answered all three of the boot's MCP calls (`POST /_mcp_tools`) with 403.
+  - The site's watchdog has three rows from 18:52:40, all from `cinatra_dev_site`: "The exposure refused a remote
+    request." The same refusal answered the boot's first call at 18:46:13Z, before any run started.
+  - The step therefore answered `read-failed`, and the WayFlow task ended `failed` (`422 STEP_DECLARED_FAILURE`).
+  - No review gate was filed, and no `lifecycle-repair-run:` row exists.
+- **Where the refusal comes from:** the development site's exposure guard (`DevSiteRemoteEndpoint`, through its profile
+  binding). It refused every remote request of this boot, although its own `ensure()` verified the exposure at 18:46:10Z.
+  This is a precondition of the site, not of the repair road. The Drupal half of item 1 stays open until a development
+  Drupal site answers the boot's MCP calls.
+- The boot was stopped and its booking freed.
