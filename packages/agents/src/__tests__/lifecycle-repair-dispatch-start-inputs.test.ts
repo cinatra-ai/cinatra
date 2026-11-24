@@ -420,12 +420,10 @@ describe("input data cannot become repair authorization", () => {
     expect(String(ports.writes[0].values.changeSummary)).toContain("the Regenerate intent names no node");
   });
 
-  // A retry of a Regenerate reads the deterministic run, then plans. A
-  // "write_draft" dispatch created and enqueued its segment run, then stopped
-  // before the repair was marked dispatched. When the run is exactly what the
-  // plan writes now, the retry carries it to the mark: no second create and the
-  // same job id. When the plan refuses now, the run is stopped and the repair
-  // escalated: nothing is sent that the plan would not write.
+  // A "write_draft" dispatch created and enqueued its segment run, then
+  // stopped before the repair was marked dispatched. This first pass uses a
+  // stub plan, so its run carries no record of its dispatch: a retry stops
+  // and escalates it (a completed one is escalated only).
   const PLANNED = { kind: "segment" as const, parentRunId: "provenance-run",
     inputParams: { draftNote: "the note", lifecycleRepairRequest: { repairId: "repair-current", findings: [] } } };
   async function firstPassCreatesAndEnqueuesTheRun() {
@@ -442,43 +440,102 @@ describe("input data cannot become repair authorization", () => {
     return ports.created[0].input;
   }
 
-  // red-first-expect: expected [ { repair: { …(5) }, …(5) } ] to have a length of 2 but got 1
-  it("a Regenerate retry whose run already exists as the plan writes it is carried to dispatched: no second create and the same job id", async () => {
-    const created = await firstPassCreatesAndEnqueuesTheRun();
+  // A retry judges a run that already exists by its own stored record only
+  // (`recordedRegenerateInput`, as the completer does), never by a plan
+  // rebuilt from the current template and flow: those can be reinstalled in
+  // place after the run was made. The first pass here runs the REAL plan, so
+  // the run carries the record its dispatch wrote; the retry then reads a
+  // template whose Regenerate entry is gone and no installed flow, so a
+  // rebuilt plan would refuse.
+  const RECORDED_NOTE = "Open with the harbour, not the market";
+  const RECORDED_FINDINGS = [{ id: "prompt-window", message: RECORDED_NOTE }];
+  const RECORDED_CONFIG = JSON.stringify({ regenerate: [{ artifactNode: "write_draft", step: "draft_flow", noteInput: "note" }] });
+  const REINSTALLED_CONFIG = JSON.stringify({ repairFindingsInput: { input: "instructions" } });
+  async function firstPassCreatesARecordedRun() {
+    const dir = mkdtempSync(path.join(tmpdir(), "regen-4264-"));
+    segmentPorts.oasPath = path.join(dir, "agent.oas.json");
+    writeFileSync(segmentPorts.oasPath, JSON.stringify({
+      component_type: "Flow",
+      start_node: { $component_ref: "start" },
+      data_flow_connections: [
+        { source_node: { $component_ref: "start" }, source_output: "draftNote",
+          destination_node: { $component_ref: "draft_flow" }, destination_input: "note" },
+      ],
+    }));
+    segmentPorts.provenance = { runId: "provenance-run", nodeId: "write_draft" };
+    arrangeProducer({ custom: "retained" }, {}, RECORDED_CONFIG);
+    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft", findings: RECORDED_FINDINGS })];
+    ports.updateResults = []; // the pass stops before the dispatched mark
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await dispatchPendingProducerRepairs()).toMatchObject({ dispatched: 0, escalated: 0, failed: 1 });
+    } finally {
+      error.mockRestore();
+      rmSync(dir, { recursive: true, force: true });
+      segmentPorts.oasPath = null; segmentPorts.provenance = null;
+    }
+    expect(ports.created).toHaveLength(1);
+    expect(ports.queued).toHaveBeenCalledOnce();
+    ports.writes = []; // the first pass's failed mark
+    return ports.created[0].input;
+  }
+  function retryReads(created: Record<string, unknown>, status: string, config: string) {
+    arrangeProducer({ custom: "retained" }, {}, config);
+    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft", findings: RECORDED_FINDINGS })];
+    ports.reads[3] = [{ id: repairRunId("repair-current"), status,
+      inputParams: JSON.stringify(created.inputParams), parentRunId: created.parentRunId }];
+  }
+
+  it("a Regenerate retry whose run already exists with its record is carried to dispatched: no second create, no second plan and the same job id", async () => {
+    const created = await firstPassCreatesARecordedRun();
     const firstJobId = ports.queued.mock.calls[0][1].jobId;
 
-    arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG);
-    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
-    ports.reads[3] = [{ id: repairRunId("repair-current"), status: "queued",
-      inputParams: JSON.stringify(created.inputParams), parentRunId: created.parentRunId }];
+    retryReads(created, "queued", RECORDED_CONFIG);
     const result = await dispatchPendingProducerRepairs();
     expect(result).toMatchObject({ scanned: 1, dispatched: 1, escalated: 0, failed: 0 });
-    expect(segmentPlan.calls).toHaveLength(2);
+    expect(segmentPlan.calls).toHaveLength(1); // the first pass's plan only
     expect(ports.created).toHaveLength(1);
     expect(ports.queued).toHaveBeenCalledTimes(2);
     expect(ports.queued.mock.calls[1][0].runId).toBe(repairRunId("repair-current"));
     expect(ports.queued.mock.calls[1][1].jobId).toBe(firstJobId);
-    expect(ports.writes.map((w) => w.values.status)).not.toContain("escalated");
-    expect(ports.writes.at(-1)!.values.status).toBe("dispatched");
+    expect(ports.writes.map((w) => w.values.status)).toEqual(["dispatched"]);
+  });
+
+  // The worker validated and started the run; the template was then
+  // reinstalled in place before the retry. The run is judged by its record,
+  // so it is carried to the mark, never stopped.
+  // red-first-expect: expected { scanned: 1, dispatched: +0, …(3) } to match object { scanned: 1, dispatched: 1, …(2) }
+  it("a Regenerate retry whose running run was made before its template changed is marked dispatched, not stopped", async () => {
+    const created = await firstPassCreatesARecordedRun();
+    const firstJobId = ports.queued.mock.calls[0][1].jobId;
+    ports.run = { status: "running" }; ports.events = [];
+
+    retryReads(created, "running", REINSTALLED_CONFIG);
+    ports.reads.push([{ status: "running" }]); // read only by a stop
+    const result = await dispatchPendingProducerRepairs();
+    expect(result).toMatchObject({ scanned: 1, dispatched: 1, escalated: 0, failed: 0 });
+    expect(ports.run).toEqual({ status: "running" });
+    expect(ports.transitions).toHaveLength(0);
+    expect(segmentPlan.calls).toHaveLength(1); // the first pass's plan only
+    expect(ports.created).toHaveLength(1);
+    expect(ports.queued.mock.calls.at(-1)![1].jobId).toBe(firstJobId);
+    expect(ports.writes.map((w) => w.values.status)).toEqual(["dispatched"]);
   });
 
   // The worker can finish the run before the pass that enqueued it marks the
-  // repair dispatched. A retry that finds the run completed, exactly as the
-  // plan writes it, marks the repair dispatched with no second create and no
-  // second job, so the completer takes the run's output. A completed run in
-  // another form is escalated; there is nothing to stop.
+  // repair dispatched, and the template can be reinstalled after that. A
+  // retry that finds the run completed with its record marks the repair
+  // dispatched with no second create and no second job, so the completer
+  // takes the run's output. A completed run with no valid record is
+  // escalated; there is nothing to stop.
   // red-first-expect: expected { scanned: 1, dispatched: +0, …(3) } to match object { scanned: 1, dispatched: 1, …(2) }
-  it("a Regenerate retry whose run already completed as the plan writes it is marked dispatched: no second create and no second job", async () => {
-    const created = await firstPassCreatesAndEnqueuesTheRun();
-    ports.writes = []; // the first pass's failed mark
+  it("a Regenerate retry whose completed run was made before its template changed is marked dispatched: no second create and no second job", async () => {
+    const created = await firstPassCreatesARecordedRun();
 
-    arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG);
-    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
-    ports.reads[3] = [{ id: repairRunId("repair-current"), status: "completed",
-      inputParams: JSON.stringify(created.inputParams), parentRunId: created.parentRunId }];
+    retryReads(created, "completed", REINSTALLED_CONFIG);
     const result = await dispatchPendingProducerRepairs();
     expect(result).toMatchObject({ scanned: 1, dispatched: 1, escalated: 0, failed: 0 });
-    expect(segmentPlan.calls).toHaveLength(2);
+    expect(segmentPlan.calls).toHaveLength(1); // the first pass's plan only
     expect(ports.created).toHaveLength(1);
     expect(ports.queued).toHaveBeenCalledOnce(); // the first pass's call only
     expect(ports.transitions).toHaveLength(0);
@@ -488,7 +545,30 @@ describe("input data cannot become repair authorization", () => {
     expect(ports.reads).toHaveLength(0);
   });
 
-  it("a Regenerate retry whose run already completed in another form than the plan writes is escalated, never marked dispatched", async () => {
+  // A run with no record is escalated even when a rebuilt plan would match
+  // it byte for byte: the plan never decides for an existing run.
+  // red-first-expect: expected { scanned: 1, dispatched: 1, …(3) } to match object { scanned: 1, dispatched: +0, …(2) }
+  it("a Regenerate retry whose existing run carries no record is stopped and escalated, even when the rebuilt plan matches it", async () => {
+    const created = await firstPassCreatesAndEnqueuesTheRun();
+    ports.writes = []; // the first pass's failed mark
+    ports.run = { status: "queued" }; ports.events = [];
+
+    arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG);
+    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
+    ports.reads[3] = [{ id: repairRunId("repair-current"), status: "queued",
+      inputParams: JSON.stringify(created.inputParams), parentRunId: created.parentRunId }];
+    ports.reads.push([{ status: "queued" }]); // the stop's own read of the run
+    ports.updateResults = [[{ lineageId: "lineage-current" }]];
+    const result = await dispatchPendingProducerRepairs();
+    expect(result).toMatchObject({ scanned: 1, dispatched: 0, escalated: 1, failed: 0 });
+    expect(ports.run).toEqual({ status: "stopped" });
+    expect(ports.events).toEqual(["transition queued->stopped", "write escalated"]);
+    expect(ports.created).toHaveLength(1);
+    expect(ports.queued).toHaveBeenCalledOnce(); // the first pass's call only
+    expect(String(ports.writes.at(-1)!.values.changeSummary)).toContain("stopped and not sent");
+  });
+
+  it("a Regenerate retry whose run already completed with no valid record is escalated, never marked dispatched", async () => {
     const created = await firstPassCreatesAndEnqueuesTheRun();
     ports.writes = []; // the first pass's failed mark
 
@@ -505,26 +585,6 @@ describe("input data cannot become repair authorization", () => {
     expect(ports.writes.map((w) => w.values.status)).toEqual(["escalated"]);
     expect(String(ports.writes[0].values.changeSummary)).toContain(dispatchStore.REGENERATE_RUN_NOT_DECLARED_FORM);
     expect(ports.reads).toHaveLength(0);
-  });
-
-  // red-first-expect: expected { scanned: 1, dispatched: 1, …(3) } to match object { scanned: 1, dispatched: +0, …(2) }
-  it("a Regenerate retry whose run already exists and whose new plan refuses stops the run, then escalates: no second create, no second job", async () => {
-    const created = await firstPassCreatesAndEnqueuesTheRun();
-    ports.run = { status: "queued" }; ports.events = [];
-
-    arrangeProducer({ custom: "retained" }, {}, REGENERATE_CONFIG);
-    ports.reads[0] = [pendingRepair({ regenerateNodeId: "write_draft" })];
-    ports.reads[3] = [{ id: repairRunId("repair-current"), status: "queued",
-      inputParams: JSON.stringify(created.inputParams), parentRunId: created.parentRunId }];
-    ports.reads.push([{ status: "queued" }]); // the stop's own read of the run
-    segmentPlan.answer = { kind: "refused", reason: "Regenerate refused: the agent declares no Regenerate entry for that step" };
-    const result = await dispatchPendingProducerRepairs();
-    expect(result).toMatchObject({ scanned: 1, dispatched: 0, escalated: 1, failed: 0 });
-    expect(ports.run).toEqual({ status: "stopped" });
-    expect(ports.events).toEqual(["transition queued->stopped", "write escalated"]);
-    expect(ports.created).toHaveLength(1);
-    expect(ports.queued).toHaveBeenCalledOnce(); // the first pass's call only
-    expect(String(ports.writes.at(-1)!.values.changeSummary)).toContain("declares no Regenerate entry for that step");
   });
 
   // A run made in the earlier form (the generic findings text in the note's
@@ -991,8 +1051,17 @@ describe("the escalation of a Regenerate repair whose run is not in the declared
   it("moves a dispatched Regenerate repair to escalated with the reason, once", async () => {
     expect(dispatchStore).toHaveProperty("escalateRegenerateRepairOfUndeclaredRun");
     ports.updateResults = [[{ lineageId: "lineage-current" }], []];
-    expect(await dispatchStore.escalateRegenerateRepairOfUndeclaredRun("repair-current")).toBe(true);
-    expect(await dispatchStore.escalateRegenerateRepairOfUndeclaredRun("repair-current")).toBe(false);
+    // The escalation lives in `../regenerate-segment` (route-graph ratchet),
+    // which this suite loads through its original module, so the carrier it
+    // calls is the real one: a lineage with no root gate (the empty read)
+    // carries nothing.
+    ports.reads = [[]];
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(await dispatchStore.escalateRegenerateRepairOfUndeclaredRun("repair-current")).toBe(true);
+      expect(await dispatchStore.escalateRegenerateRepairOfUndeclaredRun("repair-current")).toBe(false);
+    } finally { warn.mockRestore(); }
+    expect(ports.reads).toHaveLength(0);
     expect(ports.writes.map((w) => w.values.status)).toEqual(["escalated", "escalated"]);
     expect(String(ports.writes[0].values.changeSummary)).toBe(
       `${dispatchStore.DISPATCH_ESCALATION_PREFIX}${dispatchStore.REGENERATE_RUN_NOT_DECLARED_FORM}`,

@@ -85,9 +85,7 @@ import "server-only";
 // skipped only when `CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION=off`.
 // ---------------------------------------------------------------------------
 
-import { isDeepStrictEqual } from "node:util";
-
-import { and, asc, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
+import { and, asc, eq, isNotNull, or, sql } from "drizzle-orm";
 
 import { agentBuilderPool, db } from "./db";
 import { agentRuns, agentTemplates, artifactReviewGates, lifecycleRepair } from "./schema";
@@ -104,7 +102,13 @@ import {
   projectRepairFindingsInput,
   type CompiledManifestLifecycle,
 } from "@/lib/lifecycle/lifecycle-policy";
-import { hasRegenerateIntent, planSegmentDispatch } from "./regenerate-segment";
+import {
+  DISPATCH_ESCALATION_PREFIX,
+  hasRegenerateIntent,
+  planSegmentDispatch,
+  recordedRegenerateInput,
+  REGENERATE_RUN_NOT_DECLARED_FORM,
+} from "./regenerate-segment";
 import { regenerateStepRoadDispatches } from "./regenerate-step-road";
 // cinatra#1940 P3 (Decision 2): the creation perimeter is now guarded — this
 // repair-delivery drain has no session, so it mints the SYSTEM
@@ -151,7 +155,9 @@ export function repairIdFromRunId(runId: string | null | undefined): string | nu
  * `dispatchEscalationReason`, which requires `status === 'escalated'` first, so a
  * genuine change summary that happens to start with the same characters can never
  * be misread as an escalation reason (Codex round, finding C). */
-export const DISPATCH_ESCALATION_PREFIX = "[escalated] ";
+// The sentinel itself lives in `./regenerate-segment` (the run start's
+// escalation writes it without loading this store: route-graph ratchet).
+export { DISPATCH_ESCALATION_PREFIX };
 
 /** The recorded escalation reason for a repair, or null. Discriminates on STATUS
  * first — never on the prefix alone. */
@@ -475,34 +481,41 @@ async function deliverRepair(row: typeof lifecycleRepair.$inferSelect): Promise<
   // unchanged. A strict NULL check: a blank intent is planned, refused
   // and escalated, never dispatched as an ordinary repair.
   //
-  // The deterministic run is read FIRST, then every Regenerate is planned.
-  // A repair with no run is created from the plan. A run that already
-  // exists (an earlier pass created it, and maybe enqueued it, then stopped
-  // before the repair was marked dispatched) is carried to the mark only
-  // when it is exactly what the plan writes now (its inputs and its parent):
-  // no second create, and the same derived job id, so no second job. A run
-  // the plan does not match (one made in the earlier form, with the findings
-  // text and the full findings request, by an older build before a crash or
-  // during a rolling deployment) or a plan that refuses stops that run and
-  // escalates the repair (`escalateRepairBeforeRunRead`). It is refused
-  // rather than re-planned: the earlier pass may already have enqueued its
-  // job, so a worker can start the run at any moment, and rewriting its
-  // inputs would race that start. The stop is a compare-and-set, nothing new
-  // is created or enqueued, so nothing is dispatched twice; the worker's run
-  // start fails such a run on its own as well (`resolveRegenerateSegment`).
-  // The checks above this read that escalate a Regenerate stop an existing
-  // run first too, so an escalated Regenerate never leaves a live run or job
-  // behind it.
+  // The deterministic run is read FIRST. A repair with no run is planned,
+  // and its run is created from the plan; a plan that refuses escalates the
+  // repair and nothing is dispatched.
+  //
+  // A run that already exists (an earlier pass created it, and maybe
+  // enqueued it, then stopped before the repair was marked dispatched; the
+  // worker may have started or even finished it since) is judged by its own
+  // stored record only, as the completer judges it
+  // (`recordedRegenerateInput`: the record its dispatch wrote, and the
+  // repair's own findings). The plan is never rebuilt for it: the template
+  // and the installed flow can be reinstalled after the run was made, and a
+  // run already validated at its start is never stopped, nor a completed
+  // run's output discarded, because they changed. A run with a valid record
+  // is carried to the mark: no second create, and the same derived job id,
+  // so no second job. A run with no record, or one the record does not
+  // describe (one made in the earlier form, with the findings text and the
+  // full findings request, by an older build before a crash or during a
+  // rolling deployment), stops and escalates (`escalateRepairBeforeRunRead`).
+  // It is refused rather than re-planned: the earlier pass may already have
+  // enqueued its job, so a worker can start the run at any moment, and
+  // rewriting its inputs would race that start. The stop is a
+  // compare-and-set, nothing new is created or enqueued, so nothing is
+  // dispatched twice; the worker's run start fails such a run on its own as
+  // well (`resolveRegenerateSegment`). The checks above this read that
+  // escalate a Regenerate stop an existing run first too, so an escalated
+  // Regenerate never leaves a live run or job behind it.
   //
   // A Regenerate whose existing run already failed or was stopped is
   // escalated here, never enqueued or marked dispatched: a pass that stopped
   // the run and died before its escalation leaves a stopped run and a
   // `requested` repair, and the check that stopped it may pass on this pass.
   // A run that already COMPLETED (the worker finished it before an earlier
-  // pass marked the repair dispatched) is planned like any existing run: when
-  // it is exactly what the plan writes, the repair is marked dispatched with
-  // no second job, so the completer takes its output as the successor; a
-  // refused plan or another form escalates it.
+  // pass marked the repair dispatched) with a valid record is marked
+  // dispatched with no second job, so the completer takes its output as the
+  // successor; one with no valid record is escalated (nothing to stop).
   const [already] = await db
     .select({
       id: agentRuns.id,
@@ -527,7 +540,30 @@ async function deliverRepair(row: typeof lifecycleRepair.$inferSelect): Promise<
   }
   let segmentParentRunId: string | null = null;
   let segmentInputParams: Record<string, unknown> | null = null;
-  if (hasRegenerateIntent(row.regenerateNodeId)) {
+  if (hasRegenerateIntent(row.regenerateNodeId) && already) {
+    const recorded = recordedRegenerateInput({
+      regenerateNodeId: row.regenerateNodeId ?? "",
+      findings: row.findings,
+      inputParams: already.inputParams,
+    });
+    // A completed run has nothing left to stop.
+    const completed = already.status === "completed";
+    if (!recorded) {
+      const escalated = completed
+        ? await escalateRepair(row.id, REGENERATE_RUN_NOT_DECLARED_FORM)
+        : await escalateRepairBeforeRunRead(
+            row,
+            "the Regenerate's repair run was made with other inputs than the reviewer's words in the step's declared input, so it is stopped and not sent",
+          );
+      return escalated ? "escalated" : "raced";
+    }
+    if (completed) {
+      // The recorded run already finished: the same compare-and-set as
+      // below, and no job, because the run is not started again.
+      const moved = await markRepairDispatched(row.id);
+      return moved ? "dispatched" : "raced";
+    }
+  } else if (hasRegenerateIntent(row.regenerateNodeId)) {
     const segment = await planSegmentDispatch({
       repair: {
         id: row.id,
@@ -546,29 +582,10 @@ async function deliverRepair(row: typeof lifecycleRepair.$inferSelect): Promise<
       findings: request.findings,
       request: request as unknown as Record<string, unknown>,
     });
-    // A completed run has nothing left to stop.
-    const completed = already?.status === "completed";
     if (segment.kind === "refused") {
-      // An existing run is stopped first; with none, nothing is left to stop.
-      const escalated = already && !completed
-        ? await escalateRepairBeforeRunRead(row, segment.reason)
-        : await escalateRepair(row.id, segment.reason);
+      // No run exists, so nothing is left to stop.
+      const escalated = await escalateRepair(row.id, segment.reason);
       return escalated ? "escalated" : "raced";
-    }
-    if (already && !existingRunMatchesPlan(already, segment)) {
-      const escalated = completed
-        ? await escalateRepair(row.id, REGENERATE_RUN_NOT_DECLARED_FORM)
-        : await escalateRepairBeforeRunRead(
-            row,
-            "the Regenerate's repair run was made with other inputs than the reviewer's words in the step's declared input, so it is stopped and not sent",
-          );
-      return escalated ? "escalated" : "raced";
-    }
-    if (completed) {
-      // The planned run already finished: the same compare-and-set as below,
-      // and no job, because the run is not started again.
-      const moved = await markRepairDispatched(row.id);
-      return moved ? "dispatched" : "raced";
     }
     segmentParentRunId = segment.parentRunId;
     segmentInputParams = segment.inputParams;
@@ -653,22 +670,6 @@ async function deliverRepair(row: typeof lifecycleRepair.$inferSelect): Promise<
 
   const moved = await markRepairDispatched(row.id);
   return moved ? "dispatched" : "raced";
-}
-
-/** Whether an existing Regenerate run is exactly what `plan` writes: the same
- *  parent and the same input params (the stored JSON text, parsed). */
-function existingRunMatchesPlan(
-  run: { inputParams: string | null; parentRunId: string | null },
-  plan: { parentRunId: string; inputParams: Record<string, unknown> },
-): boolean {
-  if (run.parentRunId !== plan.parentRunId || typeof run.inputParams !== "string") return false;
-  let stored: unknown;
-  try {
-    stored = JSON.parse(run.inputParams);
-  } catch {
-    return false;
-  }
-  return isDeepStrictEqual(stored, JSON.parse(JSON.stringify(plan.inputParams)));
 }
 
 /**
@@ -878,41 +879,20 @@ async function stopExistingRepairRun(runId: string, orgId: string): Promise<void
   throw new Error(`the repair run ${runId} was not stopped: ${String(notStopped.error)}`);
 }
 
-/** Why a Regenerate repair whose run is not in the declared-input form
- *  (`segmentInputsInDeclaredForm`) is escalated (cinatra#4264). */
-export const REGENERATE_RUN_NOT_DECLARED_FORM =
-  "the Regenerate's repair run was made with other inputs than the reviewer's words in the step's declared input, so it is not run and its work is not applied";
-
-/**
- * cinatra#4264: escalate the Regenerate repair of a run whose inputs are not
- * the declared-input form. One rule for both readers of such a run: the
- * worker's run start, which fails the run (`resolveRegenerateSegment` refuses
- * it), and the completer, which finds it finished. During a rolling deployment
- * an older dispatcher can create the run in the earlier form and mark its
- * repair `dispatched`; the dispatch drain reads only `requested` repairs, so
- * the escalation takes a `requested` or a `dispatched` repair. Only a repair
- * that names a Regenerate node is taken. A compare-and-set, as
- * `escalateRepair`: a second call for the same repair changes nothing and
- * returns false.
- */
-export async function escalateRegenerateRepairOfUndeclaredRun(repairId: string): Promise<boolean> {
-  return escalateRepair(repairId, REGENERATE_RUN_NOT_DECLARED_FORM, { fromDispatched: true });
-}
+// cinatra#4264: the escalation of a Regenerate repair whose run is not in the
+// declared-input form, and its reason, live in `./regenerate-segment` so the
+// worker's run start reaches them without this store (route-graph ratchet).
+// Re-exported here for the completer and the drain.
+export { REGENERATE_RUN_NOT_DECLARED_FORM };
+export { escalateRegenerateRepairOfUndeclaredRun } from "./regenerate-segment";
 
 /** CAS a `requested` repair to `escalated`, recording WHY on `change_summary`
  * behind the dispatch sentinel. Returns false when the row moved under us.
  * cinatra#4312 — an escalated lineage has no successor to decide, so the same
  * commit carries a declared review's latest decision (carryDeclaredReviewDecision).
- * `fromDispatched` (only `escalateRegenerateRepairOfUndeclaredRun`): a
- * `dispatched` Regenerate repair is taken too. */
-async function escalateRepair(
-  repairId: string,
-  reason: string,
-  opts?: { fromDispatched: true },
-): Promise<boolean> {
-  const from = opts?.fromDispatched
-    ? and(inArray(lifecycleRepair.status, ["requested", "dispatched"]), isNotNull(lifecycleRepair.regenerateNodeId))
-    : eq(lifecycleRepair.status, "requested");
+ * A `dispatched` Regenerate repair is taken only by
+ * `escalateRegenerateRepairOfUndeclaredRun` (`./regenerate-segment`). */
+async function escalateRepair(repairId: string, reason: string): Promise<boolean> {
   return db.transaction(async (tx) => {
     const rows = await tx
       .update(lifecycleRepair)
@@ -921,7 +901,7 @@ async function escalateRepair(
         changeSummary: `${DISPATCH_ESCALATION_PREFIX}${reason}`,
         updatedAt: sql`now()`,
       })
-      .where(and(eq(lifecycleRepair.id, repairId), from))
+      .where(and(eq(lifecycleRepair.id, repairId), eq(lifecycleRepair.status, "requested")))
       .returning({ lineageId: lifecycleRepair.lineageId });
     if (rows.length !== 1) return false;
     await carryDeclaredReviewDecision(tx, rows[0].lineageId);

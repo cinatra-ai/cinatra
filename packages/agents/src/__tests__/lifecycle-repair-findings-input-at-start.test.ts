@@ -52,18 +52,14 @@ const segmentMock = vi.hoisted(() => ({
   fenceRegenerateRuntime: vi.fn(async (): Promise<boolean> => false),
   classifyRegenerateSegmentRun: vi.fn(async (): Promise<"segment" | "ordinary" | "unreadable"> => "ordinary"),
 }));
-vi.mock("../regenerate-segment", async (orig) => ({
-  ...(await orig<typeof import("../regenerate-segment")>()),
-  ...segmentMock,
-}));
-
 // cinatra#4264: the escalation of the repair whose run start refuses a run
 // that is not in the declared-input form (a compare-and-set on the repair row).
 const escalationMock = vi.hoisted(() => ({
   escalateRegenerateRepairOfUndeclaredRun: vi.fn(async (_repairId: string): Promise<boolean> => true),
 }));
-vi.mock("../lifecycle-repair-dispatch-store", async (orig) => ({
-  ...(await orig<typeof import("../lifecycle-repair-dispatch-store")>()),
+vi.mock("../regenerate-segment", async (orig) => ({
+  ...(await orig<typeof import("../regenerate-segment")>()),
+  ...segmentMock,
   ...escalationMock,
 }));
 

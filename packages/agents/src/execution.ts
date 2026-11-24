@@ -550,6 +550,7 @@ import {
   persistSegmentReceipt,
   redactSegmentRequests,
   regenerateSegmentMetadata,
+  escalateRegenerateRepairOfUndeclaredRun,
   resolveRegenerateSegment,
   segmentRepairIdFromRunId,
   stripSegmentReceipts,
@@ -4097,7 +4098,8 @@ async function runAgentBuilderExecutionJobInner(
     const repairId = segmentResolution.inputsNotDeclared ? segmentRepairIdFromRunId(runId) : null;
     if (repairId) {
       try {
-        const { escalateRegenerateRepairOfUndeclaredRun } = await import("./lifecycle-repair-dispatch-store");
+        // From `./regenerate-segment`, never the dispatch store: this module
+        // is in the locked routes' graph (route-graph ratchet).
         await escalateRegenerateRepairOfUndeclaredRun(repairId);
       } catch (err) {
         console.error(

@@ -101,6 +101,55 @@ export function segmentRepairIdFromRunId(runId: string | null | undefined): stri
   const id = runId.slice(SEGMENT_REPAIR_RUN_PREFIX.length);
   return id.length > 0 ? id : null;
 }
+
+/** The sentinel an escalated repair carries on `change_summary`; read it only
+ *  through `dispatchEscalationReason` (`./lifecycle-repair-dispatch-store`,
+ *  which re-exports it). It lives here so the run start reaches the escalation
+ *  below without the dispatch store (route-graph ratchet). */
+export const DISPATCH_ESCALATION_PREFIX = "[escalated] ";
+
+/** Why a Regenerate repair whose run is not in the declared-input form
+ *  (`segmentInputsInDeclaredForm`) is escalated (cinatra#4264). */
+export const REGENERATE_RUN_NOT_DECLARED_FORM =
+  "the Regenerate's repair run was made with other inputs than the reviewer's words in the step's declared input, so it is not run and its work is not applied";
+
+/**
+ * cinatra#4264: escalate the Regenerate repair of a run whose inputs are not
+ * the declared-input form. One rule for both readers of such a run: the
+ * worker's run start, which fails the run (`resolveRegenerateSegment` refuses
+ * it), and the completer, which finds it finished. During a rolling deployment
+ * an older dispatcher can create the run in the earlier form and mark its
+ * repair `dispatched`; the dispatch drain reads only `requested` repairs, so
+ * the escalation takes a `requested` or a `dispatched` repair. Only a repair
+ * that names a Regenerate node is taken. A compare-and-set, as the dispatch
+ * store's `escalateRepair` (the same transaction carries a declared review's
+ * latest decision): a second call for the same repair changes nothing and
+ * returns false. Its modules load lazily: the run start's module graph stays
+ * as it was (route-graph ratchet).
+ */
+export async function escalateRegenerateRepairOfUndeclaredRun(repairId: string): Promise<boolean> {
+  const [{ carryDeclaredReviewDecision }, { db }, { lifecycleRepair }, { and, eq, inArray, isNotNull, sql }] =
+    await Promise.all([import("./lifecycle-repair-store"), import("./db"), import("./schema"), import("drizzle-orm")]);
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .update(lifecycleRepair)
+      .set({
+        status: "escalated",
+        changeSummary: `${DISPATCH_ESCALATION_PREFIX}${REGENERATE_RUN_NOT_DECLARED_FORM}`,
+        updatedAt: sql`now()`,
+      })
+      .where(
+        and(
+          eq(lifecycleRepair.id, repairId),
+          and(inArray(lifecycleRepair.status, ["requested", "dispatched"]), isNotNull(lifecycleRepair.regenerateNodeId)),
+        ),
+      )
+      .returning({ lineageId: lifecycleRepair.lineageId });
+    if (rows.length !== 1) return false;
+    await carryDeclaredReviewDecision(tx, rows[0].lineageId);
+    return true;
+  });
+}
 const FENCE_TIMEOUT_MS = 10_000;
 
 function nonEmptyString(value: unknown): value is string {
