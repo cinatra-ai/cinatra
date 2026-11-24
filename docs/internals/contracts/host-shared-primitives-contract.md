@@ -17,6 +17,7 @@ onto. Slice 3 moves the packages, one package at a time.
 | Contract version | `1.1.0` (major `1`) |
 | Declared in | `packages/sdk-extensions/src/artifact-client-bundle.ts`, next to the React externals allowlist |
 | Typed contract export | `@cinatra-ai/sdk-extensions/design-primitives-contract` |
+| SDK peer declaration | `cinatra.hostServedPeers` in `packages/sdk-extensions/package.json` (`"^1.1.0"`), pinned to the contract constants by `packages/sdk-extensions/src/__tests__/design-primitives-host-peer.test.ts` |
 | Host implementation | `src/lib/artifacts/host-shared-primitives.ts` |
 | Resolved at run time by | `src/lib/artifacts/host-module-registry.ts` |
 
@@ -133,8 +134,10 @@ they never enter this contract.
    dependency or a peer. The id is VIRTUAL: the host serves it at run time and no
    package is published under it, so *any* specifier — optional peer included —
    makes the install fail (`pnpm install` resolves peer specifiers and 404s on
-   the id; measured on this branch, which is why the SDK does not declare one
-   either). The package instead declares the contract version it builds against
+   the id; measured on this branch). For the same reason the SDK declares the
+   module as its host peer outside the npm fields, in
+   `cinatra.hostServedPeers` of `packages/sdk-extensions/package.json`: the id
+   and a caret range on the served contract version. The package instead declares the contract version it builds against
    in its bundle preamble (`__cinatraDesignPrimitivesContract`), so the loader's
    fail-closed major check applies to it, and imports the contract itself from
    `@cinatra-ai/sdk-extensions/design-primitives-contract` for the id, the
