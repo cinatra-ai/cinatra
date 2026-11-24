@@ -26,47 +26,19 @@
 // loaded, or failed to load, holds its Continue (`continueHeldByRenderer`,
 // cinatra#3470) rather than sending an answer its renderer never drew.
 
+// The read itself, shared with a gate's fresh read, lives beside the store it
+// records into (`readRuntimeRendererBindings`, cinatra#3470).
+
 import { useEffect, useState } from "react";
-import { settleRuntimeRendererBindings } from "./field-renderer-registry";
+import { readRuntimeRendererBindings } from "./field-renderer-registry";
 
 export function useRuntimeFieldRendererBindings(): void {
   const [, setVersion] = useState(0);
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
-      try {
-        const { getRuntimeFieldRendererBindingsAction } = await import(
-          "./server-actions"
-        );
-        const answer = await getRuntimeFieldRendererBindingsAction();
-        const bindings = answer?.bindings;
-        const refusedScreenIds = answer?.refusedScreenIds;
-        if (!Array.isArray(bindings) || !Array.isArray(refusedScreenIds)) {
-          settleRuntimeRendererBindings({ ok: false });
-          return;
-        }
-        if (bindings.length > 0) {
-          const { registerFieldRendererBindings } = await import(
-            "./register-default-renderers"
-          );
-          registerFieldRendererBindings(bindings);
-        }
-        // The bindings that declare a screen, and the declared screens the
-        // server's validator refused: one of them that is still unregistered
-        // after this is a declared screen the host cannot draw, and its gate
-        // stays held (never read as a gate with no screen).
-        settleRuntimeRendererBindings({
-          ok: true,
-          screenIds: [
-            ...bindings.filter((b) => b.screen !== undefined).map((b) => b.id),
-            ...refusedScreenIds.filter((id): id is string => typeof id === "string"),
-          ],
-        });
-        if (!cancelled) setVersion((v) => v + 1);
-      } catch {
-        settleRuntimeRendererBindings({ ok: false });
-      }
-    })();
+    void readRuntimeRendererBindings().then((answered) => {
+      if (answered && !cancelled) setVersion((v) => v + 1);
+    });
     return () => {
       cancelled = true;
     };

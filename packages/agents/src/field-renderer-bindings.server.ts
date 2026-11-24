@@ -73,8 +73,20 @@ export function collectInstalledRefusedScreenIds(): string[] {
   return collectInstalled().refusedScreenIds;
 }
 
-function collectInstalled(): { entries: CollectedBinding[]; refusedScreenIds: string[] } {
-  if (cache && Date.now() - cache.at < CACHE_TTL_MS) return cache;
+/** Is the scan `collectInstalled` would answer now the cached one? */
+function scanIsCached(): boolean {
+  return cache !== null && Date.now() - cache.at < CACHE_TTL_MS;
+}
+
+/**
+ * The installed bindings and the refused screen ids. `fresh` scans past the
+ * cache: an answer that must not miss an agent installed within the TTL
+ * (cinatra#3470) asks for it.
+ */
+function collectInstalled(
+  opts?: { fresh?: boolean },
+): { entries: CollectedBinding[]; refusedScreenIds: string[] } {
+  if (opts?.fresh !== true && cache && scanIsCached()) return cache;
   const all: CollectedBinding[] = [];
   const refused = new Set<string>();
   let installDir: string;
@@ -153,9 +165,11 @@ export type RuntimeFieldRendererBindingsPayload = {
  * screens the validator refused. Generated (build-time) bindings are already
  * compiled into the client registry, so neither list names one.
  */
-export function runtimeFieldRendererBindingsPayload(): RuntimeFieldRendererBindingsPayload {
+export function runtimeFieldRendererBindingsPayload(
+  opts?: { fresh?: boolean },
+): RuntimeFieldRendererBindingsPayload {
   const generatedIds = new Set(GENERATED_FIELD_RENDERER_BINDINGS.map((b) => b.id));
-  const { entries, refusedScreenIds } = collectInstalled();
+  const { entries, refusedScreenIds } = collectInstalled({ fresh: opts?.fresh === true });
   return {
     bindings: entries
       .filter((b) => !generatedIds.has(b.id))
@@ -233,9 +247,33 @@ export function isUndrawableDeclaredScreen(binding: { kind: string; screen?: unk
  * a refused screen as a gate with no screen.
  */
 export function isRefusedDeclaredScreen(xRenderer: string): boolean {
-  const binding = getMergedFieldRendererBindings().find((b) => b.id === xRenderer);
+  const { binding, refused } = lookupFieldRendererBinding(xRenderer);
   if (binding) return isUndrawableDeclaredScreen(binding);
-  return collectInstalled().refusedScreenIds.includes(xRenderer);
+  return refused;
+}
+
+/**
+ * The merged binding of exactly this id, or whether an installed declaration
+ * of it was refused (cinatra#3470). A CACHED SCAN NEVER SAYS AN ID DECLARES
+ * NOTHING: the scan is cached for a few seconds, and an agent installed within
+ * them is missing from it. When the cached scan names the id neither way, the
+ * installed agents are scanned again, and only that answer reads as none.
+ */
+export function lookupFieldRendererBinding(
+  xRenderer: string,
+): { binding: CollectedBinding | undefined; refused: boolean } {
+  const read = () => {
+    const binding = getMergedFieldRendererBindings().find((b) => b.id === xRenderer);
+    return {
+      binding,
+      refused: binding === undefined && collectInstalled().refusedScreenIds.includes(xRenderer),
+    };
+  };
+  const wasCached = scanIsCached();
+  const first = read();
+  if (first.binding !== undefined || first.refused || !wasCached) return first;
+  cache = null;
+  return read();
 }
 
 /**
@@ -252,8 +290,8 @@ export function isRefusedDeclaredScreen(xRenderer: string): boolean {
  */
 export function readDeclaredHitlCard(xRenderer: string): DeclaredHitlCard | "unavailable" | null {
   try {
-    const binding = getMergedFieldRendererBindings().find((b) => b.id === xRenderer);
-    if (!binding) return isRefusedDeclaredScreen(xRenderer) ? "unavailable" : null;
+    const { binding, refused } = lookupFieldRendererBinding(xRenderer);
+    if (!binding) return refused ? "unavailable" : null;
     if (isUndrawableDeclaredScreen(binding)) return "unavailable";
     if (binding.midRunHitl !== true || binding.screen === undefined) return null;
     const checked = validateHitlScreen(binding.screen, `${binding.id} screen`) as {

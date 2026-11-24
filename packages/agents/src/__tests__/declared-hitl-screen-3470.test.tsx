@@ -51,10 +51,11 @@ vi.mock("../server-actions", () => ({
 vi.mock("../list-picker-actions", () => ({
   fetchAvailableLists: vi.fn(async () => []),
 }));
-vi.mock("../hitl-actions", () => ({
-  approveReviewTask: vi.fn(async () => ({ ok: true as const })),
+const hitlActions = vi.hoisted(() => ({
+  approveReviewTask: vi.fn(async (..._args: unknown[]) => ({ ok: true as const })),
   rejectReviewTask: vi.fn(async () => undefined),
 }));
+vi.mock("../hitl-actions", () => hitlActions);
 
 import {
   fieldRendererRegistry,
@@ -71,10 +72,15 @@ import { SchemaOnlyFloorRenderer } from "../schema-field-renderer";
 import { AgentHitlScreenCard } from "../agent-hitl-screen-card";
 import { parseAgentHitlScreenState } from "../agent-hitl-screen";
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
-import { continueApprovalFlag, continueHeldByRenderer, declaredHitlApprovalFlag } from "../hitl-gate-submit";
+import {
+  continueApprovalFlag,
+  continueHeldByRenderer,
+  declaredHitlApprovalFlag,
+  isGroupedSetupRenderer,
+} from "../hitl-gate-submit";
 
 /** The gate of `ID` once the host's bindings loaded. */
-const LOADED_GATE = { xRenderer: "@acme-test/publish-agent:confirm", bindings: { status: "loaded" as const, announcedIds: new Set<string>() } };
+const LOADED_GATE = { xRenderer: "@acme-test/publish-agent:confirm", bindings: { status: "loaded" as const, announcedIds: new Set<string>(), freshlyReadIds: new Set<string>() } };
 
 const ID = "@acme-test/publish-agent:confirm";
 
@@ -578,6 +584,22 @@ describe("a declared card holds the host's Continue (cinatra#3470)", () => {
     expect(holding).toEqual(["list-picker"]);
   });
 
+  // The grouped setup form sends from its own control, which validates the
+  // form first. Every host reads it so from the declared kind alone, with no
+  // option of its own: the run panel and the conversation card ask without
+  // one, and an outer Continue there would send the approval without the
+  // form's values and past its validation.
+  it("of every kind a 'kind' layout can declare, only the grouped setup form reads as one on every host", () => {
+    const grouped: string[] = [];
+    for (const kind of knownFieldRendererKinds()) {
+      fieldRendererRegistry.clear();
+      registerFieldRendererBindings([{ id: ID, kind, priority: 80, midRunHitl: true, screen: { layout: "kind" } }]);
+      if (entryOf() !== undefined && isGroupedSetupRenderer(ID)) grouped.push(kind);
+    }
+    // red-first-expect: expected [] to deeply equal [ 'wayflow-setup-form' ]
+    expect(grouped).toEqual(["wayflow-setup-form"]);
+  });
+
   it("only a 'card' stages its whole answer; a 'kind' and a plain binding stage as their kind does", () => {
     registerFieldRendererBindings([{ id: ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: CARD }]);
     expect(entryOf()?.stagesWholeAnswer).toBe(true);
@@ -859,5 +881,75 @@ describe("the conversation hosts draw the declared card (cinatra#3470, V.1)", ()
       />,
     );
     expect(dom.queryByTestId("list-picker-gate-question")?.textContent).toBe("Fixture declared question?");
+  });
+});
+
+describe("a declared grouped setup form sends only from its own control (cinatra#3470)", () => {
+  const RUN_ID = "run-3470-grouped";
+  const GROUPED_ID = "@acme-test/setup-agent:details";
+  const ASKING = {
+    state: "asking" as const,
+    runId: RUN_ID,
+    screenRef: null,
+    gate: {
+      reviewTaskId: "task-3470-grouped",
+      xRenderer: GROUPED_ID,
+      inputSchema: {
+        type: "object",
+        properties: { projectName: { type: "string", title: "Project name" } },
+        required: ["projectName"],
+      },
+      currentValues: {},
+      fieldName: null,
+    },
+    declaredScreen: {
+      id: GROUPED_ID,
+      kind: "wayflow-setup-form",
+      priority: 80,
+      midRunHitl: true,
+      screen: { layout: "kind" },
+    },
+  };
+  let originalFetch: typeof globalThis.fetch;
+
+  beforeEach(() => {
+    screenStateMock.mockImplementation(async () => ASKING);
+    originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify(ASKING), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })) as unknown as typeof fetch;
+  });
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("chat_thread: draws no outer Continue, and an invalid form sends nothing", async () => {
+    const { container } = render(
+      <LifecycleCardSurfaceProvider host="chat_thread">
+        <AgentHitlScreenCard runId={RUN_ID} wireRef="task-3470-grouped" />
+      </LifecycleCardSurfaceProvider>,
+    );
+    const formSubmit = await waitFor(() => within(container).getByRole("button", { name: /save & start run/i }));
+    // red-first-expect: expected <button data-slot="button"
+    expect(within(container).queryByRole("button", { name: /^continue$/i })).toBeNull();
+    // The required value is blank: the form's own control validates and sends nothing.
+    await act(async () => {
+      fireEvent.click(formSubmit);
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    // Filled in, the same control sends the form's values with the approval.
+    fireEvent.change(within(container).getByRole("textbox"), { target: { value: "Fixture project" } });
+    await act(async () => {
+      fireEvent.click(formSubmit);
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    expect(hitlActions.approveReviewTask.mock.calls[0]![1]).toMatchObject({
+      projectName: "Fixture project",
+      approved: true,
+    });
   });
 });

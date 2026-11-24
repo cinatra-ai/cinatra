@@ -25,6 +25,8 @@ import {
   isListPickerRenderer,
   isRendererBound,
   rendererReadsAsKind,
+  awaitsFreshRendererBindingRead,
+  midRunBindingReadsAsKind,
   type RendererBindingsLoad,
 } from "./field-renderer-registry";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
@@ -85,6 +87,11 @@ export function isGroupedSetupRenderer(
   ) {
     return true;
   }
+  // A MID-RUN binding of the grouped form's kind is one on every host, with or
+  // without the option (cinatra#3470): the form sends from its own control,
+  // which validates it first, and a host that drew its Continue beside it
+  // would send the approval past that validation and without the values.
+  if (midRunBindingReadsAsKind(xRenderer, "wayflow-setup-form")) return true;
   // A `:setup-form` id is a grouped setup only when no registered binding says
   // otherwise: a declared card is never one, and a binding's declared kind
   // decides before its suffix (cinatra#3470).
@@ -355,8 +362,9 @@ export const SCREEN_FAILED_HOLD_REASON =
  * Why the mid-run Continue of the gate drawn by `xRenderer` is held because
  * its renderer binding is missing (cinatra#3470), or null. A gate with no
  * binding registered under its exact id is held while the host's bindings
- * are still loading, after they failed to load, and when the source named a
- * declared screen for it that did not register. It FAILS CLOSED: the
+ * are still loading, after they failed to load, when the source named a
+ * declared screen for it that did not register, and until a fresh read of
+ * the source answered for it (`awaitsFreshRendererBindingRead`). It FAILS CLOSED: the
  * fallback such a gate draws can only approve, so a press would resume a
  * declared screen without its decision and its fields.
  */
@@ -369,6 +377,10 @@ export function rendererBindingHoldReason(
   if (bindings.status === "failed" || bindings.announcedIds.has(xRenderer)) {
     return SCREEN_FAILED_HOLD_REASON;
   }
+  // Loaded, and not announced: only a fresh read says it declares nothing.
+  // Until one answered for it, the answer may be a scan cached before its
+  // agent was installed, and the gate is held as still loading.
+  if (awaitsFreshRendererBindingRead(xRenderer, bindings)) return SCREEN_LOADING_HOLD_REASON;
   return null;
 }
 

@@ -81,6 +81,9 @@ vi.mock("../run-recommendation-actions", () => ({
 
 vi.mock("../server-actions", () => ({
   getRunRecommendedSkillsAction: vi.fn(async () => []),
+  // The gate's fresh read of the installed bindings answers nothing beyond the
+  // build either (cinatra#3470).
+  getRuntimeFieldRendererBindingsAction: vi.fn(async () => ({ bindings: [], refusedScreenIds: [] })),
 }));
 
 vi.mock("../run-name-actions", () => ({

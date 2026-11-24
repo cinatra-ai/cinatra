@@ -264,6 +264,14 @@ export function continueAwaitsAPick(
 export type RendererBindingsLoad = {
   status: "loading" | "loaded" | "failed";
   announcedIds: ReadonlySet<string>;
+  /**
+   * The ids a FRESH read of the source answered for. A loaded answer may be a
+   * scan cached before the gate's agent was installed, so an id it does not
+   * announce reads as declaring nothing only once a fresh read answered for
+   * it. `"every"`: the source reads each gate's own binding fresh (the
+   * conversation card's read), so every id it answered for is.
+   */
+  freshlyReadIds: ReadonlySet<string> | "every";
 };
 
 /** Is a binding registered under exactly this id? */
@@ -271,7 +279,11 @@ export function isRendererBound(xRenderer: string): boolean {
   return fieldRendererRegistry.list().some((e) => e.id === xRenderer);
 }
 
-let runtimeBindingsLoad: RendererBindingsLoad = { status: "loading", announcedIds: new Set() };
+let runtimeBindingsLoad: RendererBindingsLoad = {
+  status: "loading",
+  announcedIds: new Set(),
+  freshlyReadIds: new Set(),
+};
 const runtimeBindingsListeners = new Set<() => void>();
 
 /**
@@ -284,16 +296,139 @@ export function runtimeRendererBindingsLoad(): RendererBindingsLoad {
   return runtimeBindingsLoad;
 }
 
-/** Record what the runtime bindings fetch answered. */
+/**
+ * Record what the runtime bindings fetch answered. `freshFor` names the gate
+ * ids a fresh read was asked for: its answer is theirs. A fresh read that
+ * failed leaves each of them a screen that could not be loaded (held, never
+ * read as declaring nothing).
+ */
 export function settleRuntimeRendererBindings(
-  outcome: { ok: true; screenIds: ReadonlyArray<string> } | { ok: false },
+  outcome:
+    | { ok: true; screenIds: ReadonlyArray<string>; freshFor?: ReadonlyArray<string> }
+    | { ok: false; freshFor?: ReadonlyArray<string> },
 ): void {
+  const freshFor = outcome.freshFor ?? [];
   const announcedIds = outcome.ok
     ? new Set([...runtimeBindingsLoad.announcedIds, ...outcome.screenIds])
-    : runtimeBindingsLoad.announcedIds;
+    : new Set([...runtimeBindingsLoad.announcedIds, ...freshFor]);
+  const read = runtimeBindingsLoad.freshlyReadIds;
+  const freshlyReadIds =
+    read === "every" || !outcome.ok ? read : new Set([...read, ...freshFor]);
   const status = outcome.ok || runtimeBindingsLoad.status === "loaded" ? "loaded" : "failed";
-  runtimeBindingsLoad = { status, announcedIds };
+  runtimeBindingsLoad = { status, announcedIds, freshlyReadIds };
   for (const listener of runtimeBindingsListeners) listener();
+}
+
+/**
+ * Does the gate drawn by `xRenderer` wait for a fresh read of its bindings
+ * (cinatra#3470)? Only a gate with no binding registered, on an answer that
+ * loaded, did not announce it, and was not read fresh for it.
+ */
+export function awaitsFreshRendererBindingRead(
+  xRenderer: string,
+  bindings: RendererBindingsLoad,
+): boolean {
+  if (xRenderer === "" || isRendererBound(xRenderer)) return false;
+  if (bindings.status !== "loaded" || bindings.announcedIds.has(xRenderer)) return false;
+  const read = bindings.freshlyReadIds;
+  return read !== "every" && !read.has(xRenderer);
+}
+
+// ---------------------------------------------------------------------------
+// THE RUN PAGE'S READ OF THE INSTALLED AGENTS' BINDINGS (cinatra#151 Stage 5,
+// cinatra#3470). One read registers what the server answered and records it
+// (`settleRuntimeRendererBindings`). The page reads once on mount
+// (`useRuntimeFieldRendererBindings`), and once more, FRESH, for a gate that
+// answer does not name (`requestFreshRendererBindingRead`): the server caches
+// its scan for a few seconds, and an agent installed within them is missing
+// from it. Until that fresh read answered, the gate is held, never read as
+// declaring no screen. Both imports stay lazy, as the mount read's always were.
+// ---------------------------------------------------------------------------
+
+/** The action module, imported on the first read and kept for every later one. */
+let serverActionsModule: Promise<typeof import("./server-actions")> | null = null;
+function serverActions(): Promise<typeof import("./server-actions")> {
+  // A failed import is not kept: the next read imports again.
+  serverActionsModule ??= import("./server-actions").catch((err: unknown) => {
+    serverActionsModule = null;
+    throw err;
+  });
+  return serverActionsModule;
+}
+
+/**
+ * Read the installed agents' bindings, register them and record the answer.
+ * `freshFor` names a gate id the read is asked for: the server scans past its
+ * cache, and the answer is recorded as that id's fresh read. True when the
+ * read answered.
+ */
+export async function readRuntimeRendererBindings(freshFor?: string): Promise<boolean> {
+  const readFor = freshFor === undefined ? undefined : [freshFor];
+  try {
+    const { getRuntimeFieldRendererBindingsAction } = await serverActions();
+    const answer = await (freshFor === undefined
+      ? getRuntimeFieldRendererBindingsAction()
+      : getRuntimeFieldRendererBindingsAction({ fresh: true }));
+    const bindings = answer?.bindings;
+    const refusedScreenIds = answer?.refusedScreenIds;
+    if (!Array.isArray(bindings) || !Array.isArray(refusedScreenIds)) {
+      settleRuntimeRendererBindings({ ok: false, freshFor: readFor });
+      return false;
+    }
+    if (bindings.length > 0) {
+      const { registerFieldRendererBindings } = await import(
+        "./register-default-renderers"
+      );
+      registerFieldRendererBindings(bindings);
+    }
+    // The bindings that declare a screen, and the declared screens the
+    // server's validator refused: one of them that is still unregistered
+    // after this is a declared screen the host cannot draw, and its gate
+    // stays held (never read as a gate with no screen).
+    settleRuntimeRendererBindings({
+      ok: true,
+      screenIds: [
+        ...bindings.filter((b) => b.screen !== undefined).map((b) => b.id),
+        ...refusedScreenIds.filter((id): id is string => typeof id === "string"),
+      ],
+      freshFor: readFor,
+    });
+    return true;
+  } catch {
+    settleRuntimeRendererBindings({ ok: false, freshFor: readFor });
+    return false;
+  }
+}
+
+/** The gate ids this page has asked a fresh read for: each is asked once. */
+const freshReadsAsked = new Set<string>();
+
+/**
+ * Ask for THE GATE'S FRESH READ (cinatra#3470), once per id, when the gate
+ * drawn by `xRenderer` waits for one (`awaitsFreshRendererBindingRead`). A
+ * host calls it from an effect. A read that fails leaves the gate held as a
+ * screen that could not be loaded.
+ */
+export function requestFreshRendererBindingRead(xRenderer: string | null | undefined): void {
+  if (typeof xRenderer !== "string") return;
+  if (!awaitsFreshRendererBindingRead(xRenderer, runtimeBindingsLoad)) return;
+  if (freshReadsAsked.has(xRenderer)) return;
+  freshReadsAsked.add(xRenderer);
+  void readRuntimeRendererBindings(xRenderer);
+}
+
+/**
+ * Is `xRenderer` a MID-RUN binding of `kind` (cinatra#3470)? Read from the
+ * registered entry alone, never the id: a declared card is never one.
+ */
+export function midRunBindingReadsAsKind(xRenderer: string, kind: string): boolean {
+  const entry = fieldRendererRegistry.list().find((e) => e.id === xRenderer);
+  return (
+    entry?.midRunHitl === true &&
+    entry.declaredScreen === undefined &&
+    entry.stagesWholeAnswer !== true &&
+    entry.kind === kind
+  );
 }
 
 /** Subscribe to `runtimeRendererBindingsLoad` (for `useSyncExternalStore`). */

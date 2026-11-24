@@ -397,7 +397,7 @@ describe("a declared card holds the HITL screen card's Continue (cinatra#3470)",
 });
 
 describe("continueHeldByRenderer (cinatra#3470)", () => {
-  const loaded = { status: "loaded" as const, announcedIds: new Set<string>() };
+  const loaded = { status: "loaded" as const, announcedIds: new Set<string>(), freshlyReadIds: new Set<string>() };
   const boundGate = { xRenderer: PROBE_ID, bindings: loaded };
 
   it("holds only where the entry declares continueReady and it answers false", () => {
@@ -413,15 +413,27 @@ describe("continueHeldByRenderer (cinatra#3470)", () => {
   // red-first-expect: Failed to resolve import "../declared-hitl-screen-renderer"
   it("holds a gate with no binding registered while bindings load, after they failed, and when its announced screen did not register", () => {
     const unbound = "@acme-test/runtime-agent:output";
-    const at = (bindings: { status: "loading" | "loaded" | "failed"; announcedIds: ReadonlySet<string> }) =>
+    const at = (bindings: {
+      status: "loading" | "loaded" | "failed";
+      announcedIds: ReadonlySet<string>;
+      freshlyReadIds: ReadonlySet<string> | "every";
+    }) =>
       ({ xRenderer: unbound, bindings });
-    expect(continueHeldByRenderer(null, {}, {}, at({ status: "loading", announcedIds: new Set() }))).toBe(true);
-    expect(continueHeldByRenderer(null, {}, {}, at({ status: "failed", announcedIds: new Set() }))).toBe(true);
-    expect(continueHeldByRenderer(null, {}, {}, at({ status: "loaded", announcedIds: new Set([unbound]) }))).toBe(true);
-    // Loaded, and no screen announced for it: a gate with no binding, as before.
-    expect(continueHeldByRenderer(null, {}, {}, at(loaded))).toBe(false);
+    expect(continueHeldByRenderer(null, {}, {}, at({ status: "loading", announcedIds: new Set(), freshlyReadIds: new Set() }))).toBe(true);
+    expect(continueHeldByRenderer(null, {}, {}, at({ status: "failed", announcedIds: new Set(), freshlyReadIds: new Set() }))).toBe(true);
+    expect(continueHeldByRenderer(null, {}, {}, at({ status: "loaded", announcedIds: new Set([unbound]), freshlyReadIds: new Set() }))).toBe(true);
+    // Loaded, but no fresh read has answered for it yet: the answer may be a
+    // scan cached before its agent was installed, so it is held.
+    // red-first-expect: expected false to be true
+    expect(continueHeldByRenderer(null, {}, {}, at(loaded))).toBe(true);
+    // Loaded, and a fresh read found no screen for it: a gate with no binding, as before.
+    expect(
+      continueHeldByRenderer(null, {}, {}, at({ ...loaded, freshlyReadIds: new Set([unbound]) })),
+    ).toBe(false);
+    // A source that reads each gate's own binding fresh answers for every id.
+    expect(continueHeldByRenderer(null, {}, {}, at({ ...loaded, freshlyReadIds: "every" }))).toBe(false);
     // A registered binding is never held by the load, whatever its status.
-    expect(continueHeldByRenderer(null, {}, {}, { xRenderer: PROBE_ID, bindings: { status: "failed", announcedIds: new Set() } })).toBe(false);
+    expect(continueHeldByRenderer(null, {}, {}, { xRenderer: PROBE_ID, bindings: { status: "failed", announcedIds: new Set(), freshlyReadIds: new Set() } })).toBe(false);
   });
 });
 

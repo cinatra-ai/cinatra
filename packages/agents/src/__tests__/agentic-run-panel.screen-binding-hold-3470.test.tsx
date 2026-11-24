@@ -29,7 +29,7 @@
  *     src/__tests__/agentic-run-panel.screen-binding-hold-3470.test.tsx
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -79,7 +79,7 @@ vi.mock("../a2a-actions", () => ({
 
 /** What the page's fetch of the installed agents' bindings answers. */
 const runtimeBindings = vi.hoisted(() => ({
-  fetch: vi.fn(async (): Promise<unknown> => ({ bindings: [], refusedScreenIds: [] })),
+  fetch: vi.fn(async (_input?: { fresh?: boolean }): Promise<unknown> => ({ bindings: [], refusedScreenIds: [] })),
 }));
 
 /**
@@ -122,7 +122,7 @@ vi.mock("../server-actions", () => ({
     skillCount: 0,
   })),
   getSkillsForAgentAction: vi.fn(async () => []),
-  getRuntimeFieldRendererBindingsAction: () => runtimeBindings.fetch(),
+  getRuntimeFieldRendererBindingsAction: (input?: { fresh?: boolean }) => runtimeBindings.fetch(input),
 }));
 
 vi.mock("../agent-ui-override-registry", () => ({
@@ -132,8 +132,9 @@ vi.mock("../agent-ui-override-registry", () => ({
 /** A runtime-installed agent's screen: mid-run by its suffix, no binding in the build. */
 const RUNTIME_ID = "@cinatra-test/runtime-agent:output";
 const REVIEW_TASK_ID = "wayflow-task-3470";
-/** The gate the stream hands the panel (a test may name another). */
-const gate = { xRenderer: RUNTIME_ID };
+/** The gate the stream hands the panel (a test may name another, and its schema). */
+const DECISION_SCHEMA = { type: "object", properties: { decision: { type: "string", enum: ["approve", "revise"] } } };
+const gate: { xRenderer: string; schema: Record<string, unknown> } = { xRenderer: RUNTIME_ID, schema: DECISION_SCHEMA };
 const HOLD_LOADING = "This step's screen is still loading.";
 const HOLD_FAILED = "This step's screen could not be loaded. Reload the page to try again.";
 
@@ -144,7 +145,7 @@ vi.mock("../use-ag-ui-run-stream", () => ({
     presentationHint: null,
     isLive: true,
     interruptContext: {
-      schema: { type: "object", properties: { decision: { type: "string", enum: ["approve", "revise"] } } },
+      schema: gate.schema,
       xRenderer: gate.xRenderer,
       values: { itemId: "item-1" },
       reviewTaskId: REVIEW_TASK_ID,
@@ -193,6 +194,7 @@ async function expectHeld(reason: string, published: { submit: GateSubmit | null
 
 beforeEach(() => {
   gate.xRenderer = RUNTIME_ID;
+  gate.schema = DECISION_SCHEMA;
   ensureDefaultFieldRenderersRegistered();
   cleanup();
 });
@@ -300,7 +302,61 @@ describe("AgenticRunPanel — a screen whose binding has not loaded holds its Co
     await waitFor(() => expect(published.submit).not.toBeNull());
     await waitFor(() => expect(document.body.textContent).toContain("no renderer configured"));
     expect(holdReason()).toBeNull();
-    await published.submit!({ decision: "approve" });
+    // Only a fresh read of the installed agents says the gate declares nothing.
+    // red-first-expect: expected "vi.fn()" to be called with arguments
+    await waitFor(() => expect(runtimeBindings.fetch).toHaveBeenCalledWith({ fresh: true }));
+    // Once it answered, the gate continues as before.
+    await waitFor(() => published.submit!({ decision: "approve" }));
     await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+  });
+
+  // The page's bindings loaded before this gate arrived, and the answer it
+  // reads now may be a cached scan taken before its agent was installed. A
+  // gate whose id that answer does not name is held until a fresh read of the
+  // installed agents answers for it.
+  it("holds the Continue of a gate the loaded bindings do not name until a fresh read answers for it", async () => {
+    gate.xRenderer = "@cinatra-test/late-agent:output";
+    runtimeBindings.fetch.mockImplementation((input?: { fresh?: boolean }) =>
+      input?.fresh === true
+        ? new Promise(() => {})
+        : Promise.resolve({ bindings: [], refusedScreenIds: [] }),
+    );
+    const published = await mountGate();
+    await waitFor(() => expect(runtimeBindings.fetch).toHaveBeenCalled());
+    // red-first-expect: promise resolved "undefined" instead of rejecting
+    await expectHeld(HOLD_LOADING, published);
+  });
+
+  // A declared grouped setup form sends from its own control, which validates
+  // the form first: the panel draws no Continue beside it, so nothing sends the
+  // approval without the form's values.
+  it("draws no outer Continue beside a declared grouped setup form, and its invalid form sends nothing", async () => {
+    gate.xRenderer = "@cinatra-test/setup-agent:details";
+    gate.schema = {
+      type: "object",
+      properties: { projectName: { type: "string", title: "Project name" } },
+      required: ["projectName"],
+    };
+    runtimeBindings.fetch.mockImplementation(async () => ({
+      bindings: [
+        { id: gate.xRenderer, kind: "wayflow-setup-form", priority: 80, midRunHitl: true, screen: { layout: "kind" } },
+      ],
+      refusedScreenIds: [],
+    }));
+    await mountGate();
+    const formSubmit = await waitFor(() => {
+      const button = [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) =>
+        /save & start run/i.test(b.textContent ?? ""),
+      );
+      expect(button).toBeDefined();
+      return button!;
+    });
+    // red-first-expect: expected <button data-slot="button"
+    expect(gateContinue()).toBeNull();
+    await act(async () => {
+      fireEvent.click(formSubmit);
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
   });
 });

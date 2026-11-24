@@ -1296,6 +1296,10 @@ export function AgentHitlScreenCard({
           ? "loading"
           : "loaded",
       announcedIds: new Set(declaredScreen === null ? [] : [declaredScreen.id]),
+      // The read answers for this gate's own binding, and the server rescans
+      // the installed agents before it answers "none" for an id
+      // (`lookupFieldRendererBinding`): what it says is fresh.
+      freshlyReadIds: "every",
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [declaredScreenUnavailable, declaredScreenKey, registeredScreenKey],

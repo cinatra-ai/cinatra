@@ -163,14 +163,15 @@ async function declaredScreenBindingOf(
   xRenderer: string,
 ): Promise<AgentHitlDeclaredScreenBinding | "unavailable" | null> {
   try {
-    const { getMergedFieldRendererBindings, isRefusedDeclaredScreen } = await import(
+    const { lookupFieldRendererBinding, isUndrawableDeclaredScreen } = await import(
       "./field-renderer-bindings.server"
     );
-    const binding = getMergedFieldRendererBindings().find((b) => b.id === xRenderer);
+    // A cached scan never reads as "none declared" (`lookupFieldRendererBinding`).
+    const { binding, refused } = lookupFieldRendererBinding(xRenderer);
     // A screen the validator refused, or a "kind" screen of a kind the host
     // draws nothing for, is declared but cannot be drawn: the run page holds
     // it, and so does a conversation host (the same shared rule).
-    if (isRefusedDeclaredScreen(xRenderer)) return "unavailable";
+    if (binding ? isUndrawableDeclaredScreen(binding) : refused) return "unavailable";
     if (!binding || binding.screen === undefined) return null;
     const parsed = parseDeclaredScreenBinding(
       {

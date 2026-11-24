@@ -107,16 +107,20 @@ export async function getFieldRendererContextForAgentBuilderAction(): Promise<{
 // `refusedScreenIds` names the installed bindings whose declared screen the
 // validator refused: their gates are held too, never drawn as no screen.
 // ---------------------------------------------------------------------------
-export async function getRuntimeFieldRendererBindingsAction(): Promise<
-  RuntimeFieldRendererBindingsPayload | null
-> {
+// `fresh` scans the installed agents past the collector's short cache: the run
+// page asks for it when a gate names a screen its earlier answer did not, so
+// an agent installed within the cache's lifetime is never read as declaring
+// nothing (cinatra#3470).
+export async function getRuntimeFieldRendererBindingsAction(
+  input?: { fresh?: boolean },
+): Promise<RuntimeFieldRendererBindingsPayload | null> {
   const session = await requireAuthSession().catch(() => null);
   if (!session?.user?.id) return { bindings: [], refusedScreenIds: [] };
   try {
     const { runtimeFieldRendererBindingsPayload } = await import(
       "./field-renderer-bindings.server"
     );
-    return runtimeFieldRendererBindingsPayload();
+    return runtimeFieldRendererBindingsPayload({ fresh: input?.fresh === true });
   } catch {
     return null;
   }

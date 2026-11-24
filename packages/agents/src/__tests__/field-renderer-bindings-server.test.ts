@@ -268,3 +268,58 @@ describe("a 'kind' screen on a kind the host draws no component for is refused (
     expect(undrawable!({ kind: "linkedin-draft-review" })).toBe(false);
   });
 });
+
+describe("a declared screen installed after a scan was cached is never read as none (cinatra#3470)", () => {
+  const read = (id: string): unknown =>
+    (installedBindings as { readDeclaredHitlCard?: (x: string) => unknown }).readDeclaredHitlCard?.(id) ?? null;
+  const refused = (id: string): unknown =>
+    (installedBindings as { isRefusedDeclaredScreen?: (x: string) => unknown }).isRefusedDeclaredScreen?.(id);
+  const CARD_SCREEN = {
+    layout: "card",
+    title: "Fixture title",
+    sections: [{ type: "field", key: "answer", label: "Fixture answer" }],
+  };
+
+  it("a gate's own read rescans when the cached scan does not name its id", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    // The scan is cached while nothing is installed …
+    expect(collectInstalledFieldRendererBindings()).toEqual([]);
+    // … and then the agent is installed.
+    writePkg("s", "late-screen-agent", {
+      name: "@s/late-screen-agent",
+      cinatra: {
+        fieldRenderers: [
+          { id: "@s/late-screen-agent:card", kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: CARD_SCREEN },
+          { id: "@s/late-screen-agent:refused", kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: { layout: "card" } },
+        ],
+      },
+    });
+    // red-first-expect: expected null to match object { layout: 'card'
+    expect(read("@s/late-screen-agent:card")).toMatchObject({ layout: "card", title: "Fixture title" });
+    expect(refused("@s/late-screen-agent:refused")).toBe(true);
+    expect(read("@s/late-screen-agent:refused")).toBe("unavailable");
+  });
+
+  it("the run page's fresh read rescans past the cache", () => {
+    // Read through the module, so a tree without the payload answers nothing.
+    const payload = (opts?: { fresh?: boolean }): { bindings: Array<{ id: string }> } =>
+      (installedBindings as {
+        runtimeFieldRendererBindingsPayload?: (o?: { fresh?: boolean }) => { bindings: Array<{ id: string }> };
+      }).runtimeFieldRendererBindingsPayload?.(opts) ?? { bindings: [] };
+    expect(payload().bindings).toEqual([]);
+    writePkg("s", "fresh-agent", {
+      name: "@s/fresh-agent",
+      cinatra: {
+        fieldRenderers: [
+          { id: "@s/fresh-agent:card", kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: CARD_SCREEN },
+        ],
+      },
+    });
+    // The cached answer, as before.
+    expect(payload().bindings).toEqual([]);
+    const fresh = payload({ fresh: true });
+    // red-first-expect: expected [] to deeply equal [ '@s/fresh-agent:card' ]
+    expect(fresh.bindings.map((b) => b.id)).toEqual(["@s/fresh-agent:card"]);
+  });
+});
+

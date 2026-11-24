@@ -45,6 +45,7 @@ import {
   continueAwaitsAPick,
   declaredHitlCardOf,
   fieldRendererRegistry,
+  requestFreshRendererBindingRead,
   runtimeRendererBindingsLoad,
   subscribeRuntimeRendererBindings,
   wholeAnswerStageProps,
@@ -1233,6 +1234,15 @@ export function AgenticRunPanel({
   const effectiveHitlContext: HitlContext | null = parkedOnProducedReview
     ? null
     : suppression.context;
+  // A mid-run gate the page's bindings answer does not name waits for a fresh
+  // read of them before it reads as declaring no screen (cinatra#3470).
+  const freshReadGateId =
+    effectiveHitlContext !== null && !isSetupGateTaskId(effectiveHitlContext.reviewTaskId)
+      ? effectiveHitlContext.xRenderer
+      : null;
+  useEffect(() => {
+    requestFreshRendererBindingRead(freshReadGateId);
+  }, [freshReadGateId, rendererBindings]);
 
   // THE BADGE READS THE RUN'S OWN MOMENT (cinatra#2930, epic #2926 W3).
   //

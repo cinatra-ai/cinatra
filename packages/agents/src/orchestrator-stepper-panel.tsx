@@ -158,6 +158,7 @@ import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import {
   continueAwaitsAPick,
   fieldRendererRegistry,
+  requestFreshRendererBindingRead,
   runtimeRendererBindingsLoad,
   subscribeRuntimeRendererBindings,
   wholeAnswerStageProps,
@@ -970,6 +971,11 @@ function HitlApprovalCard({
   void _xr;
 
   const isMidRunHitl = classifyMidRunHitl(interruptContext.xRenderer);
+  // A gate the page's bindings answer does not name waits for a fresh read of
+  // them before it reads as declaring no screen (cinatra#3470).
+  useEffect(() => {
+    requestFreshRendererBindingRead(interruptContext.xRenderer);
+  }, [interruptContext.xRenderer, rendererBindings]);
   // Narrower classifier than isMidRunHitl: matches output renderers only,
   // excluding input forms. Drives the `data-hitl-output` attribute on the
   // HitlApprovalCard root Card element, which AgentPageLayout's outer wrapper

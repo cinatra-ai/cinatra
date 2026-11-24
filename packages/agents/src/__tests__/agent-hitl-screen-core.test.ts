@@ -34,6 +34,13 @@ vi.mock("../field-renderer-bindings.server", () => ({
   getMergedFieldRendererBindings: () => mergedBindings(),
   isRefusedDeclaredScreen: (id: string) =>
     !mergedBindings().some((b) => (b as { id?: string }).id === id) && refusedScreenIds().includes(id),
+  // The gate's own read: its binding, or whether its declaration was refused.
+  lookupFieldRendererBinding: (id: string) => {
+    const binding = mergedBindings().find((b) => (b as { id?: string }).id === id);
+    return { binding, refused: binding === undefined && refusedScreenIds().includes(id) };
+  },
+  // Every fixture binding here names a kind the host draws.
+  isUndrawableDeclaredScreen: () => false,
 }));
 
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "../agent-builder-ids";
