@@ -1676,6 +1676,50 @@ export function collectPublishRows(
   return { ok: true, rows };
 }
 
+// cinatra#4762: the host routes that check a publishing call when it is made (publishCallAllowed: the decision is
+// released and the review fence still holds). WayFlow calls any other URL itself, with no check, so a call made by a
+// publishing step must go to one of these. Only the exact template form counts: the loader sends the run's token and
+// the step's signature only to the CINATRA_BASE_URL host, and a host route outside this list does not check the call.
+const PUBLISH_CALL_ROUTES = new Set(["{{CINATRA_BASE_URL}}/api/llm-bridge", "{{CINATRA_BASE_URL}}/api/agents/passthrough"]);
+
+/** Every component of a publishing step that carries a `url` (the step itself, and each component inside it, a subflow
+ *  its `$component_ref` names included, resolved in the nearest enclosing `$referenced_components` first) must name a
+ *  PUBLISH_CALL_ROUTES route; any other value refuses the compile. The error names the node id only, never the URL. */
+export function checkPublishingCallRoutes(
+  parsed: Record<string, unknown>,
+  publishingSteps: readonly string[],
+): { ok: true } | { ok: false; error: string } {
+  type Scope = Record<string, unknown>;
+  const rootRefs = (parsed.$referenced_components as Scope | undefined) ?? {};
+  for (const step of publishingSteps) {
+    const seen = new Set<object>();
+    const stack: Array<[unknown, Scope[]]> = [[rootRefs[step], [rootRefs]]];
+    while (stack.length > 0) {
+      const [value, outer] = stack.pop()!;
+      if (!value || typeof value !== "object" || seen.has(value)) continue;
+      seen.add(value);
+      if (Array.isArray(value)) {
+        for (const item of value) stack.push([item, outer]);
+        continue;
+      }
+      const comp = value as Record<string, unknown>;
+      const own = comp.$referenced_components;
+      const scopes = own && typeof own === "object" && !Array.isArray(own) ? [own as Scope, ...outer] : outer;
+      if (typeof comp.component_type === "string" && hasOwn(comp, "url") && !PUBLISH_CALL_ROUTES.has(comp.url as string)) {
+        const who = typeof comp.id === "string" ? comp.id : step;
+        return { ok: false, error: `PUBLISH_CALL_UNCHECKED: node ${quoteNodeId(who)} of publishing step ${quoteNodeId(step)} calls a URL that is not the host's model bridge or passthrough, so its call would skip the publish check` };
+      }
+      if (typeof comp.$component_ref === "string") {
+        const ref = comp.$component_ref;
+        const scope = scopes.find((s) => hasOwn(s, ref));
+        if (scope) stack.push([scope[ref], scopes]);
+      }
+      for (const child of Object.values(comp)) stack.push([child, scopes]);
+    }
+  }
+  return { ok: true };
+}
+
 // ---------------------------------------------------------------------------
 // Main compile entry point
 // ---------------------------------------------------------------------------
@@ -1791,6 +1835,10 @@ export async function compileOasAgentJson(opts: {
   const publishRows = collectPublishRows(parsed, publishing.steps);
   if (!publishRows.ok) {
     return { ok: false, error: publishRows.error };
+  }
+  const publishRoutes = checkPublishingCallRoutes(parsed, publishing.steps);
+  if (!publishRoutes.ok) {
+    return { ok: false, error: publishRoutes.error };
   }
 
   // Fan out `metadata.cinatra.llm` to every

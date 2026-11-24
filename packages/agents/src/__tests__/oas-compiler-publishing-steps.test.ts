@@ -20,7 +20,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { collectPublishingSteps, compileOasAgentJson, __resetRegistryCacheForTests } from "../oas-compiler";
+import { checkPublishingCallRoutes, collectPublishingSteps, compileOasAgentJson, __resetRegistryCacheForTests } from "../oas-compiler";
 
 type Node = Record<string, unknown>;
 
@@ -29,7 +29,8 @@ function apiNode(id: string, cinatra?: Record<string, unknown>, extra: Node = {}
     component_type: "ApiNode",
     id,
     name: id,
-    url: `https://example.invalid/${id}`,
+    // A publishing node calls the host's model bridge, where its call is checked (cinatra#4762).
+    url: cinatra?.publishes === true ? "{{CINATRA_BASE_URL}}/api/llm-bridge" : `https://example.invalid/${id}`,
     http_method: "POST",
     data: {},
     outputs: [{ title: `${id}_out`, type: "string" }],
@@ -466,5 +467,45 @@ describe("cinatra#4150 — the error texts name the field and the node id, never
   it("an inline subflow with no id is named as such", () => {
     const doc = { nodes: [{ $component_ref: "top" }], $referenced_components: { top: { component_type: "FlowNode", id: "top", subflow: { component_type: "Flow", metadata: { cinatra: { publishes: "x" } } } } } };
     expect(collectPublishingSteps(doc)).toEqual({ ok: false, error: expect.stringMatching(/^PUBLISHES_MALFORMED: an inline subflow declares /) });
+  });
+});
+
+describe("cinatra#4762 — a publishing step calls only the host routes that check the call", () => {
+  const publishingSubflow = (url: string) => {
+    const sub = withSubflow([{ ...apiNode("inner_write"), url }]);
+    sub.middle[0]!.metadata = { cinatra: { publishes: true } };
+    return buildFlow(sub);
+  };
+
+  // red-first-expect: expected true to be false
+  it("a publishing ApiNode that calls another host is refused, and the error names the node, never the URL", async () => {
+    const error = await compileError(buildFlow({ middle: [{ ...apiNode("publish", { publishes: true }), url: "https://api.example.invalid/v2/posts" }] }));
+    expect(error).toMatch(/^PUBLISH_CALL_UNCHECKED: node "publish" of publishing step "publish" /);
+    expect(error).not.toContain("example.invalid");
+  });
+
+  // red-first-expect: expected true to be false
+  it("a host route that does not check the call, or the route's path on another host, is refused too", async () => {
+    for (const url of ["{{CINATRA_BASE_URL}}/api/context-resolve", "https://elsewhere.example.invalid/api/llm-bridge", "/api/llm-bridge", "{{CINATRA_BASE_URL}}/api/agents/passthrough?x=1", 42]) {
+      expect(await compileError(buildFlow({ middle: [{ ...apiNode("publish", { publishes: true }), url }] }))).toMatch(/^PUBLISH_CALL_UNCHECKED: /);
+    }
+  });
+
+  // red-first-expect: expected true to be false
+  it("a call inside a publishing FlowNode's subflow that goes to another host is refused", async () => {
+    expect(await compileError(publishingSubflow("https://api.example.invalid/v2/posts"))).toMatch(/^PUBLISH_CALL_UNCHECKED: node "inner_write" of publishing step "sub" /);
+  });
+
+  // red-first-expect: checkPublishingCallRoutes is not a function
+  it("the model bridge and the passthrough pass, at the top level and inside a publishing subflow", async () => {
+    expect(await publishingStepsOf(publishingSubflow("{{CINATRA_BASE_URL}}/api/llm-bridge"))).toEqual(["sub"]);
+    for (const url of ["{{CINATRA_BASE_URL}}/api/llm-bridge", "{{CINATRA_BASE_URL}}/api/agents/passthrough"]) {
+      expect(checkPublishingCallRoutes(buildFlow({ middle: [{ ...apiNode("publish", { publishes: true }), url }] }), ["publish"])).toEqual({ ok: true });
+      expect(checkPublishingCallRoutes(publishingSubflow(url), ["sub"])).toEqual({ ok: true });
+    }
+  });
+
+  it("a node that does not publish may still call another host", async () => {
+    expect(await publishingStepsOf(buildFlow({ middle: [apiNode("draft"), apiNode("publish", { publishes: true })] }))).toEqual(["publish"]);
   });
 });
