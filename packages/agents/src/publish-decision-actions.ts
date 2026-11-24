@@ -555,9 +555,11 @@ export async function approvePublishDecision(input: DecideInput): Promise<Publis
       // the release commits, where the call-site check (publishCallAllowed) reads the fence again. A review of the
       // attempt raised or settled otherwise since the park refuses it too. The claim is given back and the decision
       // stays as it is; nothing is sent.
+      // A decision with no generation (written by code older than the column) is the current attempt's, as the store reads
+      // it (CURRENT_ATTEMPT): it is approved under the run's own generation, never read as attempt 0.
       const generation = run.resetGeneration ?? 0;
       const answer = await withRunRowLock(run.id, async (tx, locked) => {
-        if (locked?.resetGeneration !== generation || (target.runGeneration ?? 0) !== generation ||
+        if (locked?.resetGeneration !== generation || (target.runGeneration ?? generation) !== generation ||
           !(await reviewFenceHolds({ runId: run.id, orgId: run.orgId, generation, executor: tx }))) return null;
         return open ? decide(open.id, { from: "parked", to: "released", actor: deciderId }, tx) : { outcome: "won" as const };
       });

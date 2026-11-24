@@ -540,6 +540,16 @@ describe("the review fence, read again at Publish (cinatra#4762)", () => {
     expectNothingReleased();
   });
 
+  it("a decision written with no generation is the current attempt's, and is approved under the run's own generation", async () => {
+    storeMock.readAgentRunById.mockResolvedValue(run({ resetGeneration: 1 }));
+    decisions.readOpenDecisionForRun.mockResolvedValue(decision({ runGeneration: null }));
+    decisions.withRunRowLock.mockImplementationOnce(async (_runId: string, fn: (tx: unknown, run: unknown) => Promise<unknown>) =>
+      fn(TX, { orgId: "org-1", resetGeneration: 1 }));
+    reviewSeam.listReviews.mockResolvedValue([{ ...APPROVED_REVIEW, runGeneration: 1 }]);
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: true });
+    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "released", actor: "user-a" }, TX);
+  });
+
   // red-first-expect: expected { ok: true, resumed: true } to deeply equal { ok: false, …(1) }
   it("the release is written in the transaction that reads the fence under the run row's lock, so an output in flight is seen", async () => {
     // A writer of the attempt inserted an output that commits before the lock is granted: only the reads made in the
