@@ -226,6 +226,21 @@ export default defineConfig({
       dependencies: ["setup"],
     },
     {
+      // Item 9 of cinatra#3080: the review floor pressed in a browser on a real
+      // gate of the no-LLM marked review gate fixture, on the review page and
+      // on the chat card, with the outcome read back from the store. Needs the
+      // fixture staged into extensions/ before the server and the WayFlow
+      // runtime boot; FAILS (no skip) when its template is not registered.
+      // Depends on `setup` (auth) ONLY.
+      name: "review-floor-browser",
+      testMatch: /review-floor-browser\.spec\.ts/,
+      use: {
+        ...desktopChrome,
+        storageState: suitePath("agents-run", ".auth/state.json"),
+      },
+      dependencies: ["setup"],
+    },
+    {
       // Item 7 of cinatra#3487: on a booted instance, with the review screen of
       // a run active, the run window's tool manifest equals the chat composer's,
       // both read from GET /api/assistants/chat/tool-manifest. The run is named
