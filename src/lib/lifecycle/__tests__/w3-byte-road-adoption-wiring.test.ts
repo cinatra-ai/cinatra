@@ -79,6 +79,22 @@ describe("wave 3 — the byte capability finally has a caller", () => {
   });
 });
 
+describe("wave 3 — the CMS picture pair's broker minter has no caller", () => {
+  // red-first-expect: expected [ Array(1) ] to deeply equal []
+  it("is called nowhere in the product tree", () => {
+    expect(callersOf("buildBrokerCapturePair")).toEqual([]);
+  });
+
+  // red-first-expect: not to contain 'buildBrokerCapturePair'
+  it("is not reached from the review surface loader", () => {
+    const roads = readFileSync(
+      path.join(ROOT, "src/app/artifacts/[id]/review-surface-roads.ts"),
+      "utf8",
+    );
+    expect(roads).not.toContain("buildBrokerCapturePair");
+  });
+});
+
 describe("wave 3 — the three browser fetchers are handed their content", () => {
   it("the review card's props builder reaches the content channel instead of naming it unwired", () => {
     const roads = readFileSync(

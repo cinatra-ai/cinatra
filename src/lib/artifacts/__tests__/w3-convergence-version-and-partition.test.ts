@@ -196,3 +196,15 @@ describe("wave 3 — a capped read must not lie about the work's size", () => {
     expect(projection.truncated).toBe(false);
   });
 });
+
+describe("wave 3 — the review ports build no capture pair of their own", () => {
+  // red-first-expect: not to contain 'roads?.capturePair'
+  it("names neither the surface road's pair builder nor the repair pair reader", () => {
+    // A pinned capture pair is not drawn on any review surface any more
+    // (cinatra#3862 leg 8), so the ports must not choose between the road's
+    // pair builder and the repair pair reader at all.
+    const source = repoFile("src/app/artifacts/[id]/review-gate-ports.ts");
+    expect(source).not.toContain("roads?.capturePair");
+    expect(source).not.toContain("loadPinnedRepairPair");
+  });
+});

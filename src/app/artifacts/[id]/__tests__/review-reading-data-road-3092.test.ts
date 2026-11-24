@@ -390,6 +390,26 @@ describe("(e) the surface loader sets the reading from the gate", () => {
     expect(image.review).toEqual({ reading: "continued", openLive: "/teams/t-1/dashboards/d-1" });
   });
 
+  // cinatra#3862 leg 8: a pinned capture is not drawn on any surface, so the
+  // loader hands each target its identity and its display, and starts no other
+  // read beside them.
+  // red-first-expect: to deeply equal [ 'prepared', 'target' ]
+  it("hands each target its identity and its display, and nothing beside them", async () => {
+    wireGate("pending", null);
+    const surface = await loadReviewGateSurface({
+      runId: RUN,
+      reviewTaskId: TASK,
+      actorCtx: { actor: { actorType: "human", userId: "u" } as never, orgId: ORG },
+      roads: { buildContent: stubContent, dataRoad: SESSION_ROAD } as never,
+    });
+    expect(surface.kind).toBe("ready");
+    const targets = (surface as { targets: object[] }).targets;
+    expect(targets).toHaveLength(2);
+    for (const stream of targets) {
+      expect(Object.keys(stream).sort()).toEqual(["prepared", "target"]);
+    }
+  });
+
   // No reading means no review stands, and a display then offers the live link.
   it.each(["reject", "comment"])("a gate resolved with %s hands its targets the pending reading", async (disposition) => {
     wireGate("resolved", disposition);
