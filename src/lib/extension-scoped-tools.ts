@@ -527,7 +527,7 @@ async function runExtensionTool(
   });
   trail.verifiedStepId = runField(run, "verifiedStepId") ?? null;
   trail.stepRead = true;
-  const context = origin.kind === "child" ? origin.context : runContext;
+  const context = origin.kind === "parent" ? runContext : origin.context;
   trail.codePackage = context.packageName;
   trail.codeInstallId = origin.kind === "child" ? origin.codeInstallId : null;
   // Every audit event the ports write names whose code made the call (2.7).
@@ -564,7 +564,7 @@ async function runExtensionTool(
     cinatra: context.cinatra,
     request: input.input,
     ports,
-    ...(origin.kind === "child" && origin.install !== null ? { install: origin.install } : {}),
+    ...(origin.kind === "child" ? { install: origin.install } : {}),
   });
 }
 

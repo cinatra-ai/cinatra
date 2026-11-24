@@ -77,12 +77,13 @@ describe.skipIf(!HAS_TREE && !REQUIRE_EXTENSIONS)(
         expect(satisfiesConstraint(version, edges[0].versionConstraint)).toBe(true);
       });
 
-      it(`runs ${child}'s own brand_voice_text tool for the pipeline's ${step} step`, async () => {
+      it(`resolves the pipeline's ${step} step to ${child}'s own brand_voice_text tool`, async () => {
         const deps = {
           deriveDependentInstallId: vi.fn(async () => ({ kind: "none" as const })),
           isDevelopmentMode: vi.fn(() => true),
           resolveDevelopmentRoot: vi.fn(sourceRoot),
           readInstalledExtensionById: vi.fn(async () => null),
+          readInstallRecordRows: vi.fn(async () => []),
         } satisfies ExtensionToolOriginDeps;
         const origin = await resolveExtensionToolOrigin(
           {
@@ -95,10 +96,8 @@ describe.skipIf(!HAS_TREE && !REQUIRE_EXTENSIONS)(
           },
           deps,
         );
-        expect(origin.kind).toBe("child");
-        if (origin.kind !== "child") return;
-        expect(origin.install).toBeNull();
-        expect(origin.codeInstallId).toBeNull();
+        expect(origin.kind).toBe("development-child");
+        if (origin.kind !== "development-child") return;
         expect(origin.context.packageName).toBe(child);
         expect(origin.context.packageVersion).toBe(version);
         const tools = (origin.context.cinatra as { tools?: { name: string; embeddable?: boolean }[] }).tools ?? [];

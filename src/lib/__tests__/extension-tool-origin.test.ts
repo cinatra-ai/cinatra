@@ -136,7 +136,6 @@ type World = {
   flows: Record<string, unknown>;
   dev: boolean;
   devRoot: string | { realRoot: string } | null;
-  devVersions: Record<string, string | null>;
   derived: { kind: "none" } | { kind: "derived"; id: string } | { kind: "ambiguous"; message: string };
 };
 
@@ -155,14 +154,12 @@ function makeWorld(edit: (w: World) => void = () => {}) {
     roots: { [PARENT_ID]: PARENT_ROOT, [CHILD_ID]: CHILD_ROOT },
     manifests: {
       [PARENT_ROOT]: { name: PARENT, version: PARENT_VERSION, cinatra: parentCinatra() },
-      [DEV_ROOT]: { name: PARENT, version: PARENT_VERSION, cinatra: parentCinatra() },
       [CHILD_ROOT]: { name: CHILD, version: CHILD_VERSION,
         cinatra: { tools: [{ name: TOOL, module: "./cinatra/tools/c.mjs", embeddable: true }] } },
     },
     flows: { [PARENT_ROOT]: parentDoc(), [CHILD_ROOT]: childDoc(), [DEV_ROOT]: parentDoc() },
     dev: false,
     devRoot: DEV_ROOT,
-    devVersions: {},
     derived: { kind: "derived", id: PARENT_ID },
   };
   edit(w);
@@ -182,7 +179,6 @@ function makeWorld(edit: (w: World) => void = () => {}) {
     deriveDependentInstallId: vi.fn(async () => w.derived),
     isDevelopmentMode: vi.fn(() => w.dev),
     resolveDevelopmentRoot: vi.fn(async () => w.devRoot),
-    readDevelopmentVersion: vi.fn(async (name: string) => w.devVersions[name] ?? null),
   } satisfies ExtensionToolOriginDeps;
   return { w, deps };
 }
@@ -314,8 +310,8 @@ describe("the embedded child's road", () => {
       packageVersion: CHILD_VERSION,
       cinatra: world.w.manifests[CHILD_ROOT]!.cinatra,
     });
-    expect(origin.install!.installId).toBe(CHILD_ID);
-    expect(origin.install!.digest).toBe("digest-child");
+    expect(origin.install.installId).toBe(CHILD_ID);
+    expect(origin.install.digest).toBe("digest-child");
     // The non-default install the edge names, never the package's default one.
     expect(world.deps.readFlowDocument).toHaveBeenCalledWith(CHILD_ROOT);
     expect(world.deps.readInstalledExtensionById).not.toHaveBeenCalledWith(CHILD_DEFAULT_ID);
@@ -334,10 +330,10 @@ describe("the embedded child's road", () => {
     const world = makeWorld();
     const origin = await resolve(world);
     if (origin.kind !== "child") throw new Error("expected the child road");
-    expect(await origin.install!.stillBound!()).toBe(true);
+    expect(await origin.install.stillBound!()).toBe(true);
     world.w.rows[PARENT_ID] = installRow({ id: PARENT_ID, packageName: PARENT, version: PARENT_VERSION,
       dependencyEdges: [childEdge({ resolvedInstallId: CHILD_DEFAULT_ID })] });
-    expect(await origin.install!.stillBound!()).toBe(false);
+    expect(await origin.install.stillBound!()).toBe(false);
   });
 
   // The parent installation that authorized the flow, read again just before the import: any change is a
@@ -385,9 +381,9 @@ describe("the embedded child's road", () => {
       const world = makeWorld();
       const origin = await resolve(world);
       if (origin.kind !== "child") throw new Error("expected the child road");
-      expect(await origin.install!.stillBound!()).toBe(true);
+      expect(await origin.install.stillBound!()).toBe(true);
       change(world.w);
-      expect(await origin.install!.stillBound!()).toBe(false);
+      expect(await origin.install.stillBound!()).toBe(false);
     });
   }
 
@@ -450,7 +446,7 @@ describe("the parent installation", () => {
     expect(world.deps.resolveDevelopmentRoot).not.toHaveBeenCalled();
   });
 
-  it("in development with no canonical row: a parent step proceeds, a child with no source is not materialized", async () => {
+  it("in development with no canonical row: a parent step proceeds, a child step is not materialized", async () => {
     const world = makeWorld((w) => {
       w.derived = { kind: "none" };
       w.dev = true;

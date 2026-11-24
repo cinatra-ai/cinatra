@@ -24,7 +24,8 @@ import "server-only";
 // no install row, edge or anchor to bind. There, and only there, the parent and
 // the child are read by name off the same name-and-version root road, the child
 // at the version its source carries, which must meet the parent's own declared
-// range. Every other check above holds unchanged on that road.
+// range. Every other check above holds unchanged on that road, and a child the
+// canonical store holds a non-live row for (archived, uninstalled) is refused.
 //
 // The step is never read from the request: only `verifiedStepId`, which the
 // route verified from the runtime's signed pair. Each refusal is a fixed
@@ -45,6 +46,7 @@ import {
   type InstallBindingDeps,
 } from "@/lib/extension-tool-install-binding";
 import type { DerivedDependentInstallId } from "@/lib/extension-edge-bound-serving";
+import { probeInstallRecord, type InstallRecordHealDeps } from "@/lib/extension-install-anchor";
 import {
   resolvePinnedPackageRoot,
   type ExactInstallBinding,
@@ -80,8 +82,10 @@ export class ExtensionToolOriginRefusal extends Error {
 export type ExtensionToolOrigin =
   /** The run package's own code, on today's road. */
   | { kind: "parent" }
-  /** The embedded child's code, from the exact child installation (null on the development road). */
-  | { kind: "child"; context: RunExtensionContext; install: ExactInstallBinding | null; codeInstallId: string | null };
+  /** The embedded child's code, from the exact child installation. */
+  | { kind: "child"; context: RunExtensionContext; install: ExactInstallBinding; codeInstallId: string }
+  /** The embedded child's code on a development installation: its source, by name and version, with no install. */
+  | { kind: "development-child"; context: RunExtensionContext };
 
 export type ExtensionToolOriginRun = {
   id: string;
@@ -102,6 +106,8 @@ export type ExtensionToolOriginDeps = InstallBindingDeps & {
   resolveDevelopmentRoot?: PinnedPackageRootResolver;
   /** The version a development installation's source of a package carries; null when it has none. */
   readDevelopmentVersion?: (packageName: string) => Promise<string | null>;
+  /** The canonical install rows of a package, read for a development child's lifecycle. */
+  readInstallRecordRows?: InstallRecordHealDeps["readRows"];
 };
 
 const refuse = (code: ExtensionToolOriginCode): never => {
@@ -379,21 +385,29 @@ export async function resolveExtensionToolOrigin(
     const g = graphOf(await guarded("flow-document", () => readFlow(rootDir)), "");
     const { step, label } = classify(g, stepId, context.packageName);
     if (label === null) return { kind: "parent" };
-    const parentCinatra = await developmentManifest(rootDir, context.packageName, context.packageVersion, "parent");
-    const dependency = agentDependencyOf(parentCinatra, label);
     const childVersion = await guarded("development-version", () => readDevelopmentVersion(label));
     if (!nonEmpty(childVersion)) return refuse("child-not-materialized");
+    const parentCinatra = await developmentManifest(rootDir, context.packageName, context.packageVersion, "parent");
+    const dependency = agentDependencyOf(parentCinatra, label);
     if (!satisfiesConstraint(childVersion, dependency.versionConstraint)) return refuse("edge-constraint-unmet");
+    // A development child has no install row of its own. Where the canonical store does hold one for it, that
+    // row's lifecycle governs, as on the store road: an archived or uninstalled child is never run from source.
+    const lifecycle = await probeInstallRecord(
+      label,
+      deps.readInstallRecordRows ? { readRows: deps.readInstallRecordRows } : {},
+      { orgId: run.orgId, expectKind: "agent" },
+    );
+    if (lifecycle.state === "unreadable") {
+      logFailure("[extension_tool] an origin read failed", { read: "install-record" }, new Error(lifecycle.reason));
+      return refuse("origin-unreadable");
+    }
+    if (lifecycle.state === "mismatched") return refuse("edge-target-mismatch");
+    if (lifecycle.state !== "absent" && lifecycle.state !== "live") return refuse("edge-not-live");
     const childRoot = await developmentRootOf(label, childVersion);
     if (childRoot === null) return refuse("child-not-materialized");
     const childCinatra = await developmentManifest(childRoot, label, childVersion, "child");
     await proveChildTool({ step, stepId, label, childRoot, childCinatra, request: input.request }, readFlow);
-    return {
-      kind: "child",
-      codeInstallId: null,
-      context: { packageName: label, packageVersion: childVersion, cinatra: childCinatra },
-      install: null,
-    };
+    return { kind: "development-child", context: { packageName: label, packageVersion: childVersion, cinatra: childCinatra } };
   };
 
   let installId = nonEmpty(run.dependentInstallId) ? run.dependentInstallId : null;

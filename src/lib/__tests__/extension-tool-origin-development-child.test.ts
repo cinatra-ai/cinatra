@@ -16,6 +16,8 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+import type { CanonicalRowView } from "@/lib/extension-install-anchor";
+
 import {
   ExtensionToolOriginRefusal,
   resolveExtensionToolOrigin,
@@ -79,6 +81,8 @@ type World = {
   roots: Record<string, string | null>;
   manifests: Record<string, Doc>;
   flows: Record<string, unknown>;
+  /** The canonical install rows per package; none in the normal development case. */
+  records: Record<string, CanonicalRowView[] | Error>;
 };
 
 function makeWorld(edit: (w: World) => void = () => {}) {
@@ -93,6 +97,7 @@ function makeWorld(edit: (w: World) => void = () => {}) {
         cinatra: { tools: [{ name: TOOL, module: "./cinatra/tools/c.mjs", embeddable: true }] } },
     },
     flows: { [PARENT_SRC]: parentFlow(), [CHILD_SRC]: childFlow() },
+    records: {},
   };
   edit(w);
   const deps = {
@@ -113,6 +118,11 @@ function makeWorld(edit: (w: World) => void = () => {}) {
       return w.flows[root];
     }),
     readInstalledExtensionById: vi.fn(async () => null),
+    readInstallRecordRows: vi.fn(async (name: string) => {
+      const rows = w.records[name] ?? [];
+      if (rows instanceof Error) throw rows;
+      return rows;
+    }),
   } satisfies ExtensionToolOriginDeps;
   return { w, deps };
 }
@@ -137,14 +147,12 @@ async function refusedWith(p: Promise<unknown>, code: string) {
 }
 
 describe("an embedded child step on a development installation", () => {
-  it("runs the child's own tool, read from the child's source at its own version", async () => {
+  it("resolves to the child's own tool, read from the child's source at its own version", async () => {
     // red-first-expect: child-not-materialized
     const world = makeWorld();
     const origin = await resolve(world);
     expect(origin).toEqual({
-      kind: "child",
-      codeInstallId: null,
-      install: null,
+      kind: "development-child",
       context: { packageName: CHILD, packageVersion: CHILD_VERSION,
         cinatra: { tools: [{ name: TOOL, module: "./cinatra/tools/c.mjs", embeddable: true }] } },
     });
@@ -176,7 +184,7 @@ describe("an embedded child step on a development installation", () => {
         (w.manifests[PARENT_SRC].cinatra as Doc).dependencies = dependencies;
       });
       await refusedWith(resolve(world), code);
-      expect(world.deps.readDevelopmentVersion).not.toHaveBeenCalled();
+      expect(world.deps.resolveDevelopmentRoot).not.toHaveBeenCalledWith(expect.objectContaining({ packageName: CHILD }));
     }
   });
 
@@ -227,4 +235,38 @@ describe("an embedded child step on a development installation", () => {
       w.manifests[CHILD_SRC].cinatra = { tools: [] };
     })), "child-tool-undeclared");
   });
+
+  it("refuses a child the canonical store holds archived or otherwise not live, before its source is read", async () => {
+    // red-first-expect: edge-not-live
+    for (const status of ["archived", "uninstalled-tombstone"]) {
+      const world = makeWorld((w) => {
+        w.records[CHILD] = [row({ status })];
+      });
+      await refusedWith(resolve(world), "edge-not-live");
+      expect(world.deps.resolveDevelopmentRoot).not.toHaveBeenCalledWith(expect.objectContaining({ packageName: CHILD }));
+      expect(world.deps.readFlowDocument).not.toHaveBeenCalledWith(CHILD_SRC);
+    }
+  });
+
+  it("admits a child with no install record, and a child whose record is live", async () => {
+    for (const records of [[], [row({ status: "active" })], [row({ status: "locked", organizationId: ORG })]]) {
+      const world = makeWorld((w) => {
+        w.records[CHILD] = records;
+      });
+      expect((await resolve(world)).kind).toBe("development-child");
+      expect(world.deps.readInstallRecordRows).toHaveBeenCalledWith(CHILD);
+    }
+  });
+
+  it("refuses when the child's install record cannot be read, or is not an agent's", async () => {
+    // red-first-expect: origin-unreadable
+    await refusedWith(resolve(makeWorld((w) => { w.records[CHILD] = new Error("store down"); })), "origin-unreadable");
+    await refusedWith(resolve(makeWorld((w) => { w.records[CHILD] = [row({ kind: "artifact" })]; })),
+      "edge-target-mismatch");
+  });
 });
+
+function row(over: Partial<CanonicalRowView> = {}): CanonicalRowView {
+  return { id: "install-child", status: "active", organizationId: null, kind: "agent", isDefault: true,
+    version: CHILD_VERSION, ...over };
+}

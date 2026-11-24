@@ -140,8 +140,8 @@ describe("dispatchExtensionScopedTool — the origin of an extension_tool call",
   });
 
   it("runs a development child step's tool by the child's name and version, with no install binding", async () => {
-    // red-first-expect: to be called with arguments
-    resolveExtensionToolOrigin.mockResolvedValue({ ...CHILD_ORIGIN, codeInstallId: null, install: null });
+    // red-first-expect: to deeply equal
+    resolveExtensionToolOrigin.mockResolvedValue({ kind: "development-child", context: CHILD_ORIGIN.context });
     loadDeclaredToolModule.mockResolvedValue({ extensionTool: () => ({ ran: "child" }) });
     const { dispatchExtensionScopedTool } = await import("@/lib/extension-scoped-tools");
     const outcome = await dispatchExtensionScopedTool({
