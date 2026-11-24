@@ -56,6 +56,10 @@ import {
   // cinatra#2762: which implementation is in service. Descriptive only —
   // co-located in that registry so it costs no new route-graph module.
   recordServingImplementation,
+  // cinatra#3745: the loaded identity of a verified install.
+  recordLoadedExtensionIdentity,
+  retireLoadedExtensionIdentity,
+  type LoadedExtensionIdentity,
 } from "@/lib/extension-capabilities-registry";
 
 /**
@@ -543,6 +547,9 @@ export async function loadRuntimePackageExtensions(
   // object to makeContext and to onRegisterSettled (typed LoaderRecord there —
   // a structural supertype of the store record, hence the `object` key type).
   const pendingSinks = new Map<object, VersionKeyedRegistrationSink>();
+  // cinatra#3745: the loaded identity each attempt stamped, by the same record
+  // object identity, so the settle retires only its own stamp.
+  const stampedIdentities = new Map<object, LoadedExtensionIdentity>();
 
   // cinatra#2762 (round-5 convergence): the version of the DEFAULT record whose
   // register pass ACTUALLY SETTLED SUCCESSFULLY, captured at the settle hook
@@ -632,8 +639,28 @@ export async function loadRuntimePackageExtensions(
       // the edge-bound consume seams must bind this row's edges, never a
       // same-shape sibling's). Absent on legacy anchors → identity-less
       // consult semantics (composite alias / package-level derivation).
-      const installId =
-        anchorByIdentity.get(identityKey(packageName, record.version))?.installId ?? null;
+      const anchor = anchorByIdentity.get(identityKey(packageName, record.version));
+      const installId = anchor?.installId ?? null;
+      // cinatra#3745: the loaded identity of this verified install (the driver
+      // verified the bytes against this anchor before the import). Only an
+      // anchor with an install id and a digest stamps one; any other load keeps
+      // none, so an outward run action of it is refused. The stamp is kept
+      // per attempt, so the settle below retires only this attempt's stamp.
+      if (anchor?.installId && anchor.digest && record.version) {
+        try {
+          stampedIdentities.set(
+            record,
+            recordLoadedExtensionIdentity({
+              packageName,
+              version: record.version,
+              installId: anchor.installId,
+              digest: anchor.digest,
+            }),
+          );
+        } catch {
+          // A malformed field stamps nothing: this attempt loads unpinned.
+        }
+      }
       if (record.isDefault === false) {
         let sink: VersionKeyedRegistrationSink | undefined;
         if (record.version) {
@@ -667,6 +694,17 @@ export async function loadRuntimePackageExtensions(
       // must not claim a half-activated version is serving.
       if (registered && record.isDefault !== false) {
         servingVersionByPackage.set(record.packageName, record.version ?? null);
+      }
+      // cinatra#3745: a failed attempt retires only the identity it stamped
+      // (compare-and-delete), never a newer one of a concurrent attempt. A
+      // successful load without a stamp now owns the version unpinned, so any
+      // older identity is retired and no owner is attributed to that install.
+      const stamped = stampedIdentities.get(record);
+      stampedIdentities.delete(record);
+      if (!registered) {
+        if (stamped) retireLoadedExtensionIdentity(record.packageName, record.version, stamped);
+      } else if (!stamped) {
+        retireLoadedExtensionIdentity(record.packageName, record.version);
       }
       const sink = pendingSinks.get(record);
       if (!sink) return;
