@@ -41,8 +41,8 @@ import { and, eq } from "drizzle-orm";
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 import { pgSchema, text } from "drizzle-orm/pg-core";
 
-import { db } from "./db";
-import { agentRuns, agentTemplates } from "./schema";
+import { agentBuilderPool, db } from "./db";
+import { agentRuns, agentTemplates, lifecycleRepair } from "./schema";
 import {
   coreRepairsObjectType,
   readProducingStepNoteInput,
@@ -65,10 +65,16 @@ import {
   isDeclaredReviewLeg,
   isDeclaredReviewTaskId,
 } from "@/lib/artifacts/artifact-review-target";
+import { readRevisionImagePrompt } from "@/lib/artifacts/materialization-ledger";
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
 import { sessionAuthorityFromResolvedRole } from "@/lib/org-write/authority";
 import { producedEventId, type ContinuationMode } from "@/lib/lifecycle/lifecycle-produced-event";
-import { parseLifecycleConfigText, type CompiledManifestLifecycle } from "@/lib/lifecycle/lifecycle-policy";
+import {
+  parseLifecycleConfigText,
+  PICTURE_PROMPT_FINDING_ID,
+  REVIEW_NOTE_FINDING_ID,
+  type CompiledManifestLifecycle,
+} from "@/lib/lifecycle/lifecycle-policy";
 import type { ChangesRequestedRequest, RepairFinding } from "@/lib/lifecycle/lifecycle-repair";
 
 /** Re-export the entry point's result so the surface (a src-side model) can map it
@@ -79,13 +85,18 @@ export type { RecordChangesRequestedResult } from "./lifecycle-repair-store";
  * response-lost retry re-derives the identical `changes_requested` fingerprint
  * (the entry point keys the fingerprint on the idempotency key + the sorted
  * finding ids). The distinguishing datum across submits is the FEEDBACK, which the
- * idempotency key encodes below. */
-const PROMPT_WINDOW_FINDING_ID = "prompt-window";
+ * idempotency key encodes below. A Regenerate's dispatch reads the Note from
+ * this finding alone (`routeRegenerateFindings`, cinatra#4264). */
+const PROMPT_WINDOW_FINDING_ID = REVIEW_NOTE_FINDING_ID;
 
-/** The stable finding id the PICTURE PROMPT travels under (cinatra#3080 item 5).
- * Its OWN id is what makes the note and the prompt two values rather than one
- * concatenated sentence — at the store as well as on the wire. */
-const PICTURE_PROMPT_FINDING_ID = "picture-prompt";
+/* The PICTURE PROMPT travels under its own finding id (`PICTURE_PROMPT_FINDING_ID`,
+ * cinatra#3080 item 5). Its OWN id is what makes the note and the prompt two
+ * values rather than one concatenated sentence — at the store as well as on the
+ * wire. It is recorded only when the reviewed revision is a picture with a
+ * recorded prompt (`revisionRecordsAPrompt`), so a Regenerate's dispatch reads
+ * its presence as the fact that the reviewed work is a picture and gives the
+ * prompt to the step's declared input, whatever that input is called
+ * (`routeRegenerateFindings`, cinatra#4264). */
 
 /** cinatra#4245: the refusal for the step's own declared gate (`wayflow-<task>`)
  * when it does not meet every condition of a change request that ends the run's
@@ -123,8 +134,10 @@ export interface RecordReviewSurfaceChangesRequestedInput {
    * answered as a gate conflict on an already-repairing gate rather than
    * silently re-deriving the first repair.
    *
-   * Null for everything that is not a picture, and the request is then
-   * byte-identical to the one this composer built before the field existed —
+   * Kept only when the reviewed revision records the prompt it was made from
+   * (read on the server); on any other work a submitted prompt is dropped
+   * (cinatra#4264). Null for everything that is not a picture, and the
+   * request is then byte-identical to the one this composer built before the field existed —
    * the idempotency key included, so a retry that crosses the deploy boundary
    * still reconciles against its own repair.
    */
@@ -150,7 +163,8 @@ export interface RecordReviewSurfaceChangesRequestedInput {
 // SAME app schema), exactly as the orchestration store does for its own context
 // read, so this agents-package store reads `objects.type` without depending on
 // the host objects-store drizzle table.
-const appSchemaRef = pgSchema(process.env.SUPABASE_SCHEMA?.trim() ?? "cinatra");
+const APP_SCHEMA = process.env.SUPABASE_SCHEMA?.trim() ?? "cinatra";
+const appSchemaRef = pgSchema(APP_SCHEMA);
 const objectsTypeRef = appSchemaRef.table("objects", {
   id: text("id").primaryKey(),
   type: text("type").notNull(),
@@ -170,12 +184,54 @@ const materializationLedgerRef = appSchemaRef.table("artifact_materializations",
   verifiedStepId: text("verified_step_id"),
 });
 
+/** The bound of the filing-node walk across refiled successors; the dispatch's
+ * provenance read walks as far (`REGENERATE_PROVENANCE_MAX_DEPTH`). */
+const REGENERATE_FILING_WALK_MAX_DEPTH = 64;
+
+/** What a person reads when the reviewed work could not be checked for a recorded prompt. */
+const PICTURE_PROMPT_UNREADABLE = "The picture's prompt could not be checked. Nothing was sent; try Regenerate again.";
+
+/**
+ * Is the reviewed revision a picture with a recorded prompt (cinatra#4264)?
+ * True exactly when the review surface's prefill read (`readRevisionImagePrompt`,
+ * the one rule for both) returns a prompt for it, so the store keeps the
+ * picture's prompt exactly when the surface offered it, a refiled successor of
+ * an earlier Regenerate included. Read on the server, never from the request.
+ * Only a read that succeeded decides: no prompt yields false (the work is not
+ * a picture with a recorded prompt). A read fault yields null: the person's
+ * prompt is never dropped on a fault, the request is refused before anything
+ * is recorded, and a retry may succeed.
+ */
+async function revisionRecordsAPrompt(
+  orgId: string,
+  target: { artifactId: string; representationRevisionId: string },
+): Promise<boolean | null> {
+  try {
+    const prompt = await readRevisionImagePrompt(
+      { orgId, artifactId: target.artifactId, representationRevisionId: target.representationRevisionId },
+      { query: (text, values) => agentBuilderPool.query(text, values), schema: APP_SCHEMA },
+    );
+    return prompt !== null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The node that filed the reviewed revision (cinatra#3080 on cinatra#4264): the
  * runtime's signed step id on the one finalized `materialize_tool` ledger row of
  * (org, producing run, artifact, revision), read through the pure
  * `readVerifiedFilingNode`. Fail-soft toward refusal: no row, an unverified row,
  * two rows or a read fault all yield NULL, and Regenerate is then refused.
+ *
+ * A REFILED SUCCESSOR has no ledger row of its own: the repair answer was
+ * refiled onto the reviewed artifact. Like the dispatch's provenance read
+ * (`readVerifiedFilingNode` in `@/lib/artifacts/regenerate-provenance`), the
+ * read then continues at the base revision of the one `repaired` repair that
+ * names this revision as its successor, and stops with NULL on zero or two
+ * such repairs or past `REGENERATE_FILING_WALK_MAX_DEPTH` steps. So a
+ * Regenerate of a regenerated revision is admitted exactly when the dispatch
+ * can rerun the step that filed it.
  */
 async function resolveVerifiedFilingNode(
   orgId: string,
@@ -183,21 +239,42 @@ async function resolveVerifiedFilingNode(
   target: { artifactId: string; representationRevisionId: string },
 ): Promise<string | null> {
   try {
-    const rows = await db
-      .select({ verifiedStepId: materializationLedgerRef.verifiedStepId })
-      .from(materializationLedgerRef)
-      .where(
-        and(
-          eq(materializationLedgerRef.orgId, orgId),
-          eq(materializationLedgerRef.runId, producerRunId),
-          eq(materializationLedgerRef.artifactId, target.artifactId),
-          eq(materializationLedgerRef.representationRevisionId, target.representationRevisionId),
-          eq(materializationLedgerRef.path, "materialize_tool"),
-          eq(materializationLedgerRef.phase, "finalized"),
-        ),
-      )
-      .limit(2);
-    return readVerifiedFilingNode(rows.map((row) => row.verifiedStepId ?? null));
+    let at = target;
+    for (let depth = 0; depth <= REGENERATE_FILING_WALK_MAX_DEPTH; depth += 1) {
+      const rows = await db
+        .select({ verifiedStepId: materializationLedgerRef.verifiedStepId })
+        .from(materializationLedgerRef)
+        .where(
+          and(
+            eq(materializationLedgerRef.orgId, orgId),
+            eq(materializationLedgerRef.runId, producerRunId),
+            eq(materializationLedgerRef.artifactId, at.artifactId),
+            eq(materializationLedgerRef.representationRevisionId, at.representationRevisionId),
+            eq(materializationLedgerRef.path, "materialize_tool"),
+            eq(materializationLedgerRef.phase, "finalized"),
+          ),
+        )
+        .limit(2);
+      if (rows.length > 0) return readVerifiedFilingNode(rows.map((row) => row.verifiedStepId ?? null));
+      const repairs = await db
+        .select({
+          baseArtifactId: lifecycleRepair.baseArtifactId,
+          baseRepresentationRevisionId: lifecycleRepair.baseRepresentationRevisionId,
+        })
+        .from(lifecycleRepair)
+        .where(
+          and(
+            eq(lifecycleRepair.orgId, orgId),
+            eq(lifecycleRepair.status, "repaired"),
+            eq(lifecycleRepair.successorArtifactId, at.artifactId),
+            eq(lifecycleRepair.successorRepresentationRevisionId, at.representationRevisionId),
+          ),
+        )
+        .limit(2);
+      if (repairs.length !== 1) return null;
+      at = { artifactId: repairs[0].baseArtifactId, representationRevisionId: repairs[0].baseRepresentationRevisionId };
+    }
+    return null;
   } catch {
     return null;
   }
@@ -298,7 +375,7 @@ export async function recordReviewSurfaceChangesRequested(
   input: RecordReviewSurfaceChangesRequestedInput,
 ): Promise<RecordChangesRequestedResult> {
   const { runId, reviewTaskId, baseTarget, currentBaseRevisionId, feedback } = input;
-  const prompt = input.prompt?.trim() ?? "";
+  const submittedPrompt = input.prompt?.trim() ?? "";
 
   const lifecycleGate = isAutoReviewTaskId(reviewTaskId);
   if (!lifecycleGate && !isDeclaredReviewTaskId(reviewTaskId)) {
@@ -412,6 +489,18 @@ export async function recordReviewSurfaceChangesRequested(
   // own prefix (`rg:`), so it never equals a typed key whatever the words; the
   // typed key (`pw:`) is byte-identical to the one stored rows carry, so a typed
   // retry still reconciles against its own repair.
+  //
+  // THE PICTURE'S PROMPT BELONGS TO A PICTURE (cinatra#4264). A submitted
+  // prompt is kept only when the reviewed revision records the prompt it was
+  // made from; on any other work it belongs to no input of the step and is
+  // dropped here, so it is never recorded, never keyed and never sent. A
+  // request without one reads nothing more than before.
+  const recordsAPrompt = submittedPrompt.length > 0 ? await revisionRecordsAPrompt(gate.orgId, baseTarget) : false;
+  if (recordsAPrompt === null) {
+    // Nothing is recorded and the gate stays pending: the same request may be sent again.
+    return { ok: false, code: "regenerate-unavailable", error: PICTURE_PROMPT_UNREADABLE };
+  }
+  const prompt = recordsAPrompt ? submittedPrompt : "";
   const keyMaterial =
     prompt.length > 0
       ? `${gate.id} ${trimmed} ${prompt}`

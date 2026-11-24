@@ -33,6 +33,7 @@ import {
 import { autoReviewTaskId, isRepairSuccessorTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
+import { recordedRegenerateInput } from "../regenerate-segment";
 
 const TEST_SCHEMA = "cinatra_test_lifecycle_4264_b1b";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
@@ -50,6 +51,11 @@ const MEMBER_USER = "user-4264-b1b-member";
  * onto `agent_templates.lifecycle_config`) — what routes `changes_requested` to the
  * producer instead of a human. */
 const MANIFEST_REPAIR_CAPABLE = JSON.stringify({ repairCapable: true });
+/** The reviewer's words: the Note finding of the repair. */
+const FEEDBACK = "tighten the headline";
+/** The declared input a Regenerate dispatch records in its run's request. */
+const REGENERATE_RECORD = { artifactNode: "file_image", step: "image_flow", noteInput: "prompt", startOutput: "imagePrompt" };
+
 
 let outboxStore: typeof import("../lifecycle-produced-outbox-store");
 let gateStore: typeof import("../artifact-review-gate-store");
@@ -257,7 +263,7 @@ async function driveToDispatchedRepair(): Promise<RepairContext> {
       representationRevisionId: base.representationRevisionId,
     },
     currentBaseRevisionId: base.representationRevisionId,
-    feedback: "tighten the headline",
+    feedback: FEEDBACK,
   });
   expect(cr.ok).toBe(true);
   if (!cr.ok) throw new Error(`changes-request failed: ${cr.error}`);
@@ -306,8 +312,38 @@ async function landRepair(
   return rr.successorGateId;
 }
 
-async function setRegenerateIntent(repairId: string, nodeId: string) {
-  await pool(`UPDATE "${q(TEST_SCHEMA)}"."lifecycle_repair" SET regenerate_node_id=$2 WHERE id=$1`, [repairId, nodeId]);
+/**
+ * Make the dispatched repair what a real Regenerate dispatch leaves
+ * (cinatra#4264): the repair names its filing node, its findings hold the
+ * Note (the field the step takes), and its run's input params are the
+ * declared-input form the drain writes: the Note under the start output that
+ * feeds the step's declared input, and the typed request with no findings and
+ * the record of that input. The completer accepts exactly this form
+ * (`recordedRegenerateInput`) and escalates any other.
+ */
+async function modelRegenerateDispatch(ctx: RepairContext) {
+  await pool(`UPDATE "${q(TEST_SCHEMA)}"."lifecycle_repair" SET regenerate_node_id=$2 WHERE id=$1`, [
+    ctx.repairId,
+    REGENERATE_RECORD.artifactNode,
+  ]);
+  const repair = await pool(`SELECT findings FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE id=$1`, [ctx.repairId]);
+  const findings = (repair.rows[0] as { findings: unknown }).findings;
+  expect(findings).toEqual([{ id: "prompt-window", message: FEEDBACK }]);
+  const delivered = await dispatchStore.readDeliveredRepairRequest(ctx.repairRunId);
+  expect(delivered).not.toBeNull();
+  const inputParams = JSON.stringify({
+    [REGENERATE_RECORD.startOutput]: FEEDBACK,
+    lifecycleRepairRequest: { ...delivered, findings: [], regenerateInput: REGENERATE_RECORD },
+  });
+  const updated = await pool(`UPDATE "${q(TEST_SCHEMA)}"."agent_runs" SET input_params=$2 WHERE id=$1`, [
+    ctx.repairRunId,
+    inputParams,
+  ]);
+  expect(updated.rowCount).toBe(1);
+  // The form the completer reads as the run's own record of its dispatch.
+  expect(
+    recordedRegenerateInput({ regenerateNodeId: REGENERATE_RECORD.artifactNode, findings, inputParams }),
+  ).toEqual(REGENERATE_RECORD);
 }
 
 async function repairColumns(repairId: string) {
@@ -327,7 +363,7 @@ async function repairColumns(repairId: string) {
 describe.skipIf(!HAS_DB)("cinatra#4264 B1b T14: a Regenerate segment's write lands under one gate", () => {
   it("ONE GATE: the segment's own write settles under the successor gate", async () => {
     const ctx = await driveToDispatchedRepair();
-    await setRegenerateIntent(ctx.repairId, "file_image");
+    await modelRegenerateDispatch(ctx);
     // The segment's filing node wrote a NEW artifact on the repair run.
     const segmentWrite = await produce({ producerRunId: ctx.repairRunId });
     const successorRev = `rev-regenerated-${randomUUID()}`;
@@ -359,7 +395,7 @@ describe.skipIf(!HAS_DB)("cinatra#4264 B1b T14: a Regenerate segment's write lan
 
   it("CRASH: a written segment whose repair never answered stays pending and ungated", async () => {
     const ctx = await driveToDispatchedRepair();
-    await setRegenerateIntent(ctx.repairId, "file_image");
+    await modelRegenerateDispatch(ctx);
     const segmentWrite = await produce({ producerRunId: ctx.repairRunId });
 
     await runAppSweeps();

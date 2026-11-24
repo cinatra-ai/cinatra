@@ -19,11 +19,16 @@ import "server-only";
 
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 
+import { normalizeReviewTargets } from "@/lib/artifacts/artifact-review-target";
+import { encodePublishDecisionIslandRef } from "@/lib/lifecycle/lifecycle-card-ref";
+
 import type { ActorRoleHints } from "./auth-policy";
 import {
   PUBLISH_DECISION_CARD_NONE,
+  declaredPublishRowsFor,
   publishDecisionCardRows,
   type PublishDecisionCardAnswer,
+  type DrawPublishArtifactsRow,
   type PublishDecisionCardState,
   type PublishDecisionDecideOutcome,
 } from "./publish-decision-card";
@@ -94,13 +99,22 @@ async function cardStateForRun(
   // The rows the decision kept at its park: a later recompile of the template never relabels a decision. Only a row
   // older than that record (declaredRows null) falls back to the template's current rows. An own key only: a node id
   // that names an Object.prototype member reads as no declaration.
-  const byNode = template.publishRows ?? {};
-  const declared = decision.declaredRows
-    ?? (Object.prototype.hasOwnProperty.call(byNode, decision.nodeId) ? (byNode[decision.nodeId] ?? []) : []);
+  const declared = decision.declaredRows ?? declaredPublishRowsFor(template.publishRows, decision.nodeId);
+  // An artifacts row (cinatra#4150 W4 C1b) carries the island ref for THIS row of THIS decision, never a target id: the
+  // island reads the targets from the decision and proves each one was made by the run. A surfaced value that is not a
+  // target list draws the row's "could not be shown" line rather than dropping it, so no one decides on a row that
+  // vanished; so does a ref that cannot be minted. The address for a credential host is minted by its broker read.
+  const drawArtifacts: DrawPublishArtifactsRow = (row, surfaced) => {
+    const targets = normalizeReviewTargets(surfaced);
+    const ref = targets.ok
+      ? encodePublishDecisionIslandRef({ runId: run.id, decisionId: decision.id, input: row.input })
+      : null;
+    return { kind: "artifacts", label: row.label, ref, islandSrc: null };
+  };
   const common = {
     runId: run.id,
     agentName: template.name,
-    rows: publishDecisionCardRows(declared, decision.surfacedValues),
+    rows: publishDecisionCardRows(declared, decision.surfacedValues, drawArtifacts),
   };
   // A settled card names its decider. A row with none recorded, or a name read that fails, draws nothing: never an
   // anonymous card, and never a decline reason the read could not attribute.

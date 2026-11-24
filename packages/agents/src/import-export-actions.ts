@@ -42,6 +42,7 @@ import { publishAgentTemplateAndBindVersion } from "./publish-template";
 import { deriveAgentTemplateIdentityClaim } from "./agent-template-identity";
 import { logAuditEvent } from "@/lib/authz";
 import { POLICY_VERSION } from "@/lib/authz/actor-context";
+import type { PublishRowsMap } from "./publish-decision-card";
 
 // ---------------------------------------------------------------------------
 // createLocalAgentTemplateVersion — shared creation path for ZIP imports and
@@ -124,7 +125,7 @@ export type LocalAgentTemplateSeed = {
   publishingSteps?: string[] | null;
   /** The publish card's rows per declared node (cinatra#4150), threaded the
    * same way; omitted normalizes to NULL ("unknown"). */
-  publishRows?: Record<string, Array<{ label: string; input: string }>> | null;
+  publishRows?: PublishRowsMap | null;
   // Install-time owner tier. NULL means a row whose owner tier has not been
   // normalized yet. Threaded from installRegistryPackageAtScope's target
   // through installAgentPackageWithDependencies -> installAgentFromPackage.
