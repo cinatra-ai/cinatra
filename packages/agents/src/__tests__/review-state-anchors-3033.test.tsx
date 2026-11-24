@@ -114,7 +114,7 @@ describe("the run page's review step carries the reading it draws", () => {
         <ReviewGateCard view={VIEW} runId="run-3033" />
       </LifecycleCardSurfaceProvider>,
     );
-    // red-first-expect: "run-review-step-post": 0,
+    // red-first-expect: expected { 'run-review-step-post': +0, …(2) } to deeply equal { 'run-review-step-post': 1
     await waitFor(() => expect(counts(container)).toEqual(only("run-review-step-post")));
     // The anchor is drawn inside the card, not around it.
     const card = container.querySelector('[data-conformance-id="review-gate-card"]');
@@ -128,7 +128,7 @@ describe("the run page's review step carries the reading it draws", () => {
         <ReviewGateCard view={VIEW} runId="run-3033" />
       </LifecycleCardSurfaceProvider>,
     );
-    // red-first-expect: "run-review-step-picture": 0,
+    // red-first-expect: to deeply equal { 'run-review-step-post': +0, …(2) }
     await waitFor(() => expect(counts(container)).toEqual(only("run-review-step-picture")));
     // The same trait the drawing names: the note opens with the prompt.
     const note = container.querySelector<HTMLTextAreaElement>('textarea[data-testid="review-rationale"]');
@@ -142,7 +142,7 @@ describe("the run page's review step carries the reading it draws", () => {
         <ReviewGateCard view={VIEW} runId="run-3033" />
       </LifecycleCardSurfaceProvider>,
     );
-    // red-first-expect: "run-review-step-picture": 0,
+    // red-first-expect: to deeply equal { 'run-review-step-post': +0, …(2) }
     await waitFor(() => expect(counts(container)).toEqual(only("run-review-step-picture")));
   });
 });
@@ -155,7 +155,7 @@ describe("the chat thread carries the featured image's card", () => {
         <ReviewGateCard view={VIEW} />
       </LifecycleCardSurfaceProvider>,
     );
-    // red-first-expect: "review-card-post-with-featured-image": 0,
+    // red-first-expect: to deeply equal { 'run-review-step-post': +0, …(2) }
     await waitFor(() =>
       expect(counts(container)).toEqual(only("review-card-post-with-featured-image")),
     );
@@ -170,7 +170,7 @@ describe("the chat thread carries the featured image's card", () => {
         </LifecycleCardSurfaceProvider>
       </LifecycleCardSurfaceProvider>,
     );
-    // red-first-expect: "review-card-post-with-featured-image": 0,
+    // red-first-expect: to deeply equal { 'run-review-step-post': +0, …(2) }
     await waitFor(() =>
       expect(counts(container)).toEqual(only("review-card-post-with-featured-image")),
     );
