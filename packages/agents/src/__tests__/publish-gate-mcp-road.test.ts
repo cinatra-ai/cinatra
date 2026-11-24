@@ -556,7 +556,7 @@ describe("agent_run_resume on a step that declares a card", () => {
 
   it("a generic approval is refused and nothing is sent", async () => {
     const answer = (await resume({ approvalNote: "go on" })) as { error?: string };
-    // red-first-expect: expected 'undefined' to contain 'did not give'
+    // red-first-expect: to contain 'did not give'
     expect(String(answer.error)).toContain("did not give");
     expect(sendTaskSpy).not.toHaveBeenCalled();
     expect(pauseClaimFake.claimPause).not.toHaveBeenCalled();
@@ -564,7 +564,7 @@ describe("agent_run_resume on a step that declares a card", () => {
 
   it("an answer that names no declared decision is refused", async () => {
     const answer = (await resume({ userResponse: JSON.stringify({ post: "maybe" }) })) as { error?: string };
-    // red-first-expect: expected 'undefined' to contain 'did not give'
+    // red-first-expect: to contain 'did not give'
     expect(String(answer.error)).toContain("did not give");
     expect(sendTaskSpy).not.toHaveBeenCalled();
   });
@@ -636,7 +636,7 @@ describe("agent_run_resume on a step that declares a card", () => {
     const answer = (await resume({ userResponse: JSON.stringify({ itemId: "item-B", post: true }) })) as {
       error?: string;
     };
-    // red-first-expect: expected 'undefined' to contain 'did not give'
+    // red-first-expect: to contain 'did not give'
     expect(String(answer.error)).toContain("did not give");
     expect(sendTaskSpy).not.toHaveBeenCalled();
   });

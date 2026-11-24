@@ -177,9 +177,11 @@ async function declaredScreenBindingOf(
   try {
     const { lookupFieldRendererBinding, isUndrawableDeclaredScreen, stepDeclarationStanding } =
       await import("./field-renderer-bindings.server");
-    if (stepDeclarationStanding(xRenderer, stepSchema) === "changed") return "unavailable";
     // A cached scan never reads as "none declared" (`lookupFieldRendererBinding`).
-    const { binding, refused, unknown } = lookupFieldRendererBinding(xRenderer);
+    // The one lookup is both checked against the step's pin and drawn.
+    const read = lookupFieldRendererBinding(xRenderer);
+    if (stepDeclarationStanding(xRenderer, stepSchema, { read }) === "changed") return "unavailable";
+    const { binding, refused, unknown } = read;
     // A screen the validator refused, or a "kind" screen of a kind the host
     // draws nothing for, is declared but cannot be drawn: the run page holds
     // it, and so does a conversation host (the same shared rule).

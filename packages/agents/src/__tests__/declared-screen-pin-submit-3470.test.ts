@@ -32,10 +32,13 @@ import { RunTransitionError } from "../run-status";
 // The host seals each pin it writes with a key derived from the app secret.
 process.env.BETTER_AUTH_SECRET ??= "x3470-placeholder-not-a-credential";
 
-const mount = vi.hoisted(() => ({ dir: "" }));
+// `beforeScan`: what happens on disk before each next scan of the installed
+// agents, one step per scan (an install made between two scans).
+const mount = vi.hoisted(() => ({ dir: "", beforeScan: [] as Array<(() => void) | null> }));
 vi.mock("../agent-runtime-mount", () => ({
   resolveAgentRuntimeMountDir: () => {
     if (!mount.dir) throw new Error("fixture mount unset");
+    mount.beforeScan.shift()?.();
     return mount.dir;
   },
 }));
@@ -124,6 +127,7 @@ vi.mock("@cinatra-ai/a2a", async (orig) => ({
 const handleWayflowTaskState = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../execution", () => ({ handleWayflowTaskState }));
 
+import * as reviewTaskActions from "../review-task-actions";
 import { approveReviewTaskInternal } from "../review-task-actions";
 import * as claimModule from "../run-pause-claim";
 import * as bindingsServer from "../field-renderer-bindings.server";
@@ -265,6 +269,7 @@ afterAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mount.beforeScan = [];
   gateRow.read = "row";
   gateRow.xRenderer = ID;
   gateRow.values = {};
@@ -286,6 +291,56 @@ describe("an answer is sent only under the declared screen its step opened under
     expect(fenceCalls()).toEqual([]);
     expect(pauseClaimFake.releasePauseClaim).toHaveBeenCalledTimes(1);
     expect(row.status).toBe("pending_approval");
+  });
+
+  describe("the declaration checked against the step's pin is the one its answer is read with", () => {
+    const EARLIER_CARD = {
+      layout: "card",
+      title: "Fixture checked revision",
+      decisionLabel: "Fixture decision",
+      decisions: [{ label: "Fixture checked send", answer: { approved: true } }],
+    };
+    const LATER_CARD = {
+      layout: "card",
+      title: "Fixture swapped revision",
+      decisionLabel: "Fixture decision",
+      decisions: [{ label: "Fixture swapped send", answer: { approved: true, route: "swapped" } }],
+    };
+    /** The later revision is installed under the same id just before the scan `n` (from 1) after now. */
+    const swapBeforeScan = (n: number) => {
+      mount.beforeScan = Array.from({ length: n }, (_, i) =>
+        i === n - 1 ? () => writeManifest(manifest("Fixture swapped revision", LATER_CARD)) : null,
+      );
+    };
+
+    it("a card read takes the declaration whose pin it checked, never one installed before a second scan", () => {
+      install("Fixture checked revision", EARLIER_CARD);
+      park();
+      swapBeforeScan(2);
+      const card = (
+        bindingsServer as unknown as { readDeclaredHitlCard?: (x: string, s: unknown, o?: unknown) => unknown }
+      ).readDeclaredHitlCard?.(ID, gateRow.inputSchema, { fresh: true });
+      // red-first-expect: expected undefined to match object
+      expect(card).toMatchObject({ title: "Fixture checked revision" });
+    });
+
+    it("an answer made on a declaration installed between the check and the read is refused", async () => {
+      install("Fixture checked revision", EARLIER_CARD);
+      park();
+      swapBeforeScan(3);
+      const swappedAnswer = JSON.stringify({ approved: true, route: "swapped" });
+      // Read through the module, so a tree without the reader answers nothing.
+      const { stepScreenAnswer } = reviewTaskActions as unknown as {
+        stepScreenAnswer?: (gate: unknown, answer: unknown) => Promise<Record<string, string>>;
+      };
+      const result = await stepScreenAnswer?.(
+        { xRenderer: ID, inputSchema: gateRow.inputSchema, values: {} },
+        { answersDeclaredCard: true, resumeText: swappedAnswer },
+      );
+      // red-first-expect: expected 'undefined' to be 'string'
+      expect(typeof result?.refusal).toBe("string");
+      expect(result?.send).toBeUndefined();
+    });
   });
 
   it("an answer to a step whose declaration is unchanged is sent once", async () => {
@@ -316,7 +371,7 @@ describe("an answer is sent only under the declared screen its step opened under
     writeManifest(manifest("Fixture installed at park"));
     park();
     const pinned = gateRow.inputSchema["x-declared-screen"];
-    // red-first-expect: expected undefined to match /^sha256:/
+    // red-first-expect: .toMatch() expects to receive a string, but got undefined
     expect(pinned).toMatch(/^sha256:/);
     expect(pinned).not.toBe(cachedPin);
     expect(pinned).toBe(server.currentDeclaredScreenPin?.(ID, { fresh: true }));

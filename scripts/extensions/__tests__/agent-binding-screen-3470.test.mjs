@@ -67,7 +67,7 @@ describe("the binding validator carries a declared screen", () => {
     const { entries, errors, refusedScreenIds } = validateFieldRendererDeclarations(PKG, [
       { ...BINDING, kind: "linkedin-draft-review", screen: { layout: "kind" } },
     ]);
-    // red-first-expect: expected [ { …(6) } ] to deeply equal []
+    // red-first-expect: to deeply equal []
     expect(entries).toEqual([]);
     expect(errors.join("\n")).toMatch(
       /cinatra\.fieldRenderers\[0\]\.screen: a "kind" screen cannot use kind "linkedin-draft-review": the host draws no component of its own for it/,

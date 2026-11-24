@@ -397,6 +397,12 @@ export type RendererBindingsLoad = {
    * pins each gate's declaration itself (the conversation card's read).
    */
   screenPins?: ReadonlyMap<string, string>;
+  /**
+   * The steps whose fresh read failed, by `freshReadKey`, until a fresh read
+   * made for them answers. Such a step is held as a screen that could not be
+   * loaded (`rendererBindingHoldReason`), never as one still loading.
+   */
+  failedFreshReads?: ReadonlySet<string>;
 };
 
 /** Is a binding registered under exactly this id? */
@@ -459,9 +465,14 @@ export function settleRuntimeRendererBindings(
   const incomplete = outcome.ok
     ? outcome.incomplete === true
     : runtimeBindingsLoad.incomplete === true;
-  // A gate whose fresh read failed may ask again once a later answer leaves it
-  // unannounced (`requestFreshRendererBindingRead`).
-  if (!outcome.ok) for (const key of freshFor) freshReadsAsked.delete(key);
+  // A step whose fresh read failed is remembered as failed: it is not asked
+  // again on the next render or notification, only by the bounded retry of
+  // its read (`readRuntimeRendererBindings`) or a reload of the page.
+  const failedFreshReads = new Set(runtimeBindingsLoad.failedFreshReads ?? []);
+  for (const key of freshFor) {
+    if (outcome.ok) failedFreshReads.delete(key);
+    else failedFreshReads.add(key);
+  }
   // The pins go with the answer they came in: a failed read keeps the last.
   const screenPins = outcome.ok
     ? outcome.screenPins === undefined
@@ -475,6 +486,7 @@ export function settleRuntimeRendererBindings(
     refusedIds,
     incomplete,
     ...(screenPins === undefined ? {} : { screenPins }),
+    ...(failedFreshReads.size === 0 ? {} : { failedFreshReads }),
   };
   for (const listener of runtimeBindingsListeners) listener();
 }
@@ -646,13 +658,42 @@ function readScreenPins(value: unknown): Record<string, string> | undefined {
   return pins;
 }
 
+/** How many times a step's fresh read is made at most before a reload. */
+export const FRESH_READ_MAX_ATTEMPTS = 3;
+/** The wait before the first retry of a failed fresh read; each next one doubles it. */
+export const FRESH_READ_RETRY_BASE_MS = 2_000;
+/** The fresh reads made for each step (`freshReadKey`) that have not answered yet. */
+const freshReadAttempts = new Map<string, number>();
+
 /**
  * Read the installed agents' bindings, register them and record the answer.
  * `freshFor` names the step a read is asked for (`freshReadKey`): the server
  * scans past its cache, and the answer is recorded as that step's fresh read.
  * True when the read answered.
+ *
+ * A FAILED FRESH READ IS RETRIED A BOUNDED NUMBER OF TIMES: after a growing
+ * wait, at most `FRESH_READ_MAX_ATTEMPTS` reads in all for the step. The step
+ * then stays held as a screen that could not be loaded until the page is
+ * reloaded.
  */
 export async function readRuntimeRendererBindings(freshFor?: string): Promise<boolean> {
+  const answered = await readRuntimeRendererBindingsOnce(freshFor);
+  if (freshFor === undefined) return answered;
+  if (answered) {
+    freshReadAttempts.delete(freshFor);
+    return true;
+  }
+  const attempts = (freshReadAttempts.get(freshFor) ?? 0) + 1;
+  freshReadAttempts.set(freshFor, attempts);
+  if (attempts < FRESH_READ_MAX_ATTEMPTS) {
+    setTimeout(() => {
+      void readRuntimeRendererBindings(freshFor);
+    }, FRESH_READ_RETRY_BASE_MS * 2 ** (attempts - 1));
+  }
+  return false;
+}
+
+async function readRuntimeRendererBindingsOnce(freshFor?: string): Promise<boolean> {
   const readFor = freshFor === undefined ? undefined : [freshFor];
   try {
     const { getRuntimeFieldRendererBindingsAction } = await serverActions();
@@ -702,7 +743,11 @@ export async function readRuntimeRendererBindings(freshFor?: string): Promise<bo
   }
 }
 
-/** The steps this page has asked a fresh read for (`freshReadKey`): each is asked once. */
+/**
+ * The steps this page has asked a fresh read for (`freshReadKey`): each is
+ * asked once. One whose read failed stays asked: its read retries itself a
+ * bounded number of times (`readRuntimeRendererBindings`).
+ */
 const freshReadsAsked = new Set<string>();
 
 /**

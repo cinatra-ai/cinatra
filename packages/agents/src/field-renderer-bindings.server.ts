@@ -424,10 +424,10 @@ export function declaredScreenPin(binding: {
  */
 export function currentDeclaredScreenPin(
   xRenderer: string,
-  opts?: { fresh?: boolean },
+  opts?: { fresh?: boolean; read?: BindingLookup },
 ): string | null {
   try {
-    const { binding, refused, unknown } = lookupFieldRendererBinding(xRenderer, opts);
+    const { binding, refused, unknown } = opts?.read ?? lookupFieldRendererBinding(xRenderer, opts);
     if (binding === undefined) return refused || unknown ? null : DECLARED_SCREEN_PIN_NONE;
     return declaredScreenPin(binding);
   } catch {
@@ -447,11 +447,16 @@ export function currentDeclaredScreenPin(
  * when it is sent. A step is drawn, filled and submitted only on
  * "matches". The answer that is sent reads it `fresh`: a cached declaration
  * can still name a screen updated or uninstalled within the cache's seconds.
+ *
+ * `read` is a lookup the caller already made (`lookupFieldRendererBinding`):
+ * the standing is then that of the very binding the caller draws or answers
+ * with, never of another scan, which an install between the two scans could
+ * answer with another declaration under the same id.
  */
 export function stepDeclarationStanding(
   xRenderer: string,
   stepSchema: unknown,
-  opts?: { fresh?: boolean },
+  opts?: { fresh?: boolean; read?: BindingLookup },
 ): "matches" | "changed" | "unknown" {
   const current = currentDeclaredScreenPin(xRenderer, opts);
   if (current === null) return "unknown";
@@ -641,10 +646,12 @@ export function isRefusedDeclaredScreen(xRenderer: string): boolean {
  * check before an answer is sent reads it, since a cached binding can be one
  * updated or uninstalled since.
  */
+export type BindingLookup = { binding: CollectedBinding | undefined; refused: boolean; unknown: boolean };
+
 export function lookupFieldRendererBinding(
   xRenderer: string,
   opts?: { fresh?: boolean },
-): { binding: CollectedBinding | undefined; refused: boolean; unknown: boolean } {
+): BindingLookup {
   const read = () => {
     const binding = getMergedFieldRendererBindings().find((b) => b.id === xRenderer);
     const scan = collectInstalled();
@@ -699,8 +706,12 @@ export function readDeclaredHitlCard(
   try {
     // The step is answered only under the declaration it opened under: a
     // renderer changed since then lends nothing, not even the raw schema.
-    if (stepDeclarationStanding(xRenderer, stepSchema, opts) === "changed") return "unavailable";
-    const { binding, refused, unknown } = lookupFieldRendererBinding(xRenderer, opts);
+    // One lookup is both checked and used: the card read is the declaration
+    // whose pin was compared with the step's, never one installed between
+    // two scans under the same id.
+    const read = lookupFieldRendererBinding(xRenderer, opts);
+    if (stepDeclarationStanding(xRenderer, stepSchema, { read }) === "changed") return "unavailable";
+    const { binding, refused, unknown } = read;
     if (!binding) return refused || unknown ? "unavailable" : null;
     if (binding.screen === undefined) return null;
     if (isUndrawableDeclaredScreen(binding)) return "unavailable";

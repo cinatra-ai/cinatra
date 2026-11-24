@@ -355,7 +355,7 @@ describe("AgenticRunPanel — a screen whose binding has not loaded holds its Co
       expect(button).toBeDefined();
       return button!;
     });
-    // red-first-expect: expected <button data-slot="button"
+    // red-first-expect: expected undefined to be defined
     expect(gateContinue()).toBeNull();
     await act(async () => {
       fireEvent.click(formSubmit);

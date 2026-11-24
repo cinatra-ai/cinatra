@@ -27,6 +27,7 @@ import {
   isRendererBoundByRuntimeRead,
   rendererReadsAsKind,
   awaitsFreshRendererBindingRead,
+  freshReadKey,
   answeredScreenPin,
   midRunBindingReadsAsKind,
   DECLARED_SCREEN_PIN_NONE,
@@ -398,11 +399,18 @@ export function rendererBindingHoldReason(
 ): string | null {
   if (xRenderer === "") return null;
   if (bindings.refusedIds?.has(xRenderer)) return SCREEN_FAILED_HOLD_REASON;
+  // A step that waits for its fresh read is still loading, or could not be
+  // loaded once that read failed (it is retried only a bounded number of
+  // times, or by a reload).
+  const awaitedReadHold = () =>
+    bindings.failedFreshReads?.has(freshReadKey(xRenderer, step?.key)) === true
+      ? SCREEN_FAILED_HOLD_REASON
+      : SCREEN_LOADING_HOLD_REASON;
   if (step !== undefined && stepScreenPinHolds(xRenderer, bindings, step)) {
     if (bindings.status === "loading") return SCREEN_LOADING_HOLD_REASON;
     if (answeredScreenPin(xRenderer, bindings) === null) return SCREEN_FAILED_HOLD_REASON;
     return awaitsFreshRendererBindingRead(xRenderer, bindings, step)
-      ? SCREEN_LOADING_HOLD_REASON
+      ? awaitedReadHold()
       : SCREEN_CHANGED_HOLD_REASON;
   }
   // A FAILED SOURCE HOLDS BEFORE AN INSTALLED AGENT'S BINDING IS READ AS
@@ -419,7 +427,7 @@ export function rendererBindingHoldReason(
   // Loaded, and not announced: only a fresh read says it declares nothing.
   // Until one answered for it, the answer may be a scan cached before its
   // agent was installed, and the gate is held as still loading.
-  if (awaitsFreshRendererBindingRead(xRenderer, bindings, step)) return SCREEN_LOADING_HOLD_REASON;
+  if (awaitsFreshRendererBindingRead(xRenderer, bindings, step)) return awaitedReadHold();
   // An answer that could not read every installed agent is no proof that
   // this gate declares nothing.
   if (bindings.incomplete === true) return SCREEN_FAILED_HOLD_REASON;

@@ -976,7 +976,7 @@ describe("a declared grouped setup form sends only from its own control (cinatra
       </LifecycleCardSurfaceProvider>,
     );
     const formSubmit = await waitFor(() => within(container).getByRole("button", { name: /save & start run/i }));
-    // red-first-expect: expected <button data-slot="button"
+    // red-first-expect: Unable to find role="button" and name
     expect(within(container).queryByRole("button", { name: /^continue$/i })).toBeNull();
     // The required value is blank: the form's own control validates and sends nothing.
     await act(async () => {

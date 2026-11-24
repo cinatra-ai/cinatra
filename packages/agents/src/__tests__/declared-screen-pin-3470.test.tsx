@@ -50,14 +50,23 @@ const screenStateMock = vi.hoisted(() => vi.fn());
 vi.mock("../agent-hitl-screen-actions", () => ({
   getAgentHitlScreenStateAction: (input: { runId: string }) => screenStateMock(input),
 }));
-// The run page's runtime bindings read answers what the server answers.
+// The run page's runtime bindings read answers what the server answers, or,
+// while `bindingReads.failFresh` is set, fails every fresh read it counts.
+const bindingReads = vi.hoisted(() => ({ failFresh: false, freshFailed: 0 }));
 vi.mock("../server-actions", async () => {
   const server = await import("../field-renderer-bindings.server");
   return {
     getFieldRendererContextForAgentBuilderAction: async () => ({ connectedApps: [], gmailAliases: [] }),
-    getRuntimeFieldRendererBindingsAction: async (opts?: { fresh?: boolean }) =>
-      (server as { runtimeFieldRendererBindingsPayload?: (o?: { fresh?: boolean }) => unknown })
-        .runtimeFieldRendererBindingsPayload?.(opts) ?? { bindings: [], refusedScreenIds: [] },
+    getRuntimeFieldRendererBindingsAction: async (opts?: { fresh?: boolean }) => {
+      if (opts?.fresh === true && bindingReads.failFresh) {
+        bindingReads.freshFailed += 1;
+        throw new Error("fixture bindings read down");
+      }
+      return (
+        (server as { runtimeFieldRendererBindingsPayload?: (o?: { fresh?: boolean }) => unknown })
+          .runtimeFieldRendererBindingsPayload?.(opts) ?? { bindings: [], refusedScreenIds: [] }
+      );
+    },
   };
 });
 vi.mock("../list-picker-actions", () => ({
@@ -102,6 +111,7 @@ const reg = registry as unknown as {
   runtimeRendererBindingsLoad?: () => unknown;
   requestFreshRendererBindingRead?: (x: string, step?: unknown) => void;
   rendererStepOf?: (key: string, schema: Record<string, unknown>) => unknown;
+  subscribeRuntimeRendererBindings?: (listener: () => void) => () => void;
   declaredHitlCardOf?: (x: string) => unknown;
 };
 const submitRules = gateSubmit as unknown as {
@@ -323,6 +333,50 @@ describe("the run page reads its bindings fresh for each step (cinatra#3470)", (
     expect(hold(stepBefore)).toBe(
       "This step's screen was changed after the step opened, so it cannot be answered. Stop the run to end it.",
     );
+  });
+});
+
+describe("a step whose fresh read keeps failing is asked a bounded number of times (cinatra#3470)", () => {
+  const FAIL_ID = "@acme-test/fail-agent:confirm";
+  const hold = (step: unknown) =>
+    submitRules.rendererBindingHoldReason?.(FAIL_ID, reg.runtimeRendererBindingsLoad?.(), step) ?? null;
+
+  it("every render and notification asks no further read, and the step is held as could not be loaded", async () => {
+    install(EARLIER, FAIL_ID);
+    const parked = parkedSchema(FAIL_ID);
+    // The agent is updated: the page's answer pins another declaration than
+    // the step's, so the step waits for a read made for it.
+    install(LATER, FAIL_ID);
+    await reg.readRuntimeRendererBindings?.();
+    const step = reg.rendererStepOf?.("task-fail", parked);
+    // red-first-expect: expected null to be 'This step\'s screen is still loading.'
+    expect(hold(step)).toBe("This step's screen is still loading.");
+    bindingReads.failFresh = true;
+    bindingReads.freshFailed = 0;
+    vi.useFakeTimers();
+    // A host asks again on every notification and every render, as the run
+    // page's effect does. The listener stops itself so a loop still ends.
+    let notified = 0;
+    const unsubscribe = reg.subscribeRuntimeRendererBindings?.(() => {
+      notified += 1;
+      if (notified < 200) reg.requestFreshRendererBindingRead?.(FAIL_ID, step);
+    });
+    try {
+      reg.requestFreshRendererBindingRead?.(FAIL_ID, step);
+      for (let render = 0; render < 30; render += 1) {
+        await vi.advanceTimersByTimeAsync(1_000);
+        reg.requestFreshRendererBindingRead?.(FAIL_ID, step);
+      }
+      expect(bindingReads.freshFailed).toBeLessThanOrEqual(3);
+      expect(bindingReads.freshFailed).toBeGreaterThanOrEqual(1);
+      expect(hold(step)).toBe("This step's screen could not be loaded. Reload the page to try again.");
+    } finally {
+      unsubscribe?.();
+      vi.useRealTimers();
+      bindingReads.failFresh = false;
+      uninstall(FAIL_ID);
+      await reg.readRuntimeRendererBindings?.();
+    }
   });
 });
 
