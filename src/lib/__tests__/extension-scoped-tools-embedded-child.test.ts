@@ -139,9 +139,11 @@ describe("dispatchExtensionScopedTool — the origin of an extension_tool call",
     );
   });
 
-  it("runs a development child step's tool by the child's name and version, with no install binding", async () => {
+  it("runs a development child step's tool from the source its origin proved, with no install binding", async () => {
     // red-first-expect: to deeply equal
-    resolveExtensionToolOrigin.mockResolvedValue({ kind: "development-child", context: CHILD_ORIGIN.context });
+    const source = { origin: "development-child", packageName: CHILD, packageVersion: "0.1.1",
+      realRoot: "/fixture-source/child", installRecord: null, stillBound };
+    resolveExtensionToolOrigin.mockResolvedValue({ kind: "development-child", context: CHILD_ORIGIN.context, source });
     loadDeclaredToolModule.mockResolvedValue({ extensionTool: () => ({ ran: "child" }) });
     const { dispatchExtensionScopedTool } = await import("@/lib/extension-scoped-tools");
     const outcome = await dispatchExtensionScopedTool({
@@ -152,9 +154,11 @@ describe("dispatchExtensionScopedTool — the origin of an extension_tool call",
     expect(outcome).toEqual({ ok: true, result: { ran: "child" } });
     expect(loadDeclaredToolModule).toHaveBeenCalledWith(
       { packageName: CHILD, packageVersion: "0.1.1", orgId: RUN.orgId, toolName: "child_tool",
-        modulePath: CHILD_TOOL.module },
+        modulePath: CHILD_TOOL.module, developmentSource: source },
       expect.anything(),
     );
+    // The load is bound to the proven source: the origin's own binding, handed over unchanged.
+    expect(loadDeclaredToolModule.mock.calls[0][0].developmentSource).toBe(source);
   });
 
   it("binds a child tool's ports to the child's declarations, not the parent's", async () => {

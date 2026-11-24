@@ -10,11 +10,16 @@
  * child's own node, the request names that node's fixed tool, and the child
  * marks the tool embeddable. Outside development nothing changes.
  *
- * Pure: every read is injected. The packages are fixtures.
+ * Every read is injected but the real path of each root, which lies in a temporary directory. The
+ * packages are fixtures.
  *
  *   pnpm vitest run src/lib/__tests__/extension-tool-origin-development-child.test.ts
  */
-import { describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 import type { CanonicalRowView } from "@/lib/extension-install-anchor";
 
@@ -29,8 +34,11 @@ const PARENT = "@fixture-scope/fixture-parent-agent";
 const CHILD = "@fixture-scope/fixture-child-agent";
 const PARENT_VERSION = "2.0.0";
 const CHILD_VERSION = "0.2.2";
-const PARENT_SRC = "/fixture-source/fixture-parent-agent";
-const CHILD_SRC = "/fixture-source/fixture-child-agent";
+const SOURCE_BASE = realpathSync(mkdtempSync(path.join(tmpdir(), "cinatra-3033-origin-")));
+const PARENT_SRC = path.join(SOURCE_BASE, "fixture-parent-agent");
+const CHILD_SRC = path.join(SOURCE_BASE, "fixture-child-agent");
+for (const dir of [PARENT_SRC, CHILD_SRC]) mkdirSync(dir);
+afterAll(() => rmSync(SOURCE_BASE, { recursive: true, force: true }));
 const TOOL = "child_tool";
 const STEP = "child__embed_step";
 
@@ -155,6 +163,8 @@ describe("an embedded child step on a development installation", () => {
       kind: "development-child",
       context: { packageName: CHILD, packageVersion: CHILD_VERSION,
         cinatra: { tools: [{ name: TOOL, module: "./cinatra/tools/c.mjs", embeddable: true }] } },
+      source: { origin: "development-child", packageName: CHILD, packageVersion: CHILD_VERSION, realRoot: CHILD_SRC,
+        installRecord: null, stillBound: expect.any(Function) },
     });
     expect(world.deps.readFlowDocument).toHaveBeenCalledWith(CHILD_SRC);
     // Neither side is read by an install id: there is none in development.

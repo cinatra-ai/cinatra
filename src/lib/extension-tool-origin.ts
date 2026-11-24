@@ -26,6 +26,9 @@ import "server-only";
 // at the version its source carries, which must meet the parent's own declared
 // range. Every other check above holds unchanged on that road, and a child the
 // canonical store holds a non-live row for (archived, uninstalled) is refused.
+// The answer carries what was proven: the child's root at its real path and the
+// install row the lifecycle check read, with a re-check the loader runs just
+// before the import, so the import reads that root only, under that lifecycle.
 //
 // The step is never read from the request: only `verifiedStepId`, which the
 // route verified from the runtime's signed pair. Each refusal is a fixed
@@ -33,7 +36,7 @@ import "server-only";
 // version. Nothing here names a package.
 
 import path from "node:path";
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 
 import { declaredToolIsEmbeddable, parseDeclaredTools } from "@cinatra-ai/sdk-extensions/manifest";
 
@@ -49,6 +52,7 @@ import type { DerivedDependentInstallId } from "@/lib/extension-edge-bound-servi
 import { probeInstallRecord, type InstallRecordHealDeps } from "@/lib/extension-install-anchor";
 import {
   resolvePinnedPackageRoot,
+  type DevelopmentSourceBinding,
   type ExactInstallBinding,
   type PinnedPackageRootResolver,
 } from "@/lib/extension-tool-module-loader";
@@ -85,7 +89,7 @@ export type ExtensionToolOrigin =
   /** The embedded child's code, from the exact child installation. */
   | { kind: "child"; context: RunExtensionContext; install: ExactInstallBinding; codeInstallId: string }
   /** The embedded child's code on a development installation: its source, by name and version, with no install. */
-  | { kind: "development-child"; context: RunExtensionContext };
+  | { kind: "development-child"; context: RunExtensionContext; source: DevelopmentSourceBinding };
 
 export type ExtensionToolOriginRun = {
   id: string;
@@ -392,11 +396,12 @@ export async function resolveExtensionToolOrigin(
     if (!satisfiesConstraint(childVersion, dependency.versionConstraint)) return refuse("edge-constraint-unmet");
     // A development child has no install row of its own. Where the canonical store does hold one for it, that
     // row's lifecycle governs, as on the store road: an archived or uninstalled child is never run from source.
-    const lifecycle = await probeInstallRecord(
-      label,
-      deps.readInstallRecordRows ? { readRows: deps.readInstallRecordRows } : {},
-      { orgId: run.orgId, expectKind: "agent" },
-    );
+    const probeLifecycle = () =>
+      probeInstallRecord(label, deps.readInstallRecordRows ? { readRows: deps.readInstallRecordRows } : {}, {
+        orgId: run.orgId,
+        expectKind: "agent",
+      });
+    const lifecycle = await probeLifecycle();
     if (lifecycle.state === "unreadable") {
       logFailure("[extension_tool] an origin read failed", { read: "install-record" }, new Error(lifecycle.reason));
       return refuse("origin-unreadable");
@@ -405,9 +410,46 @@ export async function resolveExtensionToolOrigin(
     if (lifecycle.state !== "absent" && lifecycle.state !== "live") return refuse("edge-not-live");
     const childRoot = await developmentRootOf(label, childVersion);
     if (childRoot === null) return refuse("child-not-materialized");
-    const childCinatra = await developmentManifest(childRoot, label, childVersion, "child");
-    await proveChildTool({ step, stepId, label, childRoot, childCinatra, request: input.request }, readFlow);
-    return { kind: "development-child", context: { packageName: label, packageVersion: childVersion, cinatra: childCinatra } };
+    // Every read below, and the import, is at the root's real path.
+    const realRoot = await guarded("package-root", () => realpath(childRoot));
+    const childCinatra = await developmentManifest(realRoot, label, childVersion, "child");
+    await proveChildTool({ step, stepId, label, childRoot: realRoot, childCinatra, request: input.request }, readFlow);
+    const installRecord =
+      lifecycle.state === "live"
+        ? { rowId: lifecycle.rowId, status: lifecycle.status, version: lifecycle.version ?? null }
+        : null;
+    // Just before the import: the same lifecycle (still no row, or the same live row, unchanged) and the same
+    // real root on the name-and-version road. Any change or failed read refuses the load.
+    const stillBound = async (): Promise<boolean> => {
+      try {
+        const again = await probeLifecycle();
+        const sameLifecycle =
+          installRecord === null
+            ? again.state === "absent"
+            : again.state === "live" &&
+              again.rowId === installRecord.rowId &&
+              again.status === installRecord.status &&
+              (again.version ?? null) === installRecord.version;
+        if (!sameLifecycle) return false;
+        const root = await resolveRoot({ packageName: label, packageVersion: childVersion, orgId: run.orgId });
+        if (root === null) return false;
+        return (typeof root === "string" ? await realpath(root) : root.realRoot) === realRoot;
+      } catch {
+        return false;
+      }
+    };
+    return {
+      kind: "development-child",
+      context: { packageName: label, packageVersion: childVersion, cinatra: childCinatra },
+      source: {
+        origin: "development-child",
+        packageName: label,
+        packageVersion: childVersion,
+        realRoot,
+        installRecord,
+        stillBound,
+      },
+    };
   };
 
   let installId = nonEmpty(run.dependentInstallId) ? run.dependentInstallId : null;

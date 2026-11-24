@@ -565,6 +565,8 @@ async function runExtensionTool(
     request: input.input,
     ports,
     ...(origin.kind === "child" ? { install: origin.install } : {}),
+    // A development child loads from the source it proved, and only from it.
+    ...(origin.kind === "development-child" ? { developmentSource: origin.source } : {}),
   });
 }
 
