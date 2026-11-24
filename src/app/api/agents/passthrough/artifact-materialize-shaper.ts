@@ -84,10 +84,13 @@ function requireMemberFieldName(raw: Record<string, unknown>, field: string): st
  * the ledger hashes and the store writes. JavaScript strings that differ can
  * encode to the same bytes (a lone surrogate encodes as U+FFFD), so the bytes,
  * not the strings, are compared; the round trip yields one string per byte
- * sequence.
+ * sequence. The decoder keeps a leading byte order mark (`ignoreBOM`): by
+ * default it would drop it, and two members that differ only in that mark
+ * have different bytes and are two artifacts.
  */
+const UTF8_KEY_DECODER = new TextDecoder("utf-8", { ignoreBOM: true });
 function utf8Key(content: string): string {
-  return new TextDecoder().decode(new TextEncoder().encode(content));
+  return UTF8_KEY_DECODER.decode(new TextEncoder().encode(content));
 }
 
 function requireNonEmptyString(

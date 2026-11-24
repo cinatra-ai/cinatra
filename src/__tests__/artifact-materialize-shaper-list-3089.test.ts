@@ -96,6 +96,15 @@ describe("shapeArtifactMaterializeInput — list mode (cinatra#3089)", () => {
     expect(() => shapeArtifactMaterializeInput(membersOf(list))).toThrow("member 2 has the same content bytes as member 1");
   });
 
+  // red-first-expect: artifact_materialize input.title must
+  it("takes two members that differ only in a leading byte order mark: their bytes differ", () => {
+    const first = "draft";
+    const second = "\uFEFFdraft";
+    expect(new TextEncoder().encode(first)).not.toEqual(new TextEncoder().encode(second));
+    const list = [{ subject: "a", body: first }, { subject: "b", body: second }];
+    expect(() => shapeArtifactMaterializeInput(membersOf(list))).not.toThrow();
+  });
+
   // red-first-expect: but got 'artifact_materialize input.title must
   it.each([
     ["memberContentField", " "],
