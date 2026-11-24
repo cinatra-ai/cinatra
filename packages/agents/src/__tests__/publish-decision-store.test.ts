@@ -974,7 +974,6 @@ describe("the decision keeps the rows its template declared at the park (review 
 
   // cinatra#4738 on main's declared rows: a list or artifacts row the dispatched plan declares is kept with its kind and
   // columns, never cut down to a text row (which would draw a list as nothing and an artifacts row as nothing).
-  // red-first-expect: to match object { Object (declaredRows) }
   it("keeps a list row's columns and an artifacts row's kind, at the park and through the dispatched plan", async () => {
     const KINDED = [
       { label: "Title", input: "title" },
