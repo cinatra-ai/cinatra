@@ -37,7 +37,6 @@ vi.mock("../db", () => ({
 
 // The module under test is loaded inside the tests (beforeEach), so before the fix this file loads and every test
 // fails on the missing module.
-// red-first-expect: publish-decision-island-subject
 import type * as SubjectModule from "../publish-decision-island-subject";
 let readPublishDecisionIslandSubject: typeof SubjectModule.readPublishDecisionIslandSubject;
 let readRevisionsMadeByRun: typeof SubjectModule.readRevisionsMadeByRun;
