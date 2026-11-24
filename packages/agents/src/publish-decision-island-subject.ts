@@ -61,6 +61,9 @@ async function openCardOfRun(runId: string, who: Who) {
   const decision = await readLatestDecisionForRun(run.id);
   if (!decision || decision.runId !== run.id) return null;
   if (decision.status === "run_ended") return null;
+  // A parked decision is a card only while its run is HELD (pending_approval, or running when a hold wrote its row
+  // but not its move), the card's own rule: a run stopped, queued or back in pending_input is parked at no gate.
+  if (decision.status === "parked" && run.status !== "pending_approval" && run.status !== "running") return null;
   if (decision.orgId !== null && decision.orgId !== run.orgId) return null;
   // 3. The declared rows. The rows the decision kept at its park are the card's rows; only a decision older than that
   //    record (declaredRows null) reads the template's current rows, as the card does.

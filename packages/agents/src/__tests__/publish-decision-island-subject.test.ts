@@ -47,7 +47,7 @@ const WHO = {
   actor: { actorType: "human" as const, source: "ui" as const, userId: "user-a" },
   roleHints: { orgRole: "member" as const, actorOrganizationId: "org-1" },
 };
-const RUN = { id: "run-1", templateId: "tmpl-1", orgId: "org-1" };
+const RUN = { id: "run-1", templateId: "tmpl-1", orgId: "org-1", status: "pending_approval" };
 const TARGETS = [
   { artifactId: "art-1", representationRevisionId: "rev-1" },
   { artifactId: "art-2", representationRevisionId: "rev-2" },
@@ -104,6 +104,19 @@ describe("readPublishDecisionIslandSubject", () => {
     expect(await readPublishDecisionIslandSubject(ASK)).toMatchObject({ decided: true });
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "run_ended" }));
     expect(await readPublishDecisionIslandSubject(ASK)).toBeNull();
+  });
+
+  it("a parked decision is read only while its run is held, as the card draws it", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({ ...RUN, status: "running" });
+    expect(await readPublishDecisionIslandSubject(ASK)).toMatchObject({ targets: TARGETS });
+    for (const status of ["stopped", "queued", "pending_input", "completed", "failed"]) {
+      storeMock.readAgentRunById.mockResolvedValue({ ...RUN, status });
+      expect(await readPublishDecisionIslandSubject(ASK)).toBeNull();
+    }
+    // A settled decision stays decided whatever the run did after it.
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released" }));
+    storeMock.readAgentRunById.mockResolvedValue({ ...RUN, status: "completed" });
+    expect(await readPublishDecisionIslandSubject(ASK)).toMatchObject({ decided: true });
   });
 
   it("a decision recorded with no organization is read under the run's organization", async () => {
