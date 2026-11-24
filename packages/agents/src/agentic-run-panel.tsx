@@ -49,7 +49,7 @@ import {
   type PublishDecisionCardRead,
 } from "./publish-decision-card-view";
 import { StatusPill } from "@/components/ui/status-pill";
-import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
+import { continueAwaitsAPick } from "./field-renderer-registry";
 import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
 import type { FieldRendererContext, FieldRendererProps } from "./field-renderer-registry";
 import { ArrowRight } from "lucide-react";
@@ -144,7 +144,7 @@ import {
   type HitlDerivationState,
 } from "./hitl-recovery-state";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
-import { hasMidRunHitlBinding } from "./orchestrator-mid-run-hitl";
+import { hasMidRunHitlBinding, resolveHitlGateRenderer } from "./orchestrator-mid-run-hitl";
 import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
 import { getAgentBuilderTask, type TaskSnapshot } from "./a2a-actions";
 import { useAgUiRunStream } from "./use-ag-ui-run-stream";
@@ -2103,7 +2103,7 @@ export function AgenticRunPanel({
     // component renders a gate is decided by its `x-renderer` id, never by the
     // interrupt's field name. Only the rendered field IDENTITY below carries
     // the real name.
-    const entry = fieldRendererRegistry.resolve(
+    const entry = resolveHitlGateRenderer(
       HITL_PLACEHOLDER_FIELD_NAME,
       fieldSchema,
       context,

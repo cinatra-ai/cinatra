@@ -13,7 +13,17 @@
  * needs no edit.
  */
 
-import { fieldRendererRegistry } from "./field-renderer-registry";
+import {
+  fieldRendererRegistry,
+  RENDERER_NAMESPACE_RE,
+  type FieldRendererContext,
+  type FieldRendererEntry,
+} from "./field-renderer-registry";
+import {
+  ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
+  SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+  TRIGGER_WAIT_STATUS_RENDERER_ID,
+} from "./agent-builder-ids";
 
 /**
  * Manifest-declared strict classification: does a registered binding flag
@@ -47,4 +57,40 @@ export function classifyMidRunHitl(xRenderer: string): boolean {
     xRenderer.endsWith(":final-list-review") || // Gate 2 - list-curator
     xRenderer.endsWith(":setup-form")
   );
+}
+
+/** Gate ids a host draws inline, never through a field renderer: no floor for them. */
+const HOST_INLINE_GATE_IDS: ReadonlySet<string> = new Set([
+  ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
+  TRIGGER_WAIT_STATUS_RENDERER_ID,
+]);
+
+/**
+ * The entry a LIVE HITL gate is drawn with. A gate whose `x-renderer` id no
+ * entry claims (a package dropped the binding while a run was parked at that
+ * step) falls to the schema floor, the entry registered under
+ * `SCHEMA_FIELD_FALLBACK_RENDERER_ID`, so the person can still answer the
+ * step from its stored schema and the run can resume. This is the floor a
+ * not-in-build binding of a known kind already draws.
+ *
+ * Fail-safe: only a namespaced id gets the floor; an empty or bare id, and an
+ * id a host draws inline, keep no renderer. The registry's own `resolve` is
+ * unchanged, so a field inside a form never takes the floor's Continue.
+ */
+export function resolveHitlGateRenderer(
+  fieldName: string,
+  schema: Record<string, unknown>,
+  context: FieldRendererContext,
+): FieldRendererEntry | null {
+  const entry = fieldRendererRegistry.resolve(fieldName, schema, context);
+  if (entry !== null) return entry;
+  const xRenderer = schema["x-renderer"];
+  if (
+    typeof xRenderer !== "string" ||
+    !RENDERER_NAMESPACE_RE.test(xRenderer) ||
+    HOST_INLINE_GATE_IDS.has(xRenderer)
+  ) {
+    return null;
+  }
+  return fieldRendererRegistry.list().find((e) => e.id === SCHEMA_FIELD_FALLBACK_RENDERER_ID) ?? null;
 }

@@ -1,0 +1,172 @@
+// @vitest-environment jsdom
+/**
+ * THE AGENTIC RUN PANEL DRAWS A GATE WHOSE RENDERER ID NO BINDING DECLARES.
+ *
+ * A run parked at a step whose stored schema names an `x-renderer` id that no
+ * binding declares any more (its package dropped the declaration). The panel
+ * drew "Waiting for input — no renderer configured for this step." and no
+ * Continue, so the step could not be answered. It now draws the stored schema
+ * through the schema floor, whose Continue sends the answer to the gate's
+ * review task.
+ *
+ * Harness mirrors agentic-run-panel.hitl.test.tsx.
+ *
+ *    cd packages/agents && pnpm exec vitest run \
+ *      src/__tests__/agentic-run-panel-unregistered-renderer.test.tsx
+ */
+import React from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { fieldRendererRegistry } from "../field-renderer-registry";
+import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
+
+vi.mock("@cinatra-ai/sdk-ui", () => ({
+  LoadingSpinner: () => null,
+  // HitlConversationPanel renders the field-assist PromptField. Stub it to a
+  // plain element exposing the placeholder text so the cinatra#767 surface test
+  // can assert presence/absence of the window's sentence in the field
+  // above…". The real PromptField pulls in browser-only deps jsdom can't load.
+  // Use a <div> (not a raw <input>, which the design-system lint gate forbids in
+  // favor of the shadcn <Input>) and surface the placeholder as text content.
+  PromptField: ({ placeholder }: { placeholder?: string }) => (
+    <div data-testid="field-assist-prompt-stub">{placeholder}</div>
+  ),
+}));
+vi.mock("sonner", () => ({
+  toast: { error: vi.fn(), success: vi.fn() },
+}));
+// lucide-react: stub the specific icons transitively imported by result
+// renderers (ExternalLink from CardListRenderer + TableRenderer). Returning
+// a module-namespace object (not a Proxy) avoids a vitest mock-hoist crash
+// ("Cannot create proxy with a non-object as target or handler").
+vi.mock("lucide-react", () => {
+  // Vitest/Vite verifies named-export presence at module load time, so the
+  // former fixed-list object broke when the run-start chip-row (cinatra#2067)
+  // pulled `Check`/`ChevronDown` (direct) plus the transitive
+  // orchestrator-sub-agent-node icon set (Circle, CircleDot, CheckCircle2,
+  // XCircle, Loader2) into this panel's import graph. Mirror the robust Proxy
+  // stub the sibling panel tests use (no-audit-button, email-drafts): every
+  // named import resolves to a null-render StubIcon, so no future icon added to
+  // the graph can break this mock. The `{}` object target + factory-local
+  // StubIcon avoid the vi.mock hoist crash a bare-function Proxy target hits.
+  const StubIcon = () => null;
+  return new Proxy(
+    {} as Record<string, () => null>,
+    {
+      get: (_t, prop) => {
+        if (prop === "__esModule") return true;
+        if (prop === "then") return undefined;
+        if (typeof prop === "symbol") return undefined;
+        return StubIcon;
+      },
+      has: () => true,
+      ownKeys: () => [
+        "ArrowRight",
+        "Check",
+        "CheckCircle2",
+        "ChevronDown",
+        "Circle",
+        "CircleDot",
+        "ClipboardList",
+        "ExternalLink",
+        "Loader2",
+        "XCircle",
+        "default",
+      ],
+      getOwnPropertyDescriptor: () => ({
+        enumerable: true,
+        configurable: true,
+        value: StubIcon,
+      }),
+    },
+  );
+});
+
+const hitlActions = vi.hoisted(() => ({
+  approveReviewTask: vi.fn(async () => ({ ok: true as const })),
+  rejectReviewTask: vi.fn(async () => undefined),
+}));
+vi.mock("../hitl-actions", () => hitlActions);
+vi.mock("../a2a-actions", () => ({
+  getAgentBuilderTask: vi.fn(async () => null),
+}));
+vi.mock("../server-actions", () => ({
+  getFieldRendererContextForAgentBuilderAction: vi.fn(async () => ({
+    connectedApps: [],
+    gmailAliases: [],
+    runId: "run-1",
+  })),
+  getAuditAvailabilityAction: vi.fn(async () => ({
+    visible: false,
+    promptCount: 0,
+    skillCount: 0,
+  })),
+  getSkillsForAgentAction: vi.fn(async () => []),
+}));
+vi.mock("../agent-ui-override-registry", () => ({
+  agentUIOverrideRegistry: { resolve: () => null },
+}));
+
+const TASK_ID = "wayflow-task-dropped";
+/** An id a package declared once and no longer declares. */
+const DROPPED_ID = "@cinatra-test/retired-pack-agent:draft-confirm";
+
+vi.mock("../use-ag-ui-run-stream", () => ({
+  useAgUiRunStream: vi.fn(() => ({
+    status: "pending_approval",
+    error: null,
+    presentationHint: null,
+    isLive: true,
+    interruptContext: {
+      schema: { type: "object", properties: { note: { type: "string", title: "Note" } } },
+      xRenderer: "@cinatra-test/retired-pack-agent:draft-confirm",
+      values: {},
+      reviewTaskId: "wayflow-task-dropped",
+    },
+    streamedText: "",
+  })),
+}));
+
+function continues(): HTMLButtonElement[] {
+  return Array.from(document.querySelectorAll<HTMLButtonElement>("button")).filter((b) =>
+    /Continue|Submitting|Continuing/.test(b.textContent ?? ""),
+  );
+}
+
+beforeEach(() => {
+  cleanup();
+  fieldRendererRegistry.clear();
+  ensureDefaultFieldRenderersRegistered();
+});
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
+
+describe("AgenticRunPanel — a gate whose renderer id no binding declares", () => {
+  // red-first-expect: expected null not to be null
+  it("draws the stored schema's field and one Continue, which sends the answer once", async () => {
+    expect(fieldRendererRegistry.list().some((e) => e.id === DROPPED_ID)).toBe(false);
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    render(
+      <AgenticRunPanel
+        runId="run-dropped"
+        initialStatus="pending_approval"
+        initialError={null}
+        initialMessages={[]}
+        agUiEnabled={true}
+      />,
+    );
+    await waitFor(() => expect(document.getElementById("field-note")).not.toBeNull());
+    expect(document.body.textContent ?? "").not.toMatch(/no renderer configured/);
+    fireEvent.change(document.getElementById("field-note")!, { target: { value: "Go ahead." } });
+    await waitFor(() => expect(continues()).toHaveLength(1));
+    fireEvent.click(continues()[0]!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const call = hitlActions.approveReviewTask.mock.calls[0] as unknown[];
+    expect(call[0]).toBe(TASK_ID);
+    expect(call[1]).toEqual(expect.objectContaining({ note: "Go ahead." }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1);
+  });
+});

@@ -70,7 +70,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { LoadingSpinner } from "@cinatra-ai/sdk-ui";
 
-import { classifyMidRunHitl } from "./orchestrator-mid-run-hitl";
+import { classifyMidRunHitl, resolveHitlGateRenderer } from "./orchestrator-mid-run-hitl";
 import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
 import { useRunWindowScreen } from "./run-window-screen-context";
 import { useRunWindowConversation } from "./use-run-window-conversation";
@@ -936,7 +936,7 @@ function HitlApprovalCard({
   // (e.g. the gmail-sender whitelist) start CHANGING which component renders a
   // gate, which is a different behaviour change than fixing a label. Only the
   // rendered field IDENTITY below carries the real name.
-  const entry = fieldRendererRegistry.resolve(
+  const entry = resolveHitlGateRenderer(
     HITL_PLACEHOLDER_FIELD_NAME,
     fieldSchema,
     context,

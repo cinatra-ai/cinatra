@@ -134,8 +134,8 @@ import {
   type AgentHitlScreenState,
 } from "./agent-hitl-screen";
 import { getAgentHitlScreenStateAction } from "./agent-hitl-screen-actions";
-import { continueAwaitsAPick, fieldRendererRegistry, type FieldRendererContext } from "./field-renderer-registry";
-import { hasMidRunHitlBinding } from "./orchestrator-mid-run-hitl";
+import { continueAwaitsAPick, type FieldRendererContext } from "./field-renderer-registry";
+import { hasMidRunHitlBinding, resolveHitlGateRenderer } from "./orchestrator-mid-run-hitl";
 import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
 import { DispatchRenderer, type PresentationHint } from "./result-renderers";
 import { approveReviewTask } from "./hitl-actions";
@@ -711,7 +711,7 @@ function resolveHitlGateEntry(runId: string, gate: AgentHitlScreenGate) {
     xRenderer: gate.xRenderer,
   };
   return (
-    fieldRendererRegistry.resolve(HITL_PLACEHOLDER_FIELD_NAME, fieldSchema, context) ?? null
+    resolveHitlGateRenderer(HITL_PLACEHOLDER_FIELD_NAME, fieldSchema, context) ?? null
   );
 }
 
@@ -783,7 +783,7 @@ export function AgentHitlScreenFields({
   const entry =
     hint || withholdRenderer === true
       ? null
-      : fieldRendererRegistry.resolve(HITL_PLACEHOLDER_FIELD_NAME, fieldSchema, context);
+      : resolveHitlGateRenderer(HITL_PLACEHOLDER_FIELD_NAME, fieldSchema, context);
   const { "x-renderer": _xr, ...renderSchema } = fieldSchema;
   void _xr;
   const Renderer = entry?.renderer ?? null;
