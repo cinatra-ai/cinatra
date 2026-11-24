@@ -19,8 +19,9 @@
  * idempotent INSERT per enumerated write.
  *
  * PURE (no DB / server-only): a `{text, values}` op is all it returns; the caller
- * owns the connection + transaction. (`producerAttemptForRun` reads only the
- * caller's request frame, never the database.) The deterministic id + emitter enumeration
+ * owns the connection + transaction. (`producerAttemptForRun` and the builder's
+ * own publishing-call claim, `publishCallClaimForRun`, read only the caller's
+ * request frame, never the database.) The deterministic id + emitter enumeration
  * come from the S0 contract (`lifecycle-produced-event.ts`).
  */
 
@@ -155,6 +156,19 @@ export interface BuildProducedEventInsertInput {
 }
 
 /**
+ * cinatra#4762 — the publishing call claim a write of `runId` runs under: the released decision the passthrough route's
+ * call check claimed for the call whose frame the write runs in (`publishCallClaim`, written only by that route from the
+ * claim the server took). Null with no frame, no claim, or a claim of another run. The produced event passes the
+ * in-flight fence of exactly this claim: the call's own output is what the call publishes, while every other claim of
+ * the run still refuses it, and so does every claim for a write that runs under none.
+ */
+export function publishCallClaimForRun(runId: string | null | undefined): string | null {
+  if (!runId) return null;
+  const claim = mcpRequestContextStorage.getStore()?.publishCallClaim;
+  return claim && claim.runId === runId && typeof claim.decisionId === "string" && claim.decisionId ? claim.decisionId : null;
+}
+
+/**
  * Build the same-tx produced-event INSERT op for a local writer. `schema` is the
  * caller's ALREADY-ESCAPED postgres schema identifier (both writers pass their
  * local escaped `schema`). Idempotent on the deterministic `event_id` PK.
@@ -217,10 +231,14 @@ export function buildProducedEventInsertOp(
   // fence's sentinel (PUBLISH_CALL_IN_FLIGHT_SENTINEL) aborts the writer's whole transaction with an error of its own,
   // which each writer surfaces as PublishCallInFlightError. The writer took the run row before its first write
   // (producerRunLockOps), in an earlier statement, so this read sees every claim committed before that lock.
+  // The claim the write itself runs under ($14, publishCallClaimForRun: the server's claim, carried in the call's frame)
+  // is not counted: that call's own output is what it publishes. A write under no claim ($14 null) counts every claim.
+  const ownClaim = input.producerRunId ? publishCallClaimForRun(input.producerRunId) : null;
   const noPublishCall = `(CASE WHEN EXISTS (SELECT 1 FROM "${schema}"."agent_run_publish_decisions" call_claim
           JOIN "${schema}"."agent_runs" claim_run ON claim_run.id = call_claim.run_id
           WHERE call_claim.run_id = $7::text AND call_claim.calls_in_flight > 0
-            AND coalesce(call_claim.run_generation, claim_run.reset_generation) = claim_run.reset_generation)
+            AND coalesce(call_claim.run_generation, claim_run.reset_generation) = claim_run.reset_generation
+            AND call_claim.id IS DISTINCT FROM $14::text)
         THEN '${PUBLISH_CALL_IN_FLIGHT_SENTINEL}' ELSE '1' END)::integer = 1`;
   return {
     text: `INSERT INTO "${schema}"."artifact_produced_outbox"
@@ -249,6 +267,7 @@ WHERE "${schema}"."artifact_produced_outbox".producer_run_id = EXCLUDED.producer
       input.continuationMode ?? "async_effects_gated",
       generation,
       dispatch,
+      ownClaim,
     ],
   };
 }

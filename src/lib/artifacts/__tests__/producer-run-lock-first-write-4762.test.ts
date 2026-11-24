@@ -18,8 +18,17 @@ vi.mock("@/lib/database", () => ({
 vi.mock("@/lib/postgres-sync", () => ({ runPostgresQueriesSync: vi.fn() }));
 // The state a test sets: a publishing call of the run in flight, or a transaction Postgres aborts with `abort`.
 // `finalizedWinner`: the revision a concurrent drive of the same claim finalized, as the ledger row reads it.
-const db: { publishCallInFlight: boolean; abort: unknown; finalizedWinner: string | null } = {
-  publishCallInFlight: false, abort: null, finalizedWinner: null,
+const db: { publishCallInFlight: boolean; abort: unknown; finalizedWinner: string | null; claimsInFlight: string[] } = {
+  publishCallInFlight: false, abort: null, finalizedWinner: null, claimsInFlight: [],
+};
+// What the fence's EXISTS finds for one event statement: `publishCallInFlight` is a claim no write runs under;
+// `claimsInFlight` are the decisions with a call in flight, and a statement that binds its own claim as $14 (the
+// `call_claim.id IS DISTINCT FROM $14::text` term) does not count that one.
+const fenceRefuses = (q: Query): boolean => {
+  if (!/THEN '[^']+' ELSE '1' END\)::integer = 1/.test(q.text)) return false;
+  if (db.publishCallInFlight) return true;
+  const own = q.text.includes("call_claim.id IS DISTINCT FROM $14::text") ? q.values[13] : null;
+  return db.claimsInFlight.some((claim) => own == null || claim !== own);
 };
 vi.mock("@/lib/postgres-async", () => ({
   runPostgresQueriesAsync: async (input: { transaction?: boolean; queries: Query[] }) => {
@@ -37,10 +46,11 @@ vi.mock("@/lib/postgres-async", () => ({
       return [{ rows: row ? [row] : [], rowCount: row ? 1 : 0 }];
     }
     if (db.abort) throw db.abort;
-    if (db.publishCallInFlight) {
-      // What Postgres raises while a claim is counted: the produced event's cast of the in-flight fence's sentinel.
-      const fence = input.queries.map((q) => /THEN '([^']+)' ELSE '1' END\)::integer = 1/.exec(q.text)).find(Boolean);
-      if (fence) throw Object.assign(new Error(`invalid input syntax for type integer: "${fence[1]}"`), { code: "22P02" });
+    // What Postgres raises while a claim is counted: the produced event's cast of the in-flight fence's sentinel.
+    const fence = input.queries.find(fenceRefuses);
+    if (fence) {
+      const sentinel = /THEN '([^']+)' ELSE '1' END\)::integer = 1/.exec(fence.text)![1];
+      throw Object.assign(new Error(`invalid input syntax for type integer: "${sentinel}"`), { code: "22P02" });
     }
     // Only the revision insert returns a row; a reader at any other position finds none.
     return input.queries.map((q) => ({
@@ -86,7 +96,7 @@ vi.mock("@/lib/db/pooled", async () => ({
       query: async (text: string, values: unknown[] = []) => {
         restamp.push({ text, values });
         const fence = /THEN '([^']+)' ELSE '1' END\)::integer = 1/.exec(text);
-        if (fence && db.publishCallInFlight) throw Object.assign(new Error(`invalid input syntax for type integer: "${fence[1]}"`), { code: "22P02" });
+        if (fence && fenceRefuses({ text, values })) throw Object.assign(new Error(`invalid input syntax for type integer: "${fence[1]}"`), { code: "22P02" });
         return { rows: [], rowCount: 0 };
       },
       release: () => {},
@@ -100,6 +110,7 @@ beforeEach(() => {
   db.publishCallInFlight = false;
   db.abort = null;
   db.finalizedWinner = null;
+  db.claimsInFlight = [];
   ledger.claim = { kind: "claimed", ledgerId: "ledger-1" };
 });
 
@@ -190,6 +201,59 @@ describe("cinatra#4762: a retry of an append that reproduces identical bytes cou
     db.publishCallInFlight = true;
     expect(await appendInAttempt(1)).toMatchObject({ ok: false, reason: "publish_call_in_flight" });
     expect(steps()).toEqual(["BEGIN", "lock run-1", "event rev-2 generation 1", "ROLLBACK"]);
+  });
+});
+
+describe("cinatra#4762: a released publishing call's own write passes the in-flight fence of its own claim only", () => {
+  // The frame the passthrough route runs a publishing call in: its attempt and the decision its call check claimed.
+  const appendUnder = async (publishCallClaim: string | null) => {
+    const [{ appendArtifactRevision }, { mcpRequestContextStorage }] = await Promise.all([
+      import("../artifact-revision-append"),
+      import("@cinatra-ai/mcp-server/request-context"),
+    ]);
+    const frame = {
+      runAttempt: { runId: "run-1", resetGeneration: 0 },
+      ...(publishCallClaim ? { publishCallClaim: { runId: "run-1", decisionId: publishCallClaim } } : {}),
+    };
+    return mcpRequestContextStorage.run(frame as never, () => appendArtifactRevision({
+      orgId: "org-1", runId: "run-1", nodeId: "publish", artifactId: "art-1", baseRepresentationRevisionId: "rev-1",
+      content: "hello", mime: "text/markdown", createdBy: null, extension: "@cinatra-ai/post",
+    }));
+  };
+  const eventClaims = () => [...asyncCalls.flat(), ...restamp]
+    .filter((q) => q.text.includes("artifact_produced_outbox")).map((q) => q.values[13]);
+
+  // red-first-expect: expected [ undefined ] to deeply equal [ 'decision-1' ]
+  it("the append of the call that holds decision-1 is taken while only that call is in flight", async () => {
+    db.claimsInFlight = ["decision-1"];
+    expect(await appendUnder("decision-1")).toMatchObject({ ok: true, representationRevisionId: "rev-new" });
+    expect(eventClaims()).toEqual(["decision-1"]);
+  });
+
+  // red-first-expect: expected [] to include 'COMMIT'
+  it("the restamp of a revision the call reuses is taken under its own claim", async () => {
+    ledger.claim = { kind: "finalized", artifactId: "art-1", representationRevisionId: "rev-2", path: "materialize_tool" };
+    db.claimsInFlight = ["decision-1"];
+    expect(await appendUnder("decision-1")).toMatchObject({ ok: true, representationRevisionId: "rev-2", deduped: true });
+    expect(restamp.map((q) => q.text)).toContain("COMMIT");
+    expect(eventClaims()).toEqual(["decision-1"]);
+  });
+
+  // red-first-expect: to match object { ok: false, …(1) }
+  it("a concurrent write under no claim is still refused while that call is in flight", async () => {
+    db.claimsInFlight = ["decision-1"];
+    expect(await appendUnder(null)).toMatchObject({ ok: false, reason: "publish_call_in_flight" });
+    expect(eventClaims()).toEqual([null]);
+  });
+
+  // red-first-expect: to match object { ok: false, …(1) }
+  it("a write under another claim is refused, and so is the call's own write while another call is in flight", async () => {
+    db.claimsInFlight = ["decision-1"];
+    expect(await appendUnder("decision-2")).toMatchObject({ ok: false, reason: "publish_call_in_flight" });
+    expect(eventClaims()).toEqual(["decision-2"]);
+    asyncCalls.length = 0;
+    db.claimsInFlight = ["decision-1", "decision-2"];
+    expect(await appendUnder("decision-1")).toMatchObject({ ok: false, reason: "publish_call_in_flight" });
   });
 });
 

@@ -15,6 +15,7 @@ const {
   buildActorContextFromRunMock,
   collectAllPrimitiveHandlersMock,
   materializeToolArtifactMock,
+  callClaim,
 } = vi.hoisted(() => ({
   isAuthorizedMock: vi.fn(() => true),
   bindBridgeRunIdMock: vi.fn(
@@ -31,10 +32,16 @@ const {
   })),
   collectAllPrimitiveHandlersMock: vi.fn(async () => ({})),
   materializeToolArtifactMock: vi.fn(),
+  // cinatra#4762: the decision the call check claims for the call, or null when it claims none.
+  callClaim: { decisionId: null as string | null },
 }));
 
 vi.mock("@cinatra-ai/agents", () => ({
-  publishCallAllowed: async () => true, // cinatra#4150: no publish decision holds this run
+  // cinatra#4150: no publish decision holds this run, unless a test sets the claim the check takes (cinatra#4762).
+  publishCallAllowed: async (_run: unknown, _step: unknown, hold: (release: () => Promise<void>, claim: { decisionId: string }) => void) => {
+    if (callClaim.decisionId) hold(async () => {}, { decisionId: callClaim.decisionId });
+    return true;
+  },
   readAgentRunById: readAgentRunByIdMock,
 }));
 vi.mock("@/lib/primitive-handlers", () => ({
@@ -95,6 +102,7 @@ function materializeBody(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  callClaim.decisionId = null;
   isAuthorizedMock.mockReturnValue(true);
   bindBridgeRunIdMock.mockResolvedValue({ ok: true });
   readAgentRunByIdMock.mockResolvedValue(RUN);
@@ -192,5 +200,41 @@ describe("POST /api/agents/passthrough — artifact_materialize", () => {
     // Echoes the shaped input fields for OAS-declared output parity.
     expect(body.extension).toBe(EXT);
     expect(body.title).toBe("My Draft");
+  });
+});
+
+describe("POST /api/agents/passthrough — a released publishing artifact_materialize (cinatra#4762)", () => {
+  // What the create writes its produced event under: the claim of the frame the materializer runs in.
+  const claimSeen = async () => {
+    const { publishCallClaimForRun, buildProducedEventInsertOp } = await import("@/lib/lifecycle/lifecycle-emit");
+    let seen: { read: string | null; bound: unknown } | null = null;
+    materializeToolArtifactMock.mockImplementation(async () => {
+      seen = {
+        read: publishCallClaimForRun("run-1"),
+        bound: buildProducedEventInsertOp("cinatra", {
+          orgId: "org-a", artifactId: "art-1", representationRevisionId: "rep-1", emitter: "createSemanticArtifact",
+          originKind: "agent_generated", producerRunId: "run-1", producerAttempt: null,
+        }).values[13],
+      };
+      return { ok: true, artifactId: "art-1", representationRevisionId: "rep-1", deduped: false };
+    });
+    return () => seen;
+  };
+
+  // red-first-expect: hold is not a function
+  it("creates under the claim its call check took, so the create's event passes that claim's fence", async () => {
+    callClaim.decisionId = "decision-1";
+    const seen = await claimSeen();
+    const res = await POST(post(materializeBody()));
+    expect(res.status).toBe(200);
+    expect(seen()).toEqual({ read: "decision-1", bound: "decision-1" });
+  });
+
+  // red-first-expect: expected 500 to be 200
+  it("never takes a claim from the request: a call the check claimed nothing for writes under none", async () => {
+    const seen = await claimSeen();
+    const res = await POST(post({ ...materializeBody({ publishCallClaim: "decision-1" }), publishCallClaim: { runId: "run-1", decisionId: "decision-1" } }));
+    expect(res.status).toBe(200);
+    expect(seen()).toEqual({ read: null, bound: null });
   });
 });

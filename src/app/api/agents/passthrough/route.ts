@@ -507,7 +507,13 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
   }
   // cinatra#4150 — no publish without a released decision, enforced at the call,
   // before any tool runs: the run the binding proved, the verified step or none.
-  if (!(await publishCallAllowed(run, verifiedStepId, holdRelease))) {
+  // cinatra#4762: the decision the check claimed for this call, as the server took it, never from the request. The
+  // call's frame carries it, so the call's own output passes the in-flight fence of that claim and no other.
+  let publishCallClaim: { runId: string; decisionId: string } | undefined;
+  if (!(await publishCallAllowed(run, verifiedStepId, (release, claim) => {
+    holdRelease(release);
+    if (claim && typeof claim.decisionId === "string" && claim.decisionId) publishCallClaim = { runId: run.id, decisionId: claim.decisionId };
+  }))) {
     return NextResponse.json(
       { error: "This call waits for a publish decision.", code: "publish_not_released" },
       { status: 403 },
@@ -595,6 +601,7 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
       ...(verifiedStepId ? { verifiedStepId } : {}),
       ...(verifiedExecutedSource ? { verifiedExecutedSource } : {}),
       ...(orgWriteAuthority ? { orgWriteAuthority } : {}),
+      ...(publishCallClaim ? { publishCallClaim } : {}),
     }, async () => {
     // Every deterministic branch shares the verified executing-source frame;
     // no materializer, extension-data branch or primitive gets a legacy bypass.

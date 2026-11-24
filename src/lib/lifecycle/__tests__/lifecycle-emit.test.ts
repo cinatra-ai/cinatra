@@ -10,8 +10,10 @@ import {
   isPublishCallInFlightAbort,
   maybeBuildProducedEventInsertOp,
   producerRunLockOps,
+  publishCallClaimForRun,
   publishCallInFlightOr,
 } from "../lifecycle-emit";
+import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server/request-context";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "../lifecycle-activation";
 import { producedEventId } from "../lifecycle-produced-event";
 
@@ -63,8 +65,9 @@ describe("buildProducedEventInsertOp — op shape", () => {
     const op = buildProducedEventInsertOp("cinatra", base);
     expect(op.text).toContain(`"cinatra"."artifact_produced_outbox"`);
     expect(op.text).toContain("ON CONFLICT (event_id) DO UPDATE SET producer_run_generation");
-    // 13 bound params ($1..$13; $12/$13 the producing attempt, cinatra#4762); continuation_address + status are SQL literals.
-    expect(op.values).toHaveLength(13);
+    // 14 bound params ($1..$14; $12/$13 the producing attempt, $14 the call's own publishing claim, cinatra#4762);
+    // continuation_address + status are SQL literals.
+    expect(op.values).toHaveLength(14);
     expect(op.values[0]).toBe(
       producedEventId("art-1", "rev-1", "artifact_produced"),
     );
@@ -122,20 +125,20 @@ describe("buildProducedEventInsertOp — op shape", () => {
         `coalesce($12::integer, (SELECT live_run.reset_generation FROM "cinatra"."agent_runs" live_run WHERE live_run.id = $7::text AND live_run.execution_attempt_id = $13::text AND live_run.status IN ('running', 'pending_approval')), -1)`,
       );
       expect(op.values[6]).toBe("run-9");
-      expect(op.values.slice(11)).toEqual([0, null]);
+      expect(op.values.slice(11, 13)).toEqual([0, null]);
     }
   });
 
   // red-first-expect: expected [] to deeply equal [ null, 'attempt-7' ]
   it("a verified dispatch names its attempt id; no attempt identity, or no run, records -1 (cinatra#4762)", () => {
     const dispatched = buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { executionAttemptId: "attempt-7" } });
-    expect(dispatched.values.slice(11)).toEqual([null, "attempt-7"]);
+    expect(dispatched.values.slice(11, 13)).toEqual([null, "attempt-7"]);
     // Neither parameter set: the coalesce falls through to -1.
-    expect(buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: null }).values.slice(11)).toEqual([null, null]);
+    expect(buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: null }).values.slice(11, 13)).toEqual([null, null]);
     // A carried attempt with no run named is no attempt of any run.
-    expect(buildProducedEventInsertOp("cinatra", { ...base, producerRunId: null, producerAttempt: { generation: 3 } }).values.slice(11)).toEqual([null, null]);
+    expect(buildProducedEventInsertOp("cinatra", { ...base, producerRunId: null, producerAttempt: { generation: 3 } }).values.slice(11, 13)).toEqual([null, null]);
     // A generation that is no safe integer is none.
-    expect(buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 1.5 } }).values.slice(11)).toEqual([null, null]);
+    expect(buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 1.5 } }).values.slice(11, 13)).toEqual([null, null]);
   });
 
   // red-first-expect: to deeply equal { locksRunRow: true, guardKept: true }
@@ -156,7 +159,7 @@ describe("buildProducedEventInsertOp — op shape", () => {
     // That call read the review fence without this output; the event's cast of the fence's sentinel aborts the writer's
     // transaction, its artifact rows included. The writer's earlier lock statement (producerRunLockOps) makes this read
     // see every claim committed before it.
-    const CALL = `(CASE WHEN EXISTS (SELECT 1 FROM "cinatra"."agent_run_publish_decisions" call_claim JOIN "cinatra"."agent_runs" claim_run ON claim_run.id = call_claim.run_id WHERE call_claim.run_id = $7::text AND call_claim.calls_in_flight > 0 AND coalesce(call_claim.run_generation, claim_run.reset_generation) = claim_run.reset_generation) THEN 'cinatra_publish_call_in_flight' ELSE '1' END)::integer = 1`;
+    const CALL = `(CASE WHEN EXISTS (SELECT 1 FROM "cinatra"."agent_run_publish_decisions" call_claim JOIN "cinatra"."agent_runs" claim_run ON claim_run.id = call_claim.run_id WHERE call_claim.run_id = $7::text AND call_claim.calls_in_flight > 0 AND coalesce(call_claim.run_generation, claim_run.reset_generation) = claim_run.reset_generation AND call_claim.id IS DISTINCT FROM $14::text) THEN 'cinatra_publish_call_in_flight' ELSE '1' END)::integer = 1`;
     for (const op of [
       buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 0 } }),
       buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 0 } }, { whereExistsSql: "EXISTS (SELECT 1)" }),
@@ -164,6 +167,28 @@ describe("buildProducedEventInsertOp — op shape", () => {
       expect(op.text).toMatch(/calls_in_flight > 0/);
       expect(op.text.replace(/\s+/g, " ")).toContain(` AND ${CALL}`);
     }
+  });
+
+  // red-first-expect: publishCallClaimForRun) is not a function
+  it("a write in the frame of a publishing call names that call's own claim, so only that claim does not refuse it (cinatra#4762)", () => {
+    const inFrame = <T>(frame: Record<string, unknown> | null, fn: () => T): T =>
+      frame ? mcpRequestContextStorage.run(frame as never, fn) : fn();
+    const claimOf = (frame: Record<string, unknown> | null, runId: string | null) => inFrame(frame, () => ({
+      read: publishCallClaimForRun(runId),
+      bound: buildProducedEventInsertOp("cinatra", { ...base, producerRunId: runId, producerAttempt: { generation: 0 } }).values[13],
+    }));
+    const call = { publishCallClaim: { runId: "run-9", decisionId: "decision-1" } };
+    // The call's own write: the claim the route carried, bound as $14, which the fence's EXISTS does not count.
+    expect(claimOf(call, "run-9")).toEqual({ read: "decision-1", bound: "decision-1" });
+    expect(inFrame(call, () => buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 0 } }).text)
+      .replace(/\s+/g, " ")).toContain("AND call_claim.id IS DISTINCT FROM $14::text) THEN 'cinatra_publish_call_in_flight'");
+    // A write under no claim (no frame, a frame with none, no run named) binds null: every claim of the run refuses it.
+    expect(claimOf(null, "run-9")).toEqual({ read: null, bound: null });
+    expect(claimOf({ runId: "run-9" }, "run-9")).toEqual({ read: null, bound: null });
+    expect(claimOf(call, null)).toEqual({ read: null, bound: null });
+    // A claim of another run is no claim of this one.
+    expect(claimOf({ publishCallClaim: { runId: "run-other", decisionId: "decision-1" } }, "run-9")).toEqual({ read: null, bound: null });
+    expect(claimOf({ publishCallClaim: { runId: "run-9", decisionId: "" } }, "run-9")).toEqual({ read: null, bound: null });
   });
 
   // red-first-expect: expected undefined to be defined
@@ -191,7 +216,7 @@ describe("buildProducedEventInsertOp — op shape", () => {
     }
   });
 
-  // red-first-expect: producerRunLockOps is not a function
+  // red-first-expect: producerRunLockOps) is not a function
   it("a writer whose rows precede its event takes the producing run's row FOR KEY SHARE first, only when it splices the event (cinatra#4762)", () => {
     const event = maybeBuildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 0 } });
     expect(producerRunLockOps("cinatra", "run-9", event)).toEqual([

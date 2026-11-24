@@ -496,7 +496,7 @@ describe("cinatra#4762 — a publishing step calls only the host routes that che
     expect(await compileError(publishingSubflow("https://api.example.invalid/v2/posts"))).toMatch(/^PUBLISH_CALL_UNCHECKED: node "inner_write" of publishing step "sub" /);
   });
 
-  // red-first-expect: checkPublishingCallRoutes is not a function
+  // red-first-expect: checkPublishingCallRoutes) is not a function
   it("the model bridge and the passthrough pass, at the top level and inside a publishing subflow", async () => {
     expect(await publishingStepsOf(publishingSubflow("{{CINATRA_BASE_URL}}/api/llm-bridge"))).toEqual(["sub"]);
     for (const url of ["{{CINATRA_BASE_URL}}/api/llm-bridge", "{{CINATRA_BASE_URL}}/api/agents/passthrough"]) {
@@ -514,7 +514,7 @@ describe("cinatra#4762 — a publishing step calls only the host routes that che
     expect(error).not.toContain("peer.example.invalid");
   });
 
-  // red-first-expect: checkPublishingCallRoutes is not a function
+  // red-first-expect: checkPublishingCallRoutes) is not a function
   it("any other address field inside a publishing step is refused, while a local child agent stays allowed", () => {
     for (const key of ["agent_url", "base_url", "baseUrl", "api_spec_uri", "service_endpoint"]) {
       const doc = buildFlow({ middle: [agentNode({ component_type: "Agent", id: "child", name: "child", llm_config: { component_type: "SomeLlmConfig", id: "cfg", name: "cfg", [key]: "https://x.example.invalid" } })] });
@@ -532,14 +532,14 @@ describe("cinatra#4762 — a publishing step calls only the host routes that che
     expect(error).not.toContain("peer.example.invalid");
   });
 
-  // red-first-expect: checkPublishingCallRoutes is not a function
+  // red-first-expect: checkPublishingCallRoutes) is not a function
   it("a reference inside a publishing step that resolves nowhere is refused", async () => {
     const doc = buildFlow({ middle: [agentNode({ $component_ref: "missing_agent" })] });
     expect(checkPublishingCallRoutes(doc, ["publish"], {})).toEqual({ ok: false, error: expect.stringMatching(/^PUBLISH_CALL_UNCHECKED: node "publish" of publishing step "publish" references a component that resolves nowhere/) });
     expect(await compileError(doc)).toMatch(/^PUBLISH_CALL_UNCHECKED: node "publish" of publishing step "publish" references a component /);
   });
 
-  // red-first-expect: checkPublishingCallRoutes is not a function
+  // red-first-expect: checkPublishingCallRoutes) is not a function
   it("a publishing AgentNode whose child agent is a local or global Agent still compiles", async () => {
     const child = { component_type: "Agent", id: "child", name: "child", system_prompt: "write", tools: [] };
     writeFileSync(path.join(tempDir, "components.json"), JSON.stringify({ components: { shared_child: { ...child, id: "shared_child", name: "shared_child" } } }));

@@ -792,6 +792,12 @@ async function resolvePublishingStep(
 /** The release of a publishing call's claim: it resolves once the release is written, or logged as not written. */
 export type PublishCallRelease = () => Promise<void>;
 
+/** cinatra#4762 — the claim a publishing call took: the released decision it holds. The caller carries it with the call,
+ *  so the call's own output passes the in-flight fence of exactly this claim (lifecycle-emit buildProducedEventInsertOp). */
+export interface PublishCallClaim {
+  decisionId: string;
+}
+
 /**
  * The call-site check of the model bridge and the passthrough road (A6): may this call of `run` go on? `verifiedStepId`
  * is the step the runtime signed for the call, or undefined when the call carries no verified step.
@@ -800,7 +806,8 @@ export type PublishCallRelease = () => Promise<void>;
  *     attempt written after the release, or a review of it opened since, refuses the call until it is approved. In the
  *     same transaction the call takes the decision (claimPublishCall): until its release is written, no output or review of
  *     the run is written, so nothing the fence did not see comes before the call's effect. A claim that cannot be
- *     taken refuses the call. The claim is handed to `holdRelease` as its release: the caller runs it once the call is
+ *     taken refuses the call. The claim is handed to `holdRelease` with its release (and the decision it holds, so the
+ *     call's own output passes the in-flight fence of that claim only): the caller runs the release once the call is
  *     done, whatever its outcome, and awaits it before it answers, so the next node of the run never writes an output or
  *     opens a review while the release is still pending. The release never rejects: a release that cannot be written is
  *     logged, and the claim stays counted, so the attempt's later outputs and reviews stay refused until a retry's reset
@@ -817,7 +824,7 @@ export type PublishCallRelease = () => Promise<void>;
 export async function publishCallAllowed(
   run: { id: string; templateId: string },
   verifiedStepId: string | undefined,
-  holdRelease: (release: PublishCallRelease) => void,
+  holdRelease: (release: PublishCallRelease, claim: PublishCallClaim) => void,
 ): Promise<boolean> {
   try {
     const template = await readAgentTemplateById(run.templateId);
@@ -845,7 +852,7 @@ export async function publishCallAllowed(
         holdRelease(() => (released ??= endPublishCall(row.id).catch((err: unknown) => {
           // The count stays up: the run's output stays refused until a retry's reset (fail closed).
           console.warn(`[publish-decision] the end of a publishing call could not be written: ${nameOf(err)}`);
-        })));
+        })), { decisionId: row.id });
       }
       return claimed;
     }

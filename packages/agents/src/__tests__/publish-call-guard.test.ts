@@ -183,6 +183,10 @@ describe("a verified step the template lists as publishing", () => {
     reviewSeam.listReviews.mockResolvedValue([APPROVED_REVIEW, { ...APPROVED_REVIEW, id: "gate-2" }]);
     expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(true);
     expect(reviewSeam.listReviews.mock.calls.every((c) => c[1] === TX)).toBe(true);
+    // The served call is handed its release with the decision it claimed, so its own output passes that claim's fence.
+    const held: unknown[] = [];
+    expect(await publishCallAllowed(RUN, "publish", (release, claim) => { held.push(claim); void release(); })).toBe(true);
+    expect(held).toEqual([{ decisionId: "d1" }]);
     // A run whose row is gone, or a fence that cannot be read: refused.
     decisions.withRunRowLock.mockImplementationOnce(async (_runId: string, fn: (tx: unknown, run: unknown) => Promise<unknown>) => fn(TX, null));
     expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(false);
