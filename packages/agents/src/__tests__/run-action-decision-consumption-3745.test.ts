@@ -6,7 +6,7 @@
  * graph is the repository's synthetic agent fixture with two declared steps, read by the host's real declaration
  * reader. The guarded transaction is a stand-in that keeps the rows of each table in memory; the consumption table
  * behaves as its primary key does (an insert of a used key inserts nothing). The decision read is honoured from the
- * query itself: the stand-in renders the read's where and order to SQL and runs only the one shape it knows (run and step
+ * query itself: the stand-in renders the read's where and order to SQL and runs only the one shape it knows (run and node
  * from the query's own parameters, the publish-decision store's current-attempt predicate, created_at then id, newest
  * first); any other where or order throws, so the stand-in cannot filter what the query does not say. Creation times
  * are kept at microsecond precision (`createdAtMicros`, which a JavaScript Date cannot hold).
@@ -157,7 +157,7 @@ h.park = async (table, value) => {
   }
 };
 
-/** The decision read, run from the query's own where and order. The one where shape known is the run and step (taken
+/** The decision read, run from the query's own where and order. The one where shape known is the run and node (taken
  *  from the query's parameters) and the store's current-attempt predicate; the one order known is created_at then id,
  *  newest first. Anything else throws. The current attempt is the run's reset generation, or no generation at all. */
 function databaseDecisionRead(rows: Row[], where: unknown, order: unknown[] | null): Row[] {
@@ -217,7 +217,8 @@ const GRAPH = JSON.parse(readFileSync(new URL("./fixtures/synthetic-gemini-agent
   $referenced_components: Record<string, Record<string, unknown>>;
 };
 const graph = structuredClone(GRAPH);
-graph.$referenced_components[SEND_STEP]!.metadata = { cinatra: { tools: ["mail_send"] } };
+// The step is a top-level node that publishes: its own decision covers it.
+graph.$referenced_components[SEND_STEP]!.metadata = { cinatra: { tools: ["mail_send"], publishes: true } };
 graph.$referenced_components[OTHER_STEP] = { ...structuredClone(GRAPH.$referenced_components[SEND_STEP]!), id: OTHER_STEP,
   name: OTHER_STEP, metadata: { cinatra: { tools: ["post_publish"] } } };
 const source = JSON.stringify(graph);
@@ -253,9 +254,9 @@ describe("the person's affirmative decision for the run's action, used once", ()
     await loadModule();
     const result = await consume(input());
     expect(result).toEqual({ consumptionKey: "publish_decision:decision-1", decisionId: "decision-1", decidedBy: "user-7",
-      stepId: SEND_STEP, action });
+      stepId: SEND_STEP, decisionNodeId: SEND_STEP, action });
     expect(consumptions()).toEqual([expect.objectContaining({ gateId: "publish_decision:decision-1", runId: "run-1",
-      orgId: "org-1", stepId: SEND_STEP, toolIdentity: action, executedSourceSha256: sha })]);
+      orgId: "org-1", stepId: SEND_STEP, toolIdentity: { ...action, decisionNodeId: SEND_STEP }, executedSourceSha256: sha })]);
     // One transaction under the org-write guard; the rows are locked run, binding, decision, then the one insert.
     expect(h.calls).toEqual(["guard:run.execute", "lock:run:update", "lock:binding:update", "lock:decision:update",
       "insert:consumption"]);
@@ -489,6 +490,98 @@ describe("the person's affirmative decision for the run's action, used once", ()
     const org = await consume(input({ authority: { orgId: "org-2" } })).catch((e: unknown) => e as Error & { code?: string });
     expect(org).toMatchObject({ code: "action_person_decision_unavailable" });
     expect(String((org as Error).message)).not.toContain("org-7");
+    expect(consumptions()).toEqual([]);
+  });
+});
+
+// The email-outreach shape: the send step declares the tool and sits in a subflow definition that the top-level node
+// `sender_flow` runs. A publish decision is recorded only for a top-level node that publishes, keyed by that node, so
+// the decision that covers the send step is the decision of `sender_flow`.
+const OUTREACH_STEP = "sender-send";
+const OUTREACH_NODE = "sender_flow";
+const OUTREACH_TOOL = "email_outreach_send_initial_start";
+const bridgeStep = GRAPH.$referenced_components[SEND_STEP]!;
+type Doc = { nodes: Array<{ $component_ref: string }>; $referenced_components: Record<string, Record<string, unknown>> };
+function outreachGraph(): Doc {
+  const ref = (id: string) => ({ $component_ref: id });
+  return {
+    component_type: "Flow", id: "outreach", name: "outreach", start_node: ref("start"),
+    nodes: [ref("start"), ref("drafts_flow"), ref(OUTREACH_NODE), ref("end")],
+    $referenced_components: {
+      start: structuredClone(GRAPH.$referenced_components.start!),
+      end: structuredClone(GRAPH.$referenced_components.end!),
+      drafts_flow: { component_type: "FlowNode", id: "drafts_flow", name: "drafts", subflow: ref("drafting-subflow") },
+      "drafting-subflow": { component_type: "Flow", id: "drafting-subflow", name: "drafting", nodes: [ref("drafts-write")],
+        $referenced_components: { "drafts-write": { ...structuredClone(bridgeStep), id: "drafts-write", name: "drafts-write" } } },
+      [OUTREACH_NODE]: { component_type: "FlowNode", id: OUTREACH_NODE, name: "Test & send",
+        subflow: ref("email-delivery-subflow"), metadata: { cinatra: { publishes: true } } },
+      "email-delivery-subflow": { component_type: "Flow", id: "email-delivery-subflow", name: "delivery",
+        start_node: ref("sender-start"), nodes: [ref("sender-start"), ref(OUTREACH_STEP)],
+        $referenced_components: {
+          "sender-start": { component_type: "StartNode", id: "sender-start", name: "sender-start" },
+          [OUTREACH_STEP]: { ...structuredClone(bridgeStep), id: OUTREACH_STEP, name: OUTREACH_STEP,
+            metadata: { cinatra: { tools: [OUTREACH_TOOL, "objects_get"] } } },
+        } },
+    },
+  } as unknown as Doc;
+}
+/** Binds `doc` as the run's graph and returns a consumption input of the send step over it. */
+function bindOutreach(doc: Doc) {
+  const text = JSON.stringify(doc);
+  const digest = createHash("sha256").update(text).digest("hex");
+  h.tables.set(agentRunOutwardActionPolicies, [{ runId: "run-1", orgId: "org-1", executionAttemptId: "attempt-1",
+    policy: { ...policy, source: text, sourceSha256: digest, executedSourceSha256: digest, declarationSourceSha256: digest } }]);
+  return input({ proof: { ...proofFor(OUTREACH_STEP), sourceSha256: digest, executedSourceSha256: digest,
+    declarationSourceSha256: digest }, action: { ...action, toolName: OUTREACH_TOOL } });
+}
+
+describe("a tool step nested in a subflow is covered by its top-level publishing node's decision", () => {
+  it("admits the send step once after a released decision on the top-level node that runs its subflow", async () => {
+    await loadModule();
+    const call = bindOutreach(outreachGraph());
+    h.tables.set(agentRunPublishDecisions, [decision({ nodeId: OUTREACH_NODE })]);
+    // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
+    const result = await consume(call);
+    expect(result).toMatchObject({ consumptionKey: "publish_decision:decision-1", decisionId: "decision-1",
+      stepId: OUTREACH_STEP, decisionNodeId: OUTREACH_NODE });
+    expect(consumptions()).toEqual([expect.objectContaining({ gateId: "publish_decision:decision-1",
+      stepId: OUTREACH_STEP, toolIdentity: { ...action, toolName: OUTREACH_TOOL, decisionNodeId: OUTREACH_NODE } })]);
+    await expect(consume(call)).rejects.toMatchObject({ code: "action_person_decision_already_consumed" });
+    expect(consumptions()).toHaveLength(1);
+  });
+
+  it("refuses a decision on another node: the step itself, or another top-level node", async () => {
+    await loadModule();
+    const call = bindOutreach(outreachGraph());
+    for (const nodeId of [OUTREACH_STEP, "drafts_flow"]) {
+      h.tables.set(agentRunPublishDecisions, [decision({ nodeId })]);
+      await expect(consume(call)).rejects.toMatchObject({ code: "action_person_decision_missing" });
+    }
+    expect(consumptions()).toEqual([]);
+  });
+
+  it("refuses a step that no top-level node runs, or that more than one runs", async () => {
+    await loadModule();
+    h.tables.set(agentRunPublishDecisions, [decision({ nodeId: OUTREACH_NODE })]);
+    const orphan = outreachGraph();
+    orphan.nodes = orphan.nodes.filter((n) => n.$component_ref !== OUTREACH_NODE);
+    // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
+    await expect(consume(bindOutreach(orphan))).rejects.toMatchObject({ code: "action_decision_node_unresolved" });
+    const twice = outreachGraph();
+    twice.$referenced_components.drafts_flow!.subflow = { $component_ref: "email-delivery-subflow" };
+    await expect(consume(bindOutreach(twice))).rejects.toMatchObject({ code: "action_decision_node_ambiguous" });
+    expect(consumptions()).toEqual([]);
+  });
+
+  it("refuses when the top-level node that runs the step does not publish", async () => {
+    await loadModule();
+    h.tables.set(agentRunPublishDecisions, [decision({ nodeId: OUTREACH_NODE })]);
+    for (const publishes of [undefined, false, "true"]) {
+      const doc = outreachGraph();
+      doc.$referenced_components[OUTREACH_NODE]!.metadata = publishes === undefined ? {} : { cinatra: { publishes } };
+      // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
+      await expect(consume(bindOutreach(doc))).rejects.toMatchObject({ code: "action_decision_node_not_publishing" });
+    }
     expect(consumptions()).toEqual([]);
   });
 });

@@ -11,8 +11,14 @@
 //   - the run still runs under the proof's attempt, context and bound source;
 //   - the step of the proof declares the action's tool in the run's bound graph
 //     (a step that declares nothing binds no decision to an action: refused);
-//   - the newest decision of exactly this run and step, in the run's current
-//     attempt, reads `released`, names the person who decided it and belongs to
+//   - the decision that covers the step is the one of the step's top-level
+//     publishing ancestor in the run's bound graph (a publish decision is
+//     recorded only for a top-level node that declares `publishes: true`; a
+//     top-level step is its own ancestor). The ancestor is read from the bound
+//     graph, never from the caller; no, or more than one, ancestor, or one that
+//     does not publish, is refused;
+//   - the newest decision of exactly this run and that node, in the run's
+//     current attempt, reads `released`, names the person who decided it and belongs to
 //     the run's organization;
 //   - no consumption of that decision exists; the insert of the consumption row
 //     (its primary key is the decision's key) is the fence, so of two concurrent
@@ -51,6 +57,7 @@ import {
   artifactReviewActionConsumptions,
 } from "./schema";
 import { CURRENT_ATTEMPT, decodeStoredPublishDecision, type PublishDecisionRow } from "./publish-decision-store";
+import { findPublishingAncestor } from "./validate-oas-runtime-invariants";
 
 /** The tool that would act and the loaded extension version that owns it (the loaded identity's fields). */
 export type RunActionToolIdentity = {
@@ -74,7 +81,10 @@ export type RunActionDecisionConsumption = {
   readonly consumptionKey: string;
   readonly decisionId: string;
   readonly decidedBy: string;
+  /** The step that calls the tool (it declares the tool). */
   readonly stepId: string;
+  /** The top-level publishing node whose decision covers the step (the step itself when it is that node). */
+  readonly decisionNodeId: string;
   readonly action: RunActionToolIdentity;
 };
 
@@ -100,6 +110,18 @@ function readActionIdentity(value: unknown): RunActionToolIdentity {
   return Object.freeze(out) as unknown as RunActionToolIdentity;
 }
 
+/** The top-level publishing node of the bound graph whose decision covers the step; refused when there is none, more
+ *  than one, or it declares no publication. */
+function readDecisionNode(source: string, stepId: string): string {
+  let document: unknown;
+  try { document = JSON.parse(source); } catch { return refuse("action_decision_node_unresolved"); }
+  const ancestor = findPublishingAncestor(document, stepId);
+  if (ancestor.kind === "ambiguous") return refuse("action_decision_node_ambiguous");
+  if (ancestor.kind === "not_publishing") return refuse("action_decision_node_not_publishing");
+  if (ancestor.kind !== "resolved" || !fieldValid(ancestor.nodeId)) return refuse("action_decision_node_unresolved");
+  return ancestor.nodeId;
+}
+
 /**
  * Check the person's recorded, affirmative decision for exactly this run, step and action, and record its single
  * consumption, in one transaction. Returns the consumption; throws a RunStepToolPolicyRefusal otherwise:
@@ -108,7 +130,9 @@ function readActionIdentity(value: unknown): RunActionToolIdentity {
  *   - `action_run_source_stale`: the run is not running under the proof's attempt, context and bound source;
  *   - `step_tool_not_declared` / `action_decision_step_undeclared`: the step does not declare the action's tool, or
  *     declares no tools at all (so no decision of it can name an action);
- *   - `action_person_decision_missing`: no decision of this step in the run's current attempt;
+ *   - `action_decision_node_unresolved` / `action_decision_node_ambiguous` / `action_decision_node_not_publishing`: no
+ *     top-level node of the bound graph holds the step, more than one does, or the one that does declares no publication;
+ *   - `action_person_decision_missing`: no decision of that node in the run's current attempt;
  *   - `action_person_decision_open`: the newest such decision still waits for a person;
  *   - `action_person_decision_not_affirmative`: it was declined, expired or ended with the run;
  *   - `action_person_decision_invalid`: the store cannot read the row, or it reads released but names no person, or
@@ -144,17 +168,18 @@ export async function consumeRunActionDecision(input: ConsumeRunActionDecisionIn
       const reading = assertRunStepToolAllowed({ policy, contextId: p.contextId,
         executedSourceSha256: p.executedSourceSha256, stepId: p.stepId, toolName: action.toolName });
       if (reading.kind !== "declared") refuse("action_decision_step_undeclared");
+      const decisionNodeId = readDecisionNode(policy.source, p.stepId);
 
-      // The newest decision of exactly this step in the run's current attempt, chosen by the database: the store's own
+      // The newest decision of exactly that node in the run's current attempt, chosen by the database: the store's own
       // current-attempt predicate (a row with no generation, written by an older node, is current until a reset stamps
       // it) and the store's order (created_at, then id, both descending), at the database's full timestamp precision.
       const [stored] = await tx.select().from(agentRunPublishDecisions)
-        .where(and(eq(agentRunPublishDecisions.runId, runId), eq(agentRunPublishDecisions.nodeId, p.stepId),
+        .where(and(eq(agentRunPublishDecisions.runId, runId), eq(agentRunPublishDecisions.nodeId, decisionNodeId),
           CURRENT_ATTEMPT))
         .orderBy(desc(agentRunPublishDecisions.createdAt), desc(agentRunPublishDecisions.id))
         .limit(1)
         .for("update");
-      if (!stored || stored.runId !== runId || stored.nodeId !== p.stepId) return refuse("action_person_decision_missing");
+      if (!stored || stored.runId !== runId || stored.nodeId !== decisionNodeId) return refuse("action_person_decision_missing");
       // The locked row is read through the store's own decoder: a row the store cannot read (an unknown status,
       // unreadable surfaced values or declared rows) is refused with a fixed code and none of its stored text.
       let decision: PublishDecisionRow;
@@ -175,12 +200,13 @@ export async function consumeRunActionDecision(input: ConsumeRunActionDecisionIn
       if (used.some((u) => u.gateId === consumptionKey)) refuse("action_person_decision_already_consumed");
       const inserted = await tx.insert(artifactReviewActionConsumptions).values({
         gateId: consumptionKey, runId, orgId, stepId: p.stepId,
-        // A plain copy: the frozen identity is stored as its fields, never as the object.
-        toolIdentity: { ...action }, executedSourceSha256: p.executedSourceSha256,
+        // A plain copy: the frozen identity is stored as its fields, never as the object. The step column holds the
+        // tool step; the node whose decision is used up is recorded beside the identity.
+        toolIdentity: { ...action, decisionNodeId }, executedSourceSha256: p.executedSourceSha256,
       }).onConflictDoNothing().returning({ gateId: artifactReviewActionConsumptions.gateId });
       if (inserted.length !== 1 || inserted[0]!.gateId !== consumptionKey) refuse("action_person_decision_already_consumed");
       return Object.freeze({ consumptionKey, decisionId: decision.id, decidedBy: decision.decidedBy as string,
-        stepId: p.stepId, action });
+        stepId: p.stepId, decisionNodeId, action });
     });
   } catch (err) {
     if (err instanceof RunStepToolPolicyRefusal) throw err;
