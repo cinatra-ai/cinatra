@@ -287,3 +287,58 @@ describe("enabler 0.6 — a DOWNLOAD capability is fetched, never navigated to",
     expect(isSameOriginDisplaySubresourceFetch(linkClick)).toBe(false);
   });
 });
+
+// cinatra#4738 round 2: a PUBLISH ROW'S byte capability. Sealed as a publish row's, and proven against that row's own
+// set through its own port, never a gate's. Red at ffe421ea, whose codec seals no kind.
+describe("a publish row's byte capability", () => {
+  const PUBLISH = { ...PAYLOAD, reviewTaskId: "publish-decision:subject", subject: "publish-decision" as const };
+  const pinned = [{ artifactId: PAYLOAD.artifactId, representationRevisionId: PAYLOAD.representationRevisionId }];
+
+  // red-first-expect: expected undefined to be 'publish-decision'
+  it("seals its kind, and a gate capability seals none", () => {
+    expect(verifyReviewIslandByteCapability(mintReviewIslandByteCapability(PUBLISH))?.subject).toBe("publish-decision");
+    expect(Object.prototype.hasOwnProperty.call(verifyReviewIslandByteCapability(capability), "subject")).toBe(false);
+    expect(mintReviewIslandByteCapability({ ...PAYLOAD, subject: "gate" as never })).toBeNull();
+  });
+
+  it("is proven against the row's own set, and the gate port is never read", async () => {
+    let gateRead = false;
+    let asked: unknown = null;
+    const decision = await decideIslandByteServe({
+      encodedCapability: mintReviewIslandByteCapability(PUBLISH),
+      headers: subresourceHeaders(),
+      ports: ports({
+        readGatePinnedTargets: async () => {
+          gateRead = true;
+          return pinned;
+        },
+        readPublishDecisionPinnedTargets: async (input) => {
+          asked = input;
+          return pinned;
+        },
+      }),
+    });
+    expect(asked).toEqual({ runId: "run-1", subjectKey: "publish-decision:subject", userId: "user-1", orgId: "org-1" });
+    expect(decision.ok).toBe(true);
+    expect(gateRead).toBe(false);
+  });
+
+  it("is refused when the row does not show the target, and by a port set with no publish reader", async () => {
+    const encoded = mintReviewIslandByteCapability(PUBLISH);
+    const decide = (overrides: Partial<IslandByteServePorts>) =>
+      decideIslandByteServe({ encodedCapability: encoded, headers: subresourceHeaders(), ports: ports(overrides) });
+    expect((await decide({ readPublishDecisionPinnedTargets: async () => [{ artifactId: "artifact-2", representationRevisionId: "rev-2" }] })).ok).toBe(false);
+    expect((await decide({ readPublishDecisionPinnedTargets: async () => null })).ok).toBe(false);
+    // The gate port pins the target, but a publish capability never reads it.
+    expect((await decide({})).ok).toBe(false);
+  });
+
+  it("a gate capability is never proven against a publish row's set", async () => {
+    const decision = await decideIslandByteServe({
+      encodedCapability: capability,
+      headers: subresourceHeaders(),
+      ports: ports({ readGatePinnedTargets: async () => null, readPublishDecisionPinnedTargets: async () => pinned }),
+    });
+    expect(decision.ok).toBe(false);
+  });
+});

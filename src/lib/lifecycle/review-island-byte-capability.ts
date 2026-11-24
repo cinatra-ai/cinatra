@@ -95,6 +95,13 @@ export interface ReviewIslandByteCapabilityPayload {
   representationRevisionId: string;
   /** Inline or attachment. Sealed, so the holder cannot upgrade one to the other. */
   disposition: IslandByteDisposition;
+  /**
+   * WHAT the capability's run and `reviewTaskId` name (cinatra#4738 round 2). ABSENT is a review gate, exactly as
+   * every capability minted before this field existed. `publish-decision` is one artifacts row of a publish card: its
+   * `reviewTaskId` holds that row's subject key, and the serving path proves the target against that row's set, never
+   * a gate's. Sealed, so a holder cannot turn one kind into the other.
+   */
+  subject?: "publish-decision";
 }
 
 export interface VerifiedReviewIslandByteCapability
@@ -117,6 +124,7 @@ export function mintReviewIslandByteCapability(
   options?: { nowSeconds?: number; ttlSeconds?: number },
 ): string | null {
   if (payload.disposition !== "preview" && payload.disposition !== "download") return null;
+  if (payload.subject !== undefined && payload.subject !== "publish-decision") return null;
   return sealCapability(
     SPEC,
     {
@@ -132,6 +140,8 @@ export function mintReviewIslandByteCapability(
       a: payload.artifactId,
       v: payload.representationRevisionId,
       d: payload.disposition,
+      // OMITTED for a gate, so a gate capability seals exactly what it always did.
+      ...(payload.subject === "publish-decision" ? { k: "pd" } : {}),
     },
     options,
   );
@@ -145,10 +155,16 @@ export function verifyReviewIslandByteCapability(
   encoded: string | null | undefined,
   options?: { nowSeconds?: number },
 ): VerifiedReviewIslandByteCapability | null {
-  const opened = openCapability(SPEC, encoded, FIELDS, options);
+  const opened = openCapability(SPEC, encoded, FIELDS, {
+    nowSeconds: options?.nowSeconds,
+    optionalFields: ["k"],
+  });
   if (!opened) return null;
   const disposition = opened.fields.d;
   if (disposition !== "preview" && disposition !== "download") return null;
+  // The subject is ours, or absent (a gate): any other value is not a capability this codec minted.
+  const kind = opened.fields.k;
+  if (kind !== undefined && kind !== "pd") return null;
   return {
     orgId: opened.fields.o,
     userId: opened.fields.u,
@@ -162,6 +178,7 @@ export function verifyReviewIslandByteCapability(
     artifactId: opened.fields.a,
     representationRevisionId: opened.fields.v,
     disposition,
+    ...(kind === "pd" ? { subject: "publish-decision" as const } : {}),
     expiresAt: opened.expiresAt,
   };
 }

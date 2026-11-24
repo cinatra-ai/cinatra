@@ -413,4 +413,45 @@ describe("capture capability serving", () => {
       expect(Object.keys(arm)).toEqual(["ok"]);
     }
   });
+
+  // cinatra#4738 round 2: a PUBLISH ROW'S capture capability, proven against that row's own set through its own port,
+  // never a gate's. Red at ffe421ea, whose codec seals no kind.
+  describe("a publish row's capture capability", () => {
+    const PUBLISH = { ...PAYLOAD, reviewTaskId: "publish-decision:subject", subject: "publish-decision" as const };
+    const mintPublish = () => mintCaptureCapability(PUBLISH, { nowSeconds: NOW })!;
+
+    // red-first-expect: expected "vi.fn()" to be called with arguments: [ { runId: 'run-1', …(3) } ]
+    it("is served through the row's own set, and the gate port is never read", async () => {
+      const readPublishDecisionPinnedTargets = vi.fn(async () => [GATE_A_TARGET]);
+      const ports = makePorts({ readPublishDecisionPinnedTargets });
+      const decision = await decide(ports, { capability: mintPublish() });
+      expect(readPublishDecisionPinnedTargets).toHaveBeenCalledWith({
+        runId: "run-1",
+        subjectKey: "publish-decision:subject",
+        userId: "user-1",
+        orgId: "org-1",
+      });
+      expect(decision.ok).toBe(true);
+      expect(ports.readGatePinnedTargets).not.toHaveBeenCalled();
+    });
+
+    it("is refused when the row does not show the capture's target, or no publish reader is named", async () => {
+      const other = vi.fn(async () => [{ artifactId: "art-B", representationRevisionId: "rev-B" }]);
+      expect((await decide(makePorts({ readPublishDecisionPinnedTargets: other }), { capability: mintPublish() })).ok).toBe(false);
+      expect((await decide(makePorts(), { capability: mintPublish() })).ok).toBe(false);
+    });
+
+    it("a gate capability is never proven against a publish row's set", async () => {
+      const ports = makePorts({
+        readGatePinnedTargets: vi.fn(async () => null),
+        readPublishDecisionPinnedTargets: vi.fn(async () => [GATE_A_TARGET]),
+      });
+      expect((await decide(ports)).ok).toBe(false);
+      expect(ports.readPublishDecisionPinnedTargets).not.toHaveBeenCalled();
+    });
+
+    it("an unknown kind is not minted", () => {
+      expect(mintCaptureCapability({ ...PAYLOAD, subject: "gate" as never }, { nowSeconds: NOW })).toBeNull();
+    });
+  });
 });

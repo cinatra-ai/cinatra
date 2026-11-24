@@ -11,6 +11,8 @@
 //     with no recorded decider, or a decider name that cannot be read, draws nothing rather than an anonymous card.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+process.env.BETTER_AUTH_SECRET ??= "test-secret-for-publish-card-core";
+
 const storeMock = vi.hoisted(() => ({
   readAgentRunById: vi.fn(),
   readAgentTemplateById: vi.fn(),
@@ -31,6 +33,7 @@ import {
   publishDecisionCardStateForWidgetRun,
   resolvePublishDecisionCardStateForActor,
 } from "../publish-decision-card-core";
+import { decodeLifecycleGateRef, decodePublishDecisionIslandRef } from "@/lib/lifecycle/lifecycle-card-ref";
 
 const WHO = {
   actor: { actorType: "human" as const, source: "ui" as const, userId: "user-a" },
@@ -95,8 +98,6 @@ describe("which card a run shows", () => {
     });
   });
 
-  // Before the fix the widget read does not exist yet, so this test fails on the missing export.
-  // red-first-expect: publishDecisionCardStateForWidgetRun is not a function
   it("the site widget's card asks the widget reader's rights, never the decide check", async () => {
     const widget = { ...WHO, actor: { actorType: "human" as const, source: "a2a" as const, userId: "user-a" } };
     for (const answer of [true, false]) {
@@ -257,6 +258,30 @@ describe("the rows are the pack's words over the surfaced values", () => {
     expect(await read()).toMatchObject({ state: "pending", rows: [] });
   });
 
+  // red-first-expect: to match object { rows: [
+  it("a declared list row reads the surfaced records into the card (W4)", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      ...TEMPLATE,
+      publishRows: {
+        post: [
+          { label: "Title", input: "title" },
+          { kind: "list", label: "Recipients", input: "people", columns: [{ label: "Name", field: "name" }] },
+        ],
+      },
+    });
+    decisions.readLatestDecisionForRun.mockResolvedValue(
+      decision({ surfacedValues: { title: "Autumn launch", people: [{ name: "Ada", id: "row-77" }, { name: "Bo" }] } }),
+    );
+    const state = await read();
+    expect(state).toMatchObject({
+      rows: [
+        { label: "Title", value: "Autumn launch" },
+        { kind: "list", label: "Recipients", columns: ["Name"], items: [["Ada"], ["Bo"]], total: 2 },
+      ],
+    });
+    expect(JSON.stringify(state)).not.toContain("row-77");
+  });
+
   it("a node id that names an Object.prototype member reads as no declaration", async () => {
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ nodeId: "constructor" }));
     expect(await read()).toMatchObject({ state: "pending", rows: [] });
@@ -289,6 +314,64 @@ describe("the access door runs first", () => {
     for (const later of [decisions.readLatestDecisionForRun, storeMock.readAgentTemplateById, names.readDeciderName]) {
       expect(later.mock.invocationCallOrder[0]).toBeGreaterThan(door);
     }
+  });
+});
+
+// C1b: an artifacts row carries the island ref for THIS row of THIS decision, never a target id; a surfaced value that is
+// not a target list draws the row's "could not be shown" reading (ref null), never a silent drop. Red at C1's head
+// 2ea9dbd1, where the card core drops every artifacts row.
+describe("the artifacts row (C1b)", () => {
+  const TARGETS = [{ artifactId: "art-1", representationRevisionId: "rev-1" }];
+  const WITH_ARTIFACTS = {
+    ...TEMPLATE,
+    publishRows: { post: [{ label: "Title", input: "title" }, { kind: "artifacts", label: "Proposed page", input: "page" }] },
+  };
+
+  beforeEach(() => storeMock.readAgentTemplateById.mockResolvedValue(WITH_ARTIFACTS));
+
+  it("draws the row with a publish-decision island ref that names the run, the decision and the input", async () => {
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ surfacedValues: { title: "About us", page: TARGETS } }));
+    const state = await read();
+    if (state.state !== "pending") throw new Error("expected a pending card");
+    expect(state.rows[0]).toEqual({ label: "Title", value: "About us" });
+    const row = state.rows[1] as { kind: string; label: string; ref: string; islandSrc: null };
+    expect(row).toMatchObject({ kind: "artifacts", label: "Proposed page", islandSrc: null });
+    expect(decodePublishDecisionIslandRef(row.ref)).toEqual({ runId: "run-1", decisionId: "d1", input: "page" });
+    // Not a gate ref, and no target id travels on the card.
+    expect(decodeLifecycleGateRef(row.ref)).toBeNull();
+    expect(JSON.stringify(state)).not.toContain("rev-1");
+    expect(JSON.stringify(state)).not.toContain("art-1");
+  });
+
+  it.each([
+    ["a value that is not a list", "art-1"],
+    ["an empty list", []],
+    ["a list with a malformed entry", [...TARGETS, { artifactId: "art-2" }]],
+  ])("a surfaced %s draws the row with no ref, never drops it", async (_name, page) => {
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ surfacedValues: { title: "About us", page } }));
+    const state = await read();
+    if (state.state !== "pending") throw new Error("expected a pending card");
+    expect(state.rows).toEqual([
+      { label: "Title", value: "About us" },
+      { kind: "artifacts", label: "Proposed page", ref: null, islandSrc: null },
+    ]);
+  });
+
+  it("a row whose input the stop did not surface is dropped, as every kind is", async () => {
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ surfacedValues: { title: "About us" } }));
+    const state = await read();
+    if (state.state !== "pending") throw new Error("expected a pending card");
+    expect(state.rows).toEqual([{ label: "Title", value: "About us" }]);
+  });
+
+  it("a settled card keeps the row, with a ref for the same decision", async () => {
+    decisions.readLatestDecisionForRun.mockResolvedValue(
+      decision({ status: "released", decidedBy: "user-b", surfacedValues: { page: TARGETS } }),
+    );
+    const state = await read();
+    if (state.state !== "approved") throw new Error("expected an approved card");
+    const row = state.rows[0] as { ref: string };
+    expect(decodePublishDecisionIslandRef(row.ref)).toEqual({ runId: "run-1", decisionId: "d1", input: "page" });
   });
 });
 
@@ -325,6 +408,20 @@ describe("a decision's rows are the ones its template declared at the park (revi
   it("a stored empty declaration draws no rows, even when the template now declares some", async () => {
     decisions.readLatestDecisionForRun.mockResolvedValue(decision({ declaredRows: [] }));
     expect((await read() as { rows: unknown }).rows).toEqual([]);
+  });
+
+  // cinatra#4738: the artifacts row a decision kept at its park draws with its island ref, whatever the template now says.
+  it("a stored artifacts row draws with the decision's island ref after the template drops it", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue(RECOMPILED);
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({
+      declaredRows: [{ kind: "artifacts", label: "Proposed page", input: "page" }],
+      surfacedValues: { page: [{ artifactId: "art-1", representationRevisionId: "rev-1" }] },
+    }));
+    const card = await read();
+    if (card.state !== "pending") throw new Error("expected a pending card");
+    const row = card.rows[0] as { kind: string; label: string; ref: string };
+    expect(row).toMatchObject({ kind: "artifacts", label: "Proposed page", islandSrc: null });
+    expect(decodePublishDecisionIslandRef(row.ref)).toEqual({ runId: "run-1", decisionId: "d1", input: "page" });
   });
 
   it("an older decision with no stored declaration (null) falls back to the template's current rows", async () => {

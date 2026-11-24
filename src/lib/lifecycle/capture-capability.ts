@@ -100,6 +100,13 @@ export interface CaptureCapabilityPayload {
   captureArtifactId: string;
   /** The one PNG representation revision of that capture. */
   representationRevisionId: string;
+  /**
+   * WHAT the capability's run and `reviewTaskId` name (cinatra#4738 round 2). ABSENT is a review gate, exactly as
+   * every capability minted before this field existed. `publish-decision` is one artifacts row of a publish card: its
+   * `reviewTaskId` holds that row's subject key, and the serving path proves the capture against that row's set,
+   * never a gate's. Sealed, so a holder cannot turn one kind into the other.
+   */
+  subject?: "publish-decision";
 }
 
 /** A verified capability: the sealed payload plus its own expiry. */
@@ -155,6 +162,8 @@ type SealedShape = {
   a: string;
   v: string;
   x: number;
+  /** Present only on a publish-decision capability (`"pd"`). */
+  k?: "pd";
 };
 
 /**
@@ -184,6 +193,7 @@ export function mintCaptureCapability(
     payload.representationRevisionId,
   ];
   if (!fields.every((f) => boundedId(f))) return null;
+  if (payload.subject !== undefined && payload.subject !== "publish-decision") return null;
 
   const now = Math.floor(options?.nowSeconds ?? Date.now() / 1000);
   const ttl = options?.ttlSeconds ?? CAPTURE_CAPABILITY_TTL_SECONDS;
@@ -209,6 +219,8 @@ export function mintCaptureCapability(
     a: payload.captureArtifactId,
     v: payload.representationRevisionId,
     x: now + ttl,
+    // OMITTED for a gate, so a gate capability seals exactly what it always did.
+    ...(payload.subject === "publish-decision" ? { k: "pd" as const } : {}),
   };
 
   try {
@@ -279,6 +291,8 @@ export function verifyCaptureCapability(
     return null;
   }
   if (typeof s.x !== "number" || !Number.isFinite(s.x)) return null;
+  // The subject is ours, or absent (a gate): any other value is not a capability this codec minted.
+  if (Object.prototype.hasOwnProperty.call(s, "k") && s.k !== "pd") return null;
 
   const now = Math.floor(options?.nowSeconds ?? Date.now() / 1000);
   // Expiry is checked against the SERVER clock, never a value the holder
@@ -301,6 +315,7 @@ export function verifyCaptureCapability(
     reviewTaskId: s.g,
     captureArtifactId: s.a,
     representationRevisionId: s.v,
+    ...(s.k === "pd" ? { subject: "publish-decision" as const } : {}),
     expiresAt: s.x,
   };
 }

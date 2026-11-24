@@ -68,8 +68,10 @@ export function buildCaptureCapabilityMinter(params: {
   principal: WidgetCapturePrincipal;
   runId: string;
   reviewTaskId: string;
+  /** A publish row's road (cinatra#4738 round 2): `reviewTaskId` is the row's subject key. Absent ⇒ a gate. */
+  subject?: "publish-decision";
 }): PinnedCaptureImageUrlMinter {
-  const { principal, runId, reviewTaskId } = params;
+  const { principal, runId, reviewTaskId, subject } = params;
   return ({ captureArtifactId, representationRevisionId }) => {
     const payload: CaptureCapabilityPayload = {
       orgId: principal.orgId,
@@ -83,6 +85,7 @@ export function buildCaptureCapabilityMinter(params: {
       reviewTaskId,
       captureArtifactId,
       representationRevisionId,
+      ...(subject ? { subject } : {}),
     };
     const sealed = mintCaptureCapability(payload);
     // A capability that cannot be sealed degrades to the honest "no picture for
@@ -104,12 +107,14 @@ export function buildBrokerCapturePair(params: {
   principal: WidgetCapturePrincipal;
   runId: string;
   reviewTaskId: string;
+  /** A publish row's road (cinatra#4738 round 2). Absent ⇒ a gate. */
+  subject?: "publish-decision";
   /** A target THIS gate pinned — never a caller-chosen artifact. */
   target: { artifactId: string; representationRevisionId: string };
   kind: PinnedCapturePairKind;
   driftedRegions?: readonly string[];
 }): PinnedCapturePairView | null {
-  const { principal, runId, reviewTaskId, target, kind } = params;
+  const { principal, runId, reviewTaskId, subject, target, kind } = params;
   try {
     const stored = readPinnedPreviewCaptures({
       orgId: principal.orgId,
@@ -119,7 +124,7 @@ export function buildBrokerCapturePair(params: {
     if (stored.length === 0) return null;
     const views = buildPinnedCaptureViews(
       stored,
-      buildCaptureCapabilityMinter({ principal, runId, reviewTaskId }),
+      buildCaptureCapabilityMinter({ principal, runId, reviewTaskId, ...(subject ? { subject } : {}) }),
     );
     return buildPinnedCapturePair(views, kind, params.driftedRegions ?? []);
   } catch (err) {

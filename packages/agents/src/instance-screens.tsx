@@ -2790,7 +2790,7 @@ export async function SetupScreen({
               wrapped around the contract it would land beneath BOTH columns.
               The rail frame below draws the chrome inside its own detail
               column; the branch without a frame wraps its detail column here. */}
-          <div className="flex items-start gap-6" data-run-detail-contract="" data-conformance-id="run-surface">
+          <div className="flex items-start gap-6 max-[620px]:flex-col max-[620px]:items-stretch" data-run-detail-contract="" data-conformance-id="run-surface">
             {(() => {
               // THE ONE `recommendation_hold` MOUNT ON THIS PAGE (cinatra#3047),
               // and it is used in exactly ONE slot: the Skills step's own
@@ -4616,7 +4616,7 @@ export async function TriggerScreen({
             {/* THE RUN PAGE'S CHROME OWNS THE ONE PROMPT WINDOW (cinatra#3487). */}
             <RunPageChrome>
               <div
-                className="flex items-start gap-6"
+                className="flex items-start gap-6 max-[620px]:flex-col max-[620px]:items-stretch"
                 data-run-detail-contract=""
                 data-conformance-id="run-surface"
               >

@@ -99,7 +99,11 @@ import {
   widgetAuthSessionIsLive,
   WIDGET_AUTH_SESSION_COLUMN,
 } from "@/lib/widget-session-binding";
-import { decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
+import {
+  decodeLifecycleGateRef,
+  decodePublishDecisionIslandRef,
+  publishDecisionIslandSubjectKey,
+} from "@/lib/lifecycle/lifecycle-card-ref";
 import { buildWidgetLifecycleRoleHints } from "@/lib/lifecycle/widget-lifecycle-actor";
 import {
   verifyReviewIslandCredential,
@@ -234,6 +238,13 @@ export type IslandCredentialReader = {
   runId: string;
   reviewTaskId: string;
   /**
+   * THE PUBLISH-DECISION ROW this credential paints (cinatra#4150 W4 C1b), or
+   * `null` for a review gate. Taken from the ref only after the ref was proven
+   * to name the sealed run and subject, so the caller loads THIS and never a
+   * second decode of the ref.
+   */
+  publishDecision: { decisionId: string; input: string } | null;
+  /**
    * THE LIVE PRINCIPAL THIS RESOLVER JUST PROVED (wave 3 of
    * `PLAN: Agents Lifecycle (D) — Review`, cinatra#3091).
    *
@@ -273,14 +284,33 @@ export async function resolveIslandCredentialReader(input: {
     verifyReviewIslandCredential(encoded);
   if (!verified) return null;
 
-  // 1. REF BINDING. The ref must decode, and must decode to the sealed gate.
+  // 1. REF BINDING. The ref must decode, and must decode to the sealed gate —
+  //    or, for a publish-decision credential (cinatra#4150 W4 C1b), to the
+  //    sealed publish row. The two kinds never cross: a gate credential is
+  //    refused beside a publish ref (it does not decode as a gate ref), and a
+  //    publish credential is refused beside a gate ref (it does not decode as a
+  //    publish ref), whatever the ids say.
   const ref = typeof input.ref === "string" ? input.ref : "";
-  const payload = ref ? decodeLifecycleGateRef(ref) : null;
-  if (
-    !payload ||
-    payload.runId !== verified.runId ||
-    payload.reviewTaskId !== verified.reviewTaskId
-  ) {
+  let bound = false;
+  let publishDecision: IslandCredentialReader["publishDecision"] = null;
+  if (verified.subject === "publish-decision") {
+    const publish = ref ? decodePublishDecisionIslandRef(ref) : null;
+    if (
+      publish &&
+      publish.runId === verified.runId &&
+      publishDecisionIslandSubjectKey(publish) === verified.reviewTaskId
+    ) {
+      bound = true;
+      publishDecision = { decisionId: publish.decisionId, input: publish.input };
+    }
+  } else {
+    const payload = ref ? decodeLifecycleGateRef(ref) : null;
+    bound =
+      payload !== null &&
+      payload.runId === verified.runId &&
+      payload.reviewTaskId === verified.reviewTaskId;
+  }
+  if (!bound) {
     emitWidgetAuthAudit("widget_lifecycle_read_rejected", {
       agentSlug: verified.agentSlug,
       reason: "island_ref_mismatch",
@@ -394,6 +424,7 @@ export async function resolveIslandCredentialReader(input: {
     actorCtx,
     runId: verified.runId,
     reviewTaskId: verified.reviewTaskId,
+    publishDecision,
     // From `live`, never from `verified`: the sealed copy is what was CLAIMED
     // and the row is what is TRUE. They were proven equal three rungs above,
     // and handing out the true one keeps it that way if they ever stop being.

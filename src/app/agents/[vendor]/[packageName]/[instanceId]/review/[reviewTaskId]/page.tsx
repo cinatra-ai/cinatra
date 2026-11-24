@@ -487,7 +487,7 @@ export default async function AgentRunReviewPage({
 
   return (
     <ReviewShell crumbs={scopeCrumbs} runCrumb={runCrumb}>
-      <div className="flex items-start gap-6" data-run-detail-contract="">
+      <div className="flex items-start gap-6 max-[620px]:flex-col max-[620px]:items-stretch" data-run-detail-contract="">
         {(() => {
           // The agent run STEPS on the left, as run context (cinatra#2063).
           const railNode = (

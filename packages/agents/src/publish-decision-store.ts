@@ -14,6 +14,7 @@ import { types } from "node:util";
 import { and, asc, desc, eq, getTableColumns, gt, inArray, lte, sql } from "drizzle-orm";
 
 import { db } from "./db";
+import { isPublishRowDeclaration, isPublishRowInput, PUBLISH_ROW_INPUT_MAX, type PublishRowDeclaration } from "./publish-decision-card";
 import { agentRunPublishDecisions, agentRuns } from "./schema";
 
 /** A decision of the run's current attempt: its run_generation equals the run's reset_generation, read in the same
@@ -35,10 +36,11 @@ export const PUBLISH_DECISION_MAX_NOTE_LENGTH = 2000;
 export const PUBLISH_DECISION_MAX_SURFACED_BYTES = 64 * 1024;
 /** The most rows one declaration may hold, and the longest label or input name in one. */
 export const PUBLISH_DECISION_MAX_DECLARED_ROWS = 32;
-export const PUBLISH_DECISION_MAX_DECLARED_TEXT = 256;
+export const PUBLISH_DECISION_MAX_DECLARED_TEXT = PUBLISH_ROW_INPUT_MAX;
 
-/** One row the template declared for a publishing node: the pack's label over one of the node's inputs. */
-export type PublishDeclaredRow = { label: string; input: string };
+/** One row the template declared for a publishing node: the pack's label over one of the node's inputs, in one of the
+ *  shapes the compiler writes (a text row, a list row with its columns, or an artifacts row; publish-decision-card.ts). */
+export type PublishDeclaredRow = PublishRowDeclaration;
 
 export class PublishDecisionError extends Error {
   readonly code: "invalid-input" | "invalid-transition" | "malformed-row" | "not-found" | "conflict";
@@ -101,16 +103,23 @@ function deserialize(row: StoredRow): PublishDecisionRow {
   return { ...row, status: row.status, surfacedValues, declaredRows, runGeneration: row.runGeneration ?? null };
 }
 
-/** A declaration as plain rows of two texts each, within the caps; null for any other shape. */
+/** A declaration as plain rows in a shape the compiler writes (isPublishRowDeclaration: a text, list or artifacts row),
+ *  each label and input within the caps; null for any other shape. A row is copied field by field, so the stored text
+ *  holds only the fields its shape names. */
 function declaredRowsOf(value: unknown): PublishDeclaredRow[] | null {
   if (!Array.isArray(value) || value.length > PUBLISH_DECISION_MAX_DECLARED_ROWS) return null;
   const rows: PublishDeclaredRow[] = [];
   for (const row of value as unknown[]) {
-    if (!isPlainObject(row)) return null;
+    if (!isPlainObject(row) || !isPublishRowDeclaration(row)) return null;
     const { label, input } = row;
-    if (typeof label !== "string" || typeof input !== "string" || label.length === 0 || input.length === 0
-      || label.length > PUBLISH_DECISION_MAX_DECLARED_TEXT || input.length > PUBLISH_DECISION_MAX_DECLARED_TEXT) return null;
-    rows.push({ label, input });
+    if (label.length === 0 || label.length > PUBLISH_DECISION_MAX_DECLARED_TEXT || !isPublishRowInput(input)) return null;
+    if (row.kind === "list") {
+      rows.push({ kind: "list", label, input, columns: row.columns.map(({ label: l, field }) => ({ label: l, field })) });
+    } else if (row.kind === "artifacts") {
+      rows.push({ kind: "artifacts", label, input });
+    } else {
+      rows.push({ label, input });
+    }
   }
   return rows;
 }
