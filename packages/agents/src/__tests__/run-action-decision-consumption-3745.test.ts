@@ -202,9 +202,8 @@ function tableName(table: unknown): string {
   return "consumption";
 }
 
-// The module is new with cinatra#3745. It is loaded inside each test, not at the top of the file: before the change
+// The module came with cinatra#3745. It is loaded inside each test, not at the top of the file: on a tree without it
 // the file still loads and each test fails on the missing module.
-// red-first-expect: Cannot find module '/src/run-action-decision-consumption'
 const loadModule = () => import("../run-action-decision-consumption");
 async function consume(input: unknown) {
   const { consumeRunActionDecision } = await loadModule();
@@ -253,6 +252,7 @@ describe("the person's affirmative decision for the run's action, used once", ()
   it("consumes the released decision of exactly this run, step and action once, in one guarded transaction", async () => {
     await loadModule();
     const result = await consume(input());
+    // red-first-expect: expected { …(5) } to deeply equal { …(6) }
     expect(result).toEqual({ consumptionKey: "publish_decision:decision-1", decisionId: "decision-1", decidedBy: "user-7",
       stepId: SEND_STEP, decisionNodeId: SEND_STEP, action });
     expect(consumptions()).toEqual([expect.objectContaining({ gateId: "publish_decision:decision-1", runId: "run-1",
@@ -292,7 +292,6 @@ describe("the person's affirmative decision for the run's action, used once", ()
     let park: Promise<unknown> | null = null;
     // The new decision arrives right after the consumption chose the released one, and is given time to commit.
     h.afterDecisionRead = async () => { park = newPark(); await pause(); };
-    // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
     const result = await consume(input());
     await park;
     expect(result).toMatchObject({ decisionId: "decision-1" });
@@ -310,7 +309,6 @@ describe("the person's affirmative decision for the run's action, used once", ()
     h.parkHold = new Promise<void>((resolve) => { release = resolve; });
     const park = newPark();
     await pause();
-    // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
     const consumption = consume(input()).catch((e: unknown) => e);
     await pause();
     // The consumption waits at the run row: it has not read the binding yet.
@@ -395,7 +393,6 @@ describe("the person's affirmative decision for the run's action, used once", ()
   it("consumes once a released decision with no generation: a row of an older node is current until a reset", async () => {
     await loadModule();
     h.tables.set(agentRunPublishDecisions, [decision({ runGeneration: null })]);
-    // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
     const result = await consume(input());
     expect(result).toMatchObject({ consumptionKey: "publish_decision:decision-1", decidedBy: "user-7" });
     await expect(consume(input())).rejects.toMatchObject({ code: "action_person_decision_already_consumed" });
@@ -417,7 +414,6 @@ describe("the person's affirmative decision for the run's action, used once", ()
       decision({ id: "decision-a", gateTaskId: "gate-task-2", status: "parked", decidedBy: null, decidedAt: null,
         createdAt: ms, createdAtMicros: base + 500 }),
     ]);
-    // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
     await expect(consume(input())).rejects.toMatchObject({ code: "action_person_decision_open" });
     expect(consumptions()).toEqual([]);
     // The read orders as the store does (created_at, then id, newest first) and takes one row.
@@ -443,7 +439,6 @@ describe("the person's affirmative decision for the run's action, used once", ()
       { declaredRows: "[{" }, { declaredRows: JSON.stringify([{ label: "Subject" }]) }];
     for (const over of malformed) {
       h.tables.set(agentRunPublishDecisions, [decision(over)]);
-      // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
       const refused = await consume(input()).catch((e: unknown) => e as Error & { code?: string });
       expect(refused).toMatchObject({ code: "action_person_decision_invalid" });
       expect(String((refused as Error).message)).not.toMatch(/not json|Subject/);
@@ -540,7 +535,7 @@ describe("a tool step nested in a subflow is covered by its top-level publishing
     await loadModule();
     const call = bindOutreach(outreachGraph());
     h.tables.set(agentRunPublishDecisions, [decision({ nodeId: OUTREACH_NODE })]);
-    // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
+    // red-first-expect: action_person_decision_missing
     const result = await consume(call);
     expect(result).toMatchObject({ consumptionKey: "publish_decision:decision-1", decisionId: "decision-1",
       stepId: OUTREACH_STEP, decisionNodeId: OUTREACH_NODE });
@@ -555,6 +550,7 @@ describe("a tool step nested in a subflow is covered by its top-level publishing
     const call = bindOutreach(outreachGraph());
     for (const nodeId of [OUTREACH_STEP, "drafts_flow"]) {
       h.tables.set(agentRunPublishDecisions, [decision({ nodeId })]);
+      // red-first-expect: promise resolved "{ …(5) }" instead of rejecting
       await expect(consume(call)).rejects.toMatchObject({ code: "action_person_decision_missing" });
     }
     expect(consumptions()).toEqual([]);
@@ -565,7 +561,7 @@ describe("a tool step nested in a subflow is covered by its top-level publishing
     h.tables.set(agentRunPublishDecisions, [decision({ nodeId: OUTREACH_NODE })]);
     const orphan = outreachGraph();
     orphan.nodes = orphan.nodes.filter((n) => n.$component_ref !== OUTREACH_NODE);
-    // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
+    // red-first-expect: to match object { Object (code) }
     await expect(consume(bindOutreach(orphan))).rejects.toMatchObject({ code: "action_decision_node_unresolved" });
     const twice = outreachGraph();
     twice.$referenced_components.drafts_flow!.subflow = { $component_ref: "email-delivery-subflow" };
@@ -579,7 +575,7 @@ describe("a tool step nested in a subflow is covered by its top-level publishing
     for (const publishes of [undefined, false, "true"]) {
       const doc = outreachGraph();
       doc.$referenced_components[OUTREACH_NODE]!.metadata = publishes === undefined ? {} : { cinatra: { publishes } };
-      // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
+      // red-first-expect: to match object { Object (code) }
       await expect(consume(bindOutreach(doc))).rejects.toMatchObject({ code: "action_decision_node_not_publishing" });
     }
     expect(consumptions()).toEqual([]);

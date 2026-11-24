@@ -246,7 +246,7 @@ describe("the guarded outward run action", () => {
 
   describe("an extension-owned outward tool", () => {
     // Before the change the loaded identity is not consulted and every outward run call is refused:
-    // red-first-expect: recordLoadedExtensionIdentity is not a function
+    // red-first-expect: expected true to be falsy
     it("is admitted once under the owner's current loaded identity", async () => {
       recordLoadedExtensionIdentity({ packageName: PACKAGE, version: VERSION, installId: "install-9", digest: "sha256:abc" });
       const server = await buildServer({ packageName: PACKAGE, version: VERSION });
@@ -265,7 +265,7 @@ describe("the guarded outward run action", () => {
       expect(store.consume).not.toHaveBeenCalled();
     });
 
-    // red-first-expect: recordLoadedExtensionIdentity is not a function
+    // red-first-expect: to contain 'outward_effect_requires_recorded_deci…
     it("is refused when its owner's loaded identity was retired", async () => {
       recordLoadedExtensionIdentity({ packageName: PACKAGE, version: VERSION, installId: "install-9", digest: "sha256:abc" });
       retireLoadedExtensionIdentity(PACKAGE, VERSION);
@@ -276,7 +276,7 @@ describe("the guarded outward run action", () => {
       expect(server.handled).toEqual([]);
     });
 
-    // red-first-expect: recordLoadedExtensionIdentity is not a function
+    // red-first-expect: to contain 'outward_effect_requires_recorded_deci…
     it("is refused when its owner's loaded identity is replaced between the check and the consumption", async () => {
       recordLoadedExtensionIdentity({ packageName: PACKAGE, version: VERSION, installId: "install-9", digest: "sha256:abc" });
       // The boundary's other rules run between the two steps; a new install is stamped while they run.
