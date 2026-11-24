@@ -17,7 +17,10 @@ vi.mock("@/lib/database", () => ({
 }));
 vi.mock("@/lib/postgres-sync", () => ({ runPostgresQueriesSync: vi.fn() }));
 // The state a test sets: a publishing call of the run in flight, or a transaction Postgres aborts with `abort`.
-const db: { publishCallInFlight: boolean; abort: unknown } = { publishCallInFlight: false, abort: null };
+// `finalizedWinner`: the revision a concurrent drive of the same claim finalized, as the ledger row reads it.
+const db: { publishCallInFlight: boolean; abort: unknown; finalizedWinner: string | null } = {
+  publishCallInFlight: false, abort: null, finalizedWinner: null,
+};
 vi.mock("@/lib/postgres-async", () => ({
   runPostgresQueriesAsync: async (input: { transaction?: boolean; queries: Query[] }) => {
     asyncCalls.push(input.queries);
@@ -26,6 +29,8 @@ vi.mock("@/lib/postgres-async", () => ({
       // content-addressed resource. Any other statement (a claim's release) finds nothing.
       const text = input.queries[0]?.text ?? "";
       const row = text.includes('FROM "cinatra"."objects"') ? { type: "post" }
+        : text.includes("phase = 'finalized'")
+          ? (db.finalizedWinner ? { artifact_id: "art-1", representation_revision_id: db.finalizedWinner } : null)
         : text.includes('SELECT revision FROM "cinatra"."representation"') ? { revision: 1 }
           : text.includes("resource_op") ? { resource_id: "res-1", is_new: false, storage_key: "blob-key" }
             : null;
@@ -94,6 +99,7 @@ beforeEach(() => {
   restamp.length = 0;
   db.publishCallInFlight = false;
   db.abort = null;
+  db.finalizedWinner = null;
   ledger.claim = { kind: "claimed", ledgerId: "ledger-1" };
 });
 
@@ -164,6 +170,18 @@ describe("cinatra#4762: a retry of an append that reproduces identical bytes cou
     expect(steps()).toEqual(["BEGIN", "lock run-1", "event rev-2 generation 1", "COMMIT"]);
     expect(restamp.find((q) => q.text.includes("artifact_produced_outbox"))!.text.replace(/\s+/g, " "))
       .toMatch(/AND \(EXISTS \(SELECT 1 FROM "[^"]+"\."artifact_produced_outbox" WHERE event_id = \$1::text\)\)/);
+  });
+
+  // red-first-expect: expected [] to deeply equal [ 'BEGIN', 'lock run-1', …(2) ]
+  it("the loser of a concurrent drive of the same claim restamps the winner's revision with its own attempt", async () => {
+    // A delayed drive of attempt 0 and the retry in attempt 1 share one unfinalized claim. Attempt 0 wins: the
+    // retry's insert loses the revision index and the ledger row reads the winner's rev-2.
+    db.abort = Object.assign(new Error("duplicate key value violates unique constraint"), { code: "23505" });
+    db.finalizedWinner = "rev-2";
+    expect(await appendInAttempt(1)).toMatchObject({ ok: true, representationRevisionId: "rev-2", deduped: true });
+    // The winner's event records attempt 1, so a review of exactly these bytes counts for the retry.
+    expect(steps()).toEqual(["BEGIN", "lock run-1", "event rev-2 generation 1", "COMMIT"]);
+    expect(restamp.find((q) => q.text.includes("artifact_produced_outbox"))!.values[6]).toBe("run-1");
   });
 
   // red-first-expect: to match object { ok: false, …(1) }

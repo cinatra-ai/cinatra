@@ -127,6 +127,51 @@ async function sql(text: string, values: unknown[]): Promise<Record<string, unkn
 }
 
 /**
+ * cinatra#4762 — THE ONE RESULT of an append that hands back a revision it did not
+ * write (a finalized ledger hit at entry, or the winner of a concurrent drive of
+ * the same claim). Every such return goes through here, so none can skip the
+ * restamp: the revision's existing event records the attempt this append runs in
+ * (materialization-ledger restampReusedRevision), and an approval of these bytes
+ * counts for it. A publishing call of the run in flight is the temporary refusal.
+ */
+async function reusedRevisionResult(input: {
+  schema: string;
+  runId: string;
+  orgId: string;
+  artifactId: string;
+  representationRevisionId: string;
+}): Promise<ArtifactRevisionAppendResult> {
+  try {
+    await restampReusedRevision({
+      runId: input.runId,
+      orgId: input.orgId,
+      artifactId: input.artifactId,
+      representationRevisionId: input.representationRevisionId,
+    });
+  } catch (err) {
+    if (!isPublishCallInFlightAbort(err)) throw err;
+    return {
+      ok: false,
+      reason: PUBLISH_CALL_IN_FLIGHT_CODE,
+      error:
+        `a publishing call of run ${input.runId} is in flight; append the ` +
+        "revision again once it has ended",
+    };
+  }
+  const revRow = await sql(
+    `SELECT revision FROM "${input.schema}"."representation" WHERE id = $1 AND org_id = $2`,
+    [input.representationRevisionId, input.orgId],
+  );
+  return {
+    ok: true,
+    artifactId: input.artifactId,
+    representationRevisionId: input.representationRevisionId,
+    revision: Number(revRow?.revision ?? 0),
+    deduped: true,
+  };
+}
+
+/**
  * Append the next revision of an existing artifact.
  *
  * `baseRepresentationRevisionId` is the revision the caller READ. Two mid-run
@@ -285,34 +330,13 @@ export async function appendArtifactRevision(input: {
     }
     // cinatra#4762: a retry of identical bytes appends nothing; the revision's
     // event records this attempt, so an approval of these bytes counts for it.
-    try {
-      await restampReusedRevision({
-        runId: input.runId,
-        orgId: input.orgId,
-        artifactId: claim.artifactId,
-        representationRevisionId: claim.representationRevisionId,
-      });
-    } catch (err) {
-      if (!isPublishCallInFlightAbort(err)) throw err;
-      return {
-        ok: false,
-        reason: PUBLISH_CALL_IN_FLIGHT_CODE,
-        error:
-          `a publishing call of run ${input.runId} is in flight; append the ` +
-          "revision again once it has ended",
-      };
-    }
-    const revRow = await sql(
-      `SELECT revision FROM "${schema}"."representation" WHERE id = $1 AND org_id = $2`,
-      [claim.representationRevisionId, input.orgId],
-    );
-    return {
-      ok: true,
+    return reusedRevisionResult({
+      schema,
+      runId: input.runId,
+      orgId: input.orgId,
       artifactId: claim.artifactId,
       representationRevisionId: claim.representationRevisionId,
-      revision: Number(revRow?.revision ?? 0),
-      deduped: true,
-    };
+    });
   }
   if (typeof claim.path === "string" && claim.path !== "materialize_tool") {
     // A RE-USED unfinalized row of a different path (cinatra#1893 Q3): the
@@ -614,17 +638,15 @@ ON CONFLICT (org_id, artifact_id, representation_revision_id) DO NOTHING`,
       finalized.artifact_id === input.artifactId
     ) {
       await discardStaged();
-      const revRow = await sql(
-        `SELECT revision FROM "${schema}"."representation" WHERE id = $1 AND org_id = $2`,
-        [finalized.representation_revision_id, input.orgId],
-      );
-      return {
-        ok: true,
+      // cinatra#4762: the winner may be a drive of an earlier attempt; the
+      // revision's event records the attempt this append runs in.
+      return reusedRevisionResult({
+        schema,
+        runId: input.runId,
+        orgId: input.orgId,
         artifactId: input.artifactId,
         representationRevisionId: String(finalized.representation_revision_id),
-        revision: Number(revRow?.revision ?? 0),
-        deduped: true,
-      };
+      });
     }
     await discardStaged();
     await releaseClaim();

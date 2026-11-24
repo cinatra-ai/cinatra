@@ -836,6 +836,25 @@ async function* asUtf8Stream(s: string): AsyncIterable<Uint8Array> {
 }
 
 /**
+ * cinatra#4762 — THE ONE RESULT of a write that hands back a finalized revision it did not write (a ledger hit, the
+ * winner of a concurrent drive, a fan-out message's own or bound mid-run body). Every such return goes through here,
+ * so none can skip the restamp: the revision's existing event records the attempt this write runs in
+ * (materialization-ledger restampReusedRevision), and an approval of these bytes counts for it.
+ */
+async function reusedArtifact(
+  run: { runId: string; orgId: string },
+  filed: { artifactId: string; representationRevisionId: string },
+): Promise<{ ok: true; artifactId: string; representationRevisionId: string; deduped: true }> {
+  await restampReusedRevision({
+    runId: run.runId,
+    orgId: run.orgId,
+    artifactId: filed.artifactId,
+    representationRevisionId: filed.representationRevisionId,
+  });
+  return { ok: true, artifactId: filed.artifactId, representationRevisionId: filed.representationRevisionId, deduped: true };
+}
+
+/**
  * Shared write core for both materialization paths (cinatra#923 EndNode
  * bindings, cinatra#925 `artifact_materialize` tool): registry/accepts/
  * write-gate validation on an ALREADY-RESOLVED {extension, title, mime,
@@ -956,19 +975,8 @@ export async function writeClaimedArtifact(input: {
     };
   }
   if (claim.kind === "finalized") {
-    // cinatra#4762: a retry of identical bytes writes nothing; the revision's event records this attempt.
-    await restampReusedRevision({
-      runId: input.runId,
-      orgId: input.orgId,
-      artifactId: claim.artifactId,
-      representationRevisionId: claim.representationRevisionId,
-    });
-    return {
-      ok: true,
-      artifactId: claim.artifactId,
-      representationRevisionId: claim.representationRevisionId,
-      deduped: true,
-    };
+    // cinatra#4762: a retry of identical bytes writes nothing.
+    return reusedArtifact(input, claim);
   }
 
   let created: { artifactId: string; representationRevisionId: string };
@@ -1025,14 +1033,8 @@ export async function writeClaimedArtifact(input: {
         ledgerId: claim.ledgerId,
       });
       if (winner) {
-        // cinatra#4762: the winner's revision is this write's; its event records this attempt.
-        await restampReusedRevision({ runId: input.runId, orgId: input.orgId, ...winner });
-        return {
-          ok: true,
-          artifactId: winner.artifactId,
-          representationRevisionId: winner.representationRevisionId,
-          deduped: true,
-        };
+        // cinatra#4762: the winner's revision is this write's.
+        return reusedArtifact(input, winner);
       }
     }
     throw err;
@@ -1802,10 +1804,7 @@ export async function materializeFanoutMessageRevision(input: {
       ...messageKey,
       outputId: input.outputId,
     });
-    if (own) {
-      await restampReusedRevision({ runId: input.runId, orgId: input.orgId, ...own });
-      return { ok: true, ...own, deduped: true };
-    }
+    if (own) return await reusedArtifact(input, own);
     // A mid-run body not yet bound to another message is bound to this one.
     const prefiled = await findFinalizedMidRunMaterialization(messageKey);
     if (prefiled) {
@@ -1814,8 +1813,7 @@ export async function materializeFanoutMessageRevision(input: {
         outputId: input.outputId,
         ...prefiled,
       });
-      await restampReusedRevision({ runId: input.runId, orgId: input.orgId, ...prefiled });
-      return { ok: true, ...prefiled, deduped: true };
+      return await reusedArtifact(input, prefiled);
     }
 
     return await writeClaimedArtifact({
