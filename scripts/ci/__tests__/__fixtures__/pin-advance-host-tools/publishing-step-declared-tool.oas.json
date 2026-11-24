@@ -1,0 +1,18 @@
+{
+  "component_type": "Flow",
+  "id": "publishing-step-declared-tool-fixture",
+  "name": "Declared tool called from a publishing step",
+  "start_node": { "$component_ref": "send_campaign" },
+  "nodes": [{ "$component_ref": "send_campaign" }],
+  "$referenced_components": {
+    "send_campaign": {
+      "component_type": "ApiNode",
+      "id": "send_campaign",
+      "name": "Send the campaign",
+      "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+      "http_method": "POST",
+      "metadata": { "cinatra": { "publishes": true } },
+      "data": { "tool": "email_outreach_send_initial_start", "input": {}, "agent_run_id": "{{ cinatra_run_id }}" }
+    }
+  }
+}

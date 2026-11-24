@@ -327,3 +327,212 @@ describe("the per-pack route reading (cinatra#3664)", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// The publishing-step declaration (cinatra#3089): a tool the owning package
+// declares for a declared publishing step is served off the allowlist, and only
+// to a node that is a publishing step of its flow.
+
+const DECLARATION = "src/lib/passthrough-publishing-step-tools.ts";
+const publishingNode = (id, tool, publishes) => ({
+  ...passthroughNode(id, { tool, input: {} }),
+  ...(publishes === undefined ? {} : { metadata: { cinatra: { publishes } } }),
+});
+const textReader = (root, files) => (abs) => {
+  const rel = path.relative(root, abs);
+  if (!(rel in files)) throw new Error(`ENOENT ${rel}`);
+  return files[rel];
+};
+
+describe("the publishing-step declaration reader", () => {
+  it("reads the declared tools of this tree from the declaration module and the metadata it lists", () => {
+    // red-first-expect: readPassthroughPublishingStepTools is not a function
+    const declared = check.readPassthroughPublishingStepTools(REPO_ROOT);
+    expect([...declared]).toEqual(["email_outreach_send_initial_start"]);
+    // A declared tool is not on the allowlist: the two lists are separate.
+    expect(readPassthroughAllowlist(REPO_ROOT).has("email_outreach_send_initial_start")).toBe(false);
+  });
+
+  const sourcesFile = (sources) =>
+    [
+      'import { aMetadata } from "@cinatra-ai/pkg-a";',
+      'import { bMetadata } from "@cinatra-ai/pkg-b";',
+      'import { localMetadata } from "./local-metadata";',
+      "const HOST_PRIMITIVE_SOURCES: readonly Source[] = [",
+      sources,
+      "];",
+    ].join("\n");
+  const packageFiles = (name, main, extra = {}) => ({
+    [`packages/${name}/package.json`]: JSON.stringify({ name: `@cinatra-ai/${name}`, main }),
+    ...extra,
+  });
+
+  it("follows an import of a workspace package through its entry file and its re-export", () => {
+    // red-first-expect: readPassthroughPublishingStepTools is not a function
+    const files = {
+      [DECLARATION]: sourcesFile("  { metadata: aMetadata, loadHandlers: async () => ({}) },"),
+      ...packageFiles("pkg-a", "./src/index.ts", {
+        "packages/pkg-a/src/index.ts": 'export { aMetadata } from "./mcp/metadata";',
+        "packages/pkg-a/src/mcp/metadata.ts": [
+          "export const aMetadata = [",
+          '  { name: "tool_plain", mutatesState: true },',
+          '  { name: "tool_declared", mutatesState: true, passthroughPublishingStep: true }, // a comment, "not_a_name"',
+          '  { name: "tool_false", passthroughPublishingStep: false },',
+          "] as const satisfies readonly Meta[];",
+        ].join("\n"),
+      }),
+    };
+    const declared = check.readPassthroughPublishingStepTools("/repo", { readText: textReader("/repo", files) });
+    expect([...declared]).toEqual(["tool_declared"]);
+  });
+
+  it("does not count a name that two sources carry, or one a source lists twice, as declared", () => {
+    // red-first-expect: readPassthroughPublishingStepTools is not a function
+    const files = {
+      [DECLARATION]: sourcesFile(
+        [
+          "  { metadata: aMetadata, loadHandlers: async () => ({}) },",
+          "  { metadata: bMetadata, loadHandlers: async () => ({}) },",
+          "  { metadata: localMetadata, loadHandlers: async () => ({}) },",
+        ].join("\n"),
+      ),
+      ...packageFiles("pkg-a", "./src/index.ts", {
+        "packages/pkg-a/src/index.ts": 'export { aMetadata } from "./m";',
+        "packages/pkg-a/src/m.ts": [
+          "export const aMetadata = [",
+          '  { name: "shared", passthroughPublishingStep: true },',
+          '  { name: "only_a", passthroughPublishingStep: true },',
+          "];",
+        ].join("\n"),
+      }),
+      ...packageFiles("pkg-b", "./src/index.ts", {
+        "packages/pkg-b/src/index.ts": [
+          "export const bMetadata = [",
+          '  { name: "shared", passthroughPublishingStep: true },',
+          "];",
+        ].join("\n"),
+      }),
+      "src/lib/local-metadata.ts": [
+        "export const localMetadata = [",
+        '  { name: "twice", passthroughPublishingStep: true },',
+        '  { name: "twice", passthroughPublishingStep: true },',
+        "];",
+      ].join("\n"),
+    };
+    const declared = check.readPassthroughPublishingStepTools("/repo", { readText: textReader("/repo", files) });
+    expect([...declared]).toEqual(["only_a"]);
+  });
+
+  it("throws, naming the entry and the file, on a source whose metadata it cannot resolve", () => {
+    // red-first-expect: to throw error matching /buildMetadata
+    const files = {
+      [DECLARATION]: sourcesFile("  { metadata: buildMetadata(), loadHandlers: async () => ({}) },"),
+    };
+    expect(() =>
+      check.readPassthroughPublishingStepTools("/repo", { readText: textReader("/repo", files) }),
+    ).toThrow(/buildMetadata\(\).*src\/lib\/passthrough-publishing-step-tools\.ts/);
+  });
+});
+
+describe("collectPassthroughHostTools and the publishing step", () => {
+  it("marks a node that declares metadata.cinatra.publishes: true, and no other", () => {
+    // red-first-expect: to deeply equal
+    const calls = collectPassthroughHostTools({
+      $referenced_components: {
+        a: publishingNode("publishing", "some_tool", true),
+        b: publishingNode("explicit_false", "some_tool", false),
+        c: publishingNode("absent", "some_tool"),
+        d: { ...passthroughNode("string_true", { tool: "some_tool" }), metadata: { cinatra: { publishes: "true" } } },
+      },
+    });
+    expect(calls).toEqual([
+      { nodeId: "publishing", tool: "some_tool", publishes: true },
+      { nodeId: "explicit_false", tool: "some_tool" },
+      { nodeId: "absent", tool: "some_tool" },
+      { nodeId: "string_true", tool: "some_tool" },
+    ]);
+  });
+});
+
+describe("hostToolFindings with a declared publishing-step tool", () => {
+  const allowlist = readPassthroughAllowlist(REPO_ROOT);
+  const declaredTools = new Set(["a_declared_tool"]);
+  const findings = (nodes) =>
+    hostToolFindings({
+      packageName: PACKAGE,
+      tip: TIP,
+      calls: collectPassthroughHostTools({ $referenced_components: nodes }),
+      allowlist,
+      declaredTools,
+    });
+
+  it("passes a declared tool called from a publishing step", () => {
+    // red-first-expect: to deeply equal
+    const result = findings({ send: publishingNode("send", "a_declared_tool", true) });
+    expect(result.findings).toEqual([]);
+    expect(result.tools).toEqual(["a_declared_tool"]);
+  });
+
+  it("refuses a declared tool called from a step that is not a publishing step, and says so", () => {
+    // red-first-expect: to deeply equal
+    const result = findings({
+      absent: publishingNode("absent", "a_declared_tool"),
+      explicit_false: publishingNode("explicit_false", "a_declared_tool", false),
+    });
+    expect(result.findings.map((f) => f.line)).toEqual([
+      `pin-advance host-tool check: ${PACKAGE} at ${TIP} — node "absent" calls host tool "a_declared_tool", ` +
+        "which the owning package declares for a publishing step only (passthroughPublishingStep), " +
+        "and this node does not declare metadata.cinatra.publishes: true",
+      `pin-advance host-tool check: ${PACKAGE} at ${TIP} — node "explicit_false" calls host tool "a_declared_tool", ` +
+        "which the owning package declares for a publishing step only (passthroughPublishingStep), " +
+        "and this node does not declare metadata.cinatra.publishes: true",
+    ]);
+  });
+
+  it("still refuses an undeclared tool that is not on the list, from a publishing step too", () => {
+    const result = findings({ send: publishingNode("send", "an_undeclared_tool", true) });
+    expect(result.findings.map((f) => [f.nodeId, f.tool])).toEqual([["send", "an_undeclared_tool"]]);
+    expect(result.findings[0].line).toContain("does not carry");
+  });
+
+  it("still passes a tool on the list, from any step", () => {
+    const result = findings({
+      plain: publishingNode("plain", "objects_save"),
+      publishing: publishingNode("publishing", "objects_save", true),
+    });
+    expect(result.findings).toEqual([]);
+  });
+
+  it("serves a tool on the list as the list does when it is also declared", () => {
+    const result = hostToolFindings({
+      packageName: PACKAGE,
+      tip: TIP,
+      calls: collectPassthroughHostTools({ $referenced_components: { plain: publishingNode("plain", "objects_save") } }),
+      allowlist,
+      declaredTools: new Set(["objects_save"]),
+    });
+    expect(result.findings).toEqual([]);
+  });
+});
+
+describe("the one-flow command line with a declared publishing-step tool", () => {
+  const run = (fixture) =>
+    spawnSync(
+      process.execPath,
+      [SCRIPT, "--flow", path.join(FIXTURES, fixture), "--package", PACKAGE, "--tip", TIP],
+      { cwd: REPO_ROOT, encoding: "utf8" },
+    );
+
+  it("exits 0 for the declared tool from a publishing step and 1 from a step that does not publish", () => {
+    // red-first-expect: expected 1 to be +0
+    const passed = run("publishing-step-declared-tool.oas.json");
+    expect(passed.status).toBe(0);
+    expect(passed.stdout).toContain("email_outreach_send_initial_start");
+    const refused = run("declared-tool-outside-publishing-step.oas.json");
+    expect(refused.status).toBe(1);
+    expect(refused.stdout).toContain(
+      'node "send_campaign" calls host tool "email_outreach_send_initial_start", which the owning package declares ' +
+        "for a publishing step only",
+    );
+  });
+});

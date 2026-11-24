@@ -23,6 +23,17 @@
 // list. A pack-declared name used DIRECTLY as `data.tool` is compared, and is
 // refused, because the route refuses it.
 //
+// A second way a host tool is served (cinatra#3089): the route also serves a
+// tool its owning package DECLARES for a publishing step
+// (`passthroughPublishingStep: true` in the package's own metadata, listed by
+// HOST_PRIMITIVE_SOURCES in src/lib/passthrough-publishing-step-tools.ts), and
+// only to a verified publishing step of the run's flow. The check reads that
+// declaration statically from the same sources the route reads, counts a
+// declared tool as served, and refuses a node that calls it without being a
+// publishing step itself (`metadata.cinatra.publishes: true` on the node, the
+// flag the compiler lists as `publishingSteps`). A tool on the allowlist is
+// served as before, from any node.
+//
 // The allowlist is read STATICALLY from the route's source, and every entry the
 // reader cannot resolve (a spread of a call, an unknown import, a non-literal)
 // THROWS naming the entry and the file — the reader never guesses.
@@ -60,7 +71,10 @@ try {
 
 export const ROUTE_FILE = "src/app/api/agents/passthrough/route.ts";
 export const ALLOWLIST_NAME = "ALLOWED_TOOLS";
-export const LOCK_FILES = ["cinatra-dev-extensions.lock.json", "cinatra-required-extensions.lock.json"];
+export const DECLARATION_FILE = "src/lib/passthrough-publishing-step-tools.ts";
+export const DECLARATION_SOURCES_NAME = "HOST_PRIMITIVE_SOURCES";
+export const DECLARATION_KEY = "passthroughPublishingStep";
+export const LOCK_FILES =["cinatra-dev-extensions.lock.json", "cinatra-required-extensions.lock.json"];
 const PASSTHROUGH_PATH = "/api/agents/passthrough";
 const PREFIX = "pin-advance host-tool check:";
 const TOOL_NAME_RE = /^[A-Za-z0-9_.-]+$/;
@@ -268,6 +282,127 @@ export function readPassthroughAllowlist(repoRoot, { readText = (abs) => readFil
 }
 
 // ---------------------------------------------------------------------------
+// The static publishing-step declaration reader (cinatra#3089).
+
+/** Find `<NAME> = [` (a const array) in `text`; returns the index just past the `[`, or null. */
+function findArrayBlock(text, name, file) {
+  const re = new RegExp(`(?:export\\s+)?(?:const|let|var)\\s+${escapeRe(name)}\\s*(?::[^=]*?)?=\\s*\\[`, "g");
+  const matches = [...text.matchAll(re)];
+  if (matches.length > 1) throw new Error(`the array ${name} is declared ${matches.length} times in ${file}`);
+  return matches.length === 1 ? matches[0].index + matches[0][0].length : null;
+}
+
+/** A module a specifier names: a relative or `@/` path, or the entry file of a workspace package. */
+function resolveImportedFile(repoRoot, fromFile, specifier, readText) {
+  const local = resolveModuleFile(repoRoot, fromFile, specifier, readText);
+  if (local) return local;
+  if (!SAFE_SCOPED_PKG_RE.test(specifier)) return null;
+  const dir = path.join("packages", specifier.split("/")[1]);
+  let main;
+  try {
+    const pkg = JSON.parse(readText(path.join(repoRoot, dir, "package.json")));
+    if (pkg?.name !== specifier || typeof pkg.main !== "string") return null;
+    main = pkg.main.startsWith(".") ? pkg.main : `./${pkg.main}`;
+  } catch {
+    return null;
+  }
+  return resolveModuleFile(repoRoot, path.join(dir, "package.json"), main, readText);
+}
+
+/** The `key: value` pairs of an object literal text `{ ... }`; anything else throws. */
+function objectPairs(entry, what, file) {
+  if (!entry.startsWith("{") || !entry.endsWith("}")) {
+    throw new Error(`the entry ${entry} of ${what} in ${file} is not an object literal the reader can resolve`);
+  }
+  const pairs = new Map();
+  for (const field of splitEntries(entry.slice(1, -1))) {
+    const m = field.match(/^["']?([A-Za-z_$][A-Za-z0-9_$]*)["']?\s*:\s*([\s\S]*)$/);
+    if (!m) throw new Error(`the field ${field} of ${what} in ${file} is not a key: value pair the reader can resolve`);
+    pairs.set(m[1], m[2].trim());
+  }
+  return pairs;
+}
+
+/** The `{ name, declared }` rows of a primitive-metadata array body. */
+function metadataRows(body, name, file) {
+  return splitEntries(body).map((entry) => {
+    const pairs = objectPairs(entry, name, file);
+    const value = pairs.get("name") ?? "";
+    const literal = value.match(/^(["'`])(.*)\1$/s);
+    if (!literal || !TOOL_NAME_RE.test(literal[2])) {
+      throw new Error(`the entry ${entry} of ${name} in ${file} carries no plain tool name the reader can resolve`);
+    }
+    return { name: literal[2], declared: pairs.get(DECLARATION_KEY) === "true" };
+  });
+}
+
+/** The metadata rows an identifier names: a same-file array, or an import (re-exports are followed). */
+function metadataRowsOf({ repoRoot, file, text, name, readText, seen }) {
+  const key = `${file}#${name}`;
+  if (seen.has(key)) throw new Error(`the metadata ${name} in ${file} re-exports itself (a cycle)`);
+  seen.add(key);
+  const start = findArrayBlock(text, name, file);
+  if (start !== null) return metadataRows(bracketBody(text, start, file, name), name, file);
+  const reExports = [...text.matchAll(/export\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']([^"']+)["']/g)];
+  for (const m of reExports) {
+    for (const spec of m[1].split(",")) {
+      const parts = spec.trim().split(/\s+as\s+/);
+      if ((parts[1] ?? parts[0])?.trim() !== name) continue;
+      const mod = resolveImportedFile(repoRoot, file, m[2], readText);
+      if (!mod) throw new Error(`the re-export of ${name} in ${file} names no module the reader can resolve (${m[2]})`);
+      return metadataRowsOf({ repoRoot, file: mod.rel, text: mod.text, name: parts[0].trim(), readText, seen });
+    }
+  }
+  throw new Error(`no array ${name} = [...] and no re-export of it in ${file}`);
+}
+
+/**
+ * The tools the owning packages DECLARE for a publishing step, read statically
+ * from the declaration module's `HOST_PRIMITIVE_SOURCES` and the metadata each
+ * source names, the way the route's `declaresPassthroughPublishingStep` reads
+ * them: only the literal `true` declares, and a name that two sources carry, or
+ * that one source lists twice, is not declared. Throws on anything it cannot
+ * resolve. `readText` is injectable for tests.
+ */
+export function readPassthroughPublishingStepTools(repoRoot, { readText = (abs) => readFileSync(abs, "utf8") } = {}) {
+  let text;
+  try {
+    text = readText(path.join(repoRoot, DECLARATION_FILE));
+  } catch (e) {
+    throw new Error(`cannot read ${DECLARATION_FILE}: ${e.message}`);
+  }
+  if (typeof text !== "string") throw new Error(`cannot read ${DECLARATION_FILE}`);
+  const start = findArrayBlock(text, DECLARATION_SOURCES_NAME, DECLARATION_FILE);
+  if (start === null) throw new Error(`no array ${DECLARATION_SOURCES_NAME} = [...] in ${DECLARATION_FILE}`);
+  const carried = new Map();
+  for (const source of splitEntries(bracketBody(text, start, DECLARATION_FILE, DECLARATION_SOURCES_NAME))) {
+    const metadata = objectPairs(source, DECLARATION_SOURCES_NAME, DECLARATION_FILE).get("metadata");
+    let rows;
+    if (metadata !== undefined && metadata.startsWith("[")) {
+      rows = metadataRows(bracketBody(metadata, 1, DECLARATION_FILE, "metadata"), "metadata", DECLARATION_FILE);
+    } else if (metadata !== undefined && IDENT_RE.test(metadata)) {
+      if (findArrayBlock(text, metadata, DECLARATION_FILE) !== null) {
+        rows = metadataRowsOf({ repoRoot, file: DECLARATION_FILE, text, name: metadata, readText, seen: new Set() });
+      } else {
+        const imp = findImport(text, metadata);
+        const mod = imp && resolveImportedFile(repoRoot, DECLARATION_FILE, imp.specifier, readText);
+        if (!mod) {
+          throw new Error(`the metadata ${metadata} of ${DECLARATION_SOURCES_NAME} in ${DECLARATION_FILE} names no array and no import the reader can resolve`);
+        }
+        rows = metadataRowsOf({ repoRoot, file: mod.rel, text: mod.text, name: imp.imported, readText, seen: new Set() });
+      }
+    } else {
+      throw new Error(`the metadata ${metadata} of ${DECLARATION_SOURCES_NAME} in ${DECLARATION_FILE} is not an array or an identifier the reader can resolve`);
+    }
+    for (const row of rows) {
+      const prior = carried.get(row.name);
+      carried.set(row.name, { count: (prior?.count ?? 0) + 1, declared: row.declared });
+    }
+  }
+  return new Set([...carried].filter(([, v]) => v.count === 1 && v.declared).map(([n]) => n));
+}
+
+// ---------------------------------------------------------------------------
 // The flow reader.
 
 /**
@@ -295,6 +430,8 @@ export function collectPassthroughHostTools(flow) {
       if (typeof tool !== "string" || tool === "") call = { nodeId, tool: null, unreadable: "data.tool is missing or not a string" };
       else if (tool.includes("{{")) call = { nodeId, tool: null, unreadable: `data.tool is the template ${JSON.stringify(tool)}` };
       else call = { nodeId, tool };
+      // The flag the compiler lists as `publishingSteps`: the JSON boolean true on the node.
+      if (value.metadata?.cinatra?.publishes === true) call.publishes = true;
       const key = `${nodeId}\u0000${call.tool}\u0000${call.unreadable ?? ""}`;
       if (!seen.has(key)) {
         seen.add(key);
@@ -349,7 +486,14 @@ export function changedPins(baseLock, headLock) {
 // ---------------------------------------------------------------------------
 // The comparison.
 
-export function findingLine({ packageName, tip, nodeId, tool, unreadable }) {
+export function findingLine({ packageName, tip, nodeId, tool, unreadable, publishingStepOnly }) {
+  if (publishingStepOnly) {
+    return (
+      `${PREFIX} ${packageName} at ${tip} — node "${nodeId}" calls host tool "${tool}", which the owning package ` +
+      `declares for a publishing step only (${DECLARATION_KEY}), and this node does not declare ` +
+      "metadata.cinatra.publishes: true"
+    );
+  }
   if (unreadable) {
     return (
       `${PREFIX} ${packageName} at ${tip} — node "${nodeId}" names no readable host tool (${unreadable}), ` +
@@ -363,15 +507,26 @@ export function findingLine({ packageName, tip, nodeId, tool, unreadable }) {
 }
 
 /**
- * Compare one pinned flow's passthrough calls with the allowlist. Returns the
- * sorted host-tool names it calls and one finding per offending node.
+ * Compare one pinned flow's passthrough calls with the allowlist and the
+ * publishing-step declarations. Returns the sorted host-tool names it calls and
+ * one finding per offending node. A tool on the allowlist is served from any
+ * node; a declared tool only from a node that is a publishing step.
  */
-export function hostToolFindings({ packageName, tip, calls, allowlist }) {
+export function hostToolFindings({ packageName, tip, calls, allowlist, declaredTools = new Set() }) {
   const tools = [...new Set(calls.filter((c) => c.tool !== null).map((c) => c.tool))].sort();
   const findings = [];
   for (const call of calls) {
     if (call.tool !== null && allowlist.has(call.tool)) continue;
-    const finding = { packageName, tip, nodeId: call.nodeId, tool: call.tool, unreadable: call.unreadable };
+    const declared = call.tool !== null && declaredTools.has(call.tool);
+    if (declared && call.publishes === true) continue;
+    const finding = {
+      packageName,
+      tip,
+      nodeId: call.nodeId,
+      tool: call.tool,
+      unreadable: call.unreadable,
+      publishingStepOnly: declared,
+    };
     findings.push({ ...finding, line: findingLine(finding) });
   }
   return { packageName, tip, tools, findings };
@@ -456,12 +611,14 @@ function report(results, refusals, log) {
 function runFlowForm(args, repoRoot, log) {
   if (!SHA_RE.test(args.tip)) throw new Error(`--tip must be a 40-character sha, got ${args.tip}`);
   const allowlist = readPassthroughAllowlist(repoRoot);
+  const declaredTools = readPassthroughPublishingStepTools(repoRoot);
   const flow = readJson(readFileSync(args.flow, "utf8"), args.flow);
   const result = hostToolFindings({
     packageName: args.package,
     tip: args.tip,
     calls: collectPassthroughHostTools(flow),
     allowlist,
+    declaredTools,
   });
   const count = report([result], [], log);
   log(`${PREFIX} ${count} finding(s) in one flow`);
@@ -487,6 +644,7 @@ function runBaseForm(args, repoRoot, log) {
   const headLocks = LOCK_FILES.map((f) => readJson(readFileSync(path.join(repoRoot, f), "utf8"), `${f} in this tree`));
   const { changed, added, removed } = changedPins(baseLocks, headLocks);
   const allowlist = readPassthroughAllowlist(repoRoot);
+  const declaredTools = readPassthroughPublishingStepTools(repoRoot);
 
   const results = [];
   const refusals = [];
@@ -534,7 +692,7 @@ function runBaseForm(args, repoRoot, log) {
       continue;
     }
     const flow = readJson(readFileSync(flowFile, "utf8"), `extensions/${scope}/${name}/cinatra/oas.json`);
-    results.push(hostToolFindings({ packageName, tip: to, calls: collectPassthroughHostTools(flow), allowlist }));
+    results.push(hostToolFindings({ packageName, tip: to, calls: collectPassthroughHostTools(flow), allowlist, declaredTools }));
   }
   for (const { packageName, from } of removed) log(`${PREFIX} ${packageName} (was ${from}) — removed from the lock, not checked`);
   const count = report(results, refusals, log);
