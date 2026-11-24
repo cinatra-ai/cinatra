@@ -142,7 +142,7 @@ vi.mock("../field-renderer-bindings.server", async (orig) => ({
       ?.list()
       .find(
         (e) =>
-          (e.id === askingGate.xRenderer || e.id.startsWith(`${askingGate.xRenderer}--`)) &&
+          (e.id === askingGate.xRenderer || e.id.startsWith(`${askingGate.xRenderer}#card-scope-`)) &&
           e.declaredScreen !== undefined,
       )?.declaredScreen ?? null,
 }));
@@ -456,7 +456,7 @@ describe("continueHeldByRenderer (cinatra#3470)", () => {
     expect(continueHeldByRenderer(null, {}, {}, at({ status: "loaded", announcedIds: new Set([unbound]), freshlyReadIds: new Set() }))).toBe(true);
     // Loaded, but no fresh read has answered for it yet: the answer may be a
     // scan cached before its agent was installed, so it is held.
-    // red-first-expect: expected false to be true
+    // red-first-expect: Failed to resolve import "../declared-hitl-screen-renderer"
     expect(continueHeldByRenderer(null, {}, {}, at(loaded))).toBe(true);
     // Loaded, and a fresh read found no screen for it: a gate with no binding, as before.
     expect(
@@ -471,7 +471,7 @@ describe("continueHeldByRenderer (cinatra#3470)", () => {
   it("holds a registered binding the source refused, and a gate an incomplete answer does not name", () => {
     // A refused id overrides a binding an earlier read registered under it.
     const refusedLoad = { ...loaded, freshlyReadIds: "every" as const, refusedIds: new Set([PROBE_ID]) };
-    // red-first-expect: expected false to be true
+    // red-first-expect: Failed to resolve import "../declared-hitl-screen-renderer"
     expect(continueHeldByRenderer(null, {}, {}, { xRenderer: PROBE_ID, bindings: refusedLoad })).toBe(true);
     // A source that could not read every installed agent proves no unnamed id declares nothing.
     const unbound = "@acme-test/unread-agent:output";
@@ -543,7 +543,7 @@ describe("the HITL screen card holds a screen whose binding failed to load (cina
     const { container } = mount();
     await settle();
     await waitFor(() => expect(continueButton(container)).not.toBeNull());
-    // red-first-expect: expected false to be true
+    // red-first-expect: Failed to resolve import "../declared-hitl-screen-renderer"
     expect(continueButton(container)!.disabled).toBe(true);
     expect(holdReason(container)).toBe(HOLD_FAILED);
     fireEvent.click(continueButton(container)!);

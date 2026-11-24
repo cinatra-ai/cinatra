@@ -37,6 +37,21 @@ export type {
  */
 export const RENDERER_NAMESPACE_RE = /^@[\w-]+\/[\w-]+:[\w-]+$/;
 
+/**
+ * The mark between a binding's id and a card's own number in a CARD-SCOPED id
+ * (cinatra#3470, `registerScopedDeclaredScreen`). `#` is outside the id
+ * grammar every manifest binding passes (`RENDERER_NAMESPACE_RE`, mirrored by
+ * the manifest validator's `BINDING_ID_RE`), so no manifest binding can ever
+ * hold a card-scoped id, and a card's entry never takes a binding's.
+ */
+export const CARD_SCOPED_ID_MARK = "#card-scope-";
+const CARD_SCOPED_ID_RE = /^@[\w-]+\/[\w-]+:[\w-]+#card-scope-[0-9]+$/;
+
+/** Is `id` a card-scoped id: a binding id, the mark and the card's number? */
+export function isCardScopedRendererId(id: string): boolean {
+  return CARD_SCOPED_ID_RE.test(id);
+}
+
 export type FieldRendererCondition = (
   fieldName: string,
   schema: Record<string, unknown>,
@@ -174,7 +189,11 @@ class FieldRendererRegistryImpl {
 
   register(entry: FieldRendererEntry): void {
     // Warn in development when the ID is not in @scope/package:local-id format.
-    if (process.env.NODE_ENV !== "production" && !RENDERER_NAMESPACE_RE.test(entry.id)) {
+    if (
+      process.env.NODE_ENV !== "production" &&
+      !RENDERER_NAMESPACE_RE.test(entry.id) &&
+      !isCardScopedRendererId(entry.id)
+    ) {
       console.warn(
         `Field renderer ID '${entry.id}' is not namespaced. Use '@scope/package:local-id' format.`,
       );

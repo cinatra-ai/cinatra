@@ -522,6 +522,52 @@ describe("an answer is sent only under the declared screen its step opened under
     });
   });
 
+  describe("agent_run_resume to a step with neither a gate row nor an event-log frame", () => {
+    const { resumeStepScreenAnswer } = reviewTaskActions as unknown as {
+      resumeStepScreenAnswer?: (run: unknown, template: unknown, text: string) => Promise<Record<string, string>>;
+    };
+    /** What agent_run_resume sends with no response: the fallback of its resume message. */
+    const bareResume = (template: unknown) =>
+      resumeStepScreenAnswer?.(RUN, template, resumeMessageFromInput(undefined, undefined).resumeText);
+    /** The agent that declared the step's screen is uninstalled. */
+    function removeAgent(): void {
+      rmSync(join(mount.dir, "acme-test"), { recursive: true, force: true });
+      server.__clearInstalledFieldRendererBindingsCache();
+    }
+
+    it("is refused when the agent that declared the step's screen was removed after the frame expired", async () => {
+      // The step parks under a declared card; its gate row is never written.
+      install("Fixture removed-agent revision");
+      gateRow.read = "missing";
+      // The frame expires from the event log, then the agent is removed.
+      eventLog.frame = null;
+      removeAgent();
+      try {
+        for (const template of [
+          { approvalPolicy: { steps: [{ stepNumber: 1, xRenderer: ID }] } },
+          { approvalPolicy: { steps: [{ stepNumber: 1, schema: { type: "object", properties: { reply: { "x-renderer": ID } } } }] } },
+        ]) {
+          const result = await bareResume(template);
+          // red-first-expect: expected 'undefined' to be 'string'
+          expect(typeof result?.refusal).toBe("string");
+          expect(result?.refusal).toContain("could not be loaded");
+          expect(result?.send).toBeUndefined();
+        }
+      } finally {
+        install("Fixture reinstalled revision");
+      }
+    });
+
+    it("an ordinary step with no renderer, under no declared screen, still resumes on a bare approval", async () => {
+      install(null);
+      gateRow.read = "missing";
+      eventLog.frame = null;
+      expect(await bareResume({ approvalPolicy: { steps: [{ stepNumber: 1 }] } })).toEqual({
+        send: "[Approved by operator]",
+      });
+    });
+  });
+
   it("a step that opened with no screen, whose renderer declares none, is sent as before", async () => {
     install(null);
     gateRow.inputSchema = { type: "object" };

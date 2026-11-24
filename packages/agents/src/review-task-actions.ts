@@ -313,11 +313,17 @@ async function stepGateFromEventLog(
  *   - a gate row that is absent leaves the step's event-log frame, checked
  *     the same way (`stepGateFromEventLog`);
  *   - with neither, only the agent's own step data is left: the
- *     step's renderer is one of the template's renderer-gate steps (or the
- *     host's context or fallback screen). Only when every one of them is read
- *     fresh to declare no screen is the answer sent as before. Any that
- *     declares a screen, or cannot be read, refuses: which step is open, and
- *     so whether a declared card's whole answer is due, cannot be determined.
+ *     step's renderer is one of the template's renderer-gate steps (named by
+ *     the step, or by an `x-renderer` in its stored schema) or the host's
+ *     context or fallback screen. Only when every one of them is read fresh
+ *     to declare no screen is the answer sent as before. Any that declares a
+ *     screen, or cannot be read, refuses: which step is open, and so whether a
+ *     declared card's whole answer is due, cannot be determined.
+ *   - a renderer the template names in the binding id form that NO agent
+ *     installs now refuses too. Its absence is no proof that it governed the
+ *     step with no screen: the agent that declared one can have been removed
+ *     after the step parked. Only an id that no binding can take (a host
+ *     renderer outside the binding id form) is read as declaring none.
  */
 export async function resumeStepScreenAnswer(
   run: { id: string; a2aTaskId: string },
@@ -340,19 +346,42 @@ export async function resumeStepScreenAnswer(
     const { SCHEMA_FIELD_FALLBACK_RENDERER_ID } = await import("./agent-builder-ids");
     const policy = template?.approvalPolicy as { steps?: unknown } | null | undefined;
     const steps = Array.isArray(policy?.steps) ? (policy.steps as Array<Record<string, unknown>>) : [];
-    const ids = new Set<string>([SCHEMA_FIELD_FALLBACK_RENDERER_ID]);
+    const { RENDERER_NAMESPACE_RE } = await import("./field-renderer-registry");
+    // The host's own screens: read as before, and never refused for having no binding.
+    const hostIds = new Set<string>([SCHEMA_FIELD_FALLBACK_RENDERER_ID]);
     const contextId = bindings.resolveRendererIdForKind("context-selector");
-    if (contextId !== undefined) ids.add(contextId);
+    if (contextId !== undefined) hostIds.add(contextId);
+    const stepIds = new Set<string>();
     for (const step of steps) {
-      if (step && typeof step.xRenderer === "string" && step.firesRendererGate !== false) ids.add(step.xRenderer);
+      if (!step || step.firesRendererGate === false) continue;
+      if (typeof step.xRenderer === "string") stepIds.add(step.xRenderer);
+      for (const id of [...schemaRendererIds(step.schema), ...schemaRendererIds(step.inputMessageSchema)]) stepIds.add(id);
     }
-    for (const id of ids) {
-      if (bindings.currentDeclaredScreenPin(id, { fresh: true }) !== DECLARED_SCREEN_PIN_NONE) return failed;
+    for (const id of new Set([...hostIds, ...stepIds])) {
+      const read = bindings.lookupFieldRendererBinding(id, { fresh: true });
+      if (read.binding === undefined && !hostIds.has(id) && RENDERER_NAMESPACE_RE.test(id)) return failed;
+      if (bindings.currentDeclaredScreenPin(id, { read }) !== DECLARED_SCREEN_PIN_NONE) return failed;
     }
     return { send: resumeText };
   } catch {
     return failed;
   }
+}
+
+/** The `x-renderer` ids a step's stored schema names: at its top and on each of its properties. */
+function schemaRendererIds(schema: unknown): string[] {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return [];
+  const ids: string[] = [];
+  const own = (schema as Record<string, unknown>)["x-renderer"];
+  if (typeof own === "string") ids.push(own);
+  const properties = (schema as { properties?: unknown }).properties;
+  if (properties && typeof properties === "object" && !Array.isArray(properties)) {
+    for (const property of Object.values(properties as Record<string, unknown>)) {
+      const id = property && typeof property === "object" ? (property as Record<string, unknown>)["x-renderer"] : undefined;
+      if (typeof id === "string") ids.push(id);
+    }
+  }
+  return ids;
 }
 
 /** The refusal of an answer that does not answer the step's declared card (cinatra#3470). */

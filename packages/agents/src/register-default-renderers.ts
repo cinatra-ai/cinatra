@@ -23,7 +23,9 @@
 
 import { createElement, type ComponentType } from "react";
 import {
+  CARD_SCOPED_ID_MARK,
   fieldRendererRegistry,
+  isCardScopedRendererId,
   type FieldRendererCondition,
   type FieldRendererEntry,
   type FieldRendererProps,
@@ -404,15 +406,21 @@ let scopedDeclaredScreenSeq = 0;
  * card that holds the id resolves it. The card unregisters the entry when it
  * unmounts or is handed another declaration. The declaration is validated
  * exactly as every other registration validates it.
+ *
+ * The scoped id is the binding's id, `CARD_SCOPED_ID_MARK` and the card's
+ * number: a form no manifest id can take, so it never replaces another
+ * binding's entry. An id already held by any entry is refused, never
+ * replaced, and the card then holds no entry: the cleanup removes only the
+ * entry this call registered.
  */
 export function registerScopedDeclaredScreen(
   binding: FieldRendererBindingInput,
 ): FieldRendererEntry | null {
   if (binding.screen === undefined) return null;
   scopedDeclaredScreenSeq += 1;
-  // The binding's id with a suffix of word characters, so it stays in the
-  // namespaced form and still names the binding in a log line.
-  const id = `${binding.id}--card-scope-${scopedDeclaredScreenSeq}`;
+  const id = `${binding.id}${CARD_SCOPED_ID_MARK}${scopedDeclaredScreenSeq}`;
+  if (!isCardScopedRendererId(id)) return null;
+  if (fieldRendererRegistry.list().some((e) => e.id === id)) return null;
   registerDeclaredScreen({ ...binding, id });
   return fieldRendererRegistry.list().find((e) => e.id === id) ?? null;
 }

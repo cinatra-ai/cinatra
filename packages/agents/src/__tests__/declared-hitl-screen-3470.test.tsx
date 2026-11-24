@@ -58,10 +58,12 @@ const hitlActions = vi.hoisted(() => ({
 vi.mock("../hitl-actions", () => hitlActions);
 
 import {
+  RENDERER_NAMESPACE_RE,
   fieldRendererRegistry,
   type FieldRendererEntry,
   type FieldRendererProps,
 } from "../field-renderer-registry";
+import * as registerModule from "../register-default-renderers";
 import { knownFieldRendererKinds, registerFieldRendererBindings } from "../register-default-renderers";
 import {
   __resetFieldRendererComponentMapForTests,
@@ -908,7 +910,7 @@ describe("the conversation hosts draw the declared card (cinatra#3470, V.1)", ()
     mountOn("site_widget");
     // The card's own registration of the binding it was handed (under an id
     // scoped to the card, never the binding's id).
-    const scopedEntry = () => fieldRendererRegistry.list().find((e) => e.id.startsWith(`${LIST_ID}--`));
+    const scopedEntry = () => fieldRendererRegistry.list().find((e) => e.id.startsWith(`${LIST_ID}#card-scope-`));
     await waitFor(() => expect(scopedEntry()).toBeDefined());
     const Picker = scopedEntry()!.renderer;
     cleanup();
@@ -1064,5 +1066,56 @@ describe("each conversation card draws the declared screen it was handed (cinatr
     expect(dom.getByText("Fixture earlier decision")).toBeTruthy();
     view.unmount();
     expect(entryOf()).toBe(pageEntry);
+  });
+});
+
+describe("a card's own registration never takes a manifest binding's id (cinatra#3470)", () => {
+  const scoped = registerModule as unknown as {
+    registerScopedDeclaredScreen?: (binding: unknown) => FieldRendererEntry | null;
+  };
+  const BINDING = { id: ID, kind: "linkedin-draft-review", priority: 90, midRunHitl: true, screen: CARD };
+  /** Open a card on BINDING: its scoped entry, or null. */
+  const openCard = () => scoped.registerScopedDeclaredScreen?.(BINDING) ?? null;
+  /** The number the next card takes after `entry`'s. */
+  const nextNumber = (entry: FieldRendererEntry) => Number(/([0-9]+)$/.exec(entry.id)?.[1]) + 1;
+
+  it("a card-scoped id is in a form the manifest id grammar refuses", async () => {
+    const card = openCard();
+    // red-first-expect: expected null not to be null
+    expect(card).not.toBeNull();
+    fieldRendererRegistry.unregisterEntry(card!);
+    const kindsPath = join(dirname(fileURLToPath(import.meta.url)), "../../../../scripts/extensions/agent-binding-kinds.mjs");
+    const kinds: { BINDING_ID_RE?: RegExp } = await import(/* @vite-ignore */ kindsPath);
+    expect(kinds.BINDING_ID_RE?.test(ID)).toBe(true);
+    expect(kinds.BINDING_ID_RE?.test(card!.id)).toBe(false);
+    expect(RENDERER_NAMESPACE_RE.test(card!.id)).toBe(false);
+  });
+
+  it("a manifest binding whose id looks like the old scoped form survives a card opening and closing", () => {
+    const probe = openCard();
+    // red-first-expect: expected null not to be null
+    expect(probe).not.toBeNull();
+    fieldRendererRegistry.unregisterEntry(probe!);
+    const lookalike = `${ID}--card-scope-${nextNumber(probe!)}`;
+    registerFieldRendererBindings([{ ...BINDING, id: lookalike }]);
+    const manifestEntry = entryOf(lookalike);
+    expect(manifestEntry).toBeDefined();
+    const card = openCard();
+    expect(card).not.toBeNull();
+    expect(entryOf(lookalike)).toBe(manifestEntry);
+    fieldRendererRegistry.unregisterEntry(card!);
+    expect(entryOf(lookalike)).toBe(manifestEntry);
+    expect(entryOf(card!.id)).toBeUndefined();
+  });
+
+  it("a card-scoped id already held by an entry is refused, never replaced, and closing removes nothing", () => {
+    const probe = openCard();
+    // red-first-expect: expected null not to be null
+    expect(probe).not.toBeNull();
+    fieldRendererRegistry.unregisterEntry(probe!);
+    const held = { ...probe!, id: probe!.id.replace(/[0-9]+$/, String(nextNumber(probe!))) };
+    fieldRendererRegistry.register(held);
+    expect(openCard()).toBeNull();
+    expect(entryOf(held.id)).toBe(held);
   });
 });

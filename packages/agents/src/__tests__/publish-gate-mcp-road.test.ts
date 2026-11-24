@@ -193,12 +193,14 @@ vi.mock("../publish-decision-store", async (orig) => ({
 
 // cinatra#3470: the step's gate row and its declared card. No row by default:
 // the resume then reads the agent's own renderer-gate steps, which declare no
-// screen unless a case says so (`declared.stepDeclares`).
+// screen unless a case says so (`declared.stepDeclares`). `declared.installed`
+// is a renderer id an installed agent binds with no screen.
 const declared = vi.hoisted(() => ({
   gate: null as null | { xRenderer: string; inputSchema: Record<string, unknown>; values: Record<string, unknown> },
   gateRead: "row" as "row" | "throws",
   card: null as null | Record<string, unknown>,
   stepDeclares: null as null | string,
+  installed: null as null | string,
 }));
 // The durable prompt row the resume records (its submitted values).
 const promptCapture = vi.hoisted(() => vi.fn(async (_input: unknown) => "prompt-fixture"));
@@ -224,6 +226,14 @@ vi.mock("../field-renderer-bindings.server", async (orig) => {
       declared.stepDeclares !== null && a[0] === declared.stepDeclares
         ? "sha256:fixture-declared-card"
         : actual.currentDeclaredScreenPin!(...a),
+    lookupFieldRendererBinding: (...a: unknown[]) =>
+      declared.installed !== null && a[0] === declared.installed
+        ? {
+            binding: { id: declared.installed, kind: "linkedin-draft-review", priority: 90, declaredBy: "@acme-test/plain-agent" },
+            refused: false,
+            unknown: false,
+          }
+        : actual.lookupFieldRendererBinding!(...a),
   };
 });
 
@@ -555,6 +565,7 @@ describe("agent_run_resume on a step that declares a card", () => {
     declared.gateRead = "row";
     declared.card = null;
     declared.stepDeclares = null;
+    declared.installed = null;
   });
 
   it("a generic approval is refused and nothing is sent", async () => {
@@ -621,6 +632,7 @@ describe("agent_run_resume on a step that declares a card", () => {
   it("an absent gate row of an agent whose renderer-gate steps declare no screen is resumed as before", async () => {
     declared.gate = null;
     declared.card = null;
+    declared.installed = "@acme-test/plain-agent:confirm";
     storeMock.readAgentTemplateById.mockResolvedValue({
       id: "tmpl-1",
       packageName: "@cinatra-ai/web-research-agent",
@@ -631,6 +643,23 @@ describe("agent_run_resume on a step that declares a card", () => {
     const answer = (await resume({ approvalNote: "go on" })) as { error?: string };
     expect(String(answer.error)).not.toContain("could not be loaded");
     expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("an absent gate row of a step whose renderer no agent installs now refuses the resume: its screen cannot be established", async () => {
+    declared.gate = null;
+    declared.card = null;
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tmpl-1",
+      packageName: "@cinatra-ai/web-research-agent",
+      sourceType: "internal",
+      agentAuthPolicy: null,
+      approvalPolicy: { steps: [{ stepNumber: 1, xRenderer: "@acme-test/removed-agent:confirm" }] },
+    });
+    const answer = (await resume({ approvalNote: "go on" })) as { error?: string };
+    // red-first-expect: to contain 'could not be loaded'
+    expect(String(answer.error)).toContain("could not be loaded");
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(pauseClaimFake.claimPause).not.toHaveBeenCalled();
   });
 
   it("a carried value that is not the gate's own is refused", async () => {
