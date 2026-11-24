@@ -2015,6 +2015,12 @@ export type LifecycleResolveAnswerFor<K extends LifecycleDataPartViewType> =
     targetHeadersComplete?: boolean;
     /** §VI producer prefill; envelope-only, absent on older readers/answers. */
     recordedPrompt?: string | null;
+    /** The media form (mime, lower case, no parameters) of the ONE target a
+     * pending or restricted gate pins, read from that artifact's own row
+     * (cinatra#3033). Absent for a gate that pins several targets, for one
+     * whose target the reader cannot read, and on older answers. Envelope-only,
+     * like `recordedPrompt`. */
+    targetForm?: string | null;
   };
 
 /**
@@ -2182,6 +2188,14 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
     if (recordedPrompt !== undefined && recordedPrompt !== null && typeof recordedPrompt !== "string") return null;
     if (recordedPrompt !== undefined && recordedPrompt !== null &&
         (expectedKind !== "artifact_review_gate" || (state.data.state !== "pending" && state.data.state !== "restricted"))) return null;
+    // The target's form follows the same rule: a string inside the header's
+    // bound, on a pending or restricted review gate only.
+    const targetForm = record.targetForm;
+    if (targetForm !== undefined && targetForm !== null &&
+        (typeof targetForm !== "string" || targetForm.length === 0 ||
+         targetForm.length > LIFECYCLE_TARGET_HEADER_MAX_TEXT)) return null;
+    if (targetForm !== undefined && targetForm !== null &&
+        (expectedKind !== "artifact_review_gate" || (state.data.state !== "pending" && state.data.state !== "restricted"))) return null;
     // A HEADER BELONGS TO ONE KIND, and it is refused on every other exactly as
     // a wrong body is. Only the review gate has a review target, so a header
     // arriving beside a verification summary or a schedule proposal is an answer
@@ -2239,6 +2253,7 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
         targetHeaders,
         ...(targetHeadersComplete === undefined ? {} : { targetHeadersComplete }),
         ...(recordedPrompt === undefined ? {} : { recordedPrompt }),
+        ...(targetForm === undefined ? {} : { targetForm }),
         aside,
       } as LifecycleResolveAnswerFor<K>;
     }
@@ -2255,6 +2270,7 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
       targetHeaders,
       ...(targetHeadersComplete === undefined ? {} : { targetHeadersComplete }),
       ...(recordedPrompt === undefined ? {} : { recordedPrompt }),
+      ...(targetForm === undefined ? {} : { targetForm }),
       aside,
     } as LifecycleResolveAnswerFor<K>;
   } catch {

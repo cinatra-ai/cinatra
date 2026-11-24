@@ -145,7 +145,6 @@ import {
   useRef,
   useState,
   type ReactElement,
-  type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -1350,6 +1349,14 @@ export function ReviewGateCard({
     targetHeaders,
     targetIslands,
     recordedPrompt: resolved?.recordedPrompt ?? null,
+    reading: reviewStateAnchor({
+      host,
+      insideConversation,
+      state: state.state,
+      targetCount: targetHeaders?.length ?? 0,
+      targetForm: resolved?.targetForm ?? null,
+      recordedPrompt: resolved?.recordedPrompt ?? null,
+    }),
     // NO PROMPT WINDOW INSIDE A CONVERSATION (cinatra#3481). The drawing
     // (`app-lifecycle-cards.html` §II): "A change request is typed into that
     // composer: Agent run & review §VI fixes typing a request as the whole
@@ -1422,13 +1429,6 @@ export function ReviewGateCard({
   // to read). No panel, no placeholder, no reason — the turn carries only prose.
   if (body === null) return null;
 
-  const stateAnchor = reviewStateAnchor({
-    host,
-    insideConversation,
-    state: state.state,
-    recordedPrompt: resolved?.recordedPrompt ?? null,
-  });
-
   return (
     <div
       className={frame}
@@ -1437,9 +1437,7 @@ export function ReviewGateCard({
       data-lifecycle-card-host={host}
       data-conformance-id="review-gate-card"
     >
-      <IslandFramingContext.Provider value={islandFraming}>
-        <ReviewStateAnchor anchor={stateAnchor}>{body}</ReviewStateAnchor>
-      </IslandFramingContext.Provider>
+      <IslandFramingContext.Provider value={islandFraming}>{body}</IslandFramingContext.Provider>
     </div>
   );
 }
@@ -1454,62 +1452,45 @@ export type ReviewStateAnchorId =
  * WHICH DRAWN READING THIS CARD IS (cinatra#3033), for the design grader.
  *
  * `app-artifact-review.html` §I.3 draws the run page's review step twice: on
- * the post, and on the featured image. `app-lifecycle-cards.html` §II.1 draws
- * the featured image's card in the chat thread. The drawing's own trait tells
- * the two readings apart: on the picture the note field opens carrying the
- * prompt that made it; on the post it opens empty. The card reads exactly that,
- * through the resolve answer's `recordedPrompt`, which asks only whether the
- * reviewed row records the prompt it was made from. It names no artifact type.
+ * the post, "drawn by the markdown display", and on the featured image, "the
+ * picture drawn by the image display". `app-lifecycle-cards.html` §II.1 draws
+ * the featured image's card in the chat thread. What tells the two apart is
+ * the TARGET: one artifact per gate, and its own form decides the display that
+ * draws it. The card reads that form from the resolve answer (`targetForm`, the
+ * one pinned target's mime), never from an artifact type id, which core does
+ * not name. On the picture the note field also opens carrying the prompt that
+ * made it, so the picture needs that prompt as well; on the post it is empty.
+ *
+ * FAIL CLOSED. A gate that pins several targets, an answer that names no form,
+ * a form that is neither the markdown display's nor an image, and a picture
+ * with no recorded prompt all claim NO reading: an absent anchor is honest, a
+ * wrong one is not. While the answer is loading, and on a settled or absent
+ * gate, nothing is claimed either: the answer carries the form and the prompt
+ * only for a `pending` or `restricted` gate.
  *
  * THE PLACE, NOT THE NEAREST PROP. The chat reading is any card drawn inside a
  * conversation (the inline run panel included, as for the prompt window). The
  * run page reading is a `run_card` outside one. The review page and the site
  * widget draw neither.
- *
- * ONLY WHERE THE ANSWER CAN TELL. The resolve answer discloses the prompt only
- * for a `pending` or `restricted` gate. While the answer is loading, and on a
- * settled or absent gate, a missing prompt says nothing about the reading, so
- * no reading is claimed.
  */
 export function reviewStateAnchor(input: {
   host: LifecycleCardHost | null;
   insideConversation: boolean;
   state: LifecycleCardState["state"];
+  /** How many target headers the answer carried. */
+  targetCount: number;
+  targetForm: string | null;
   recordedPrompt: string | null;
 }): ReviewStateAnchorId | null {
   if (input.state !== "pending" && input.state !== "restricted") return null;
-  const picture = input.recordedPrompt !== null && input.recordedPrompt !== "";
+  if (input.targetCount !== 1 || input.targetForm === null) return null;
+  const prompted = input.recordedPrompt !== null && input.recordedPrompt.trim() !== "";
+  const picture = input.targetForm.startsWith("image/") && prompted;
+  const post = input.targetForm === "text/markdown" && !prompted;
   if (input.insideConversation) return picture ? "review-card-post-with-featured-image" : null;
   if (input.host !== "run_card") return null;
-  return picture ? "run-review-step-picture" : "run-review-step-post";
-}
-
-/**
- * The anchor's own element. `display: contents` draws no box, so the card's
- * layout is the same with and without it. Each anchor is a literal so that a
- * search of the source finds the element that carries it.
- */
-function ReviewStateAnchor({
-  anchor,
-  children,
-}: {
-  anchor: ReviewStateAnchorId | null;
-  children: ReactNode;
-}): ReactElement {
-  switch (anchor) {
-    case "run-review-step-post":
-      return <div className="contents" data-conformance-id="run-review-step-post">{children}</div>;
-    case "run-review-step-picture":
-      return <div className="contents" data-conformance-id="run-review-step-picture">{children}</div>;
-    case "review-card-post-with-featured-image":
-      return (
-        <div className="contents" data-conformance-id="review-card-post-with-featured-image">
-          {children}
-        </div>
-      );
-    case null:
-      return <>{children}</>;
-  }
+  if (picture) return "run-review-step-picture";
+  return post ? "run-review-step-post" : null;
 }
 
 /**
@@ -1527,6 +1508,10 @@ function renderState(args: {
    * `null` when it is not. */
   targetIslands: ReadonlyArray<ReviewTargetPair> | null;
   recordedPrompt: string | null;
+  /** The drawn reading's anchor (`reviewStateAnchor`), carried by the gate
+   *  header: an element every reading already draws, in the same place, so a
+   *  gate that settles changes one attribute and remounts nothing. */
+  reading: ReviewStateAnchorId | null;
   /** §VI's prompt window, bound to the run, or `null` on a host that named no
    * run and anywhere inside a conversation, where the thread's own composer is
    * the request road (cinatra#3481). Taken as a factory so the one permission
@@ -1557,6 +1542,7 @@ function renderState(args: {
     targetHeaders,
     targetIslands,
     recordedPrompt,
+    reading,
     promptWindow,
     settledExchange,
     islandSrc,
@@ -1690,7 +1676,7 @@ function renderState(args: {
       const pairTargets = targetIslands !== null;
       return (
         <>
-          <ReviewGateHeader pending />
+          <ReviewGateHeader pending reading={reading} />
           {/* §IV — the immutable target header(s): "Every target opens with a
               header that names what is under review and fixes it in place".
               Drawn HERE, by the card, so it survives every state of the island
@@ -2227,8 +2213,11 @@ export function SuggestionChips({
 function ReviewGateHeader({
   pending,
   outcome,
+  reading = null,
 }: {
   pending: boolean;
+  /** The drawn reading's anchor, on a pending or restricted gate only. */
+  reading?: ReviewStateAnchorId | null;
   /** The recorded outcome, for a settled gate that has one. Absent on every
    *  other reading, which keeps the request wording it always had. The title
    *  itself is `reviewGateHeaderTitle`, shared with the settled line below so
@@ -2236,7 +2225,7 @@ function ReviewGateHeader({
   outcome?: ReviewSettledOutcome | null;
 }): ReactElement {
   return (
-    <div className="flex flex-wrap items-center gap-2.5">
+    <div className="flex flex-wrap items-center gap-2.5" data-conformance-id={reading ?? undefined}>
       <span className="grid size-7 flex-none place-items-center rounded-chip bg-brand-mustard/[0.16] text-mustard-ink">
         <ClipboardCheck aria-hidden="true" className="size-4" />
       </span>

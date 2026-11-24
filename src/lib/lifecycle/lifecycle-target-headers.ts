@@ -125,13 +125,25 @@ export type ReviewTargetHeadersReading = {
   headers: LifecycleTargetHeader[] | null;
   pinnedCount: number;
   complete: boolean;
+  /** The media form (mime, lower case, no parameters) of the gate's ONE pinned
+   *  target, read from its row; `null` unless the gate pins exactly one target
+   *  and the reading is complete (cinatra#3033). */
+  onlyTargetForm: string | null;
 };
 
 const NO_HEADERS: ReviewTargetHeadersReading = Object.freeze({
   headers: null,
   pinnedCount: 0,
   complete: false,
+  onlyTargetForm: null,
 });
+
+/** A row's mime as a media form: lower case, no parameters, inside the bound. */
+function mediaForm(mime: string | null | undefined): string | null {
+  if (typeof mime !== "string") return null;
+  const form = mime.toLowerCase().split(";")[0].trim();
+  return form.length > 0 && form.length <= LIFECYCLE_TARGET_HEADER_MAX_TEXT ? form : null;
+}
 
 export async function readReviewTargetHeadersReading(
   input: ReviewTargetHeadersInput,
@@ -182,6 +194,7 @@ export async function readReviewTargetHeadersReading(
       ((level === "team" && memberTeams.has(id)) ||
         (level === "organization" && id === actor.organizationId));
     const headers: LifecycleTargetHeader[] = [];
+    const forms: Array<string | null> = [];
     // Every header's revision is the pinned id EXACTLY, or the reading is not
     // complete (cinatra#4129): a header whose id the projection module cut,
     // substituted or refused names its target and nothing more.
@@ -254,6 +267,7 @@ export async function readReviewTargetHeadersReading(
           : null;
       const revision = projectReviewTargetHeaderRevision(target.representationRevisionId);
       if (!revision.exact) allExact = false;
+      forms.push(mediaForm(artifact.mime));
       headers.push({
         title: clamp(artifact.title ?? artifact.artifactId, artifact.artifactId),
         typeLabel: artifact.objectType
@@ -282,11 +296,13 @@ export async function readReviewTargetHeadersReading(
     // pin this reader cannot read has no header, an empty, dot-segment,
     // ill-formed or cut revision id is not its pin's id, and a shared id
     // selects no single target.
+    const complete =
+      headers.length > 0 && reached === pinnedCount && allRead && allExact && distinctRevisions;
     return {
       headers: headers.length > 0 ? headers : null,
       pinnedCount,
-      complete:
-        headers.length > 0 && reached === pinnedCount && allRead && allExact && distinctRevisions,
+      complete,
+      onlyTargetForm: complete && pinnedCount === 1 && forms.length === 1 ? forms[0] : null,
     };
   } catch {
     // The reading is lost, never the card.

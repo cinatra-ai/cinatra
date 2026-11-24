@@ -266,17 +266,6 @@ const HOST_STANDARD_IDS = new Set([
   // keeps its spec anchor, `review-gate-settled`, unchanged.
   "review-gate-settled-pill",
   "review-gate-settled-sentence",
-  // cinatra#3033 — the two readings of the review step on the RUN PAGE
-  // (`specs/app-artifact-review.html` §I.3) and the featured image's card in the
-  // CHAT THREAD (`specs/app-lifecycle-cards.html` §II.1), drawn by the card on
-  // an element of their own and only on those two hosts. The review page this
-  // route draws carries none of them; they are listed here for the same reason
-  // as the S2 anchors above: this suite's closed set is the older spec's.
-  // Their own conformance is pinned in
-  // packages/agents/src/__tests__/review-state-anchors-3033.test.tsx.
-  "run-review-step-post",
-  "run-review-step-picture",
-  "review-card-post-with-featured-image",
 ]);
 
 function conformanceIdsIn(src: string): string[] {

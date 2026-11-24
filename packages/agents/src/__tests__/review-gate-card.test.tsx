@@ -300,16 +300,7 @@ describe("one renderer, four first-party hosts", () => {
       // Keep the original frame normalization, then normalize ONLY the two
       // exact Note attributes asserted above. Every other card byte, including
       // Note labels/values and action/permission chrome, remains compared.
-      // cinatra#3033: on the run page the card names the drawn reading it is
-      // (app-artifact-review §I.3) on an element of its own that draws no box.
-      // Assert it here, then unwrap it, so every drawn byte is still compared.
-      const reading = root!.querySelector('[data-conformance-id="run-review-step-post"]');
-      // red-first-expect: expected null to be <div
-      expect(reading?.parentElement ?? null).toBe(host === "run_card" ? root : null);
-      if (reading) expect(reading.className).toBe("contents");
       const clone = root!.cloneNode(true) as HTMLElement;
-      const clonedReading = clone.querySelector('[data-conformance-id="run-review-step-post"]');
-      if (clonedReading) clonedReading.replaceWith(...Array.from(clonedReading.childNodes));
       clone.removeAttribute("class");
       clone.removeAttribute("data-lifecycle-card-host");
       const clonedNote = clone.querySelector('[data-testid="review-rationale"]')!;

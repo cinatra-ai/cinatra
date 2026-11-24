@@ -431,7 +431,7 @@ export const RUN_STEP_RAIL_ROWS_BY_SURFACE: Readonly<
       unexportedModules: ["packages/agents/src/instance-screens.tsx"],
     },
     readiness:
-      "the review gate card IS shipped (packages/agents/src/review-gate-card.tsx, with the review-target and review-decision-bar anchors; the prompt window is the run page chrome's since cinatra#3487 and carries the drawing's own review-prompt-window anchor there), and since cinatra#3033 the card carries the run-review-step-post anchor on the run page host when the resolve answer records no prompt for the reviewed row. But this surface is that card HOSTED ON THE RUN PAGE'S REVIEW STEP, which the harness cannot mount: the step is drawn by the run screen (packages/agents/src/instance-screens.tsx), which is on no subpath of its package's exports, and the card resolves its target through a review task behind a session",
+      "the review gate card IS shipped (packages/agents/src/review-gate-card.tsx, with the review-target and review-decision-bar anchors; the prompt window is the run page chrome's since cinatra#3487 and carries the drawing's own review-prompt-window anchor there), and since cinatra#3033 the card carries the run-review-step-post anchor on the run page host when its one target is the post (the resolve answer names a markdown form and no recorded prompt). But this surface is that card HOSTED ON THE RUN PAGE'S REVIEW STEP, which the harness cannot mount: the step is drawn by the run screen's SetupScreen (packages/agents/src/instance-screens.tsx; that file is on no subpath of its package's exports, and a route reaches the screen only through the ./screens subpath, as agentPluginScreens.instanceSetup), an async server component that reads the session and resolves the run, its rail and its review gate from the database, and the conformance harness boots a standalone server with neither",
   },
   "run-review-step-picture": {
     surface: "run-review-step-picture",
@@ -453,7 +453,7 @@ export const RUN_STEP_RAIL_ROWS_BY_SURFACE: Readonly<
       unexportedModules: ["packages/agents/src/instance-screens.tsx"],
     },
     readiness:
-      "the featured image's review is the second of the two readings of the same frame, so it waits on the same host as the post's. Since cinatra#3033 the card carries the run-review-step-picture anchor on the run page host when the resolve answer records the prompt that made the reviewed row. But the review step that hosts it is the run page's, drawn by the run screen (packages/agents/src/instance-screens.tsx, on no subpath of its package's exports), which the harness cannot mount (the floor's regenerate-review to successor-gate-opened ships in the one review card)",
+      "the featured image's review is the second of the two readings of the same frame, so it waits on the same host as the post's. Since cinatra#3033 the card carries the run-review-step-picture anchor on the run page host when its one target is the picture (the resolve answer names an image form and the prompt that made it). But the review step that hosts it is the run page's, drawn by the run screen's SetupScreen (packages/agents/src/instance-screens.tsx, reached only through the ./screens subpath as agentPluginScreens.instanceSetup), a server component that needs a session and the database, which the harness's standalone server does not have, so the harness cannot mount it (the floor's regenerate-review to successor-gate-opened ships in the one review card)",
   },
   "run-chip-row": {
     surface: "run-chip-row",

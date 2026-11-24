@@ -398,6 +398,14 @@ export async function POST(request: Request): Promise<Response> {
       recordedPrompt = await readReviewGateRecordedPrompt({ ...gate, actorCtx });
     }
   }
+  // The form of the ONE pinned target (cinatra#3033), from the same
+  // actor-scoped read that composed its header, on the same two states the
+  // prompt travels on. A gate that pins several targets carries none.
+  const targetForm =
+    parsed.data.viewType === "artifact_review_gate" &&
+    (withOutcome.state === "pending" || withOutcome.state === "restricted")
+      ? (targetReading.onlyTargetForm ?? null)
+      : null;
 
   // The island's credential (cinatra#2754) — minted HERE or not at all, and
   // only on the widget arm. A first-party answer omits the key entirely, so the
@@ -450,6 +458,7 @@ export async function POST(request: Request): Promise<Response> {
         : {}),
       ...(targetHeaders ? { targetHeaders, targetHeadersComplete } : {}),
       ...(recordedPrompt === null ? {} : { recordedPrompt }),
+      ...(targetForm === null ? {} : { targetForm }),
     },
     { headers: { "Cache-Control": "no-store" } },
   );

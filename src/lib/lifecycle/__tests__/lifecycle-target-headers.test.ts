@@ -355,10 +355,11 @@ describe("the reading says whether its headers are complete", () => {
 
   it("no headers, a refused state and a store that throws are never complete", async () => {
     readArtifactForDetail.mockReturnValue({ kind: "not-found" });
-    expect(await reading()).toEqual({ headers: null, pinnedCount: 1, complete: false });
-    expect(await reading({ state: "absent" })).toEqual({ headers: null, pinnedCount: 0, complete: false });
+    // red-first-expect: to deeply equal { headers: null, pinnedCount: 1, …(2) }
+    expect(await reading()).toEqual({ headers: null, pinnedCount: 1, complete: false, onlyTargetForm: null });
+    expect(await reading({ state: "absent" })).toEqual({ headers: null, pinnedCount: 0, complete: false, onlyTargetForm: null });
     readReviewGate.mockRejectedValue(new Error("gate store down"));
-    expect(await reading()).toEqual({ headers: null, pinnedCount: 0, complete: false });
+    expect(await reading()).toEqual({ headers: null, pinnedCount: 0, complete: false, onlyTargetForm: null });
   });
 
   it("the headers-only reader answers exactly the reading's headers", async () => {
@@ -412,5 +413,36 @@ describe("the reading says whether its headers are complete", () => {
       ]),
     );
     expect((await reading()).complete).toBe(true);
+  });
+});
+
+describe("cinatra#3033 — the form of the gate's one target", () => {
+  function reading(state: LifecycleCardState = PENDING) {
+    return readReviewTargetHeadersReading({ viewType: "artifact_review_gate", ref: REF, state, actorCtx: ACTOR });
+  }
+
+  it("names the one target's form, from its own row, without parameters", async () => {
+    readArtifactForDetail.mockReturnValue(artifact({ mime: "Text/Markdown; charset=utf-8" }));
+    // red-first-expect: expected undefined to be 'text/markdown'
+    expect((await reading()).onlyTargetForm).toBe("text/markdown");
+  });
+
+  it("names no form for a gate that pins several targets", async () => {
+    readReviewGate.mockResolvedValue(
+      gate([
+        { artifactId: "art-1", representationRevisionId: "rev_post" },
+        { artifactId: "art-2", representationRevisionId: "rev_picture" },
+      ]),
+    );
+    const result = await reading();
+    expect(result.complete).toBe(true);
+    // red-first-expect: expected undefined to be null
+    expect(result.onlyTargetForm).toBeNull();
+  });
+
+  it("names no form when the one target cannot be read", async () => {
+    readArtifactForDetail.mockReturnValue({ kind: "not-found" });
+    // red-first-expect: expected undefined to be null
+    expect((await reading()).onlyTargetForm).toBeNull();
   });
 });
