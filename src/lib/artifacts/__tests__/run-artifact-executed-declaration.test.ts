@@ -75,9 +75,7 @@ vi.mock("../resolve-bound-artifact-type", () => ({
   resolveBoundArtifactTarget: resolveBoundArtifactTargetMock,
 }));
 vi.mock("../artifact-creation", () => ({ createSemanticArtifact: createSemanticArtifactMock }));
-vi.mock("../materialization-ledger", async () => ({
-  // cinatra#4762: the reused revision's restamp, as the module ships it.
-  restampReusedRevision: (await vi.importActual<typeof import("../materialization-ledger")>("../materialization-ledger")).restampReusedRevision,
+vi.mock("../materialization-ledger", () => ({
   claimMaterialization: claimMaterializationMock,
   buildFinalizeMaterializationQuery: buildFinalizeMaterializationQueryMock,
   readFinalizedMaterialization: readFinalizedMaterializationMock,
