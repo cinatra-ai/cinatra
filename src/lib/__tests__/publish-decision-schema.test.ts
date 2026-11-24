@@ -285,7 +285,6 @@ describe("agent_run_publish_decisions.released_pause_generation — DDL parity (
     expect(all.filter((t) => t.includes("released_pause_generation"))).toHaveLength(1);
   });
 
-  // red-first-expect: Cannot find module '/migrations/core/core__0134_publish-decision-released-pause-generation.mjs'
   it("the migration adds the same column, idempotently, outside a transaction, under a bounded lock wait, with no backfill", async () => {
     const mod = await load();
     expect(mod.publishDecisionReleasedPauseGenerationDdlSql).toBe(
@@ -303,7 +302,6 @@ describe("agent_run_publish_decisions.released_pause_generation — DDL parity (
     ]);
   });
 
-  // red-first-expect: ENOENT: no such file or directory
   it("the manifest fragment names the migration and its one table, not destructive", () => {
     const fragment = JSON.parse(
       readFileSync(join(process.cwd(), "migrations/manifest.d/core__0134_publish-decision-released-pause-generation.json"), "utf8"),
@@ -316,7 +314,6 @@ describe("agent_run_publish_decisions.released_pause_generation — DDL parity (
     });
   });
 
-  // red-first-expect: expected undefined to match object { notNull: false, …(2) }
   it("the Drizzle column is a nullable bigint read as a number, with no default, like the run's pause_generation", () => {
     const column = getTableConfig(agentRunPublishDecisions).columns.find((c) => c.name === "released_pause_generation");
     expect(column).toMatchObject({ notNull: false, hasDefault: false, columnType: "PgBigInt53" });
