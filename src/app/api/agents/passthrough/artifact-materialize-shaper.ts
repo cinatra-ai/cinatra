@@ -38,8 +38,11 @@ export type ShapedArtifactMaterializeInput = {
   /**
    * THE LIST MODE (cinatra#3089): one artifact per member of a JSON array, in
    * order, each under the same node. Present only when the call names both
-   * `memberContentField` and `memberTitleField`; then `content` is the raw list
-   * text the call carried and `title` is empty — every member carries its own.
+   * `memberContentField` and `memberTitleField`; then `content` and `title` are
+   * empty — every member carries its own bytes and title. The raw list text is
+   * not kept beside the members: the shaped call is frozen and size-checked
+   * whole before any tool runs, and the list twice over would refuse a list the
+   * request itself carried within that limit.
    */
   members?: ShapedArtifactMaterializeMember[];
 };
@@ -58,6 +61,33 @@ const OBJECT_TYPE_ID_RE = /^@[\w-]+\/[\w-]+:[\w-]+$/;
 function titleIfPresent(raw: Record<string, unknown>): string {
   const value = raw.title;
   return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * A list call's member field name: a non-blank string that is exactly the JSON
+ * property it names. Never trimmed — `" body "` names the property `" body "`,
+ * not `"body"`, so a padded name is refused rather than silently read as
+ * another one (the compile check refuses the same names).
+ */
+function requireMemberFieldName(raw: Record<string, unknown>, field: string): string {
+  const value = raw[field];
+  if (typeof value !== "string" || value.trim().length === 0 || value !== value.trim()) {
+    throw new Error(
+      `artifact_materialize input.${field} must be a field name with no surrounding whitespace (got ${JSON.stringify(value)})`,
+    );
+  }
+  return value;
+}
+
+/**
+ * The key two members collide on: their content as UTF-8 bytes, which is what
+ * the ledger hashes and the store writes. JavaScript strings that differ can
+ * encode to the same bytes (a lone surrogate encodes as U+FFFD), so the bytes,
+ * not the strings, are compared; the round trip yields one string per byte
+ * sequence.
+ */
+function utf8Key(content: string): string {
+  return new TextDecoder().decode(new TextEncoder().encode(content));
 }
 
 function requireNonEmptyString(
@@ -130,7 +160,7 @@ export function shapeArtifactMaterializeInput(
   if (hasMemberContentField || hasMemberTitleField) {
     return {
       extension,
-      content: typeof contentRaw === "string" ? contentRaw : "",
+      content: "",
       declaredMime,
       title: "",
       nodeId,
@@ -214,7 +244,7 @@ export function shapeArtifactMaterializeInput(
  * `contentJsonField`, or with a top-level title; a content that is not a JSON
  * array; an empty list or one over the bound; a member that is not an object,
  * whose content is missing or not a string, or whose title is missing or blank;
- * two members with the same content bytes (they would collapse into one
+ * two members with the same UTF-8 content bytes (they would collapse into one
  * artifact, and the review plan refuses one target named twice).
  */
 function shapeListMembers(
@@ -228,8 +258,8 @@ function shapeListMembers(
         "given together — a list call names the content AND the title of every member",
     );
   }
-  const contentField = requireNonEmptyString(raw, "memberContentField");
-  const titleField = requireNonEmptyString(raw, "memberTitleField");
+  const contentField = requireMemberFieldName(raw, "memberContentField");
+  const titleField = requireMemberFieldName(raw, "memberTitleField");
   for (const field of ["artifactId", "baseRepresentationRevisionId", "contentJsonField", "title"]) {
     if (raw[field] !== undefined && raw[field] !== null) {
       throw new Error(
@@ -289,14 +319,15 @@ function shapeListMembers(
     if (typeof title !== "string" || title.trim().length === 0) {
       throw new Error(`${where} field "${titleField}" must be a non-empty string (got ${JSON.stringify(title)})`);
     }
-    const earlier = seen.get(content);
+    const key = utf8Key(content);
+    const earlier = seen.get(key);
     if (earlier !== undefined) {
       throw new Error(
         `${where} has the same content bytes as member ${earlier + 1} — the two would be one artifact, ` +
           "and a review names each artifact once",
       );
     }
-    seen.set(content, index);
+    seen.set(key, index);
     return { title: title.trim(), content };
   });
 }

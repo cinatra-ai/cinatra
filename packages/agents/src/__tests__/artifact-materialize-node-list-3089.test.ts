@@ -76,6 +76,20 @@ describe("collectArtifactMaterializeNodesFromOasDocument — list mode (cinatra#
     ]);
   });
 
+  // red-first-expect: expected [ Array(1) ] to deeply equal [ StringContaining
+  it.each([
+    ["memberContentField", " "],
+    ["memberContentField", " body "],
+    ["memberTitleField", ""],
+    ["memberTitleField", "subject\t"],
+  ])("refuses %s %j: the runtime reads the property by exactly this name", (field, name) => {
+    const result = collect(listInput({ [field]: name }));
+    expect(result.nodes).toEqual([]);
+    expect(result.errors).toEqual([
+      expect.stringContaining(`data.input.${field}: when present, must be a literal field name with no surrounding whitespace`),
+    ]);
+  });
+
   // red-first-expect: to contain 'data.input.
   it.each([
     ["title", { title: "{{ title }}" }],

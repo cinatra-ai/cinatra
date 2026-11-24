@@ -969,8 +969,17 @@ export function collectArtifactMaterializeNodesFromOasDocument(
     const isList = hasMemberContent || hasMemberTitle;
     for (const field of ["memberContentField", "memberTitleField"] as const) {
       const value = input[field];
-      if (value !== undefined && (typeof value !== "string" || value.length === 0 || isTemplated(value))) {
-        fieldError(field, `when present, must be a literal field name (got ${JSON.stringify(value)})`);
+      // The runtime reads the member property by exactly this name, so a blank
+      // name (it names no property) or a padded one (it would not be the
+      // property the author sees) is refused here, as the runtime refuses it.
+      if (
+        value !== undefined &&
+        (typeof value !== "string" || value.trim().length === 0 || value !== value.trim() || isTemplated(value))
+      ) {
+        fieldError(
+          field,
+          `when present, must be a literal field name with no surrounding whitespace (got ${JSON.stringify(value)})`,
+        );
       }
     }
     if (isList) {

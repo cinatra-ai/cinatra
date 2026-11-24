@@ -34,9 +34,11 @@ describe("shapeArtifactMaterializeInput — list mode (cinatra#3089)", () => {
   // red-first-expect: input.title must be a non-empty string
   it("shapes one member per list entry, in order, trimming titles but never content", () => {
     const shaped = shapeArtifactMaterializeInput(listRaw({ objectTypeId: "@cinatra-ai/email:body" }));
-    expect(shaped).toEqual({
+    expect(shaped).toStrictEqual({
       extension: EXT,
-      content: JSON.stringify(DRAFTS),
+      // The raw list is not kept beside its members: the shaped call is frozen
+      // and size-checked whole, and the list twice over would double its size.
+      content: "",
       declaredMime: "text/markdown",
       title: "",
       nodeId: "file_drafts",
@@ -82,6 +84,36 @@ describe("shapeArtifactMaterializeInput — list mode (cinatra#3089)", () => {
     ["two members with the same bytes", [{ subject: "a", body: "same" }, { subject: "b", body: "same" }], "member 2 has the same content bytes as member 1"],
   ])("refuses %s", (_name, list, message) => {
     expect(() => shapeArtifactMaterializeInput(membersOf(list as unknown[]))).toThrow(message);
+  });
+
+  // red-first-expect: but got 'artifact_materialize input.title must
+  it.each([
+    ["a lone surrogate and U+FFFD", "a\uD800b", "a\uFFFDb"],
+    ["two different lone surrogates", "\uDC00", "\uD801"],
+  ])("refuses two members whose strings differ but encode to the same UTF-8 bytes: %s", (_name, first, second) => {
+    expect(new TextEncoder().encode(first)).toEqual(new TextEncoder().encode(second));
+    const list = [{ subject: "a", body: first }, { subject: "b", body: second }];
+    expect(() => shapeArtifactMaterializeInput(membersOf(list))).toThrow("member 2 has the same content bytes as member 1");
+  });
+
+  // red-first-expect: but got 'artifact_materialize input.title must
+  it.each([
+    ["memberContentField", " "],
+    ["memberContentField", " body "],
+    ["memberTitleField", " "],
+    ["memberTitleField", "subject "],
+  ])("refuses %s %j: a blank or padded name is never read as another property", (field, name) => {
+    expect(() => shapeArtifactMaterializeInput(listRaw({ [field]: name }))).toThrow(
+      `input.${field} must be a field name with no surrounding whitespace`,
+    );
+  });
+
+  // red-first-expect: input.title must be a non-empty string
+  it("reads a member property whose name has inner spaces exactly as named", () => {
+    const shaped = shapeArtifactMaterializeInput(
+      listRaw({ memberContentField: "mail body", content: JSON.stringify([{ subject: "s", "mail body": "b" }]) }),
+    );
+    expect(shaped.members).toEqual([{ title: "s", content: "b" }]);
   });
 
   // red-first-expect: but got 'artifact_materialize input.title must
