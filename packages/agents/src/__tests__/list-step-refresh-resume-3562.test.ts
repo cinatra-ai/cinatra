@@ -23,7 +23,8 @@ import { RunTransitionError } from "../run-status";
 import { buildListStepRefreshPayload, listStepRefreshRequest } from "../hitl-gate-submit";
 
 const LIST_STEP_ID = "@cinatra-ai/email-outreach-agent:list-picker";
-const durableGate = vi.hoisted(() => ({ value: null as null | Record<string, unknown> }));
+/** `fail: true` makes the durable gate read throw, as a database error would. */
+const durableGate = vi.hoisted(() => ({ value: null as null | Record<string, unknown>, fail: false }));
 /** `generated: true` reads the application's real generated bindings, unchanged. */
 const bindings = vi.hoisted(() => ({ list: [] as Array<Record<string, unknown>>, generated: false }));
 vi.mock("../field-renderer-bindings.server", async () => {
@@ -71,7 +72,10 @@ vi.mock("../agent-run-hitl-prompts", () => ({
     await (storeMock.writeHitlPrompt as unknown as (value: unknown) => Promise<void>)(input);
     return "captured-prompt";
   },
-  readDurableHitlGateForContinue: async () => durableGate.value,
+  readDurableHitlGateForContinue: async () => {
+    if (durableGate.fail) throw new Error("gate record read failed");
+    return durableGate.value;
+  },
   recordSuccessfulContinue: async () => {},
   continueBindingDigest: () => "",
   continueGateDigest: () => "",
@@ -152,6 +156,7 @@ function arrange() {
   promptRows.list = [];
   bindings.generated = false;
   durableGate.value = listStepGate();
+  durableGate.fail = false;
   bindings.list = [{ id: LIST_STEP_ID, kind: "list-picker", priority: 90, params: { refreshValue: "refresh" } }];
   storeMock.readAgentRunByTaskId.mockImplementation(async () => liveRun());
   storeMock.readAgentRunById.mockImplementation(async () => liveRun());
@@ -228,6 +233,46 @@ describe("cinatra#3562 — the list step's Try again resumes the run with the de
     bindings.list = [];
     await approveReviewTaskInternal(TASK, RUN.runBy, { approved: true, listStepRefresh: "keep me" });
     expect(sendTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses the hosts' refresh when the gate record is missing, and claims, sends and stores nothing", async () => {
+    durableGate.value = null;
+    const { claimPause } = (await import("./pause-claim-test-fake")).pauseClaimFake;
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await expect(
+      approveReviewTaskInternal(TASK, RUN.runBy, buildListStepRefreshPayload("refresh")),
+    ).rejects.toThrow("takes no such list step refresh");
+    expect(claimPause).not.toHaveBeenCalled();
+    expect(sendTask).not.toHaveBeenCalled();
+    expect(storeMock.writeHitlPrompt).not.toHaveBeenCalled();
+    expect(row.status).toBe("pending_approval");
+  });
+
+  it("refuses the hosts' refresh when the gate record read fails, and claims, sends and stores nothing", async () => {
+    durableGate.fail = true;
+    const { claimPause } = (await import("./pause-claim-test-fake")).pauseClaimFake;
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await expect(
+      approveReviewTaskInternal(TASK, RUN.runBy, buildListStepRefreshPayload("refresh")),
+    ).rejects.toThrow("takes no such list step refresh");
+    expect(claimPause).not.toHaveBeenCalled();
+    expect(sendTask).not.toHaveBeenCalled();
+    expect(storeMock.writeHitlPrompt).not.toHaveBeenCalled();
+    expect(row.status).toBe("pending_approval");
+  });
+
+  it("submits a single text field named like the key normally when the gate record is missing (guard)", async () => {
+    durableGate.value = null;
+    bindings.list = [];
+    await approveReviewTaskInternal(TASK, RUN.runBy, {
+      approved: true,
+      approvedAt: "2026-11-24T00:00:00.000Z",
+      userResponse: "a real answer",
+      userResponseFieldName: "listStepRefresh",
+      listStepRefresh: "a real answer",
+    });
+    expect(sentText()).toContain("a real answer");
+    expect(storeMock.writeHitlPrompt).toHaveBeenCalledTimes(1);
   });
 
   it("submits a field named like the key on a list step whose schema declares it (guard)", async () => {
@@ -369,6 +414,21 @@ describe("cinatra#3562 — a refresh is no answer of the list step in the run's 
     expect(sendTask).toHaveBeenCalledTimes(3);
     const map = await walk();
     expect(map.get(1)?.stepKey).toBe("task-list-3");
+    expect(map.has(2)).toBe(false);
+  });
+
+  it("keeps the pick on the list step after a refresh refused for a missing gate record", async () => {
+    row.status = "pending_approval";
+    durableGate.value = null;
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await expect(
+      approveReviewTaskInternal("wayflow-task-list-1", RUN.runBy, buildListStepRefreshPayload("refresh")),
+    ).rejects.toThrow("takes no such list step refresh");
+    await answerAt("wayflow-task-list-2", PICK);
+    expect(sendTask).toHaveBeenCalledTimes(1);
+    const map = await walk();
+    expect(map.get(1)?.stepKey).toBe("task-list-2");
+    expect(map.get(1)?.submittedValues).toMatchObject({ listIds: ["list-a"] });
     expect(map.has(2)).toBe(false);
   });
 

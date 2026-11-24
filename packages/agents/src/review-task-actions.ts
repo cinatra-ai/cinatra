@@ -37,7 +37,7 @@ import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuc
 // kernel guard instead of directly on the module `db` (owner ruling 2026-07-26,
 // ruling 1: "now").
 import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
-import { readWayflowSubmittedValues, readListStepRefreshAsk, listStepRefreshAccepted, listStepRefreshIsRequest } from "./hitl-gate-submit";
+import { readWayflowSubmittedValues, readListStepRefreshAsk, listStepRefreshAccepted, listStepRefreshIsRequest, isListStepRefreshPayloadShape } from "./hitl-gate-submit";
 // cinatra#2484: the setup-resume path is the LAST place a type-violating setup
 // value can be stopped before it becomes `agent_runs.inputParams` and reaches
 // the run. It needs the SAME effective schema the setup loop rendered from —
@@ -977,6 +977,12 @@ export async function approveReviewTaskInternal(
     const refreshKeyValue = readListStepRefreshAsk(values);
     if (refreshKeyValue !== undefined) {
       const gate = await readDurableHitlGateForContinue(run.id, reviewTaskId).catch(() => null);
+      // No record (missing, or the read failed): the step cannot be told from a
+      // list step. An answer in the hosts' exact refresh shape is refused, so a
+      // refresh is never stored as an answer row that shifts the later pick.
+      if (!gate && isListStepRefreshPayloadShape(values)) {
+        throw new Error(`WayFlow approval rejected: gate ${taskId} on run ${run.id} takes no such list step refresh (no gate record)`);
+      }
       if (gate && listStepRefreshIsRequest({ reviewTaskId, gate })) {
         // Who declares the refresh value, and when:
         // 1. No binding at the application's current pin declares

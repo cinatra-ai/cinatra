@@ -593,6 +593,30 @@ export function readListStepRefreshAsk(values: unknown): unknown {
 }
 
 /**
+ * Whether an answer has exactly the shape `buildListStepRefreshPayload` gives:
+ * no own key but `approved`, `approvedAt`, `userResponse` and
+ * `LIST_STEP_REFRESH_KEY`, with the refresh key a nonblank string equal to
+ * `userResponse`. The server uses it only when the gate's durable record
+ * cannot be read: it then cannot tell a list step from another step, so it
+ * refuses this shape rather than store a refresh as an ordinary answer.
+ *
+ * A step whose schema declares a field of that name answers in another shape:
+ * a single text field adds `userResponseFieldName`, and any other answer sends
+ * the fields as a JSON object in `userResponse`, which is not the field's own
+ * value. A hand-made answer could still match this shape; without the record
+ * it is refused (fail closed), and the person can answer again.
+ */
+export function isListStepRefreshPayloadShape(values: unknown): boolean {
+  if (values === null || typeof values !== "object" || Array.isArray(values)) return false;
+  const allowed = new Set(["approved", "approvedAt", "userResponse", LIST_STEP_REFRESH_KEY]);
+  if (Object.keys(values).some((key) => !allowed.has(key))) return false;
+  const refresh = readListStepRefreshAsk(values);
+  if (typeof refresh !== "string" || refresh.trim().length === 0) return false;
+  return Object.prototype.hasOwnProperty.call(values, "userResponse")
+    && (values as Record<string, unknown>).userResponse === refresh;
+}
+
+/**
  * Whether an answer's `LIST_STEP_REFRESH_KEY` is the list step's refresh
  * request or an ordinary answer value. The key is no reserved word: a setup
  * step or any other step may declare a field of that name, and its value is
