@@ -125,6 +125,12 @@ vi.mock("../agent-run-hitl-prompts", () => ({
   continueBindingDigest: () => "",
   continueGateDigest: () => "",
 }));
+// The step's renderer declares a card on the server: a declared card's answer
+// (marked as one by every host) is sent only to such a step.
+vi.mock("../field-renderer-bindings.server", async (orig) => ({
+  ...(await orig<typeof import("../field-renderer-bindings.server")>()),
+  readDeclaredHitlCard: () => ({ layout: "card", title: "Fixture server card" }),
+}));
 vi.mock("../wayflow-url", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   resolveWayflowUrl: vi.fn(() => "http://wayflow.test"),

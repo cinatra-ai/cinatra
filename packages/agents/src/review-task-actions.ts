@@ -38,7 +38,7 @@ import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuc
 // ruling 1: "now").
 import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
 import { readWayflowSubmittedValues } from "./hitl-gate-submit";
-import { SCREEN_FAILED_HOLD_REASON } from "./hitl-gate-submit";
+import { DECLARED_CARD_ANSWER_KEY, SCREEN_FAILED_HOLD_REASON } from "./hitl-gate-submit";
 import { readSentUserEnvelope } from "./wayflow-user-response-envelope";
 // cinatra#2484: the setup-resume path is the LAST place a type-violating setup
 // value can be stopped before it becomes `agent_runs.inputParams` and reaches
@@ -89,18 +89,38 @@ export const DECLARED_SCREEN_CHANGED_REFUSAL =
  */
 async function stepScreenRefusal(
   gate: { xRenderer: string; inputSchema: Record<string, unknown> } | null,
+  answersDeclaredCard: boolean,
 ): Promise<string | null> {
   if (gate === null) return SCREEN_FAILED_HOLD_REASON;
   let standing: "matches" | "changed" | "unknown";
+  let declaresCard = false;
   try {
-    const { stepDeclarationStanding } = await import("./field-renderer-bindings.server");
+    const { stepDeclarationStanding, readDeclaredHitlCard } = await import(
+      "./field-renderer-bindings.server"
+    );
     standing = stepDeclarationStanding(gate.xRenderer, gate.inputSchema, { fresh: true });
+    if (standing === "matches" && answersDeclaredCard) {
+      const card = readDeclaredHitlCard(gate.xRenderer, gate.inputSchema);
+      declaresCard = card !== null && typeof card === "object";
+    }
   } catch {
     return SCREEN_FAILED_HOLD_REASON;
   }
-  if (standing === "matches") return null;
-  return standing === "changed" ? DECLARED_SCREEN_CHANGED_REFUSAL : SCREEN_FAILED_HOLD_REASON;
+  if (standing !== "matches") {
+    return standing === "changed" ? DECLARED_SCREEN_CHANGED_REFUSAL : SCREEN_FAILED_HOLD_REASON;
+  }
+  // AN ANSWER MADE ON A DECLARED CARD IS SENT ONLY TO A STEP THAT DECLARES
+  // ONE. A browser can still hold a card an earlier read registered under the
+  // id; a step that declares none (or a "kind" screen) never asked for that
+  // card's fields or decisions.
+  if (answersDeclaredCard && !declaresCard) return UNDECLARED_CARD_ANSWER_REFUSAL;
+  return null;
 }
+
+/** The refusal of a declared card's answer to a step that declares no card (cinatra#3470). */
+export const UNDECLARED_CARD_ANSWER_REFUSAL =
+  "This answer was made on a screen this step does not declare, so it was not sent. " +
+  "Reload the page to answer the step on its own screen.";
 
 /**
  * THE WAYFLOW RESUME TEXT OF A DECLINE (cinatra#3470).
@@ -1138,6 +1158,21 @@ export async function approveReviewTaskInternal(
     // downstream flag the bridge passes the JSON
     // string through VERBATIM — that is the byte-identical legacy
     // invariant, NOT a bug.
+    // A DECLARED CARD'S ANSWER SAYS SO (cinatra#3470, `DECLARED_CARD_ANSWER_KEY`).
+    // The mark is checked against the step's declaration below and never sent
+    // on or recorded.
+    let answersDeclaredCard = false;
+    if (
+      values &&
+      typeof values === "object" &&
+      !Array.isArray(values) &&
+      Object.prototype.hasOwnProperty.call(values, DECLARED_CARD_ANSWER_KEY)
+    ) {
+      const { [DECLARED_CARD_ANSWER_KEY]: _mark, ...unmarked } = values as Record<string, unknown>;
+      void _mark;
+      answersDeclaredCard = true;
+      values = unmarked;
+    }
     const valuesObj =
       values && typeof values === "object" && !Array.isArray(values)
         ? (values as { userResponse?: unknown; approvalNote?: unknown })
@@ -1205,7 +1240,7 @@ export async function approveReviewTaskInternal(
       // cinatra#3470: a step is answered only under the screen it opened under. A renderer
       // updated or uninstalled while the step waited, or a screen that cannot be verified,
       // refuses the answer before the fence, and the claim is given back.
-      const screenRefusal = await stepScreenRefusal(gateSnapshot);
+      const screenRefusal = await stepScreenRefusal(gateSnapshot, answersDeclaredCard);
       if (screenRefusal !== null) throw new Error(screenRefusal);
       // The shared WayFlow resume (cinatra#4150) is prepared before the fence and
       // sent after it (cinatra#4245): the client with its 24h ceiling and the

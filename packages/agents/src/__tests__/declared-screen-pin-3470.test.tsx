@@ -618,3 +618,40 @@ describe("a runtime registration gives back the entry it replaced (cinatra#3470)
     }
   });
 });
+
+describe("a step that declares no screen is never drawn with a screen an earlier read registered (cinatra#3470)", () => {
+  it("a screen removed since a run page registered it is not drawn for a later step of the same id, and the page's registry drops it", async () => {
+    install(LATER);
+    // A run page read the installed agents: the declared screen is registered
+    // under the renderer id itself, for every surface of this browser.
+    await reg.readRuntimeRendererBindings?.();
+    // red-first-expect: expected undefined to match object { title: 'Fixture later revision' }
+    expect(reg.declaredHitlCardOf?.(ID)).toMatchObject({ title: "Fixture later revision" });
+    // The screen is removed (the binding stays, with no screen), and a later
+    // step of the same id opens with none.
+    install(undefined);
+    const laterRun = runParkedOn("run-removed", "task-removed", parkedSchema());
+    screenStateMock.mockImplementation(async () => agentHitlScreenStateForRun(laterRun));
+    try {
+      const { container } = render(
+        <LifecycleCardSurfaceProvider host="chat_thread">
+          <AgentHitlScreenCard runId="run-removed" wireRef="task-removed" />
+        </LifecycleCardSurfaceProvider>,
+      );
+      const card = within(container);
+      await waitFor(() => expect(screenStateMock).toHaveBeenCalled());
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 20));
+      });
+      expect(card.queryAllByRole("radio")).toHaveLength(0);
+      expect(card.queryByText("Fixture later decision")?.textContent ?? null).toBeNull();
+      // The page's registry no longer holds the removed screen under the id.
+      await waitFor(() => expect(reg.declaredHitlCardOf?.(ID)).toBeUndefined());
+      expect(card.queryAllByRole("radio")).toHaveLength(0);
+    } finally {
+      cleanup();
+      uninstall();
+      await reg.readRuntimeRendererBindings?.();
+    }
+  });
+});

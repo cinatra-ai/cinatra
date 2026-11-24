@@ -848,10 +848,31 @@ export function declaredHitlContinuePayload(
   attachments: ReadonlyArray<LlmAttachmentRef>,
   now: string = new Date().toISOString(),
 ): Record<string, unknown> {
-  return applyAttachmentEnvelopeUserResponseOnly(
-    { ...staged, approved: declaredHitlApprovalFlag(screen, staged), approvedAt: now },
-    attachments,
-  );
+  return {
+    ...applyAttachmentEnvelopeUserResponseOnly(
+      { ...staged, approved: declaredHitlApprovalFlag(screen, staged), approvedAt: now },
+      attachments,
+    ),
+    [DECLARED_CARD_ANSWER_KEY]: true,
+  };
+}
+
+/**
+ * THE MARK OF AN ANSWER MADE ON A DECLARED CARD (cinatra#3470). Every host
+ * sets it on the Continue of a gate drawn by a declared card. The server
+ * sends such an answer only to a step whose declaration is a card, and drops
+ * the mark before the answer goes on: a card an earlier read registered in
+ * the browser, for a step that declares none, never answers that step.
+ */
+export const DECLARED_CARD_ANSWER_KEY = "x-declared-card-answer";
+
+/** `payload` with the declared-card mark when a declared card draws `xRenderer`. */
+export function markDeclaredCardAnswer(
+  xRenderer: string | null | undefined,
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  if (typeof xRenderer !== "string" || declaredHitlCardOf(xRenderer) === undefined) return payload;
+  return { ...payload, [DECLARED_CARD_ANSWER_KEY]: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -1430,11 +1451,14 @@ export function finishContinuePayload(
       payload: Record<string, unknown>,
       attachments: ReadonlyArray<LlmAttachmentRef>,
     ) => Record<string, unknown>;
+    /** The renderer id the gate is drawn by: a declared card's answer is marked (`markDeclaredCardAnswer`). */
+    xRenderer: string | null;
   },
 ): Record<string, unknown> {
   const declared = withDeclaredRendererValues(finish.declaredSchema, finish.written, payload);
-  if (finish.attachments.length === 0) return declared;
-  return finish.wrapAttachments(declared, finish.attachments);
+  const wrapped =
+    finish.attachments.length === 0 ? declared : finish.wrapAttachments(declared, finish.attachments);
+  return markDeclaredCardAnswer(finish.xRenderer, wrapped);
 }
 
 /**

@@ -342,6 +342,29 @@ describe("an answer is sent only under the declared screen its step opened under
     expect(sendTask).toHaveBeenCalledTimes(1);
   });
 
+  it("an answer made on a declared card is refused for a step that opened with no screen, whose renderer declares none now", async () => {
+    // The screen was removed before the step opened: the step declares none.
+    install(null);
+    park();
+    // A browser still holding the removed card sends its answer, marked as one.
+    const staleCardAnswer = { approved: true, route: "removed", "x-declared-card-answer": true };
+    const sent = await approveReviewTaskInternal(GATE, RUN.runBy, staleCardAnswer).then(
+      () => "sent",
+      (err: unknown) => (err instanceof Error ? err.message : String(err)),
+    );
+    // red-first-expect: expected 'sent' to contain 'does not declare'
+    expect(sent).toContain("does not declare");
+    expectRefusedAndGivenBack();
+  });
+
+  it("an answer made on the declared card the step opened under is sent, without the mark", async () => {
+    install("Fixture marked revision");
+    park();
+    await approveReviewTaskInternal(GATE, RUN.runBy, { approved: true, "x-declared-card-answer": true });
+    expect(sendTask).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(sendTask.mock.calls)).not.toContain("x-declared-card-answer");
+  });
+
   it("a step parked before the upgrade whose own schema names an 'unknown' pin is never answered under a declared screen", async () => {
     install("Fixture screen installed after the park");
     // The agent's schema carried the key; the park of that time kept it, unsealed.

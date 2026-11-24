@@ -1640,6 +1640,7 @@ export function AgenticRunPanel({
               written: answer,
               attachments: pendingAttachmentsRef.current,
               wrapAttachments: applyAttachmentEnvelopeUserResponseOnly,
+              xRenderer: ctx.xRenderer,
             })
           : payload,
         payloadFieldName,
@@ -2523,6 +2524,7 @@ export function AgenticRunPanel({
             wrapAttachments: approvalNoteLift
               ? applyAttachmentEnvelope
               : applyAttachmentEnvelopeUserResponseOnly,
+            xRenderer: effectiveHitlContext.xRenderer,
           });
           await performGateSubmit({
             reviewTaskId: effectiveHitlContext.reviewTaskId,

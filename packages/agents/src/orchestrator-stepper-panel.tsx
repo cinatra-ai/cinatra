@@ -1186,6 +1186,7 @@ function HitlApprovalCard({
       written: bufferedHitlValue,
       attachments: isSetupGateTaskId(interruptContext.reviewTaskId) ? [] : pendingAttachmentsRef.current,
       wrapAttachments: applyAttachmentEnvelope,
+      xRenderer: interruptContext.xRenderer,
     });
     let didApprove = false;
     try {

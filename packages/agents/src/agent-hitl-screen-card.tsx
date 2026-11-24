@@ -137,7 +137,10 @@ import { getAgentHitlScreenStateAction } from "./agent-hitl-screen-actions";
 import {
   continueAwaitsAPick,
   fieldRendererRegistry,
+  freshReadKey,
+  isDeclaredScreenBoundByRuntimeRead,
   isRendererBound,
+  readRuntimeRendererBindings,
   wholeAnswerStageProps,
   type FieldRendererContext,
   type FieldRendererEntry,
@@ -1058,6 +1061,7 @@ export function AgentHitlScreenContinue({
           written: buffered,
           attachments: [],
           wrapAttachments: applyAttachmentEnvelopeUserResponseOnly,
+          xRenderer: gate.xRenderer,
         });
         await onContinue(payload);
       }}
@@ -1331,13 +1335,41 @@ export function AgentHitlScreenCard({
     state !== null && state.state === "asking" && state.declaredScreenRefused === true
       ? state.gate.xRenderer
       : null;
+  // A SCREEN THIS GATE DOES NOT DECLARE IS NEVER ITS SCREEN (cinatra#3470). The
+  // card's read handed no declared screen, yet a runtime read made earlier on
+  // this page can still hold a declared screen under the gate's id (one
+  // removed since). That entry is stale: the card draws nothing from it and
+  // holds its Continue, and asks one fresh runtime read for the step, which
+  // reconciles the registry for every host on the page. Once that read
+  // dropped the entry the gate is drawn by what is registered now; a read that
+  // left it in place (failed, or could not read every installed agent) keeps
+  // the gate held as a screen that could not be loaded.
+  const staleScreenStepKey =
+    gate !== null && declaredScreen === null && isDeclaredScreenBoundByRuntimeRead(gate.xRenderer)
+      ? freshReadKey(gate.xRenderer, gate.reviewTaskId)
+      : null;
+  const [staleScreenReadFor, setStaleScreenReadFor] = useState<string | null>(null);
+  useEffect(() => {
+    if (staleScreenStepKey === null) return;
+    let live = true;
+    void readRuntimeRendererBindings(staleScreenStepKey).then(() => {
+      if (live) setStaleScreenReadFor(staleScreenStepKey);
+    });
+    return () => {
+      live = false;
+    };
+  }, [staleScreenStepKey]);
   const gateBindings = useMemo<RendererBindingsLoad>(
     () => ({
       status: declaredScreenUnavailable
         ? "failed"
-        : declaredScreenKey !== null && registeredScreenKey !== declaredScreenKey
-          ? "loading"
-          : "loaded",
+        : staleScreenStepKey !== null
+          ? staleScreenReadFor === staleScreenStepKey
+            ? "failed"
+            : "loading"
+          : declaredScreenKey !== null && registeredScreenKey !== declaredScreenKey
+            ? "loading"
+            : "loaded",
       announcedIds: new Set(declaredScreen === null ? [] : [declaredScreen.id]),
       // The read answers for this gate's own binding, and the server rescans
       // the installed agents before it answers "none" for an id
@@ -1347,7 +1379,14 @@ export function AgentHitlScreenCard({
       refusedIds: new Set(refusedScreenId === null ? [] : [refusedScreenId]),
     }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [declaredScreenUnavailable, refusedScreenId, declaredScreenKey, registeredScreenKey],
+    [
+      declaredScreenUnavailable,
+      refusedScreenId,
+      declaredScreenKey,
+      registeredScreenKey,
+      staleScreenStepKey,
+      staleScreenReadFor,
+    ],
   );
   // A GATE WITHOUT ITS OWN DRAWABLE DECLARATION RESOLVES NOTHING (cinatra#3470).
   // Its declared screen is unavailable (refused, unreadable, or changed since
@@ -1357,7 +1396,9 @@ export function AgentHitlScreenCard({
   // read: the card draws the empty region and its Continue holds, with the
   // reason of the binding's standing.
   const screenWithheld =
-    declaredScreenUnavailable || (declaredScreenKey !== null && ownScopedId === null);
+    declaredScreenUnavailable ||
+    staleScreenStepKey !== null ||
+    (declaredScreenKey !== null && ownScopedId === null);
 
   // THE BUFFER BELONGS TO ONE GATE, AND ONLY TO IT.
   //

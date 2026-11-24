@@ -566,7 +566,7 @@ function serverActions(): Promise<typeof import("./server-actions")> {
  */
 const runtimeRegisteredEntries = new Map<
   string,
-  { entry: FieldRendererEntry; displaced: FieldRendererEntry | undefined }
+  { entry: FieldRendererEntry; displaced: FieldRendererEntry | undefined; declaresScreen: boolean }
 >();
 
 /**
@@ -578,6 +578,17 @@ const runtimeRegisteredEntries = new Map<
 export function isRendererBoundByRuntimeRead(xRenderer: string): boolean {
   const held = runtimeRegisteredEntries.get(xRenderer);
   return held !== undefined && fieldRendererRegistry.list().includes(held.entry);
+}
+
+/**
+ * Is the entry registered under exactly this id a DECLARED SCREEN a runtime
+ * answer registered (cinatra#3470)? A read that says the id declares no
+ * screen now proves such an entry stale: it stays until the next runtime
+ * answer drops it (`reconcileRuntimeRegistrations`).
+ */
+export function isDeclaredScreenBoundByRuntimeRead(xRenderer: string): boolean {
+  const held = runtimeRegisteredEntries.get(xRenderer);
+  return held !== undefined && held.declaresScreen && fieldRendererRegistry.list().includes(held.entry);
 }
 
 /**
@@ -619,7 +630,9 @@ function reconcileRuntimeRegistrations(
     // source's entry in place, and that entry is not this road's to remove.
     const entry = entryOf(b.id);
     const displaced = before.get(b.id);
-    if (entry !== undefined && entry !== displaced) runtimeRegisteredEntries.set(b.id, { entry, displaced });
+    if (entry !== undefined && entry !== displaced) {
+      runtimeRegisteredEntries.set(b.id, { entry, displaced, declaresScreen: b.screen !== undefined });
+    }
   }
 }
 
