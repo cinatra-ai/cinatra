@@ -423,10 +423,46 @@ export async function getOrAddWayflowRendererGateIndex(
   const r = getPublisher();
   const list = (await r.lrange(key, 0, -1)) as string[];
   const existing = list.indexOf(taskId);
-  if (existing !== -1) return existing;
+  // cinatra#3562: a pause that follows a list step's refresh is that same step
+  // again. Its fresh task id takes the refreshed task's place in the list, so
+  // the position does not advance. A read fault throws: no later index is guessed.
+  const repeatKey = rendererGateRepeatKey(runId);
+  const repeatOf = await r.get(repeatKey);
+  if (existing !== -1) {
+    if (repeatOf === taskId) await r.del(repeatKey);
+    return existing;
+  }
+  if (repeatOf !== null) {
+    await r.del(repeatKey);
+    const at = list.length - 1;
+    if (at < 0 || list[at] !== repeatOf) {
+      throw new Error(`renderer gate ${taskId} on run ${runId} follows a refresh of a task that is not the last renderer gate`);
+    }
+    await r.lset(key, at, taskId);
+    await r.expire(key, GATE_SEQUENCE_TTL_S);
+    return at;
+  }
   await r.rpush(key, taskId);
   await r.expire(key, GATE_SEQUENCE_TTL_S);
   return list.length; // new renderer-gate index = old list length
+}
+
+function rendererGateRepeatKey(runId: string): string {
+  return `cinatra:wayflow:renderer-gate-repeat:${runId}`;
+}
+
+/**
+ * cinatra#3562: record that the resume about to be sent for the renderer gate
+ * `taskId` is a list step's refresh, so the run parks at the same step again.
+ * The next renderer pause of the run reads this once, clears it and keeps the
+ * refreshed step's index (`getOrAddWayflowRendererGateIndex`).
+ */
+export async function rememberWayflowRendererGateRepeat(
+  runId: string,
+  taskId: string,
+): Promise<void> {
+  const r = getPublisher();
+  await r.set(rendererGateRepeatKey(runId), taskId, "EX", GATE_SEQUENCE_TTL_S);
 }
 
 /**

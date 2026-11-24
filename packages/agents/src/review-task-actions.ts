@@ -1217,24 +1217,31 @@ export async function approveReviewTaskInternal(
       // authorizes no persist, and its `userResponse` is not what is sent (the
       // declared refresh value is). A mint here would let the refresh's payload
       // authorize a draft or recipient write that the operator never answered.
-      if (listStepRefreshAsk === undefined && typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0) {
+      // A refresh records instead that the next pause is this list step again, so
+      // that pause keeps this step's renderer (`getOrAddWayflowRendererGateIndex`).
+      // Its failure is handled as the mint's is: nothing is sent, the gate is put back.
+      if (listStepRefreshAsk !== undefined || (typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0)) {
         try {
-          const { rememberAnsweredGateSubmission, rememberLatestWayflowGateTask } =
-            await import("@cinatra-ai/a2a");
-          // RE-ASSERT the latest-task join key to THIS answered gate before minting.
-          // The passthrough seam derives the persist's `verifiedSubmissionId` from the
-          // latest-task map, stamped at interrupt-EMIT with a TTL; a gate that stays
-          // pending PAST that TTL before the operator answers would leave the key
-          // expired, so the post-resume consume would resolve no `verifiedSubmissionId`
-          // and FALSELY deny a genuine answer. Re-asserting it here guarantees the
-          // immediate post-resume consume resolves the same gate identity we mint
-          // under. It is IDEMPOTENT: a WayFlow run is suspended at exactly ONE gate at
-          // a time and `taskId` IS that gate, so this only re-writes the value already
-          // present (or restores it after a TTL expiry); concurrent answers to the
-          // same gate write the identical `taskId`, and the next gate's interrupt-emit
-          // legitimately advances the key afterwards.
-          await rememberLatestWayflowGateTask(run.id, taskId);
-          await rememberAnsweredGateSubmission(run.id, taskId, userResponseRaw);
+          if (listStepRefreshAsk !== undefined) {
+            await (await import("@cinatra-ai/a2a")).rememberWayflowRendererGateRepeat(run.id, taskId);
+          } else {
+            const { rememberAnsweredGateSubmission, rememberLatestWayflowGateTask } =
+              await import("@cinatra-ai/a2a");
+            // RE-ASSERT the latest-task join key to THIS answered gate before minting.
+            // The passthrough seam derives the persist's `verifiedSubmissionId` from the
+            // latest-task map, stamped at interrupt-EMIT with a TTL; a gate that stays
+            // pending PAST that TTL before the operator answers would leave the key
+            // expired, so the post-resume consume would resolve no `verifiedSubmissionId`
+            // and FALSELY deny a genuine answer. Re-asserting it here guarantees the
+            // immediate post-resume consume resolves the same gate identity we mint
+            // under. It is IDEMPOTENT: a WayFlow run is suspended at exactly ONE gate at
+            // a time and `taskId` IS that gate, so this only re-writes the value already
+            // present (or restores it after a TTL expiry); concurrent answers to the
+            // same gate write the identical `taskId`, and the next gate's interrupt-emit
+            // legitimately advances the key afterwards.
+            await rememberLatestWayflowGateTask(run.id, taskId);
+            await rememberAnsweredGateSubmission(run.id, taskId, userResponseRaw as string);
+          }
         } catch (recordError) {
           // Nothing was sent. The fence already moved the run to `running`, so the
           // gate is put back by the status edge (#3423's release edge): the run waits
