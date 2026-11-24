@@ -475,7 +475,8 @@ function readPack(): Flow {
 function siteStartField(flow: Flow): { stepInput: string; startField: string } {
   const system = flow.$referenced_components.publish?.data?.system ?? "";
   const named = new Set<string>();
-  for (const call of ["wordpress_site_tools_list", "wordpress_site_tool_call"]) {
+  // red-first-expect: calls wordpress_site_tool_write with instanceId: <field>: expected 0 to be greater than 0
+  for (const call of ["wordpress_site_tools_list", "wordpress_site_tool_write"]) {
     // A call written with its arguments: `<call>({ instanceId: <field>, ... })`.
     const calls = [...system.matchAll(new RegExp(`${call}\\(\\{\\s*instanceId:\\s*<([A-Za-z_][A-Za-z0-9_]*)>`, "g"))];
     expect(calls.length, `the publish step's prompt calls ${call} with instanceId: <field>`).toBeGreaterThan(0);
