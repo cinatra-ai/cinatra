@@ -21,6 +21,7 @@ import {
   readDispatchedPublishRows,
   readLatestDecisionForRun,
   readOpenDecisionForRun,
+  readRunBoundGraph,
   withRunRowLock,
   type PublishDecisionRow,
   type PublishDecisionStatus,
@@ -613,6 +614,120 @@ export async function approvePublishDecision(input: DecideInput): Promise<Publis
   return { ok: true, resumed: true };
 }
 
+type FlowComponent = Record<string, unknown>;
+const isComponent = (value: unknown): value is FlowComponent => !!value && typeof value === "object" && !Array.isArray(value);
+
+const addTo = (map: Map<string, FlowComponent[]>, name: string, comp: FlowComponent) => map.set(name, [...(map.get(name) ?? []), comp]);
+
+/** Every component of the document by the key it is declared under in a `$referenced_components` map, at any depth (a
+ *  key declared in more than one scope names all of them, so a reference read against it reaches each, fail closed),
+ *  and every object of the document by its own `id`, inline ones included. */
+function indexComponents(document: FlowComponent): { byKey: Map<string, FlowComponent[]>; byId: Map<string, FlowComponent[]> } {
+  const byKey = new Map<string, FlowComponent[]>();
+  const byId = new Map<string, FlowComponent[]>();
+  const seen = new Set<object>();
+  const stack: unknown[] = [document];
+  while (stack.length > 0) {
+    const value = stack.pop();
+    if (!value || typeof value !== "object" || seen.has(value)) continue;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      stack.push(...value);
+      continue;
+    }
+    const comp = value as FlowComponent;
+    if (typeof comp.id === "string") addTo(byId, comp.id, comp);
+    if (isComponent(comp.$referenced_components)) {
+      for (const [key, child] of Object.entries(comp.$referenced_components)) if (isComponent(child)) addTo(byKey, key, child);
+    }
+    stack.push(...Object.values(comp));
+  }
+  return { byKey, byId };
+}
+
+/** The ids of every component inside `root` (the root's own included): each object's `id`, each key of a
+ *  `$referenced_components` map, and every component a `$component_ref` names, followed. Over-reading is fail closed. */
+function idsInside(root: FlowComponent, byKey: Map<string, FlowComponent[]>): Set<string> {
+  const ids = new Set<string>();
+  const seen = new Set<object>();
+  const stack: unknown[] = [root];
+  while (stack.length > 0) {
+    const value = stack.pop();
+    if (!value || typeof value !== "object" || seen.has(value)) continue;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      stack.push(...value);
+      continue;
+    }
+    const comp = value as FlowComponent;
+    if (typeof comp.$component_ref === "string") {
+      ids.add(comp.$component_ref);
+      stack.push(...(byKey.get(comp.$component_ref) ?? []));
+    }
+    if (typeof comp.id === "string") ids.add(comp.id);
+    if (isComponent(comp.$referenced_components)) for (const key of Object.keys(comp.$referenced_components)) ids.add(key);
+    stack.push(...Object.values(comp));
+  }
+  return ids;
+}
+
+const declaresPublishes = (comp: FlowComponent): boolean => {
+  const cinatra = isComponent(comp.metadata) ? comp.metadata.cinatra : undefined;
+  return isComponent(cinatra) && cinatra.publishes === true;
+};
+
+/** The publishing step of `stepId` in a flow document: the step itself when it is a publishing node, else the one
+ *  publishing node it lies inside, else the step as unrelated to any publishing node. The publishing nodes are the
+ *  template's list and every component the document itself declares `publishes: true`. null: inside more than one. */
+function publishingStepInGraph(
+  document: FlowComponent,
+  stepId: string,
+  listed: readonly string[],
+): { step: string; publishing: boolean } | null {
+  const { byKey, byId } = indexComponents(document);
+  const containers = new Set(listed);
+  for (const [name, comps] of [...byKey, ...byId]) if (comps.some(declaresPublishes)) containers.add(name);
+  if (containers.has(stepId)) return { step: stepId, publishing: true };
+  // One publishing component may carry two names (its key and its own id); the step's decision is the one component's.
+  const holders = new Map<FlowComponent, string>();
+  for (const name of [...listed, ...containers]) {
+    for (const comp of [...(byKey.get(name) ?? []), ...(byId.get(name) ?? [])]) {
+      if (!holders.has(comp) && idsInside(comp, byKey).has(stepId)) holders.set(comp, name);
+    }
+  }
+  if (holders.size > 1) return null;
+  const [holder] = holders.values();
+  return holder !== undefined ? { step: holder, publishing: true } : { step: stepId, publishing: false };
+}
+
+/**
+ * The publishing step whose decision governs a call of the verified step `stepId` (cinatra#4762). The runtime signs the
+ * id of the step that executes, so a call made by a step nested inside a publishing FlowNode names that nested step,
+ * while the decision is stored under the FlowNode. The ancestry is read from the graph the run is bound to execute
+ * (readRunBoundGraph), never from the request. A step the template lists is its own. When the graph cannot be read, a
+ * step with its own decision row is its own; any other step is refused (null) when the template lists a publishing step
+ * or the run's current attempt holds any decision, since it may lie inside a publishing node; else it is unrelated.
+ * A read error propagates.
+ */
+async function resolvePublishingStep(
+  runId: string,
+  stepId: string,
+  listed: readonly string[],
+): Promise<{ step: string; publishing: boolean } | null> {
+  if (listed.includes(stepId)) return { step: stepId, publishing: true };
+  const source = await readRunBoundGraph(runId);
+  let document: unknown = null;
+  if (source !== null) {
+    try {
+      document = JSON.parse(source);
+    } catch { /* unreadable: no graph */ }
+  }
+  if (isComponent(document)) return publishingStepInGraph(document, stepId, listed);
+  if (await readDecisionForRunNode(runId, stepId)) return { step: stepId, publishing: true };
+  if (listed.length > 0 || (await readLatestDecisionForRun(runId))) return null;
+  return { step: stepId, publishing: false };
+}
+
 /** The release of a publishing call's claim: it resolves once the release is written, or logged as not written. */
 export type PublishCallRelease = () => Promise<void>;
 
@@ -629,7 +744,10 @@ export type PublishCallRelease = () => Promise<void>;
  *     opens a review while the release is still pending. The release never rejects: a release that cannot be written is
  *     logged, and the claim stays counted, so the attempt's later outputs and reviews stay refused until a retry's reset
  *     (fail closed).
- *   - A verified step with no row is refused when the template lists it as a publishing step.
+ *   - The verified step is first resolved to the publishing step that governs it (resolvePublishingStep): a step inside a
+ *     publishing container (a FlowNode, a ParallelFlowNode or an AgentNode declared `publishes: true`) is fenced and
+ *     claimed under that container's decision, exactly as a call of the container itself.
+ *   - A verified step with no row is refused when the template lists it as a publishing step, or when it lies inside one.
  *   - A call with no verified step is refused when the template lists any publishing step.
  *   - A template that is not found cannot prove that it publishes nothing; a list stored as null (a template compiled
  *     before the list existed) lists none, so only a decision row holds such a run.
@@ -644,7 +762,10 @@ export async function publishCallAllowed(
     const template = await readAgentTemplateById(run.templateId);
     const listed = template?.publishingSteps ?? [];
     if (verifiedStepId === undefined) return template !== null && listed.length === 0;
-    const row = await readDecisionForRunNode(run.id, verifiedStepId);
+    const resolved = await resolvePublishingStep(run.id, verifiedStepId, listed);
+    if (resolved === null) return false;
+    const step = resolved.step;
+    const row = await readDecisionForRunNode(run.id, step);
     if (row) {
       if (row.status !== "released") return false;
       // The decision read before the lock may be stale: a reset since then stamped it with the attempt it ended (a row
@@ -652,7 +773,7 @@ export async function publishCallAllowed(
       // lock the decision is read again; only that reading decides, and it must still be the same released row.
       const claimed = await withRunRowLock(run.id, async (tx, locked) => {
         if (!locked) return false;
-        const current = await readDecisionForRunNode(run.id, verifiedStepId, tx);
+        const current = await readDecisionForRunNode(run.id, step, tx);
         if (!current || current.id !== row.id || current.status !== "released") return false;
         if (current.runGeneration != null && current.runGeneration !== locked.resetGeneration) return false;
         if (!(await reviewFenceHolds({ runId: run.id, orgId: locked.orgId, generation: current.runGeneration ?? locked.resetGeneration, executor: tx }))) return false;
@@ -667,7 +788,7 @@ export async function publishCallAllowed(
       }
       return claimed;
     }
-    return template !== null && !listed.includes(verifiedStepId);
+    return template !== null && !resolved.publishing && !listed.includes(step);
   } catch (err) {
     console.warn(`[publish-decision] a call could not check its publish decision: ${nameOf(err)}`);
     return false;

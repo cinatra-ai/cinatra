@@ -9,12 +9,12 @@ import "server-only";
 // only the CURRENT attempt's rows (run_generation = the run's reset_generation), so a closed decision of an earlier
 // attempt never holds, labels or stops a later one.
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { types } from "node:util";
 import { and, asc, desc, eq, getTableColumns, gt, inArray, lte, sql } from "drizzle-orm";
 
 import { db } from "./db";
-import { agentRunPublishDecisions, agentRuns } from "./schema";
+import { agentRunOutwardActionPolicies, agentRunPublishDecisions, agentRuns } from "./schema";
 
 /** A decision of the run's current attempt: its run_generation equals the run's reset_generation, read in the same
  *  statement. A row with NO generation (written by code older than the column, e.g. an old node during a rolling deploy)
@@ -395,6 +395,25 @@ export async function readDispatchedPublishRows(runId: string, nodeId: string): 
   if (!isPlainObject(map)) return null;
   const node = requireText(nodeId, "nodeId");
   return Object.prototype.hasOwnProperty.call(map, node) ? declaredRowsOf(map[node]) : [];
+}
+
+/**
+ * The graph the run is bound to execute (agent_run_outward_action_policies.policy.source, cinatra#3745): the flow
+ * document the runtime's step ids name, selected before the dispatch and never replaced by a retry. null when the run
+ * has no binding, the binding belongs to another organization than the run, or its source does not match its digest.
+ * A read error propagates.
+ */
+export async function readRunBoundGraph(runId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ policy: agentRunOutwardActionPolicies.policy, bindingOrg: agentRunOutwardActionPolicies.orgId, runOrg: agentRuns.orgId })
+    .from(agentRunOutwardActionPolicies)
+    .innerJoin(agentRuns, eq(agentRuns.id, agentRunOutwardActionPolicies.runId))
+    .where(eq(agentRunOutwardActionPolicies.runId, requireText(runId, "runId")))
+    .limit(1);
+  if (!row || row.bindingOrg !== row.runOrg) return null;
+  const policy = row.policy as { source?: unknown; declarationSourceSha256?: unknown } | null;
+  if (!policy || typeof policy.source !== "string" || typeof policy.declarationSourceSha256 !== "string") return null;
+  return createHash("sha256").update(policy.source).digest("hex") === policy.declarationSourceSha256 ? policy.source : null;
 }
 
 /** The newest decision of this step in the run's current attempt, whatever its status. */

@@ -23,6 +23,8 @@ const decisions = vi.hoisted(() => ({
   readDecisionForRunNode: vi.fn(),
   readLatestDecisionForRun: vi.fn(),
   readOpenDecisionForRun: vi.fn(),
+  // cinatra#4762: the graph the run is bound to execute, where a nested step's publishing container is read.
+  readRunBoundGraph: vi.fn(async (): Promise<string | null> => null),
   listDueParked: vi.fn(async () => []),
   listSettledWithWaitingRun: vi.fn(async () => []),
 }));
@@ -50,6 +52,8 @@ afterAll(() => { seamSlot.__cinatraArtifactReviewGateSeam = previousSeam; });
 beforeEach(() => {
   storeMock.readAgentTemplateById.mockReset().mockResolvedValue(template(["publish"]));
   decisions.readDecisionForRunNode.mockReset().mockResolvedValue(null);
+  decisions.readLatestDecisionForRun.mockReset().mockResolvedValue(null);
+  decisions.readRunBoundGraph.mockReset().mockResolvedValue(null);
   decisions.withRunRowLock.mockClear();
   decisions.claimPublishCall.mockReset().mockResolvedValue(true);
   decisions.endPublishCall.mockReset().mockResolvedValue(undefined);
@@ -211,12 +215,121 @@ describe("a verified step the template does not list", () => {
     ["was compiled before the list existed", null],
   ])("on a template that %s is served when it has no decision row", async (_label, steps) => {
     storeMock.readAgentTemplateById.mockResolvedValue(template(steps));
+    // The run's bound graph shows the step outside every publishing node (cinatra#4762).
+    decisions.readRunBoundGraph.mockResolvedValue(JSON.stringify({ nodes: [{ $component_ref: "publish" }, { $component_ref: "other" }],
+      $referenced_components: { publish: { component_type: "ApiNode", id: "publish" }, other: { component_type: "ApiNode", id: "other" } } }));
     expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(true);
   });
 
   it("a step of a publishing template that is not its publishing step is served", async () => {
+    decisions.readRunBoundGraph.mockResolvedValue(JSON.stringify(GRAPH));
     expect(await publishCallAllowed(RUN, "draft", ENDED)).toBe(true);
     expect(decisions.readDecisionForRunNode).toHaveBeenCalledWith("run-1", "draft");
+  });
+});
+
+// cinatra#4762: a top-level FlowNode can be the publishing action; the runtime signs the id of the nested step that
+// executes, while the decision is stored under the FlowNode. The run's bound graph: `draft` outside, then `publish`, a
+// FlowNode whose subflow (a reference) holds `compose` and `send`, and an inline ParallelFlowNode subflow with `fanout`.
+const GRAPH = {
+  component_type: "Flow",
+  id: "root",
+  nodes: [{ $component_ref: "draft" }, { $component_ref: "publish" }],
+  $referenced_components: {
+    draft: { component_type: "ApiNode", id: "draft" },
+    publish: {
+      component_type: "FlowNode",
+      id: "publish",
+      metadata: { cinatra: { publishes: true } },
+      subflow: { $component_ref: "publish_body" },
+    },
+    publish_body: {
+      component_type: "Flow",
+      id: "publish_body",
+      nodes: [{ $component_ref: "compose" }, { $component_ref: "send" }, { $component_ref: "spread" }],
+      $referenced_components: {
+        compose: { component_type: "ApiNode", id: "compose" },
+        send: { component_type: "ApiNode", id: "send" },
+        spread: { component_type: "ParallelFlowNode", id: "spread", subflows: [{ component_type: "Flow", id: "lane",
+          nodes: [{ $component_ref: "fanout" }], $referenced_components: { fanout: { component_type: "ApiNode", id: "fanout" } } }] },
+      },
+    },
+  },
+};
+const parentRow = (status: string) => async (_runId: string, nodeId: string) => (nodeId === "publish" ? row(status) : null);
+
+describe("a step inside a publishing FlowNode", () => {
+  beforeEach(() => {
+    decisions.readRunBoundGraph.mockResolvedValue(JSON.stringify(GRAPH));
+  });
+
+  // red-first-expect: to be called with arguments: [ 'd1', …(1) ]
+  it("a child call of a released publishing FlowNode takes the parent's fence and claim", async () => {
+    decisions.readDecisionForRunNode.mockImplementation(parentRow("released"));
+    const releases: Array<() => Promise<void>> = [];
+    for (const child of ["compose", "send", "fanout"]) {
+      expect(await publishCallAllowed(RUN, child, (release) => { releases.push(release); })).toBe(true);
+    }
+    expect(decisions.claimPublishCall).toHaveBeenCalledWith("d1", TX);
+    expect(decisions.claimPublishCall).toHaveBeenCalledTimes(3);
+    expect(decisions.readDecisionForRunNode).toHaveBeenCalledWith("run-1", "publish", TX);
+    expect(reviewSeam.hasPendingProducedReview).toHaveBeenCalledWith({ orgId: "org-1", runId: "run-1", generation: 0 }, TX);
+    expect(releases).toHaveLength(3);
+    for (const release of releases) await release();
+    expect(decisions.endPublishCall).toHaveBeenCalledTimes(3);
+    expect(decisions.endPublishCall).toHaveBeenCalledWith("d1");
+  });
+
+  // red-first-expect: expected true to be false
+  it("a child call after a pending output, or with no release, is refused", async () => {
+    // Released, but an output of the attempt written after the release still waits for its review.
+    decisions.readDecisionForRunNode.mockImplementation(parentRow("released"));
+    reviewSeam.hasPendingProducedReview.mockResolvedValue(true);
+    expect(await publishCallAllowed(RUN, "send", ENDED)).toBe(false);
+    expect(decisions.claimPublishCall).not.toHaveBeenCalled();
+    reviewSeam.hasPendingProducedReview.mockResolvedValue(false);
+    // The parent's decision is not released, or there is none.
+    for (const status of ["parked", "declined", "expired", "run_ended"]) {
+      decisions.readDecisionForRunNode.mockImplementation(parentRow(status));
+      expect(await publishCallAllowed(RUN, "send", ENDED)).toBe(false);
+    }
+    decisions.readDecisionForRunNode.mockResolvedValue(null);
+    expect(await publishCallAllowed(RUN, "send", ENDED)).toBe(false);
+    // The container declared in the bound graph only (a template compiled before the list existed) holds its children too.
+    storeMock.readAgentTemplateById.mockResolvedValue(template(null));
+    expect(await publishCallAllowed(RUN, "compose", ENDED)).toBe(false);
+    // A publishing node written inline, with no reference key, holds its children under its own id.
+    decisions.readRunBoundGraph.mockResolvedValue(JSON.stringify({ nodes: [{ component_type: "FlowNode", id: "publish_node",
+      metadata: { cinatra: { publishes: true } }, subflow: { component_type: "Flow", id: "inline_body", nodes: [{ component_type: "ApiNode", id: "post" }] } }] }));
+    storeMock.readAgentTemplateById.mockResolvedValue(template(null));
+    expect(await publishCallAllowed(RUN, "post", ENDED)).toBe(false);
+    expect(decisions.readDecisionForRunNode).toHaveBeenCalledWith("run-1", "publish_node");
+    expect(decisions.claimPublishCall).not.toHaveBeenCalled();
+  });
+
+  // red-first-expect: expected true to be false
+  it("a step whose ancestry cannot be read is refused when it may lie inside a publishing node", async () => {
+    for (const graph of [null, "not json", "[]"]) {
+      decisions.readRunBoundGraph.mockResolvedValue(graph);
+      expect(await publishCallAllowed(RUN, "send", ENDED)).toBe(false);
+    }
+    // The template lists none, but the run's current attempt holds a decision.
+    storeMock.readAgentTemplateById.mockResolvedValue(template([]));
+    decisions.readLatestDecisionForRun.mockResolvedValue(row("released"));
+    decisions.readRunBoundGraph.mockResolvedValue(null);
+    expect(await publishCallAllowed(RUN, "send", ENDED)).toBe(false);
+    // A step inside two publishing nodes cannot name one decision.
+    decisions.readRunBoundGraph.mockResolvedValue(JSON.stringify({ ...GRAPH, $referenced_components: { ...GRAPH.$referenced_components,
+      again: { component_type: "FlowNode", id: "again", metadata: { cinatra: { publishes: true } }, subflow: { $component_ref: "publish_body" } } } }));
+    storeMock.readAgentTemplateById.mockResolvedValue(template(["publish"]));
+    decisions.readDecisionForRunNode.mockImplementation(parentRow("released"));
+    expect(await publishCallAllowed(RUN, "send", ENDED)).toBe(false);
+  });
+
+  it("an unrelated step is still allowed", async () => {
+    decisions.readDecisionForRunNode.mockImplementation(parentRow("parked"));
+    expect(await publishCallAllowed(RUN, "draft", ENDED)).toBe(true);
+    expect(decisions.claimPublishCall).not.toHaveBeenCalled();
   });
 });
 
