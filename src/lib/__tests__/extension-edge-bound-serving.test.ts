@@ -847,6 +847,7 @@ describe("dispatchPlannedExtensionMcpTool — plan-pinned dispatch (codex round-
     const second = beginVersionKeyedRegistration(TARGET, V);
     second.retainMcpTool({ name: "the_tool", handler: versionedHandler, packageName: TARGET, outward: {} });
     second.commit();
+    // red-first-expect: promise resolved "{ served: 'versioned' }" instead of rejecting
     await expect(
       dispatchPlannedExtensionMcpTool(
         { expected: "versioned", packageName: TARGET, name: "the_tool", version: V, registration: planned.value },
