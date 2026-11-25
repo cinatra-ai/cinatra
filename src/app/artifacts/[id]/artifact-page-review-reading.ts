@@ -57,6 +57,7 @@ export async function readArtifactPageReviewReading(args: {
  *   - `pinned`: a gate of this organization pins the revision shown, open or
  *     decided. Another revision of a reviewed artifact, and an artifact no gate
  *     ever pinned, are not pinned.
+ *   - `open`: a gate on that revision is still pending.
  *   - `settled`: no gate on that revision is open and the latest one is decided,
  *     with an outcome this build can read. The marker is the same for every
  *     outcome (Lifecycle cards §XIII.1); `decidedAt` is set only where a person
@@ -67,10 +68,11 @@ export async function readArtifactPageReviewReading(args: {
  */
 export type ArtifactPageRevisionReview = {
   readonly pinned: boolean;
+  readonly open: boolean;
   readonly settled: { readonly outcome: ReviewSettledOutcome; readonly decidedAt: string | null } | null;
 };
 
-export const NOT_A_REVIEW_TARGET: ArtifactPageRevisionReview = { pinned: false, settled: null };
+export const NOT_A_REVIEW_TARGET: ArtifactPageRevisionReview = { pinned: false, open: false, settled: null };
 
 export async function readArtifactPageRevisionReview(args: {
   orgId: string;
@@ -84,10 +86,10 @@ export async function readArtifactPageRevisionReview(args: {
       artifactId: args.artifactId,
       representationRevisionId: args.revisionId,
     });
-    if (review.status === "open") return { pinned: true, settled: null };
+    if (review.status === "open") return { pinned: true, open: true, settled: null };
     if (review.status !== "settled") return NOT_A_REVIEW_TARGET;
     const outcome = reviewSettledOutcomeFromDisposition(review.disposition);
-    return { pinned: true, settled: outcome ? { outcome, decidedAt: review.decidedAt } : null };
+    return { pinned: true, open: false, settled: outcome ? { outcome, decidedAt: review.decidedAt } : null };
   } catch {
     // As above: nothing of the error is read or logged.
     warnFixed(REVISION_REVIEW_READ_FAILED_WARNING);
@@ -96,14 +98,19 @@ export async function readArtifactPageRevisionReview(args: {
 }
 
 /**
- * THE CONTINUED READING A DISPLAY IS HANDED ON THIS PAGE, on the review card's
- * own rule (`artifact-review-preparation`): only for a revision a person
- * approved, with that decision's time. Anything else hands no continued reading.
+ * THE READING THE REVISION READ ALONE GIVES A DISPLAY ON THIS PAGE. An open
+ * review of the revision shown is pending, whatever the artifact-wide read said:
+ * the two reads are separate, and a review that opens between them must never
+ * leave the display with no reading, which it would read as free to offer the
+ * live link. The continued reading comes only from a settled review a person
+ * approved, with that decision's time, on the review card's own rule
+ * (`artifact-review-preparation`). Anything else hands no reading.
  */
-export function continuedReviewReading(
+export function revisionReviewReading(
   revision: ArtifactPageRevisionReview,
   openLive: string | null,
 ): ArtifactRendererReviewReading | undefined {
+  if (revision.open) return PENDING;
   const settled = revision.settled;
   if (!settled || settled.outcome !== "approved" || settled.decidedAt === null) return undefined;
   return { reading: "continued", openLive, decidedAt: settled.decidedAt };

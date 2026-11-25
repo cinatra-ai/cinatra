@@ -253,6 +253,19 @@ describe("while the review is open: pinned, and no settled marker", () => {
     expect(root.textContent).not.toContain("Decided on the revision above.");
     expect(handedReview()).toEqual({ reading: "pending", openLive: null });
   });
+
+  it("a review that opens between the two reads still hands the pending reading", async () => {
+    mocks.isArtifactUnderOpenReview.mockResolvedValue(false);
+    mocks.readArtifactRevisionReview.mockResolvedValue({ status: "open" });
+    mocks.readArtifactForDetail.mockReturnValue({
+      kind: "ok",
+      artifact: { ...ARTIFACT, sourceUrl: "https://dash.example/live" },
+    });
+    const root = await renderPage();
+    expect(handedReview()).toEqual({ reading: "pending", openLive: null });
+    expect(pinnedMarker(root)?.textContent).toBe(" · pinned");
+    expect(settledMarkers(root)).toHaveLength(0);
+  });
 });
 
 describe("once the review is settled: pinned, and one Continued marker below the whole display", () => {

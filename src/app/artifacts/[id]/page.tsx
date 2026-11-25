@@ -52,9 +52,9 @@ import {
 } from "@/lib/artifacts/artifact-renderer-props";
 import { hostArtifactContentBuilder } from "./review-surface-roads";
 import {
-  continuedReviewReading,
   readArtifactPageReviewReading,
   readArtifactPageRevisionReview,
+  revisionReviewReading,
 } from "./artifact-page-review-reading";
 import { ArtifactMetaLine } from "./artifact-meta-line";
 import { ReviewGateSettled } from "@cinatra-ai/agents/review-gate-states";
@@ -308,15 +308,17 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
   //
   // THE REVISION SHOWN, AS A REVIEW TARGET (§XI): pinned where a gate of this
   // organization pins it, settled once that review is decided. An open review
-  // anywhere on the artifact still hands the pending reading; otherwise a
-  // revision a person approved hands the continued reading, on the review
-  // card's own rule, so the display draws its own continued reading inside it.
+  // anywhere on the artifact hands the pending reading, and so does an open
+  // review the revision read sees (the two reads can disagree if a review opens
+  // between them); otherwise a revision a person approved hands the continued
+  // reading, on the review card's own rule, so the display draws its own
+  // continued reading inside it.
   const [openReading, revisionReview] = await Promise.all([
     readArtifactPageReviewReading({ orgId, artifactId: id }),
     readArtifactPageRevisionReview({ orgId, artifactId: id, revisionId }),
   ]);
   const review =
-    openReading ?? continuedReviewReading(revisionReview, displayedArtifact.sourceUrl);
+    openReading ?? revisionReviewReading(revisionReview, displayedArtifact.sourceUrl);
 
   // The normalized, serializable renderer props snapshot (AC-5) — supplied to an
   // extension-shipped renderer; the host context never crosses into it.
