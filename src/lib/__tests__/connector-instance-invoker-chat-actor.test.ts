@@ -190,11 +190,15 @@ vi.mock("@/lib/connector-instance-mcp-transport", async (importOriginal) => {
     callConnectorInstanceMcpTool: vi.fn(
       async (input: { endpoint: string; authHeader: string; name: string; arguments: Record<string, unknown> }) => {
         wireCalls.push({ name: input.name, arguments: input.arguments });
+        // cinatra#3745 — the "wp-write" instance (site w.example) serves ONE
+        // write-class ability instead, so the adapter tests can prove that
+        // `expectedClass` reaches the invoker.
+        const writeSite = input.endpoint.startsWith("https://w.example");
         if (input.name === actual.TRIAD_DISCOVER_ABILITIES) {
-          return { abilities: [{ name: "core/get-site-info" }] };
+          return { abilities: [{ name: writeSite ? "core/update-option" : "core/get-site-info" }] };
         }
         if (input.name === actual.TRIAD_GET_ABILITY_INFO) {
-          return { input_schema: {}, meta: { annotations: { readOnlyHint: true } } };
+          return { input_schema: {}, meta: { annotations: { readOnlyHint: !writeSite } } };
         }
         // TRIAD_EXECUTE_ABILITY — the final, real tool-call result.
         return { structuredContent: { ok: true } };
@@ -226,6 +230,13 @@ const WP_ROWS: Record<string, { id: string; orgId: string; siteUrl: string; user
     id: "wp-other-tenant",
     orgId: "org-b",
     siteUrl: "https://b.example",
+    username: "u",
+    applicationPassword: "p",
+  },
+  "wp-write": {
+    id: "wp-write",
+    orgId: "org-a",
+    siteUrl: "https://w.example",
     username: "u",
     applicationPassword: "p",
   },
@@ -457,5 +468,61 @@ describe("chat actor connector-instance-invoker resolver (cinatra#2024 S9 G1)", 
     await expect(call).rejects.toBeInstanceOf(InvokerError);
     await expect(call).rejects.toMatchObject({ code: "connector_key_underivable" });
     expect(resolveOrgRoleForUser).not.toHaveBeenCalled();
+  });
+});
+
+describe("invokeSiteTool copies the row binding to the invoker (cinatra#3745)", () => {
+  beforeAll(() => {
+    resolveOrgRoleForUser.mockImplementation(async (orgId) => (orgId ? "member" : undefined));
+  });
+
+  const isExecute = (c: { name: string }) => c.name === "mcp-adapter-execute-ability";
+
+  it("expectedRawAnnotations reaches the invoker: the listed row executes, a different one is refused before execution", async () => {
+    const page = await runAsChatActor({ userId: "user-1", orgId: "org-a" }, () =>
+      invoker.listSiteTools({ instanceId: "wp-valid" }),
+    );
+    const row = page.tools.find((t) => t.name === "core/get-site-info");
+    expect(row?.rawAnnotations).toEqual({ readOnlyHint: true });
+
+    wireCalls.length = 0;
+    const ok = await runAsChatActor({ userId: "user-1", orgId: "org-a" }, () =>
+      invoker.invokeSiteTool({
+        toolName: "core/get-site-info",
+        args: {},
+        instanceId: "wp-valid",
+        expectedRawAnnotations: row!.rawAnnotations,
+      }),
+    );
+    expect(ok).toEqual({ structuredContent: { ok: true } });
+    expect(wireCalls.filter(isExecute)).toHaveLength(1);
+
+    wireCalls.length = 0;
+    const refused = runAsChatActor({ userId: "user-1", orgId: "org-a" }, () =>
+      invoker.invokeSiteTool({
+        toolName: "core/get-site-info",
+        args: {},
+        instanceId: "wp-valid",
+        expectedRawAnnotations: { readOnlyHint: false },
+      }),
+    );
+    // red-first-expect: promise resolved "{ structuredContent: { ok: true } }" instead of rejecting
+    await expect(refused).rejects.toMatchObject({ code: "catalog_entry_changed" });
+    expect(wireCalls.filter(isExecute)).toHaveLength(0);
+  });
+
+  it("expectedClass reaches the invoker: a write-class row is refused before execution, a read-class row executes", async () => {
+    wireCalls.length = 0;
+    const refused = runAsChatActor({ userId: "user-1", orgId: "org-a" }, () =>
+      invoker.invokeSiteTool({ toolName: "core/update-option", args: {}, instanceId: "wp-write", expectedClass: "read" }),
+    );
+    // red-first-expect: promise resolved "{ structuredContent: { ok: true } }" instead of rejecting
+    await expect(refused).rejects.toMatchObject({ code: "catalog_entry_not_read" });
+    expect(wireCalls.filter(isExecute)).toHaveLength(0);
+
+    const ok = await runAsChatActor({ userId: "user-1", orgId: "org-a" }, () =>
+      invoker.invokeSiteTool({ toolName: "core/get-site-info", args: {}, instanceId: "wp-valid", expectedClass: "read" }),
+    );
+    expect(ok).toEqual({ structuredContent: { ok: true } });
   });
 });

@@ -1570,6 +1570,11 @@ export function registerHostConnectorServices(): void {
           args: input.args,
           ...(input.instanceId ? { instanceId: input.instanceId } : {}),
           ...(input.serverId ? { serverId: input.serverId } : {}),
+          // cinatra#3745 — the row binding; each can only add a refusal.
+          ...(input.expectedRawAnnotations !== undefined
+            ? { expectedRawAnnotations: input.expectedRawAnnotations }
+            : {}),
+          ...(input.expectedClass !== undefined ? { expectedClass: input.expectedClass } : {}),
           actor,
           primitiveName: `${boundConnectorKey}_site_tool_call`,
           // cinatra#2020 D6 — host-derived surface as `sourceType` (also makes

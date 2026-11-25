@@ -394,6 +394,20 @@ export type InvokeConnectorInstanceToolInput = {
   /** The connector primitive name for the authority + execution audit rows. */
   primitiveName?: string;
   sourceType?: string;
+  /**
+   * cinatra#3745 — the `rawAnnotations` of the catalog row the caller checked
+   * (as `listConnectorInstanceTools` served it). When present, the call is
+   * refused with `catalog_entry_changed` unless the row the host resolves now
+   * carries canonically equal annotations. See `refuseUnboundEntry`.
+   */
+  expectedRawAnnotations?: Record<string, unknown>;
+  /**
+   * cinatra#3745 — a caller that must only ever read says so: when present,
+   * the call is refused with `catalog_entry_not_read` unless the resolved row
+   * is read-class by the host's own classifier and its name is not on the
+   * known-destructive list.
+   */
+  expectedClass?: "read";
 };
 
 export type ListConnectorInstanceToolsInput = {
@@ -662,6 +676,67 @@ export async function acquireSnapshots(
   return served;
 }
 
+/** Canonical JSON of an annotations record: object keys sorted at every
+ * depth, array order kept. A value that is not a plain object (absent, null,
+ * an array, a primitive) reads as `null` here, so it never equals a record. */
+function canonicalAnnotationsJson(value: unknown): string {
+  const sortKeys = (v: unknown): unknown => {
+    if (v === null || typeof v !== "object") return v;
+    if (Array.isArray(v)) return v.map(sortKeys);
+    const obj = v as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(obj).sort()) out[key] = sortKeys(obj[key]);
+    return out;
+  };
+  const isRecord = value !== null && typeof value === "object" && !Array.isArray(value);
+  return JSON.stringify(isRecord ? sortKeys(value) : null);
+}
+
+/**
+ * Step 1b (cinatra#3745) — bind the call to the row its caller checked. A
+ * connector's read tool lists the catalog, checks the row, then calls; the
+ * host resolves the call against its OWN cached snapshot, which may refresh in
+ * between and turn the same `{serverId, name}` into an ordinary write that no
+ * hook stops. Catalog revisions cannot bind a call (a new one is minted at
+ * every snapshot load), so the binding is the row's annotations themselves.
+ *
+ * Equality: canonical JSON with sorted keys at every depth. The host side
+ * reads the resolved entry's `rawAnnotations`; the catalog always stores an
+ * unannotated row as `{}` (and the list serves it as `{}`), and a defensive
+ * non-object entry value also reads as `{}`, so a row listed and sent back
+ * unchanged — through a JSON round trip too — is always equal. The caller's
+ * value must itself be a plain object: `null`, an array or a primitive never
+ * equals and is refused. A key whose value is `undefined` drops out, as it
+ * does on the wire.
+ *
+ * Trusting the caller's values is safe: either field can only ADD a refusal,
+ * never skip the policy, a hook or any other check below. A refusal executes
+ * nothing, parks nothing and fires no hook.
+ */
+function refuseUnboundEntry(
+  input: Pick<InvokeConnectorInstanceToolInput, "expectedRawAnnotations" | "expectedClass">,
+  name: string,
+  entry: CatalogToolEntry,
+): void {
+  if (input.expectedRawAnnotations !== undefined) {
+    const current = entry.rawAnnotations && typeof entry.rawAnnotations === "object" ? entry.rawAnnotations : {};
+    if (canonicalAnnotationsJson(current) !== canonicalAnnotationsJson(input.expectedRawAnnotations)) {
+      throw new InvokerError(
+        "catalog_entry_changed",
+        "the site tool changed since it was listed; list the tools again before calling it",
+      );
+    }
+  }
+  if (input.expectedClass !== undefined) {
+    if (classifyAnnotations(entry.rawAnnotations) !== "read" || isKnownDestructiveToolName(name)) {
+      throw new InvokerError(
+        "catalog_entry_not_read",
+        "the site tool is not a read tool; this call may only read",
+      );
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // invokeConnectorInstanceTool — the D1 single-pass order (steps 0→5).
 // ---------------------------------------------------------------------------
@@ -710,6 +785,10 @@ export async function invokeConnectorInstanceTool(
     throw new InvokerError("tool_not_found", `tool "${input.toolName}" is not present in the instance catalog`);
   }
   const { serverId, name, entry, snapshot } = resolution;
+
+  // Step 1b — bind the call to the row its caller checked (cinatra#3745):
+  // BEFORE the policy, the hooks and the execution.
+  refuseUnboundEntry(input, name, entry);
 
   // Step 2 — per-instance tool policy floor (§2.6 / §10-A3).
   const ref: ToolRef = { serverId, name };

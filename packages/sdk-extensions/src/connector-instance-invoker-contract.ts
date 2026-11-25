@@ -90,6 +90,22 @@ export type SiteToolCallInput = {
    * verbatim and never mints one.
    */
   serverId?: string;
+  /**
+   * OPTIONAL row binding (cinatra#3745): the `rawAnnotations` of the
+   * `SiteToolRow` the caller listed and checked, sent back unchanged. The host
+   * refuses the call with `catalog_entry_changed` (nothing executed) unless
+   * the row it resolves now carries equal annotations (sorted-key deep
+   * equality; an unannotated row is listed as `{}`). Omitted, the call
+   * behaves as before. It can only add a refusal.
+   */
+  expectedRawAnnotations?: Record<string, unknown>;
+  /**
+   * OPTIONAL read-only assertion (cinatra#3745): when `"read"`, the host
+   * refuses the call with `catalog_entry_not_read` (nothing executed) unless
+   * the resolved row is read-class by the host's own classifier and its name
+   * is not on the known-destructive list. It can only add a refusal.
+   */
+  expectedClass?: "read";
 };
 
 /**
