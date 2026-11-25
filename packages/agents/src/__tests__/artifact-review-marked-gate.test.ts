@@ -334,7 +334,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
   it("each gate the run raises carries the generation of the attempt this handler serves (cinatra#4762)", async () => {
     // The record the executor read for its attempt names generation 2; the run row may already be at a later attempt
     // when a delayed callback of this one runs, so the gate takes the attempt's own value, never a read of the row.
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     const run = { ...makeRun({ reviewTargets: TARGETS }), resetGeneration: 2 } as AgentRunRecord;
     storeMock.readAgentRunById.mockResolvedValue({ ...run, resetGeneration: 3 });
     await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task: inputRequiredTask("Two items.") });

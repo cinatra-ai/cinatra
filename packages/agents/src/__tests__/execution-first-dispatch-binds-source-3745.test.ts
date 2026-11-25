@@ -529,9 +529,18 @@ describe("cinatra#3089 - the dispatch binds the steps of the source the loader m
     expect([boundMarker(0), boundMarker(1)]).toEqual(["reviewTargets", "reviewTargets"]);
   });
 
-  it("a loader that sends no mounted source: the bind records that no steps could be compiled, never the row's", async () => {
+  it("an older loader that sends no mounted source: the bind carries no steps at all, so the run reads as one bound before them", async () => {
     bindTemplate({ ...makeTemplate(), approvalPolicy: { steps: rowSteps(true) } });
     mounted(undefined);
+    await run();
+    const [bound] = storeMock.bindRunStepToolPolicy.mock.calls[0]! as unknown as [Record<string, unknown>];
+    // red-first-expect: expected null to be undefined
+    expect(bound.pauseSteps).toBeUndefined();
+  });
+
+  it("a mounted source that was sent but does not compile: the bind records that no steps could be compiled, never the row's", async () => {
+    bindTemplate({ ...makeTemplate(), approvalPolicy: { steps: rowSteps(true) } });
+    mounted(JSON.stringify({ component_type: "Flow" }));
     await run();
     expect(storeMock.bindRunStepToolPolicy).toHaveBeenCalledWith(expect.objectContaining({ pauseSteps: null }));
   });
