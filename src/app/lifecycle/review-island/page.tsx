@@ -247,9 +247,14 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
   // live address reader (cinatra#4311): its reader carries the cookie both are
   // reached with.
   let roads: ReviewSurfaceRoads | null = null;
+  // WHO THE RESOLVER PROVED THIS READER TO BE (cinatra#3459). Set only from a
+  // reader the resolver returned, which is always a widget site's principal:
+  // the page branches on that proven fact below, never on the query value.
+  let widgetReader = false;
   if (credential) {
     const reader = await resolveIslandCredentialReader({ credential, ref });
     if (!reader) return empty;
+    widgetReader = true;
     actorCtx = reader.actorCtx;
     // The GATE COMES FROM THE CREDENTIAL, not from a second decode of the ref.
     // The two were proven equal inside the resolver; reading the ref again here
@@ -474,7 +479,7 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
           words and draws no download control. */}
       <PdfShellFrameProvider
         frame="sandboxed"
-        downloads={credential || widgetFrame ? "none" : "link"}
+        downloads={widgetReader || widgetFrame ? "none" : "link"}
       >
         {drawn.map((stream, index) => (
           <Suspense
