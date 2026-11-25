@@ -1579,6 +1579,12 @@ export function collectPublishingSteps(
       if (typeof node.component_type !== "string" || !PUBLISHES_ACTION_KINDS.has(node.component_type)) {
         return `PUBLISHES_MISPLACED: ${who} declares metadata.cinatra.publishes, but only a node of kind ApiNode, AgentNode, FlowNode or ParallelFlowNode can be the publishing action`;
       }
+      // The host signs the node's own id for a call, and a run reads the step by that id as a key of the root
+      // references (isTopLevelPublishingStep), so a key that is not the id could never be served.
+      if (node.id !== key) {
+        const own = typeof node.id === "string" ? quoteNodeId(node.id) : "none";
+        return `PUBLISHES_ID_MISMATCH: node ${quoteNodeId(key)} declares metadata.cinatra.publishes, but its id is ${own}; the id of a publishing step must be its key in $referenced_components`;
+      }
       steps.push(key);
     }
     for (const [childKey, child] of childrenOf(node)) {

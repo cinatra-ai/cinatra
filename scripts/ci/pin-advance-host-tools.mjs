@@ -31,8 +31,11 @@
 // declaration statically from the same sources the route reads, counts a
 // declared tool as served, and refuses a node that calls it without being a
 // publishing step itself (`metadata.cinatra.publishes: true` on the node, the
-// flag the compiler lists as `publishingSteps`). A tool on the allowlist is
-// served as before, from any node.
+// flag the compiler lists as `publishingSteps`) in the shape the route serves:
+// a top-level node of the flow whose key in the root `$referenced_components`
+// is its id and is listed in the root `nodes`, with a literal lower-case
+// `data.tool`. A node that declares the flag and has another shape is refused
+// with its reason. A tool on the allowlist is served as before, from any node.
 //
 // The allowlist is read STATICALLY from the route's source, and every entry the
 // reader cannot resolve (a spread of a call, an unknown import, a non-literal)
@@ -405,6 +408,32 @@ export function readPassthroughPublishingStepTools(repoRoot, { readText = (abs) 
 // ---------------------------------------------------------------------------
 // The flow reader.
 
+const plain = (v) => !!v && typeof v === "object" && !Array.isArray(v);
+
+/**
+ * Why the passthrough route would not serve a declared tool to this publishing node, or null when it would. The same
+ * rule as `isTopLevelPublishingStep` and `findStepToolDeclaration` of
+ * packages/agents/src/validate-oas-runtime-invariants.ts and the compile's `collectPublishingSteps`
+ * (packages/agents/src/oas-compiler.ts), which this plain script cannot import: the one table of cases
+ * scripts/ci/__tests__/__fixtures__/pin-advance-host-tools/publishing-step-cases.json is run against all three. The
+ * node must be a top-level node (`key` is its key in the root `$referenced_components`, undefined when it sits
+ * elsewhere), its key must be the id the host signs, the root `nodes` must list the key, and its `data.tool` must be a
+ * literal lower-case name without whitespace.
+ */
+function publishingStepProblem(node, key, listed) {
+  if (key === undefined) return "it is not a top-level node of the flow";
+  if (typeof node.id !== "string" || node.id === "") return `its component key "${key}" in $referenced_components has no matching id (the node carries none)`;
+  if (node.id !== key) {
+    return `its component key "${key}" in $referenced_components differs from its id "${node.id}"`;
+  }
+  if (!listed.has(key)) return "it is not listed in the nodes of the flow";
+  const tool = node.data && typeof node.data === "object" ? node.data.tool : undefined;
+  if (typeof tool === "string" && tool !== "" && (/\s/.test(tool) || tool !== tool.toLowerCase())) {
+    return "its data.tool is not a literal lower-case tool name";
+  }
+  return null;
+}
+
 /**
  * Every passthrough ApiNode of a flow: `{ nodeId, tool }`, or, when `data.tool`
  * is missing, not a string or a template, `{ nodeId, tool: null, unreadable }`.
@@ -413,6 +442,11 @@ export function readPassthroughPublishingStepTools(repoRoot, { readText = (abs) 
 export function collectPassthroughHostTools(flow) {
   const calls = [];
   const seen = new Set();
+  // The top-level nodes of the flow: the values of the root `$referenced_components`, and the keys the root `nodes`
+  // lists. A publishing step is read only there (see publishingStepProblem).
+  const rootRefs = plain(flow?.$referenced_components) ? flow.$referenced_components : {};
+  const keyOfTopLevel = new Map(Object.entries(rootRefs).filter(([, v]) => plain(v)).map(([k, v]) => [v, k]));
+  const listed = new Set((Array.isArray(flow?.nodes) ? flow.nodes : []).map((n) => n?.$component_ref).filter((r) => typeof r === "string"));
   const walk = (value) => {
     if (Array.isArray(value)) {
       for (const v of value) walk(v);
@@ -431,7 +465,11 @@ export function collectPassthroughHostTools(flow) {
       else if (tool.includes("{{")) call = { nodeId, tool: null, unreadable: `data.tool is the template ${JSON.stringify(tool)}` };
       else call = { nodeId, tool };
       // The flag the compiler lists as `publishingSteps`: the JSON boolean true on the node.
-      if (value.metadata?.cinatra?.publishes === true) call.publishes = true;
+      if (value.metadata?.cinatra?.publishes === true) {
+        call.publishes = true;
+        const problem = publishingStepProblem(value, keyOfTopLevel.get(value), listed);
+        if (problem !== null) call.publishingProblem = problem;
+      }
       const key = `${nodeId}\u0000${call.tool}\u0000${call.unreadable ?? ""}`;
       if (!seen.has(key)) {
         seen.add(key);
@@ -486,7 +524,14 @@ export function changedPins(baseLock, headLock) {
 // ---------------------------------------------------------------------------
 // The comparison.
 
-export function findingLine({ packageName, tip, nodeId, tool, unreadable, publishingStepOnly }) {
+export function findingLine({ packageName, tip, nodeId, tool, unreadable, publishingStepOnly, publishingProblem }) {
+  if (publishingStepOnly && publishingProblem) {
+    return (
+      `${PREFIX} ${packageName} at ${tip} — node "${nodeId}" calls host tool "${tool}", which the owning package ` +
+      `declares for a publishing step only (${DECLARATION_KEY}), and this node is not a publishing step the route ` +
+      `serves: ${publishingProblem}`
+    );
+  }
   if (publishingStepOnly) {
     return (
       `${PREFIX} ${packageName} at ${tip} — node "${nodeId}" calls host tool "${tool}", which the owning package ` +
@@ -518,7 +563,7 @@ export function hostToolFindings({ packageName, tip, calls, allowlist, declaredT
   for (const call of calls) {
     if (call.tool !== null && allowlist.has(call.tool)) continue;
     const declared = call.tool !== null && declaredTools.has(call.tool);
-    if (declared && call.publishes === true) continue;
+    if (declared && call.publishes === true && call.publishingProblem === undefined) continue;
     const finding = {
       packageName,
       tip,
@@ -526,6 +571,7 @@ export function hostToolFindings({ packageName, tip, calls, allowlist, declaredT
       tool: call.tool,
       unreadable: call.unreadable,
       publishingStepOnly: declared,
+      publishingProblem: declared ? call.publishingProblem : undefined,
     };
     findings.push({ ...finding, line: findingLine(finding) });
   }

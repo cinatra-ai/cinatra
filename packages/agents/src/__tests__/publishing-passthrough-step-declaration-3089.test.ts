@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 
 import * as invariants from "../validate-oas-runtime-invariants";
+import { collectPublishingSteps } from "../oas-compiler";
 
 const FIXTURE = JSON.parse(
   readFileSync(
@@ -71,5 +72,49 @@ describe("isTopLevelPublishingStep", () => {
     expect(isTopLevelPublishingStep({ ...structuredClone(FIXTURE), nodes: [] }, STEP)).toBe(false);
     expect(isTopLevelPublishingStep(FIXTURE, "renamed_step")).toBe(false);
     expect(isTopLevelPublishingStep(null, STEP)).toBe(false);
+  });
+});
+
+// ONE table of cases for the three places that decide whether a node is a publishing step whose call the passthrough
+// route serves: the run's source (isTopLevelPublishingStep, findStepToolDeclaration, here), the compile
+// (collectPublishingSteps, here) and the pin check of the pack (scripts/ci/pin-advance-host-tools.mjs, which is a
+// plain script and cannot import this module: scripts/ci/__tests__/pin-advance-host-tools.test.mjs runs the same table).
+type StepCase = {
+  name: string; stepId: string; isPublishingStep: boolean; servedTool: string | null;
+  compile: "ok-step" | "ok-no-step" | "refused"; document: Record<string, unknown>;
+};
+const CASES = (JSON.parse(
+  readFileSync(
+    new URL("../../../../scripts/ci/__tests__/__fixtures__/pin-advance-host-tools/publishing-step-cases.json", import.meta.url),
+    "utf8",
+  ),
+) as { cases: StepCase[] }).cases;
+
+describe("the shared table of publishing-step cases", () => {
+  it.each(CASES.map((c) => [c.name, c] as const))("the run's source reads the step as the table says: %s", (_name, c) => {
+    // red-first-expect: expected true to be false
+    expect(isTopLevelPublishingStep(c.document, c.stepId)).toBe(c.isPublishingStep);
+    expect(invariants.findStepToolDeclaration(c.document, c.stepId)).toEqual(
+      c.servedTool === null ? { kind: "undeclared" } : { kind: "declared", tools: [c.servedTool] },
+    );
+  });
+
+  it.each(CASES.map((c) => [c.name, c] as const))("the compile reads the step as the table says: %s", (_name, c) => {
+    // red-first-expect: expected true to be false
+    const read = collectPublishingSteps(c.document);
+    expect(read.ok).toBe(c.compile !== "refused");
+    if (read.ok) expect(read.steps).toEqual(c.compile === "ok-step" ? [c.stepId] : []);
+  });
+
+  it("the compile names the key and the id of a publishing node whose key is not its id", () => {
+    // red-first-expect: expected true to be false
+    const doc = CASES.find((c) => c.name === "a node whose component key differs from its id")!.document;
+    const read = collectPublishingSteps(doc);
+    expect(read.ok).toBe(false);
+    if (!read.ok) {
+      expect(read.error).toMatch(/^PUBLISHES_ID_MISMATCH: /);
+      expect(read.error).toContain('"key_a"');
+      expect(read.error).toContain('"send"');
+    }
   });
 });

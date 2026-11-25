@@ -617,9 +617,12 @@ const PUBLISHING_STEP_KINDS = new Set(["ApiNode", "AgentNode", "FlowNode", "Para
 /**
  * cinatra#3089: whether `stepId` is a publishing step of the flow document: a
  * key of the root `$referenced_components` listed in the root `nodes`, whose
- * node is of an action kind and declares `metadata.cinatra.publishes` as the
- * JSON boolean `true` (the compiler's rule, read from the document a run
- * executes, never from the live template).
+ * node is of an action kind, carries that same key as its own `id` (the id the
+ * host signs for a call) and declares `metadata.cinatra.publishes` as the JSON
+ * boolean `true` (the compiler's rule, read from the document a run executes,
+ * never from the live template). The compile (collectPublishingSteps in
+ * oas-compiler.ts) and the pin check of a pack (scripts/ci/pin-advance-host-tools.mjs)
+ * apply the same rule; one table of cases is run against all three.
  */
 export function isTopLevelPublishingStep(document: unknown, stepId: string): boolean {
   if (!isPlainObject(document) || typeof stepId !== "string" || stepId === "") return false;
@@ -627,7 +630,7 @@ export function isTopLevelPublishingStep(document: unknown, stepId: string): boo
   if (!isPlainObject(refs) || !Object.prototype.hasOwnProperty.call(refs, stepId)) return false;
   const listed = Array.isArray(document.nodes) && document.nodes.some((entry) => resolveComponentRef(entry) === stepId);
   const node = refs[stepId];
-  if (!listed || !isPlainObject(node) || typeof node.component_type !== "string" ||
+  if (!listed || !isPlainObject(node) || node.id !== stepId || typeof node.component_type !== "string" ||
       !PUBLISHING_STEP_KINDS.has(node.component_type)) return false;
   const metadata = node.metadata;
   const cinatra = isPlainObject(metadata) ? metadata.cinatra : null;
@@ -637,13 +640,14 @@ export function isTopLevelPublishingStep(document: unknown, stepId: string): boo
 /**
  * cinatra#3089: the tool a direct passthrough publishing step calls: the
  * literal `data.tool` (non-empty, lower-case, no whitespace, no template) of
- * the top-level `/api/agents/passthrough` ApiNode keyed and identified by
- * `stepId` that is a publishing step; null for every other node.
+ * the top-level `/api/agents/passthrough` ApiNode that is the publishing step
+ * `stepId` (isTopLevelPublishingStep: keyed and identified by it); null for
+ * every other node.
  */
 function publishingPassthroughTool(document: Record<string, unknown>, stepId: string): string | null {
   if (!isTopLevelPublishingStep(document, stepId)) return null;
   const node = (document.$referenced_components as Record<string, unknown>)[stepId] as Record<string, unknown>;
-  if (node.component_type !== "ApiNode" || node.id !== stepId || typeof node.url !== "string" ||
+  if (node.component_type !== "ApiNode" || typeof node.url !== "string" ||
       !node.url.includes("/api/agents/passthrough")) return null;
   const tool = isPlainObject(node.data) ? node.data.tool : undefined;
   if (typeof tool !== "string" || tool === "" || /\s/.test(tool) || tool !== tool.toLowerCase() ||

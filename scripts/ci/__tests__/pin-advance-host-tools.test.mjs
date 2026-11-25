@@ -434,23 +434,39 @@ describe("the publishing-step declaration reader", () => {
   });
 });
 
+// A flow root as a pack authors it: every node a top-level reference, listed in the root `nodes`.
+const flowOf = (nodes) => ({
+  component_type: "Flow",
+  nodes: Object.keys(nodes).map((key) => ({ $component_ref: key })),
+  $referenced_components: nodes,
+});
+
 describe("collectPassthroughHostTools and the publishing step", () => {
   it("marks a node that declares metadata.cinatra.publishes: true, and no other", () => {
     // red-first-expect: to deeply equal
-    const calls = collectPassthroughHostTools({
-      $referenced_components: {
-        a: publishingNode("publishing", "some_tool", true),
-        b: publishingNode("explicit_false", "some_tool", false),
-        c: publishingNode("absent", "some_tool"),
-        d: { ...passthroughNode("string_true", { tool: "some_tool" }), metadata: { cinatra: { publishes: "true" } } },
-      },
-    });
+    const calls = collectPassthroughHostTools(flowOf({
+      publishing: publishingNode("publishing", "some_tool", true),
+      explicit_false: publishingNode("explicit_false", "some_tool", false),
+      absent: publishingNode("absent", "some_tool"),
+      string_true: { ...passthroughNode("string_true", { tool: "some_tool" }), metadata: { cinatra: { publishes: "true" } } },
+    }));
     expect(calls).toEqual([
       { nodeId: "publishing", tool: "some_tool", publishes: true },
       { nodeId: "explicit_false", tool: "some_tool" },
       { nodeId: "absent", tool: "some_tool" },
       { nodeId: "string_true", tool: "some_tool" },
     ]);
+  });
+
+  // The one table of cases that packages/agents/src/__tests__/publishing-passthrough-step-declaration-3089.test.ts runs
+  // against the run's source reader and the compile: the script cannot import them, so the table keeps the three equal.
+  const TABLE = readFixture("publishing-step-cases.json").cases;
+  const served = (call) => (call.publishes === true && call.publishingProblem === undefined ? call.tool : null);
+  it.each(TABLE.map((c) => [c.name, c]))("serves the tool the table says: %s", (_name, c) => {
+    // red-first-expect: expected null to be 'email_outreach_send_initial_start'
+    const calls = collectPassthroughHostTools(c.document).filter((x) => x.nodeId === (c.pinNodeId ?? c.stepId));
+    expect(calls.length).toBe(1);
+    expect(served(calls[0])).toBe(c.servedTool);
   });
 });
 
@@ -461,7 +477,7 @@ describe("hostToolFindings with a declared publishing-step tool", () => {
     hostToolFindings({
       packageName: PACKAGE,
       tip: TIP,
-      calls: collectPassthroughHostTools({ $referenced_components: nodes }),
+      calls: collectPassthroughHostTools(flowOf(nodes)),
       allowlist,
       declaredTools,
     });
@@ -489,6 +505,27 @@ describe("hostToolFindings with a declared publishing-step tool", () => {
     ]);
   });
 
+  it("refuses a declared tool called from a publishing node the route would not serve, and names why", () => {
+    // red-first-expect: to deeply equal
+    const send = (extra) => ({ ...publishingNode("send", "a_declared_tool", true), ...extra });
+    const lines = (doc) =>
+      hostToolFindings({ packageName: PACKAGE, tip: TIP, calls: collectPassthroughHostTools(doc), allowlist, declaredTools })
+        .findings.map((f) => f.line);
+    const head = `pin-advance host-tool check: ${PACKAGE} at ${TIP} — node "send" calls host tool "a_declared_tool", ` +
+      "which the owning package declares for a publishing step only (passthroughPublishingStep), " +
+      "and this node is not a publishing step the route serves: ";
+    // The component key differs from the id the host signs.
+    expect(lines(flowOf({ key_a: send() }))).toEqual([
+      head + 'its component key "key_a" in $referenced_components differs from its id "send"',
+    ]);
+    // Inside a subflow, not a top-level node.
+    expect(lines(flowOf({ sub: { component_type: "FlowNode", id: "sub", subflow: flowOf({ send: send() }) } }))).toEqual([
+      head + "it is not a top-level node of the flow",
+    ]);
+    // Not listed in the root nodes.
+    expect(lines({ ...flowOf({ send: send() }), nodes: [] })).toEqual([head + "it is not listed in the nodes of the flow"]);
+  });
+
   it("still refuses an undeclared tool that is not on the list, from a publishing step too", () => {
     const result = findings({ send: publishingNode("send", "an_undeclared_tool", true) });
     expect(result.findings.map((f) => [f.nodeId, f.tool])).toEqual([["send", "an_undeclared_tool"]]);
@@ -507,7 +544,7 @@ describe("hostToolFindings with a declared publishing-step tool", () => {
     const result = hostToolFindings({
       packageName: PACKAGE,
       tip: TIP,
-      calls: collectPassthroughHostTools({ $referenced_components: { plain: publishingNode("plain", "objects_save") } }),
+      calls: collectPassthroughHostTools(flowOf({ plain: publishingNode("plain", "objects_save") })),
       allowlist,
       declaredTools: new Set(["objects_save"]),
     });

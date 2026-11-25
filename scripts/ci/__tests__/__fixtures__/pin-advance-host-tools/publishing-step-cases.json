@@ -1,0 +1,444 @@
+{
+  "comment": "cinatra#3089: one table of cases for the three places that decide whether a node is a publishing step whose call the passthrough route serves: isTopLevelPublishingStep and publishingPassthroughStepTool (packages/agents/src/validate-oas-runtime-invariants.ts), collectPublishingSteps (packages/agents/src/oas-compiler.ts) and collectPassthroughHostTools (scripts/ci/pin-advance-host-tools.mjs). The first two run in packages/agents/src/__tests__/publishing-passthrough-step-declaration-3089.test.ts, the script in scripts/ci/__tests__/pin-advance-host-tools.test.mjs. stepId is the id the host signs. isPublishingStep: the step is a top-level publishing step. servedTool: the tool the route serves for that step (null: none). compile: ok-step (compiles and lists the step), ok-no-step (compiles, lists none), refused. pinNodeId: the id of the node the script reads, where it differs from stepId.",
+  "cases": [
+    {
+      "name": "a top-level listed node whose key is its id",
+      "stepId": "send",
+      "isPublishingStep": true,
+      "servedTool": "email_outreach_send_initial_start",
+      "compile": "ok-step",
+      "document": {
+        "component_type": "Flow",
+        "id": "case",
+        "start_node": {
+          "$component_ref": "send"
+        },
+        "nodes": [
+          {
+            "$component_ref": "send"
+          }
+        ],
+        "$referenced_components": {
+          "send": {
+            "component_type": "ApiNode",
+            "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+            "http_method": "POST",
+            "data": {
+              "tool": "email_outreach_send_initial_start",
+              "input": {}
+            },
+            "id": "send",
+            "metadata": {
+              "cinatra": {
+                "publishes": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "a node whose component key differs from its id",
+      "stepId": "send",
+      "isPublishingStep": false,
+      "servedTool": null,
+      "compile": "refused",
+      "document": {
+        "component_type": "Flow",
+        "id": "case",
+        "start_node": {
+          "$component_ref": "key_a"
+        },
+        "nodes": [
+          {
+            "$component_ref": "key_a"
+          }
+        ],
+        "$referenced_components": {
+          "key_a": {
+            "component_type": "ApiNode",
+            "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+            "http_method": "POST",
+            "data": {
+              "tool": "email_outreach_send_initial_start",
+              "input": {}
+            },
+            "id": "send",
+            "metadata": {
+              "cinatra": {
+                "publishes": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "a node whose component key differs from its id, asked by its key",
+      "stepId": "key_a",
+      "isPublishingStep": false,
+      "servedTool": null,
+      "compile": "refused",
+      "document": {
+        "component_type": "Flow",
+        "id": "case",
+        "start_node": {
+          "$component_ref": "key_a"
+        },
+        "nodes": [
+          {
+            "$component_ref": "key_a"
+          }
+        ],
+        "$referenced_components": {
+          "key_a": {
+            "component_type": "ApiNode",
+            "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+            "http_method": "POST",
+            "data": {
+              "tool": "email_outreach_send_initial_start",
+              "input": {}
+            },
+            "id": "send",
+            "metadata": {
+              "cinatra": {
+                "publishes": true
+              }
+            }
+          }
+        }
+      },
+      "pinNodeId": "send"
+    },
+    {
+      "name": "a node whose id is missing",
+      "stepId": "send",
+      "isPublishingStep": false,
+      "servedTool": null,
+      "compile": "refused",
+      "document": {
+        "component_type": "Flow",
+        "id": "case",
+        "start_node": {
+          "$component_ref": "send"
+        },
+        "nodes": [
+          {
+            "$component_ref": "send"
+          }
+        ],
+        "$referenced_components": {
+          "send": {
+            "component_type": "ApiNode",
+            "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+            "http_method": "POST",
+            "data": {
+              "tool": "email_outreach_send_initial_start",
+              "input": {}
+            },
+            "metadata": {
+              "cinatra": {
+                "publishes": true
+              }
+            }
+          }
+        }
+      },
+      "pinNodeId": "(no id)"
+    },
+    {
+      "name": "a node inside a subflow",
+      "stepId": "send",
+      "isPublishingStep": false,
+      "servedTool": null,
+      "compile": "refused",
+      "document": {
+        "component_type": "Flow",
+        "id": "case",
+        "start_node": {
+          "$component_ref": "sub"
+        },
+        "nodes": [
+          {
+            "$component_ref": "sub"
+          }
+        ],
+        "$referenced_components": {
+          "sub": {
+            "component_type": "FlowNode",
+            "id": "sub",
+            "subflow": {
+              "component_type": "Flow",
+              "id": "inner",
+              "$referenced_components": {
+                "send": {
+                  "component_type": "ApiNode",
+                  "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+                  "http_method": "POST",
+                  "data": {
+                    "tool": "email_outreach_send_initial_start",
+                    "input": {}
+                  },
+                  "id": "send",
+                  "metadata": {
+                    "cinatra": {
+                      "publishes": true
+                    }
+                  }
+                }
+              },
+              "nodes": [
+                {
+                  "$component_ref": "send"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "a node not listed in the root nodes",
+      "stepId": "send",
+      "isPublishingStep": false,
+      "servedTool": null,
+      "compile": "refused",
+      "document": {
+        "component_type": "Flow",
+        "id": "case",
+        "start_node": {
+          "$component_ref": "none"
+        },
+        "nodes": [],
+        "$referenced_components": {
+          "send": {
+            "component_type": "ApiNode",
+            "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+            "http_method": "POST",
+            "data": {
+              "tool": "email_outreach_send_initial_start",
+              "input": {}
+            },
+            "id": "send",
+            "metadata": {
+              "cinatra": {
+                "publishes": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "a node that declares publishes: false",
+      "stepId": "send",
+      "isPublishingStep": false,
+      "servedTool": null,
+      "compile": "ok-no-step",
+      "document": {
+        "component_type": "Flow",
+        "id": "case",
+        "start_node": {
+          "$component_ref": "send"
+        },
+        "nodes": [
+          {
+            "$component_ref": "send"
+          }
+        ],
+        "$referenced_components": {
+          "send": {
+            "component_type": "ApiNode",
+            "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+            "http_method": "POST",
+            "data": {
+              "tool": "email_outreach_send_initial_start",
+              "input": {}
+            },
+            "id": "send",
+            "metadata": {
+              "cinatra": {
+                "publishes": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "a node with no publishing flag",
+      "stepId": "send",
+      "isPublishingStep": false,
+      "servedTool": null,
+      "compile": "ok-no-step",
+      "document": {
+        "component_type": "Flow",
+        "id": "case",
+        "start_node": {
+          "$component_ref": "send"
+        },
+        "nodes": [
+          {
+            "$component_ref": "send"
+          }
+        ],
+        "$referenced_components": {
+          "send": {
+            "component_type": "ApiNode",
+            "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+            "http_method": "POST",
+            "data": {
+              "tool": "email_outreach_send_initial_start",
+              "input": {}
+            },
+            "id": "send"
+          }
+        }
+      }
+    },
+    {
+      "name": "a node whose publishes is the string true",
+      "stepId": "send",
+      "isPublishingStep": false,
+      "servedTool": null,
+      "compile": "refused",
+      "document": {
+        "component_type": "Flow",
+        "id": "case",
+        "start_node": {
+          "$component_ref": "send"
+        },
+        "nodes": [
+          {
+            "$component_ref": "send"
+          }
+        ],
+        "$referenced_components": {
+          "send": {
+            "component_type": "ApiNode",
+            "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+            "http_method": "POST",
+            "data": {
+              "tool": "email_outreach_send_initial_start",
+              "input": {}
+            },
+            "id": "send",
+            "metadata": {
+              "cinatra": {
+                "publishes": "true"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "a top-level publishing node with a templated tool",
+      "stepId": "send",
+      "isPublishingStep": true,
+      "servedTool": null,
+      "compile": "ok-step",
+      "document": {
+        "component_type": "Flow",
+        "id": "case",
+        "start_node": {
+          "$component_ref": "send"
+        },
+        "nodes": [
+          {
+            "$component_ref": "send"
+          }
+        ],
+        "$referenced_components": {
+          "send": {
+            "component_type": "ApiNode",
+            "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+            "http_method": "POST",
+            "data": {
+              "tool": "{{ tool }}",
+              "input": {}
+            },
+            "id": "send",
+            "metadata": {
+              "cinatra": {
+                "publishes": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "a top-level publishing node with an upper-case tool",
+      "stepId": "send",
+      "isPublishingStep": true,
+      "servedTool": null,
+      "compile": "ok-step",
+      "document": {
+        "component_type": "Flow",
+        "id": "case",
+        "start_node": {
+          "$component_ref": "send"
+        },
+        "nodes": [
+          {
+            "$component_ref": "send"
+          }
+        ],
+        "$referenced_components": {
+          "send": {
+            "component_type": "ApiNode",
+            "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+            "http_method": "POST",
+            "data": {
+              "tool": "Email_send",
+              "input": {}
+            },
+            "id": "send",
+            "metadata": {
+              "cinatra": {
+                "publishes": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "a top-level publishing node with a tool that has whitespace",
+      "stepId": "send",
+      "isPublishingStep": true,
+      "servedTool": null,
+      "compile": "ok-step",
+      "document": {
+        "component_type": "Flow",
+        "id": "case",
+        "start_node": {
+          "$component_ref": "send"
+        },
+        "nodes": [
+          {
+            "$component_ref": "send"
+          }
+        ],
+        "$referenced_components": {
+          "send": {
+            "component_type": "ApiNode",
+            "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+            "http_method": "POST",
+            "data": {
+              "tool": "email send",
+              "input": {}
+            },
+            "id": "send",
+            "metadata": {
+              "cinatra": {
+                "publishes": true
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}
