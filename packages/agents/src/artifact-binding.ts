@@ -466,6 +466,13 @@ export function collectArtifactBindingsFromOasDocument(
         continue;
       }
 
+      // The ledger namespace of a list filing's rows is no output's: a bound output named inside it would
+      // collide with a set's row (the unique key has no path).
+      if (isReservedLedgerOutputId(title)) {
+        errors.push(`${where}: ${MATERIALIZE_RESERVED_NODE_ID_MESSAGE}`);
+        continue;
+      }
+
       let referenceError = false;
       for (const [field, ref] of [
         // A FILE-SOURCED binding reads no output, so it names none to check
@@ -781,13 +788,23 @@ export function materializeListMemberFieldsEqualRefusal(
 
 /**
  * The ledger namespace of a LIST filing's rows (cinatra#3089). A set's rows (its header and its members) carry an
- * output id that begins with this prefix, so no ordinary node id can be the output id of a set row: a node whose
- * id begins with it is refused at compile time and at the road (the single filing and the list call alike).
+ * `output_id` that begins with this prefix. EVERY source of an `output_id` value in the ledger is refused this prefix
+ * through ONE predicate (`isReservedLedgerOutputId`): a tool node's id (compile time, the route, both materializer
+ * entry points), a bound end-node output's name (compile time; its fanned-out members are `<name>[i]`), the image
+ * and page-capture tools' node ids, and every claim and record in the ledger itself (`claimMaterialization`,
+ * `recordFanoutReuseMaterialization`, `recordLlmEmitMaterialization`). The other producers write ids of a fixed
+ * form of their own: `default_road` (`default-road:<name>` and `run-file:<path>`), `email_fanout`
+ * (`email-body:<run>:<item>`), `materialize_tool` append (`<node>#append:…`, which begins with a node id).
  */
 export const MATERIALIZE_RESERVED_NODE_ID_PREFIX = "cinatra:set/";
 export const MATERIALIZE_RESERVED_NODE_ID_CODE = "materialize_node_id_reserved";
 export const MATERIALIZE_RESERVED_NODE_ID_MESSAGE =
-  `artifact_materialize: a node id may not begin with "${MATERIALIZE_RESERVED_NODE_ID_PREFIX}" (the ledger namespace of a list filing)`;
+  `a node id or an output name may not begin with "${MATERIALIZE_RESERVED_NODE_ID_PREFIX}" (the ledger namespace of a list filing's rows)`;
+
+/** Whether `value` is in the ledger namespace of a list filing's rows: no node id and no output name may be. */
+export function isReservedLedgerOutputId(value: string): boolean {
+  return value.startsWith(MATERIALIZE_RESERVED_NODE_ID_PREFIX);
+}
 
 export const MATERIALIZE_LIST_DATA_CODE = "materialize_list_data_declaration";
 export const MATERIALIZE_LIST_DATA_MAX_FIELDS = 8;
@@ -1228,7 +1245,7 @@ export function collectArtifactMaterializeNodesFromOasDocument(
           "same-byte outputs into one artifact",
       );
     }
-    if (typeof declaredNodeId === "string" && declaredNodeId.startsWith(MATERIALIZE_RESERVED_NODE_ID_PREFIX)) {
+    if (typeof declaredNodeId === "string" && isReservedLedgerOutputId(declaredNodeId)) {
       fieldError("node_id", MATERIALIZE_RESERVED_NODE_ID_MESSAGE);
     }
 
@@ -1333,7 +1350,8 @@ export function collectArtifactImageNodesFromOasDocument(
     if (
       typeof declaredNodeId !== "string" ||
       isTemplated(declaredNodeId) ||
-      declaredNodeId !== nodeId
+      declaredNodeId !== nodeId ||
+      isReservedLedgerOutputId(declaredNodeId)
     ) {
       return;
     }

@@ -1,10 +1,13 @@
 import type { VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
 import { verifyRunExecutedSource } from "@cinatra-ai/agents/store";
 import {
+  ARTIFACT_IMAGE_TOOL,
+  ARTIFACT_MATERIALIZE_TOOL,
+  ARTIFACT_PAGE_CAPTURE_TOOL,
   isArtifactMaterializeListInput,
+  isReservedLedgerOutputId,
   MATERIALIZE_RESERVED_NODE_ID_CODE,
   MATERIALIZE_RESERVED_NODE_ID_MESSAGE,
-  MATERIALIZE_RESERVED_NODE_ID_PREFIX,
   materializeListMemberFieldsEqualRefusal,
   materializeListResultIdFieldRefusal,
   readMaterializeListDataDeclaration,
@@ -37,7 +40,6 @@ import {
 } from "./artifact-materialize-shaper";
 import {
   isMaterializeListInputTooLarge,
-  isRegenerateRepairRun,
   materializeListAnswer,
   MATERIALIZE_LIST_INPUT_TOO_LARGE,
   materializeListInputTooLargeError,
@@ -495,12 +497,12 @@ export async function POST(req: Request): Promise<Response> {
     } catch { return NextResponse.json({ error: "Executing source could not be verified" }, { status: 403 }); }
   }
 
-  // cinatra#3089: the ledger namespace of a list filing's rows is not a node's: a node id that
-  // begins with its prefix is refused for every call of the tool, single or list.
+  // cinatra#3089: the ledger namespace of a list filing's rows is not a node's: a node id inside it is
+  // refused for every call of every filing tool (the ledger refuses it again at each claim).
   if (
-    tool === "artifact_materialize" &&
+    (tool === ARTIFACT_MATERIALIZE_TOOL || tool === ARTIFACT_IMAGE_TOOL || tool === ARTIFACT_PAGE_CAPTURE_TOOL) &&
     typeof rawInput.node_id === "string" &&
-    rawInput.node_id.startsWith(MATERIALIZE_RESERVED_NODE_ID_PREFIX)
+    isReservedLedgerOutputId(rawInput.node_id)
   ) {
     return NextResponse.json(
       { error: MATERIALIZE_RESERVED_NODE_ID_MESSAGE, code: MATERIALIZE_RESERVED_NODE_ID_CODE },
@@ -704,8 +706,12 @@ export async function POST(req: Request): Promise<Response> {
       // all; a refusal or a fault stores nothing and answers one refusal (see
       // `materializeToolArtifactSet`). The answer is the set, in member order.
       if (shaped.members !== undefined) {
-        // A Regenerate run takes one production: a list is refused before anything is filed.
-        if (isRegenerateRepairRun(run)) {
+        // A Regenerate run takes one production: a list is refused before anything is filed. Whether a run
+        // is one is read from the durable repair row, by the classifier the run executor uses: a repair
+        // run whose row names an intent, is missing or cannot be read is refused (it fails closed); the
+        // run's request payload is no authority.
+        const { isRegenerateSegmentRun } = await import("@cinatra-ai/agents/regenerate-segment");
+        if (await isRegenerateSegmentRun({ id: run.id, sourceType: run.sourceType })) {
           return NextResponse.json(
             { error: MATERIALIZE_LIST_IN_REGENERATE_RUN_ERROR, code: MATERIALIZE_LIST_IN_REGENERATE_RUN },
             { status: 400 },

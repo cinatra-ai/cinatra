@@ -7,7 +7,11 @@ import {
   postgresSchema,
 } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
-import { MATERIALIZE_RESERVED_NODE_ID_PREFIX } from "@cinatra-ai/agents/artifact-binding";
+import {
+  isReservedLedgerOutputId,
+  MATERIALIZE_RESERVED_NODE_ID_MESSAGE,
+  MATERIALIZE_RESERVED_NODE_ID_PREFIX,
+} from "@cinatra-ai/agents/artifact-binding";
 
 // ---------------------------------------------------------------------------
 // Artifact-materialization idempotency ledger (cinatra#923).
@@ -35,6 +39,13 @@ import { MATERIALIZE_RESERVED_NODE_ID_PREFIX } from "@cinatra-ai/agents/artifact
 // declarative path writes that provenance), so the emit returns the existing
 // refs instead of creating a duplicate.
 // ---------------------------------------------------------------------------
+
+/** The ledger namespace of a list filing's rows is no claim's: every claim and record of the ledger refuses an
+ *  output id inside it, whoever the producer is (a node id, an output name, a step id). Only the set's own
+ *  statements (`buildToolSetRowQueries`) write it. */
+function assertOutputIdNotReserved(outputId: string): void {
+  if (isReservedLedgerOutputId(outputId)) throw new Error(MATERIALIZE_RESERVED_NODE_ID_MESSAGE);
+}
 
 export type MaterializationPath =
   | "end_node_binding"
@@ -139,6 +150,7 @@ export async function claimMaterialization(input: {
    *  value stays: a re-drive hits the key and writes nothing. */
   verifiedStepId?: string | null;
 }): Promise<MaterializationClaim> {
+  assertOutputIdNotReserved(input.outputId);
   ensurePostgresSchema();
   const s = schema();
   const id = randomUUID();
@@ -478,6 +490,8 @@ export async function findFinalizedMidRunMaterialization(input: {
   runId: string;
   extension: string;
   contentHash: string;
+  /** Artifacts the caller has already considered and set aside (two bodies of one run may share their bytes). */
+  excludeArtifactIds?: readonly string[];
 }): Promise<{ artifactId: string; representationRevisionId: string } | null> {
   ensurePostgresSchema();
   const s = schema();
@@ -492,9 +506,10 @@ export async function findFinalizedMidRunMaterialization(input: {
        WHERE f.run_id = $1 AND f.org_id = $4 AND f.path = 'email_fanout'
          AND f.artifact_id = m.artifact_id
     )
-  ORDER BY m.created_at ASC
+    AND NOT (m.artifact_id = ANY($5::text[]))
+  ORDER BY m.created_at ASC, m.output_id ASC
   LIMIT 1`,
-    [input.runId, input.extension, input.contentHash, input.orgId],
+    [input.runId, input.extension, input.contentHash, input.orgId, [...(input.excludeArtifactIds ?? [])]],
   );
   const row = res.rows[0] as
     | { artifact_id: string | null; representation_revision_id: string | null }
@@ -690,6 +705,7 @@ export async function recordFanoutReuseMaterialization(input: {
   artifactId: string;
   representationRevisionId: string;
 }): Promise<void> {
+  assertOutputIdNotReserved(input.outputId);
   ensurePostgresSchema();
   const s = schema();
   await pool().query(
@@ -726,6 +742,7 @@ export async function recordLlmEmitMaterialization(input: {
   artifactId: string;
   representationRevisionId: string;
 }): Promise<void> {
+  assertOutputIdNotReserved(input.authoringStepId);
   ensurePostgresSchema();
   const s = schema();
   await pool().query(

@@ -16,6 +16,8 @@
  *   S7  a marked gate receives every member as a target, and every member is the gate's write
  *   S8  typed data per member; the same fields as a single filing when none is declared
  *   S9  the send fan-out reuses the batch-written bodies (type, title and correlation must match)
+ *   D1  members that repeat their bytes (even in the whole identity) are artifacts of their own, by position
+ *   E1  an exception that is not a refusal of the call is not turned into one; the named refusals have fixed texts
  *   R1  two DIFFERING calls for one (run, node, extension), concurrent: one commits, the other is refused, nothing of it stored
  *   R2  the ledger rows of a set can never be a node's row: list node `drafts` and single node `drafts#1` never share a row
  *   C1  the batch entry point: ONE transaction for N artifacts, every row writer once per artifact, ONE rollback
@@ -43,6 +45,7 @@ const {
   readArtifactTypeClaimsForOrgMock,
   pgSyncMock,
   blobPutMock,
+  blobDeleteMock,
 } = vi.hoisted(() => ({
   poolQueryMock: vi.fn(),
   getAgentPackageMock: vi.fn(),
@@ -61,6 +64,7 @@ const {
   readArtifactTypeClaimsForOrgMock: vi.fn(),
   pgSyncMock: vi.fn(),
   blobPutMock: vi.fn(),
+  blobDeleteMock: vi.fn(async () => {}),
 }));
 
 vi.mock("@/lib/db/pooled", async () => ({
@@ -79,7 +83,7 @@ vi.mock("../producer-assertions", () => ({
 }));
 vi.mock("../local-disk-blob-store", async () => ({
   ...(await vi.importActual<typeof import("../local-disk-blob-store")>("../local-disk-blob-store")),
-  createLocalDiskBlobStore: () => ({ put: blobPutMock, deleteByStorageKey: vi.fn(async () => {}) }),
+  createLocalDiskBlobStore: () => ({ put: blobPutMock, deleteByStorageKey: blobDeleteMock }),
 }));
 vi.mock("@cinatra-ai/registries", () => ({ getAgentPackage: getAgentPackageMock }));
 vi.mock("@/lib/verdaccio-config", () => ({
@@ -338,11 +342,12 @@ beforeEach(() => {
     return staged.map(({ ids }) => ids);
   });
   findFinalizedMidRunMaterializationMock.mockImplementation(
-    async (k: { runId: string; extension: string; contentHash: string }) => {
+    async (k: { runId: string; extension: string; contentHash: string; excludeArtifactIds?: string[] }) => {
       const row = ledger.find(
         (r) =>
           r.runId === k.runId && r.extension === k.extension && r.contentHash === k.contentHash &&
           (r.path === "materialize_tool" || r.path === "end_node_binding") && r.artifactId &&
+          !(k.excludeArtifactIds ?? []).includes(r.artifactId) &&
           !ledger.some((f) => f.path === "email_fanout" && f.artifactId === r.artifactId),
       );
       return row ? { artifactId: row.artifactId!, representationRevisionId: row.representationRevisionId! } : null;
@@ -427,11 +432,10 @@ describe("cinatra#3089 — the list is filed as ONE UNIT", () => {
   });
 
   // red-first-expect: materializeToolArtifactSet is not a function
-  it.each([1, 2, 3])("S2 a fault at member %i inside the transaction stores nothing and answers ONE refusal; the identical retry files the set once", async (k) => {
+  it.each([1, 2, 3])("S2 a fault at member %i inside the transaction stores nothing and is thrown to the route's fixed boundary; the identical retry files the set once", async (k) => {
     faultAtMember = k;
-    const failed = await fileSet();
-    expect(failed).toMatchObject({ ok: false, code: "materialize_list_set_failed" });
-    expect((failed as { error: string }).error).toContain("nothing of it was stored");
+    // A fault of the write is not a refusal of the call: it is thrown, to the route's fixed boundary.
+    await expect(fileSet()).rejects.toThrow(`row writer fault at member ${k}`);
     // Nothing exists: no object, no event, no finalized ledger row, no commit.
     expect(storedObjects.size).toBe(0);
     expect(events).toEqual([]);
@@ -533,6 +537,135 @@ describe("cinatra#3089 — the list is filed as ONE UNIT", () => {
   it("S7 a node no gate reviews files its members as plain agent writes", async () => {
     await fileSet();
     expect(events.map((e) => e.originKind)).toEqual(["agent_generated", "agent_generated", "agent_generated"]);
+  });
+});
+
+describe("cinatra#3089 — members that repeat their bytes", () => {
+  const same = (n: number, over?: (i: number) => Partial<ToolArtifactSetMember>): ToolArtifactSetMember[] =>
+    Array.from({ length: n }, (_, i) => ({ title: `Hello ${i + 1}`, content: "Dear customer, the same text", typedData: { contactId: `c-${i + 1}` }, ...(over?.(i) ?? {}) }));
+
+  // red-first-expect: materializeToolArtifactSet is not a function
+  it("D1 two members with the same bytes are two artifacts, under two ledger rows told apart by position; an identical retry answers them", async () => {
+    const filed = await fileSet(same(2));
+    expect(filed).toEqual({ ok: true, deduped: false, artifacts: EXPECTED.slice(0, 2) });
+    expect(finalizedRows().map((r) => r.outputId)).toEqual([`cinatra:set/"${NODE}"/1`, `cinatra:set/"${NODE}"/2`]);
+    expect(new Set(finalizedRows().map((r) => r.contentHash)).size).toBe(1);
+    expect(storedObjects.size).toBe(2);
+    expect(await fileSet(same(2))).toEqual({ ok: true, deduped: true, artifacts: EXPECTED.slice(0, 2) });
+    // The member that differs from the stored one is named even though its bytes equal its neighbour's.
+    expect(await fileSet(same(2, (i) => (i === 1 ? { typedData: { contactId: "c-9" } } : {})))).toMatchObject({
+      ok: false, code: "materialize_list_set_differs", failedMember: 2,
+    });
+  });
+
+  // red-first-expect: materializeToolArtifactSet is not a function
+  it("D1 two members that are identical in the whole identity are two artifacts too", async () => {
+    const filed = await fileSet(same(2, () => ({ title: "Hello", typedData: { contactId: "c-1" } })));
+    expect(filed).toMatchObject({ ok: true, deduped: false });
+    expect(storedObjects.size).toBe(2);
+    expect(await fileSet(same(2, () => ({ title: "Hello", typedData: { contactId: "c-1" } })))).toMatchObject({ ok: true, deduped: true });
+  });
+
+  // red-first-expect: materializeToolArtifactSet is not a function
+  it("D1 the send binds each of two same-bytes bodies to its own message, by correlation, whatever order the ledger lists them", async () => {
+    await fileSet(
+      same(2, (i) => ({ title: `Hello ${i + 1}`, typedData: { contactId: `c-${i + 1}`, campaignId: "camp-1", runId: "run-1" } })),
+    );
+    const fanOut = (n: number) =>
+      materializeFanoutMessageRevision({
+        runId: "run-1", orgId: "org-a", createdBy: "user-1", objectTypeId: BODY_TYPE,
+        outputId: `email-body:run-1:d${n}`, title: `Hello ${n}`, markdown: "Dear customer, the same text",
+        typedData: { runId: "run-1", campaignId: "camp-1", subject: `Hello ${n}`, bodyMarkdown: "Dear customer, the same text", contactId: `c-${n}` },
+        reuseMustCarry: ["runId", "campaignId", "contactId"],
+      });
+    // A message none of the two bodies fits is refused with the difference, not handed a wrong body.
+    expect(await fanOut(3)).toMatchObject({ ok: false, code: "fanout_reuse_typed_data_mismatch" });
+    // The SECOND message first: the ledger's first candidate is the body of contact 1, which is not its body.
+    const two = await fanOut(2);
+    const one = await fanOut(1);
+    expect(two).toMatchObject({ ok: true, artifactId: "art-2", deduped: true });
+    expect(one).toMatchObject({ ok: true, artifactId: "art-1", deduped: true });
+  });
+});
+
+describe("cinatra#3089 — a fault is a refusal only when the call can be refused for it", () => {
+  // red-first-expect: materializeToolArtifactSet is not a function
+  it("E1 a storage or database fault inside the write is thrown (to the route's fixed boundary), never answered with its text", async () => {
+    createSemanticArtifactsMock.mockRejectedValueOnce(new Error("connect ECONNREFUSED 10.1.2.3:5432 password=hunter2"));
+    await expect(fileSet()).rejects.toThrow("ECONNREFUSED");
+    expect(storedObjects.size).toBe(0);
+    expect(ledger).toEqual([]);
+  });
+
+  // red-first-expect: materializeToolArtifactSet is not a function
+  it("E1 a database fault before the write (the run's ownership read) is thrown as well", async () => {
+    poolQueryMock.mockImplementation(async (text: string) => {
+      if (text.includes("owner_level")) throw new Error("terminating connection due to administrator command");
+      if (text.includes("SELECT package_name")) return { rows: [{ package_name: "@test/agent" }] };
+      return { rows: [] };
+    });
+    await expect(fileSet()).rejects.toThrow("terminating connection");
+  });
+
+  // red-first-expect: materializeToolArtifactSet is not a function
+  it.each([
+    ["the type's own refusal (a MIME the winner of a same-bytes resource carries)", async () => new (await import("../artifact-creation")).ObjectsTypeNotRegisteredError("@cinatra-ai/email:body", 'persisted (dedupe-winner) MIME "application/pdf" is not accepted by "@cinatra-ai/email:body"'), "materialize_list_member_refused", "persisted (dedupe-winner) MIME"],
+    ["the organization's byte quota", async () => new (await import("../local-disk-blob-store")).ArtifactQuotaExceededError("org-quota", 1000, 999999), "materialize_list_quota_exceeded", "storage quota would be exceeded"],
+    ["a member over the size limit", async () => new (await import("@cinatra-ai/artifacts")).BlobTooLargeError(10), "materialize_list_member_refused", "larger than the artifact size limit"],
+  ])("E1 %s is a refusal with a fixed code and text, with nothing stored", async (_n, make, code, text) => {
+    createSemanticArtifactsMock.mockRejectedValueOnce(await make());
+    const refused = await fileSet();
+    expect(refused).toMatchObject({ ok: false, code });
+    expect((refused as { error: string }).error).toContain(text);
+    // No figure of the quota, no limit: the fixed text only.
+    expect((refused as { error: string }).error).not.toMatch(/999999|1000/);
+    expect(storedObjects.size).toBe(0);
+    expect(ledger).toEqual([]);
+  });
+});
+
+describe("cinatra#3089 — the ledger refuses the set namespace to EVERY producer of an output id", () => {
+  const reserved = 'cinatra:set/"drafts"/1';
+
+  // red-first-expect: to throw error including 'may not begin with
+  it("R3 a claim or a record under a name inside the namespace is refused before any statement, whatever its path", async () => {
+    const real = await vi.importActual<typeof import("../materialization-ledger")>("../materialization-ledger");
+    poolQueryMock.mockClear();
+    const claim = (path: "end_node_binding" | "materialize_tool" | "llm_emit" | "derived_output" | "default_road", outputId = reserved) =>
+      real.claimMaterialization({ orgId: "org-a", runId: "run-1", outputId, nodeId: null, path, extension: EXT, contentHash: sha256("x") });
+    for (const path of ["end_node_binding", "materialize_tool", "llm_emit", "derived_output", "default_road"] as const) {
+      await expect(claim(path)).rejects.toThrow('may not begin with "cinatra:set/"');
+    }
+    // The fan-out of a bound output is `<name>[i]`: the member of a reserved name is reserved too.
+    await expect(claim("end_node_binding", `${reserved}[0]`)).rejects.toThrow("may not begin with");
+    await expect(
+      real.recordFanoutReuseMaterialization({ orgId: "org-a", runId: "run-1", outputId: reserved, extension: EXT, contentHash: sha256("x"), artifactId: "a", representationRevisionId: "r" }),
+    ).rejects.toThrow("may not begin with");
+    await expect(
+      real.recordLlmEmitMaterialization({ orgId: "org-a", runId: "run-1", authoringStepId: reserved, extension: EXT, contentHash: sha256("x"), artifactId: "a", representationRevisionId: "r" }),
+    ).rejects.toThrow("may not begin with");
+    expect(poolQueryMock.mock.calls.filter(([t]) => String(t).includes("artifact_materializations"))).toEqual([]);
+  });
+
+  // red-first-expect: toolSetOutputId is not a function
+  it("R3 an end output named like a set member never shares its row, in either order", async () => {
+    const real = await vi.importActual<typeof import("../materialization-ledger")>("../materialization-ledger");
+    const memberId = real.toolSetOutputId("drafts", 1);
+    expect(memberId).toBe(reserved);
+    // Set first: its member row exists; the end output claiming the same name and bytes is refused, not aliased.
+    await fileSet(members(), { nodeId: "drafts", verifiedStepId: "drafts" });
+    const rowsBefore = ledger.length;
+    await expect(
+      real.claimMaterialization({ orgId: "org-a", runId: "run-1", outputId: memberId, nodeId: null, path: "end_node_binding", extension: EXT, contentHash: sha256(DRAFTS[0]!.body) }),
+    ).rejects.toThrow("may not begin with");
+    expect(ledger).toHaveLength(rowsBefore);
+    // The end output first: it cannot have claimed that name, so the set's rows meet no row of it.
+    ledger = [];
+    storedObjects.clear();
+    await expect(
+      real.claimMaterialization({ orgId: "org-a", runId: "run-1", outputId: memberId, nodeId: null, path: "end_node_binding", extension: EXT, contentHash: sha256(DRAFTS[0]!.body) }),
+    ).rejects.toThrow("may not begin with");
+    expect(await fileSet(members(), { nodeId: "drafts", verifiedStepId: "drafts" })).toMatchObject({ ok: true, deduped: false });
   });
 });
 
@@ -793,8 +926,11 @@ describe("cinatra#3089 — the creation path's batch entry point (createSemantic
   beforeEach(() => {
     committed = [];
     faultAtStatement = null;
+    blobDeleteMock.mockClear();
     let resources = 0;
     let blobs = 0;
+    /** The resource rows committed so far, by substance key: the unique key (org, kind, substance key) the real upsert resolves on. */
+    const resourcesBySubstance = new Map<string, { resource_id: string; blob_id: string; storage_key: string }>();
     blobPutMock.mockImplementation(async (input: { stream: AsyncIterable<Uint8Array> }) => {
       const body = await readBody(input.stream);
       const digest = sha256(body);
@@ -804,10 +940,18 @@ describe("cinatra#3089 — the creation path's batch entry point (createSemantic
     pgSyncMock.mockImplementation((input: { transaction?: boolean; queries: Array<{ text: string }> }) => {
       const texts = input.queries.map((q) => q.text);
       if (texts[0]!.includes("WITH resource_op")) {
-        // The resource row of ONE blob: its own transaction, committed before the artifact rows.
+        // The resource row of ONE blob: its own transaction, committed before the artifact rows. The upsert
+        // answers the existing row (`is_new` false) for a substance key it already holds.
+        const query = input.queries[0] as unknown as { values: string[] };
+        const substanceKey = query.values[2]!;
+        const existing = resourcesBySubstance.get(substanceKey);
+        if (existing) return [{ rows: [{ ...existing, mime: "text/markdown", size_bytes: 6, is_new: false }], rowCount: 1 }];
         resources += 1;
-        return [{ rows: [{ resource_id: `res-${resources}`, mime: "text/markdown", size_bytes: 6, storage_key: `k${resources}`, blob_id: `b${resources}`, is_new: true }], rowCount: 1 }];
+        const row = { resource_id: `res-${resources}`, blob_id: query.values[6]!, storage_key: query.values[7]! };
+        resourcesBySubstance.set(substanceKey, row);
+        return [{ rows: [{ ...row, mime: "text/markdown", size_bytes: 6, is_new: true }], rowCount: 1 }];
       }
+      if (texts[0]!.includes("artifact_blobs")) return [{ rows: [{ "?column?": 1 }], rowCount: 1 }];
       if (faultAtStatement !== null && faultAtStatement < texts.length) throw new Error("statement failed");
       committed.push(texts);
       return texts.map(() => ({ rows: [], rowCount: 0 }));
@@ -847,6 +991,30 @@ describe("cinatra#3089 — the creation path's batch entry point (createSemantic
     expect(committed).toHaveLength(1);
     expect(count(committed[0]!, 'INSERT INTO "public"."objects"')).toBe(50);
     expect(count(committed[0]!, "UPDATE finalize")).toBe(50);
+  });
+
+  // red-first-expect: createSemanticArtifacts is not a function
+  it("C1 two artifacts with the same bytes in one transaction share ONE resource row and ONE blob file, which no cleanup deletes", async () => {
+    const creation = await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation");
+    const twin = (i: number) => ({ ...creationInput(i), stream: stream("Same bytes") });
+    const results = await creation.createSemanticArtifacts([twin(0), twin(1)]);
+    expect(results.map((r) => r.resourceId)).toEqual(["res-1", "res-1"]);
+    expect(new Set(results.map((r) => r.artifactId)).size).toBe(2);
+    const batch = committed[0]!;
+    expect(count(batch, 'INSERT INTO "public"."representation"')).toBe(2);
+    // The second write found the first's committed resource row (a dedupe); both wrote the same
+    // content-addressed file, so the loser's cleanup must not unlink the winner's bytes.
+    expect(blobDeleteMock).not.toHaveBeenCalled();
+  });
+
+  // red-first-expect: createSemanticArtifacts is not a function
+  it("C1 a rolled-back batch of same-bytes artifacts deletes no shared blob file either", async () => {
+    const creation = await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation");
+    faultAtStatement = 3;
+    const twin = (i: number) => ({ ...creationInput(i), stream: stream("Same bytes") });
+    await expect(creation.createSemanticArtifacts([twin(0), twin(1)])).rejects.toThrow("statement failed");
+    expect(committed).toEqual([]);
+    expect(blobDeleteMock).not.toHaveBeenCalled();
   });
 
   it("C1 a single artifact is still ONE transaction with the same row writers", async () => {

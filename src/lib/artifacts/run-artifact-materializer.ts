@@ -5,7 +5,7 @@ import {
   MATERIALIZE_LIST_ENVELOPE_FIELDS,
   MATERIALIZE_RESERVED_NODE_ID_CODE,
   MATERIALIZE_RESERVED_NODE_ID_MESSAGE,
-  MATERIALIZE_RESERVED_NODE_ID_PREFIX,
+  isReservedLedgerOutputId,
   ARTIFACT_IMAGE_TOOL,
   ARTIFACT_MATERIALIZE_TOOL,
   collectArtifactBindingsFromOasDocument,
@@ -35,8 +35,11 @@ import {
   artifactWriteRefusal,
   createSemanticArtifact,
   createSemanticArtifacts,
+  ObjectsTypeNotRegisteredError,
   type CreateSemanticArtifactInput,
 } from "./artifact-creation";
+import { ArtifactQuotaExceededError } from "./local-disk-blob-store";
+import { BlobTooLargeError } from "@cinatra-ai/artifacts";
 import {
   MAX_AUTHORED_CONTENT_BYTES,
   TEXT_AUTHORING_COMPATIBLE_MIMES,
@@ -1743,7 +1746,7 @@ export async function materializeToolArtifact(input: {
   mime: string;
   content: string;
 }): Promise<ToolArtifactMaterialization> {
-  if (input.nodeId.startsWith(MATERIALIZE_RESERVED_NODE_ID_PREFIX)) {
+  if (isReservedLedgerOutputId(input.nodeId)) {
     return { ok: false, error: MATERIALIZE_RESERVED_NODE_ID_MESSAGE, code: MATERIALIZE_RESERVED_NODE_ID_CODE };
   }
   try {
@@ -1811,7 +1814,7 @@ export async function materializeToolArtifact(input: {
 export const MATERIALIZE_LIST_MEMBER_REFUSED = "materialize_list_member_refused";
 export const MATERIALIZE_LIST_SET_DIFFERS = "materialize_list_set_differs";
 export const MATERIALIZE_LIST_SET_BUSY = "materialize_list_set_busy";
-export const MATERIALIZE_LIST_SET_FAILED = "materialize_list_set_failed";
+export const MATERIALIZE_LIST_QUOTA_EXCEEDED = "materialize_list_quota_exceeded";
 
 export type ToolArtifactSetMember = {
   title: string;
@@ -1845,7 +1848,8 @@ export type ToolArtifactSetResult =
  *     quota, the persisted MIME of an existing same-substance resource, a storage or database fault) ends the
  *     call at this step with nothing stored but content-addressed blobs and their resource rows, which the next
  *     write of the same bytes reuses, as after a failed single write.
- * Never throws: every refusal is a returned error.
+ * A refusal is a returned error with a fixed code. A fault that is not one the call can be refused for (storage,
+ * database, a bug) is thrown, to the route's fixed 500 boundary: no exception text becomes an answer.
  */
 export async function materializeToolArtifactSet(input: {
   runId: string;
@@ -1862,207 +1866,218 @@ export async function materializeToolArtifactSet(input: {
   mime: string;
   members: readonly ToolArtifactSetMember[];
 }): Promise<ToolArtifactSetResult> {
-  try {
-    // The ledger namespace of a set's rows is not a node's: no node id begins with its prefix.
-    if (input.nodeId.startsWith(MATERIALIZE_RESERVED_NODE_ID_PREFIX)) {
-      return { ok: false, code: MATERIALIZE_RESERVED_NODE_ID_CODE, error: MATERIALIZE_RESERVED_NODE_ID_MESSAGE };
-    }
-    const n = input.members.length;
-    if (n === 0) return { ok: false, code: MATERIALIZE_LIST_MEMBER_REFUSED, error: "a list call files at least one member; nothing was filed" };
-    const titles = input.members.map((m) => m.title.trim());
-    const hashes = input.members.map((m) => createHash("sha256").update(m.content, "utf8").digest("hex"));
-    const refuse = (member: number, why: string): ToolArtifactSetResult => ({
-      ok: false,
-      code: MATERIALIZE_LIST_MEMBER_REFUSED,
-      failedMember: member,
-      error: `artifact_materialize list member ${member} of ${n} was refused: ${why} — nothing was filed`,
-    });
+  // The ledger namespace of a set's rows is not a node's: no node id begins with its prefix.
+  if (isReservedLedgerOutputId(input.nodeId)) {
+    return { ok: false, code: MATERIALIZE_RESERVED_NODE_ID_CODE, error: MATERIALIZE_RESERVED_NODE_ID_MESSAGE };
+  }
+  const n = input.members.length;
+  if (n === 0) return { ok: false, code: MATERIALIZE_LIST_MEMBER_REFUSED, error: "a list call files at least one member; nothing was filed" };
+  const titles = input.members.map((m) => m.title.trim());
+  const hashes = input.members.map((m) => createHash("sha256").update(m.content, "utf8").digest("hex"));
+  const refuse = (member: number, why: string): ToolArtifactSetResult => ({
+    ok: false,
+    code: MATERIALIZE_LIST_MEMBER_REFUSED,
+    failedMember: member,
+    error: `artifact_materialize list member ${member} of ${n} was refused: ${why} — nothing was filed`,
+  });
 
-    // 1. Every member, before anything is written.
-    let target: { objectTypeId: string; acceptedFileMimeTypes: string[] } | null = null;
-    let reviewed = false;
-    for (const [i, member] of input.members.entries()) {
-      if (titles[i]!.length === 0) return refuse(i + 1, "title must be a non-empty string");
-      const authorized = await authorizeToolMaterializeWrite({
-        orgId: input.orgId,
-        templateId: input.templateId,
-        packageVersion: input.packageVersion,
-        extension: input.extension,
-        objectTypeId: input.objectTypeId,
-        mime: input.mime,
-        content: member.content,
-        // cinatra#3035: the review is read only for the verified calling step.
-        ...(input.verifiedStepId !== undefined && input.verifiedStepId === input.nodeId ? { nodeId: input.nodeId } : {}),
-      });
-      if (!authorized.ok) return refuse(i + 1, authorized.error);
-      target = authorized.target;
-      reviewed = authorized.reviewed;
-      const envelope = artifactWriteRefusal(
-        {
-          objectType: authorized.target.objectTypeId,
-          expectedAcceptMimes: authorized.target.acceptedFileMimeTypes,
-          typedData: member.typedData,
-          title: titles[i]!,
-          originKind: authorized.reviewed ? "live_generator" : "agent_generated",
-        },
-        artifactWriteFactsOfContent(member.content, input.mime),
-      );
-      if (envelope !== null) return refuse(i + 1, envelope);
-    }
-    if (target === null) return refuse(1, "no write target resolved");
-    const gate = await writeGateRefusal({
+  // 1. Every member, before anything is written.
+  let target: { objectTypeId: string; acceptedFileMimeTypes: string[] } | null = null;
+  let reviewed = false;
+  for (const [i, member] of input.members.entries()) {
+    if (titles[i]!.length === 0) return refuse(i + 1, "title must be a non-empty string");
+    const authorized = await authorizeToolMaterializeWrite({
       orgId: input.orgId,
-      extension: input.extension,
-      mime: input.mime,
-      resolvedTarget: target,
-      mimeDescription: "the call declared MIME",
-    });
-    if (gate !== null) return refuse(1, gate);
-
-    // 2. A set this run already filed for this node: answer it, or refuse the difference.
-    const stored = await readToolSetRows({
-      orgId: input.orgId,
-      runId: input.runId,
-      nodeId: input.nodeId,
-      extension: input.extension,
-    });
-    const compareWithStored = async (read: typeof stored): Promise<ToolArtifactSetResult | null> => {
-      if (!read.header) return null;
-      const at = new Map(read.members.map((r) => [r.outputId, r]));
-      const problems: string[] = [];
-      let firstDiffering: number | undefined;
-      const note = (member: number, what: string) => {
-        problems.push(`member ${member}: ${what}`);
-        firstDiffering ??= member;
-      };
-      for (let i = 0; i < n; i++) {
-        const row = at.get(toolSetOutputId(input.nodeId, i + 1));
-        if (!row || row.contentHash !== hashes[i]) note(i + 1, "bytes");
-      }
-      if (read.members.length !== n) problems.push(`count (filed ${read.members.length}, call ${n})`);
-      if (problems.length === 0) {
-        for (let i = 0; i < n; i++) {
-          const row = at.get(toolSetOutputId(input.nodeId, i + 1))!;
-          const what = describeDifferences(
-            await reuseDifferences({
-              orgId: input.orgId,
-              artifactId: row.artifactId,
-              objectTypeId: target!.objectTypeId,
-              title: titles[i]!,
-              typedData: input.members[i]!.typedData ?? {},
-              mustCarry: Object.keys(input.members[i]!.typedData ?? {}),
-              exact: true,
-            }),
-          );
-          if (what !== null) note(i + 1, what);
-        }
-      }
-      if (problems.length > 0) {
-        return {
-          ok: false,
-          code: MATERIALIZE_LIST_SET_DIFFERS,
-          ...(firstDiffering !== undefined ? { failedMember: firstDiffering } : {}),
-          error:
-            `${MATERIALIZE_LIST_SET_DIFFERS}: this run already filed a set for this node and this call is not that set ` +
-            `(${problems.join("; ")}); it was not changed and nothing was filed. File the corrected values in a new run`,
-        };
-      }
-      return {
-        ok: true,
-        deduped: true,
-        artifacts: Array.from({ length: n }, (_, i) => {
-          const row = at.get(toolSetOutputId(input.nodeId, i + 1))!;
-          return { artifactId: row.artifactId, representationRevisionId: row.representationRevisionId };
-        }),
-      };
-    };
-    const already = await compareWithStored(stored);
-    if (already !== null) return already;
-
-    // 3. One unit: every blob, then ONE transaction that writes every member AND the set's ledger rows
-    // (a header and one row per member, already finalized). The set read above is a courtesy, not the
-    // guard: the header's unique key (run, node, extension; no hash, no position) is. A call that filed a
-    // different set meanwhile makes this transaction fail on that key and roll back as a whole.
-    const ownership = await resolveRunScopeOwnership({
       templateId: input.templateId,
-      runId: input.runId,
-      orgId: input.orgId,
+      packageVersion: input.packageVersion,
+      extension: input.extension,
+      objectTypeId: input.objectTypeId,
+      mime: input.mime,
+      content: member.content,
+      // cinatra#3035: the review is read only for the verified calling step.
+      ...(input.verifiedStepId !== undefined && input.verifiedStepId === input.nodeId ? { nodeId: input.nodeId } : {}),
     });
-    let created: Array<{ artifactId: string; representationRevisionId: string }>;
-    try {
-      created = await createSemanticArtifacts(
-        input.members.map((member, i) =>
-          claimedCreateInput({
+    if (!authorized.ok) return refuse(i + 1, authorized.error);
+    target = authorized.target;
+    reviewed = authorized.reviewed;
+    const envelope = artifactWriteRefusal(
+      {
+        objectType: authorized.target.objectTypeId,
+        expectedAcceptMimes: authorized.target.acceptedFileMimeTypes,
+        typedData: member.typedData,
+        title: titles[i]!,
+        originKind: authorized.reviewed ? "live_generator" : "agent_generated",
+      },
+      artifactWriteFactsOfContent(member.content, input.mime),
+    );
+    if (envelope !== null) return refuse(i + 1, envelope);
+  }
+  if (target === null) return refuse(1, "no write target resolved");
+  const gate = await writeGateRefusal({
+    orgId: input.orgId,
+    extension: input.extension,
+    mime: input.mime,
+    resolvedTarget: target,
+    mimeDescription: "the call declared MIME",
+  });
+  if (gate !== null) return refuse(1, gate);
+
+  // 2. A set this run already filed for this node: answer it, or refuse the difference.
+  const stored = await readToolSetRows({
+    orgId: input.orgId,
+    runId: input.runId,
+    nodeId: input.nodeId,
+    extension: input.extension,
+  });
+  const compareWithStored = async (read: typeof stored): Promise<ToolArtifactSetResult | null> => {
+    if (!read.header) return null;
+    const at = new Map(read.members.map((r) => [r.outputId, r]));
+    const problems: string[] = [];
+    let firstDiffering: number | undefined;
+    const note = (member: number, what: string) => {
+      problems.push(`member ${member}: ${what}`);
+      firstDiffering ??= member;
+    };
+    for (let i = 0; i < n; i++) {
+      const row = at.get(toolSetOutputId(input.nodeId, i + 1));
+      if (!row || row.contentHash !== hashes[i]) note(i + 1, "bytes");
+    }
+    if (read.members.length !== n) problems.push(`count (filed ${read.members.length}, call ${n})`);
+    if (problems.length === 0) {
+      for (let i = 0; i < n; i++) {
+        const row = at.get(toolSetOutputId(input.nodeId, i + 1))!;
+        const what = describeDifferences(
+          await reuseDifferences({
             orgId: input.orgId,
-            runId: input.runId,
-            createdBy: input.createdBy,
-            extension: input.extension,
+            artifactId: row.artifactId,
+            objectTypeId: target!.objectTypeId,
             title: titles[i]!,
-            mime: input.mime,
-            content: member.content,
-            ownership,
-            resolvedTarget: target!,
-            originKind: reviewed ? "live_generator" : undefined,
-            typedData: member.typedData,
-            ledgerQueries: (ids) =>
-              buildToolSetRowQueries({
-                orgId: input.orgId,
-                runId: input.runId,
-                nodeId: input.nodeId,
-                extension: input.extension,
-                verifiedStepId: input.verifiedStepId ?? null,
-                position: i + 1,
-                contentHash: hashes[i]!,
-                artifactId: ids.artifactId,
-                representationRevisionId: ids.representationRevisionId,
-              }),
+            typedData: input.members[i]!.typedData ?? {},
+            mustCarry: Object.keys(input.members[i]!.typedData ?? {}),
+            exact: true,
           }),
-        ),
-      );
-    } catch (err) {
-      // Another call filed this node's set first: the whole transaction rolled back, nothing of this call
-      // exists. The set that won decides: an identical call is answered with it, a different one refused.
-      if (isToolSetIdentityConflict(err)) {
-        const winner = await compareWithStored(
-          await readToolSetRows({ orgId: input.orgId, runId: input.runId, nodeId: input.nodeId, extension: input.extension }),
         );
-        if (winner !== null) return winner;
-        return {
-          ok: false,
-          code: MATERIALIZE_LIST_SET_BUSY,
-          error: `${MATERIALIZE_LIST_SET_BUSY}: another call of this run is filing this node's set; nothing was filed by this call, retry it`,
-        };
+        if (what !== null) note(i + 1, what);
       }
+    }
+    if (problems.length > 0) {
       return {
         ok: false,
-        code: MATERIALIZE_LIST_SET_FAILED,
+        code: MATERIALIZE_LIST_SET_DIFFERS,
+        ...(firstDiffering !== undefined ? { failedMember: firstDiffering } : {}),
         error:
-          `${MATERIALIZE_LIST_SET_FAILED}: the list was not filed and nothing of it was stored (it is written as one unit): ` +
-          `${err instanceof Error ? err.message : String(err)}`,
+          `${MATERIALIZE_LIST_SET_DIFFERS}: this run already filed a set for this node and this call is not that set ` +
+          `(${problems.join("; ")}); it was not changed and nothing was filed. File the corrected values in a new run`,
       };
-    }
-    // The meaning matcher, post-commit, best-effort, as for a single filing.
-    const { enqueueArtifactMatchRun } = await import("./matcher-enqueue");
-    for (const artifact of created) {
-      await enqueueArtifactMatchRun({
-        orgId: input.orgId,
-        artifactId: artifact.artifactId,
-        representationRevisionId: artifact.representationRevisionId,
-        createdByRunId: input.runId,
-      });
     }
     return {
       ok: true,
-      deduped: false,
-      artifacts: created.map((c) => ({ artifactId: c.artifactId, representationRevisionId: c.representationRevisionId })),
+      deduped: true,
+      artifacts: Array.from({ length: n }, (_, i) => {
+        const row = at.get(toolSetOutputId(input.nodeId, i + 1))!;
+        return { artifactId: row.artifactId, representationRevisionId: row.representationRevisionId };
+      }),
     };
+  };
+  const already = await compareWithStored(stored);
+  if (already !== null) return already;
+
+  // 3. One unit: every blob, then ONE transaction that writes every member AND the set's ledger rows
+  // (a header and one row per member, already finalized). The set read above is a courtesy, not the
+  // guard: the header's unique key (run, node, extension; no hash, no position) is. A call that filed a
+  // different set meanwhile makes this transaction fail on that key and roll back as a whole.
+  const ownership = await resolveRunScopeOwnership({
+    templateId: input.templateId,
+    runId: input.runId,
+    orgId: input.orgId,
+  });
+  let created: Array<{ artifactId: string; representationRevisionId: string }>;
+  try {
+    created = await createSemanticArtifacts(
+      input.members.map((member, i) =>
+        claimedCreateInput({
+          orgId: input.orgId,
+          runId: input.runId,
+          createdBy: input.createdBy,
+          extension: input.extension,
+          title: titles[i]!,
+          mime: input.mime,
+          content: member.content,
+          ownership,
+          resolvedTarget: target!,
+          originKind: reviewed ? "live_generator" : undefined,
+          typedData: member.typedData,
+          ledgerQueries: (ids) =>
+            buildToolSetRowQueries({
+              orgId: input.orgId,
+              runId: input.runId,
+              nodeId: input.nodeId,
+              extension: input.extension,
+              verifiedStepId: input.verifiedStepId ?? null,
+              position: i + 1,
+              contentHash: hashes[i]!,
+              artifactId: ids.artifactId,
+              representationRevisionId: ids.representationRevisionId,
+            }),
+        }),
+      ),
+    );
   } catch (err) {
-    return {
-      ok: false,
-      code: MATERIALIZE_LIST_SET_FAILED,
-      error: `${MATERIALIZE_LIST_SET_FAILED}: the list was not filed: ${err instanceof Error ? err.message : String(err)}`,
-    };
+    // Another call filed this node's set first: the whole transaction rolled back, nothing of this call
+    // exists. The set that won decides: an identical call is answered with it, a different one refused.
+    if (isToolSetIdentityConflict(err)) {
+      const winner = await compareWithStored(
+        await readToolSetRows({ orgId: input.orgId, runId: input.runId, nodeId: input.nodeId, extension: input.extension }),
+      );
+      if (winner !== null) return winner;
+      return {
+        ok: false,
+        code: MATERIALIZE_LIST_SET_BUSY,
+        error: `${MATERIALIZE_LIST_SET_BUSY}: another call of this run is filing this node's set; nothing was filed by this call, retry it`,
+      };
+    }
+    // The refusals the creation path itself names, each with a fixed text (no exception text, no figures):
+    // the write was rolled back as a whole.
+    if (err instanceof ObjectsTypeNotRegisteredError) {
+      return {
+        ok: false,
+        code: MATERIALIZE_LIST_MEMBER_REFUSED,
+        error: `artifact_materialize list was not filed: ${err.message} — nothing was filed`,
+      };
+    }
+    if (err instanceof ArtifactQuotaExceededError) {
+      return {
+        ok: false,
+        code: MATERIALIZE_LIST_QUOTA_EXCEEDED,
+        error: `${MATERIALIZE_LIST_QUOTA_EXCEEDED}: the organization's artifact storage quota would be exceeded; nothing was filed`,
+      };
+    }
+    if (err instanceof BlobTooLargeError) {
+      return {
+        ok: false,
+        code: MATERIALIZE_LIST_MEMBER_REFUSED,
+        error: "artifact_materialize list was not filed: a member is larger than the artifact size limit — nothing was filed",
+      };
+    }
+    // Any other fault (storage, database, a bug) is not a refusal of this call: it propagates to the route's
+    // fixed boundary, which answers one fixed sentence and logs the failure without its text.
+    throw err;
   }
+  // The meaning matcher, post-commit, best-effort, as for a single filing.
+  const { enqueueArtifactMatchRun } = await import("./matcher-enqueue");
+  for (const artifact of created) {
+    await enqueueArtifactMatchRun({
+      orgId: input.orgId,
+      artifactId: artifact.artifactId,
+      representationRevisionId: artifact.representationRevisionId,
+      createdByRunId: input.runId,
+    });
+  }
+  return {
+    ok: true,
+    deduped: false,
+    artifacts: created.map((c) => ({ artifactId: c.artifactId, representationRevisionId: c.representationRevisionId })),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -2242,11 +2257,21 @@ export async function materializeFanoutMessageRevision(input: {
     if (own) {
       return (await admit(own.artifactId)) ?? { ok: true, ...own, deduped: true };
     }
-    // A mid-run body not yet bound to another message is bound to this one.
-    const prefiled = await findFinalizedMidRunMaterialization(messageKey);
-    if (prefiled) {
+    // A mid-run body not yet bound to another message is bound to this one. Two bodies of a run may share
+    // their bytes (the members of a list are separate artifacts by position), so the candidates are taken
+    // in turn: the first one that is of this message's type and title and carries its correlation is bound;
+    // when none is, the first candidate's difference is the refusal. Nothing is written to any of them.
+    const considered: string[] = [];
+    let firstRefusal: ToolArtifactMaterialization | null = null;
+    for (;;) {
+      const prefiled = await findFinalizedMidRunMaterialization({ ...messageKey, excludeArtifactIds: [...considered] });
+      if (!prefiled || considered.includes(prefiled.artifactId)) break;
+      considered.push(prefiled.artifactId);
       const refused = await admit(prefiled.artifactId);
-      if (refused) return refused;
+      if (refused) {
+        firstRefusal ??= refused;
+        continue;
+      }
       await recordFanoutReuseMaterialization({
         ...messageKey,
         outputId: input.outputId,
@@ -2254,6 +2279,7 @@ export async function materializeFanoutMessageRevision(input: {
       });
       return { ok: true, ...prefiled, deduped: true };
     }
+    if (firstRefusal) return firstRefusal;
 
     return await writeClaimedArtifact({
       runId: input.runId,

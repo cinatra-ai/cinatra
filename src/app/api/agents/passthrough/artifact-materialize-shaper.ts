@@ -100,20 +100,6 @@ function requireMemberFieldName(raw: Record<string, unknown>, field: string): st
   return value;
 }
 
-/**
- * The key two members collide on: their content as UTF-8 bytes, which is what
- * the ledger hashes and the store writes. JavaScript strings that differ can
- * encode to the same bytes (a lone surrogate encodes as U+FFFD), so the bytes,
- * not the strings, are compared; the round trip yields one string per byte
- * sequence. The decoder keeps a leading byte order mark (`ignoreBOM`): by
- * default it would drop it, and two members that differ only in that mark
- * have different bytes and are two artifacts.
- */
-const UTF8_KEY_DECODER = new TextDecoder("utf-8", { ignoreBOM: true });
-function utf8Key(content: string): string {
-  return UTF8_KEY_DECODER.decode(new TextEncoder().encode(content));
-}
-
 function requireNonEmptyString(
   raw: Record<string, unknown>,
   field: string,
@@ -278,9 +264,10 @@ export function shapeArtifactMaterializeInput(
  * Refused: one field without the other; a list combined with an append or with
  * `contentJsonField`, or with a top-level title; a content that is not a JSON
  * array; an empty list or one over the bound; a member that is not an object,
- * whose content is missing or not a string, or whose title is missing or blank;
- * two members with the same UTF-8 content bytes (they would collapse into one
- * artifact, and the review plan refuses one target named twice).
+ * whose content is missing or not a string, or whose title is missing or blank.
+ * Two members may have the same bytes: a member is an artifact of its own by its
+ * position in the set (the ledger's key names the position), each has its own
+ * review target, and the blob store keeps the shared bytes once.
  */
 function shapeListMembers(
   raw: Record<string, unknown>,
@@ -335,7 +322,6 @@ function shapeListMembers(
       `artifact_materialize input.content has ${parsed.length} members; a list call files at most ${MAX_MATERIALIZE_LIST_MEMBERS}`,
     );
   }
-  const seen = new Map<string, number>();
   return parsed.map((member: unknown, index) => {
     const where = `artifact_materialize input.content member ${index + 1}`;
     if (typeof member !== "object" || member === null || Array.isArray(member)) {
@@ -378,15 +364,6 @@ function shapeListMembers(
     } else if (listData?.runIdField && Object.prototype.hasOwnProperty.call(record, listData.runIdField)) {
       throw new Error(`${where} must not carry the field "${listData.runIdField}" (its value is stamped by the call)`);
     }
-    const key = utf8Key(content);
-    const earlier = seen.get(key);
-    if (earlier !== undefined) {
-      throw new Error(
-        `${where} has the same content bytes as member ${earlier + 1} — the two would be one artifact, ` +
-          "and a review names each artifact once",
-      );
-    }
-    seen.set(key, index);
     return { title: title.trim(), content, ...(data ? { data } : {}) };
   });
 }

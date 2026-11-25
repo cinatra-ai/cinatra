@@ -339,6 +339,7 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
     expect(second.every((o) => o.ok && o.deduped)).toBe(true);
   });
 
+  // red-first-expect: to be called with arguments
   it("B1 a fan-out over a body already filed under the same identity key returns that artifact and writes no second one", async () => {
     storedObjects.set("prefiled-1", stored(fullData(MESSAGES[0])));
     findFinalizedMidRunMaterializationMock.mockResolvedValue({
@@ -362,6 +363,7 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
       runId: "run-1",
       extension: EXT,
       contentHash: sha256("Body one"),
+      excludeArtifactIds: [],
     });
     // The reuse is bound to the message; the retry reads that row first.
     expect(recordFanoutReuseMaterializationMock).toHaveBeenCalledTimes(1);
@@ -570,6 +572,7 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
     expect(createSemanticArtifactMock).toHaveBeenCalledTimes(1);
   });
 
+  // red-first-expect: to deeply equal
   it("L1 the ledger reads a message's own row, skips a mid-run body bound to another message, and binds a reuse", async () => {
     const ledger = await vi.importActual<typeof import("../materialization-ledger")>(
       "../materialization-ledger",
@@ -586,7 +589,7 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
     const [midSql, midParams] = poolQueryMock.mock.calls[0] as [string, unknown[]];
     expect(midSql).toMatch(/m\.path IN \('materialize_tool', 'end_node_binding'\)/);
     expect(midSql).toMatch(/NOT EXISTS \([\s\S]*f\.path = 'email_fanout'[\s\S]*f\.artifact_id = m\.artifact_id/);
-    expect(midParams).toEqual(["run-1", EXT, "h", "org-a"]);
+    expect(midParams).toEqual(["run-1", EXT, "h", "org-a", []]);
 
     await ledger.findFinalizedFanoutMessageMaterialization({
       orgId: "org-a",

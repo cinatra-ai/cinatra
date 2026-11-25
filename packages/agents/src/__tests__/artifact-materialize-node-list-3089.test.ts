@@ -6,6 +6,8 @@ import { describe, it, expect } from "vitest";
 
 import {
   ARTIFACT_MATERIALIZE_TOOL,
+  collectArtifactBindingsFromOasDocument,
+  collectArtifactImageNodesFromOasDocument,
   collectArtifactMaterializeNodesFromOasDocument,
   readApiNodeDataObject,
   readMaterializeListDataDeclaration,
@@ -120,14 +122,49 @@ describe("collectArtifactMaterializeNodesFromOasDocument — list mode (cinatra#
     ]);
   });
 
-  // red-first-expect: to contain 'a node id may not begin with
+  // red-first-expect: to contain 'a node id or an output name may not
   it.each([
     ["an object data block", false],
     ["a JSON-text data block", true],
   ])("refuses a node id in the ledger namespace of a list filing's rows, in %s", (_name, dataAsText) => {
     const result = collect(listInput({ node_id: 'cinatra:set/"file_drafts"/1' }), {}, dataAsText);
     expect(result.nodes).toEqual([]);
-    expect(result.errors.join("\n")).toContain('a node id may not begin with "cinatra:set/"');
+    expect(result.errors.join("\n")).toContain('a node id or an output name may not begin with "cinatra:set/"');
+  });
+
+  // red-first-expect: to deeply equal [
+  it.each([
+    ["a bound output named inside the namespace", 'cinatra:set/"drafts"/1'],
+    ["a bound output named with the bare prefix", "cinatra:set/"],
+  ])("refuses %s: an end output's name is an output id of the ledger too", (_n, title) => {
+    const doc = {
+      component_type: "Flow",
+      $referenced_components: {
+        end: {
+          component_type: "EndNode", id: "end", name: "End",
+          outputs: [{ title, type: "string", default: "", cinatra: { artifact: { extension: EXT, titleFrom: "t", contentFrom: title, declaredMime: "text/markdown" } } }],
+        },
+      },
+    };
+    const result = collectArtifactBindingsFromOasDocument(doc, { produces: [EXT] });
+    expect(result.bindings).toEqual([]);
+    expect(result.errors).toEqual([expect.stringContaining('a node id or an output name may not begin with "cinatra:set/"')]);
+  });
+
+  // red-first-expect: to deeply equal []
+  it.each(["artifact_image_generate", "artifact_page_capture"])("resolves no %s node whose id is in the namespace", (tool) => {
+    const nodeAt = (id: string) => ({
+      component_type: "Flow",
+      $referenced_components: {
+        [id]: {
+          component_type: "ApiNode", id, name: id,
+          url: "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+          data: { tool, input: { extension: EXT, node_id: id, title: "T", prompt: "p", url: "https://example.com" } },
+        },
+      },
+    });
+    expect(collectArtifactImageNodesFromOasDocument(nodeAt("pictures"), { produces: [EXT] }).nodes).toHaveLength(1);
+    expect(collectArtifactImageNodesFromOasDocument(nodeAt('cinatra:set/"pictures"/1'), { produces: [EXT] }).nodes).toEqual([]);
   });
 
   // red-first-expect: readMaterializeListDataDeclaration) is not a function

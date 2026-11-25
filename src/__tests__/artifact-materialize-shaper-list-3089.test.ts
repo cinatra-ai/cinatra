@@ -85,19 +85,19 @@ describe("shapeArtifactMaterializeInput — list mode (cinatra#3089)", () => {
     ["a member without the content field", [{ subject: "s" }], 'member 1 field "body" must be a string (field missing'],
     ["a member with non-string content", [{ subject: "s", body: { html: "x" } }], 'member 1 field "body" must be a string (got object'],
     ["a member with a blank title", [{ subject: "  ", body: "b" }], 'member 1 field "subject" must be a non-empty string'],
-    ["two members with the same bytes", [{ subject: "a", body: "same" }, { subject: "b", body: "same" }], "member 2 has the same content bytes as member 1"],
   ])("refuses %s", (_name, list, message) => {
     expect(() => shapeArtifactMaterializeInput(membersOf(list as unknown[]))).toThrow(message);
   });
 
-  // red-first-expect: but got 'artifact_materialize input.title must
+  // red-first-expect: input.title must be a non-empty string
   it.each([
-    ["a lone surrogate and U+FFFD", "a\uD800b", "a\uFFFDb"],
-    ["two different lone surrogates", "\uDC00", "\uD801"],
-  ])("refuses two members whose strings differ but encode to the same UTF-8 bytes: %s", (_name, first, second) => {
-    expect(new TextEncoder().encode(first)).toEqual(new TextEncoder().encode(second));
-    const list = [{ subject: "a", body: first }, { subject: "b", body: second }];
-    expect(() => shapeArtifactMaterializeInput(membersOf(list))).toThrow("member 2 has the same content bytes as member 1");
+    ["the same bytes and different titles", [{ subject: "a", body: "same" }, { subject: "b", body: "same" }]],
+    ["the same bytes, titles and fields (a fully identical member)", [{ subject: "a", body: "same" }, { subject: "a", body: "same" }]],
+    ["strings that differ but encode to the same UTF-8 bytes", [{ subject: "a", body: "a\uD800b" }, { subject: "b", body: "a\uFFFDb" }]],
+  ])("takes two members with %s: a member is an artifact of its own by its position", (_name, list) => {
+    const shaped = shapeArtifactMaterializeInput(membersOf(list));
+    expect(shaped.members).toHaveLength(2);
+    expect(shaped.members!.map((m) => m.title)).toEqual([list[0]!.subject, list[1]!.subject]);
   });
 
   // red-first-expect: to not throw an error but 'Error: artifact_materialize input.tit

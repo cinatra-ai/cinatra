@@ -61,41 +61,13 @@ export function isMaterializeListInputTooLarge(rawInput: Record<string, unknown>
 // list filing; this refuses the call too (an older compiled template, a
 // hand-made flow), before anything is filed.
 //
-// A Regenerate run is a lifecycle repair run whose typed request carries the
-// record its dispatch writes (`regenerateInput`); the run start refuses a
-// Regenerate run without it. The names are those of regenerate-segment.ts
-// (pinned by the route test); they are kept here so that this module stays
-// free of project imports.
+// Whether a run is a Regenerate run is read by the route from the DURABLE repair row, by the classifier the
+// run executor uses (`isRegenerateSegmentRun` in packages/agents/src/regenerate-segment.ts): a repair run whose
+// row names an intent, whose row is missing or whose row cannot be read counts as one (it fails closed). The
+// run's own request payload is no authority.
 
 export const MATERIALIZE_LIST_IN_REGENERATE_RUN = "materialize_list_in_regenerate_run";
 
 export const MATERIALIZE_LIST_IN_REGENERATE_RUN_ERROR =
   "artifact_materialize: a list call files one artifact per member, and a Regenerate run files exactly one " +
   "artifact; nothing was filed. Regenerating one member needs its own regenerate entry";
-
-const REPAIR_RUN_SOURCE_TYPE = "lifecycle_repair";
-const REPAIR_RUN_ID_PREFIX = "lifecycle-repair-run:";
-const REPAIR_REQUEST_INPUT = "lifecycleRepairRequest";
-const REGENERATE_RECORD_KEY = "regenerateInput";
-
-/** Whether `run` is a Regenerate run (or a repair run whose inputs cannot be
- *  read, which counts as one: fail closed). */
-export function isRegenerateRepairRun(run: {
-  id: string;
-  sourceType?: string | null;
-  inputParams?: unknown;
-}): boolean {
-  if (run.sourceType !== REPAIR_RUN_SOURCE_TYPE && !run.id.startsWith(REPAIR_RUN_ID_PREFIX)) return false;
-  let params: unknown = run.inputParams;
-  if (typeof params === "string") {
-    try {
-      params = JSON.parse(params);
-    } catch {
-      return true;
-    }
-  }
-  if (params === null || typeof params !== "object" || Array.isArray(params)) return true;
-  const request = (params as Record<string, unknown>)[REPAIR_REQUEST_INPUT];
-  if (request === null || typeof request !== "object" || Array.isArray(request)) return false;
-  return Object.prototype.hasOwnProperty.call(request, REGENERATE_RECORD_KEY);
-}
