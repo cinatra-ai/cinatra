@@ -114,6 +114,7 @@ vi.mock("../publish-decision-actions", () => ({
 vi.mock("@cinatra-ai/a2a", () => ({ resolveLatestWayflowGateTaskId: resolveLatestTaskMock }));
 
 import { readListStepContent } from "../list-picker-actions";
+import { listStepRefreshFor } from "../hitl-gate-submit";
 import { resolveCrmListReader } from "@/lib/crm-integration-providers";
 
 const RUN_ID = "run-3562";
@@ -301,6 +302,17 @@ describe("readListStepContent — only for the list step the run waits at", () =
     await expect(readListStepContent(RUN_ID, TASK_ID)).resolves.toMatchObject({ listsRead: "ok" });
     expect(assertNoOpenPublishDecisionMock).toHaveBeenCalledWith(RUN_ID);
     expect(resolveLatestTaskMock).toHaveBeenCalledWith(RUN_ID);
+    expect(searchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a stored step with the bare renderer id offers Try again and the server read answers", async () => {
+    readLatestGateMock.mockResolvedValueOnce(listGate({ xRenderer: "list-picker" }));
+    const refresh = listStepRefreshFor(
+      { xRenderer: "list-picker", reviewTaskId: TASK_ID, isCurrentWaitingStep: true, mode: "edit" },
+      (reviewTaskId) => readListStepContent(RUN_ID, reviewTaskId),
+    );
+    expect(typeof refresh).toBe("function");
+    await expect(refresh!()).resolves.toMatchObject({ listsRead: "ok" });
     expect(searchMock).toHaveBeenCalledTimes(1);
   });
 

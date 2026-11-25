@@ -362,6 +362,17 @@ export function withContextSelectorEnvelope(
 // ---------------------------------------------------------------------------
 
 /**
+ * Whether a gate's screen id is the list step's: the namespaced `<id>:list-picker`
+ * or the bare `list-picker` the renderer registry also accepts for stored steps
+ * (register-default-renderers.ts, the kind's `bareAliases`). The one reading the
+ * client (Try again offered, approval note lifted) and the server read
+ * (list-picker-actions.ts) share (cinatra#3562).
+ */
+export function isListStepRendererId(xRenderer: string): boolean {
+  return xRenderer === "list-picker" || xRenderer.endsWith(":list-picker");
+}
+
+/**
  * THE RUN PANEL'S MID-RUN LIST STEP (cinatra#3562): a `:list-picker` gate that
  * is not a setup gate. The run panel draws it as a mid-run gate (its picks
  * buffer for the outer Continue) and lifts its picks into the approval note;
@@ -370,7 +381,7 @@ export function withContextSelectorEnvelope(
  * field name.
  */
 export function isMidRunListStepGate(xRenderer: string, reviewTaskId: string): boolean {
-  return xRenderer.endsWith(":list-picker") && !isSetupGateTaskId(reviewTaskId);
+  return isListStepRendererId(xRenderer) && !isSetupGateTaskId(reviewTaskId);
 }
 
 /**
@@ -415,7 +426,7 @@ function toListStepReadValue(answer: unknown): ListStepReadValue {
  * surface hands a list step's renderer, or `undefined` when the step offers no
  * new read. It is handed only when ALL hold:
  *   - the gate is a mid-run list step (`isMidRunListStepGate`: the renderer id
- *     ends with `:list-picker` and it is not a setup gate; the server reads
+ *     is the list step's (`isListStepRendererId`) and it is not a setup gate; the server reads
  *     again only for a flow gate the run waits at);
  *   - the gate is the step the run waits at now (the surface says so);
  *   - the renderer is drawn in edit mode;
@@ -480,7 +491,7 @@ export function liftRendererApprovalNote(
   buffered: Record<string, unknown>,
   now: string = new Date().toISOString(),
 ): { approvalNote: string } | null {
-  if (xRenderer.endsWith(":list-picker")) {
+  if (isListStepRendererId(xRenderer)) {
     // SEVERAL PICKS (cinatra#3562): a list step declared to take several picks
     // buffers `listIds` (and `listNames`, in the same order). The snapshot then
     // carries every ticked id in the order ticked, each once, with its name.
@@ -601,7 +612,7 @@ export function applyRendererApprovalNote(
 ): Record<string, unknown> {
   if (!lift) return payload;
   const merged: Record<string, unknown> = { ...payload, ...lift };
-  if (!xRenderer.endsWith(":list-picker")) return merged;
+  if (!isListStepRendererId(xRenderer)) return merged;
   delete merged.userResponse;
   return merged;
 }

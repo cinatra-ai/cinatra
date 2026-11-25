@@ -11,6 +11,7 @@ import {
 import { actorFromSession, type ActorRoleHints } from "@/lib/authz/build-actor-context";
 import type { AgentRunRecord } from "./agent-run-record";
 import { enforceRunAccess } from "./auth-policy";
+import { isListStepRendererId } from "./hitl-gate-submit";
 import { gateTaskIsCurrentPause } from "./run-status";
 import { deriveOboCeilingChain, oboCeilingContains } from "@cinatra-ai/mcp-server/obo-ceiling";
 import { readAgentRunById, readAgentTemplateById, readLatestDurableHitlGateArtifact } from "./store";
@@ -257,9 +258,6 @@ const WAITING_RUN_STATUS = "pending_approval";
 /** A mid-run gate's review task is this prefix and the flow's gate task id. */
 const FLOW_GATE_TASK_PREFIX = "wayflow-";
 
-/** The renderer id of a list step ends with this. */
-const LIST_STEP_RENDERER_SUFFIX = ":list-picker";
-
 /** The tool the flow itself reads the lists with; its boundary decision is asked for the run. */
 const CRM_LIST_READ_TOOL = "crm_list_search";
 
@@ -381,7 +379,7 @@ async function listGateIsCurrentPause(
   gate: { reviewTaskId: string; xRenderer: string },
 ): Promise<boolean> {
   if (run.status !== WAITING_RUN_STATUS) return false;
-  if (typeof gate.xRenderer !== "string" || !gate.xRenderer.endsWith(LIST_STEP_RENDERER_SUFFIX)) {
+  if (typeof gate.xRenderer !== "string" || !isListStepRendererId(gate.xRenderer)) {
     return false;
   }
   if (!gate.reviewTaskId.startsWith(FLOW_GATE_TASK_PREFIX)) return false;
@@ -405,7 +403,7 @@ async function listGateIsCurrentPause(
  *   1. the signed-in person may read the run (the run page's rule, as
  *      `fetchAvailableLists`); a refusal is thrown before anything else is read;
  *   2. the run waits now at this list step: its newest durable gate names a
- *      renderer that ends with `:list-picker`, when a review task is named it
+ *      renderer that is the list step's (`isListStepRendererId`), when a review task is named it
  *      is that gate's, and that gate is the pause the run waits at now
  *      (`listGateIsCurrentPause`: no publish hold, the run row's gate task
  *      and the latest-task key). Otherwise the fixed refusal
