@@ -78,10 +78,16 @@ const STAGED = {
   // is drawn as the generic floor, so drupal-pointer-never-a-review-target binds no field
   // and no action and declares only error and kind:artifact. The copy also carries the
   // nine publish-card surfaces the drawing gained at design#237; no wave drives them yet.
+  // Re-copied verbatim at design@cbf0faa5 (design#272, cinatra#3459, cinatra#3092): the
+  // review card's Download PDF control is declared (download-artifact -> file-downloaded on
+  // review-card-mixed-kind and review-card-slide-deck). The copy also carries what the drawing
+  // gained since design@94d892de: the declared-step kinds of the agent input card
+  // (hitl-declared-facts, hitl-declared-rows, hitl-declared-decision, design#243) and the
+  // publish card's Allow again state and rows (design#264, design#269). No wave drives those.
   "app-lifecycle-cards.json": {
     spec: "specs/app-lifecycle-cards.html",
-    manifestSha256: "bd6c1d1dac41d36fb32af2c77468e6dca4b361117ef5bccfc2d15c06e137305a",
-    contentHash: "sha256:46f0ba32fa6cf1276b819549c7e27d48a6fc2f7027f1675a49fbabaca66847b6",
+    manifestSha256: "de99a8f5770e9916a12358dfd5ab1726be1a4ac6addacb6ddd9e2e163139c0a8",
+    contentHash: "sha256:e376b881381b046a5f925472e9aec46446f18fa1b35f27137317ece58b12cdf1",
   },
   // The artifact-review drawing, staged by cinatra#3158 (the artifact-kind
   // display wave). First-time adoption: the drawing has never been committed
@@ -100,10 +106,15 @@ const STAGED = {
   // drupal-pointer-continued-reading). The copy also carries what the drawing changed at
   // design#208 (run-list-step-loading, run-list-step-error) and design#237 (the three
   // publish steps leave the run page); no wave drives any of those surfaces.
+  // Re-copied verbatim at design@cbf0faa5 (design#272, cinatra#3459, cinatra#3092): the
+  // mixed-kind and slide-deck displays declare download-artifact -> file-downloaded, and the
+  // CMS page display draws the changed excerpts and Open in the CMS with no frame of the page
+  // (no surface of that display changes). The copy also carries the cms-fields-display surface
+  // the drawing gained at design#267; no wave drives it.
   "app-artifact-review.json": {
     spec: "specs/app-artifact-review.html",
-    manifestSha256: "1453349335ba92261a63c4405785d638fd052baece58db9333f6cc4f3cf94211",
-    contentHash: "sha256:1ab8f7739088b1ce78a171144f0d30d91ec2e9ad950bc863ed12df39d2bd07c8",
+    manifestSha256: "25ae9112d640de1b3a083e7cf81789e6c334d330643c33529775a9d1eb55add1",
+    contentHash: "sha256:c4366e50ec362c3fef1984ed87c43b068900378eb2a635a454dc247a2cd88850",
   },
 };
 

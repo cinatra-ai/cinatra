@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app-lifecycle-cards.html",
-  "contentHash": "sha256:46f0ba32fa6cf1276b819549c7e27d48a6fc2f7027f1675a49fbabaca66847b6",
+  "contentHash": "sha256:e376b881381b046a5f925472e9aec46446f18fa1b35f27137317ece58b12cdf1",
   "surfaces": [
     {
       "id": "chat-thread",
@@ -446,6 +446,64 @@
       "id": "hitl-screen-fields",
       "fields": [],
       "actions": [],
+      "states": []
+    },
+    {
+      "id": "hitl-declared-facts",
+      "fields": [
+        {
+          "field": "fact-label",
+          "source": "schema.title"
+        },
+        {
+          "field": "fact-value",
+          "source": "values.fact"
+        }
+      ],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "hitl-declared-rows",
+      "fields": [
+        {
+          "field": "rows-label",
+          "source": "schema.title"
+        },
+        {
+          "field": "column-title",
+          "source": "schema.items.properties.title"
+        },
+        {
+          "field": "row-value",
+          "source": "values.rows"
+        }
+      ],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "hitl-declared-decision",
+      "fields": [
+        {
+          "field": "decision-label",
+          "source": "schema.title"
+        },
+        {
+          "field": "answer-value",
+          "source": "schema.enum"
+        },
+        {
+          "field": "answer-label",
+          "source": "schema.x-enum-titles"
+        }
+      ],
+      "actions": [
+        {
+          "action": "choose-answer",
+          "outcome": "answer-chosen"
+        }
+      ],
       "states": []
     },
     {
@@ -957,6 +1015,10 @@
         {
           "action": "continue-review",
           "outcome": "resolved"
+        },
+        {
+          "action": "download-artifact",
+          "outcome": "file-downloaded"
         }
       ],
       "states": [
@@ -992,6 +1054,10 @@
         {
           "action": "continue-review",
           "outcome": "resolved"
+        },
+        {
+          "action": "download-artifact",
+          "outcome": "file-downloaded"
         }
       ],
       "states": [
@@ -1204,6 +1270,170 @@
       ],
       "actions": [],
       "states": []
+    },
+    {
+      "id": "publish-card-allow-again",
+      "fields": [
+        {
+          "field": "agent",
+          "source": "manifest.displayName"
+        },
+        {
+          "field": "row-label",
+          "source": "declaration.row.label"
+        },
+        {
+          "field": "row-value",
+          "source": "declaration.row.value"
+        },
+        {
+          "field": "row-label",
+          "source": "declaration.row.label"
+        },
+        {
+          "field": "row-value",
+          "source": "declaration.row.value"
+        }
+      ],
+      "actions": [
+        {
+          "action": "approve-publish",
+          "outcome": "released"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "publish-card-rows",
+      "fields": [],
+      "actions": [],
+      "states": [
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "publish-row-text",
+      "fields": [
+        {
+          "field": "row-label",
+          "source": "declaration.row.label"
+        },
+        {
+          "field": "row-value",
+          "source": "declaration.row.value"
+        }
+      ],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "publish-row-list",
+      "fields": [
+        {
+          "field": "row-label",
+          "source": "declaration.row.label"
+        },
+        {
+          "field": "row-column",
+          "source": "declaration.row.columns.label"
+        },
+        {
+          "field": "row-column",
+          "source": "declaration.row.columns.label"
+        },
+        {
+          "field": "row-column",
+          "source": "declaration.row.columns.label"
+        },
+        {
+          "field": "row-cell",
+          "source": "declaration.row.columns.field"
+        },
+        {
+          "field": "row-cell",
+          "source": "declaration.row.columns.field"
+        },
+        {
+          "field": "row-cell",
+          "source": "declaration.row.columns.field"
+        },
+        {
+          "field": "row-cell",
+          "source": "declaration.row.columns.field"
+        },
+        {
+          "field": "row-cell",
+          "source": "declaration.row.columns.field"
+        },
+        {
+          "field": "row-cell",
+          "source": "declaration.row.columns.field"
+        },
+        {
+          "field": "row-cell",
+          "source": "declaration.row.columns.field"
+        },
+        {
+          "field": "row-cell",
+          "source": "declaration.row.columns.field"
+        },
+        {
+          "field": "row-cell",
+          "source": "declaration.row.columns.field"
+        },
+        {
+          "field": "row-more",
+          "source": "declaration.row.total"
+        }
+      ],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "publish-row-items",
+      "fields": [
+        {
+          "field": "row-label",
+          "source": "declaration.row.label"
+        },
+        {
+          "field": "row-items",
+          "source": "declaration.row.input"
+        }
+      ],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "publish-row-items-refused",
+      "fields": [
+        {
+          "field": "row-label",
+          "source": "declaration.row.label"
+        }
+      ],
+      "actions": [],
+      "states": [
+        "error"
+      ]
+    },
+    {
+      "id": "publish-row-items-empty",
+      "fields": [
+        {
+          "field": "row-label",
+          "source": "declaration.row.label"
+        },
+        {
+          "field": "row-items",
+          "source": "declaration.row.input"
+        }
+      ],
+      "actions": [],
+      "states": [
+        "empty"
+      ]
     }
   ]
 }
