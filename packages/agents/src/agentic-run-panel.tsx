@@ -2233,7 +2233,9 @@ export function AgenticRunPanel({
     /** cinatra#3380 — the schema whose declared keys the renderer's buffer
      *  answers: each one it wrote is sent as written, over the host fields. */
     declaredSchema?: Record<string, unknown> | null;
-  }): ReactNode => effectiveHitlContext && (
+  }): ReactNode => effectiveHitlContext &&
+    // A retired step (`hitlStepScreenIsAnswerable`) gets no Continue or Reject.
+    hitlStepScreenIsAnswerable(effectiveHitlContext.xRenderer) && (
     <div className="flex justify-end items-center gap-2 pt-2 border-t border-line">
       {opts?.withReject ? (
         <Button

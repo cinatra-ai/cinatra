@@ -140,6 +140,7 @@ const gateId = vi.hoisted(() => ({ current: "" }));
 const gateShape = vi.hoisted(() => ({
   schema: null as Record<string, unknown> | null,
   fieldName: undefined as string | undefined,
+  values: {} as Record<string, unknown>,
 }));
 
 vi.mock("../use-ag-ui-run-stream", () => ({
@@ -155,7 +156,7 @@ vi.mock("../use-ag-ui-run-stream", () => ({
       },
       xRenderer: gateId.current,
       fieldName: gateShape.fieldName,
-      values: {},
+      values: gateShape.values,
       reviewTaskId: "wayflow-task-dropped",
     },
     streamedText: "",
@@ -181,6 +182,7 @@ afterEach(() => {
   gateId.current = FLOOR_ID;
   gateShape.schema = null;
   gateShape.fieldName = undefined;
+  gateShape.values = {};
 });
 
 function mountPanel(AgenticRunPanel: typeof import("../agentic-run-panel").AgenticRunPanel) {
@@ -208,5 +210,17 @@ describe("AgenticRunPanel — a tombstoned gate stays unanswerable", () => {
       cleanup();
     }
   });
-});
 
+  // red-first-expect: to have a length of +0 but got 1
+  it("a tombstoned step whose values carry a presentation hint shows no Continue and no Reject", async () => {
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    gateId.current = "@cinatra/email-reviewer-agent:output";
+    gateShape.values = {
+      presentation: { type: "card_list", title: "Review drafts", items: [{ title: "Draft A", description: "Body A" }] },
+    };
+    mountPanel(AgenticRunPanel);
+    await waitFor(() => expect(document.body.textContent ?? "").toMatch(/Review drafts/));
+    expect(continues()).toHaveLength(0);
+    expect(Array.from(document.querySelectorAll("button")).filter((b) => /Reject/.test(b.textContent ?? ""))).toHaveLength(0);
+  });
+});
