@@ -66,7 +66,7 @@ function subflow(id: string, gates: Array<Record<string, unknown>>) {
 }
 
 type GateStep = Record<string, unknown>;
-function flowNode(id: string, subflowRef: string, pkg: string, gateSteps?: GateStep[]) {
+function flowNode(id: string, subflowRef: string, pkg: string, gateSteps?: unknown[]) {
   return {
     component_type: "FlowNode",
     id,
@@ -87,7 +87,7 @@ const DRAFTS_STEP: GateStep = {
 
 type Parts = {
   draftsGates?: Array<Record<string, unknown>>;
-  draftsGateSteps?: GateStep[] | undefined;
+  draftsGateSteps?: unknown[] | undefined;
   startInputs?: string[];
 };
 
@@ -275,5 +275,61 @@ describe("cinatra#3089 — an embedded child's artifact-review gate", () => {
   it("refuses a flow whose own run input has the name of the marked input", async () => {
     const error = await compileError({ startInputs: ["senderName", "reviewTargets"] });
     expect(error).toContain("ARTIFACT_REVIEW_GATE_INPUT_SHADOWED");
+  });
+
+  // The context decision reads the renderer the compiled step carries: the
+  // field's inputRenderers entry first, then the gate's own renderer.
+  it("a marked gate whose own renderer is a context renderer but whose field renderer is a normal one compiles with the marker", async () => {
+    const steps = await compileSteps({
+      draftsGates: [
+        markedGate("drafts-approval_gate", {
+          renderer: "@test/drafting:context-selector",
+          inputRenderers: { userResponse: "@test/drafting:own-review" },
+        }),
+      ],
+    });
+    const drafts = byName(steps, "Review drafts");
+    // red-first-expect: expected undefined to be 'reviewTargets'
+    expect(drafts.artifactReviewTargetsInput).toBe("reviewTargets");
+    expect(drafts.xRenderer).toBe("@test/drafting:own-review");
+    expect(drafts.firesRendererGate).toBeUndefined();
+  });
+
+  it("a marked gate whose field renderer is a context renderer is refused, whatever its own renderer is", async () => {
+    const error = await compileError({
+      draftsGates: [
+        markedGate("drafts-approval_gate", {
+          renderer: "@test/drafting:own-review",
+          inputRenderers: { userResponse: "@test/drafting:context-selector" },
+        }),
+      ],
+    });
+    expect(error).toContain("ARTIFACT_REVIEW_GATE_NOT_A_PAUSE");
+    expect(error).toContain('"drafts_flow"');
+  });
+
+  it("refuses a marked gate whose gateStep entry is not an object", async () => {
+    for (const entry of [null, "Review drafts", 7, true, []]) {
+      const error = await compileError({ draftsGateSteps: [entry] });
+      expect(error).toContain("ARTIFACT_REVIEW_GATE_AMBIGUOUS");
+      expect(error).toContain('"drafts_flow"');
+    }
+  });
+
+  it("a marked gate with an empty gateStep object compiles with the marker", async () => {
+    const steps = await compileSteps({ draftsGateSteps: [{}] });
+    const drafts = byName(steps, "drafts_flow");
+    // red-first-expect: expected undefined to be 'reviewTargets'
+    expect(drafts.artifactReviewTargetsInput).toBe("reviewTargets");
+  });
+
+  it("an unmarked child with a null or string gateStep entry compiles as on main", async () => {
+    for (const entry of [null, "Review drafts"]) {
+      const steps = await compileSteps({
+        draftsGates: [gate("drafts-approval_gate", { surfaceGateInputs: true, inputMessageSchema: SCHEMA }, ["reviewTargets"])],
+        draftsGateSteps: [entry],
+      });
+      for (const s of steps) expect(s.artifactReviewTargetsInput).toBeUndefined();
+    }
   });
 });

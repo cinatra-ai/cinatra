@@ -1422,6 +1422,9 @@ function subflowSurfaceGateInputKeys(
 // authored review gateSteps never actually pause). Scans the INLINED subflow
 // only; when the ref is absent or not inlined we return true (safe default:
 // treat as firing so a real gate is never dropped).
+function isContextGateRenderer(gateId: string, renderer: string): boolean {
+  return renderer.endsWith(":context-selector") || gateId.startsWith("ctx-");
+}
 function subflowFiresNonContextRuntimeGate(
   subflowRef: string | undefined,
   localRefs: Record<string, unknown>,
@@ -1444,8 +1447,7 @@ function subflowFiresNonContextRuntimeGate(
       const requiresApproval = cin["requiresApproval"] === true;
       const renderer = typeof cin["renderer"] === "string" ? (cin["renderer"] as string) : "";
       const nodeId = typeof node["id"] === "string" ? (node["id"] as string) : "";
-      const isContextGate = renderer.endsWith(":context-selector") || nodeId.startsWith("ctx-");
-      if (requiresApproval && !isContextGate) {
+      if (requiresApproval && !isContextGateRenderer(nodeId, renderer)) {
         fires = true;
         return;
       }
@@ -1464,7 +1466,7 @@ type InputMessageGateComponent = {
   name?: string;
   outputs?: Array<{ id?: string; title?: string }>;
   inputs?: Array<{ id?: string; title?: unknown; schema?: Record<string, unknown> }>;
-  metadata?: { cinatra?: { description?: string; inputRenderers?: Record<string, string>; renderer?: string; inputMessageSchema?: Record<string, unknown>; artifactReview?: { targetsInput?: unknown }; surfaceGateInputs?: unknown } };
+  metadata?: { cinatra?: { description?: string; inputRenderers?: Record<string, string>; renderer?: string; inputMessageSchema?: Record<string, unknown>; artifactReview?: { targetsInput?: unknown }; surfaceGateInputs?: unknown; requiresApproval?: unknown } };
 };
 function readInputMessageGateView(
   ime: InputMessageGateComponent,
@@ -1482,6 +1484,13 @@ function readInputMessageGateView(
     ime.metadata?.cinatra?.renderer ??
     SCHEMA_FIELD_FALLBACK_RENDERER_ID;
   return { field, inputSchema, renderer };
+}
+
+// A marked embedded gate is a reviewer pause when it requires approval and is
+// not a context gate, judged by the renderer its compiled step carries (the
+// resolved renderer of readInputMessageGateView), never by a second reading.
+function embeddedGateIsReviewerPause(gate: InputMessageGateComponent, gateId: string): boolean {
+  return gate.metadata?.cinatra?.requiresApproval === true && !isContextGateRenderer(gateId, readInputMessageGateView(gate, gateId).renderer);
 }
 
 // cinatra#3089: the artifact-review gate of an EMBEDDED child flow. A gate in a
@@ -1530,13 +1539,16 @@ function readEmbeddedArtifactReviewGate(
   const gate = marked[0]!;
   const gateId = typeof gate["id"] === "string" ? (gate["id"] as string) : "";
   const gateSteps = flowNode.metadata?.cinatra?.gateSteps;
-  const gateCount = Array.isArray(gateSteps)
-    ? (gateSteps[0] as { gateCount?: unknown } | undefined)?.gateCount
-    : undefined;
+  // The one gateStep must be an object (not null, not an array, not a scalar):
+  // the compiled step reads the marker only through a truthy gateStep entry.
+  const gateStep = Array.isArray(gateSteps) ? gateSteps[0] : undefined;
+  const gateStepIsObject = gateStep !== null && typeof gateStep === "object" && !Array.isArray(gateStep);
+  const gateCount = gateStepIsObject ? (gateStep as { gateCount?: unknown }).gateCount : undefined;
   if (
     gates.length !== 1 ||
     !Array.isArray(gateSteps) ||
     gateSteps.length !== 1 ||
+    !gateStepIsObject ||
     (gateCount !== undefined && gateCount !== 1)
   ) {
     return {
@@ -1546,10 +1558,10 @@ function readEmbeddedArtifactReviewGate(
         `its subflow must hold no other InputMessageNode and the FlowNode must declare exactly one gateStep with one pause`,
     };
   }
-  // The one gate must be a reviewer pause the runtime resolves to this step
-  // (subflowFiresNonContextRuntimeGate), else the step is a phantom and the
-  // review would never open.
-  if (!subflowFiresNonContextRuntimeGate(subflowRef, localRefs)) {
+  // The one gate must be a reviewer pause the runtime resolves to this step,
+  // judged by the renderer the compiled step carries, else the step is a
+  // phantom and the review would never open.
+  if (!embeddedGateIsReviewerPause(gate as InputMessageGateComponent, gateId)) {
     return {
       ok: false,
       error:
@@ -2366,7 +2378,9 @@ export async function compileOasAgentJson(opts: {
         // gateSteps become firesRendererGate:false; email-outreach's gateSteps
         // (subflows carry real reviewer InputMessageNodes) stay unset/included,
         // so its compiled policy is byte-identical.
-        if (!subflowFiresNonContextRuntimeGate(node.subflow?.$component_ref, localRefs)) {
+        // A marked gate was validated as a reviewer pause above, so it never
+        // takes this flag.
+        if (!embeddedReviewGates.has(id) && !subflowFiresNonContextRuntimeGate(node.subflow?.$component_ref, localRefs)) {
           step.firesRendererGate = false;
         }
         if (nestedGateKeys.length > 0) step.surfaceGateInputKeys = nestedGateKeys;
