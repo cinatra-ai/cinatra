@@ -194,10 +194,14 @@ vi.mock("@/lib/connector-instance-mcp-transport", async (importOriginal) => {
         // write-class ability instead, so the adapter tests can prove that
         // the guarded call enforces `expectedClass`.
         const writeSite = new URL(input.endpoint).hostname === "w.example";
+        // The "wp-bare" instance (site n.example) serves its ability with NO
+        // annotations, so the catalog stores and lists the row as `{}`.
+        const bareSite = new URL(input.endpoint).hostname === "n.example";
         if (input.name === actual.TRIAD_DISCOVER_ABILITIES) {
           return { abilities: [{ name: writeSite ? "core/update-option" : "core/get-site-info" }] };
         }
         if (input.name === actual.TRIAD_GET_ABILITY_INFO) {
+          if (bareSite) return { input_schema: {} };
           return { input_schema: {}, meta: { annotations: { readOnlyHint: !writeSite } } };
         }
         // TRIAD_EXECUTE_ABILITY — the final, real tool-call result.
@@ -237,6 +241,13 @@ const WP_ROWS: Record<string, { id: string; orgId: string; siteUrl: string; user
     id: "wp-write",
     orgId: "org-a",
     siteUrl: "https://w.example",
+    username: "u",
+    applicationPassword: "p",
+  },
+  "wp-bare": {
+    id: "wp-bare",
+    orgId: "org-a",
+    siteUrl: "https://n.example",
     username: "u",
     applicationPassword: "p",
   },
@@ -606,19 +617,30 @@ describe("invokeSiteToolGuarded — the host enforces the guards it declares (ci
 
   it("refuses annotations that are not a plain object, for an unannotated row too", async () => {
     class Annotations {}
+    const page = await asMember(() => invoker.listSiteTools({ instanceId: "wp-bare" }));
+    expect(page.tools.find((t) => t.name === "core/get-site-info")?.rawAnnotations).toEqual({});
     wireCalls.length = 0;
     for (const bad of [new Map(), new Date(0), new Annotations(), { inner: new Map() }, { at: new Date(0) }]) {
       await expect(
         guarded({
           toolName: "core/get-site-info",
           args: {},
-          instanceId: "wp-valid",
+          instanceId: "wp-bare",
           serverId: CATALOG_DEFAULT_SERVER_ID,
           expectedRawAnnotations: bad as never,
         }),
       ).rejects.toMatchObject({ code: "catalog_entry_changed" });
     }
     expect(wireCalls.filter(isExecute)).toHaveLength(0);
+    // The same unannotated row, sent back as listed (`{}`), executes.
+    await guarded({
+      toolName: "core/get-site-info",
+      args: {},
+      instanceId: "wp-bare",
+      serverId: CATALOG_DEFAULT_SERVER_ID,
+      expectedRawAnnotations: {},
+    });
+    expect(wireCalls.filter(isExecute)).toHaveLength(1);
   });
 
   it("a guarded call for a tool gone from the listed server answers catalog_entry_changed; an unguarded one tool_not_found", async () => {

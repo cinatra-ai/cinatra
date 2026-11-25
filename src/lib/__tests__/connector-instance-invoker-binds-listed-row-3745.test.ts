@@ -389,18 +389,87 @@ describe("listConnectorInstanceTools hands out copies, never the stored catalog 
     expect(again.inputSchema).toEqual({});
   });
 
-  it("a hook receives copies of the stored schema and annotations", async () => {
+  type HookInput = { inputSchema: Record<string, unknown>; rawAnnotations: Record<string, unknown> };
+  const mutatingHook = async (input: HookInput) => {
+    input.inputSchema.mutated = true;
+    input.rawAnnotations.destructiveHint = false;
+    input.rawAnnotations.readOnlyHint = true;
+    return { action: "continue" as const };
+  };
+
+  it("the destructive hook receives copies of the stored schema and annotations", async () => {
     const { deps, cache, destructiveFire } = makeDeps(
       snapshot([{ name: "core/delete-post", rawAnnotations: { destructiveHint: true } }], "rev-a"),
     );
-    const mutatingHook = async (input: { rawAnnotations: Record<string, unknown> }) => {
-      input.rawAnnotations.destructiveHint = false;
-      return { action: "continue" as const };
-    };
     destructiveFire.mockImplementation(mutatingHook as unknown as () => Promise<{ action: "continue" }>);
     await invokeConnectorInstanceTool({ connectorKey: "wordpress", toolName: "core/delete-post", args: {}, actor: ACTOR }, deps);
     expect(destructiveFire).toHaveBeenCalledTimes(1);
-    expect(cache.listForInstance("inst-1")[0]!.tools[0]!.rawAnnotations).toEqual({ destructiveHint: true });
+    const stored = cache.listForInstance("inst-1")[0]!.tools[0]!;
+    expect(stored.rawAnnotations).toEqual({ destructiveHint: true });
+    expect(stored.inputSchema).toEqual({});
+  });
+
+  it("the content-review hook receives copies of the stored schema and annotations", async () => {
+    const { deps, cache, contentReviewFire } = makeDeps(
+      snapshot([{ name: "core/update-page", rawAnnotations: { readOnlyHint: false } }], "rev-a"),
+    );
+    contentReviewFire.mockImplementation(mutatingHook as unknown as () => Promise<{ action: "continue" }>);
+    await invokeConnectorInstanceTool({ connectorKey: "wordpress", toolName: "core/update-page", args: {}, actor: ACTOR }, deps);
+    expect(contentReviewFire).toHaveBeenCalledTimes(1);
+    const stored = cache.listForInstance("inst-1")[0]!.tools[0]!;
+    expect(stored.rawAnnotations).toEqual({ readOnlyHint: false });
+    expect(stored.inputSchema).toEqual({});
+  });
+});
+
+describe("invokeConnectorInstanceTool — two rows of one name on one server (cinatra#3745)", () => {
+  // A refresh between the list and the call adds a second, write-capable row
+  // with the same name on the listed server.
+  const withDuplicate = (revision: string) =>
+    snapshot(
+      [
+        { name: READ_TOOL, rawAnnotations: { readOnlyHint: true } },
+        { name: READ_TOOL, rawAnnotations: { readOnlyHint: false } },
+      ],
+      revision,
+    );
+
+  it("a guarded call refuses when a duplicate appeared on the listed server: nothing is sent", async () => {
+    const { deps, cache, callWireTool } = makeDeps(snapshot([{ name: READ_TOOL, rawAnnotations: { readOnlyHint: true } }], "rev-a"));
+    const row = await listRow(deps, READ_TOOL);
+    cache.set("inst-1", withDuplicate("rev-b"));
+    const call = invokeConnectorInstanceTool(
+      {
+        connectorKey: "wordpress",
+        toolName: READ_TOOL,
+        args: {},
+        actor: ACTOR,
+        serverId: row.serverId,
+        expectedServerId: row.serverId,
+        expectedRawAnnotations: row.rawAnnotations,
+        expectedClass: "read",
+      },
+      deps,
+    );
+    // red-first-expect: promise resolved "{ success: true, data: { ok: 1 } }" instead of rejecting
+    await expect(call).rejects.toMatchObject({ code: "catalog_entry_changed" });
+    expect(callWireTool).not.toHaveBeenCalled();
+  });
+
+  it("an unguarded call refuses the duplicate with ambiguous_tool", async () => {
+    const { deps, callWireTool } = makeDeps(withDuplicate("rev-b"));
+    await expect(
+      invokeConnectorInstanceTool({ connectorKey: "wordpress", toolName: READ_TOOL, args: {}, actor: ACTOR }, deps),
+    ).rejects.toMatchObject({ code: "ambiguous_tool" });
+    expect(callWireTool).not.toHaveBeenCalled();
+  });
+
+  it("the listing serves both rows, identical by name and server", async () => {
+    const { deps } = makeDeps(withDuplicate("rev-b"));
+    const page = await listConnectorInstanceTools({ connectorKey: "wordpress", actor: ACTOR }, deps);
+    const rows = page.tools.filter((t) => t.name === READ_TOOL);
+    expect(rows).toHaveLength(2);
+    expect(new Set(rows.map((r) => r.serverId)).size).toBe(1);
   });
 });
 

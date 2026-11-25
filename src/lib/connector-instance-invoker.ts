@@ -866,7 +866,9 @@ export async function invokeConnectorInstanceTool(
     if (resolution.reason === "ambiguous_tool") {
       throw new InvokerError(
         "ambiguous_tool",
-        `toolName "${input.toolName}" is non-unique across enrolled servers; a serverId is required (candidates: ${resolution.candidateServerIds.join(", ")})`,
+        input.serverId
+          ? `toolName "${input.toolName}" has more than one row on server "${input.serverId}"; the call cannot name one`
+          : `toolName "${input.toolName}" is non-unique across enrolled servers; a serverId is required (candidates: ${resolution.candidateServerIds.join(", ")})`,
       );
     }
     throw new InvokerError("tool_not_found", `tool "${input.toolName}" is not present in the instance catalog`);
