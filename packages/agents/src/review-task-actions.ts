@@ -1225,20 +1225,28 @@ export async function approveReviewTaskInternal(
       // A flow with one renderer step does not map pauses by place, so nothing is
       // recorded there. A failure, or a place that is not known, is handled as the
       // mint's failure is: nothing is sent, the gate is put back.
-      if (listStepRefreshAsk !== undefined || (typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0)) {
+      // A real answer in such a flow first removes a refresh note that names this
+      // task (left by a refresh of it that was not sent): the answer moves the run
+      // on, so the next pause is a new step. A failure is handled the same way.
+      const answerHasPayload = typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0;
+      const rendererGatePolicySteps = (template.approvalPolicy?.steps ?? []) as RendererGateStepShape[];
+      const mapsPausesByPlace = rendererGatePolicySteps.filter(stepFiresRendererGate).length > 1;
+      if (listStepRefreshAsk !== undefined || answerHasPayload || mapsPausesByPlace) {
         try {
           if (listStepRefreshAsk !== undefined) {
-            const policySteps = (template.approvalPolicy?.steps ?? []) as RendererGateStepShape[];
-            if (policySteps.filter(stepFiresRendererGate).length > 1) {
+            if (mapsPausesByPlace) {
               // When the run's step list has expired, the place comes from the
               // step's durable gate record (its renderer) and the compiled steps.
               await (await import("@cinatra-ai/a2a")).rememberWayflowRendererGateRepeat(
                 run.id,
                 taskId,
-                listStepRefreshRenderer === undefined ? null : rendererGateIndexOfRenderer(policySteps, listStepRefreshRenderer),
+                listStepRefreshRenderer === undefined ? null : rendererGateIndexOfRenderer(rendererGatePolicySteps, listStepRefreshRenderer),
               );
             }
-          } else {
+          } else if (mapsPausesByPlace) {
+            await (await import("@cinatra-ai/a2a")).forgetWayflowRendererGateRepeat(run.id, taskId);
+          }
+          if (listStepRefreshAsk === undefined && answerHasPayload) {
             const { rememberAnsweredGateSubmission, rememberLatestWayflowGateTask } =
               await import("@cinatra-ai/a2a");
             // RE-ASSERT the latest-task join key to THIS answered gate before minting.
@@ -1261,6 +1269,7 @@ export async function approveReviewTaskInternal(
           // gate is put back by the status edge (#3423's release edge): the run waits
           // at this task again, its claim is cleared, and the person can answer again.
           settled = true;
+          if (listStepRefreshAsk !== undefined) await forgetUnsentRefreshNote(run.id, taskId);
           try {
             await transitionRunStatus(run.id, "running", "pending_approval", { pauseTaskId: taskId }, resumeAuthority);
           } catch (backError) {
@@ -1361,6 +1370,8 @@ export async function approveReviewTaskInternal(
     } catch (e) {
       if (settled) throw e;
       if (!dispatchStarted) {
+        // cinatra#3562: a refresh that was not sent leaves no note behind.
+        if (listStepRefreshAsk !== undefined) await forgetUnsentRefreshNote(run.id, taskId);
         // cinatra#4150: a publish-hold refusal gives the claim back and is the answer; a release that fails
         // too is logged with no run, no task and no raw error.
         if (await givePauseBackOnHoldFault(claimRef, resumeAuthority, e, "[approveReviewTaskInternal] could not release the gate claim")) throw e;
@@ -1384,6 +1395,22 @@ export async function approveReviewTaskInternal(
     `real UUID paths are not supported after review task row removal. ` +
     `Use synthetic prefix (setup-, wayflow-) for post-migration runs.`,
   );
+}
+
+/**
+ * cinatra#3562: a list step's refresh of `taskId` was not sent, and its gate is
+ * put back: its refresh note is removed if it still names `taskId`. A failure
+ * is logged and the failure being answered stays the answer: a later real
+ * answer to `taskId` removes the note before it is sent, and refuses to send
+ * when it cannot.
+ */
+async function forgetUnsentRefreshNote(runId: string, taskId: string): Promise<void> {
+  try {
+    await (await import("@cinatra-ai/a2a")).forgetWayflowRendererGateRepeat(runId, taskId);
+  } catch (error) {
+    // The first argument of a console call is a constant (cinatra#3423).
+    console.warn("[approveReviewTaskInternal] the note of a refresh that was not sent could not be removed", { runId }, error);
+  }
 }
 
 /** The steps of a WayFlow resume that can fail before its send (cinatra#4245), drawn before the caller's fence. */

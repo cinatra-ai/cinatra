@@ -609,6 +609,35 @@ export async function rememberWayflowRendererGateRepeat(
   await r.set(rendererGateRepeatKey(runId), JSON.stringify({ taskId, index }), "EX", GATE_SEQUENCE_TTL_S);
 }
 
+/** Deletes KEYS[1] only when it still holds ARGV[1] exactly; 1 when deleted, else 0. */
+const RENDERER_GATE_REPEAT_FORGET_LUA = `
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+  redis.call('DEL', KEYS[1])
+  return 1
+end
+return 0
+`;
+
+/**
+ * cinatra#3562: remove the refresh note of the renderer gate `taskId`, and only
+ * that note: a note that names another task is left as it is. Called when the
+ * refresh of `taskId` was not sent (the gate is put back), and when a real
+ * answer to `taskId` is sent (the next pause is a new step, so a note for
+ * `taskId` cannot be pending). The note is deleted only while it still holds
+ * the text read here; when another write changed it in between, it is read again.
+ * A read or write fault throws.
+ */
+export async function forgetWayflowRendererGateRepeat(runId: string, taskId: string): Promise<void> {
+  const r = getPublisher();
+  const repeatKey = rendererGateRepeatKey(runId);
+  for (let attempt = 0; attempt < RENDERER_GATE_COMMIT_ATTEMPTS; attempt += 1) {
+    const raw = await r.get(repeatKey);
+    if (raw === null || readRendererGateRepeat(raw)?.taskId !== taskId) return;
+    if (Number(await r.eval(RENDERER_GATE_REPEAT_FORGET_LUA, 1, repeatKey, raw)) === 1) return;
+  }
+  throw new Error(`the refresh note of renderer gate ${taskId} on run ${runId} was not removed: it kept changing`);
+}
+
 /**
  * #1625 (F1) — the AUTHORITATIVE, non-racing source of the CURRENT gate
  * visit's a2a task id for a run. Written UNCONDITIONALLY at each input-required

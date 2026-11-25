@@ -126,22 +126,28 @@ vi.mock("../wayflow-run-token-carrier", () => ({ mintResumeRunTokenMetadata: vi.
  * (no clock runs), and answers `ttl` as Redis does: -2 absent, -1 none.
  *
  * `eval` runs the renderer gate list's commit script (the only script these
- * flows send with three keys) step by step on the same maps, as the script
- * reads its keys and arguments, in one synchronous call, so no other command
- * runs in between (as on Redis). Any other script answers "absent" (the
- * answered-gate consume, which these tests do not exercise).
+ * flows send with three keys) and the refresh note's compare-and-delete (one
+ * key, the note's) step by step on the same maps, as the scripts read their
+ * keys and arguments, in one synchronous call, so no other command runs in
+ * between (as on Redis). Any other script answers "absent" (the answered-gate
+ * consume, which these tests do not exercise).
+ *
+ * `loseReplyOnce` names keys whose next `set` is written and then fails, as a
+ * write whose reply is lost does.
  */
 const redis = vi.hoisted(() => {
   const store = new Map<string, string>();
   const lists = new Map<string, string[]>();
   const hashes = new Map<string, Map<string, string>>();
   const ttls = new Map<string, number>();
+  const loseReplyOnce = new Set<string>();
   const has = (key: string) => store.has(key) || lists.has(key) || hashes.has(key);
   class FakeRedis {
     async set(key: string, value: string, mode?: string, seconds?: number): Promise<"OK"> {
       store.set(key, value);
       if (mode === "EX" && typeof seconds === "number") ttls.set(key, seconds);
       else ttls.delete(key);
+      if (loseReplyOnce.delete(key)) throw new Error("Connection is closed.");
       return "OK";
     }
     async get(key: string): Promise<string | null> {
@@ -179,6 +185,13 @@ const redis = vi.hoisted(() => {
       return ttls.get(key) ?? -1;
     }
     async eval(_script: string, numKeys: number, ...rest: string[]): Promise<number | string> {
+      if (numKeys === 1 && rest[0].startsWith("cinatra:wayflow:renderer-gate-repeat:")) {
+        const [noteKey, noteAsRead] = rest;
+        if (store.get(noteKey) !== noteAsRead) return 0;
+        store.delete(noteKey);
+        ttls.delete(noteKey);
+        return 1;
+      }
       if (numKeys !== 3) return "absent";
       const [listKey, noteKey, replacedKey, noteAsRead, ttl, taskId, at, refreshedTaskId, nRaw, mRaw, ...tail] = rest;
       if ((store.get(noteKey) ?? "") !== noteAsRead) return 0;
@@ -212,7 +225,7 @@ const redis = vi.hoisted(() => {
       return this;
     }
   }
-  return { store, lists, hashes, ttls, FakeRedis };
+  return { store, lists, hashes, ttls, loseReplyOnce, FakeRedis };
 });
 vi.mock("ioredis", () => ({ Redis: redis.FakeRedis, default: redis.FakeRedis }));
 
@@ -308,6 +321,7 @@ function arrange() {
   redis.lists.clear();
   redis.hashes.clear();
   redis.ttls.clear();
+  redis.loseReplyOnce.clear();
   // A refused send leaves its queued answer behind: drop it.
   sendTask.mockReset();
   durableGate.value = null;
@@ -609,5 +623,56 @@ describe("cinatra#3562 — a refreshed pause reported again keeps the next pause
       expect(redis.store.has(repeatKey)).toBe(true);
     }
     expect(redis.lists.get(RENDERER_GATES_KEY)).toEqual(["task-first-1", "task-list-1"]);
+  });
+});
+
+describe("cinatra#3562 — a refresh that was not sent, and a real answer, leave no note for the step", () => {
+  const REPEAT_KEY = `cinatra:wayflow:renderer-gate-repeat:${RUN.id}`;
+
+  it("the refresh's note is written but its reply is lost: nothing is sent, the step is put back with no note, and a pick reaches the second step", async () => {
+    await firstPause("task-list-1");
+    redis.loseReplyOnce.add(REPEAT_KEY);
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await expect(refresh("task-list-1", "task-list-2")).rejects.toThrow("Connection is closed.");
+    expect(sendTask).not.toHaveBeenCalled();
+    expect(row.status).toBe("pending_approval");
+    expect(redis.store.has(REPEAT_KEY)).toBe(false);
+
+    sendTask.mockReset();
+    await pick("task-list-1", "task-second-1");
+    expect(renderers()).toEqual([LIST_STEP_ID, SECOND_STEP_ID]);
+    expect(redis.store.has(REPEAT_KEY)).toBe(false);
+  });
+
+  it("a real answer to a step with a note left for it removes the note before it is sent, and the next pause takes the next step", async () => {
+    await firstPause("task-list-1");
+    redis.store.set(REPEAT_KEY, JSON.stringify({ taskId: "task-list-1", index: 0 }));
+    const noteAtSend: boolean[] = [];
+    sendTask.mockImplementationOnce(async () => {
+      noteAtSend.push(redis.store.has(REPEAT_KEY));
+      return pauseTask("task-second-1");
+    });
+    durableGate.value = listStepGate("task-list-1");
+    // red-first-expect: expected [ true ] to deeply equal [ false ]
+    await approveReviewTaskInternal("wayflow-task-list-1", RUN.runBy, { approved: true, userResponse: JSON.stringify({ listIds: ["list-a"], listNames: ["List A"] }) });
+    expect(noteAtSend).toEqual([false]);
+    expect(renderers()).toEqual([LIST_STEP_ID, SECOND_STEP_ID]);
+  });
+
+  it("a real answer leaves a note that names another task", async () => {
+    await firstPause("task-list-1");
+    const otherNote = JSON.stringify({ taskId: "task-other-1", index: 0 });
+    redis.store.set(REPEAT_KEY, otherNote);
+    const noteAtSend: Array<string | undefined> = [];
+    sendTask.mockImplementationOnce(async () => {
+      noteAtSend.push(redis.store.get(REPEAT_KEY));
+      throw new Error("the runtime is unreachable");
+    });
+    durableGate.value = listStepGate("task-list-1");
+    await expect(
+      approveReviewTaskInternal("wayflow-task-list-1", RUN.runBy, { approved: true, userResponse: JSON.stringify({ listIds: ["list-a"], listNames: ["List A"] }) }),
+    ).rejects.toThrow("the runtime is unreachable");
+    expect(noteAtSend).toEqual([otherNote]);
+    expect(redis.store.get(REPEAT_KEY)).toBe(otherNote);
   });
 });
