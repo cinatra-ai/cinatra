@@ -526,12 +526,13 @@ describe("invokeSiteToolGuarded — the host enforces the guards it declares (ci
     const page = await asMember(() => invoker.listSiteTools({ instanceId: "wp-valid" }));
     const row = page.tools.find((t) => t.name === "core/get-site-info");
     expect(row?.rawAnnotations).toEqual({ readOnlyHint: true });
+    expect(row?.serverId).toBe(CATALOG_DEFAULT_SERVER_ID);
 
     wireCalls.length = 0;
     const ok = await guarded({
       toolName: "core/get-site-info",
       args: {},
-      instanceId: "wp-valid",
+      instanceId: "wp-valid", serverId: CATALOG_DEFAULT_SERVER_ID,
       expectedRawAnnotations: row!.rawAnnotations,
     });
     expect(ok).toEqual({ structuredContent: { ok: true } });
@@ -539,7 +540,7 @@ describe("invokeSiteToolGuarded — the host enforces the guards it declares (ci
 
     wireCalls.length = 0;
     await expect(
-      guarded({ toolName: "core/get-site-info", args: {}, instanceId: "wp-valid", expectedRawAnnotations: { readOnlyHint: false } }),
+      guarded({ toolName: "core/get-site-info", args: {}, instanceId: "wp-valid", serverId: CATALOG_DEFAULT_SERVER_ID, expectedRawAnnotations: { readOnlyHint: false } }),
     ).rejects.toMatchObject({ code: "catalog_entry_changed" });
     expect(wireCalls.filter(isExecute)).toHaveLength(0);
   });
@@ -550,7 +551,7 @@ describe("invokeSiteToolGuarded — the host enforces the guards it declares (ci
       guarded({
         toolName: "core/update-option",
         args: {},
-        instanceId: "wp-write",
+        instanceId: "wp-write", serverId: CATALOG_DEFAULT_SERVER_ID,
         expectedRawAnnotations: { readOnlyHint: false },
         expectedClass: "read",
       }),
@@ -560,7 +561,7 @@ describe("invokeSiteToolGuarded — the host enforces the guards it declares (ci
     const ok = await guarded({
       toolName: "core/get-site-info",
       args: {},
-      instanceId: "wp-valid",
+      instanceId: "wp-valid", serverId: CATALOG_DEFAULT_SERVER_ID,
       expectedRawAnnotations: { readOnlyHint: true },
       expectedClass: "read",
     });
@@ -572,18 +573,51 @@ describe("invokeSiteToolGuarded — the host enforces the guards it declares (ci
     wireCalls.length = 0;
     for (const bad of [undefined, null, [], "x"]) {
       await expect(
-        guarded({ toolName: "core/get-site-info", args: {}, instanceId: "wp-valid", expectedRawAnnotations: bad as never }),
+        guarded({ toolName: "core/get-site-info", args: {}, instanceId: "wp-valid", serverId: CATALOG_DEFAULT_SERVER_ID, expectedRawAnnotations: bad as never }),
       ).rejects.toMatchObject({ code: "catalog_entry_changed" });
     }
     await expect(
       guarded({
         toolName: "core/get-site-info",
         args: {},
-        instanceId: "wp-valid",
+        instanceId: "wp-valid", serverId: CATALOG_DEFAULT_SERVER_ID,
         expectedRawAnnotations: { readOnlyHint: true },
         expectedClass: "write" as never,
       }),
     ).rejects.toMatchObject({ code: "catalog_entry_not_read" });
+    expect(wireCalls.filter(isExecute)).toHaveLength(0);
+  });
+
+  it("refuses a guarded call without a non-empty serverId before anything resolves", async () => {
+    wireCalls.length = 0;
+    for (const serverId of [undefined, "", 7]) {
+      await expect(
+        guarded({
+          toolName: "core/get-site-info",
+          args: {},
+          instanceId: "wp-valid",
+          serverId: serverId as never,
+          expectedRawAnnotations: { readOnlyHint: true },
+        }),
+      ).rejects.toMatchObject({ code: "guarded_server_id_required" });
+    }
+    expect(wireCalls).toHaveLength(0);
+  });
+
+  it("refuses annotations that are not a plain object, for an unannotated row too", async () => {
+    class Annotations {}
+    wireCalls.length = 0;
+    for (const bad of [new Map(), new Date(0), new Annotations(), { inner: new Map() }, { at: new Date(0) }]) {
+      await expect(
+        guarded({
+          toolName: "core/get-site-info",
+          args: {},
+          instanceId: "wp-valid",
+          serverId: CATALOG_DEFAULT_SERVER_ID,
+          expectedRawAnnotations: bad as never,
+        }),
+      ).rejects.toMatchObject({ code: "catalog_entry_changed" });
+    }
     expect(wireCalls.filter(isExecute)).toHaveLength(0);
   });
 
@@ -600,7 +634,7 @@ describe("invokeSiteToolGuarded — the host enforces the guards it declares (ci
         (olderHost as Required<HostConnectorInstanceInvokerService>).invokeSiteToolGuarded({
           toolName: "core/update-option",
           args: {},
-          instanceId: "wp-write",
+          instanceId: "wp-write", serverId: CATALOG_DEFAULT_SERVER_ID,
           expectedRawAnnotations: { readOnlyHint: true },
           expectedClass: "read",
         }),

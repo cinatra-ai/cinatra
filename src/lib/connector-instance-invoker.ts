@@ -408,6 +408,13 @@ export type InvokeConnectorInstanceToolInput = {
    * known-destructive list.
    */
   expectedClass?: "read";
+  /**
+   * cinatra#3745 — the server of the catalog row the caller checked. When
+   * present, the call is refused with `catalog_entry_changed` unless the row
+   * resolves on exactly that server (the guarded call also sends it as
+   * `serverId`, which narrows the resolution to that server).
+   */
+  expectedServerId?: string;
 };
 
 export type ListConnectorInstanceToolsInput = {
@@ -676,9 +683,20 @@ export async function acquireSnapshots(
   return served;
 }
 
+/** Whether `value` is a plain object: a non-null object whose prototype is
+ * `Object.prototype` or `null`. A `Map`, a `Date`, a class instance or an
+ * array is not. The one predicate for annotations records (cinatra#3745). */
+export function isPlainAnnotationsRecord(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object") return false;
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
 /** Canonical JSON of an annotations record: object keys sorted at every
- * depth, array order kept. A value that is not a plain object (absent, null,
- * an array, a primitive) reads as `null` here, so it never equals a record.
+ * depth, array order kept. The value and every object nested in it must be a
+ * plain object or an array; anything else (a `Map`, a `Date`, a class
+ * instance, a BigInt, a cycle) throws, and the caller refuses the call, so a
+ * value with no enumerable own keys never reads as `{}`.
  *
  * The text is written straight from the sorted own keys, never through a new
  * object: assigning a caller- or site-owned key into `{}` would run the
@@ -686,8 +704,7 @@ export async function acquireSnapshots(
  * annotation would vanish from the comparison), and an object's key order
  * puts integer-like keys first whatever the sort said. A key whose value is
  * `undefined`, a function or a symbol drops out, as in `JSON.stringify`; in an
- * array such a value reads as `null`. A value it cannot write (a BigInt, a
- * cycle) throws; the caller refuses the call. */
+ * array such a value reads as `null`. */
 function canonicalAnnotationsJson(value: unknown): string {
   const dropped = (v: unknown) => v === undefined || typeof v === "function" || typeof v === "symbol";
   const write = (v: unknown): string => {
@@ -696,18 +713,18 @@ function canonicalAnnotationsJson(value: unknown): string {
       return JSON.stringify(v);
     }
     if (Array.isArray(v)) return `[${v.map((item) => (dropped(item) ? "null" : write(item))).join(",")}]`;
-    const obj = v as Record<string, unknown>;
-    const keys = Object.keys(obj)
-      .filter((key) => !dropped(obj[key]))
+    if (!isPlainAnnotationsRecord(v)) throw new TypeError("annotation value is not a plain object");
+    const keys = Object.keys(v)
+      .filter((key) => !dropped(v[key]))
       .sort();
-    return `{${keys.map((key) => `${JSON.stringify(key)}:${write(obj[key])}`).join(",")}}`;
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${write(v[key])}`).join(",")}}`;
   };
-  const isRecord = value !== null && typeof value === "object" && !Array.isArray(value);
-  return isRecord ? write(value) : "null";
+  if (!isPlainAnnotationsRecord(value)) throw new TypeError("annotations are not a plain object");
+  return write(value);
 }
 
 /** Whether two annotations values are canonically equal; a value that cannot
- * be written never equals. */
+ * be written (see `canonicalAnnotationsJson`) never equals. */
 function sameAnnotations(a: unknown, b: unknown): boolean {
   try {
     return canonicalAnnotationsJson(a) === canonicalAnnotationsJson(b);
@@ -729,21 +746,31 @@ function sameAnnotations(a: unknown, b: unknown): boolean {
  * unannotated row as `{}` (and the list serves it as `{}`), and a defensive
  * non-object entry value also reads as `{}`, so a row listed and sent back
  * unchanged — through a JSON round trip too — is always equal. The caller's
- * value must itself be a plain object: `null`, an array or a primitive never
- * equals and is refused. A key whose value is `undefined` drops out, as it
- * does on the wire.
+ * value, and every object in it, must be a plain object (or an array inside
+ * it): `null`, an array, a primitive, a `Map`, a `Date` or a class instance
+ * never equals and is refused. A key whose value is `undefined` drops out, as
+ * it does on the wire. `expectedServerId`, when present, must equal the
+ * resolved row's server.
  *
  * Trusting the caller's values is safe: either field can only ADD a refusal,
  * never skip the policy, a hook or any other check below. A refusal executes
  * nothing, parks nothing and fires no hook.
  */
 function refuseUnboundEntry(
-  input: Pick<InvokeConnectorInstanceToolInput, "expectedRawAnnotations" | "expectedClass">,
+  input: Pick<InvokeConnectorInstanceToolInput, "expectedRawAnnotations" | "expectedClass" | "expectedServerId">,
+  serverId: string,
   name: string,
   entry: CatalogToolEntry,
 ): void {
+  if (input.expectedServerId !== undefined && input.expectedServerId !== serverId) {
+    throw new InvokerError(
+      "catalog_entry_changed",
+      "the site tool resolved on another server than the one it was listed on; list the tools again before calling it",
+    );
+  }
   if (input.expectedRawAnnotations !== undefined) {
-    const current = entry.rawAnnotations && typeof entry.rawAnnotations === "object" ? entry.rawAnnotations : {};
+    const raw: unknown = entry.rawAnnotations;
+    const current = raw === null || typeof raw !== "object" ? {} : raw;
     if (!sameAnnotations(current, input.expectedRawAnnotations)) {
       throw new InvokerError(
         "catalog_entry_changed",
@@ -818,7 +845,7 @@ export async function invokeConnectorInstanceTool(
 
   // Step 1b — bind the call to the row its caller checked (cinatra#3745):
   // BEFORE the policy, the hooks and the execution.
-  refuseUnboundEntry(input, name, entry);
+  refuseUnboundEntry(input, serverId, name, entry);
 
   // Step 2 — per-instance tool policy floor (§2.6 / §10-A3).
   const ref: ToolRef = { serverId, name };

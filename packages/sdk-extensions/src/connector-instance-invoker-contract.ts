@@ -108,13 +108,23 @@ export type SiteToolCallInput = {
  * only when every guard below holds against the row the host resolves now, and
  * otherwise refuses with nothing executed, parked or hooked.
  */
-export type GuardedSiteToolCallInput = Omit<SiteToolCallInput, "expectedRawAnnotations" | "expectedClass"> & {
+export type GuardedSiteToolCallInput = Omit<SiteToolCallInput, "serverId" | "expectedRawAnnotations" | "expectedClass"> & {
+  /**
+   * REQUIRED: the `serverId` of the `SiteToolRow` the caller listed and
+   * checked. The host refuses a guarded call without a non-empty one
+   * (`guarded_server_id_required`) before anything resolves, resolves the tool
+   * on that server only, and refuses with `catalog_entry_changed` unless the
+   * row resolves there.
+   */
+  serverId: string;
   /**
    * REQUIRED: the `rawAnnotations` of the `SiteToolRow` the caller listed and
    * checked, sent back unchanged. The host refuses with
    * `catalog_entry_changed` unless the row it resolves now carries equal
    * annotations (sorted-key deep equality; an unannotated row is listed as
-   * `{}`). A value that is not a plain object is refused.
+   * `{}`). A value that is not a plain object (prototype `Object.prototype`
+   * or `null`) is refused, and so is a nested object that is not plain or an
+   * array (a `Map`, a `Date`, a class instance).
    */
   expectedRawAnnotations: Record<string, unknown>;
   /**
@@ -229,7 +239,7 @@ export type HostConnectorInstanceInvokerService = {
    *   if (typeof guarded !== "function") {
    *     throw new Error("guarded site-tool calls are unsupported by this host");
    *   }
-   *   return guarded({ ...call, expectedRawAnnotations: row.rawAnnotations, expectedClass: "read" });
+   *   return guarded({ ...call, serverId: row.serverId, expectedRawAnnotations: row.rawAnnotations, expectedClass: "read" });
    *
    * The member is optional, so under `strict` a call without that presence
    * test does not compile; at run time, calling the absent method throws

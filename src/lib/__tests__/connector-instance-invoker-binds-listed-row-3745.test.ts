@@ -242,6 +242,93 @@ describe("invokeConnectorInstanceTool — the annotations comparison reads own k
   });
 });
 
+describe("invokeConnectorInstanceTool — only plain objects compare (cinatra#3745)", () => {
+  class Annotations {}
+  it("refuses a Map, a Date, a class instance and a nested Map or Date for an unannotated row", async () => {
+    for (const bad of [new Map(), new Date(0), new Annotations(), { inner: new Map() }, { at: [new Date(0)] }]) {
+      const { deps, callWireTool } = makeDeps(snapshot([{ name: READ_TOOL }], "rev-a"));
+      const call = invokeConnectorInstanceTool(
+        { connectorKey: "wordpress", toolName: READ_TOOL, args: {}, actor: ACTOR, expectedRawAnnotations: bad as never },
+        deps,
+      );
+      // red-first-expect: promise resolved "{ success: true, data: { ok: 1 } }" instead of rejecting
+      await expect(call).rejects.toMatchObject({ code: "catalog_entry_changed" });
+      expect(callWireTool).not.toHaveBeenCalled();
+    }
+  });
+
+  it("accepts a null-prototype record equal to the row", async () => {
+    const listed = Object.assign(Object.create(null) as Record<string, unknown>, { readOnlyHint: true });
+    const { deps, callWireTool } = makeDeps(snapshot([{ name: READ_TOOL, rawAnnotations: { readOnlyHint: true } }], "rev-a"));
+    await invokeConnectorInstanceTool(
+      { connectorKey: "wordpress", toolName: READ_TOOL, args: {}, actor: ACTOR, expectedRawAnnotations: listed },
+      deps,
+    );
+    expect(callWireTool).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("invokeConnectorInstanceTool — expectedServerId binds the call to the listed server (cinatra#3745)", () => {
+  // Server A's unique row is gone; server B now carries the same name and
+  // annotations. The caller listed (and checked) the row on A.
+  function onlyOnServerB(): CatalogServerSnapshot {
+    const base = snapshot([{ name: READ_TOOL, rawAnnotations: { readOnlyHint: true } }], "rev-b");
+    return { ...base, serverId: "srv-b", tools: base.tools.map((t) => ({ ...t, serverId: "srv-b" })) };
+  }
+
+  it("refuses a row that resolves on another server than the listed one: nothing executes", async () => {
+    const { deps, callWireTool } = makeDeps(onlyOnServerB());
+    const call = invokeConnectorInstanceTool(
+      {
+        connectorKey: "wordpress",
+        toolName: READ_TOOL,
+        args: {},
+        actor: ACTOR,
+        expectedRawAnnotations: { readOnlyHint: true },
+        expectedServerId: "srv-a",
+      },
+      deps,
+    );
+    await expect(call).rejects.toMatchObject({ code: "catalog_entry_changed" });
+    expect(callWireTool).not.toHaveBeenCalled();
+  });
+
+  it("with serverId of A the resolution stays on A and refuses the substitution", async () => {
+    const { deps, callWireTool } = makeDeps(onlyOnServerB());
+    const call = invokeConnectorInstanceTool(
+      {
+        connectorKey: "wordpress",
+        toolName: READ_TOOL,
+        args: {},
+        actor: ACTOR,
+        serverId: "srv-a",
+        expectedRawAnnotations: { readOnlyHint: true },
+        expectedServerId: "srv-a",
+      },
+      deps,
+    );
+    await expect(call).rejects.toBeInstanceOf(InvokerError);
+    expect(callWireTool).not.toHaveBeenCalled();
+  });
+
+  it("executes the row on the listed server", async () => {
+    const { deps, callWireTool } = makeDeps(onlyOnServerB());
+    await invokeConnectorInstanceTool(
+      {
+        connectorKey: "wordpress",
+        toolName: READ_TOOL,
+        args: {},
+        actor: ACTOR,
+        serverId: "srv-b",
+        expectedRawAnnotations: { readOnlyHint: true },
+        expectedServerId: "srv-b",
+      },
+      deps,
+    );
+    expect(callWireTool).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("invokeConnectorInstanceTool — expectedClass: \"read\" (cinatra#3745)", () => {
   it("refuses a write-class entry: nothing executes, no hook fires", async () => {
     const { deps, callWireTool, destructiveFire, contentReviewFire } = makeDeps(

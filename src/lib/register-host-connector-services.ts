@@ -174,6 +174,7 @@ import {
   type InvokeConnectorInstanceToolInput,
   type ResolvedInstanceEndpoint,
   acquireSnapshots as acquireConnectorInstanceCatalogSnapshots,
+  isPlainAnnotationsRecord,
 } from "@/lib/connector-instance-invoker";
 import {
   callConnectorInstanceMcpTool,
@@ -1564,7 +1565,7 @@ export function registerHostConnectorServices(): void {
   // only fields the invoker enforces; each can only add a refusal.
   const invokeSiteToolWith = async (
     input: Pick<SiteToolCallInput, "toolName" | "args" | "instanceId" | "serverId">,
-    guards: Pick<InvokeConnectorInstanceToolInput, "expectedRawAnnotations" | "expectedClass">,
+    guards: Pick<InvokeConnectorInstanceToolInput, "expectedRawAnnotations" | "expectedClass" | "expectedServerId">,
   ) => {
     const { actor, boundConnectorKey, surface, frameRunId } = await resolveConnectorInstanceInvokerContext(
       { explicitInstanceId: input.instanceId },
@@ -1607,17 +1608,28 @@ export function registerHostConnectorServices(): void {
     // host enforces the guards (an older host has no such method, so a
     // connector relying on a guard refuses there instead of calling unguarded).
     invokeSiteToolGuarded: async (input) => {
+      // Both checks run before anything resolves: the guarded call is bound to
+      // the server of the row it listed, and its annotations must be a plain
+      // object (the invoker's own predicate).
+      const serverId: unknown = input.serverId;
+      if (typeof serverId !== "string" || serverId.length === 0) {
+        throw new InvokerError(
+          "guarded_server_id_required",
+          "a guarded site tool call must name the serverId of the row it listed",
+        );
+      }
       const annotations: unknown = input.expectedRawAnnotations;
-      if (annotations === null || typeof annotations !== "object" || Array.isArray(annotations)) {
+      if (!isPlainAnnotationsRecord(annotations)) {
         throw new InvokerError(
           "catalog_entry_changed",
           "a guarded site tool call must carry the annotations of the row it listed; list the tools again",
         );
       }
       return invokeSiteToolWith(
-        input,
+        { toolName: input.toolName, args: input.args, instanceId: input.instanceId, serverId },
         {
-          expectedRawAnnotations: annotations as Record<string, unknown>,
+          expectedRawAnnotations: annotations,
+          expectedServerId: serverId,
           ...(input.expectedClass !== undefined ? { expectedClass: input.expectedClass } : {}),
         },
       );
