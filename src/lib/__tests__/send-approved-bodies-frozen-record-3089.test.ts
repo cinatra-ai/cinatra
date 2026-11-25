@@ -22,8 +22,8 @@
  *   A1 after the approval, an address changed in the bundle: refused, nothing
  *      claimed or mailed
  *   A2 the same for a subject
- *   A3 the released decision's values are mailed, the address as the card
- *      showed it, trimmed
+ *   A3 the released decision's values are mailed, the address and the
+ *      subject byte for byte as the card showed them
  *   A4 a decision that is not released, or no list on a run with filed bodies
  *      (no decision, or a call without a verified step): refused
  *   A4b a decision that cannot be read: refused before anything is bound
@@ -303,8 +303,9 @@ describe("cinatra#3089 — what a person approved comes from the released publis
   });
 
   it("A3 each message goes to the address and with the subject the released card showed", async () => {
-    const shown = approved.map((e, i) => (i === 0 ? { ...e, recipientEmail: " one@example.com " } : e));
-    const fx = makeFixture({ decision: releasedCard(shown) });
+    // The address and the subject are sent as the card showed them, byte for byte (one shown with white space around
+    // it is refused, never trimmed: send-approved-bodies-3089 B5).
+    const fx = makeFixture({ decision: releasedCard(approved) });
     const result = await fx.start({});
     expect(result.status).toBe("completed");
     // red-first-expect: expected "vi.fn()" to be called with arguments

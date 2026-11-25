@@ -115,16 +115,28 @@ describe("releasedDecisionList (cinatra#3089)", () => {
     }
   });
 
-  it("L8 a shown value is compared trimmed, and in any letter case only where the caller asks", () => {
+  it("L8 a shown value is compared exactly: the entry is what is sent, so it must be the very cell the card drew", () => {
     const list = entries(1);
-    const padded = decision(list, { shown: [{ email: "  p0@example.com ", subject: "Subject 0" }] });
-    // red-first-expect: is not a function
-    expect(read(padded).ok).toBe(true);
-    const upper = decision(list, { shown: [{ email: "P0@Example.com", subject: "Subject 0" }] });
-    expect(read(upper).ok).toBe(false);
-    expect(
-      releasedDecisionList({ decision: upper, entryFields: FIELDS, shownFields: [{ field: "recipientEmail", column: "email", caseInsensitive: true }, { field: "subject", column: "subject" }] }).ok,
-    ).toBe(true);
+    const shownAs = (email: string, subject = "Subject 0") => decision(list, { shown: [{ email, subject }] });
+    // Each of these looks the same, or nearly so, on the screen, and each is another value than the one sent.
+    for (const d of [
+      shownAs("  p0@example.com "),
+      shownAs("p0@example.com\u00a0"),
+      shownAs("P0@Example.com"),
+      shownAs("p0@example.com", " Subject 0 "),
+      shownAs("p0@example.com", "Subject  0"),
+      shownAs("p0@example.com", "Subject\u00a00"),
+    ]) {
+      // red-first-expect: is not a function
+      expect(read(d).ok).toBe(false);
+    }
+    // The same visible text in two Unicode normalisation forms is two values.
+    const nfc = "R\u00e9sum\u00e9";
+    const decomposed = [{ ...list[0]!, subject: nfc.normalize("NFD") }];
+    expect(read(decision(decomposed, { shown: [{ email: "p0@example.com", subject: nfc }] })).ok).toBe(false);
+    // Byte for byte equal: answered as released, never trimmed or normalised.
+    const padded = [{ ...list[0]!, subject: " Padded  subject\u00a0" }];
+    expect(read(decision(padded))).toEqual({ ok: true, list: padded });
   });
 
   it("L9 one drawn cell never proves two fields: each field is read from its own named column", () => {
@@ -178,7 +190,9 @@ describe("releasedDecisionList (cinatra#3089)", () => {
     const released = (surfacedValues: Record<string, unknown>, declaredRows: unknown = rows) =>
       ({ status: "released", decidedBy: "user-2", surfacedValues, declaredRows }) as Parameters<typeof releasedDecisionText>[0]["decision"];
     // red-first-expect: releasedDecisionText is not a function
-    expect(releasedDecisionText({ decision: released({ senderEmail: " a@example.com " }), input: "senderEmail" })).toEqual({ ok: true, value: "a@example.com" });
+    expect(releasedDecisionText({ decision: released({ senderEmail: "a@example.com" }), input: "senderEmail" })).toEqual({ ok: true, value: "a@example.com" });
+    // The value the row drew, as it drew it: never trimmed (the caller compares and sends this very value).
+    expect(releasedDecisionText({ decision: released({ senderEmail: " a@example.com " }), input: "senderEmail" })).toEqual({ ok: true, value: " a@example.com " });
     // Blank or absent: the card draws no row and nothing is released.
     expect(releasedDecisionText({ decision: released({ senderEmail: "  " }), input: "senderEmail" })).toEqual({ ok: true, value: null });
     expect(releasedDecisionText({ decision: released({}), input: "senderEmail" })).toEqual({ ok: true, value: null });

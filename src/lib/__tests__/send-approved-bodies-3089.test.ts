@@ -52,12 +52,46 @@
  *      publish card showed: a change in the bundle, the recipients list or the
  *      draft's subject refuses the whole send before any claim and names no
  *      address; the mailed subject is the entry's, byte for byte, whatever a
- *      body artifact's own `subject` field holds; equal values (the address
- *      with spaces) are sent, an address in another letter case is refused;
+ *      body artifact's own `subject` field holds; equal values are sent, an
+ *      address in another letter case is refused;
  *      a list surfaced as JSON text is refused before any claim: the card
  *      draws no bodies from it
+ *   G1-G4 the send reads the decision that governs its call through the one
+ *      resolution the publishing call guard claims under (a step nested in a
+ *      publishing node, or signed with the node's own id, reads the node's
+ *      decision), and a call signed for a decision is served by that one only
+ *   B1-B6 what is sent is byte for byte what the card showed: a candidate
+ *      subject or address that differs from the shown one in spaces, a
+ *      non-breaking space, letter case or Unicode normalisation is refused;
+ *      an equal one is sent exactly as shown; an id, address, sender or
+ *      campaign carried with white space around it is refused, never trimmed
  */
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// The real resolution of the decision that governs a call (the send's default
+// reader, readGoverningPublishDecision, which the publishing call guard also
+// claims under), over stubbed reads: the run and its template, the graph the
+// run is bound to execute, and the decision rows by step. The released-list
+// readers of the decision store stay real.
+const governing = vi.hoisted(() => ({
+  readAgentRunById: vi.fn(async (): Promise<unknown> => ({ id: "run-1", templateId: "tmpl-1" })),
+  readAgentTemplateById: vi.fn(async (): Promise<unknown> => ({ id: "tmpl-1", publishingSteps: ["publish"] })),
+  readDecisionForRunNode: vi.fn(async (..._args: unknown[]): Promise<unknown> => null),
+  readLatestDecisionForRun: vi.fn(async (): Promise<unknown> => null),
+  readRunBoundGraph: vi.fn(async (): Promise<string | null> => null),
+}));
+vi.mock("../../../packages/agents/src/db", () => ({ db: {} }));
+vi.mock("../../../packages/agents/src/store", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  readAgentRunById: governing.readAgentRunById,
+  readAgentTemplateById: governing.readAgentTemplateById,
+}));
+vi.mock("../../../packages/agents/src/publish-decision-store", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  readDecisionForRunNode: governing.readDecisionForRunNode,
+  readLatestDecisionForRun: governing.readLatestDecisionForRun,
+  readRunBoundGraph: governing.readRunBoundGraph,
+}));
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import { createTriggerEmailSendHandlers } from "@cinatra-ai/trigger-email-send";
 import { serviceAndCampaignIdSchema } from "../../../packages/trigger-email-send/src/mcp/schemas";
@@ -68,7 +102,9 @@ import {
   materializeEmailFanout,
   type DecidedBodyRead,
   type EmailFanoutArgs,
+  type CallingRun,
   type MessageSendLedger,
+  type StepPublishDecision,
   type TriggerEmailSendDeps,
 } from "../trigger-email-send-use-cases";
 
@@ -107,8 +143,10 @@ function memorySendLedger() {
  *  list a case names (cinatra#3089): the campaign, the card's Recipients list
  *  row and its Emails row, drawn from the frozen values. A case that names no
  *  list gets a released decision that surfaced none. */
-function releasedCardFor(named: unknown, campaignId: unknown = CAMPAIGN_ID) {
-  const list = (named === undefined ? [] : typeof named === "string" ? JSON.parse(named) : named) as Array<{
+function releasedCardFor(named: unknown, campaignId: unknown = CAMPAIGN_ID, shownList?: unknown) {
+  // The Recipients row draws the released list itself, or the records a case
+  // names as `shownList` (what the card showed, when it differs).
+  const list = (shownList ?? (named === undefined ? [] : typeof named === "string" ? JSON.parse(named) : named)) as Array<{
     recipientEmail: string;
     subject: string;
   }>;
@@ -124,7 +162,7 @@ function releasedCardFor(named: unknown, campaignId: unknown = CAMPAIGN_ID) {
       { kind: "list", input: "recipients", columns: [{ field: "email" }, { field: "subject" }] },
       { kind: "artifacts", input: "emailBodies" },
     ],
-  };
+  } as unknown as StepPublishDecision & { declaredRows: unknown[] };
 }
 
 const actor: PrimitiveActorContext = {
@@ -203,6 +241,10 @@ function makeFixture(opts?: {
   recipients?: unknown[];
   /** What the ledger answers for "the run has bodies filed for review". */
   reviewedBodies?: boolean | Error;
+  /** The run, verified step and signed decision of the call. */
+  callingRun?: CallingRun;
+  /** The decision read; null leaves the send's own default reader. */
+  readPublishDecision?: TriggerEmailSendDeps["readPublishDecision"] | null;
 }) {
   const store = opts?.store ?? makeStore();
   const sendLedger = memorySendLedger();
@@ -266,6 +308,9 @@ function makeFixture(opts?: {
       registeredTypes: new Set([EMAIL_BODY_TYPE_ID]),
     } as Parameters<typeof materializeEmailFanout>[1]),
   );
+  // The decision the send asks for: a case reads which step it asked for.
+  const readPublishDecision = vi.fn(async (_runId: string, _stepId: string): Promise<StepPublishDecision | null> =>
+    releasedCardFor(named, CAMPAIGN_ID, shown));
   const readRunReviewedBodies = vi.fn(async (_runId: string) => {
     const answer = opts?.reviewedBodies ?? false;
     if (answer instanceof Error) throw answer;
@@ -286,16 +331,18 @@ function makeFixture(opts?: {
       const d = (envelopes[id]?.data ?? {}) as Record<string, unknown>;
       return typeof d.cinatraAgentRunId === "string" ? [d.cinatraAgentRunId] : [];
     },
-    readCallingRun: async () => ({ runId: "run-1", stepId: "send" }),
-    readPublishDecision: async () => releasedCardFor(named),
+    readCallingRun: async () => opts?.callingRun ?? { runId: "run-1", stepId: "send" },
+    ...(opts?.readPublishDecision === null ? {} : { readPublishDecision: opts?.readPublishDecision ?? readPublishDecision }),
   } as unknown as TriggerEmailSendDeps;
   let named: unknown;
+  let shown: unknown;
   const handlers = createTriggerEmailSendHandlers(createTriggerEmailSendUseCases(deps));
   // `releasedList` is what the stubbed decision surfaced; every other key goes
   // to the tool as the request.
   const start = (input: Record<string, unknown>) => {
-    const { releasedList, ...request } = input;
+    const { releasedList, shownList, ...request } = input;
     named = releasedList;
+    shown = shownList;
     return handlers["email_outreach_send_initial_start"]({
       input: {
         campaignId: CAMPAIGN_ID,
@@ -312,6 +359,7 @@ function makeFixture(opts?: {
     sendEmail,
     readDecidedBody,
     readRunReviewedBodies,
+    readPublishDecision,
     writeBody,
     bindBody,
     emitEmailFanout,
@@ -689,14 +737,14 @@ describe("cinatra#3089 — each message is sent to the address and with the subj
     expect(fx.sent[0]?.textBody).toBe("Approved body one");
   });
 
-  it("C6 equal values are sent as before, the address compared trimmed and byte for byte", async () => {
-    const entries = [{ ...approved[0]!, recipientEmail: "  one@example.com " }, approved[1]];
+  it("C6 equal values are sent as before, the address compared byte for byte", async () => {
     const fx = makeFixture();
-    const result = await fx.start({ releasedList: entries });
+    const result = await fx.start({ releasedList: approved });
     expect(result.status).toBe("completed");
     expect(result.sentCount).toBe(2);
-    // The mail goes to the address the released card showed (trimmed), the
-    // bundle's equal address only checked against it.
+    // The mail goes to the address the released card showed, as it showed
+    // it; the bundle's equal address is only checked against it (an address
+    // shown with white space around it is refused, see B5).
     // red-first-expect: to deeply equal [ ObjectContaining{…}, …(1) ]
     expect(fx.sent).toEqual([
       expect.objectContaining({ to: ["one@example.com"], subject: "Bundle subject one", textBody: "Approved body one" }),
@@ -746,6 +794,207 @@ describe("cinatra#3089 — each message is sent to the address and with the subj
       { releasedList: JSON.stringify(approved) },
       "no artifacts row of the released publish decision draws the bodies of the released list",
       ["one@example.com", "two@example.com"],
+    );
+  });
+});
+
+// The run's bound graph: `draft`, then `publish`, a publishing FlowNode whose
+// subflow holds `compose` and `send`; the decision is stored under `publish`.
+const NESTED_GRAPH = {
+  component_type: "Flow",
+  id: "root",
+  nodes: [{ $component_ref: "draft" }, { $component_ref: "publish" }],
+  $referenced_components: {
+    draft: { component_type: "ApiNode", id: "draft" },
+    publish: { component_type: "FlowNode", id: "publish", metadata: { cinatra: { publishes: true } }, subflow: { $component_ref: "publish_body" } },
+    publish_body: {
+      component_type: "Flow",
+      id: "publish_body",
+      nodes: [{ $component_ref: "compose" }, { $component_ref: "send" }],
+      $referenced_components: { compose: { component_type: "ApiNode", id: "compose" }, send: { component_type: "ApiNode", id: "send" } },
+    },
+  },
+};
+// A publishing component declared under the key `publish` with its own id
+// `send`: the decision is stored under the key, the runtime signs the id.
+const ALIASED_GRAPH = {
+  component_type: "Flow",
+  id: "root",
+  nodes: [{ $component_ref: "draft" }, { $component_ref: "publish" }],
+  $referenced_components: {
+    draft: { component_type: "ApiNode", id: "draft" },
+    publish: { component_type: "ApiNode", id: "send", metadata: { cinatra: { publishes: true } } },
+  },
+};
+
+describe("cinatra#3089 — the send reads the decision that governs its call, as the publishing call guard does", () => {
+  beforeEach(() => {
+    governing.readAgentRunById.mockReset().mockResolvedValue({ id: "run-1", templateId: "tmpl-1" });
+    governing.readAgentTemplateById.mockReset().mockResolvedValue({ id: "tmpl-1", publishingSteps: ["publish"] });
+    governing.readDecisionForRunNode.mockReset().mockResolvedValue(null);
+    governing.readLatestDecisionForRun.mockReset().mockResolvedValue(null);
+    governing.readRunBoundGraph.mockReset().mockResolvedValue(null);
+  });
+
+  it("G1 the send asks for the decision of its call's verified step, and of that step only", async () => {
+    const fx = makeFixture();
+    const result = await fx.start({ releasedList: approved });
+    expect(result.status).toBe("completed");
+    expect(fx.readPublishDecision).toHaveBeenCalledTimes(1);
+    expect(fx.readPublishDecision).toHaveBeenCalledWith("run-1", "send");
+    // Another verified step asks for its own.
+    const other = makeFixture({ callingRun: { runId: "run-1", stepId: "deliver" } });
+    await other.start({ releasedList: approved });
+    expect(other.readPublishDecision).toHaveBeenCalledWith("run-1", "deliver");
+  });
+
+  for (const [name, graph] of [["nested in a released publishing FlowNode", NESTED_GRAPH], ["signed with the publishing component's own id", ALIASED_GRAPH]] as const) {
+    it(`G2 a send step ${name} reads the decision stored under the publishing node, and sends the approved bodies`, async () => {
+      governing.readRunBoundGraph.mockResolvedValue(JSON.stringify(graph));
+      governing.readDecisionForRunNode.mockImplementation(async (_runId: unknown, nodeId: unknown) =>
+        nodeId === "publish" ? { id: "d-publish", ...releasedCardFor(approved) } : null);
+      const fx = makeFixture({ readPublishDecision: null, reviewedBodies: true });
+      const result = await fx.start({});
+      expect(result.status).toBe("completed");
+      expect(governing.readDecisionForRunNode).toHaveBeenCalledWith("run-1", "publish");
+      expect(governing.readDecisionForRunNode).not.toHaveBeenCalledWith("run-1", "send");
+      expect(fx.sent.map((m) => m.textBody)).toEqual(["Approved body one", "Approved body two"]);
+    });
+  }
+
+  it("G3 a send step whose governing publishing node cannot be told is refused before any mail", async () => {
+    // `send` lies inside two publishing nodes.
+    governing.readRunBoundGraph.mockResolvedValue(JSON.stringify({
+      ...NESTED_GRAPH,
+      $referenced_components: {
+        ...NESTED_GRAPH.$referenced_components,
+        again: { component_type: "FlowNode", id: "again", metadata: { cinatra: { publishes: true } }, subflow: { $component_ref: "publish_body" } },
+      },
+    }));
+    governing.readDecisionForRunNode.mockResolvedValue({ id: "d-publish", ...releasedCardFor(approved) });
+    // red-first-expect: expected 'completed' to be 'failed'
+    await expectRefused(makeFixture({ readPublishDecision: null }), {}, "which publishing step governs the call cannot be told");
+  });
+
+  it("G4 a call signed for a publish decision is served only by that decision", async () => {
+    const signed = { runId: "run-1", stepId: "send", publishDecisionId: "d-signed" };
+    const card = (id: string | undefined) => async () => ({ ...(id ? { id } : {}), ...releasedCardFor(approved) });
+    // red-first-expect: expected 'completed' to be 'failed'
+    await expectRefused(
+      makeFixture({ callingRun: signed, readPublishDecision: card("d-newer") }),
+      {},
+      "the call was signed for another publish decision than the one that governs step send of run run-1",
+    );
+    await expectRefused(makeFixture({ callingRun: signed, readPublishDecision: card(undefined) }), {}, "signed for another publish decision");
+    await expectRefused(makeFixture({ callingRun: signed, readPublishDecision: async () => null }), {}, "signed for another publish decision");
+    const served = makeFixture({ callingRun: signed, readPublishDecision: card("d-signed") });
+    expect((await served.start({})).status).toBe("completed");
+    expect(served.sent.map((m) => m.textBody)).toEqual(["Approved body one", "Approved body two"]);
+  });
+});
+
+// What the card showed is what is compared and what is sent: a released value
+// is never trimmed, folded or normalised on the way to the mail.
+describe("cinatra#3089 — what is sent is byte for byte what the card showed", () => {
+  const SHOWN_DIFFERS = "no list row of the released publish decision shows each record of the released list";
+  const variants: Array<[string, string]> = [
+    ["leading and trailing spaces", " Bundle subject one "],
+    ["an inner double space", "Bundle  subject one"],
+    ["a non-breaking space", "Bundle subject one"],
+  ];
+  for (const [name, candidate] of variants) {
+    it(`B1 a subject with ${name} beside the shown subject is refused`, async () => {
+      const drafts = bundleDrafts.map((d) => (d.recipientId === "c1" ? { ...d, subject: candidate } : d));
+      // red-first-expect: expected 'completed' to be 'failed'
+      await expectCardRefused(
+        makeFixture({ drafts }),
+        { releasedList: [{ ...approved[0]!, subject: candidate }, approved[1]], shownList: approved },
+        SHOWN_DIFFERS,
+      );
+    });
+  }
+
+  it("B2 the same visible subject in another Unicode normalisation form than the shown one is refused", async () => {
+    const shownNfc = "Résumé of the quarter";
+    const candidateNfd = shownNfc.normalize("NFD");
+    expect(candidateNfd).not.toBe(shownNfc);
+    const drafts = bundleDrafts.map((d) => (d.recipientId === "c1" ? { ...d, subject: candidateNfd } : d));
+    // red-first-expect: expected 'completed' to be 'failed'
+    await expectCardRefused(
+      makeFixture({ drafts }),
+      { releasedList: [{ ...approved[0]!, subject: candidateNfd }, approved[1]], shownList: [{ ...approved[0]!, subject: shownNfc }, approved[1]] },
+      SHOWN_DIFFERS,
+    );
+  });
+
+  it("B3 a subject shown with spaces, a non-breaking space or a decomposed accent is sent exactly as shown", async () => {
+    for (const subject of [" Padded  subject ", "Bundle subject one", "Résumé".normalize("NFD")]) {
+      const drafts = bundleDrafts.map((d) => (d.recipientId === "c1" ? { ...d, subject } : d));
+      const store = makeStore();
+      store.get("art-1")!.data = { ...store.get("art-1")!.data, subject };
+      const fx = makeFixture({ drafts, store });
+      const result = await fx.start({ releasedList: [{ ...approved[0]!, subject }, approved[1]] });
+      expect(result.status).toBe("completed");
+      expect(fx.sent[0]?.subject).toBe(subject);
+    }
+  });
+
+  it("B4 an address shown in another form than the candidate's is refused", async () => {
+    for (const recipientEmail of [" one@example.com ", "one@example.com ", "One@example.com"]) {
+      // red-first-expect: expected 'completed' to be 'failed'
+      await expectCardRefused(
+        makeFixture(),
+        { releasedList: [{ ...approved[0]!, recipientEmail }, approved[1]], shownList: approved },
+        SHOWN_DIFFERS,
+        ["one@example.com"],
+      );
+    }
+  });
+
+  it("B5 an address or contact the card carried with white space around it is refused, never trimmed and sent", async () => {
+    // red-first-expect: expected 'completed' to be 'failed'
+    await expectCardRefused(
+      makeFixture(),
+      { releasedList: [{ ...approved[0]!, recipientEmail: "  one@example.com " }, approved[1]] },
+      "approved body 1 carries its recipientEmail with white space around it",
+      ["one@example.com"],
+    );
+    await expectCardRefused(
+      makeFixture(),
+      { releasedList: [{ ...approved[0]!, contactId: " c1" }, approved[1]] },
+      "approved body 1 carries its contactId with white space around it",
+    );
+  });
+
+  it("B6 the campaign and the sender are compared and used exactly as the decision froze and the card showed them", async () => {
+    const withSender = (sender: unknown) => async () => {
+      const card = releasedCardFor(approved);
+      return {
+        ...card,
+        surfacedValues: { ...card.surfacedValues, senderEmail: sender },
+        declaredRows: [...card.declaredRows, { label: "From", input: "senderEmail" }],
+      };
+    };
+    // red-first-expect: expected 'completed' to be 'failed'
+    await expectRefused(
+      makeFixture({ readPublishDecision: withSender(" team@example.com ") as TriggerEmailSendDeps["readPublishDecision"] }),
+      {},
+      "the sender the released publish card showed carries white space around it",
+    );
+    // The call's sender must be the shown sender byte for byte.
+    await expectRefused(
+      makeFixture({ readPublishDecision: withSender("team@example.com") as TriggerEmailSendDeps["readPublishDecision"] }),
+      { senderEmail: "TEAM@example.com" },
+      "the call names another sender than the released publish card showed",
+    );
+    const fx = makeFixture({ readPublishDecision: withSender("team@example.com") as TriggerEmailSendDeps["readPublishDecision"] });
+    expect((await fx.start({ senderEmail: "team@example.com" })).status).toBe("completed");
+    expect(fx.sendEmail.mock.calls.map((c) => (c[0] as { fromEmail?: string }).fromEmail)).toEqual(["team@example.com", "team@example.com"]);
+    // A campaign frozen with white space around it is refused, not trimmed.
+    await expectRefused(
+      makeFixture({ readPublishDecision: async () => releasedCardFor(approved, ` ${CAMPAIGN_ID} `) }),
+      {},
+      "the released publish decision carries its campaign with white space around it",
     );
   });
 });

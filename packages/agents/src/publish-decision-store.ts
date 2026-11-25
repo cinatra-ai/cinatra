@@ -576,14 +576,15 @@ export async function listDueParked(limit: number, now?: Date, afterId?: string)
  *   - `{ ok: true, list }`: the one candidate, as parsed.
  * A row shows a record when, for EACH `shownFields` entry, the row declares the named `column` (a column `field` of
  * the row) and the record's string value of that column equals the entry's value of `field`. Each column proves one
- * field only, so one drawn cell never shows two fields. A shown value is compared after trimming both sides;
- * `caseInsensitive` also ignores letter case. Errors name no value.
+ * field only, so one drawn cell never shows two fields. A shown value is compared exactly, byte for byte: no trimming,
+ * no letter case, no Unicode normalisation, since the caller sends the entry's value as it is, and what is sent must be
+ * what the card drew (the card draws a cell's string as it is, publishDecisionCardRows). Errors name no value.
  */
 export function releasedDecisionList(input: {
   decision: Pick<PublishDecisionRow, "status" | "decidedBy" | "surfacedValues" | "declaredRows">;
   entryFields: readonly string[];
   /** For each entry field the card must show, the row column (its `field`) that shows it. */
-  shownFields: ReadonlyArray<{ field: string; column: string; caseInsensitive?: boolean }>;
+  shownFields: ReadonlyArray<{ field: string; column: string }>;
 }): { ok: true; list: Array<Record<string, string>> | null } | { ok: false; error: string } {
   const { decision, entryFields, shownFields } = input;
   const columnsNamed = new Set(shownFields.map((s) => s.column));
@@ -629,8 +630,6 @@ export function releasedDecisionList(input: {
     return { ok: false, error: `the publish decision surfaced ${candidates.length} lists of that shape, so which one was released cannot be told` };
   }
   const { key: listKey, list } = candidates[0]!;
-  const same = (shown: string, value: string, caseInsensitive?: boolean) =>
-    caseInsensitive ? shown.trim().toLowerCase() === value.trim().toLowerCase() : shown.trim() === value.trim();
   const shownOnRow = (decision.declaredRows ?? []).some((row) => {
     if (publishRowKind(row) !== "list" || !own(surfaced, row.input)) return false;
     const raw = surfaced[row.input];
@@ -643,9 +642,9 @@ export function releasedDecisionList(input: {
     if (shownFields.some(({ column }) => !drawn.has(column))) return false;
     return list.every((entry, i) => {
       const record = records[i]!;
-      return shownFields.every(({ field, column, caseInsensitive }) => {
+      return shownFields.every(({ field, column }) => {
         const cell = own(record, column) ? record[column] : undefined;
-        return typeof cell === "string" && typeof entry[field] === "string" && same(cell, entry[field], caseInsensitive);
+        return typeof cell === "string" && typeof entry[field] === "string" && cell === entry[field];
       });
     });
   });
@@ -675,7 +674,8 @@ export function releasedDecisionList(input: {
  * The text a person was SHOWN for `input` on a released decision's card (cinatra#3089). The card draws a declared text
  * row (a row with no `kind`, `publishRowKind` "text") for a surfaced plain value that is not blank, and drops it otherwise.
  * Answers:
- *   - `{ ok: true, value }`: a declared text row of `input` drew this string (trimmed);
+ *   - `{ ok: true, value }`: a declared text row of `input` drew this string, as it is (the card draws it untrimmed, so
+ *     the caller compares and sends this very value);
  *   - `{ ok: true, value: null }`: the decision surfaced nothing, or a blank string, for `input` (the card drew nothing);
  *   - `{ ok: false }`: the decision is not released by a person, or surfaced a value for `input` that is not a string,
  *     or a non-blank string that no declared text row drew (a value no person saw is never released).
@@ -697,5 +697,5 @@ export function releasedDecisionText(input: {
   if (raw.trim() === "") return { ok: true, value: null };
   const drawn = (decision.declaredRows ?? []).some((row) => publishRowKind(row) === "text" && row.input === input.input);
   if (!drawn) return { ok: false, error: `the publish decision surfaced ${input.input}, but no row of its card showed it` };
-  return { ok: true, value: raw.trim() };
+  return { ok: true, value: raw };
 }

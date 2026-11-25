@@ -132,9 +132,14 @@ export type TriggerEmailSendDeps = {
    */
   readCallingRun?: () => Promise<CallingRun | null>;
   /**
-   * The newest publish decision of `stepId` in `runId`, whatever its status:
-   * the values frozen when the step stopped (the card is drawn from them), the
-   * rows the card declared, and who released it; null when the step has none.
+   * The publish decision that governs a call of the verified step `stepId` in
+   * `runId`, whatever its status: the values frozen when the step stopped (the
+   * card is drawn from them), the rows the card declared, and who released
+   * it; null when the step governs none. Defaults to
+   * `readGoverningPublishDecision`, the one resolution the publishing call
+   * guard (`publishCallAllowed`) also claims under: a step nested in a
+   * publishing node, or signed with the publishing component's own id, reads
+   * the decision of that node, never a lookup by the raw step id.
    */
   readPublishDecision?: (runId: string, stepId: string) => Promise<StepPublishDecision | null>;
   /**
@@ -157,11 +162,14 @@ export type TriggerEmailSendDeps = {
   ) => Promise<string | null>;
 };
 
-/** The run of a call and the verified step that made it (see `readCallingRun`). */
-export type CallingRun = { runId: string; stepId?: string };
+/** The run of a call, the verified step that made it, and the publish
+ *  decision the runtime signed for the call, when it signed one (see
+ *  `readCallingRun`). */
+export type CallingRun = { runId: string; stepId?: string; publishDecisionId?: string };
 
 /** A step's publish decision, as the send reads it (see `readPublishDecision`). */
-export type StepPublishDecision = Pick<PublishDecisionRow, "status" | "decidedBy" | "surfacedValues" | "declaredRows">;
+export type StepPublishDecision = Pick<PublishDecisionRow, "status" | "decidedBy" | "surfacedValues" | "declaredRows">
+  & Partial<Pick<PublishDecisionRow, "id">>;
 
 /** One message's durable send record (see `performRevisionEffectOnce`). */
 export type MessageSendLedger = RevisionEffectLedger;
@@ -346,7 +354,13 @@ function buildLazyDefaultDeps(): TriggerEmailSendDeps {
       const runId = agentRun?.runId ?? ctx?.verifiedRunScopeId ?? (ctx?.verifiedStepId ? ctx.runId : undefined);
       if (typeof runId !== "string" || runId.trim() === "") return null;
       const stepId = ctx?.verifiedStepId ?? agentRun?.verifiedStepId;
-      return { runId: runId.trim(), ...(typeof stepId === "string" && stepId !== "" ? { stepId } : {}) };
+      // The decision the runtime signed beside the verified source (cinatra#3745), never request input.
+      const publishDecisionId = ctx?.verifiedPublishDecisionId;
+      return {
+        runId: runId.trim(),
+        ...(typeof stepId === "string" && stepId !== "" ? { stepId } : {}),
+        ...(typeof publishDecisionId === "string" && publishDecisionId !== "" ? { publishDecisionId } : {}),
+      };
     },
     async readObjectRuns(objectId, actor) {
       const orgId = actor.orgId;
@@ -365,8 +379,8 @@ function buildLazyDefaultDeps(): TriggerEmailSendDeps {
       return state.ok ? null : state.error;
     },
     async readPublishDecision(runId, stepId) {
-      const { readDecisionForRunNode } = await import("@cinatra-ai/agents/publish-decision-store");
-      return readDecisionForRunNode(runId, stepId);
+      const { readGoverningPublishDecision } = await import("@cinatra-ai/agents/publish-decision-actions");
+      return readGoverningPublishDecision(runId, stepId);
     },
   };
 }
@@ -1000,6 +1014,13 @@ async function runInitialSend(args: {
     };
     const textOf = (value: unknown): string | undefined =>
       typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+    // A value of the released decision is used exactly as it was frozen, shown
+    // and compared: never trimmed or folded on the way to the mail. An id or an
+    // address must therefore carry no white space around it (the card would
+    // show it, and a check would compare it, in another form than the one
+    // sent); a subject is compared and sent byte for byte.
+    const exactOf = (value: unknown): string | undefined =>
+      typeof value === "string" && value !== "" && value.trim() === value ? value : undefined;
 
     // WHAT A PERSON APPROVED (cinatra#3089) is the publish decision a person
     // released for the calling step: its values were frozen when the step
@@ -1047,6 +1068,12 @@ async function runInitialSend(args: {
       } catch (err) {
         refuse(`the publish decision of ${decisionOf} could not be read: ${err instanceof Error ? err.message : String(err)}`);
       }
+      // The decision the runtime signed for this call names the visit it was
+      // made under: the governing decision must be that very decision.
+      const signed = callingRun?.publishDecisionId;
+      if (signed !== undefined && decision?.id !== signed) {
+        refuse(`the call was signed for another publish decision than the one that governs ${decisionOf}`);
+      }
       if (decision) {
         const { releasedDecisionList } = await import("@cinatra-ai/agents/publish-decision-store");
         const read = releasedDecisionList({
@@ -1060,18 +1087,22 @@ async function runInitialSend(args: {
         if (!read.ok) return refuse(`${read.error} (${decisionOf})`);
         if (read.list) {
           const surfaced = decision.surfacedValues;
-          const campaignId = Object.prototype.hasOwnProperty.call(surfaced, "campaignId")
-            ? textOf(surfaced.campaignId)
-            : undefined;
-          if (!campaignId) refuse(`the released publish decision carries no campaign (${decisionOf})`);
-          if (campaignId !== input.campaignId.trim()) {
+          const frozenCampaign = Object.prototype.hasOwnProperty.call(surfaced, "campaignId") ? surfaced.campaignId : undefined;
+          if (textOf(frozenCampaign) === undefined) refuse(`the released publish decision carries no campaign (${decisionOf})`);
+          const campaignId = exactOf(frozenCampaign)
+            ?? refuse(`the released publish decision carries its campaign with white space around it (${decisionOf})`);
+          if (campaignId !== input.campaignId) {
             refuse(`the call names another campaign than the released publish decision carries (${decisionOf})`);
           }
           const { releasedDecisionText } = await import("@cinatra-ai/agents/publish-decision-store");
           const shownSender = releasedDecisionText({ decision, input: "senderEmail" });
           if (!shownSender.ok) return refuse(`${shownSender.error} (${decisionOf})`);
           const senderEmail = shownSender.value ?? undefined;
-          const callSender = textOf(input.senderEmail);
+          if (senderEmail !== undefined && exactOf(senderEmail) === undefined) {
+            refuse(`the sender the released publish card showed carries white space around it (${decisionOf})`);
+          }
+          // The call's sender, when it names one, must be the shown sender byte for byte.
+          const callSender = textOf(input.senderEmail) === undefined ? undefined : input.senderEmail;
           if (callSender !== undefined && callSender !== senderEmail) {
             refuse(
               senderEmail
@@ -1079,7 +1110,7 @@ async function runInitialSend(args: {
                 : `the call names a sender the released publish card did not show (${decisionOf})`,
             );
           }
-          released = { list: read.list, campaignId: campaignId!, senderEmail };
+          released = { list: read.list, campaignId, senderEmail };
         }
       }
     }
@@ -1133,8 +1164,10 @@ async function runInitialSend(args: {
     // its `recipientId`, and names exactly one draft of the bundle; a body that
     // carries a contact of its own must carry the same one, and the body must be
     // filed for the released campaign. The address and the subject mailed are
-    // the released entry's; the bundle's draft must still resolve the same
-    // address (trimmed, byte for byte) and hold the same subject, so a bundle
+    // the released entry's, exactly as the card's list row showed them; the
+    // bundle's draft must still resolve the same address (its own value
+    // trimmed, the entry's byte for byte) and hold the same subject byte for
+    // byte, so a bundle
     // changed after the card refuses the send. The revision's text must equal
     // the body the bundle's draft holds (trailing white space aside, as the
     // delivery pack's read step compares them before the card), so two entries
@@ -1168,6 +1201,13 @@ async function runInitialSend(args: {
         if (textOf(entry.artifactId) === undefined || textOf(entry.representationRevisionId) === undefined) {
           refuse(`approved body ${position} names no artifact revision`);
         }
+        // The released values are used as frozen: an id or address with white
+        // space around it is refused rather than trimmed (see `exactOf`).
+        for (const field of ["artifactId", "representationRevisionId", "contactId", "recipientEmail"] as const) {
+          if (textOf(entry[field]) !== undefined && exactOf(entry[field]) === undefined) {
+            refuse(`approved body ${position} carries its ${field} with white space around it`);
+          }
+        }
         if (namedArtifacts.has(entry.artifactId!)) {
           refuse(`approved body ${position} names artifact ${entry.artifactId} a second time`);
         }
@@ -1183,7 +1223,7 @@ async function runInitialSend(args: {
         bodyByContact.set(contact, {
           artifactId: entry.artifactId!,
           representationRevisionId: entry.representationRevisionId!,
-          recipientEmail: entry.recipientEmail!.trim(),
+          recipientEmail: entry.recipientEmail!,
           subject: entry.subject!,
           position,
         });
