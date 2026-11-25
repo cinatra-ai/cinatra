@@ -392,6 +392,7 @@ describe("the decision that governs a call (readGoverningPublishDecision)", () =
     decisions.readRunBoundGraph.mockResolvedValue(JSON.stringify(GRAPH));
     decisions.readDecisionForRunNode.mockImplementation(parentRow("released"));
     for (const child of ["compose", "send", "fanout"]) {
+      // red-first-expect: readGoverningPublishDecision is not a function
       expect(await readGoverningPublishDecision("run-1", child)).toEqual(row("released"));
       expect(await publishCallAllowed(RUN, child, ENDED)).toBe(true);
     }

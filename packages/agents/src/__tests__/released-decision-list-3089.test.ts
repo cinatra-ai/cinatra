@@ -152,6 +152,7 @@ describe("releasedDecisionList (cinatra#3089)", () => {
 
   it("L10 a column named for two fields, or a field named twice, is refused", () => {
     const d = decision(entries(1));
+    // red-first-expect: releasedDecisionList is not a function
     const twiceColumn = releasedDecisionList({ decision: d, entryFields: FIELDS, shownFields: [{ field: "recipientEmail", column: "email" }, { field: "subject", column: "email" }] });
     expect(twiceColumn.ok).toBe(false);
     const twiceField = releasedDecisionList({ decision: d, entryFields: FIELDS, shownFields: [{ field: "subject", column: "email" }, { field: "subject", column: "subject" }] });
