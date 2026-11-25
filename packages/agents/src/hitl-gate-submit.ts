@@ -19,6 +19,7 @@
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import { GROUPED_SETUP_FORM_RENDERER_ID } from "./agent-builder-ids";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
+import { isContextSelectorRendererId } from "./orchestrator-gate-predicate";
 import { isSetupInterruptTaskId } from "./run-surface-status";
 import { wrapUserResponseWithAttachments } from "./wayflow-user-response-envelope";
 
@@ -338,7 +339,7 @@ export function withContextSelectorEnvelope(
   interruptValues: Record<string, unknown> | undefined,
   payload: Record<string, unknown>,
 ): Record<string, unknown> {
-  if (!xRenderer.endsWith(":context-selector")) return payload;
+  if (!isContextSelectorRendererId(xRenderer)) return payload;
   if (typeof payload.userResponse === "string") return payload;
   const vals = (interruptValues ?? {}) as Record<string, unknown>;
   const slotMeta = vals["slotMeta"] as

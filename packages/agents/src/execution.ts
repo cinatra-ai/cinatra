@@ -215,6 +215,9 @@ export type PinnedRunSnapshotFields = {
    * environment is bound at the seam, not on the template object).
    */
   executionEnvironment?: unknown;
+  /** cinatra#3089: the approval policy captured in this snapshot. The worker's
+   *  dispatch overlay ignores it; a pause of the run is classified by it. */
+  approvalPolicy?: unknown;
 };
 
 export type ResolvePinnedRunSnapshotDeps = {
@@ -321,6 +324,7 @@ export async function resolvePinnedRunSnapshot(
       compiledPlan?: unknown;
       taskSpec?: string | null;
       executionEnvironment?: unknown;
+      approvalPolicy?: unknown;
     };
     // (5) EXECUTION-FIELD COMPLETENESS — a required pin FULLY replaces the
     //     execution plan, so an ABSENT or `undefined` compiledPlan cannot pin
@@ -338,6 +342,7 @@ export async function resolvePinnedRunSnapshot(
       compiledPlan: s.compiledPlan,
       taskSpec: s.taskSpec ?? null,
       executionEnvironment: s.executionEnvironment ?? null,
+      approvalPolicy: s.approvalPolicy,
     };
   }
 
@@ -352,6 +357,7 @@ export async function resolvePinnedRunSnapshot(
       compiledPlan?: unknown;
       taskSpec?: string | null;
       executionEnvironment?: unknown;
+      approvalPolicy?: unknown;
     };
     // A RESOLVED best-effort snapshot is authoritative for this run exactly as
     // it is for compiledPlan/taskSpec above — the environment does not fall back
@@ -361,11 +367,34 @@ export async function resolvePinnedRunSnapshot(
       compiledPlan: s.compiledPlan,
       taskSpec: s.taskSpec,
       executionEnvironment: s.executionEnvironment ?? null,
+      approvalPolicy: s.approvalPolicy,
     };
   }
 
   // `versionId`-only (inert pin) or neither → live template.
   return null;
+}
+
+/**
+ * cinatra#3089: the template a pause is classified by. A run served a pinned
+ * snapshot pauses in THAT version's flow, so its approval policy is the
+ * snapshot's, never the live template's (a later version may drop or rename a
+ * review marker). The rest is the live row, as the dispatch overlay keeps it.
+ * A required pin that cannot be served, a snapshot read that throws, or a
+ * served snapshot with no approval policy throws: the caller retries, then
+ * stops; it never falls back to the live policy. No served snapshot: the live
+ * template, as on main.
+ */
+export async function readPausePolicyTemplate(
+  run: { templateId: string; packageVersion: string | null; versionId: string | null },
+): Promise<Awaited<ReturnType<typeof readAgentTemplateById>>> {
+  const live = await readAgentTemplateById(run.templateId);
+  const pinned = await resolvePinnedRunSnapshot(run, { readAgentTemplateVersionById, readAgentTemplateVersionBySemver });
+  if (!pinned || !live) return live;
+  if (pinned.approvalPolicy === undefined) {
+    throw new Error(`the pinned snapshot of ${run.templateId}@${run.packageVersion} carries no approval policy`);
+  }
+  return { ...live, approvalPolicy: pinned.approvalPolicy as typeof live.approvalPolicy };
 }
 
 // ---------------------------------------------------------------------------
@@ -515,7 +544,7 @@ import {
   buildA2UiMidRunTranslatorResolver,
   resolveRendererIdForKind,
 } from "./field-renderer-bindings.server";
-import { stepFiresRendererGate } from "./orchestrator-gate-predicate";
+import { stepFiresRendererGate, reviewGateNodeSteps, stepForVerifiedPause, ARTIFACT_REVIEW_GATE_UNVERIFIED_TEXT, PAUSE_POLICY_UNREAD_TEXT, readPausePolicyWithRetry } from "./orchestrator-gate-predicate";
 import {
   GATE_KEYS_NOT_FROM_RUN_INPUTS,
   readStoredKeyList,
@@ -529,7 +558,7 @@ import { getOrAddWayflowRendererGateIndex, rememberWayflowGateTask, rememberLate
 // host-side caller injects the live `email-send` providers so sender-alias
 // enums resolve registration-driven.
 import { resolveEmailSendProviders } from "@/lib/email-send-providers";
-import { mintRunToken, CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY } from "@/lib/agent-run-token";
+import { mintRunToken, CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY, verifyGateNodeClaim } from "@/lib/agent-run-token";
 import { holdRunAtPublishGate } from "./publish-decision-actions";
 // cinatra#2566 — the lifecycle card REF CODEC only (node:crypto + the app
 // secret). Deliberately NOT the refetch resolver: importing that here would pull
@@ -2397,6 +2426,29 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // only: no renderer, no generic review task. A missing or unverified claim on a
     // publishing template ends the run failed.
     if (await holdRunAtPublishGate({ run, fromStatus, task, claim: gateNodeClaim, authority })) return;
+    // cinatra#3089: ONE read of the template for this pause, used for every
+    // decision below (the renderer's too), with the policy of the version the
+    // run is pinned to. A step that names its gate's node is the step of a pause
+    // by the pause's verified node, never by position. Without a verified node it
+    // cannot be told whether this pause is such a review: the run is stopped
+    // failed, the pause offered as no approval. A read that throws is retried
+    // briefly first (nothing re-drives a dropped report); only then the stop.
+    const stopUnplacedPause = (error: string) =>
+      transitionRunStatus(runId, fromStatus, "failed", { error, completedAt: new Date() }, authority)
+        .catch((err: unknown) => { if ((err as { code?: unknown } | null)?.code !== "stale_from_status") throw err; });
+    const pauseRead = await readPausePolicyWithRetry(() => readPausePolicyTemplate(run), `run=${runId} task=${task.id}`);
+    if (!pauseRead.ok) {
+      await stopUnplacedPause(PAUSE_POLICY_UNREAD_TEXT);
+      return;
+    }
+    const pauseTemplate = pauseRead.value;
+    const reviewNodeSteps = reviewGateNodeSteps(pauseTemplate?.approvalPolicy?.steps);
+    const verifiedGateNode = reviewNodeSteps.length === 0 ? null
+      : verifyGateNodeClaim({ key: process.env.CINATRA_CONTEXT_ATTEST_KEY, contextId: task.contextId ?? run.a2aContextId, taskId: task.id, claim: gateNodeClaim });
+    if (reviewNodeSteps.length > 0 && verifiedGateNode === null) {
+      await stopUnplacedPause(ARTIFACT_REVIEW_GATE_UNVERIFIED_TEXT);
+      return;
+    }
     const adapter = new DualAdapterDispatch(
       new AgUiAdapter(runId, run.templateId, (event) => publishAgUiEvent(runId, event)),
       new A2UiAdapter(
@@ -2520,7 +2572,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         // Read first and on its own, so that neither a template fault nor a
         // fault below lets a run input fill the gate (null stays).
         try {
-          const contextTmpl = await readAgentTemplateById(run.templateId);
+          const contextTmpl = pauseTemplate;
           wayflowSurfaceGateInputKeys = contextTmpl
             ? readTemplateGateKeys(contextTmpl.approvalPolicy?.steps ?? [])
             : null;
@@ -2531,7 +2583,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           resolveRendererIdForKind("context-selector") ?? SCHEMA_FIELD_FALLBACK_RENDERER_ID;
         await rememberWayflowGateTask(runId, task.id);
       } else {
-        const tmpl = await readAgentTemplateById(run.templateId);
+        const tmpl = pauseTemplate;
         const rawPolicySteps: unknown = tmpl?.approvalPolicy?.steps ?? [];
         // Read before anything can throw on these steps, so the catch below
         // keeps it; an absent template leaves it null.
@@ -2573,6 +2625,26 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         // lists, or null (every run input) when the template was not read.
         wayflowSurfaceGateInputKeys = templateGateKeys;
       }
+    }
+    // cinatra#3089: the one step this pause is drawn as. A verified node that a
+    // node-named step names takes ALL of that step; a position that picked a
+    // node-named step of another node takes none of it (no step: the pause's
+    // own schema through the plain form, every listed key withheld).
+    const pauseStep = verifiedGateNode === null ? { kind: "positional" as const }
+      : stepForVerifiedPause({ nodeSteps: reviewNodeSteps, verifiedNode: verifiedGateNode, positionalStepNumber: wayflowStepNumber });
+    if (pauseStep.kind === "matched") {
+      const s = pauseStep.step.step as { xRenderer?: unknown; schema?: Record<string, unknown>; inputMessageSchema?: Record<string, unknown>; surfaceGateInputKeys?: unknown };
+      wayflowXRenderer = typeof s.xRenderer === "string" ? s.xRenderer : SCHEMA_FIELD_FALLBACK_RENDERER_ID;
+      wayflowStepNumber = pauseStep.step.stepNumber;
+      wayflowSchema = s.schema ?? s.inputMessageSchema ?? null;
+      wayflowArtifactReviewTargetsInput = pauseStep.step.targetsInput;
+      wayflowSurfaceGateInputKeys = readStoredKeyList(s.surfaceGateInputKeys);
+    } else if (pauseStep.kind === "mispicked") {
+      wayflowXRenderer = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
+      wayflowStepNumber = null;
+      wayflowSchema = null;
+      wayflowArtifactReviewTargetsInput = null;
+      wayflowSurfaceGateInputKeys = templateGateKeys;
     }
     // ------------------------------------------------------------------------
     // cinatra#1796 (epic #1620 S13) — MARKED artifact-review gate: pin + route.
