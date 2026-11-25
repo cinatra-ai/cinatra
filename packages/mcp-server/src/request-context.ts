@@ -77,6 +77,8 @@ export type DelegatedMcpActor =
        */
       verifiedStepId?: string;
       verifiedExecutedSource?: VerifiedExecutedRunSource;
+      /** The token's `pdc` claim (cinatra#3745): the publish decision the call was made under, only beside a proof. */
+      verifiedPublishDecisionId?: string;
     }
   | {
       delegation: "public_site_widget";
@@ -372,6 +374,14 @@ export type McpRequestContext = {
   verifiedStepId?: string;
   verifiedExecutedSource?: VerifiedExecutedRunSource;
   /**
+   * The publish decision this call was made under, VERIFIED (cinatra#3745): the
+   * decision id the flow runtime signed beside the executing-source proof, from
+   * the on-behalf-of token's `pdc` claim. Present only with
+   * `verifiedExecutedSource` from the same token; never from request input.
+   * It names which decision a use of a decision may take; it grants nothing.
+   */
+  verifiedPublishDecisionId?: string;
+  /**
    * The LENT-ACTION GRANT this turn presented (cinatra#2932, lifecycle-b W5a).
    *
    * WHAT IT IS. A server-minted, signed, single-use authority naming the person,
@@ -545,6 +555,8 @@ export type ResolvedRequestRunContext = {
    */
   stepId?: string;
   verifiedExecutedSource?: VerifiedExecutedRunSource;
+  /** The on-behalf-of token's publish decision (cinatra#3745), only beside that token's served proof. */
+  publishDecisionId?: string;
   /** Which channel supplied the run id (the cutover metric dimension). */
   servedBy: RunContextServedBy;
   /** True when a durable "invalid" outcome suppressed the legacy channels. */
@@ -601,6 +613,9 @@ export function resolveRequestRunContext(input: {
    *  proof: the token's own claims are fixed at mint and cannot show that the
    *  run is still on that attempt. */
   delegatedSourceCurrent?: boolean;
+  /** delegatedActor.verifiedPublishDecisionId when delegation === "agent_run" (cinatra#3745). Used only when the
+   *  delegated run id serves with its proof. */
+  delegatedPublishDecisionId?: string;
   /** The ONE per-request durable resolution (undefined when not consulted —
    *  e.g. a delegated request or no bearer). */
   durable?: DurableRunContextResolution;
@@ -716,6 +731,9 @@ export function resolveRequestRunContext(input: {
     agentSpecVersion: durableCtx?.agentSpecVersion ?? effHeaderAgentSpecVersion,
     ...(stepId ? { stepId } : {}),
     ...(source ? { verifiedExecutedSource: source } : {}),
+    // The publish decision rides only with the on-behalf-of proof it was signed beside (cinatra#3745).
+    ...(source && nonEmpty(input.delegatedRunId) && nonEmpty(input.delegatedPublishDecisionId)
+      ? { publishDecisionId: input.delegatedPublishDecisionId } : {}),
     servedBy,
     suppressed,
     denied,

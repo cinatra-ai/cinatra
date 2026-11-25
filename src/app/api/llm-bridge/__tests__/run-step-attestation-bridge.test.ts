@@ -585,8 +585,38 @@ describe("a source-bound call never gets a machine bearer", () => {
     expect(res.status).toBe(200);
     expect(await invokeOverride()).toEqual({ type: "mcp-tool" });
     expect(mintedActor()).toMatchObject({ runId: RUN.id, verifiedStepId: NODE, verifiedExecutedSource: VERIFIED_SOURCE });
+    expect(mintedActor()).not.toHaveProperty("verifiedPublishDecisionId");
     expect(buildLlmMcpServerToolMock).not.toHaveBeenCalled();
     expect(writeDurableRunContextBindingMock).not.toHaveBeenCalled();
+  });
+
+  /** The publish decision the runtime signs beside the source-bound pair (cinatra#3745). */
+  function decisionHeaders(decision: string, signedDecision = decision) {
+    const expiry = Math.floor(Date.now() / 1000) + 300;
+    const { sourceSha256, executedSourceSha256, declarationSourceSha256 } = SOURCE;
+    const sig = createHmac("sha256", ATTEST_KEY).update(`s3\n${CTX}\n${NODE}\n${ATTEMPT}\n${sourceSha256}\n` +
+      `${executedSourceSha256}\n${declarationSourceSha256}\n${signedDecision}\n${expiry}`).digest("hex");
+    return { "x-cinatra-publish-decision": decision, "x-cinatra-publish-decision-attestation": `s3:${expiry}:${sig}` };
+  }
+
+  it("carries the signed publish decision of the call in the on-behalf-of token", async () => {
+    const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...sourceHeaders(), ...decisionHeaders("decision-2") }));
+    expect(res.status).toBe(200);
+    expect(await invokeOverride()).toEqual({ type: "mcp-tool" });
+    expect(mintedActor()).toMatchObject({ verifiedExecutedSource: VERIFIED_SOURCE, verifiedPublishDecisionId: "decision-2" });
+  });
+
+  it("refuses a call whose publish decision does not verify before any model call", async () => {
+    const cases: Array<Record<string, string>> = [decisionHeaders("decision-2", "decision-1"),
+      { "x-cinatra-publish-decision": "decision-2" },
+      { "x-cinatra-publish-decision-attestation": decisionHeaders("decision-2")["x-cinatra-publish-decision-attestation"] }];
+    for (const headers of cases) {
+      runResolvedSkillAwareDeterministicLlmTaskMock.mockClear();
+      const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...sourceHeaders(), ...headers }));
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({ code: "run_source_mismatch" });
+      expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
+    }
   });
 
   // (b16)

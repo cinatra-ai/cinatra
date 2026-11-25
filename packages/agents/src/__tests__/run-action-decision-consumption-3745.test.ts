@@ -204,7 +204,6 @@ function tableName(table: unknown): string {
 
 // The module is new with cinatra#3745. It is loaded inside each test, not at the top of the file: before the change
 // the file still loads and each test fails on the missing module.
-// red-first-expect: Cannot find module '/src/run-action-decision-consumption'
 const loadModule = () => import("../run-action-decision-consumption");
 async function consume(input: unknown) {
   const { consumeRunActionDecision } = await loadModule();
@@ -291,7 +290,6 @@ describe("the person's affirmative decision for the run's action, used once", ()
     let park: Promise<unknown> | null = null;
     // The new decision arrives right after the consumption chose the released one, and is given time to commit.
     h.afterDecisionRead = async () => { park = newPark(); await pause(); };
-    // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
     const result = await consume(input());
     await park;
     expect(result).toMatchObject({ decisionId: "decision-1" });
@@ -309,7 +307,6 @@ describe("the person's affirmative decision for the run's action, used once", ()
     h.parkHold = new Promise<void>((resolve) => { release = resolve; });
     const park = newPark();
     await pause();
-    // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
     const consumption = consume(input()).catch((e: unknown) => e);
     await pause();
     // The consumption waits at the run row: it has not read the binding yet.
@@ -394,7 +391,6 @@ describe("the person's affirmative decision for the run's action, used once", ()
   it("consumes once a released decision with no generation: a row of an older node is current until a reset", async () => {
     await loadModule();
     h.tables.set(agentRunPublishDecisions, [decision({ runGeneration: null })]);
-    // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
     const result = await consume(input());
     expect(result).toMatchObject({ consumptionKey: "publish_decision:decision-1", decidedBy: "user-7" });
     await expect(consume(input())).rejects.toMatchObject({ code: "action_person_decision_already_consumed" });
@@ -416,10 +412,9 @@ describe("the person's affirmative decision for the run's action, used once", ()
       decision({ id: "decision-a", gateTaskId: "gate-task-2", status: "parked", decidedBy: null, decidedAt: null,
         createdAt: ms, createdAtMicros: base + 500 }),
     ]);
-    // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
     await expect(consume(input())).rejects.toMatchObject({ code: "action_person_decision_open" });
     expect(consumptions()).toEqual([]);
-    // The read orders as the store does (created_at, then id, newest first) and takes one row.
+    // The read orders as the store does (created_at, then id, newest first).
     const { PgDialect } = await import("drizzle-orm/pg-core");
     const { sql } = await import("drizzle-orm");
     const order = h.decisionOrder.at(-1) ?? [];
@@ -442,7 +437,6 @@ describe("the person's affirmative decision for the run's action, used once", ()
       { declaredRows: "[{" }, { declaredRows: JSON.stringify([{ label: "Subject" }]) }];
     for (const over of malformed) {
       h.tables.set(agentRunPublishDecisions, [decision(over)]);
-      // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
       const refused = await consume(input()).catch((e: unknown) => e as Error & { code?: string });
       expect(refused).toMatchObject({ code: "action_person_decision_invalid" });
       expect(String((refused as Error).message)).not.toMatch(/not json|Subject/);
@@ -490,5 +484,76 @@ describe("the person's affirmative decision for the run's action, used once", ()
     expect(org).toMatchObject({ code: "action_person_decision_unavailable" });
     expect(String((org as Error).message)).not.toContain("org-7");
     expect(consumptions()).toEqual([]);
+  });
+});
+
+// A step entered twice in one attempt signs the same source-bound proof on both visits, and each visit has its own
+// decision. The call names the decision of its own visit (the binding the runtime signed beside the proof); the
+// consumption uses exactly that decision.
+describe("the decision of the call's own visit (cinatra#3745)", () => {
+  // The second visit: a newer released decision of the same run and step, with its own gate task.
+  const secondVisit = (over: Row = {}) => decision({ id: "decision-2", gateTaskId: "gate-task-2",
+    decidedAt: new Date("2026-11-24T11:30:00Z"), createdAt: new Date("2026-11-24T11:00:00Z"), ...over });
+  const bound = (publishDecisionId: unknown, over: Record<string, unknown> = {}) => input({ publishDecisionId, ...over });
+
+  it("a delayed call of the first visit, after the second release, never uses the second visit's decision", async () => {
+    await loadModule();
+    await consume(bound("decision-1"));
+    h.tables.get(agentRunPublishDecisions)!.push(secondVisit());
+    await expect(consume(bound("decision-1"))).rejects.toMatchObject({ code: "action_person_decision_already_consumed" });
+    expect(consumptions().map((c) => c.gateId)).toEqual(["publish_decision:decision-1"]);
+    // The second visit's own call is served once.
+    expect(await consume(bound("decision-2"))).toMatchObject({ decisionId: "decision-2",
+      consumptionKey: "publish_decision:decision-2" });
+    await expect(consume(bound("decision-2"))).rejects.toMatchObject({ code: "action_person_decision_already_consumed" });
+    expect(consumptions().map((c) => c.gateId)).toEqual(["publish_decision:decision-1", "publish_decision:decision-2"]);
+  });
+
+  it("a call bound to its own older visit uses that decision, not the newest one", async () => {
+    await loadModule();
+    h.tables.get(agentRunPublishDecisions)!.push(secondVisit());
+    expect(await consume(bound("decision-1"))).toMatchObject({ decisionId: "decision-1" });
+    expect(consumptions().map((c) => c.gateId)).toEqual(["publish_decision:decision-1"]);
+  });
+
+  it("refuses a binding that names another run's or another step's decision, or no decision of this step", async () => {
+    await loadModule();
+    h.tables.get(agentRunPublishDecisions)!.push(
+      decision({ id: "decision-other-run", runId: "run-2" }),
+      decision({ id: "decision-other-step", nodeId: OTHER_STEP, gateTaskId: "gate-task-9" }));
+    for (const id of ["decision-other-run", "decision-other-step", "decision-unknown"]) {
+      await expect(consume(bound(id)), id).rejects.toMatchObject({ code: "action_decision_binding_mismatch" });
+    }
+    expect(consumptions()).toEqual([]);
+  });
+
+  it("refuses a binding to a decision that is not released", async () => {
+    await loadModule();
+    h.tables.set(agentRunPublishDecisions, [decision(),
+      secondVisit({ status: "parked", decidedBy: null, decidedAt: null })]);
+    await expect(consume(bound("decision-2"))).rejects.toMatchObject({ code: "action_person_decision_open" });
+    h.tables.set(agentRunPublishDecisions, [decision(), secondVisit({ status: "declined" })]);
+    await expect(consume(bound("decision-2"))).rejects.toMatchObject({ code: "action_person_decision_not_affirmative" });
+    expect(consumptions()).toEqual([]);
+  });
+
+  it("a call with no binding is served when the step has exactly one decision in the attempt", async () => {
+    await loadModule();
+    expect(await consume(input())).toMatchObject({ decisionId: "decision-1" });
+  });
+
+  it("refuses a call with no binding when the step has more than one decision in the attempt", async () => {
+    await loadModule();
+    h.tables.get(agentRunPublishDecisions)!.push(secondVisit());
+    await expect(consume(input())).rejects.toMatchObject({ code: "action_decision_binding_missing" });
+    expect(consumptions()).toEqual([]);
+  });
+
+  it("refuses a malformed binding before any transaction", async () => {
+    await loadModule();
+    for (const id of ["", "d\nx", "d".repeat(513), 7, null]) {
+      await expect(consume(bound(id)), String(id)).rejects.toMatchObject({ code: "action_decision_input_invalid" });
+    }
+    expect(h.calls).toEqual([]);
   });
 });

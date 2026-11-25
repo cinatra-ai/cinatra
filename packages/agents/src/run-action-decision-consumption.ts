@@ -11,9 +11,14 @@
 //   - the run still runs under the proof's attempt, context and bound source;
 //   - the step of the proof declares the action's tool in the run's bound graph
 //     (a step that declares nothing binds no decision to an action: refused);
-//   - the newest decision of exactly this run and step, in the run's current
+//   - the decision of the call's own visit of the step, in the run's current
 //     attempt, reads `released`, names the person who decided it and belongs to
-//     the run's organization;
+//     the run's organization. A step entered twice in one attempt has one
+//     decision per visit and signs the same proof on both, so the call names its
+//     visit's decision (`publishDecisionId`, signed by the runtime beside the
+//     proof) and only that decision is used. A call that names none is served
+//     only when the step has exactly one decision in the attempt (a runtime that
+//     signs no decision yet); with more than one it is refused;
 //   - no consumption of that decision exists; the insert of the consumption row
 //     (its primary key is the decision's key) is the fence, so of two concurrent
 //     consumptions exactly one commits.
@@ -26,7 +31,7 @@
 // commits. Under READ COMMITTED each later statement here reads a fresh
 // snapshot, so a park that committed before the lock was granted is seen by the
 // decision read, and a park still waiting commits only after this transaction.
-// The decision chosen stays the newest until the consumption commits. Every refusal is a RunStepToolPolicyRefusal
+// The decisions read cannot change until the consumption commits. Every refusal is a RunStepToolPolicyRefusal
 // with a fixed code; a store failure is refused with a fixed code too and never
 // passes its own text on.
 //
@@ -67,6 +72,14 @@ export type ConsumeRunActionDecisionInput = {
   readonly authority: OrgWriteAuthority;
   readonly proof: VerifiedExecutedRunSource;
   readonly action: RunActionToolIdentity;
+  /**
+   * The decision of the call's own visit of the step (cinatra#3745): the id the
+   * runtime signed beside the proof (`s3`), as the caller verified it. A step
+   * entered twice in one attempt signs the same proof on both visits, and each
+   * visit has its own decision; with this id the call can only use its own.
+   * Absent for a call whose runtime signed no decision (see the rule below).
+   */
+  readonly publishDecisionId?: string;
 };
 
 export type RunActionDecisionConsumption = {
@@ -109,6 +122,11 @@ function readActionIdentity(value: unknown): RunActionToolIdentity {
  *   - `step_tool_not_declared` / `action_decision_step_undeclared`: the step does not declare the action's tool, or
  *     declares no tools at all (so no decision of it can name an action);
  *   - `action_person_decision_missing`: no decision of this step in the run's current attempt;
+ *   - `action_decision_binding_mismatch`: the call names a decision (`publishDecisionId`) that is not one of this run
+ *     and step in the run's current attempt;
+ *   - `action_decision_binding_missing`: the call names no decision, and the step has more than one decision in the
+ *     run's current attempt, so which visit it belongs to cannot be told (a call that names none is served only when
+ *     the step has exactly one: a runtime that signs no decision yet);
  *   - `action_person_decision_open`: the newest such decision still waits for a person;
  *   - `action_person_decision_not_affirmative`: it was declined, expired or ended with the run;
  *   - `action_person_decision_invalid`: the store cannot read the row, or it reads released but names no person, or
@@ -123,6 +141,8 @@ export async function consumeRunActionDecision(input: ConsumeRunActionDecisionIn
   const proof = parseVerifiedExecutedRunSource(input.proof);
   if (!proof) refuse("action_decision_input_invalid");
   const action = readActionIdentity(input.action);
+  const bound = input.publishDecisionId;
+  if (bound !== undefined && !fieldValid(bound)) refuse("action_decision_input_invalid");
   const p = proof as VerifiedExecutedRunSource;
   try {
     return await withRunActionPolicyTransaction({ orgId, runId, authority: input.authority }, async (tx) => {
@@ -145,16 +165,28 @@ export async function consumeRunActionDecision(input: ConsumeRunActionDecisionIn
         executedSourceSha256: p.executedSourceSha256, stepId: p.stepId, toolName: action.toolName });
       if (reading.kind !== "declared") refuse("action_decision_step_undeclared");
 
-      // The newest decision of exactly this step in the run's current attempt, chosen by the database: the store's own
-      // current-attempt predicate (a row with no generation, written by an older node, is current until a reset stamps
-      // it) and the store's order (created_at, then id, both descending), at the database's full timestamp precision.
-      const [stored] = await tx.select().from(agentRunPublishDecisions)
+      // Every decision of exactly this step in the run's current attempt, newest first as the database orders them: the
+      // store's own current-attempt predicate (a row with no generation, written by an older node, is current until a
+      // reset stamps it) and the store's order (created_at, then id, both descending), at the database's full timestamp
+      // precision. All of them are locked.
+      const rows = (await tx.select().from(agentRunPublishDecisions)
         .where(and(eq(agentRunPublishDecisions.runId, runId), eq(agentRunPublishDecisions.nodeId, p.stepId),
           CURRENT_ATTEMPT))
         .orderBy(desc(agentRunPublishDecisions.createdAt), desc(agentRunPublishDecisions.id))
-        .limit(1)
-        .for("update");
-      if (!stored || stored.runId !== runId || stored.nodeId !== p.stepId) return refuse("action_person_decision_missing");
+        .for("update")).filter((r) => r.runId === runId && r.nodeId === p.stepId);
+      if (rows.length === 0) return refuse("action_person_decision_missing");
+      // The decision of the call's own visit: the one it names, else the step's only one. With no name and more than one
+      // decision the newest still decides an open or a refused answer; a released newest one cannot be told from an
+      // earlier visit's, so it is refused.
+      let stored: (typeof rows)[number];
+      if (bound !== undefined) {
+        const named = rows.find((r) => r.id === bound);
+        if (!named) return refuse("action_decision_binding_mismatch");
+        stored = named;
+      } else {
+        stored = rows[0]!;
+        if (rows.length > 1 && stored.status === "released") refuse("action_decision_binding_missing");
+      }
       // The locked row is read through the store's own decoder: a row the store cannot read (an unknown status,
       // unreadable surfaced values or declared rows) is refused with a fixed code and none of its stored text.
       let decision: PublishDecisionRow;
