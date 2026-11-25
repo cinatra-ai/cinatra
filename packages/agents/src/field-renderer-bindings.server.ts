@@ -47,6 +47,29 @@ export function __clearInstalledFieldRendererBindingsCache(): void {
 }
 
 /**
+ * A declared HITL screen (cinatra#3470) is drawn only for a BUNDLED package,
+ * whose declaration the build validated into the generated map. A package
+ * installed at runtime keeps its binding, but its `screen` is dropped here,
+ * with one logged line, and the binding is registered as if it declared none.
+ */
+function withoutDeclaredScreens(packageName: string, declared: unknown): unknown {
+  if (!Array.isArray(declared)) return declared;
+  let dropped = false;
+  const kept = declared.map((e: unknown) => {
+    if (e === null || typeof e !== "object" || Array.isArray(e) || !Object.hasOwn(e, "screen")) return e;
+    dropped = true;
+    const { screen: _screen, ...rest } = e as Record<string, unknown>;
+    return rest;
+  });
+  if (dropped) {
+    console.warn(
+      `[field-renderer-bindings] ${packageName} is installed at runtime: its declared screen is not drawn (only a bundled package's is)`,
+    );
+  }
+  return kept;
+}
+
+/**
  * Enumerate `<agentInstallDir>/<scope>/<name>/package.json` and collect the
  * validated `cinatra.fieldRenderers` declarations. Returns [] on any
  * environment where the install dir is unreadable (build contexts, fresh
@@ -94,7 +117,7 @@ export function collectInstalledFieldRendererBindings(): CollectedBinding[] {
       if (!packageName || declared === undefined) continue;
       const { entries, errors } = validateFieldRendererDeclarations(
         packageName,
-        declared,
+        withoutDeclaredScreens(packageName, declared),
       ) as { entries: CollectedBinding[]; errors: string[] };
       for (const err of errors) {
         console.warn(`[field-renderer-bindings] skipped invalid declaration: ${err}`);

@@ -38,7 +38,13 @@ import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuc
 // kernel guard instead of directly on the module `db` (owner ruling 2026-07-26,
 // ruling 1: "now").
 import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
-import { readWayflowSubmittedValues } from "./hitl-gate-submit";
+import {
+  declaredHitlCardOfBinding,
+  declaredHitlCheckedAnswer,
+  readWayflowSubmittedValues,
+  type DeclaredHitlCard,
+} from "./hitl-gate-submit";
+import { GENERATED_FIELD_RENDERER_BINDINGS } from "@/lib/generated/agent-bindings";
 // cinatra#2484: the setup-resume path is the LAST place a type-violating setup
 // value can be stopped before it becomes `agent_runs.inputParams` and reaches
 // the run. It needs the SAME effective schema the setup loop rendered from —
@@ -68,6 +74,32 @@ const RESERVED_APPROVAL_ENVELOPE_KEYS = new Set<string>([
   "stepNumber",
   "approvalNote",
 ]);
+
+/**
+ * THE DECLARED CARD OF THE STEP AN ANSWER GOES TO (cinatra#3470), read on the
+ * server from the step's own gate row and the BUNDLED bindings (a package
+ * installed at runtime declares no screen the host draws). `"unknown"` when the
+ * gate row could not be read and the run's agent declares a screen on any of
+ * its bindings: which step is open, and so whether its card must answer it,
+ * cannot be told, and the answer is refused (fail closed).
+ */
+export function declaredCardOfStep(
+  gate: { xRenderer: string } | null,
+  packageName: string,
+): DeclaredHitlCard | "unknown" | null {
+  if (gate !== null) {
+    const binding = GENERATED_FIELD_RENDERER_BINDINGS.find((b) => b.id === gate.xRenderer);
+    return binding ? declaredHitlCardOfBinding(binding) : null;
+  }
+  const declares = GENERATED_FIELD_RENDERER_BINDINGS.some(
+    (b) => b.screen !== undefined && (b.declaredBy === packageName || b.id.startsWith(`${packageName}:`)),
+  );
+  return declares ? "unknown" : null;
+}
+
+/** The refusal of an answer whose step's screen could not be read (cinatra#3470). */
+export const DECLARED_CARD_STEP_UNREADABLE_REFUSAL =
+  "This step's screen could not be read, so nothing was sent. Reload the page and answer the step on its card.";
 
 /**
  * Reject a setup value that violates its input's DECLARED type (cinatra#2484).
@@ -1053,7 +1085,7 @@ export async function approveReviewTaskInternal(
       values && typeof values === "object" && !Array.isArray(values)
         ? (values as { userResponse?: unknown; approvalNote?: unknown })
         : null;
-    const userResponseRaw = valuesObj?.userResponse;
+    let userResponseRaw = valuesObj?.userResponse;
     const approvalNoteRaw = valuesObj?.approvalNote;
     const trimmedNote = typeof approvalNoteRaw === "string" ? approvalNoteRaw.trim() : "";
 
@@ -1069,7 +1101,7 @@ export async function approveReviewTaskInternal(
     // Extract structured submission payload: a named single text answer under
     // its field (cinatra#4244), else parsed userResponse JSON, else values minus
     // userResponse, else null. The resume text above is unchanged by this.
-    const submittedValues = readWayflowSubmittedValues(values);
+    let submittedValues = readWayflowSubmittedValues(values);
 
     // THE CLAIM IS RELEASED WHEN THE ANSWER NEVER LEAVES (cinatra#3423).
     //
@@ -1096,6 +1128,19 @@ export async function approveReviewTaskInternal(
       // seen and nothing is sent; a refusal gives the claim back. A hold that cannot be read answers one
       // fixed text that names no run and carries no store error.
       await assertNoOpenPublishDecision(run.id).catch((err: unknown) => { throw publishHoldFault(err); });
+      // cinatra#3470: THE SERVER ENFORCES A DECLARED CARD. An answer to a step a
+      // declared card draws holds exactly the card's fields; it is rebuilt from the
+      // step's stored values, and that one object is what is sent and recorded. A
+      // refusal is thrown before the fence, so the claim is given back.
+      const declaredCard = declaredCardOfStep(gateSnapshot, template.packageName);
+      if (declaredCard === "unknown") throw new Error(DECLARED_CARD_STEP_UNREADABLE_REFUSAL);
+      if (declaredCard !== null) {
+        const checked = declaredHitlCheckedAnswer(declaredCard, gateSnapshot?.values ?? {}, values);
+        if ("refusal" in checked) throw new Error(checked.refusal);
+        userResponseRaw = checked.values.userResponse;
+        resumeText = checked.values.userResponse as string;
+        submittedValues = readWayflowSubmittedValues(checked.values);
+      }
       // The shared WayFlow resume (cinatra#4150) is prepared before the fence and
       // sent after it (cinatra#4245): the client with its 24h ceiling and the
       // runtime's long header/body timeouts, this leg's credential and the message.

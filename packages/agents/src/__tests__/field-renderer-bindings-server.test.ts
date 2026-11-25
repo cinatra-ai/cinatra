@@ -86,6 +86,30 @@ describe("collectInstalledFieldRendererBindings", () => {
     warn.mockRestore();
   });
 
+  it("cinatra#3470: keeps a runtime package's binding but drops its declared screen, with one logged line", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    writePkg("rt", "card-agent", {
+      name: "@rt/card-agent",
+      cinatra: {
+        fieldRenderers: [
+          {
+            id: "@rt/card-agent:brief",
+            kind: "cta",
+            priority: 90,
+            midRunHitl: true,
+            screen: { layout: "card", sections: [{ type: "field", key: "angle", label: "Angle" }] },
+          },
+        ],
+      },
+    });
+    expect(collectInstalledFieldRendererBindings()).toEqual([
+      { id: "@rt/card-agent:brief", kind: "cta", priority: 90, midRunHitl: true, declaredBy: "@rt/card-agent" },
+    ]);
+    const lines = warn.mock.calls.map((c) => String(c[0]));
+    expect(lines.filter((l) => l.includes("its declared screen is not drawn"))).toHaveLength(1);
+    warn.mockRestore();
+  });
+
   it("returns [] when the install dir is unreadable (normal degraded state)", () => {
     rmSync(FIXTURE_DIR, { recursive: true, force: true });
     expect(collectInstalledFieldRendererBindings()).toEqual([]);

@@ -107,6 +107,14 @@ export type FieldRendererEntry = {
   drawsOwnSubmit?: boolean;
   /** cinatra#3035: this kind's component commits a pick as `userResponse`, and a gate drawn by it holds the card's Continue until a pick is made. */
   holdsContinueUntilPicked?: boolean;
+  /**
+   * MAY THE HOST'S CONTINUE SEND THIS STAGED ANSWER YET? (cinatra#3470.)
+   * Asked by every host's mid-run Continue with the answer staged so far
+   * (`continueAwaitsAPick`); anything but `true` holds it. ABSENT MEANS NO
+   * HOLD. A declared HITL card sets it: its Continue waits until every field
+   * holds text.
+   */
+  continueReady?: (staged: Record<string, unknown>) => boolean;
 };
 
 class FieldRendererRegistryImpl {
@@ -148,11 +156,18 @@ class FieldRendererRegistryImpl {
 
 export const fieldRendererRegistry = new FieldRendererRegistryImpl();
 
-/** Whether a gate's Continue still waits for a pick: its entry declares the hold and the buffered `userResponse` is not a non-empty string (cinatra#3035). */
+/**
+ * Whether a gate's Continue still waits: its entry declares `continueReady`
+ * and the buffered answer is not ready (cinatra#3470), or its entry declares
+ * the pick hold and the buffered `userResponse` is not a non-empty string
+ * (cinatra#3035). The one reading the run panel, the stepper and the
+ * conversation card hold their mid-run Continue by.
+ */
 export function continueAwaitsAPick(
   entry: FieldRendererEntry | null | undefined,
   buffered: Record<string, unknown>,
 ): boolean {
+  if (typeof entry?.continueReady === "function") return entry.continueReady(buffered) !== true;
   if (entry?.holdsContinueUntilPicked !== true) return false;
   const pick = buffered.userResponse;
   return !(typeof pick === "string" && pick.length > 0);
