@@ -148,18 +148,8 @@ beforeAll(async () => {
   // Provision from the CANONICAL DDL builder (anti-drift: never hand-rolled) —
   // includes the artifact_promotion_request DDL under test.
   const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
-  for (const qy of buildCreateStoreSchemaQueries(TEST_SCHEMA)) {
-    const head = qy.text.trim().slice(0, 6).toUpperCase();
-    if (head !== "CREATE" && head !== "ALTER " && head !== "DROP T" && head !== "DROP S") continue;
-    try {
-      await client.query(qy.text, (qy as { values?: unknown[] }).values as never[]);
-    } catch (err) {
-      // Same tolerance as the sibling suites: a handful of statements
-      // reference seed/DO-block dependencies absent in a fresh empty schema.
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!msg.includes("does not exist")) throw err;
-    }
-  }
+  const { replayStoreSchema } = await import("@/lib/test-support/store-schema-replay");
+  await replayStoreSchema(client, buildCreateStoreSchemaQueries(TEST_SCHEMA));
   // SEED ORDER IS FORCED BY REAL FOREIGN KEYS. In CI the lifecycle DB job
   // provisions `public` from the committed Better Auth seed
   // (scripts/apply-public-schema.mjs), so these tables ALREADY EXIST carrying

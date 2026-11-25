@@ -13,6 +13,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pool } from "pg";
 import { buildCreateStoreSchemaQueries } from "@/lib/drizzle-store";
+import { replayStoreSchema } from "@/lib/test-support/store-schema-replay";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const TEST_SCHEMA = "cinatra_test_agent_templates_schema";
@@ -33,22 +34,9 @@ describe.skipIf(!HAS_REAL_DB)("agent_templates ownership schema", () => {
     await pool.query(`CREATE SCHEMA "${TEST_SCHEMA}"`);
 
     // Run only DDL (CREATE/ALTER/DROP) — skip seed INSERT/UPDATE statements
-    // that can collide with an empty test schema. Mirrors the fixture pattern
-    // in src/lib/__tests__/integration/_fixture.ts.
-    const queries = buildCreateStoreSchemaQueries(TEST_SCHEMA);
-    for (const q of queries) {
-      const head = q.text.trim().slice(0, 6).toUpperCase();
-      if (head !== "CREATE" && head !== "ALTER " && head !== "DROP T" && head !== "DROP S") {
-        continue;
-      }
-      try {
-        await pool.query(q.text);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        // Tolerate dependency-missing errors against an empty schema; rethrow real failures.
-        if (!msg.includes("does not exist")) throw err;
-      }
-    }
+    // that can collide with an empty test schema, and the statements that
+    // target the shared `public` tables (cinatra#3559).
+    await replayStoreSchema(pool, buildCreateStoreSchemaQueries(TEST_SCHEMA));
   }, 60_000);
 
   afterAll(async () => {
@@ -143,24 +131,11 @@ describe.skipIf(!HAS_REAL_DB)("agent_templates interaction axis (#1037 P1)", () 
     kindPool = new Pool({ connectionString: DB_URL });
     await kindPool.query(`DROP SCHEMA IF EXISTS "${KIND_SCHEMA}" CASCADE`);
     await kindPool.query(`CREATE SCHEMA "${KIND_SCHEMA}"`);
-    const queries = buildCreateStoreSchemaQueries(KIND_SCHEMA);
-    for (const q of queries) {
-      const trimmed = q.text.trim().toUpperCase();
-      const head = trimmed.slice(0, 6);
-      // Include DO blocks (via startsWith) — the interaction-axis invariant
-      // CHECKs are added through the bootstrap's guarded DO block, so a
-      // head-only slice ("DO $$\n") would wrongly skip them.
-      const isDoBlock = trimmed.startsWith("DO $$");
-      if (head !== "CREATE" && head !== "ALTER " && head !== "DROP T" && head !== "DROP S" && !isDoBlock) {
-        continue;
-      }
-      try {
-        await kindPool.query(q.text);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (!msg.includes("does not exist")) throw err;
-      }
-    }
+    // The interaction-axis invariant CHECKs are added through the bootstrap's
+    // guarded DO block, so the DO heads stay in the replay.
+    await replayStoreSchema(kindPool, buildCreateStoreSchemaQueries(KIND_SCHEMA), {
+      additionalHeads: ["DO $$ ", "DO $$\n"],
+    });
   }, 60_000);
 
   afterAll(async () => {
