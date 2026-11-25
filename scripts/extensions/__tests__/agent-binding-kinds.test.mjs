@@ -15,9 +15,59 @@ import {
   mergeFieldRendererBindings,
   mergeRoleDeclarations,
 } from "../agent-binding-kinds.mjs";
+// A namespace read, so the constant's absence fails only its own case.
+import * as bindingKinds from "../agent-binding-kinds.mjs";
 
 const PKG = "@cinatra-ai/some-agent";
 const VALID = { id: `${PKG}:thing`, kind: "cta", priority: 90 };
+
+// Item 1 of cinatra#3470: an agent package DECLARES its HITL screens and never
+// renders them, so the shared validator refuses a component declaration from a
+// package of kind agent, outright (no baseline: owner ruling of 2026-09-13,
+// "They are not allowed to stay"). Artifact packages keep the channel.
+describe("validateFieldRendererDeclarations: agents render nothing (cinatra#3470)", () => {
+  const WITH_COMPONENT = { ...VALID, component: { entry: "./field-renderer" } };
+
+  it("refuses a component declared by a package of kind agent, naming the rule's issue", () => {
+    const { entries, errors } = validateFieldRendererDeclarations(PKG, [WITH_COMPONENT], {
+      kind: "agent",
+    });
+    expect(entries).toEqual([]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/cinatra#3470/);
+    expect(errors[0]).toMatch(/kind "agent" package may not declare a component/);
+    expect(errors[0]).toContain(`${PKG}:thing`);
+  });
+
+  it("refuses the component even when the rest of the package's entries are valid", () => {
+    const { entries, errors } = validateFieldRendererDeclarations(
+      PKG,
+      [VALID, { ...WITH_COMPONENT, id: `${PKG}:other` }],
+      { kind: "agent" },
+    );
+    expect(entries.map((e) => e.id)).toEqual([`${PKG}:thing`]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain(`${PKG}:other`);
+  });
+
+  it("accepts a kind agent entry that declares no component", () => {
+    const { entries, errors } = validateFieldRendererDeclarations(PKG, [VALID], { kind: "agent" });
+    expect(errors).toEqual([]);
+    expect(entries).toHaveLength(1);
+  });
+
+  it("keeps the component channel for a package of kind artifact", () => {
+    const { entries, errors } = validateFieldRendererDeclarations(PKG, [WITH_COMPONENT], {
+      kind: "artifact",
+    });
+    expect(errors).toEqual([]);
+    expect(entries[0].component).toEqual({ entry: "./field-renderer" });
+  });
+
+  it("exports the rule's issue reference", () => {
+    expect(bindingKinds.AGENT_HITL_RULE_ISSUE).toBe("cinatra#3470");
+  });
+});
 
 describe("validateFieldRendererDeclarations", () => {
   it("accepts a minimal valid entry and normalizes it", () => {

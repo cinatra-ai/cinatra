@@ -38,11 +38,10 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 // KIND-AGNOSTIC CHANNEL (cinatra#1625, epic #1620 S8 — M3): this manifest and
 // the whole vendoring/provenance mechanism are extension-KIND-neutral — an
 // `extensionDir` under `extensions/<scope>/` is vendored the same way whether it
-// is a connector OR an AGENT. A companion HITL-renderer slice that relocates a
-// field-renderer component into its claiming `-agent` extension adds an entry
-// here for that agent dir, exactly like a connector; the relative-import rewrite
-// keeps the vendored primitives clear of the `@/` import-ban (which is itself
-// kind-agnostic). Nothing below is connector-specific.
+// is a connector OR an AGENT; the relative-import rewrite keeps the vendored
+// primitives clear of the `@/` import-ban (which is itself kind-agnostic).
+// Nothing below is connector-specific. Which kinds may hold an ENTRY is a
+// separate rule, stated below for each kind.
 //
 // RETIRED KINDS — DECISION 407 A (2026-09-13, cinatra-ai/cinatra#3471, epic
 // #2926). Connectors render the setup page themselves and artifacts render the
@@ -56,15 +55,15 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 // emptied it; that gate now refuses any copy in either kind outright. Re-adding
 // an entry of either kind fails
 // scripts/extensions/__tests__/vendor-extension-primitives.test.mjs.
-const VENDOR_MANIFEST = [
-  // AGENT claimant (cinatra#1625, epic #1620 S8 — M3): blog-linkedin-publish-agent
-  // relocated its draft-review HITL field renderer into its own repo; it imports
-  // these design-registry primitives, vendored the same kind-agnostic way.
-  {
-    extensionDir: "extensions/cinatra-ai/blog-linkedin-publish-agent",
-    uiItems: ["label", "textarea"],
-  },
-];
+//
+// NO kind:agent ENTRY EITHER (cinatra#3470). Agents do NOT render the HITL view
+// themselves: an agent package declares its screens and the product draws
+// them, so it has no primitive to copy, and the provenance check never blocks
+// a product primitive change on an agent package. The last agent entry
+// (blog-linkedin-publish-agent, label + textarea) is gone; a re-added agent
+// entry fails scripts/extensions/__tests__/vendor-extension-primitives.test.mjs
+// and scripts/extensions/agent-hitl-renders-nothing-gate.mjs.
+const VENDOR_MANIFEST = [];
 
 // registryDependencies are namespaced (`@cinatra-ai/label`) so a consumer's
 // shadcn CLI resolves them in OUR registry instead of its default one; the item
