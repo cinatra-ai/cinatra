@@ -55,7 +55,21 @@ export function reviewTargetRowFacts(
   /** The instant to read `updatedAt` against. Injected so the reading is
    *  testable; defaults to now, which is what every caller wants. */
   now: Date = new Date(),
+  /** THE FACTS THE DISPLAY DECLARES OF ITSELF (cinatra#3092), already read and
+   *  checked by the display identity leaf the artifact page reads
+   *  (`artifact-display-identity`), or null where it declares none. The line
+   *  then reads as the artifact page's line does (`buildArtifactDetailHeader`)
+   *  and as lifecycle-cards §XIII.7 draws it: the revision facts first (right
+   *  after the pinned marker, which the card draws), then the scope facts,
+   *  then the closing facts in place of the MIME and the updated time. */
+  displayFacts: {
+    readonly revision: readonly string[];
+    readonly closing: readonly string[];
+  } | null = null,
 ): string[] {
+  if (displayFacts !== null) {
+    return [...displayFacts.revision, ...reviewTargetScopeFacts(artifact), ...displayFacts.closing];
+  }
   return [
     ...reviewTargetScopeFacts(artifact),
     artifact.mime,

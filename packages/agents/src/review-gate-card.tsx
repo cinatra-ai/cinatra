@@ -2846,6 +2846,15 @@ export function ReviewTargetHeader({
       </div>
       <p className="mt-1 font-mono text-badge-xs tracking-tight text-muted-foreground">
         {header.objectType ? <span>{header.objectType} · </span> : null}
+        {/* THE RENDERER, where the display names itself (cinatra#3092,
+            lifecycle-cards §XIII.7): right after the type, as the artifact's
+            own page draws it. A pack's text, drawn as text, and a long name
+            breaks inside the line rather than widening the card. */}
+        {header.drawnBy ? (
+          <span data-review-target-drawn-by={header.drawnBy} className="break-words">
+            drawn by {header.drawnBy} ·{" "}
+          </span>
+        ) : null}
         <span data-review-target-revision={revision.full} title={revision.full}>
           revision {revision.short}
         </span>

@@ -57,8 +57,7 @@ import {
   artifactDisplayTitle,
   buildArtifactDetailHeader,
 } from "./artifact-detail-header";
-import { readArtifactDisplayIdentity } from "./artifact-display-identity";
-import { loadArtifactRenderer } from "@/lib/artifacts/artifact-renderer-loader";
+import { buildMapDisplayDecision, readArtifactDisplayIdentity } from "./artifact-display-identity";
 import { resolveArtifactContentClass } from "@/lib/artifacts/artifact-content-channel";
 import { projectRecordedPageCaptureFacts } from "@/lib/artifacts/page-capture-facts-record";
 import {
@@ -353,12 +352,7 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
   // the slot, which awaits the same decision.
   const buildMapDecision =
     mount.kind === "build-map"
-      ? loadArtifactRenderer({
-          generatedKey: mount.generatedKey,
-          packageName: mount.packageName,
-          slot: mount.slot,
-          expectedPropsApiVersion: rendererProps.propsApiVersion,
-        })
+      ? buildMapDisplayDecision(mount, rendererProps.propsApiVersion)
       : null;
 
   // THE IDENTITY LINE NAMES THE RENDERER THAT DREW THE ROW, where that display

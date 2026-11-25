@@ -105,10 +105,12 @@ describe("the conformance harness mount for the artifact-kind cards", () => {
       fixture.headers.forEach((seed, index) => {
         // The meta line reads exactly what the shipped composer composes from
         // the row — owner level, visibility, MIME and the relative updated time,
-        // in the drawing's order. A fixture that ever carried a finished fact
-        // instead (a platform, an address, a preworded scope) is red here,
-        // because the product has no reading that produces one.
-        const facts = reviewTargetRowFacts(seed.row, now);
+        // in the drawing's order — or, where the display declares its identity
+        // facts (cinatra#3092), its platform, the scopes and its address in
+        // their place. A fixture that ever carried a finished fact instead (a
+        // preworded scope, a platform outside the display's declaration) is red
+        // here, because the product has no reading that produces one.
+        const facts = reviewTargetRowFacts(seed.row, now, seed.display?.facts ?? null);
         expect(facts.length, `${fixture.surfaceId} fact count`).toBe(4);
         const text = headers[index]!.textContent ?? "";
         expect(text).toContain(facts.join(" · "));
@@ -176,11 +178,35 @@ describe("the shipped header names the owner's scope by its type and its name (c
       fixture.headers.forEach((seed, index) => {
         if (seed.row.ownerLevel === "team" && seed.row.visibility === "private") {
           matched++;
-          expect(headers[index]!.textContent).toContain("Team: Growth · Private · " + seed.row.mime);
+          expect(headers[index]!.textContent).toContain(
+            "Team: Growth · Private · " + (seed.display ? seed.display.facts.closing[0] : seed.row.mime),
+          );
           expect(headers[index]!.textContent).not.toContain("Team · Private");
         }
       });
     }
     expect(matched).toBeGreaterThan(0);
+  });
+});
+
+describe("the CMS page's identity line, as lifecycle-cards §XIII.7 draws it (cinatra#3092)", () => {
+  function metaLine(surfaceId: string): string {
+    const { container } = render(<LifecycleReviewTargetHeaderFixtures />);
+    const header = container
+      .querySelector(`[data-surface-id="${surfaceId}"]`)!
+      .querySelector('[data-conformance-id="review-target-header"]')!;
+    return (header.querySelector("p")!.textContent ?? "").replace(/\s+/g, " ").trim();
+  }
+
+  it("names the renderer after the type, the platform after the pinned marker and the address at the close", () => {
+    expect(metaLine("review-card-cms-page")).toBe(
+      "@acme/cms-page:content-snapshot · drawn by @acme/cms-page:page-diff · revision rev_c410 · pinned · WordPress · Team: Growth · Private · acme.example/pricing",
+    );
+  });
+
+  it("leaves the dashboard's line as it was: no renderer, the MIME and the updated time", () => {
+    expect(metaLine("review-card-dashboard")).toBe(
+      "@acme/dashboard:dashboard · revision rev_2e77 · pinned · Team: Growth · Private · application/json · updated 8 min ago",
+    );
   });
 });

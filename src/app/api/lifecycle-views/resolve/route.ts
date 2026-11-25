@@ -7,6 +7,7 @@ import {
   LIFECYCLE_VIEW_REF_MAX_LENGTH,
   mintReviewTargetIslandAddresses,
   reviewGateTargetPairKeys,
+  reviewTargetHeadersWire,
   reviewTargetIslandAddressesWire,
   type LifecycleCardState,
   type LifecycleDataPartViewType,
@@ -456,7 +457,10 @@ export async function POST(request: Request): Promise<Response> {
       ...(islandSrcByRevision
         ? { islandSrcByRevision: reviewTargetIslandAddressesWire(islandSrcByRevision) }
         : {}),
-      ...(targetHeaders ? { targetHeaders, targetHeadersComplete } : {}),
+      // Each renderer name travels BESIDE its header (cinatra#3092), a key an
+      // older client ignores; an answer whose displays name nothing is
+      // unchanged.
+      ...(targetHeaders ? { ...reviewTargetHeadersWire(targetHeaders), targetHeadersComplete } : {}),
       ...(recordedPrompt === null ? {} : { recordedPrompt }),
       ...(targetDisplay === null ? {} : { targetDisplay }),
     },

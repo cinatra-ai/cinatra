@@ -264,11 +264,18 @@ export async function readReviewTargetHeadersReading(
           : null;
       const revision = projectReviewTargetHeaderRevision(target.representationRevisionId);
       if (!revision.exact) allExact = false;
-      if (pinnedCount === 1) {
-        displays.push(
-          await readPinnedRevisionDisplay(actorCtx.orgId, actor, artifact, target, state.state === "settled"),
-        );
-      }
+      // WHAT DRAWS THE PINNED REVISION, AND WHAT THAT DISPLAY SAYS OF ITSELF:
+      // one membership read and one mount resolution per target, as the
+      // target's preview makes them.
+      const drawing = await readPinnedRevisionDrawing(
+        actorCtx.orgId,
+        actor,
+        artifact,
+        target,
+        state.state === "settled",
+      );
+      if (pinnedCount === 1) displays.push(drawing.display);
+      const drawnBy = drawing.identity.drawnBy;
       headers.push({
         title: clamp(artifact.title ?? artifact.artifactId, artifact.artifactId),
         typeLabel: artifact.objectType
@@ -286,9 +293,13 @@ export async function readReviewTargetHeadersReading(
           updatedAt: artifact.updatedAt,
           ownerName,
           organizationName,
-        })
+        }, undefined, drawing.identity.facts)
           .slice(0, LIFECYCLE_TARGET_HEADER_FACTS_MAX)
           .map((fact) => clamp(fact, "—")),
+        // THE RENDERER, where the display names itself (cinatra#3092,
+        // lifecycle-cards §XIII.7); absent otherwise, so the header of a
+        // display that declares nothing is the header it always was.
+        ...(drawnBy === null ? {} : { drawnBy: clamp(drawnBy, drawnBy) }),
       });
       if (headers.length === LIFECYCLE_TARGET_HEADERS_MAX) break;
     }
@@ -312,7 +323,8 @@ export async function readReviewTargetHeadersReading(
 }
 
 /**
- * THE DISPLAY THAT DRAWS THE PINNED REVISION (cinatra#3033).
+ * THE DISPLAY THAT DRAWS THE PINNED REVISION (cinatra#3033), AND WHAT IT SAYS
+ * OF ITSELF (cinatra#3092).
  *
  * The media type alone does not say which display draws a target: the dispatch
  * gives an extension artifact's own detail renderer priority over the display of
@@ -329,6 +341,18 @@ export async function readReviewTargetHeadersReading(
  * value. A revision that is not a member, and a read or a resolution that throws,
  * name no display: no display, no reading drawn from it.
  *
+ * THE IDENTITY LINE IS READ THE WAY THE ARTIFACT PAGE READS IT. lifecycle-cards
+ * §XIII.7: "the extension's display draws on the card exactly what it draws on
+ * the artifact's own page", and "the platform the page lives on is carried in
+ * the identity line, which also names the one renderer both CMS extensions
+ * draw through … so a WordPress page and a Drupal page are told apart there
+ * and nowhere else". For a display mounted from the build map, the same load
+ * decision the page makes (`buildMapDisplayDecision`) and the same generic read
+ * of the module's two optional exports (`readPinnedArtifactDisplayIdentity`,
+ * over `displayIdentityFromModule`), fed the PINNED revision's content exactly
+ * as the binder builds it for the card's display. A runtime mount, a floor, a
+ * decision the slot would not mount and any failure declare nothing.
+ *
  * DYNAMIC on purpose, the resolve route's `readReviewGateRecordedPrompt`
  * posture: the binder module carries the display resolution, and this leaf
  * keeps it off the static graph of every route that reaches the header. The
@@ -336,13 +360,13 @@ export async function readReviewTargetHeadersReading(
  * of the props module would hand this file every export of it, the artifact
  * page's edit grant among them (w4-edit-capability-repo-wide.test.ts).
  */
-async function readPinnedRevisionDisplay(
+async function readPinnedRevisionDrawing(
   orgId: string,
   actor: ReturnType<typeof buildActorContextFromPrimitive>,
   artifact: ArtifactSummary,
   target: { artifactId: string; representationRevisionId: string },
   settled: boolean,
-): Promise<LifecycleTargetDisplay | null> {
+): Promise<{ display: LifecycleTargetDisplay | null; identity: PinnedDisplayIdentity }> {
   try {
     const { bindArtifactReviewPorts } = await import("@/app/artifacts/[id]/review-target-prepare");
     const { artifactDisplayFamily } = await import("@/app/artifacts/[id]/renderer-resolution");
@@ -351,17 +375,51 @@ async function readPinnedRevisionDisplay(
       settled && typeof ports.revisionMemberHistorical === "function"
         ? await ports.revisionMemberHistorical(target.artifactId, target.representationRevisionId)
         : await ports.revisionMember(target.artifactId, target.representationRevisionId);
-    if (typeof member?.mime !== "string") return null;
+    if (typeof member?.mime !== "string") return NO_DRAWING;
+    const mime = member.mime;
     const mount = await ports.resolveMount({
       artifact,
-      mime: member.mime,
+      mime,
       propsApiVersion: ARTIFACT_RENDERER_PROPS_API_VERSION,
     });
-    return artifactDisplayFamily(orgId, mount, member.mime);
+    const display = artifactDisplayFamily(orgId, mount, mime);
+    if (mount.kind !== "build-map" || typeof ports.buildProps !== "function") {
+      return { display, identity: NO_IDENTITY };
+    }
+    const { buildMapDisplayDecision, readPinnedArtifactDisplayIdentity } = await import(
+      "@/app/artifacts/[id]/artifact-display-identity"
+    );
+    const identity = await readPinnedArtifactDisplayIdentity({
+      // The review road resolves at the detail slot, as the page does.
+      decision: buildMapDisplayDecision(
+        { generatedKey: mount.generatedKey, packageName: mount.packageName, slot: mount.slot ?? "detail" },
+        ARTIFACT_RENDERER_PROPS_API_VERSION,
+      ),
+      readContent: async () =>
+        (
+          await ports.buildProps({
+            artifact,
+            representationRevisionId: target.representationRevisionId,
+            mime,
+            propsApiVersion: ARTIFACT_RENDERER_PROPS_API_VERSION,
+            member,
+          })
+        ).content,
+      propsApiVersion: ARTIFACT_RENDERER_PROPS_API_VERSION,
+    });
+    return { display, identity };
   } catch {
-    return null;
+    return NO_DRAWING;
   }
 }
+
+/** What the display of a pinned revision declares of itself, or nothing. */
+type PinnedDisplayIdentity = {
+  readonly drawnBy: string | null;
+  readonly facts: { readonly revision: readonly string[]; readonly closing: readonly string[] } | null;
+};
+const NO_IDENTITY: PinnedDisplayIdentity = Object.freeze({ drawnBy: null, facts: null });
+const NO_DRAWING = Object.freeze({ display: null, identity: NO_IDENTITY });
 
 /**
  * COMPOSE INSIDE THE WIRE'S OWN BOUNDS, never outside them.

@@ -81,7 +81,8 @@ export function reviewTargetFixtureHeader(
     // Both readings are worded by the SURFACE MODEL, never by the harness —
     // the same calls the server-side composer makes.
     typeLabel: artifactKindLabelFor(seed.objectType),
-    facts: reviewTargetRowFacts(seed.row, now),
+    facts: reviewTargetRowFacts(seed.row, now, seed.display?.facts ?? null),
+    ...(seed.display ? { drawnBy: seed.display.drawnBy } : {}),
   };
 }
 

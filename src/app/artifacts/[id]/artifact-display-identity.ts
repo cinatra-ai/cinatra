@@ -32,7 +32,12 @@ import "server-only";
  * decision that rejects (a present but broken module) answers nothing here,
  * and the slot, awaiting the same decision, still fails loud on its own road.
  */
-import type { ArtifactRendererLoadResult } from "@/lib/artifacts/artifact-renderer-loader";
+import type { ArtifactUiSlot } from "@cinatra-ai/sdk-extensions/artifact-contract";
+
+import {
+  loadArtifactRenderer,
+  type ArtifactRendererLoadResult,
+} from "@/lib/artifacts/artifact-renderer-loader";
 
 import {
   NO_DISPLAY_IDENTITY,
@@ -138,6 +143,76 @@ function readExport(mod: object, name: "rendererName" | "identityFacts"): unknow
   }
 }
 
+/** A display mounted from the build map, in the shape both surfaces resolve
+ *  it in (the page's `resolveArtifactDisplayMount`, the review binder's
+ *  `resolveMount`). */
+export type BuildMapDisplayMount = {
+  readonly generatedKey: string;
+  readonly packageName: string;
+  readonly slot: ArtifactUiSlot;
+};
+
+/**
+ * THE ONE BUILD-MAP LOAD DECISION, made the same way on both surfaces that
+ * draw an identity line: the artifact's own page (which also hands it to the
+ * slot that mounts the display) and the review card's header composer
+ * (cinatra#3092). The host's props version is the ceiling of the negotiation,
+ * as the page has always asked it.
+ */
+export function buildMapDisplayDecision(
+  mount: BuildMapDisplayMount,
+  propsApiVersion: number,
+): Promise<ArtifactRendererLoadResult> {
+  return loadArtifactRenderer({
+    generatedKey: mount.generatedKey,
+    packageName: mount.packageName,
+    slot: mount.slot,
+    expectedPropsApiVersion: propsApiVersion,
+  });
+}
+
+/** Whether a loaded module exports either identity name at all. */
+function declaresIdentity(mod: unknown): boolean {
+  if (typeof mod !== "object" || mod === null) return false;
+  return readExport(mod, "rendererName") !== undefined || readExport(mod, "identityFacts") !== undefined;
+}
+
+async function identityOfDecision(
+  decision: Promise<ArtifactRendererLoadResult> | null,
+  propsApiVersion: number,
+  readContent: () => unknown,
+): Promise<ArtifactDisplayIdentity> {
+  if (decision === null) return NO_DISPLAY_IDENTITY;
+  try {
+    const result = await decision;
+    if (!rendererLoadMountsAt(result, propsApiVersion)) return NO_DISPLAY_IDENTITY;
+    // A module that names neither export declares nothing, whatever the
+    // content: the content is not read for it.
+    if (!declaresIdentity(result.module)) return NO_DISPLAY_IDENTITY;
+    return displayIdentityFromModule(result.module, await readContent());
+  } catch {
+    return NO_DISPLAY_IDENTITY;
+  }
+}
+
+/**
+ * THE REVIEW CARD'S READ OF THE SAME IDENTITY (cinatra#3092; lifecycle-cards
+ * §XIII.7: "the extension's display draws on the card exactly what it draws on
+ * the artifact's own page", and the identity line names the renderer and the
+ * platform). The same decision rule and the same module read as the page, over
+ * the PINNED revision's content, which is read only when the module declares
+ * an identity at all. A content read that throws declares nothing.
+ */
+export async function readPinnedArtifactDisplayIdentity(input: {
+  readonly decision: Promise<ArtifactRendererLoadResult> | null;
+  /** Reads the pinned revision's content projection, as the card's display is
+   *  handed it. */
+  readonly readContent: () => Promise<unknown>;
+  readonly propsApiVersion: number;
+}): Promise<ArtifactDisplayIdentity> {
+  return identityOfDecision(input.decision, input.propsApiVersion, input.readContent);
+}
+
 /**
  * Read the identity of the display from the page's ONE build-map load decision,
  * the very decision the slot mounts with. Every decision the slot would not
@@ -152,12 +227,5 @@ export async function readArtifactDisplayIdentity(input: {
   /** The props version of the page's snapshot, the one the slot mounts at. */
   readonly propsApiVersion: number;
 }): Promise<ArtifactDisplayIdentity> {
-  if (input.decision === null) return NO_DISPLAY_IDENTITY;
-  try {
-    const result = await input.decision;
-    if (!rendererLoadMountsAt(result, input.propsApiVersion)) return NO_DISPLAY_IDENTITY;
-    return displayIdentityFromModule(result.module, input.content);
-  } catch {
-    return NO_DISPLAY_IDENTITY;
-  }
+  return identityOfDecision(input.decision, input.propsApiVersion, () => input.content);
 }
