@@ -1,6 +1,9 @@
 import type { VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
 import { verifyRunExecutedSource } from "@cinatra-ai/agents/store";
-import { materializeListResultIdFieldRefusal } from "@cinatra-ai/agents/artifact-binding";
+import {
+  isArtifactMaterializeListInput,
+  materializeListResultIdFieldRefusal,
+} from "@cinatra-ai/agents/artifact-binding";
 import "server-only";
 import { NextResponse } from "next/server";
 
@@ -28,8 +31,11 @@ import {
   type ShapedArtifactMaterializeInput,
 } from "./artifact-materialize-shaper";
 import {
+  isMaterializeListInputTooLarge,
   isRegenerateRepairRun,
   materializeArtifactList,
+  MATERIALIZE_LIST_INPUT_TOO_LARGE,
+  materializeListInputTooLargeError,
   MATERIALIZE_LIST_IN_REGENERATE_RUN,
   MATERIALIZE_LIST_IN_REGENERATE_RUN_ERROR,
 } from "./artifact-materialize-list";
@@ -475,6 +481,19 @@ export async function POST(req: Request): Promise<Response> {
       verifiedExecutedSource = await verifyRunExecutedSource(agentRunId, sourceRun.orgId, attestation);
       verifiedStepId = verifiedExecutedSource.stepId;
     } catch { return NextResponse.json({ error: "Executing source could not be verified" }, { status: 403 }); }
+  }
+
+  // cinatra#3089: a list call is bounded AS RECEIVED, before the shaper parses
+  // its list: the shaped call keeps only each member's title and content, so the
+  // argument check below would never see the rest (artifact-materialize-list.ts).
+  if (tool === "artifact_materialize" && isArtifactMaterializeListInput(rawInput)) {
+    const { ACTION_JSON_MAX_BYTES } = await import("@/lib/extension-host-context");
+    if (isMaterializeListInputTooLarge(rawInput, ACTION_JSON_MAX_BYTES)) {
+      return NextResponse.json(
+        { error: materializeListInputTooLargeError(ACTION_JSON_MAX_BYTES), code: MATERIALIZE_LIST_INPUT_TOO_LARGE },
+        { status: 400 },
+      );
+    }
   }
 
   const shaper = TOOL_INPUT_SHAPERS[tool];

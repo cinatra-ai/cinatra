@@ -297,6 +297,63 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
     expect(JSON.parse(body.reviewTargets)).toEqual(body.artifacts);
   });
 
+  describe("the raw size of a list call (cinatra#3089)", () => {
+    // The limit of a run tool call's arguments as JSON text (the argument check
+    // of the host's preparation), applied to the list call as received.
+    const LIMIT = 256 * 1024;
+
+    /** A 50-member list call whose input, as JSON text, is exactly `bytes` long;
+     *  every member carries small filed fields and a field the filing does not use. */
+    function listInputOfBytes(bytes: number): Record<string, unknown> {
+      const members = Array.from({ length: 50 }, (_, i) => ({ subject: `Draft ${i + 1}`, body: `Body ${i + 1}`, pad: "" }));
+      const build = () => (listBody({ content: JSON.stringify(members) }) as { input: Record<string, unknown> }).input;
+      const extra = bytes - Buffer.byteLength(JSON.stringify(build()));
+      for (const [i, m] of members.entries()) m.pad = "x".repeat(Math.floor(extra / 50) + (i === 0 ? extra % 50 : 0));
+      const input = build();
+      expect(Buffer.byteLength(JSON.stringify(input))).toBe(bytes);
+      return input;
+    }
+
+    function callOf(input: Record<string, unknown>): Record<string, unknown> {
+      return { tool: "artifact_materialize", agent_run_id: "run-1", input, result_input_passthrough: true };
+    }
+
+    // red-first-expect: expected undefined to be 'materialize_list_input_too_large'
+    it.each([
+      ["one byte over the limit", LIMIT + 1],
+      ["far over the limit (50 members with 100 KiB unused fields each)", 50 * 100 * 1024],
+    ])("refuses a list call %s before its content is parsed or anything is filed", async (_name, bytes) => {
+      const input = listInputOfBytes(bytes);
+      const parse = vi.spyOn(JSON, "parse");
+      try {
+        const res = await POST(post(callOf(input)));
+        const body = await res.json();
+        expect(body.code).toBe("materialize_list_input_too_large");
+        expect(res.status).toBe(400);
+        expect(body).toEqual({
+          error:
+            "artifact_materialize: a list call's input is larger than 262144 bytes as JSON text " +
+            "(the limit of a run tool call's arguments); nothing was filed",
+          code: "materialize_list_input_too_large",
+        });
+        // The list text was never parsed into members, and nothing was filed or echoed.
+        expect(parse.mock.calls.some(([text]) => text === input.content)).toBe(false);
+        expect(h.materializeToolArtifact).not.toHaveBeenCalled();
+        expect(body).not.toHaveProperty("content");
+      } finally {
+        parse.mockRestore();
+      }
+    });
+
+    it("files a list call whose input is exactly at the limit", async () => {
+      const input = listInputOfBytes(LIMIT);
+      const res = await POST(post(callOf(input)));
+      expect(res.status).toBe(200);
+      expect(h.materializeToolArtifact).toHaveBeenCalledTimes(50);
+      expect((await res.json()).content).toBe(input.content);
+    });
+  });
+
   // red-first-expect: expected { Object (error) } to deeply equal
   it("refuses a list call that names one result id field before anything is filed", async () => {
     const res = await POST(

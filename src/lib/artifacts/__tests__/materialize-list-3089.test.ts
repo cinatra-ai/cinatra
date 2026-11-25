@@ -14,6 +14,9 @@
  *   L3 a marked gate fed by the list node reviews every member's write, and
  *      plans one review leg per artifact, in order
  *   L4 the send fan-out reuses each list-filed body by its bytes
+ *   L5 a list-filed body is stored with the same fields as a single filing of
+ *      the same body (neither carries typed data: the send records the
+ *      correlation of a body it reuses, not the filing)
  *
  *   npx vitest run src/lib/artifacts/__tests__/materialize-list-3089.test.ts
  */
@@ -386,5 +389,45 @@ describe("cinatra#3089 — artifact_materialize list mode on the ledgered write 
     expect(createSemanticArtifactMock).not.toHaveBeenCalled();
     expect(claimMaterializationMock).not.toHaveBeenCalled();
     expect(ledger.filter((r) => r.path === "email_fanout").map((r) => r.artifactId)).toEqual(["art-1", "art-2", "art-3"]);
+  });
+  // red-first-expect: input.title must be a non-empty string
+  it("L5 a list-filed body is stored with the same fields as a single filing of the same body", async () => {
+    const stored = (call: unknown[]) => {
+      const { stream: _stream, additionalTx2Queries: _tx2, ...fields } = call[0] as Record<string, unknown>;
+      return fields;
+    };
+    const listed = await fileList(NODE);
+    if (!listed.ok) throw new Error(listed.error);
+    const fromList = stored(createSemanticArtifactMock.mock.calls[0]!);
+
+    ledger = [];
+    createSemanticArtifactMock.mockClear();
+    const single = shapeArtifactMaterializeInput({
+      extension: EXT,
+      objectTypeId: BODY_TYPE,
+      content: DRAFTS[0]!.body,
+      title: DRAFTS[0]!.subject,
+      declaredMime: "text/markdown",
+      node_id: NODE,
+    });
+    const filed = await materializeToolArtifact({
+      runId: "run-1",
+      orgId: "org-a",
+      templateId: "tpl-1",
+      packageVersion: "1.0.0",
+      createdBy: "user-1",
+      nodeId: single.nodeId,
+      verifiedStepId: NODE,
+      extension: single.extension,
+      objectTypeId: single.objectTypeId,
+      title: single.title,
+      mime: single.declaredMime,
+      content: single.content,
+    });
+    expect(filed).toMatchObject({ ok: true });
+    const fromSingle = stored(createSemanticArtifactMock.mock.calls[0]!);
+
+    expect(fromList).toEqual(fromSingle);
+    expect(fromList).not.toHaveProperty("typedData");
   });
 });

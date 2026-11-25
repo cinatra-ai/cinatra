@@ -67,6 +67,33 @@ export async function materializeArtifactList(
   return { ok: true, artifacts, reviewTargets: JSON.stringify(artifacts) };
 }
 
+// THE RAW SIZE OF A LIST CALL (cinatra#3089). The shaper parses the whole list
+// and keeps only each member's title and content, and the argument check of the
+// host's preparation then measures that reduced call. A list with small filed
+// fields and large unused ones would pass that check, be parsed whole and, when
+// the call asks for its inputs back, be echoed whole. So the route measures the
+// call AS RECEIVED, before the shaper parses anything: its `content` text and
+// its whole input as JSON text, each against the limit the argument check uses
+// (the route passes it in; this module keeps no project imports). With the raw
+// input bounded, the echo of it is bounded too.
+
+export const MATERIALIZE_LIST_INPUT_TOO_LARGE = "materialize_list_input_too_large";
+
+export function materializeListInputTooLargeError(maxBytes: number): string {
+  return (
+    `artifact_materialize: a list call's input is larger than ${maxBytes} bytes as JSON text ` +
+    "(the limit of a run tool call's arguments); nothing was filed"
+  );
+}
+
+/** Whether a list call's input, as received, is larger than `maxBytes`: its
+ *  `content` text in UTF-8, or the whole input as JSON text. */
+export function isMaterializeListInputTooLarge(rawInput: Record<string, unknown>, maxBytes: number): boolean {
+  const content = rawInput.content;
+  if (typeof content === "string" && Buffer.byteLength(content, "utf8") > maxBytes) return true;
+  return Buffer.byteLength(JSON.stringify(rawInput), "utf8") > maxBytes;
+}
+
 // THE REGENERATE RUN (cinatra#3089). A Regenerate re-runs one filing node and
 // takes exactly one production (`claimSegmentProduction` in
 // packages/agents/src/regenerate-segment.ts). A list call in such a run would
