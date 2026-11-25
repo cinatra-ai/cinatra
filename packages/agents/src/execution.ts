@@ -387,14 +387,19 @@ export async function readPausePolicyTemplate(
 /** cinatra#3089: the installer's own compile applied to the source the loader mounted (its bytes, digest-checked by
  *  selectWayflowRunStepToolPolicy). The path names no directory (nothing exists under /dev/null), so no sibling
  *  manifest is read from the install directory, which a reinstall may already have rewritten; the steps are compiled
- *  before any sibling read. Null when the source does not compile: the run's pauses then stop. Undefined when the
- *  loader sent no source (an older loader): the binding carries no steps, and the rolling-upgrade rule applies. */
-async function compileMountedPauseSteps(source: string | undefined, packageName: string | null | undefined): Promise<{ approvalPolicy: unknown } | null | undefined> {
+ *  before any sibling read. Undefined when the loader sent no source (an older loader) or the source does not compile
+ *  with this host's compiler (the loader still runs it): the binding carries no steps, and the run's pauses read the
+ *  stored approval policy row as before steps were bound. A compile failure is logged once, by its code only. */
+async function compileMountedPauseSteps(source: string | undefined, packageName: string | null | undefined): Promise<{ approvalPolicy: unknown } | undefined> {
   // An older loader sends no mounted source: no steps are bound at all, so the run reads as one bound before them.
   if (source === undefined) return undefined;
   const { compileOasAgentJson } = await import("./oas-compiler");
   const compiled = await compileOasAgentJson({ packageName, oasSource: Buffer.from(source, "utf8"), oasSourcePath: "/dev/null/cinatra/oas.json" });
-  return compiled.ok ? { approvalPolicy: compiled.value.approvalPolicy } : null;
+  if (compiled.ok) return { approvalPolicy: compiled.value.approvalPolicy };
+  // The error text may quote the source, so only its leading code is logged.
+  const code = /^([A-Z][A-Z0-9_]+):/.exec(compiled.error)?.[1] ?? "UNCODED";
+  console.warn(`[pause-steps] the mounted source does not compile with this host's compiler (${code}): no pause steps are bound; its pauses read the stored approval policy`);
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------

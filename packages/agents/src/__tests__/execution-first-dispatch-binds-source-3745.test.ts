@@ -538,10 +538,21 @@ describe("cinatra#3089 - the dispatch binds the steps of the source the loader m
     expect(bound.pauseSteps).toBeUndefined();
   });
 
-  it("a mounted source that was sent but does not compile: the bind records that no steps could be compiled, never the row's", async () => {
+  it("a mounted source that this host's compiler refuses: no steps are bound, so its pauses read the stored row as before; the code alone is logged", async () => {
     bindTemplate({ ...makeTemplate(), approvalPolicy: { steps: rowSteps(true) } });
-    mounted(JSON.stringify({ component_type: "Flow" }));
-    await run();
-    expect(storeMock.bindRunStepToolPolicy).toHaveBeenCalledWith(expect.objectContaining({ pauseSteps: null }));
+    const source = JSON.stringify({ component_type: "Flow", id: "secret-node-name" });
+    mounted(source);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await run();
+      const [bound] = storeMock.bindRunStepToolPolicy.mock.calls[0]! as unknown as [Record<string, unknown>];
+      // red-first-expect: expected null to be undefined
+      expect(bound.pauseSteps).toBeUndefined();
+      const logged = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.startsWith("[pause-steps]"));
+      expect(logged).toHaveLength(1);
+      expect(logged[0]).not.toContain("secret-node-name");
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
