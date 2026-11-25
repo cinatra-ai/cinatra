@@ -230,6 +230,8 @@ describe("cinatra#3089 — the fan-out's body write on the ledgered writer", () 
       sendEmail: sendEmail as never,
       getObjectByRef: (async (ref: string) => bundles[ref] ?? null) as never,
       emitEmailFanout,
+      // A run whose drafting step filed no body for review.
+      readRunReviewedBodies: async () => false,
     });
 
     const result = await uc.startInitialSend(
@@ -257,6 +259,7 @@ describe("cinatra#3089 — the fan-out's body write on the ledgered writer", () 
       getDraftsByIds: vi.fn().mockResolvedValue([]),
       sendEmail: sendEmail as never,
       getObjectByRef: (async (ref: string) => bundles[ref] ?? null) as never,
+      readRunReviewedBodies: async () => false,
       emitEmailFanout: (args: EmailFanoutArgs) =>
         materializeEmailFanout(args, {
           writeBody: async () => {

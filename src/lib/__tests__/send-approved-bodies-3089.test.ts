@@ -18,7 +18,8 @@
  *
  * Cases:
  *   S1 the approved form mails the approved revision's text and the subject the
- *      card showed, even when the bundle's body text differs
+ *      card showed; the bundle's draft holds the same text, here with trailing
+ *      white space the revision does not carry
  *   R1 a draft with an address and no approved body refuses the whole send
  *   R2 an approved revision that cannot be read refuses the whole send
  *   R3 an approved revision that is not the artifact's current revision (a body
@@ -28,8 +29,19 @@
  *   R6 the list names a body that maps to no draft
  *   R7 two bodies for one contact
  *   R8 a body that carries another contact than its entry
- *   U1 the reference-only form is unchanged: the bundle body is mailed and no
- *      approved body is read
+ *   U1 the reference-only form is unchanged for a run without bodies filed for
+ *      review: the bundle body is mailed and no approved body is read
+ *   U2 a run whose drafting step filed bodies for review refuses a send that
+ *      names no approved body, before any mail and any body write
+ *   U3 a run whose filed bodies cannot be looked up refuses that send too
+ *   P1 two approved bodies that name no contact, swapped between the drafts
+ *      (each entry with the other draft's contact, address and subject): the
+ *      whole send is refused, nothing is bound, claimed or mailed
+ *   P2 the same two bodies, not swapped, are sent
+ *   P3 two swapped bodies with the same text are sent: each recipient receives
+ *      exactly the text its own draft holds and the card showed
+ *   P4 a draft whose body was changed in the bundle after its body was filed
+ *      refuses the whole send
  *   F1 the fan-out binds each mailed message to its approved revision and
  *      files no new body (nor one for a draft without an address)
  *   Z1 the tool's schema keeps the list, bounded at 50 entries, closed to other
@@ -102,11 +114,13 @@ const RECIPIENTS_REF = "22222222-2222-4222-8222-222222222222";
 const CAMPAIGN_ID = "33333333-3333-4333-8333-333333333333";
 
 // The bundle as the drafting step saves it: each draft names its contact as
-// `recipientId`; c3 has no address and is never mailed.
+// `recipientId`; c3 has no address and is never mailed. Each draft holds the
+// text its body was filed from, here with trailing blank lines the filed
+// revision does not carry (trailing white space is not compared).
 const bundleDrafts = [
-  { recipientId: "c1", recipientName: "One", recipientEmail: "one@example.com", subject: "Bundle subject one", body: "Bundle body one" },
-  { recipientId: "c2", recipientName: "Two", recipientEmail: "two@example.com", subject: "Bundle subject two", body: "Bundle body two" },
-  { recipientId: "c3", recipientName: "Three", recipientEmail: "", subject: "Bundle subject three", body: "Bundle body three" },
+  { recipientId: "c1", recipientName: "One", recipientEmail: "one@example.com", subject: "Bundle subject one", body: "Approved body one\n\n" },
+  { recipientId: "c2", recipientName: "Two", recipientEmail: "two@example.com", subject: "Bundle subject two", body: "Approved body two\n\n" },
+  { recipientId: "c3", recipientName: "Three", recipientEmail: "", subject: "Bundle subject three", body: "Approved body three\n\n" },
 ];
 const confirmedRecipients = [
   { contactId: "c1", email: "one@example.com" },
@@ -157,7 +171,13 @@ const approved = [
   { artifactId: "art-2", representationRevisionId: "rev-2", contactId: "c2", recipientEmail: "two@example.com", subject: "Bundle subject two" },
 ];
 
-function makeFixture(opts?: { store?: Map<string, StoredBody>; drafts?: unknown[]; recipients?: unknown[] }) {
+function makeFixture(opts?: {
+  store?: Map<string, StoredBody>;
+  drafts?: unknown[];
+  recipients?: unknown[];
+  /** What the ledger answers for "the run has bodies filed for review". */
+  reviewedBodies?: boolean | Error;
+}) {
   const store = opts?.store ?? makeStore();
   const sendLedger = memorySendLedger();
   const sent: Array<{ to: string[]; subject: string; textBody: string }> = [];
@@ -220,6 +240,11 @@ function makeFixture(opts?: { store?: Map<string, StoredBody>; drafts?: unknown[
       registeredTypes: new Set([EMAIL_BODY_TYPE_ID]),
     } as Parameters<typeof materializeEmailFanout>[1]),
   );
+  const readRunReviewedBodies = vi.fn(async (_runId: string) => {
+    const answer = opts?.reviewedBodies ?? false;
+    if (answer instanceof Error) throw answer;
+    return answer;
+  });
   const deps: TriggerEmailSendDeps = {
     getCampaign: async () => null,
     getDraftsByIds: async () => [],
@@ -228,7 +253,8 @@ function makeFixture(opts?: { store?: Map<string, StoredBody>; drafts?: unknown[
     emitEmailFanout,
     readDecidedBody,
     messageSendLedger: sendLedger.ledger,
-  };
+    readRunReviewedBodies,
+  } as TriggerEmailSendDeps;
   const handlers = createTriggerEmailSendHandlers(createTriggerEmailSendUseCases(deps));
   const start = (input: Record<string, unknown>) =>
     handlers["email_outreach_send_initial_start"]({
@@ -240,7 +266,18 @@ function makeFixture(opts?: { store?: Map<string, StoredBody>; drafts?: unknown[
       },
       actor,
     } as never) as unknown as Promise<{ status: string; sentCount: number; errorMessage?: string }>;
-  return { store, sent, sendEmail, readDecidedBody, writeBody, bindBody, emitEmailFanout, sendLedger, start };
+  return {
+    store,
+    sent,
+    sendEmail,
+    readDecidedBody,
+    readRunReviewedBodies,
+    writeBody,
+    bindBody,
+    emitEmailFanout,
+    sendLedger,
+    start,
+  };
 }
 
 async function expectRefused(
@@ -258,7 +295,7 @@ async function expectRefused(
 }
 
 describe("cinatra#3089 — the send mails the approved body revisions", () => {
-  it("S1 the approved form mails the approved revision's text and the card's subject, even when the bundle's body text differs", async () => {
+  it("S1 the approved form mails the approved revision's text and the card's subject", async () => {
     const fx = makeFixture();
     const result = await fx.start({ approvedBodies: approved });
     expect(result.status).toBe("completed");
@@ -268,7 +305,8 @@ describe("cinatra#3089 — the send mails the approved body revisions", () => {
       expect.objectContaining({ to: ["one@example.com"], subject: "Bundle subject one", textBody: "Approved body one" }),
       expect.objectContaining({ to: ["two@example.com"], subject: "Bundle subject two", textBody: "Approved body two" }),
     ]);
-    expect(fx.sent.some((m) => m.textBody.startsWith("Bundle body"))).toBe(false);
+    // The revision's text, not the draft's (which ends in blank lines).
+    expect(fx.sent.some((m) => m.textBody.endsWith("\n"))).toBe(false);
   });
 
   it("R1 a draft with an address and no approved body refuses the whole send", async () => {
@@ -343,18 +381,101 @@ describe("cinatra#3089 — the send mails the approved body revisions", () => {
     await expectRefused(makeFixture({ store }), { approvedBodies: approved }, "approved body 2 is the body of contact c1, not of contact c2");
   });
 
-  it("U1 the reference-only form is unchanged: the bundle body is mailed and no approved body is read", async () => {
+  it("U1 the reference-only form is unchanged for a run without bodies filed for review", async () => {
     const fx = makeFixture();
     const result = await fx.start({});
     expect(result.status).toBe("completed");
     expect(fx.sent).toEqual([
-      expect.objectContaining({ to: ["one@example.com"], subject: "Bundle subject one", textBody: "Bundle body one" }),
-      expect.objectContaining({ to: ["two@example.com"], subject: "Bundle subject two", textBody: "Bundle body two" }),
+      expect.objectContaining({ to: ["one@example.com"], subject: "Bundle subject one", textBody: "Approved body one\n\n" }),
+      expect.objectContaining({ to: ["two@example.com"], subject: "Bundle subject two", textBody: "Approved body two\n\n" }),
     ]);
     expect(fx.readDecidedBody).not.toHaveBeenCalled();
     expect(fx.bindBody).not.toHaveBeenCalled();
     // The fan-out still files one body per draft of the bundle, as before.
     expect(fx.writeBody).toHaveBeenCalledTimes(3);
+  });
+
+  it("U2 a run with bodies filed for review refuses a send that names none of them, before any mail", async () => {
+    const fx = makeFixture({ reviewedBodies: true });
+    const result = await fx.start({});
+    // red-first-expect: expected 'completed' to be 'failed'
+    expect(result.status).toBe("failed");
+    expect(result.sentCount).toBe(0);
+    expect(result.errorMessage).toContain(
+      "REVIEWED_BODIES_REQUIRED: The send was refused before any email went out: run run-1 has email bodies filed for review, so the send must name the approved bodies (approvedBodies)",
+    );
+    expect(fx.readRunReviewedBodies).toHaveBeenCalledWith("run-1", expect.objectContaining({ orgId: "org-1" }));
+    expect(fx.sendEmail).not.toHaveBeenCalled();
+    expect(fx.writeBody).not.toHaveBeenCalled();
+    expect(fx.emitEmailFanout).not.toHaveBeenCalled();
+  });
+
+  it("U3 a run whose filed bodies cannot be looked up refuses a send that names none of them", async () => {
+    const fx = makeFixture({ reviewedBodies: new Error("the ledger is unavailable") });
+    const result = await fx.start({});
+    // red-first-expect: expected 'completed' to be 'failed'
+    expect(result.status).toBe("failed");
+    expect(result.errorMessage).toContain(
+      "whether run run-1 has email bodies filed for review could not be read: the ledger is unavailable",
+    );
+    expect(fx.sendEmail).not.toHaveBeenCalled();
+    expect(fx.emitEmailFanout).not.toHaveBeenCalled();
+  });
+
+  it("P1 two approved bodies without a contact of their own, swapped between the drafts, refuse the whole send", async () => {
+    const store = makeStore();
+    store.get("art-1")!.data = {};
+    // Each entry carries the other draft's contact, address and subject.
+    const swapped = [
+      { ...approved[0]!, contactId: "c2", recipientEmail: "two@example.com", subject: "Bundle subject two" },
+      { ...approved[1]!, contactId: "c1", recipientEmail: "one@example.com", subject: "Bundle subject one" },
+    ];
+    const fx = makeFixture({ store });
+    // red-first-expect: expected 'completed' to be 'failed'
+    await expectRefused(fx, { approvedBodies: swapped }, "approved body 1 is not the body of draft 2 of the bundle (contact c2)");
+    expect(fx.sendLedger.rows.size).toBe(0);
+  });
+
+  it("P2 the same two bodies without a contact of their own, not swapped, are sent", async () => {
+    const store = makeStore();
+    store.get("art-1")!.data = {};
+    const fx = makeFixture({ store });
+    const result = await fx.start({ approvedBodies: approved });
+    expect(result.status).toBe("completed");
+    // red-first-expect: to deeply equal [ 'Approved body one', …(1) ]
+    expect(fx.sent.map((m) => m.textBody)).toEqual(["Approved body one", "Approved body two"]);
+  });
+
+  it("P3 two swapped bodies with the same text are sent: each recipient receives the text its own draft holds", async () => {
+    const store = makeStore();
+    store.get("art-1")!.data = {};
+    store.get("art-1")!.revisions["rev-1"] = "The same body";
+    store.get("art-2")!.revisions["rev-2"] = "The same body";
+    const drafts = bundleDrafts.map((d) => (d.recipientId === "c3" ? d : { ...d, body: "The same body\n" }));
+    const swapped = [
+      { ...approved[0]!, contactId: "c2", recipientEmail: "two@example.com", subject: "Bundle subject two" },
+      { ...approved[1]!, contactId: "c1", recipientEmail: "one@example.com", subject: "Bundle subject one" },
+    ];
+    const fx = makeFixture({ store, drafts });
+    const result = await fx.start({ approvedBodies: swapped });
+    expect(result.status).toBe("completed");
+    // red-first-expect: to deeply equal [ ObjectContaining{…}, …(1) ]
+    expect(fx.sent).toEqual([
+      expect.objectContaining({ to: ["one@example.com"], subject: "Bundle subject one", textBody: "The same body" }),
+      expect.objectContaining({ to: ["two@example.com"], subject: "Bundle subject two", textBody: "The same body" }),
+    ]);
+    // Draft 1's message is bound to art-2, whose text is draft 1's own text.
+    expect(fx.bindBody.mock.calls.map(([b]) => b.artifactId)).toEqual(["art-2", "art-1"]);
+  });
+
+  it("P4 a draft whose body was changed in the bundle after its body was filed refuses the whole send", async () => {
+    const drafts = bundleDrafts.map((d) => (d.recipientId === "c2" ? { ...d, body: "Approved body two, changed later" } : d));
+    // red-first-expect: expected 'completed' to be 'failed'
+    await expectRefused(
+      makeFixture({ drafts }),
+      { approvedBodies: approved },
+      "approved body 2 is not the body of draft 2 of the bundle (contact c2)",
+    );
   });
 
   it("F1 the fan-out binds each mailed message to its approved revision and files no new body", async () => {
@@ -522,7 +643,7 @@ describe("cinatra#3089 — each message is sent to the address and with the subj
     const result = await fx.start({ approvedBodies: [{ ...approved[0]!, subject: padded }, approved[1]] });
     expect(result.status).toBe("completed");
     expect(fx.sent[0]?.subject).toBe(padded);
-    // red-first-expect: expected 'Bundle body one' to be 'Approved body one'
+    // red-first-expect: to be 'Approved body one'
     expect(fx.sent[0]?.textBody).toBe("Approved body one");
   });
 

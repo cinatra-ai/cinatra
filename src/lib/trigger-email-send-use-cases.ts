@@ -116,7 +116,28 @@ export type TriggerEmailSendDeps = {
   // twice. Defaults to the materialization ledger's send rows
   // (`claimFanoutMessageSend`). The reference-only form does not use it.
   messageSendLedger?: MessageSendLedger;
+  // Whether the drafting step of a run filed email bodies for review
+  // (cinatra#3089). A send of such a run without `approvedBodies` is refused
+  // before any mail, so the bundle's text never bypasses the reviewed bodies.
+  // Defaults to the materialization ledger (`runHasFiledReviewBodies`): a
+  // finalized mid-run filing of the body type in the run, never the send's own
+  // `email_fanout` rows.
+  readRunReviewedBodies?: (runId: string, actor: PrimitiveActorContext) => Promise<boolean>;
 };
+
+/** The code a send carries when its run has bodies filed for review and the
+ *  send names none of them (cinatra#3089). */
+export const REVIEWED_BODIES_REQUIRED = "REVIEWED_BODIES_REQUIRED";
+
+/** Refuses a send that names no approved body of a run whose drafting step
+ *  filed bodies for review; nothing is mailed. */
+export class ReviewedBodiesRequiredError extends Error {
+  readonly code = REVIEWED_BODIES_REQUIRED;
+  constructor(message: string) {
+    super(`${REVIEWED_BODIES_REQUIRED}: ${message}`);
+    this.name = "ReviewedBodiesRequiredError";
+  }
+}
 
 /** The outcome of claiming one message's mail (see `MessageSendLedger`). */
 export type MessageSendClaim =
@@ -299,7 +320,20 @@ function buildLazyDefaultDeps(): TriggerEmailSendDeps {
       });
     },
     messageSendLedger: defaultMessageSendLedger,
+    readRunReviewedBodies: defaultReadRunReviewedBodies,
   };
+}
+
+/** The materialization ledger's mid-run body filings (`runHasFiledReviewBodies`). */
+async function defaultReadRunReviewedBodies(runId: string): Promise<boolean> {
+  const { runHasFiledReviewBodies } = await import("./artifacts/materialization-ledger");
+  return runHasFiledReviewBodies({ runId, objectTypeId: EMAIL_BODY_TYPE_ID });
+}
+
+/** Trailing white space is not part of what a reader sees in an email; the
+ *  delivery pack's read step compares a body with its draft the same way. */
+function withoutTrailingSpace(text: string): string {
+  return text.replace(/\s+$/, "");
 }
 
 function orgOf(actor: PrimitiveActorContext): string {
@@ -884,8 +918,10 @@ function sendRecordCounts(row: InitialSendStateRow): {
  * given back only for an error raised before the hand-over to the transport
  * (`MailNotHandedOverError`), so a later call may mail it. A mail handed over
  * is marked sent; the mark is one conditional update, written again up to
- * `MARK_SENT_ATTEMPTS` times while it throws. A mark that is refused (the
- * record is not open) or that still throws leaves the message in doubt: it is
+ * `MARK_SENT_ATTEMPTS` times while it throws; an attempt whose write committed
+ * before its reply was lost reads as written (the claim's row is sent). A mark
+ * that is refused (the record is gone, or not sent) or that still throws leaves
+ * the message in doubt: it is
  * counted in `sentCount` (the mail went out) AND in `inDoubtCount`, named in
  * `errorMessage`, and the answer is failed. A message in doubt stays unmailed
  * by every later call until a person establishes with the mail provider
@@ -903,8 +939,11 @@ async function markSentWithRetry(
   let reason = "";
   for (let attempt = 1; attempt <= MARK_SENT_ATTEMPTS; attempt += 1) {
     try {
+      // True also when an earlier attempt committed and only its reply was
+      // lost: the ledger reads the claim's own row back.
       if (await ledger.markSent(ledgerId, actor)) return true;
-      // The conditional update found no open record: writing again cannot help.
+      // The claim's record is gone or was never moved to sent by any attempt:
+      // writing again cannot help.
       return "the record was not open";
     } catch (err) {
       reason = err instanceof Error ? err.message : String(err);
@@ -1059,14 +1098,23 @@ async function runInitialSend(args: {
   sendEmail: TriggerEmailSendDeps["sendEmail"];
   readDecidedBody: NonNullable<TriggerEmailSendDeps["readDecidedBody"]>;
   messageSendLedger: MessageSendLedger;
+  readRunReviewedBodies: NonNullable<TriggerEmailSendDeps["readRunReviewedBodies"]>;
   getObjectByRef: (
     ref: string,
     actor: PrimitiveActorContext,
   ) => Promise<ObjectsEnvelope | null>;
   emitEmailFanout: (args: EmailFanoutArgs) => Promise<EmailFanoutResult>;
 }): Promise<InitialSendStateRow> {
-  const { input, actor, sendEmail, getObjectByRef, emitEmailFanout, readDecidedBody, messageSendLedger } =
-    args;
+  const {
+    input,
+    actor,
+    sendEmail,
+    getObjectByRef,
+    emitEmailFanout,
+    readDecidedBody,
+    messageSendLedger,
+    readRunReviewedBodies,
+  } = args;
   const startedAt = new Date().toISOString();
   sendStateByCampaign.set(input.campaignId, {
     status: "running",
@@ -1125,7 +1173,35 @@ async function runInitialSend(args: {
     // card showed for it: the address the send resolves and the subject it
     // mails must equal the entry's `recipientEmail` and `subject`, so an
     // address or a subject changed while the card waited is never mailed.
-    // Without `approvedBodies` the send reads the bundle exactly as before.
+    // Each approved revision is also bound to the ONE draft it is paired with
+    // by its text: the revision's text must equal the body the bundle's draft
+    // holds (trailing white space aside, as the delivery pack's read step
+    // compares them before the card), for every entry, whether or not the body
+    // artifact names a contact. The drafting step files each body from its
+    // draft's text, so two entries swapped between drafts are refused unless
+    // their texts are the same (then nobody receives a text another draft
+    // holds), and a draft whose body was changed in the bundle after its body
+    // was filed is refused too: the send mails only a text that was reviewed.
+    //
+    // Without `approvedBodies` the send reads the bundle exactly as before,
+    // unless the drafting step of the run filed bodies for review: the bundle's
+    // text is then not what a person reviewed, so the send is refused before
+    // any mail and must name the approved bodies (`ReviewedBodiesRequiredError`).
+    if (!input.approvedBodies && runScopeId) {
+      let reviewed: boolean;
+      try {
+        reviewed = await readRunReviewedBodies(runScopeId, actor);
+      } catch (err) {
+        throw new Error(
+          `The send was refused before any email went out: whether run ${runScopeId} has email bodies filed for review could not be read: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      if (reviewed) {
+        throw new ReviewedBodiesRequiredError(
+          `The send was refused before any email went out: run ${runScopeId} has email bodies filed for review, so the send must name the approved bodies (approvedBodies)`,
+        );
+      }
+    }
     let approvedByIndex: Map<number, ApprovedFanoutBody & { subject: string }> | null = null;
     if (input.approvedBodies) {
       const refuse = (reason: string): never => {
@@ -1233,13 +1309,17 @@ async function runInitialSend(args: {
         if (ownContact !== undefined && ownContact !== contact) {
           refuse(`approved body ${body.position} is the body of contact ${ownContact}, not of contact ${contact}`);
         }
+        const index = draftsByContact.get(contact)![0]!;
+        const draftText = String(drafts[index]!.body ?? drafts[index]!.bodyHtml ?? "");
+        if (withoutTrailingSpace(read.text) !== withoutTrailingSpace(draftText)) {
+          refuse(`approved body ${body.position} is not the body of draft ${index + 1} of the bundle (contact ${contact})`);
+        }
         // ONE subject per message: the one the card showed, which the entry
         // carries and the send mails. It must equal the subject the bundle's
         // draft holds now, exactly, so a draft changed after the card refuses
         // the send. The body artifact's own `subject` field is read by no
         // reviewer (the review shows its text and title), so it neither
         // decides the mailed subject nor blocks the send.
-        const index = draftsByContact.get(contact)![0]!;
         if ((drafts[index]!.subject ?? "(no subject)") !== body.subject) {
           refuse(`draft ${index + 1} of the bundle (contact ${contact}): the subject changed after the card was shown`);
         }
@@ -1668,6 +1748,7 @@ export function createTriggerEmailSendUseCases(
         emitEmailFanout: deps.emitEmailFanout ?? defaultEmitEmailFanout,
         readDecidedBody: deps.readDecidedBody ?? buildLazyDefaultDeps().readDecidedBody!,
         messageSendLedger: deps.messageSendLedger ?? defaultMessageSendLedger,
+        readRunReviewedBodies: deps.readRunReviewedBodies ?? defaultReadRunReviewedBodies,
       });
       sendStateByCampaign.set(input.campaignId, result);
       return {

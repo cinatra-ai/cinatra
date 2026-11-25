@@ -593,22 +593,30 @@ export async function recordFanoutReuseMaterialization(input: {
 // only after it holds that message's SEND ROW: a second `email_fanout` row of
 // the run, under the message's send identity (`email-send:<run>:<item>`, see
 // `fanoutMessageSendOutputId`), copied from the message's binding row (the
-// organization, the run, the pack, and the approved artifact and revision the
-// mail carries). The row's `phase` is the send state, with the ledger's own
-// two values:
+// organization, the run, and the approved artifact and revision the mail
+// carries; not its pack, see below). The row's `phase` is the send state, with
+// the ledger's own two values:
 //   - `claimed`   — a caller won the message and may be handing it over now, or
 //                   stopped after the claim (a crash, or a provider error that
 //                   may have come after the hand-over). Nobody mails it again.
 //   - `finalized` — the provider accepted the mail.
 // The row's content hash is the fixed marker `FANOUT_MESSAGE_SEND_MARKER`, not
-// a hash of the text, so the unique key (run, output, extension, hash) admits
-// ONE send row per message of a run whatever revision is mailed: a person is
-// mailed once per message of a run. The insert is conditional on the key
-// (`ON CONFLICT DO NOTHING`), so of concurrent callers exactly one wins.
+// a hash of the text, and its extension is the fixed value
+// `FANOUT_MESSAGE_SEND_EXTENSION`, not the pack of the binding row (the pack
+// that wins the body type is chosen again on every send, and a send row
+// records a send, not an artifact of a pack). So the unique key (run, output,
+// extension, hash) admits ONE send row per message of a run whatever revision
+// is mailed and whichever pack wins the type: a person is mailed once per
+// message of a run. The insert is conditional on that key (`ON CONFLICT DO
+// NOTHING` on the unique index), which Postgres decides atomically: of
+// concurrent callers exactly one inserts, the others insert nothing.
 // ---------------------------------------------------------------------------
 
 /** The content-hash value of every send row (see the block above). */
 export const FANOUT_MESSAGE_SEND_MARKER = "message-send";
+
+/** The extension value of every send row (see the block above). */
+export const FANOUT_MESSAGE_SEND_EXTENSION = "message-send";
 
 /** The send identity of a message, from its binding identity
  *  (`email-body:<run>:<item>` → `email-send:<run>:<item>`). */
@@ -646,7 +654,7 @@ export async function claimFanoutMessageSend(input: {
   const sendOutputId = fanoutMessageSendOutputId(input.outputId);
   const inserted = await pool().query(
     `WITH bound AS (
-  SELECT org_id, run_id, extension, artifact_id, representation_revision_id
+  SELECT org_id, run_id, artifact_id, representation_revision_id
     FROM "${s}"."artifact_materializations"
    WHERE org_id = $2 AND run_id = $3 AND output_id = $4
      AND path = 'email_fanout' AND phase = 'finalized'
@@ -656,7 +664,7 @@ export async function claimFanoutMessageSend(input: {
 INSERT INTO "${s}"."artifact_materializations"
   (id, org_id, run_id, output_id, node_id, path, extension, content_hash,
    artifact_id, representation_revision_id, phase)
-SELECT $1, org_id, run_id, $7, NULL, 'email_fanout', extension, $8,
+SELECT $1, org_id, run_id, $7, NULL, 'email_fanout', $9, $8,
        artifact_id, representation_revision_id, 'claimed'
   FROM bound
 ON CONFLICT (run_id, output_id, extension, content_hash) DO NOTHING
@@ -670,6 +678,7 @@ RETURNING id`,
       input.representationRevisionId,
       sendOutputId,
       FANOUT_MESSAGE_SEND_MARKER,
+      FANOUT_MESSAGE_SEND_EXTENSION,
     ],
   );
   if (inserted.rows.length > 0) {
@@ -699,8 +708,11 @@ RETURNING id`,
   return row.phase === "finalized" ? { kind: "sent", ...refs } : { kind: "in_doubt", ...refs };
 }
 
-/** Record that the provider accepted the mail of a won message. True when this
- *  call moved the row from `claimed` to `finalized`. */
+/** Record that the provider accepted the mail of a won message. True when the
+ *  claim's row is `finalized` after the call: moved by this call, or already
+ *  moved by an earlier write of the same mark whose reply was lost (the row is
+ *  found by its id, which only this claim holds). False when the row is gone,
+ *  or is not a send row of the organization in `finalized`. */
 export async function markFanoutMessageSent(input: {
   orgId: string;
   ledgerId: string;
@@ -714,7 +726,44 @@ export async function markFanoutMessageSent(input: {
   RETURNING id`,
     [input.ledgerId, input.orgId],
   );
-  return res.rows.length > 0;
+  if (res.rows.length > 0) return true;
+  // Nothing moved: an earlier write of this mark may have committed before its
+  // reply was lost. The row of this claim, read by its id, decides.
+  const row = await pool().query(
+    `SELECT phase FROM "${s}"."artifact_materializations"
+  WHERE id = $1 AND org_id = $2 AND path = 'email_fanout'
+  LIMIT 1`,
+    [input.ledgerId, input.orgId],
+  );
+  return (row.rows[0] as { phase?: string } | undefined)?.phase === "finalized";
+}
+
+/**
+ * Whether the drafting step of `runId` filed bodies of `objectTypeId` for
+ * review (cinatra#3089): a finalized row of the run on a MID-RUN path
+ * (`materialize_tool`, the `artifact_materialize` filing a list member or one
+ * artifact; `end_node_binding`, a declared binding) whose artifact is of that
+ * type. The send's own rows are on the path `email_fanout` (a body the send
+ * writes or binds, and its send rows), so a send never counts its own rows: a
+ * retry of a reference-only send finds only those and reads false. The run id
+ * is unique, so the read needs no organization.
+ */
+export async function runHasFiledReviewBodies(input: {
+  runId: string;
+  objectTypeId: string;
+}): Promise<boolean> {
+  ensurePostgresSchema();
+  const s = schema();
+  const res = await pool().query(
+    `SELECT EXISTS (
+  SELECT 1 FROM "${s}"."artifact_materializations" m
+    JOIN "${s}"."objects" o ON o.id = m.artifact_id
+   WHERE m.run_id = $1 AND m.path IN ('materialize_tool', 'end_node_binding')
+     AND m.phase = 'finalized' AND o.type = $2
+) AS filed`,
+    [input.runId, input.objectTypeId],
+  );
+  return (res.rows[0] as { filed?: boolean } | undefined)?.filed === true;
 }
 
 /** Give a won message back, ONLY when its mail was demonstrably never handed to

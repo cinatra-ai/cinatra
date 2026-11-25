@@ -142,11 +142,13 @@ const BUNDLE_REF = "11111111-1111-4111-8111-111111111111";
 const RECIPIENTS_REF = "22222222-2222-4222-8222-222222222222";
 const CAMPAIGN_ID = "33333333-3333-4333-8333-333333333333";
 
+// Each draft holds the text its body was filed from (with a trailing newline
+// the filed revision does not carry; trailing white space is not compared).
 const drafts = [1, 2, 3].map((n) => ({
   recipientId: `c${n}`,
   recipientEmail: `p${n}@example.com`,
   subject: `Bundle subject ${n}`,
-  body: `Bundle body ${n}`,
+  body: `Approved art-${n}\n`,
 }));
 const recipients = [1, 2, 3].map((n) => ({ contactId: `c${n}`, email: `p${n}@example.com` }));
 const approved = [1, 2, 3].map((n) => ({
@@ -231,7 +233,9 @@ function makeFixture(opts?: {
     ...(emitEmailFanout ? { emitEmailFanout } : {}),
     ...(readDecidedBody ? { readDecidedBody } : {}),
     messageSendLedger: sendLedger.ledger,
-  };
+    // A run without bodies filed for review, so the reference-only form runs.
+    readRunReviewedBodies: async () => false,
+  } as TriggerEmailSendDeps;
   const handlers = createTriggerEmailSendHandlers(createTriggerEmailSendUseCases(deps));
   const start = (input: Record<string, unknown>) =>
     handlers["email_outreach_send_initial_start"]({
@@ -289,7 +293,7 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     readRevisionMock.mockImplementation(async (input: { artifactId: string; actor?: { principalId?: string } }) =>
       input.artifactId === "art-2" || input.actor?.principalId !== "user-1"
         ? { ok: false, error: `artifact ${input.artifactId} is not an artifact this organisation can see` }
-        : { ok: true, artifactId: input.artifactId, representationRevisionId: "x", text: "t", data: {} },
+        : { ok: true, artifactId: input.artifactId, representationRevisionId: "x", text: `Approved ${input.artifactId}`, data: {} },
     );
     const fx = makeFixture({ readDecidedBody: "production" });
     const result = await fx.start({ approvedBodies: approved });
@@ -315,7 +319,7 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     const fx = makeFixture({ readDecidedBody: "production" });
     const result = await fx.start({ approvedBodies: approved });
     expect(result.status).toBe("completed");
-    // red-first-expect: expected [ 'Bundle body 1', …(2) ] to deeply equal [ 'Approved art-1', …(2) ]
+    // red-first-expect: to deeply equal [ 'Approved art-1', …(2) ]
     expect(fx.sent.map((m) => m.textBody)).toEqual(["Approved art-1", "Approved art-2", "Approved art-3"]);
   });
 
@@ -335,7 +339,7 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     const fx = makeFixture({ emitEmailFanout: "production" });
     const result = await fx.start({});
     expect(result.status).toBe("completed");
-    expect(fx.sent.map((m) => m.textBody)).toEqual(["Bundle body 1", "Bundle body 2", "Bundle body 3"]);
+    expect(fx.sent.map((m) => m.textBody)).toEqual(["Approved art-1\n", "Approved art-2\n", "Approved art-3\n"]);
     expect(writeRevisionMock).not.toHaveBeenCalled();
   });
 
@@ -613,8 +617,8 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     const one = await makeFixture({ sendLedger, sent }).start({});
     const two = await makeFixture({ sendLedger, sent }).start({});
     expect(sent.map((m) => m.textBody)).toEqual([
-      "Bundle body 1", "Bundle body 2", "Bundle body 3",
-      "Bundle body 1", "Bundle body 2", "Bundle body 3",
+      "Approved art-1\n", "Approved art-2\n", "Approved art-3\n",
+      "Approved art-1\n", "Approved art-2\n", "Approved art-3\n",
     ]);
     expect(claim).not.toHaveBeenCalled();
     for (const answer of [one, two]) {
