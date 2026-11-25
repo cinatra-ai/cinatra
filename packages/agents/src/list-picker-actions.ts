@@ -11,7 +11,7 @@ import {
 import { actorFromSession, type ActorRoleHints } from "@/lib/authz/build-actor-context";
 import type { AgentRunRecord } from "./agent-run-record";
 import { enforceRunAccess } from "./auth-policy";
-import { runWaitsAtGateTask } from "./run-status";
+import { gateTaskIsCurrentPause } from "./run-status";
 import { readAgentRunById, readLatestDurableHitlGateArtifact } from "./store";
 
 // The picker still exposes the legacy `AvailableListSummary` shape so its
@@ -76,6 +76,17 @@ export type AvailableListSummary = {
  * guard.
  */
 async function requireRunReadAccess(runId: unknown): Promise<AgentRunRecord | null> {
+  return (await readRunWithViewer(runId)).run;
+}
+
+/**
+ * The run the signed-in person may read (the rule of `requireRunReadAccess`),
+ * with the organization the person acts in now (the session's active
+ * organization, as the actor context reads it), or null when there is none.
+ */
+async function readRunWithViewer(
+  runId: unknown,
+): Promise<{ run: AgentRunRecord | null; viewerOrgId: string | null }> {
   const session = await requireAuthSession();
   const kernel = await requireActorContext();
   const actor = actorFromSession(session);
@@ -91,10 +102,11 @@ async function requireRunReadAccess(runId: unknown): Promise<AgentRunRecord | nu
   if (typeof runId !== "string" || runId.trim() === "") {
     // Same hidden-run absence as an unknown id — no DB round-trip needed.
     await enforceRunAccess(null, actor, "read", roleHints);
-    return null;
+    return { run: null, viewerOrgId: kernel.organizationId ?? null };
   }
 
-  return readAgentRunById(runId, actor, roleHints);
+  const run = await readAgentRunById(runId, actor, roleHints);
+  return { run, viewerOrgId: kernel.organizationId ?? null };
 }
 
 /**
@@ -251,21 +263,41 @@ function failedListStepContent(): ListStepContent {
  * refused there, before any role short-circuit.
  *
  * Fail-closed: a run without a stored ceiling (its own call falls back to the
- * machine token, which the boundary refuses), a run without a person, and any
- * fault while the decision is asked answer `false`.
+ * machine token, which the boundary refuses), a run without a person, a person
+ * the live run actor resolver does not resolve (no user row, or no live
+ * membership of the run's organization), and any fault while the decision is
+ * asked answer `false`.
  */
 async function runMayReadCrmLists(run: AgentRunRecord): Promise<boolean> {
   if (!run.oboCeiling || run.oboCeiling.length === 0) return false;
   if (typeof run.runBy !== "string" || run.runBy.length === 0) return false;
   try {
+    // The run's actor, resolved as a live run step resolves it before its
+    // tool call (`resolveAgentRunMcpActor`, the llm-bridge mint): the person
+    // the run acts for must still exist and hold a live membership of the
+    // run's organization (an operator with the platform admin role excepted,
+    // never on a widget run). No actor, no list read: the boundary would
+    // otherwise take the ids it is handed as a membership.
+    const { resolveAgentRunMcpActor } = await import("@/lib/agent-run-actor-resolve");
+    const liveActor = await resolveAgentRunMcpActor({
+      runId: run.id,
+      runBy: run.runBy,
+      orgId: run.orgId,
+      sourceType: run.sourceType,
+    });
+    if (!liveActor) return false;
     const { enforceMcpBoundary } = await import("@/lib/authz/mcp-boundary");
-    const orgRole = await resolveOrgRoleForUser(run.orgId, run.runBy);
+    const orgRole =
+      liveActor.platformRole === "platform_admin"
+        ? undefined
+        : await resolveOrgRoleForUser(run.orgId, run.runBy);
     const decision = await enforceMcpBoundary({
       primitiveName: CRM_LIST_READ_TOOL,
       delegatedRestricted: false,
       ctx: {
         orgId: run.orgId,
         userId: run.runBy,
+        platformRole: liveActor.platformRole,
         ...(orgRole ? { orgRole } : {}),
         runId: run.id,
         oboCeiling: run.oboCeiling,
@@ -306,12 +338,13 @@ function toListStepLists(
  *     `pending_approval` without writing a generic gate, so the list gate
  *     before it would still be the newest row;
  *   - the gate's review task is a flow gate task (`wayflow-<task>`), and the
- *     run waits at that task: `runWaitsAtGateTask`, the one reading of "the
- *     pause the run waits at" (the run row's gate task, and the latest-task
- *     key when it holds a value), read as the answer road reads it, with a
- *     key that cannot be read leaving the run row's word. An answered gate
- *     fails it: the answer moves the run out of `pending_approval`, and a run
- *     that paused again names its new gate task.
+ *     run waits at that task as answering the gate decides it
+ *     (`gateTaskIsCurrentPause`): when the run row names the task, a
+ *     latest-task key that names another task refuses and an absent key (or
+ *     one that cannot be read) leaves the row's word; when the row names
+ *     another task (its write can stay stale), only a key naming this task
+ *     proves it. An answered gate fails it: the answer moves the run out of
+ *     `pending_approval`, and a run that paused again names its new task.
  * Any fault reads as not waiting.
  */
 async function listGateIsCurrentPause(
@@ -332,7 +365,7 @@ async function listGateIsCurrentPause(
   }
   const latest = await (async () =>
     (await import("@cinatra-ai/a2a")).resolveLatestWayflowGateTaskId(run.id))().catch(() => null);
-  return runWaitsAtGateTask(run, gateTaskId, latest ?? null);
+  return gateTaskIsCurrentPause(run, gateTaskId, latest ?? null);
 }
 
 /**
@@ -350,8 +383,9 @@ async function listGateIsCurrentPause(
  *      `list_step_not_waiting` is thrown and no CRM call is made. This is
  *      stricter than `fetchAvailableLists`, which reads the lists for any run
  *      the person may read;
- *   3. the run itself may read the CRM lists (`runMayReadCrmLists`); if not,
- *      the failed shape, with no CRM call;
+ *   3. the person acts in the run's organization now, and the run itself may
+ *      read the CRM lists (`runMayReadCrmLists`: the live run actor, then the
+ *      boundary decision); if not, the failed shape, with no CRM call;
  *   4. the CRM list read, with the same arguments as `fetchAvailableLists`. A
  *      missing capability and a failed read answer the failed shape; no error
  *      text leaves this function, and the log line is fixed words.
@@ -363,7 +397,7 @@ export async function readListStepContent(
   runId: string,
   reviewTaskId?: string,
 ): Promise<ListStepContent> {
-  const run = await requireRunReadAccess(runId);
+  const { run, viewerOrgId } = await readRunWithViewer(runId);
 
   const namedTask =
     typeof reviewTaskId === "string" && reviewTaskId.length > 0 ? reviewTaskId : null;
@@ -384,6 +418,14 @@ export async function readListStepContent(
   console.info(
     `[list-picker] the list step is read again (run ${run.id}, review task ${gate.reviewTaskId})`,
   );
+
+  // The person who pressed acts in the run's organization now: a run of
+  // another organization (one the person may still read, as its owner) gets
+  // no list of that organization.
+  if (viewerOrgId !== run.orgId) {
+    console.warn("[list-picker] the person does not act in the run's organization; the step shows the failed read");
+    return failedListStepContent();
+  }
 
   if (!(await runMayReadCrmLists(run))) {
     console.warn("[list-picker] the run may not read the CRM lists; the step shows the failed read");

@@ -217,24 +217,54 @@ export function ListPickerRenderer({
   // is no longer redirected to `/not-authorized` at this step.
   const runId = context?.runId;
 
+  // ONE RECONCILIATION FOR EVERY READ THAT SUCCEEDED (cinatra#3562), whether
+  // it is the first load, a load the run identity re-issued, or Try again: its
+  // lists replace the drawn ones, and, while the step may change, the pick is
+  // the chosen list if the read still offers it, with the name the read gives
+  // it, else no pick. When that differs from the pick last written (the list
+  // dropped or renamed), it is written once through the current `onChange`;
+  // the same read again writes nothing. A failed, rejected or malformed read
+  // never comes here: it draws the failed reading and keeps the pick as it is.
+  function acceptRead(read: AvailableListSummary[]) {
+    setLists(read);
+    setReadFailed(false);
+    const now = latest.current;
+    if (!isWritable(now)) return;
+    const kept = read.find((list) => list.id === now.selectedId) ?? null;
+    if (kept === null && now.selectedId !== null) setSelectedId(null);
+    const pick = { listId: kept?.id ?? "", listName: kept?.name ?? "" };
+    const last = lastWritten.current;
+    if (pick.listId !== last.listId || pick.listName !== last.listName) {
+      lastWritten.current = pick;
+      onChangeRef.current({
+        scope: "list",
+        listId: pick.listId,
+        listName: pick.listName,
+        memberCount: kept?.memberCount ?? 0,
+      });
+    }
+  }
+  const acceptReadRef = useRef(acceptRead);
+  useEffect(() => {
+    acceptReadRef.current = acceptRead;
+  });
+
   // Mount-once fetch, guarded with a cancellation flag so React Strict Mode's
   // double-mount in dev does not double-fetch. Keyed on the run identity so a
   // runId that only arrives after mount re-issues the (now authorized) load.
   // A rejected load is the failed reading (design I.1), drawn in place as the
-  // step's alert rather than as an empty list.
+  // step's alert rather than as an empty list; it keeps the pick.
   useEffect(() => {
     let cancelled = false;
     fetchAvailableLists(runId ?? "")
       .then((items) => {
         if (!cancelled) {
-          setLists(items);
-          setReadFailed(false);
+          acceptReadRef.current(items);
           setLoading(false);
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setLists([]);
           setReadFailed(true);
           setLoading(false);
         }
@@ -271,11 +301,9 @@ export function ListPickerRenderer({
   // the run does not resume. A second press while a read is pending does
   // nothing. A read that ends after the step is gone sets nothing; one that
   // ends after the step was locked (disabled, or drawn read-only) is dropped.
-  // After a read the step accepts, its lists replace the first load's. The
-  // pick is the chosen list if the read still offers it, with the name the
-  // read gives it, else no pick; when that differs from the pick last written
-  // (the list dropped or renamed), it is written once through the current
-  // `onChange`, else nothing is written.
+  // A read that succeeded takes the one reconciliation (`acceptRead`); a
+  // failed, rejected or malformed one draws the failed reading and changes
+  // nothing else.
   async function refresh() {
     if (!writes || typeof onRequestRefresh !== "function" || inFlight.current) return;
     inFlight.current = true;
@@ -296,25 +324,10 @@ export function ListPickerRenderer({
     const read = listsOfRead(answer);
     setReading(false);
     if (read === null) {
-      setLists([]);
       setReadFailed(true);
-    } else {
-      setLists(read);
-      setReadFailed(false);
+      return;
     }
-    const kept = (read ?? []).find((list) => list.id === now.selectedId) ?? null;
-    if (kept === null && now.selectedId !== null) setSelectedId(null);
-    const pick = { listId: kept?.id ?? "", listName: kept?.name ?? "" };
-    const last = lastWritten.current;
-    if (pick.listId !== last.listId || pick.listName !== last.listName) {
-      lastWritten.current = pick;
-      onChangeRef.current({
-        scope: "list",
-        listId: pick.listId,
-        listName: pick.listName,
-        memberCount: kept?.memberCount ?? 0,
-      });
-    }
+    acceptRead(read);
   }
 
   // v1: client-side search filter only. The crm_list_search facade accepts a

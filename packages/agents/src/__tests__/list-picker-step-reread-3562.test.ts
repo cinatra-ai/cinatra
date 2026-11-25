@@ -73,6 +73,33 @@ vi.mock("@/lib/authz/audit", () => ({ logAuditEvent: logAuditEventMock }));
 
 vi.mock("@/lib/crm-integration-providers", () => ({ resolveCrmListReader: vi.fn() }));
 
+// THE LIVE RUN ACTOR RESOLVER IS REAL (`resolveAgentRunMcpActor`, the one a
+// live run step's tool call takes); only its database is a stand-in: the user
+// rows and the membership rows it reads, keyed by the table it selects from.
+const { authRows } = vi.hoisted(() => ({
+  authRows: {
+    users: [] as Array<{ id: string; role: string | null }>,
+    members: [] as Array<{ id: string; userId: string; organizationId: string }>,
+  },
+}));
+vi.mock("@/lib/better-auth-db", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/better-auth-db")>();
+  const fakeDb = {
+    select: () => ({
+      from: (table: unknown) => ({
+        where: () => ({
+          limit: async () =>
+            table === real.betterAuthUsers
+              ? authRows.users.filter((u) => u.id === "member-1")
+              : authRows.members.filter((m) => m.userId === "member-1" && m.organizationId === "org-1"),
+        }),
+      }),
+    }),
+  };
+  return { ...real, betterAuthDb: fakeDb };
+});
+vi.mock("@/lib/authz/build-actor-context-from-run", () => ({ buildActorContextFromRun: vi.fn() }));
+
 // The publish hold and the latest-task key: the two readers the answer road
 // and the publish hold use to tell the pause the run waits at.
 const { assertNoOpenPublishDecisionMock, resolveLatestTaskMock } = vi.hoisted(() => ({
@@ -162,6 +189,10 @@ beforeEach(() => {
   resolveLatestTaskMock.mockReset();
   resolveLatestTaskMock.mockResolvedValue(GATE_TASK);
   resolveOrgRoleForUserMock.mockClear();
+  resolveOrgRoleForUserMock.mockResolvedValue("member");
+  authRows.users = [{ id: "member-1", role: "user" }];
+  authRows.members = [{ id: "m-1", userId: "member-1", organizationId: "org-1" }];
+  requireActorContextMock.mockClear();
   warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
   infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
 });
@@ -215,8 +246,18 @@ describe("readListStepContent — only for the list step the run waits at", () =
     ],
     ["a publish hold that cannot be read", () => assertNoOpenPublishDecisionMock.mockRejectedValueOnce(new Error("db down"))],
     [
-      "an answered list gate (the run went on and paused at another task)",
-      () => readAgentRunByIdMock.mockResolvedValueOnce(waitingRun({ a2aTaskId: "flow-task-2" })),
+      "an answered list gate (the run went on and paused at another task: row and key name it)",
+      () => {
+        readAgentRunByIdMock.mockResolvedValueOnce(waitingRun({ a2aTaskId: "flow-task-2" }));
+        resolveLatestTaskMock.mockResolvedValueOnce("flow-task-2");
+      },
+    ],
+    [
+      "a run row naming another task with no latest-task key to prove this one",
+      () => {
+        readAgentRunByIdMock.mockResolvedValueOnce(waitingRun({ a2aTaskId: "flow-task-2" }));
+        resolveLatestTaskMock.mockResolvedValueOnce(null);
+      },
     ],
     ["a stale task (the latest-task key names a later pause)", () => resolveLatestTaskMock.mockResolvedValueOnce("flow-task-2")],
     [
@@ -249,6 +290,25 @@ describe("readListStepContent — only for the list step the run waits at", () =
     expect(assertNoOpenPublishDecisionMock).toHaveBeenCalledWith(RUN_ID);
     expect(resolveLatestTaskMock).toHaveBeenCalledWith(RUN_ID);
     expect(searchMock).toHaveBeenCalledTimes(1);
+  });
+
+  // red-first-expect: readListStepContent is not a function
+  it("a stale run row whose latest-task key names this gate reads, as answering the gate would", async () => {
+    // The row's task-id write lost its race and still names the earlier task;
+    // the key, written when the gate was shown, names this one.
+    readAgentRunByIdMock.mockResolvedValueOnce(waitingRun({ a2aTaskId: "flow-task-0" }));
+    resolveLatestTaskMock.mockResolvedValueOnce(GATE_TASK);
+    await expect(readListStepContent(RUN_ID, TASK_ID)).resolves.toMatchObject({ listsRead: "ok" });
+    expect(searchMock).toHaveBeenCalledTimes(1);
+  });
+
+  // red-first-expect: readListStepContent is not a function
+  it("a stale run row whose latest-task key names a later task is refused", async () => {
+    readAgentRunByIdMock.mockResolvedValueOnce(waitingRun({ a2aTaskId: "flow-task-0" }));
+    resolveLatestTaskMock.mockResolvedValueOnce("flow-task-2");
+    const rejection = await rejectionOf(readListStepContent(RUN_ID, TASK_ID));
+    expect((rejection as Error).message).toBe("list_step_not_waiting");
+    expect(searchMock).not.toHaveBeenCalled();
   });
 
   // red-first-expect: readListStepContent is not a function
@@ -305,6 +365,46 @@ describe("readListStepContent — the run itself must be allowed the CRM list re
     );
     expect(searchMock).toHaveBeenCalledTimes(1);
     expect(searchMock).toHaveBeenCalledWith({ query: "", objectType: "contact" });
+  });
+});
+
+describe("readListStepContent — the run's actor is resolved as a live run step resolves it", () => {
+  const noActor: Array<[string, () => void]> = [
+    [
+      "a person removed from the run's organization",
+      () => {
+        authRows.members = [];
+        resolveOrgRoleForUserMock.mockResolvedValue(undefined as never);
+      },
+    ],
+    [
+      "a person whose account is gone (no user row)",
+      () => {
+        authRows.users = [];
+      },
+    ],
+  ];
+  for (const [name, arrange] of noActor) {
+    // red-first-expect: readListStepContent is not a function
+    it(`${name} gets the failed shape, with no CRM call`, async () => {
+      arrange();
+      await expect(readListStepContent(RUN_ID, TASK_ID)).resolves.toEqual({ lists: [], listsRead: "failed" });
+      expect(resolveCrmListReader).not.toHaveBeenCalled();
+      expect(searchMock).not.toHaveBeenCalled();
+    });
+  }
+
+  // red-first-expect: readListStepContent is not a function
+  it("a person who acts in another organization than the run's gets the failed shape, with no CRM call", async () => {
+    requireActorContextMock.mockResolvedValueOnce({
+      principalId: "member-1",
+      organizationId: "org-2",
+      orgRole: "member" as const,
+      platformRole: "member" as const,
+    });
+    await expect(readListStepContent(RUN_ID, TASK_ID)).resolves.toEqual({ lists: [], listsRead: "failed" });
+    expect(resolveCrmListReader).not.toHaveBeenCalled();
+    expect(searchMock).not.toHaveBeenCalled();
   });
 });
 

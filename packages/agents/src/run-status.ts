@@ -1697,3 +1697,23 @@ export function runWaitsAtGateTask(
   return run.status === "pending_approval" && gateTaskId.length > 0 && run.a2aTaskId === gateTaskId
     && (latest === null || latest === gateTaskId);
 }
+
+/**
+ * Is the gate task `gateTaskId` the pause the run waits at now, decided as answering that gate decides it
+ * (review-task-actions.ts, the `wayflow-` road, cinatra#4245)? The run must be `pending_approval`. Then:
+ *   - the run row's gate task names this task: the column is durable, so it is the run's word, and the latest-task key
+ *     can only refuse: a key that names ANOTHER task means the run moved on to a later pause; no key (or a read fault,
+ *     passed as null) leaves the column's word;
+ *   - the run row names another task: the column's task-id write can lose a race and stay stale (event-log.ts), so
+ *     only the latest-task key can prove this task is the current pause: it must name it. No key, no proof.
+ * `runWaitsAtGateTask` above stays the publish decision's reading, which needs the column to name its gate.
+ */
+export function gateTaskIsCurrentPause(
+  run: { readonly status: string; readonly a2aTaskId: string | null },
+  gateTaskId: string,
+  latest: string | null,
+): boolean {
+  if (run.status !== "pending_approval" || gateTaskId.length === 0) return false;
+  if (run.a2aTaskId === gateTaskId) return latest === null || latest === gateTaskId;
+  return latest === gateTaskId;
+}
