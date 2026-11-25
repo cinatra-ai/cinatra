@@ -40,6 +40,21 @@ import {
 } from "@/lib/lifecycle/lifecycle-produced-event";
 import { buildProducedEventInsertOp } from "@/lib/lifecycle/lifecycle-emit";
 
+// cinatra#4762: the server binder's reused-snapshot event, read without a database. Its statements are recorded, and
+// the shared reuse restamp is a spy.
+type Query = { text: string; values: unknown[] };
+const sync = vi.hoisted(() => ({ calls: [] as Array<{ transaction?: boolean; queries: Query[] }> }));
+const restampSpy = vi.hoisted(() => vi.fn(async (_input: Record<string, unknown>) => {}));
+vi.mock("@/lib/postgres-sync", () => ({
+  runPostgresQueriesSync: (input: { transaction?: boolean; queries: Query[] }) => {
+    sync.calls.push(input);
+    return input.queries.map(() => ({ rows: [], rowCount: 0 }));
+  },
+}));
+vi.mock("@/lib/artifacts/materialization-ledger", () => ({ restampReusedRevision: restampSpy }));
+vi.mock("@/lib/objects-store", () => ({ getObjectById: () => null }));
+vi.mock("@/lib/artifacts/object-content-snapshot", () => ({ captureObjectContentSnapshot: async () => null }));
+
 const ORG = "org-3028";
 const OBJECT = "obj-3028";
 const EMAIL_TYPE = "@cinatra-ai/email:record";
@@ -154,6 +169,66 @@ describe("0.13 — the mint-or-reuse road binds the minted revision into the rev
     // pinning a row as context asks nobody to decide about it — so the first
     // review of that row would open no gate without this.
     expect(ensure).toHaveBeenCalledWith({
+      orgId: ORG,
+      artifactId: OBJECT,
+      representationRevisionId: "rev-pinned-earlier",
+      producerRunId: null,
+    });
+  });
+
+  // red-first-expect: expected "vi.fn()" to be called with arguments: [ { orgId: 'org-3028', …(3) } ]
+  it("a run that opens a review on an existing snapshot is named on its trigger (cinatra#4762)", async () => {
+    const ensure = vi.fn(async () => {});
+    await openObjectBackedReview(
+      { orgId: ORG, objectId: OBJECT, createdByRunId: "run-4762" },
+      ports({
+        mintOrReuseSnapshot: async () => ({
+          representationRevisionId: "rev-pinned-earlier",
+          contentDigest: "digest-1",
+          reused: true,
+          effectiveBaseType: EMAIL_TYPE,
+        }),
+        ensureProducedEventForReusedSnapshot: ensure,
+      }),
+    );
+    // Without the run the event is an orphan of no run, outside that run's publish fence.
+    expect(ensure).toHaveBeenCalledWith({
+      orgId: ORG,
+      artifactId: OBJECT,
+      representationRevisionId: "rev-pinned-earlier",
+      producerRunId: "run-4762",
+    });
+  });
+
+  // red-first-expect: expected null to be 'run-4762'
+  it("the server binder's reused-snapshot event names the run and its attempt, and restamps an existing one (cinatra#4762)", async () => {
+    const [{ serverObjectBackedReviewPorts }, { mcpRequestContextStorage }] = await Promise.all([
+      import("@/lib/artifacts/object-backed-contract"),
+      import("@cinatra-ai/mcp-server/request-context"),
+    ]);
+    sync.calls.length = 0;
+    restampSpy.mockClear();
+    const bound = await serverObjectBackedReviewPorts({ originKind: "upload" });
+    await mcpRequestContextStorage.run({ runAttempt: { runId: "run-4762", resetGeneration: 3 } } as never, () =>
+      bound.ensureProducedEventForReusedSnapshot({
+        orgId: ORG,
+        artifactId: OBJECT,
+        representationRevisionId: "rev-pinned-earlier",
+        producerRunId: "run-4762",
+      } as never),
+    );
+    const queries = sync.calls.flatMap((c) => c.queries);
+    const event = queries.find((q) => q.text.includes("artifact_produced_outbox"))!;
+    // The new event: the run that opened the review, and the generation of the attempt the open runs in.
+    expect(event.values[6]).toBe("run-4762");
+    expect(event.values[11]).toBe(3);
+    // The run row first, in its own statement, in one transaction with the event.
+    expect(sync.calls[0].transaction).toBe(true);
+    expect(queries[0].text).toContain("FOR KEY SHARE");
+    // Only an absent event is inserted; an existing one takes the shared reuse restamp.
+    expect(event.text).toContain('AND (NOT EXISTS (SELECT 1 FROM');
+    expect(restampSpy).toHaveBeenCalledWith({
+      runId: "run-4762",
       orgId: ORG,
       artifactId: OBJECT,
       representationRevisionId: "rev-pinned-earlier",
@@ -292,28 +367,35 @@ describe("0.13 — the produced event is emitted at the mint", () => {
         representationRevisionId: "rev-minted",
         emitter: "object_snapshot_mint",
         originKind: "upload",
+        producerAttempt: null,
       },
       {
         whereExistsSql: `EXISTS (SELECT 1 FROM "app"."representation" WHERE id = $4::text AND org_id = $2::text AND artifact_id = $3::text)`,
       },
     );
     expect(op.text).toContain("SELECT $1::text");
-    expect(op.text).toContain("WHERE EXISTS");
-    expect(op.text).toContain("ON CONFLICT (event_id) DO NOTHING");
+    // cinatra#4762: the guard is ANDed to the producing run's row lock and its publishing-call check.
+    expect(op.text).toContain("FOR KEY SHARE) locked_run) >= 0 AND (CASE WHEN EXISTS");
+    expect(op.text).toContain("THEN 'cinatra_publish_call_in_flight' ELSE '1' END)::integer = 1 AND (EXISTS");
+    expect(op.text).toContain("ON CONFLICT (event_id) DO UPDATE SET producer_run_generation");
     // The guard binds ONLY this builder's own parameters.
     expect(op.values[0]).toBe(producedEventId(OBJECT, "rev-minted", "artifact_produced"));
     expect(op.values[3]).toBe("rev-minted");
   });
 
-  it("an unguarded emit is byte-identical to the one every existing choke point splices", () => {
+  it("an unguarded emit carries no guard: only the producing run's row lock (cinatra#4762)", () => {
     const op = buildProducedEventInsertOp("app", {
       orgId: ORG,
       artifactId: OBJECT,
       representationRevisionId: "rev-minted",
       emitter: "createSemanticArtifact",
       originKind: "agent_generated",
+      producerAttempt: null,
     });
-    expect(op.text).toContain("VALUES ($1::text");
-    expect(op.text).not.toContain("WHERE EXISTS");
+    expect(op.text).toContain("SELECT $1::text");
+    expect(op.text).toContain("FOR KEY SHARE) locked_run) >= 0 AND (CASE WHEN EXISTS");
+    // After the publishing-call check (cinatra#4762) comes no guard.
+    expect(op.text).toContain("THEN 'cinatra_publish_call_in_flight' ELSE '1' END)::integer = 1\nON CONFLICT");
+    expect(op.text).not.toContain('"representation"');
   });
 });

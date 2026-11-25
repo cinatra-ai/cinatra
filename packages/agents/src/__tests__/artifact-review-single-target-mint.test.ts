@@ -14,12 +14,23 @@ type StoredGate = {
 const storage = vi.hoisted(() => {
   const rows = new Map<string, StoredGate>();
   const inserts: StoredGate[] = [];
+  /** The run generation each insert stamps, as the emitter hands it to the statement (a number, or an SQL read). */
+  const generations: unknown[] = [];
   let readFailure = false;
   let lateConflict: StoredGate | null = null;
   let crashAfter: number | null = null;
   let readIdentity: { runId: string; reviewTaskId: string } | undefined;
   const key = (row: StoredGate) => `${row.runId}/${row.reviewTaskId}`;
+  /** cinatra#4762: the statements the store runs on `execute` (the run-row lock, the read of a publishing call in
+   *  flight), in order, each tagged with the insert count at that moment. */
+  const statements: Array<{ text: string; insertsBefore: number }> = [];
+  let publishCallInFlight = false;
   const executor = {
+    async execute(query: SQL) {
+      const text = new PgDialect().sqlToQuery(query).sql;
+      statements.push({ text, insertsBefore: inserts.length });
+      return { rows: /calls_in_flight > 0/.test(text) && publishCallInFlight ? [{ "?column?": 1 }] : [] };
+    },
     async transaction<T>(callback: (tx: unknown) => Promise<T>): Promise<T> {
       const before = new Map(rows);
       try { return await callback(executor); }
@@ -27,7 +38,11 @@ const storage = vi.hoisted(() => {
     },
     insert() {
       return {
-        values(row: StoredGate) {
+        values(input: StoredGate & { runGeneration?: unknown }) {
+          // The run generation is an SQL expression the database evaluates from the run row; this store keeps none.
+          const row: StoredGate & { runGeneration?: unknown } = { ...input };
+          generations.push(row.runGeneration);
+          delete row.runGeneration;
           readIdentity = row;
           inserts.push(row);
           return {
@@ -66,7 +81,7 @@ const storage = vi.hoisted(() => {
       };
     },
   };
-  return { rows, inserts, executor, setLateConflict(row: StoredGate | null) { lateConflict = row; }, setReadFailure(value: boolean) { readFailure = value; }, setCrashAfter(n: number | null) { crashAfter = n; }, setReadKey(row: StoredGate) { readIdentity = row; } };
+  return { rows, inserts, generations, executor, statements, setPublishCallInFlight(value: boolean) { publishCallInFlight = value; }, setLateConflict(row: StoredGate | null) { lateConflict = row; }, setReadFailure(value: boolean) { readFailure = value; }, setCrashAfter(n: number | null) { crashAfter = n; }, setReadKey(row: StoredGate) { readIdentity = row; } };
 });
 
 vi.mock("../db", () => ({ db: storage.executor }));
@@ -77,13 +92,14 @@ vi.mock("../auth-policy", () => ({ enforceRunAccess: vi.fn(), resolveEffectivePo
 vi.mock("../run-wait-notifier", () => ({ dispatchAutoGateResolved: vi.fn() }));
 vi.mock("../run-produced-review-hold", () => ({ isParkedOnProducedReview: vi.fn(() => false) }));
 
+import * as gateStore from "../artifact-review-gate-store";
 import { emitArtifactReviewGate, emitDeclaredReviewGateFamily, readGatePinnedTargets } from "../artifact-review-gate-store";
 
 const A = { artifactId: "post", representationRevisionId: "post-r1" };
 const B = { artifactId: "image", representationRevisionId: "image-r1" };
 const input = (targets: unknown) => ({ runId: "run", orgId: "org", reviewTaskId: "task", targets });
 
-beforeEach(() => { storage.rows.clear(); storage.inserts.length = 0; storage.setCrashAfter(null); storage.setReadFailure(false); storage.setLateConflict(null); });
+beforeEach(() => { storage.rows.clear(); storage.inserts.length = 0; storage.generations.length = 0; storage.statements.length = 0; storage.setPublishCallInFlight(false); storage.setCrashAfter(null); storage.setReadFailure(false); storage.setLateConflict(null); });
 
 describe("new review gates freeze one artifact revision", () => {
   it.each([
@@ -240,4 +256,148 @@ describe("H1 atomic original-pause membership", () => {
     expect(storage.rows.get("run/wayflow-task")!.pinnedTargets[0]).toMatchObject({ declaredReviewPlan: { orgId: "org" } });
   });
 
+});
+
+describe("the attempt a review gate belongs to (cinatra#4762)", () => {
+  // red-first-expect: to match object { code: 'publish_call_in_flight' }
+  it("takes the run row before its insert and opens no review while a publishing call of the run is in flight (cinatra#4762)", async () => {
+    // A publishing call read the review fence and took its released decision under the run row FOR UPDATE. This
+    // review is written after: the store holds the run row FOR KEY SHARE first, reads the call's claim, and refuses.
+    storage.setPublishCallInFlight(true);
+    const refused: unknown = await emitArtifactReviewGate({ ...input([A]), runGeneration: 0 }).catch((err: unknown) => err);
+    expect(refused).toMatchObject({ code: "publish_call_in_flight" });
+    // Not a gate refusal: the run executor never falls back to another gate for it.
+    expect(refused).not.toBeInstanceOf(gateStore.ArtifactReviewGateError);
+    expect(storage.rows.size).toBe(0);
+    expect(storage.statements.map((st) =>
+      /for key share/.test(st.text) && st.insertsBefore === 0 ? "lock-before-insert"
+        : /calls_in_flight > 0/.test(st.text) && st.insertsBefore === 1 ? "claim-read-after-insert" : st.text))
+      .toEqual(["lock-before-insert", "claim-read-after-insert"]);
+    // The claim only counts for the run's current attempt; once the call ends, the review opens.
+    expect(storage.statements[1]!.text).toMatch(/coalesce\(call_claim\.run_generation, claim_run\.reset_generation\) = claim_run\.reset_generation/);
+    storage.setPublishCallInFlight(false);
+    expect((await emitArtifactReviewGate({ ...input([A]), runGeneration: 0 })).idempotent).toBe(false);
+    expect(storage.rows.size).toBe(1);
+    // A replay of an existing review writes nothing new, and stays idempotent even while a call is in flight.
+    storage.setPublishCallInFlight(true);
+    expect((await emitArtifactReviewGate({ ...input([A]), runGeneration: 0 })).idempotent).toBe(true);
+  });
+
+  // red-first-expect: to deeply equal [ 3, -1, -1 ]
+  it("a gate raised for a produced event carries the producing attempt's generation, never the run's live state", async () => {
+    // The delayed drain names the generation the event was written with; an event of an older build carries none, and
+    // its gate is stamped -1, which no publish gate counts.
+    await emitArtifactReviewGate({ ...input([A]), reviewTaskId: "produced-3", runGeneration: 3 });
+    await emitArtifactReviewGate({ ...input([A]), reviewTaskId: "produced-old", runGeneration: null });
+    await emitArtifactReviewGate({ ...input([A]), reviewTaskId: "produced-bad", runGeneration: 1.5 });
+    expect(storage.generations).toEqual([3, -1, -1]);
+  });
+
+  // red-first-expect: to be -1 // Object.is equality
+  it("a gate whose caller names no attempt is stamped -1: the run row is never read at the raise", async () => {
+    // A delayed caller of an ended attempt would read the next attempt's generation there.
+    await emitArtifactReviewGate({ ...input([A]), reviewTaskId: "own" });
+    expect(storage.generations[0]).toBe(-1);
+    // The executor names the attempt it serves.
+    await emitArtifactReviewGate({ ...input([A]), reviewTaskId: "executor", runGeneration: 2 });
+    expect(storage.generations[1]).toBe(2);
+    // A continuation of a review (a failed verification's reopen, a repair's successor) takes the generation of the
+    // gate it continues, read in the insert: an SQL expression, not a number, and it wins over a named generation.
+    await emitArtifactReviewGate({ ...input([A]), reviewTaskId: "reopen", successorOfGateId: "gate-1", runGeneration: 5 });
+    expect(typeof storage.generations[2]).toBe("object");
+    expect(storage.generations[2]).not.toBeNull();
+  });
+});
+
+describe("a successor of a review raised before the generation column (cinatra#4762)", () => {
+  /** The statement text an SQL value renders to; a plain value renders as itself. */
+  const rendered = async (value: unknown): Promise<string> => {
+    const { PgDialect } = await import("drizzle-orm/pg-core");
+    const { SQL } = await import("drizzle-orm");
+    return value instanceof SQL ? new PgDialect().sqlToQuery(value).sql.replace(/\s+/g, " ") : String(value);
+  };
+
+  // red-first-expect: to match /nullif\(coalesce\(\(select coalesce\(
+  it("keeps no generation, as the review it continues: settled it reads as 0, open it holds every attempt; a foreign one is -1", async () => {
+    // The review it continues has no stored generation (null): the successor is stored null too (the -2 marker inside
+    // the read), so the publish gate reads it as that review: generation 0 once settled, so it can clear the change
+    // request, and while open a review of an unknown attempt that holds every attempt's fence. A review this run does
+    // not own still stamps -1.
+    await emitArtifactReviewGate({ ...input([A]), reviewTaskId: "repair-successor", successorOfGateId: "gate-old" });
+    expect(await rendered(storage.generations[0])).toMatch(
+      /nullif\(coalesce\(\(select coalesce\(prior_gate\.run_generation, -2\) from \S+ prior_gate where prior_gate\.id = \$\d+ and prior_gate\.run_id = \$\d+\), -1\), -2\)/,
+    );
+  });
+
+  // red-first-expect: to be null
+  it("a review the drain raises for an output that names no attempt is stored with no generation (cinatra#4762)", async () => {
+    await emitArtifactReviewGate({ ...input([A]), reviewTaskId: "auto-unknown", runGeneration: "unknown" as never });
+    expect(storage.generations[0]).toBeNull();
+  });
+});
+
+describe("an output of the attempt still waiting for the review orchestration (cinatra#4762)", () => {
+  /** The WHERE clause the read hands to its executor, rendered as Postgres reads it. */
+  const whereOf = async (generation: number) => {
+    let where = "";
+    let params: unknown[] = [];
+    const executor = {
+      select: () => ({ from: () => ({ where: (condition: SQL) => {
+        const q = new PgDialect().sqlToQuery(condition);
+        where = q.sql.replace(/\s+/g, " ");
+        params = q.params;
+        return { limit: async () => [] };
+      } }) }),
+    };
+    const read = (gateStore as { hasPendingProducedEventForAttempt?: (input: unknown, executor: unknown) => Promise<boolean> })
+      .hasPendingProducedEventForAttempt;
+    if (read) await read({ orgId: "org", runId: "run", generation }, executor);
+    return { where, params };
+  };
+
+  // red-first-expect: expected { nullCounts: false } to deeply equal { nullCounts: true }
+  it("an event with no generation, written before the column existed, may be this attempt's: it counts for every attempt", async () => {
+    const { where, params } = await whereOf(1);
+    expect({ nullCounts: /\((\S+\.)?"artifact_produced_outbox"\."producer_run_generation" = \$\d+ or (\S+\.)?"artifact_produced_outbox"\."producer_run_generation" is null\)/.test(where) })
+      .toEqual({ nullCounts: true });
+    expect(params).toEqual(["pending", "org", "run", 1]);
+  });
+});
+
+describe("a review of exactly the bytes a later attempt wrote again (cinatra#4762)", () => {
+  /** The run's gates and its produced events, as the two reads of the lineage list return them. */
+  const reproducedOf = async (
+    gates: Array<{ id: string; runGeneration: number | null; pinnedTargets: Array<typeof A> }>,
+    events: Array<typeof A & { generation: number | null; orgId?: string }>,
+  ) => {
+    const executor = {
+      select: () => ({ from: () => ({
+        leftJoin: () => ({ where: () => ({ orderBy: async () => gates.map((g) => ({ ...g, orgId: "org", runId: "run", successorGateId: null })) }) }),
+        where: async () => events.map((e) => ({ orgId: "org", ...e })),
+      }) }),
+    };
+    const list = (gateStore as { listReviewLineageForRun?: (runId: string, executor: unknown) => Promise<Array<{ id: string; reproducedGeneration?: number | null }>> })
+      .listReviewLineageForRun;
+    const rows = list ? await list("run", executor) : [];
+    return rows.map((r) => [r.id, r.reproducedGeneration]);
+  };
+
+  // red-first-expect: expected [] to deeply equal [ [ 'g0', 1 ] ]
+  it("a gate of attempt 0 whose pinned revision attempt 1 wrote again carries attempt 1", async () => {
+    expect(await reproducedOf([{ id: "g0", runGeneration: 0, pinnedTargets: [A] }], [{ ...A, generation: 1 }])).toEqual([["g0", 1]]);
+  });
+
+  // red-first-expect: expected [] to deeply equal [ Array(4) ]
+  it("no later attempt: the revision not written again, only partly written again, of another org, or a gate with no generation", async () => {
+    expect(await reproducedOf([
+      { id: "g0", runGeneration: 0, pinnedTargets: [A] },
+      { id: "g1", runGeneration: 0, pinnedTargets: [A, B] },
+      { id: "g2", runGeneration: 0, pinnedTargets: [{ artifactId: "x", representationRevisionId: "x-r1" }] },
+      { id: "g3", runGeneration: null, pinnedTargets: [A] },
+    ], [
+      { ...A, generation: 0 },
+      { ...B, generation: 1 },
+      { artifactId: "x", representationRevisionId: "x-r1", generation: 1, orgId: "other-org" },
+    ])).toEqual([["g0", null], ["g1", null], ["g2", null], ["g3", null]]);
+  });
 });
