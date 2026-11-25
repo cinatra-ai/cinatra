@@ -51,13 +51,16 @@
 // seam is a pure decision function over four effects, so the invariant is unit
 // testable without a store, a queue, or a running runtime.
 //
-// One step is not injected: the card a step pauses with is stamped into the
-// built artifact's schema here (`withDeclaredScreenOfStep`, cinatra#3470), so
-// every park writes it to the frame and the row alike, with no call site able
-// to skip it. It reads only the build's bundled bindings.
+// One step is not injected: the card a mid-run step pauses with is stamped
+// into the built artifact's schema here (`withDeclaredScreenOfStep`,
+// cinatra#3470), so the frame and the row carry the same card. A step that
+// carries one depends on its row (the answer road reads the card from it), so
+// its row write is retried within the read-back bounds and, if it still
+// fails, the park fails: the run never waits on a card it cannot answer.
 // ---------------------------------------------------------------------------
 
-import { withDeclaredScreenOfStep } from "./field-renderer-bindings.server";
+import { withDeclaredScreenOfStep, type PausedRowReader } from "./field-renderer-bindings.server";
+import { DECLARED_SCREEN_KEY } from "./hitl-gate-submit";
 
 /**
  * Stable prefix of the named failure recorded on `agent_runs.error` when a gate
@@ -117,6 +120,12 @@ export type ParkRunOnHumanGateOptions = {
    * artifact already lives in a table) stay unchanged.
    */
   readonly persistArtifact?: (artifact: HumanGateArtifact) => Promise<void>;
+  /**
+   * A MID-RUN step (cinatra#3470): the reader of the gate row already written
+   * for this pause. Given only by the mid-run gate; a setup step passes none
+   * and is never stamped with a declared card.
+   */
+  readonly midRunStep?: { readonly readPausedRow: PausedRowReader };
   /** `from -> pending_approval`. Only ever called after a verified read-back. */
   readonly parkRun: () => Promise<void>;
   /** `from -> failed`, carrying the named error. */
@@ -216,11 +225,17 @@ export async function parkRunOnHumanGate(
 
   let artifact: HumanGateArtifact;
   try {
-    // The card the step pauses with is written with it (cinatra#3470).
-    artifact = withDeclaredScreenOfStep(await buildArtifact());
+    artifact = await buildArtifact();
   } catch (err) {
     return fail(`the gate payload could not be built (${describe(err)})`);
   }
+  // The card a mid-run step pauses with is written with it (cinatra#3470).
+  try {
+    artifact = await withDeclaredScreenOfStep(artifact, options.midRunStep?.readPausedRow);
+  } catch (err) {
+    return fail(`the step's recorded card could not be read (${describe(err)})`);
+  }
+  const needsRow = Object.hasOwn(artifact.schema, DECLARED_SCREEN_KEY);
 
   try {
     await emitInterrupt(artifact);
@@ -268,9 +283,24 @@ export async function parkRunOnHumanGate(
     // so the row and the frame carry the SAME verified gate. A re-emit writes
     // too: its row is idempotent on the gate identity and monotonic on time.
     if (persistArtifact) {
-      try {
-        await persistArtifact(artifact);
-      } catch (err) {
+      // A step that carries a card depends on its row: retried within the
+      // read-back bounds, and a write that still fails fails the park.
+      let persistError: unknown = null;
+      for (let tries = 0; tries < (needsRow ? attempts : 1); tries += 1) {
+        if (tries > 0 && delayMs > 0) await sleep(delayMs);
+        try {
+          await persistArtifact(artifact);
+          persistError = null;
+          break;
+        } catch (err) {
+          persistError = err ?? new Error("unknown error");
+        }
+      }
+      if (persistError !== null && needsRow) {
+        return fail(`the step's card could not be recorded with it (${describe(persistError)})`);
+      }
+      if (persistError !== null) {
+        const err = persistError;
         console.error(
           `[human-gate-park] run=${runId} could not persist the durable gate row ` +
             `for ${gateLabel} (${describe(err)}); the verified event-log frame ` +

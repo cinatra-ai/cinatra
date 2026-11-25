@@ -73,7 +73,8 @@ const gateRow = vi.hoisted(() => ({
   inputSchema: {} as Record<string, unknown>,
   values: {} as Record<string, unknown>,
 }));
-vi.mock("../agent-run-hitl-prompts", () => ({
+vi.mock("../agent-run-hitl-prompts", async (orig) => ({
+  declaredScreenDigest: (await orig<typeof import("../agent-run-hitl-prompts")>()).declaredScreenDigest,
   captureHitlPromptForContinue: capture,
   readDurableHitlGateForContinue: async (runId: string, reviewTaskId: string) => {
     if (gateRow.read === "throws") throw new Error("fixture gate store down");

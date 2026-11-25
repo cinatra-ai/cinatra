@@ -1257,24 +1257,13 @@ export function declaredHitlCardOfBinding(binding: {
  * THE CARD A STEP PAUSED WITH is stored WITH the step, under this key of the
  * step's own input schema (the gate row's `input_schema` and the pause frame's
  * `schema`): `{ screen, digest }`, the checked declaration and the sha-256 of
- * its canonical JSON. It is written once, when the pause is recorded
+ * its canonical JSON (`declaredScreenDigest`). It is written once, when the pause is recorded
  * (`withDeclaredScreenOfStep`, field-renderer-bindings.server.ts), and every
  * later reader of that step reads it from here, never from the build's
  * current bindings: a newer build that changes or removes the screen does not
  * change what the paused step asks for.
  */
 export const DECLARED_SCREEN_KEY = "x-declared-screen";
-
-/** JSON with every object's keys sorted: the stored screen's digest form
- *  (a jsonb column does not keep key order). */
-export function canonicalJson(v: unknown): string {
-  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(",")}]`;
-  if (v !== null && typeof v === "object") {
-    const o = v as Record<string, unknown>;
-    return `{${Object.keys(o).sort().map((k) => `${JSON.stringify(k)}:${canonicalJson(o[k])}`).join(",")}}`;
-  }
-  return JSON.stringify(v);
-}
 
 /**
  * The card a step paused with, read from its schema: null when the step

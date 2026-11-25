@@ -3067,6 +3067,12 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         );
       },
       readBackGate: (id) => readLatestAgUiInterrupt(id),
+      // A MID-RUN step (cinatra#3470): the seam may stamp a declared card, once
+      // per pause, and reads this pause's existing row to carry a stored one.
+      midRunStep: {
+        readPausedRow: async (id) =>
+          (await import("./agent-run-hitl-prompts")).readDurableHitlGateForContinue(runId, id),
+      },
       // The durable fallback for this gate (cinatra#2748). The seam calls it only
       // after the read-back verified the frame, so the row mirrors a gate a human
       // really was shown. The event log expires; this row does not.

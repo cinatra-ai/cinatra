@@ -32,7 +32,7 @@ import {
 } from "./store";
 import { claimPause } from "./run-pause-claim";
 import { failPreSendStep, givePauseBackOnHoldFault, settleSendOrDescribe } from "./run-resume-under-claim";
-import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuccessfulContinue, continueBindingDigest, continueGateDigest } from "./agent-run-hitl-prompts";
+import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuccessfulContinue, continueBindingDigest, continueGateDigest, declaredScreenDigest } from "./agent-run-hitl-prompts";
 // cinatra#1939 wave 2 (§7.1): the guarded setup-resume writer — the setup-*
 // inputParams-merge + pending_approval->queued CAS now runs inside the org-write
 // kernel guard instead of directly on the module `db` (owner ruling 2026-07-26,
@@ -41,7 +41,6 @@ import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
 import { readWayflowSubmittedValues } from "./hitl-gate-submit";
 import { declaredHitlCheckedAnswer, storedDeclaredCardOf, type DeclaredHitlCard } from "./hitl-gate-submit";
 import { GENERATED_FIELD_RENDERER_BINDINGS } from "@/lib/generated/agent-bindings";
-import { declaredScreenDigest } from "./declared-screen-digest.server";
 // cinatra#2484: the setup-resume path is the LAST place a type-violating setup
 // value can be stopped before it becomes `agent_runs.inputParams` and reaches
 // the run. It needs the SAME effective schema the setup loop rendered from —

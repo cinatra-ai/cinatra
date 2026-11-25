@@ -35,7 +35,6 @@ import {
   DECLARED_SCREEN_KEY,
   declaredHitlCardOfBinding,
 } from "./hitl-gate-submit";
-import { declaredScreenDigest } from "./declared-screen-digest.server";
 import {
   A2UI_MID_RUN_TRANSLATOR_KINDS,
   type MidRunTranslatorResolver,
@@ -207,22 +206,52 @@ export function buildA2UiMidRunTranslatorResolver(): MidRunTranslatorResolver {
   };
 }
 
+/** How the park reads the gate row already written for a pause, if any. */
+export type PausedRowReader = (
+  reviewTaskId: string,
+) => Promise<{ xRenderer: string; inputSchema?: Record<string, unknown> | null } | null>;
+
 /**
  * THE ONE WRITER OF THE CARD A STEP PAUSES WITH (cinatra#3470). Called when a
  * pause is recorded (human-gate-park.ts), before the frame is emitted and the
- * gate row written, so both carry it: the BUNDLED binding's checked card for
- * the step's renderer, under `DECLARED_SCREEN_KEY` of the step's schema, with
- * its digest. This is the only moment the build's current bindings decide a
- * step's card. A key the agent's own schema carried is dropped: only this
- * writer puts one there.
+ * gate row written, so both carry the same card under `DECLARED_SCREEN_KEY`
+ * of the step's schema, with its digest. A key the agent's own schema carried
+ * is always dropped: only this writer puts one there.
+ *
+ * - A MID-RUN step only (`readPausedRow` given): a setup step is never
+ *   stamped, and is drawn and answered as setup.
+ * - ONCE PER PAUSE. A pause is its gate row's identity, (run, review task),
+ *   with the same renderer. When that row already exists (a re-emission of
+ *   the same pause), what it stored is carried unchanged (or nothing, if it
+ *   stored nothing); only a NEW pause takes the card from the build's current
+ *   bindings. The row writer keeps a stored card on its own as well
+ *   (`writeDurableHitlGateArtifact`).
+ * - When the row cannot be read and the current build declares a card for
+ *   the renderer, this throws: the park fails rather than risk re-stamping.
+ *   With no card declared now, the step is recorded as it always was.
  */
-export function withDeclaredScreenOfStep<T extends { schema: Record<string, unknown>; xRenderer: string }>(
-  artifact: T,
-): T {
+export async function withDeclaredScreenOfStep<
+  T extends { schema: Record<string, unknown>; xRenderer: string; reviewTaskId: string },
+>(artifact: T, readPausedRow?: PausedRowReader): Promise<T> {
   const { [DECLARED_SCREEN_KEY]: _incoming, ...schema } = artifact.schema ?? {};
   void _incoming;
+  if (!readPausedRow) return { ...artifact, schema };
   const binding = GENERATED_FIELD_RENDERER_BINDINGS.find((b) => b.id === artifact.xRenderer);
   const card = binding?.screen !== undefined ? declaredHitlCardOfBinding(binding) : null;
+  let row: Awaited<ReturnType<PausedRowReader>>;
+  try {
+    row = await readPausedRow(artifact.reviewTaskId);
+  } catch (err) {
+    if (card === null) return { ...artifact, schema };
+    throw err;
+  }
+  if (row !== null && row.xRenderer === artifact.xRenderer) {
+    const stored = row.inputSchema ?? {};
+    return Object.hasOwn(stored, DECLARED_SCREEN_KEY)
+      ? { ...artifact, schema: { ...schema, [DECLARED_SCREEN_KEY]: stored[DECLARED_SCREEN_KEY] } }
+      : { ...artifact, schema };
+  }
   if (card === null) return { ...artifact, schema };
+  const { declaredScreenDigest } = await import("./agent-run-hitl-prompts");
   return { ...artifact, schema: { ...schema, [DECLARED_SCREEN_KEY]: { screen: card, digest: declaredScreenDigest(card) } } };
 }

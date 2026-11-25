@@ -2497,6 +2497,12 @@ const defaultHitlGateQuery: HitlGateQuery = async <T>(
  * MONOTONIC on `materialized_at`: the update only lands when the incoming
  * artifact is newer, so a late-landing re-emit of an older artifact can never
  * overwrite a newer one.
+ *
+ * A STORED DECLARED CARD IS KEPT (cinatra#3470). The card a step paused with
+ * (`x-declared-screen` in `input_schema`) is written once, by the first write
+ * of that pause: the same gate identity with the same renderer. A later write
+ * of the same pause keeps the stored card whatever it brings, so no re-emission
+ * can replace the card a waiting step is answered with.
  */
 export async function writeDurableHitlGateArtifact(
   artifact: DurableHitlGateArtifact,
@@ -2510,7 +2516,13 @@ export async function writeDurableHitlGateArtifact(
      VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7)
      ON CONFLICT (run_id, review_task_id) DO UPDATE SET
        x_renderer      = EXCLUDED.x_renderer,
-       input_schema    = EXCLUDED.input_schema,
+       input_schema    = CASE
+         WHEN ${AGENT_RUN_HITL_GATES_TABLE}.x_renderer = EXCLUDED.x_renderer
+          AND ${AGENT_RUN_HITL_GATES_TABLE}.input_schema ? 'x-declared-screen'
+         THEN jsonb_set(EXCLUDED.input_schema, '{x-declared-screen}',
+                        ${AGENT_RUN_HITL_GATES_TABLE}.input_schema -> 'x-declared-screen')
+         ELSE EXCLUDED.input_schema
+       END,
        gate_values     = EXCLUDED.gate_values,
        field_name      = EXCLUDED.field_name,
        materialized_at = EXCLUDED.materialized_at
