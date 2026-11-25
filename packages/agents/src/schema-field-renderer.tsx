@@ -57,6 +57,34 @@ export const GateContinueHoldContext = createContext<boolean>(false);
 export const RendererFloorReportContext = createContext<((floored: boolean) => void) | null>(null);
 
 /**
+ * WHERE A MOUNTED RENDERER MARKS AN ANSWER AS THE PLAIN FORM'S. A host that
+ * mounts a gate's renderer provides the setter of `useFloorAnswerMark` below.
+ * An extension wrapper that shows the plain form in place of its component
+ * (while it loads, after a failed load or a crash) calls it with `true` around
+ * each answer the plain form hands up, and with `false` right after, so the
+ * mark holds only while that one answer is handed to the host. The host reads
+ * it at the start of its answer handler and answers the gate as the plain form
+ * does (`buildFieldGateAnswer`), whatever the static registry entry says. It
+ * draws nothing and re-renders nothing. Here for the route-graph reason given
+ * above.
+ */
+export const FloorAnswerMarkContext = createContext<((answering: boolean) => void) | null>(null);
+
+/**
+ * The host's side of `FloorAnswerMarkContext`: a reader (is the answer being
+ * handed up now the plain form's?) and the stable setter to provide. A ref, so
+ * a mark never re-renders the host.
+ */
+export function useFloorAnswerMark(): readonly [() => boolean, (answering: boolean) => void] {
+  const markRef = useRef(false);
+  const read = useCallback(() => markRef.current, []);
+  const mark = useCallback((answering: boolean) => {
+    markRef.current = answering;
+  }, []);
+  return [read, mark] as const;
+}
+
+/**
  * THE HOST'S FLOOR STATE BELONGS TO ONE GATE (cinatra#3035). A host keeps the
  * report above the renderer it remounts per gate, so a plain boolean would still
  * read gate A's `true` in the first frame of gate B, before any effect of B's

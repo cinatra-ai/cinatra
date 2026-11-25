@@ -72,6 +72,7 @@ import { ensureDefaultFieldRenderersRegistered } from "../register-default-rende
 import { AgentHitlScreenCard } from "../agent-hitl-screen-card";
 import * as midRun from "../orchestrator-mid-run-hitl";
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
+import { makeExtensionFieldRenderer } from "../extension-field-renderer";
 
 const RUN_ID = "run-dropped";
 const TASK_ID = "wayflow-task-dropped";
@@ -344,6 +345,43 @@ describe("AgentHitlScreenCard — a run-time binding the plain form draws", () =
         userResponseFieldName: "selectedIdeaJson",
         selectedIdeaJson: "idea-7",
       });
+    });
+  }
+});
+
+// AN EXTENSION WRAPPER THAT FALLS BACK TO THE PLAIN FORM ANSWERS AS THE PLAIN
+// FORM DOES. Its registry entry carries no `drawnBySchemaFloor` (the component
+// may load), but this instance shows the plain form (its component is not in
+// the build), so the typed answer is the run's resume text, never the
+// setup-loop shape the server would answer with the approval marker.
+describe("AgentHitlScreenCard — an extension wrapper in fallback", () => {
+  const EXTENSION_ID = "@cinatra-test/ext-agent:screen";
+  for (const host of ["run_card", "chat_thread"] as LifecycleCardHost[]) {
+    // red-first-expect: expected { answer: 'Ship it.' } to match object { approved: true, …(3) }
+    it(`${host}: sends the typed answer as the resume text`, async () => {
+      fieldRendererRegistry.register({
+        id: EXTENSION_ID,
+        priority: 90,
+        condition: (_f, schema) => schema["x-renderer"] === EXTENSION_ID,
+        renderer: makeExtensionFieldRenderer(EXTENSION_ID),
+        drawsOwnSubmit: true,
+      });
+      askingFor(EXTENSION_ID, { inputSchema: { type: "string", title: "Answer" }, fieldName: "answer" });
+      const { container } = mountOn(host);
+      await settle();
+      await waitFor(() => expect(container.querySelector("#field-answer")).not.toBeNull());
+      fireEvent.change(container.querySelector("#field-answer")!, { target: { value: "Ship it." } });
+      await waitFor(() => expect(continues(container)).toHaveLength(1));
+      fireEvent.click(continues(container)[0]!);
+      await waitFor(() => expect(approveMock).toHaveBeenCalledTimes(1));
+      expect(approveMock.mock.calls[0]![0]).toBe(TASK_ID);
+      expect(approveMock.mock.calls[0]![1]).toMatchObject({
+        approved: true,
+        userResponse: "Ship it.",
+        userResponseFieldName: "answer",
+        answer: "Ship it.",
+      });
+      expect(approveMock.mock.calls[0]![2]).toBeUndefined();
     });
   }
 });

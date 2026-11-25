@@ -626,3 +626,141 @@ describe("a step whose renderer id no entry claims is refused by the resume acti
     expect(wayflowText()).toBe("go");
   });
 });
+
+// A DISPLAY-ONLY CARD AND AN UNREADABLE RECORD ARE REFUSED BY THE GENERIC ANSWER.
+// The artifact-review redirect draws no answer of its own: only its review's
+// decision consumes the pause (the resume delivery, which never takes this
+// action). A durable record that cannot be read refuses with a fixed text; only a
+// real absence (`null`) goes on as before. Nothing is claimed, recorded or sent
+// on a refusal.
+describe("the generic answer and the paused step's durable record", () => {
+  const TASK = "wayflow-task-r1";
+  const gateFor = (xRenderer: string) => ({
+    runId: "run-r1",
+    reviewTaskId: TASK,
+    xRenderer,
+    inputSchema: { type: "object" },
+    values: {},
+    materializedAt: "2026-11-25T00:00:00.000Z",
+  });
+  const nothingMoved = () => {
+    expect(pauseClaimFake.claimPause).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    expect(storeMock.writeHitlPrompt).not.toHaveBeenCalled();
+    expect(sendTaskMock).not.toHaveBeenCalled();
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupRun();
+    continueMock.readDurableHitlGateForContinue.mockReset().mockResolvedValue(null);
+  });
+
+  // red-first-expect: promise resolved "undefined" instead of rejecting
+  it("a pause on the display-only artifact-review redirect is refused and not consumed", async () => {
+    continueMock.readDurableHitlGateForContinue.mockResolvedValue(
+      gateFor("@cinatra-ai/agent-builder:artifact-review-redirect"),
+    );
+    await expect(
+      approveReviewTaskInternal(TASK, "actor-1", { approved: true, approvedAt: "2026-11-25T00:00:00.000Z" }),
+    ).rejects.toMatchObject({
+      name: "HitlStepNotAnswerableError",
+      message: "WayFlow approval rejected: gate task-r1 on run run-r1 is an artifact review; it goes on only when that review is decided",
+    });
+    nothingMoved();
+  });
+
+  // red-first-expect: promise resolved "undefined" instead of rejecting
+  it("a durable record that cannot be read refuses with a fixed text; nothing is claimed or sent", async () => {
+    continueMock.readDurableHitlGateForContinue.mockRejectedValue(
+      new Error("permission denied for table agent_run_hitl_gates"),
+    );
+    await expect(
+      approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" }),
+    ).rejects.toThrow(
+      /^WayFlow approval rejected: the paused step of gate task-r1 on run run-r1 could not be read$/,
+    );
+    nothingMoved();
+  });
+
+  it("no durable record (a real null) is answered as before", async () => {
+    await approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" });
+    expect(continueMock.readDurableHitlGateForContinue).toHaveBeenCalledWith("run-r1", TASK);
+    expect(sendTaskMock).toHaveBeenCalledTimes(1);
+    expect(wayflowText()).toBe("go");
+  });
+
+  it("an ordinary builder input step still answers", async () => {
+    for (const id of [
+      "@cinatra-ai/agent-builder:schema-field-fallback",
+      "@cinatra-ai/agent-builder:grouped-setup-form",
+      "@cinatra-ai/agent-builder:skill-selector",
+    ]) {
+      sendTaskMock.mockClear();
+      continueMock.readDurableHitlGateForContinue.mockResolvedValue(gateFor(id));
+      await approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" });
+      expect(sendTaskMock, id).toHaveBeenCalledTimes(1);
+      expect(wayflowText(), id).toBe("go");
+    }
+  });
+});
+
+// A ONE-VALUE ANSWER WITH NO RESUME TEXT OF ITS OWN IS NOT AN APPROVAL. A text,
+// a number, a boolean or a list that reaches a WayFlow gate bare, or under the
+// field it names (the setup-loop shape), is sent as the plain form sends it: the
+// run receives what was written. The approval marker stays for a submission that
+// carries no answer: no values, an approval flag or note, or a structured record.
+describe("a one-value answer without a resume text reaches the run", () => {
+  const TASK = "wayflow-task-r1";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupRun();
+    continueMock.readDurableHitlGateForContinue.mockReset().mockResolvedValue(null);
+  });
+
+  const KEPT: Array<{ label: string; values: unknown; fieldName?: string; text: string; recorded: unknown }> = [
+    { label: "a named text", values: { answer: "Ship it." }, fieldName: "answer", text: "Ship it.", recorded: { answer: "Ship it." } },
+    { label: "a named number", values: { answer: 42 }, fieldName: "answer", text: "42", recorded: { answer: 42 } },
+    { label: "a named boolean", values: { answer: false }, fieldName: "answer", text: "false", recorded: { answer: false } },
+    { label: "a named list", values: { answer: ["a", "b"] }, fieldName: "answer", text: '["a","b"]', recorded: { answer: ["a", "b"] } },
+    { label: "a bare text", values: "Ship it.", text: "Ship it.", recorded: { "hitl-field": "Ship it." } },
+    { label: "a bare number", values: 0, text: "0", recorded: { "hitl-field": 0 } },
+  ];
+
+  for (const c of KEPT) {
+    // red-first-expect: expected '[Approved by operator]' to be
+    it(`${c.label} is the resume text and is recorded under its field`, async () => {
+      await approveReviewTaskInternal(TASK, "actor-1", c.values, c.fieldName);
+      expect(sendTaskMock).toHaveBeenCalledTimes(1);
+      expect(wayflowText()).toBe(c.text);
+      const written = storeMock.writeHitlPrompt.mock.calls[0]?.[0] as { submittedValues?: unknown };
+      expect(written?.submittedValues).toEqual(c.recorded);
+    });
+  }
+
+  it("a named blank answer sends the marker and is kept as a blank answer", async () => {
+    await approveReviewTaskInternal(TASK, "actor-1", { answer: null }, "answer");
+    expect(wayflowText()).toBe("[Approved by operator]");
+    const written = storeMock.writeHitlPrompt.mock.calls[0]?.[0] as { submittedValues?: unknown };
+    expect(written?.submittedValues).toEqual({ answer: null });
+  });
+
+  it("a submission that carries no answer keeps the approval marker", async () => {
+    for (const values of [
+      undefined,
+      { approved: true, approvedAt: "2026-11-25T00:00:00.000Z" },
+      { note: "Go ahead." },
+      { answer: "Ship it.", other: "x" },
+    ]) {
+      sendTaskMock.mockClear();
+      await approveReviewTaskInternal(TASK, "actor-1", values, values && "answer" in values ? "answer" : undefined);
+      expect(wayflowText(), JSON.stringify(values)).toBe("[Approved by operator]");
+    }
+  });
+
+  it("an approval note keeps its own text", async () => {
+    await approveReviewTaskInternal(TASK, "actor-1", { approvalNote: " Looks good. " });
+    expect(wayflowText()).toBe("Looks good.");
+  });
+});

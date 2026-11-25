@@ -17,7 +17,13 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+// The WayFlow answer reads the paused step's durable record and refuses when that
+// read fails. These cases are about other questions: the run has no such record.
+vi.mock("../agent-run-hitl-prompts", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readDurableHitlGateForContinue: async () => null,
+}));
 
 type Reader = (values: unknown) => Record<string, unknown> | null;
 

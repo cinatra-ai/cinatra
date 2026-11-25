@@ -27,6 +27,7 @@ import * as registration from "../register-default-renderers";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import * as midRun from "../orchestrator-mid-run-hitl";
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
+import { makeExtensionFieldRenderer } from "../extension-field-renderer";
 
 /**
  * Mid-run decision and picker steps whose packages dropped the declarations:
@@ -393,5 +394,42 @@ describe("AgenticRunPanel — a run-time binding the plain form draws", () => {
       userResponseFieldName: "selectedIdeaJson",
       selectedIdeaJson: "idea-7",
     });
+  });
+});
+
+// AN EXTENSION WRAPPER THAT FALLS BACK TO THE PLAIN FORM ANSWERS AS THE PLAIN
+// FORM DOES, whatever its registry entry says: the typed answer is the resume
+// text (`userResponse`), never the setup-loop shape.
+describe("AgenticRunPanel — an extension wrapper in fallback", () => {
+  const EXTENSION_ID = "@cinatra-test/ext-agent:screen";
+
+  // red-first-expect: expected { answer: 'Ship it.' } to match object { approved: true, …(3) }
+  it("sends the typed answer as the resume text", async () => {
+    fieldRendererRegistry.register({
+      id: EXTENSION_ID,
+      priority: 90,
+      condition: (_f, schema) => schema["x-renderer"] === EXTENSION_ID,
+      renderer: makeExtensionFieldRenderer(EXTENSION_ID),
+      drawsOwnSubmit: true,
+    });
+    gateId.current = EXTENSION_ID;
+    gateShape.schema = { type: "string", title: "Answer" };
+    gateShape.fieldName = "answer";
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    mountPanel(AgenticRunPanel);
+    await waitFor(() => expect(document.getElementById("field-answer")).not.toBeNull());
+    fireEvent.change(document.getElementById("field-answer")!, { target: { value: "Ship it." } });
+    await waitFor(() => expect(continues()).toHaveLength(1));
+    fireEvent.click(continues()[0]!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const call = hitlActions.approveReviewTask.mock.calls[0] as unknown[];
+    expect(call[0]).toBe(TASK_ID);
+    expect(call[1]).toMatchObject({
+      approved: true,
+      userResponse: "Ship it.",
+      userResponseFieldName: "answer",
+      answer: "Ship it.",
+    });
+    expect(call[2]).toBeUndefined();
   });
 });

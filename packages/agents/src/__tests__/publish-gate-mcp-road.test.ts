@@ -191,6 +191,16 @@ vi.mock("../publish-decision-store", async (orig) => ({
   readLatestDecisionForRun: decisions.readLatestDecisionForRun,
 }));
 
+// The paused step's durable record: none by default (a real absence), so the
+// resume road goes on to the checks this suite is about.
+const durableGate = vi.hoisted(() => ({
+  read: vi.fn(async (): Promise<unknown> => null),
+}));
+vi.mock("../agent-run-hitl-prompts", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readDurableHitlGateForContinue: durableGate.read,
+}));
+
 const ACTOR = { actorType: "human" as const, source: "ui" as const, userId: "user-a" };
 
 function pausedRun() {
@@ -474,5 +484,103 @@ describe("agent_run_resume on a template that lists no publishing step, for a ru
     expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
     expect(moves()[0]).toEqual(["run-1", "pending_approval", "running"]);
     expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// THE PAUSED STEP'S DURABLE RECORD DECIDES WHETHER `agent_run_resume` MAY ANSWER IT.
+// A display-only card (the artifact-review redirect) is consumed only by its
+// review's own decision; a record that cannot be read refuses; only a real
+// absence (`null`) goes on as before. Nothing is claimed, fenced, recorded or sent
+// on a refusal, and the run stays parked.
+describe("agent_run_resume and the paused step's durable record", () => {
+  const gateFor = (xRenderer: string) => ({
+    runId: "run-1",
+    reviewTaskId: "wayflow-task-1",
+    xRenderer,
+    inputSchema: { type: "object" },
+    values: {},
+    materializedAt: "2026-11-25T00:00:00.000Z",
+  });
+  const nothingMoved = () => {
+    expect(pauseClaimFake.claimPause).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    expect(storeMock.writeHitlPrompt).not.toHaveBeenCalled();
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Implementations an earlier suite left (its fence's row) must not feed this one.
+    for (const m of [storeMock.readAgentRunById, storeMock.transitionRunStatus, decisions.readLatestDecisionForRun, sendTaskSpy]) m.mockReset();
+    storeMock.transitionRunStatus.mockResolvedValue(undefined);
+    pauseClaimFake.claimPause.mockReset().mockImplementation(async () => ({ kind: "claimed", token: "tok-fake", generation: 1, expiresAt: new Date(0) }));
+    authSessionMock.resolveOrgRoleForUser.mockResolvedValue("member");
+    enforceRunAccessSpy.mockResolvedValue(undefined);
+    storeMock.readAgentRunById.mockResolvedValue(pausedRun());
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tmpl-1",
+      packageName: "@cinatra-ai/web-research-agent",
+      sourceType: "internal",
+      agentAuthPolicy: null,
+    });
+    sendTaskSpy.mockResolvedValue({
+      id: "task-1",
+      contextId: "ctx-1",
+      status: { state: "completed", message: { parts: [] } },
+      metadata: {},
+      history: [{ role: "agent", parts: [{ kind: "text", text: "done" }] }],
+    });
+    holdSpy.mockResolvedValue({ held: false, reason: "no-review" });
+    decisions.readLatestDecisionForRun.mockResolvedValue(null);
+    durableGate.read.mockReset().mockResolvedValue(null);
+  });
+
+  // red-first-expect: to not be called at all, but actually been called 1 times
+  it("a pause on the display-only artifact-review redirect is refused and not consumed", async () => {
+    durableGate.read.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:artifact-review-redirect"));
+    const answer = (await resume()) as { error?: string };
+    expect(pauseClaimFake.claimPause).not.toHaveBeenCalled();
+    expect(answer.error).toBe("Run run-1 is paused at an artifact review; it goes on only when that review is decided.");
+    nothingMoved();
+  });
+
+  // red-first-expect: to not be called at all, but actually been called 1 times
+  it("a durable record that cannot be read refuses with a fixed text; nothing is claimed or sent", async () => {
+    durableGate.read.mockRejectedValue(new Error("permission denied for table agent_run_hitl_gates"));
+    const answer = (await resume()) as { error?: string };
+    expect(pauseClaimFake.claimPause).not.toHaveBeenCalled();
+    expect(answer.error).toBe("Run run-1 cannot be resumed: its paused step could not be read.");
+    nothingMoved();
+  });
+
+  it("no durable record (a real null) is resumed as before", async () => {
+    await resume();
+    expect(durableGate.read).toHaveBeenCalledWith("run-1", "wayflow-task-1");
+    expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("an ordinary builder input step still answers", async () => {
+    for (const id of [
+      "@cinatra-ai/agent-builder:schema-field-fallback",
+      "@cinatra-ai/agent-builder:grouped-setup-form",
+      "@cinatra-ai/agent-builder:personal-skill",
+    ]) {
+      sendTaskSpy.mockClear();
+      durableGate.read.mockResolvedValue(gateFor(id));
+      await resume();
+      expect(sendTaskSpy, id).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  // red-first-expect: to not be called at all, but actually been called 1 times
+  it("a builder id no host entry answers is refused like any undrawn step", async () => {
+    durableGate.read.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:trigger-wait-status"));
+    const answer = (await resume()) as { error?: string };
+    expect(pauseClaimFake.claimPause).not.toHaveBeenCalled();
+    expect(answer.error).toBe(
+      "Run run-1 is paused at a step that no screen draws (@cinatra-ai/agent-builder:trigger-wait-status); it cannot be resumed.",
+    );
+    nothingMoved();
   });
 });

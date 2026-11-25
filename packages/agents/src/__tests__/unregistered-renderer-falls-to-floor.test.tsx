@@ -43,6 +43,7 @@ import * as registration from "../register-default-renderers";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import { fieldRendererRegistry, type FieldRendererContext } from "../field-renderer-registry";
 import * as midRun from "../orchestrator-mid-run-hitl";
+import { makeExtensionFieldRenderer } from "../extension-field-renderer";
 
 vi.mock("lucide-react", () => {
   const StubIcon: React.FC = () => null;
@@ -357,6 +358,47 @@ describe("OrchestratorStepperPanel - a one-value plain-form gate sends the enter
       expect(call[2]).toBeUndefined();
     });
   }
+});
+
+// AN EXTENSION WRAPPER THAT FALLS BACK TO THE PLAIN FORM ANSWERS AS THE PLAIN
+// FORM DOES, whatever its registry entry says: the typed answer is the resume
+// text (`userResponse`), never the setup-loop shape.
+describe("OrchestratorStepperPanel - an extension wrapper in fallback", () => {
+  const EXTENSION_ID = "@cinatra-test/ext-agent:screen";
+
+  // red-first-expect: expected { answer: 'Ship it.' } to match object { approved: true, …(3) }
+  it("sends the typed answer as the resume text", async () => {
+    fieldRendererRegistry.register({
+      id: EXTENSION_ID,
+      priority: 90,
+      condition: (_f, schema) => schema["x-renderer"] === EXTENSION_ID,
+      renderer: makeExtensionFieldRenderer(EXTENSION_ID),
+      drawsOwnSubmit: true,
+    });
+    INTERRUPT = {
+      schema: { type: "string", title: "Answer" },
+      xRenderer: EXTENSION_ID,
+      values: {},
+      reviewTaskId: TASK_ID,
+      fieldName: "answer",
+    };
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    render(<OrchestratorStepperPanel {...baseProps()} />);
+    await waitFor(() => expect(document.getElementById("field-answer")).not.toBeNull());
+    fireEvent.change(document.getElementById("field-answer")!, { target: { value: "Ship it." } });
+    await waitFor(() => expect(continues()).toHaveLength(1));
+    fireEvent.click(continues()[0]!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const call = hitlActions.approveReviewTask.mock.calls[0] as unknown[];
+    expect(call[0]).toBe(TASK_ID);
+    expect(call[1]).toMatchObject({
+      approved: true,
+      userResponse: "Ship it.",
+      userResponseFieldName: "answer",
+      answer: "Ship it.",
+    });
+    expect(call[2]).toBeUndefined();
+  });
 });
 
 // The generic-object confirmation (a bare object schema, nothing to fill in, a

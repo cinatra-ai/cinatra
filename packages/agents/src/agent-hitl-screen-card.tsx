@@ -146,7 +146,7 @@ import {
   parkedHitlStepIsAnswerable,
   resolveHitlGateRenderer,
 } from "./orchestrator-mid-run-hitl";
-import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
+import { FloorAnswerMarkContext, RendererFloorReportContext, useFloorAnswerMark, useGateRendererFloor } from "./schema-field-renderer";
 import { DispatchRenderer, type PresentationHint } from "./result-renderers";
 import { approveReviewTask } from "./hitl-actions";
 import { getFieldRendererContextForAgentBuilderAction } from "./server-actions";
@@ -827,6 +827,9 @@ export function AgentHitlScreenFields({
   const registerRendererFlush = registerFlush
     ? (fn: () => Promise<void>) => registerFlush(flushKey, fn)
     : undefined;
+  // An answer the plain form hands up from inside an extension wrapper
+  // (`FloorAnswerMarkContext`) is answered as the floor's, whatever the entry says.
+  const [answerIsFloorDrawn, markFloorAnswer] = useFloorAnswerMark();
 
   return (
     <div
@@ -862,6 +865,7 @@ export function AgentHitlScreenFields({
           Waiting for input — no renderer configured for this step.
         </p>
       ) : (
+        <FloorAnswerMarkContext.Provider value={markFloorAnswer}>
         <Renderer
           // The full gate identity (review task, renderer, field), as the buffer
           // is keyed (cinatra#3380, cinatra#3035): a later gate remounts with no pick.
@@ -902,8 +906,10 @@ export function AgentHitlScreenFields({
                   // unclaimed id the floor took over) is answered with the
                   // floor's approval instead, so the run receives what was
                   // written (`buildFieldGateAnswer`).
+                  // …and so is an answer the plain form hands up from inside
+                  // an extension wrapper (`FloorAnswerMarkContext`).
                   const { payload, payloadFieldName } = buildFieldGateAnswer({
-                    drawnByFloor: gateDrawnBySchemaFloor(gate.xRenderer, entry),
+                    drawnByFloor: answerIsFloorDrawn() || gateDrawnBySchemaFloor(gate.xRenderer, entry),
                     reviewTaskId: gate.reviewTaskId,
                     fieldName: gate.fieldName ?? undefined,
                     next,
@@ -930,6 +936,7 @@ export function AgentHitlScreenFields({
           }
           registerFlush={registerRendererFlush}
         />
+        </FloorAnswerMarkContext.Provider>
       )}
     </div>
   );

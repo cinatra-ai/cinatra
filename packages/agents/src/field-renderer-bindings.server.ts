@@ -31,7 +31,13 @@ import {
 } from "@/lib/generated/agent-bindings";
 import { resolveAgentRuntimeMountDir } from "./agent-runtime-mount";
 import type { FieldRendererBindingInput } from "./register-default-renderers";
-import { AGENT_BUILDER_ID_SCOPE } from "./agent-builder-ids";
+import {
+  ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
+  GROUPED_SETUP_FORM_RENDERER_ID,
+  PERSONAL_SKILL_RENDERER_ID,
+  SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+  SKILL_SELECTOR_RENDERER_ID,
+} from "./agent-builder-ids";
 import { parkedHitlStepIsAnswerable } from "./orchestrator-mid-run-hitl";
 import {
   A2UI_MID_RUN_TRANSLATOR_KINDS,
@@ -181,19 +187,50 @@ export function buildA2UiMidRunTranslatorResolver(): MidRunTranslatorResolver {
   };
 }
 
-/** The host's own unscoped renderer ids (the personal-skill and skill-selector fields). */
-const HOST_BARE_RENDERER_IDS: ReadonlySet<string> = new Set(["personal-skill", "skill-selector"]);
+/**
+ * THE HOST'S OWN ANSWERING RENDERER IDS: exactly the ids the host registers an
+ * answering entry for in `ensureDefaultFieldRenderersRegistered` (the grouped
+ * setup form, the plain form, the personal-skill and skill-selector fields, and
+ * the two fields' bare ids). Listed by id, never read from the agent-builder
+ * scope: that scope also names ids that no entry answers, the display-only
+ * artifact-review redirect among them (`DISPLAY_ONLY_HITL_RENDERER_IDS`).
+ */
+const HOST_ANSWERING_RENDERER_IDS: ReadonlySet<string> = new Set([
+  GROUPED_SETUP_FORM_RENDERER_ID,
+  SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+  PERSONAL_SKILL_RENDERER_ID,
+  SKILL_SELECTOR_RENDERER_ID,
+  "personal-skill",
+  "skill-selector",
+]);
+
+/**
+ * THE DISPLAY-ONLY STEP IDS: a step parked under one of them is drawn as a card
+ * with no answer of its own. The artifact-review redirect is one: the host draws
+ * it inline (`register-default-renderers.ts`, cinatra#1796) with no approve
+ * control, and the paused run goes on only by the review's own decision (the
+ * resume delivery of that decision). A generic answer is never taken for it.
+ */
+const DISPLAY_ONLY_HITL_RENDERER_IDS: ReadonlySet<string> = new Set([
+  ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
+]);
 
 /**
  * What claims a parked step's recorded renderer id on the server, where no
- * component registry exists: the host's own ids (its agent-builder scope and
- * its bare field ids) and every binding the page registers from (the
- * generated build bindings and the installed packages, `getMergedFieldRendererBindings`),
- * by id or by a kind's bare name. `null` when nothing declares the id any more.
+ * component registry exists: the host's own answering ids
+ * (`HOST_ANSWERING_RENDERER_IDS`) and every binding the page registers from
+ * (the generated build bindings and the installed packages,
+ * `getMergedFieldRendererBindings`), by id or by a kind's bare name. `null`
+ * when nothing declares the id any more, and for a display-only id.
  */
 export function serverHitlRendererClaim(xRenderer: string): { id: string } | null {
-  if (xRenderer.startsWith(`${AGENT_BUILDER_ID_SCOPE}:`)) return { id: xRenderer };
-  if (HOST_BARE_RENDERER_IDS.has(xRenderer)) return { id: xRenderer };
+  if (DISPLAY_ONLY_HITL_RENDERER_IDS.has(xRenderer)) return null;
+  if (
+    HOST_ANSWERING_RENDERER_IDS.has(xRenderer) ||
+    xRenderer.startsWith(`${GROUPED_SETUP_FORM_RENDERER_ID}:`)
+  ) {
+    return { id: xRenderer };
+  }
   const binding = getMergedFieldRendererBindings().find(
     (b) => b.id === xRenderer || b.kind === xRenderer,
   );
@@ -201,13 +238,30 @@ export function serverHitlRendererClaim(xRenderer: string): { id: string } | nul
 }
 
 /**
+ * Why a generic answer is refused for a parked step's durable record, or
+ * `null` when it may be taken:
+ *   - `display-only`: the step is a display-only card
+ *     (`DISPLAY_ONLY_HITL_RENDERER_IDS`); only its own decision road consumes it;
+ *   - `undrawn`: no screen draws the step (`parkedHitlStepIsAnswerable`).
+ */
+export function parkedHitlStepRefusalOnServer(step: {
+  readonly xRenderer: string;
+  readonly values?: unknown;
+}): "display-only" | "undrawn" | null {
+  if (DISPLAY_ONLY_HITL_RENDERER_IDS.has(step.xRenderer)) return "display-only";
+  return parkedHitlStepIsAnswerable(step.xRenderer, serverHitlRendererClaim(step.xRenderer), step.values)
+    ? null
+    : "undrawn";
+}
+
+/**
  * The server's reading of `parkedHitlStepIsAnswerable` for a parked step's
- * durable record: the resume action and the bound-card binding ask it before
- * they take or mint anything for the step.
+ * durable record (`parkedHitlStepRefusalOnServer` refuses nothing): the
+ * bound-card binding asks it before it mints a ref for the step.
  */
 export function parkedHitlStepIsAnswerableOnServer(step: {
   readonly xRenderer: string;
   readonly values?: unknown;
 }): boolean {
-  return parkedHitlStepIsAnswerable(step.xRenderer, serverHitlRendererClaim(step.xRenderer), step.values);
+  return parkedHitlStepRefusalOnServer(step) === null;
 }

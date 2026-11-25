@@ -38,6 +38,7 @@ import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuc
 // ruling 1: "now").
 import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
 import { readWayflowSubmittedValues } from "./hitl-gate-submit";
+import { unsentOneValueAnswerAsFloorPayload } from "./hitl-gate-submit";
 // cinatra#2484: the setup-resume path is the LAST place a type-violating setup
 // value can be stopped before it becomes `agent_runs.inputParams` and reaches
 // the run. It needs the SAME effective schema the setup loop rendered from —
@@ -932,21 +933,37 @@ export async function approveReviewTaskInternal(
     // A STEP NO SCREEN DRAWS IS NOT ANSWERED (`parkedHitlStepIsAnswerable`):
     // its recorded renderer id is claimed by no entry any more, so every
     // surface shows "no renderer configured for this step" and no control, and
-    // a direct call is refused here, before the pause is claimed. Nothing is
-    // recorded or sent; the run stays parked. A step with no durable record is
-    // left to the checks below.
-    let parkedStep: Awaited<ReturnType<typeof readDurableHitlGateForContinue>> = null;
-    try { parkedStep = await readDurableHitlGateForContinue(run.id, reviewTaskId); } catch { /* No durable record: not refused here. */ }
-    if (
-      parkedStep &&
-      !(await import("./field-renderer-bindings.server")).parkedHitlStepIsAnswerableOnServer(parkedStep)
-    ) {
+    // a direct call is refused here, before the pause is claimed. A DISPLAY-ONLY
+    // card (the artifact-review redirect) is refused the same way: only its
+    // review's own decision consumes it. Nothing is recorded or sent; the run
+    // stays parked. A record that cannot be read refuses too (a fixed text,
+    // no store error); only a step with no durable record (`null`) is left to
+    // the checks below.
+    let parkedStep: Awaited<ReturnType<typeof readDurableHitlGateForContinue>>;
+    try {
+      parkedStep = await readDurableHitlGateForContinue(run.id, reviewTaskId);
+    } catch {
+      throw new Error(`WayFlow approval rejected: the paused step of gate ${taskId} on run ${run.id} could not be read`);
+    }
+    const refusal = parkedStep
+      ? (await import("./field-renderer-bindings.server")).parkedHitlStepRefusalOnServer(parkedStep)
+      : null;
+    if (parkedStep && refusal !== null) {
       throw new HitlStepNotAnswerableError({
         runId: run.id,
         xRenderer: parkedStep.xRenderer,
-        message: `WayFlow approval rejected: gate ${taskId} on run ${run.id} has no screen that draws it`,
+        message:
+          refusal === "display-only"
+            ? `WayFlow approval rejected: gate ${taskId} on run ${run.id} is an artifact review; it goes on only when that review is decided`
+            : `WayFlow approval rejected: gate ${taskId} on run ${run.id} has no screen that draws it`,
       });
     }
+    // AN ANSWER LEFT IN THE SETUP SHAPE IS NOT AN APPROVAL. A one-value answer
+    // (a text, a number, a boolean, a list) that reaches a WayFlow gate bare, or
+    // under the field it names, with no resume text of its own, is sent as the
+    // plain form sends it (`unsentOneValueAnswerAsFloorPayload`): the run
+    // receives what was written, never "[Approved by operator]" in its place.
+    values = unsentOneValueAnswerAsFloorPayload(values, fieldName ?? parkedStep?.fieldName) ?? values;
     if (!run.a2aContextId) {
       // Defensive: run must have a2aContextId. execution.ts
       // persists task.contextId immediately after the initial sendTask succeeds.

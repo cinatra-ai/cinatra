@@ -2148,9 +2148,20 @@ async function handleAgentBuilderRunResume(
       if (!run.a2aContextId) {
         return { error: `Run ${runId} has no a2aContextId. Cannot resume WayFlow task without context ID.` };
       }
-      // A step no screen draws is not answered (`parkedHitlStepIsAnswerable`); the run stays parked.
-      const parkedStep = await import("../agent-run-hitl-prompts").then((m) => m.readDurableHitlGateForContinue(run.id, `wayflow-${run.a2aTaskId}`)).catch(() => null);
-      if (parkedStep && !(await import("../field-renderer-bindings.server")).parkedHitlStepIsAnswerableOnServer(parkedStep)) {
+      // A step no screen draws, or a display-only card, is not answered here
+      // (`parkedHitlStepRefusalOnServer`); the run stays parked. A record that
+      // cannot be read refuses too: only a real absence (`null`) goes on.
+      let parkedStep: Awaited<ReturnType<typeof import("../agent-run-hitl-prompts")["readDurableHitlGateForContinue"]>>;
+      try {
+        parkedStep = await (await import("../agent-run-hitl-prompts")).readDurableHitlGateForContinue(run.id, `wayflow-${run.a2aTaskId}`);
+      } catch {
+        return { error: `Run ${runId} cannot be resumed: its paused step could not be read.` };
+      }
+      const refusal = parkedStep && (await import("../field-renderer-bindings.server")).parkedHitlStepRefusalOnServer(parkedStep);
+      if (refusal === "display-only") {
+        return { error: `Run ${runId} is paused at an artifact review; it goes on only when that review is decided.` };
+      }
+      if (parkedStep && refusal === "undrawn") {
         return { error: `Run ${runId} is paused at a step that no screen draws (${parkedStep.xRenderer}); it cannot be resumed.` };
       }
       // cinatra#4150: a run held at a publish decision goes on only by that decision.

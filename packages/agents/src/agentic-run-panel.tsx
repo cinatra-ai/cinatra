@@ -50,7 +50,7 @@ import {
 } from "./publish-decision-card-view";
 import { StatusPill } from "@/components/ui/status-pill";
 import { continueAwaitsAPick } from "./field-renderer-registry";
-import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
+import { FloorAnswerMarkContext, RendererFloorReportContext, useFloorAnswerMark, useGateRendererFloor } from "./schema-field-renderer";
 import type { FieldRendererContext, FieldRendererProps } from "./field-renderer-registry";
 import { ArrowRight } from "lucide-react";
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
@@ -1819,6 +1819,9 @@ export function AgenticRunPanel({
   // cinatra#3035: the mounted gate renderer reports here when it settles on the
   // floor, for this gate only: a later gate reads its own hold from its first frame.
   const [rendererFloored, setRendererFloored] = useGateRendererFloor(bufferedHitlValueKey);
+  // An answer the plain form hands up from inside an extension wrapper
+  // (`FloorAnswerMarkContext`) is answered as the floor's, whatever the entry says.
+  const [answerIsFloorDrawn, markFloorAnswer] = useFloorAnswerMark();
   const [prevBufferedHitlValueKey, setPrevBufferedHitlValueKey] = useState<string | null>(null);
   if (
     bufferedHitlValueKey !== null &&
@@ -3337,6 +3340,7 @@ export function AgenticRunPanel({
                 // affordances are one resume path with two entrances, not two.
                 return (
                   <>
+                    <FloorAnswerMarkContext.Provider value={markFloorAnswer}>
                     <RendererFloorReportContext.Provider value={setRendererFloored}>
                     {/* The renderer reports this gate's validity as its own. */}
                     <GateValidityOwner
@@ -3435,11 +3439,16 @@ export function AgenticRunPanel({
                         // or an unclaimed id the floor took over) is answered
                         // with the floor's approval instead, so the run
                         // receives what was written (`buildFieldGateAnswer`).
+                        // …and so is an answer the plain form hands up from
+                        // inside an extension wrapper (`FloorAnswerMarkContext`),
+                        // read before anything is awaited.
                         const { payload, payloadFieldName } = buildFieldGateAnswer({
-                          drawnByFloor: gateDrawnBySchemaFloor(
-                            effectiveHitlContext.xRenderer,
-                            hitlRendererEntry.entry,
-                          ),
+                          drawnByFloor:
+                            answerIsFloorDrawn() ||
+                            gateDrawnBySchemaFloor(
+                              effectiveHitlContext.xRenderer,
+                              hitlRendererEntry.entry,
+                            ),
                           reviewTaskId: effectiveHitlContext.reviewTaskId,
                           fieldName: effectiveHitlContext.fieldName,
                           next,
@@ -3509,6 +3518,7 @@ export function AgenticRunPanel({
                       }
                     />
                     </RendererFloorReportContext.Provider>
+                    </FloorAnswerMarkContext.Provider>
                     {/* Show the external Continue button only for non-grouped-setup midrun renderers.
                         cinatra#3380 — it stays unavailable while the gate declares a
                         value its renderer must produce and the renderer has written

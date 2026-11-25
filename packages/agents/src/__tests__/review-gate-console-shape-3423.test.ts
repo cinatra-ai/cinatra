@@ -52,6 +52,8 @@ vi.mock("../run-pause-claim", async (orig) => ({
 }));
 vi.mock("../store", () => storeMock);
 vi.mock("../agent-run-hitl-prompts", () => ({
+  // No durable gate record (a real absence): the answer goes on to the checks below.
+  readDurableHitlGateForContinue: async () => null,
   captureHitlPromptForContinue: async (input: never) => {
     await (storeMock.writeHitlPrompt as unknown as (value: unknown) => Promise<void>)(input); return "captured-prompt";
   },

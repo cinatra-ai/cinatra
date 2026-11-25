@@ -120,7 +120,7 @@ import {
 } from "./review-gate-card";
 import { ensureOrCheckRunNameAction } from "./run-name-actions";
 import { approveReviewTask } from "./hitl-actions";
-import { GateContinueHoldContext, RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
+import { FloorAnswerMarkContext, GateContinueHoldContext, RendererFloorReportContext, useFloorAnswerMark, useGateRendererFloor } from "./schema-field-renderer";
 // Wrap the legacy `userResponse` text with the WayFlow `user_envelope`
 // shape when paperclip attachments are pending. Refs persist attachments
 // captured at Suggest time; consumed at gate Continue.
@@ -795,6 +795,9 @@ function HitlApprovalCard({
   // cinatra#3035: the mounted gate renderer reports here when it settles on the
   // floor, for this gate only: a later gate reads its own hold from its first frame.
   const [rendererFloored, setRendererFloored] = useGateRendererFloor(bufferKey);
+  // An answer the plain form hands up from inside an extension wrapper
+  // (`FloorAnswerMarkContext`) is answered as the floor's, whatever the entry says.
+  const [answerIsFloorDrawn, markFloorAnswer] = useFloorAnswerMark();
   const [prevBufferKey, setPrevBufferKey] = useState<string | null>(null);
   if (bufferKey !== null && bufferKey !== prevBufferKey) {
     setPrevBufferKey(bufferKey);
@@ -1526,6 +1529,7 @@ function HitlApprovalCard({
         {/* The renderer reports this gate's validity as its own. */}
         {RendererComponent && !isGenericObjectSchema && !fallbackGateIsMalformed ? (
           <GateContinueHoldContext.Provider value={fallbackGateAsksForFields}>
+          <FloorAnswerMarkContext.Provider value={markFloorAnswer}>
           <RendererFloorReportContext.Provider value={setRendererFloored}>
           <GateValidityOwner
             renderer={RendererComponent}
@@ -1645,7 +1649,14 @@ function HitlApprovalCard({
                     // cinatra#4244 - a non-setup gate whose declared fields the
                     // fallback draws, or whose one value it draws, is answered
                     // as an approval, never through the setup-loop wrap below.
-                    if (fallbackGateAsksForFields || fallbackGateAsksForOneValue) {
+                    // So is an answer the plain form hands up from inside an
+                    // extension wrapper on a non-setup gate
+                    // (`FloorAnswerMarkContext`, read before anything is awaited).
+                    if (
+                      fallbackGateAsksForFields ||
+                      fallbackGateAsksForOneValue ||
+                      (answerIsFloorDrawn() && !isSetupGateTaskId(interruptContext.reviewTaskId))
+                    ) {
                       await submitSchemaFieldGate(next);
                       return;
                     }
@@ -1723,6 +1734,7 @@ function HitlApprovalCard({
             }
           />
           </RendererFloorReportContext.Provider>
+          </FloorAnswerMarkContext.Provider>
           </GateContinueHoldContext.Provider>
         ) : !isGenericObjectSchema ? (
           <p className="text-sm text-muted-foreground">

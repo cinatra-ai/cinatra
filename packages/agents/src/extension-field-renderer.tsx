@@ -25,7 +25,7 @@ import {
   type ReactNode,
 } from "react";
 import type { FieldRendererProps } from "./field-renderer-registry";
-import { RendererFloorReportContext, SchemaOnlyFloorRenderer } from "./schema-field-renderer";
+import { FloorAnswerMarkContext, RendererFloorReportContext, SchemaOnlyFloorRenderer } from "./schema-field-renderer";
 import { loadFieldRendererComponent } from "./field-renderer-components";
 
 /** Render-time containment: an extension renderer that throws while rendering is
@@ -93,6 +93,9 @@ export function makeExtensionFieldRenderer(
     // load window counts as not floored: the component may still mount. Nothing is
     // shared by binding id, so a remount or a second instance of the id starts over.
     const reportFloor = useContext(RendererFloorReportContext);
+    // An answer the plain form hands up from inside this wrapper is the plain
+    // form's (`FloorAnswerMarkContext`): the host answers it as the floor does.
+    const markFloorAnswer = useContext(FloorAnswerMarkContext);
     const floored = degraded || crashed;
     useEffect(() => {
       reportFloor?.(floored);
@@ -170,6 +173,15 @@ export function makeExtensionFieldRenderer(
     const floorProps: FieldRendererProps = {
       ...props,
       ...(heldAtCrash ? { disabled: true } : {}),
+      onChange: (next: unknown) => {
+        // The plain form awaits what the host returns: it is handed back.
+        markFloorAnswer?.(true);
+        try {
+          return props.onChange(next);
+        } finally {
+          markFloorAnswer?.(false);
+        }
+      },
       schema: floorSchema,
       context: {
         ...props.context,

@@ -1232,6 +1232,46 @@ export function buildSchemaFloorGatePayload(args: {
 }
 
 /**
+ * A ONE-VALUE ANSWER LEFT IN THE SETUP SHAPE, AS THE PLAIN FORM SENDS IT.
+ * The WayFlow continue road takes `userResponse` as the run's resume text and
+ * sends "[Approved by operator]" when there is none. A one-value answer (a
+ * text, a number, a boolean, a list) that reaches that road with no resume text
+ * of its own (a host that answered a floor-drawn gate with the setup-loop
+ * shape, `wrapPrimitiveSetupPayload`) would therefore be replaced by the
+ * approval marker. Such a submission is rebuilt here with
+ * `buildSchemaFloorGatePayload`, so the run receives what was written, under
+ * the same rules as the plain form (a blank text, `null` and an empty list send
+ * the marker and are kept as a named blank answer):
+ *   - the values ARE the value (a text, a number, a boolean or a list), named by
+ *     `fieldName` or, without one, `hitl-field`; or
+ *   - the values are a record whose only own key is `fieldName` (the field the
+ *     setup-loop shape names), holding such a value or `null`.
+ * `null` for everything else, which keeps its meaning: no values (a bare
+ * approval), a record with an approval note, an approval flag or a resume text,
+ * and a structured record, whose fields are recorded as they are.
+ */
+export function unsentOneValueAnswerAsFloorPayload(
+  values: unknown,
+  fieldName: string | undefined,
+): Record<string, unknown> | null {
+  const oneValue = (value: unknown): boolean =>
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    Array.isArray(value);
+  if (oneValue(values)) {
+    return buildSchemaFloorGatePayload({ schema: undefined, next: values, fieldName });
+  }
+  const field = floorAnswerFieldName(fieldName);
+  if (!isPlainSchemaObject(values) || field === null) return null;
+  const keys = Object.keys(values);
+  if (keys.length !== 1 || keys[0] !== field) return null;
+  const value = ownValue(values, field);
+  if (value !== null && !oneValue(value)) return null;
+  return buildSchemaFloorGatePayload({ schema: undefined, next: value, fieldName: field });
+}
+
+/**
  * The gate's own field name as the key a one-value answer is written under,
  * or `null` when it has none that may be used (blank, the placeholder, or a
  * key of the approval itself); the answer is then written under

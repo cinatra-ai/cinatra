@@ -7,6 +7,12 @@ vi.mock("../publish-decision-store", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   readLatestDecisionForRun: async () => null,
 }));
+// The resume road reads the paused step's durable record and refuses when that
+// read fails. This suite is about another question: the run has no such record.
+vi.mock("../agent-run-hitl-prompts", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readDurableHitlGateForContinue: async () => null,
+}));
 
 /**
  * cinatra#3007 — the resume primitive is a DIRECT resume caller: it drives the
