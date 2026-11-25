@@ -28,7 +28,9 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
-import { captureHitlPromptForContinue } from "./agent-run-hitl-prompts";
+import { captureHitlPromptForContinue, readDurableHitlGateForContinue } from "./agent-run-hitl-prompts";
+import { AGENT_BUILDER_ID_SCOPE } from "./agent-builder-ids";
+import { hitlStepIsRetired } from "./orchestrator-mid-run-hitl";
 import type { AgentRunRecord } from "./agent-run-record";
 import { claimPause, PauseClaimReleaseError, releasePauseClaim, settlePauseSend } from "./run-pause-claim";
 import { PAUSE_SEND_LEASE_SECONDS, RunTransitionError, TERMINAL_RUN_STATUSES, type AgentRunStatus } from "./run-status";
@@ -36,6 +38,41 @@ import { transitionRunStatus } from "./store";
 
 type ClaimRef = { runId: string; orgId: string; token: string };
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/**
+ * Does a binding declare exactly this renderer id on the server: one of this
+ * build (the generated bindings) or one of a package installed at run time?
+ * The sources a page's registry is filled from. Read only for a package's own
+ * screen (`<package>:<screen>`).
+ */
+async function packageScreenIsDeclared(xRenderer: string): Promise<boolean> {
+  const colon = xRenderer.indexOf(":");
+  if (colon <= 0 || xRenderer.slice(0, colon) === AGENT_BUILDER_ID_SCOPE) return false;
+  const { GENERATED_FIELD_RENDERER_BINDINGS } = await import("@/lib/generated/agent-bindings");
+  if (GENERATED_FIELD_RENDERER_BINDINGS.some((b) => b.id === xRenderer)) return true;
+  const { collectInstalledFieldRendererBindings } = await import("./field-renderer-bindings.server");
+  return collectInstalledFieldRendererBindings().some((b) => b.id === xRenderer);
+}
+
+/**
+ * IS THE PAUSED STEP AN ANSWER REACHES RETIRED? Its durable row
+ * (`agent_run_hitl_gates`, by the step's review task id) names its renderer; a
+ * retired step (`hitlStepIsRetired`, the definition every host withholds its
+ * Continue by) is answered by nothing, and the person starts a new run. Returns
+ * that row's renderer id when the step is retired, else null. A step with no
+ * row, or whose row cannot be read (its write is best-effort), is left to the
+ * road, as before.
+ */
+export async function retiredParkedStep(runId: string, reviewTaskId: string): Promise<string | null> {
+  try {
+    const row = await readDurableHitlGateForContinue(runId, reviewTaskId);
+    if (!row) return null;
+    const declared = await packageScreenIsDeclared(row.xRenderer);
+    return hitlStepIsRetired(row.xRenderer, row.values, () => declared) ? row.xRenderer : null;
+  } catch {
+    return null;
+  }
+}
 
 /** A pre-send step failed: give the lease back and throw the step's error, or
  * PauseClaimReleaseError when the release failed too. A `lost` release needs

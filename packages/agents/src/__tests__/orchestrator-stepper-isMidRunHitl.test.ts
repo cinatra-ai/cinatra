@@ -52,6 +52,14 @@ describe("classifyMidRunHitl — strict-equality renderer IDs", () => {
     expect(classifyMidRunHitl("@cinatra/whatever:setup-form")).toBe(true);
   });
 
+  // red-first-expect: expected true to be false
+  it("a tombstoned id is never mid-run, whatever its suffix", () => {
+    // The retired legacy-scope reviewer alias stays unresumable, so no host
+    // draws an outer Continue for it. Other `@cinatra/` ids keep their suffix
+    // classification (above).
+    expect(classifyMidRunHitl("@cinatra/email-reviewer-agent:output")).toBe(false);
+  });
+
   it("non-HITL renderer ids return false", () => {
     expect(classifyMidRunHitl("@cinatra-ai/agent-builder:schema-field-fallback")).toBe(false);
     expect(classifyMidRunHitl("")).toBe(false);

@@ -57,6 +57,7 @@ import {
 } from "./agent-builder-ids";
 import { hasFieldRendererComponent } from "./field-renderer-components";
 import { makeExtensionFieldRenderer } from "./extension-field-renderer";
+import { isTombstonedHitlRendererId } from "./orchestrator-mid-run-hitl";
 
 // ---------------------------------------------------------------------------
 // The normalized binding shape this module registers from. Mirrors
@@ -285,6 +286,13 @@ export function registerFieldRendererBindings(
   bindings: ReadonlyArray<FieldRendererBindingInput>,
 ): void {
   for (const b of bindings) {
+    // A TOMBSTONED id never registers (`TOMBSTONED_HITL_RENDERER_IDS`): a
+    // retired review gate stays unresumable even when a stale build or a
+    // runtime-installed package still declares it.
+    if (isTombstonedHitlRendererId(b.id)) {
+      console.warn(`[field-renderers] tombstoned renderer id ${b.id} — skipped`);
+      continue;
+    }
     // S8 spine (cinatra#1625): a binding whose component has migrated into its
     // claiming extension (declared cinatra.fieldRenderers[].component and is in
     // THIS build) resolves to the extension-shipped component via the generated
@@ -455,6 +463,10 @@ export function ensureDefaultFieldRenderersRegistered(): void {
   // — presents no Continue button, so it cannot be resumed. Losing that working
   // resume path is an unresumable dead-end explicitly accepted under the owner's
   // backward-compat waiver. NOT a schema floor.
+  //
+  // Both aliases, and the retired reviewer and auditor bindings, are listed in
+  // `TOMBSTONED_HITL_RENDERER_IDS` (orchestrator-mid-run-hitl.ts): the binding
+  // registration below skips them, and no host classifies one as mid-run.
 
   // -------------------------------------------------------------------------
   // Manifest-driven entries: the generated build-time bindings (presence-

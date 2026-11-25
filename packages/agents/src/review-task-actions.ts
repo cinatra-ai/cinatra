@@ -1,7 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { CINATRA_PUBLISH_DECISION_MESSAGE_KEY } from "@/lib/agent-run-token";
-import { GateNotPendingError, PAUSE_SEND_LEASE_SECONDS, RunTransitionError } from "./run-status";
+import { GateNotPendingError, HitlStepNotAnswerableError, PAUSE_SEND_LEASE_SECONDS, RunTransitionError } from "./run-status";
 import { assertNoOpenPublishDecision, publishHoldFault } from "./publish-decision-actions";
 
 import { sql, type SQL } from "drizzle-orm";
@@ -31,7 +31,7 @@ import {
   transitionRunStatus,
 } from "./store";
 import { claimPause } from "./run-pause-claim";
-import { failPreSendStep, givePauseBackOnHoldFault, settleSendOrDescribe } from "./run-resume-under-claim";
+import { failPreSendStep, givePauseBackOnHoldFault, retiredParkedStep, settleSendOrDescribe } from "./run-resume-under-claim";
 import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuccessfulContinue, continueBindingDigest, continueGateDigest } from "./agent-run-hitl-prompts";
 // cinatra#1939 wave 2 (§7.1): the guarded setup-resume writer — the setup-*
 // inputParams-merge + pending_approval->queued CAS now runs inside the org-write
@@ -929,6 +929,16 @@ export async function approveReviewTaskInternal(
           actingUserId: actorId,
         }),
       );
+    }
+    // A RETIRED STEP is answered by nothing (`retiredParkedStep`): refused before
+    // the pause is claimed, so nothing is recorded or sent and the run stays parked.
+    const retiredRenderer = await retiredParkedStep(run.id, reviewTaskId);
+    if (retiredRenderer !== null) {
+      throw new HitlStepNotAnswerableError({
+        runId: run.id,
+        xRenderer: retiredRenderer,
+        message: `WayFlow approval rejected: gate ${taskId} on run ${run.id} is a retired step; it can no longer be answered`,
+      });
     }
     if (!run.a2aContextId) {
       // Defensive: run must have a2aContextId. execution.ts

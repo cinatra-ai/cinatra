@@ -70,7 +70,11 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { LoadingSpinner } from "@cinatra-ai/sdk-ui";
 
-import { classifyMidRunHitl } from "./orchestrator-mid-run-hitl";
+import {
+  classifyMidRunHitl,
+  parkedHitlStepIsAnswerable,
+  resolveHitlGateRenderer,
+} from "./orchestrator-mid-run-hitl";
 import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
 import { useRunWindowScreen } from "./run-window-screen-context";
 import { useRunWindowConversation } from "./use-run-window-conversation";
@@ -936,7 +940,7 @@ function HitlApprovalCard({
   // (e.g. the gmail-sender whitelist) start CHANGING which component renders a
   // gate, which is a different behaviour change than fixing a label. Only the
   // rendered field IDENTITY below carries the real name.
-  const entry = fieldRendererRegistry.resolve(
+  const entry = resolveHitlGateRenderer(
     HITL_PLACEHOLDER_FIELD_NAME,
     fieldSchema,
     context,
@@ -944,6 +948,11 @@ function HitlApprovalCard({
   const { "x-renderer": _xr, ...renderSchema } = fieldSchema;
   void _xr;
 
+  // MAY THIS STEP BE ANSWERED HERE? Only when a screen draws it
+  // (`parkedHitlStepIsAnswerable`): a step whose recorded id no entry claims
+  // shows "no renderer configured for this step" and no Continue, whatever
+  // its id's name says.
+  const stepIsAnswerable = parkedHitlStepIsAnswerable(interruptContext.xRenderer, entry);
   const isMidRunHitl = classifyMidRunHitl(interruptContext.xRenderer);
   // Narrower classifier than isMidRunHitl: matches output renderers only,
   // excluding input forms. Drives the `data-hitl-output` attribute on the
@@ -1057,6 +1066,8 @@ function HitlApprovalCard({
   );
 
   const handleContinue = async () => {
+    // A step no screen draws is never answered from here.
+    if (!stepIsAnswerable) return;
     // Reported unsendable (see `gateValidity`): the press sends nothing, before
     // the run-name check and the optimistic spinner below.
     if (gateValidity.isHeld(setupGateKey)) return;
@@ -1218,7 +1229,8 @@ function HitlApprovalCard({
   // calls approveReviewTask. Renderers that own their own action surface
   // coexist fine; their inner button still works and the outer button is a
   // redundant alternate.
-  const showContinueButton = isGenericObjectSchema || (isMidRunHitl && !isGroupedSetup);
+  const showContinueButton =
+    stepIsAnswerable && (isGenericObjectSchema || (isMidRunHitl && !isGroupedSetup));
 
   // ---------------------------------------------------------------------------
   // cinatra#3532 — THE SETUP FIELD THAT DRAWS NO CONTROL OF ITS OWN.
@@ -1482,6 +1494,7 @@ function HitlApprovalCard({
     stepId: interruptContext.xRenderer ?? null,
     gateRef: interruptContext.reviewTaskId ?? null,
     canManipulate:
+      stepIsAnswerable &&
       !gateBlocked &&
       !isGenericObjectSchema &&
       // cinatra#2933 — the run's access decides who sees the box.

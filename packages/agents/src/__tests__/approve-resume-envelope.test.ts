@@ -90,7 +90,37 @@ const storeMock = vi.hoisted(() => ({
   transitionRunStatus: vi.fn(async () => undefined),
 }));
 vi.mock("../store", () => storeMock);
+// THE PAUSED STEP'S DURABLE ROW, and what declares a package's screen on the
+// server: the bindings of this build (filtered by `packScreens.dropped`, as a
+// newer bundled pack that no longer ships the screen) and those of packages
+// installed at run time (none by default).
+const durableRead = vi.hoisted(() => vi.fn(async (_runId: string, _reviewTaskId: string): Promise<unknown> => null));
+const packScreens = vi.hoisted(() => ({
+  dropped: [] as string[],
+  installed: [] as Array<{ id: string; kind: string; priority: number; declaredBy: string }>,
+}));
+vi.mock("@/lib/generated/agent-bindings", async (orig) => {
+  const real = await orig<typeof import("@/lib/generated/agent-bindings")>();
+  return {
+    ...real,
+    get GENERATED_FIELD_RENDERER_BINDINGS() {
+      return real.GENERATED_FIELD_RENDERER_BINDINGS.filter((b) => !packScreens.dropped.includes(b.id));
+    },
+  };
+});
+vi.mock("../field-renderer-bindings.server", () => ({
+  collectInstalledFieldRendererBindings: () => packScreens.installed,
+}));
+/** The two publish packs' own confirmation screens, as their old pins declared them. */
+const OLD_PUBLISH_SCREENS = [
+  { id: "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm", kind: "wordpress-draft-confirm" },
+  { id: "@cinatra-ai/blog-linkedin-publish-agent:draft-review", kind: "linkedin-draft-review" },
+];
+const parkedRow = (runId: string, reviewTaskId: string, xRenderer: string) => ({
+  runId, reviewTaskId, xRenderer, inputSchema: { type: "object" }, values: {}, materializedAt: "2026-11-25T00:00:00.000Z",
+});
 vi.mock("../agent-run-hitl-prompts", () => ({
+  readDurableHitlGateForContinue: durableRead,
   captureHitlPromptForContinue: async (input: never) => {
     await storeMock.writeHitlPrompt(input); return "captured-prompt";
   },
@@ -285,5 +315,71 @@ describe("a list step's picks reach the run (cinatra#3562)", () => {
     const envelope = JSON.parse(sentText()!) as { text: string; attachments: unknown[] };
     expect(envelope.attachments).toEqual([REF]);
     expect(JSON.parse(envelope.text)).toMatchObject({ type: "list", listIds: ["L1"] });
+  });
+});
+
+// A RETIRED STEP IS ANSWERED BY NOTHING (`retiredParkedStep`): a tombstoned id,
+// or a package's own screen that no binding of this build and no installed
+// package declares any more. Refused before the pause is claimed: nothing is
+// recorded or sent, and the person starts a new run.
+describe("the generic answer and a retired step", () => {
+  const TASK = "wayflow-task-r1";
+  const RETIRED = "WayFlow approval rejected: gate task-r1 on run run-r1 is a retired step; it can no longer be answered";
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupRun();
+    durableRead.mockReset().mockResolvedValue(null);
+    packScreens.dropped = [];
+    packScreens.installed = [];
+  });
+  const parkAt = (xRenderer: string) => durableRead.mockResolvedValue(parkedRow("run-r1", TASK, xRenderer));
+  const answer = () => approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" });
+
+  // red-first-expect: promise resolved "undefined" instead of rejecting
+  it("a tombstoned step is refused and nothing is sent", async () => {
+    parkAt("@cinatra/email-reviewer-agent:output");
+    await expect(answer()).rejects.toMatchObject({ name: "HitlStepNotAnswerableError", message: RETIRED });
+    expect(durableRead).toHaveBeenCalledWith("run-r1", TASK);
+    expect(sendTaskMock).not.toHaveBeenCalled();
+    expect(storeMock.writeHitlPrompt).not.toHaveBeenCalled();
+  });
+
+  // red-first-expect: promise resolved "undefined" instead of rejecting
+  it("a package screen that no binding declares is refused", async () => {
+    parkAt("@acme/removed:output");
+    await expect(answer()).rejects.toMatchObject({ name: "HitlStepNotAnswerableError", message: RETIRED });
+    expect(sendTaskMock).not.toHaveBeenCalled();
+  });
+
+  for (const screen of OLD_PUBLISH_SCREENS) {
+    // red-first-expect: promise resolved "undefined" instead of rejecting
+    it(`${screen.id}: refused once the bundled pack no longer declares it and no installed pack does`, async () => {
+      packScreens.dropped = [screen.id];
+      parkAt(screen.id);
+      await expect(answer()).rejects.toMatchObject({ name: "HitlStepNotAnswerableError", message: RETIRED });
+      expect(sendTaskMock).not.toHaveBeenCalled();
+    });
+    it(`${screen.id}: answered where an installed older pack still declares it (its old flow runs)`, async () => {
+      packScreens.dropped = [screen.id];
+      packScreens.installed = [{ id: screen.id, kind: screen.kind, priority: 90, declaredBy: "installed" }];
+      parkAt(screen.id);
+      await answer();
+      expect(sendTaskMock).toHaveBeenCalledTimes(1);
+    });
+    it(`${screen.id}: answered while the bundled pack still declares it`, async () => {
+      parkAt(screen.id);
+      await answer();
+      expect(sendTaskMock).toHaveBeenCalledTimes(1);
+    });
+  }
+
+  it("an ordinary step, a step with no row and an unreadable row are answered as before", async () => {
+    parkAt("@cinatra-ai/agent-builder:schema-field-fallback");
+    await answer();
+    durableRead.mockResolvedValue(null);
+    await answer();
+    durableRead.mockRejectedValue(new Error("permission denied"));
+    await answer();
+    expect(sendTaskMock).toHaveBeenCalledTimes(3);
   });
 });
