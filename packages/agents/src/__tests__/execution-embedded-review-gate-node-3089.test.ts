@@ -397,6 +397,46 @@ describe("cinatra#3089 — an embedded review gate's marker follows the verified
     expect(storeMock.readAgentTemplateById).toHaveBeenCalledTimes(1 + PAUSE_POLICY_READ_WAITS_MS.length);
   });
 
+  // A run pinned to v1 (an explicit version: versionId AND packageVersion)
+  // while the live template is v2, whose drafts step no longer names a node.
+  const V2_DRAFTS = { ...DRAFTS_STEP } as Record<string, unknown>;
+  delete V2_DRAFTS.artifactReviewTargetsInput;
+  delete V2_DRAFTS.artifactReviewGateNode;
+  const V2 = [RECIPIENTS_STEP, V2_DRAFTS, SEND_STEP];
+  const V1_ROW = { templateId: "tmpl-rev-1", semver: "1.0.0", snapshot: { compiledPlan: [], taskSpec: null, approvalPolicy: { steps: OUTREACH } } };
+  async function pinnedPause(row: unknown) {
+    storeMock.readAgentTemplateById.mockReset();
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(V2));
+    storeMock.readAgentTemplateVersionById.mockReset();
+    if (row instanceof Error) storeMock.readAgentTemplateVersionById.mockRejectedValue(row);
+    else storeMock.readAgentTemplateVersionById.mockResolvedValue(row as never);
+    gateIndexSpy.mockResolvedValue(1);
+    const run = { ...makeRun({ ...RUN_INPUTS, reviewTargets: TARGETS }), versionId: "ver-1", packageVersion: "1.0.0" } as AgentRunRecord;
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task: pausedTask(signedClaim("drafts-approval_gate")) });
+  }
+
+  it("a pinned run's pause is classified by the pinned version's policy, not by a later live version", async () => {
+    await pinnedPause(V1_ROW);
+    // red-first-expect: expected "vi.fn()" to be called at least once
+    expect(emitSpy).toHaveBeenCalled();
+    expect(routedToReview()).toBe(true);
+    expect(storeMock.readAgentTemplateVersionById).toHaveBeenCalledWith("ver-1");
+  });
+
+  it("a pinned run whose snapshot is missing, unreadable or carries no policy stops after the retries; the live policy is never used", async () => {
+    const noPolicy = { ...V1_ROW, snapshot: { compiledPlan: [], taskSpec: null } };
+    for (const row of [null, new Error("snapshot store down"), noPolicy]) {
+      storeMock.transitionRunStatus.mockClear();
+      onInterruptSpy.mockClear();
+      emitSpy.mockClear();
+      await pinnedPause(row);
+      expect(onInterruptSpy).not.toHaveBeenCalled();
+      expect(emitSpy).not.toHaveBeenCalled();
+      stoppedWith("PAUSE_POLICY_UNREAD");
+      expect(storeMock.readAgentTemplateVersionById).toHaveBeenCalledTimes(1 + PAUSE_POLICY_READ_WAITS_MS.length);
+    }
+  }, 15_000);
+
   it("a claim another runtime signed for its own task (a child agent's pause) does not verify here: the run is stopped", async () => {
     await pause(signedClaim("drafts-approval_gate", KEY, "ctx-child-agent", "task-child-agent"), 1);
     expect(emitSpy).not.toHaveBeenCalled();

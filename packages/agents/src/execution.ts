@@ -213,6 +213,9 @@ export type PinnedRunSnapshotFields = {
    * environment is bound at the seam, not on the template object).
    */
   executionEnvironment?: unknown;
+  /** cinatra#3089: the approval policy captured in this snapshot. The worker's
+   *  dispatch overlay ignores it; a pause of the run is classified by it. */
+  approvalPolicy?: unknown;
 };
 
 export type ResolvePinnedRunSnapshotDeps = {
@@ -319,6 +322,7 @@ export async function resolvePinnedRunSnapshot(
       compiledPlan?: unknown;
       taskSpec?: string | null;
       executionEnvironment?: unknown;
+      approvalPolicy?: unknown;
     };
     // (5) EXECUTION-FIELD COMPLETENESS — a required pin FULLY replaces the
     //     execution plan, so an ABSENT or `undefined` compiledPlan cannot pin
@@ -336,6 +340,7 @@ export async function resolvePinnedRunSnapshot(
       compiledPlan: s.compiledPlan,
       taskSpec: s.taskSpec ?? null,
       executionEnvironment: s.executionEnvironment ?? null,
+      approvalPolicy: s.approvalPolicy,
     };
   }
 
@@ -350,6 +355,7 @@ export async function resolvePinnedRunSnapshot(
       compiledPlan?: unknown;
       taskSpec?: string | null;
       executionEnvironment?: unknown;
+      approvalPolicy?: unknown;
     };
     // A RESOLVED best-effort snapshot is authoritative for this run exactly as
     // it is for compiledPlan/taskSpec above — the environment does not fall back
@@ -359,11 +365,34 @@ export async function resolvePinnedRunSnapshot(
       compiledPlan: s.compiledPlan,
       taskSpec: s.taskSpec,
       executionEnvironment: s.executionEnvironment ?? null,
+      approvalPolicy: s.approvalPolicy,
     };
   }
 
   // `versionId`-only (inert pin) or neither → live template.
   return null;
+}
+
+/**
+ * cinatra#3089: the template a pause is classified by. A run served a pinned
+ * snapshot pauses in THAT version's flow, so its approval policy is the
+ * snapshot's, never the live template's (a later version may drop or rename a
+ * review marker). The rest is the live row, as the dispatch overlay keeps it.
+ * A required pin that cannot be served, a snapshot read that throws, or a
+ * served snapshot with no approval policy throws: the caller retries, then
+ * stops; it never falls back to the live policy. No served snapshot: the live
+ * template, as on main.
+ */
+export async function readPausePolicyTemplate(
+  run: { templateId: string; packageVersion: string | null; versionId: string | null },
+): Promise<Awaited<ReturnType<typeof readAgentTemplateById>>> {
+  const live = await readAgentTemplateById(run.templateId);
+  const pinned = await resolvePinnedRunSnapshot(run, { readAgentTemplateVersionById, readAgentTemplateVersionBySemver });
+  if (!pinned || !live) return live;
+  if (pinned.approvalPolicy === undefined) {
+    throw new Error(`the pinned snapshot of ${run.templateId}@${run.packageVersion} carries no approval policy`);
+  }
+  return { ...live, approvalPolicy: pinned.approvalPolicy as typeof live.approvalPolicy };
 }
 
 // ---------------------------------------------------------------------------
@@ -2396,7 +2425,8 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // publishing template ends the run failed.
     if (await holdRunAtPublishGate({ run, fromStatus, task, claim: gateNodeClaim, authority })) return;
     // cinatra#3089: ONE read of the template for this pause, used for every
-    // decision below. A step that names its gate's node is the step of a pause
+    // decision below (the renderer's too), with the policy of the version the
+    // run is pinned to. A step that names its gate's node is the step of a pause
     // by the pause's verified node, never by position. Without a verified node it
     // cannot be told whether this pause is such a review: the run is stopped
     // failed, the pause offered as no approval. A read that throws is retried
@@ -2404,7 +2434,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     const stopUnplacedPause = (error: string) =>
       transitionRunStatus(runId, fromStatus, "failed", { error, completedAt: new Date() }, authority)
         .catch((err: unknown) => { if ((err as { code?: unknown } | null)?.code !== "stale_from_status") throw err; });
-    const pauseRead = await readPausePolicyWithRetry(() => readAgentTemplateById(run.templateId), `run=${runId} task=${task.id}`);
+    const pauseRead = await readPausePolicyWithRetry(() => readPausePolicyTemplate(run), `run=${runId} task=${task.id}`);
     if (!pauseRead.ok) {
       await stopUnplacedPause(PAUSE_POLICY_UNREAD_TEXT);
       return;

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { compileOasAgentJson, __resetRegistryCacheForTests, type CompiledAgentOasStep } from "../oas-compiler";
+import { compileOasAgentJson, __resetRegistryCacheForTests, RUNTIME_GATE_NODE_MAX_DEPTH, type CompiledAgentOasStep } from "../oas-compiler";
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 import embeddedDrafting from "./fixtures/email-drafting-embedded-3089.json";
 
@@ -536,6 +536,19 @@ describe("cinatra#3089 — an embedded child's artifact-review gate", () => {
     }
   });
 
+  it("a marked gate at the deepest level the runtime names a paused step at is carried; one level deeper is refused", async () => {
+    // The child of the top-level FlowNode is level 1, each nested flow one more.
+    expect(RUNTIME_GATE_NODE_MAX_DEPTH).toBe(32);
+    const atLimit = await compileSteps({ draftsFlow: nestedDraftsFlow(RUNTIME_GATE_NODE_MAX_DEPTH - 1, [markedGate()]) });
+    expect(byName(atLimit, "Review drafts").artifactReviewGateNode).toBe("drafts-approval_gate");
+    const error = await compileError({ draftsFlow: nestedDraftsFlow(RUNTIME_GATE_NODE_MAX_DEPTH, [markedGate()]) });
+    expect(error).toContain("ARTIFACT_REVIEW_GATE_TOO_DEEP");
+    expect(error).toContain('"drafts_flow"');
+    // An unmarked gate at that depth is not this rule's business.
+    const unmarked = await compileSteps({ draftsFlow: nestedDraftsFlow(RUNTIME_GATE_NODE_MAX_DEPTH, [gate("drafts-approval_gate", {})]) });
+    expect(byName(unmarked, "Review drafts").artifactReviewTargetsInput).toBeUndefined();
+  });
+
   it("a deeply nested child with an unmarked gate compiles without a marker", async () => {
     const steps = await compileSteps({ draftsFlow: nestedDraftsFlow(12, [gate("drafts-approval_gate", {})]) });
     expect(byName(steps, "Review drafts").artifactReviewTargetsInput).toBeUndefined();
@@ -934,14 +947,23 @@ describe("cinatra#3089 — an embedded child's artifact-review gate", () => {
     expect(await compileError({ draftsFlow: readsFirst })).toContain(UNREVIEWED);
   });
 
-  it("the step of a carried gate names the gate's node, also before a later reviewer step, whatever the paths", async () => {
-    const later = { senderGateSteps: [{ name: "Confirm send", renderer: "@test/delivery:send-confirmation", hitlOwnedBy: "self", gateCount: 1 }] };
-    for (const parts of [draftingParts(later), later]) {
-      const steps = await compileSteps(parts);
-      // red-first-expect: expected undefined to be 'drafts-approval_gate'
-      expect(byName(steps, "Review drafts").artifactReviewGateNode).toBe("drafts-approval_gate");
-      expect(byName(steps, "Confirm send").artifactReviewGateNode).toBeUndefined();
-    }
+  const laterReviewer = { senderGateSteps: [{ name: "Confirm send", renderer: "@test/delivery:send-confirmation", hitlOwnedBy: "self", gateCount: 1 }] };
+
+  it("the step of a carried gate names the gate's node, also before a later reviewer step when every run crosses it", async () => {
+    const steps = await compileSteps(laterReviewer);
+    // red-first-expect: expected undefined to be 'drafts-approval_gate'
+    expect(byName(steps, "Review drafts").artifactReviewGateNode).toBe("drafts-approval_gate");
+    expect(byName(steps, "Confirm send").artifactReviewGateNode).toBeUndefined();
+  });
+
+  it("a marked gate a run may skip must be the flow's last reviewer step: a later reviewer step is refused", async () => {
+    // The answers of a run are replayed onto the steps by order: a skipped gate
+    // before a later reviewer would take that reviewer's answer.
+    expect(await compileError(draftingParts(laterReviewer))).toContain("ARTIFACT_REVIEW_GATE_SKIPPABLE_NOT_LAST");
+    // A later step that does not pause for a reviewer is no reviewer step.
+    const phantom = { senderGateSteps: [{ name: "Send log", hitlOwnedBy: "self", gateCount: 1 }] };
+    const steps = await compileSteps(draftingParts(phantom));
+    expect(byName(steps, "Review drafts").artifactReviewGateNode).toBe("drafts-approval_gate");
   });
 
   it("refuses a marked gate whose id another component of the flow also carries", async () => {
