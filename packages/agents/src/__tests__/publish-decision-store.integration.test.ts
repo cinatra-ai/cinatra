@@ -1030,4 +1030,32 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     await runUp();
     expect(await snapshot()).toEqual(before);
   });
+
+  it("cinatra#3745: a park waits while a consumption holds the run row FOR UPDATE, and commits only after it", async () => {
+    const runId = await seedRun(`run-${randomUUID()}`, "running");
+    const holder = new Client({ connectionString: DB_URL });
+    await holder.connect();
+    try {
+      // A plain status update's lock (FOR NO KEY UPDATE) does not hold the park back.
+      await holder.query("BEGIN");
+      await holder.query(`SELECT id FROM ${RUNS_TABLE} WHERE id = $1 FOR NO KEY UPDATE`, [runId]);
+      expect(await store.insertParkedDecision(park({ runId, gateTaskId: "task-free" }))).toMatchObject({ inserted: true, current: true });
+      await holder.query("COMMIT");
+
+      // The consumption's lock (FOR UPDATE) does: the park's row is not visible while the lock is held.
+      await holder.query("BEGIN");
+      await holder.query(`SELECT id FROM ${RUNS_TABLE} WHERE id = $1 FOR UPDATE`, [runId]);
+      let settled = false;
+      const parking = store.insertParkedDecision(park({ runId, gateTaskId: "task-fenced" })).finally(() => { settled = true; });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(settled).toBe(false);
+      const seen = await holder.query(`SELECT count(*)::int AS n FROM ${TABLE} WHERE run_id = $1 AND gate_task_id = 'task-fenced'`, [runId]);
+      expect(seen.rows[0].n).toBe(0);
+      await holder.query("COMMIT");
+      expect(await parking).toMatchObject({ inserted: true, current: true });
+    } finally {
+      await holder.query("ROLLBACK").catch(() => undefined);
+      await holder.end();
+    }
+  });
 });
