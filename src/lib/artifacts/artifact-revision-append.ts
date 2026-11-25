@@ -44,7 +44,13 @@ import {
 import { runPostgresQueriesAsync } from "@/lib/postgres-async";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { registerAllObjectTypes } from "@/lib/register-all-object-types";
-import { maybeBuildProducedEventInsertOp } from "@/lib/lifecycle/lifecycle-emit";
+import {
+  isPublishCallInFlightAbort,
+  maybeBuildProducedEventInsertOp,
+  PUBLISH_CALL_IN_FLIGHT_CODE,
+  producerAttemptForRun,
+  producerRunLockOps,
+} from "@/lib/lifecycle/lifecycle-emit";
 
 import { buildArtifactWriterWitnessOp } from "./artifact-writer-witness";
 import { createLocalDiskBlobStore } from "./local-disk-blob-store";
@@ -52,6 +58,7 @@ import {
   buildFinalizeMaterializationQuery,
   buildImageGenerationProvenanceQuery,
   claimMaterialization,
+  restampReusedRevision,
   type ImageGenerationProvenance,
 } from "./materialization-ledger";
 import { appendRepresentationWithExpectedBase } from "./representation-store";
@@ -72,7 +79,9 @@ export type ArtifactRevisionAppendRefusal =
   | "stale_base"
   | "accepts_mismatch"
   | "type_mismatch"
-  | "ledger_conflict";
+  | "ledger_conflict"
+  /** cinatra#4762: a publishing call of the run is in flight; temporary, append again once it has ended. */
+  | typeof PUBLISH_CALL_IN_FLIGHT_CODE;
 
 /**
  * THE APPEND'S OWN LEDGER IDENTITY (convergence round, cinatra#3030).
@@ -115,6 +124,51 @@ async function sql(text: string, values: unknown[]): Promise<Record<string, unkn
     queries: [{ text, values }],
   });
   return (res?.rows?.[0] as Record<string, unknown> | undefined) ?? null;
+}
+
+/**
+ * cinatra#4762 — THE ONE RESULT of an append that hands back a revision it did not
+ * write (a finalized ledger hit at entry, or the winner of a concurrent drive of
+ * the same claim). Every such return goes through here, so none can skip the
+ * restamp: the revision's existing event records the attempt this append runs in
+ * (materialization-ledger restampReusedRevision), and an approval of these bytes
+ * counts for it. A publishing call of the run in flight is the temporary refusal.
+ */
+async function reusedRevisionResult(input: {
+  schema: string;
+  runId: string;
+  orgId: string;
+  artifactId: string;
+  representationRevisionId: string;
+}): Promise<ArtifactRevisionAppendResult> {
+  try {
+    await restampReusedRevision({
+      runId: input.runId,
+      orgId: input.orgId,
+      artifactId: input.artifactId,
+      representationRevisionId: input.representationRevisionId,
+    });
+  } catch (err) {
+    if (!isPublishCallInFlightAbort(err)) throw err;
+    return {
+      ok: false,
+      reason: PUBLISH_CALL_IN_FLIGHT_CODE,
+      error:
+        `a publishing call of run ${input.runId} is in flight; append the ` +
+        "revision again once it has ended",
+    };
+  }
+  const revRow = await sql(
+    `SELECT revision FROM "${input.schema}"."representation" WHERE id = $1 AND org_id = $2`,
+    [input.representationRevisionId, input.orgId],
+  );
+  return {
+    ok: true,
+    artifactId: input.artifactId,
+    representationRevisionId: input.representationRevisionId,
+    revision: Number(revRow?.revision ?? 0),
+    deduped: true,
+  };
 }
 
 /**
@@ -274,17 +328,15 @@ export async function appendArtifactRevision(input: {
           "identity — refusing to report another write's revision as this one's",
       };
     }
-    const revRow = await sql(
-      `SELECT revision FROM "${schema}"."representation" WHERE id = $1 AND org_id = $2`,
-      [claim.representationRevisionId, input.orgId],
-    );
-    return {
-      ok: true,
+    // cinatra#4762: a retry of identical bytes appends nothing; the revision's
+    // event records this attempt, so an approval of these bytes counts for it.
+    return reusedRevisionResult({
+      schema,
+      runId: input.runId,
+      orgId: input.orgId,
       artifactId: claim.artifactId,
       representationRevisionId: claim.representationRevisionId,
-      revision: Number(revRow?.revision ?? 0),
-      deduped: true,
-    };
+    });
   }
   if (typeof claim.path === "string" && claim.path !== "materialize_tool") {
     // A RE-USED unfinalized row of a different path (cinatra#1893 Q3): the
@@ -437,6 +489,29 @@ SELECT r.id AS resource_id, r.is_new AS is_new, r.metadata->>'storageKey' AS sto
   // projection, the writer witness, the ledger finalize, the produced event and
   // the satisfaction row. A lost compare-and-set aborts all of it.
   // ------------------------------------------------------------------
+  // The append's produced event, built once per revision id: it decides both
+  // the run lock taken before the first write and the insert appended last.
+  let producedEvent: { revisionId: string; op: ReturnType<typeof maybeBuildProducedEventInsertOp> } | null = null;
+  const producedEventOpFor = (representationRevisionId: string) => {
+    if (producedEvent?.revisionId !== representationRevisionId) {
+      producedEvent = {
+        revisionId: representationRevisionId,
+        op: maybeBuildProducedEventInsertOp(schema, {
+          orgId: input.orgId,
+          artifactId: input.artifactId,
+          representationRevisionId,
+          emitter: "artifact_revision_append",
+          // "The append's produced event carries the live-generator origin,
+          // which the review policy maps to intermediate and skips by default."
+          originKind: "live_generator",
+          producerRunId: input.runId,
+          producerAgentId: null,
+          producerAttempt: producerAttemptForRun(input.runId),
+        }),
+      };
+    }
+    return producedEvent.op;
+  };
   let result;
   try {
     result = await appendRepresentationWithExpectedBase({
@@ -447,18 +522,14 @@ SELECT r.id AS resource_id, r.is_new AS is_new, r.metadata->>'storageKey' AS sto
       form: "file",
       createdBy: input.createdBy,
       createdByRunId: input.runId,
+      // cinatra#4762: the producing run's row FOR KEY SHARE before the first
+      // write, held to commit, so a Publish's locked fence read never runs
+      // while this revision is written but its event (below) is not. Empty when
+      // no event is spliced or no run is named (see `producerRunLockOps`).
+      leadingOps: (representationRevisionId) =>
+        producerRunLockOps(schema, input.runId, producedEventOpFor(representationRevisionId)),
       additionalOps: (representationRevisionId) => {
-        const producedEventOp = maybeBuildProducedEventInsertOp(schema, {
-          orgId: input.orgId,
-          artifactId: input.artifactId,
-          representationRevisionId,
-          emitter: "artifact_revision_append",
-          // "The append's produced event carries the live-generator origin,
-          // which the review policy maps to intermediate and skips by default."
-          originKind: "live_generator",
-          producerRunId: input.runId,
-          producerAgentId: null,
-        });
+        const producedEventOp = producedEventOpFor(representationRevisionId);
         return [
           {
             // The projection mirror follows the revision it points at. Only the
@@ -530,6 +601,21 @@ ON CONFLICT (org_id, artifact_id, representation_revision_id) DO NOTHING`,
       },
     });
   } catch (err) {
+    if (isPublishCallInFlightAbort(err)) {
+      // cinatra#4762: a publishing call of the run is in flight; the append's
+      // transaction rolled back whole. Temporary: the same append is taken
+      // once the call has ended, so it leaves nothing behind, the claim
+      // included, and is never read as an unknown or stale base.
+      await discardStaged();
+      await releaseClaim();
+      return {
+        ok: false,
+        reason: PUBLISH_CALL_IN_FLIGHT_CODE,
+        error:
+          `a publishing call of run ${input.runId} is in flight; append the ` +
+          "revision again once it has ended",
+      };
+    }
     // The bytes are (probably) unreferenced now; the reachability-guarded delete
     // keeps anything a live row still points at.
     await discardBlob();
@@ -552,17 +638,15 @@ ON CONFLICT (org_id, artifact_id, representation_revision_id) DO NOTHING`,
       finalized.artifact_id === input.artifactId
     ) {
       await discardStaged();
-      const revRow = await sql(
-        `SELECT revision FROM "${schema}"."representation" WHERE id = $1 AND org_id = $2`,
-        [finalized.representation_revision_id, input.orgId],
-      );
-      return {
-        ok: true,
+      // cinatra#4762: the winner may be a drive of an earlier attempt; the
+      // revision's event records the attempt this append runs in.
+      return reusedRevisionResult({
+        schema,
+        runId: input.runId,
+        orgId: input.orgId,
         artifactId: input.artifactId,
         representationRevisionId: String(finalized.representation_revision_id),
-        revision: Number(revRow?.revision ?? 0),
-        deduped: true,
-      };
+      });
     }
     await discardStaged();
     await releaseClaim();

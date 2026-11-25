@@ -8,7 +8,7 @@
  *     pnpm --filter @cinatra-ai/agents test:integration publish-decision-store
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Client } from "pg";
 
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
@@ -47,6 +47,26 @@ function park(overrides: Record<string, unknown> = {}) {
   } as Parameters<typeof store.insertParkedDecision>[0];
 }
 
+/** The person who decides the reviews these cases settle. */
+const REVIEWER = "user-reviewer-4762";
+
+/** cinatra#4762: a settled review gate's columns, as a person's decision writes them: the decision core's sha256
+ *  fingerprint and the deciding person (commitReviewDecision's terminal CAS stamps both). */
+function resolvedGate(disposition: string) {
+  return { status: "resolved", disposition, fingerprint: createHash("sha256").update(randomUUID()).digest("hex"),
+    resolved_by: REVIEWER, resolved_at: new Date() };
+}
+
+/** cinatra#4762: settles a pending review as a person's decision does, in the shape of commitReviewDecision's terminal
+ *  CAS: pending -> resolved with the disposition, the decision fingerprint and the deciding person. */
+async function settleAsPerson(gates: string, gateId: string, disposition: string): Promise<void> {
+  const s = resolvedGate(disposition);
+  const { rowCount } = await admin.query(
+    `UPDATE ${gates} SET status = $2, disposition = $3, fingerprint = $4, resolved_by = $5, resolved_at = now() WHERE id = $1 AND status = 'pending'`,
+    [gateId, s.status, s.disposition, s.fingerprint, s.resolved_by]);
+  expect(rowCount).toBe(1);
+}
+
 beforeAll(async () => {
   if (!HAS_DB) return;
   process.env.SUPABASE_SCHEMA = TEST_SCHEMA;
@@ -75,6 +95,21 @@ afterAll(async () => {
     admin,
     dropSchemaSql: `DROP SCHEMA IF EXISTS "${q(TEST_SCHEMA)}" CASCADE`,
     priorSchema: PRIOR_SCHEMA,
+  });
+});
+
+describe("cinatra#4762: the review gate fixture", () => {
+  it("a settled gate carries every column the store's resolved check requires", async () => {
+    const { artifactReviewGateSchemaQueries } = await import("@/lib/artifacts/artifact-review-gate-schema");
+    const ddl = artifactReviewGateSchemaQueries("s").map((x) => x.text).join("\n");
+    const check = /CONSTRAINT artifact_review_gates_resolved_chk CHECK \(([\s\S]*?)\n\s*\)/.exec(ddl)?.[1] ?? "";
+    const required = [...check.matchAll(/(\w+) IS NOT NULL/g)].map((m) => m[1]);
+    expect(required).toEqual(["fingerprint", "resolved_at"]);
+    for (const disposition of ["approve", "reject", "changes_requested"]) {
+      const row = resolvedGate(disposition) as Record<string, unknown>;
+      expect(check).toContain(`'${disposition}'`);
+      for (const column of required) expect(row[column] ?? null, column).not.toBeNull();
+    }
   });
 });
 
@@ -413,6 +448,408 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     expect(await rowOf(next.id)).toMatchObject({ status: "run_ended", run_generation: 1 });
   });
 
+  it("cinatra#4762: a review counts only for the attempt it was raised in, whatever happens to the start stamp", async () => {
+    const { bindArtifactReviewGateSeam } = await import("../artifact-review-gate-seam");
+    const { emitArtifactReviewGate } = await import("../artifact-review-gate-store");
+    const { approvedReviewPrecedes } = await import("../publish-decision-actions");
+    bindArtifactReviewGateSeam();
+    const GATES = `"${q(TEST_SCHEMA)}"."artifact_review_gates"`;
+    /** A review raised by the real emitter for the attempt that names its generation (none: no attempt identity), then
+     *  settled as the store settles it. */
+    const review = async (runId: string, disposition: string | null, runGeneration?: number) => {
+      const reviewTaskId = `review-${randomUUID()}`;
+      const { gateId } = await emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId,
+        targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }],
+        ...(runGeneration === undefined ? {} : { runGeneration }) });
+      if (disposition) await settleAsPerson(GATES, gateId, disposition);
+      return gateId;
+    };
+    const runId = await seedRun(`run-${randomUUID()}`, "running");
+    // The first attempt: no review yet, then an approved one, recorded at generation 0.
+    expect(await approvedReviewPrecedes(runId, 0)).toBe(false);
+    const first = await review(runId, "approve", 0);
+    expect((await admin.query(`SELECT run_generation FROM ${GATES} WHERE id = $1`, [first])).rows[0]).toEqual({ run_generation: 0 });
+    expect(await approvedReviewPrecedes(runId, 0)).toBe(true);
+    // The attempt fails and is reset: generation 1. The reset leaves the start stamp to the dispatch.
+    await setRun(runId, "failed");
+    await reset(runId, 0);
+    expect(await genOf(runId)).toEqual({ status: "pending_input", reset_generation: 1 });
+    // The retry runs; a cleanup clears its start stamp. The earlier attempt's approval does not count for it.
+    await admin.query(`UPDATE ${RUNS_TABLE} SET status = 'running', started_at = NULL WHERE id = $1`, [runId]);
+    expect(await approvedReviewPrecedes(runId, 1)).toBe(false);
+    // Its own approved review counts, with no start stamp at all.
+    await review(runId, "approve", 1);
+    expect(await approvedReviewPrecedes(runId, 1)).toBe(true);
+    // A gate raised by a caller that names no attempt belongs to none, whatever the run row says.
+    const idle = await seedRun(`run-${randomUUID()}`, "running");
+    const stray = await review(idle, "approve");
+    expect((await admin.query(`SELECT run_generation FROM ${GATES} WHERE id = $1`, [stray])).rows[0]).toEqual({ run_generation: -1 });
+    expect(await approvedReviewPrecedes(idle, 0)).toBe(false);
+  });
+
+  it("cinatra#4762: a move of an attempt a retry ended lands nothing on the next attempt's row", async () => {
+    const runId = await seedRun(`run-${randomUUID()}`, "running");
+    await admin.query(`UPDATE ${RUNS_TABLE} SET reset_generation = 1 WHERE id = $1`, [runId]);
+    const authority = { orgId: ORG, can: () => true } as never;
+    await expect(transitions.transitionRunStatus(runId, "running", "stopped", { completedAt: new Date(), attemptGeneration: 0 }, authority))
+      .rejects.toMatchObject({ code: "stale_from_status" });
+    expect(await genOf(runId)).toEqual({ status: "running", reset_generation: 1 });
+    await transitions.transitionRunStatus(runId, "running", "stopped", { completedAt: new Date(), attemptGeneration: 1 }, authority);
+    expect(await genOf(runId)).toEqual({ status: "stopped", reset_generation: 1 });
+  });
+
+  it("cinatra#4762: a stop of an attempt a retry ended inserts no decision row", async () => {
+    const runId = await seedRun(`run-${randomUUID()}`, "running");
+    await admin.query(`UPDATE ${RUNS_TABLE} SET reset_generation = 1 WHERE id = $1`, [runId]);
+    const count = async () => Number((await admin.query(`SELECT count(*) AS n FROM ${TABLE} WHERE run_id = $1`, [runId])).rows[0].n);
+    await expect(store.insertParkedDecision(park({ runId, attemptGeneration: 0 }))).rejects.toMatchObject({ code: "stale-attempt" });
+    expect(await count()).toBe(0);
+    // A run no longer held at a gate is no live attempt either, at any generation.
+    await setRun(runId, "failed");
+    await expect(store.insertParkedDecision(park({ runId, attemptGeneration: 1 }))).rejects.toMatchObject({ code: "stale-attempt" });
+    expect(await count()).toBe(0);
+    // The live attempt's own stop is written, stamped with its generation.
+    await setRun(runId, "running");
+    const own = await store.insertParkedDecision(park({ runId, attemptGeneration: 1 }));
+    expect(own).toMatchObject({ inserted: true, current: true });
+    expect(await rowOf(own.decision.id)).toMatchObject({ status: "parked", run_generation: 1 });
+  });
+
+  it("cinatra#4762: an optional review its expiry settled 'approve', or a carrier with no decider, is no approval; a person's is", async () => {
+    const { bindArtifactReviewGateSeam } = await import("../artifact-review-gate-seam");
+    const { emitArtifactReviewGate } = await import("../artifact-review-gate-store");
+    const { approvedReviewPrecedes } = await import("../publish-decision-actions");
+    bindArtifactReviewGateSeam();
+    const GATES = `"${q(TEST_SCHEMA)}"."artifact_review_gates"`;
+    const runId = await seedRun(`run-${randomUUID()}`, "running");
+    const raise = async () => (await emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: `review-${randomUUID()}`,
+      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }], runGeneration: 0 })).gateId;
+    const expired = await raise();
+    // The expiry's own write shape: approve, a synthetic fingerprint, no person.
+    await admin.query(`UPDATE ${GATES} SET status = 'resolved', disposition = 'approve', fingerprint = $2, resolved_at = now() WHERE id = $1`,
+      [expired, `expiry:${expired}`]);
+    expect(await approvedReviewPrecedes(runId, 0)).toBe(false);
+    // A non-human carrier's approval, as the approve path writes it for a carrier with no user id: the decision
+    // fingerprint and no decider (resolved_by NULL). It is no person's approval either.
+    const carrier = await raise();
+    await admin.query(`UPDATE ${GATES} SET status = 'resolved', disposition = 'approve', fingerprint = $2, resolved_at = now() WHERE id = $1`,
+      [carrier, createHash("sha256").update(randomUUID()).digest("hex")]);
+    expect(await approvedReviewPrecedes(runId, 0)).toBe(false);
+    // A person's approval, as the approve path writes it: the decision fingerprint and the deciding person.
+    const person = await raise();
+    await settleAsPerson(GATES, person, "approve");
+    expect((await admin.query(`SELECT resolved_by, fingerprint ~ '^[a-f0-9]{64}$' AS human FROM ${GATES} WHERE id = $1`, [person])).rows[0])
+      .toEqual({ resolved_by: REVIEWER, human: true });
+    expect(await approvedReviewPrecedes(runId, 0)).toBe(true);
+  });
+
+  it("cinatra#4762: a change request is cleared only by its own repair successor; a pending output of the attempt holds the fence", async () => {
+    const { bindArtifactReviewGateSeam } = await import("../artifact-review-gate-seam");
+    const { emitArtifactReviewGate } = await import("../artifact-review-gate-store");
+    const { approvedReviewPrecedes, reviewFenceHolds } = await import("../publish-decision-actions");
+    bindArtifactReviewGateSeam();
+    const GATES = `"${q(TEST_SCHEMA)}"."artifact_review_gates"`;
+    const REPAIRS = `"${q(TEST_SCHEMA)}"."lifecycle_repair"`;
+    const OUTBOX = `"${q(TEST_SCHEMA)}"."artifact_produced_outbox"`;
+    const runId = await seedRun(`run-${randomUUID()}`, "running");
+    const raise = async (extra: { runGeneration?: number; successorOfGateId?: string } = { runGeneration: 0 }) =>
+      (await emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: `review-${randomUUID()}`,
+        targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }], ...extra })).gateId;
+    const settle = (gateId: string, disposition: string) => settleAsPerson(GATES, gateId, disposition);
+    /** The repair of `gateId` finished and recorded `successorGateId`, as submitRepairResponse writes it. */
+    const repaired = async (gateId: string, successorGateId: string, producerRunId = runId) => {
+      const id = `repair-${randomUUID()}`;
+      await admin.query(
+        `INSERT INTO ${REPAIRS} (id, lineage_id, gate_id, org_id, producer_run_id, base_artifact_id, base_representation_revision_id,
+           expected_base_revision_id, findings, continuation_mode, attempt, route, status, successor_gate_id, idempotency_key)
+         VALUES ($1, $1, $2, $3, $4, 'art', 'rev', 'rev', '[]', 'checkpointed', 1, 'producer_repair', 'repaired', $5, $1)`,
+        [id, gateId, ORG, producerRunId, successorGateId]);
+    };
+    const generationOf = async (gateId: string) =>
+      (await admin.query(`SELECT run_generation FROM ${GATES} WHERE id = $1`, [gateId])).rows[0].run_generation as number | null;
+
+    // Artifact A's review: changes requested. Artifact B's review, raised later: approved. B clears nothing of A.
+    const a = await raise();
+    await settle(a, "changes_requested");
+    const b = await raise();
+    await settle(b, "approve");
+    expect(await approvedReviewPrecedes(runId, 0)).toBe(false);
+    // A's repair successor continues A's attempt; while it is open the fence does not hold, approved it clears A.
+    const a2 = await raise({ successorOfGateId: a });
+    expect(await generationOf(a2)).toBe(0);
+    await repaired(a, a2);
+    expect(await approvedReviewPrecedes(runId, 0)).toBe(false);
+    await settle(a2, "approve");
+    expect(await approvedReviewPrecedes(runId, 0)).toBe(true);
+    expect(await reviewFenceHolds({ runId, orgId: ORG, generation: 0 })).toBe(true);
+
+    // A review raised before the generation column (null): its repair successor keeps null, read as 0 once settled,
+    // so it clears.
+    const legacyRun = await seedRun(`run-${randomUUID()}`, "running");
+    const legacy = (await emitArtifactReviewGate({ runId: legacyRun, orgId: ORG, reviewTaskId: `review-${randomUUID()}`,
+      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }], runGeneration: 0 })).gateId;
+    await admin.query(`UPDATE ${GATES} SET run_generation = NULL WHERE id = $1`, [legacy]);
+    await settle(legacy, "changes_requested");
+    const legacySuccessor = (await emitArtifactReviewGate({ runId: legacyRun, orgId: ORG, reviewTaskId: `review-${randomUUID()}`,
+      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }], successorOfGateId: legacy })).gateId;
+    expect(await generationOf(legacySuccessor)).toBeNull();
+    await repaired(legacy, legacySuccessor, legacyRun);
+    await settle(legacySuccessor, "approve");
+    expect(await approvedReviewPrecedes(legacyRun, 0)).toBe(true);
+
+    // A produced event of the attempt still pending holds the fence; one of another attempt, or one processed, does not.
+    const event = async (generation: number, status: string) => {
+      const eventId = `evt-${randomUUID()}`;
+      await admin.query(
+        `INSERT INTO ${OUTBOX} (event_id, org_id, artifact_id, representation_revision_id, emitter, producer_run_id, origin_kind,
+           destination_class, continuation_mode, status, producer_run_generation)
+         VALUES ($1, $2, $3, 'rev-1', 'createSemanticArtifact', $4, 'agent_produced', 'none', 'checkpointed', $5, $6)`,
+        [eventId, ORG, `art-${randomUUID()}`, runId, status, generation]);
+      return eventId;
+    };
+    await event(1, "pending");
+    await event(0, "processed");
+    expect(await reviewFenceHolds({ runId, orgId: ORG, generation: 0 })).toBe(true);
+    const pending = await event(0, "pending");
+    expect(await reviewFenceHolds({ runId, orgId: ORG, generation: 0 })).toBe(false);
+    await admin.query(`UPDATE ${OUTBOX} SET status = 'processed', processed_at = now() WHERE event_id = $1`, [pending]);
+    expect(await reviewFenceHolds({ runId, orgId: ORG, generation: 0 })).toBe(true);
+  });
+
+  it("cinatra#4762: an output or a review of an unknown attempt (no generation) holds every attempt's fence while it is open", async () => {
+    const { bindArtifactReviewGateSeam } = await import("../artifact-review-gate-seam");
+    const { emitArtifactReviewGate, hasPendingProducedEventForAttempt } = await import("../artifact-review-gate-store");
+    const { reviewFenceHolds } = await import("../publish-decision-actions");
+    bindArtifactReviewGateSeam();
+    const GATES = `"${q(TEST_SCHEMA)}"."artifact_review_gates"`;
+    const OUTBOX = `"${q(TEST_SCHEMA)}"."artifact_produced_outbox"`;
+    const runId = await seedRun(`run-${randomUUID()}`, "running");
+    const raise = async (runGeneration: number | "unknown") => (await emitArtifactReviewGate({ runId, orgId: ORG,
+      reviewTaskId: `review-${randomUUID()}`, targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }],
+      runGeneration })).gateId;
+    const approved = await raise(0);
+    await settleAsPerson(GATES, approved, "approve");
+    expect(await reviewFenceHolds({ runId, orgId: ORG, generation: 0 })).toBe(true);
+    // An output written before the generation column (null) is still pending: it may be this attempt's, or a later one's.
+    const legacy = `evt-${randomUUID()}`;
+    await admin.query(
+      `INSERT INTO ${OUTBOX} (event_id, org_id, artifact_id, representation_revision_id, emitter, producer_run_id, origin_kind,
+         destination_class, continuation_mode, status, producer_run_generation)
+       VALUES ($1, $2, $3, 'rev-1', 'createSemanticArtifact', $4, 'agent_produced', 'none', 'checkpointed', 'pending', NULL)`,
+      [legacy, ORG, `art-${randomUUID()}`, runId]);
+    expect(await reviewFenceHolds({ runId, orgId: ORG, generation: 0 })).toBe(false);
+    expect(await hasPendingProducedEventForAttempt({ orgId: ORG, runId, generation: 3 })).toBe(true);
+    // The drain settles it and raises its review with no generation: open, it still holds the fence.
+    await admin.query(`UPDATE ${OUTBOX} SET status = 'processed', processed_at = now() WHERE event_id = $1`, [legacy]);
+    const unknown = await raise("unknown");
+    expect((await admin.query(`SELECT run_generation FROM ${GATES} WHERE id = $1`, [unknown])).rows[0]).toEqual({ run_generation: null });
+    expect(await reviewFenceHolds({ runId, orgId: ORG, generation: 0 })).toBe(false);
+    // A person settles it: it reads as generation 0, as the publish gate reads every review with no generation.
+    await settleAsPerson(GATES, unknown, "approve");
+    expect(await reviewFenceHolds({ runId, orgId: ORG, generation: 0 })).toBe(true);
+  });
+
+  it("cinatra#4762: a writer that has begun its rows blocks the locked check until it commits, which then refuses; a lock taken first holds the writer back", async () => {
+    const { buildProducedEventInsertOp, producerRunLockOps } = await import("@/lib/lifecycle/lifecycle-emit");
+    const { bindArtifactReviewGateSeam } = await import("../artifact-review-gate-seam");
+    const { emitArtifactReviewGate } = await import("../artifact-review-gate-store");
+    const { reviewFenceHolds } = await import("../publish-decision-actions");
+    bindArtifactReviewGateSeam();
+    const GATES = `"${q(TEST_SCHEMA)}"."artifact_review_gates"`;
+    const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const runId = await seedRun(`run-${randomUUID()}`, "pending_approval");
+    const approved = (await emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: `review-${randomUUID()}`,
+      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }], runGeneration: 0 })).gateId;
+    await settleAsPerson(GATES, approved, "approve");
+    const insertOp = () => buildProducedEventInsertOp(q(TEST_SCHEMA), { orgId: ORG, artifactId: `art-${randomUUID()}`,
+      representationRevisionId: "rev-1", emitter: "createSemanticArtifact", originKind: "agent_generated", producerRunId: runId,
+      producerAttempt: { generation: 0 } });
+    const fenceUnderLock = () => store.withRunRowLock(runId, (tx, locked) =>
+      reviewFenceHolds({ runId, orgId: locked!.orgId, generation: locked!.resetGeneration, executor: tx }));
+    expect(await fenceUnderLock()).toBe(true);
+
+    // A writer has begun its output: the run lock (its first statement) and an artifact row are written, and its
+    // produced event (the last statement of a writer's transaction) is not yet. The locked check waits for it; once
+    // the writer inserts its event and commits, the check sees the event and refuses.
+    await admin.query("BEGIN");
+    try {
+      const op = insertOp();
+      for (const lock of producerRunLockOps(q(TEST_SCHEMA), runId, op)) await admin.query(lock.text, lock.values);
+      await admin.query(
+        `INSERT INTO "${q(TEST_SCHEMA)}"."representation" (id, org_id, artifact_id, resource_id, revision, form, created_by_run_id)
+         VALUES ($1, $2, $3, 'res-1', 1, 'file', $4)`,
+        [`rev-${randomUUID()}`, ORG, op.values[2], runId]);
+      let read = false;
+      const fence = fenceUnderLock().then((holds) => { read = true; return holds; });
+      await pause(300);
+      expect(read).toBe(false);
+      await admin.query(op.text, op.values);
+      await pause(100);
+      expect(read).toBe(false);
+      await admin.query("COMMIT");
+      expect(await fence).toBe(false);
+    } catch (err) {
+      await admin.query("ROLLBACK").catch(() => undefined);
+      throw err;
+    }
+    await admin.query(`UPDATE "${q(TEST_SCHEMA)}"."artifact_produced_outbox" SET status = 'processed', processed_at = now() WHERE producer_run_id = $1`, [runId]);
+
+    // The lock taken first: a writer waits at its first statement, before any row is written, until the locked
+    // transaction ends.
+    let open!: () => void;
+    const held = new Promise<void>((resolve) => { open = resolve; });
+    const locked = store.withRunRowLock(runId, async () => { await held; return true; });
+    await pause(200);
+    let started = false;
+    const op = insertOp();
+    const [lock] = producerRunLockOps(q(TEST_SCHEMA), runId, op);
+    await admin.query("BEGIN");
+    try {
+      const begin = admin.query(lock.text, lock.values).then(() => { started = true; });
+      await pause(300);
+      expect(started).toBe(false);
+      open();
+      await locked;
+      await begin;
+      expect(started).toBe(true);
+      await admin.query(op.text, op.values);
+      await admin.query("COMMIT");
+    } catch (err) {
+      await admin.query("ROLLBACK").catch(() => undefined);
+      throw err;
+    }
+  });
+
+  it("cinatra#4762: an output or a review written after a publishing call passed its fence refuses until the call ends; then the next call is refused", async () => {
+    const { buildProducedEventInsertOp, producerRunLockOps } = await import("@/lib/lifecycle/lifecycle-emit");
+    const { bindArtifactReviewGateSeam } = await import("../artifact-review-gate-seam");
+    const { emitArtifactReviewGate } = await import("../artifact-review-gate-store");
+    const { publishCallAllowed } = await import("../publish-decision-actions");
+    bindArtifactReviewGateSeam();
+    const GATES = `"${q(TEST_SCHEMA)}"."artifact_review_gates"`;
+    const runId = await seedRun(`run-${randomUUID()}`, "running");
+    const run = { id: runId, templateId: `tpl-${randomUUID()}` };
+    const approved = (await emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: `review-${randomUUID()}`,
+      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }], runGeneration: 0 })).gateId;
+    await settleAsPerson(GATES, approved, "approve");
+    const parked = await store.insertParkedDecision(park({ runId, gateTaskId: "task-claim" }));
+    expect(await store.decide(parked.decision.id, { from: "parked", to: "released", actor: REVIEWER })).toMatchObject({ outcome: "won" });
+    const inFlight = async () =>
+      (await admin.query(`SELECT calls_in_flight FROM ${TABLE} WHERE id = $1`, [parked.decision.id])).rows[0].calls_in_flight as number | null;
+    /** A writer's whole output transaction: its run lock first, then its produced event (the rows between are elided).
+     *  `claim`: the decision whose publishing call the write runs under (the call's frame), else none. */
+    const writeOutput = async (claim?: string): Promise<void> => {
+      if (claim) {
+        const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
+        return mcpRequestContextStorage.run({ publishCallClaim: { runId, decisionId: claim } } as never, () => writeOutput());
+      }
+      const op = buildProducedEventInsertOp(q(TEST_SCHEMA), { orgId: ORG, artifactId: `art-${randomUUID()}`,
+        representationRevisionId: "rev-1", emitter: "createSemanticArtifact", originKind: "agent_generated", producerRunId: runId,
+        producerAttempt: { generation: 0 } });
+      await admin.query("BEGIN");
+      try {
+        for (const lock of producerRunLockOps(q(TEST_SCHEMA), runId, op)) await admin.query(lock.text, lock.values);
+        await admin.query(op.text, op.values);
+        await admin.query("COMMIT");
+      } catch (err) {
+        await admin.query("ROLLBACK");
+        throw err;
+      }
+    };
+    const raiseReview = () => emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: `review-${randomUUID()}`,
+      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: `rev-${randomUUID()}` }], runGeneration: 0 });
+
+    // The call passes its fence and takes its released decision.
+    const releases: Array<() => Promise<void>> = [];
+    const hold = (release: () => Promise<void>) => { releases.push(release); };
+    expect(await publishCallAllowed(run, "publish", hold)).toBe(true);
+    expect(await inFlight()).toBe(1);
+    // While it runs, an output and a review of the run are refused, and nothing of either is written.
+    const gatesBefore = (await admin.query(`SELECT count(*)::int AS n FROM ${GATES} WHERE run_id = $1`, [runId])).rows[0].n;
+    await expect(writeOutput()).rejects.toMatchObject({ code: "22P02", message: expect.stringContaining("cinatra_publish_call_in_flight") });
+    await expect(raiseReview()).rejects.toMatchObject({ code: "publish_call_in_flight" });
+    expect((await admin.query(`SELECT count(*)::int AS n FROM ${GATES} WHERE run_id = $1`, [runId])).rows[0].n).toBe(gatesBefore);
+    expect((await admin.query(`SELECT count(*)::int AS n FROM "${q(TEST_SCHEMA)}"."artifact_produced_outbox" WHERE producer_run_id = $1`, [runId])).rows[0].n).toBe(0);
+    // A second call of the step runs beside it; the count holds until both end.
+    expect(await publishCallAllowed(run, "publish", hold)).toBe(true);
+    expect(await inFlight()).toBe(2);
+    // Two calls of the one decision: neither call's own output is taken while the other is in flight.
+    await expect(writeOutput(parked.decision.id)).rejects.toMatchObject({ code: "22P02", message: expect.stringContaining("cinatra_publish_call_in_flight") });
+    await releases[1]!();
+    expect(await inFlight()).toBe(1);
+    // One call left: its own output is taken; a write under no claim is still refused.
+    await expect(writeOutput()).rejects.toMatchObject({ code: "22P02" });
+    await writeOutput(parked.decision.id);
+    // The release resolves only once its write is committed: the count reads 0 right after it.
+    await releases[0]!();
+    expect(await inFlight()).toBe(0);
+    // The call ended: the output is written, and the next call reads it in its fence and is refused.
+    await writeOutput();
+    expect(await publishCallAllowed(run, "publish", hold)).toBe(false);
+    expect(releases).toHaveLength(2);
+    expect(await inFlight()).toBe(0);
+    // A claim of an attempt a retry's reset ended holds nothing: the next attempt's review opens.
+    await admin.query(`UPDATE ${TABLE} SET calls_in_flight = 1 WHERE id = $1`, [parked.decision.id]);
+    await expect(raiseReview()).rejects.toMatchObject({ code: "publish_call_in_flight" });
+    await admin.query(`UPDATE ${RUNS_TABLE} SET reset_generation = 1 WHERE id = $1`, [runId]);
+    await expect(raiseReview()).resolves.toMatchObject({ idempotent: false });
+  });
+
+  it("cinatra#4762: a produced event records the generation its attempt carries; a delayed writer of an ended attempt keeps its own", async () => {
+    const { buildProducedEventInsertOp, producerAttemptForRun } = await import("@/lib/lifecycle/lifecycle-emit");
+    const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
+    const { bindArtifactReviewGateSeam } = await import("../artifact-review-gate-seam");
+    const { emitArtifactReviewGate } = await import("../artifact-review-gate-store");
+    const { approvedReviewPrecedes } = await import("../publish-decision-actions");
+    bindArtifactReviewGateSeam();
+    const OUTBOX = `"${q(TEST_SCHEMA)}"."artifact_produced_outbox"`;
+    const GATES = `"${q(TEST_SCHEMA)}"."artifact_review_gates"`;
+    const runId = await seedRun(`run-${randomUUID()}`, "running");
+    /** A writer of the run, in the frame it runs in: the attempt identity comes from that frame, as the writers take it. */
+    const produce = (frame: Record<string, unknown>) => mcpRequestContextStorage.run(frame as never, async () => {
+      const artifactId = `art-${randomUUID()}`;
+      const op = buildProducedEventInsertOp(q(TEST_SCHEMA), { orgId: ORG, artifactId, representationRevisionId: "rev-1",
+        emitter: "createSemanticArtifact", originKind: "agent_generated", producerRunId: runId,
+        producerAttempt: producerAttemptForRun(runId) });
+      await admin.query(op.text, op.values);
+      return (await admin.query(`SELECT producer_run_generation FROM ${OUTBOX} WHERE artifact_id = $1`, [artifactId])).rows[0].producer_run_generation as number;
+    });
+    // Attempt A: the run worker captured generation 0 when it started; A writes its output.
+    const frameA = { runAttempt: { runId, resetGeneration: 0 } };
+    expect(await produce(frameA)).toBe(0);
+    // A fails; a retry's reset raises the run to generation 1 and attempt B runs, dispatched as att-b.
+    await setRun(runId, "failed");
+    await reset(runId, 0);
+    await admin.query(`UPDATE ${RUNS_TABLE} SET status = 'running', execution_attempt_id = 'att-b' WHERE id = $1`, [runId]);
+    // A's delayed writer runs now, in A's frame: it records A's generation, never the live 1.
+    const late = await produce(frameA);
+    expect(late).toBe(0);
+    // B's own writer records B's.
+    expect(await produce({ runAttempt: { runId, resetGeneration: 1 } })).toBe(1);
+    // A verified dispatch records the generation only while it is the run's current dispatch; A's old one records -1.
+    expect(await produce({ runId, verifiedExecutedSource: { executionAttemptId: "att-b" } })).toBe(1);
+    expect(await produce({ runId, verifiedExecutedSource: { executionAttemptId: "att-a" } })).toBe(-1);
+    expect(await produce({ delegatedActor: { delegation: "agent_run", runId, executionAttemptId: "att-a" } })).toBe(-1);
+    // No attempt identity: -1.
+    expect(await produce({})).toBe(-1);
+    // The drain raises the review of A's late event with the event's generation; a person approves it. It is no review
+    // of B: B's publish gate does not count it.
+    const { gateId } = await emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: `auto-${randomUUID()}`,
+      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-1" }], runGeneration: late });
+    expect((await admin.query(`SELECT run_generation FROM ${GATES} WHERE id = $1`, [gateId])).rows[0]).toEqual({ run_generation: 0 });
+    await settleAsPerson(GATES, gateId, "approve");
+    expect(await approvedReviewPrecedes(runId, 1)).toBe(false);
+    // A failed verification's reopen of that review continues A's review: it keeps generation 0 on the same run.
+    const reopen = await emitArtifactReviewGate({ runId, orgId: ORG, reviewTaskId: `reopen-${randomUUID()}`,
+      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-2" }], successorOfGateId: gateId });
+    expect((await admin.query(`SELECT run_generation FROM ${GATES} WHERE id = $1`, [reopen.gateId])).rows[0]).toEqual({ run_generation: 0 });
+    // The same continuation named on another run takes nothing from it: -1.
+    const other = await seedRun(`run-${randomUUID()}`, "running");
+    const foreign = await emitArtifactReviewGate({ runId: other, orgId: ORG, reviewTaskId: `reopen-${randomUUID()}`,
+      targets: [{ artifactId: `art-${randomUUID()}`, representationRevisionId: "rev-3" }], successorOfGateId: gateId });
+    expect((await admin.query(`SELECT run_generation FROM ${GATES} WHERE id = $1`, [foreign.gateId])).rows[0]).toEqual({ run_generation: -1 });
+  });
+
   it("round 21, finding 1: a row an old node parks with no generation after a reset holds, and the next reset ends it", async () => {
     const runId = await seedRun(`run-${randomUUID()}`, "failed");
     await reset(runId, 0);
@@ -478,9 +915,13 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
       publishDecisionRunGenerationDdlSql: string;
       runDispatchPublishRowsDdlSql: string;
     };
+    // cinatra#4762: core__0135's columns too, the publishing calls in flight included.
+    const next = (await import("../../../../migrations/core/core__0135_review-gate-run-generation.mjs")) as unknown as Record<string, string>;
     await admin.query(`SET search_path TO "${q(TEST_SCHEMA)}"`);
     try {
-      for (const ddl of [mod.runResetGenerationDdlSql, mod.publishDecisionRunGenerationDdlSql, mod.runDispatchPublishRowsDdlSql]) {
+      for (const ddl of [mod.runResetGenerationDdlSql, mod.publishDecisionRunGenerationDdlSql, mod.runDispatchPublishRowsDdlSql,
+        next.reviewGateRunGenerationDdlSql, next.producedOutboxRunGenerationDdlSql, next.publishDecisionCallsInFlightDdlSql]) {
+        expect(ddl).toMatch(/^ALTER TABLE /);
         await expect(admin.query(ddl)).resolves.toBeDefined();
       }
     } finally {
@@ -588,5 +1029,33 @@ describe.skipIf(!HAS_DB)("publish-decision store on Postgres", () => {
     const before = await snapshot();
     await runUp();
     expect(await snapshot()).toEqual(before);
+  });
+
+  it("cinatra#3745: a park waits while a consumption holds the run row FOR UPDATE, and commits only after it", async () => {
+    const runId = await seedRun(`run-${randomUUID()}`, "running");
+    const holder = new Client({ connectionString: DB_URL });
+    await holder.connect();
+    try {
+      // A plain status update's lock (FOR NO KEY UPDATE) does not hold the park back.
+      await holder.query("BEGIN");
+      await holder.query(`SELECT id FROM ${RUNS_TABLE} WHERE id = $1 FOR NO KEY UPDATE`, [runId]);
+      expect(await store.insertParkedDecision(park({ runId, gateTaskId: "task-free" }))).toMatchObject({ inserted: true, current: true });
+      await holder.query("COMMIT");
+
+      // The consumption's lock (FOR UPDATE) does: the park's row is not visible while the lock is held.
+      await holder.query("BEGIN");
+      await holder.query(`SELECT id FROM ${RUNS_TABLE} WHERE id = $1 FOR UPDATE`, [runId]);
+      let settled = false;
+      const parking = store.insertParkedDecision(park({ runId, gateTaskId: "task-fenced" })).finally(() => { settled = true; });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(settled).toBe(false);
+      const seen = await holder.query(`SELECT count(*)::int AS n FROM ${TABLE} WHERE run_id = $1 AND gate_task_id = 'task-fenced'`, [runId]);
+      expect(seen.rows[0].n).toBe(0);
+      await holder.query("COMMIT");
+      expect(await parking).toMatchObject({ inserted: true, current: true });
+    } finally {
+      await holder.query("ROLLBACK").catch(() => undefined);
+      await holder.end();
+    }
   });
 });

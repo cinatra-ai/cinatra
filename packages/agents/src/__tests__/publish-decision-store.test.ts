@@ -310,7 +310,6 @@ describe("decide", () => {
 
   // A release records the run's pause generation its claim holds, in the same UPDATE that releases the row, so a later
   // read tells a run still parked at that pause (its resume died before the fence) from one that went on.
-  // red-first-expect: expected { status: 'released', …(3) } to match object { status: 'released', …(3) }
   it("a release records the pause generation in the same UPDATE, and the row reads it back", async () => {
     answers.update = async () => [stored({ status: "released", decidedBy: "person-1", releasedPauseGeneration: 7 })];
     const result = await decide("d1", { from: "parked", to: "released", actor: "person-1", pauseGeneration: 7 } as never);
@@ -1007,7 +1006,6 @@ describe("the decision keeps the rows its template declared at the park (review 
     expect(result.decision.declaredRows).toEqual([]);
   });
 
-  // red-first-expect: expected [ 'd1', 'parked' ] to deeply equal [ 'd1', 'parked', 'run-1' ]
   it("refuses a declaration that is not rows of a label and an input, before any write", async () => {
     for (const bad of [
       [{ label: "", input: "title" }],
@@ -1046,7 +1044,6 @@ describe("the decision keeps the rows its template declared at the park (review 
     }
   });
 
-  // red-first-expect: expected [ 'd1', 'parked' ] to deeply equal [ 'd1', 'parked', 'run-1' ]
   it("a stored declaration the module cannot read is a malformed row, never a quiet fallback", async () => {
     for (const text of ["{nope", '{"label":"Title"}', '[{"label":"Title"}]']) {
       answers.select = async () => [stored({ declaredRows: text })];
@@ -1099,7 +1096,8 @@ describe("round 20: a decision belongs to one reset generation of its run", () =
     const park = await insertParkedDecision(PARK);
     expect(park).toMatchObject({ inserted: true, current: true });
     const stamp = rendered(calls.values[0]!.runGeneration);
-    expect(stamp.sql).toMatch(/^coalesce\(\(select live_run\.reset_generation from "[^"]+"\."agent_runs" live_run where live_run\.id = \$1 and live_run\.status in \('running', 'pending_approval'\)\), -1\)$/);
+    // The read locks the run row FOR KEY SHARE until the park commits: the fence against a consumption (cinatra#3745).
+    expect(stamp.sql).toMatch(/^coalesce\(\(select case when live_run\.status in \('running', 'pending_approval'\) then live_run\.reset_generation end from "[^"]+"\."agent_runs" live_run where live_run\.id = \$1 for key share\), -1\)$/);
     expect(stamp.params).toEqual(["run-1"]);
     answers.insert = async () => [stored({ runGeneration: -1 })];
     expect(await insertParkedDecision(PARK)).toMatchObject({ inserted: true, current: false });
@@ -1125,7 +1123,6 @@ describe("round 20: a decision belongs to one reset generation of its run", () =
 describe("round 19: the park copies its node's rows from the dispatched plan", () => {
   const MAP = JSON.stringify({ publish: [{ label: "Title", input: "title" }], other: [{ label: "X", input: "x" }] });
 
-  // red-first-expect: expected [ 'd1', 'parked' ] to deeply equal [ 'd1', 'parked', 'run-1' ]
   it("answers the node's rows of the recorded map, [] for a node it declares none for, and null when none is recorded", async () => {
     answers.select = async () => [{ rows: MAP }];
     expect(await readDispatchedPublishRows("run-1", "publish")).toEqual([{ label: "Title", input: "title" }]);
@@ -1145,7 +1142,6 @@ describe("round 19: the park copies its node's rows from the dispatched plan", (
     expect(await readDispatchedPublishRows("run-1", "publish")).toBeNull();
   });
 
-  // red-first-expect: expected [ 'd1', 'parked' ] to deeply equal [ 'd1', 'parked', 'run-1' ]
   it("a read error propagates (the park records nothing for it)", async () => {
     answers.select = async () => {
       throw new Error("db down");

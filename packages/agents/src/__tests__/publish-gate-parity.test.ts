@@ -33,7 +33,13 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(tempDir, { recursive: true, force: true }));
 
-async function compiledPublishingSteps(flow: Record<string, unknown>): Promise<string[]> {
+async function compiledPublishingSteps(fixtureFlow: Record<string, unknown>): Promise<string[]> {
+  // cinatra#4762: a publishing step calls only the host's model bridge or passthrough (the packs' publish nodes call the
+  // bridge); the fixture's placeholder URLs, which the loader's tests read, are set to the bridge for the compile here.
+  const flow = JSON.parse(JSON.stringify(fixtureFlow)) as { $referenced_components: Record<string, Record<string, unknown>> };
+  for (const comp of Object.values(flow.$referenced_components)) {
+    if ((comp.metadata as { cinatra?: { publishes?: unknown } } | undefined)?.cinatra?.publishes === true) comp.url = "{{CINATRA_BASE_URL}}/api/llm-bridge";
+  }
   const p = path.join(tempDir, "agent.json");
   writeFileSync(p, JSON.stringify(flow, null, 2));
   const res = await compileOasAgentJson({

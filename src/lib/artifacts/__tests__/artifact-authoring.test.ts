@@ -16,6 +16,7 @@ const {
   tombstoneArtifactMock,
   findFinalizedDeclarativeMock,
   recordLlmEmitMock,
+  restampReusedRevisionMock,
   resolveAuthoringEdgeMock,
 } = vi.hoisted(() => ({
   listArtifactsMock: vi.fn(),
@@ -28,6 +29,7 @@ const {
   tombstoneArtifactMock: vi.fn(),
   findFinalizedDeclarativeMock: vi.fn(async (): Promise<unknown> => null),
   recordLlmEmitMock: vi.fn(async () => undefined),
+  restampReusedRevisionMock: vi.fn(async () => undefined),
   resolveAuthoringEdgeMock: vi.fn(
     async (): Promise<{ skillId: string; packageName: string } | null> => null,
   ),
@@ -75,6 +77,7 @@ vi.mock("../artifact-extension-access", () => ({
 }));
 // WARN-phase declarative dedupe (cinatra#923) — advisory ledger surface.
 vi.mock("../materialization-ledger", () => ({
+  restampReusedRevision: restampReusedRevisionMock,
   findFinalizedDeclarativeMaterialization: findFinalizedDeclarativeMock,
   recordLlmEmitMaterialization: recordLlmEmitMock,
 }));
@@ -746,6 +749,18 @@ describe("authorArtifact — WARN-phase declarative dedupe (cinatra#923)", () =>
     expect(createSemanticArtifactMock).not.toHaveBeenCalled();
     expect(recordAuthoringInvocationMock).not.toHaveBeenCalled();
     expect(assertSemanticTypeMock).not.toHaveBeenCalled();
+  });
+
+  it("an absorbed emit restamps the declared revision for its attempt, and a refused restamp is its answer, never a second write (cinatra#4762)", async () => {
+    listArtifactsMock.mockReturnValue([makeIcpDef()]);
+    findFinalizedDeclarativeMock.mockResolvedValue({ artifactId: "art-declared", representationRevisionId: "rep-declared" });
+    await authorArtifact(RUN_EMIT);
+    expect(restampReusedRevisionMock).toHaveBeenCalledWith({
+      runId: "run-1", orgId: "org-a", artifactId: "art-declared", representationRevisionId: "rep-declared",
+    });
+    restampReusedRevisionMock.mockRejectedValueOnce(Object.assign(new Error("in flight"), { code: "publish_call_in_flight" }));
+    await expect(authorArtifact(RUN_EMIT)).rejects.toMatchObject({ code: "publish_call_in_flight" });
+    expect(createSemanticArtifactMock).not.toHaveBeenCalled();
   });
 
   it("absorbs BEFORE the authoring-skill refusal (declarative-only extension)", async () => {

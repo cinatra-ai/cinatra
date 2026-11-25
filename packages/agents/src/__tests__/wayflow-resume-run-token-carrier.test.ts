@@ -158,6 +158,29 @@ describe("resume sites attach the carrier to the A2A message", () => {
 // identity again, which is exactly the regression that forced the prior revert.
 // ---------------------------------------------------------------------------
 
+describe("a publish release names its decision in the resume message (cinatra#3745)", () => {
+  async function prepare(options?: { publishDecisionId?: string }) {
+    vi.doMock("@cinatra-ai/a2a", () => ({ createExternalA2AClient: vi.fn(async () => ({ sendTask: sendTaskMock })) }));
+    const { prepareWayflowResume } = await import("../review-task-actions");
+    return (prepareWayflowResume as (runId: string, url: string, options?: { publishDecisionId?: string }) =>
+      ReturnType<typeof prepareWayflowResume>)("run-1", "http://wayflow.test/agent", options);
+  }
+
+  it("carries the released decision's id under the reserved key beside the run token", async () => {
+    const { CINATRA_PUBLISH_DECISION_MESSAGE_KEY } = await import("@/lib/agent-run-token") as Record<string, unknown>;
+    expect(CINATRA_PUBLISH_DECISION_MESSAGE_KEY).toBe("__cinatra_publish_decision__");
+    const prepared = await prepare({ publishDecisionId: "decision-2" });
+    expect(prepared.metadata["__cinatra_publish_decision__"]).toBe("decision-2");
+    expect(typeof prepared.metadata[CINATRA_RUN_TOKEN_MESSAGE_KEY]).toBe("string");
+  });
+
+  it("a resume that is no publish release names no decision", async () => {
+    const prepared = await prepare();
+    expect(prepared.metadata).not.toHaveProperty("__cinatra_publish_decision__");
+    expect(typeof prepared.metadata[CINATRA_RUN_TOKEN_MESSAGE_KEY]).toBe("string");
+  });
+});
+
 describe("every WayFlow resume sendTask site is wired to the carrier", () => {
   const SITES = [
     "orchestrator-actions.ts",

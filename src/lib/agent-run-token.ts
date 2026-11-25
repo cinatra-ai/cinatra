@@ -304,3 +304,76 @@ export function verifySourceBoundRunStep(input: {
   if (!hexEquals(m[2]!, hmacHex(key, `s2\n${contextId}\n${node}\n${executionAttemptId}\n${sourceSha256}\n${executedSourceSha256}\n${declarationSourceSha256}\n${expiry}`))) return null;
   return Object.freeze({ stepId: node, contextId, executionAttemptId, sourceSha256: sourceSha256!, executedSourceSha256: executedSourceSha256!, declarationSourceSha256: declarationSourceSha256! });
 }
+
+// cinatra#3745: the publish decision a step's call was made under. Every visit
+// of a publishing step gets its own decision, but the s2 pair of a step entered
+// twice in one attempt is the same, so it cannot tell the visits apart. The
+// release names its decision in the resume message (message metadata key
+// CINATRA_PUBLISH_DECISION_MESSAGE_KEY); the runtime keeps it for that task and
+// signs it, beside the s2 pair, over the same values plus the decision id and
+// the s2 signature of the same call, with the s2 expiry:
+//
+//   X-Cinatra-Publish-Decision:             <decisionId>
+//   X-Cinatra-Publish-Decision-Attestation: s3:<expiryEpochSeconds>:<hex>
+//   hex = HMAC-SHA256(key, "s3\n<contextId>\n<nodeId>\n<attempt>\n<raw>\n<executed>\n<declaration>\n<decisionId>\n<s2hex>\n<expiryEpochSeconds>")
+//
+// So an s3 pair is valid only with the one s2 pair it was signed with: never
+// beside another s2 pair of the same step and attempt (for example a later
+// visit's).
+//
+// The s2 pair is unchanged, so an application that does not read these two
+// headers serves the call as before. A call without them names no decision.
+export const RUN_PUBLISH_DECISION_HEADER = "x-cinatra-publish-decision";
+export const RUN_PUBLISH_DECISION_ATTESTATION_HEADER = "x-cinatra-publish-decision-attestation";
+/** The reserved A2A `message.metadata` key under which a publish release names its decision. MUST equal
+ *  CINATRA_PUBLISH_DECISION_MESSAGE_KEY in docker/wayflow/agent_loader.py (a cross-language ABI with no shared import).
+ *  Not a credential: the decision id is only what the call is bound to. */
+export const CINATRA_PUBLISH_DECISION_MESSAGE_KEY = "__cinatra_publish_decision__";
+
+const SOURCE_PROOF_KEYS = ["contextId", "stepId", "executionAttemptId", "sourceSha256", "executedSourceSha256",
+  "declarationSourceSha256"] as const;
+type SourceProof = Record<(typeof SOURCE_PROOF_KEYS)[number], string>;
+/** A plain copy of a source-bound proof with exactly its six fields, each a string of 1 to 512 characters without a
+ *  line break, or null. */
+function readSourceProof(value: unknown): SourceProof | null {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Reflect.ownKeys(value).length !== SOURCE_PROOF_KEYS.length) return null;
+  const out: Record<string, string> = {};
+  for (const key of SOURCE_PROOF_KEYS) {
+    const d = Object.getOwnPropertyDescriptor(value, key);
+    if (!d || !("value" in d) || typeof d.value !== "string" || !d.value ||
+        d.value.length > RUN_SOURCE_PROOF_FIELD_MAX_CHARS || /[\r\n]/.test(d.value)) return null;
+    out[key] = d.value;
+  }
+  return out as SourceProof;
+}
+
+/**
+ * The decision id the runtime signed for one call (`s3`), over the values of the
+ * call's verified source-bound proof (the answer of verifySourceBoundRunStep for
+ * the same call) and that call's own `s2` value (`stepAttestation`), or null: no
+ * key, a proof that is not that answer's shape, an `s2` value that is not well
+ * formed or has another expiry, a
+ * missing or malformed decision id (empty, a line break, longer than 512
+ * characters), a value that is not `s3` with a 64-character lower-case hex
+ * signature, a signature that does not verify, or the same expiry window as `s2`.
+ * It proves only what the runtime signed; whether that decision may be used is
+ * the consumption's check.
+ */
+export function verifyRunStepPublishDecision(input: {
+  key?: string | null; proof?: unknown; publishDecisionId?: string | null; attestation?: string | null;
+  stepAttestation?: string | null; nowMs?: number;
+}): string | null {
+  const { key, publishDecisionId, attestation } = input;
+  const proof = readSourceProof(input.proof);
+  if (typeof key !== "string" || key.trim() === "" || !proof || typeof publishDecisionId !== "string" ||
+      !publishDecisionId || publishDecisionId.length > RUN_SOURCE_PROOF_FIELD_MAX_CHARS || /[\r\n]/.test(publishDecisionId)) return null;
+  const m = /^s3:([0-9]+):([a-f0-9]{64})$/.exec(attestation ?? "");
+  if (!m || !Number.isSafeInteger(Number(m[1]))) return null;
+  const step = /^s2:([0-9]+):([a-f0-9]{64})$/.exec(input.stepAttestation ?? "");
+  if (!step || step[1] !== m[1]) return null;
+  const expiry = Number(m[1]); const now = input.nowMs ?? Date.now();
+  if (now > expiry * 1000 + RUN_STEP_ATTESTATION_SKEW_MS || expiry * 1000 > now + RUN_STEP_ATTESTATION_MAX_FUTURE_MS) return null;
+  const material = `s3\n${proof.contextId}\n${proof.stepId}\n${proof.executionAttemptId}\n${proof.sourceSha256}\n` +
+    `${proof.executedSourceSha256}\n${proof.declarationSourceSha256}\n${publishDecisionId}\n${step[2]}\n${expiry}`;
+  return hexEquals(m[2]!, hmacHex(key, material)) ? publishDecisionId : null;
+}

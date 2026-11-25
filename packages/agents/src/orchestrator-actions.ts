@@ -37,6 +37,8 @@ import {
 import { cancelOrchestratorRun } from "./orchestrator-execution";
 import {
   PUBLISH_DECISION_REQUIRED,
+  PUBLISH_REVIEW_MISSING_REASON,
+  PUBLISH_REVIEW_NOT_APPROVED,
   assertNoOpenPublishDecision,
   isPublishDecisionRequired,
   publishHoldFault,
@@ -192,6 +194,7 @@ export async function revalidateOrchestratorStatusAction(
  *   - "no-package-name"     — template.packageName is null; cannot derive vendor/slug
  *   - "no-wayflow-url"      — WAYFLOW_BASE_URL is unset or resolveWayflowUrl rejected the packageName
  *   - "publish_decision_required" — the run waits or ended at a publish decision
+ *   - "publish_review_not_approved" — the run's publish gate stopped it for want of an approved review (cinatra#4762)
  *   - "race condition — run status changed"
  *   - "resume failed"
  */
@@ -281,12 +284,23 @@ export async function resumeStoppedOrchestratorAction(
   // written before it is seen; a refusal tries to put the run back to stopped (if that move
   // fails too, the run stays queued and nothing is sent). A hold that cannot be read throws
   // one fixed text that names no run and carries no store error.
+  // cinatra#4762: a run its publish gate stopped for want of an approved review writes no decision row, so the decision
+  // hold lets it pass; its context still sits at that gate, and the resume text would answer it. The stop's
+  // recorded reason is its hold: it is read from the run row again under this claim (the record read before the claim
+  // may be of an earlier stop), and such a run is never resumed here. Only a fresh run can publish then. A row that
+  // cannot be read refuses too.
+  let claimedRun: Awaited<ReturnType<typeof readAgentRunById>>;
   try {
     await assertNoOpenPublishDecision(run.id);
+    claimedRun = await readAgentRunById(runId);
   } catch (err) {
     await transitionRunStatus(runId, "queued", "stopped", undefined, authority).catch(() => undefined);
     if (isPublishDecisionRequired(err)) return { ok: false, error: PUBLISH_DECISION_REQUIRED };
     throw publishHoldFault(err);
+  }
+  if (!claimedRun || claimedRun.error === PUBLISH_REVIEW_MISSING_REASON) {
+    await transitionRunStatus(runId, "queued", "stopped", undefined, authority).catch(() => undefined);
+    return { ok: false, error: PUBLISH_REVIEW_NOT_APPROVED };
   }
 
   // Split try/catch so post-sendTask errors never revert to "stopped"

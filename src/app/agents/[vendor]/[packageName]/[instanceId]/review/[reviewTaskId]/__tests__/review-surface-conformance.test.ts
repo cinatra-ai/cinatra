@@ -55,10 +55,6 @@ const RUN_GATE_NOTIFICATION = readRepo("src/lib/agent-run-wait-notifications.ts"
 // keeps it and only its render site changes — the panel the chrome mounts, with
 // the card that used to carry it read for the road instead.
 const RUN_WINDOW_PANEL = readRepo("packages/agents/src/hitl-conversation-panel.tsx");
-// The file the fix adds is read inside the tests that use it, not when this
-// file loads: before the fix the file still loads and those tests fail on the
-// missing file.
-// red-first-expect: no such file or directory, open
 const runWindowChrome = () => readRepo("packages/agents/src/run-page-chrome.tsx");
 const REVIEW_PROMPT_WINDOW = readRepo("packages/agents/src/review-gate-card.tsx");
 

@@ -30,7 +30,7 @@
     {
       "packageName": "@cinatra-ai/blog-draft-writer-agent",
       "repo": "cinatra-ai/blog-draft-writer-agent",
-      "resolvedSha": "dc9ec0bd4f0e7d7674898fda0ebaacb4ff6b6b7b"
+      "resolvedSha": "67eaa50d5c95dbf1ea19480c03bca9dad6116418"
     },
     {
       "packageName": "@cinatra-ai/blog-idea-artifact",
@@ -60,7 +60,7 @@
     {
       "packageName": "@cinatra-ai/blog-image-generator-agent",
       "repo": "cinatra-ai/blog-image-generator-agent",
-      "resolvedSha": "5bb1cf87a14c237813d1aa712dd2465bd607fd49"
+      "resolvedSha": "81aa5bf1c9367dc029ec11660b2163ce62085b1b"
     },
     {
       "packageName": "@cinatra-ai/blog-image-matcher-skill",
@@ -85,7 +85,7 @@
     {
       "packageName": "@cinatra-ai/blog-pipeline-agent",
       "repo": "cinatra-ai/blog-pipeline-agent",
-      "resolvedSha": "9f90e1ef24b8e586dd5c76651a7471e3ed839833"
+      "resolvedSha": "9b651d24907711b11fd7e4a127ad9af1abccf94f"
     },
     {
       "packageName": "@cinatra-ai/blog-post-artifact",

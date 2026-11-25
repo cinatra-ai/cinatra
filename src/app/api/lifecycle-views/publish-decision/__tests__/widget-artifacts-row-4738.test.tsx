@@ -10,8 +10,6 @@
 //   - FINDING 2. The card re-reads its state while the run is live. Before the fix each read minted a new random ref,
 //     and every widget read brings a fresh single-use credential, so the frame's address moved on every read and the
 //     preview reloaded. A second read of the same decision must leave the same frame on the same address.
-//
-// red-first-expect: expected null not to be null
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
