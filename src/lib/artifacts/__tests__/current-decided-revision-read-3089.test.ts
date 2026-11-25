@@ -56,8 +56,15 @@ vi.mock("@/lib/postgres-schema-init", () => ({ ensurePostgresSchema: vi.fn() }))
 vi.mock("../extension-artifact-reads", () => ({ readArtifactRepresentationText: readTextMock }));
 vi.mock("../artifact-service", () => ({ getArtifact: getArtifactMock }));
 
-// red-first-expect: Cannot find module '/src/lib/artifacts/current-decided-revision-read'
-import { readCurrentDecidedRevision } from "../current-decided-revision-read";
+type ReadInput = Parameters<typeof import("../current-decided-revision-read").readCurrentDecidedRevision>[0];
+
+// The module is loaded when a test calls it, so this file loads (and every
+// test runs) even where the module is absent.
+async function readCurrentDecidedRevision(input: ReadInput) {
+  // red-first-expect: Cannot find module '/src/lib/artifacts/current-decided-revision-read'
+  const mod = await import("../current-decided-revision-read");
+  return mod.readCurrentDecidedRevision(input);
+}
 
 const BODY_TYPE = "@cinatra-ai/email:body";
 const actor = { principalId: "user-1", principalType: "user", organizationId: "org-1" } as never;
