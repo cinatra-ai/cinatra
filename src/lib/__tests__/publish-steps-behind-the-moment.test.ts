@@ -356,21 +356,30 @@ beforeAll(async () => {
 
 /**
  * The proof a held step relies on: the real boundary, on an agent run's frame (a platform admin, so no role rule
- * decides), refuses each tool. A tool the host classifies is refused for the recorded decision; one it does not
- * classify is refused before that, as unclassified.
+ * decides), refuses each tool with an ENFORCED denial. Both dispatchers skip the handler only on
+ * `!decision.allowed && decision.shouldBlock` (packages/mcp-server/src/runtime-server.ts, the boundary step of the
+ * tool wrapper; src/lib/extension-self-mcp.ts, the same condition); every other decision dispatches. So each tool must
+ * answer `allowed: false`, `shouldBlock: true`, and the expected reason: the recorded decision for a tool the host
+ * classifies, unclassified for one it does not (refused before that rule). The dispatchers themselves are not driven
+ * here: on a run frame each first proves the run's executing source against the run store.
  */
-async function boundaryOnRunFrame(tools: Array<{ name: string; declaresOutward: boolean }>): Promise<string[]> {
+type BoundaryDecision = Awaited<ReturnType<typeof enforceMcpBoundary>>;
+export const blocksDispatch = (d: BoundaryDecision) => !d.allowed && d.shouldBlock === true;
+async function boundaryOnRunFrame(
+  tools: Array<{ name: string; declaresOutward: boolean }>,
+  decide: typeof enforceMcpBoundary = enforceMcpBoundary,
+): Promise<string[]> {
   const spy = vi.spyOn(auditModule, "logAuditEvent").mockResolvedValue(undefined);
   try {
     const served: string[] = [];
     for (const { name, declaresOutward } of tools) {
-      const decision = await enforceMcpBoundary({
+      const decision = await decide({
         primitiveName: name,
         ctx: { orgId: "org-1", userId: "admin-1", platformRole: "platform_admin", runId: "run-1" },
         declaresOutward,
       } as Parameters<typeof enforceMcpBoundary>[0]);
       const expected = lookupPrimitiveClassification(name) ? RECORDED_DECISION_REQUIRED_REASON : "unclassified_primitive";
-      if (decision.allowed || decision.reason !== expected) served.push(`${name}: ${JSON.stringify(decision)}`);
+      if (!blocksDispatch(decision) || decision.reason !== expected) served.push(`${name}: ${JSON.stringify(decision)}`);
     }
     return served;
   } finally {
@@ -428,6 +437,20 @@ describe("item 7: a node that can publish is declared and sits behind the moment
       ...[...OUTWARD_EFFECT_TOOL_NAMES].map((name) => ({ name, declaresOutward: false })),
       ...[...FIXTURE_CENSUS.outwardByRegistration].map((name) => ({ name, declaresOutward: true })),
     ])).toEqual([]);
+  });
+
+  it("the boundary census accepts only a denial that stops dispatch: the right reason without shouldBlock fails it", async () => {
+    const tools = [
+      { name: "linkedin_post_publish", declaresOutward: false },
+      { name: "fixture_site_tool_write", declaresOutward: true },
+    ];
+    const reasonOf = (name: string) => (lookupPrimitiveClassification(name) ? RECORDED_DECISION_REQUIRED_REASON : "unclassified_primitive");
+    const notBlocking: typeof enforceMcpBoundary = async (req) => ({ allowed: false, reason: reasonOf(req.primitiveName), shouldBlock: false });
+    const allowed: typeof enforceMcpBoundary = async () => ({ allowed: true });
+    const blocking: typeof enforceMcpBoundary = async (req) => ({ allowed: false, reason: reasonOf(req.primitiveName), shouldBlock: true });
+    expect(await boundaryOnRunFrame(tools, notBlocking)).toHaveLength(2);
+    expect(await boundaryOnRunFrame(tools, allowed)).toHaveLength(2);
+    expect(await boundaryOnRunFrame(tools, blocking)).toEqual([]);
   });
 
   it("(c) a model-bridge step with no tool list offered another MCP toolbox is UNHELD; built-ins only, or none, offer no MCP tool", async () => {
