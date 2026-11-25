@@ -10,6 +10,8 @@ import { bindBridgeRunId } from "@/lib/authz/bridge-run-binding";
 import {
   verifyRunStepAttestation,
   verifySourceBoundRunStep,
+  verifyRunStepPublishDecision,
+  RUN_PUBLISH_DECISION_HEADER, RUN_PUBLISH_DECISION_ATTESTATION_HEADER,
   RUN_RAW_SOURCE_HEADER, RUN_EXECUTED_SOURCE_HEADER, RUN_DECLARATION_SOURCE_HEADER, RUN_EXECUTION_ATTEMPT_HEADER,
   RUN_STEP_NODE_HEADER,
   RUN_STEP_ATTESTATION_HEADER,
@@ -494,6 +496,8 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
     }) ?? undefined;
 
   let verifiedExecutedSource: VerifiedExecutedRunSource | undefined;
+  // cinatra#3745: the publish decision of the call's visit, signed beside the source-bound pair (s3).
+  let verifiedPublishDecisionId: string | undefined;
   if (req.headers.get(RUN_RAW_SOURCE_HEADER) !== null || req.headers.get(RUN_EXECUTED_SOURCE_HEADER) !== null ||
       req.headers.get(RUN_DECLARATION_SOURCE_HEADER) !== null || req.headers.get(RUN_EXECUTION_ATTEMPT_HEADER) !== null) {
     const attestation = verifySourceBoundRunStep({ key: attestKey && attestKey.trim() !== "" ? attestKey : null,
@@ -507,7 +511,21 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
       if (!attestation || !sourceRun?.orgId) throw new Error("source_binding_invalid");
       verifiedExecutedSource = await verifyRunExecutedSource(agentRunId, sourceRun.orgId, attestation);
       verifiedStepId = verifiedExecutedSource.stepId;
+      // A call that names a publish decision must carry its valid signature over this same pair; else it is refused.
+      if (req.headers.get(RUN_PUBLISH_DECISION_HEADER) !== null ||
+          req.headers.get(RUN_PUBLISH_DECISION_ATTESTATION_HEADER) !== null) {
+        const decision = verifyRunStepPublishDecision({ key: attestKey && attestKey.trim() !== "" ? attestKey : null,
+          proof: attestation, publishDecisionId: req.headers.get(RUN_PUBLISH_DECISION_HEADER),
+          attestation: req.headers.get(RUN_PUBLISH_DECISION_ATTESTATION_HEADER),
+          stepAttestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER) });
+        if (decision === null) throw new Error("publish_decision_invalid");
+        verifiedPublishDecisionId = decision;
+      }
     } catch { return NextResponse.json({ error: "Executing source could not be verified" }, { status: 403 }); }
+  } else if (req.headers.get(RUN_PUBLISH_DECISION_HEADER) !== null ||
+      req.headers.get(RUN_PUBLISH_DECISION_ATTESTATION_HEADER) !== null) {
+    // A decision is signed only beside a source-bound pair: one named without that pair proves nothing and is refused.
+    return NextResponse.json({ error: "Executing source could not be verified" }, { status: 403 });
   }
 
   const shaper = TOOL_INPUT_SHAPERS[tool];
@@ -636,6 +654,7 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
       ...(run.oboCeiling ? { oboCeiling: run.oboCeiling } : {}),
       ...(verifiedStepId ? { verifiedStepId } : {}),
       ...(verifiedExecutedSource ? { verifiedExecutedSource } : {}),
+      ...(verifiedExecutedSource && verifiedPublishDecisionId ? { verifiedPublishDecisionId } : {}),
       ...(orgWriteAuthority ? { orgWriteAuthority } : {}),
       ...(publishCallClaim ? { publishCallClaim } : {}),
     }, async () => {
@@ -919,7 +938,9 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
       // attempt takes a new release). Any other refusal is the run call's 403.
       const beforeEffect = async () => {
         const used = await consumePublishingStepDecision({ tool, orgId: run.orgId, runId: run.id,
-          authority: orgWriteAuthority, proof: verifiedExecutedSource });
+          authority: orgWriteAuthority, proof: verifiedExecutedSource,
+          // The decision of the call's own visit, as the frame carries it (absent when the runtime signed none).
+          publishDecisionId: mcpRequestContextStorage.getStore()?.verifiedPublishDecisionId });
         if (!used) throw new PublishingStepCallPerformed();
       };
       const handler = await loadPassthroughPublishingStepHandler(tool, { beforeEffect });

@@ -130,6 +130,8 @@ export async function consumePublishingStepDecision(input: {
   runId: string;
   authority: unknown;
   proof: unknown;
+  /** The verified publish decision of the call's visit (cinatra#3745); absent when the runtime signed none. */
+  publishDecisionId?: string;
 }): Promise<boolean> {
   const { consumeRunActionDecision } = await import("@cinatra-ai/agents/run-action-decision-consumption");
   const { RunStepToolPolicyRefusal } = await import("@cinatra-ai/agents/store");
@@ -141,6 +143,7 @@ export async function consumePublishingStepDecision(input: {
       runId: input.runId,
       authority: input.authority as Input["authority"],
       proof: input.proof as Input["proof"],
+      ...(input.publishDecisionId !== undefined ? { publishDecisionId: input.publishDecisionId } : {}),
       action: {
         toolName: input.tool,
         packageName: HOST_PRIMITIVE_OWNER_PACKAGE,

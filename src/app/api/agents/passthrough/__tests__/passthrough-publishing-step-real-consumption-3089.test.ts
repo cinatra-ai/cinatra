@@ -157,17 +157,36 @@ const VERIFIED_SOURCE = Object.freeze({ contextId: CTX, stepId: NODE, executionA
 const POLICY = { version: 1, contextId: CTX, sourceSha256: SHA, executedSourceSha256: SHA, declarationSourceSha256: SHA,
   source: FLOW };
 
-function makeReq(): Request {
+/** A signed call of the step. `decision`: the publish decision of the call's visit, signed beside the pair (`s3`). */
+function makeReq(opts: { decision?: string; decisionSig?: string; sourceHeaders?: boolean } = {}): Request {
   const expiry = Math.floor(Date.now() / 1000) + 300;
   const sig = createHmac("sha256", ATTEST_KEY).update(`s2\n${CTX}\n${NODE}\nattempt-1\n${SHA}\n${SHA}\n${SHA}\n${expiry}`).digest("hex");
+  const headers: Record<string, string> = { "content-type": "application/json", "x-cinatra-a2a-context-id": CTX,
+    "x-cinatra-step-node": NODE, "x-cinatra-step-attestation": `s2:${expiry}:${sig}` };
+  if (opts.sourceHeaders !== false) {
+    Object.assign(headers, { "x-cinatra-execution-attempt": "attempt-1", "x-cinatra-raw-source": SHA,
+      "x-cinatra-executed-source": SHA, "x-cinatra-declaration-source": SHA });
+  }
+  if (opts.decision !== undefined) {
+    const decisionSig = opts.decisionSig ?? createHmac("sha256", ATTEST_KEY)
+      .update(`s3\n${CTX}\n${NODE}\nattempt-1\n${SHA}\n${SHA}\n${SHA}\n${opts.decision}\n${sig}\n${expiry}`).digest("hex");
+    headers["x-cinatra-publish-decision"] = opts.decision;
+    headers["x-cinatra-publish-decision-attestation"] = `s3:${expiry}:${decisionSig}`;
+  }
   return new Request("http://localhost:3000/api/agents/passthrough", {
     method: "POST",
-    headers: { "content-type": "application/json", "x-cinatra-a2a-context-id": CTX, "x-cinatra-step-node": NODE,
-      "x-cinatra-execution-attempt": "attempt-1", "x-cinatra-step-attestation": `s2:${expiry}:${sig}`,
-      "x-cinatra-raw-source": SHA, "x-cinatra-executed-source": SHA, "x-cinatra-declaration-source": SHA },
+    headers,
     body: JSON.stringify({ tool: SEND, input: SEND_INPUT, agent_run_id: RUN.id }),
   });
 }
+
+/** A released decision row of the step (or of `nodeId`), created `minute` minutes after the first. */
+const decisionRow = (id: string, minute: number, nodeId = NODE) => ({ id, orgId: RUN.orgId, runId: RUN.id, nodeId,
+  gateTaskId: `gate-task-${id}`, status: "released", decidedBy: "user-7", decidedAt: new Date(Date.UTC(2026, 10, 24, 10, minute)),
+  createdAt: new Date(Date.UTC(2026, 10, 24, 9, minute)), runGeneration: 0, surfacedValues: "{}", declaredRows: null,
+  a2aContextId: CTX, decisionNote: null, expiresAt: new Date(Date.UTC(2026, 10, 25, 9, minute)) });
+const used = () => (h.tables.get(artifactReviewActionConsumptions) ?? []).map((r) => r.gateId);
+const codeOf = async (res: Response) => ((await res.json()) as { code?: string }).code;
 
 beforeEach(() => {
   h.sends.length = 0;
@@ -176,10 +195,7 @@ beforeEach(() => {
     [agentRuns, [{ id: RUN.id, orgId: RUN.orgId, status: "running", executionAttemptId: "attempt-1", a2aContextId: CTX,
       resetGeneration: 0 }]],
     [agentRunOutwardActionPolicies, [{ runId: RUN.id, orgId: RUN.orgId, executionAttemptId: "attempt-1", policy: POLICY }]],
-    [agentRunPublishDecisions, [{ id: "decision-1", orgId: RUN.orgId, runId: RUN.id, nodeId: NODE, gateTaskId: "gate-task-1",
-      status: "released", decidedBy: "user-7", decidedAt: new Date("2026-11-24T10:00:00Z"),
-      createdAt: new Date("2026-11-24T09:00:00Z"), runGeneration: 0, surfacedValues: "{}", declaredRows: null,
-      a2aContextId: CTX, decisionNote: null, expiresAt: new Date("2026-11-25T09:00:00Z") }]],
+    [agentRunPublishDecisions, [decisionRow("decision-1", 0)]],
     [artifactReviewActionConsumptions, []],
   ]);
   h.readAgentRunById.mockReset().mockResolvedValue(RUN);
@@ -212,6 +228,64 @@ describe("a direct passthrough publishing step's call, used through the real con
     expect(again.status).toBe(409);
     expect(((await again.json()) as { code?: string }).code).toBe("publishing_step_call_performed");
     expect(h.sends).toHaveLength(1);
+  });
+});
+
+// cinatra#3745 (#4791): a step entered twice in one attempt has one decision per visit, and the runtime signs the
+// visit's decision beside the pair. The call uses only the decision of its own visit.
+describe("a publishing step's call uses the decision of its own visit", () => {
+  it("a delayed call of the first visit, after a second release, never uses the second visit's decision", async () => {
+    expect((await POST(makeReq({ decision: "decision-1" }))).status).toBe(200);
+    h.tables.get(agentRunPublishDecisions)!.push(decisionRow("decision-2", 5));
+    const late = await POST(makeReq({ decision: "decision-1" }));
+    expect(late.status).toBe(409);
+    expect(used()).toEqual(["publish_decision:decision-1"]);
+    expect(h.sends).toHaveLength(1);
+  });
+
+  it("the second visit's own call is served once", async () => {
+    h.tables.get(agentRunPublishDecisions)!.push(decisionRow("decision-2", 5));
+    expect((await POST(makeReq({ decision: "decision-2" }))).status).toBe(200);
+    expect((await POST(makeReq({ decision: "decision-2" }))).status).toBe(409);
+    expect(used()).toEqual(["publish_decision:decision-2"]);
+    expect(h.sends).toHaveLength(1);
+  });
+
+  it("a call that names a decision of another step is refused, and uses nothing", async () => {
+    h.tables.get(agentRunPublishDecisions)!.push(decisionRow("decision-other-step", 5, "another_step"));
+    const res = await POST(makeReq({ decision: "decision-other-step" }));
+    expect(res.status).toBe(403);
+    expect(await codeOf(res)).toBe("action_decision_binding_mismatch");
+    expect(used()).toEqual([]);
+    expect(h.sends).toHaveLength(0);
+  });
+
+  it("a call that names a decision of another run is refused, and uses nothing", async () => {
+    h.tables.get(agentRunPublishDecisions)!.push({ ...decisionRow("decision-other-run", 5), runId: "run-2" });
+    const res = await POST(makeReq({ decision: "decision-other-run" }));
+    expect(res.status).toBe(403);
+    expect(await codeOf(res)).toBe("action_decision_binding_mismatch");
+    expect(used()).toEqual([]);
+  });
+
+  it("a call that names no decision is served when the step has one visit", async () => {
+    expect((await POST(makeReq())).status).toBe(200);
+    expect(used()).toEqual(["publish_decision:decision-1"]);
+  });
+
+  it("a call that names no decision is refused when the step has two visits", async () => {
+    h.tables.get(agentRunPublishDecisions)!.push(decisionRow("decision-2", 5));
+    const res = await POST(makeReq());
+    expect(res.status).toBe(403);
+    expect(await codeOf(res)).toBe("action_decision_binding_missing");
+    expect(h.sends).toHaveLength(0);
+  });
+
+  it("a decision whose signature does not verify, or that is named without the source pair, is refused before the send", async () => {
+    expect((await POST(makeReq({ decision: "decision-1", decisionSig: "0".repeat(64) }))).status).toBe(403);
+    expect((await POST(makeReq({ decision: "decision-1", sourceHeaders: false }))).status).toBe(403);
+    expect(used()).toEqual([]);
+    expect(h.sends).toHaveLength(0);
   });
 });
 

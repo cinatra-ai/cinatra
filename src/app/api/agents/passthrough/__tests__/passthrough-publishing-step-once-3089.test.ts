@@ -265,17 +265,6 @@ describe("a declared publishing step's call, once per released decision", () => 
     expect(h.sends).toHaveLength(1);
   });
 
-  // Not true today: a call carries no proof of the visit it was signed for, so the consumption uses the step's NEWEST
-  // decision, and a delayed call of an earlier visit can use a later release. Binding the call to its visit's decision
-  // (the signed decision headers of cinatra#4791) closes this case; it runs once that pull request is on main.
-  it.skip("a new release of the same step is a new decision, and its call reaches the send again (needs cinatra#4791)", async () => {
-    expect((await POST(makeReq())).status).toBe(200);
-    h.decisionId = "decision-2";
-    expect((await POST(makeReq())).status).toBe(200);
-    expect(h.sends).toHaveLength(2);
-    expect((await POST(makeReq())).status).toBe(409);
-  });
-
   it("arguments the owning package's schema refuses use nothing: the call with the card's values is served after", async () => {
     const refused = await POST(makeReq({ campaignId: "" }));
     expect(refused.status).toBe(500);
