@@ -1612,13 +1612,18 @@ function HitlApprovalCard({
                       }
                     }
                     // A list step's Try again (cinatra#3562) is sent now.
-                    const listStepRefresh = listStepRefreshRequest(
-                      interruptContext.xRenderer,
-                      interruptContext.reviewTaskId,
+                    // The value sent is the one recorded with the pause; a
+                    // pause recorded with none sends nothing.
+                    const press = listStepRefreshRequest(
+                      {
+                        xRenderer: interruptContext.xRenderer,
+                        reviewTaskId: interruptContext.reviewTaskId,
+                        schema: interruptContext.schema,
+                      },
                       next,
                     );
-                    if (listStepRefresh !== null) {
-                      await sendListStepRefresh(rendererGateKey, listStepRefresh);
+                    if (press !== null) {
+                      if (press.value !== null) await sendListStepRefresh(rendererGateKey, press.value);
                       return;
                     }
                     if (isGroupedSetup) {

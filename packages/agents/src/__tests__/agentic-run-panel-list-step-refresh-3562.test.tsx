@@ -157,27 +157,38 @@ function TryAgainRenderer({ onChange, onValidityChange }: FieldRendererProps) {
   );
 }
 
+/** The pause's gate schema, recorded with `recorded` as its refresh value (none when null). */
+const recordedWith = (recorded: string | null = "refresh") =>
+  recorded === null ? { type: "string" } : { type: "string", "x-cinatra-list-step-refresh-value": recorded };
+
 function streamResultFor(
   xRenderer: string,
   fieldName: string,
   schema: Record<string, unknown>,
   reviewTaskId: string,
+  stepNumber: number | null = 1,
 ) {
   return {
     status: "pending_approval",
     error: null,
     presentationHint: null,
     isLive: true,
-    interruptContext: { schema, xRenderer, values: {}, reviewTaskId, fieldName },
+    interruptContext: {
+      schema,
+      xRenderer,
+      values: stepNumber === null ? {} : { stepNumber },
+      reviewTaskId,
+      fieldName,
+    },
     streamedText: "",
     dataPartFrames: [],
   };
 }
 
-async function renderPanelOn(reviewTaskId: string) {
+async function renderPanelOn(reviewTaskId: string, recorded: string | null = "refresh") {
   const { useAgUiRunStream } = await import("../use-ag-ui-run-stream");
   (useAgUiRunStream as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
-    streamResultFor(LIST_STEP_ID, "accountScope", { type: "string" }, reviewTaskId),
+    streamResultFor(LIST_STEP_ID, "accountScope", recordedWith(recorded), reviewTaskId),
   );
   const { AgenticRunPanel } = await import("../agentic-run-panel");
   return render(
@@ -272,6 +283,18 @@ describe("AgenticRunPanel — a list step's Try again (cinatra#3562)", () => {
     await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(2));
   });
 
+  it("a pause recorded with no refresh value sends nothing, and Continue stays unavailable", async () => {
+    const view = await renderPanelOn(WAYFLOW_TASK, null);
+    const tryAgain = await view.findByTestId("list-picker-try-again");
+    await waitFor(() => expect(productContinue()!.disabled).toBe(true));
+    fireEvent.click(tryAgain);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    expect(productContinue()!.disabled).toBe(true);
+  });
+
   it("sends nothing from a list step on a setup gate (guard)", async () => {
     const view = await renderPanelOn("setup-run-3562");
     fireEvent.click(await view.findByTestId("list-picker-try-again"));
@@ -330,9 +353,9 @@ describe("AgenticRunPanel — the pack's list step, mounted through the binding'
     __resetFieldRendererComponentMapForTests();
   });
 
-  it("sends the refresh value the binding declares when the failed-read alert's Try again is pressed", async () => {
-    mountPackListStep({ selection: "multiple", minSelected: 1, refreshValue: "refresh" });
-    const view = await renderPanelOn(WAYFLOW_TASK);
+  it("sends the value recorded with the pause when the failed-read alert's Try again is pressed, even when the deployed binding declares another", async () => {
+    mountPackListStep({ selection: "multiple", minSelected: 1, refreshValue: "reload" });
+    const view = await renderPanelOn(WAYFLOW_TASK, "refresh");
     const tryAgain = await view.findByTestId("list-picker-try-again");
     expect(view.getByTestId("list-picker-read-failed").contains(tryAgain)).toBe(true);
     await waitFor(() => expect(productContinue()!.disabled).toBe(true));
@@ -346,6 +369,7 @@ describe("AgenticRunPanel — the pack's list step, mounted through the binding'
     ];
     expect(taskId).toBe(WAYFLOW_TASK);
     expect(payload).toMatchObject({ userResponse: "refresh", listStepRefresh: "refresh" });
+    expect(JSON.stringify(payload)).not.toContain("reload");
     expect(payload).not.toHaveProperty("listIds");
   });
 
@@ -429,10 +453,10 @@ describe("AgenticRunPanel — a list step's Try again keeps the files attached f
     windowFiles.attachments = null;
   });
 
-  async function showPause(xRenderer: string, reviewTaskId: string, fieldName = "accountScope") {
+  async function showPause(xRenderer: string, reviewTaskId: string, fieldName = "accountScope", stepNumber = 1) {
     const { useAgUiRunStream } = await import("../use-ag-ui-run-stream");
     (useAgUiRunStream as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
-      streamResultFor(xRenderer, fieldName, { type: "string" }, reviewTaskId),
+      streamResultFor(xRenderer, fieldName, recordedWith(), reviewTaskId, stepNumber),
     );
   }
 
@@ -503,7 +527,7 @@ describe("AgenticRunPanel — a list step's Try again keeps the files attached f
     await showWorking();
     rerender();
     await act(async () => {});
-    await showPause(OTHER_STEP_ID, "wayflow-task-next", "nextScope");
+    await showPause(OTHER_STEP_ID, "wayflow-task-next", "nextScope", 2);
     rerender();
     await act(async () => {});
     const payload = await pickAndContinue(view, 1);
@@ -519,7 +543,47 @@ describe("AgenticRunPanel — a list step's Try again keeps the files attached f
     await showWorking();
     rerender();
     await act(async () => {});
-    await showPause(OTHER_STEP_ID, "wayflow-task-next", "nextScope");
+    await showPause(OTHER_STEP_ID, "wayflow-task-next", "nextScope", 2);
+    rerender();
+    await act(async () => {});
+    const payload = await pickAndContinue(view, 2);
+    expect(payload).not.toHaveProperty("userResponse");
+  });
+
+  it("a file attached before a Try again that fails does not go with a later pause of the same renderer (guard)", async () => {
+    hitlActions.approveReviewTask.mockImplementationOnce(async () => {
+      throw new Error("takes no such list step refresh");
+    });
+    const { view, rerender } = await mount();
+    fireEvent.click(await view.findByRole("button", { name: "Send with a file" }));
+    await act(async () => {});
+    fireEvent.click(await view.findByTestId("list-picker-try-again"));
+    // red-first-expect: to be called with arguments: [ 'Could not continue this run.' ]
+    await waitFor(() => expect(panelToast.error).toHaveBeenCalledWith("Could not continue this run."));
+    // The step is answered elsewhere; the run reaches a later step drawn by
+    // the same renderer.
+    await showWorking();
+    rerender();
+    await act(async () => {});
+    await showPause(FILES_STEP_ID, "wayflow-task-later", "accountScope", 3);
+    rerender();
+    await act(async () => {});
+    const payload = await pickAndContinue(view, 2);
+    expect(payload).not.toHaveProperty("userResponse");
+  });
+
+  it("a file attached before Try again does not go with another step drawn by the same renderer (guard)", async () => {
+    const { view, rerender } = await mount();
+    fireEvent.click(await view.findByRole("button", { name: "Send with a file" }));
+    await act(async () => {});
+    fireEvent.click(await view.findByTestId("list-picker-try-again"));
+    // red-first-expect: to be called 1 times, but got 0 times
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    await showWorking();
+    rerender();
+    await act(async () => {});
+    // The run moves on to the second list step, drawn by the same renderer.
+    await showPause(FILES_STEP_ID, "wayflow-task-second-list", "accountScope", 2);
     rerender();
     await act(async () => {});
     const payload = await pickAndContinue(view, 2);

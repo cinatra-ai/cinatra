@@ -488,16 +488,26 @@ describe("cinatra#3562 — a refresh carries nothing but its value and mints no 
 });
 
 describe("cinatra#3562 — which write is a refresh request", () => {
-  it("only a mid-run list step's write with a nonblank string `refresh`", () => {
+  const recorded = { type: "object", "x-cinatra-list-step-refresh-value": "reload" };
+  const at = (xRenderer: string, reviewTaskId: string, schema: unknown = recorded) => ({ xRenderer, reviewTaskId, schema });
+  it("only a mid-run list step's write with a nonblank string `refresh`, which sends the value recorded with the pause", () => {
     const write = { listIds: [], listNames: [], refresh: "refresh" };
     // red-first-expect: listStepRefreshRequest is not a function
-    expect(listStepRefreshRequest(LIST_STEP_ID, TASK, write)).toBe("refresh");
-    expect(listStepRefreshRequest(LIST_STEP_ID, `setup-${RUN.id}`, write)).toBeNull();
-    expect(listStepRefreshRequest("@cinatra-ai/email-outreach-agent:output", TASK, write)).toBeNull();
-    expect(listStepRefreshRequest(LIST_STEP_ID, TASK, { listIds: ["a"], listNames: ["A"] })).toBeNull();
-    expect(listStepRefreshRequest(LIST_STEP_ID, TASK, { refresh: "  " })).toBeNull();
-    expect(listStepRefreshRequest(LIST_STEP_ID, TASK, { refresh: true })).toBeNull();
-    expect(listStepRefreshRequest(LIST_STEP_ID, TASK, "refresh")).toBeNull();
+    expect(listStepRefreshRequest(at(LIST_STEP_ID, TASK), write)).toEqual({ value: "reload" });
+    expect(listStepRefreshRequest(at(LIST_STEP_ID, `setup-${RUN.id}`), write)).toBeNull();
+    expect(listStepRefreshRequest(at("@cinatra-ai/email-outreach-agent:output", TASK), write)).toBeNull();
+    expect(listStepRefreshRequest(at(LIST_STEP_ID, TASK), { listIds: ["a"], listNames: ["A"] })).toBeNull();
+    expect(listStepRefreshRequest(at(LIST_STEP_ID, TASK), { refresh: "  " })).toBeNull();
+    expect(listStepRefreshRequest(at(LIST_STEP_ID, TASK), { refresh: true })).toBeNull();
+    expect(listStepRefreshRequest(at(LIST_STEP_ID, TASK), "refresh")).toBeNull();
+  });
+
+  it("a press on a pause recorded with no refresh value has no value to send", () => {
+    const write = { listIds: [], listNames: [], refresh: "refresh" };
+    // red-first-expect: listStepRefreshRequest is not a function
+    expect(listStepRefreshRequest(at(LIST_STEP_ID, TASK, { type: "object" }), write)).toEqual({ value: null });
+    expect(listStepRefreshRequest(at(LIST_STEP_ID, TASK, null), write)).toEqual({ value: null });
+    expect(listStepRefreshRequest(at(LIST_STEP_ID, TASK, { "x-cinatra-list-step-refresh-value": " " }), write)).toEqual({ value: null });
   });
 });
 

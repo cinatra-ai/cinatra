@@ -164,9 +164,16 @@ function TryAgainRenderer({ onChange, onValidityChange }: FieldRendererProps) {
   );
 }
 
-async function mountOn(reviewTaskId: string) {
+/** The pause's gate schema, recorded with `recorded` as its refresh value (none when null). */
+const gateSchema = (recorded: string | null = "refresh") => ({
+  type: "object",
+  properties: { accountScope: { type: "string" } },
+  ...(recorded === null ? {} : { "x-cinatra-list-step-refresh-value": recorded }),
+});
+
+async function mountOn(reviewTaskId: string, recorded: string | null = "refresh") {
   INTERRUPT = {
-    schema: { type: "object", properties: { accountScope: { type: "string" } } },
+    schema: gateSchema(recorded),
     xRenderer: LIST_STEP_ID,
     values: {},
     reviewTaskId,
@@ -306,6 +313,27 @@ describe("OrchestratorStepperPanel — a list step's Try again (cinatra#3562)", 
     expect(payload).not.toHaveProperty("listIds");
   });
 
+  it("sends the value recorded with the pause, not the one the renderer's deployed binding writes", async () => {
+    const view = await mountOn(WAYFLOW_TASK, "reload");
+    fireEvent.click(await view.findByTestId("list-picker-try-again"));
+    // red-first-expect: to be called 1 times, but got 0 times
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const payload = (hitlActions.approveReviewTask.mock.calls[0] as unknown as [string, Record<string, unknown>])[1];
+    expect(payload).toMatchObject({ userResponse: "reload", listStepRefresh: "reload" });
+  });
+
+  it("a pause recorded with no refresh value sends nothing, and Continue stays unavailable", async () => {
+    const view = await mountOn(WAYFLOW_TASK, null);
+    const tryAgain = await view.findByTestId("list-picker-try-again");
+    await waitFor(() => expect(productContinue()!.disabled).toBe(true));
+    fireEvent.click(tryAgain);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    expect(productContinue()!.disabled).toBe(true);
+  });
+
   it("sends once for a double press", async () => {
     let finish: (value: { ok: true }) => void = () => {};
     hitlActions.approveReviewTask.mockImplementationOnce(
@@ -359,7 +387,7 @@ describe("OrchestratorStepperPanel — a list step's Try again (cinatra#3562)", 
       renderer: PickOrRetryRenderer,
       drawsOwnSubmit: true,
     });
-    const schema = { type: "object", properties: { accountScope: { type: "string" } } };
+    const schema = gateSchema();
     INTERRUPT = { schema, xRenderer: LIST_STEP_ID, values: { stepNumber: 1 }, reviewTaskId: "wayflow-task-first" };
     const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
     const view = render(twoListStepsPanel(OrchestratorStepperPanel));

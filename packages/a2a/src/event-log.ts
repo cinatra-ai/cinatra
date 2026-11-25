@@ -425,36 +425,46 @@ export async function rememberWayflowGateTask(
  *
  * Storage: beside the list, one hash `cinatra:wayflow:renderer-gate-nodes:<runId>`
  * holds `last` (the verified node of the last appended pause) and
- * `task:<taskId>` (the place of a pause that took an earlier pause's place), with
- * the list's time to live. The whole read and write is one script, so two
- * reports of one pause, or of two pauses, never both take a place.
+ * `task:<taskId>` (the place of a pause that took an earlier pause's place). The
+ * list and the hash share one lifetime: every path of the script sets the
+ * time to live of both, and a list that starts again (empty: never written, or
+ * expired) drops what the hash held. The whole read and write is one script,
+ * so two reports of one pause, or of two pauses, never both take a place.
  */
 const RENDERER_GATE_PLACE_LUA = `
-local list = redis.call('LRANGE', KEYS[1], 0, -1)
 local ttl = tonumber(ARGV[3])
+local function keep()
+  redis.call('EXPIRE', KEYS[1], ttl)
+  redis.call('EXPIRE', KEYS[2], ttl)
+end
+local list = redis.call('LRANGE', KEYS[1], 0, -1)
+if #list == 0 then
+  redis.call('DEL', KEYS[2])
+end
 for i = 1, #list do
   if list[i] == ARGV[1] then
-    redis.call('EXPIRE', KEYS[1], ttl)
+    keep()
     return i - 1
   end
 end
 local alias = redis.call('HGET', KEYS[2], 'task:' .. ARGV[1])
-if alias then return tonumber(alias) end
+if alias then
+  keep()
+  return tonumber(alias)
+end
 local n = #list
 if ARGV[2] ~= '' and n > 0 and redis.call('HGET', KEYS[2], 'last') == ARGV[2] then
   redis.call('HSET', KEYS[2], 'task:' .. ARGV[1], n - 1)
-  redis.call('EXPIRE', KEYS[2], ttl)
-  redis.call('EXPIRE', KEYS[1], ttl)
+  keep()
   return n - 1
 end
 redis.call('RPUSH', KEYS[1], ARGV[1])
-redis.call('EXPIRE', KEYS[1], ttl)
 if ARGV[2] ~= '' then
   redis.call('HSET', KEYS[2], 'last', ARGV[2])
-  redis.call('EXPIRE', KEYS[2], ttl)
 else
   redis.call('HDEL', KEYS[2], 'last')
 end
+keep()
 return n
 `;
 

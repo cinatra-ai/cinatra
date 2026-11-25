@@ -19,6 +19,7 @@
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import { GROUPED_SETUP_FORM_RENDERER_ID } from "./agent-builder-ids";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
+import { recordedListStepRefreshValue } from "./orchestrator-gate-predicate";
 import { isSetupInterruptTaskId } from "./run-surface-status";
 import { wrapUserResponseWithAttachments } from "./wayflow-user-response-envelope";
 
@@ -552,21 +553,38 @@ export function applyRendererApprovalNote(
 export const LIST_STEP_REFRESH_KEY = "listStepRefresh";
 
 /**
- * The refresh value a list step's write asks to send, or null. Only a mid-run
- * list step (`isMidRunListStepGate`: a `:list-picker` gate that is not a setup
- * gate) asks, and only with a `refresh` that is a nonblank string. The write is
- * the renderer's own `onChange` value, not the merged buffer, so each press is
- * read once.
+ * A list step's Try again press, read off one renderer write: null when the
+ * write is no press (it takes its road unchanged), else the value to send.
+ *
+ * Only a mid-run list step (`isMidRunListStepGate`: a `:list-picker` gate that
+ * is not a setup gate) presses, and only with a `refresh` that is a nonblank
+ * string. That string only signals the press: the renderer draws from the
+ * binding deployed now, which can differ from the one the pause was recorded
+ * with. THE VALUE SENT IS THE ONE RECORDED WITH THE PAUSE, read from the gate's
+ * own schema (`recordedListStepRefreshValue`), the only value the server takes.
+ * A pause recorded with no value gives `value: null`: the host sends nothing.
+ * The write is the renderer's own `onChange` value, not the merged buffer, so
+ * each press is read once.
  */
 export function listStepRefreshRequest(
-  xRenderer: string,
-  reviewTaskId: string,
+  gate: { xRenderer: string; reviewTaskId: string; schema: unknown },
   written: unknown,
-): string | null {
-  if (!isMidRunListStepGate(xRenderer, reviewTaskId)) return null;
+): { value: string | null } | null {
+  if (!isMidRunListStepGate(gate.xRenderer, gate.reviewTaskId)) return null;
   if (written === null || typeof written !== "object" || Array.isArray(written)) return null;
   const refresh = (written as { refresh?: unknown }).refresh;
-  return typeof refresh === "string" && refresh.trim().length > 0 ? refresh : null;
+  if (typeof refresh !== "string" || refresh.trim().length === 0) return null;
+  return { value: recordedListStepRefreshValue(gate.schema) ?? null };
+}
+
+/**
+ * The step number a pause's values carry (`stepNumber`: the policy step the
+ * run placed the pause at), or null when it carries none.
+ */
+export function pauseStepNumber(values: unknown): number | null {
+  if (values === null || typeof values !== "object" || Array.isArray(values)) return null;
+  const stepNumber = (values as { stepNumber?: unknown }).stepNumber;
+  return typeof stepNumber === "number" && Number.isInteger(stepNumber) ? stepNumber : null;
 }
 
 /**

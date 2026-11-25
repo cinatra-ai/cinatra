@@ -48,7 +48,8 @@ import { AgentHitlScreenCard } from "../agent-hitl-screen-card";
 const RUN_ID = "run-3562";
 const LIST_STEP_ID = "@cinatra-ai/email-outreach-agent:list-picker";
 
-function askingOn(reviewTaskId: string) {
+/** The pause's gate, recorded with `recorded` as its refresh value (none when null). */
+function askingOn(reviewTaskId: string, recorded: string | null = "refresh") {
   return {
     state: "asking" as const,
     runId: RUN_ID,
@@ -56,7 +57,11 @@ function askingOn(reviewTaskId: string) {
     gate: {
       reviewTaskId,
       xRenderer: LIST_STEP_ID,
-      inputSchema: { type: "object", properties: { accountScope: { type: "string" } } },
+      inputSchema: {
+        type: "object",
+        properties: { accountScope: { type: "string" } },
+        ...(recorded === null ? {} : { "x-cinatra-list-step-refresh-value": recorded }),
+      },
       currentValues: {},
       fieldName: "accountScope",
     },
@@ -134,5 +139,26 @@ describe("AgentHitlScreenCard — a list step's Try again (cinatra#3562)", () =>
     await waitFor(() => expect(approveMock).toHaveBeenCalledTimes(1));
     await act(async () => finish({ ok: true }));
     expect(approveMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends the value recorded with the pause, not the one the renderer's deployed binding writes", async () => {
+    screenStateMock.mockImplementation(async () => askingOn("wayflow-task-3562", "reload"));
+    const view = mountCard();
+    fireEvent.click(await view.findByTestId("list-picker-try-again"));
+    await waitFor(() => expect(approveMock).toHaveBeenCalledTimes(1));
+    // red-first-expect: to match object { userResponse: 'reload'
+    expect(approveMock.mock.calls[0]![1]).toMatchObject({ userResponse: "reload", listStepRefresh: "reload" });
+  });
+
+  it("a pause recorded with no refresh value sends nothing, and the screen stays as it is", async () => {
+    screenStateMock.mockImplementation(async () => askingOn("wayflow-task-3562", null));
+    const view = mountCard();
+    fireEvent.click(await view.findByTestId("list-picker-try-again"));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    // red-first-expect: to not be called at all, but actually been called 1 times
+    expect(approveMock).not.toHaveBeenCalled();
+    expect(view.getByTestId("list-picker-try-again")).toBeTruthy();
   });
 });

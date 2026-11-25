@@ -814,9 +814,15 @@ export function AgentHitlScreenFields({
   // takes its road unchanged.
   const sendingRefreshFirst =
     (road: (next: unknown) => Promise<void>) => async (next: unknown) => {
-      const listStepRefresh = listStepRefreshRequest(gate.xRenderer, gate.reviewTaskId, next);
-      if (listStepRefresh === null) return road(next);
-      await onSubmitRefresh?.(buildListStepRefreshPayload(listStepRefresh));
+      const press = listStepRefreshRequest(
+        { xRenderer: gate.xRenderer, reviewTaskId: gate.reviewTaskId, schema: gate.inputSchema },
+        next,
+      );
+      if (press === null) return road(next);
+      // A pause recorded with no refresh value takes none: nothing is sent and
+      // the screen stays as it is, its list still there to pick from.
+      if (press.value === null) return;
+      await onSubmitRefresh?.(buildListStepRefreshPayload(press.value));
     };
 
   return (

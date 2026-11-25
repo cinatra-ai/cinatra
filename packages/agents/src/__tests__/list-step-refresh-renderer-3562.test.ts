@@ -192,41 +192,66 @@ const redis = vi.hoisted(() => {
     }
     /**
      * The renderer pause place script (two keys: the list and the node hash),
-     * run step by step on the same maps in one synchronous call, as Redis runs
-     * a script. Any other script answers "absent".
+     * RUN AS SHIPPED: the script text the code sends is turned line by line
+     * into JavaScript (the few Lua forms it uses) and runs on the same maps in
+     * one synchronous call, as Redis runs a script. Lua tables count from 1, so
+     * a list read answers with an empty first slot. Any other script answers
+     * "absent".
      */
     async eval(script: string, numKeys: number, ...rest: string[]): Promise<number | string> {
-      if (numKeys !== 2 || !rest[0].startsWith("cinatra:wayflow:renderer-gates:") || !script.includes("'last'")) return "absent";
-      const [listKey, nodesKey, taskId, node, ttlRaw] = rest;
-      const ttl = Number(ttlRaw);
-      const list = lists.get(listKey) ?? [];
-      const at = list.indexOf(taskId);
-      if (at !== -1) {
-        ttls.set(listKey, ttl);
-        return at;
-      }
-      const nodes = hashes.get(nodesKey) ?? new Map<string, string>();
-      const alias = nodes.get(`task:${taskId}`);
-      if (alias !== undefined) return Number(alias);
-      const n = list.length;
-      if (node !== "" && n > 0 && nodes.get("last") === node) {
-        nodes.set(`task:${taskId}`, String(n - 1));
-        hashes.set(nodesKey, nodes);
-        ttls.set(nodesKey, ttl);
-        ttls.set(listKey, ttl);
-        return n - 1;
-      }
-      list.push(taskId);
-      lists.set(listKey, list);
-      ttls.set(listKey, ttl);
-      if (node !== "") {
-        nodes.set("last", node);
-        hashes.set(nodesKey, nodes);
-        ttls.set(nodesKey, ttl);
-      } else {
-        nodes.delete("last");
-      }
-      return n;
+      if (numKeys !== 2 || !rest[0].startsWith("cinatra:wayflow:renderer-gates:")) return "absent";
+      const call = (command: string, key: string, ...args: Array<string | number>): unknown => {
+        switch (command) {
+          case "LRANGE":
+            return [null, ...(lists.get(key) ?? [])];
+          case "RPUSH": {
+            const list = lists.get(key) ?? [];
+            list.push(...args.map(String));
+            lists.set(key, list);
+            return list.length;
+          }
+          case "HGET":
+            return hashes.get(key)?.get(String(args[0])) ?? null;
+          case "HSET": {
+            const hash = hashes.get(key) ?? new Map<string, string>();
+            hash.set(String(args[0]), String(args[1]));
+            hashes.set(key, hash);
+            return 1;
+          }
+          case "HDEL": {
+            const hash = hashes.get(key);
+            const had = hash?.delete(String(args[0])) ?? false;
+            if (hash && hash.size === 0) hashes.delete(key);
+            return had ? 1 : 0;
+          }
+          case "DEL":
+            ttls.delete(key);
+            return (lists.delete(key) ? 1 : 0) + (hashes.delete(key) ? 1 : 0);
+          case "EXPIRE":
+            if (!has(key)) return 0;
+            ttls.set(key, Number(args[0]));
+            return 1;
+          default:
+            throw new Error(`the place script called ${command}, which this double does not know`);
+        }
+      };
+      const js = script
+        .replace(/local function (\w+)\(\)/g, "const $1 = () => {")
+        .replace(/\blocal\b/g, "let")
+        .replace(/for (\w+) = 1, #(\w+) do/g, "for (let $1 = 1; $1 <= $2.length - 1; $1++) {")
+        .replace(/#(\w+)/g, "($1.length - 1)")
+        .replace(/\bif (.+) then (.+) end$/gm, "if ($1) { $2 }")
+        .replace(/\bif (.+) then$/gm, "if ($1) {")
+        .replace(/^\s*else\s*$/gm, "} else {")
+        .replace(/^\s*end\s*$/gm, "}")
+        .replace(/ ~= /g, " !== ")
+        .replace(/ == /g, " === ")
+        .replace(/ and /g, " && ")
+        .replace(/ \.\. /g, " + ")
+        .replace(/redis\.call\(/g, "call(")
+        .replace(/tonumber\(/g, "Number(");
+      const [listKey, nodesKey, ...argv] = rest;
+      return new Function("KEYS", "ARGV", "call", js)([null, listKey, nodesKey], [null, ...argv], call) as number;
     }
     async quit(): Promise<"OK"> {
       return "OK";
@@ -523,7 +548,7 @@ describe("cinatra#3562 — without a verified node, pauses are placed as before"
     expect(redis.lists.get(RENDERER_GATES_KEY)).toEqual(["task-list-1", "task-list-2"]);
     // An unverified pause clears the last node: a signed pause on the list
     // node after it is not matched across it.
-    expect(redis.hashes.get(NODES_KEY)?.has("last")).toBe(false);
+    expect(redis.hashes.get(NODES_KEY)?.get("last")).toBeUndefined();
   });
 
   it("a pause after a refresh with no claim takes a new place too", async () => {
@@ -544,13 +569,64 @@ describe("cinatra#3562 — when the run's place records expire", () => {
     // The place is not known any more: the pause takes place 0, the list step's.
     expect(renderers().at(-1)).toBe(LIST_STEP_ID);
   });
+
+  const SEVEN_DAYS_S = 7 * 24 * 3600;
+  /** Both records age apart (the node hash closer to its end), as if days passed. */
+  const ageApart = () => {
+    redis.ttls.set(RENDERER_GATES_KEY, 600);
+    redis.ttls.set(NODES_KEY, 5);
+  };
+
+  it("a pause reported again renews the lifetime of the list and the node records together", async () => {
+    await firstPause("task-list-1");
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await refresh("task-list-1", "task-list-2");
+    ageApart();
+    await reportAgain("task-list-1");
+    expect([redis.ttls.get(RENDERER_GATES_KEY), redis.ttls.get(NODES_KEY)]).toEqual([SEVEN_DAYS_S, SEVEN_DAYS_S]);
+  });
+
+  it("a pause that took an earlier place, reported again, renews both records too", async () => {
+    await firstPause("task-list-1");
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await refresh("task-list-1", "task-list-2");
+    ageApart();
+    await reportAgain("task-list-2");
+    expect([redis.ttls.get(RENDERER_GATES_KEY), redis.ttls.get(NODES_KEY)]).toEqual([SEVEN_DAYS_S, SEVEN_DAYS_S]);
+  });
+
+  it("node records left from an ended list are not read: the places restart together", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      ...TEMPLATE,
+      approvalPolicy: {
+        steps: [
+          { ...TEMPLATE.approvalPolicy.steps[0], stepNumber: 1 },
+          { ...TEMPLATE.approvalPolicy.steps[0], stepNumber: 2 },
+          { ...TEMPLATE.approvalPolicy.steps[1], stepNumber: 3 },
+        ],
+      },
+    });
+    await firstPause("task-a-1", LIST_NODE);
+    await pick("task-a-1", "task-b-1", OTHER_LIST_NODE);
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await refresh("task-b-1", "task-b-2", OTHER_LIST_NODE);
+    expect(stepNumbers()).toEqual([1, 2, 2]);
+    // The list ends alone; the node hash still says task-b-2 is place 1.
+    redis.lists.delete(RENDERER_GATES_KEY);
+    await reportAgain("task-b-2", OTHER_LIST_NODE);
+    expect(stepNumbers().at(-1)).toBe(1);
+    expect(redis.hashes.get(NODES_KEY)?.get("task:task-b-2")).toBeUndefined();
+    expect(redis.ttls.get(NODES_KEY)).toBe(SEVEN_DAYS_S);
+  });
 });
 
 describe("cinatra#3562 — the refresh value is the one the pause recorded", () => {
   it("a later change of the binding does not change what Try again sends", async () => {
     await firstPause("task-list-1");
+    // The page receives the recorded value with the pause: the hosts send it.
+    // red-first-expect: expected undefined to be 'refresh'
+    expect((onInterruptSpy.mock.calls[0][0] as Record<string, unknown>)["x-cinatra-list-step-refresh-value"]).toBe("refresh");
     listBinding.params = { refreshValue: "reload" };
-    // red-first-expect: buildListStepRefreshPayload is not a function
     await expect(
       approveReviewTaskInternal("wayflow-task-list-1", RUN.runBy, buildListStepRefreshPayload("reload")),
     ).rejects.toThrow("takes no such list step refresh");
