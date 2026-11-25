@@ -342,7 +342,6 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
     expect(second.every((o) => o.ok && o.deduped)).toBe(true);
   });
 
-  // red-first-expect: expected [] to deeply equal [ { eventOf: 'rep-1', …(1) }, …(2) ]
   it("A4 a retry that reuses a revision writes that revision's produced event for its own attempt (cinatra#4762)", async () => {
     const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
     const events = () => poolQueryMock.mock.calls
@@ -378,7 +377,6 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
     expect(String(text).replace(/\s+/g, " ")).toContain(`AND (EXISTS (SELECT 1 FROM "public"."artifact_produced_outbox" WHERE event_id = $1::text))`);
   });
 
-  // red-first-expect: expected [] to deeply equal [ { eventOf: 'rep-w', generation: 1 } ]
   it("A6 the loser of a concurrent double drive restamps the winner's revision for its own attempt (cinatra#4762)", async () => {
     const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
     const { MATERIALIZATION_FINALIZE_CONFLICT_MARKER } = await vi.importActual<typeof import("../materialization-ledger")>("../materialization-ledger");
@@ -402,7 +400,6 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
     expect(events()).toEqual([{ eventOf: "rep-w", generation: 1 }]);
   });
 
-  // red-first-expect: expected [] to deeply equal [ Array(4) ]
   it("A5 the reuse restamp takes the run row in its own statement before the event statement, and a claim seen there refuses it (cinatra#4762)", async () => {
     const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
     storedObjects.set("art-2", stored(fullData(MESSAGES[0])));
