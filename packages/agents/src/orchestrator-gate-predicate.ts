@@ -27,6 +27,22 @@ export function stepFiresRendererGate(step: RendererGateStepShape): boolean {
 }
 
 /**
+ * cinatra#3562: the largest `gateCount` a step can carry for the walk below. A
+ * step's `gateCount` is the number of pauses that one compiled step produces:
+ * 1 for an input step, and a split child gate is its own step of 1. The
+ * compiler copies the value as authored and nothing else bounds it, so a step
+ * that claims more than this many pauses gives no place.
+ */
+export const RENDERER_GATE_STEP_GATE_COUNT_LIMIT = 64;
+
+/**
+ * cinatra#3562: the number of places a run's renderer gate list can hold, the
+ * same limit as `RENDERER_GATE_PLACE_LIMIT` in packages/a2a (event-log.ts): a
+ * place at or past it is never written. A real flow has a few person steps.
+ */
+export const RENDERER_GATE_INDEX_LIMIT = 1024;
+
+/**
  * cinatra#3562: the place of a renderer gate in the run's renderer gate
  * sequence, read from the compiled steps alone (no expiry): the gate index at
  * which the one renderer step whose `xRenderer` is `xRenderer` starts. It walks
@@ -34,7 +50,11 @@ export function stepFiresRendererGate(step: RendererGateStepShape): boolean {
  * execution.ts: `stepFiresRendererGate`, `gateCount` 1 when not a number).
  *
  * Null when no renderer step, or more than one, carries that renderer, or when
- * that step spans more than one gate: the place is then not one index.
+ * that step spans more than one gate: the place is then not one index. Null
+ * also when any renderer step has a numeric `gateCount` that is not a whole
+ * number from 1 to `RENDERER_GATE_STEP_GATE_COUNT_LIMIT`, or when the place is
+ * not below `RENDERER_GATE_INDEX_LIMIT`: the stored policy can be replaced as a
+ * whole, so its values are not trusted to size anything.
  */
 export function rendererGateIndexOfRenderer(
   steps: ReadonlyArray<RendererGateStepShape & { gateCount?: unknown }>,
@@ -45,8 +65,10 @@ export function rendererGateIndexOfRenderer(
   for (const step of steps) {
     if (!stepFiresRendererGate(step)) continue;
     const gateCount = typeof step.gateCount === "number" ? step.gateCount : 1;
+    if (!Number.isInteger(gateCount) || gateCount < 1 || gateCount > RENDERER_GATE_STEP_GATE_COUNT_LIMIT) return null;
     if (step.xRenderer === xRenderer) {
       if (found !== null || gateCount !== 1) return null;
+      if (accumulated >= RENDERER_GATE_INDEX_LIMIT) return null;
       found = accumulated;
     }
     accumulated += gateCount;

@@ -431,6 +431,7 @@ export async function getOrAddWayflowRendererGateIndex(
   // that applies only when the list and the refresh note are still as read
   // here; when another report changed them in between, they are read again.
   // So two reports of one pause, or of two pauses, never both take a place.
+  let lastReadHadNote = false;
   for (let attempt = 0; attempt < RENDERER_GATE_COMMIT_ATTEMPTS; attempt += 1) {
     const list = (await r.lrange(key, 0, -1)) as string[];
     const existing = list.indexOf(taskId);
@@ -454,8 +455,8 @@ export async function getOrAddWayflowRendererGateIndex(
     const replacedAt = await r.hget(replacedKey, taskId);
     if (replacedAt !== null) {
       const at = Number(replacedAt);
-      if (!Number.isInteger(at) || at < 0) {
-        throw new Error(`renderer gate ${taskId} on run ${runId} was replaced at a place that cannot be read`);
+      if (!isRendererGatePlace(at)) {
+        throw new RendererGatePlaceUnknownError(`renderer gate ${taskId} on run ${runId} was replaced at a place that cannot be read`);
       }
       return at;
     }
@@ -468,13 +469,13 @@ export async function getOrAddWayflowRendererGateIndex(
       // A note that cannot be used is kept (not consumed): every later pause is
       // refused in the same way until the note expires, and none is given a guessed place.
       if (repeat === null) {
-        throw new Error(`renderer gate ${taskId} on run ${runId} follows a refresh whose position cannot be read`);
+        throw new RendererGatePlaceUnknownError(`renderer gate ${taskId} on run ${runId} follows a refresh whose position cannot be read`);
       }
       at = repeat.index;
       if (list.length > at) {
         // The list is still there: the refreshed task must be its last entry.
         if (at !== list.length - 1 || list[at] !== repeat.taskId) {
-          throw new Error(`renderer gate ${taskId} on run ${runId} follows a refresh of a task that is not the last renderer gate`);
+          throw new RendererGatePlaceUnknownError(`renderer gate ${taskId} on run ${runId} follows a refresh of a task that is not the last renderer gate`);
         }
         push = [];
       } else {
@@ -502,9 +503,56 @@ export async function getOrAddWayflowRendererGateIndex(
       ...push,
     );
     if (Number(committed) === 1) return at;
+    // The script refuses a place past the limit itself, whatever the caller read.
+    if (Number(committed) === RENDERER_GATE_COMMIT_PLACE_REFUSED) {
+      const refused = `renderer gate ${taskId} on run ${runId} was not given place ${at}: it is past the limit of ${RENDERER_GATE_PLACE_LIMIT} places`;
+      throw repeatRaw !== null ? new RendererGatePlaceUnknownError(refused) : new Error(refused);
+    }
+    lastReadHadNote = repeatRaw !== null;
   }
-  throw new Error(`renderer gate ${taskId} on run ${runId} was not given a place: the run's renderer gates kept changing`);
+  const exhausted = `renderer gate ${taskId} on run ${runId} was not given a place: the run's renderer gates kept changing`;
+  throw lastReadHadNote ? new RendererGatePlaceUnknownError(exhausted) : new Error(exhausted);
 }
+
+/**
+ * cinatra#3562: the place of a renderer gate cannot be established because of
+ * a list step's refresh: its note cannot be read, names a task that is not the
+ * last renderer gate, or names a place past `RENDERER_GATE_PLACE_LIMIT`; or a
+ * place kept for a refreshed task cannot be read. Every other failure of the
+ * place lookup (a Redis fault) is a plain `Error`.
+ *
+ * The caller must not show the pause with a guessed renderer.
+ */
+export class RendererGatePlaceUnknownError extends Error {
+  readonly code = RENDERER_GATE_PLACE_UNKNOWN;
+  constructor(message: string) {
+    super(message);
+    this.name = "RendererGatePlaceUnknownError";
+  }
+}
+
+/** The code of `RendererGatePlaceUnknownError`, and the start of the run error that records it. */
+export const RENDERER_GATE_PLACE_UNKNOWN = "renderer_gate_place_unknown";
+
+/**
+ * cinatra#3562: the number of places a run's renderer gate list can hold
+ * (places 0 to 1023). A place is one pause of a person step. A flow that maps
+ * its pauses by place has a fixed count of them (the sum of its steps'
+ * `gateCount`), and a real flow has a few person steps, so the limit is far
+ * above any real flow; a re-entrant step is the only renderer step of its flow
+ * and is not mapped by place. A note, a
+ * restored place or a write past the limit is refused, so an expired list is
+ * never rebuilt with more than this many vacant places. `rendererGateIndexOfRenderer`
+ * (packages/agents, orchestrator-gate-predicate.ts) uses the same limit.
+ */
+export const RENDERER_GATE_PLACE_LIMIT = 1024;
+
+function isRendererGatePlace(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value < RENDERER_GATE_PLACE_LIMIT;
+}
+
+/** What `RENDERER_GATE_COMMIT_LUA` returns when the place is past the limit. */
+const RENDERER_GATE_COMMIT_PLACE_REFUSED = -1;
 
 /** How often a renderer gate report reads the list again after another report changed it. */
 const RENDERER_GATE_COMMIT_ATTEMPTS = 8;
@@ -523,8 +571,15 @@ const RENDERER_GATE_COMMIT_ATTEMPTS = 8;
  * takes the refreshed task's place (set in place when nothing is pushed, or
  * pushed after the vacant places), and the refreshed task's place is kept in
  * KEYS[3] for a late report of it. Without a note, the values are pushed.
+ *
+ * A place that is not a whole number below `RENDERER_GATE_PLACE_LIMIT`, or a
+ * push that would make the list longer than the limit, changes nothing and
+ * returns -1 (`RENDERER_GATE_COMMIT_PLACE_REFUSED`), whatever the caller read.
  */
 const RENDERER_GATE_COMMIT_LUA = `
+local at = tonumber(ARGV[4])
+if at == nil or at < 0 or at ~= math.floor(at) or at >= ${RENDERER_GATE_PLACE_LIMIT} then return -1 end
+if tonumber(ARGV[6]) + tonumber(ARGV[7]) > ${RENDERER_GATE_PLACE_LIMIT} then return -1 end
 local note = redis.call('GET', KEYS[2]) or ''
 if note ~= ARGV[1] then return 0 end
 local n = tonumber(ARGV[6])
@@ -567,7 +622,7 @@ function readRendererGateRepeat(raw: string): { taskId: string; index: number } 
   try {
     const parsed = JSON.parse(raw) as { taskId?: unknown; index?: unknown };
     if (typeof parsed?.taskId !== "string" || parsed.taskId.length === 0) return null;
-    if (typeof parsed.index !== "number" || !Number.isInteger(parsed.index) || parsed.index < 0) return null;
+    if (!isRendererGatePlace(parsed.index)) return null;
     return { taskId: parsed.taskId, index: parsed.index };
   } catch {
     return null;
@@ -588,8 +643,9 @@ function readRendererGateRepeat(raw: string): { taskId: string; index: number } 
  *
  * Throws, and writes nothing, when the list holds entries and `taskId` is not
  * its last entry (the task is not the current renderer gate), or when the list
- * is gone and `placeFromSteps` is not a place: the place of the next pause
- * cannot be known, so the caller must not send the refresh.
+ * is gone and `placeFromSteps` is not a place (a whole number below
+ * `RENDERER_GATE_PLACE_LIMIT`), or when the place is past that limit: the place
+ * of the next pause cannot be known, so the caller must not send the refresh.
  */
 export async function rememberWayflowRendererGateRepeat(
   runId: string,
@@ -600,9 +656,9 @@ export async function rememberWayflowRendererGateRepeat(
   const r = getPublisher();
   const list = (await r.lrange(key, 0, -1)) as string[];
   let index = list.length - 1;
-  if (index < 0 && typeof placeFromSteps === "number" && Number.isInteger(placeFromSteps) && placeFromSteps >= 0) {
+  if (index < 0 && isRendererGatePlace(placeFromSteps)) {
     index = placeFromSteps;
-  } else if (index < 0 || list[index] !== taskId) {
+  } else if (index < 0 || list[index] !== taskId || !isRendererGatePlace(index)) {
     throw new Error(`the refresh of renderer gate ${taskId} on run ${runId} was not sent: its place in the run's steps is not known`);
   }
   await r.expire(key, GATE_SEQUENCE_TTL_S);

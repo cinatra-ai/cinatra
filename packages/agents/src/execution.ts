@@ -1914,6 +1914,62 @@ async function resolveWayflowXRenderer(
   return { xRenderer: fallback, stepNumber: null, schema: null, artifactReviewTargetsInput: null, surfaceGateInputKeys: unpinnedKeys() };
 }
 
+/**
+ * cinatra#3562: the code of `RendererGatePlaceUnknownError` (packages/a2a,
+ * event-log.ts), read by value so that a module double of the a2a package
+ * needs no class: the place of a renderer pause cannot be established because
+ * of a list step's refresh.
+ */
+const RENDERER_GATE_PLACE_UNKNOWN_CODE = "renderer_gate_place_unknown";
+
+function isRendererGatePlaceUnknown(error: unknown): boolean {
+  return error instanceof Error && (error as { code?: unknown }).code === RENDERER_GATE_PLACE_UNKNOWN_CODE;
+}
+
+/** The run error of a pause whose step cannot be established; it names no id or value. */
+export const RENDERER_GATE_PLACE_UNKNOWN_RUN_ERROR =
+  `${RENDERER_GATE_PLACE_UNKNOWN_CODE}: the run paused at a step that cannot be told after a list step's Try again, ` +
+  "so the step was not shown and the run was stopped. Start the run again.";
+
+/**
+ * cinatra#3562: end the run at a pause whose step cannot be established, as the
+ * failed task branch of `handleWayflowTaskState` does: a run with output under
+ * review holds at that review first; else the event log ends on RUN_ERROR and
+ * the run moves to `failed` with `RENDERER_GATE_PLACE_UNKNOWN_RUN_ERROR`.
+ */
+async function failWayflowRunAtUnplacedPause(args: {
+  runId: string;
+  run: AgentRunRecord;
+  fromStatus: AgentRunStatus;
+  authority: OrgWriteAuthority | undefined;
+  resumeLeg: ResumeGateIdentity | undefined;
+}): Promise<void> {
+  const { runId, run, fromStatus, authority, resumeLeg } = args;
+  const error = RENDERER_GATE_PLACE_UNKNOWN_RUN_ERROR;
+  if (
+    await producedReviewHoldsRun({
+      runId,
+      orgId: run.orgId,
+      fromStatus,
+      stepResults: [],
+      withheld: { status: "failed", error },
+      authority,
+      resumeLeg,
+      where: "unplaced gate",
+    })
+  ) {
+    return;
+  }
+  await Promise.resolve(
+    publishAgUiEvent(runId, { type: "RUN_ERROR", threadId: runId, runId, message: error, timestamp: Date.now() } as never),
+  ).catch(() => undefined);
+  if (fromStatus === "failed") return;
+  await transitionRunStatus(runId, fromStatus, "failed", { error, ...(resumeLeg ? { resumeLeg } : {}) }, authority).catch((e) => {
+    if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
+    throw e;
+  });
+}
+
 // ---------------------------------------------------------------------------
 // handleWayflowTaskState
 //
@@ -2511,6 +2567,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // the renderer resolved. The predicate is the same shape test the renderer
     // branch already runs, asked once and kept.
     const gateAsksForContext = isContextSelectorInterruptPayload(spreadFromOutput);
+    let rendererPlaceUnknown: Error | null = null;
     try {
       if (gateAsksForContext) {
         // cinatra#4457 — a context ask names no step, and a flagged gate can
@@ -2556,11 +2613,15 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         // gate's: no run input fills it.
         wayflowSurfaceGateInputKeys = tmpl ? resolved.surfaceGateInputKeys : null;
       }
-    } catch {
+    } catch (resolveError) {
       // non-fatal. For a single-renderer-gate agent, resolve to that one gate
       // (never the schema-field fallback) — contract (1). Multi-gate / context
-      // flows keep the acceptable schema-field fallback.
-      if (soleRendererGate) {
+      // flows keep the acceptable schema-field fallback, except (cinatra#3562)
+      // when a list step's refresh leaves the place of this pause, and so its
+      // step, unknown: no renderer is guessed for it (handled below).
+      if (isRendererGatePlaceUnknown(resolveError)) {
+        rendererPlaceUnknown = resolveError as Error;
+      } else if (soleRendererGate) {
         wayflowXRenderer = soleRendererGate.xRenderer;
         wayflowStepNumber = soleRendererGate.stepNumber;
         wayflowSchema = soleRendererGate.schema;
@@ -2571,6 +2632,15 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         // lists, or null (every run input) when the template was not read.
         wayflowSurfaceGateInputKeys = templateGateKeys;
       }
+    }
+    // cinatra#3562: a pause whose step cannot be established is never shown as
+    // an answerable step under another step's screen (the fallback form). The
+    // run ends failed with a fixed reason, as a failed task does: the person
+    // sees the run's error, and starts the run again.
+    if (rendererPlaceUnknown !== null) {
+      console.warn(`[wayflow] run=${runId} task=${task.id} is not shown: ${rendererPlaceUnknown.message}`);
+      await failWayflowRunAtUnplacedPause({ runId, run, fromStatus, authority, resumeLeg: legFence?.resumeLeg });
+      return;
     }
     // ------------------------------------------------------------------------
     // cinatra#1796 (epic #1620 S13) — MARKED artifact-review gate: pin + route.

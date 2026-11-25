@@ -130,7 +130,10 @@ vi.mock("../wayflow-run-token-carrier", () => ({ mintResumeRunTokenMetadata: vi.
  * key, the note's) step by step on the same maps, as the scripts read their
  * keys and arguments, in one synchronous call, so no other command runs in
  * between (as on Redis). Any other script answers "absent" (the answered-gate
- * consume, which these tests do not exercise).
+ * consume, which these tests do not exercise). The commit's first check (a
+ * place that is not a whole number below the limit, or a list that would grow
+ * past it, returns -1) reads the limit from the script text it is given, so
+ * the copy and the script cannot hold two limits.
  *
  * `loseReplyOnce` names keys whose next `set` is written and then fails, as a
  * write whose reply is lost does.
@@ -184,7 +187,7 @@ const redis = vi.hoisted(() => {
       if (!has(key)) return -2;
       return ttls.get(key) ?? -1;
     }
-    async eval(_script: string, numKeys: number, ...rest: string[]): Promise<number | string> {
+    async eval(script: string, numKeys: number, ...rest: string[]): Promise<number | string> {
       if (numKeys === 1 && rest[0].startsWith("cinatra:wayflow:renderer-gate-repeat:")) {
         const [noteKey, noteAsRead] = rest;
         if (store.get(noteKey) !== noteAsRead) return 0;
@@ -194,6 +197,13 @@ const redis = vi.hoisted(() => {
       }
       if (numKeys !== 3) return "absent";
       const [listKey, noteKey, replacedKey, noteAsRead, ttl, taskId, at, refreshedTaskId, nRaw, mRaw, ...tail] = rest;
+      const limitText = /or at >= (\d+) then return -1 end/.exec(script)?.[1];
+      if (limitText === undefined || !script.includes(`if tonumber(ARGV[6]) + tonumber(ARGV[7]) > ${limitText} then return -1 end`)) {
+        throw new Error("the commit script carries no place limit");
+      }
+      const place = at.trim() === "" ? Number.NaN : Number(at);
+      if (!Number.isFinite(place) || place < 0 || !Number.isInteger(place) || place >= Number(limitText)) return -1;
+      if (Number(nRaw) + Number(mRaw) > Number(limitText)) return -1;
       if ((store.get(noteKey) ?? "") !== noteAsRead) return 0;
       const n = Number(nRaw);
       const m = Number(mRaw);
@@ -238,7 +248,7 @@ vi.mock("@cinatra-ai/a2a", async (orig) => ({
 }));
 
 import { approveReviewTaskInternal } from "../review-task-actions";
-import { handleWayflowTaskState } from "../execution";
+import { handleWayflowTaskState, RENDERER_GATE_PLACE_UNKNOWN_RUN_ERROR } from "../execution";
 
 const RUN = {
   id: "run-refresh-renderer-3562",
@@ -674,5 +684,162 @@ describe("cinatra#3562 — a refresh that was not sent, and a real answer, leave
     ).rejects.toThrow("the runtime is unreachable");
     expect(noteAtSend).toEqual([otherNote]);
     expect(redis.store.get(REPEAT_KEY)).toBe(otherNote);
+  });
+});
+
+describe("cinatra#3562 — a pause whose step cannot be established after a refresh is not shown", () => {
+  const REPEAT_KEY = `cinatra:wayflow:renderer-gate-repeat:${RUN.id}`;
+
+  /** The state handler is given the next pause: the outcome is checked, then the note is removed and the pause reported again. */
+  async function refusedThenPlaced(note: string): Promise<void> {
+    redis.store.set(REPEAT_KEY, note);
+    const listBefore = [...(redis.lists.get(RENDERER_GATES_KEY) ?? [])];
+    const shownBefore = renderers();
+    // The run was resumed (a refresh was sent) and the runtime reports its next pause.
+    row.status = "running";
+    await firstPause("task-next-1");
+    // Not shown at all: no screen, and so no fallback form, for this pause.
+    expect(renderers()).toEqual(shownBefore);
+    expect(row.status).toBe("failed");
+    expect(storeMock.transitionRunStatus).toHaveBeenLastCalledWith(
+      RUN.id,
+      "running",
+      "failed",
+      { error: RENDERER_GATE_PLACE_UNKNOWN_RUN_ERROR },
+      expect.anything(),
+    );
+    expect(RENDERER_GATE_PLACE_UNKNOWN_RUN_ERROR).toMatch(/^renderer_gate_place_unknown: /);
+    // Nothing is consumed or rebuilt: the note and the list stay as they were.
+    expect(redis.store.get(REPEAT_KEY)).toBe(note);
+    expect(redis.lists.get(RENDERER_GATES_KEY) ?? []).toEqual(listBefore);
+
+    // Without the note, the same pause takes the next place and its own step's screen.
+    redis.store.delete(REPEAT_KEY);
+    row.status = "running";
+    await firstPause("task-next-1");
+    expect(renderers()).toEqual([...shownBefore, SECOND_STEP_ID]);
+    expect(row.status).toBe("pending_approval");
+  }
+
+  it("a note that cannot be read: the run ends failed with the fixed reason and the pause is not shown", async () => {
+    await firstPause("task-list-1");
+    // red-first-expect: to deeply equal [ Array(1) ]
+    await refusedThenPlaced("{not a note");
+  });
+
+  it("a note that names a task that is not the last renderer gate: the run ends failed with the fixed reason and the pause is not shown", async () => {
+    await firstPause("task-list-1");
+    // The list holds the list step's pause last; the note names another task at place 0.
+    // red-first-expect: to deeply equal [ Array(1) ]
+    await refusedThenPlaced(JSON.stringify({ taskId: "task-other-1", index: 0 }));
+  });
+
+  it("a note whose place is past the limit: the run ends failed and no place is rebuilt", async () => {
+    await firstPause("task-list-1");
+    // red-first-expect: to deeply equal [ Array(1) ]
+    await refusedThenPlaced(JSON.stringify({ taskId: "task-list-1", index: 1_000_000_000 }));
+  });
+});
+
+describe("cinatra#3562 — the places of a run's renderer gates are bounded", () => {
+  const REPEAT_KEY = `cinatra:wayflow:renderer-gate-repeat:${RUN.id}`;
+
+  it("the place from the steps refuses a gate count or a place past its limit", async () => {
+    const { rendererGateIndexOfRenderer, RENDERER_GATE_STEP_GATE_COUNT_LIMIT, RENDERER_GATE_INDEX_LIMIT } = await import("../orchestrator-gate-predicate");
+    const s = (xRenderer: string, extra: Record<string, unknown> = {}) => ({ xRenderer, ...extra });
+    // red-first-expect: rendererGateIndexOfRenderer is not a function
+    expect(rendererGateIndexOfRenderer([s("a", { gateCount: 1_000_000_000 }), s("list")], "list")).toBeNull();
+    expect(RENDERER_GATE_STEP_GATE_COUNT_LIMIT).toBe(64);
+    expect(RENDERER_GATE_INDEX_LIMIT).toBe(1024);
+    // The list's own limit (packages/a2a) is the same.
+    const { RENDERER_GATE_PLACE_LIMIT } = await import("@cinatra-ai/a2a");
+    expect(RENDERER_GATE_PLACE_LIMIT).toBe(RENDERER_GATE_INDEX_LIMIT);
+    expect(rendererGateIndexOfRenderer([s("a", { gateCount: 65 }), s("list")], "list")).toBeNull();
+    expect(rendererGateIndexOfRenderer([s("a", { gateCount: 1.5 }), s("list")], "list")).toBeNull();
+    expect(rendererGateIndexOfRenderer([s("a", { gateCount: 0 }), s("list")], "list")).toBeNull();
+    expect(rendererGateIndexOfRenderer([s("a", { gateCount: Number.POSITIVE_INFINITY }), s("list")], "list")).toBeNull();
+    // A step after the list step is checked too.
+    expect(rendererGateIndexOfRenderer([s("list"), s("b", { gateCount: 1_000_000_000 })], "list")).toBeNull();
+    expect(rendererGateIndexOfRenderer([s("a", { gateCount: 64 }), s("list")], "list")).toBe(64);
+    const many = (count: number) => Array.from({ length: count }, (_, i) => s(`a${i}`, { gateCount: 64 }));
+    expect(rendererGateIndexOfRenderer([...many(15), s("list")], "list")).toBe(960);
+    expect(rendererGateIndexOfRenderer([...many(16), s("list")], "list")).toBeNull();
+  });
+
+  it("a huge gate count on an earlier step after the list expired: the refresh is refused, nothing is sent, and no place is rebuilt", async () => {
+    const FIRST_STEP_ID = "@cinatra-ai/email-outreach-agent:account-scope";
+    const [listStep, secondStep] = TEMPLATE.approvalPolicy.steps;
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      ...TEMPLATE,
+      approvalPolicy: { steps: [{ ...listStep, stepNumber: 1, xRenderer: FIRST_STEP_ID, gateCount: 1_000_000_000 }, { ...listStep, stepNumber: 2 }, { ...secondStep, stepNumber: 3 }] },
+    });
+    await firstPause("task-list-1");
+    redis.lists.delete(RENDERER_GATES_KEY);
+    const evalCalls = vi.spyOn(redis.FakeRedis.prototype, "eval");
+
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await expect(refresh("task-list-1", "task-list-2")).rejects.toThrow("its place in the run's steps is not known");
+    expect(sendTask).not.toHaveBeenCalled();
+    expect(redis.store.has(REPEAT_KEY)).toBe(false);
+    expect(redis.lists.has(RENDERER_GATES_KEY)).toBe(false);
+    // The rebuild of the list (the commit script) is never sent.
+    expect(evalCalls.mock.calls.filter((call) => call[1] === 3)).toEqual([]);
+    evalCalls.mockRestore();
+  });
+
+  it("a note that carries a place past the limit is refused on read, and its list is not rebuilt", async () => {
+    const { getOrAddWayflowRendererGateIndex } = await import("@cinatra-ai/a2a");
+    const evalCalls = vi.spyOn(redis.FakeRedis.prototype, "eval");
+    for (const index of [1024, 1_000_000_000]) {
+      redis.store.set(REPEAT_KEY, JSON.stringify({ taskId: "task-list-1", index }));
+      // red-first-expect: promise resolved "+0" instead of rejecting
+      await expect(getOrAddWayflowRendererGateIndex(RUN.id, "task-list-2")).rejects.toMatchObject({ code: "renderer_gate_place_unknown" });
+      expect(redis.lists.has(RENDERER_GATES_KEY)).toBe(false);
+      expect(redis.store.has(REPEAT_KEY)).toBe(true);
+    }
+    expect(evalCalls.mock.calls.filter((call) => call[1] === 3)).toEqual([]);
+    evalCalls.mockRestore();
+    // The last place within the limit is restored.
+    redis.store.set(REPEAT_KEY, JSON.stringify({ taskId: "task-list-1", index: 1023 }));
+    expect(await getOrAddWayflowRendererGateIndex(RUN.id, "task-list-2")).toBe(1023);
+    expect(redis.lists.get(RENDERER_GATES_KEY)).toHaveLength(1024);
+  });
+
+  it("the commit script itself refuses a place past the limit, whatever its caller read", async () => {
+    const { getOrAddWayflowRendererGateIndex } = await import("@cinatra-ai/a2a");
+    const evalCalls = vi.spyOn(redis.FakeRedis.prototype, "eval");
+    expect(await getOrAddWayflowRendererGateIndex(RUN.id, "task-list-1")).toBe(0);
+    const commit = evalCalls.mock.calls.find((call) => call[1] === 3);
+    evalCalls.mockRestore();
+    const script = String(commit?.[0]);
+    // red-first-expect: expected 'undefined' to contain 'or at >= 1024 then return -1 end'
+    expect(script).toContain("or at >= 1024 then return -1 end");
+    expect(script).toContain("if tonumber(ARGV[6]) + tonumber(ARGV[7]) > 1024 then return -1 end");
+    // A rebuild of an expired list up to place 1024, sent straight to the script: refused, nothing written.
+    redis.lists.delete(RENDERER_GATES_KEY);
+    const note = JSON.stringify({ taskId: "task-list-1", index: 1024 });
+    redis.store.set(REPEAT_KEY, note);
+    const vacant = Array.from({ length: 1024 }, () => "");
+    const fake = new redis.FakeRedis();
+    const args = [RENDERER_GATES_KEY, REPEAT_KEY, `cinatra:wayflow:renderer-gate-replaced:${RUN.id}`, note, String(SEVEN_DAYS_S), "task-list-2"];
+    expect(await fake.eval(script, 3, ...args, "1024", "task-list-1", "0", "1025", ...vacant, "task-list-2")).toBe(-1);
+    expect(await fake.eval(script, 3, ...args, "1e9", "task-list-1", "0", "1", "task-list-2")).toBe(-1);
+    expect(await fake.eval(script, 3, ...args, "-1", "task-list-1", "0", "1", "task-list-2")).toBe(-1);
+    expect(redis.lists.has(RENDERER_GATES_KEY)).toBe(false);
+    expect(redis.store.get(REPEAT_KEY)).toBe(note);
+  });
+
+  it("a replacement approval policy takes a gate count only from 1 to the limit", async () => {
+    const { AGENT_BUILDER_TOOL_META } = await import("../mcp/schemas");
+    const schema = AGENT_BUILDER_TOOL_META.agent_update.inputSchema;
+    const update = (approvalPolicy: Record<string, unknown>) => schema.safeParse({ templateId: "tpl-1", approvalPolicy }).success;
+    // red-first-expect: expected true to be false
+    expect(update({ steps: [{ stepNumber: 1, gateCount: 1_000_000_000 }] })).toBe(false);
+    expect(update({ steps: [{ stepNumber: 1, gateCount: 65 }] })).toBe(false);
+    expect(update({ steps: [{ stepNumber: 1, gateCount: 1.5 }] })).toBe(false);
+    expect(update({ steps: [{ stepNumber: 1, gateCount: "2" }] })).toBe(false);
+    expect(update({ steps: [{ stepNumber: 1, gateCount: 64 }, { stepNumber: 2 }] })).toBe(true);
+    expect(update({ steps: [] })).toBe(true);
+    expect(update({})).toBe(true);
   });
 });
