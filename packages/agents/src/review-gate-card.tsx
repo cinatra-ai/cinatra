@@ -1349,14 +1349,6 @@ export function ReviewGateCard({
     targetHeaders,
     targetIslands,
     recordedPrompt: resolved?.recordedPrompt ?? null,
-    reading: reviewStateAnchor({
-      host,
-      insideConversation,
-      state: state.state,
-      targetCount: targetHeaders?.length ?? 0,
-      targetForm: resolved?.targetForm ?? null,
-      recordedPrompt: resolved?.recordedPrompt ?? null,
-    }),
     // NO PROMPT WINDOW INSIDE A CONVERSATION (cinatra#3481). The drawing
     // (`app-lifecycle-cards.html` §II): "A change request is typed into that
     // composer: Agent run & review §VI fixes typing a request as the whole
@@ -1428,7 +1420,23 @@ export function ReviewGateCard({
   // The SECOND absence: the reader may not read the target (or there is nothing
   // to read). No panel, no placeholder, no reason — the turn carries only prose.
   if (body === null) return null;
+  const reading = reviewStateAnchor({
+    host,
+    insideConversation,
+    state: state.state,
+    targetCount: targetHeaders?.length ?? 0,
+    targetForm: resolved?.targetForm ?? null,
+    recordedPrompt: resolved?.recordedPrompt ?? null,
+  });
 
+  // THE READING'S ANCHOR HOLDS THE WHOLE READING (cinatra#3033). The drawing
+  // puts each reading's id on the element that holds the gate header, the
+  // target and the decision floor together, so the grader reads them beneath
+  // it. The root already carries `review-gate-card`, so the reading rides one
+  // inner element that is ALWAYS drawn, in the same place, on every reading:
+  // a gate that settles changes one attribute and remounts nothing, the island
+  // included. It draws no box of its own (`contents`): the card's column lays
+  // out exactly the children it laid out before.
   return (
     <div
       className={frame}
@@ -1437,7 +1445,9 @@ export function ReviewGateCard({
       data-lifecycle-card-host={host}
       data-conformance-id="review-gate-card"
     >
-      <IslandFramingContext.Provider value={islandFraming}>{body}</IslandFramingContext.Provider>
+      <div className="contents" data-conformance-id={reading ?? undefined}>
+        <IslandFramingContext.Provider value={islandFraming}>{body}</IslandFramingContext.Provider>
+      </div>
     </div>
   );
 }
@@ -1458,7 +1468,10 @@ export type ReviewStateAnchorId =
  * the TARGET: one artifact per gate, and its own form decides the display that
  * draws it. The card reads that form from the resolve answer (`targetForm`, the
  * one pinned target's mime), never from an artifact type id, which core does
- * not name. On the picture the note field also opens carrying the prompt that
+ * not name. The answer carries the form in the spelling the preview's display
+ * was chosen by (the server passes it through the renderer's own
+ * `canonicalRepresentationMime`), so a legacy markdown spelling arrives as
+ * `text/markdown` and this rule needs no list of spellings. On the picture the note field also opens carrying the prompt that
  * made it, so the picture needs that prompt as well; on the post it is empty.
  *
  * FAIL CLOSED. A gate that pins several targets, an answer that names no form,
@@ -1508,10 +1521,6 @@ function renderState(args: {
    * `null` when it is not. */
   targetIslands: ReadonlyArray<ReviewTargetPair> | null;
   recordedPrompt: string | null;
-  /** The drawn reading's anchor (`reviewStateAnchor`), carried by the gate
-   *  header: an element every reading already draws, in the same place, so a
-   *  gate that settles changes one attribute and remounts nothing. */
-  reading: ReviewStateAnchorId | null;
   /** §VI's prompt window, bound to the run, or `null` on a host that named no
    * run and anywhere inside a conversation, where the thread's own composer is
    * the request road (cinatra#3481). Taken as a factory so the one permission
@@ -1542,7 +1551,6 @@ function renderState(args: {
     targetHeaders,
     targetIslands,
     recordedPrompt,
-    reading,
     promptWindow,
     settledExchange,
     islandSrc,
@@ -1676,7 +1684,7 @@ function renderState(args: {
       const pairTargets = targetIslands !== null;
       return (
         <>
-          <ReviewGateHeader pending reading={reading} />
+          <ReviewGateHeader pending />
           {/* §IV — the immutable target header(s): "Every target opens with a
               header that names what is under review and fixes it in place".
               Drawn HERE, by the card, so it survives every state of the island
@@ -2213,11 +2221,8 @@ export function SuggestionChips({
 function ReviewGateHeader({
   pending,
   outcome,
-  reading = null,
 }: {
   pending: boolean;
-  /** The drawn reading's anchor, on a pending or restricted gate only. */
-  reading?: ReviewStateAnchorId | null;
   /** The recorded outcome, for a settled gate that has one. Absent on every
    *  other reading, which keeps the request wording it always had. The title
    *  itself is `reviewGateHeaderTitle`, shared with the settled line below so
@@ -2225,7 +2230,7 @@ function ReviewGateHeader({
   outcome?: ReviewSettledOutcome | null;
 }): ReactElement {
   return (
-    <div className="flex flex-wrap items-center gap-2.5" data-conformance-id={reading ?? undefined}>
+    <div className="flex flex-wrap items-center gap-2.5">
       <span className="grid size-7 flex-none place-items-center rounded-chip bg-brand-mustard/[0.16] text-mustard-ink">
         <ClipboardCheck aria-hidden="true" className="size-4" />
       </span>

@@ -340,12 +340,18 @@ async function readPinnedRevisionForm(
 ): Promise<string | null> {
   try {
     const { bindArtifactReviewPorts } = await import("@/app/artifacts/[id]/review-target-prepare");
+    const { canonicalRepresentationMime } = await import("@/app/artifacts/[id]/renderer-resolution");
     const ports = bindArtifactReviewPorts({ orgId, actor });
     const member =
       settled && typeof ports.revisionMemberHistorical === "function"
         ? await ports.revisionMemberHistorical(target.artifactId, target.representationRevisionId)
         : await ports.revisionMember(target.artifactId, target.representationRevisionId);
-    return mediaForm(member?.mime);
+    // THE RENDERER'S OWN SPELLING. The preview resolves the pinned mime through
+    // `canonicalRepresentationMime` before it picks a display, so a legacy
+    // spelling (`text/x-markdown`) is drawn by the display of the registered one.
+    // The form named here goes through the same function, so the card reads the
+    // form the display was chosen by, never a second list of spellings.
+    return typeof member?.mime === "string" ? mediaForm(canonicalRepresentationMime(member.mime)) : null;
   } catch {
     return null;
   }

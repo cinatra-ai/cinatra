@@ -219,6 +219,119 @@ describe("the run page's review step carries the reading its target draws", () =
   });
 });
 
+describe("the reading's anchor holds the whole reading", () => {
+  /** What the drawing lists beneath the reading: the gate header, the one
+   *  target (its header and its preview) and the decision floor. */
+  function expectWholeReading(anchor: Element): void {
+    expect(anchor.textContent).toContain("Review requested");
+    expect(anchor.querySelector('[data-conformance-id="review-target-header"]')).not.toBeNull();
+    expect(anchor.querySelector("iframe")).not.toBeNull();
+    expect(anchor.querySelector('[data-conformance-id="review-decision-bar"]')).not.toBeNull();
+    expect(anchor.querySelector('textarea[data-testid="review-rationale"]')).not.toBeNull();
+  }
+
+  it("the post's anchor holds its header, its target and its floor", async () => {
+    mockResolve({ state: PENDING, headers: [POST.header], form: POST.form });
+    const { container } = render(runPage());
+    await mountedFloor(container);
+    const anchor = container.querySelector('[data-conformance-id="run-review-step-post"]');
+    // red-first-expect: expected null not to be null
+    expect(anchor).not.toBeNull();
+    expectWholeReading(anchor!);
+    expect(anchor!.querySelector('[data-action="continue-review -> resolved"]')).not.toBeNull();
+  });
+
+  it("the picture's anchor holds its header, its target and its floor", async () => {
+    mockResolve({ state: PENDING, headers: [PICTURE.header], form: PICTURE.form, recordedPrompt: PROMPT });
+    const { container } = render(runPage());
+    await mountedFloor(container);
+    const anchor = container.querySelector('[data-conformance-id="run-review-step-picture"]');
+    // red-first-expect: expected null not to be null
+    expect(anchor).not.toBeNull();
+    expectWholeReading(anchor!);
+    expect(anchor!.querySelector('[data-action="regenerate-review -> successor-gate-opened"]')).not.toBeNull();
+  });
+
+  it("the thread's picture card anchor holds its header, its target and its floor", async () => {
+    mockResolve({ state: PENDING, headers: [PICTURE.header], form: PICTURE.form, recordedPrompt: PROMPT });
+    const { container } = render(
+      <LifecycleCardSurfaceProvider host="chat_thread">
+        <ReviewGateCard view={VIEW} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    await mountedFloor(container);
+    const anchor = container.querySelector('[data-conformance-id="review-card-post-with-featured-image"]');
+    // red-first-expect: expected null not to be null
+    expect(anchor).not.toBeNull();
+    expectWholeReading(anchor!);
+  });
+
+  /** The card root's one child: the element that holds every reading. */
+  function holderOf(container: HTMLElement): Element {
+    const card = container.querySelector('[data-conformance-id="review-gate-card"]');
+    expect(card).not.toBeNull();
+    expect(card!.children).toHaveLength(1);
+    return card!.children[0]!;
+  }
+
+  it("the holder is drawn on every reading, draws no box, and is marked only where a reading applies", async () => {
+    // Loading: the answer the card draws its skeleton for.
+    mockResolve({ state: { state: "loading" } as LifecycleCardState });
+    const loading = render(runPage());
+    await waitFor(() => expect(loading.container.querySelector('[data-lifecycle-card-state="loading"]')).not.toBeNull());
+    // red-first-expect: to have a length of 1 but got 2
+    expect(holderOf(loading.container).className).toBe("contents");
+    expect(holderOf(loading.container).hasAttribute("data-conformance-id")).toBe(false);
+    cleanup();
+
+    // Pending, but a reading the card cannot claim (the post inside a thread).
+    mockResolve({ state: PENDING, headers: [POST.header], form: POST.form });
+    const thread = render(
+      <LifecycleCardSurfaceProvider host="chat_thread">
+        <ReviewGateCard view={VIEW} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    await mountedFloor(thread.container);
+    expect(holderOf(thread.container).className).toBe("contents");
+    expect(holderOf(thread.container).hasAttribute("data-conformance-id")).toBe(false);
+    cleanup();
+
+    // Settled.
+    mockResolve({ state: { state: "settled", outcome: "approved" }, headers: [POST.header] });
+    const settled = render(runPage());
+    await waitFor(() => expect(settled.container.querySelector('[data-lifecycle-card-state="settled"]')).not.toBeNull());
+    expect(holderOf(settled.container).className).toBe("contents");
+    expect(holderOf(settled.container).hasAttribute("data-conformance-id")).toBe(false);
+  });
+
+  it("Continue keeps the same holder and the same island frame, and only the mark goes", async () => {
+    let resolves = 0;
+    globalThis.fetch = vi.fn(async (url: unknown, init?: RequestInit) => {
+      if (String(url).endsWith("/decide") && init?.method === "POST") {
+        return json({ outcome: { kind: "decided", disposition: "approve", idempotent: false } });
+      }
+      return ++resolves === 1
+        ? json(envelope({ state: PENDING, headers: [POST.header], form: POST.form }))
+        : new Promise<Response>(() => {});
+    }) as unknown as typeof fetch;
+    const { container } = render(runPage());
+    await mountedFloor(container);
+    // red-first-expect: to have a length of 1 but got 3
+    const holder = holderOf(container);
+    expect(holder.getAttribute("data-conformance-id")).toBe("run-review-step-post");
+    const frame = holder.querySelector("iframe");
+    expect(frame).not.toBeNull();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="review-gate-settled"]')).not.toBeNull(),
+    );
+    expect(holderOf(container)).toBe(holder);
+    expect(holder.hasAttribute("data-conformance-id")).toBe(false);
+    expect(holder.querySelector("iframe")).toBe(frame);
+  });
+});
+
 describe("the chat thread carries the featured image's card", () => {
   it("the picture's card carries the anchor", async () => {
     mockResolve({ state: PENDING, headers: [PICTURE.header], form: PICTURE.form, recordedPrompt: PROMPT });
@@ -365,7 +478,7 @@ describe("reviewStateAnchor — the rule", () => {
     }
     // No form, or a form neither display draws as these readings.
     expect(reviewStateAnchor({ ...post, targetForm: null })).toBeNull();
-    for (const targetForm of ["application/pdf", "text/html", "text/plain", "video/mp4"]) {
+    for (const targetForm of ["application/pdf", "text/html", "text/plain", "video/mp4", "application/vnd.cinatra-unknown"]) {
       expect(reviewStateAnchor({ ...post, targetForm })).toBeNull();
       expect(reviewStateAnchor({ ...picture, targetForm })).toBeNull();
     }

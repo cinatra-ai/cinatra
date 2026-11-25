@@ -461,6 +461,18 @@ describe("cinatra#3033 — the form of the gate's one target", () => {
     expect(revisionMember).not.toHaveBeenCalled();
   });
 
+  it("names the legacy markdown spelling by the registered one the preview draws it under", async () => {
+    revisionMember.mockReturnValue({ mime: "text/x-markdown", form: "file", historical: false });
+    // red-first-expect: expected undefined to be 'text/markdown'
+    expect((await reading()).onlyTargetForm).toBe("text/markdown");
+  });
+
+  it("keeps a form the preview knows no other spelling for exactly as it is", async () => {
+    revisionMember.mockReturnValue({ mime: "application/vnd.cinatra-unknown", form: "file", historical: false });
+    // red-first-expect: expected undefined to be 'application/vnd.cinatra-unknown'
+    expect((await reading()).onlyTargetForm).toBe("application/vnd.cinatra-unknown");
+  });
+
   it("names no form when the pinned revision is not a member, and keeps the header", async () => {
     revisionMember.mockReturnValue(null);
     const result = await reading();
