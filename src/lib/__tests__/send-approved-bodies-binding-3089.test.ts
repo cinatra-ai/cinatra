@@ -112,6 +112,14 @@ import {
   type TriggerEmailSendDeps,
 } from "../trigger-email-send-use-cases";
 
+// The claim the passthrough route took for the call (cinatra#3089): the decision the call was signed for, else the
+// step's decision, `d-1`; each stubbed decision carries that id unless it names its own.
+const withClaim = <T extends { runId: string; publishDecisionId?: string; claim?: unknown } | null>(run: T): T =>
+  run && !run.claim ? { ...run, claim: { runId: run.runId, decisionId: run.publishDecisionId ?? "d-1" } } : run;
+const withDecisionId = <T extends object | null | undefined>(decision: T): T =>
+  decision ? ({ id: "d-1", ...decision } as T) : decision;
+
+
 /** A stand-in for the message send records with the claim's semantics: the
  *  first claim of a message wins (checked and set with no await between, so
  *  concurrent calls cannot both win), a sent message reads "done", and a
@@ -268,6 +276,12 @@ function makeFixture(opts?: {
           text: `Approved ${ref.artifactId}`,
           data: { campaignId: CAMPAIGN_ID },
         });
+  const governing = () =>
+    opts && "decision" in opts
+      ? opts.decision
+      : named === undefined
+        ? null
+        : { ...(opts?.decisionId ? { id: opts.decisionId } : {}), ...releasedCardFor(named) };
   const deps: TriggerEmailSendDeps = {
     getCampaign: async () => null,
     getDraftsByIds: async () => [],
@@ -281,14 +295,13 @@ function makeFixture(opts?: {
     readObjectRuns: async () => [],
     // The run of the call follows the case's run: none when the case has none.
     readCallingRun: async () =>
-      runId ? { runId, stepId: "send", ...(opts?.decisionId ? { publishDecisionId: opts.decisionId } : {}) } : null,
+      withClaim(runId ? { runId, stepId: "send", ...(opts?.decisionId ? { publishDecisionId: opts.decisionId } : {}) } : null),
     // A case that names no list calls from a step no publish decision governs.
-    readPublishDecision: async () =>
-      opts && "decision" in opts
-        ? opts.decision
-        : named === undefined
-          ? null
-          : { ...(opts?.decisionId ? { id: opts.decisionId } : {}), ...releasedCardFor(named) },
+    readPublishDecision: async () => withDecisionId(governing() as object | null),
+    readClaimedPublishDecision: async (_runId: string, decisionId: string) => {
+      const decision = withDecisionId(governing() as { id?: string } | null);
+      return decision?.id === decisionId ? decision : null;
+    },
   } as unknown as TriggerEmailSendDeps;
   let named: unknown;
   const handlers = createTriggerEmailSendHandlers(createTriggerEmailSendUseCases(deps));

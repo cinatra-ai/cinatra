@@ -165,6 +165,15 @@ export type TriggerEmailSendDeps = {
    */
   readPublishDecision?: (runId: string, stepId: string) => Promise<StepPublishDecision | null>;
   /**
+   * The decision `decisionId` of `runId`, by its id, in the run's CURRENT
+   * attempt (cinatra#3089): the decision the call's road claimed for this call
+   * (`CallingRun.claim`). Null when the run holds no such decision in its
+   * current attempt (another run's, or one a reset left behind). Defaults to
+   * `readDecisionOfRun`. The approved send reads its list from this decision
+   * only, never from "the newest of the attempt".
+   */
+  readClaimedPublishDecision?: (runId: string, decisionId: string) => Promise<StepPublishDecision | null>;
+  /**
    * The runs the HOST RECORDED as writers of the object `objectId` (its row's
    * run and every run of its append-only change history), never a run id the
    * object's own data names (cinatra#3089). Throws when they cannot be read.
@@ -184,10 +193,17 @@ export type TriggerEmailSendDeps = {
   ) => Promise<string | null>;
 };
 
-/** The run of a call, the verified step that made it, and the publish
- *  decision the runtime signed for the call, when it signed one (see
- *  `readCallingRun`). */
-export type CallingRun = { runId: string; stepId?: string; publishDecisionId?: string };
+/** The run of a call, the verified step that made it, the publish decision
+ *  the runtime signed for the call, when it signed one, and the decision the
+ *  call's road CLAIMED for this call (`claim`, the request frame's
+ *  `publishCallClaim`: the passthrough route's call check took it), when it
+ *  claimed one (see `readCallingRun`). */
+export type CallingRun = {
+  runId: string;
+  stepId?: string;
+  publishDecisionId?: string;
+  claim?: { runId: string; decisionId: string };
+};
 
 /** A step's publish decision, as the send reads it (see `readPublishDecision`). */
 export type StepPublishDecision = Pick<PublishDecisionRow, "status" | "decidedBy" | "surfacedValues" | "declaredRows">
@@ -378,10 +394,15 @@ function buildLazyDefaultDeps(): TriggerEmailSendDeps {
       const stepId = ctx?.verifiedStepId ?? agentRun?.verifiedStepId;
       // The decision the runtime signed beside the verified source (cinatra#3745), never request input.
       const publishDecisionId = ctx?.verifiedPublishDecisionId;
+      // The decision the passthrough route's call check CLAIMED for this call (cinatra#4762), as the server took it.
+      const claim = ctx?.publishCallClaim;
       return {
         runId: runId.trim(),
         ...(typeof stepId === "string" && stepId !== "" ? { stepId } : {}),
         ...(typeof publishDecisionId === "string" && publishDecisionId !== "" ? { publishDecisionId } : {}),
+        ...(claim && typeof claim.runId === "string" && typeof claim.decisionId === "string" && claim.decisionId !== ""
+          ? { claim: { runId: claim.runId, decisionId: claim.decisionId } }
+          : {}),
       };
     },
     async readObjectRuns(objectId, actor) {
@@ -403,6 +424,10 @@ function buildLazyDefaultDeps(): TriggerEmailSendDeps {
     async readPublishDecision(runId, stepId) {
       const { readGoverningPublishDecision } = await import("@cinatra-ai/agents/publish-decision-actions");
       return readGoverningPublishDecision(runId, stepId);
+    },
+    async readClaimedPublishDecision(runId, decisionId) {
+      const { readDecisionOfRun } = await import("@cinatra-ai/agents/publish-decision-store");
+      return readDecisionOfRun(runId, decisionId);
     },
   };
 }
@@ -974,6 +999,7 @@ async function runInitialSend(args: {
   readRunReviewedBodies: NonNullable<TriggerEmailSendDeps["readRunReviewedBodies"]>;
   readCallingRun: NonNullable<TriggerEmailSendDeps["readCallingRun"]>;
   readPublishDecision: NonNullable<TriggerEmailSendDeps["readPublishDecision"]>;
+  readClaimedPublishDecision: NonNullable<TriggerEmailSendDeps["readClaimedPublishDecision"]>;
   readObjectRuns: NonNullable<TriggerEmailSendDeps["readObjectRuns"]>;
   readRevisionStateUnderLock: NonNullable<TriggerEmailSendDeps["readRevisionStateUnderLock"]>;
   getObjectByRef: (
@@ -993,6 +1019,7 @@ async function runInitialSend(args: {
     readRunReviewedBodies,
     readCallingRun,
     readPublishDecision,
+    readClaimedPublishDecision,
     readObjectRuns,
     readRevisionStateUnderLock,
   } = args;
@@ -1107,17 +1134,45 @@ async function runInitialSend(args: {
     const stepId = callingRun?.stepId;
     if (runScopeId && stepId) {
       const decisionOf = `step ${stepId} of run ${runScopeId}`;
-      let decision: StepPublishDecision | null = null;
+      let governing: StepPublishDecision | null = null;
       try {
-        decision = await readPublishDecision(runScopeId, stepId);
+        governing = await readPublishDecision(runScopeId, stepId);
       } catch (err) {
         refuse(`the publish decision of ${decisionOf} could not be read: ${err instanceof Error ? err.message : String(err)}`);
       }
       // The decision the runtime signed for this call names the visit it was
       // made under: the governing decision must be that very decision.
       const signed = callingRun?.publishDecisionId;
-      if (signed !== undefined && decision?.id !== signed) {
+      if (signed !== undefined && governing?.id !== signed) {
         refuse(`the call was signed for another publish decision than the one that governs ${decisionOf}`);
+      }
+      // THE SEND USES EXACTLY ONE DECISION (cinatra#3089): the one the call's
+      // road claimed for this call (`claim`). Its list is read by that id, in
+      // the run's current attempt, never as "the newest of the attempt". A
+      // governed call with no claim, a claim of another run, a claim that the
+      // signed decision contradicts, a claimed decision the current attempt no
+      // longer holds (a reset left it behind), or one a newer decision of the
+      // step superseded is refused before any mail; a claimed decision that is
+      // not released is refused by the list read below.
+      let decision: StepPublishDecision | null = null;
+      if (governing) {
+        const claim = callingRun?.claim;
+        if (!claim) refuse(`no publish decision was claimed for this call (${decisionOf}) (decision_not_claimed)`);
+        if (claim!.runId !== runScopeId) refuse(`the call claimed a publish decision of another run (${decisionOf}) (decision_claim_other_run)`);
+        if (signed !== undefined && signed !== claim!.decisionId) {
+          refuse(`the call was signed for another publish decision than the one it claimed (${decisionOf}) (decision_claim_conflict)`);
+        }
+        try {
+          decision = await readClaimedPublishDecision(runScopeId, claim!.decisionId);
+        } catch {
+          refuse(`the publish decision this call claimed could not be read (${decisionOf}) (decision_claim_unreadable)`);
+        }
+        if (!decision || decision.id !== claim!.decisionId) {
+          refuse(`the publish decision this call claimed is not a decision of the current attempt of the run (${decisionOf}) (decision_claim_not_current)`);
+        }
+        if (governing.id !== claim!.decisionId) {
+          refuse(`the publish decision this call claimed was superseded by a newer decision of the step (${decisionOf}) (decision_claim_superseded)`);
+        }
       }
       if (decision) {
         const { releasedDecisionList } = await import("@cinatra-ai/agents/publish-decision-store");
@@ -1951,6 +2006,7 @@ export function createTriggerEmailSendUseCases(
         readRunReviewedBodies: deps.readRunReviewedBodies ?? fallback().readRunReviewedBodies!,
         readCallingRun: deps.readCallingRun ?? fallback().readCallingRun!,
         readPublishDecision: deps.readPublishDecision ?? fallback().readPublishDecision!,
+        readClaimedPublishDecision: deps.readClaimedPublishDecision ?? fallback().readClaimedPublishDecision!,
         readObjectRuns: deps.readObjectRuns ?? fallback().readObjectRuns!,
         readRevisionStateUnderLock: deps.readRevisionStateUnderLock ?? fallback().readRevisionStateUnderLock!,
       });

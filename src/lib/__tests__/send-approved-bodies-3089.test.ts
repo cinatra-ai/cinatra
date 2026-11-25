@@ -91,6 +91,11 @@ const governing = vi.hoisted(() => ({
   readDecisionForRunNode: vi.fn(async (..._args: unknown[]): Promise<unknown> => null),
   readLatestDecisionForRun: vi.fn(async (): Promise<unknown> => null),
   readRunBoundGraph: vi.fn(async (): Promise<string | null> => null),
+  // By id, in the current attempt (cinatra#3089): here the publishing node's decision when it carries that id.
+  readDecisionOfRun: vi.fn(async (runId: unknown, decisionId: unknown): Promise<unknown> => {
+    const decision = (await governing.readDecisionForRunNode(runId, "publish")) as { id?: string } | null;
+    return decision?.id === decisionId ? decision : null;
+  }),
 }));
 vi.mock("../../../packages/agents/src/db", () => ({ db: {} }));
 vi.mock("../../../packages/agents/src/store", async (importOriginal) => ({
@@ -103,6 +108,7 @@ vi.mock("../../../packages/agents/src/publish-decision-store", async (importOrig
   readDecisionForRunNode: governing.readDecisionForRunNode,
   readLatestDecisionForRun: governing.readLatestDecisionForRun,
   readRunBoundGraph: governing.readRunBoundGraph,
+  readDecisionOfRun: governing.readDecisionOfRun,
 }));
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import { createTriggerEmailSendHandlers } from "@cinatra-ai/trigger-email-send";
@@ -119,6 +125,14 @@ import {
   type StepPublishDecision,
   type TriggerEmailSendDeps,
 } from "../trigger-email-send-use-cases";
+
+// The claim the passthrough route took for the call (cinatra#3089): the decision the call was signed for, else the
+// step's decision, `d-1`; each stubbed decision carries that id unless it names its own.
+const withClaim = <T extends { runId: string; publishDecisionId?: string; claim?: unknown } | null>(run: T): T =>
+  run && !run.claim ? { ...run, claim: { runId: run.runId, decisionId: run.publishDecisionId ?? "d-1" } } : run;
+const withDecisionId = <T extends object | null | undefined>(decision: T): T =>
+  decision ? ({ id: "d-1", ...decision } as T) : decision;
+
 
 /** A stand-in for the message send records with the claim's semantics: the
  *  first claim of a message wins (checked and set with no await between, so
@@ -258,6 +272,10 @@ function makeFixture(opts?: {
   callingRun?: CallingRun;
   /** The decision read; null leaves the send's own default reader. */
   readPublishDecision?: TriggerEmailSendDeps["readPublishDecision"] | null;
+  /** The run of the call is read by the send's own reader, from the request frame the case runs it in (`inFrame`), as
+   *  the passthrough route sets it; `decisions` is then the run's decisions: the governing read answers the step's
+   *  newest of the current attempt, the claimed read the one of that id in the current attempt. */
+  decisions?: { current: StepPublishDecision[]; earlier?: StepPublishDecision[] };
 }) {
   const store = opts?.store ?? makeStore();
   const sendLedger = memorySendLedger();
@@ -330,6 +348,7 @@ function makeFixture(opts?: {
     if (answer instanceof Error) throw answer;
     return answer;
   });
+  let lastGoverning: StepPublishDecision | null = null;
   const deps: TriggerEmailSendDeps = {
     getCampaign: async () => null,
     getDraftsByIds: async () => [],
@@ -345,8 +364,23 @@ function makeFixture(opts?: {
       const d = (envelopes[id]?.data ?? {}) as Record<string, unknown>;
       return typeof d.cinatraAgentRunId === "string" ? [d.cinatraAgentRunId] : [];
     },
-    readCallingRun: async () => opts?.callingRun ?? { runId: "run-1", stepId: "send" },
-    ...(opts?.readPublishDecision === null ? {} : { readPublishDecision: opts?.readPublishDecision ?? readPublishDecision }),
+    // The road claimed the decision the call was signed for, else the step's decision `d-1` (cinatra#3089).
+    ...(opts?.decisions
+      ? {
+          readPublishDecision: async () => opts.decisions!.current.at(-1) ?? null,
+          readClaimedPublishDecision: async (runId: string, decisionId: string) =>
+            runId === "run-1" ? (opts.decisions!.current.find((d) => d.id === decisionId) ?? null) : null,
+        }
+      : { readCallingRun: async () => withClaim(opts?.callingRun ?? { runId: "run-1", stepId: "send" }) }),
+    ...(opts?.decisions || opts?.readPublishDecision === null
+      ? {}
+      : {
+          readPublishDecision: async (runId: string, stepId: string) =>
+            (lastGoverning = withDecisionId(await (opts?.readPublishDecision ?? readPublishDecision)(runId, stepId))),
+          // The stub store holds one decision: the one the governing read answered.
+          readClaimedPublishDecision: async (_runId: string, decisionId: string) =>
+            lastGoverning?.id === decisionId ? lastGoverning : null,
+        }),
   } as unknown as TriggerEmailSendDeps;
   let named: unknown;
   let shown: unknown;
@@ -867,7 +901,11 @@ describe("cinatra#3089 — the send reads the decision that governs its call, as
       governing.readRunBoundGraph.mockResolvedValue(JSON.stringify(graph));
       governing.readDecisionForRunNode.mockImplementation(async (_runId: unknown, nodeId: unknown) =>
         nodeId === "publish" ? { id: "d-publish", ...releasedCardFor(approved) } : null);
-      const fx = makeFixture({ readPublishDecision: null, reviewedBodies: true });
+      const fx = makeFixture({
+        readPublishDecision: null,
+        reviewedBodies: true,
+        callingRun: { runId: "run-1", stepId: "send", claim: { runId: "run-1", decisionId: "d-publish" } },
+      });
       const result = await fx.start({});
       expect(result.status).toBe("completed");
       expect(governing.readDecisionForRunNode).toHaveBeenCalledWith("run-1", "publish");
@@ -1025,5 +1063,75 @@ describe("cinatra#3089 — what is sent is byte for byte what the card showed", 
       {},
       "the released publish decision carries its campaign with white space around it",
     );
+  });
+});
+
+// cinatra#3089: THE SEND USES EXACTLY ONE DECISION, the one the call's road claimed. Each case runs the send inside the
+// request frame as the passthrough route sets it (`runId` with `verifiedStepId`, `publishCallClaim` from the call
+// check's claim and, with a signed visit, `verifiedPublishDecisionId`): the send's own reader takes the run and the
+// claim from there. The run's decisions are an in-memory store: newest last in the current attempt.
+describe("cinatra#3089 — the approved send reads the decision its call claimed, by id", () => {
+  // B releases the same list as A: a send under B would go out, so only the claim can tell the two apart.
+  const decisionA = { id: "d-A", ...releasedCardFor(approved) } as StepPublishDecision;
+  const decisionB = { id: "d-B", ...releasedCardFor(approved) } as StepPublishDecision;
+  const inFrame = async <T,>(frame: Record<string, unknown>, run: () => Promise<T>): Promise<T> => {
+    const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
+    return mcpRequestContextStorage.run({ runId: "run-1", verifiedStepId: "send", ...frame } as never, run);
+  };
+  const claimOf = (decisionId: string, runId = "run-1") => ({ publishCallClaim: { runId, decisionId } });
+
+  it("C1 the normal case mails the list of the claimed decision", async () => {
+    const fx = makeFixture({ decisions: { current: [decisionA] } });
+    const result = await inFrame(claimOf("d-A"), () => fx.start({}));
+    expect(result.status).toBe("completed");
+    expect(fx.sent.map((m) => m.to[0])).toEqual(["one@example.com", "two@example.com"]);
+  });
+
+  it("C2 a call that claimed A, after B was released for the step in the same attempt, is refused: never B's list", async () => {
+    // A is still released, but B superseded it as the step's decision: the send uses exactly one decision, the claimed
+    // one, and only while it is still the step's decision, so it mails neither list.
+    const fx = makeFixture({ decisions: { current: [decisionA, decisionB] } });
+    const result = await inFrame(claimOf("d-A"), () => fx.start({}));
+    // red-first-expect: expected 'completed' to be 'failed'
+    expect(result.status).toBe("failed");
+    expect(result.errorMessage).toContain("(decision_claim_superseded)");
+    expect(fx.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("C3 a call that claimed A, after a reset left A in an earlier attempt and B was released, is refused", async () => {
+    const fx = makeFixture({ decisions: { current: [decisionB], earlier: [decisionA] } });
+    const result = await inFrame(claimOf("d-A"), () => fx.start({}));
+    expect(result.status).toBe("failed");
+    expect(result.errorMessage).toContain("(decision_claim_not_current)");
+    expect(fx.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("C4 a signed decision that is not the claimed one is refused", async () => {
+    const fx = makeFixture({ decisions: { current: [decisionA, decisionB] } });
+    const result = await inFrame({ ...claimOf("d-A"), verifiedPublishDecisionId: "d-B" }, () => fx.start({}));
+    expect(result.status).toBe("failed");
+    expect(result.errorMessage).toContain("(decision_claim_conflict)");
+    expect(fx.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("C5 a governed call with no claim, or with a claim of another run, is refused", async () => {
+    const none = makeFixture({ decisions: { current: [decisionA] } });
+    const unclaimed = await inFrame({}, () => none.start({}));
+    expect(unclaimed.status).toBe("failed");
+    expect(unclaimed.errorMessage).toContain("(decision_not_claimed)");
+    const other = makeFixture({ decisions: { current: [decisionA] } });
+    const elsewhere = await inFrame(claimOf("d-A", "run-2"), () => other.start({}));
+    expect(elsewhere.errorMessage).toContain("(decision_claim_other_run)");
+    expect(none.sendEmail).not.toHaveBeenCalled();
+    expect(other.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("C6 a claimed decision that is not released is refused", async () => {
+    const parked = { ...decisionA, status: "parked", decidedBy: null } as unknown as StepPublishDecision;
+    const fx = makeFixture({ decisions: { current: [parked] } });
+    const result = await inFrame(claimOf("d-A"), () => fx.start({}));
+    expect(result.status).toBe("failed");
+    expect(result.errorMessage).toContain("not released by a person");
+    expect(fx.sendEmail).not.toHaveBeenCalled();
   });
 });

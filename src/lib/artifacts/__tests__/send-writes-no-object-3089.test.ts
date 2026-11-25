@@ -106,6 +106,14 @@ import {
   type TriggerEmailSendDeps,
 } from "../../trigger-email-send-use-cases";
 
+// The claim the passthrough route took for the call (cinatra#3089): the decision the call was signed for, else the
+// step's decision, `d-1`; each stubbed decision carries that id unless it names its own.
+const withClaim = <T extends { runId: string; publishDecisionId?: string; claim?: unknown } | null>(run: T): T =>
+  run && !run.claim ? { ...run, claim: { runId: run.runId, decisionId: run.publishDecisionId ?? "d-1" } } : run;
+const withDecisionId = <T extends object | null | undefined>(decision: T): T =>
+  decision ? ({ id: "d-1", ...decision } as T) : decision;
+
+
 /** The ledger statements the send reaches, over `table.rows` with its unique key. */
 function runStatement(sql: string, params: unknown[]) {
   const p = (n: number) => params[n - 1] as string;
@@ -188,14 +196,18 @@ function send(sent: string[]) {
     }),
     readRunReviewedBodies: async () => true,
     readObjectRuns: async () => ["run-1"],
-    readCallingRun: async () => ({ runId: "run-1", stepId: "send" }),
+    readCallingRun: async () => withClaim({ runId: "run-1", stepId: "send" }),
+    readClaimedPublishDecision: async (runId: string, decisionId: string) => {
+      const decision = withDecisionId(await (deps as unknown as { readPublishDecision: (r: string, s: string) => Promise<object | null> }).readPublishDecision(runId, "send")) as { id?: string } | null;
+      return decision?.id === decisionId ? decision : null;
+    },
     // The decision state under the revision's lock, read on the claim's own
     // connection (the shipped reader's query is its own suite's subject).
     readRevisionStateUnderLock: async (query: (text: string, values: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }>) => {
       const { rows } = await query("SELECT 'decided' AS state", []);
       return rows[0]?.state === "decided" ? null : "not decided";
     },
-    readPublishDecision: async () => ({
+    readPublishDecision: async () => withDecisionId({
       status: "released",
       decidedBy: "user-2",
       surfacedValues: {

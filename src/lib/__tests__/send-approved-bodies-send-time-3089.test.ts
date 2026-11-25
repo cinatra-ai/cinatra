@@ -47,6 +47,12 @@ import {
   type TriggerEmailSendDeps,
 } from "../trigger-email-send-use-cases";
 
+// The claim the passthrough route took for the call (cinatra#3089): the decision the call was signed for, else the
+// step's decision, `d-1`; each stubbed decision carries that id unless it names its own.
+const withDecisionId = <T extends object | null | undefined>(decision: T): T =>
+  decision ? ({ id: "d-1", ...decision } as T) : decision;
+
+
 const actor: PrimitiveActorContext = { actorType: "human", source: "route", userId: "user-1", sessionId: "s-1", orgId: "org-1" };
 const BUNDLE_REF = "11111111-1111-4111-8111-111111111111";
 const RECIPIENTS_REF = "22222222-2222-4222-8222-222222222222";
@@ -148,8 +154,11 @@ function fixture(opts?: {
       verified.push(`${ref.artifactId}@${ref.representationRevisionId} in ${ref.runId}`);
       return opts?.underLock?.(ref.artifactId) ?? null;
     },
-    readCallingRun: async () => ({ runId: "run-1", stepId: "send" }),
+    readCallingRun: async () => ({ runId: "run-1", stepId: "send", claim: { runId: "run-1", decisionId: "d-1" } }),
+    readClaimedPublishDecision: async (runId: string, decisionId: string) =>
+      decisionId === "d-1" ? withDecisionId(await (deps as { readPublishDecision: (r: string, s: string) => Promise<object | null> }).readPublishDecision(runId, "send")) : null,
     readPublishDecision: async () => ({
+      id: "d-1",
       status: "released",
       decidedBy: "user-2",
       surfacedValues: {

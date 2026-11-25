@@ -60,6 +60,14 @@ import {
   type TriggerEmailSendDeps,
 } from "../trigger-email-send-use-cases";
 
+// The claim the passthrough route took for the call (cinatra#3089): the decision the call was signed for, else the
+// step's decision, `d-1`; each stubbed decision carries that id unless it names its own.
+const withClaim = <T extends { runId: string; publishDecisionId?: string; claim?: unknown } | null>(run: T): T =>
+  run && !run.claim ? { ...run, claim: { runId: run.runId, decisionId: run.publishDecisionId ?? "d-1" } } : run;
+const withDecisionId = <T extends object | null | undefined>(decision: T): T =>
+  decision ? ({ id: "d-1", ...decision } as T) : decision;
+
+
 function memorySendLedger() {
   const rows = new Map<string, { id: string; phase: "claimed" | "finalized" }>();
   let next = 0;
@@ -234,8 +242,13 @@ function makeFixture(opts?: {
       const d = (envelopes[id]?.data ?? {}) as Record<string, unknown>;
       return typeof d.cinatraAgentRunId === "string" && d.cinatraAgentRunId !== "" ? [d.cinatraAgentRunId] : [];
     },
-    readCallingRun: async () => callingRun,
-    readPublishDecision,
+    readCallingRun: async () => withClaim(callingRun),
+    readPublishDecision: async (runId: string, stepId: string) =>
+      withDecisionId(await (readPublishDecision as (r: string, s: string) => Promise<object | null>)(runId, stepId)),
+    readClaimedPublishDecision: async (_runId: string, decisionId: string) => {
+      const decision = withDecisionId((await readPublishDecision()) as { id?: string } | null);
+      return decision?.id === decisionId ? decision : null;
+    },
   } as unknown as TriggerEmailSendDeps;
   const handlers = createTriggerEmailSendHandlers(createTriggerEmailSendUseCases(deps));
   const start = (input: Record<string, unknown>) =>
