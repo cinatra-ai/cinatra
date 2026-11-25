@@ -3335,15 +3335,16 @@ const ARTIFACT_KIND_DISPLAY_EXTRAS: Record<
 
   // §XI.7 (design@94d892de) — "A page is a page, whichever system holds it":
   // the Drupal page a run changes is the page snapshot, drawn by the same one
-  // view as the WordPress page of §XI.8, the page embedded live in a frame, the
-  // changed excerpts beneath it and Open in the CMS under them.
+  // view as the WordPress page of §XI.8: the changed excerpts and Open in the CMS
+  // under them, with no frame of the page (design@cbf0faa5).
   "drupal-page-display": (base) => ({
     ...base,
     present: async (page, root) => {
       await base.present(page, root);
       await expectOneView(root, "drupal-page-display");
       const display = kindDisplayPanel(root, "drupal-page-display");
-      await expect(display.locator('[data-conformance-id="page-embed"]')).toBeVisible();
+      await expect(display.locator('[data-conformance-id="page-embed"]')).toHaveCount(0);
+      await expect(display.locator("iframe")).toHaveCount(0);
       await expect(display.locator('[data-conformance-id="changed-excerpts"]')).toBeVisible();
       await expect(
         display.locator('[data-action="open-in-cms -> cms-opened"]'),
@@ -3351,16 +3352,17 @@ const ARTIFACT_KIND_DISPLAY_EXTRAS: Record<
     },
   }),
 
-  // §XI.8 — "one view and no tab strip": the page embedded live in a frame, a
-  // diff of only the changed excerpts beneath it, and Open in the CMS drawn under
-  // the excerpts, the same way in every reading.
+  // §XI.8 — "one view and no tab strip": a diff of only the changed excerpts and
+  // Open in the CMS drawn under the excerpts, the same way in every reading. Since
+  // design@cbf0faa5 (design#272) the display draws no frame of the page.
   "cms-page-display": (base) => ({
     ...base,
     present: async (page, root) => {
       await base.present(page, root);
       await expectOneView(root, "cms-page-display");
       const display = kindDisplayPanel(root, "cms-page-display");
-      await expect(display.locator('[data-conformance-id="page-embed"]')).toBeVisible();
+      await expect(display.locator('[data-conformance-id="page-embed"]')).toHaveCount(0);
+      await expect(display.locator("iframe")).toHaveCount(0);
       await expect(display.locator('[data-conformance-id="changed-excerpts"]')).toBeVisible();
       await expect(
         display.locator('[data-action="open-in-cms -> cms-opened"]'),

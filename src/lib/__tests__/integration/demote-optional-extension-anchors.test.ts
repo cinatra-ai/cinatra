@@ -32,6 +32,7 @@ import path from "node:path";
 import { Client } from "pg";
 
 import { buildCreateStoreSchemaQueries } from "@/lib/drizzle-store";
+import { replayStoreSchema } from "@/lib/test-support/store-schema-replay";
 // the migration module is plain ESM — import the real artifact, no copy
 import {
   DEMOTED_PACKAGES,
@@ -97,22 +98,10 @@ function migrationStatements(fn: unknown): string[] {
 }
 
 async function applyStoreDdl(client: Client, schema: string): Promise<void> {
-  for (const q of buildCreateStoreSchemaQueries(schema)) {
-    const head = q.text.trim().slice(0, 6).toUpperCase();
-    if (
-      head !== "CREATE" &&
-      head !== "ALTER " &&
-      head !== "DROP T" &&
-      head !== "DROP S" &&
-      head !== "DELETE" &&
-      head !== "UPDATE" &&
-      head !== "DO $$ " &&
-      !head.startsWith("DO $$")
-    ) {
-      continue;
-    }
-    await client.query(q.text);
-  }
+  // The loop this replaced also replayed the heads named here, so they stay.
+  await replayStoreSchema(client, buildCreateStoreSchemaQueries(schema), {
+    additionalHeads: ["DO $$ ", "DO $$\n", "DELETE", "UPDATE"],
+  });
 }
 
 const ANCHOR_SOURCE = (pkg: string) =>

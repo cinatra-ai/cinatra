@@ -40,7 +40,6 @@ describe("§I.2 run-outputs-list on the run's last step", () => {
     const { container } = render(
       <RunMadeStepSurface rows={[wrote]} reading={runMadeReading([wrote])} />,
     );
-    // red-first-expect: to have a length of 1 but got +0
     expect(container.querySelectorAll(ANCHOR)).toHaveLength(1);
     const root = container.querySelector(ANCHOR) as HTMLElement;
     expect(root.getAttribute("data-run-made")).toBe("listed");
