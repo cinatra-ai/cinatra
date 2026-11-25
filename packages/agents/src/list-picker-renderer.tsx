@@ -249,10 +249,12 @@ export function ListPickerRenderer({
   // double-mount in dev does not double-fetch. Keyed on the run identity so a
   // runId that only arrives after mount re-issues the (now authorized) load.
   // A rejected load is the failed reading (design I.1), drawn in place as the
-  // step's alert rather than as an empty list; it keeps the pick.
+  // step's alert rather than as an empty list; it keeps the pick. A missing CRM
+  // capability is asked to reject too, as Try again reads it: it is "could not
+  // read", never an empty list to reconcile the pick against.
   useEffect(() => {
     let cancelled = false;
-    fetchAvailableLists(runId ?? "")
+    fetchAvailableLists(runId ?? "", { missingCapability: "failed" })
       .then((items) => {
         if (!cancelled) {
           acceptReadRef.current(items);

@@ -202,6 +202,30 @@ describe("ListPickerRenderer — the failed read and Try again (cinatra#3562)", 
 });
 
 describe("ListPickerRenderer — the pick after a new read (cinatra#3562)", () => {
+  it("a stored pick with the CRM capability missing on load is kept, draws the failed reading and emits no value", async () => {
+    // Like the real action: an absent capability answers [] unless the caller
+    // asks for it to reject (the first load does).
+    vi.mocked(actions.fetchAvailableLists).mockImplementation(async (_runId, options) => {
+      if (options?.missingCapability === "failed") throw new Error("the CRM list reader is missing");
+      return [];
+    });
+    const onChange = vi.fn();
+    const onRequestRefresh = vi.fn(async () => ({ lists: [], listsRead: "failed" }));
+    render(
+      <ListPickerRenderer
+        {...props({
+          onChange,
+          onRequestRefresh,
+          value: { scope: "list", listId: "l-1", listName: "Q2 Targets", memberCount: 0 },
+        })}
+      />,
+    );
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("This list could not be read.");
+    expect(tryAgain()).not.toBeNull();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("a written pick a later read no longer offers is dropped and the empty pick is written once", async () => {
     // A restored pick, written to the host on the first good read; the run
     // identity then re-issues the load, which no longer offers it.

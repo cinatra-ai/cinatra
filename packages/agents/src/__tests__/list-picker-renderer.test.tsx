@@ -47,6 +47,9 @@ import { ListPickerRenderer } from "../list-picker-renderer";
 import * as actions from "../list-picker-actions";
 import type { FieldRendererProps } from "../field-renderer-registry";
 
+// The first load asks a missing CRM capability to reject (cinatra#3562).
+const FIRST_LOAD = { missingCapability: "failed" };
+
 // Minimal-required props every FieldRendererProps consumer expects. The
 // picker reads `value`, `onChange`, `disabled`, `required`, `error`, `label`,
 // `description`; everything else is unused but must satisfy the type.
@@ -268,7 +271,7 @@ describe("ListPickerRenderer — run identity (cinatra#3050)", () => {
     await waitFor(() =>
       expect(actions.fetchAvailableLists).toHaveBeenCalledTimes(1),
     );
-    expect(actions.fetchAvailableLists).toHaveBeenCalledWith("run-abc");
+    expect(actions.fetchAvailableLists).toHaveBeenCalledWith("run-abc", FIRST_LOAD);
   });
 
   it("re-loads when the run identity arrives after mount", async () => {
@@ -282,7 +285,7 @@ describe("ListPickerRenderer — run identity (cinatra#3050)", () => {
     );
     // No run identity yet: the loader is still called, and refuses server-side
     // with the hidden-run absence rather than being gated on a platform role.
-    expect(actions.fetchAvailableLists).toHaveBeenNthCalledWith(1, "");
+    expect(actions.fetchAvailableLists).toHaveBeenNthCalledWith(1, "", FIRST_LOAD);
 
     rerender(
       <ListPickerRenderer
@@ -293,6 +296,6 @@ describe("ListPickerRenderer — run identity (cinatra#3050)", () => {
     await waitFor(() =>
       expect(actions.fetchAvailableLists).toHaveBeenCalledTimes(2),
     );
-    expect(actions.fetchAvailableLists).toHaveBeenNthCalledWith(2, "run-late");
+    expect(actions.fetchAvailableLists).toHaveBeenNthCalledWith(2, "run-late", FIRST_LOAD);
   });
 });
