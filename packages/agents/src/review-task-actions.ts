@@ -201,7 +201,7 @@ function isBlankSetupValue(value: unknown): boolean {
 }
 
 /**
- * Refuses an answer to a parked step no screen draws (`unanswerableParkedStep`)
+ * Refuses an answer to a retired parked step (`unanswerableParkedStep`)
  * with `HitlStepNotAnswerableError`, and one whose record cannot be read with
  * the road's fixed text. A step with no record goes on as before.
  */
@@ -364,7 +364,7 @@ export async function approveReviewTaskInternal(
       });
     }
 
-    // A setup step records its renderer too: one no screen draws is refused the
+    // A setup step records its renderer too: a retired one is refused the
     // same way, before any write.
     await refuseUnanswerableStep(runId, reviewTaskId, {
       unreadable: `Setup approval rejected: the paused step of run ${runId} could not be read`,
@@ -958,7 +958,7 @@ export async function approveReviewTaskInternal(
         }),
       );
     }
-    // A step no screen draws is answered by nothing (`unanswerableParkedStep`):
+    // A retired step is answered by nothing (`unanswerableParkedStep`):
     // refused before the pause is claimed, so nothing is recorded or sent and
     // the run stays parked; so is a step whose record cannot be read.
     await refuseUnanswerableStep(run.id, reviewTaskId, {

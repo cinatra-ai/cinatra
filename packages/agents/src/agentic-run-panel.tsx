@@ -49,7 +49,7 @@ import {
   type PublishDecisionCardRead,
 } from "./publish-decision-card-view";
 import { StatusPill } from "@/components/ui/status-pill";
-import { continueAwaitsAPick } from "./field-renderer-registry";
+import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
 import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
 import type { FieldRendererContext, FieldRendererProps } from "./field-renderer-registry";
 import { ArrowRight } from "lucide-react";
@@ -144,11 +144,7 @@ import {
   type HitlDerivationState,
 } from "./hitl-recovery-state";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
-import {
-  hasMidRunHitlBinding,
-  parkedHitlStepIsAnswerable,
-  resolveHitlGateRenderer,
-} from "./orchestrator-mid-run-hitl";
+import { hasMidRunHitlBinding, hitlStepScreenIsAnswerable } from "./orchestrator-mid-run-hitl";
 import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
 import { getAgentBuilderTask, type TaskSnapshot } from "./a2a-actions";
 import { useAgUiRunStream } from "./use-ag-ui-run-stream";
@@ -1253,55 +1249,6 @@ export function AgenticRunPanel({
   latestHitlContextRef.current = effectiveHitlContext;
   bufferedHitlValueRef.current = bufferedHitlValue;
 
-  // The renderer a gate is drawn with, resolved one way for every use below
-  // (the inline HITL bubble and the answerability the chat composer reads).
-  const resolveGateRendering = (gate: HitlContext) => {
-    const fieldSchema: Record<string, unknown> = {
-      ...(gate.inputSchema ?? {}),
-      "x-renderer": gate.xRenderer,
-    };
-    const context: FieldRendererContext = {
-      ...fieldRendererContext,
-      runId,  // lets HITL renderers resolve campaignId via DB lookup when absent from interrupt payload
-      // inputParams (run setup values) come first so currentValues can override if needed.
-      allFieldValues: { ...(inputParams ?? {}), ...(gate.currentValues ?? {}) },
-      templateId,
-      xRenderer: gate.xRenderer,
-    };
-    // RENDERER SELECTION stays on the placeholder key (cinatra#2541) — which
-    // component renders a gate is decided by its `x-renderer` id, never by the
-    // interrupt's field name. Only the rendered field IDENTITY below carries
-    // the real name.
-    const entry = resolveHitlGateRenderer(
-      HITL_PLACEHOLDER_FIELD_NAME,
-      fieldSchema,
-      context,
-    );
-    // Strip "x-renderer" before passing to the renderer so renderers that
-    // internally call fieldRendererRegistry.resolve (e.g. SchemaFieldRenderer)
-    // don't re-match themselves and enter an infinite recursion loop.
-    const { "x-renderer": _xr, ...renderSchema } = fieldSchema;
-    void _xr;
-    return { entry, fieldSchema: renderSchema, context };
-  };
-  // MAY THE GATE ON SCREEN BE ANSWERED HERE? (`parkedHitlStepIsAnswerable`.) A
-  // gate no screen draws is not handed to the chat composer, and its submit
-  // sends nothing.
-  const activeGateAnswerable =
-    !!effectiveHitlContext &&
-    parkedHitlStepIsAnswerable(
-      effectiveHitlContext.xRenderer,
-      resolveGateRendering(effectiveHitlContext).entry,
-      effectiveHitlContext.currentValues,
-    );
-  // Read by the composer's submit and the publish effect below; written after
-  // each commit, in an effect declared before the publish effect, so that
-  // effect reads this commit's answer.
-  const activeGateAnswerableRef = useRef(activeGateAnswerable);
-  useEffect(() => {
-    activeGateAnswerableRef.current = activeGateAnswerable;
-  }, [activeGateAnswerable]);
-
   const gateFields: ChatGateField[] = useMemo(() => {
     if (!effectiveHitlContext) return [];
     const schema = effectiveHitlContext.inputSchema as {
@@ -1547,8 +1494,8 @@ export function AgenticRunPanel({
     async (value: Record<string, unknown> | string | number | boolean) => {
       const ctx = latestHitlContextRef.current;
       if (!ctx) return;
-      // A gate no screen draws is never answered from the composer.
-      if (!activeGateAnswerableRef.current) return;
+      // A retired step (`hitlStepScreenIsAnswerable`) is never answered here.
+      if (!hitlStepScreenIsAnswerable(ctx.xRenderer)) return;
       // Reported unsendable (see `gateValidity`): the composer sends nothing,
       // as the Continue drawn for the gate does.
       const gateKey = hitlGateIdentityKey(ctx);
@@ -1683,7 +1630,7 @@ export function AgenticRunPanel({
     ? // The composer binding is PART of the signature: focusing (or releasing) a
       // review card changes what this panel publishes, and the publish is
       // otherwise gated on gate identity alone.
-      `${runId}:${effectiveHitlContext.reviewTaskId}:${effectiveHitlContext.xRenderer}:${activeGateAnswerable ? 1 : 0}:${effectiveHitlContext.fieldName ?? ""}:${gateFields.map((f) => `${f.name}:${f.type}:${f.required ? 1 : 0}`).join(",")}:${composerBoundRef ?? ""}`
+      `${runId}:${effectiveHitlContext.reviewTaskId}:${effectiveHitlContext.xRenderer}:${effectiveHitlContext.fieldName ?? ""}:${gateFields.map((f) => `${f.name}:${f.type}:${f.required ? 1 : 0}`).join(",")}:${composerBoundRef ?? ""}`
     : `${runId}:null`;
   const onActiveGateChangeRef = useRef(onActiveGateChange);
   onActiveGateChangeRef.current = onActiveGateChange;
@@ -1701,12 +1648,11 @@ export function AgenticRunPanel({
     // path that bypasses the review surface (and could double-resume the gate the
     // worker also resumes). That descriptor is still never published for a marked
     // gate; the branch below publishes a COMMENT-ONLY one instead.
-    // A gate no screen draws (`parkedHitlStepIsAnswerable`) is not handed to
-    // the composer either: it publishes nothing, as for no gate.
+    // A retired step (`hitlStepScreenIsAnswerable`) is not handed to the composer.
     if (
       ctx &&
       ctx.xRenderer !== ARTIFACT_REVIEW_REDIRECT_RENDERER_ID &&
-      activeGateAnswerableRef.current
+      hitlStepScreenIsAnswerable(ctx.xRenderer)
     ) {
       cb(
         runId,
@@ -2146,10 +2092,36 @@ export function AgenticRunPanel({
     : null;
 
   // Resolve renderer entry for inline HITL bubble.
-  const hitlRendererEntry =
-    !isPendingApproval || !effectiveHitlContext?.xRenderer
-      ? null
-      : resolveGateRendering(effectiveHitlContext);
+  const hitlRendererEntry = (() => {
+    if (!isPendingApproval || !effectiveHitlContext?.xRenderer) return null;
+    const fieldSchema: Record<string, unknown> = {
+      ...(effectiveHitlContext.inputSchema ?? {}),
+      "x-renderer": effectiveHitlContext.xRenderer,
+    };
+    const context: FieldRendererContext = {
+      ...fieldRendererContext,
+      runId,  // lets HITL renderers resolve campaignId via DB lookup when absent from interrupt payload
+      // inputParams (run setup values) come first so currentValues can override if needed.
+      allFieldValues: { ...(inputParams ?? {}), ...(effectiveHitlContext.currentValues ?? {}) },
+      templateId,
+      xRenderer: effectiveHitlContext.xRenderer,
+    };
+    // RENDERER SELECTION stays on the placeholder key (cinatra#2541) — which
+    // component renders a gate is decided by its `x-renderer` id, never by the
+    // interrupt's field name. Only the rendered field IDENTITY below carries
+    // the real name.
+    const entry = fieldRendererRegistry.resolve(
+      HITL_PLACEHOLDER_FIELD_NAME,
+      fieldSchema,
+      context,
+    );
+    // Strip "x-renderer" before passing to the renderer so renderers that
+    // internally call fieldRendererRegistry.resolve (e.g. SchemaFieldRenderer)
+    // don't re-match themselves and enter an infinite recursion loop.
+    const { "x-renderer": _xr, ...renderSchema } = fieldSchema;
+    void _xr;
+    return { entry, fieldSchema: renderSchema, context };
+  })();
 
   // Mirror the presentation hint out of currentValues so
   // the HITL render block can choose DispatchRenderer over the registry path.
@@ -3210,7 +3182,7 @@ export function AgenticRunPanel({
               it can be selected". Nothing replaces it — the settled chips above
               the card are the reading. */}
           {drawSkillPicker ? <HitlSkillChips skills={hitlSkills} /> : null}
-          {activeGateAnswerable && (hitlRendererEntry?.entry || hitlPresentationHint) ? (
+          {hitlRendererEntry?.entry || hitlPresentationHint ? (
             <div
               className={HITL_FIELDS_REGION_CLASS[hitlFieldPresentationFor("run_card")]}
               data-conformance-id="hitl-screen-fields"

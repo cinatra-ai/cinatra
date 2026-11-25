@@ -191,32 +191,8 @@ vi.mock("../publish-decision-store", async (orig) => ({
   readLatestDecisionForRun: decisions.readLatestDecisionForRun,
 }));
 
-// THE PAUSED STEP'S DURABLE ROW, and what declares a package's screen on the
-// server: the bindings of this build (filtered by `packScreens.dropped`, as a
-// newer bundled pack that no longer ships the screen) and those of packages
-// installed at run time (none by default).
+// THE PAUSED STEP'S DURABLE ROW (none unless a case parks one).
 const durableRead = vi.hoisted(() => vi.fn(async (_runId: string, _reviewTaskId: string): Promise<unknown> => null));
-const packScreens = vi.hoisted(() => ({
-  dropped: [] as string[],
-  installed: [] as Array<{ id: string; kind: string; priority: number; declaredBy: string }>,
-}));
-vi.mock("@/lib/generated/agent-bindings", async (orig) => {
-  const real = await orig<typeof import("@/lib/generated/agent-bindings")>();
-  return {
-    ...real,
-    get GENERATED_FIELD_RENDERER_BINDINGS() {
-      return real.GENERATED_FIELD_RENDERER_BINDINGS.filter((b) => !packScreens.dropped.includes(b.id));
-    },
-  };
-});
-vi.mock("../field-renderer-bindings.server", () => ({
-  collectInstalledFieldRendererBindings: () => packScreens.installed,
-}));
-/** The two publish packs' own confirmation screens, as their old pins declared them. */
-const OLD_PUBLISH_SCREENS = [
-  { id: "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm", kind: "wordpress-draft-confirm" },
-  { id: "@cinatra-ai/blog-linkedin-publish-agent:draft-review", kind: "linkedin-draft-review" },
-];
 const parkedRow = (runId: string, reviewTaskId: string, xRenderer: string) => ({
   runId, reviewTaskId, xRenderer, inputSchema: { type: "object" }, values: {}, materializedAt: "2026-11-25T00:00:00.000Z",
 });
@@ -311,9 +287,8 @@ describe("agent_run_resume and a publish decision", () => {
   });
 });
 
-// A RETIRED STEP IS ANSWERED BY NOTHING (`unanswerableParkedStep`): a tombstoned id,
-// or a package's own screen that no binding of this build and no installed
-// package declares any more. The run stays parked; the person starts a new run.
+// A RETIRED STEP IS ANSWERED BY NOTHING (`unanswerableParkedStep`): one
+// recorded under a tombstoned id. The run stays parked; the person starts a new run.
 describe("agent_run_resume and a retired step", () => {
   const RETIRED = "Run run-1 is paused at a retired step; it can no longer be answered.";
   beforeEach(() => {
@@ -337,8 +312,6 @@ describe("agent_run_resume and a retired step", () => {
     holdSpy.mockResolvedValue({ held: false, reason: "no-review" });
     decisions.readLatestDecisionForRun.mockResolvedValue(null);
     durableRead.mockReset().mockResolvedValue(null);
-    packScreens.dropped = [];
-    packScreens.installed = [];
     // An earlier suite resets the claim fake; the claim wins here.
     pauseClaimFake.claimPause.mockReset().mockImplementation(async () => ({ kind: "claimed", token: "tok-fake", generation: 1, expiresAt: new Date(0) }));
     pauseClaimFake.releasePauseClaim.mockReset().mockImplementation(async () => "released");
@@ -362,37 +335,6 @@ describe("agent_run_resume and a retired step", () => {
     expect(answer.error).toBe(RETIRED);
     nothingMoved();
   });
-
-  // red-first-expect: to be 'Run run-1 is paused at a retired step
-  it("a package screen that no binding declares is refused", async () => {
-    parkAt("@acme/removed:output");
-    const answer = (await resume()) as { error?: string };
-    expect(answer.error).toBe(RETIRED);
-    nothingMoved();
-  });
-
-  for (const screen of OLD_PUBLISH_SCREENS) {
-    // red-first-expect: to be 'Run run-1 is paused at a retired step
-    it(`${screen.id}: refused once the bundled pack no longer declares it and no installed pack does`, async () => {
-      packScreens.dropped = [screen.id];
-      parkAt(screen.id);
-      const answer = (await resume()) as { error?: string };
-      expect(answer.error).toBe(RETIRED);
-      nothingMoved();
-    });
-    it(`${screen.id}: resumed where an installed older pack still declares it (its old flow runs)`, async () => {
-      packScreens.dropped = [screen.id];
-      packScreens.installed = [{ id: screen.id, kind: screen.kind, priority: 90, declaredBy: "installed" }];
-      parkAt(screen.id);
-      await resume().catch(() => undefined);
-      expect(sendTaskSpy).toHaveBeenCalledTimes(1);
-    });
-    it(`${screen.id}: resumed while the bundled pack still declares it`, async () => {
-      parkAt(screen.id);
-      await resume().catch(() => undefined);
-      expect(sendTaskSpy).toHaveBeenCalledTimes(1);
-    });
-  }
 
   it("an ordinary step and a step with no row are resumed as before", async () => {
     parkAt("@cinatra-ai/agent-builder:schema-field-fallback");

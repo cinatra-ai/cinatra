@@ -2148,7 +2148,7 @@ async function handleAgentBuilderRunResume(
       if (!run.a2aContextId) {
         return { error: `Run ${runId} has no a2aContextId. Cannot resume WayFlow task without context ID.` };
       }
-      // A step no screen draws is answered by nothing (`unanswerableParkedStep`); nor is one whose record cannot be read.
+      // A retired step is answered by nothing (`unanswerableParkedStep`); nor is one whose record cannot be read.
       let retired: string | null;
       try { ({ unanswerable: retired } = await unanswerableParkedStep(run.id, `wayflow-${run.a2aTaskId}`)); } catch { return { error: `Run ${runId} cannot be resumed: its paused step could not be read.` }; }
       if (retired !== null) return { error: `Run ${runId} is paused at a retired step; it can no longer be answered.` };

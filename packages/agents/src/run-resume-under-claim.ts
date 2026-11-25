@@ -29,7 +29,6 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 import { captureHitlPromptForContinue, readDurableHitlGateForContinue } from "./agent-run-hitl-prompts";
-import { AGENT_BUILDER_ID_SCOPE } from "./agent-builder-ids";
 import { hitlStepScreenIsAnswerable } from "./orchestrator-mid-run-hitl";
 import type { AgentRunRecord } from "./agent-run-record";
 import { claimPause, PauseClaimReleaseError, releasePauseClaim, settlePauseSend } from "./run-pause-claim";
@@ -40,35 +39,15 @@ type ClaimRef = { runId: string; orgId: string; token: string };
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /**
- * The server's declaration of a renderer id: the sources a page's registry is
- * filled from. The host's own scope; a binding of this build (the generated
- * bindings) or of a package installed at run time that names the id; for a
- * bare compat id (no scope), a binding whose kind it is.
- */
-async function serverDeclaresScreen(): Promise<(id: string) => boolean> {
-  const { GENERATED_FIELD_RENDERER_BINDINGS } = await import("@/lib/generated/agent-bindings");
-  const { collectInstalledFieldRendererBindings } = await import("./field-renderer-bindings.server");
-  const bindings: ReadonlyArray<{ id: string; kind: string }> = [
-    ...GENERATED_FIELD_RENDERER_BINDINGS,
-    ...collectInstalledFieldRendererBindings(),
-  ];
-  return (id) => {
-    const colon = id.indexOf(":");
-    if (colon > 0 && id.slice(0, colon) === AGENT_BUILDER_ID_SCOPE) return true;
-    return bindings.some((b) => b.id === id || (colon < 0 && b.kind === id));
-  };
-}
-
-/**
- * CAN THE PAUSED STEP AN ANSWER REACHES BE ANSWERED? Its durable row
+ * IS THE PAUSED STEP AN ANSWER REACHES RETIRED? Its durable row
  * (`agent_run_hitl_gates`, by the step's review task id) names its renderer,
  * and `hitlStepScreenIsAnswerable` (the predicate every page withholds its
  * control by) decides. Three outcomes, kept apart:
- *   - the row was read: `{ unanswerable: <renderer id> }` when no screen draws
- *     the step, else `{ unanswerable: null }`;
+ *   - the row was read: `{ unanswerable: <renderer id> }` for a retired step,
+ *     else `{ unanswerable: null }`;
  *   - no row exists: `{ unanswerable: null }`, answered as before;
- *   - the row or the declarations could not be read: it THROWS, and each road
- *     refuses with its own fixed text, sending nothing.
+ *   - the row could not be read: it THROWS, and each road refuses with its own
+ *     fixed text, sending nothing.
  */
 export async function unanswerableParkedStep(
   runId: string,
@@ -76,8 +55,7 @@ export async function unanswerableParkedStep(
 ): Promise<{ unanswerable: string | null }> {
   const row = await readDurableHitlGateForContinue(runId, reviewTaskId);
   if (!row) return { unanswerable: null };
-  const declared = await serverDeclaresScreen();
-  return { unanswerable: hitlStepScreenIsAnswerable(row.xRenderer, row.values, declared) ? null : row.xRenderer };
+  return { unanswerable: hitlStepScreenIsAnswerable(row.xRenderer) ? null : row.xRenderer };
 }
 
 /** A pre-send step failed: give the lease back and throw the step's error, or

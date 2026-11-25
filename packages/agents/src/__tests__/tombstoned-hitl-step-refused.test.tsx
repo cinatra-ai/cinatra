@@ -1,34 +1,20 @@
 // @vitest-environment jsdom
 /**
- * A STEP WHOSE SCREEN IS NO LONGER DECLARED IS REFUSED, NEVER DRAWN AS A
- * PLAIN FORM.
- *
- * A run parks at a mid-run step whose stored schema names an `x-renderer` id.
- * The step's durable record holds that id, the schema, the values and the
- * field name, but no kind and no `midRunHitl` flag. When the package that
- * declared the id drops the declaration, the host knows nothing more about
- * the id than about one it has never seen, and the schema does not tell a
- * confirmation from a decision or a picker. So the plain form never stands in
- * for such a step.
+ * A RETIRED STEP IS REFUSED.
  *
  * Pinned here:
- *   - `resolveHitlGateRenderer` answers exactly as the registry does: a
- *     claimed id keeps its own entry, the plain form's own id is drawn by the
- *     plain form, and an id no entry claims gets no renderer (a former
- *     decision or picker step such as an idea selection, a context selector,
- *     a send confirmation or a publish confirmation, and an id the host has
- *     never seen);
- *   - on the orchestrator stepper such a step shows "no renderer configured",
- *     no field and no Continue, and nothing is sent;
- *   - a TOMBSTONED id (a retired review gate) never resolves, a tombstoned
- *     binding never registers, and on the stepper the gate shows "no renderer
- *     configured" and no Continue.
+ *   - a TOMBSTONED id (a retired review gate) never resolves and a tombstoned
+ *     binding never registers;
+ *   - on the orchestrator stepper such a gate shows "no renderer configured"
+ *     and no Continue;
+ *   - a renderer of any other `@cinatra/` package registers, resolves and is
+ *     answered like any other package's renderer.
  *
  * Harness mirrors orchestrator-stepper-panel-next-input-gate-4244.test.tsx.
  *
  * Run:
  *   cd packages/agents && pnpm exec vitest run \
- *     src/__tests__/unregistered-renderer-falls-to-floor.test.tsx
+ *     src/__tests__/tombstoned-hitl-step-refused.test.tsx
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -127,36 +113,8 @@ vi.mock("../use-runtime-field-renderer-bindings", () => ({
   useRuntimeFieldRendererBindings: () => ({ bindings: {}, loading: false }),
 }));
 
-/**
- * Mid-run decision and picker steps whose packages dropped the declarations:
- * the generated bindings no longer list them.
- */
-const DROPPED = vi.hoisted(() => [
-  "@cinatra-ai/blog-pipeline-agent:idea-selection",
-  "@cinatra-ai/context-selection-agent:context-selector",
-  "@cinatra-ai/email-delivery-agent:send-confirmation",
-  "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm",
-  "@cinatra-ai/blog-linkedin-publish-agent:draft-review",
-]);
-vi.mock("@/lib/generated/agent-bindings", async (orig) => {
-  const real = await orig<typeof import("@/lib/generated/agent-bindings")>();
-  return {
-    ...real,
-    GENERATED_FIELD_RENDERER_BINDINGS: real.GENERATED_FIELD_RENDERER_BINDINGS.filter(
-      (b) => !DROPPED.includes(b.id),
-    ),
-  };
-});
-
-/** An id no binding has ever declared. */
-const NEVER_SEEN_ID = "@cinatra-test/never-seen-agent:screen";
 /** The plain form's own id: a step that declares no screen of its own. */
 const FLOOR_ID = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
-/** The idea selection's answer field, as its step asks for it. */
-const PICK_SCHEMA = {
-  type: "object",
-  properties: { selectedIdeaJson: { type: "string", title: "Selected idea" } },
-};
 const TASK_ID = "wayflow-task-dropped";
 const NOTE_FIELD = "note";
 const STORED_SCHEMA = {
@@ -230,51 +188,16 @@ afterEach(() => {
   ensureDefaultFieldRenderersRegistered();
 });
 
-describe("resolveHitlGateRenderer", () => {
-  // red-first-expect: resolveHitlGateRenderer is not a function
-  it("refuses a former decision or picker step whose declaration is gone", () => {
-    for (const id of DROPPED) {
-      expect(fieldRendererRegistry.list().some((e) => e.id === id), id).toBe(false);
-      for (const schema of [PICK_SCHEMA, STORED_SCHEMA, { type: "object" }, { type: "string" }]) {
-        expect(midRun.resolveHitlGateRenderer("hitl", { ...schema, "x-renderer": id }, CONTEXT), id).toBeNull();
-      }
-    }
-  });
-
-  // red-first-expect: resolveHitlGateRenderer is not a function
-  it("refuses a renderer id the host has never seen", () => {
-    for (const id of [NEVER_SEEN_ID, "@cinatra-ai/some-retired-agent:old-screen", "never-seen"]) {
-      expect(midRun.resolveHitlGateRenderer("hitl", gateSchema(id), CONTEXT), id).toBeNull();
-    }
-  });
-
-  // red-first-expect: resolveHitlGateRenderer is not a function
-  it("draws a step recorded under the plain form's own id with the plain form", () => {
-    expect(midRun.resolveHitlGateRenderer("hitl", gateSchema(FLOOR_ID), CONTEXT)?.id).toBe(FLOOR_ID);
-  });
-
-  // red-first-expect: resolveHitlGateRenderer is not a function
-  it("keeps a claimed id's own entry", () => {
-    fieldRendererRegistry.register({
-      id: NEVER_SEEN_ID,
-      priority: 90,
-      condition: (_f, schema) => schema["x-renderer"] === NEVER_SEEN_ID,
-      renderer: () => null,
-    });
-    expect(midRun.resolveHitlGateRenderer("hitl", gateSchema(NEVER_SEEN_ID), CONTEXT)?.id).toBe(NEVER_SEEN_ID);
-  });
-
-  // red-first-expect: TOMBSTONED_HITL_RENDERER_IDS is not iterable
+describe("a tombstoned id", () => {
   it("gives no renderer to any tombstoned id", () => {
     const tombstoned = [...midRun.TOMBSTONED_HITL_RENDERER_IDS];
     expect(tombstoned.length).toBeGreaterThan(0);
     for (const id of tombstoned) {
       expect(fieldRendererRegistry.resolve("hitl", gateSchema(id), CONTEXT), id).toBeNull();
-      expect(midRun.resolveHitlGateRenderer("hitl", gateSchema(id), CONTEXT), id).toBeNull();
+      expect(fieldRendererRegistry.resolve("hitl", gateSchema(id), CONTEXT), id).toBeNull();
     }
   });
 
-  // red-first-expect: expected true to be false
   it("never registers a binding whose id is tombstoned", () => {
     const tombstoned = "@cinatra/email-reviewer-agent:ai-review-panel";
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -286,27 +209,7 @@ describe("resolveHitlGateRenderer", () => {
     const ids = fieldRendererRegistry.list().map((e) => e.id);
     expect(ids.includes(tombstoned)).toBe(false);
     expect(ids.includes("@cinatra-ai/some-live-agent:screen")).toBe(true);
-    expect(midRun.resolveHitlGateRenderer("hitl", gateSchema(tombstoned), CONTEXT)).toBeNull();
-  });
-});
-
-describe("OrchestratorStepperPanel - a step whose screen is no longer declared is refused", () => {
-  it("a former decision or picker step shows no field and no Continue, and nothing is sent", async () => {
-    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
-    for (const id of [...DROPPED, NEVER_SEEN_ID]) {
-      INTERRUPT = { schema: PICK_SCHEMA, xRenderer: id, values: {}, reviewTaskId: TASK_ID };
-      render(
-        <OrchestratorStepperPanel
-          {...baseProps()}
-          stepperSteps={[{ index: 1, stepNumber: 0, label: "Pick", xRenderer: id }]}
-        />,
-      );
-      await waitFor(() => expect(document.body.textContent ?? "", id).toMatch(/no renderer configured/));
-      expect(document.getElementById("field-selectedIdeaJson"), id).toBeNull();
-      expect(continues(), id).toHaveLength(0);
-      expect(hitlActions.approveReviewTask, id).not.toHaveBeenCalled();
-      cleanup();
-    }
+    expect(fieldRendererRegistry.resolve("hitl", gateSchema(tombstoned), CONTEXT)).toBeNull();
   });
 });
 
@@ -348,7 +251,7 @@ describe("a renderer of a `@cinatra/` package", () => {
     expect(midRun.isTombstonedHitlRendererId(LIVE_ID)).toBe(false);
     registration.registerFieldRendererBindings([{ id: LIVE_ID, kind: "cta", priority: 90 }]);
     expect(fieldRendererRegistry.list().some((e) => e.id === LIVE_ID)).toBe(true);
-    expect(midRun.resolveHitlGateRenderer("hitl", gateSchema(LIVE_ID), CONTEXT)?.id).toBe(LIVE_ID);
+    expect(fieldRendererRegistry.resolve("hitl", gateSchema(LIVE_ID), CONTEXT)?.id).toBe(LIVE_ID);
     expect(midRun.classifyMidRunHitl(LIVE_ID)).toBe(true);
   });
 
@@ -378,7 +281,7 @@ describe("a renderer of a `@cinatra/` package", () => {
       expect(midRun.classifyMidRunHitl(id), id).toBe(false);
       registration.registerFieldRendererBindings([{ id, kind: "cta", priority: 90 }]);
       expect(fieldRendererRegistry.list().some((e) => e.id === id), id).toBe(false);
-      expect(midRun.resolveHitlGateRenderer("hitl", gateSchema(id), CONTEXT), id).toBeNull();
+      expect(fieldRendererRegistry.resolve("hitl", gateSchema(id), CONTEXT), id).toBeNull();
     }
     warn.mockRestore();
   });
@@ -420,25 +323,3 @@ describe("a renderer of a `@cinatra/` package", () => {
   });
 });
 
-// A PUBLISH PACK'S OWN CONFIRMATION SCREEN, PARKED BEFORE AN UPGRADE: under a
-// bundled pack that no longer declares it, the step is retired (no field, no
-// Continue; the `DROPPED` cases above). Where an installed older pack still
-// declares it, its old flow is the one that runs, and the step stays answerable.
-const OLD_PUBLISH_SCREENS = [
-  { id: "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm", kind: "wordpress-draft-confirm" },
-  { id: "@cinatra-ai/blog-linkedin-publish-agent:draft-review", kind: "linkedin-draft-review" },
-];
-describe("OrchestratorStepperPanel - a publish pack's own confirmation screen after an upgrade", () => {
-  for (const screen of OLD_PUBLISH_SCREENS) {
-    it(`${screen.id}: a runtime-installed older pack that declares it keeps the step answerable`, async () => {
-      expect(fieldRendererRegistry.list().some((e) => e.id === screen.id)).toBe(false);
-      registration.registerFieldRendererBindings([{ id: screen.id, kind: screen.kind, priority: 90, midRunHitl: true }]);
-      INTERRUPT = { schema: { type: "string", title: "Answer" }, xRenderer: screen.id, values: {}, reviewTaskId: TASK_ID, fieldName: "answer" };
-      const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
-      render(<OrchestratorStepperPanel {...baseProps()} />);
-      await waitFor(() => expect(document.getElementById("field-answer")).not.toBeNull());
-      expect(document.body.textContent ?? "").not.toMatch(/no renderer configured/);
-      await waitFor(() => expect(continues().length).toBeGreaterThan(0));
-    });
-  }
-});

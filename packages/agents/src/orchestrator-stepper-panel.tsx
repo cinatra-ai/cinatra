@@ -70,11 +70,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { LoadingSpinner } from "@cinatra-ai/sdk-ui";
 
-import {
-  classifyMidRunHitl,
-  parkedHitlStepIsAnswerable,
-  resolveHitlGateRenderer,
-} from "./orchestrator-mid-run-hitl";
+import { classifyMidRunHitl, hitlStepScreenIsAnswerable } from "./orchestrator-mid-run-hitl";
 import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
 import { useRunWindowScreen } from "./run-window-screen-context";
 import { useRunWindowConversation } from "./use-run-window-conversation";
@@ -940,7 +936,7 @@ function HitlApprovalCard({
   // (e.g. the gmail-sender whitelist) start CHANGING which component renders a
   // gate, which is a different behaviour change than fixing a label. Only the
   // rendered field IDENTITY below carries the real name.
-  const entry = resolveHitlGateRenderer(
+  const entry = fieldRendererRegistry.resolve(
     HITL_PLACEHOLDER_FIELD_NAME,
     fieldSchema,
     context,
@@ -948,11 +944,8 @@ function HitlApprovalCard({
   const { "x-renderer": _xr, ...renderSchema } = fieldSchema;
   void _xr;
 
-  // MAY THIS STEP BE ANSWERED HERE? Only when a screen draws it
-  // (`parkedHitlStepIsAnswerable`): a step whose recorded id no entry claims
-  // shows "no renderer configured for this step" and no Continue, whatever
-  // its id's name says.
-  const stepIsAnswerable = parkedHitlStepIsAnswerable(interruptContext.xRenderer, entry);
+  // A retired step (`hitlStepScreenIsAnswerable`) gets no Continue and sends nothing.
+  const stepIsAnswerable = hitlStepScreenIsAnswerable(interruptContext.xRenderer ?? "");
   const isMidRunHitl = classifyMidRunHitl(interruptContext.xRenderer);
   // Narrower classifier than isMidRunHitl: matches output renderers only,
   // excluding input forms. Drives the `data-hitl-output` attribute on the
@@ -1066,7 +1059,6 @@ function HitlApprovalCard({
   );
 
   const handleContinue = async () => {
-    // A step no screen draws is never answered from here.
     if (!stepIsAnswerable) return;
     // Reported unsendable (see `gateValidity`): the press sends nothing, before
     // the run-name check and the optimistic spinner below.

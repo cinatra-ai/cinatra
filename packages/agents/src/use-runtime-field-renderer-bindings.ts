@@ -26,17 +26,9 @@
 
 import { useEffect, useState } from "react";
 
-/**
- * Returns whether the runtime bindings have been loaded (registered, or found
- * absent or unreadable): a surface that decides from the registry whether a
- * step can be answered waits for it, so a screen only a runtime-installed pack
- * declares is not taken for a retired one. `enabled: false` loads nothing and
- * reads as loaded.
- */
-export function useRuntimeFieldRendererBindings(enabled = true): boolean {
-  const [loaded, setLoaded] = useState(!enabled);
+export function useRuntimeFieldRendererBindings(): void {
+  const [, setVersion] = useState(0);
   useEffect(() => {
-    if (!enabled) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -51,17 +43,13 @@ export function useRuntimeFieldRendererBindings(enabled = true): boolean {
           "./register-default-renderers"
         );
         registerFieldRendererBindings(bindings);
+        if (!cancelled) setVersion((v) => v + 1);
       } catch {
         // Degrade silently: resolution falls back to the schema-field path.
-      } finally {
-        // The state change also re-renders the caller, so renderer resolution
-        // picks up the new entries.
-        if (!cancelled) setLoaded(true);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [enabled]);
-  return loaded || !enabled;
+  }, []);
 }

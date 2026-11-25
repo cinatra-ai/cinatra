@@ -134,18 +134,12 @@ import {
   type AgentHitlScreenState,
 } from "./agent-hitl-screen";
 import { getAgentHitlScreenStateAction } from "./agent-hitl-screen-actions";
-import { continueAwaitsAPick, type FieldRendererContext } from "./field-renderer-registry";
-import {
-  hasMidRunHitlBinding,
-  isTombstonedHitlRendererId,
-  parkedHitlStepIsAnswerable,
-  resolveHitlGateRenderer,
-} from "./orchestrator-mid-run-hitl";
+import { continueAwaitsAPick, fieldRendererRegistry, type FieldRendererContext } from "./field-renderer-registry";
+import { hasMidRunHitlBinding, hitlStepScreenIsAnswerable } from "./orchestrator-mid-run-hitl";
 import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
 import { DispatchRenderer, type PresentationHint } from "./result-renderers";
 import { approveReviewTask } from "./hitl-actions";
 import { getFieldRendererContextForAgentBuilderAction } from "./server-actions";
-import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
   gateAwaitsRendererValue,
@@ -554,9 +548,10 @@ function classifyHitlGate(gate: AgentHitlScreenGate): {
   isGroupedSetup: boolean;
 } {
   return {
-    // A tombstoned gate is never mid-run, so the card draws no Continue for it.
+    // A retired step (`hitlStepScreenIsAnswerable`) is never mid-run, so the
+    // card draws no Continue for it.
     isMidRun:
-      !isTombstonedHitlRendererId(gate.xRenderer) &&
+      hitlStepScreenIsAnswerable(gate.xRenderer) &&
       (gate.xRenderer.endsWith(":output") || hasMidRunHitlBinding(gate.xRenderer)),
     isGroupedSetup: isGroupedSetupRenderer(gate.xRenderer),
   };
@@ -720,7 +715,7 @@ function resolveHitlGateEntry(runId: string, gate: AgentHitlScreenGate) {
     xRenderer: gate.xRenderer,
   };
   return (
-    resolveHitlGateRenderer(HITL_PLACEHOLDER_FIELD_NAME, fieldSchema, context) ?? null
+    fieldRendererRegistry.resolve(HITL_PLACEHOLDER_FIELD_NAME, fieldSchema, context) ?? null
   );
 }
 
@@ -792,7 +787,7 @@ export function AgentHitlScreenFields({
   const entry =
     hint || withholdRenderer === true
       ? null
-      : resolveHitlGateRenderer(HITL_PLACEHOLDER_FIELD_NAME, fieldSchema, context);
+      : fieldRendererRegistry.resolve(HITL_PLACEHOLDER_FIELD_NAME, fieldSchema, context);
   const { "x-renderer": _xr, ...renderSchema } = fieldSchema;
   void _xr;
   const Renderer = entry?.renderer ?? null;
@@ -1185,11 +1180,6 @@ export function AgentHitlScreenCard({
   // does not hold the card composes its own body instead, under the rules
   // above, rather than drawing nothing.
   const hostSuppliesScreen = screen !== undefined && cookieSession;
-  // THE RUNTIME-INSTALLED BINDINGS, as the run panel and the stepper load them.
-  // The card decides from the registry whether a step can be answered, so it
-  // draws nothing (as before its read lands) until they are loaded: a screen
-  // only a runtime-installed pack declares is never shown as retired.
-  const runtimeBindingsLoaded = useRuntimeFieldRendererBindings(present && !hostSuppliesScreen);
 
   // Hooks run unconditionally (rules of hooks); a surface with no declared host —
   // or one that supplies its own screen — asks for nothing, because the empty
@@ -1472,14 +1462,6 @@ export function AgentHitlScreenCard({
     // a setup-loop field submits on change — a second Continue on either would
     // be a control the run page does not offer.
     const { isMidRun, isGroupedSetup } = classifyHitlGate(gate);
-    // MAY THIS STEP BE ANSWERED HERE? (`parkedHitlStepIsAnswerable`.) A step no
-    // screen draws gets no Continue of the card's: the region shows "no
-    // renderer configured for this step" and nothing is offered.
-    const stepIsAnswerable = parkedHitlStepIsAnswerable(
-      gate.xRenderer,
-      resolveHitlGateEntry(runId, gate),
-      gate.currentValues,
-    );
     // A renderer that is not declared safe without a session is withheld
     // wherever there is no session — see the header. The condition is the
     // ABSENCE of a session rather than the presence of a credential, so a host
@@ -1494,7 +1476,6 @@ export function AgentHitlScreenCard({
     // resolves to no renderer at all keeps whatever control it has, and the card
     // draws none of its own there.
     const cardOwnsSetupSend =
-      stepIsAnswerable &&
       cardOwnsTheSetupSend(host, gate, gateRendererDrawsOwnSubmit(runId, gate)) &&
       !withholdRenderer &&
       gateMountsAnAnsweringRenderer(runId, gate);
@@ -1516,7 +1497,7 @@ export function AgentHitlScreenCard({
           gateKey={gateKey ?? ""}
         />
         </RendererFloorReportContext.Provider>
-        {stepIsAnswerable && isMidRun && !isGroupedSetup ? (
+        {isMidRun && !isGroupedSetup ? (
           <AgentHitlScreenContinue
             gate={gate}
             buffered={activeBuffered}
@@ -1554,13 +1535,12 @@ export function AgentHitlScreenCard({
     stageSetupAnswer,
     rendererFloored,
     setRendererFloored,
-    runtimeBindingsLoaded,
   ]);
 
   // Nothing before an authorized read, and NO DOM AT ALL for `none` — the
   // collapse of every denial, exactly as the audit card's `absent` is. A
   // host-supplied screen is past both: its host already decided.
-  if (!present || !asking || !runtimeBindingsLoaded) return null;
+  if (!present || !asking) return null;
 
   return (
     <div

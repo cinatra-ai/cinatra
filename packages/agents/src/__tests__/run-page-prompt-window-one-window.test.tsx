@@ -45,7 +45,6 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 import { RUN_WINDOW_PLACEHOLDERS } from "../hitl-conversation-panel";
 import { RunPageChrome } from "../run-page-chrome";
-import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 
 type CapturedFieldProps = {
   placeholder?: string;
@@ -196,10 +195,6 @@ vi.mock("../use-ag-ui-run-stream", () => ({
 }));
 
 beforeEach(() => {
-  // The renderers a real install registers at boot (src/app/field-renderer-init.tsx):
-  // the host's own entries and every generated binding, the gate's
-  // `@cinatra-ai/email-recipient-selection-agent:output` among them.
-  ensureDefaultFieldRenderersRegistered();
   cleanup();
   captured.fields.length = 0;
   document.body.innerHTML = "";

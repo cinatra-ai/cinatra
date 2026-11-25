@@ -145,8 +145,6 @@ vi.mock("../agent-run-hitl-prompts", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   readDurableHitlGateForContinue: durableRead,
 }));
-// No package is installed at run time here.
-vi.mock("../field-renderer-bindings.server", () => ({ collectInstalledFieldRendererBindings: () => [] }));
 
 import { approveReviewTaskInternal } from "../review-task-actions";
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
@@ -186,12 +184,12 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
   });
 
   // red-first-expect: promise resolved "undefined" instead of rejecting
-  it("a setup step whose pack screen no binding declares any more is refused, nothing written", async () => {
+  it("a setup step recorded under a tombstoned id is refused, nothing written", async () => {
     storeMock.readAgentRunById.mockResolvedValue({
       id: "run-gone", templateId: "tpl-s1", status: "pending_approval", inputParams: {},
     });
     durableRead.mockResolvedValue({
-      runId: "run-gone", reviewTaskId: "setup-run-gone", xRenderer: "@acme/removed-pack:setup-form",
+      runId: "run-gone", reviewTaskId: "setup-run-gone", xRenderer: "@cinatra/email-reviewer-agent:output",
       inputSchema: { type: "object" }, values: {}, materializedAt: "2026-11-25T00:00:00.000Z",
     });
     await expect(
