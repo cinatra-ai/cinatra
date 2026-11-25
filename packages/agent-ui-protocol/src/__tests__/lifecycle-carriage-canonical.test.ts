@@ -28,16 +28,17 @@ describe("the lifecycle carriage record", () => {
     for (const kind of LIFECYCLE_CARD_KINDS) {
       const row = LIFECYCLE_CARD_CARRIAGE[kind];
       expect(["run_state", "data_part"]).toContain(row.canonical);
-      expect(["data_part", "interrupt"]).toContain(row.represent);
+      expect(["data_part", "interrupt", "read"]).toContain(row.represent);
     }
   });
 
   it("makes every RUN-CARRIED kind's truth the run's own row", () => {
-    // Four of the five. A card mounted from run state is a card no model can
+    // Five of the six. A card mounted from run state is a card no model can
     // withhold, which is the whole claim the injection makes.
     expect([...LIFECYCLE_RUN_CARRIED_KINDS].sort()).toEqual([
       "agent_hitl_screen",
       "artifact_review_gate",
+      "publish_decision",
       "recommendation_hold",
       "verification_summary",
     ]);
@@ -80,6 +81,7 @@ describe("the lifecycle carriage record", () => {
       "trigger_schedule_proposal",
       "verification_summary",
     ]);
+    // cinatra#4150: the publish card is carried by the run's read, not an interrupt its gate never emits.
     expect([...LIFECYCLE_INTERRUPT_KINDS].sort()).toEqual([
       "agent_hitl_screen",
       "recommendation_hold",

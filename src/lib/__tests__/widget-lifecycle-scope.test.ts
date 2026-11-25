@@ -23,6 +23,7 @@ import {
   WIDGET_LIFECYCLE_DECIDE_SCOPE,
   WIDGET_LIFECYCLE_HITL_SCREEN_ROUTE_PATH,
   WIDGET_LIFECYCLE_HITL_SCREEN_SUBMIT_ROUTE_PATH,
+  WIDGET_LIFECYCLE_PUBLISH_DECISION_ROUTE_PATH,
   WIDGET_CONVERSATION_READ_SCOPE,
   WIDGET_CONVERSATION_WRITE_SCOPE,
   WIDGET_TOOL_CONFIRM_SCOPE,
@@ -40,6 +41,7 @@ import {
   tokenAudienceAdmits,
   tokenSetHas,
   widgetUserBaseScope,
+  widgetConsentDigest,
 } from "@/lib/widget-lifecycle-scope";
 
 describe("the set codec", () => {
@@ -149,6 +151,31 @@ describe("the mint", () => {
     const entry = WIDGET_EXTENSION_SCOPES[WIDGET_LIFECYCLE_DECIDE_SCOPE];
     expect(entry.audiences).toContain(WIDGET_LIFECYCLE_HITL_SCREEN_SUBMIT_ROUTE_PATH);
     expect(entry.consentCopy).toContain("answer a question an agent has paused to ask you");
+  });
+
+  it("the PUBLISH CARD read audience joined the read grant WITH its sentence, and the decide grant has none of it", () => {
+    // cinatra#4150. The publish card's broker read is a READ: it shows the card and sends no decision, so it joins
+    // `lifecycle.read` and its consent sentence changes in the same edit, and a decide-only token cannot reach it.
+    expect(WIDGET_LIFECYCLE_PUBLISH_DECISION_ROUTE_PATH).toBe("/api/lifecycle-views/publish-decision");
+    const read = WIDGET_EXTENSION_SCOPES[WIDGET_LIFECYCLE_READ_SCOPE];
+    expect(read.audiences).toContain(WIDGET_LIFECYCLE_PUBLISH_DECISION_ROUTE_PATH);
+    expect(read.consentCopy).toContain("whether an agent may publish what it made");
+    const readAud = mintWidgetTokenAudience([WIDGET_LIFECYCLE_READ_SCOPE]);
+    const decideAud = mintWidgetTokenAudience([WIDGET_LIFECYCLE_DECIDE_SCOPE]);
+    expect(tokenSetHas(readAud, WIDGET_LIFECYCLE_PUBLISH_DECISION_ROUTE_PATH)).toBe(true);
+    expect(tokenSetHas(decideAud, WIDGET_LIFECYCLE_PUBLISH_DECISION_ROUTE_PATH)).toBe(false);
+  });
+
+  it("the PUBLISH CARD decide audience joined the decide grant WITH its sentence, and the read grant has none of it", () => {
+    // cinatra#4758. Answering the publish card (Allow or Do not allow) changes the run, so it joins `lifecycle.decide`
+    // with its consent sentence in the same edit, and a read-only token cannot reach it.
+    const path = "/api/lifecycle-views/publish-decision/decide";
+    const decide = WIDGET_EXTENSION_SCOPES[WIDGET_LIFECYCLE_DECIDE_SCOPE];
+    expect(decide.audiences).toContain(path);
+    expect(decide.consentCopy).toContain("allow or not allow an agent to publish what it made");
+    expect(WIDGET_EXTENSION_SCOPES[WIDGET_LIFECYCLE_READ_SCOPE].audiences).not.toContain(path);
+    expect(tokenSetHas(mintWidgetTokenAudience([WIDGET_LIFECYCLE_DECIDE_SCOPE]), path)).toBe(true);
+    expect(tokenSetHas(mintWidgetTokenAudience([WIDGET_LIFECYCLE_READ_SCOPE]), path)).toBe(false);
   });
 
   it("a sign-in grants the whole set this build defines — nothing more, nothing less", () => {
@@ -373,7 +400,10 @@ describe("the displayed-scope token", () => {
     // round-7 exploit cannot reopen it on the nodes still running the old code.
     const record = widgetDisplayedScopesToken(WIDGET_SIGNIN_GRANTED_SCOPES);
     const bare = formatTokenSet([...WIDGET_SIGNIN_GRANTED_SCOPES].sort());
-    expect(record).toBe(`${WIDGET_DISPLAYED_SCREEN_PREFIX}${bare})`);
+    // cinatra#4150 — the record also names the consent it showed (the audiences and sentences of that set).
+    expect(record).toBe(
+      `${WIDGET_DISPLAYED_SCREEN_PREFIX}${bare}|consent:${widgetConsentDigest(WIDGET_SIGNIN_GRANTED_SCOPES)})`,
+    );
     expect(record).not.toBe(bare);
     // ...and the mirror: a BARE record, written by such a build, is refused HERE,
     // so the window fails closed in both directions.
@@ -467,6 +497,54 @@ describe("the displayed-scope token", () => {
     expect(
       widgetNoSignInScreenToken(fp, [...WIDGET_SIGNIN_GRANTED_SCOPES].reverse()),
     ).toBe(current);
+  });
+
+  it("binds the CONSENT it showed, not only the scope names, so a rollout that widens a grant fails closed (cinatra#4150)", () => {
+    // The publish card's read joined `lifecycle.read` with a new sentence and the SAME scope names. A screen an
+    // older node rendered named those names over the older sentence; a record that compared names alone would let
+    // this build grant the wider audience on it. Simulate that older mapping by removing the new audience while the
+    // older node writes its record and its no-screen claim, then compare them against this build.
+    const read = WIDGET_EXTENSION_SCOPES[WIDGET_LIFECYCLE_READ_SCOPE];
+    const audiences = read.audiences as string[];
+    const at = audiences.indexOf(WIDGET_LIFECYCLE_PUBLISH_DECISION_ROUTE_PATH);
+    expect(at).toBeGreaterThanOrEqual(0);
+    const fp = "a".repeat(32);
+    audiences.splice(at, 1);
+    let olderScreen: string;
+    let olderNoScreen: string;
+    let olderDigest: string;
+    try {
+      olderScreen = widgetDisplayedScopesToken(WIDGET_SIGNIN_GRANTED_SCOPES);
+      olderNoScreen = widgetNoSignInScreenToken(fp, WIDGET_SIGNIN_GRANTED_SCOPES);
+      olderDigest = widgetConsentDigest(WIDGET_SIGNIN_GRANTED_SCOPES);
+    } finally {
+      audiences.splice(at, 0, WIDGET_LIFECYCLE_PUBLISH_DECISION_ROUTE_PATH);
+    }
+    expect(olderDigest).not.toBe(widgetConsentDigest(WIDGET_SIGNIN_GRANTED_SCOPES));
+    expect(displayedScopesAgree(olderScreen, WIDGET_SIGNIN_GRANTED_SCOPES)).toBe(false);
+    const current = widgetNoSignInScreenToken(fp, WIDGET_SIGNIN_GRANTED_SCOPES);
+    expect(displayedScopesAgree(olderNoScreen, WIDGET_SIGNIN_GRANTED_SCOPES, current)).toBe(false);
+    // The record the base build wrote (names only) is refused too.
+    const bare = formatTokenSet([...WIDGET_SIGNIN_GRANTED_SCOPES].sort());
+    expect(displayedScopesAgree(`${WIDGET_DISPLAYED_SCREEN_PREFIX}${bare})`, WIDGET_SIGNIN_GRANTED_SCOPES)).toBe(false);
+    expect(
+      displayedScopesAgree(`${WIDGET_NO_SIGNIN_SCREEN_PREFIX}${fp}:${bare})`, WIDGET_SIGNIN_GRANTED_SCOPES, current),
+    ).toBe(false);
+    // A sentence change alone moves the digest as well: the person consents to what the sentence says.
+    const copy = read.consentCopy;
+    (read as { consentCopy: string }).consentCopy = `${copy} `;
+    let reworded: string;
+    try {
+      reworded = widgetConsentDigest(WIDGET_SIGNIN_GRANTED_SCOPES);
+    } finally {
+      (read as { consentCopy: string }).consentCopy = copy;
+    }
+    expect(reworded).not.toBe(widgetConsentDigest(WIDGET_SIGNIN_GRANTED_SCOPES));
+    // ...and the current records still agree with this build.
+    expect(
+      displayedScopesAgree(widgetDisplayedScopesToken(WIDGET_SIGNIN_GRANTED_SCOPES), WIDGET_SIGNIN_GRANTED_SCOPES),
+    ).toBe(true);
+    expect(displayedScopesAgree(current, WIDGET_SIGNIN_GRANTED_SCOPES, current)).toBe(true);
   });
 
   it("REFUSES null — a transaction that predates the mechanism knows nothing", () => {

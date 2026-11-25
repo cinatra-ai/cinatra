@@ -70,6 +70,19 @@ vi.mock("@/lib/primitive-handlers", async () => {
   };
 });
 
+// cinatra#3745: every passthrough call first prepares its arguments against the
+// run's verified executing source and the step's declared tools (pinned in
+// src/app/api/agents/passthrough/__tests__/passthrough-verified-step.test.ts and
+// passthrough-refusal-map-3745.test.ts). Here that check admits the call and
+// hands the tool its input unchanged. The guarded invocation reads the refusal
+// class it throws when the boundary refuses a call; the class is the host's shape.
+vi.mock("@/lib/extension-host-context", () => ({
+  prepareDeclaredRunToolArguments: async (_tool: string, input: unknown) => input,
+  OutwardActionRefusal: class OutwardActionRefusal extends Error {
+    constructor(readonly code: string) { super(code); this.name = "OutwardActionRefusal"; }
+  },
+}));
+
 import { POST } from "@/app/api/agents/passthrough/route";
 
 const ATTEST_KEY = "step-attest-key-under-test";
@@ -156,6 +169,22 @@ describe("the passthrough road refuses a publish the decision does not let throu
     }
   });
 
+  it("a served publishing call answers only after the release of its claim is written (cinatra#4762)", async () => {
+    const order: string[] = [];
+    let writeRelease!: () => void;
+    const releaseWritten = new Promise<void>((resolve) => { writeRelease = resolve; });
+    h.publishCallAllowed.mockImplementation((async (_run: unknown, _step: unknown, hold?: unknown) => {
+      if (typeof hold === "function") hold(async () => { await releaseWritten; order.push("released"); });
+      return true;
+    }) as never);
+    const answered = POST(makeReq(RUN_SCOPED_TOOL, stepHeaders())).then((res) => { order.push("answered"); return res; });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(order).toEqual([]);
+    writeRelease();
+    expect((await answered).status).toBe(200);
+    expect(order).toEqual(["released", "answered"]);
+  });
+
   it("a call the decision lets through is served as before", async () => {
     const res = await POST(makeReq(RUN_SCOPED_TOOL, stepHeaders()));
     expect(res.status).toBe(200);
@@ -183,5 +212,6 @@ afterAll(() => {
   vi.doUnmock("@/lib/extension-scoped-tools");
   vi.doUnmock("@/lib/run-folder-tools");
   vi.doUnmock("@/lib/primitive-handlers");
+  vi.doUnmock("@/lib/extension-host-context");
   vi.resetModules();
 });

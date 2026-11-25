@@ -1156,11 +1156,48 @@ describe("auth-route-guard - cinatra#2576 (S8c) /api/lifecycle-views/capture wid
       "/api/lifecycle-views/hitl-screen/anything",
       "/api/lifecycle-views/hitl-screen/submit/",
       "/api/lifecycle-views/hitl-screen/submit/anything",
+      // cinatra#4150 -- the publish card's read is exact too.
+      "/api/lifecycle-views/publish-decision/",
+      "/api/lifecycle-views/publish-decision/anything",
+      // cinatra#4758 -- and its answer is exact too.
+      "/api/lifecycle-views/publish-decision/decide/",
+      "/api/lifecycle-views/publish-decision/decide/anything",
     ]) {
       const res = await guardAppRoute(fakeRequest(p));
       expect(res.status, `${p} must stay guarded`).toBe(307);
       expect(res.headers.get("location")).toContain("/sign-in");
     }
+  });
+
+  it("cinatra#4150: the publish card's broker read is ADMITTED cookieless, on its own exact entry", async () => {
+    // The widget arm of the card sends a GET with `credentials: "omit"`; without the entry the guard 307s it to
+    // /sign-in before the handler that authorizes the `cwu_` runs, and the card draws nothing.
+    const res = await guardAppRoute(fakeRequest("/api/lifecycle-views/publish-decision"));
+    expect(res.status ?? 200).toBe(200);
+    expect(res.headers.get("x-middleware-next")).toBe("1");
+    expect(res.headers.get("location")).toBeNull();
+    const exact = guardSource.match(/const PUBLIC_EXACT_PATHS = \[([\s\S]*?)\n\];/)?.[1] ?? "";
+    const line = exact.split("\n").find((l) => l.includes('"/api/lifecycle-views/publish-decision"'));
+    expect(line, "the publish card read must have its own entry").toBeDefined();
+    expect((line ?? "").toLowerCase()).toMatch(/reachability only/);
+    expect((line ?? "").toLowerCase()).toMatch(/exact path, never a prefix/);
+    expect(line ?? "").toMatch(/401/);
+  });
+
+  it("cinatra#4758: the publish card's broker ANSWER is ADMITTED cookieless, on its own exact entry", async () => {
+    // The widget arm of the card POSTs with `credentials: "omit"`; without the entry the guard 307s it to /sign-in,
+    // which serves GET only, and the answer never reaches a decision while the run waits.
+    const res = await guardAppRoute(fakeRequest("/api/lifecycle-views/publish-decision/decide"));
+    expect(res.status ?? 200).toBe(200);
+    expect(res.headers.get("x-middleware-next")).toBe("1");
+    expect(res.headers.get("location")).toBeNull();
+    const exact = guardSource.match(/const PUBLIC_EXACT_PATHS = \[([\s\S]*?)\n\];/)?.[1] ?? "";
+    const line = exact.split("\n").find((l) => l.includes('"/api/lifecycle-views/publish-decision/decide"'));
+    expect(line, "the publish card answer must have its own entry").toBeDefined();
+    expect((line ?? "").toLowerCase()).toMatch(/reachability only/);
+    expect((line ?? "").toLowerCase()).toMatch(/exact path, never a prefix/);
+    expect(line ?? "").toMatch(/lifecycle\.decide/);
+    expect(line ?? "").toMatch(/401/);
   });
 
   it("cinatra#2930: BOTH HITL-screen paths are ADMITTED cookieless, and each on its own entry", async () => {

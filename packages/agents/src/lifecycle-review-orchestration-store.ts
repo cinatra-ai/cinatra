@@ -432,6 +432,20 @@ interface ProducedEventRow {
   continuationMode: string;
   continuationAddress: string | null;
   status: string;
+  /** cinatra#4762: the producing attempt's reset generation, stamped when the event was written (null or absent: an
+   *  event written before the column existed, of an unknown attempt). */
+  producerRunGeneration?: number | null;
+}
+
+/** cinatra#4762: the generation an automatic review of these events is stamped with: the producing attempt's, carried
+ *  by the events since production. "unknown" when one carries none (written before the column existed): the review is
+ *  stamped null, which holds every attempt's publish fence while it is open (fail closed: it may be this attempt's
+ *  output). -1 (never counts) when they carry different generations. */
+function producedGeneration(rows: ReadonlyArray<Pick<ProducedEventRow, "producerRunGeneration">>): number | "unknown" {
+  if (rows.some((r) => r.producerRunGeneration == null)) return "unknown";
+  const [first] = rows;
+  const g = first?.producerRunGeneration;
+  return typeof g === "number" && Number.isSafeInteger(g) && rows.every((r) => r.producerRunGeneration === g) ? g : -1;
 }
 
 function toAxes(row: ProducedEventRow): ProducedEventAxes {
@@ -460,6 +474,7 @@ const PRODUCED_OUTBOX_COLUMNS = {
   continuationMode: artifactProducedOutbox.continuationMode,
   continuationAddress: artifactProducedOutbox.continuationAddress,
   status: artifactProducedOutbox.status,
+  producerRunGeneration: artifactProducedOutbox.producerRunGeneration,
 } as const;
 
 /** The COMPLETE pending membership of ONE production `(orgId, producerRunId)`,
@@ -713,6 +728,17 @@ function claimForMember(
   ) {
     return "successor-gated";
   }
+  // cinatra#4264 B1b: a Regenerate segment run's own write was re-filed onto
+  // the reviewed artifact as the successor. Its produced event is the SAME
+  // work under the successor gate, never a second review: settle it.
+  if (
+    repair.status === "repaired" &&
+    typeof repair.sourceArtifactId === "string" &&
+    repair.sourceArtifactId === row.artifactId &&
+    repair.sourceRepresentationRevisionId === row.representationRevisionId
+  ) {
+    return "successor-gated";
+  }
   return "not-claimed";
 }
 
@@ -867,6 +893,7 @@ export async function orchestrateProducedEvent(row: ProducedEventRow): Promise<O
         reviewTaskId: plan.reviewTaskId,
         targets: [{ artifactId: row.artifactId, representationRevisionId: row.representationRevisionId }],
         expiresAt: new Date(Date.now() + AUTO_REVIEW_GATE_TTL_MS),
+        runGeneration: producedGeneration([row]),
       }, tx),
     );
     if (decided.kind === "withheld") {
@@ -1512,7 +1539,7 @@ async function orchestrateProducedBatch(
         // gate pins it; a member still free waits for the next pass, and the
         // epoch stays open until it is gated.
         const decided = await emitUnderEventLocks(members.map((m) => m.row), (tx) =>
-          emitArtifactReviewGate({ runId, orgId, reviewTaskId, targets: partition, expiresAt }, tx),
+          emitArtifactReviewGate({ runId, orgId, reviewTaskId, targets: partition, expiresAt, runGeneration: producedGeneration(members.map((m) => m.row)) }, tx),
         );
         if (decided.kind === "withheld") {
           for (const m of members) {
@@ -1703,6 +1730,10 @@ export interface GateMaintenanceSummary {
   producerRepairsCompleted: number;
   /** A repair the generic completer would not finalize on what it found. */
   producerRepairsUnresolved: number;
+  /** A Regenerate repair the generic completer escalated: its finished run
+   *  was not made in the declared-input form, so its work is not applied
+   *  (cinatra#4264). */
+  producerRepairsEscalated: number;
 }
 
 /**
@@ -1734,6 +1765,7 @@ export async function sweepLifecycleGateMaintenance(opts?: {
     repairsEscalated: 0,
     producerRepairsCompleted: 0,
     producerRepairsUnresolved: 0,
+    producerRepairsEscalated: 0,
   };
   if (!isLifecycleReviewOrchestrationActive()) return summary;
   const limit = Math.max(1, Math.min(opts?.limit ?? 100, 500));
@@ -1789,6 +1821,7 @@ async function completeProducerRepairs(summary: GateMaintenanceSummary): Promise
     const completion = await completeDispatchedProducerRepairs();
     summary.producerRepairsCompleted += completion.completed;
     summary.producerRepairsUnresolved += completion.unresolved;
+    summary.producerRepairsEscalated += completion.escalated;
   } catch (err) {
     console.error(
       `[lifecycle-review-orchestration] producer repair completion drain failed: ${

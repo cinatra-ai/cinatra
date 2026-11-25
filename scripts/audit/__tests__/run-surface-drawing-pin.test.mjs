@@ -35,6 +35,11 @@ const CONTRACT = JSON.parse(
     "utf8",
   ),
 );
+// The anchor contract mirrors the acceptance manifest's pin; a pin move (adopt-design-pin.mjs --write)
+// moves both, so this reads the revision from the manifest rather than naming it.
+const MANIFEST_PIN_REVISION = parseSpecCommit(
+  JSON.parse(readFileSync(path.join(REPO_ROOT, "scripts/audit/chat-hitl-acceptance-manifest.json"), "utf8")).specCommit,
+).revision;
 const RAIL_MODULE = readFileSync(
   path.join(REPO_ROOT, "packages/agents/src/run-input-rail-steps.tsx"),
   "utf8",
@@ -85,7 +90,7 @@ describe("the run surface's drawing pin is recorded", () => {
       CONTRACT.runSurfaceDrawingPin.specCommitDeliberatelyNotMoved,
     ).toMatch(/run-recommendation-chip-row/);
     expect(parseSpecCommit(CONTRACT.specCommit)).toEqual({
-      revision: "635da0077d169c5e682a082e691f0182b21bcc7c",
+      revision: MANIFEST_PIN_REVISION,
       paths: ["specs/app-lifecycle-cards.html", "specs/app-artifact-review.html"],
     });
   });

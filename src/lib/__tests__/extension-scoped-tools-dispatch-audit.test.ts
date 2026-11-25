@@ -1,0 +1,674 @@
+/**
+ * ONE `extension_tool.dispatch` AUDIT EVENT PER CALL, AND THE TOOL'S PORTS
+ * ATTRIBUTED (cinatra#4154, part C2).
+ *
+ * Every `extension_tool` call that reaches the scoped dispatch writes one
+ * `extension_tool.dispatch` event, allowed and refused alike, carrying
+ * `runPackage`, `codePackage`, `codeInstallId` (null on the run package's own
+ * road) and `verifiedStepId`. A refused call records a fixed reason word, the
+ * resolver's fixed code where the resolver refused, and never the thrown text;
+ * a refused event is never folded away by the denied-event cooldown. The ports
+ * a tool is handed write their own audit events with the same four fields.
+ *
+ * The origin resolver and the module loader are stubbed (the resolver is
+ * pinned in extension-tool-origin.test.ts); the dispatch, the declaration
+ * parse, the port wiring and the data tool's compile are the real ones. The
+ * audit write is captured at `@/lib/authz/audit`. The packages are fixtures.
+ *
+ *   pnpm exec vitest run src/lib/__tests__/extension-scoped-tools-dispatch-audit.test.ts
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const query = vi.fn();
+const getAgentPackage = vi.fn();
+const loadDeclaredToolModule = vi.fn();
+const resolveExtensionToolOrigin = vi.fn();
+const logAuditEvent = vi.fn();
+
+vi.mock("@/lib/db/pooled", async () => ({
+  ...(await vi.importActual<typeof import("@/lib/db/pooled")>("@/lib/db/pooled")),
+  getPooledDb: () => ({
+    query: (...a: unknown[]) => query(...a),
+    connect: async () => ({ query: (...a: unknown[]) => query(...a), release: () => {} }),
+  }),
+}));
+vi.mock("@/lib/postgres-config", () => ({
+  getPostgresConnectionString: () => "postgres://unused",
+  postgresSchema: "cinatra",
+}));
+vi.mock("@/lib/postgres-schema-init", () => ({ ensurePostgresSchema: () => {} }));
+vi.mock("@cinatra-ai/registries", () => ({
+  getAgentPackage: (...a: unknown[]) => getAgentPackage(...a),
+}));
+vi.mock("@cinatra-ai/agents/installed-oas-path", () => ({
+  probeInstalledOasPathForRead: () => ({ path: null }),
+}));
+vi.mock("@/lib/verdaccio-config", () => ({ loadVerdaccioConfigForReads: async () => ({}) }));
+// The audit module loads slowly (a fresh load per test, after resetModules), so a
+// write the dispatch starts only after its answer would be missing when the answer returns.
+vi.mock("@/lib/authz/audit", async () => {
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  return { logAuditEvent: (...a: unknown[]) => logAuditEvent(...a) };
+});
+vi.mock("@/lib/extension-tool-module-loader", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/extension-tool-module-loader")>()),
+  loadDeclaredToolModule: (...args: unknown[]) => loadDeclaredToolModule(...args),
+}));
+vi.mock("@/lib/extension-tool-origin", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/extension-tool-origin")>()),
+  resolveExtensionToolOrigin: (...args: unknown[]) => resolveExtensionToolOrigin(...args),
+}));
+
+const PARENT = "@fixture-scope/fixture-parent-agent";
+const CHILD = "@fixture-scope/fixture-child-agent";
+const STEP = "child-embed_step";
+const PARENT_TOOL = { name: "parent_tool", module: "./cinatra/tools/parent-tool.mjs" };
+const CHILD_TOOL = { name: "child_tool", module: "./cinatra/tools/child-tool.mjs", embeddable: true };
+const PARENT_CINATRA = { dependencies: [{ packageName: CHILD, kind: "agent" }], tools: [PARENT_TOOL] };
+const CHILD_CINATRA = {
+  tools: [CHILD_TOOL],
+  declaredTables: [
+    {
+      name: "child_rows",
+      organizationColumn: "org_id",
+      columns: [
+        { name: "id", type: "text", notNull: true, primaryKey: true },
+        { name: "org_id", type: "text", notNull: true },
+      ],
+    },
+  ],
+};
+const RUN = {
+  id: "run-1",
+  orgId: "org-1",
+  runBy: "user-1",
+  templateId: "tmpl-1",
+  packageVersion: "2.0.0",
+  dependentInstallId: "install-parent",
+  verifiedStepId: STEP,
+};
+const CHILD_ORIGIN = {
+  kind: "child",
+  codeInstallId: "install-child",
+  context: { packageName: CHILD, packageVersion: "0.1.1", cinatra: CHILD_CINATRA },
+  install: { installId: "install-child", digest: "digest-child", stillBound: async () => true },
+};
+/** Text a thrown module failure carries that no audit event may hold. */
+const LEAKY = "ENOENT /srv/fixture-store/agent/fixture-child-agent/digest-x install-leaky-id";
+
+type Event = Record<string, unknown> & { metadata: Record<string, unknown> };
+
+function dispatchEvents(): Event[] {
+  return logAuditEvent.mock.calls
+    .map((c) => c[0] as Event)
+    .filter((e) => e.operation === "extension_tool.dispatch");
+}
+
+/**
+ * The dispatch event is handed to the audit sink before the answer returns
+ * (the answer never waits for the write itself): exactly `n` were handed over
+ * by the time the answer returned.
+ */
+async function settledEvents(n: number): Promise<Event[]> {
+  expect(dispatchEvents()).toHaveLength(n);
+  return dispatchEvents();
+}
+
+async function call(name: string, run: Record<string, unknown> = RUN) {
+  const { dispatchExtensionScopedTool } = await import("@/lib/extension-scoped-tools");
+  return dispatchExtensionScopedTool({
+    tool: "extension_tool",
+    input: { name, input: {} },
+    run: run as typeof RUN,
+  });
+}
+
+afterEach(() => {
+  vi.resetModules();
+  vi.restoreAllMocks();
+});
+
+describe("the extension_tool.dispatch audit event", () => {
+  beforeEach(() => {
+    query.mockReset();
+    getAgentPackage.mockReset();
+    loadDeclaredToolModule.mockReset();
+    resolveExtensionToolOrigin.mockReset();
+    logAuditEvent.mockReset().mockResolvedValue(undefined);
+    query.mockResolvedValue({ rows: [{ package_name: PARENT }] });
+    getAgentPackage.mockResolvedValue({ manifest: { cinatra: PARENT_CINATRA } });
+  });
+
+  it("records an allowed call of the run package's own road, with no install id", async () => {
+    resolveExtensionToolOrigin.mockResolvedValue({ kind: "parent" });
+    loadDeclaredToolModule.mockResolvedValue({ extensionTool: () => ({ ran: "parent" }) });
+    expect(await call("parent_tool")).toEqual({ ok: true, result: { ran: "parent" } });
+    const events = await settledEvents(1);
+    expect(events[0]).toMatchObject({
+      organizationId: RUN.orgId,
+      actorPrincipalId: RUN.runBy,
+      resourceType: "extension_tool",
+      runId: RUN.id,
+      decision: "allowed",
+    });
+    expect(events[0]!.metadata).toEqual({
+      runPackage: PARENT,
+      codePackage: PARENT,
+      codeInstallId: null,
+      verifiedStepId: STEP,
+    });
+  });
+
+  it("records an allowed call of an embedded child step with the exact child installation", async () => {
+    resolveExtensionToolOrigin.mockResolvedValue(CHILD_ORIGIN);
+    loadDeclaredToolModule.mockResolvedValue({ extensionTool: () => ({ ran: "child" }) });
+    expect(await call("child_tool")).toEqual({ ok: true, result: { ran: "child" } });
+    const events = await settledEvents(1);
+    expect(events[0]).toMatchObject({ decision: "allowed", resourceId: CHILD });
+    expect(events[0]!.metadata).toEqual({
+      runPackage: PARENT,
+      codePackage: CHILD,
+      codeInstallId: "install-child",
+      verifiedStepId: STEP,
+    });
+  });
+
+  it("records a resolver refusal with its fixed code, no code package and no cooldown", async () => {
+    const { ExtensionToolOriginRefusal } = await import("@/lib/extension-tool-origin");
+    resolveExtensionToolOrigin.mockRejectedValue(new ExtensionToolOriginRefusal("provenance-mismatch"));
+    const outcome = await call("child_tool");
+    expect(outcome).toMatchObject({ ok: false, status: 403 });
+    const events = await settledEvents(1);
+    expect(events[0]).toMatchObject({ decision: "denied", deniedCooldown: "record_every" });
+    expect(events[0]).not.toHaveProperty("resourceId");
+    expect(events[0]!.metadata).toEqual({
+      runPackage: PARENT,
+      codePackage: null,
+      codeInstallId: null,
+      verifiedStepId: STEP,
+      reason: "refused",
+      originCode: "provenance-mismatch",
+    });
+  });
+
+  it("records a dispatch refusal on the child road with the child as the code package", async () => {
+    resolveExtensionToolOrigin.mockResolvedValue(CHILD_ORIGIN);
+    const outcome = await call("parent_tool");
+    expect(outcome).toMatchObject({ ok: false, status: 403 });
+    const events = await settledEvents(1);
+    expect(events[0]!.metadata).toEqual({
+      runPackage: PARENT,
+      codePackage: CHILD,
+      codeInstallId: "install-child",
+      verifiedStepId: STEP,
+      reason: "refused",
+    });
+  });
+
+  it("records a module's failure as `failed`, never with its text", async () => {
+    resolveExtensionToolOrigin.mockResolvedValue(CHILD_ORIGIN);
+    loadDeclaredToolModule.mockResolvedValue({
+      extensionTool: () => {
+        throw new Error(LEAKY);
+      },
+    });
+    const outcome = await call("child_tool");
+    expect(outcome).toMatchObject({ ok: false, status: 500 });
+    const events = await settledEvents(1);
+    expect(events[0]).toMatchObject({ decision: "denied", deniedCooldown: "record_every" });
+    expect(events[0]!.metadata.reason).toBe("failed");
+    expect(JSON.stringify(events[0])).not.toContain("install-leaky-id");
+    expect(JSON.stringify(events[0])).not.toContain("/srv/fixture-store");
+  });
+
+  it("records a run with no package as refused, with no package fields", async () => {
+    query.mockResolvedValue({ rows: [] });
+    const outcome = await call("parent_tool");
+    expect(outcome).toMatchObject({ ok: false, status: 403 });
+    const events = await settledEvents(1);
+    expect(events[0]!.metadata).toEqual({
+      runPackage: null,
+      codePackage: null,
+      codeInstallId: null,
+      verifiedStepId: STEP,
+      reason: "refused",
+    });
+  });
+
+  it("keeps the answer when the audit write fails", async () => {
+    resolveExtensionToolOrigin.mockResolvedValue({ kind: "parent" });
+    loadDeclaredToolModule.mockResolvedValue({ extensionTool: () => ({ ran: "parent" }) });
+    logAuditEvent.mockRejectedValue(new Error(LEAKY));
+    expect(await call("parent_tool")).toEqual({ ok: true, result: { ran: "parent" } });
+  });
+
+  it("writes no dispatch event for the other scoped tools", async () => {
+    const { dispatchExtensionScopedTool } = await import("@/lib/extension-scoped-tools");
+    for (const tool of ["extension_data", "artifacts_list", "artifacts_get", "artifact_content_read"]) {
+      await dispatchExtensionScopedTool({ tool, input: {}, run: RUN });
+    }
+    expect(dispatchEvents()).toHaveLength(0);
+  });
+
+  it("attributes the audit event a child tool's data port writes", async () => {
+    resolveExtensionToolOrigin.mockResolvedValue(CHILD_ORIGIN);
+    loadDeclaredToolModule.mockResolvedValue({
+      extensionTool: async ({ ports }: { ports: { data: { select: (r: unknown) => Promise<unknown> } } }) =>
+        ports.data.select({ table: "undeclared_rows" }),
+    });
+    const outcome = await call("child_tool");
+    expect(outcome).toMatchObject({ ok: false, status: 403 });
+    const data = logAuditEvent.mock.calls
+      .map((c) => c[0] as Event)
+      .filter((e) => e.operation === "extension_data.select");
+    expect(data).toHaveLength(1);
+    expect(data[0]!.metadata).toMatchObject({
+      extension: CHILD,
+      reason: "table-not-declared",
+      runPackage: PARENT,
+      codePackage: CHILD,
+      codeInstallId: "install-child",
+      verifiedStepId: STEP,
+    });
+  });
+
+  it("leaves a direct extension_data call's audit event without the four fields", async () => {
+    getAgentPackage.mockResolvedValue({ manifest: { cinatra: { ...PARENT_CINATRA, ...CHILD_CINATRA } } });
+    const { dispatchExtensionScopedTool } = await import("@/lib/extension-scoped-tools");
+    await dispatchExtensionScopedTool({
+      tool: "extension_data",
+      input: { table: "undeclared_rows", operation: "select" },
+      run: RUN,
+    });
+    const data = logAuditEvent.mock.calls
+      .map((c) => c[0] as Event)
+      .filter((e) => e.operation === "extension_data.select");
+    expect(data).toHaveLength(1);
+    for (const key of ["runPackage", "codePackage", "codeInstallId", "verifiedStepId"]) {
+      expect(data[0]!.metadata).not.toHaveProperty(key);
+    }
+  });
+
+  it("records a context failure as `failed`, with no package fields and never its text", async () => {
+    query.mockRejectedValue(new Error(LEAKY));
+    const outcome = await call("parent_tool");
+    expect(outcome).toMatchObject({ ok: false, status: 500 });
+    const events = await settledEvents(1);
+    expect(events[0]).toMatchObject({ decision: "denied", deniedCooldown: "record_every" });
+    expect(events[0]).not.toHaveProperty("resourceId");
+    expect(events[0]!.metadata).toEqual({
+      runPackage: null,
+      codePackage: null,
+      codeInstallId: null,
+      verifiedStepId: STEP,
+      reason: "failed",
+    });
+    expect(JSON.stringify(events[0])).not.toContain("/srv/fixture-store");
+  });
+});
+
+/**
+ * THE EVENT NEVER CHANGES THE ANSWER AND NEVER SKIPS A CALL (cinatra#4154 C2
+ * fold 1). The dispatch reads the call's `tool` and `run` exactly as often and
+ * in the same order as without the event; the event takes what those reads
+ * saw. A throw whose class cannot be read stays the fixed 500. A run field
+ * that cannot be read is left out of the event, never the event. The answer
+ * never waits for the write.
+ */
+describe("the dispatch event and the answer", () => {
+  beforeEach(() => {
+    query.mockReset();
+    getAgentPackage.mockReset();
+    loadDeclaredToolModule.mockReset();
+    resolveExtensionToolOrigin.mockReset();
+    logAuditEvent.mockReset().mockResolvedValue(undefined);
+    query.mockResolvedValue({ rows: [{ package_name: PARENT }] });
+    getAgentPackage.mockResolvedValue({ manifest: { cinatra: PARENT_CINATRA } });
+  });
+
+  it("answers a resolver throw whose class check throws only once with the fixed 500, never its text", async () => {
+    const { ExtensionDataRefusal } = await import("@/lib/extension-data-tool");
+    const { PASSTHROUGH_UNEXPECTED_ERROR } = await import("@/lib/passthrough-refusal");
+    let checks = 0;
+    const shifty = new Proxy(
+      { message: LEAKY },
+      {
+        getPrototypeOf() {
+          checks += 1;
+          if (checks === 1) throw new Error("class check");
+          return ExtensionDataRefusal.prototype;
+        },
+      },
+    );
+    resolveExtensionToolOrigin.mockRejectedValue(shifty);
+    const outcome = await call("child_tool");
+    expect(outcome).toEqual({ ok: false, status: 500, error: PASSTHROUGH_UNEXPECTED_ERROR });
+    const events = await settledEvents(1);
+    expect(events[0]!.metadata).toMatchObject({ reason: "failed" });
+    expect(JSON.stringify(events[0])).not.toContain("/srv/fixture-store");
+  });
+
+  it("records only a fixed origin code, read from the answer, never the refusal's own code field", async () => {
+    const { ExtensionToolOriginRefusal } = await import("@/lib/extension-tool-origin");
+    const refusal = new ExtensionToolOriginRefusal("provenance-mismatch");
+    const fixed = refusal.message;
+    Object.defineProperty(refusal, "code", {
+      configurable: true,
+      get() {
+        Object.defineProperty(refusal, "message", { configurable: true, value: LEAKY });
+        return LEAKY;
+      },
+    });
+    resolveExtensionToolOrigin.mockRejectedValue(refusal);
+    const outcome = await call("child_tool");
+    expect(outcome).toEqual({ ok: false, status: 403, error: fixed });
+    const events = await settledEvents(1);
+    expect(events[0]!.metadata).toMatchObject({ reason: "refused", originCode: "provenance-mismatch" });
+    expect(JSON.stringify(events[0])).not.toContain("/srv/fixture-store");
+  });
+
+  it("hands the event to the audit sink before the answer returns", async () => {
+    resolveExtensionToolOrigin.mockResolvedValue({ kind: "parent" });
+    loadDeclaredToolModule.mockResolvedValue({ extensionTool: () => ({ ran: "parent" }) });
+    const answered = await call("parent_tool").then((outcome) => ({ outcome, handed: dispatchEvents().length }));
+    expect(answered).toEqual({ outcome: { ok: true, result: { ran: "parent" } }, handed: 1 });
+  });
+
+  it("reads the tool twice and the run five times on an allowed call of the run package's own road", async () => {
+    const { dispatchExtensionScopedTool } = await import("@/lib/extension-scoped-tools");
+    resolveExtensionToolOrigin.mockResolvedValue({ kind: "parent" });
+    loadDeclaredToolModule.mockResolvedValue({ extensionTool: () => ({ ran: "parent" }) });
+    const reads = { tool: 0, run: 0 };
+    const input = {
+      get tool(): string {
+        reads.tool += 1;
+        return "extension_tool";
+      },
+      input: { name: "parent_tool", input: {} },
+      get run(): typeof RUN {
+        reads.run += 1;
+        return RUN;
+      },
+    };
+    expect(await dispatchExtensionScopedTool(input)).toEqual({ ok: true, result: { ran: "parent" } });
+    // f4ab805f's own reads: the tool in the two branch checks; the run twice for the context, once for the
+    // resolver, once for the objects port and once for the dispatch's organisation.
+    expect(reads).toEqual({ tool: 2, run: 5 });
+    await settledEvents(1);
+  });
+
+  it("answers a resolver throw whose class check always throws with the fixed 500, never its text", async () => {
+    const { ExtensionDataRefusal } = await import("@/lib/extension-data-tool");
+    const { PASSTHROUGH_UNEXPECTED_ERROR } = await import("@/lib/passthrough-refusal");
+    const replacement = new ExtensionDataRefusal("fixture", LEAKY);
+    const trap = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          throw replacement;
+        },
+      },
+    );
+    resolveExtensionToolOrigin.mockRejectedValue(trap);
+    const outcome = await call("child_tool");
+    expect(outcome).toEqual({ ok: false, status: 500, error: PASSTHROUGH_UNEXPECTED_ERROR });
+    const events = await settledEvents(1);
+    expect(events[0]!.metadata).toMatchObject({ reason: "failed", codePackage: null });
+    expect(events[0]!.metadata).not.toHaveProperty("originCode");
+    expect(JSON.stringify(events[0])).not.toContain("/srv/fixture-store");
+  });
+
+  it("answers a tool name that throws on its first read with the fixed 500, and records the call", async () => {
+    const { PASSTHROUGH_UNEXPECTED_ERROR } = await import("@/lib/passthrough-refusal");
+    const { dispatchExtensionScopedTool } = await import("@/lib/extension-scoped-tools");
+    resolveExtensionToolOrigin.mockResolvedValue({ kind: "parent" });
+    loadDeclaredToolModule.mockResolvedValue({ extensionTool: () => ({ ran: "parent" }) });
+    let reads = 0;
+    const input = {
+      get tool(): string {
+        reads += 1;
+        if (reads === 1) throw new Error(LEAKY);
+        return "extension_tool";
+      },
+      input: { name: "parent_tool", input: {} },
+      run: RUN,
+    };
+    const outcome = await dispatchExtensionScopedTool(input);
+    expect(outcome).toEqual({ ok: false, status: 500, error: PASSTHROUGH_UNEXPECTED_ERROR });
+    expect(loadDeclaredToolModule).not.toHaveBeenCalled();
+    const events = await settledEvents(1);
+    expect(events[0]).toMatchObject({ decision: "denied", runId: RUN.id });
+    expect(events[0]!.metadata).toMatchObject({ reason: "failed", codePackage: null });
+  });
+
+  it("reads the run no more often than the dispatch does, so the no-package refusal stays", async () => {
+    query.mockResolvedValue({ rows: [] });
+    const { dispatchExtensionScopedTool } = await import("@/lib/extension-scoped-tools");
+    let reads = 0;
+    const input = {
+      tool: "extension_tool",
+      input: { name: "parent_tool", input: {} },
+      get run(): typeof RUN {
+        reads += 1;
+        if (reads > 2) throw new Error(LEAKY);
+        return RUN;
+      },
+    };
+    const outcome = await dispatchExtensionScopedTool(input);
+    expect(outcome).toMatchObject({
+      ok: false,
+      status: 403,
+      error: expect.stringContaining("resolves to no extension package"),
+    });
+    const events = await settledEvents(1);
+    expect(reads).toBe(2);
+    expect(events[0]).toMatchObject({ organizationId: RUN.orgId, runId: RUN.id, decision: "denied" });
+    expect(events[0]!.metadata).toMatchObject({ reason: "refused", verifiedStepId: STEP });
+  });
+
+  it("writes the event without the run id when the run's id cannot be read", async () => {
+    resolveExtensionToolOrigin.mockResolvedValue({ kind: "parent" });
+    loadDeclaredToolModule.mockResolvedValue({ extensionTool: () => ({ ran: "parent" }) });
+    const run: Record<string, unknown> = { ...RUN };
+    Object.defineProperty(run, "id", {
+      get() {
+        throw new Error(LEAKY);
+      },
+    });
+    expect(await call("parent_tool", run)).toEqual({ ok: true, result: { ran: "parent" } });
+    const events = await settledEvents(1);
+    expect(events[0]).toMatchObject({ organizationId: RUN.orgId, decision: "allowed" });
+    expect(events[0]).not.toHaveProperty("runId");
+    expect(events[0]!.metadata).toEqual({
+      runPackage: PARENT,
+      codePackage: PARENT,
+      codeInstallId: null,
+      verifiedStepId: STEP,
+    });
+  });
+
+  it("answers without waiting for the dispatch event to be written", async () => {
+    await import("@/lib/extension-scoped-tools");
+    resolveExtensionToolOrigin.mockResolvedValue({ kind: "parent" });
+    loadDeclaredToolModule.mockResolvedValue({ extensionTool: () => ({ ran: "parent" }) });
+    logAuditEvent.mockImplementation(() => new Promise<void>(() => {}));
+    const late = Symbol("late");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const answer = await Promise.race([
+      call("parent_tool"),
+      new Promise<symbol>((resolve) => {
+        timer = setTimeout(() => resolve(late), 2000);
+      }),
+    ]);
+    clearTimeout(timer);
+    expect(answer).toEqual({ ok: true, result: { ran: "parent" } });
+    expect(dispatchEvents()).toHaveLength(1);
+  });
+});
+
+/**
+ * A STALLED AUDIT SINK IS BOUNDED. An extension_tool call takes one of 64 slots, synchronously, before its
+ * origin is resolved or its module is loaded, and holds it until its dispatch event's write settles. A call
+ * that finds every slot taken is refused with a fixed 403 and named in the server log by a fixed line
+ * instead of a write. A call answered before that point hands its event over only if a slot is free.
+ * A write still pending after 10 seconds is named once in the server log by a fixed line and keeps its slot.
+ */
+describe("a stalled audit sink", () => {
+  const BACKLOG = "extension_tool: the audit trail is not keeping up, so the call was not run";
+  const LATE_LINE = "[extension_tool] a dispatch audit write did not settle in time; it is still counted as pending";
+  const BACKLOG_LINE = "[extension_tool] a call was refused while dispatch audit writes were pending; no event was handed over";
+  const FULL_LINE = "[extension_tool] dispatch audit writes were pending at the bound; the event of this call was not handed over";
+  let settle: Array<() => void> = [];
+
+  beforeEach(() => {
+    query.mockReset().mockResolvedValue({ rows: [{ package_name: PARENT }] });
+    getAgentPackage.mockReset().mockResolvedValue({ manifest: { cinatra: PARENT_CINATRA } });
+    resolveExtensionToolOrigin.mockReset().mockResolvedValue({ kind: "parent" });
+    loadDeclaredToolModule.mockReset().mockResolvedValue({ extensionTool: () => ({ ran: "parent" }) });
+    settle = [];
+    logAuditEvent.mockReset().mockImplementation(() => new Promise<void>((resolve) => settle.push(resolve)));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    for (const resolve of settle) resolve();
+  });
+
+  const lines = (spy: { mock: { calls: unknown[][] } }, sentence: string) =>
+    spy.mock.calls.filter((c) => c[0] === sentence).length;
+
+  it("refuses a new call while 64 dispatch events are pending, loads nothing for it and hands over no further write", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    for (let i = 0; i < 64; i += 1) {
+      expect(await call("parent_tool")).toEqual({ ok: true, result: { ran: "parent" } });
+    }
+    expect(dispatchEvents()).toHaveLength(64);
+    expect(loadDeclaredToolModule).toHaveBeenCalledTimes(64);
+    expect(await call("parent_tool")).toEqual({ ok: false, status: 403, error: BACKLOG });
+    expect(loadDeclaredToolModule).toHaveBeenCalledTimes(64);
+    expect(dispatchEvents()).toHaveLength(64);
+    expect(lines(error, BACKLOG_LINE)).toBe(1);
+    for (const c of error.mock.calls) expect(JSON.stringify(c)).not.toContain(RUN.runBy);
+  });
+
+  it("admits calls again once a pending write settles", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    for (let i = 0; i < 64; i += 1) await call("parent_tool");
+    expect((await call("parent_tool")).ok).toBe(false);
+    settle[0]!();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(await call("parent_tool")).toEqual({ ok: true, result: { ran: "parent" } });
+    expect(dispatchEvents()).toHaveLength(65);
+  });
+
+  it("admits at most 64 of 65 simultaneous calls, whatever they await before the module runs", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Vitest serves the real module, not the mock, to a dynamic import of a mocked module that another import
+    // from the same module is still resolving (they share one import call stack). So the calls pass the
+    // dispatch's dynamic imports one at a time: the manifest read's before the slot, the audit sink's after
+    // the module ran. The 64 admitted calls still hold their slots at the module loader while the 65th checks.
+    const turns: Array<() => void> = [];
+    let previous: Promise<void> = Promise.resolve();
+    query.mockImplementation(() => {
+      const mine = previous;
+      previous = new Promise<void>((resolve) => turns.push(resolve));
+      return mine.then(() => ({ rows: [{ package_name: PARENT }] }));
+    });
+    getAgentPackage.mockImplementation(async () => {
+      turns.shift()?.();
+      return { manifest: { cinatra: PARENT_CINATRA } };
+    });
+    let open: () => void = () => {};
+    let loaderTurn = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    let arrived = 0;
+    let answered = 0;
+    const checked = () => {
+      if (arrived + answered === 65) open();
+    };
+    const loaderTurns: Array<() => void> = [];
+    loadDeclaredToolModule.mockImplementation(() => {
+      arrived += 1;
+      checked();
+      const mine = loaderTurn;
+      loaderTurn = new Promise<void>((resolve) => loaderTurns.push(resolve));
+      return mine.then(() => ({ extensionTool: () => ({ ran: "parent" }) }));
+    });
+    logAuditEvent.mockImplementation(() => {
+      loaderTurns.shift()?.();
+      return new Promise<void>((resolve) => settle.push(resolve));
+    });
+    const answers = await Promise.all(
+      Array.from({ length: 65 }, () =>
+        call("parent_tool").then((a) => {
+          answered += 1;
+          checked();
+          return a;
+        }),
+      ),
+    );
+    expect(answers.filter((a) => a.ok)).toHaveLength(64);
+    expect(answers.filter((a) => !a.ok)).toEqual([{ ok: false, status: 403, error: BACKLOG }]);
+    expect(loadDeclaredToolModule).toHaveBeenCalledTimes(64);
+    expect(resolveExtensionToolOrigin).toHaveBeenCalledTimes(64);
+    expect(dispatchEvents()).toHaveLength(64);
+    expect(lines(error, BACKLOG_LINE)).toBe(1);
+  });
+
+  it("hands over no 65th write to a sink that never settles, also for calls answered before the slot check", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    for (let i = 0; i < 64; i += 1) await call("parent_tool");
+    query.mockResolvedValue({ rows: [] });
+    for (let i = 0; i < 5; i += 1) expect(await call("parent_tool")).toMatchObject({ ok: false, status: 403 });
+    query.mockRejectedValue(new Error(LEAKY));
+    expect(await call("parent_tool")).toMatchObject({ ok: false, status: 500 });
+    expect(dispatchEvents()).toHaveLength(64);
+    expect(lines(error, FULL_LINE)).toBe(6);
+    for (const c of error.mock.calls) expect(JSON.stringify(c)).not.toContain(LEAKY);
+  });
+
+  it("keeps the slot of a write that times out: a 65th call is still refused until a write settles", async () => {
+    await import("@/lib/authz/audit");
+    await import("@/lib/extension-scoped-tools");
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.useFakeTimers();
+    for (let i = 0; i < 64; i += 1) await call("parent_tool");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(lines(error, LATE_LINE)).toBe(64);
+    expect(await call("parent_tool")).toEqual({ ok: false, status: 403, error: BACKLOG });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(lines(error, LATE_LINE)).toBe(64);
+    expect(dispatchEvents()).toHaveLength(64);
+    settle[0]!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await call("parent_tool")).toEqual({ ok: true, result: { ran: "parent" } });
+  });
+
+  it("frees the slot of a write that throws at once", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    logAuditEvent.mockImplementation(() => {
+      throw new Error(LEAKY);
+    });
+    for (let i = 0; i < 65; i += 1) {
+      expect(await call("parent_tool")).toEqual({ ok: true, result: { ran: "parent" } });
+    }
+    expect(dispatchEvents()).toHaveLength(65);
+  });
+
+  it("names a write still pending after 10 seconds once in the server log, and none that settled in time", async () => {
+    await import("@/lib/authz/audit");
+    await import("@/lib/extension-scoped-tools");
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.useFakeTimers();
+    await call("parent_tool");
+    await call("parent_tool");
+    settle[1]!();
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(lines(error, LATE_LINE)).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(lines(error, LATE_LINE)).toBe(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(lines(error, LATE_LINE)).toBe(1);
+  });
+});

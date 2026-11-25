@@ -2,35 +2,35 @@
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. The counts exclude modules under the extension tree (extensions/**): they are walked and reported per route as the excluded count, and each changed pack is read by the pin-advance host-tool check. A core module a route reaches only through a pack's modules is that pack's cost: it is reported per pack ('reached through <pack>') and excluded as well; a core module the route also reaches through core modules counts. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate and its tests validate the committed records strictly against the base (malformed/stale/orphan records fail closed, naming the route and the field; a carried-forward record may not be deleted while its raised ceiling is kept) and the gate prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
     "/sign-in": 165,
-    "/api/mcp": 1327,
-    "/chat": 1432,
-    "/api/a2a": 1335,
-    "/api/llm-bridge": 1345
+    "/api/mcp": 1336,
+    "/chat": 1441,
+    "/api/a2a": 1344,
+    "/api/llm-bridge": 1354
   },
   "absorbs": {
     "/api/a2a": {
-      "from": 1333,
-      "to": 1335,
-      "reason": "Issue 4264 slice A1b adds exactly two core modules to this route, both reached through packages/agents/src/mcp/handlers.ts: packages/agents/src/retained-regenerate.ts (new: the stored regenerate check of the writer roads, also imported by import-agent-core.ts, ensure-agent-package.ts and seed-bundled-agent-template.ts) and packages/agents/src/mcp/agent-source-review-checks.ts (new: runDeterministicReview and isTrivialOas moved unchanged out of handlers.ts, so that handlers.ts stays under its file-size ceiling of 6190, which is not raised). Every module the two import is already on the route (src/lib/lifecycle/lifecycle-policy.ts, packages/agents/src/verdaccio/package-contract.ts, packages/agents/src/validate-agent-json.ts). Counted from the added import edges, not measured with scripts/route-graph.mjs; the ratchet gate of this pull request at its head checks that count.",
-      "pr": 4637
+      "from": 1339,
+      "to": 1344,
+      "reason": "Issue 4150 (the publish card) mounts the card on the run page's stepper panel too (packages/agents/src/orchestrator-stepper-panel.tsx), which serves a publishing flow run; that panel is re-exported by the packages/agents barrel this route reaches, so the same five core modules the /chat record names join this route: the card (packages/agents/src/publish-decision-card-view.tsx), its state shape (publish-decision-card.ts), its session read action (publish-decision-card-actions.ts), the read it calls (publish-decision-card-core.ts) and the settled-outcome helper that read uses (src/lib/lifecycle/lifecycle-settled-outcome.ts). The card is the run page's own surface, so the growth is accepted; it is additive and no module leaves the route. Measured by scripts/audit/route-graph-ratchet.mjs with the extensions cloned on this change against main e7f17c8c1: +5 over the main ceiling of 1339.",
+      "pr": 0
     },
     "/api/llm-bridge": {
-      "from": 1343,
-      "to": 1345,
-      "reason": "Issue 4264 slice A1b adds exactly two core modules to this route, both reached through packages/agents/src/mcp/handlers.ts: packages/agents/src/retained-regenerate.ts (new: the stored regenerate check of the writer roads, also imported by import-agent-core.ts, ensure-agent-package.ts and seed-bundled-agent-template.ts) and packages/agents/src/mcp/agent-source-review-checks.ts (new: runDeterministicReview and isTrivialOas moved unchanged out of handlers.ts, so that handlers.ts stays under its file-size ceiling of 6190, which is not raised). Every module the two import is already on the route (src/lib/lifecycle/lifecycle-policy.ts, packages/agents/src/verdaccio/package-contract.ts, packages/agents/src/validate-agent-json.ts). Counted from the added import edges, not measured with scripts/route-graph.mjs; the ratchet gate of this pull request at its head checks that count.",
-      "pr": 4637
+      "from": 1349,
+      "to": 1354,
+      "reason": "Issue 4150 (the publish card) mounts the card on the run page's stepper panel too (packages/agents/src/orchestrator-stepper-panel.tsx), which serves a publishing flow run; that panel is re-exported by the packages/agents barrel this route reaches, so the same five core modules the /chat record names join this route: the card (packages/agents/src/publish-decision-card-view.tsx), its state shape (publish-decision-card.ts), its session read action (publish-decision-card-actions.ts), the read it calls (publish-decision-card-core.ts) and the settled-outcome helper that read uses (src/lib/lifecycle/lifecycle-settled-outcome.ts). The card is the run page's own surface, so the growth is accepted; it is additive and no module leaves the route. Measured by scripts/audit/route-graph-ratchet.mjs with the extensions cloned on this change against main e7f17c8c1: +5 over the main ceiling of 1349.",
+      "pr": 0
     },
     "/api/mcp": {
-      "from": 1325,
-      "to": 1327,
-      "reason": "Issue 4264 slice A1b adds exactly two core modules to this route, both reached through packages/agents/src/mcp/handlers.ts: packages/agents/src/retained-regenerate.ts (new: the stored regenerate check of the writer roads, also imported by import-agent-core.ts, ensure-agent-package.ts and seed-bundled-agent-template.ts) and packages/agents/src/mcp/agent-source-review-checks.ts (new: runDeterministicReview and isTrivialOas moved unchanged out of handlers.ts, so that handlers.ts stays under its file-size ceiling of 6190, which is not raised). Every module the two import is already on the route (src/lib/lifecycle/lifecycle-policy.ts, packages/agents/src/verdaccio/package-contract.ts, packages/agents/src/validate-agent-json.ts). Counted from the added import edges, not measured with scripts/route-graph.mjs; the ratchet gate of this pull request at its head checks that count.",
-      "pr": 4637
+      "from": 1331,
+      "to": 1336,
+      "reason": "Issue 4150 (the publish card) mounts the card on the run page's stepper panel too (packages/agents/src/orchestrator-stepper-panel.tsx), which serves a publishing flow run; that panel is re-exported by the packages/agents barrel this route reaches, so the same five core modules the /chat record names join this route: the card (packages/agents/src/publish-decision-card-view.tsx), its state shape (publish-decision-card.ts), its session read action (publish-decision-card-actions.ts), the read it calls (publish-decision-card-core.ts) and the settled-outcome helper that read uses (src/lib/lifecycle/lifecycle-settled-outcome.ts). The card is the run page's own surface, so the growth is accepted; it is additive and no module leaves the route. Measured by scripts/audit/route-graph-ratchet.mjs with the extensions cloned on this change against main e7f17c8c1: +5 over the main ceiling of 1331.",
+      "pr": 0
     },
     "/chat": {
-      "from": 1430,
-      "to": 1432,
-      "reason": "Issue 4264 slice A1b adds exactly two core modules to this route, both reached through packages/agents/src/mcp/handlers.ts: packages/agents/src/retained-regenerate.ts (new: the stored regenerate check of the writer roads, also imported by import-agent-core.ts, ensure-agent-package.ts and seed-bundled-agent-template.ts) and packages/agents/src/mcp/agent-source-review-checks.ts (new: runDeterministicReview and isTrivialOas moved unchanged out of handlers.ts, so that handlers.ts stays under its file-size ceiling of 6190, which is not raised). Every module the two import is already on the route (src/lib/lifecycle/lifecycle-policy.ts, packages/agents/src/verdaccio/package-contract.ts, packages/agents/src/validate-agent-json.ts). Counted from the added import edges, not measured with scripts/route-graph.mjs; the ratchet gate of this pull request at its head checks that count.",
-      "pr": 4637
+      "from": 1436,
+      "to": 1441,
+      "reason": "Issue 4150 (the publish card) mounts the card in the shared chat column beside the hitl screen, which adds five core modules to this route: the card (packages/agents/src/publish-decision-card-view.tsx), its state shape (publish-decision-card.ts), its session read action (publish-decision-card-actions.ts), the read it calls (publish-decision-card-core.ts) and the settled-outcome helper that read uses (src/lib/lifecycle/lifecycle-settled-outcome.ts). The card is the route's own surface, so the growth is accepted; it is additive and no module leaves the route. Measured with scripts/route-graph.mjs on the change's earlier base: that base read 1430 and the change read 1435. Carried onto main after pull request 4723 (issue 4264 slice B1b), whose ceiling for this route is 1436: the same five modules raise it to at most 1441. Not re-measured on the merged tree; the ceiling is an upper bound, and the ratchet gate of this pull request at its head checks the count.",
+      "pr": 0
     },
     "/sign-in": {
       "from": 164,

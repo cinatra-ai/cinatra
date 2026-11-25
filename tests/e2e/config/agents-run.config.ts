@@ -225,5 +225,21 @@ export default defineConfig({
       },
       dependencies: ["setup"],
     },
+    {
+      // Item 7 of cinatra#3487: on a booted instance, with the review screen of
+      // a run active, the run window's tool manifest equals the chat composer's,
+      // both read from GET /api/assistants/chat/tool-manifest. The run is named
+      // by E2E_TOOL_MANIFEST_REVIEW_PATH; without it the spec FAILS (no skip).
+      // Depends on `setup` (auth) ONLY. Not part of the design-conformance
+      // suite the item names: that suite's boot has no signed-in session and
+      // no run in review (see the spec's header).
+      name: "tool-manifest-parity",
+      testMatch: /tool-manifest-parity-3487\.spec\.ts/,
+      use: {
+        ...desktopChrome,
+        storageState: suitePath("agents-run", ".auth/state.json"),
+      },
+      dependencies: ["setup"],
+    },
   ],
 });

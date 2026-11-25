@@ -74,6 +74,11 @@ const hitlScreenStateMock = vi.fn(async () => ({ state: "none" }) as Record<stri
 vi.mock("../../../agents/src/agent-hitl-screen-actions", () => ({
   getAgentHitlScreenStateAction: () => hitlScreenStateMock(),
 }));
+// The publish card's own session entry (cinatra#4150), stubbed for the same reason; "none" unless its own arm runs.
+const publishStateMock = vi.fn(async () => ({ state: "none" }) as Record<string, unknown>);
+vi.mock("../../../agents/src/publish-decision-card-actions", () => ({
+  getPublishDecisionCardStateAction: () => publishStateMock(),
+}));
 vi.mock("../../../agents/src/hitl-actions", () => ({
   approveReviewTask: vi.fn(async () => undefined),
   rejectReviewTask: vi.fn(async () => undefined),
@@ -129,6 +134,7 @@ import { RecommendationHoldCard } from "../../../agents/src/run-recommendation-c
 import { VerificationSummaryCard } from "../../../agents/src/verification-summary-card";
 import { ScheduleProposalCard } from "../../../agents/src/schedule-proposal-card";
 import { AgentHitlScreenCard } from "../../../agents/src/agent-hitl-screen-card";
+import { PublishDecisionCard } from "../../../agents/src/publish-decision-card-view";
 import { LifecycleCard } from "../renderable-views/lifecycle-card";
 import {
   LIFECYCLE_RESOLVE_ANSWERS,
@@ -174,6 +180,16 @@ const ASKING = {
   },
 };
 
+/** The PENDING answer (cinatra#4150): an open publish decision, the state that makes the publish card draw. */
+const PUBLISH_PENDING = {
+  state: "pending",
+  runId: "run-held-2826",
+  agentName: "Proof agent",
+  rows: [{ label: "Title", value: "Spring launch" }],
+  decisionId: "d1",
+  mayDecide: true,
+};
+
 /** The HELD answer — the one state that makes the hold card draw at all. */
 const HELD = {
   state: "held",
@@ -205,6 +221,8 @@ function installResolve() {
     // the card reads THERE rather than through the cookie action, and from the
     // SAME mock the cookie arm resolves, so neither arm is fed a different truth.
     hitlScreen: () => hitlScreenStateMock(),
+    // The publish card's broker read (cinatra#4150), from the same mock the cookie arm resolves.
+    publishDecision: () => publishStateMock(),
   });
   return stub;
 }
@@ -237,11 +255,12 @@ async function observedByTranscript(
   hitlScreenStateMock.mockImplementation(async () =>
     kind === "agent_hitl_screen" ? ASKING : { state: "none" },
   );
+  publishStateMock.mockImplementation(async () => (kind === "publish_decision" ? PUBLISH_PENDING : { state: "none" }));
   // BOTH INTERRUPT KINDS are carried by the run's own dispatch part rather than
   // by a DATA_PART, so both are observed from the transcript a parked dispatch
   // really leaves behind (cinatra#2930 for the HITL screen, S9b for the hold).
   const messages =
-    kind === "recommendation_hold" || kind === "agent_hitl_screen"
+    kind === "recommendation_hold" || kind === "agent_hitl_screen" || kind === "publish_decision"
       ? lifecycleHeldTranscript()
       : lifecycleDataPartTranscript(kind, `ref-${kind}`);
   const mounted = await mountSurface(arm, { messages });
@@ -276,6 +295,8 @@ const OWNER_COMPONENTS: Record<string, React.ComponentType<never>> = {
   // The HITL screen's own card (cinatra#2930, lifecycle-b W3), composed on both
   // direct-mount hosts — the run panel and the review page's gate region.
   AgentHitlScreenCard: AgentHitlScreenCard as unknown as React.ComponentType<never>,
+  // The publish card (cinatra#4150), composed on the same two direct-mount hosts, keyed by the run.
+  PublishDecisionCard: PublishDecisionCard as unknown as React.ComponentType<never>,
   LifecycleCard: LifecycleCard as unknown as React.ComponentType<never>,
 };
 
@@ -289,7 +310,7 @@ function renderOwnerUnderHost(tag: string, host: LifecycleCardHost, kind: Lifecy
     );
   }
   const props =
-    tag === "AgentHitlScreenCard"
+    tag === "AgentHitlScreenCard" || tag === "PublishDecisionCard"
       ? { runId: "run-held-2826" }
       : tag === "RecommendationHoldCard"
       ? { runId: "run-2826", agentPackageName: "@cinatra-ai/proof-agent" }
@@ -324,6 +345,7 @@ async function observedByComposition(
   hitlScreenStateMock.mockImplementation(async () =>
     kind === "agent_hitl_screen" ? ASKING : { state: "none" },
   );
+  publishStateMock.mockImplementation(async () => (kind === "publish_decision" ? PUBLISH_PENDING : { state: "none" }));
   let drawn = false;
   for (const tag of candidates) {
     const mounted = renderOwnerUnderHost(tag, host, kind);
@@ -366,6 +388,7 @@ let OBSERVED: ObservedHostParity = {};
 beforeEach(() => {
   holdStateMock.mockImplementation(async () => ({ state: "none" }));
   hitlScreenStateMock.mockImplementation(async () => ({ state: "none" }));
+  publishStateMock.mockImplementation(async () => ({ state: "none" }));
 });
 
 afterEach(() => {

@@ -74,10 +74,25 @@ const STAGED = {
   // bytes, so only the embedded contentHash moves. No surface changes.
   // Re-copied verbatim at design@3beff055 (design#247): the brand gold moved to #9c7434
   // in the drawing, so only the embedded contentHash moves. No surface changes.
+  // Re-copied verbatim at design@94d892de (design#253, cinatra#4366): the Drupal pointer
+  // is drawn as the generic floor, so drupal-pointer-never-a-review-target binds no field
+  // and no action and declares only error and kind:artifact. The copy also carries the
+  // nine publish-card surfaces the drawing gained at design#237; no wave drives them yet.
+  // Re-copied verbatim at design@cbf0faa5 (design#272, cinatra#3459, cinatra#3092): the
+  // review card's Download PDF control is declared (download-artifact -> file-downloaded on
+  // review-card-mixed-kind and review-card-slide-deck). The copy also carries what the drawing
+  // gained since design@94d892de: the declared-step kinds of the agent input card
+  // (hitl-declared-facts, hitl-declared-rows, hitl-declared-decision, design#243) and the
+  // publish card's Allow again state and rows (design#264, design#269). No wave drives those.
+  // Re-copied verbatim at design@69868e8f (design#273): the publish card's Allow waits for the
+  // items. Five surfaces are added (publish-card-items-shown, publish-card-items-failed,
+  // publish-allow-waits-failed, publish-allow-waits-refused, publish-allow-waits-empty) and the
+  // items-failed one declares retry-review-target-island -> reload. No existing surface changes
+  // in the manifest, and no wave drives the added ones.
   "app-lifecycle-cards.json": {
     spec: "specs/app-lifecycle-cards.html",
-    manifestSha256: "9289120d2a0ff812dce2af37b8f1c73d20d52c13dd9a02d74f9263ad2a2bb355",
-    contentHash: "sha256:234c532f2301b049026211df7b548903bc7eff7b67837a018e18c4195246574c",
+    manifestSha256: "33fe04490fe442ab6d6d649a141ca45eba8ee331e8bf4129f90b91b0a49433ba",
+    contentHash: "sha256:e0897cef222828a55a88ec34149ab79878bb6647f83ed5159e87a459afbb0fb4",
   },
   // The artifact-review drawing, staged by cinatra#3158 (the artifact-kind
   // display wave). First-time adoption: the drawing has never been committed
@@ -90,10 +105,21 @@ const STAGED = {
   // bytes, so only the embedded contentHash moves. No surface changes.
   // Re-copied verbatim at design@3beff055 (design#247): the brand gold moved to #9c7434
   // in the drawing, so only the embedded contentHash moves. No surface changes.
+  // Re-copied verbatim at design@94d892de (design#253, cinatra#4366): drupal-pointer-display
+  // is the generic floor (no field, no action, error and kind:artifact), the Drupal page is
+  // drawn as the page snapshot (drupal-page-display and drupal-page-continued-reading replace
+  // drupal-pointer-continued-reading). The copy also carries what the drawing changed at
+  // design#208 (run-list-step-loading, run-list-step-error) and design#237 (the three
+  // publish steps leave the run page); no wave drives any of those surfaces.
+  // Re-copied verbatim at design@cbf0faa5 (design#272, cinatra#3459, cinatra#3092): the
+  // mixed-kind and slide-deck displays declare download-artifact -> file-downloaded, and the
+  // CMS page display draws the changed excerpts and Open in the CMS with no frame of the page
+  // (no surface of that display changes). The copy also carries the cms-fields-display surface
+  // the drawing gained at design#267; no wave drives it.
   "app-artifact-review.json": {
     spec: "specs/app-artifact-review.html",
-    manifestSha256: "0eb04b2a30858e5f383559d90852ca2e3e74cca8c8a5e9d6c3cc497a14540465",
-    contentHash: "sha256:54d23e9cfae4ee2078901b8e64d60b9dab6ce82190e38ebdf745a86e730533ec",
+    manifestSha256: "25ae9112d640de1b3a083e7cf81789e6c334d330643c33529775a9d1eb55add1",
+    contentHash: "sha256:c4366e50ec362c3fef1984ed87c43b068900378eb2a635a454dc247a2cd88850",
   },
 };
 

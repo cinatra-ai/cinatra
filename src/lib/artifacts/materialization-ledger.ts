@@ -7,6 +7,12 @@ import {
   postgresSchema,
 } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
+import {
+  maybeBuildProducedEventInsertOp,
+  producerAttemptForRun,
+  producerRunLockOps,
+  publishCallInFlightOr,
+} from "@/lib/lifecycle/lifecycle-emit";
 
 // ---------------------------------------------------------------------------
 // Artifact-materialization idempotency ledger (cinatra#923).
@@ -307,27 +313,138 @@ export async function readFinalizedMaterialization(input: {
   };
 }
 
-/** Producer prompt on the exact FINALIZED revision the gate pinned (§VI).
- * Authorization belongs to the caller's artifact/run read ladder. This query
- * never substitutes the current revision, another org, or an unfinalized claim.
- * Ambiguous provenance is absent rather than guessed. */
-export async function readRevisionImagePrompt(input: {
+/**
+ * cinatra#4762 — THE restamp of a revision a write of the run REUSES instead of writing: a ledger hit finalized by an
+ * earlier attempt (a retry that reproduced identical bytes), the winner of a concurrent double drive, a body bound
+ * from a mid-run filing, a declared binding an emit is absorbed into, a reused object snapshot. Such a write writes
+ * no revision, so no writer emits a produced event for it. Every reuse road calls this one function before it hands
+ * the reused revision back: the revision's existing event records the attempt the write runs in (lifecycle-emit
+ * buildProducedEventInsertOp: the same event id, only a NEWER generation of the same run moves it), so a review of
+ * exactly these bytes counts for that attempt (artifact-review-gate-store listReviewLineageForRun). Only an existing
+ * event is restamped: a revision that never had one gains none, and nothing else of the event changes (the emitter
+ * and origin below are never written). Nothing when the review orchestration is off, no run is named, or the write
+ * runs in no attempt (its event could record only -1, which restamps nothing).
+ *
+ * One transaction of two statements: the run row FOR KEY SHARE first (producerRunLockOps), then the event statement.
+ * A publish check holds that row FOR UPDATE until its in-flight claim commits; in one statement the claim lookup would
+ * keep the snapshot taken before the lock wait and miss that claim, so the restamp could move an older review into
+ * the current attempt during the checked call. The event statement starts after the lock is held, so under READ
+ * COMMITTED it sees the committed claim and refuses: the caller receives PublishCallInFlightError.
+ */
+export async function restampReusedRevision(input: {
+  runId: string | null | undefined;
   orgId: string;
   artifactId: string;
   representationRevisionId: string;
-}): Promise<string | null> {
-  ensurePostgresSchema();
+}): Promise<void> {
+  if (!input.runId) return;
+  const producerAttempt = producerAttemptForRun(input.runId);
+  if (!producerAttempt) return;
   const s = schema();
-  const res = await pool().query(
-    `SELECT image_prompt FROM "${s}"."artifact_materializations"
-     WHERE org_id = $1 AND artifact_id = $2 AND representation_revision_id = $3
-       AND phase = 'finalized' AND image_prompt IS NOT NULL
-     LIMIT 2`,
+  const op = maybeBuildProducedEventInsertOp(s, {
+    orgId: input.orgId,
+    artifactId: input.artifactId,
+    representationRevisionId: input.representationRevisionId,
+    emitter: "createSemanticArtifact",
+    originKind: "agent_generated",
+    producerRunId: input.runId,
+    producerAgentId: null,
+    producerAttempt,
+  }, {
+    whereExistsSql: `EXISTS (SELECT 1 FROM "${s}"."artifact_produced_outbox" WHERE event_id = $1::text)`,
+  });
+  if (!op) return;
+  const client = await pool().connect();
+  try {
+    await client.query("BEGIN");
+    for (const lock of producerRunLockOps(s, input.runId, op)) await client.query(lock.text, lock.values);
+    await client.query(op.text, op.values);
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw publishCallInFlightOr(err);
+  } finally {
+    client.release();
+  }
+}
+
+/** The query seam of `readRevisionImagePrompt`: this module's pool by default,
+ * a caller's own client (and the schema it reads) else. */
+export type RevisionImagePromptDb = {
+  query: (text: string, values: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }>;
+  /** The application schema the tables live in (unquoted). */
+  schema: string;
+};
+
+function ledgerDb(): RevisionImagePromptDb {
+  ensurePostgresSchema();
+  return { query: (text, values) => pool().query(text, values), schema: postgresSchema };
+}
+
+function onlyPrompt(rows: Array<Record<string, unknown>>): string | null {
+  if (rows.length !== 1) return null;
+  const prompt: unknown = rows[0]?.image_prompt;
+  return typeof prompt === "string" && prompt.trim().length > 0 ? prompt : null;
+}
+
+/** Producer prompt on the exact FINALIZED revision the gate pinned (§VI).
+ * Authorization belongs to the caller's artifact/run read ladder. This query
+ * never substitutes the current revision, another org, or an unfinalized claim.
+ * Ambiguous provenance is absent rather than guessed.
+ *
+ * A REFILED REVISION (cinatra#4264). A repair's answer is written by its run
+ * on an artifact of its own and then refiled onto the reviewed artifact
+ * (`refileRevisionOntoArtifact`): a new representation row and no ledger row.
+ * The repair that finalized it records both ends: its successor (the refiled
+ * revision) and its source (the revision the run wrote). The prompt of a
+ * refiled revision is the one recorded for that source, read only through
+ * exactly one `repaired` repair of the org that names the revision as its
+ * successor and records a source; two such repairs are ambiguous and read
+ * nothing. A revision no repair names (a direct write,
+ * with a ledger row or without one) never reads another revision's prompt,
+ * whatever bytes it shares. The repair link is read only when the revision
+ * has no prompt row of its own, and it too must name exactly one row.
+ *
+ * The one rule for the review surface's prefill and for the review store,
+ * which keeps a submitted prompt exactly when this read returns one. A read
+ * fault throws. */
+export async function readRevisionImagePrompt(
+  input: {
+    orgId: string;
+    artifactId: string;
+    representationRevisionId: string;
+  },
+  db: RevisionImagePromptDb = ledgerDb(),
+): Promise<string | null> {
+  const s = db.schema.replaceAll('"', '""');
+  const ownPrompt = (artifactId: string, revisionId: string) =>
+    db.query(
+      `SELECT image_prompt FROM "${s}"."artifact_materializations"
+       WHERE org_id = $1 AND artifact_id = $2 AND representation_revision_id = $3
+         AND phase = 'finalized' AND image_prompt IS NOT NULL
+       LIMIT 2`,
+      [input.orgId, artifactId, revisionId],
+    );
+  const exact = await ownPrompt(input.artifactId, input.representationRevisionId);
+  if (exact.rows.length > 0) return onlyPrompt(exact.rows);
+  // The repair links are counted before any prompt is read: two repairs naming
+  // the revision are ambiguous provenance, whatever their sources recorded.
+  const links = await db.query(
+    `SELECT rr.source_artifact_id, rr.source_representation_revision_id
+       FROM "${s}"."lifecycle_repair" rr
+      WHERE rr.org_id = $1 AND rr.successor_artifact_id = $2
+        AND rr.successor_representation_revision_id = $3
+        AND rr.status = 'repaired'
+        AND rr.source_artifact_id IS NOT NULL AND rr.source_representation_revision_id IS NOT NULL
+      LIMIT 2`,
     [input.orgId, input.artifactId, input.representationRevisionId],
   );
-  if (res.rows.length !== 1) return null;
-  const prompt: unknown = res.rows[0]?.image_prompt;
-  return typeof prompt === "string" && prompt.trim().length > 0 ? prompt : null;
+  if (links.rows.length !== 1) return null;
+  const source = links.rows[0];
+  const sourceArtifactId: unknown = source?.source_artifact_id;
+  const sourceRevisionId: unknown = source?.source_representation_revision_id;
+  if (typeof sourceArtifactId !== "string" || typeof sourceRevisionId !== "string") return null;
+  return onlyPrompt((await ownPrompt(sourceArtifactId, sourceRevisionId)).rows);
 }
 
 /**

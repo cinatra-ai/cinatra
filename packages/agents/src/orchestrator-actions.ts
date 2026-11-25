@@ -37,6 +37,8 @@ import {
 import { cancelOrchestratorRun } from "./orchestrator-execution";
 import {
   PUBLISH_DECISION_REQUIRED,
+  PUBLISH_REVIEW_MISSING_REASON,
+  PUBLISH_REVIEW_NOT_APPROVED,
   assertNoOpenPublishDecision,
   isPublishDecisionRequired,
   publishHoldFault,
@@ -192,6 +194,7 @@ export async function revalidateOrchestratorStatusAction(
  *   - "no-package-name"     — template.packageName is null; cannot derive vendor/slug
  *   - "no-wayflow-url"      — WAYFLOW_BASE_URL is unset or resolveWayflowUrl rejected the packageName
  *   - "publish_decision_required" — the run waits or ended at a publish decision
+ *   - "publish_review_not_approved" — the run's publish gate stopped it for want of an approved review (cinatra#4762)
  *   - "race condition — run status changed"
  *   - "resume failed"
  */
@@ -281,12 +284,23 @@ export async function resumeStoppedOrchestratorAction(
   // written before it is seen; a refusal tries to put the run back to stopped (if that move
   // fails too, the run stays queued and nothing is sent). A hold that cannot be read throws
   // one fixed text that names no run and carries no store error.
+  // cinatra#4762: a run its publish gate stopped for want of an approved review writes no decision row, so the decision
+  // hold lets it pass; its context still sits at that gate, and the resume text would answer it. The stop's
+  // recorded reason is its hold: it is read from the run row again under this claim (the record read before the claim
+  // may be of an earlier stop), and such a run is never resumed here. Only a fresh run can publish then. A row that
+  // cannot be read refuses too.
+  let claimedRun: Awaited<ReturnType<typeof readAgentRunById>>;
   try {
     await assertNoOpenPublishDecision(run.id);
+    claimedRun = await readAgentRunById(runId);
   } catch (err) {
     await transitionRunStatus(runId, "queued", "stopped", undefined, authority).catch(() => undefined);
     if (isPublishDecisionRequired(err)) return { ok: false, error: PUBLISH_DECISION_REQUIRED };
     throw publishHoldFault(err);
+  }
+  if (!claimedRun || claimedRun.error === PUBLISH_REVIEW_MISSING_REASON) {
+    await transitionRunStatus(runId, "queued", "stopped", undefined, authority).catch(() => undefined);
+    return { ok: false, error: PUBLISH_REVIEW_NOT_APPROVED };
   }
 
   // Split try/catch so post-sendTask errors never revert to "stopped"
@@ -311,8 +325,8 @@ export async function resumeStoppedOrchestratorAction(
   }
 
   // THE RESUME CLAIMS THE RUN AND BINDS ITS ATTEMPT BEFORE IT DISPATCHES
-  // (cinatra#3745). A later part admits the resumed leg's callbacks only while the
-  // run is `running` under the attempt its step policy is bound to. So the dispatch
+  // (cinatra#3745). The model bridge and the passthrough road admit the resumed leg's
+  // source-bound callbacks only while the run is `running` under the attempt its step policy is bound to. So the dispatch
   // edge `queued -> running` (which mints the fresh attempt) is taken BEFORE the
   // send, and in that SAME transaction the run's one bound graph is carried forward
   // to the attempt (`carryBoundStepToolPolicy`). The prior attempt is the locked run
@@ -339,7 +353,9 @@ export async function resumeStoppedOrchestratorAction(
     // task attaches no X-Cinatra-Run-Token and every run-identity resolution in
     // the resumed leg fails closed. Metadata (not text) because the message text
     // is what the gate's InputMessageNode yields to the flow.
-    const resumeMetadata = await mintResumeRunTokenMetadata(runId);
+    // cinatra#3745: the message names the attempt THIS claim minted, and the mint
+    // refuses when the run no longer runs under it (stopped and resumed again).
+    const resumeMetadata = await mintResumeRunTokenMetadata(runId, { executionAttemptId: attemptId });
     // Send into the existing context so fasta2a routes to the paused conversation.
     // Resume MUST reuse run.a2aContextId; a fresh contextId
     // would start a new conversation and the flow would retry from the beginning.
@@ -355,9 +371,11 @@ export async function resumeStoppedOrchestratorAction(
       configuration: { acceptedOutputModes: ["text"] },
     });
   } catch (err) {
-    await transitionRunStatus(runId, "running", "stopped", undefined, authority).catch((revertErr) => {
+    // cinatra#3745: only this claim's attempt is put back; a run stopped and resumed
+    // again meanwhile runs under a newer attempt and is left as it is.
+    await transitionRunStatus(runId, "running", "stopped", { runningAttempt: attemptId }, authority).catch((revertErr) => {
       if (revertErr instanceof RunTransitionError && revertErr.code === "stale_from_status") {
-        console.warn(`[resumeStoppedOrchestratorAction] compensation no-op for ${runId}: status already advanced`);
+        console.warn(`[resumeStoppedOrchestratorAction] compensation no-op for ${runId}: status or attempt already advanced`);
         return;
       }
       console.error("[resumeStoppedOrchestratorAction] compensation revert failed for run", runId, revertErr);

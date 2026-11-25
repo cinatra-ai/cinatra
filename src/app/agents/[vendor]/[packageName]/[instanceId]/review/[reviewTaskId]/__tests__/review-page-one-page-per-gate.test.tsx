@@ -115,6 +115,15 @@ vi.mock("@cinatra-ai/agents/run-recommendation-chip-row", () => ({
 vi.mock("@cinatra-ai/agents/agent-hitl-screen-card", () => ({
   AgentHitlScreenCard: () => <div data-lifecycle-card="agent_hitl_screen" />,
 }));
+// cinatra#4150: the page also composes the publish card beside the hitl screen card. This suite mocks the card
+// runtime whole, so the card is stubbed the same way, to a marker carrying the one root anchor and the run it is
+// keyed by (the real card owns whether it draws). The stub names the card's file, which the page's package subpath
+// resolves to, so this file also loads before that subpath.
+vi.mock("../../../../../../../../../packages/agents/src/publish-decision-card-view", () => ({
+  PublishDecisionCard: ({ runId }: { runId: string }) => (
+    <div data-lifecycle-card="publish_decision" data-publish-run={runId} />
+  ),
+}));
 vi.mock("@cinatra-ai/agents/lifecycle-card-runtime", () => ({
   LifecycleCardSurfaceProvider: ({ host, children }: { host: string; children: ReactNode }) => (
     <div data-lifecycle-card-host={host}>{children}</div>

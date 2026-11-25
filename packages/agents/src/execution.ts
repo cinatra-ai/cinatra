@@ -121,6 +121,8 @@ type ArtifactReviewGateSeam = {
     orgId: string;
     reviewTaskId: string;
     targets: unknown;
+    /** cinatra#4762: the reset generation of the attempt this handler serves (see the gate store). */
+    runGeneration: number | null;
   }): Promise<
     | { ok: true }
     | { ok: false; code: "invalid-targets" | "pin-conflict"; message: string }
@@ -527,7 +529,7 @@ import { getOrAddWayflowRendererGateIndex, rememberWayflowGateTask, rememberLate
 // host-side caller injects the live `email-send` providers so sender-alias
 // enums resolve registration-driven.
 import { resolveEmailSendProviders } from "@/lib/email-send-providers";
-import { mintRunToken } from "@/lib/agent-run-token";
+import { mintRunToken, CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY } from "@/lib/agent-run-token";
 import { holdRunAtPublishGate } from "./publish-decision-actions";
 // cinatra#2566 — the lifecycle card REF CODEC only (node:crypto + the app
 // secret). Deliberately NOT the refetch resolver: importing that here would pull
@@ -544,6 +546,19 @@ import {
   snapshotNodesMetadata,
   stripStepSnapshotClaims,
 } from "./step-snapshots";
+import {
+  classifyRegenerateSegmentRun,
+  fenceRegenerateRuntime,
+  persistSegmentReceipt,
+  redactSegmentRequests,
+  regenerateSegmentMetadata,
+  escalateRegenerateRepairOfUndeclaredRun,
+  resolveRegenerateSegment,
+  segmentRepairIdFromRunId,
+  stripSegmentReceipts,
+  REGENERATE_RUNTIME_UNSUPPORTED,
+  type RegenerateSegmentPlan,
+} from "./regenerate-segment";
 import {
   inventoryReviewTargets,
   nextUnresolvedLeg,
@@ -2284,6 +2299,14 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     orgId: run.orgId,
     history: (task as { history?: ReadonlyArray<{ role?: unknown; metadata?: unknown }> }).history,
   });
+  // cinatra#4264 B1b — a Regenerate segment's signed receipt, verified against
+  // the same runId and stored before the resync; the completer refiles the
+  // segment's write only with it. Never throws.
+  await persistSegmentReceipt({
+    runId,
+    orgId: run.orgId,
+    history: (task as { history?: ReadonlyArray<{ role?: unknown; metadata?: unknown }> }).history,
+  });
 
   // Defensive resync (idempotent if unchanged): persist task.id / contextId so
   // the next resume's reverse-lookup by a2aTaskId still finds the run if
@@ -2688,6 +2711,9 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           : [];
         type GateEmitResult = Awaited<ReturnType<typeof gateSeam.emit>>;
         let emitResult: GateEmitResult;
+        // cinatra#4762: the gate belongs to the attempt this handler serves, as the run record its caller read for the
+        // attempt names it (the publish gate reads the same value), never a later read of the run row.
+        const runGeneration = run.resetGeneration ?? 0;
         // A gate from before singleton minting keeps its complete original pins.
         // Read it BEFORE emitting any leg: a conflict on the first scalar must
         // never be followed by a new sibling overlapping that combined review.
@@ -2738,14 +2764,14 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           // pending/resolved gate and its decision/outbox untouched. Never mint
           // scalar legs or replace the caller's set with the stored set to make
           // a mismatched request pass. The route describes the actual old gate.
-          emitResult = await gateSeam.emit({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets });
+          emitResult = await gateSeam.emit({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets, runGeneration });
           pinnedTargets = originalPins.targets;
         } else if (legs.length > 1) {
           // Freeze the whole original pause through the existing store transaction.
           // A later refusal leaves no newly-visible actionable partial family.
           // Older bundles without this binding fail before any singleton mint.
           if (!gateSeam.emitFamily) throw new TypeError("declared review atomic family seam unavailable");
-          emitResult = await gateSeam.emitFamily({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets });
+          emitResult = await gateSeam.emitFamily({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets, runGeneration });
           if (!emitResult.ok) {
             // An old combined review may commit after the preflight. The atomic
             // attempt inserted nothing; only the same complete original pins
@@ -2755,7 +2781,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
             if (!racedPins?.ok || racedPins.targets.length < 2) {
               throw new Error(`Declared review family could not be pinned: ${emitResult.message}`);
             }
-            emitResult = await gateSeam.emit({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets });
+            emitResult = await gateSeam.emit({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets, runGeneration });
             if (!emitResult.ok) throw new Error(`Declared review family could not be pinned: ${emitResult.message}`);
             pinnedTargets = racedPins.targets;
           } else {
@@ -2767,13 +2793,14 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           if (legs.length === 1) pinnedTargets = legs[0].targets;
           if (legs.length === 1 && !original) {
             if (!gateSeam.emitFamily) throw new TypeError("declared review atomic family seam unavailable");
-            emitResult = await gateSeam.emitFamily({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets });
+            emitResult = await gateSeam.emitFamily({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets, runGeneration });
           } else emitResult = coreDecision.review
             ? await gateSeam.emit({
                 runId,
                 orgId: run.orgId,
                 reviewTaskId,
                 targets: pinnedTargets,
+                runGeneration,
               })
             : ({
                 ok: false as const,
@@ -3181,8 +3208,14 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   // The pause claims (cinatra#3745) are recorded at their interrupts; the
   // stored history keeps its messages and drops only the claims.
   // cinatra#4264: the step snapshots live in agent_run_step_snapshots only.
-  const history = stripStepSnapshotClaims(
-    stripCinatraGateNodeClaims(stripCinatraEndNodeOutputMessages(rawHistory)),
+  // cinatra#4264 B1b: a segment run's first message keeps its snapshots'
+  // nodes and sha256 only; their values live in agent_run_step_snapshots.
+  const history = redactSegmentRequests(
+    stripSegmentReceipts(
+      stripStepSnapshotClaims(
+        stripCinatraGateNodeClaims(stripCinatraEndNodeOutputMessages(rawHistory)),
+      ),
+    ),
   );
   // A2A spec: role is "user" | "agent". Cinatra also emits "assistant". Accept BOTH.
   const lastAgentMessage = history?.slice().reverse().find((m) => m?.role === "agent" || m?.role === "assistant");
@@ -3241,39 +3274,61 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   // Dynamic import keeps the host artifact stack out of this module's static
   // graph (same posture as the nango-system import below).
   let artifactMaterializations: Array<Record<string, unknown>> = [];
-  try {
-    const { materializeRunArtifacts } = await import(
-      "@/lib/artifacts/run-artifact-materializer"
-    );
-    artifactMaterializations = (await materializeRunArtifacts({
-      runId,
-      orgId: run.orgId,
-      templateId: run.templateId,
-      packageVersion: run.packageVersion,
-      createdBy: run.runBy,
-      endNodeOutputs,
-    })) as unknown as Array<Record<string, unknown>>;
-    for (const outcome of artifactMaterializations) {
-      if (outcome.ok !== true) {
-        console.warn(
-          `[artifact-materializer] run=${runId} output=${String(outcome.outputId)} extension=${String(outcome.extension ?? "?")} failed: ${String(outcome.error)}`,
-        );
-      }
-    }
-  } catch (err) {
-    console.warn(
-      `[artifact-materializer] run=${runId} materialization pass threw (recorded in stepResults; the run fails honestly):`,
-      err instanceof Error ? err.message : err,
-    );
+  // cinatra#4264 B1b — a Regenerate segment run executes only the step and its
+  // filing node: its end exposes the filing node's outputs, not the template's
+  // end-node bindings, and its one write is claimed by the repair completer.
+  // Neither the end-node binding materialization nor the default road below
+  // runs for it. A repair row that is missing or cannot be read is never
+  // taken for an ordinary run: the run fails (the materialization-honesty
+  // gate below) and nothing is written.
+  const segmentRunClass = await classifyRegenerateSegmentRun({ id: runId, sourceType: run.sourceType });
+  if (segmentRunClass === "segment") {
+    console.log(`[artifact-materializer] run=${runId} is a Regenerate segment; end-node bindings not materialized`);
+  } else if (segmentRunClass === "unreadable") {
     artifactMaterializations = [
       {
         ok: false,
-        outputId: "(materializer)",
+        outputId: "(regenerate-segment)",
         nodeId: null,
         extension: null,
-        error: `materialization pass failed: ${err instanceof Error ? err.message : String(err)}`,
+        error: "the run's repair row is missing or could not be read, so whether it is a Regenerate segment is unknown; nothing was materialized",
       },
     ];
+  } else {
+    try {
+      const { materializeRunArtifacts } = await import(
+        "@/lib/artifacts/run-artifact-materializer"
+      );
+      artifactMaterializations = (await materializeRunArtifacts({
+        runId,
+        orgId: run.orgId,
+        templateId: run.templateId,
+        packageVersion: run.packageVersion,
+        createdBy: run.runBy,
+        endNodeOutputs,
+      })) as unknown as Array<Record<string, unknown>>;
+      for (const outcome of artifactMaterializations) {
+        if (outcome.ok !== true) {
+          console.warn(
+            `[artifact-materializer] run=${runId} output=${String(outcome.outputId)} extension=${String(outcome.extension ?? "?")} failed: ${String(outcome.error)}`,
+          );
+        }
+      }
+    } catch (err) {
+      console.warn(
+        `[artifact-materializer] run=${runId} materialization pass threw (recorded in stepResults; the run fails honestly):`,
+        err instanceof Error ? err.message : err,
+      );
+      artifactMaterializations = [
+        {
+          ok: false,
+          outputId: "(materializer)",
+          nodeId: null,
+          extension: null,
+          error: `materialization pass failed: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      ];
+    }
   }
 
   // cinatra#2486 — materialization-honesty gate.
@@ -3326,7 +3381,10 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   // default road could not file is a visible per-output outcome on the run's own
   // record. The pickup never throws.
   let defaultRoadPickups: Array<Record<string, unknown>> = [];
-  if (materializationFailures.length === 0) {
+  // cinatra#4264 B1b: a Regenerate segment run's one write is the filing
+  // node's, claimed by the repair completer; the default road never runs for
+  // it (a second production would make the claim refuse the repair).
+  if (materializationFailures.length === 0 && segmentRunClass === "ordinary") {
     try {
       // THE SLOT, not an import (route-graph ratchet): the pickup CORE reaches
       // the ladder, the artifact writer and the pooled-db graph, and this module
@@ -3759,9 +3817,12 @@ export async function runAgentBuilderExecutionJob(
     return;
   }
   const prev = mcpRequestContextStorage.getStore();
+  // cinatra#4762: the attempt this job executes, captured once here from the same read. Every produced event the
+  // run's writers record inside this frame carries it (producerAttemptForRun), never a later read of the run row.
   const next: McpRequestContext = {
     ...(prev ?? {}),
     projectContext: { projectId: probeRun.projectId ?? null },
+    runAttempt: { runId, resetGeneration: probeRun.resetGeneration ?? 0 },
   };
   return mcpRequestContextStorage.run(next, () =>
     runAgentBuilderExecutionJobInner(data, jobId),
@@ -3866,6 +3927,32 @@ async function runAgentBuilderExecutionJobInner(
     console.log(`[agent-builder] run ${runId} not found, skipping`);
     return;
   }
+  // cinatra#4762: this read decides what the job dispatches, so the frame's attempt must be the one it read. A retry's
+  // reset between the entry's read and this one raised the generation: the frame is refreshed to the generation read
+  // here and the job starts again under it, so its writers never stamp the new attempt's output with the old one. The
+  // dispatch's queued -> running compare-and-set lands only at that generation (attemptGeneration), so a reset after
+  // this read dispatches nothing under it; when that CAS is stale and the run is queued again at a newer generation,
+  // the job starts again here (supersededAttempt), since the newer attempt's enqueue may have found this job's id taken.
+  const frame = mcpRequestContextStorage.getStore();
+  if (frame?.runAttempt?.runId === runId && frame.runAttempt.resetGeneration !== (run.resetGeneration ?? 0)) {
+    return mcpRequestContextStorage.run(
+      { ...frame, runAttempt: { runId, resetGeneration: run.resetGeneration ?? 0 } },
+      () => runAgentBuilderExecutionJobInner(data, jobId),
+    );
+  }
+  // A read that FAILS is not a read that found the run unchanged: the newer attempt may be queued with no job of its
+  // own, so the job starts again and its entry read decides (it skips a run that is not queued, and throws when the
+  // run cannot be read at all). Starting again is harmless when nothing is queued; skipping would strand the attempt.
+  const supersededAttempt = async (): Promise<boolean> => {
+    let now: Awaited<ReturnType<typeof readAgentRunById>>;
+    try {
+      now = await readAgentRunById(runId);
+    } catch (err) {
+      console.warn(`[agent-builder] run ${runId} unreadable after a stale dispatch (${thrownClassName(err)}) — starting the job again`);
+      return true;
+    }
+    return now?.status === "queued" && (now.resetGeneration ?? 0) !== (run.resetGeneration ?? 0);
+  };
   // cinatra#1939 wave 2 (§2b): mint the SYSTEM dispatch authority ONCE at job
   // entry (scoped to this run's org) and thread it into every status transition
   // this worker drives — dispatch (run.execute) and terminal finalize
@@ -4015,7 +4102,52 @@ async function runAgentBuilderExecutionJobInner(
   // scope recheck, so nothing is written for a refused or unverified run, and
   // before the headless recommendation, the version pinning, the input gates
   // and every dispatch branch read the inputs.
+  // cinatra#4264 B1b — a Regenerate segment run (a lifecycle repair whose
+  // repair names `regenerate_node_id`, re-derived from the recorded
+  // provenance and snapshots, never from the run's inputs) is resolved here,
+  // before anything reads the inputs. A disagreement fails the run before
+  // dispatch with a plain reason. A segment run skips the findings binding:
+  // its inputs are the note and the typed request only, and the resolution
+  // checks they are (a run made in an earlier form is failed, never sent).
+  const segmentResolution = await resolveRegenerateSegment({
+    run: {
+      id: runId,
+      orgId: run.orgId,
+      sourceType: run.sourceType,
+      templateId: run.templateId,
+      inputParams: run.inputParams,
+    },
+    lifecycleConfig: template.lifecycleConfig ?? null,
+    packageName: template.packageName ?? null,
+  });
+  if (segmentResolution.kind === "refused") {
+    console.error(`[agent-builder] run ${runId} rejected before dispatch: ${segmentResolution.reason}`);
+    await transitionRunStatus(runId, "queued", "failed", { error: segmentResolution.reason }, executionAuthority);
+    // A run whose inputs are not the declared-input form (one an older
+    // dispatcher made during a rolling deployment, its repair maybe already
+    // `dispatched`) is failed and its repair escalated, so the review gets
+    // its escalation and is never left waiting on a run that never answers.
+    // A compare-and-set: a second refusal of the same run writes nothing. A
+    // failed escalation is logged; the completer escalates the finished run
+    // by the same rule (`escalateRegenerateRepairOfUndeclaredRun`).
+    const repairId = segmentResolution.inputsNotDeclared ? segmentRepairIdFromRunId(runId) : null;
+    if (repairId) {
+      try {
+        // From `./regenerate-segment`, never the dispatch store: this module
+        // is in the locked routes' graph (route-graph ratchet).
+        await escalateRegenerateRepairOfUndeclaredRun(repairId);
+      } catch (err) {
+        console.error(
+          `[agent-builder] run ${runId}: its repair was not escalated: ${err instanceof Error ? err.name : "error"}`,
+        );
+      }
+    }
+    return;
+  }
+  const segmentPlan: RegenerateSegmentPlan | null =
+    segmentResolution.kind === "segment" ? segmentResolution.plan : null;
   if (
+    !segmentPlan &&
     !(await bindRepairFindingsInputAtStart(runId, run, template.lifecycleConfig ?? null, executionAuthority))
   ) {
     return;
@@ -4242,25 +4374,29 @@ async function runAgentBuilderExecutionJobInner(
   // silent-failure shape the artifact-materialization honesty fix removed, just
   // relocated. Mirrors the pre-dispatch failure handling directly above.
   try {
-    assertValuesMatchDeclaredObjectTypes(
-      properties,
-      (run.inputParams ?? {}) as Record<string, unknown>,
-      "Run cannot start",
-    );
-    // cinatra#3003 — SATISFIABILITY gate, the sibling of the declared-type gate
-    // above. That one asks "is what we already hold the right shape?"; this one
-    // asks "can the inputs we do NOT hold ever arrive?". A hidden input with no
-    // `default`, absent from the required list and written by no product path,
-    // can not: the setup loop below filters hidden fields out of `pendingFields`,
-    // so the run falls straight through to dispatch and the runtime refuses it
-    // seconds after the tick, naming a field nobody was ever shown. Fail here
-    // instead, naming the agent and the input.
-    await assertUnsatisfiableHiddenInputs({
-      properties,
-      alreadySupplied: (run.inputParams ?? {}) as Record<string, unknown>,
-      packageName: template.packageName ?? "<unknown agent>",
-      packageVersion: template.packageVersion,
-    });
+    // cinatra#4264 B1b: a segment run starts the segment, not the template's
+    // start node: its inputs are the note and the typed request only.
+    if (!segmentPlan) {
+      assertValuesMatchDeclaredObjectTypes(
+        properties,
+        (run.inputParams ?? {}) as Record<string, unknown>,
+        "Run cannot start",
+      );
+      // cinatra#3003 — SATISFIABILITY gate, the sibling of the declared-type gate
+      // above. That one asks "is what we already hold the right shape?"; this one
+      // asks "can the inputs we do NOT hold ever arrive?". A hidden input with no
+      // `default`, absent from the required list and written by no product path,
+      // can not: the setup loop below filters hidden fields out of `pendingFields`,
+      // so the run falls straight through to dispatch and the runtime refuses it
+      // seconds after the tick, naming a field nobody was ever shown. Fail here
+      // instead, naming the agent and the input.
+      await assertUnsatisfiableHiddenInputs({
+        properties,
+        alreadySupplied: (run.inputParams ?? {}) as Record<string, unknown>,
+        packageName: template.packageName ?? "<unknown agent>",
+        packageVersion: template.packageVersion,
+      });
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[agent-builder] run ${runId} rejected before dispatch: ${message}`);
@@ -4287,7 +4423,7 @@ async function runAgentBuilderExecutionJobInner(
   // fields. (GROUPED_SETUP_FORM_RENDERER_ID is imported from ./agent-builder-ids
   // — the single id authority — rather than re-declared locally.)
 
-  const pendingFields = requiredFields.filter((fieldName) => {
+  const pendingFields = segmentPlan ? [] : requiredFields.filter((fieldName) => {
     const fieldSchema = properties[fieldName] ?? {};
     if ((fieldSchema as { "x-hidden"?: boolean })["x-hidden"]) return false;
     if (
@@ -4734,6 +4870,13 @@ async function runAgentBuilderExecutionJobInner(
   // active until the stream ends and the DB status is set to completed/failed.
   // AG-UI / A2UI events flow through startExternalSseProxyFromStream → Redis.
   // ---------------------------------------------------------------------------
+  // cinatra#4264 B1b: a Regenerate segment runs only on the flow runtime.
+  if (segmentPlan && template.sourceType === "external") {
+    const error = "Regenerate refused: this agent does not run on the flow runtime";
+    console.error(`[agent-builder] run ${runId} rejected before dispatch: ${error}`);
+    await transitionRunStatus(runId, "queued", "failed", { error }, executionAuthority);
+    return;
+  }
   if (template.sourceType === "external") {
     if (!template.agentUrl) {
       await transitionRunStatus(runId, "queued", "failed", {
@@ -4775,9 +4918,12 @@ async function runAgentBuilderExecutionJobInner(
     try {
       await transitionRunStatus(runId, "queued", "running", {
         dispatch: { attemptId: randomUUID() },
+        // cinatra#4762: only at the attempt this job's frame carries.
+        attemptGeneration: run.resetGeneration ?? 0,
       }, executionAuthority);
     } catch (err) {
       if (err instanceof RunTransitionError && err.code === "stale_from_status") {
+        if (await supersededAttempt()) return runAgentBuilderExecutionJobInner(data, jobId);
         console.log(`[external-a2a] run ${runId} status no longer "queued" — skipping stale transition`);
         return;
       }
@@ -4967,12 +5113,26 @@ async function runAgentBuilderExecutionJobInner(
       }
     }
 
+    // cinatra#4264 B1b — THE FENCE. A Regenerate segment is sent only to a
+    // runtime whose /.health lists `regenerate_segment/1`; an older runtime
+    // would run the WHOLE flow. Otherwise the run fails here, nothing sent.
+    if (segmentPlan && !(await fenceRegenerateRuntime())) {
+      const error = `${REGENERATE_RUNTIME_UNSUPPORTED}: the flow runtime cannot run one step of a flow`;
+      console.error(`[wayflow] run ${runId} rejected before dispatch: ${error}`);
+      await transitionRunStatus(runId, "queued", "failed", { error }, executionAuthority);
+      return;
+    }
+
     try {
       await transitionRunStatus(runId, "queued", "running", {
-        dispatch: { attemptId: randomUUID() },
+        // cinatra#4150: the publish rows of the template object this dispatch runs (the pinned overlay included).
+        dispatch: { attemptId: randomUUID(), publishRows: JSON.stringify(template.publishRows ?? {}) },
+        // cinatra#4762: only at the attempt this job's frame carries.
+        attemptGeneration: run.resetGeneration ?? 0,
       }, executionAuthority);
     } catch (err) {
       if (err instanceof RunTransitionError && err.code === "stale_from_status") {
+        if (await supersededAttempt()) return runAgentBuilderExecutionJobInner(data, jobId);
         console.log(`[wayflow] run ${runId} no longer queued — skipping stale transition`);
         return;
       }
@@ -5087,12 +5247,16 @@ async function runAgentBuilderExecutionJobInner(
       });
       // cinatra#4264: the nodes whose inputs the runtime records, from the
       // template's stored `regenerate` declaration. No declaration, or a repair
-      // run: {} and the message carries no metadata, exactly as before.
-      const snapshotMetadata = snapshotNodesMetadata({
-        runId: run.id,
-        sourceType: run.sourceType,
-        lifecycleConfig: template.lifecycleConfig ?? null,
-      });
+      // run: {} (the message metadata then names only the attempt, below).
+      // cinatra#4264 B1b: a segment run carries the segment instead (a repair
+      // run never records snapshots, so the two never meet).
+      const snapshotMetadata = segmentPlan
+        ? regenerateSegmentMetadata(segmentPlan)
+        : snapshotNodesMetadata({
+            runId: run.id,
+            sourceType: run.sourceType,
+            lifecycleConfig: template.lifecycleConfig ?? null,
+          });
       // #813: bind a fasta2a contextId to the run BEFORE the blocking sendTask.
       // WayFlow's flow calls back POST /api/context-resolve DURING sendTask with
       // this contextId (x-cinatra-a2a-context-id); readAgentRunByContextId must
@@ -5116,6 +5280,10 @@ async function runAgentBuilderExecutionJobInner(
       if (!currentDispatchRun?.executionAttemptId) throw new Error("step_tool_dispatch_attempt_missing");
       await bindRunStepToolPolicy({ runId, orgId: run.orgId,
         executionAttemptId: currentDispatchRun.executionAttemptId, policy, authority: executionAuthority });
+      // cinatra#3745: the task's message names the attempt just bound (metadata, never
+      // the flow's text input); the runtime signs it in its `s2` pair, so a task of an
+      // earlier attempt of this run cannot sign for this one.
+      const dispatchMetadata = { ...snapshotMetadata, [CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY]: currentDispatchRun.executionAttemptId };
       const task = await client.sendTask({
         message: {
           role: "user",
@@ -5123,7 +5291,7 @@ async function runAgentBuilderExecutionJobInner(
           messageId: randomUUID(),
           contextId: dispatchContextId,
           parts: [{ kind: "text", text: JSON.stringify(initialMessagePayload) }],
-          ...(Object.keys(snapshotMetadata).length > 0 ? { metadata: snapshotMetadata } : {}),
+          metadata: dispatchMetadata,
         },
         configuration: { acceptedOutputModes: ["text"] },
       });

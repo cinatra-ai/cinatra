@@ -118,7 +118,14 @@ import { getAuthSession, signInRedirectTarget } from "@/lib/auth-session";
 import { resolveVerifiedWidgetFrameOrigin } from "@/lib/embed/frame-ancestors.server";
 import { loadReviewGateSurface } from "@/app/artifacts/[id]/review-gate-ports";
 import { type ReviewTargetStream } from "@/lib/artifacts/review-surface-model";
-import { decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
+import {
+  decodeLifecycleGateRef,
+  decodePublishDecisionIslandRef,
+} from "@/lib/lifecycle/lifecycle-card-ref";
+// cinatra#4150 W4 C1b — the publish card's artifacts row: a ref of the publish
+// family is loaded by its own loader (src/lib/lifecycle/publish-decision-island.ts,
+// see its header), imported on that branch only, so a gate paint loads exactly
+// the modules it always did.
 import { REVIEW_ISLAND_CREDENTIAL_QUERY_PARAM } from "@/lib/lifecycle/review-island-credential";
 import {
   islandBodyClassName,
@@ -225,6 +232,10 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
   let actorCtx: Awaited<ReturnType<typeof resolveReviewActorContext>> = null;
   let runId: string;
   let reviewTaskId: string;
+  // THE PUBLISH ROW THIS FRAME PAINTS, or null for a review gate (cinatra#4150
+  // W4 C1b). Set from the credential on that branch (proven equal to the ref
+  // there) and from the ref's own family on the cookie branch.
+  let publishRow: { decisionId: string; input: string } | null = null;
   // THE ROAD THIS PAINT IS ON (wave 3). The sealed roads are set only on the
   // credential branch, because only that branch has a principal to seal
   // capabilities to: a same-site first-party frame reaching the cookie branch
@@ -242,16 +253,40 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
     // would be a place for them to stop being equal.
     runId = reader.runId;
     reviewTaskId = reader.reviewTaskId;
+    // THE READER NAMES ITS KIND (cinatra#4150 W4 C1b): `null` for a review
+    // gate, the row for a publish decision. A reader that names neither is not
+    // one this page reads, so it draws the one empty island rather than being
+    // taken for a gate.
+    const named: unknown = reader.publishDecision;
+    if (
+      named !== null &&
+      !(
+        typeof named === "object" &&
+        typeof (named as { decisionId?: unknown }).decisionId === "string" &&
+        typeof (named as { input?: unknown }).input === "string"
+      )
+    ) {
+      return empty;
+    }
+    publishRow = reader.publishDecision;
     // The reader this resolver just proved, carried into the road. Every
     // address the surface below hands out is sealed to exactly these bindings
     // and to this gate, and the serving path re-proves every one of them
     // before a byte is read — so naming the road here grants nothing that the
     // credential did not already carry.
+    // A PUBLISH ROW GETS THE SAME SEALED ROADS (cinatra#4738 round 2). A reader
+    // inside a third-party site holds no Cinatra cookie, so the session
+    // addresses would load no picture, document or capture pair there. The
+    // road is the gate's, sealed to the same principal and run, with the row's
+    // SUBJECT KEY (proven equal to the ref inside the resolver) in the gate's
+    // slot and the publish kind sealed beside it: the serving paths then prove
+    // each target against THIS row's own set, never against a gate's.
     const built = reader.principal
       ? islandReviewSurfaceRoads({
           principal: reader.principal,
           runId: reader.runId,
           reviewTaskId: reader.reviewTaskId,
+          ...(publishRow ? { subject: "publish-decision" as const } : {}),
         })
       : null;
     // A ROAD THAT CANNOT MINT IS NOT A ROAD. The byte minter is exercised once
@@ -302,10 +337,20 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
     if (!ref) return empty;
     // The ref is authenticated-encrypted: a forged or tampered one does not
     // decode, and a replayed one still has to pass the access checks below.
+    // A gate ref first, exactly as before; a ref of the publish-decision family
+    // (cinatra#4150 W4 C1b) otherwise. The two families are sealed under
+    // disjoint keys, so a ref decodes as at most one of them.
     const payload = decodeLifecycleGateRef(ref);
-    if (!payload) return empty;
-    runId = payload.runId;
-    reviewTaskId = payload.reviewTaskId;
+    if (payload) {
+      runId = payload.runId;
+      reviewTaskId = payload.reviewTaskId;
+    } else {
+      const publish = decodePublishDecisionIslandRef(ref);
+      if (!publish) return empty;
+      runId = publish.runId;
+      reviewTaskId = "";
+      publishRow = { decisionId: publish.decisionId, input: publish.input };
+    }
     // THE SESSION DATA ROAD AND THE DASHBOARD LIVE ADDRESS READER
     // (cinatra#4311). This reader was authenticated by its session cookie, so
     // its displays read live series from the application's own route with that
@@ -317,20 +362,43 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
   }
   if (!selector.ok) return empty;
 
-  const surface = await loadReviewGateSurface({
-    runId,
-    reviewTaskId,
-    actorCtx,
-    // OMITTED, not passed as null, on every path that named no road: the call
-    // into this loader is then byte-identical to what it always was, so nothing
-    // about those surfaces can have changed by this wave.
-    ...(roads ? { roads } : {}),
-  });
-  // `not-authorized` and `blocked` draw nothing here — see the header. It is one
-  // empty document either way, so a reader still cannot tell WHY it is empty.
-  // `settled` draws: a decided gate keeps its reviewed target(s) read-only.
-  if (surface.kind !== "ready" && surface.kind !== "settled") return empty;
-  const decided = surface.kind === "settled";
+  // WHAT THIS FRAME DRAWS: a gate's pinned set through the gate loader, or a
+  // publish row's proven set through its own loader (cinatra#4150 W4 C1b).
+  // Both answer the same streaming targets, and everything below draws them
+  // the same way; a refusal from either is the one empty document.
+  let surface: {
+    targets: ReviewTargetStream[];
+    agentSummary: string | null;
+    decided: boolean;
+  };
+  if (publishRow) {
+    const { loadPublishDecisionIslandSurface } = await import("@/lib/lifecycle/publish-decision-island");
+    const publish = await loadPublishDecisionIslandSurface({
+      runId,
+      decisionId: publishRow.decisionId,
+      input: publishRow.input,
+      actorCtx,
+      ...(roads ? { roads } : {}),
+    });
+    if (publish.kind !== "ready") return empty;
+    surface = { targets: publish.targets, agentSummary: null, decided: publish.decided };
+  } else {
+    const gate = await loadReviewGateSurface({
+      runId,
+      reviewTaskId,
+      actorCtx,
+      // OMITTED, not passed as null, on every path that named no road: the call
+      // into this loader is then byte-identical to what it always was, so nothing
+      // about those surfaces can have changed by this wave.
+      ...(roads ? { roads } : {}),
+    });
+    // `not-authorized` and `blocked` draw nothing here — see the header. It is one
+    // empty document either way, so a reader still cannot tell WHY it is empty.
+    // `settled` draws: a decided gate keeps its reviewed target(s) read-only.
+    if (gate.kind !== "ready" && gate.kind !== "settled") return empty;
+    surface = { targets: gate.targets, agentSummary: gate.agentSummary, decided: gate.kind === "settled" };
+  }
+  const decided = surface.decided;
 
   // ONE TARGET PER FRAME (cinatra#4129). A frame that names a target draws the
   // pinned target whose revision it names, and no other; a frame that names

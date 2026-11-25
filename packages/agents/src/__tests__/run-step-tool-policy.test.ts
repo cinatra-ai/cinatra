@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 // The module is new with cinatra#3745. It is loaded here, not by a static import, so that before the
 // change this file still loads and its first case fails by an assertion on the missing module.
 const policyModule = await import("../run-step-tool-policy").catch(() => undefined);
-const { createRunStepToolPolicy, parseRunStepToolPolicy, readTrustedStepToolDeclaration, selectWayflowRunStepToolPolicy } =
+const { createRunStepToolPolicy, parseRunStepToolPolicy, readTrustedStepToolDeclaration, selectWayflowRunStepToolPolicy, assertRunStepToolAllowed, RunStepToolPolicyRefusal } =
   (policyModule ?? {}) as typeof import("../run-step-tool-policy");
 it("the run step tool policy module exists (cinatra#3745)", () => {
  expect(policyModule).toBeDefined();
@@ -109,5 +109,94 @@ describe("the loader's selected source, read before dispatch", () => {
   await expect(selectWayflowRunStepToolPolicy({ agentUrl: "http://wayflow.test:3010/agents/v/s", contextId: "c" }, answer({}) as unknown as typeof fetch)).rejects.toThrow("step_tool_loader_unavailable");
   env();
   await expect(selectWayflowRunStepToolPolicy({ agentUrl: "http://wayflow.test:3010/agents/v/s", contextId: "c" }, answer({}, false) as unknown as typeof fetch)).rejects.toThrow("step_tool_loader_selection_refused");
+ });
+});
+
+// cinatra#4762: the route check of the compiler runs on the source the run will execute, at the selection every first
+// dispatch makes. A template compiled before that check (a stored, pre-upgrade one) is refused here, before any bind or
+// send, never trusted for having compiled.
+describe("the executed source's publishing calls, checked before the first send", () => {
+ const sha = (t: string) => createHash("sha256").update(t).digest("hex");
+ const api = (id: string, url: string) => ({ component_type: "ApiNode", id, name: id, url, http_method: "POST", data: {} });
+ const branch = (node: Record<string, unknown>) => ({ component_type: "Flow", id: `${String(node.id)}_flow`, name: `${String(node.id)}_flow`,
+  start_node: { $component_ref: "s" }, nodes: [{ $component_ref: "s" }, { $component_ref: node.id }],
+  $referenced_components: { s: { component_type: "StartNode", id: "s", name: "s" }, [String(node.id)]: node } });
+ /** The loader's composed source of a publishing ParallelFlowNode (its publish gate in front, as the loader inserts it). */
+ const executed = (directUrl: string, publishes = true) => JSON.stringify({
+  component_type: "Flow", id: "pack", name: "pack", start_node: { $component_ref: "start" },
+  nodes: ["start", "cinatra_publish_gate__publish", "publish", "end"].map((id) => ({ $component_ref: id })),
+  control_flow_connections: [], data_flow_connections: [],
+  $referenced_components: {
+   start: { component_type: "StartNode", id: "start", name: "start" },
+   cinatra_publish_gate__publish: { component_type: "InputMessageNode", id: "cinatra_publish_gate__publish", name: "gate" },
+   publish: { component_type: "ParallelFlowNode", id: "publish", name: "publish",
+    subflows: [branch(api("write_artifact", "{{CINATRA_BASE_URL}}/api/agents/passthrough")), branch(api("direct_post", directUrl))],
+    ...(publishes ? { metadata: { cinatra: { publishes: true } } } : {}) },
+   end: { component_type: "EndNode", id: "end", name: "end" },
+  },
+ });
+ const select = (graph: string) => selectWayflowRunStepToolPolicy({ agentUrl: "http://wayflow.test:3010/agents/v/s/", contextId: "c" },
+  vi.fn(async () => new Response(JSON.stringify({ selectedSourceBinding: { sourceSha256: "a".repeat(64), executedSourceSha256: "b".repeat(64),
+   declarationSourceSha256: sha(graph), declarationSource: graph } }))) as unknown as typeof fetch);
+ const env = () => { vi.stubEnv("WAYFLOW_BASE_URL", "http://wayflow.test:3010"); vi.stubEnv("CINATRA_BRIDGE_TOKEN", "bridge-test-value"); };
+ afterEach(() => { vi.unstubAllEnvs(); });
+
+ it("refuses a publishing ParallelFlowNode with a direct external call, naming the node and never the URL", async () => {
+  env();
+  const refusal = await select(executed("https://api.example.invalid/v2/posts")).then(() => null, (err: unknown) => err as Error);
+  expect(refusal).toBeInstanceOf(RunStepToolPolicyRefusal);
+  expect(refusal?.message).toMatch(/^PUBLISH_CALL_UNCHECKED: node "direct_post" of publishing step "publish" calls a URL /);
+  expect(refusal?.message).not.toContain("example.invalid");
+ });
+
+ it("refuses an executed source whose publishing steps cannot be read", async () => {
+  env();
+  await expect(select("[]")).rejects.toThrow(/^PUBLISH_CALL_UNCHECKED: the executed source cannot be read/);
+ });
+
+ it("selects a publishing source whose every call goes to a checked host route", async () => {
+  env();
+  const graph = executed("{{CINATRA_BASE_URL}}/api/llm-bridge");
+  await expect(select(graph)).resolves.toMatchObject({ contextId: "c", source: graph });
+ });
+
+ it("leaves a source with no publishing step as it was, whatever its steps call", async () => {
+  env();
+  const graph = executed("https://api.example.invalid/v2/posts", false);
+  await expect(select(graph)).resolves.toMatchObject({ contextId: "c", source: graph });
+ });
+});
+
+// cinatra#3745: one call of a step is admitted only for a tool the step's bound source
+// declares; a step that declares nothing keeps every tool. The binding's context and
+// executing digest must be the proof's.
+describe("the step's declared tools, asserted for one call", () => {
+ const call = (p: ReturnType<typeof policy>, toolName: string) =>
+  ({ policy: p, contextId: "ctx", executedSourceSha256: p.executedSourceSha256, stepId: "step", toolName });
+ it("admits a declared tool and refuses an undeclared one", () => {
+  const p=policy();
+  expect(assertRunStepToolAllowed(call(p,"mail_send"),readers)).toEqual({kind:"declared",tools:["mail_send"]});
+  expect(() => assertRunStepToolAllowed(call(p,"wordpress_publish"),readers)).toThrow("step_tool_not_declared");
+ });
+ it("admits any tool of a step that declares nothing", () => {
+  const undeclared = {...readers,findStepToolDeclaration:()=>({kind:"undeclared"})};
+  expect(assertRunStepToolAllowed(call(policy(),"wordpress_publish"),undeclared)).toEqual({kind:"undeclared"});
+ });
+ it("refuses a proof for another context or another executing source", () => {
+  const p=policy();
+  for(const change of [{contextId:"other"},{executedSourceSha256:"f".repeat(64)}]) {
+   expect(() => assertRunStepToolAllowed({...call(p,"mail_send"),...change},readers)).toThrow("step_tool_executed_source_mismatch");
+  }
+ });
+ it("refuses a binding that is not a bound policy", () => {
+  expect(() => assertRunStepToolAllowed({...call(policy(),"mail_send"),policy:undefined},readers)).toThrow("step_tool_binding_missing");
+  expect(() => assertRunStepToolAllowed({...call(policy(),"mail_send"),policy:{...policy(),source:source+" "}},readers)).toThrow("step_tool_binding_invalid");
+ });
+ it("refuses with its own class, which carries the code and the class name the 403 map reads", () => {
+  let caught: unknown;
+  try { assertRunStepToolAllowed(call(policy(),"wordpress_publish"),readers); } catch (e) { caught = e; }
+  expect(caught).toBeInstanceOf(RunStepToolPolicyRefusal);
+  expect((caught as InstanceType<typeof RunStepToolPolicyRefusal>).name).toBe("RunStepToolPolicyRefusal");
+  expect((caught as InstanceType<typeof RunStepToolPolicyRefusal>).code).toBe("step_tool_not_declared");
  });
 });

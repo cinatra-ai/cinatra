@@ -23,6 +23,7 @@ import {
 } from "@/lib/artifacts/materialization-ledger";
 import { resolveBoundArtifactTarget } from "@/lib/artifacts/resolve-bound-artifact-type";
 import { mimeAcceptedByAccepts } from "@/lib/artifacts/upload-artifact-type-map";
+import { isPublishCallInFlightAbort } from "@/lib/lifecycle/lifecycle-emit";
 import {
   loadRunImageWriteFacts,
   resolveRunScopeOwnership,
@@ -116,7 +117,9 @@ export type ArtifactImageRefusal =
   /** The write itself was refused (accepts, write-eligibility, the ledger). */
   | "write_refused"
   /** A regeneration named a base another write has already built on. */
-  | "stale_base";
+  | "stale_base"
+  /** cinatra#4762: a publishing call of the run is in flight; temporary, try again once it has ended. */
+  | "publish_call_in_flight";
 
 export type ArtifactImageResult =
   | {
@@ -455,7 +458,10 @@ export async function generateArtifactImage(
       if (!appended.ok) {
         return {
           ok: false,
-          reason: appended.reason === "stale_base" ? "stale_base" : "write_refused",
+          reason:
+            appended.reason === "stale_base" || appended.reason === "publish_call_in_flight"
+              ? appended.reason
+              : "write_refused",
           error: appended.error,
         };
       }
@@ -542,6 +548,11 @@ export async function generateArtifactImage(
       deduped: false,
     };
   } catch (err) {
+    // cinatra#4762: a publishing call of the run is in flight; nothing was
+    // filed, and the same call is taken once it has ended.
+    if (isPublishCallInFlightAbort(err)) {
+      return { ok: false, reason: "publish_call_in_flight", error: "a publishing call of this run is in flight; try again once it has ended" };
+    }
     logFilingFailure("artifact_image_generate", input, err);
     return { ok: false, reason: "write_refused", error: FILING_UNEXPECTED_ERROR };
   }

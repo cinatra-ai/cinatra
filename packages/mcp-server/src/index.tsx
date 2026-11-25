@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -41,7 +42,7 @@ import {
   createMcpRuntimeServer,
   type McpRuntimeToolServer,
 } from "./runtime-server";
-import { mcpRequestContextStorage, resolveRequestRunContext, selectDelegatedToolPolicy, type DelegatedMcpActor, type McpRequestContext, type DurableRunContextResolution, type RunContextServedBy,
+import { mcpRequestContextStorage, resolveRequestRunContext, verifyDelegatedExecutedSource, selectDelegatedToolPolicy, type DelegatedMcpActor, type McpRequestContext, type DurableRunContextResolution, type RunContextServedBy,
   LENT_ACTION_GRANT_HEADER,
   resolveRequestLentActionGrant,
 } from "./request-context";
@@ -125,6 +126,11 @@ export type CreateMcpServerMountOptions = {
    *  in-process `getRunContext` registry callback that sat beside this was
    *  deleted with the registry itself. */
   resolveDurableRunContext?: (rawBearerToken: string) => Promise<DurableRunContextResolution>;
+  /** cinatra#3745: the run store's check that an executing-source proof is
+   *  still current for its run (same attempt, same bound source). App-wired.
+   *  An on-behalf-of token's proof is re-checked with it on every request;
+   *  omitting it refuses every request whose token carries a proof. */
+  isRunExecutedSourceCurrent?: (runId: string, orgId: string, source: VerifiedExecutedRunSource) => Promise<boolean>;
   /** #1195 metric: which channel served the run id (ids only). */
   onRunContextServedBy?: (channel: RunContextServedBy, info: { runId?: string; suppressed?: boolean }) => void;
   /**
@@ -897,8 +903,8 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
     // #1195 — durable binding resolved ONCE per request; the immutable result
     // feeds the dev-bypass early org-fallback below AND the final request store
     // (a second read could race the first). Skipped when delegated (OBO wins).
-    // A defensive throw is "invalid" (fail closed; transport failures are
-    // classified "absent" by the app resolver itself, which never throws).
+    // A defensive throw is "invalid" (fail closed). The app resolver never
+    // throws; it classifies a failed read of the binding "invalid" itself.
     const durableRunContext: DurableRunContextResolution | undefined =
       !delegatedActor && rawToken && options.resolveDurableRunContext
         ? await options.resolveDurableRunContext(rawToken).catch((): DurableRunContextResolution => ({ outcome: "invalid" }))
@@ -1049,9 +1055,16 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
     // request-context.ts). `failClosed: true` is the ACTIVATED cutover posture
     // — a run id only the forgeable x-cinatra-* headers could supply is
     // REFUSED, never tagged; the refusal itself is the paired enforcement below.
+    // cinatra#3745: an on-behalf-of token's executing-source proof is fixed at
+    // mint; re-check it against the run store on THIS request so a token of an
+    // earlier attempt is refused after a re-dispatch (false or unwired: denied).
+    const delegatedSourceCurrent = await verifyDelegatedExecutedSource(delegatedActor, options.isRunExecutedSourceCurrent);
     const runContext = resolveRequestRunContext({
       delegatedRunId: delegatedActor?.delegation === "agent_run" ? delegatedActor.runId : undefined,
       delegatedStepId: delegatedActor?.delegation === "agent_run" ? delegatedActor.verifiedStepId : undefined,
+      delegatedExecutedSource: delegatedActor?.delegation === "agent_run" ? delegatedActor.verifiedExecutedSource : undefined,
+      delegatedPublishDecisionId: delegatedActor?.delegation === "agent_run" ? delegatedActor.verifiedPublishDecisionId : undefined,
+      delegatedSourceCurrent,
       durable: durableRunContext,
       headerRunId: request.headers.get("x-cinatra-run-id") ?? undefined,
       headerAgentId: request.headers.get("x-cinatra-agent-id") ?? undefined,
@@ -1079,6 +1092,9 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       // The verified step of the calling run step (cinatra#3745) — only from
       // the channel that served the verified run id (see resolveRequestRunContext).
       verifiedStepId: runContext.stepId,
+      verifiedExecutedSource: runContext.verifiedExecutedSource,
+      // The publish decision of the call (cinatra#3745), only with the on-behalf-of proof it was signed beside.
+      verifiedPublishDecisionId: runContext.publishDecisionId,
       platformRole: resolvedPlatformRole,
       orgRole: resolvedOrgRole,
       // delegated-chat allowlist is keyed on the CHAT delegation type only.

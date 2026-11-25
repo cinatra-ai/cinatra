@@ -57,6 +57,8 @@ import {
   artifactDisplayTitle,
   buildArtifactDetailHeader,
 } from "./artifact-detail-header";
+import { readArtifactDisplayIdentity } from "./artifact-display-identity";
+import { loadArtifactRenderer } from "@/lib/artifacts/artifact-renderer-loader";
 import { resolveArtifactContentClass } from "@/lib/artifacts/artifact-content-channel";
 import { projectRecordedPageCaptureFacts } from "@/lib/artifacts/page-capture-facts-record";
 import {
@@ -202,15 +204,8 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
       ? artifact.organizationId
       : artifact.ownerId) ?? "",
   );
-  const header = buildArtifactDetailHeader({
-    artifact,
-    mime,
-    revisionId,
-    ownerName,
-  });
-  // `PageHeader` broadcasts this string to the trail's leaf crumb, so it is the
-  // one place the Breadcrumb rule against a raw id in a name's place lands.
-  const title = header.title;
+  // The header itself is built below the display dispatch: the display that
+  // draws the row may name itself on the line (cinatra#4366, §XI.7 and §XI.8).
 
   // THE CONTENT CHANNEL (enabler 0.3, cinatra#3027), WIRED FOR THIS CONSUMER
   // (enabler 0.20, cinatra#3026). The markdown editor draws the document from
@@ -350,6 +345,43 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
     propsApiVersion: rendererProps.propsApiVersion,
   });
 
+  // ONE LOAD DECISION FOR THE BUILD-MAP DISPLAY, made here once and handed to
+  // both the identity line below and the slot that mounts the display: one
+  // quarantine read, one module load, so the header can never name a renderer
+  // the slot then floors (cinatra#4366). A rejection (a present but broken
+  // module) is answered quietly by the identity read and still fails loud in
+  // the slot, which awaits the same decision.
+  const buildMapDecision =
+    mount.kind === "build-map"
+      ? loadArtifactRenderer({
+          generatedKey: mount.generatedKey,
+          packageName: mount.packageName,
+          slot: mount.slot,
+          expectedPropsApiVersion: rendererProps.propsApiVersion,
+        })
+      : null;
+
+  // THE IDENTITY LINE NAMES THE RENDERER THAT DREW THE ROW, where that display
+  // declares it (cinatra#4366, artifact-review §XI.7 and §XI.8). Read
+  // generically from the module of that one decision, never by name; a display
+  // that declares nothing, a decision the slot does not mount, a runtime mount
+  // and every floor leave the line exactly as it was.
+  const displayIdentity = await readArtifactDisplayIdentity({
+    decision: buildMapDecision,
+    content,
+    propsApiVersion: rendererProps.propsApiVersion,
+  });
+  const header = buildArtifactDetailHeader({
+    artifact,
+    mime,
+    revisionId,
+    ownerName,
+    display: displayIdentity,
+  });
+  // `PageHeader` broadcasts this string to the trail's leaf crumb, so it is the
+  // one place the Breadcrumb rule against a raw id in a name's place lands.
+  const title = header.title;
+
   return (
     <Main className="min-h-screen">
       <PageHeader
@@ -408,6 +440,9 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
       <PageContent
         className="flex flex-col gap-6 pb-8"
         data-render-dispatch={mount.dispatch}
+        // §III's typed-renderer case (app-artifacts): only the region a type's
+        // own renderer answers for carries it, never the MIME viewer or floor.
+        data-conformance-id={mount.dispatch === "semantic" ? "artifact-render-typed" : undefined}
       >
         {/* §III activation barrier: pin / add-to-context is replaced by a
             muted "Preparing" label until the claim's binding lands. */}
@@ -424,6 +459,7 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
         <ArtifactDisplayMountPoint
           mount={mount}
           props={rendererProps}
+          buildMapDecision={buildMapDecision}
           fallback={genericFloor}
           renderFloor={({ packageName, slot, reason }) =>
             // A CLAIMANT THIS BUILD DOES NOT CARRY still says so by name, above

@@ -182,6 +182,8 @@ export function deserializeRun(row: typeof agentRuns.$inferSelect): AgentRunReco
     lifecycleCardRef: row.lifecycleCardRef ?? null,
     // The pause generation (cinatra#4245), parsed strictly; see above.
     pauseGeneration: parsePauseGeneration(row.pauseGeneration),
+    // The reset generation (cinatra#4150), parsed as strictly as the pause generation.
+    resetGeneration: parsePauseGeneration(row.resetGeneration),
     // The LAUNCH ANCHOR (cinatra#2809), surfaced AS STORED. It is decoded by
     // src/lib/launch-scope-anchor.ts at the surface that addresses the
     // instance, where a malformed or unknown payload reads UNANCHORED — the row
@@ -759,6 +761,20 @@ export function parseRunStepToolPolicy(value: unknown): RunStepToolPolicy {
     executedSourceSha256: v.executedSourceSha256, declarationSourceSha256: v.declarationSourceSha256, source: v.source });
 }
 
+export function assertRunStepToolAllowed(input: {
+  policy: unknown; contextId: string; executedSourceSha256: string; stepId: string; toolName: string;
+}, trustedReaders: ReaderAbi = invariantReaders as ReaderAbi): StepToolReading {
+  const policy = parseRunStepToolPolicy(input.policy);
+  if (policy.contextId !== input.contextId || policy.executedSourceSha256 !== input.executedSourceSha256) {
+    throw new RunStepToolPolicyRefusal("step_tool_executed_source_mismatch");
+  }
+  const reading = readTrustedStepToolDeclaration(policy.source, input.stepId, trustedReaders);
+  if (reading.kind === "declared" && !reading.tools.includes(input.toolName)) {
+    throw new RunStepToolPolicyRefusal("step_tool_not_declared");
+  }
+  return reading;
+}
+
 /** Trusted loader selection BEFORE dispatch. Credentials never leave the configured origin. */
 export async function selectWayflowRunStepToolPolicy(input: {
   agentUrl: string; contextId: string;
@@ -788,6 +804,12 @@ export async function selectWayflowRunStepToolPolicy(input: {
       !text(b.declarationSource) || sha256(b.declarationSource) !== b.declarationSourceSha256) {
     throw new RunStepToolPolicyRefusal("step_tool_loader_binding_invalid");
   }
+  // cinatra#4762: a publishing step of the source this run will execute calls only the host routes that check the call.
+  // Read on the executed source at every first dispatch, so a template compiled before that check is refused here too;
+  // the error is the compiler's fixed text, which names node ids only.
+  const { checkExecutedPublishingCallRoutes } = await import("./oas-compiler");
+  const routes = checkExecutedPublishingCallRoutes(b.declarationSource as string);
+  if (!routes.ok) throw new RunStepToolPolicyRefusal(routes.error);
   return createRunStepToolPolicy({ contextId: input.contextId, rawSource: b.declarationSource,
     selectedRawSourceSha256: b.sourceSha256, selectedExecutedSourceSha256: b.executedSourceSha256 });
 }
@@ -877,8 +899,8 @@ export async function bindRunStepToolPolicy(input: {
  * The prior attempt is read from the run row locked here, never from a caller, and a
  * lost CAS rolls the move back with it. It never selects or replaces a graph. It
  * refuses a binding that another attempt holds than the one the locked run carries,
- * so a stale or foreign attempt cannot move it. An unbound run stays unbound (a later
- * part's source checks refuse its callbacks). Lock order: run, then binding (as bind). */
+ * so a stale or foreign attempt cannot move it. An unbound run stays unbound (the
+ * routes' source checks refuse its source-bound callbacks). Lock order: run, then binding (as bind). */
 export async function carryRunStepToolPolicyInTx(txLike: unknown, input: {
   orgId: string; runId: string; executionAttemptId: string;
 }): Promise<void> {
@@ -910,10 +932,30 @@ export async function readRunStepToolPolicy(runId: string, orgId: string): Promi
   return parseRunStepToolPolicy(bound?.policy);
 }
 
-/** Derive attempt from the authoritative run/policy rows, never a runtime header. */
+/** The attempt is the authoritative run row's: the signed attempt (the one the calling
+ * task's message named, cinatra#3745) must BE the run's running attempt and the one its
+ * binding sits on, so a task of an earlier attempt is refused even when the binding was
+ * carried forward unchanged. */
 export async function verifyRunExecutedSource(runId: string, orgId: string,
-  attestation: Omit<VerifiedExecutedRunSource, "executionAttemptId">,
+  attestation: VerifiedExecutedRunSource,
 ): Promise<VerifiedExecutedRunSource> {
+  return (await readBoundRunSource(runId, orgId, attestation)).proof;
+}
+/** cinatra#3745: the run's bound policy, read in the SAME statement that proves the run still runs
+ * under the proof's attempt and source. There is no second read between the proof and the policy. */
+export async function readCurrentRunStepToolPolicy(runId: string, orgId: string,
+  proof: VerifiedExecutedRunSource): Promise<RunStepToolPolicy> {
+  const parsed = parseVerifiedExecutedRunSource(proof);
+  if (!parsed) throw new RunStepToolPolicyRefusal("step_tool_source_proof_invalid");
+  const current = await readBoundRunSource(runId, orgId, parsed);
+  if (current.proof.executionAttemptId !== parsed.executionAttemptId) {
+    throw new RunStepToolPolicyRefusal("step_tool_run_source_inactive");
+  }
+  return current.policy;
+}
+async function readBoundRunSource(runId: string, orgId: string,
+  attestation: VerifiedExecutedRunSource,
+): Promise<{ proof: VerifiedExecutedRunSource; policy: RunStepToolPolicy }> {
   // Each claimed value is read once, here, into a frozen plain copy before any comparison: a getter or a proxy
   // cannot answer the checks below one value and the proof another.
   attestation = Object.freeze({ ...attestation });
@@ -923,6 +965,7 @@ export async function verifyRunExecutedSource(runId: string, orgId: string,
     .where(and(eq(agentRuns.id, runId), eq(agentRuns.orgId, orgId)));
   if (!row || row.run.status !== "running" || !row.run.executionAttemptId ||
       row.binding.orgId !== orgId || row.binding.executionAttemptId !== row.run.executionAttemptId ||
+      attestation.executionAttemptId !== row.run.executionAttemptId ||
       row.run.a2aContextId !== attestation.contextId) {
     throw new RunStepToolPolicyRefusal("step_tool_run_source_inactive");
   }
@@ -942,15 +985,14 @@ export async function verifyRunExecutedSource(runId: string, orgId: string,
   readTrustedStepToolDeclaration(policy.source, attestation.stepId);
   const proof = parseVerifiedExecutedRunSource({ ...attestation, executionAttemptId: row.run.executionAttemptId });
   if (!proof) throw new RunStepToolPolicyRefusal("step_tool_source_proof_invalid");
-  return proof;
+  return { proof, policy };
 }
 export async function isRunExecutedSourceCurrent(runId: string, orgId: string,
   proof: VerifiedExecutedRunSource): Promise<boolean> {
   const parsed = parseVerifiedExecutedRunSource(proof);
   if (!parsed) return false;
   try {
-    const { executionAttemptId, ...attestation } = parsed;
-    const current = await verifyRunExecutedSource(runId, orgId, attestation);
-    return current.executionAttemptId === executionAttemptId;
+    const current = await verifyRunExecutedSource(runId, orgId, parsed);
+    return current.executionAttemptId === parsed.executionAttemptId;
   } catch { return false; }
 }

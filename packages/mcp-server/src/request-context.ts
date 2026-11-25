@@ -1,4 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
+import { parseVerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
 import type { OboCeilingChain } from "./obo-ceiling";
 import type { DelegatedChatAdmissionSnapshot } from "./delegated-chat-admission";
 
@@ -74,6 +76,9 @@ export type DelegatedMcpActor =
        * no step. The transport stamps it on the frame as `verifiedStepId`.
        */
       verifiedStepId?: string;
+      verifiedExecutedSource?: VerifiedExecutedRunSource;
+      /** The token's `pdc` claim (cinatra#3745): the publish decision the call was made under, only beside a proof. */
+      verifiedPublishDecisionId?: string;
     }
   | {
       delegation: "public_site_widget";
@@ -305,6 +310,26 @@ export type McpRequestContext = {
    */
   projectContext?: { projectId: string | null };
   /**
+   * The attempt of the run this frame executes (cinatra#4762): the run's
+   * reset_generation, read ONCE by the run-worker entry
+   * (`runAgentBuilderExecutionJob`) when the attempt starts executing. A
+   * produced event written inside the frame for this run records THIS value,
+   * never a later read of the run row, so output a delayed writer of an ended
+   * attempt writes after a retry's reset never belongs to the next attempt.
+   * Only the run-worker entry writes it; never from request input.
+   */
+  runAttempt?: { runId: string; resetGeneration: number };
+  /**
+   * The publishing call claim this frame runs under (cinatra#4762): the id of
+   * the released publish decision the passthrough route's call check claimed
+   * (`publishCallAllowed`) for this run before the call's tool runs. A
+   * produced-event write of this run inside the frame passes the in-flight
+   * fence of exactly that claim; a claim of any other decision still refuses
+   * it. Only the passthrough route writes it, from the claim the server took;
+   * never from request input.
+   */
+  publishCallClaim?: { runId: string; decisionId: string };
+  /**
    * The agent-run OBO scope-ceiling chain for this frame, forwarded from the
    * delegated `agent_run` actor (the signed token claim). Present only for
    * agent-run-OBO delegations; undefined for chat / session / machine callers.
@@ -367,6 +392,15 @@ export type McpRequestContext = {
    * for every call that carries no verified step.
    */
   verifiedStepId?: string;
+  verifiedExecutedSource?: VerifiedExecutedRunSource;
+  /**
+   * The publish decision this call was made under, VERIFIED (cinatra#3745): the
+   * decision id the flow runtime signed beside the executing-source proof, from
+   * the on-behalf-of token's `pdc` claim. Present only with
+   * `verifiedExecutedSource` from the same token; never from request input.
+   * It names which decision a use of a decision may take; it grants nothing.
+   */
+  verifiedPublishDecisionId?: string;
   /**
    * The LENT-ACTION GRANT this turn presented (cinatra#2932, lifecycle-b W5a).
    *
@@ -487,9 +521,10 @@ export function resolveRequestLentActionGrant(input: {
 // packageVersion / agentSpecVersion) is UNTRUSTED tagging input on every
 // channel — never an authorization input.
 //
-// Suppression and DENIAL compose: under `failClosed` a header run id that
-// suppression already dropped is STILL refused, because serving the request
-// with the id merely dropped would persist an unattributed run-scoped write.
+// Suppression and DENIAL compose: a present-invalid durable binding is
+// refused even without a header claim. It is authoritative evidence that this
+// bearer was run-bound; dropping it must not bypass the run policy. An
+// independently verified OBO run still wins over stale durable state.
 //
 // FAIL-CLOSED CUTOVER DENIAL (`failClosed`, now ACTIVE in production wiring):
 // a run id that ONLY a legacy/forgeable channel could supply is REFUSED
@@ -512,6 +547,7 @@ export type DurableRunContextResolution =
         agentSpecVersion?: string;
         /** The binding's verified step (cinatra#3745), when it carries one. */
         stepId?: string;
+        verifiedExecutedSource?: VerifiedExecutedRunSource;
       };
     }
   | { outcome: "invalid" }
@@ -538,18 +574,21 @@ export type ResolvedRequestRunContext = {
    * verified run id and never read from a header.
    */
   stepId?: string;
+  verifiedExecutedSource?: VerifiedExecutedRunSource;
+  /** The on-behalf-of token's publish decision (cinatra#3745), only beside that token's served proof. */
+  publishDecisionId?: string;
   /** Which channel supplied the run id (the cutover metric dimension). */
   servedBy: RunContextServedBy;
   /** True when a durable "invalid" outcome suppressed the legacy channels. */
   suppressed: boolean;
   /**
-   * True when `failClosed` REFUSED a run id that only a legacy/forgeable
-   * channel could supply (#1195 fail-closed posture, now ACTIVE). The run id
+   * True when a present-invalid durable binding has no independently verified
+   * run, or when `failClosed` REFUSED a legacy-only run id (#1195). The run id
    * and legacy provenance are dropped and `servedBy` collapses to "none"; a
-   * verified channel (obo / durable) is NEVER denied. False when `failClosed`
-   * is not set. Distinct from `suppressed`: suppression is the
-   * durable-"invalid" self-defense that fires regardless of the flag; denial is
-   * the deliberate refusal of the weak channel — the enforcement point treats
+   * verified channel (obo / durable) is NEVER denied. Durable-invalid refusal
+   * is unconditional; `failClosed` only controls the legacy-header cutover.
+   * Distinct from `suppressed`: suppression drops legacy claims; denial is
+   * the refusal of known-invalid or legacy-only run authority — the enforcement point treats
    * `denied` (not merely a missing run id) as the signal to reject the request
    * before any run-scoped write can persist (see the transport in index.tsx).
    * The two are NOT mutually exclusive: a suppressed legacy claim is still a
@@ -560,12 +599,43 @@ export type ResolvedRequestRunContext = {
   deniedChannel?: LegacyRunContextChannel;
 };
 
+/**
+ * Re-check an on-behalf-of token's executing-source proof (cinatra#3745)
+ * against the run store for this request. Returns undefined when the actor is
+ * not an agent-run delegation or carries no proof (nothing to check), true
+ * only when `verify` answers true for the token's run and org, and false when
+ * `verify` is not wired, answers false, throws or rejects. The transport passes
+ * the result to resolveRequestRunContext as `delegatedSourceCurrent`.
+ */
+export async function verifyDelegatedExecutedSource(
+  actor: DelegatedMcpActor | null | undefined,
+  verify?: (runId: string, orgId: string, source: VerifiedExecutedRunSource) => Promise<boolean>,
+): Promise<boolean | undefined> {
+  if (actor?.delegation !== "agent_run" || actor.verifiedExecutedSource === undefined) return undefined;
+  if (!verify) return false;
+  try {
+    return (await verify(actor.runId, actor.orgId, actor.verifiedExecutedSource)) === true;
+  } catch {
+    return false;
+  }
+}
+
 export function resolveRequestRunContext(input: {
   /** delegatedActor.runId when delegation === "agent_run"; else undefined. */
   delegatedRunId?: string;
   /** delegatedActor.verifiedStepId when delegation === "agent_run"; else
    *  undefined (cinatra#3745). Used only when the delegated run id serves. */
   delegatedStepId?: string;
+  delegatedExecutedSource?: VerifiedExecutedRunSource;
+  /** The result of verifyDelegatedExecutedSource for THIS request: true only
+   *  when the run store found delegatedExecutedSource current for the token's
+   *  run and org. Anything else (false, not checked) refuses a delegated
+   *  proof: the token's own claims are fixed at mint and cannot show that the
+   *  run is still on that attempt. */
+  delegatedSourceCurrent?: boolean;
+  /** delegatedActor.verifiedPublishDecisionId when delegation === "agent_run" (cinatra#3745). Used only when the
+   *  delegated run id serves with its proof. */
+  delegatedPublishDecisionId?: string;
   /** The ONE per-request durable resolution (undefined when not consulted —
    *  e.g. a delegated request or no bearer). */
   durable?: DurableRunContextResolution;
@@ -624,14 +694,14 @@ export function resolveRequestRunContext(input: {
     ? "header"
     : undefined;
 
-  // Fail-closed refusal applies ONLY to a legacy-only run id: a request that
-  // never claimed one (including a durable-"invalid" with no header) is still
-  // SERVED without run attribution — an availability decision, and an
-  // unattributed write is never a misattributed one.
+  // A present-invalid binding is known run-bound state, not genuine absence.
+  // Never downgrade its bearer to an ordinary runless call after authoritative
+  // verification fails. Signed OBO retains precedence; truly absent ordinary
+  // callers retain their existing behavior. The header cutover flag cannot
+  // disable this durable refusal.
   const denied =
-    input.failClosed === true &&
     verifiedRunId === undefined &&
-    legacyChannel !== undefined;
+    (suppressed || (input.failClosed === true && legacyChannel !== undefined));
   const deniedChannel = denied ? legacyChannel : undefined;
 
   // Under denial the legacy channel is dropped as a UNIT (run id + provenance),
@@ -653,6 +723,19 @@ export function resolveRequestRunContext(input: {
       ? nonEmpty(durableCtx?.stepId)
       : undefined;
 
+  const sourceCandidate = nonEmpty(input.delegatedRunId)
+    ? input.delegatedExecutedSource : nonEmpty(durableCtx?.runId) ? durableCtx?.verifiedExecutedSource : undefined;
+  const source = sourceCandidate === undefined ? undefined : parseVerifiedExecutedRunSource(sourceCandidate);
+  // Refuse any corrupt/mixed-channel proof before dispatch; never borrow another channel's proof.
+  if (sourceCandidate !== undefined && (!source || source.stepId !== stepId)) {
+    return { servedBy: "none", suppressed: true, denied: true };
+  }
+  // A delegated proof serves only when it was re-checked current on this
+  // request (a token minted under attempt A and replayed after a re-dispatch
+  // to attempt B is refused, never served with or without its proof).
+  if (source && nonEmpty(input.delegatedRunId) && input.delegatedSourceCurrent !== true) {
+    return { servedBy: "none", suppressed: true, denied: true };
+  }
   const servedBy: RunContextServedBy = input.delegatedRunId
     ? "obo"
     : durableCtx?.runId
@@ -667,6 +750,10 @@ export function resolveRequestRunContext(input: {
     packageVersion: durableCtx?.packageVersion ?? effHeaderPackageVersion,
     agentSpecVersion: durableCtx?.agentSpecVersion ?? effHeaderAgentSpecVersion,
     ...(stepId ? { stepId } : {}),
+    ...(source ? { verifiedExecutedSource: source } : {}),
+    // The publish decision rides only with the on-behalf-of proof it was signed beside (cinatra#3745).
+    ...(source && nonEmpty(input.delegatedRunId) && nonEmpty(input.delegatedPublishDecisionId)
+      ? { publishDecisionId: input.delegatedPublishDecisionId } : {}),
     servedBy,
     suppressed,
     denied,

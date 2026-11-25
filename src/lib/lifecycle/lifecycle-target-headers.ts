@@ -60,6 +60,7 @@ import {
   projectReviewTargetHeaderRevision,
   type LifecycleCardState,
   type LifecycleDataPartViewType,
+  type LifecycleTargetDisplay,
   type LifecycleTargetHeader,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { readReviewGate } from "@cinatra-ai/agents/artifact-review-gate-store";
@@ -68,8 +69,10 @@ import { buildActorContextFromPrimitive } from "@/lib/authz/build-actor-context"
 import {
   readArtifactForDetail,
   readArtifactForSettledReview,
+  type ArtifactSummary,
 } from "@/lib/artifacts/artifact-service";
 import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
+import { ARTIFACT_RENDERER_PROPS_API_VERSION } from "@/lib/artifacts/artifact-renderer-props";
 import { reviewTargetRowFacts } from "@/lib/artifacts/review-target-row-facts";
 import { decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import { readOwnerDisplayName } from "@/lib/owner-display-names";
@@ -125,12 +128,18 @@ export type ReviewTargetHeadersReading = {
   headers: LifecycleTargetHeader[] | null;
   pinnedCount: number;
   complete: boolean;
+  /** WHICH DISPLAY DRAWS the gate's ONE pinned target (cinatra#3033), decided
+   *  by the same display resolution the target's preview mounts, for the PINNED
+   *  REVISION; `null` unless the gate pins exactly one target, the reading is
+   *  complete and that revision and its resolution answer. */
+  onlyTargetDisplay: LifecycleTargetDisplay | null;
 };
 
 const NO_HEADERS: ReviewTargetHeadersReading = Object.freeze({
   headers: null,
   pinnedCount: 0,
   complete: false,
+  onlyTargetDisplay: null,
 });
 
 export async function readReviewTargetHeadersReading(
@@ -182,6 +191,7 @@ export async function readReviewTargetHeadersReading(
       ((level === "team" && memberTeams.has(id)) ||
         (level === "organization" && id === actor.organizationId));
     const headers: LifecycleTargetHeader[] = [];
+    const displays: Array<LifecycleTargetDisplay | null> = [];
     // Every header's revision is the pinned id EXACTLY, or the reading is not
     // complete (cinatra#4129): a header whose id the projection module cut,
     // substituted or refused names its target and nothing more.
@@ -254,6 +264,11 @@ export async function readReviewTargetHeadersReading(
           : null;
       const revision = projectReviewTargetHeaderRevision(target.representationRevisionId);
       if (!revision.exact) allExact = false;
+      if (pinnedCount === 1) {
+        displays.push(
+          await readPinnedRevisionDisplay(actorCtx.orgId, actor, artifact, target, state.state === "settled"),
+        );
+      }
       headers.push({
         title: clamp(artifact.title ?? artifact.artifactId, artifact.artifactId),
         typeLabel: artifact.objectType
@@ -282,15 +297,69 @@ export async function readReviewTargetHeadersReading(
     // pin this reader cannot read has no header, an empty, dot-segment,
     // ill-formed or cut revision id is not its pin's id, and a shared id
     // selects no single target.
+    const complete =
+      headers.length > 0 && reached === pinnedCount && allRead && allExact && distinctRevisions;
     return {
       headers: headers.length > 0 ? headers : null,
       pinnedCount,
-      complete:
-        headers.length > 0 && reached === pinnedCount && allRead && allExact && distinctRevisions,
+      complete,
+      onlyTargetDisplay: complete && pinnedCount === 1 && displays.length === 1 ? displays[0] : null,
     };
   } catch {
     // The reading is lost, never the card.
     return NO_HEADERS;
+  }
+}
+
+/**
+ * THE DISPLAY THAT DRAWS THE PINNED REVISION (cinatra#3033).
+ *
+ * The media type alone does not say which display draws a target: the dispatch
+ * gives an extension artifact's own detail renderer priority over the display of
+ * its media type. So this asks the question the target's preview asks, through
+ * the SAME ports of the artifact-side review binder, bound to the same
+ * organization and the same actor-scoped context:
+ *   - the pinned revision's membership read, under the same live or historical
+ *     bound the preview takes on this reading (the row's own mime is its CURRENT
+ *     revision's, and the preview draws the revision the gate pinned);
+ *   - then `resolveMount`, with the artifact, that revision's media type and the
+ *     host's props version: the exact call the preparation core makes before it
+ *     mounts the preview.
+ * `artifactDisplayFamily` then names which display that mount is, as a closed
+ * value. A revision that is not a member, and a read or a resolution that throws,
+ * name no display: no display, no reading drawn from it.
+ *
+ * DYNAMIC on purpose, the resolve route's `readReviewGateRecordedPrompt`
+ * posture: the binder module carries the display resolution, and this leaf
+ * keeps it off the static graph of every route that reaches the header. The
+ * props version is a NAMED static import, never a dynamic one: a dynamic import
+ * of the props module would hand this file every export of it, the artifact
+ * page's edit grant among them (w4-edit-capability-repo-wide.test.ts).
+ */
+async function readPinnedRevisionDisplay(
+  orgId: string,
+  actor: ReturnType<typeof buildActorContextFromPrimitive>,
+  artifact: ArtifactSummary,
+  target: { artifactId: string; representationRevisionId: string },
+  settled: boolean,
+): Promise<LifecycleTargetDisplay | null> {
+  try {
+    const { bindArtifactReviewPorts } = await import("@/app/artifacts/[id]/review-target-prepare");
+    const { artifactDisplayFamily } = await import("@/app/artifacts/[id]/renderer-resolution");
+    const ports = bindArtifactReviewPorts({ orgId, actor });
+    const member =
+      settled && typeof ports.revisionMemberHistorical === "function"
+        ? await ports.revisionMemberHistorical(target.artifactId, target.representationRevisionId)
+        : await ports.revisionMember(target.artifactId, target.representationRevisionId);
+    if (typeof member?.mime !== "string") return null;
+    const mount = await ports.resolveMount({
+      artifact,
+      mime: member.mime,
+      propsApiVersion: ARTIFACT_RENDERER_PROPS_API_VERSION,
+    });
+    return artifactDisplayFamily(orgId, mount, member.mime);
+  } catch {
+    return null;
   }
 }
 

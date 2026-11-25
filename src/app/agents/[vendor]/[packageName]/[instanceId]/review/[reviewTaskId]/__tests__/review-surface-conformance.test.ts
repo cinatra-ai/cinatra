@@ -47,6 +47,15 @@ const RUN_GATE_NOTIFICATION = readRepo("src/lib/agent-run-wait-notifications.ts"
 // THE WINDOW IS PART OF THE GATE NOW (cinatra#3141 item 1) — the drawing draws
 // it inside the gate's frame, so it is drawn by the one card every surface
 // mounts rather than by this route. The anchor and its action travelled with it.
+// THE WINDOW'S OWN MODULE SINCE cinatra#3487. The ruling of 2026-09-14 takes
+// the window out of the card and gives it to the run page's chrome: "one window
+// owned by the page … never part of that screen's component or markup". THE
+// ANCHOR DOES NOT MOVE WITH IT: the drawing declares this surface as
+// `review-prompt-window` and the staged manifest carries that id, so the window
+// keeps it and only its render site changes — the panel the chrome mounts, with
+// the card that used to carry it read for the road instead.
+const RUN_WINDOW_PANEL = readRepo("packages/agents/src/hitl-conversation-panel.tsx");
+const runWindowChrome = () => readRepo("packages/agents/src/run-page-chrome.tsx");
 const REVIEW_PROMPT_WINDOW = readRepo("packages/agents/src/review-gate-card.tsx");
 
 // cinatra#2566 (epic #2564 S2) — the decision bar, the gate states, and the
@@ -110,6 +119,9 @@ const SPEC_IDS = Object.keys(SPEC_CONFORMANCE);
  * "standard not-authorized panel" (§V). Allowed in render→spec, documented. */
 const HOST_STANDARD_IDS = new Set([
   "review-not-authorized",
+  // cinatra#3080 — the floor's stated refusal of Regenerate on a legacy gate that
+  // pins more than one target, drawn under the floor's row by the one bar.
+  "review-regenerate-refused",
   // cinatra#2566 (epic #2564 S2) — anchors fixed by the LATER ratified spec
   // `specs/app-lifecycle-cards.html` @ design@6c20871b4108176c1d0193f19ecd2947f6c6355f,
   // not by design@5e5c53aff. They are the card the review is now drawn as (§II)
@@ -129,10 +141,11 @@ const HOST_STANDARD_IDS = new Set([
   // painted at all — the loading skeleton and the preview-recovery panel — and
   // an anchor is what makes "exactly one header per pinned target" checkable.
   "review-target-header",
-  // cinatra#3141 item 1 — §VI's conversational prompt window. Not a new anchor:
-  // it is the SAME `review-prompt-window` the run-embedded closed set below
-  // already carries, and it appears in this list only because the window moved
-  // out of this route and into the card, which this scan reads as chrome.
+  // cinatra#3141 item 1, MOVED AGAIN BY cinatra#3487 — §VI's conversational
+  // prompt window. It moved once more, out of the card and into the run page's
+  // own chrome. The id is the drawing's own and is unchanged by the move; what
+  // cinatra#3487 adds is where it may be read — the anchor is a descendant of
+  // the page chrome and never of `[data-lifecycle-card-host]`.
   "review-prompt-window",
   // cinatra#2572 (epic #2564 S6c), REDRAWN by cinatra#2852 — the SUGGESTIONS,
   // fixed by the newer spec's §VIII ("Marks, not a decision") at
@@ -444,21 +457,21 @@ describe("§V — a display says nothing about itself; only the floor speaks", (
 });
 
 describe("§IV — the decision: three affordances, one bar, atomic, re-validated", () => {
-  it("offers exactly Approve / Reject / Comment with the spec action outcomes; no 'request changes'", () => {
-    expect(DECISION_BAR).toMatch(/data-action="approve-review -> resolved"/);
-    expect(DECISION_BAR).toMatch(/data-action="reject-review -> resolved"/);
+  it("offers exactly Comment / Regenerate / Continue with the spec action outcomes; no 'request changes'", () => {
+    expect(DECISION_BAR).toMatch(/data-action="continue-review -> resolved"/);
+    expect(DECISION_BAR).toMatch(/data-action="regenerate-review -> successor-gate-opened"/);
     expect(DECISION_BAR).toMatch(/data-action="comment-review -> annotated"/);
+    expect(DECISION_BAR).not.toMatch(/data-action="(?:approve|reject)-review/);
     expect(stripComments(DECISION_BAR)).not.toMatch(/request changes|request-changes/i);
   });
 
-  it("Reject is destructive + structurally distinct from Approve (primary) — never a quiet approve (§IV/§VI)", () => {
-    expect(DECISION_BAR).toMatch(/variant="destructive"[\s\S]*?data-action="reject-review/);
-    expect(DECISION_BAR).toMatch(/variant="default"[\s\S]*?data-action="approve-review/);
+  it("Regenerate is outlined + structurally distinct from Continue (primary) — never a quiet continue (§IV/§VI)", () => {
+    expect(DECISION_BAR).toMatch(/variant="outline"[\s\S]*?data-action="regenerate-review/);
+    expect(DECISION_BAR).toMatch(/variant="default"[\s\S]*?data-action="continue-review/);
   });
 
-  it("carries the one optional rationale field (expected on reject) that travels to the audit trail", () => {
-    expect(DECISION_BAR).toMatch(/Decision rationale/);
-    expect(DECISION_BAR).toMatch(/optional on approve, expected on reject/);
+  it("carries the one Note field (optional on Continue, the words a Regenerate works from) that travels to the audit trail", () => {
+    expect(DECISION_BAR).toMatch(/\(optional on Continue · the words a Regenerate works from\)/);
     expect(DECISION_BAR).toMatch(/Textarea/);
   });
 
@@ -531,15 +544,15 @@ describe("§IV — LIFECYCLE prompt-window wiring (owner ruling 2026-07-25, cina
 
   it("adds NO fourth decision affordance — the three-button conformance lock is unchanged", () => {
     // Still exactly the three data-action affordances; no 'request changes' button.
-    expect(DECISION_BAR).toMatch(/data-action="approve-review -> resolved"/);
-    expect(DECISION_BAR).toMatch(/data-action="reject-review -> resolved"/);
+    expect(DECISION_BAR).toMatch(/data-action="continue-review -> resolved"/);
+    expect(DECISION_BAR).toMatch(/data-action="regenerate-review -> successor-gate-opened"/);
     expect(DECISION_BAR).toMatch(/data-action="comment-review -> annotated"/);
     expect(stripComments(DECISION_BAR)).not.toMatch(/request changes|request-changes/i);
-    // The disposition set the bar offers stays approve/reject/comment (no
-    // changes_requested affordance on the surface — it rides the Comment path).
+    // The disposition set a new decision may carry is approve (Continue) and
+    // comment (no changes_requested disposition — Regenerate rides the change road).
     // The SETTLED-OUTCOME vocabulary may name the recorded outcome; only that
     // type union and its copy switch may carry the literal.
-    expect(MODEL).toMatch(/REVIEW_DISPOSITIONS[\s\S]*?"approve",\s*"reject",\s*"comment",?\s*\]/);
+    expect(MODEL).toMatch(/REVIEW_DISPOSITIONS[\s\S]*?\["approve",\s*"comment"\]/);
     const literalLines = stripComments(MODEL)
       .split("\n")
       .filter((l) => l.includes('"changes_requested"'));
@@ -548,16 +561,21 @@ describe("§IV — LIFECYCLE prompt-window wiring (owner ruling 2026-07-25, cina
     }
   });
 
-  it("the action routes the Comment path to changes_requested ONLY when fenced + a single-target lifecycle gate", () => {
+  it("the action routes Regenerate and the conversation's comment to changes_requested, each only when fenced + a single-target gate; the Note-field Comment never", () => {
     // The fence gate + the lifecycle-gate class check + single-target guard.
     expect(ACTIONS).toMatch(/isLifecycleReviewOrchestrationActive\(\)/);
     expect(ACTIONS).toMatch(/isAutoReviewTaskId\(reviewTaskId\)/);
-    expect(ACTIONS).toMatch(/!isBatchAutoReviewTaskId\(reviewTaskId\)/);
-    expect(ACTIONS).toMatch(/pinnedTargets\.length === 1/);
-    // Only the Comment disposition with non-empty feedback takes the path.
-    expect(ACTIONS).toMatch(/disposition === "comment"/);
+    expect(ACTIONS).toMatch(/isBatchAutoReviewTaskId\(reviewTaskId\)/);
+    expect(ACTIONS).toMatch(/pinnedTargets\.length !== 1/);
+    // The Regenerate floor action takes the path on the regenerate road.
+    expect(ACTIONS).toMatch(/action === "regenerate"/);
     expect(ACTIONS).toMatch(/submitReviewSurfaceChangesRequested/);
     expect(ACTIONS).toMatch(/mapChangesRequestedToOutcome/);
+    // The conversation's comment (its own submission) takes it on the typed road,
+    // and the card's composer is what posts that submission.
+    expect(ACTIONS).toMatch(/resolved\.conversation/);
+    expect(ACTIONS).toMatch(/origin: "typed"/);
+    expect(stripComments(REVIEW_GATE_CARD)).toMatch(/disposition: "conversation-comment"/);
   });
 
   it("the changes_requested outcome renders as a status notice (data-review-outcome), NOT a new conformance anchor", () => {
@@ -579,7 +597,8 @@ describe("§IV — LIFECYCLE prompt-window wiring (owner ruling 2026-07-25, cina
 
 describe("§I–III — run-embedded anchors: the revised spec's closed set is rendered bidirectionally", () => {
   // The run-embedded surface (design@5e5c53aff) added five anchors beyond
-  // the review-route chrome. This block asserts the CLOSED set of run-embedded
+  // the review-route chrome, and the run page's window drawing adds a sixth,
+  // `run-window` (cinatra#3487 item 3). This block asserts the CLOSED set of run-embedded
   // anchors bidirectionally: every spec anchor has a render site, and each render
   // site carries only spec anchors. `run-gate-notification` has NO DOM home (it is
   // a notification) — it is asserted BEHAVIORALLY against its builder.
@@ -587,8 +606,17 @@ describe("§I–III — run-embedded anchors: the revised spec's closed set is r
     "run-surface": RUN_SURFACE,
     "run-step-rail": RUN_STEP_RAIL,
     "run-chip-row": RUN_CHIP_ROW,
-    "review-prompt-window": REVIEW_PROMPT_WINDOW,
+    "review-prompt-window": RUN_WINDOW_PANEL,
+    // cinatra#3487 item 3 — the run page's own window, anchored as the drawing
+    // anchors it (`app-artifact-review.html` §I.6), inside the page chrome. The
+    // live window draws it in the panel; the spent schedule's disabled window
+    // draws it in the chrome.
+    "run-window": RUN_WINDOW_PANEL,
   };
+
+  it('spec→render: the spent schedule\'s disabled window carries the "run-window" anchor in the chrome (spec §I.6)', () => {
+    expect(runWindowChrome().includes('data-conformance-id="run-window"')).toBe(true);
+  });
 
   for (const [id, src] of Object.entries(RUN_EMBEDDED_DOM_ANCHORS)) {
     it(`spec→render: the "${id}" anchor is rendered at its run-embedded site`, () => {
@@ -604,8 +632,16 @@ describe("§I–III — run-embedded anchors: the revised spec's closed set is r
     expect(RUN_CHIP_ROW).toMatch(/data-action="confirm-skill -> confirmed"/);
   });
 
-  it('spec→render: the prompt window carries "request-changes -> changes-requested" — the typed request IS how changes are requested (spec §VI)', () => {
-    expect(REVIEW_PROMPT_WINDOW).toMatch(/data-action="request-changes -> changes-requested"/);
+  it('spec→render: the typed request IS how changes are requested (spec §VI) — and it is the card\'s own comment road', () => {
+    // AMENDED BY cinatra#3487: the window is no longer the card's markup, so the
+    // action cannot ride an attribute on it. What the annotation stated is
+    // asserted where it actually lives — the screen lends the page exactly the
+    // comment road the drawing designates, and nothing else.
+    // The authenticated current contract sends the one runtime turn. Only its
+    // acted receipt refreshes the gate; the retired direct submitAction is gone.
+    expect(REVIEW_PROMPT_WINDOW).toMatch(/const effect = await runWindow\.send\(prompt\)/);
+    expect(REVIEW_PROMPT_WINDOW).toMatch(/if \(effect\.acted\) \{[\s\S]*?if \(onGateMoved\) onGateMoved\(\)/);
+    expect(REVIEW_PROMPT_WINDOW).toMatch(/useRunWindowScreen\(\{[\s\S]*?surface: "review"/);
     // And it adds NO fourth decision affordance — the request rides the Comment path.
     expect(stripComments(REVIEW_PROMPT_WINDOW)).not.toMatch(/request changes<|>Request changes/i);
   });
@@ -621,12 +657,28 @@ describe("§I–III — run-embedded anchors: the revised spec's closed set is r
 
   it("render→spec: every run-embedded render site carries ONLY anchors in the revised spec's closed set (no invented affordance)", () => {
     // The full closed set the spec annotates at design@5e5c53aff (review-route
-    // anchors + the five run-embedded anchors + the documented host-standard panel).
-    const RUN_EMBEDDED_IDS = ["run-surface", "run-step-rail", "run-chip-row", "run-gate-notification", "review-prompt-window"];
+    // anchors + the six run-embedded anchors + the documented host-standard panel).
+    // The window keeps the drawing's own id through cinatra#3487 — the window
+    // moved out of the card and into the run page's chrome, its anchor did not.
+    const RUN_EMBEDDED_IDS = ["run-surface", "run-step-rail", "run-chip-row", "run-gate-notification", "review-prompt-window", "run-window"];
     const closed = new Set<string>([...SPEC_IDS, ...RUN_EMBEDDED_IDS, ...HOST_STANDARD_IDS]);
-    for (const src of [RUN_SURFACE, RUN_STEP_RAIL, RUN_CHIP_ROW, REVIEW_PROMPT_WINDOW]) {
+    // THE SCHEDULE STEP'S OWN WINDOW ANCHORS. The chrome also draws the schedule
+    // screen's closed window once its run is over (cinatra#2972, #2934; plan (A)
+    // §7.2): `schedule-prompt-window` and `schedule-window-over` are the anchors
+    // main draws in schedule-prompt-window.tsx, MOVED with that window into the
+    // chrome by cinatra#3487 and never invented, so they are allowed for the
+    // chrome alone.
+    const SCHEDULE_WINDOW_IDS = ["schedule-prompt-window", "schedule-window-over"];
+    const SITES: Array<[string, Set<string>]> = [
+      [RUN_SURFACE, closed],
+      [RUN_STEP_RAIL, closed],
+      [RUN_CHIP_ROW, closed],
+      [RUN_WINDOW_PANEL, closed],
+      [runWindowChrome(), new Set<string>([...closed, ...SCHEDULE_WINDOW_IDS])],
+    ];
+    for (const [src, allowed] of SITES) {
       for (const foundId of conformanceIdsIn(src)) {
-        expect(closed.has(foundId)).toBe(true);
+        expect(allowed.has(foundId)).toBe(true);
       }
     }
   });
@@ -658,9 +710,9 @@ describe("§I–III — run-embedded anchors: the revised spec's closed set is r
     expect(RUN_SURFACE).toMatch(/railDraws \?\s*\(?\s*<RunStepRailPanel/);
   });
 
-  it("the decision floor stays LOCKED at Approve/Reject/Comment — the run-embedded anchors add no fourth affordance", () => {
-    expect(DECISION_BAR).toMatch(/data-action="approve-review -> resolved"/);
-    expect(DECISION_BAR).toMatch(/data-action="reject-review -> resolved"/);
+  it("the decision floor stays LOCKED at Comment/Regenerate/Continue — the run-embedded anchors add no fourth affordance", () => {
+    expect(DECISION_BAR).toMatch(/data-action="continue-review -> resolved"/);
+    expect(DECISION_BAR).toMatch(/data-action="regenerate-review -> successor-gate-opened"/);
     expect(DECISION_BAR).toMatch(/data-action="comment-review -> annotated"/);
     expect(stripComments(DECISION_BAR)).not.toMatch(/request changes|request-changes/i);
   });

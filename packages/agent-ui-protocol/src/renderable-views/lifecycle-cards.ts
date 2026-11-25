@@ -42,8 +42,8 @@ import {
 // ---------------------------------------------------------------------------
 
 /**
- * Every lifecycle interaction that becomes a card. Closed set of FIVE. Adding a
- * sixth interaction means adding a kind HERE first — that is what keeps "one
+ * Every lifecycle interaction that becomes a card. Closed set of SIX. Adding a
+ * seventh interaction means adding a kind HERE first — that is what keeps "one
  * card per interaction" enforceable instead of aspirational.
  *
  * `agent_hitl_screen` is the fifth (cinatra#2928, lifecycle-b W2a). It is the
@@ -54,6 +54,10 @@ import {
  * is not drawn by this slice: W2a registers the kind as data, and W3
  * (cinatra#2930) mounts it — which is why its host cells are OWED in the
  * parity ratchet rather than recorded.
+ *
+ * `publish_decision` is the sixth (cinatra#4150): one confirmation, owned by the application, in front of a step an
+ * agent declares as publishing. It lands with its card mounted on all four hosts, so none of its cells is owed. No
+ * moment states it yet (the publish moment is a later part), so until then no run carries it and no host draws it.
  */
 export const LIFECYCLE_CARD_KINDS = [
   "artifact_review_gate",
@@ -61,6 +65,7 @@ export const LIFECYCLE_CARD_KINDS = [
   "recommendation_hold",
   "trigger_schedule_proposal",
   "agent_hitl_screen",
+  "publish_decision",
 ] as const;
 
 export type LifecycleCardKind = (typeof LIFECYCLE_CARD_KINDS)[number];
@@ -230,6 +235,12 @@ export function scheduleScreenSelection(input: {
  *     genuinely BLOCKED on the answer; its durable anchor in the turn is the
  *     `agent_run` part of the dispatch it belongs to, which is what the card is
  *     mounted at and re-read from after a reload.
+ *   - `read` — the card rides NO wire part at all, neither a `DATA_PART` nor a
+ *     typed `INTERRUPT`: nothing is emitted for it. Every host finds it by its
+ *     own authorized read of the run's record, keyed by the run identity of the
+ *     `agent_run` part of the dispatch it belongs to, and re-reads it there
+ *     after a reload. `publish_decision` (cinatra#4150) is the one kind: its
+ *     gate parks the run on its decision record and states no moment.
  *
  * THE TWO ARE INDEPENDENT, and `recommendation_hold` is why: the run is blocked
  * on it, so its representation is an interrupt — and its truth has always been
@@ -256,13 +267,18 @@ export const LIFECYCLE_CARD_CARRIAGE = {
   // data-part view type and therefore no resolve envelope. Its truth is the
   // run's own stated moment.
   agent_hitl_screen: { canonical: "run_state", represent: "interrupt" },
+  // `publish_decision` (cinatra#4150) is carried by a READ, not an interrupt: the run is stopped in front of its
+  // publishing step until a person answers and its truth is the run's own decision record, but the publish gate
+  // emits no typed interrupt and states no lifecycle moment. Every host finds the card by reading that record for
+  // the run its transcript already names, so no interrupt is advertised that nothing emits.
+  publish_decision: { canonical: "run_state", represent: "read" },
 } as const satisfies Record<LifecycleCardKind, LifecycleCardCarriageRow>;
 
 /** Which fact decides a card is live. */
 export type LifecycleCanonicalCarriage = "run_state" | "data_part";
 
 /** How a card reaches a transcript on the one wire. */
-export type LifecycleRepresentCarriage = "data_part" | "interrupt";
+export type LifecycleRepresentCarriage = "data_part" | "interrupt" | "read";
 
 export type LifecycleCardCarriageRow = {
   canonical: LifecycleCanonicalCarriage;
@@ -1999,7 +2015,23 @@ export type LifecycleResolveAnswerFor<K extends LifecycleDataPartViewType> =
     targetHeadersComplete?: boolean;
     /** §VI producer prefill; envelope-only, absent on older readers/answers. */
     recordedPrompt?: string | null;
+    /** WHICH DISPLAY DRAWS the ONE target a pending or restricted gate pins
+     * (cinatra#3033), decided on the server by the same display resolution the
+     * target's preview mounts. See {@link LifecycleTargetDisplay}. Absent for a
+     * gate that pins several targets, for one whose pinned revision the reader
+     * cannot read, and on older answers. Envelope-only, like `recordedPrompt`. */
+    targetDisplay?: LifecycleTargetDisplay | null;
   };
+
+/**
+ * THE DISPLAY THAT DRAWS A REVIEW TARGET, as a closed value that names no
+ * package (cinatra#3033): `markdown` — the host's markdown display draws it;
+ * `image` — the host's image display draws it; `other` — anything else, a
+ * pack's own renderer or a floor among them. The resolve answer carries it so
+ * the card can name its drawn reading without reading a media type.
+ */
+export const LIFECYCLE_TARGET_DISPLAYS = ["markdown", "image", "other"] as const;
+export type LifecycleTargetDisplay = (typeof LIFECYCLE_TARGET_DISPLAYS)[number];
 
 /**
  * WHAT A KIND CARRIES BESIDE ITS BODY, AND WHY THERE IS SUCH A PLACE AT ALL
@@ -2166,6 +2198,13 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
     if (recordedPrompt !== undefined && recordedPrompt !== null && typeof recordedPrompt !== "string") return null;
     if (recordedPrompt !== undefined && recordedPrompt !== null &&
         (expectedKind !== "artifact_review_gate" || (state.data.state !== "pending" && state.data.state !== "restricted"))) return null;
+    // The target's display follows the same rule: one value of the closed set,
+    // on a pending or restricted review gate only.
+    const targetDisplay = record.targetDisplay;
+    if (targetDisplay !== undefined && targetDisplay !== null &&
+        !(LIFECYCLE_TARGET_DISPLAYS as readonly unknown[]).includes(targetDisplay)) return null;
+    if (targetDisplay !== undefined && targetDisplay !== null &&
+        (expectedKind !== "artifact_review_gate" || (state.data.state !== "pending" && state.data.state !== "restricted"))) return null;
     // A HEADER BELONGS TO ONE KIND, and it is refused on every other exactly as
     // a wrong body is. Only the review gate has a review target, so a header
     // arriving beside a verification summary or a schedule proposal is an answer
@@ -2223,6 +2262,7 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
         targetHeaders,
         ...(targetHeadersComplete === undefined ? {} : { targetHeadersComplete }),
         ...(recordedPrompt === undefined ? {} : { recordedPrompt }),
+        ...(targetDisplay === undefined ? {} : { targetDisplay: targetDisplay as LifecycleTargetDisplay | null }),
         aside,
       } as LifecycleResolveAnswerFor<K>;
     }
@@ -2239,6 +2279,7 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
       targetHeaders,
       ...(targetHeadersComplete === undefined ? {} : { targetHeadersComplete }),
       ...(recordedPrompt === undefined ? {} : { recordedPrompt }),
+      ...(targetDisplay === undefined ? {} : { targetDisplay: targetDisplay as LifecycleTargetDisplay | null }),
       aside,
     } as LifecycleResolveAnswerFor<K>;
   } catch {

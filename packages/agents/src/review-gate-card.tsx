@@ -134,6 +134,7 @@
 // is the CAS, never the route the decision came in on.
 // ---------------------------------------------------------------------------
 
+import { renderRunWindowMarkdown } from "./run-window-markdown";
 import {
   createContext,
   useCallback,
@@ -173,18 +174,22 @@ import {
   type LifecycleCardHost,
   type LifecycleCardState,
   type LifecycleSuggestion,
+  type LifecycleTargetDisplay,
   type LifecycleTargetHeader,
   type ReviewTargetIslandAddresses,
   type ReviewTargetKey,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { Button } from "@/components/ui/button";
-import type {
-  ReviewDisposition,
-  SuggestionDecisionPartition,
-} from "@/lib/artifacts/artifact-review-decision";
-import { reviewGateHeaderTitle, reviewSettledOutcomeFromDisposition } from "@/lib/artifacts/review-surface-model";
+import type { SuggestionDecisionPartition } from "@/lib/artifacts/artifact-review-decision";
+import {
+  REGENERATE_MULTI_TARGET_REASON,
+  reviewGateHeaderTitle,
+  reviewSettledOutcomeFromDisposition,
+} from "@/lib/artifacts/review-surface-model";
 import type {
   ReviewDecisionPermissions,
+  ReviewFloorAction,
+  ReviewFloorSubmission,
   ReviewSettledOutcome,
   ReviewSubmitOutcome,
 } from "@/lib/artifacts/review-surface-model";
@@ -214,8 +219,9 @@ import {
   ReviewGateLoading,
   ReviewGateSettled,
 } from "./review-gate-states";
-import { HitlConversationPanel } from "./hitl-conversation-panel";
-import { renderRunWindowMarkdown } from "./run-window-markdown";
+import {
+  useRunWindowScreen,
+} from "./run-window-screen-context";
 import { useRunWindowConversation } from "./use-run-window-conversation";
 
 // Re-exported so a HOST that mounts the card does not have to reach into the
@@ -317,6 +323,11 @@ const HOST_FRAME: Record<LifecycleCardHost, string> = {
  * not yet reported gets, and it is the ONLY number this side chooses.
  */
 const ISLAND_MIN_HEIGHT = 380;
+
+/** The box of a panel whose island settled EMPTY on a host that draws that
+ *  reading (`onSettledEmpty`): the frame of the panel, with nothing in it
+ *  (design `specs/app-lifecycle-cards.html` XV.1, `publish-row-items-empty`). */
+const ISLAND_EMPTY_HEIGHT = 36;
 
 /**
  * THE FRAME ENDS WHERE THE LAST BODY ENDS (the twelfth proof round's counted
@@ -520,7 +531,7 @@ function islandCredentialsOf(
 // this fixes.
 // ---------------------------------------------------------------------------
 
-type IslandLoadState = "loading" | "loaded" | "timed-out";
+type IslandLoadState = "loading" | "loaded" | "timed-out" | "empty";
 
 /**
  * Bounded wait for the iframe's `load` event before treating a hang as a
@@ -1043,8 +1054,9 @@ export function ReviewGateCard({
   // identity is stable across re-resolves.
   const refBoundSubmit = useMemo<SubmitReviewDecisionAction>(() => {
     return async (input: {
-      disposition: ReviewDisposition;
+      disposition: ReviewFloorSubmission;
       comment: string | null;
+      regeneratePrompt?: string | null;
       suggestionDecisions?: SuggestionDecisionPartition | null;
     }): Promise<ReviewSubmitOutcome> => {
       try {
@@ -1067,8 +1079,14 @@ export function ReviewGateCard({
           credentials: credential.credentials,
           body: JSON.stringify({
             ref: view.ref,
+            // The floor word as pressed (cinatra#3080) — the decide route
+            // resolves it, `approve` included as Continue's alias.
             disposition: input.disposition,
             comment: input.comment,
+            // The recorded prompt again, when a Regenerate carried one
+            // (cinatra#3080 item 5). Omitted entirely otherwise, so every other
+            // press posts the body it posted before the field existed.
+            ...(input.regeneratePrompt ? { regeneratePrompt: input.regeneratePrompt } : {}),
             // Omitted entirely when there is no partition, so a gate with no
             // chips posts the body it posted before this slice — and lands the
             // identity-version-1 fingerprint S6b pinned.
@@ -1146,12 +1164,15 @@ export function ReviewGateCard({
   // #2566's COMPOSER COMMENT — the card's own comment path, published to the
   // composer rather than re-implemented by it.
   //
-  // It is `submitAndRefresh` with `disposition: "comment"`: the same closure the
-  // decision bar's Comment button calls, so it carries this host's credential,
-  // lands in the same decision module with the same validation order, and
-  // re-resolves the card afterwards. A comment resolving as `changes_requested`
-  // therefore settles the card in the transcript exactly as pressing Comment
-  // does — there is no second transport that could drift from the first.
+  // It is `submitAndRefresh`, the same closure the decision bar calls, so it
+  // carries this host's credential, lands in the same decision module with the
+  // same validation order, and re-resolves the card afterwards — there is no
+  // second transport that could drift from the first. It posts the
+  // conversation's OWN submission, `conversation-comment`, for this reason:
+  // the floor's Note-field Comment only annotates, while the words a person
+  // types to the review in its conversation keep the change road they had
+  // before the floor (cinatra#2063, #4339). A conversation comment resolving
+  // as `changes_requested` settles the card in the transcript, as before.
   //
   // NO SUGGESTION PARTITION, for the reason the bar states in full: a comment
   // does not resolve the gate, so it cannot carry terminal per-item choices. The
@@ -1165,7 +1186,7 @@ export function ReviewGateCard({
         return { ok: false, message: "A review comment needs some text." };
       }
       return composerCommentResult(
-        await submitAndRefresh({ disposition: "comment", comment: trimmed }),
+        await submitAndRefresh({ disposition: "conversation-comment", comment: trimmed }),
       );
     },
     // Keep the composer submit bound to the current transport AND authorized
@@ -1242,13 +1263,13 @@ export function ReviewGateCard({
     dismissed = {};
     setMarkState({ ref: view.ref, identity: surfacedIdentity, dismissed, cleared: marksCleared });
   }
-  // The partition THIS surface would submit, per disposition (§VIII, cinatra#2852).
-  const suggestionDecisionsFor = (disposition: ReviewDisposition) =>
-    disposition === "reject"
-      ? rejectPartition(surfaced)
-      : disposition === "approve"
-        ? buildPartition(surfaced, dismissed)
-        : null;
+  // The partition THIS surface would submit, per floor action (§VIII,
+  // cinatra#2852, cinatra#3080). The marks ride the ONE decision that still
+  // decides the items under the gate — Continue. Regenerate settles the gate as
+  // superseded and Comment settles nothing, so neither carries them; the retired
+  // reject's "every surfaced suggestion not taken" partition went with it.
+  const suggestionDecisionsFor = (action: ReviewFloorAction) =>
+    action === "continue" ? buildPartition(surfaced, dismissed) : null;
 
   const frame = HOST_FRAME[host];
   // The server-minted island URL, when this answer carried one (cinatra#2754).
@@ -1400,7 +1421,23 @@ export function ReviewGateCard({
   // The SECOND absence: the reader may not read the target (or there is nothing
   // to read). No panel, no placeholder, no reason — the turn carries only prose.
   if (body === null) return null;
+  const reading = reviewStateAnchor({
+    host,
+    insideConversation,
+    state: state.state,
+    targetCount: targetHeaders?.length ?? 0,
+    targetDisplay: resolved?.targetDisplay ?? null,
+    recordedPrompt: resolved?.recordedPrompt ?? null,
+  });
 
+  // THE READING'S ANCHOR HOLDS THE WHOLE READING (cinatra#3033). The drawing
+  // puts each reading's id on the element that holds the gate header, the
+  // target and the decision floor together, so the grader reads them beneath
+  // it. The root already carries `review-gate-card`, so the reading rides one
+  // inner element that is ALWAYS drawn, in the same place, on every reading:
+  // a gate that settles changes one attribute and remounts nothing, the island
+  // included. It draws no box of its own (`contents`): the card's column lays
+  // out exactly the children it laid out before.
   return (
     <div
       className={frame}
@@ -1409,9 +1446,67 @@ export function ReviewGateCard({
       data-lifecycle-card-host={host}
       data-conformance-id="review-gate-card"
     >
-      <IslandFramingContext.Provider value={islandFraming}>{body}</IslandFramingContext.Provider>
+      <div className="contents" data-conformance-id={reading ?? undefined}>
+        <IslandFramingContext.Provider value={islandFraming}>{body}</IslandFramingContext.Provider>
+      </div>
     </div>
   );
+}
+
+/** The design anchors of the two review readings (cinatra#3033). */
+export type ReviewStateAnchorId =
+  | "run-review-step-post"
+  | "run-review-step-picture"
+  | "review-card-post-with-featured-image";
+
+/**
+ * WHICH DRAWN READING THIS CARD IS (cinatra#3033), for the design grader.
+ *
+ * `app-artifact-review.html` §I.3 draws the run page's review step twice: on
+ * the post, "drawn by the markdown display", and on the featured image, "the
+ * picture drawn by the image display". `app-lifecycle-cards.html` §II.1 draws
+ * the featured image's card in the chat thread. What tells the two apart is
+ * the DISPLAY THAT DRAWS THE TARGET: one artifact per gate, drawn by the display
+ * the dispatch selects for it. The card reads that display from the resolve
+ * answer (`targetDisplay`), which the server decides with the same display
+ * resolution the target's preview mounts. It never reads a media type or an
+ * artifact type id: the media type alone does not decide the display (an
+ * extension artifact's own detail renderer comes first), and core names no
+ * type. On the picture the note field also opens carrying the prompt that made
+ * it, so the picture needs that prompt as well; on the post it is empty.
+ *
+ * FAIL CLOSED. A gate that pins several targets, an answer that names no
+ * display, any display other than the host's markdown or image display (a
+ * pack's own renderer, a floor), a picture with no recorded prompt and a post
+ * that carries one all claim NO reading: an absent anchor is honest, a wrong
+ * one is not. While the answer is loading, and on a settled or absent gate,
+ * nothing is claimed either: the answer carries the display and the prompt only
+ * for a `pending` or `restricted` gate.
+ *
+ * THE PLACE, NOT THE NEAREST PROP. The chat reading is any card drawn inside a
+ * conversation (the inline run panel included, as for the prompt window). The
+ * run page reading is a `run_card` outside one. The review page and the site
+ * widget draw neither.
+ */
+export function reviewStateAnchor(input: {
+  host: LifecycleCardHost | null;
+  insideConversation: boolean;
+  state: LifecycleCardState["state"];
+  /** How many target headers the answer carried. */
+  targetCount: number;
+  /** The display that draws the one target, as the answer names it. */
+  targetDisplay: LifecycleTargetDisplay | null;
+  recordedPrompt: string | null;
+}): ReviewStateAnchorId | null {
+  if (input.state !== "pending" && input.state !== "restricted") return null;
+  if (input.targetCount !== 1 || input.targetDisplay === null) return null;
+  const prompted = input.recordedPrompt !== null && input.recordedPrompt.trim() !== "";
+  const picture = input.targetDisplay === "image" && prompted;
+  const post = input.targetDisplay === "markdown" && !prompted;
+  if (input.insideConversation) return picture ? "review-card-post-with-featured-image" : null;
+  if (input.host !== "run_card") return null;
+  if (picture) return "run-review-step-picture";
+  return post ? "run-review-step-post" : null;
 }
 
 /**
@@ -1450,7 +1545,7 @@ function renderState(args: {
   dismissed: Readonly<Record<string, true>>;
   marksCleared: boolean;
   onToggleMark: (id: string) => void;
-  suggestionDecisionsFor: (disposition: ReviewDisposition) => SuggestionDecisionPartition | null;
+  suggestionDecisionsFor: (action: ReviewFloorAction) => SuggestionDecisionPartition | null;
   focusBinding: ComposerFocusBinding;
 }): ReactElement | null {
   const {
@@ -1651,6 +1746,11 @@ function renderState(args: {
             permissions={permissions}
             submitAction={submit}
             recordedPrompt={recordedPrompt}
+            // ITEM 4 — A LEGACY GATE THAT STILL PINS MORE THAN ONE TARGET
+            // REFUSES REGENERATE, and says so before it is pressed. The sentence
+            // is the surface model's, the same one the decision operation
+            // refuses with.
+            regenerateRefusal={(targetHeaders?.length ?? 0) > 1 ? REGENERATE_MULTI_TARGET_REASON : null}
             suggestionDecisionsFor={suggestionDecisionsFor}
             suggestionSummary={
               state.canDecide && suggestions.length > 0
@@ -1856,30 +1956,6 @@ function buildPartition(
     else accepted.push(s.id);
   }
   return { accepted, dismissed: notTaken };
-}
-
-/**
- * The partition a REJECT carries: every surfaced suggestion recorded as NOT
- * TAKEN (§VIII, cinatra#2852).
- *
- * The shipped guard refused an immediate Reject while anything was accepted, and
- * with the old unmarked default that was survivable — nothing was accepted until
- * a reviewer pressed. Accepted-by-default makes the same guard refuse the very
- * first press of Reject, on a row the reviewer never touched, which is a control
- * that fails on press.
- *
- * So the rework is here, at the surface that knows what a reject MEANS for these
- * items: a reject tombstones every reviewed revision, so nothing can be applied
- * into them, and the truthful record of that is a dismissal for each surfaced
- * id — the reviewer looked at them and took none. The decision core's rule ("a
- * reject decision cannot accept suggestions") is untouched and still enforced
- * server-side; this simply never asks it for the impossible.
- */
-function rejectPartition(
-  surfaced: ReadonlyArray<LifecycleSuggestion>,
-): SuggestionDecisionPartition | null {
-  if (surfaced.length === 0) return null;
-  return { accepted: [], dismissed: surfaced.map((s) => s.id) };
 }
 
 /**
@@ -2132,7 +2208,7 @@ export function SuggestionChips({
           {recorded
             ? "These are the per-item choices this review recorded."
             : interactive
-              ? "Press a suggestion to dismiss it, press it again to accept it. Nothing is recorded until you approve or reject below."
+              ? "Press a suggestion to dismiss it, press it again to accept it. Nothing is recorded until you press Continue or Regenerate below."
               : "Deciding these needs approve access on this run."}
         </p>
       ) : null}
@@ -2214,6 +2290,7 @@ function ReviewTargetIsland({
   awaiting = false,
   onRetryResolve,
   inPanel = false,
+  onSettledEmpty,
 }: {
   src: string;
   /** True when this `src` carries a server-minted, expiring credential. */
@@ -2231,6 +2308,9 @@ function ReviewTargetIsland({
   /** Drawn inside the target's one panel (cinatra#3441), whose border is the
    *  frame: the island then draws no border and no rounding of its own. */
   inPanel?: boolean;
+  /** See `ReviewTargetFrame`: the host draws the island's empty document as
+   *  an empty panel, and is told when the island settles that way. */
+  onSettledEmpty?: (empty: boolean) => void;
 }): ReactElement {
   // One state bag KEYED BY `src`, reset IN-RENDER rather than in an effect —
   // the same shape `useLifecycleCardState` uses above for the identical
@@ -2267,9 +2347,12 @@ function ReviewTargetIsland({
     ready: false,
     /** How many panels it has reported since — the idle bound's restart count. */
     progress: 0,
+    /** The frame served the island's one empty document, on a host that draws
+     *  that reading as an empty panel (`onSettledEmpty`). */
+    empty: false,
   });
   if (load.identity !== identity) {
-    setLoad({ identity, attempt: 0, loaded: false, timedOut: false, ready: false, progress: 0 });
+    setLoad({ identity, attempt: 0, loaded: false, timedOut: false, ready: false, progress: 0, empty: false });
   }
 
   const frameRef = useRef<HTMLIFrameElement | null>(null);
@@ -2407,11 +2490,20 @@ function ReviewTargetIsland({
   const state: IslandLoadState = refused
     ? "timed-out"
     : load.loaded
-      ? "loaded"
+      ? load.empty
+        ? "empty"
+        : "loaded"
       : load.timedOut
         ? "timed-out"
         : "loading";
   const height = Math.max(ISLAND_MIN_HEIGHT, measured.height ?? ISLAND_MIN_HEIGHT);
+  // The host learns ONE bit: the island stands settled empty, or it does not.
+  // The empty document is the same element for every denial and every absence,
+  // so this tells the host nothing about why.
+  const settledEmpty = state === "empty";
+  useEffect(() => {
+    onSettledEmpty?.(settledEmpty);
+  }, [onSettledEmpty, settledEmpty]);
   // A refused island and one that awaits its address mount no frame at all.
   const framed = !refused && !waits;
   // A frame that mounts on a credential records it in its card's framings under
@@ -2465,6 +2557,9 @@ function ReviewTargetIsland({
           ? "relative overflow-hidden bg-surface-strong"
           : "relative overflow-hidden rounded-control border border-line bg-surface-strong"
       }
+      // An island settled empty keeps the panel's frame and draws nothing in it.
+      // The frame stays mounted underneath, so the same row is never loaded twice.
+      style={settledEmpty ? { height: ISLAND_EMPTY_HEIGHT } : undefined}
     >
       {!framed ? null : (
         <iframe
@@ -2494,7 +2589,7 @@ function ReviewTargetIsland({
           // several of these off screen without fetching them all.
           loading={credentialed ? "eager" : "lazy"}
           className={`w-full border-0 bg-surface-strong transition-opacity duration-200 ${
-            load.loaded ? "opacity-100" : "pointer-events-none opacity-0"
+            load.loaded && !load.empty ? "opacity-100" : "pointer-events-none opacity-0"
           }`}
           style={{ height }}
           onLoad={(event) => {
@@ -2507,6 +2602,7 @@ function ReviewTargetIsland({
             // render comes after the dispatch, and a read inside the updater got
             // `null`: the denial was then taken for a drawn target.
             const servedTheDenial = islandFrameServedTheDenial(event.currentTarget);
+            const emptyIsSettled = onSettledEmpty !== undefined;
             setLoad((current) =>
               current.identity === identity
                 ? // LOADED IS NOT THE SAME AS DREW (cinatra#2853, the picture
@@ -2524,9 +2620,17 @@ function ReviewTargetIsland({
                   // one thing that changes is the one case that produced a blank
                   // panel. A preview that is not there is drawn as a preview that
                   // is not there, which is a state that HAS a drawing.
+                  //
+                  // A HOST WHOSE DRAWING HAS AN EMPTY READING (`onSettledEmpty`,
+                  // the publish card's items row, cinatra#4738) draws that same
+                  // document as its empty panel: it is settled, not failed, and
+                  // it has nothing to retry. A frame that never answers still
+                  // reaches the failed state through the bound above.
                   servedTheDenial
-                  ? { ...current, loaded: false, timedOut: true }
-                  : { ...current, loaded: true }
+                  ? emptyIsSettled
+                    ? { ...current, loaded: true, timedOut: false, empty: true }
+                    : { ...current, loaded: false, timedOut: true, empty: false }
+                  : { ...current, loaded: true, empty: false }
                 : current,
             );
           }}
@@ -2537,7 +2641,7 @@ function ReviewTargetIsland({
           iframe stays mounted underneath while timed out: a late `onLoad`
           self-heals the display instead of leaving a reviewer stuck on a
           retry panel for content that did, eventually, arrive. */}
-      {state !== "loaded" ? (
+      {state !== "loaded" && state !== "empty" ? (
         // An island with no frame has nothing to overlay, so its panel holds the box.
         <div className={framed ? "absolute inset-x-0 top-0" : undefined} style={{ height }}>
           {state === "loading" ? (
@@ -2561,6 +2665,7 @@ function ReviewTargetIsland({
                   // answered yet, and the old one's messages no longer name it.
                   ready: false,
                   progress: 0,
+                  empty: false,
                 }));
               }}
             />
@@ -2836,11 +2941,18 @@ export function ReviewTargetFrame({
   refused = false,
   awaiting = false,
   paired = false,
+  onSettledEmpty,
 }: {
   headers: readonly LifecycleTargetHeader[] | null;
   islandSrc: string;
   islandCredentialed: boolean;
   onRetryResolve: () => void;
+  /** Given by a host whose drawing has an EMPTY reading (the publish card's
+   *  items row, cinatra#4738): the island's one empty document is then drawn
+   *  as the panel's frame with nothing in it, and this is told whether the
+   *  island currently stands settled empty. Absent (the review gate), that
+   *  document stays a preview that did not arrive, as it always was. */
+  onSettledEmpty?: (empty: boolean) => void;
   /** This pair's own address is missing, failed or bound to another target
    *  (cinatra#4129): its island draws the failed state and frames nothing. */
   refused?: boolean;
@@ -2883,6 +2995,7 @@ export function ReviewTargetFrame({
         awaiting={awaiting}
         onRetryResolve={onRetryResolve}
         inPanel={Boolean(only)}
+        onSettledEmpty={onSettledEmpty}
       />
     </div>
   );
@@ -3066,12 +3179,6 @@ export function ReviewGatePromptWindow({
   boundCardRef?: string | null;
 }) {
   const router = useRouter();
-  // THE SLOT IS THE WINDOW'S OWN ELEMENT, held in state rather than a ref so the
-  // first commit that creates it re-renders the panel into it. The panel is a
-  // portal by construction (it was written to escape a scrolling document), and
-  // portalling into the element it is declared inside keeps its markup exactly
-  // as it shipped while landing it inside the gate's frame.
-  const [portalTarget, setPortalTarget] = useState<HTMLElement | null>(null);
   // cinatra#2933 (lifecycle-b W5b) — the exchange is the RUN's, stored server
   // side per turn and read on mount, so it is there after a reload.
   const runWindow = useRunWindowConversation({
@@ -3081,13 +3188,6 @@ export function ReviewGatePromptWindow({
       ? { boundCard: { candidateRefs: [boundCardRef], focusedRef: boundCardRef } }
       : {}),
   });
-
-  // NO CHANNEL AT ALL FOR A READER WHO MAY NOT COMMENT. The window is the one
-  // road to requesting changes, so an anchor drawn with nothing inside it would
-  // put the drawing's affordance on screen for a reader whose message the server
-  // would refuse — a control that fails on press. The permission is the SERVER's
-  // own answer for this reader and this gate, carried through unchanged.
-  if (!canComment) return null;
 
   const handleSubmit = async (prompt: string) => {
     const effect = await runWindow.send(prompt);
@@ -3100,30 +3200,39 @@ export function ReviewGatePromptWindow({
     }
   };
 
-  return (
-    // The conversational prompt window (cinatra#2063): the
-    // typed change request IS how changes are requested — there is no dedicated
-    // "request changes" button (the three-affordance decision floor is unchanged).
-    // The anchor marks this mount for the run-embedded conformance closed set.
-    <div
-      data-conformance-id="review-prompt-window"
-      data-action="request-changes -> changes-requested"
-      ref={setPortalTarget}
-    >
-      <HitlConversationPanel
-        portalTarget={portalTarget}
-        // WHICH READING OF THE ONE WINDOW THIS IS (the ratified artifact-review
-        // drawing, §X): the mount names its surface and the window reads the
-        // drawing's own sentence for it.
-        surface="review"
-        visible={!!portalTarget}
-        conversation={runWindow.entries}
-        promptPending={runWindow.pending}
-        storageKey={storageKey}
-        onSubmit={handleSubmit}
-      />
-    </div>
-  );
+  // THE SCREEN REGISTERS; THE PAGE OWNS THE WINDOW (cinatra#3487).
+  //
+  // The ruling of 2026-09-14 reads the drawing the other way round from what
+  // shipped here: "THE PROMPT WINDOW IS NEVER PART OF A LIFECYCLE SCREEN AND
+  // NEVER INSIDE A LIFECYCLE CARD, IN ANY HOST." So this component draws NOTHING
+  // — no anchor, no field, no send control — and instead hands the run page's
+  // chrome what the screen is and what it lends. The chrome mounts the one
+  // window, below the screen, in the page's own column.
+  //
+  // THE APPLYING ROAD IS UNCHANGED: `handleSubmit` above is still the one road —
+  // the run's conversation plus the EXISTING Comment path, which on a fenced
+  // single-target lifecycle gate resolves as `changes_requested`. Nothing new is
+  // reachable and no parallel endpoint exists; only the box moved.
+  //
+  // NO CHANNEL AT ALL FOR A READER WHO MAY NOT COMMENT, unchanged in substance:
+  // the permission is the SERVER's own answer for this reader and this gate, and
+  // it is what the screen publishes as "nothing to manipulate" — so the page
+  // draws no window rather than a control that fails on press.
+  //
+  // AND NO WINDOW WHERE THERE IS NO CHROME: a card drawn inside a chat thread or
+  // inside the third-party island registers with nothing, so nothing appears.
+  useRunWindowScreen({
+    surface: "review",
+    runId,
+    gateRef: boundCardRef ?? null,
+    canManipulate: canComment,
+    storageKey,
+    conversation: runWindow.entries,
+    promptPending: runWindow.pending,
+    onSubmit: handleSubmit,
+  });
+
+  return null;
 }
 
 /**

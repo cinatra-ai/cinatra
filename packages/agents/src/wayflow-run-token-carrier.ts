@@ -1,7 +1,8 @@
-import { mintRunToken, CINATRA_RUN_TOKEN_MESSAGE_KEY } from "@/lib/agent-run-token";
+import { mintRunToken, CINATRA_RUN_TOKEN_MESSAGE_KEY, CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY } from "@/lib/agent-run-token";
 import { setAgentRunTokenHash } from "./store";
 import { buildWayflowInitialMessagePayload } from "./wayflow-dispatch-payload";
 import { readSnapshotNodesMetadataForRun } from "./step-snapshots";
+import { refuseRegenerateSegmentResume } from "./regenerate-segment";
 
 // ---------------------------------------------------------------------------
 // WayFlow A2A RESUME run-token carrier (#1193).
@@ -81,14 +82,74 @@ export type ResumeRunTokenMetadata = { [key: string]: unknown };
  * carries the step-snapshot node list of the run's template (when its stored
  * lifecycle declares `regenerate`, never for a lifecycle repair run). Without a
  * declaration the metadata is the token alone, as before.
+ *
+ * cinatra#4264 B1b: for the same reason it refuses a Regenerate segment run
+ * (or a repair run whose intent cannot be read) BEFORE a credential is
+ * minted: a segment runs in one leg, and a resumed leg would carry no segment
+ * request, pass no capability fence and sign no receipt. The throw fails the
+ * resume on every road, as a token-store fault does.
  */
 export async function mintResumeRunTokenMetadata(
   runId: string,
+  claimed?: { executionAttemptId: string },
 ): Promise<ResumeRunTokenMetadata> {
+  await refuseRegenerateSegmentResume(runId);
   const runToken = mintRunToken();
   await setAgentRunTokenHash(runId, runToken.tokenHash);
   const snapshotNodes = await readSnapshotNodesMetadataForRun(runId);
-  return { ...snapshotNodes, [CINATRA_RUN_TOKEN_MESSAGE_KEY]: runToken.token };
+  const attempt = claimed
+    ? await confirmClaimedExecutionAttemptForRun(runId, claimed.executionAttemptId)
+    : await readExecutionAttemptMetadataForRun(runId);
+  return { ...snapshotNodes, ...attempt, [CINATRA_RUN_TOKEN_MESSAGE_KEY]: runToken.token };
+}
+
+/**
+ * cinatra#3745: a resume that claimed its own attempt (the stopped-orchestrator
+ * resume's `queued -> running` claim) names THAT attempt, never the run's attempt
+ * at the read. A delayed resume whose run was stopped and resumed again under a
+ * newer attempt would otherwise label its stale task with the newer attempt, and
+ * its still-valid run credential would be admitted under it. So the claimed
+ * attempt is the label, and the mint refuses (one fixed text, no send) unless the
+ * run still runs under it. If the run moves on after this read, the label stays
+ * the claimed attempt, and the routes refuse it once it is not the running one.
+ */
+async function confirmClaimedExecutionAttemptForRun(
+  runId: string,
+  executionAttemptId: string,
+): Promise<Record<string, string>> {
+  let current: { status?: string; executionAttemptId?: string | null } | null = null;
+  try {
+    const { readAgentRunById } = await import("./store");
+    current = await readAgentRunById(runId);
+  } catch {
+    current = null;
+  }
+  if (!executionAttemptId || current?.status !== "running" || current.executionAttemptId !== executionAttemptId) {
+    throw new Error("resume_attempt_not_current");
+  }
+  return { [CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY]: executionAttemptId };
+}
+
+/**
+ * cinatra#3745: the execution attempt the resumed leg runs under, read from the
+ * run row at the mint, on the gate resume roads: a gate resume's
+ * `pending_approval -> running` edge keeps the run's attempt (the
+ * stopped-orchestrator resume passes the attempt its claim minted instead,
+ * above). The runtime signs this attempt in its `s2` pair, and the
+ * routes admit the pair only while it is the run's running attempt, so a value
+ * that went stale before the send is refused, never widened. A missing attempt or
+ * a read fault names none (logged): the leg then signs no source, and the routes'
+ * source checks give it no source-bound step.
+ */
+async function readExecutionAttemptMetadataForRun(runId: string): Promise<Record<string, string>> {
+  try {
+    const { readAgentRunById } = await import("./store");
+    const attempt = (await readAgentRunById(runId))?.executionAttemptId;
+    return typeof attempt === "string" && attempt !== "" ? { [CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY]: attempt } : {};
+  } catch (err) {
+    console.warn(`[wayflow-run-token-carrier] run=${runId} attempt unreadable on resume: ${err instanceof Error ? err.name : "error"}`);
+    return {};
+  }
 }
 
 /**

@@ -36,6 +36,7 @@ vi.mock("../auth-policy", () => ({
 const resolveOrgRoleForUser = vi.hoisted(() => vi.fn(async () => "member" as string | undefined));
 vi.mock("@/lib/auth-session", () => ({ resolveOrgRoleForUser }));
 
+import * as decisionActions from "../publish-decision-actions";
 import {
   PUBLISH_DECISION_NOT_OPEN,
   PUBLISH_DECISION_REQUIRED,
@@ -45,6 +46,7 @@ import {
   declinePublishDecision,
   publishHoldAnswer,
   sweepExpiredPublishDecisions,
+  widgetReaderMayDecidePublish,
 } from "../publish-decision-actions";
 
 const ACTOR = { actorType: "human" as const, source: "ui" as const, userId: "user-a" };
@@ -68,6 +70,9 @@ function decision(overrides: Record<string, unknown> = {}) {
     decisionNote: null,
     createdAt: new Date("2026-11-01T00:00:00Z"),
     expiresAt: new Date("2026-11-02T00:00:00Z"),
+    runGeneration: 0,
+    /** The hold's read answers whether the row is of the run's current reset generation. */
+    current: true,
     ...overrides,
   };
 }
@@ -78,7 +83,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   // clearAllMocks keeps queued once-answers; a case that leaves one (a red run over older code) must not feed the next.
   for (const m of [storeMock.readAgentRunById, storeMock.transitionRunStatus, decisions.readOpenDecisionForRun,
-    decisions.readLatestDecisionForRun, decisions.decide, decisions.listDueParked, decisions.listSettledWithWaitingRun]) m.mockReset();
+    decisions.readLatestDecisionForRun, decisions.decide, decisions.listDueParked, decisions.listSettledWithWaitingRun,
+  ]) m.mockReset();
   storeMock.readAgentRunById.mockResolvedValue(run());
   storeMock.transitionRunStatus.mockResolvedValue(undefined);
   decisions.readOpenDecisionForRun.mockResolvedValue(decision());
@@ -101,9 +107,24 @@ describe("the hold every resume road reads", () => {
       await expect(assertNoOpenPublishDecision("run-1")).rejects.toMatchObject({
         code: PUBLISH_DECISION_REQUIRED,
       });
-      expect(decisions.readLatestDecisionForRun).toHaveBeenCalledWith("run-1");
+      expect(decisions.readLatestDecisionForRun).toHaveBeenCalledWith("run-1", { orEarlierAttempt: true });
     },
   );
+
+  it("a decision of an earlier reset generation never holds the later attempt; the current generation's still does (round 20)", async () => {
+    // The newest row the hold reads is of an earlier generation (current false): the retry's ordinary gate and its next
+    // publish gate go on, whatever that row's status.
+    for (const status of ["run_ended", "declined", "expired", "parked"]) {
+      decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status, runGeneration: 0, current: false }));
+      await expect(assertNoOpenPublishDecision("run-1")).resolves.toBe(true);
+    }
+    // A closed decision of the CURRENT generation still holds, as before.
+    for (const status of ["run_ended", "declined", "expired", "parked"]) {
+      decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status, runGeneration: 1, current: true }));
+      await expect(assertNoOpenPublishDecision("run-1")).rejects.toMatchObject({ code: PUBLISH_DECISION_REQUIRED });
+    }
+    expect(decisions.readLatestDecisionForRun).toHaveBeenLastCalledWith("run-1", { orEarlierAttempt: true });
+  });
 
   it("a run with no decision, or a released one, may go on", async () => {
     await expect(assertNoOpenPublishDecision("run-1")).resolves.toBe(false);
@@ -447,6 +468,131 @@ describe("Do not publish binds every check and the record to one person (finding
   });
 });
 
+describe("may the site widget's reader decide (the card's restricted reading only)", () => {
+  // The widget lifecycle door's actor shape (widget-lifecycle-frame-actor.ts).
+  const WIDGET = { actorType: "human" as const, source: "a2a" as const, userId: "user-a", orgId: "org-1" };
+
+  it("the widget reader is asked the SAME run rights and membership, and decides nothing", async () => {
+    expect(await widgetReaderMayDecidePublish({ runId: "run-1", actorContext: WIDGET })).toBe(true);
+    expect(enforceRunAccess.mock.calls.map((c) => (c as unknown[])[2])).toEqual(["execute", "approveHitl"]);
+    expect(resolveOrgRoleForUser).toHaveBeenCalledWith("org-1", "user-a");
+    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+  });
+
+  it("a refused run right, or no role in the run's organization, is false", async () => {
+    enforceRunAccess.mockRejectedValueOnce(new AuthzError({ statusCode: 403, reason: "forbidden" }));
+    expect(await widgetReaderMayDecidePublish({ runId: "run-1", actorContext: WIDGET })).toBe(false);
+    resolveOrgRoleForUser.mockResolvedValueOnce(undefined);
+    expect(await widgetReaderMayDecidePublish({ runId: "run-1", actorContext: WIDGET })).toBe(false);
+  });
+
+  it.each([
+    ["a UI person (not this road)", ACTOR],
+    ["an A2A peer", { actorType: "a2a", source: "a2a", userId: "user-a" }],
+    ["a token-scoped widget actor", { ...WIDGET, tokenScopes: ["run.resume", "run.approveHitl"] }],
+    ["an agent acting for the person", { ...WIDGET, oboCeiling: [{ tier: "organization", id: "org-1" }] }],
+    ["a widget actor with no user id", { actorType: "human", source: "a2a" }],
+    ["no actor context", null],
+  ])("%s is false before anything is read", async (_label, actorContext) => {
+    expect(await widgetReaderMayDecidePublish({ runId: "run-1", actorContext: actorContext as never })).toBe(false);
+    expect(storeMock.readAgentRunById).not.toHaveBeenCalled();
+    expect(enforceRunAccess).not.toHaveBeenCalled();
+  });
+
+  it("Do not publish still refuses the widget reader", async () => {
+    await expect(declinePublishDecision({ runId: "run-1", actorContext: WIDGET })).rejects.toMatchObject({ statusCode: 403 });
+    expect(decisions.decide).not.toHaveBeenCalled();
+  });
+});
+
+// cinatra#4758: the site widget's Do not allow. The widget's reader (a human of source "a2a", built by the widget door)
+// is admitted ONLY on this road, which only the widget's decide route calls; every check after the person is the same.
+describe("Do not allow from the site widget (cinatra#4758)", () => {
+  const WIDGET = { actorType: "human" as const, source: "a2a" as const, userId: "user-a", orgId: "org-1" };
+  type Decline = (input: { runId: string; actorContext: unknown; note?: string | null }) => Promise<unknown>;
+  const declineAsWidget = (input: Parameters<Decline>[0]) => {
+    const fn = (decisionActions as unknown as Record<string, unknown>).declinePublishDecisionAsWidgetReader;
+    expect(typeof fn, "the widget's decline road is exported").toBe("function");
+    return (fn as Decline)(input);
+  };
+
+  it("checks run.execute then run.approveHitl, writes ONE declined decision naming the widget's person with the note, then stops the run", async () => {
+    expect(await declineAsWidget({ runId: "run-1", actorContext: WIDGET, note: "Not ready yet." })).toEqual({ ok: true, runStopped: true });
+    expect(enforceRunAccess.mock.calls.map((c) => (c as unknown[])[2])).toEqual(["execute", "approveHitl"]);
+    expect(decisions.decide).toHaveBeenCalledTimes(1);
+    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "declined", actor: "user-a", note: "Not ready yet." });
+    expect((storeMock.transitionRunStatus.mock.calls[0] as unknown[]).slice(0, 3)).toEqual(["run-1", "pending_approval", "stopped"]);
+  });
+
+  it("a second answer after the request was decided is reported as not open, and the run is not moved", async () => {
+    decisions.readOpenDecisionForRun.mockResolvedValue(null);
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released" }));
+    expect(await declineAsWidget({ runId: "run-1", actorContext: WIDGET })).toEqual({
+      ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: "released",
+    });
+    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+  });
+
+  it("a widget reader who may view but not decide (the run's approve right refused) writes nothing", async () => {
+    enforceRunAccess.mockImplementation(async (...args: unknown[]) => {
+      if (args[2] === "approveHitl") throw new AuthzError({ statusCode: 403, reason: "forbidden" });
+    });
+    await expect(declineAsWidget({ runId: "run-1", actorContext: WIDGET })).rejects.toBeInstanceOf(AuthzError);
+    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a UI person (the session road's actor)", ACTOR],
+    ["an A2A peer", { actorType: "a2a", source: "a2a", userId: "user-a" }],
+    ["a token-scoped widget actor", { ...WIDGET, tokenScopes: ["run.resume", "run.approveHitl"] }],
+    ["an agent acting for the person", { ...WIDGET, oboCeiling: [{ tier: "organization", id: "org-1" }] }],
+    ["no actor context", null],
+  ])("%s is refused before anything is read", async (_label, actorContext) => {
+    await expect(declineAsWidget({ runId: "run-1", actorContext })).rejects.toMatchObject({ statusCode: 403 });
+    expect(storeMock.readAgentRunById).not.toHaveBeenCalled();
+    expect(decisions.decide).not.toHaveBeenCalled();
+  });
+});
+
+// a card answers only the decision it shows. Gate A was answered elsewhere and
+// gate B opened before this card re-read; Do not allow pressed on the stale card A must leave B untouched. The doors run
+// for real over the roads: the session door (decidePublishDecisionCardForActor) and the widget door's road.
+describe("a stale card never answers a newer gate", () => {
+  const WIDGET = { actorType: "human" as const, source: "a2a" as const, userId: "user-a", orgId: "org-1" };
+  const GATE_B = decision({ id: "dB", nodeId: "publish-2", gateTaskId: "task-2" });
+
+  beforeEach(() => {
+    decisions.readOpenDecisionForRun.mockResolvedValue(GATE_B);
+    // The store's guarded write: A is no longer parked, so its answer loses; B would be won by any write aimed at it.
+    decisions.decide.mockImplementation(async (id: string, change: { to: string }) =>
+      id === "dA" ? { outcome: "lost", currentStatus: "released" } : { outcome: "won", decision: decision({ id, status: change.to }) });
+  });
+
+  it.each([
+    ["the session door", "decidePublishDecisionCardForActor", ACTOR],
+    ["the widget door", "decidePublishDecisionCardForWidgetReader", WIDGET],
+  ] as const)("%s: Do not allow on card A is not open, and B is neither decided nor its run stopped", async (_label, door, actor) => {
+    const core = await import("../publish-decision-card-core");
+    const outcome = await core[door]({ runId: "run-1", decisionId: "dA", answer: "decline", note: "No." }, { actor, roleHints: {} });
+    expect(outcome).toBe("not_open");
+    expect(decisions.decide.mock.calls.map((c) => (c as unknown[])[0])).not.toContain("dB");
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+  });
+
+  it("the decline's one write names card A's row, bound to the run, and only while it is the newest open row of the current attempt", async () => {
+    expect(await declinePublishDecision({ runId: "run-1", actorContext: ACTOR, decisionId: "dA" } as never)).toEqual({
+      ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: "released",
+    });
+    expect(decisions.decide).toHaveBeenCalledTimes(1);
+    expect(decisions.decide).toHaveBeenCalledWith("dA", {
+      from: "parked", to: "declined", actor: "user-a", note: null, ofRun: "run-1", newestOnly: true,
+    });
+  });
+});
+
 describe("Do not publish answers a store fault with a fixed text (finding 5)", () => {
   it.each([
     ["the decision write", () => decisions.decide.mockRejectedValueOnce(new Error("insert failed: d1 user-a not today"))],
@@ -760,3 +906,4 @@ describe("the write registry tells the truth about the decline's authority (find
     expect(src).toContain("sessionAuthorityFromResolvedRole(run.orgId, role)");
   });
 });
+

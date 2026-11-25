@@ -276,12 +276,14 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
       orgId: "org-rev",
       reviewTaskId: "wayflow-task-rev-1",
       targets: [TARGETS[0]],
+      runGeneration: 0,
     });
     expect(emitSpy).toHaveBeenNthCalledWith(2, {
       runId: "run-rev-1",
       orgId: "org-rev",
       reviewTaskId: "wayflow-task-rev-1#2",
       targets: [TARGETS[1]],
+      runGeneration: 0,
     });
 
     // (2) Routed via the redirect renderer id — NOT the legacy reviewer envelope.
@@ -317,6 +319,16 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
       { pauseTaskId: "task-rev-1" },
       TEST_AUTHORITY,
     );
+  });
+
+  it("each gate the run raises carries the generation of the attempt this handler serves (cinatra#4762)", async () => {
+    // The record the executor read for its attempt names generation 2; the run row may already be at a later attempt
+    // when a delayed callback of this one runs, so the gate takes the attempt's own value, never a read of the row.
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    const run = { ...makeRun({ reviewTargets: TARGETS }), resetGeneration: 2 } as AgentRunRecord;
+    storeMock.readAgentRunById.mockResolvedValue({ ...run, resetGeneration: 3 });
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task: inputRequiredTask("Two items.") });
+    expect(emitSpy.mock.calls.map(([input]) => (input as { runGeneration?: unknown }).runGeneration)).toEqual([2, 2]);
   });
 
   it("an UNMARKED gate is byte-identical: never pins, keeps its own declared renderer", async () => {
@@ -484,6 +496,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
       orgId: "org-rev",
       reviewTaskId: "wayflow-task-rev-1",
       targets: [TARGETS[0]],
+      runGeneration: 0,
     });
     expect(onInterruptSpy).toHaveBeenCalledTimes(1);
     const [, xRenderer] = onInterruptSpy.mock.calls[0]!;
@@ -515,7 +528,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     expect([...rows.keys()]).toEqual([originalId]);
     expect(JSON.stringify(rows.get(originalId))).toBe(before);
     expect(emitSpy).toHaveBeenCalledTimes(1);
-    expect(emitSpy).toHaveBeenCalledWith({ runId: run.id, orgId: run.orgId, reviewTaskId: originalId, targets: TARGETS });
+    expect(emitSpy).toHaveBeenCalledWith({ runId: run.id, orgId: run.orgId, reviewTaskId: originalId, targets: TARGETS, runGeneration: 0 });
     const [, renderer, values, routedId] = onInterruptSpy.mock.calls[0]!;
     expect(renderer).toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
     expect(routedId).toBe(originalId);
@@ -614,7 +627,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     const run = makeRun({ reviewTargets: TARGETS });
     await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "pending_approval", task: inputRequiredTask("mismatched caller") });
     expect(emitSpy).toHaveBeenCalledTimes(1);
-    expect(emitSpy).toHaveBeenCalledWith({ runId: run.id, orgId: run.orgId, reviewTaskId: originalId, targets: TARGETS });
+    expect(emitSpy).toHaveBeenCalledWith({ runId: run.id, orgId: run.orgId, reviewTaskId: originalId, targets: TARGETS, runGeneration: 0 });
     expect(original.targets).toEqual(originalTargets);
     const [, renderer, values, routedId] = onInterruptSpy.mock.calls[0]!;
     expect(renderer).toBe(ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);

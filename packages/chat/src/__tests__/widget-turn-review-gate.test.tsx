@@ -165,7 +165,7 @@ const REVIEW_CARD = '[data-conformance-id="review-gate-card"]';
 const PROMPT_WINDOW = '[data-conformance-id="review-prompt-window"]';
 const SETTLED_EXCHANGE = "[data-review-settled-exchange]";
 const SLOT = "[data-run-review-slot]";
-const APPROVE = '[data-action="approve-review -> resolved"]';
+const APPROVE = '[data-action="continue-review -> resolved"]';
 
 if (typeof window !== "undefined" && typeof window.localStorage?.getItem !== "function") {
   const store = new Map<string, string>();

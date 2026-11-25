@@ -69,6 +69,9 @@ import {
 import { runReviewStepReading, runReviewStepSettled } from "./run-review-slot-reading";
 import { RecommendationHoldCard } from "./run-recommendation-chip-row";
 import { LifecycleCardSurfaceProvider } from "./lifecycle-card-runtime";
+// THE RUN PAGE'S CHROME (cinatra#3487) — the one module that mounts a prompt
+// window, and the frame every run-detail screen registers with.
+import { RunPageChrome } from "./run-page-chrome";
 // §VII's card on the `run_card` host (cinatra#2789, epic #2784 S9e) — see the
 // mount below for what it draws and what it deliberately does not.
 import { VerificationSummaryCard } from "./verification-summary-card";
@@ -1868,6 +1871,9 @@ export async function SetupScreen({
   // hides the trail for legacy / external templates without surfacing the
   // condition. Mirrors the client-side guard at orchestrator-stepper-panel.tsx
   // (`agentPackageName && ...`) so server-render and client-refetch agree.
+  // Where the walk stopped without a proven owner for the next answer
+  // (cinatra#3035); the rail reads it before it ties a gate to a marked step.
+  const submissionWalkReport: { stoppedAtStepNumber?: number } = {};
   const submissionMap: SubmissionMapEntries =
     run && template.packageName
       ? await buildSubmissionMapByStepIndex(
@@ -1875,6 +1881,7 @@ export async function SetupScreen({
           template.packageName,
           policySteps as ReadonlyArray<{ stepNumber: number; gateCount?: number; hitlOwnedBy?: string; xRenderer?: string; firesRendererGate?: boolean }>,
           hitlSteps.map((h) => ({ index: h.index, stepNumber: h.stepNumber })),
+          submissionWalkReport,
         )
       : [];
 
@@ -2133,6 +2140,23 @@ export async function SetupScreen({
     index: h.index,
     stepNumber: h.stepNumber,
     label: h.label,
+    // The step the policy marks as the one that opens its review (cinatra#3035):
+    // its review gate is drawn in this step's place on the rail.
+    marksReview: policySteps.some((p) => {
+      const step = p as { stepNumber?: unknown; artifactReviewTargetsInput?: unknown };
+      return (
+        step.stepNumber === h.stepNumber &&
+        typeof step.artifactReviewTargetsInput === "string" &&
+        step.artifactReviewTargetsInput.length > 0
+      );
+    }),
+    // How many times the step pauses; the rail places a marked step's gates by
+    // position only when each marked step pauses once (cinatra#3035).
+    gateCount: (() => {
+      const step = policySteps.find((p) => (p as { stepNumber?: unknown }).stepNumber === h.stepNumber);
+      const count = (step as { gateCount?: unknown } | undefined)?.gateCount;
+      return typeof count === "number" && count > 0 ? count : undefined;
+    })(),
   }));
   const railStepResults = (run?.stepResults ?? []) as unknown[];
   // Transcript only forms the rail spine for a single-agent/leaf run — no policy
@@ -2158,6 +2182,7 @@ export async function SetupScreen({
           stepIndex,
           answered: entry.submittedValues != null,
         })),
+        submissionsStoppedAtStep: submissionWalkReport.stoppedAtStepNumber,
         messages: railMessages,
         stepResults: railStepResults,
         gates: reviewRailGates,
@@ -2759,7 +2784,13 @@ export async function SetupScreen({
           // different panel — which is exactly why the width is declared here
           // and not looked up from `activeTab`.
           <AgentPanelBody role="frame">
-          <div className="flex items-start gap-6" data-run-detail-contract="" data-conformance-id="run-surface">
+          {/* THE RUN PAGE'S CHROME OWNS THE ONE PROMPT WINDOW (cinatra#3487),
+              AND IT WRAPS THE DETAIL COLUMN, never the whole two-column
+              contract: the chrome draws its window after its children, so
+              wrapped around the contract it would land beneath BOTH columns.
+              The rail frame below draws the chrome inside its own detail
+              column; the branch without a frame wraps its detail column here. */}
+          <div className="flex items-start gap-6 max-[620px]:flex-col max-[620px]:items-stretch" data-run-detail-contract="" data-conformance-id="run-surface">
             {(() => {
               // THE ONE `recommendation_hold` MOUNT ON THIS PAGE (cinatra#3047),
               // and it is used in exactly ONE slot: the Skills step's own
@@ -3454,6 +3485,8 @@ export async function SetupScreen({
                   // step "1" — the drawing's own rail — instead of the "2" the
                   // re-shoot photographed.
                   stepOffset={runSurfaceRailNumberedCount(railSteps.map((step) => step.key))}
+                  // Only a run waiting on a person opens its active row (cinatra#3035).
+                  runPaused={run.status === "pending_approval"}
                 />
               ) : null;
               // Review is a forecast after the work, never a head row above
@@ -3567,7 +3600,9 @@ export async function SetupScreen({
                   {railNode ? (
                     <div className="flex shrink-0 flex-col gap-2 pt-1">{railNode}</div>
                   ) : null}
-                  <div className="flex min-w-0 flex-1 flex-col gap-4">{runDetailFallback}</div>
+                  <div className="flex min-w-0 flex-1 flex-col gap-4">
+                    <RunPageChrome>{runDetailFallback}</RunPageChrome>
+                  </div>
                 </>
               );
             })()}
@@ -4578,18 +4613,24 @@ export async function TriggerScreen({
              The surface takes the FRAME width because it is a two-column frame,
              not a form; the schedule step inside it declares Narrow for itself. */
           <AgentPanelBody role="frame">
-            <div
-              className="flex items-start gap-6"
-              data-run-detail-contract=""
-              data-conformance-id="run-surface"
-            >
-              <RunSurfaceRail steps={railSteps} initialSelection="schedule" />
-            </div>
+            {/* THE RUN PAGE'S CHROME OWNS THE ONE PROMPT WINDOW (cinatra#3487). */}
+            <RunPageChrome>
+              <div
+                className="flex items-start gap-6 max-[620px]:flex-col max-[620px]:items-stretch"
+                data-run-detail-contract=""
+                data-conformance-id="run-surface"
+              >
+                <RunSurfaceRail steps={railSteps} initialSelection="schedule" />
+              </div>
+            </RunPageChrome>
           </AgentPanelBody>
         ) : (
           /* No run to name steps for (`/trigger` reached with `new`): the form
-             stands alone, exactly as it did. */
-          scheduleFormSurface
+             stands alone, and the page's chrome still owns its one prompt
+             window (cinatra#3487): the schedule screen lends its window to the
+             nearest chrome, so without one here the pre-run window that fills
+             this form from a sentence would not be drawn at all. */
+          <RunPageChrome>{scheduleFormSurface}</RunPageChrome>
         )}
       </AgentPageLayout>
     </Main>

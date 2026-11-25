@@ -56,7 +56,7 @@ function expectSettled(container: HTMLElement) {
 
 describe("#4024 — a committed decision settles the card before its refresh answers", () => {
   for (const host of ["run_card", "page_gate_region", "chat_thread", "site_widget"] as const) {
-    it(`${host}: an authenticated approve settles without reload while re-resolve is delayed`, async () => {
+    it(`${host}: an authenticated Continue settles without reload while re-resolve is delayed`, async () => {
       const fresh = deferred<Response>();
       let resolves = 0;
       const fetchPort = vi.fn(async (url: unknown, init?: RequestInit) => String(url).endsWith("/decide") && init?.method === "POST"
@@ -64,13 +64,13 @@ describe("#4024 — a committed decision settles the card before its refresh ans
         : ++resolves === 1 ? response(envelope(PENDING)) : fresh.promise);
       globalThis.fetch = fetchPort as unknown as typeof fetch;
       const { container } = render(surface(host));
-      fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
       await waitFor(() => expect(resolves).toBe(2));
       // The response uses ONLY the production endpoint's existing fields;
       // there is no decision time, target snapshot or remote effect in it.
       await waitFor(() => expectSettled(container));
       const sent = fetchPort.mock.calls.find(([url]) => String(url).endsWith("/decide"))![1]!;
-      expect(JSON.parse(String(sent.body))).toEqual({ ref: VIEW.ref, disposition: "approve", comment: null });
+      expect(JSON.parse(String(sent.body))).toEqual({ ref: VIEW.ref, disposition: "continue", comment: null });
       expect(sent.credentials).toBe(host === "site_widget" ? "omit" : "same-origin");
       if (host === "site_widget") expect(sent.headers).toMatchObject(AUTH.headers());
       // A later authorized denial must supersede the local settlement.
@@ -87,7 +87,7 @@ describe("#4024 — a committed decision settles the card before its refresh ans
       throw new Error("external resolve unavailable");
     }) as unknown as typeof fetch;
     const { container } = render(surface("run_card"));
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     await waitFor(() => expect(resolves).toBe(2));
     expectSettled(container);
   });
@@ -103,7 +103,7 @@ describe("#4024 — a committed decision settles the card before its refresh ans
       globalThis.fetch = vi.fn(async (url: unknown) => String(url).endsWith("/decide")
         ? response({ outcome }) : response(envelope(PENDING))) as unknown as typeof fetch;
       const { container } = render(surface("run_card"));
-      fireEvent.click(await screen.findByRole("button", { name: outcome.kind === "annotated" ? "Comment" : "Approve" }));
+      fireEvent.click(await screen.findByRole("button", { name: outcome.kind === "annotated" ? "Comment" : "Continue" }));
       await waitFor(() => expect(container.querySelector('[data-review-outcome], [data-conformance-id="review-gate-blocked"]')).not.toBeNull());
       expect(container.querySelector('[data-conformance-id="review-gate-settled"]')).toBeNull();
     });
@@ -114,7 +114,7 @@ describe("#4024 — a committed decision settles the card before its refresh ans
     globalThis.fetch = vi.fn(async (url: unknown) => String(url).endsWith("/decide")
       ? decision.promise : response(envelope(PENDING))) as unknown as typeof fetch;
     const { container, rerender } = render(surface("run_card"));
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     rerender(surface("run_card", "replacement-4024"));
     await act(async () => decision.resolve(response({ outcome: { kind: "decided", disposition: "approve", idempotent: false } })));
     await waitFor(() => expect(container.textContent).toContain("Awaiting your decision"));
@@ -127,7 +127,7 @@ describe("#4024 — a committed decision settles the card before its refresh ans
     globalThis.fetch = vi.fn(async (url: unknown) => String(url).endsWith("/decide")
       ? decision.promise : response(envelope(PENDING))) as unknown as typeof fetch;
     const { container } = render(surface("run_card"));
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     expect(container.textContent).toContain("Awaiting your decision");
     expect(container.querySelector('[data-conformance-id="review-gate-settled"]')).toBeNull();
     await act(async () => decision.resolve(response({ outcome: { kind: "error", message: "Not committed." } })));
@@ -142,9 +142,9 @@ describe("#4024 — a committed decision settles the card before its refresh ans
     const { container } = render(<LifecycleCardSurfaceProvider host="page_gate_region">
       <ReviewGateCard view={VIEW} submitAction={action} />
     </LifecycleCardSurfaceProvider>);
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     await waitFor(() => expectSettled(container));
-    expect(action).toHaveBeenCalledWith({ disposition: "approve", comment: null });
+    expect(action).toHaveBeenCalledWith({ disposition: "continue", comment: null });
   });
 
   it("a newer authoritative blocked reading supersedes the local success", async () => {
@@ -154,14 +154,14 @@ describe("#4024 — a committed decision settles the card before its refresh ans
       ? response({ outcome: { kind: "decided", disposition: "approve", idempotent: false } })
       : ++resolves === 1 ? response(envelope(PENDING)) : fresh.promise) as unknown as typeof fetch;
     const { container } = render(surface("run_card"));
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     await waitFor(() => expectSettled(container));
     await act(async () => fresh.resolve(response(envelope({ state: "settled" }))));
     await waitFor(() => expect(container.querySelector('[data-conformance-id="review-gate-blocked"]')).not.toBeNull());
     expect(container.querySelector('[data-conformance-id="review-gate-settled"]')).toBeNull();
   });
 
-  it("a concurrent composer comment completing first cannot release the old pending Approve into a newer reading", async () => {
+  it("a concurrent composer comment completing first cannot release the old pending Continue into a newer reading", async () => {
     const approve = deferred<Response>();
     let approveFinished = false;
     const approveReply = approve.promise.then((reply) => { approveFinished = true; return reply; });
@@ -170,7 +170,8 @@ describe("#4024 — a committed decision settles the card before its refresh ans
     let resolves = 0;
     const fetchPort = vi.fn(async (url: unknown, init?: RequestInit) => {
       if (String(url).endsWith("/decide")) {
-        return JSON.parse(String(init?.body)).disposition === "comment" ? comment.promise : approveReply;
+        // The composer posts the conversation's own submission, never the Note-field `comment`.
+        return JSON.parse(String(init?.body)).disposition === "conversation-comment" ? comment.promise : approveReply;
       }
       return ++resolves === 1 ? response(envelope(PENDING)) : resolves === 2
         ? response({ ...envelope(PENDING), targetHeaders: [{ ...HEADER, title: "New concurrent authoritative revision" }] })
@@ -180,11 +181,11 @@ describe("#4024 — a committed decision settles the card before its refresh ans
     const store = createComposerFocusStore();
     const { container } = render(<LifecycleComposerFocusProvider store={store}>{surface("chat_thread")}</LifecycleComposerFocusProvider>);
     await waitFor(() => expect(typeof store.getCommentAction(VIEW.ref)).toBe("function"));
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     let annotation!: ReturnType<NonNullable<ReturnType<typeof store.getCommentAction>>>;
     await act(async () => { annotation = store.getCommentAction(VIEW.ref)!("A genuine concurrent composer annotation."); });
     expect(fetchPort.mock.calls.filter(([url]) => String(url).endsWith("/decide")).map(([, init]) =>
-      JSON.parse(String(init?.body)).disposition)).toEqual(["approve", "comment"]);
+      JSON.parse(String(init?.body)).disposition)).toEqual(["continue", "conversation-comment"]);
     await act(async () => {
       comment.resolve(response({ outcome: { kind: "annotated" } }));
       expect(await annotation).toMatchObject({ ok: true });
@@ -198,7 +199,7 @@ describe("#4024 — a committed decision settles the card before its refresh ans
     expect(container.textContent).toContain("Awaiting your decision");
     expect(container.querySelector('[data-conformance-id="review-gate-settled"]')).toBeNull();
     expect(container.textContent).not.toContain("The gate is resolved and the run has been released");
-    expect((screen.getByRole("button", { name: "Approve" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "Continue" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("an ordinary focus refresh preserves an unsent comment on the same pending reading", async () => {
@@ -221,7 +222,7 @@ describe("#4024 — a committed decision settles the card before its refresh ans
     globalThis.fetch = vi.fn(async (url: unknown) => String(url).endsWith("/decide")
       ? decision.promise : ++resolves === 1 ? response(envelope(PENDING)) : resolves === 2 ? response(secondReading) : refreshAfterSubmit.promise) as unknown as typeof fetch;
     const { container } = render(surface("run_card"));
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     fireEvent(window, new Event("focus"));
     await screen.findByText("New authoritative revision");
     await act(async () => decision.resolve(response({ outcome: { kind: "decided", disposition: "approve", idempotent: false } })));
@@ -229,7 +230,7 @@ describe("#4024 — a committed decision settles the card before its refresh ans
     expect(container.textContent).toContain("Awaiting your decision");
     expect(container.querySelector('[data-conformance-id="review-gate-settled"]')).toBeNull();
     expect(container.textContent).not.toContain("The gate is resolved and the run has been released");
-    expect((screen.getByRole("button", { name: "Approve" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "Continue" }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("an in-flight decision cannot settle a widget's replacement credential declaration", async () => {
@@ -237,7 +238,7 @@ describe("#4024 — a committed decision settles the card before its refresh ans
     globalThis.fetch = vi.fn(async (url: unknown) => String(url).endsWith("/decide")
       ? decision.promise : response(envelope(PENDING))) as unknown as typeof fetch;
     const { container, rerender } = render(surface("site_widget"));
-    fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continue" }));
     const replacement = { ...AUTH, headers: () => ({ "X-Cinatra-Widget-User-Token": "replacement-test-actor" }) };
     rerender(surface("site_widget", VIEW.ref, replacement));
     await act(async () => decision.resolve(response({ outcome: { kind: "decided", disposition: "approve", idempotent: false } })));

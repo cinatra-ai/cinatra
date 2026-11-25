@@ -155,6 +155,47 @@ describe("cinatra#3334 — the streaming surface reads a picture behind its own 
   });
 });
 
+// cinatra#4738: a target whose artifact read refused the reader gets no picture, on the gate's own road or the
+// island's sealed one.
+describe("cinatra#4738 — no capture pair for a target the reader may not read", () => {
+  it.each(["read-denied", "unknown-or-tombstoned"] as const)("neither reads nor mints a pair for a %s floor", async (reason) => {
+    const islandPair = vi.fn(async () => null);
+    const floored = {
+      target: target(8),
+      props: null,
+      mount: { kind: "floor", slot: "detail", packageName: null, reason },
+    } as PreparedReviewTarget;
+    const [first, island] = [
+      streamReviewTargets(ORG, [{ target: target(8), prepared: Promise.resolve(floored) }], () =>
+        Promise.resolve({ kind: "ordinary" as const }),
+      )[0],
+      streamReviewTargets(
+        ORG,
+        [{ target: target(8), prepared: Promise.resolve(floored) }],
+        () => Promise.resolve({ kind: "ordinary" as const }),
+        { capturePair: islandPair } as unknown as Parameters<typeof streamReviewTargets>[3],
+      )[0],
+    ];
+    await expect(first.capturePair).resolves.toBeNull();
+    await expect(island.capturePair).resolves.toBeNull();
+    expect(readCaptures).not.toHaveBeenCalled();
+    expect(islandPair).not.toHaveBeenCalled();
+  });
+
+  it("still reads the pair for a readable target whose type floors (the generic view)", async () => {
+    const generic = {
+      target: target(9),
+      props: {},
+      mount: { kind: "floor", slot: "detail", packageName: null, reason: "no-semantic-renderer" },
+    } as unknown as PreparedReviewTarget;
+    const [stream] = streamReviewTargets(ORG, [{ target: target(9), prepared: Promise.resolve(generic) }], () =>
+      Promise.resolve({ kind: "ordinary" as const }),
+    );
+    await stream.capturePair;
+    expect(readCaptures).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("cinatra#3334 — a repair gate that cannot be keyed shows NO pair", () => {
   function repairPairing(runId: string, reviewTaskId: string) {
     // The surface's own lazy, shared pairing, exercised through the port's real

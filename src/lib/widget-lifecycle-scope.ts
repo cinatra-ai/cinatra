@@ -43,6 +43,8 @@
 // of either honouring it blindly or killing the whole session.
 // ---------------------------------------------------------------------------
 
+import { createHash } from "node:crypto";
+
 import { WIDGET_BROKER_ROUTE_PATH } from "@/lib/widget-broker-route";
 
 /**
@@ -155,6 +157,25 @@ export const WIDGET_LIFECYCLE_RECOMMENDATION_DECIDE_ROUTE_PATH =
  */
 export const WIDGET_LIFECYCLE_HITL_SCREEN_ROUTE_PATH =
   "/api/lifecycle-views/hitl-screen";
+
+/**
+ * The audience a widget PUBLISH-CARD read is served at (cinatra#4150). A fourth audience under the same
+ * `lifecycle.read` grant, for the hitl screen's reason: `publish_decision` is carried by this read and no view ref,
+ * and a run stopped in front of its publishing step until you answer is work waiting on you. A token minted before this
+ * audience existed is refused here, fail-closed, until the next sign-in.
+ */
+export const WIDGET_LIFECYCLE_PUBLISH_DECISION_ROUTE_PATH =
+  "/api/lifecycle-views/publish-decision";
+
+/**
+ * Where a widget ANSWER to the publish card is submitted (cinatra#4758): Allow or Do not allow. It belongs to
+ * `lifecycle.decide`, separate from the read audience above, for the hitl submit's reason: a token that may show the
+ * card does not thereby become a token that may answer it. Whether this person may decide THIS run is still the run's
+ * own access rules (`run.execute` then `run.approveHitl`), taken against their live standing by the same decision
+ * roads the app's card uses. A token minted before this audience existed is refused here, fail-closed.
+ */
+export const WIDGET_LIFECYCLE_PUBLISH_DECISION_DECIDE_ROUTE_PATH =
+  "/api/lifecycle-views/publish-decision/decide";
 
 /**
  * Where a widget ANSWER to that question is submitted (cinatra#2930,
@@ -426,7 +447,9 @@ export function widgetNoSignInScreenToken(
   const fingerprint = String(sessionFingerprint ?? "").trim();
   if (!/^[a-f0-9]{16,128}$/.test(fingerprint)) return "";
   const canonical = [...grantedScopes].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  return `${WIDGET_NO_SIGNIN_SCREEN_PREFIX}${fingerprint}:${formatTokenSet(canonical)})`;
+  // cinatra#4150 -- and the CONSENT of that set ({@link widgetConsentDigest}), so a grant that gains an audience under
+  // the same name is a different token.
+  return `${WIDGET_NO_SIGNIN_SCREEN_PREFIX}${fingerprint}:${formatTokenSet(canonical)}${consentSuffix(canonical)})`;
 }
 
 /** Is this recorded value a no-screen claim (whoever it names)? */
@@ -436,6 +459,64 @@ export function isNoSignInScreenToken(value: unknown): boolean {
     value.startsWith(WIDGET_NO_SIGNIN_SCREEN_PREFIX) &&
     value.endsWith(")")
   );
+}
+
+/**
+ * The digest of WHAT A PERSON CONSENTS TO for a set of grants: each known grant's name, the audiences it unlocks
+ * and the sentence the sign-in screen shows for it. Empty when the set holds no grant this build knows.
+ *
+ * cinatra#4150. A grant can gain an audience under the SAME name (the publish card's read joined `lifecycle.read`
+ * with a new sentence). Every consent record used to compare names only, so during a rolling deploy a screen an
+ * older node rendered, or a code an older node issued, read as agreeing with this build, and the redeem derived the
+ * wider audience set from the current mapping. Binding this digest into the screen record, the no-screen claim and
+ * the code makes those records disagree, so the person signs in again and reads the current sentence. It is never a
+ * source: nothing is granted because a record carries it; a mismatch can only REFUSE.
+ */
+export function widgetConsentDigest(grantedScopes: readonly unknown[] | null | undefined): string {
+  const known = normalizeExtensionScopes(grantedScopes);
+  if (known.length === 0) return "";
+  const material = known.map((scope) => {
+    const entry = WIDGET_EXTENSION_SCOPES[scope];
+    return [scope, [...entry.audiences].sort(), entry.consentCopy];
+  });
+  return createHash("sha256").update(JSON.stringify(material)).digest("hex").slice(0, 32);
+}
+
+/** `|consent:<digest>` for a set that holds a known grant, else empty. */
+function consentSuffix(grantedScopes: readonly unknown[]): string {
+  const digest = widgetConsentDigest(grantedScopes);
+  return digest ? `|consent:${digest}` : "";
+}
+
+/**
+ * The wrapper of the consent member a CODE's `granted_scopes` record carries (cinatra#4150), `(consent:<digest>)`.
+ * Outside the atom grammar, so a build that only knows scope names drops it as an unknown entry (and derives the
+ * narrower audience set its own mapping gives), and it can never be read as a scope.
+ */
+export const WIDGET_CODE_CONSENT_PREFIX = "(consent:";
+
+/**
+ * The `granted_scopes` value an authorization code stores: the known granted scopes plus the consent member for
+ * exactly that set under this build's mapping. A set with no known grant stores no consent member, as before.
+ */
+export function formatGrantedScopesRecord(
+  grantedScopes: readonly unknown[] | null | undefined,
+): string {
+  const known = normalizeExtensionScopes(grantedScopes);
+  const digest = widgetConsentDigest(known);
+  return formatTokenSet(digest ? [...known, `${WIDGET_CODE_CONSENT_PREFIX}${digest})`] : known);
+}
+
+/**
+ * Does a code's stored `granted_scopes` record bind the consent THIS build would grant on it? A record that grants
+ * no known scope needs none (it mints the base pair only). Any other record must carry the consent member for its
+ * own known set under the current mapping; a record from an older mapping, or one without the member (an older
+ * node's code), FAILS CLOSED at the redeem and the person signs in again.
+ */
+export function grantedScopesRecordBindsCurrentConsent(raw: unknown): boolean {
+  const known = grantedExtensionScopesFromScopeColumn(raw);
+  if (known.length === 0) return true;
+  return tokenSetHas(raw, `${WIDGET_CODE_CONSENT_PREFIX}${widgetConsentDigest(known)})`);
 }
 
 /**
@@ -488,7 +569,9 @@ export function widgetDisplayedScopesToken(
   displayedScopes: readonly string[],
 ): string {
   const canonical = [...displayedScopes].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  return `${WIDGET_DISPLAYED_SCREEN_PREFIX}${formatTokenSet(canonical)})`;
+  // cinatra#4150 -- the record names the consent it displayed, not only the names: a screen that showed an older
+  // sentence for the same grant names is a different record ({@link widgetConsentDigest}).
+  return `${WIDGET_DISPLAYED_SCREEN_PREFIX}${formatTokenSet(canonical)}${consentSuffix(canonical)})`;
 }
 
 /**
@@ -658,6 +741,8 @@ export const WIDGET_EXTENSION_SCOPES = {
       // added under the same rule: the audience joins the grant WITH the
       // sentence below that admits to it, in the same edit.
       WIDGET_LIFECYCLE_HITL_SCREEN_ROUTE_PATH,
+      // cinatra#4150 -- the publish card's own read surface, under the same rule, with its sentence below.
+      WIDGET_LIFECYCLE_PUBLISH_DECISION_ROUTE_PATH,
     ] as readonly string[],
     /**
      * The sentence the hosted SIGN-IN screen shows for this grant. It states
@@ -670,7 +755,7 @@ export const WIDGET_EXTENSION_SCOPES = {
      * grant cannot join the set without gaining a sentence at the same time.
      */
     consentCopy:
-      "Show you work items that are waiting on you — reviews and their outcomes, the skills an agent wants to use before a run you started begins, and a question an agent has paused to ask you — using the same permissions you have in Cinatra.",
+      "Show you work items that are waiting on you — reviews and their outcomes, the skills an agent wants to use before a run you started begins, a question an agent has paused to ask you, and whether an agent may publish what it made — using the same permissions you have in Cinatra.",
   },
   [WIDGET_LIFECYCLE_DECIDE_SCOPE]: {
     audiences: [
@@ -685,6 +770,8 @@ export const WIDGET_EXTENSION_SCOPES = {
       // `lifecycle.read` shows the question; this one answers it, and the two are
       // deliberately not the same grant.
       WIDGET_LIFECYCLE_HITL_SCREEN_SUBMIT_ROUTE_PATH,
+      // cinatra#4758 -- answering the publish card, under the same rule, with its sentence below.
+      WIDGET_LIFECYCLE_PUBLISH_DECISION_DECIDE_ROUTE_PATH,
     ] as readonly string[],
     /**
      * The sentence the hosted SIGN-IN screen shows for this grant.
@@ -694,7 +781,7 @@ export const WIDGET_EXTENSION_SCOPES = {
      * there is none.
      */
     consentCopy:
-      "Let you approve, reject or comment on those work items from this site, confirm, adjust or skip the skills a run was about to use, and answer a question an agent has paused to ask you — the same decisions, with the same permissions, as inside Cinatra.",
+      "Let you approve, reject or comment on those work items from this site, confirm, adjust or skip the skills a run was about to use, answer a question an agent has paused to ask you, and allow or not allow an agent to publish what it made — the same decisions, with the same permissions, as inside Cinatra.",
   },
   [WIDGET_CONVERSATION_READ_SCOPE]: {
     audiences: [

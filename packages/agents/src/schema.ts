@@ -370,6 +370,16 @@ export const agentRuns = cinatraSchema.table("agent_runs", {
   // streamed_text precedent); NULL means "not parked on a produced review".
   // Migration: see src/lib/drizzle-store.ts produced_review_park entry.
   producedReviewPark: text("produced_review_park"),
+  // cinatra#4150: the publish rows map ({ node: [{ label, input }] }, JSON-as-text) of the template object the worker
+  // dispatched this run's current attempt with (the pinned overlay included), written by the queued -> running CAS; a
+  // publish decision copies its node's rows from here, so a recompile between dispatch and park never relabels it. null =
+  // not recorded (a dispatch before core__0133, or a dispatch road that records none). DDL: drizzle-store.ts + core__0133.
+  dispatchPublishRows: text("dispatch_publish_rows"),
+  // cinatra#4150: the run's RESET GENERATION. A retry's reset (failed -> pending_input) raises it by 1 in the same
+  // compare-and-set, so each attempt a reset starts has its own number. A publish decision stamps it at the park
+  // (agent_run_publish_decisions.run_generation) and belongs to the current attempt only while the two are equal.
+  // A row from before the column reads 0. DDL: drizzle-store.ts + core__0133.
+  resetGeneration: integer("reset_generation").notNull().default(0),
   // authPolicy: per-run override of the template's agentAuthPolicy (JSON-as-text).
   // Nullable; null = inherit from agent_templates.agentAuthPolicy (or DEFAULT_AGENT_AUTH_POLICY).
   authPolicy: text("auth_policy"),
@@ -702,6 +712,11 @@ export const artifactReviewGates = cinatraSchema.table("artifact_review_gates", 
   // Added additively by artifact-review-gate-schema.ts + core__0079.
   expiresAt:     timestamp("expires_at", { withTimezone: true }),
   reopenCount:   integer("reopen_count").notNull().default(0),
+  // cinatra#4762 (core__0135): the run's reset_generation when the gate was raised, read from the run row in the
+  // insert; -1 when the run was not executing then (no attempt of its own). A publish gate counts only the reviews of
+  // its own attempt. null = raised by code older than the column, or from an event that names no attempt: read as
+  // generation 0 once settled; while open it holds every attempt's publish fence.
+  runGeneration: integer("run_generation"),
 }, (t) => ({
   // One gate per (run, task) — makes emit idempotent + is the pending anchor.
   runTaskUniq: uniqueIndex("artifact_review_gates_run_task_uniq").on(t.runId, t.reviewTaskId),
@@ -868,6 +883,11 @@ export const artifactProducedOutbox = cinatraSchema.table("artifact_produced_out
   status:                   text("status").notNull().default("pending"), // pending | processed | reconciled
   createdAt:                timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   processedAt:              timestamp("processed_at", { withTimezone: true }),
+  // cinatra#4762 (core__0135): the producing run's reset_generation when the event was written (read from the run
+  // row in the insert while it executes, else -1). The review the event raises carries it. null = an event written
+  // by code older than the column, of an unknown attempt: while pending it holds every attempt's publish fence, and
+  // its review is stamped null.
+  producerRunGeneration:    integer("producer_run_generation"),
 }, (t) => ({
   revisionUniq: uniqueIndex("artifact_produced_outbox_revision_uniq")
     .on(t.artifactId, t.representationRevisionId, t.eventKind),
@@ -932,6 +952,21 @@ export const agentRunPublishDecisions = cinatraSchema.table("agent_run_publish_d
   decisionNote:   text("decision_note"),
   createdAt:      timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   expiresAt:      timestamp("expires_at", { withTimezone: true }).notNull(),
+  // The rows the template declared for this node at the park ([{ label, input }], JSON-as-text); null = not recorded
+  // (a row older than core__0133, or a park whose template could not be read).
+  declaredRows:   text("declared_rows"),
+  // The run's reset_generation at the park (core__0133): the decision belongs to the run's current attempt only while
+  // this equals agent_runs.reset_generation. -1 = an attempt already ended (a park of a run not held at a gate, or a
+  // legacy row the migration found stale); null = a row written by code older than the column, read as generation 0.
+  runGeneration:  integer("run_generation"),
+  // The run's pause_generation at which the Allow released this decision (core__0134), written in the releasing UPDATE.
+  // A run still pending_approval at this generation waits at the very pause released here; any other generation means
+  // the run went on. null = not released, or released by code older than the column.
+  releasedPauseGeneration: bigint("released_pause_generation", { mode: "number" }),
+  // cinatra#4762 (core__0135): the publishing calls of this released decision now in flight (publish-decision-store
+  // claimPublishCall). While a decision of the run's current attempt has one, no output or review of the run is
+  // written. null = none.
+  callsInFlight:  integer("calls_in_flight"),
 }, (t) => ({
   parkUniq: uniqueIndex("agent_run_publish_decisions_park_uniq").on(t.runId, t.nodeId, t.gateTaskId),
   dueIdx:   index("agent_run_publish_decisions_due_idx").on(t.expiresAt).where(sql`status = 'parked'`),

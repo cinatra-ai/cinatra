@@ -1,3 +1,6 @@
+import type { VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
+import { verifyRunExecutedSource, readCurrentRunStepToolPolicy, readTrustedStepToolDeclaration } from "@cinatra-ai/agents/store";
+import type { StepToolReading } from "@cinatra-ai/agents/store";
 import "server-only";
 
 import * as path from "node:path";
@@ -94,6 +97,10 @@ import {
   verifyRunToken,
   RUN_TOKEN_HEADER,
   verifyRunStepAttestation,
+  verifySourceBoundRunStep,
+  verifyRunStepPublishDecision,
+  RUN_PUBLISH_DECISION_HEADER, RUN_PUBLISH_DECISION_ATTESTATION_HEADER,
+  RUN_RAW_SOURCE_HEADER, RUN_EXECUTED_SOURCE_HEADER, RUN_DECLARATION_SOURCE_HEADER, RUN_EXECUTION_ATTEMPT_HEADER,
   RUN_STEP_NODE_HEADER,
   RUN_STEP_ATTESTATION_HEADER,
 } from "@/lib/agent-run-token";
@@ -191,6 +198,12 @@ const RequestSchema = z.object({
   toolbox_ids: z.array(z.string()).optional(),
   // Structured output schema — passed through to the orchestration layer.
   output_schema: z.record(z.string(), z.unknown()).optional(),
+  // The error codes that still end this step as COMPLETED. A step answers a
+  // failure with a non-empty top-level `error.code`; the bridge ends the step
+  // failed on such an answer (422 STEP_DECLARED_FAILURE, see
+  // readDeclaredStepFailure) unless the step's own data lists the code here —
+  // e.g. a write step whose update was saved and only its re-read failed.
+  completed_error_codes: z.array(z.string()).max(50).optional(),
   // Explicit SKILL.md path on the host filesystem. Must be under an allowed skill root
   // and end with SKILL.md (path traversal guard). When absent, the route
   // auto-discovers from agents/<agent_id>/skills/<agent_id>/SKILL.md.
@@ -781,6 +794,144 @@ export function buildAgentRunInjectionPorts(
   };
 }
 
+// The bridge's answer to a step that answered a failure. WayFlow's ApiCallStep
+// fails a step on any non-2xx answer; the runtime's loader reads this code and
+// fails the step at once, without the retries it gives other non-2xx answers
+// (docker/wayflow/agent_loader.py, _patch_api_call_step_bridge_token).
+const STEP_DECLARED_FAILURE = "STEP_DECLARED_FAILURE";
+// The step's code is cut at this many Unicode code points (the loader's count).
+const STEP_FAILURE_CODE_MAX = 200;
+// The caller's agent id is only a label in the log line, cut at this length
+// (in code points).
+const STEP_FAILURE_LOG_LABEL_MAX = 120;
+
+/**
+ * `value` cut after `max` Unicode code points. The runtime's loader counts code
+ * points (python slices a string by code point), but `String.prototype.slice`
+ * counts UTF-16 code units, so a cut that falls inside a character outside the
+ * BMP would leave a lone high surrogate. A surrogate pair counts as ONE code
+ * point and a lone surrogate counts as one, as python counts the same text once
+ * it is decoded from JSON.
+ */
+function cutCodePoints(value: string, max: number): string {
+  let end = 0;
+  for (let counted = 0; counted < max && end < value.length; counted += 1) {
+    end += (value.codePointAt(end) ?? 0) > 0xffff ? 2 : 1;
+  }
+  return value.slice(0, end);
+}
+
+/**
+ * A caller-given value as it may stand in a log line: cut at `max` code points
+ * and JSON-escaped, so it stays ONE bounded quoted token on ONE line and can
+ * neither flood the log nor forge another entry. JSON.stringify escapes the
+ * quote, the backslash, every control character below U+0020 and a lone
+ * surrogate; the DEL and C1 controls and the separators U+2028 and U+2029,
+ * which it leaves raw, are escaped here as well.
+ */
+function logToken(value: string, max: number): string {
+  return JSON.stringify(cutCodePoints(value, max)).replace(
+    /[\u007f-\u009f\u2028\u2029]/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+/**
+ * A step's answer that ends the step FAILED, or null.
+ *
+ * A bridge step answers a failure in its own declared `error` output: an object
+ * whose `code` is a non-empty string. That answer ends the step failed unless
+ * the step's data lists the code in `completed_error_codes`. A successful answer
+ * carries no `error`, a null one, or one with an empty `code` (a strict
+ * structured-output schema makes every declared output appear, so a success
+ * answers `error: { code: "", message: "" }`). Only the TOP-LEVEL `error` of an
+ * object answer is read: an `error` nested in another output, and every answer
+ * that is not a JSON object, are passed on unchanged as before. Only the code is
+ * read, cut at STEP_FAILURE_CODE_MAX code points: the model's `message` is never
+ * read.
+ */
+function readDeclaredStepFailure(
+  parsed: unknown,
+  completedCodes: readonly string[] | undefined,
+): { code: string } | null {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const error = (parsed as { error?: unknown }).error;
+  if (!error || typeof error !== "object" || Array.isArray(error)) return null;
+  const { code } = error as { code?: unknown };
+  if (typeof code !== "string" || code.trim() === "") return null;
+  if (completedCodes?.includes(code)) return null;
+  return { code: cutCodePoints(code, STEP_FAILURE_CODE_MAX) };
+}
+
+/**
+ * The step's code as the 422 body carries it: JSON-escaped without the quotes,
+ * and every character outside printable ASCII written as a \uXXXX escape, so
+ * it is ONE line of printable ASCII. This is the escape the runtime's loader
+ * gives the code (docker/wayflow/agent_loader.py, StepDeclaredFailureError:
+ * json.dumps, then DEL), for every string: a character outside the BMP is
+ * written as the escapes of its surrogate pair, a lone surrogate as its own
+ * escape, and U+2028 and U+2029 as escapes. The caller cuts the code first, by
+ * code points, as the loader does (cutCodePoints).
+ */
+function stepCodeText(code: string): string {
+  return JSON.stringify(code)
+    .slice(1, -1)
+    .replace(/[^\x20-\x7e]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
+/**
+ * The body of the 422 STEP_DECLARED_FAILURE answer, members in this order. It
+ * holds NO model text: a fixed sentence, the fixed code and the step's own code
+ * (cut and escaped by stepCodeText). The model's message is never part of it.
+ */
+type DeclaredStepFailureBody = {
+  error: string;
+  code: string;
+  stepErrorCode: string;
+};
+
+/**
+ * The ONE outcome rule for a model's answer, read at EVERY branch of this route
+ * that calls a model (the text path and both media-input paths): the body of
+ * the 422 STEP_DECLARED_FAILURE answer when the answer `text` is a JSON object
+ * whose top-level `error` declares a failure the step does not list as
+ * completed (readDeclaredStepFailure), else null and the branch answers as
+ * before. Text that is not JSON (a transcript, prose) is never a declared
+ * failure. The log line names the bounded code and the caller's agent label,
+ * each as one cut, JSON-escaped token (logToken). Neither the log line nor the
+ * body names the model's message.
+ *
+ * The helper hands back a plain body, never a response: each branch returns it
+ * itself as NextResponse.json(body, { status: 422 }), so every answer of this
+ * route is built at the place that returns it.
+ */
+function declaredStepFailureBody(
+  text: string,
+  completedCodes: readonly string[] | undefined,
+  agentLabel: string,
+): DeclaredStepFailureBody | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const declaredFailure = readDeclaredStepFailure(parsed, completedCodes);
+  if (!declaredFailure) return null;
+  console.warn(
+    `[llm-bridge] step answered the error code ` +
+      `${logToken(declaredFailure.code, STEP_FAILURE_CODE_MAX)} ` +
+      `(agent=${logToken(agentLabel, STEP_FAILURE_LOG_LABEL_MAX)}); ` +
+      `its data does not list the code ` +
+      `as completed, so the step ends failed (422 ${STEP_DECLARED_FAILURE}).`,
+  );
+  return {
+    error: "The step answered a failure",
+    code: STEP_DECLARED_FAILURE,
+    stepErrorCode: stepCodeText(declaredFailure.code),
+  };
+}
+
 function toPersonalDelta(
   skill: unknown,
   isDeliverable?: (skillId: string) => boolean,
@@ -799,7 +950,45 @@ function toPersonalDelta(
 }
 
 
+/**
+ * cinatra#3745: the source and step-tool policy read that comes before EVERY
+ * provider call of a run (the text road and each media road). A run-bound
+ * call with a verified executing source gets its step's declared policy, read
+ * in the same statement that proves that source still current: a run
+ * re-dispatched since the entry check is refused, and any failure of that read
+ * (a refusal, a malformed declaration, a store error) answers the entry
+ * check's fixed 403 `run_source_mismatch`, never its text. A run-bound call
+ * without a verified executing source is offered no tool; a call with no
+ * resolved run is not restricted.
+ */
+async function readRunPolicyBeforeProvider(
+  run: { id: string; orgId?: string | null } | null,
+  verifiedExecutedSource: VerifiedExecutedRunSource | undefined,
+): Promise<{ refused: Response; stepToolPolicy?: undefined } | { refused: null; stepToolPolicy: StepToolReading | undefined }> {
+  if (!run) return { refused: null, stepToolPolicy: undefined };
+  if (!verifiedExecutedSource) return { refused: null, stepToolPolicy: { kind: "declared", tools: [] } };
+  try {
+    return { refused: null, stepToolPolicy: readTrustedStepToolDeclaration((await readCurrentRunStepToolPolicy(run.id,
+      run.orgId!, verifiedExecutedSource)).source, verifiedExecutedSource.stepId) };
+  } catch {
+    return { refused: NextResponse.json({ error: "Executing source could not be verified", code: "run_source_mismatch" }, { status: 403 }) };
+  }
+}
+
+/** cinatra#4762: a publishing call holds its released decision until its answer is built, whatever it is
+ *  (publishCallAllowed), so no output or review of its run is written while its effect runs. The release is awaited
+ *  before the answer goes back: the run's next node cannot write while it is still pending. A release that cannot be
+ *  written is logged and the answer still goes back, since the call's effect has already happened. */
 export async function POST(req: Request): Promise<Response> {
+  const releases: Array<() => Promise<void>> = [];
+  try {
+    return await handleBridge(req, (release) => { releases.push(release); });
+  } finally {
+    for (const release of releases) await release();
+  }
+}
+
+async function handleBridge(req: Request, holdRelease: (release: () => Promise<void>) => void): Promise<Response> {
   // Dual auth: bridge token (WayFlow TS) OR Bearer JWT (Python containers).
   let bridgeActorContext: ActorContext | undefined;
   const isBridgeAuthorized = isAuthorizedBridgeRequest(req);
@@ -999,23 +1188,72 @@ export async function POST(req: Request): Promise<Response> {
   // dedicated key. The step is read only on a call whose run token resolved a
   // run (a bridge-authorized call) and whose context-id header names that same
   // run, and only from the runtime's signed pair, verified with that context
-  // id. The body and every other header are never read for a step. An absent
-  // or unverified pair gives no step and changes nothing else.
-  const verifiedStepId =
+  // id. The body and every other header are never read for a step. Without
+  // source headers, an absent or unverified `s1` pair gives no step and changes
+  // nothing else. A call that carries any source header (the attempt header
+  // included) must have a run token that resolved a run and must present an
+  // `s2` pair over the step, the attempt the calling task was sent under and
+  // the executing source that verifies, with the context id naming that run,
+  // and the run must be running under that attempt, the one that source is
+  // bound to; otherwise it is refused (403 `run_source_mismatch`, a fixed
+  // sentence) before any provider is reached, and the step is the proof's. A
+  // call with source headers and without a resolved run (no run token, a run
+  // token that resolves no run, or a bearer caller) is refused the same way:
+  // the runtime sends source headers only with the run token, as on the
+  // passthrough road, where every source-header call is verified.
+  // A blank key is no key (cinatra#4154), for `s1` and `s2`, as on the passthrough road.
+  const attestKey = process.env.CINATRA_CONTEXT_ATTEST_KEY;
+  const stepAttestKey = attestKey && attestKey.trim() !== "" ? attestKey : null;
+  let verifiedStepId =
     runFromToken && a2aContextId && runFromContextId?.id === runFromToken.id
       ? (verifyRunStepAttestation({
-          key: process.env.CINATRA_CONTEXT_ATTEST_KEY,
+          key: stepAttestKey,
           contextId: a2aContextId,
           node: req.headers.get(RUN_STEP_NODE_HEADER),
           attestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER),
         }) ?? undefined)
       : undefined;
 
+  let verifiedExecutedSource: VerifiedExecutedRunSource | undefined;
+  // cinatra#3745: the publish decision the call was made under, signed beside the source-bound pair (s3).
+  let verifiedPublishDecisionId: string | undefined;
+  if (req.headers.get(RUN_RAW_SOURCE_HEADER) !== null || req.headers.get(RUN_EXECUTED_SOURCE_HEADER) !== null ||
+      req.headers.get(RUN_DECLARATION_SOURCE_HEADER) !== null || req.headers.get(RUN_EXECUTION_ATTEMPT_HEADER) !== null) {
+    const sourceAttestation = verifySourceBoundRunStep({ key: stepAttestKey,
+      contextId: a2aContextId, node: req.headers.get(RUN_STEP_NODE_HEADER),
+      executionAttemptId: req.headers.get(RUN_EXECUTION_ATTEMPT_HEADER),
+      attestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER),
+      sourceSha256: req.headers.get(RUN_RAW_SOURCE_HEADER),
+      executedSourceSha256: req.headers.get(RUN_EXECUTED_SOURCE_HEADER),
+      declarationSourceSha256: req.headers.get(RUN_DECLARATION_SOURCE_HEADER) });
+    try {
+      if (!runFromToken || !sourceAttestation || !runFromToken.orgId || runFromContextId?.id !== runFromToken.id) throw new Error("source_binding_invalid");
+      verifiedExecutedSource = await verifyRunExecutedSource(runFromToken.id, runFromToken.orgId, sourceAttestation);
+      verifiedStepId = verifiedExecutedSource.stepId;
+      // A call that names a publish decision must carry its valid signature over this same pair; else it is refused.
+      if (req.headers.get(RUN_PUBLISH_DECISION_HEADER) !== null || req.headers.get(RUN_PUBLISH_DECISION_ATTESTATION_HEADER) !== null) {
+        const decision = verifyRunStepPublishDecision({ key: stepAttestKey, proof: sourceAttestation,
+          publishDecisionId: req.headers.get(RUN_PUBLISH_DECISION_HEADER),
+          attestation: req.headers.get(RUN_PUBLISH_DECISION_ATTESTATION_HEADER),
+          stepAttestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER) });
+        if (decision === null) throw new Error("publish_decision_invalid");
+        verifiedPublishDecisionId = decision;
+      }
+    } catch {
+      return NextResponse.json({ error: "Executing source could not be verified", code: "run_source_mismatch" }, { status: 403 });
+    }
+  } else if (req.headers.get(RUN_PUBLISH_DECISION_HEADER) !== null ||
+      req.headers.get(RUN_PUBLISH_DECISION_ATTESTATION_HEADER) !== null) {
+    // A decision is signed only beside a source-bound pair; a call that names one without that pair cannot prove it,
+    // and is refused as a bad signature is, never served as a call that names none.
+    return NextResponse.json({ error: "Executing source could not be verified", code: "run_source_mismatch" }, { status: 403 });
+  }
+
   // cinatra#4150 — no publish without a released decision, enforced at the call,
   // before any provider is reached. The run is the one the token proved, else the
   // one the context-id header names; the step is the verified step above, or none.
   const publishRun = runFromToken ?? runFromContextId;
-  if (publishRun && !(await publishCallAllowed(publishRun, verifiedStepId))) {
+  if (publishRun && !(await publishCallAllowed(publishRun, verifiedStepId, holdRelease))) {
     return NextResponse.json(
       { error: "This call waits for a publish decision.", code: "publish_not_released" },
       { status: 403 },
@@ -1126,6 +1364,8 @@ export async function POST(req: Request): Promise<Response> {
           { status: 503 },
         );
       }
+      const youTubeRead = await readRunPolicyBeforeProvider(runFromToken, verifiedExecutedSource);
+      if (youTubeRead.refused) return youTubeRead.refused;
       const result = await withUsageAttribution(mediaUsageAttribution, () =>
         adapter.generate({
           system: combinedSystem,
@@ -1134,7 +1374,14 @@ export async function POST(req: Request): Promise<Response> {
           maxSteps: 1,
         }),
       );
-      return NextResponse.json({ text: result.text ?? "" });
+      const youTubeText = result.text ?? "";
+      const youTubeFailure = declaredStepFailureBody(
+        youTubeText,
+        body.completed_error_codes,
+        body.agent_id ?? "media-transcript-agent",
+      );
+      if (youTubeFailure) return NextResponse.json(youTubeFailure, { status: 422 });
+      return NextResponse.json({ text: youTubeText });
     }
 
     // Non-YouTube file branch — fetch + stream-count + upload + transcribe.
@@ -1238,6 +1485,8 @@ export async function POST(req: Request): Promise<Response> {
     }
     const filename =
       body.media.url.split("/").pop()?.split("?")[0] || "media-input";
+    const uploadRead = await readRunPolicyBeforeProvider(runFromToken, verifiedExecutedSource);
+    if (uploadRead.refused) return uploadRead.refused;
     const fileRef = await adapter.uploadFile({
       content: streamResult.bytes,
       filename,
@@ -1247,6 +1496,8 @@ export async function POST(req: Request): Promise<Response> {
     try {
       // uploadResult.id is the Gemini File resource path "files/abc";
       // the Gemini SDK accepts this resource-path form as a fileUri.
+      const fileRead = await readRunPolicyBeforeProvider(runFromToken, verifiedExecutedSource);
+      if (fileRead.refused) return fileRead.refused;
       const result = await withUsageAttribution(mediaUsageAttribution, () =>
         adapter.generateFromMediaFile!({
           system: combinedSystem,
@@ -1256,7 +1507,14 @@ export async function POST(req: Request): Promise<Response> {
           logLabel: body.agent_id ?? "media-transcript-agent",
         }),
       );
-      return NextResponse.json({ text: result.text ?? "" });
+      const fileText = result.text ?? "";
+      const fileFailure = declaredStepFailureBody(
+        fileText,
+        body.completed_error_codes,
+        body.agent_id ?? "media-transcript-agent",
+      );
+      if (fileFailure) return NextResponse.json(fileFailure, { status: 422 });
+      return NextResponse.json({ text: fileText });
     } finally {
       if (adapter.deleteFile) {
         adapter
@@ -1628,13 +1886,21 @@ export async function POST(req: Request): Promise<Response> {
     // preferredProvider. When kind === "passthrough", we pass NO
     // preferredProvider / preferredModel so the orchestration helper takes
     // the backward-compatible path.
+    // cinatra#3745: a run-bound model call is offered only the tools its step
+    // declares in the run's bound source, read here, just before the provider
+    // is reached (readRunPolicyBeforeProvider; the media roads above read it
+    // the same way before each of their provider calls).
+    const policyRead = await readRunPolicyBeforeProvider(runForPorts, verifiedExecutedSource);
+    if (policyRead.refused) return policyRead.refused;
+    const stepToolPolicy = policyRead.stepToolPolicy;
     const dispatchOverrides =
       dispatch.kind === "dispatch"
         ? {
+            ...(stepToolPolicy ? { stepToolPolicy } : {}),
             preferredProvider: dispatch.effectiveProvider,
             preferredModel: dispatch.preferredModel,
           }
-        : {};
+        : { ...(stepToolPolicy ? { stepToolPolicy } : {}) };
 
     // Telemetry only. requested_provider captures what
     // metadata.cinatra.llm.preferredProvider asked for (NULL when no
@@ -1710,13 +1976,15 @@ export async function POST(req: Request): Promise<Response> {
         });
       }
       // Build the cinatra-mcp delegated-token override ONLY when the
-      // bridge has resolved a real agent_run row with both an `orgId`
-      // and a `runBy`. The resolver does a LIVE platform-role +
-      // membership check at mint time — a demoted user gets `null` and
-      // the override falls back to the machine `client_credentials`
-      // Bearer it now mints itself (same authz outcome as pre-fix, will
-      // fail at `enforceMcpBoundary` with `not_org_member`, never an
-      // elevation).
+      // bridge has resolved a real agent_run row with an `orgId` and
+      // either a `runBy` or a verified executing source (cinatra#3745: a
+      // source proof alone installs the override, which answers null when
+      // no on-behalf-of actor is possible). The resolver does a LIVE
+      // platform-role + membership check at mint time — a demoted user
+      // gets `null` and, without a source, the override falls back to the
+      // machine `client_credentials` Bearer it now mints itself (same authz
+      // outcome as pre-fix, will fail at `enforceMcpBoundary` with
+      // `not_org_member`, never an elevation).
       //
       // The provider gate keys on the provider the task actually RUNS on
       // (#1195 codex round-1): a `cinatra_llm` dispatch overrides the
@@ -1732,7 +2000,7 @@ export async function POST(req: Request): Promise<Response> {
           : resolvedRuntimeProvider;
       const cinatraMcpToolOverride =
         runForPorts?.orgId &&
-        runForPorts?.runBy &&
+        (runForPorts?.runBy || verifiedExecutedSource) &&
         runForPorts?.id &&
         // cinatra#2910: no effective PROVIDER (the scripted test runtime) ⇒ no
         // native-MCP OBO mint. Nothing is elevated and nothing is skipped that
@@ -1761,7 +2029,17 @@ export async function POST(req: Request): Promise<Response> {
               // NO run attribution (an unattributed write, never a misattributed
               // one; a forged x-cinatra-run-id claim is refused at the MCP
               // transport).
+              //
+              // cinatra#3745: a source-bound step NEVER gets a machine bearer.
+              // The bearer outlives its binding (cleared at the end of this
+              // request, 300s TTL), and once the binding is gone the MCP reader
+              // can only read the bearer as an ordinary caller without the
+              // proof. Such a step gets the cinatra tool only through the
+              // on-behalf-of token, which carries the proof itself; when that
+              // road is unavailable the tool is withheld (null is authoritative:
+              // nothing falls back underneath).
               const buildMachineToolWithDurableBinding = async () => {
+                if (verifiedExecutedSource) return null;
                 // Byte-equivalence with the orchestration fallback this
                 // replaces requires the EFFECTIVE provider (the gate above
                 // already keys on it): registry.ts would have minted the
@@ -1803,6 +2081,9 @@ export async function POST(req: Request): Promise<Response> {
                 }
                 return machineTool;
               };
+              // cinatra#3745: an actor-less run is here only with a verified
+              // source; it has no on-behalf-of actor, so the tool is withheld.
+              if (!runForPorts.runBy) return buildMachineToolWithDurableBinding();
               const actor = await resolveAgentRunMcpActor({
                 runId: runForPorts.id,
                 runBy: runForPorts.runBy!,
@@ -1889,6 +2170,9 @@ export async function POST(req: Request): Promise<Response> {
                   ...(runForPorts.connectorInstanceBinding
                     ? { connectorInstancePin: runForPorts.connectorInstanceBinding }
                     : {}),
+                  ...(verifiedExecutedSource ? { verifiedExecutedSource } : {}),
+                  // `pdc` claim (cinatra#3745): the call's verified publish decision, only beside its proof.
+                  ...(verifiedExecutedSource && verifiedPublishDecisionId ? { verifiedPublishDecisionId } : {}),
                 },
                 issueAgentRunMcpActorToken,
                 cinatraMcpAllowedTools,
@@ -1898,7 +2182,12 @@ export async function POST(req: Request): Promise<Response> {
               if (oboTool) return oboTool;
               return buildMachineToolWithDurableBinding();
             }
-          : undefined;
+          : // cinatra#3745: a source-bound step on a provider without the
+            // on-behalf-of road still gets an authoritative override, so the
+            // orchestration never mints its own machine bearer for it.
+            verifiedExecutedSource
+            ? async () => null
+            : undefined;
 
       // exec-plane S3 A2 (cinatra#1708 §1.1): resolve the run's DECLARED L1
       // environment into a mountable layer + broker executor, or REFUSE a
@@ -2116,11 +2405,18 @@ export async function POST(req: Request): Promise<Response> {
     if (skillSelection) {
       console.warn(
         `[llm-bridge] general-path Anthropic skill rank-and-truncate ` +
-          `(agent=${body.agent_id ?? "wayflow"}): ` +
+          `(agent=${logToken(body.agent_id ?? "wayflow", STEP_FAILURE_LOG_LABEL_MAX)}): ` +
           `dropped=[${skillSelection.droppedSkillIds.join(",")}] — ` +
           `${skillSelection.selectionReason}`,
       );
     }
+
+    const declaredFailure = declaredStepFailureBody(
+      text,
+      body.completed_error_codes,
+      body.agent_id ?? "wayflow",
+    );
+    if (declaredFailure) return NextResponse.json(declaredFailure, { status: 422 });
 
     try {
       const parsed = JSON.parse(text);

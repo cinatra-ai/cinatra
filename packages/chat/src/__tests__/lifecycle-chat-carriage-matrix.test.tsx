@@ -107,6 +107,11 @@ const hitlScreenStateMock = vi.fn(async () => ({ state: "none" }) as Record<stri
 vi.mock("../../../agents/src/agent-hitl-screen-actions", () => ({
   getAgentHitlScreenStateAction: () => hitlScreenStateMock(),
 }));
+// The publish card's own session entry (cinatra#4150), stubbed for the same reason; "none" unless its own arm runs.
+const publishStateMock = vi.fn(async () => ({ state: "none" }) as Record<string, unknown>);
+vi.mock("../../../agents/src/publish-decision-card-actions", () => ({
+  getPublishDecisionCardStateAction: () => publishStateMock(),
+}));
 vi.mock("../../../agents/src/hitl-actions", () => ({
   approveReviewTask: vi.fn(async () => undefined),
   rejectReviewTask: vi.fn(async () => undefined),
@@ -207,6 +212,19 @@ const REF_BY_KIND: Record<LifecycleCardKind, string> = {
   // keyed by the protocol's closed set and a missing key would be a kind the
   // matrix silently skips.
   agent_hitl_screen: "hitl-screen-ref-2928",
+  // cinatra#4150 -- the sixth kind, carried by the run's read: never minted into an envelope and never an interrupt,
+  // keyed here for the closed set.
+  publish_decision: "publish-decision-ref-4150",
+};
+
+/** The publish card's own authorized answer (cinatra#4150): an open decision, answered only on this kind's arm. */
+const PUBLISH_PENDING = {
+  state: "pending",
+  runId: RUN_ID,
+  agentName: "Proof agent",
+  rows: [{ label: "Title", value: "Spring launch" }],
+  decisionId: "d1",
+  mayDecide: true,
 };
 
 /**
@@ -256,11 +274,14 @@ async function driveSink(kind: LifecycleCardKind): Promise<AgUiEvent[]> {
   });
   adapter.start();
   adapter.send("text", { content: PROSE });
-  if (kind === "recommendation_hold" || kind === "agent_hitl_screen") {
+  if (kind === "recommendation_hold" || kind === "agent_hitl_screen" || kind === "publish_decision") {
     // Both INTERRUPT kinds run the shape they actually have: an `agent_run`
     // dispatch that parks, whose own tool call is the slot. The hold parks
     // BEFORE the run starts (`pending_input`); the HITL screen parks the run
-    // mid-flight while the agent asks (`pending_approval`).
+    // mid-flight while the agent asks (`pending_approval`). The publish card
+    // (cinatra#4150) is NOT an interrupt kind: its gate parks the run in
+    // `pending_approval` and emits nothing, so the same parked `agent_run`
+    // dispatch is all the turn carries, and the card is found by its own read.
     adapter.send("tool_call", { id: CALL_ID, name: "agent_run" });
     adapter.send("tool_result", {
       id: CALL_ID,
@@ -506,6 +527,9 @@ async function mountKind(kind: LifecycleCardKind) {
   hitlScreenStateMock.mockImplementation(async () =>
     kind === "agent_hitl_screen" ? HITL_SCREEN_ASKING : { state: "none" },
   );
+  publishStateMock.mockImplementation(async () =>
+    kind === "publish_decision" ? PUBLISH_PENDING : { state: "none" },
+  );
   const { messages, producingSlot } = await reducedTurn(kind);
   const mounted = await mountSurface("chat", { messages });
   const root = mounted.container.querySelector<HTMLElement>('[data-parity-surface="chat"]');
@@ -601,6 +625,24 @@ describe("the five-kind chat_thread carriage matrix, in the REAL view", () => {
     expect([...CHAT_THREAD_CARRIAGE_CONTRACT.map((r) => r.kind)].sort()).toEqual(
       [...LIFECYCLE_CARD_KINDS].sort(),
     );
+  });
+
+  // cinatra#4150: the matrix's ref map names the sixth kind, so the closed set it is read against must hold it too.
+  it("keys its ref map by exactly the protocol's closed kind set, the publish decision included", () => {
+    expect(Object.keys(REF_BY_KIND).sort()).toEqual([...LIFECYCLE_CARD_KINDS].sort());
+  });
+
+  // cinatra#4150: the publish gate emits no typed interrupt, so the row claims none. The turn carries only the parked
+  // `agent_run` dispatch, and the card draws from its own read of the run's publish decision.
+  it("publish_decision: carried by the run's read, not an interrupt; the card draws from that read", async () => {
+    const row = carriageRowFor("publish_decision");
+    expect(row.carriage).toBe("read");
+    const events = await driveSink("publish_decision");
+    expect(events.some((e) => e.type === "INTERRUPT")).toBe(false);
+    publishStateMock.mockClear();
+    const { root } = await mountKind("publish_decision");
+    await waitFor(() => expect(root.querySelector('[data-lifecycle-card="publish_decision"]')).not.toBeNull());
+    expect(publishStateMock).toHaveBeenCalled();
   });
 
   it.each([...LIFECYCLE_CARD_KINDS])(

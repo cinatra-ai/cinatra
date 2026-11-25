@@ -1,6 +1,8 @@
 import "server-only";
 
 import { createHmac, timingSafeEqual } from "node:crypto";
+import type { VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
+import { parseVerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
 import {
   getLocalMcpServerUrl,
   getPublicMcpServerUrl,
@@ -107,7 +109,21 @@ export type AgentRunMcpActor = {
    * carried to the tool server's frame; it grants nothing on its own.
    */
   verifiedStepId?: string;
+  /** Signed executed-source proof; legacy step-only tokens grant no action. */
+  verifiedExecutedSource?: VerifiedExecutedRunSource;
+  /**
+   * The publish decision the calling model step was made under (the `pdc`
+   * claim, cinatra#3745): the decision id the flow runtime signed (`s3`) beside
+   * the source proof and the bridge verified. Present only with
+   * `verifiedExecutedSource`; it grants nothing on its own.
+   */
+  verifiedPublishDecisionId?: string;
 };
+
+/** A publish decision id as the run-source proof's fields are: 1 to 512 characters, no line break. */
+function isPublishDecisionId(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 512 && !/[\r\n]/.test(value);
+}
 
 type AgentRunMcpActorTokenClaims = {
   t: "cinatra.agent-run.mcp-obo";
@@ -126,6 +142,9 @@ type AgentRunMcpActorTokenClaims = {
   /** The verified step of the calling model step (cinatra#3745) — optional;
    *  see `AgentRunMcpActor.verifiedStepId`. */
   stp?: string;
+  src?: VerifiedExecutedRunSource;
+  /** The verified publish decision of the call (cinatra#3745) — optional, only beside `src`. */
+  pdc?: string;
   scope: "mcp:connect";
   aud: string;
   iss: string;
@@ -192,6 +211,13 @@ function issueIssuer(): string {
 }
 
 export function issueAgentRunMcpActorToken(input: AgentRunMcpActor): string {
+  const source = input.verifiedExecutedSource === undefined ? undefined : parseVerifiedExecutedRunSource(input.verifiedExecutedSource);
+  if (input.verifiedExecutedSource !== undefined && (!source || source.stepId !== input.verifiedStepId || source.executionAttemptId !== input.executionAttemptId)) {
+    throw new Error("agent_run_source_claim_mismatch");
+  }
+  if (input.verifiedPublishDecisionId !== undefined && (!source || !isPublishDecisionId(input.verifiedPublishDecisionId))) {
+    throw new Error("agent_run_decision_claim_mismatch");
+  }
   const now = Math.floor(Date.now() / 1000);
   const header = { alg: "HS256", typ: "JWT" };
   const payload: AgentRunMcpActorTokenClaims = {
@@ -215,6 +241,8 @@ export function issueAgentRunMcpActorToken(input: AgentRunMcpActor): string {
     // The verified step of the calling model step (cinatra#3745), written only
     // when the bridge verified one.
     ...(input.verifiedStepId ? { stp: input.verifiedStepId } : {}),
+    ...(source ? { src: source } : {}),
+    ...(input.verifiedPublishDecisionId !== undefined ? { pdc: input.verifiedPublishDecisionId } : {}),
     scope: TOKEN_SCOPE,
     aud: issueAudience(),
     iss: issueIssuer(),
@@ -323,8 +351,15 @@ export function verifyAgentRunMcpActorToken(input: {
       return null;
     }
     if (payload.exp < now) return null;
+    const source = payload.src === undefined ? undefined : parseVerifiedExecutedRunSource(payload.src);
+    // A present corrupt proof refuses the WHOLE token, never a step-only downgrade.
+    if (payload.src !== undefined && (!source || source.stepId !== payload.stp || source.executionAttemptId !== payload.att)) return null;
+    // A present publish decision must be well formed and ride with a source proof, else the WHOLE token is refused.
+    if (payload.pdc !== undefined && (!source || !isPublishDecisionId(payload.pdc))) return null;
 
     return {
+      ...(source ? { verifiedExecutedSource: source } : {}),
+      ...(isPublishDecisionId(payload.pdc) ? { verifiedPublishDecisionId: payload.pdc } : {}),
       delegation: "agent_run",
       userId: payload.sub,
       orgId: payload.org,

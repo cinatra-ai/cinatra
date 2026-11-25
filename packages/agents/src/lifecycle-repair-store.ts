@@ -89,6 +89,12 @@ import {
 } from "@/lib/lifecycle/lifecycle-orchestration";
 import { baseReviewTaskId, isDeclaredReviewLeg, isDeclaredReviewTaskId } from "@/lib/artifacts/artifact-review-target";
 import { createdAtMicrosSql, laterDeclaredPause } from "./declared-review-pause";
+import {
+  REGENERATE_BOUND_REACHED,
+  REGENERATE_NO_NOTE_INPUT,
+  REGENERATE_NO_STEP_ROAD,
+} from "@/lib/artifacts/review-surface-model";
+import { regenerateStepRoadDispatches } from "./regenerate-step-road";
 
 /** The store's executor: the pool, or the caller's open transaction. */
 type RepairStoreExecutor =
@@ -157,6 +163,44 @@ export interface RecordChangesRequestedInput {
    * the approve/reject commit now leaves: `resolved_by` on the gate. Null where
    * the host cannot name an actor (a worker-driven record). */
   decidedBy?: string | null;
+  /**
+   * WHICH ROAD ASKED (cinatra#3080 acceptance item 4). Two callers reach this
+   * one operation and they want different things of a run that has nothing left
+   * to make the work again:
+   *
+   *   `typed`      — the change road's own request. A producer that cannot
+   *                  repair ESCALATES to a human or an org route: the request is
+   *                  recorded, the gate closes, and a person picks it up. That
+   *                  is the route's design and it is unchanged.
+   *   `regenerate` — the review floor's Regenerate, which promises exactly one
+   *                  thing: this work, made again, under a successor gate. When
+   *                  no producing step can deliver that, the operation REFUSES
+   *                  before it writes anything and the gate stays PENDING. It
+   *                  must never settle a gate whose successor is not coming —
+   *                  the shape a real run was found in: one gate row before, one
+   *                  gate row after, a review closed for a revision nobody was
+   *                  going to make.
+   *
+   * Defaults to `typed`, so every caller that predates this field keeps its
+   * behaviour byte for byte.
+   */
+  origin?: "typed" | "regenerate";
+  /**
+   * THE PRODUCING STEP'S DECLARED NOTE INPUT (cinatra#3080, the 2026-10-13
+   * decision): the producing template's artifact-scoped `regenerate` entry
+   * (cinatra#4264) for the node that filed the reviewed revision, or null when
+   * there is none. Read ONLY for `origin: "regenerate"`, where it REPLACES
+   * `repairCapable`: a Regenerate is available exactly when that step declares
+   * its Note input, whatever the agent-level flag or the template's root
+   * `repairFindingsInput` says. Absent or null ⇒ the Regenerate is refused with
+   * the plain reason, before anything is written. A recorded Regenerate stores
+   * the entry's `artifactNode` as the repair's `regenerate_node_id` (the
+   * Regenerate intent), so its dispatch re-derives the same entry and never
+   * runs it as an ordinary repair. While no step road dispatches a Regenerate
+   * (`regenerateStepRoadDispatches`), an admitted Regenerate is refused before
+   * anything is written. Ignored by the `typed` road.
+   */
+  regenerateEntry?: { artifactNode: string; step: string; noteInput: string } | null;
   /**
    * cinatra#4245: the change request ENDS the pause of `runId` at a review step
    * the flow declares itself (`pauseTaskId` is the A2A task of that pause). Only
@@ -380,9 +424,28 @@ export async function recordChangesRequested(
     .from(lifecycleRepair)
     .where(eq(lifecycleRepair.gateId, request.gateId))
     .limit(1);
+  // A REGENERATE RECONCILES ONLY AGAINST ITS OWN ROW (pre-review 1 of #4571,
+  // finding 3). The key carries the origin, so a row with this request's key is
+  // this Regenerate's own earlier press (a double press, a second tab): that one
+  // reconciles here, idempotently. Any OTHER row on the gate is a different
+  // decision, typed or otherwise, and a Regenerate never adopts it: it goes on
+  // to Regenerate's own guards below, where the gate-state read answers first
+  // (that row's commit resolved the gate, so the first decision stands) and the
+  // declared-Note-input refusal after it, before any write.
+  const ownRow =
+    !!existing[0] &&
+    (input.origin !== "regenerate" || existing[0].idempotencyKey === request.idempotencyKey);
+  if (existing[0] && !ownRow) {
+    // The other row's transaction closed the gate, so its notification clear is
+    // owed whatever this call answers (cinatra#2864, as below).
+    await dispatchAutoGateResolved({
+      runId: input.runId,
+      reviewTaskId: input.reviewTaskId,
+    });
+  }
   // cinatra#4245: a change request that names its pause decides on an existing
   // repair inside its guarded transaction (below), never before the guard.
-  if (existing[0] && !input.declaredPause) {
+  if (existing[0] && ownRow && !input.declaredPause) {
     // cinatra#2864 — a RE-DRIVE clears too. A repair row exists for this gate only
     // because a prior call's transaction committed, and that transaction CASed the
     // gate to `resolved` in the same breath — so the gate is closed, whatever this
@@ -402,12 +465,68 @@ export async function recordChangesRequested(
 
   // 2. Base-revision CAS at FIRST-record time (the same TOCTOU the decision core
   //    guards): the base must still be the revision the reviewer saw.
-  const retry = existing[0] !== undefined;
+  // A Regenerate that met ANOTHER decision's row (`ownRow` false, above) is no
+  // retry of its own: it keeps the base check, as it did before (cinatra#3080).
+  const retry = existing[0] !== undefined && ownRow;
   if (!retry && input.currentBaseRevisionId === null) {
     return { ok: false, code: "tombstoned-base", error: "base target tombstoned/absent — changes_requested rejected" };
   }
   if (!retry && input.currentBaseRevisionId !== request.expectedBaseRevisionId) {
     return { ok: false, code: "stale-base", error: "base revision moved since the review (CAS witness mismatch) — stale changes_requested rejected" };
+  }
+
+  // A REGENERATE NEEDS A STEP THAT NAMES WHERE THE NOTE GOES (cinatra#3080, the
+  // 2026-10-13 decision). "On a review whose producing step declares no such
+  // input, Regenerate is refused with a plain reason." The test is the step's
+  // OWN declaration, never the agent-level `repairCapable` flag: that flag says
+  // the agent answers a typed repair request, not which input the Note fills.
+  // Refused BEFORE the transaction and before this operation's cycle-guard read
+  // of the lineage's prior attempts, so nothing is written and the gate is left
+  // exactly as the reviewer found it: pending, its floor still live, the stated
+  // reason on screen. The lineage is derived from the decided gate only after
+  // this refusal (`deriveDecidedGateLineage`, below; reads only). Comment and
+  // Continue do not reach this operation; the conversation's comment reaches it
+  // on the `typed` road, which this refusal does not touch.
+  //
+  // A GATE THAT IS NO LONGER PENDING ANSWERS FIRST (cinatra#3080). Every
+  // Regenerate refusal comes before the transaction's gate CAS, the
+  // one place that otherwise sees the gate's state. So a Regenerate that lands
+  // after a Continue (or any decision that resolved the gate) would read as
+  // "Regenerate is not available", a retryable error, when the first decision
+  // stands and the answer is the BLOCKED one. The gate's state is read first;
+  // a read only. A gate that resolves after this read is still caught by the
+  // CAS below.
+  if (input.origin === "regenerate") {
+    const [gateNow] = await db
+      .select({ status: artifactReviewGates.status })
+      .from(artifactReviewGates)
+      .where(eq(artifactReviewGates.id, request.gateId))
+      .limit(1);
+    if (gateNow?.status !== "pending") {
+      return {
+        ok: false,
+        code: "gate-not-pending",
+        error: "the review gate is not pending — a different decision resolved it",
+      };
+    }
+  }
+  const regenerateEntry = input.origin === "regenerate" ? (input.regenerateEntry ?? null) : null;
+  const declaredNoteInput = regenerateEntry?.noteInput.trim() ?? "";
+  const regenerateNodeId = regenerateEntry?.artifactNode.trim() ?? "";
+  if (input.origin === "regenerate" && (declaredNoteInput.length === 0 || regenerateNodeId.length === 0)) {
+    return { ok: false, code: "regenerate-unavailable", error: REGENERATE_NO_NOTE_INPUT };
+  }
+  // A REGENERATE THAT NOTHING CAN DISPATCH IS NOT RECORDED (cinatra#3080 on
+  // cinatra#4264). The step names its Note input, but only the step road reruns
+  // that one step with the Note there, and the drain's ordinary road never runs
+  // a Regenerate (with the step road off, the drain escalates one). Recording
+  // it would then settle the gate with no repair dispatched and no successor
+  // review ever opened. So, while the step road is off
+  // (`regenerateStepRoadDispatches`), it is refused here, before
+  // the lineage reads and the transaction: nothing is written and the gate is
+  // left pending with the plain reason on screen.
+  if (input.origin === "regenerate" && !regenerateStepRoadDispatches()) {
+    return { ok: false, code: "regenerate-unavailable", error: REGENERATE_NO_STEP_ROAD };
   }
 
   const derived = await deriveDecidedGateLineage(request.gateId);
@@ -421,10 +540,26 @@ export async function recordChangesRequested(
   const priorAttempts = priorRows.reduce((m, r) => Math.max(m, r.attempt), 0);
   const cycle = evaluateRepairCycle(priorAttempts, input.maxCycles ?? MAX_REPAIR_CYCLES);
   const route = routeChangesRequested({
-    repairCapable: input.repairCapable,
+    // For a Regenerate the step's declaration (checked above) is what makes the
+    // work again, so it stands in the flag's place; the typed road keeps the flag.
+    repairCapable:
+      input.origin === "regenerate" ? declaredNoteInput.length > 0 : input.repairCapable,
     continuationMode: request.continuationMode,
     orgRepairRoute: input.orgRepairRoute ?? null,
   });
+
+  // A REGENERATE THAT CANNOT REGENERATE IS REFUSED, NOT HALF-FIRED (cinatra#3080
+  // item 4). BEFORE the transaction, so nothing is written and the gate is left
+  // exactly as the reviewer found it: pending, with its floor still live and the
+  // stated reason on screen. An escalation is a fine answer to a TYPED change
+  // request — a person picks it up — but it is not an answer to Regenerate,
+  // which promises the same work made again beneath a successor gate. Settling
+  // the gate anyway is the worst of the three outcomes: the run is released from
+  // a decision nobody made, toward a revision that is not coming. A declared
+  // step always routes to the producer, so the remaining refusal is the bound.
+  if (input.origin === "regenerate" && cycle.escalate) {
+    return { ok: false, code: "regenerate-unavailable", error: REGENERATE_BOUND_REACHED };
+  }
 
   // Escalate (never dispatch) when the cycle bound tripped OR the producer cannot
   // repair (routed to a human / org route). Only a repair-capable producer within
@@ -525,6 +660,9 @@ export async function recordChangesRequested(
         status,
         idempotencyKey: request.idempotencyKey,
         pausedRunGeneration: ended?.generation ?? null,
+        // cinatra#3080 on cinatra#4264: a Regenerate names the node whose entry
+        // it was admitted under; NULL keeps every other repair ordinary.
+        regenerateNodeId: input.origin === "regenerate" ? regenerateNodeId : null,
       })
       .onConflictDoNothing({ target: [lifecycleRepair.gateId] })
       .returning();
@@ -723,6 +861,15 @@ export interface SubmitRepairResponseInput {
   reauthorized: boolean;
   /** Gate TTL for the successor gate (optional). */
   expiresAt?: Date | null;
+  /**
+   * cinatra#4264 B1b: the revision a Regenerate segment run wrote before it
+   * was re-filed onto the reviewed artifact. Written in the SAME update that
+   * sets `repaired` and the successor, so a crash leaves both or neither; the
+   * review orchestration then settles that revision's produced event under
+   * the successor gate (`successor-gated`) instead of gating it a second time.
+   * Ordinary repairs pass none.
+   */
+  sourceTarget?: { artifactId: string; representationRevisionId: string } | null;
 }
 
 export type SubmitRepairResponseResult =
@@ -918,6 +1065,8 @@ export async function submitRepairResponse(
               },
             ],
             expiresAt: input.expiresAt ?? null,
+            // cinatra#4762: the successor continues the review of the attempt that raised the repaired gate.
+            successorOfGateId: repair.gateId,
           },
           tx,
         );
@@ -941,6 +1090,12 @@ export async function submitRepairResponse(
           successorGateId,
           successorArtifactId: input.response.successorTarget.artifactId,
           successorRepresentationRevisionId: input.response.successorTarget.representationRevisionId,
+          ...(input.sourceTarget
+            ? {
+                sourceArtifactId: input.sourceTarget.artifactId,
+                sourceRepresentationRevisionId: input.sourceTarget.representationRevisionId,
+              }
+            : {}),
           findingOutcomes: input.response.findingOutcomes as unknown,
           changeSummary: input.response.changeSummary,
           updatedAt: sql`now()`,
@@ -1054,6 +1209,12 @@ export interface RepairRow {
   successorRepresentationRevisionId: string | null;
   findingOutcomes: RepairFindingOutcome[] | null;
   changeSummary: string | null;
+  /** cinatra#4264 B1b: the Regenerate intent (NULL = an ordinary repair).
+   *  Optional in the type only, for rows built by hand; `readRepair` sets it. */
+  regenerateNodeId?: string | null;
+  /** cinatra#4264 B1b: the segment run's own write, re-filed as the successor. */
+  sourceArtifactId?: string | null;
+  sourceRepresentationRevisionId?: string | null;
 }
 
 export async function readRepair(repairId: string): Promise<RepairRow | null> {
@@ -1496,6 +1657,9 @@ function toRepairRow(r: typeof lifecycleRepair.$inferSelect): RepairRow {
     successorRepresentationRevisionId: r.successorRepresentationRevisionId,
     findingOutcomes: (r.findingOutcomes as RepairFindingOutcome[] | null) ?? null,
     changeSummary: r.changeSummary,
+    regenerateNodeId: r.regenerateNodeId ?? null,
+    sourceArtifactId: r.sourceArtifactId ?? null,
+    sourceRepresentationRevisionId: r.sourceRepresentationRevisionId ?? null,
   };
 }
 

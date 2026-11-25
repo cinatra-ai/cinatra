@@ -17,6 +17,21 @@ const h = vi.hoisted(() => ({
   readFinalizedMaterialization: vi.fn(),
   createSemanticArtifact: vi.fn(),
   enqueueArtifactMatchRun: vi.fn(async () => undefined),
+  // cinatra#4762: the statements the reused revision's restamp sends, on its own connection.
+  restamp: [] as Array<{ text: string; values: unknown[] | undefined }>,
+}));
+
+vi.mock("@/lib/db/pooled", async () => ({
+  ...(await vi.importActual<typeof import("@/lib/db/pooled")>("@/lib/db/pooled")),
+  getPooledDb: () => ({
+    connect: async () => ({
+      query: async (text: string, values?: unknown[]) => {
+        h.restamp.push({ text, values });
+        return { rows: [], rowCount: 0 };
+      },
+      release: () => {},
+    }),
+  }),
 }));
 
 vi.mock("@/lib/artifacts/materialization-ledger", async (importOriginal) => ({
@@ -286,6 +301,54 @@ describe("fileFirstArtifactWrite (cinatra#4223)", () => {
     expect(outcome).toEqual({ kind: "refused", reason: "write_refused", error: "WRITE FAILED" });
     expect(reads).toEqual([]);
     expect(logged).toHaveBeenCalledTimes(1);
+  });
+
+  // cinatra#4762: the statements of the restamp, read as steps: the run lock, then the event of the reused revision with
+  // the generation it records ($12).
+  const restampSteps = () => h.restamp.map(({ text, values }) => {
+    const t = text.replace(/\s+/g, " ");
+    if (t.includes("artifact_produced_outbox")) return `event ${values?.[3]} generation ${values?.[11]}`;
+    if (t.includes("FOR KEY SHARE")) return `lock ${values?.[0]}`;
+    return t;
+  });
+  const inAttempt = <T>(resetGeneration: number, run: () => Promise<T>) =>
+    import("@cinatra-ai/mcp-server/request-context").then(({ mcpRequestContextStorage }) =>
+      mcpRequestContextStorage.run({ runAttempt: { runId: "run-1", resetGeneration } } as never, run));
+
+  it("a re-drive in a later attempt restamps the stored revision's event with that attempt before it serves it (cinatra#4762)", async () => {
+    h.restamp.length = 0;
+    h.claimMaterialization.mockResolvedValueOnce({ kind: "finalized", artifactId: "art-0", representationRevisionId: "rev-0", path: "materialize_tool" });
+    const outcome = await inAttempt(1, () => fileFirstArtifactWrite(filingInput()));
+    expect(outcome).toEqual({ kind: "served", answer: { served: "art-0/rev-0" } });
+    expect(h.createSemanticArtifact).not.toHaveBeenCalled();
+    // The event of the revision attempt 0 filed now records attempt 1, so an approval of these bytes counts for it.
+    expect(restampSteps()).toEqual(["BEGIN", "lock run-1", "event rev-0 generation 1", "COMMIT"]);
+  });
+
+  it("the loser of a double drive restamps the winner's revision for its own attempt before it serves it (cinatra#4762)", async () => {
+    h.restamp.length = 0;
+    h.createSemanticArtifact.mockRejectedValueOnce(new Error(`${MATERIALIZATION_FINALIZE_CONFLICT_MARKER}: rows=0`));
+    h.readFinalizedMaterialization.mockResolvedValueOnce({ artifactId: "art-w", representationRevisionId: "rev-w" });
+    const outcome = await inAttempt(1, () => fileFirstArtifactWrite(filingInput()));
+    expect(outcome).toEqual({ kind: "served", answer: { served: "art-w/rev-w" } });
+    expect(restampSteps()).toEqual(["BEGIN", "lock run-1", "event rev-w generation 1", "COMMIT"]);
+  });
+
+  it("a re-drive outside any attempt restamps nothing: its event could record no attempt (cinatra#4762)", async () => {
+    h.restamp.length = 0;
+    h.claimMaterialization.mockResolvedValueOnce({ kind: "finalized", artifactId: "art-0", representationRevisionId: "rev-0", path: "materialize_tool" });
+    expect(await fileFirstArtifactWrite(filingInput())).toEqual({ kind: "served", answer: { served: "art-0/rev-0" } });
+    expect(h.restamp).toEqual([]);
+  });
+
+  it("lets the in-flight fence's refusal reach the caller's catch as the typed, retryable refusal (cinatra#4762)", async () => {
+    // The fence's database abort, as the writer's transaction raises it.
+    h.createSemanticArtifact.mockRejectedValueOnce(
+      Object.assign(new Error('invalid input syntax for type integer: "cinatra_publish_call_in_flight"'), { code: "22P02" }),
+    );
+    await expect(fileFirstArtifactWrite(filingInput())).rejects.toMatchObject({
+      name: "PublishCallInFlightError", code: "publish_call_in_flight", retryable: true,
+    });
   });
 
   it("lets a throw of the claim reach the caller's own catch", async () => {

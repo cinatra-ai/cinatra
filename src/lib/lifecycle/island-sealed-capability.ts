@@ -124,7 +124,7 @@ export function openCapability(
   spec: SealedCapabilitySpec,
   encoded: string | null | undefined,
   requiredFields: readonly string[],
-  options?: { nowSeconds?: number },
+  options?: { nowSeconds?: number; optionalFields?: readonly string[] },
 ): OpenedCapability | null {
   if (typeof encoded !== "string") return null;
   if (encoded.length === 0 || encoded.length > SEALED_CAPABILITY_MAX_LENGTH) return null;
@@ -159,6 +159,14 @@ export function openCapability(
   const record = parsed as Record<string, unknown>;
   const out: Record<string, string> = {};
   for (const field of requiredFields) {
+    const value = record[field];
+    if (!isBoundedId(value)) return null;
+    out[field] = value;
+  }
+  // AN OPTIONAL FIELD is absent, or a bounded id like every required one. It is read only when the codec names it, so
+  // a capability minted before the field existed opens exactly as it always did.
+  for (const field of options?.optionalFields ?? []) {
+    if (!Object.prototype.hasOwnProperty.call(record, field)) continue;
     const value = record[field];
     if (!isBoundedId(value)) return null;
     out[field] = value;

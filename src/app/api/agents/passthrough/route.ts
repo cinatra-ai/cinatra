@@ -1,3 +1,5 @@
+import type { VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
+import { verifyRunExecutedSource } from "@cinatra-ai/agents/store";
 import "server-only";
 import { NextResponse } from "next/server";
 
@@ -7,6 +9,8 @@ import { isAuthorizedBridgeRequest } from "@/lib/wayflow-bridge-auth";
 import { bindBridgeRunId } from "@/lib/authz/bridge-run-binding";
 import {
   verifyRunStepAttestation,
+  verifySourceBoundRunStep,
+  RUN_RAW_SOURCE_HEADER, RUN_EXECUTED_SOURCE_HEADER, RUN_DECLARATION_SOURCE_HEADER, RUN_EXECUTION_ATTEMPT_HEADER,
   RUN_STEP_NODE_HEADER,
   RUN_STEP_ATTESTATION_HEADER,
 } from "@/lib/agent-run-token";
@@ -56,6 +60,7 @@ import {
   passthroughFailureText,
   passthroughFixedFailureText,
 } from "@/lib/passthrough-refusal";
+import { RUN_ACTION_REFUSED, runActionRefusalCode } from "@/lib/run-action-refusal";
 
 /**
  * Deterministic MCP-call passthrough for WayFlow.
@@ -156,9 +161,12 @@ const ALLOWED_TOOLS = new Set([
 // Tools that must execute inside an mcpRequestContextStorage frame carrying the
 // VERIFIED run id (from bindBridgeRunId), so the primitive derives its run scope
 // from the invocation context — never from the request body. The generic path
-// (objects_save, trigger_config_set, …) resolves identity from the actor alone
-// and does not need (or want) an ambient run id, so we scope this to the
-// run-scoped primitives only.
+// (objects_save, trigger_config_set, …) resolves identity from the actor alone;
+// since cinatra#3745 it runs inside the run's frame too (run id, owner, org,
+// the verified step and, for a source-bound call, the proof and the run-write
+// authority), so a generic handler that reads the frame's run id sees the
+// proven run. This set names the primitives that additionally get the
+// run-scoped frame (verifiedRunScopeId and the submission id).
 const RUN_SCOPED_CONTEXT_TOOLS = new Set<string>([
   "agent_run_hitl_prompts_list",
   "agent_run_hitl_prompts_exclude",
@@ -374,7 +382,20 @@ TOOL_INPUT_SHAPERS.email_outreach_recipients_update = (raw) =>
 // anything but a plain object (the shaper-throw contract answers HTTP 400).
 TOOL_INPUT_SHAPERS.objects_update = (raw) => shapeObjectsUpdateInput(raw);
 
+/** cinatra#4762: a publishing call holds its released decision until its answer is built, whatever it is
+ *  (publishCallAllowed), so no output or review of its run is written while its effect runs. The release is awaited
+ *  before the answer goes back: the run's next node cannot write while it is still pending. A release that cannot be
+ *  written is logged and the answer still goes back, since the call's effect has already happened. */
 export async function POST(req: Request): Promise<Response> {
+  const releases: Array<() => Promise<void>> = [];
+  try {
+    return await handlePassthrough(req, (release) => { releases.push(release); });
+  } finally {
+    for (const release of releases) await release();
+  }
+}
+
+async function handlePassthrough(req: Request, holdRelease: (release: () => Promise<void>) => void): Promise<Response> {
   if (!isAuthorizedBridgeRequest(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
@@ -428,17 +449,39 @@ export async function POST(req: Request): Promise<Response> {
   // cinatra#3745 — the verified step of the calling flow step. The flow runtime
   // signs the executing step's id over the run's context id; it is verified
   // here with the context id the run binding above proved, and stamped on the
-  // run-scoped frame below. An absent or unverified pair gives no step.
+  // run-scoped frame below. Without source headers, an absent or unverified
+  // `s1` pair gives no step. With any source header (the attempt header
+  // included), the `s2` pair over the step, the attempt the calling task was
+  // sent under and the executing source must verify AND the run must be running
+  // under that attempt, the one that source is bound to; otherwise the call is refused
+  // (403, a fixed sentence) before any tool runs, and the step is the proof's.
   // A blank key is no key (cinatra#4154): the runtime refuses to boot on one,
-  // and a pair signed under whitespace proves nothing.
+  // and a pair signed under whitespace proves nothing (for `s1` and `s2`).
   const attestKey = process.env.CINATRA_CONTEXT_ATTEST_KEY;
-  const verifiedStepId =
+  let verifiedStepId =
     verifyRunStepAttestation({
       key: attestKey && attestKey.trim() !== "" ? attestKey : null,
       contextId: req.headers.get("x-cinatra-a2a-context-id"),
       node: req.headers.get(RUN_STEP_NODE_HEADER),
       attestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER),
     }) ?? undefined;
+
+  let verifiedExecutedSource: VerifiedExecutedRunSource | undefined;
+  if (req.headers.get(RUN_RAW_SOURCE_HEADER) !== null || req.headers.get(RUN_EXECUTED_SOURCE_HEADER) !== null ||
+      req.headers.get(RUN_DECLARATION_SOURCE_HEADER) !== null || req.headers.get(RUN_EXECUTION_ATTEMPT_HEADER) !== null) {
+    const attestation = verifySourceBoundRunStep({ key: attestKey && attestKey.trim() !== "" ? attestKey : null,
+      contextId: req.headers.get("x-cinatra-a2a-context-id"), node: req.headers.get(RUN_STEP_NODE_HEADER),
+      executionAttemptId: req.headers.get(RUN_EXECUTION_ATTEMPT_HEADER),
+      attestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER), sourceSha256: req.headers.get(RUN_RAW_SOURCE_HEADER),
+      executedSourceSha256: req.headers.get(RUN_EXECUTED_SOURCE_HEADER),
+      declarationSourceSha256: req.headers.get(RUN_DECLARATION_SOURCE_HEADER) });
+    try {
+      const sourceRun = await readAgentRunById(agentRunId);
+      if (!attestation || !sourceRun?.orgId) throw new Error("source_binding_invalid");
+      verifiedExecutedSource = await verifyRunExecutedSource(agentRunId, sourceRun.orgId, attestation);
+      verifiedStepId = verifiedExecutedSource.stepId;
+    } catch { return NextResponse.json({ error: "Executing source could not be verified" }, { status: 403 }); }
+  }
 
   const shaper = TOOL_INPUT_SHAPERS[tool];
   let input: Record<string, unknown>;
@@ -464,7 +507,13 @@ export async function POST(req: Request): Promise<Response> {
   }
   // cinatra#4150 — no publish without a released decision, enforced at the call,
   // before any tool runs: the run the binding proved, the verified step or none.
-  if (!(await publishCallAllowed(run, verifiedStepId))) {
+  // cinatra#4762: the decision the check claimed for this call, as the server took it, never from the request. The
+  // call's frame carries it, so the call's own output passes the in-flight fence of that claim and no other.
+  let publishCallClaim: { runId: string; decisionId: string } | undefined;
+  if (!(await publishCallAllowed(run, verifiedStepId, (release, claim) => {
+    holdRelease(release);
+    if (claim && typeof claim.decisionId === "string" && claim.decisionId) publishCallClaim = { runId: run.id, decisionId: claim.decisionId };
+  }))) {
     return NextResponse.json(
       { error: "This call waits for a publish decision.", code: "publish_not_released" },
       { status: 403 },
@@ -533,6 +582,33 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   try {
+    const { mintRunWriteAuthorityForMcp } = await import("@/lib/org-write/run-authority-mint");
+    const { prepareDeclaredRunToolArguments } = await import("@/lib/extension-host-context");
+    const orgWriteAuthority = verifiedExecutedSource
+      ? await mintRunWriteAuthorityForMcp({ runId: run.id, orgId: run.orgId,
+          executionAttemptId: verifiedExecutedSource.executionAttemptId }) : undefined;
+    // cinatra#3745: the mint matches the proof's attempt against the run's
+    // CURRENT attempt. A refused mint means the run moved on after the source
+    // check above (or the authority could not be read): the proof is no longer
+    // current, so the call is refused before any tool runs, never served with
+    // the stale proof and no authority.
+    if (verifiedExecutedSource && !orgWriteAuthority) {
+      return NextResponse.json({ error: "Executing source could not be verified" }, { status: 403 });
+    }
+    return await mcpRequestContextStorage.run({ runId: binding.runId,
+      userId: run.runBy ?? undefined, orgId: run.orgId,
+      ...(run.oboCeiling ? { oboCeiling: run.oboCeiling } : {}),
+      ...(verifiedStepId ? { verifiedStepId } : {}),
+      ...(verifiedExecutedSource ? { verifiedExecutedSource } : {}),
+      ...(orgWriteAuthority ? { orgWriteAuthority } : {}),
+      ...(publishCallClaim ? { publishCallClaim } : {}),
+    }, async () => {
+    // Every deterministic branch shares the verified executing-source frame;
+    // no materializer, extension-data branch or primitive gets a legacy bypass.
+    // cinatra#3745: before any branch runs, the call must carry the run's
+    // current verified executing source and name a tool the step declares, and
+    // every branch gets the frozen copy of the input.
+    input = await prepareDeclaredRunToolArguments(tool, input) as Record<string, unknown>;
     let result: unknown;
     if (tool === "artifact_materialize") {
       // Deterministic artifact materialization (cinatra#925) — NOT an MCP
@@ -602,7 +678,9 @@ export async function POST(req: Request): Promise<Response> {
         if (!appended.ok) {
           return NextResponse.json(
             { error: appended.error, reason: appended.reason },
-            { status: appended.reason === "stale_base" ? 409 : 400 },
+            // cinatra#4762: a publishing call in flight is temporary, answered as a
+            // conflict the node may retry, as a stale base is.
+            { status: appended.reason === "stale_base" || appended.reason === "publish_call_in_flight" ? 409 : 400 },
           );
         }
         // The SAME response shape a create answers with — the fields at the top
@@ -633,7 +711,10 @@ export async function POST(req: Request): Promise<Response> {
         if (!outcome.ok) {
           // Fail the calling node visibly (validation OR infra) — the flow
           // author decides whether the node failure gates the run.
-          return NextResponse.json({ error: outcome.error }, { status: 400 });
+          // cinatra#4762: a publishing call in flight is a conflict the node may retry.
+          return outcome.reason === "publish_call_in_flight"
+            ? NextResponse.json({ error: outcome.error, reason: outcome.reason }, { status: 409 })
+            : NextResponse.json({ error: outcome.error }, { status: 400 });
         }
         result = {
           artifactId: outcome.artifactId,
@@ -676,7 +757,7 @@ export async function POST(req: Request): Promise<Response> {
       if (!outcome.ok) {
         return NextResponse.json(
           { error: outcome.error, reason: outcome.reason },
-          { status: outcome.reason === "stale_base" ? 409 : 400 },
+          { status: outcome.reason === "stale_base" || outcome.reason === "publish_call_in_flight" ? 409 : 400 },
         );
       }
       result = {
@@ -706,7 +787,8 @@ export async function POST(req: Request): Promise<Response> {
         url: shaped.url,
       });
       if (!outcome.ok) {
-        return NextResponse.json({ error: outcome.error, reason: outcome.reason }, { status: 400 });
+        return NextResponse.json({ error: outcome.error, reason: outcome.reason },
+          { status: outcome.reason === "publish_call_in_flight" ? 409 : 400 });
       }
       result = {
         artifactId: outcome.artifactId,
@@ -780,7 +862,10 @@ export async function POST(req: Request): Promise<Response> {
         actor: alsActorContext,
       });
       if (!outcome.ok) {
-        return NextResponse.json({ error: outcome.error }, { status: outcome.status });
+        return NextResponse.json(
+          { error: outcome.error, ...(outcome.code ? { code: outcome.code } : {}) },
+          { status: outcome.status },
+        );
       }
       result = outcome.result;
     } else {
@@ -869,10 +954,12 @@ export async function POST(req: Request): Promise<Response> {
       result = RUN_SCOPED_CONTEXT_TOOLS.has(tool)
         ? await mcpRequestContextStorage.run(
             {
+              ...mcpRequestContextStorage.getStore(),
               runId: binding.runId,
               verifiedRunScopeId: binding.runId,
               ...(verifiedSubmissionId ? { verifiedSubmissionId } : {}),
               ...(verifiedStepId ? { verifiedStepId } : {}),
+              ...(verifiedExecutedSource ? { verifiedExecutedSource } : {}),
               userId: run.runBy ?? undefined,
               orgId: run.orgId,
               ...(run.oboCeiling ? { oboCeiling: run.oboCeiling } : {}),
@@ -1007,7 +1094,22 @@ export async function POST(req: Request): Promise<Response> {
     }
 
     return NextResponse.json(result);
+    });
   } catch (err) {
+    // cinatra#3745: a refused run tool call is answered 403 with one fixed
+    // sentence and the refusal's code, never with exception text.
+    const refusal = await runActionRefusalCode(err).catch(() => null);
+    if (refusal) return NextResponse.json({ error: RUN_ACTION_REFUSED, code: refusal }, { status: 403 });
+    // cinatra#4762: a writer refused because a publishing call of the run is in
+    // flight (lifecycle-emit PublishCallInFlightError, read by its code so the
+    // artifact stack stays out of this route's static graph): temporary, a
+    // conflict the node may retry, never a tool failure.
+    if ((err as { code?: unknown } | null)?.code === "publish_call_in_flight") {
+      return NextResponse.json(
+        { error: "A publishing call of this run is in flight; try again once it has ended.", code: "publish_call_in_flight" },
+        { status: 409 },
+      );
+    }
     // cinatra#4223, cinatra#4465: an error with the zod marker answers its
     // issues, and a primitive's stated refusal without it keeps its text when
     // that text is a string. Every other throw, a marked error with no readable

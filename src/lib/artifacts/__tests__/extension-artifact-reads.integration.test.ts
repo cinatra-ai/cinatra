@@ -112,6 +112,8 @@ async function seedArtifact(input: {
   orgId: string;
   createdAt: string;
   text?: string;
+  /** Further keys of the row's data, as a run's objects_update merges them. */
+  data?: Record<string, unknown>;
 }) {
   const s = q(SCHEMA);
   let latestRevision: string | null = null;
@@ -155,6 +157,7 @@ async function seedArtifact(input: {
         artifactType: "file",
         originKind: "agent_generated",
         ...(latestRevision ? { latestRepresentationRevisionId: latestRevision } : {}),
+        ...input.data,
       }),
       input.orgId,
       PERSON,
@@ -297,6 +300,32 @@ describeDb("dependency-scoped artifact reads (cinatra#3031 acceptance 3 and 4)",
     expect(capped.text).toBe("# idea 3");
     expect(capped.truncated).toBe(true);
     expect(capped.totalBytes).toBeGreaterThan(capped.bytesRead);
+  });
+
+  it("the get answers the published page address a publish run wrote onto the artifact (cinatra#4313)", async () => {
+    const { extensionArtifactGet } = await import("@/lib/artifacts/extension-artifact-reads");
+    await seedArtifact({
+      id: "idea-published",
+      type: IDEA_TYPE,
+      orgId: ORG,
+      createdAt: "2026-08-20T09:00:00Z",
+      data: {
+        wordpressPublishedUrl: "https://blog.example.com/2026/09/the-lighthouse/",
+        wordpressPublishedExternalId: "4711",
+        wordpressPublishedRevisionId: "rev-wp-2",
+      },
+    });
+    try {
+      const got = await extensionArtifactGet(await readCtx(), { artifactId: "idea-published" });
+      expect(got.wordpressPublishedUrl).toBe("https://blog.example.com/2026/09/the-lighthouse/");
+      expect(got.wordpressPublishedExternalId).toBe("4711");
+      expect(got.wordpressPublishedRevisionId).toBe("rev-wp-2");
+      // A row the run never published answers none of the keys.
+      const plain = await extensionArtifactGet(await readCtx(), { artifactId: "idea-3" });
+      expect(plain).not.toHaveProperty("wordpressPublishedUrl");
+    } finally {
+      await admin.query(`DELETE FROM "${q(SCHEMA)}"."objects" WHERE id = 'idea-published'`);
+    }
   });
 
   it("IS REFUSED FOR AN UNDECLARED KIND — on the list, the get and the content read", async () => {

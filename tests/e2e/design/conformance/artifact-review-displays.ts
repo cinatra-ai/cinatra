@@ -31,6 +31,7 @@ export const ARTIFACT_KIND_DISPLAY_SURFACES = [
   "dashboard-display",
   "portlet-display",
   "drupal-pointer-display",
+  "drupal-page-display",
   "cms-page-display",
   "markdown-display-tabs",
   "binary-download-card",
@@ -68,7 +69,7 @@ export type ArtifactKindDisplay = {
   /**
    * TRUE for the three surfaces whose per-kind display shape is the whole of
    * what the drawing gives them, so the shared factory drives them alone; FALSE
-   * for the eight that carry a drawn structure of their own on top of it
+   * for the nine that carry a drawn structure of their own on top of it
    * (cinatra#3158: "markdown-display-tabs, binary-download-card, and
    * chart-display-only share the same per-kind display shape closely enough to
    * ride the same factory rather than getting individual drivers").
@@ -105,7 +106,9 @@ export const ARTIFACT_KIND_DISPLAYS: Readonly<
     section: "XI.2",
     factoryOnly: false,
     fields: [{ name: "form", source: "representation.content-form" }],
-    action: null,
+    // design@cbf0faa5 (design#272): the pdf form's download floor is a real
+    // button, the one action this display declares.
+    action: { name: "download-artifact", outcome: "file-downloaded" },
     states: ["error", "kind:artifact", "loading"],
     readiness:
       "each of the seven kind extensions ships a type declaration and no display of its own, so no shell branches on the artifact's content form — the drawing's whole point here is that an own display never falls through to a form provider, which is exactly what a kind without a display does today",
@@ -125,7 +128,9 @@ export const ARTIFACT_KIND_DISPLAYS: Readonly<
     section: "XI.4",
     factoryOnly: false,
     fields: [],
-    action: null,
+    // design@cbf0faa5 (design#272): the exported pdf's download floor is a real
+    // button, the one action this display declares.
+    action: { name: "download-artifact", outcome: "file-downloaded" },
     states: ["error", "kind:artifact", "loading"],
     readiness:
       "the deck extension declares its type and ships no renderer, so the embedded viewer the drawing mounts for the exported pdf is not drawn anywhere",
@@ -164,15 +169,29 @@ export const ARTIFACT_KIND_DISPLAYS: Readonly<
     readiness:
       "no portlet artifact extension exists in the tree, so there is no display for one entry of a dashboard cut on its own, and no cut that mints one",
   },
+  // design@94d892de (design#253): the pointer is drawn as the generic floor of
+  // §V over its row, read only, and binds no field and declares no action.
   "drupal-pointer-display": {
     surface: "drupal-pointer-display",
     section: "XI.7",
     factoryOnly: false,
-    fields: [{ name: "target", source: "representation.node-id" }],
+    fields: [],
+    action: null,
+    states: ["error", "kind:artifact"],
+    readiness:
+      "the pointer's package ships no display, so the product draws the generic floor for its row (review-target-mount.tsx: the notice with the package, the detail slot and the reason no-display), which is what the drawing draws; but the review harness mounts only review targets, and a pointer is never one, so no mount draws the floor over a pointer row",
+  },
+  // design@94d892de (design#253): the Drupal page a run changes is the page
+  // snapshot, drawn by the same one view as the WordPress page (§XI.8).
+  "drupal-page-display": {
+    surface: "drupal-page-display",
+    section: "XI.7",
+    factoryOnly: false,
+    fields: [{ name: "excerpts", source: "representation.changed-excerpts" }],
     action: { name: "open-in-cms", outcome: "cms-opened" },
     states: ["error", "kind:artifact", "loading"],
     readiness:
-      "the pointer draws through the ONE page renderer the drawing names — @cinatra-ai/website-artifacts:page-diff — and no package in the tree ships it, so the pointer's own extension declares its type and draws nothing",
+      "@cinatra-ai/website-artifacts:page-diff, the one page display the drawing names, ships in the tree now (the website-artifacts pack is pinned here and the Drupal agent files its pages as @cinatra-ai/website-artifacts:page-snapshot), but it is an extension renderer the conformance harness may not mount, which the core/extension instance-coupling ban exists to stop, so no harness mount draws a Drupal page as the page snapshot, its changed excerpts or its Open in the CMS control (since design@cbf0faa5 the display draws no frame of the page)",
   },
   "cms-page-display": {
     surface: "cms-page-display",
@@ -182,7 +201,7 @@ export const ARTIFACT_KIND_DISPLAYS: Readonly<
     action: { name: "open-in-cms", outcome: "cms-opened" },
     states: ["error", "kind:artifact", "loading"],
     readiness:
-      "@cinatra-ai/website-artifacts:page-diff — the one renderer both CMS extensions draw through — is not in the tree; the snapshot renderer that IS shipped draws a read-only list of reviewed FIELDS with a scope chip row, which is a different display: no page embedded in a frame, no diff of the changed excerpts, and no Open in the CMS",
+      "@cinatra-ai/website-artifacts:page-diff, the one renderer both CMS extensions draw through, ships in the tree now (the website-artifacts pack is pinned here and the WordPress agent files its pages as @cinatra-ai/website-artifacts:page-snapshot), but it is an extension renderer the conformance harness may not mount, which the core/extension instance-coupling ban exists to stop, so no harness mount draws the diff of the changed excerpts or the Open in the CMS link (since design@cbf0faa5 the display draws no frame of the page)",
   },
   "markdown-display-tabs": {
     surface: "markdown-display-tabs",

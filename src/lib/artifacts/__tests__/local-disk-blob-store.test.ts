@@ -665,4 +665,54 @@ describe("createLocalDiskBlobStore", () => {
     buf[3] = 0;
     expect(await sniffOfBytes(buf, "application/octet-stream")).toBe("application/octet-stream");
   });
+
+  // A declared structured-syntax JSON type (RFC 6839, `application/<subtype>+json`)
+  // over JSON text. Before, the text branch kept only the four named types, so
+  // the CMS fields snapshot type's own MIME was stored as text/plain and the
+  // write boundary's accepts check refused the snapshot.
+  const CMS_FIELDS_MIME = "application/vnd.cinatra.cms-fields+json";
+
+  it("keeps a declared application/<subtype>+json type when the text window opens a JSON object or array", async () => {
+    const small = new TextEncoder().encode('{"fields":{"title":"Hello"}}');
+    expect(await sniffOfBytes(small, CMS_FIELDS_MIME)).toBe(CMS_FIELDS_MIME);
+    // Leading JSON whitespace and an array opener.
+    expect(await sniffOfBytes(new TextEncoder().encode(' \n\t\r[{"k":1}]'), CMS_FIELDS_MIME)).toBe(
+      CMS_FIELDS_MIME,
+    );
+    // A document longer than the head window: only its prefix is read.
+    const large = new TextEncoder().encode(
+      JSON.stringify({ fields: Array.from({ length: 80 }, (_, i) => ({ name: `f${i}`, value: "v" })) }),
+    );
+    expect(large.byteLength).toBeGreaterThan(512);
+    expect(await sniffOfBytes(large, CMS_FIELDS_MIME)).toBe(CMS_FIELDS_MIME);
+    // A parameterized, upper-case declaration is kept in its canonical form.
+    expect(await sniffOfBytes(small, "Application/Vnd.Cinatra.Cms-Fields+JSON; charset=utf-8")).toBe(
+      CMS_FIELDS_MIME,
+    );
+  });
+
+  it("does not keep a declared +json type over text that is not JSON, and widens no other declaration", async () => {
+    const prose = new TextEncoder().encode("plain words, not a JSON document");
+    expect(await sniffOfBytes(prose, CMS_FIELDS_MIME)).toBe("text/plain");
+    // Whitespace only: no JSON value opens.
+    expect(await sniffOfBytes(new TextEncoder().encode(" \n "), CMS_FIELDS_MIME)).toBe("text/plain");
+    // JSON bytes under a declaration that is not a +json type stay text/plain.
+    const small = new TextEncoder().encode('{"fields":{"title":"Hello"}}');
+    expect(await sniffOfBytes(small, "application/vnd.cinatra.cms-fields")).toBe("text/plain");
+    expect(await sniffOfBytes(small, "application/x-json-ish")).toBe("text/plain");
+    expect(await sniffOfBytes(small, "image/svg+json")).toBe("text/plain");
+    // A subtype that does not start with a letter or a digit is not a media type (RFC 6838 section 4.2).
+    expect(await sniffOfBytes(small, "application/.+json")).toBe("text/plain");
+    expect(await sniffOfBytes(small, "application/-x+json")).toBe("text/plain");
+    expect(await sniffOfBytes(small, "application/++json")).toBe("text/plain");
+    expect(await sniffOfBytes(small, "application/_x+json")).toBe("text/plain");
+    // A subtype longer than 127 characters (RFC 6838 section 4.2), the +json suffix included, is not kept;
+    // one of exactly 127 characters is.
+    expect(await sniffOfBytes(small, `application/${"a".repeat(123)}+json`)).toBe("text/plain");
+    expect(await sniffOfBytes(small, `application/${"a".repeat(122)}+json`)).toBe(`application/${"a".repeat(122)}+json`);
+    // A subtype may start with a digit.
+    expect(await sniffOfBytes(small, "application/3gpp-ims+json")).toBe("application/3gpp-ims+json");
+    // No declaration: JSON text stays text/plain.
+    expect(await sniffOfBytes(small)).toBe("text/plain");
+  });
 });

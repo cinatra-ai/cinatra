@@ -84,6 +84,11 @@ const hitlScreenStateMock = vi.fn(async () => ({ state: "none" }) as Record<stri
 vi.mock("../../../agents/src/agent-hitl-screen-actions", () => ({
   getAgentHitlScreenStateAction: () => hitlScreenStateMock(),
 }));
+// The publish card's own session entry (cinatra#4150); "none" unless its own arm runs.
+const publishStateMock = vi.fn(async () => ({ state: "none" }) as Record<string, unknown>);
+vi.mock("../../../agents/src/publish-decision-card-actions", () => ({
+  getPublishDecisionCardStateAction: () => publishStateMock(),
+}));
 vi.mock("../../../agents/src/hitl-actions", () => ({
   approveReviewTask: vi.fn(async () => undefined),
   rejectReviewTask: vi.fn(async () => undefined),
@@ -181,6 +186,16 @@ const ASKING_ANSWER = {
   },
 } as Record<string, unknown>;
 
+/** The publish card's own authorized answer (cinatra#4150): an open decision. */
+const PUBLISH_PENDING = {
+  state: "pending",
+  runId: "run-held-2826",
+  agentName: "Proof agent",
+  rows: [{ label: "Title", value: "Spring launch" }],
+  decisionId: "d1",
+  mayDecide: true,
+} as Record<string, unknown>;
+
 let widgetStub: ReturnType<typeof installWidgetServiceStub> | null = null;
 
 function installStub(options: Parameters<typeof installWidgetServiceStub>[0] = {}) {
@@ -195,6 +210,8 @@ function installStub(options: Parameters<typeof installWidgetServiceStub>[0] = {
     // as a typed INTERRUPT, so on this surface it is read through its own
     // broker endpoint rather than a cookie-bound action, for the same reason.
     hitlScreen: () => hitlScreenStateMock(),
+    // cinatra#4150: the publish card is carried by the run's read (no interrupt), through its own broker endpoint here.
+    publishDecision: () => publishStateMock(),
     ...options,
   });
   return widgetStub;
@@ -245,7 +262,7 @@ async function mountKind(surface: SurfaceName, kind: LifecycleCardKind) {
   // DATA_PART, so both are mounted from the transcript a parked dispatch really
   // leaves behind (cinatra#2930 for the HITL screen, S9b for the hold).
   const messages =
-    kind === "recommendation_hold" || kind === "agent_hitl_screen"
+    kind === "recommendation_hold" || kind === "agent_hitl_screen" || kind === "publish_decision"
       ? lifecycleHeldTranscript()
       : lifecycleDataPartTranscript(kind, `ref-${kind}`);
   const mounted = await mountSurface(surface, { messages });
@@ -270,6 +287,7 @@ function drawnKinds(root: HTMLElement): LifecycleCardKind[] {
 
 beforeEach(() => {
   holdStateMock.mockImplementation(async () => ({ state: "none" }));
+  publishStateMock.mockImplementation(async () => ({ state: "none" }));
 });
 
 afterEach(() => {
@@ -390,6 +408,9 @@ describe("the recommendation hold on the widget arm", () => {
       }
       if (kind === "agent_hitl_screen") {
         hitlScreenStateMock.mockImplementation(async () => ASKING_ANSWER);
+      }
+      if (kind === "publish_decision") {
+        publishStateMock.mockImplementation(async () => PUBLISH_PENDING);
       }
       const { root } = await mountKind("widget", kind);
       if (!drawnKinds(root).includes(kind)) unmounted.push(kind);

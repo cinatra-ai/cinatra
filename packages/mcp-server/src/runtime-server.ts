@@ -374,6 +374,13 @@ export async function createMcpRuntimeServer(input: {
       // handler.
       try {
         const { enforceMcpBoundary } = await import("@/lib/authz/mcp-boundary");
+        // cinatra#3745: a run frame's call first proves the run's verified executing
+        // source and the step's declared tools, and the handler gets the frozen copy
+        // of its arguments. Prepared inside this frame, never one an await dropped.
+        if (ctx?.runId) {
+          const { prepareDeclaredRunToolArguments } = await import("@/lib/extension-host-context");
+          cbArgs[0] = await mcpRequestContextStorage.run(ctx, () => prepareDeclaredRunToolArguments(name, cbArgs[0]));
+        }
         const decision = await enforceMcpBoundary({
           primitiveName: name,
           ctx,

@@ -21,9 +21,9 @@
  * ENFORCEMENT of `denied` (refusing the request outright) is covered in
  * run-context-denied-response.test.ts — this suite pins the pure decision.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 
-import { resolveRequestRunContext } from "../request-context";
+import { resolveRequestRunContext, verifyDelegatedExecutedSource, type DelegatedMcpActor } from "../request-context";
 
 const DURABLE_RESOLVED = {
   outcome: "resolved" as const,
@@ -126,12 +126,11 @@ describe("resolveRequestRunContext precedence", () => {
     expect(r.suppressed).toBe(false);
   });
 
-  it("denied defaults to false on every non-failClosed path", () => {
+  it("ordinary and verified paths remain not denied without the header cutover", () => {
     for (const r of [
       resolveRequestRunContext({ delegatedRunId: "run-obo" }),
       resolveRequestRunContext({ durable: DURABLE_RESOLVED }),
       resolveRequestRunContext({ durable: { outcome: "absent" }, ...HEADERS }),
-      resolveRequestRunContext({ durable: { outcome: "invalid" }, ...HEADERS }),
       resolveRequestRunContext({}),
     ]) {
       expect(r.denied).toBe(false);
@@ -239,17 +238,17 @@ describe("resolveRequestRunContext fail-closed cutover denial", () => {
     expect(r.deniedChannel).toBe("header");
   });
 
-  it("durable INVALID with NO legacy claim is suppressed but NOT denied — the request is served without run attribution", () => {
-    // The availability boundary of the posture, stated explicitly: a request
-    // that never claimed a run id is not refused just because its durable
-    // binding went stale. An unattributed write is never a misattributed one.
+  it("durable INVALID with NO legacy claim is suppressed AND denied rather than served runless", () => {
+    // A present run binding is authoritative even when the caller sends no
+    // run header. Failed verification must not erase its policy protection.
     const r = resolveRequestRunContext({
       failClosed: true,
       durable: { outcome: "invalid" },
     });
     expect(r.runId).toBeUndefined();
     expect(r.suppressed).toBe(true);
-    expect(r.denied).toBe(false);
+    expect(r.denied).toBe(true);
+    expect(r.deniedChannel).toBeUndefined();
   });
 
   it("durable INVALID + a header claim does NOT deny a verified OBO caller", () => {
@@ -321,5 +320,147 @@ describe("resolveRequestRunContext empty-verified-id normalization (default path
     expect(r.runId).toBe("run-header");
     expect(r.servedBy).toBe("header");
     expect(r.denied).toBe(false);
+  });
+});
+
+
+describe("durable refusal is not a legacy-header opt-out", () => {
+  it.each([false, undefined])("invalid durable binding denies with failClosed=%s", (failClosed) => {
+    const r = resolveRequestRunContext({ durable: { outcome: "invalid" }, failClosed });
+    expect(r).toMatchObject({ servedBy: "none", suppressed: true, denied: true });
+    expect(r.runId).toBeUndefined();
+    expect(r.deniedChannel).toBeUndefined();
+  });
+  it("an empty OBO id cannot shield an invalid durable binding", () => {
+    const r = resolveRequestRunContext({ delegatedRunId: "", durable: { outcome: "invalid" }, failClosed: true });
+    expect(r.denied).toBe(true);
+    expect(r.runId).toBeUndefined();
+  });
+});
+
+describe("the verified executing source rides only with its own channel's run and step (cinatra#3745)", () => {
+  const PROOF = Object.freeze({
+    contextId: "ctx-1", stepId: "step-1", executionAttemptId: "attempt-1",
+    sourceSha256: "a".repeat(64), executedSourceSha256: "b".repeat(64), declarationSourceSha256: "c".repeat(64),
+  });
+  const durableWith = (verifiedExecutedSource: unknown, stepId = "step-1") => ({
+    outcome: "resolved" as const,
+    ctx: { runId: "run-durable", stepId, verifiedExecutedSource },
+  }) as unknown as Parameters<typeof resolveRequestRunContext>[0]["durable"];
+
+  // (r1)
+  it("an on-behalf-of run carries its own proof with its step", () => {
+    const r = resolveRequestRunContext({ delegatedRunId: "run-obo", delegatedStepId: "step-1",
+      delegatedExecutedSource: PROOF, delegatedSourceCurrent: true, failClosed: true });
+    expect(r).toMatchObject({ runId: "run-obo", stepId: "step-1", verifiedExecutedSource: PROOF,
+      servedBy: "obo", denied: false });
+  });
+
+  // (r2)
+  it("a durable run carries its binding's proof with its step", () => {
+    const r = resolveRequestRunContext({ durable: durableWith(PROOF), failClosed: true });
+    expect(r).toMatchObject({ runId: "run-durable", stepId: "step-1", verifiedExecutedSource: PROOF,
+      servedBy: "durable", denied: false });
+  });
+
+  // (r3)
+  it("a proof whose step is not the channel's step, or a corrupt proof, refuses the request", () => {
+    const cases = [
+      { delegatedRunId: "run-obo", delegatedStepId: "step-2", delegatedExecutedSource: PROOF },
+      { delegatedRunId: "run-obo", delegatedExecutedSource: PROOF },
+      { delegatedRunId: "run-obo", delegatedStepId: "step-1", delegatedExecutedSource: { ...PROOF, sourceSha256: "not-hex" } },
+      { delegatedRunId: "run-obo", delegatedStepId: "step-1", delegatedExecutedSource: { ...PROOF, extra: "x" } },
+      { durable: durableWith(PROOF, "step-2") },
+      { durable: durableWith({ ...PROOF, executionAttemptId: "" }) },
+    ] as Array<Parameters<typeof resolveRequestRunContext>[0]>;
+    for (const input of cases) {
+      const r = resolveRequestRunContext({ ...input, failClosed: true });
+      expect(r, JSON.stringify(input)).toEqual({ servedBy: "none", suppressed: true, denied: true });
+    }
+  });
+
+  // (r4)
+  it("an on-behalf-of run never borrows a durable binding's proof", () => {
+    const r = resolveRequestRunContext({ delegatedRunId: "run-obo", delegatedStepId: "step-1",
+      durable: durableWith(PROOF), failClosed: true });
+    expect(r.runId).toBe("run-obo");
+    expect(r.verifiedExecutedSource).toBeUndefined();
+    expect(r.denied).toBe(false);
+  });
+
+  // (r5)
+  it("an on-behalf-of proof that the tool server did not find current refuses the request", () => {
+    for (const delegatedSourceCurrent of [undefined, false]) {
+      const r = resolveRequestRunContext({ delegatedRunId: "run-obo", delegatedStepId: "step-1",
+        delegatedExecutedSource: PROOF, delegatedSourceCurrent, failClosed: true });
+      expect(r, String(delegatedSourceCurrent)).toEqual({ servedBy: "none", suppressed: true, denied: true });
+    }
+  });
+});
+
+describe("the publish decision of a call rides only with the on-behalf-of proof (cinatra#3745)", () => {
+  const PROOF = Object.freeze({
+    contextId: "ctx-1", stepId: "step-1", executionAttemptId: "attempt-1",
+    sourceSha256: "a".repeat(64), executedSourceSha256: "b".repeat(64), declarationSourceSha256: "c".repeat(64),
+  });
+  const obo = (extra: Record<string, unknown> = {}) => ({ delegatedRunId: "run-obo", delegatedStepId: "step-1",
+    delegatedExecutedSource: PROOF, delegatedSourceCurrent: true, failClosed: true, ...extra }) as
+    Parameters<typeof resolveRequestRunContext>[0];
+
+  it("an on-behalf-of run with a current proof carries the token's publish decision", () => {
+    const r = resolveRequestRunContext(obo({ delegatedPublishDecisionId: "decision-2" }));
+    expect(r).toMatchObject({ runId: "run-obo", verifiedExecutedSource: PROOF, publishDecisionId: "decision-2", denied: false });
+  });
+
+  it("no decision without a proof, and none from a durable binding", () => {
+    expect(resolveRequestRunContext(obo()).publishDecisionId).toBeUndefined();
+    const noProof = resolveRequestRunContext({ delegatedRunId: "run-obo", delegatedStepId: "step-1",
+      delegatedPublishDecisionId: "decision-2", failClosed: true } as Parameters<typeof resolveRequestRunContext>[0]);
+    expect(noProof.runId).toBe("run-obo");
+    expect(noProof.publishDecisionId).toBeUndefined();
+    const durable = resolveRequestRunContext({ durable: { outcome: "resolved",
+      ctx: { runId: "run-durable", stepId: "step-1", verifiedExecutedSource: PROOF } },
+      delegatedPublishDecisionId: "decision-2", failClosed: true } as Parameters<typeof resolveRequestRunContext>[0]);
+    expect(durable.runId).toBe("run-durable");
+    expect(durable.publishDecisionId).toBeUndefined();
+  });
+});
+
+describe("the tool server re-checks an on-behalf-of proof against the run store (cinatra#3745)", () => {
+  const PROOF = Object.freeze({
+    contextId: "ctx-1", stepId: "step-1", executionAttemptId: "attempt-1",
+    sourceSha256: "a".repeat(64), executedSourceSha256: "b".repeat(64), declarationSourceSha256: "c".repeat(64),
+  });
+  const actor = (extra: Record<string, unknown> = {}) => ({
+    delegation: "agent_run", userId: "user-1", orgId: "org-1", runId: "run-obo",
+    platformRole: "member", oboCeiling: [], verifiedStepId: "step-1",
+    verifiedExecutedSource: PROOF, ...extra,
+  }) as unknown as DelegatedMcpActor;
+
+  // (r6)
+  it("a token without a proof needs no check", async () => {
+    const verify = vi.fn(async () => true);
+    expect(await verifyDelegatedExecutedSource(actor({ verifiedExecutedSource: undefined }), verify)).toBeUndefined();
+    expect(await verifyDelegatedExecutedSource(undefined, verify)).toBeUndefined();
+    expect(await verifyDelegatedExecutedSource({ delegation: "chat", userId: "user-1", orgId: "org-1",
+      platformRole: "member" }, verify)).toBeUndefined();
+    expect(verify).not.toHaveBeenCalled();
+  });
+
+  // (r7)
+  it("a proof is current only when the run store finds it current for the token's run and org", async () => {
+    const verify = vi.fn(async () => true);
+    expect(await verifyDelegatedExecutedSource(actor(), verify)).toBe(true);
+    expect(verify).toHaveBeenCalledWith("run-obo", "org-1", PROOF);
+  });
+
+  // (r8) A token minted under attempt A and replayed after a re-dispatch to
+  // attempt B: the run store's check answers false.
+  it.each(["false", "throw", "reject", "missing"])("a proof whose check is %s is not current", async (kind) => {
+    const verify = kind === "missing" ? undefined
+      : kind === "throw" ? vi.fn((): Promise<boolean> => { throw new Error("run store unavailable"); })
+        : kind === "reject" ? vi.fn(async (): Promise<boolean> => { throw new Error("run store unavailable"); })
+          : vi.fn(async () => false);
+    expect(await verifyDelegatedExecutedSource(actor(), verify)).toBe(false);
   });
 });

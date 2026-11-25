@@ -12,6 +12,8 @@ const { calls, answers } = vi.hoisted(() => ({
     where: [] as unknown[],
     limit: [] as number[],
     orderBy: 0,
+    /** The terms of each orderBy, in order. */
+    orderByArgs: [] as unknown[][],
     transactions: 0,
     rollbacks: 0,
     /** Each call by the handle it went through: "db" (the pool) or "tx" (the transaction). */
@@ -70,8 +72,9 @@ vi.mock("../db", () => {
         };
         return {
           limit,
-          orderBy: () => {
+          orderBy: (...terms: unknown[]) => {
             calls.orderBy += 1;
+            calls.orderByArgs.push(terms);
             return { limit };
           },
         };
@@ -119,6 +122,7 @@ import {
   listDueParked,
   listSettledWithWaitingRun,
   readDecisionForRunNode,
+  readDispatchedPublishRows,
   readLatestDecisionForRun,
   readOpenDecisionForRun,
 } from "../publish-decision-store";
@@ -173,6 +177,7 @@ beforeEach(() => {
   calls.where.length = 0;
   calls.limit.length = 0;
   calls.orderBy = 0;
+  calls.orderByArgs.length = 0;
   calls.transactions = 0;
   calls.rollbacks = 0;
   calls.via.length = 0;
@@ -301,6 +306,40 @@ describe("decide", () => {
     answers.update = async () => [stored({ status: "declined" })];
     await decide("d1", { from: "parked", to: "declined", actor: "person-1", note: "not this week" });
     expect(calls.set[0]).toMatchObject({ decidedBy: "person-1", decisionNote: "not this week" });
+  });
+
+  // A release records the run's pause generation its claim holds, in the same UPDATE that releases the row, so a later
+  // read tells a run still parked at that pause (its resume died before the fence) from one that went on.
+  it("a release records the pause generation in the same UPDATE, and the row reads it back", async () => {
+    answers.update = async () => [stored({ status: "released", decidedBy: "person-1", releasedPauseGeneration: 7 })];
+    const result = await decide("d1", { from: "parked", to: "released", actor: "person-1", pauseGeneration: 7 } as never);
+    expect(calls.set).toHaveLength(1);
+    expect(calls.set[0]).toMatchObject({ status: "released", decidedBy: "person-1", decisionNote: null, releasedPauseGeneration: 7 });
+    expect(result).toMatchObject({ outcome: "won", decision: { releasedPauseGeneration: 7 } });
+    answers.update = async () => [stored({ status: "declined" })];
+    await decide("d1", { from: "parked", to: "declined", actor: "person-1" });
+    expect(calls.set[1]).not.toHaveProperty("releasedPauseGeneration");
+  });
+
+  it("refuses a pause generation on anything but a release, or one that is not a whole number, before any write", async () => {
+    for (const [patch, code] of [
+      [{ to: "declined", actor: "person-1", pauseGeneration: 3 }, "invalid-transition"],
+      [{ to: "expired", actor: null, pauseGeneration: 3 }, "invalid-transition"],
+      [{ to: "released", actor: "person-1", pauseGeneration: -1 }, "invalid-input"],
+      [{ to: "released", actor: "person-1", pauseGeneration: 1.5 }, "invalid-input"],
+    ] as const) {
+      expect(await codeOf(decide("d1", { from: "parked", ...patch } as never))).toBe(code);
+    }
+    expect(calls.set).toHaveLength(0);
+  });
+
+  it("a stored released pause generation it cannot read is a malformed row; none reads as null", async () => {
+    answers.update = async () => [stored({ status: "released", releasedPauseGeneration: -4 })];
+    expect(await codeOf(decide("d1", { from: "parked", to: "released", actor: "person-1" }))).toBe("malformed-row");
+    answers.update = async () => [stored({ status: "released" })];
+    expect(await decide("d1", { from: "parked", to: "released", actor: "person-1" })).toMatchObject({
+      outcome: "won", decision: { releasedPauseGeneration: null },
+    });
   });
 
   it.each(["expired", "run_ended"] as const)("%s names no person", async (to) => {
@@ -904,6 +943,20 @@ describe("cinatra#4150 PR 3a, pre-review 3: the expiry's own rules in the store"
     expect(calls.via).toEqual(["tx.update"]);
   });
 
+  // a card's answer names its row, and the row must belong to the run whose
+  // rights were checked, in the same UPDATE; a row of another run is not found, never a status that run leaks.
+  it("decide with ofRun wins only on a row of that run, in the same UPDATE, and its re-read asks the same", async () => {
+    answers.update = async () => [];
+    answers.select = async () => [];
+    expect(await codeOf(decide("d1", { from: "parked", to: "declined", actor: "person-1", ofRun: "run-1", newestOnly: true } as never))).toBe("not-found");
+    const update = rendered(calls.where[0]);
+    expect(update.params).toEqual(["d1", "parked", "run-1"]);
+    expect(update.sql).toMatch(/"id" = \$1 and .*"status" = \$2 and .*"run_id" = \$3 and not exists/);
+    const reread = rendered(calls.where[1]);
+    expect(reread.params).toEqual(["d1", "run-1"]);
+    expect(calls.via).toEqual(["tx.update", "tx.select"]);
+  });
+
   it("decide without newestOnly asks nothing about other decisions", async () => {
     answers.update = async () => [stored({ status: "run_ended" })];
     await decide("d1", { from: "parked", to: "run_ended", actor: null });
@@ -924,5 +977,175 @@ describe("cinatra#4150 PR 3a, pre-review 3: the expiry's own rules in the store"
   it("listDueParked refuses an empty last id before any read", async () => {
     expect(await codeOf(listDueParked(2, undefined, ""))).toBe("invalid-input");
     expect(calls.via).toEqual([]);
+  });
+});
+
+describe("the decision keeps the rows its template declared at the park (review finding 2)", () => {
+  const ROWS = [{ label: "Title", input: "title" }, { label: "Where", input: "channel" }];
+
+  it("writes the declared rows as JSON text with the row, and reads them back", async () => {
+    answers.insert = async () => [stored({ declaredRows: JSON.stringify(ROWS) })];
+    const result = await insertParkedDecision({ ...PARK, declaredRows: ROWS });
+    expect(calls.values[0]).toMatchObject({ declaredRows: JSON.stringify(ROWS) });
+    expect(result.decision.declaredRows).toEqual(ROWS);
+  });
+
+  it("no declaration given writes null, and an older row (null) reads as not recorded", async () => {
+    answers.insert = async () => [stored({ declaredRows: null })];
+    const result = await insertParkedDecision(PARK);
+    expect(calls.values[0]).toMatchObject({ declaredRows: null });
+    expect(result.decision.declaredRows).toBeNull();
+    await insertParkedDecision({ ...PARK, declaredRows: null });
+    expect(calls.values[1]).toMatchObject({ declaredRows: null });
+  });
+
+  it("an empty declaration is kept as empty, not as not recorded", async () => {
+    answers.insert = async () => [stored({ declaredRows: "[]" })];
+    const result = await insertParkedDecision({ ...PARK, declaredRows: [] });
+    expect(calls.values[0]).toMatchObject({ declaredRows: "[]" });
+    expect(result.decision.declaredRows).toEqual([]);
+  });
+
+  it("refuses a declaration that is not rows of a label and an input, before any write", async () => {
+    for (const bad of [
+      [{ label: "", input: "title" }],
+      [{ label: "Title" }],
+      [{ label: "Title", input: 3 }],
+      ["Title"],
+      Array.from({ length: 33 }, () => ({ label: "L", input: "i" })),
+      [{ label: "x".repeat(257), input: "title" }],
+    ]) {
+      expect(await codeOf(insertParkedDecision({ ...PARK, declaredRows: bad as never }))).toBe("invalid-input");
+    }
+    expect(calls.values).toHaveLength(0);
+  });
+
+  // cinatra#4738 on main's declared rows: a list or artifacts row the dispatched plan declares is kept with its kind and
+  // columns, never cut down to a text row (which would draw a list as nothing and an artifacts row as nothing).
+  it("keeps a list row's columns and an artifacts row's kind, at the park and through the dispatched plan", async () => {
+    const KINDED = [
+      { label: "Title", input: "title" },
+      { kind: "list", label: "Recipients", input: "people", columns: [{ label: "Name", field: "name" }] },
+      { kind: "artifacts", label: "Proposed page", input: "page" },
+    ];
+    answers.insert = async () => [stored({ declaredRows: JSON.stringify(KINDED) })];
+    const result = await insertParkedDecision({ ...PARK, declaredRows: KINDED as never });
+    expect(calls.values[0]).toMatchObject({ declaredRows: JSON.stringify(KINDED) });
+    expect(result.decision.declaredRows).toEqual(KINDED);
+    answers.select = async () => [{ rows: JSON.stringify({ publish: KINDED }) }];
+    expect(await readDispatchedPublishRows("run-1", "publish")).toEqual(KINDED);
+    // A kind this build cannot read, a list row with no columns and an extra field are refused, never read as text.
+    for (const bad of [
+      [{ kind: "chart", label: "Title", input: "title" }],
+      [{ kind: "list", label: "Recipients", input: "people", columns: [] }],
+      [{ kind: "artifacts", label: "Proposed page", input: "page", targets: [] }],
+    ]) {
+      expect(await codeOf(insertParkedDecision({ ...PARK, declaredRows: bad as never }))).toBe("invalid-input");
+    }
+  });
+
+  it("a stored declaration the module cannot read is a malformed row, never a quiet fallback", async () => {
+    for (const text of ["{nope", '{"label":"Title"}', '[{"label":"Title"}]']) {
+      answers.select = async () => [stored({ declaredRows: text })];
+      expect(await codeOf(readLatestDecisionForRun("run-1"))).toBe("malformed-row");
+    }
+  });
+});
+
+// Rounds 19 and 20 on cinatra#4150. A decision belongs to one attempt of its run: the park stamps the run's
+// reset_generation on it (run_generation), a retry's reset raises the run's generation in its compare-and-set
+// (run-transition.ts), and every run-level read judges the current attempt's rows only (run_generation = the run's
+// generation). The park copies its node's rows from the plan the attempt was dispatched with
+// (agent_runs.dispatch_publish_rows).
+describe("round 20: a decision belongs to one reset generation of its run", () => {
+  // A row with no generation reads as the run's own generation: current, so it holds (round 21: an old node's park).
+  const CURRENT = /coalesce\(coalesce\("agent_run_publish_decisions"\."run_generation", \(select attempt_run\.reset_generation from "[^"]+"\."agent_runs" attempt_run where attempt_run\.id = "agent_run_publish_decisions"\."run_id"\)\) = \(select attempt_run\.reset_generation from "[^"]+"\."agent_runs" attempt_run where attempt_run\.id = "agent_run_publish_decisions"\."run_id"\), false\)/;
+  /** The SQL with the app schema's qualifier dropped (the schema the suite runs under varies). */
+  const unschema = (text: string) => text.replace(/"[^"]+"\.(?="agent_run_publish_decisions")/g, "");
+
+  it("every run-level read asks for the current generation's rows only", async () => {
+    await readLatestDecisionForRun("run-1");
+    await readOpenDecisionForRun("run-1");
+    await readDecisionForRunNode("run-1", "publish");
+    await listSettledWithWaitingRun(50);
+    expect(calls.where).toHaveLength(4);
+    for (const where of calls.where) expect(unschema(rendered(where).sql)).toMatch(CURRENT);
+  });
+
+  it("the hold's read answers the current generation's newest row first, else an earlier one's, in one read", async () => {
+    answers.select = async () => [stored({ status: "run_ended", runGeneration: 0, current: false })];
+    const row = await readLatestDecisionForRun("run-1", { orEarlierAttempt: true });
+    expect(row).toMatchObject({ status: "run_ended", runGeneration: 0, current: false });
+    expect(unschema(rendered(calls.where[0]).sql)).not.toMatch(CURRENT);
+    expect(calls.orderByArgs).toHaveLength(1);
+    expect(unschema(rendered(calls.orderByArgs[0]![0]).sql)).toMatch(new RegExp(`^\\(${CURRENT.source}\\) desc$`));
+    expect(calls.limit).toEqual([1]);
+    answers.select = async () => [stored({ runGeneration: 1, current: true })];
+    expect(await readLatestDecisionForRun("run-1", { orEarlierAttempt: true })).toMatchObject({ runGeneration: 1, current: true });
+  });
+
+  it("a stored row reads its generation; a row older than the column reads null", async () => {
+    answers.select = async () => [stored({ runGeneration: 3, current: true })];
+    expect((await readLatestDecisionForRun("run-1"))?.runGeneration).toBe(3);
+    answers.select = async () => [stored({ current: true })];
+    expect((await readLatestDecisionForRun("run-1"))?.runGeneration).toBeNull();
+  });
+
+  it("the park stamps the run's generation in its own statement, only while the run is held at a gate, else -1", async () => {
+    answers.insert = async () => [stored({ runGeneration: 2 })];
+    const park = await insertParkedDecision(PARK);
+    expect(park).toMatchObject({ inserted: true, current: true });
+    const stamp = rendered(calls.values[0]!.runGeneration);
+    // The read locks the run row FOR KEY SHARE until the park commits: the fence against a consumption (cinatra#3745).
+    expect(stamp.sql).toMatch(/^coalesce\(\(select case when live_run\.status in \('running', 'pending_approval'\) then live_run\.reset_generation end from "[^"]+"\."agent_runs" live_run where live_run\.id = \$1 for key share\), -1\)$/);
+    expect(stamp.params).toEqual(["run-1"]);
+    answers.insert = async () => [stored({ runGeneration: -1 })];
+    expect(await insertParkedDecision(PARK)).toMatchObject({ inserted: true, current: false });
+  });
+
+  it("a stop that already has a row answers whether that row is of the current generation", async () => {
+    answers.insert = async () => [];
+    answers.select = async () => [stored({ runGeneration: 0, current: false })];
+    expect(await insertParkedDecision(PARK)).toMatchObject({ inserted: false, current: false });
+    answers.select = async () => [stored({ runGeneration: 1, current: true })];
+    expect(await insertParkedDecision(PARK)).toMatchObject({ inserted: false, current: true });
+  });
+
+  it("the expiry's newest-only answer also requires the current generation, in the same UPDATE", async () => {
+    answers.update = async () => [stored({ status: "expired" })];
+    await decide("d1", { from: "parked", to: "expired", actor: null, newestOnly: true });
+    expect(unschema(rendered(calls.where[0]).sql)).toMatch(CURRENT);
+    await decide("d1", { from: "parked", to: "expired", actor: null });
+    expect(unschema(rendered(calls.where[1]).sql)).not.toMatch(CURRENT);
+  });
+});
+
+describe("round 19: the park copies its node's rows from the dispatched plan", () => {
+  const MAP = JSON.stringify({ publish: [{ label: "Title", input: "title" }], other: [{ label: "X", input: "x" }] });
+
+  it("answers the node's rows of the recorded map, [] for a node it declares none for, and null when none is recorded", async () => {
+    answers.select = async () => [{ rows: MAP }];
+    expect(await readDispatchedPublishRows("run-1", "publish")).toEqual([{ label: "Title", input: "title" }]);
+    expect(rendered(calls.where[0]).params).toEqual(["run-1"]);
+    expect(await readDispatchedPublishRows("run-1", "missing")).toEqual([]);
+    // An own key only: a node id that names an Object.prototype member declares nothing.
+    expect(await readDispatchedPublishRows("run-1", "__proto__")).toEqual([]);
+    expect(await readDispatchedPublishRows("run-1", "toString")).toEqual([]);
+    for (const rows of [null, "not json", "[]", "null"]) {
+      answers.select = async () => [{ rows }];
+      expect(await readDispatchedPublishRows("run-1", "publish")).toBeNull();
+    }
+    answers.select = async () => [];
+    expect(await readDispatchedPublishRows("run-1", "publish")).toBeNull();
+    // A node entry this module cannot read is not recorded either.
+    answers.select = async () => [{ rows: JSON.stringify({ publish: [{ label: "" }] }) }];
+    expect(await readDispatchedPublishRows("run-1", "publish")).toBeNull();
+  });
+
+  it("a read error propagates (the park records nothing for it)", async () => {
+    answers.select = async () => {
+      throw new Error("db down");
+    };
+    await expect(readDispatchedPublishRows("run-1", "publish")).rejects.toThrow("db down");
   });
 });

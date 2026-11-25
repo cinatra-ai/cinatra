@@ -76,6 +76,13 @@ import {
   AgentHitlScreenCard,
   type AgentHitlScreenCarry,
 } from "@cinatra-ai/agents/agent-hitl-screen-card";
+// The ONE renderer of `publish_decision` (cinatra#4150), by its own subpath for the same reason.
+import {
+  PublishDecisionCard,
+  publishGateIsOpen,
+  usePublishDecisionCardRead,
+  usePublishDecisionDecide,
+} from "@cinatra-ai/agents/publish-decision-card-view";
 // The turn's own register for the settled schedule card (cinatra#3174), reached
 // by the same subpath the host declaration is.
 import { SettledScheduleRegisterProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
@@ -87,6 +94,9 @@ import {
   runMomentCardIsOpen,
   ScheduleReadingReport,
   useRunMomentCard,
+  useLifecycleCardHost,
+  useLifecycleCardAuth,
+  runMomentCardDrawsAReview,
   type RunMomentCardReader,
   type ScheduleCardReading,
 } from "@cinatra-ai/agents/lifecycle-card-runtime";
@@ -628,6 +638,35 @@ function AgentRunTurnSlot({
   const runCardStandsDown =
     momentIsOpen || (turnCarriesMomentCard && stillLooking);
 
+  // AND A REVIEW IS NEVER STOOD DOWN (cinatra#3080).
+  //
+  // The settled-schedule rule below takes the run's panel out of the picture,
+  // and what it was written to take away is named exactly: "its heading, its
+  // status pill and its 'No messages yet.' line are three of the things the
+  // section's turn does not draw, and this panel is where all three come from".
+  // A pending review is none of the three. It is the one thing in a turn a
+  // reader OWES an answer to, it is drawn in the panel's own slot
+  // (`data-run-review-slot`), and inside a conversation that slot is the only
+  // mount of the run's review at all — the injected `artifact_review_gate` part
+  // is suppressed for a turn that draws the run card. So a turn that hid the
+  // panel here hid the decision: the fifth proof round of cinatra#3080 read the
+  // card in the thread at state pending, with Comment, Regenerate and Continue
+  // on it, measuring 0 by 0 inside this wrapper.
+  //
+  // IT IS THE ROW'S OWN ANSWER, not a second reading: the same run row this
+  // container already reads for the moment card carries the review slot, and
+  // the question asked of it is the panel's own (`inPlaceReviewRef`).
+  //
+  // ASKED WITH THE HOST it is drawn under; every host answers the same, the
+  // site widget included, whose run card draws the review in its own slot
+  // (cinatra#3051).
+  const ambientLifecycleHost = useLifecycleCardHost();
+  const ambientLifecycleAuth = useLifecycleCardAuth();
+  const runCardDrawsAReview = runMomentCardDrawsAReview(
+    momentCard,
+    ambientLifecycleHost,
+  );
+
   // THE SENTENCE ABOVE THE CARD MAY NOT CONTRADICT IT (cinatra#3044).
   //
   // The line that introduces this card was written when the run was dispatched
@@ -768,7 +807,38 @@ function AgentRunTurnSlot({
   // never read by anything else, and it dies with the turn - see
   // `AgentHitlScreenCarry` for why that is deliberately not a cache.
   const screenCarrier = useRef<AgentHitlScreenCarry | null>(null);
-  const hitlScreen = (
+  // THE PUBLISH CARD (cinatra#4150), mounted beside the screen above, in the same placement, but carried by its read:
+  // keyed by the run alone, it self-gates, so a run with no open publish decision draws nothing here. A publish gate
+  // has no gate context, so the gate signal above stays quiet for it; the panel's publish-read signal (the run's
+  // status, the gate it waits at and, at a pause with no gate context, each reading of the run) is this card's change
+  // signal instead, so a decision opened after the first read draws without a reload or focus, also when the run
+  // reaches it from another gate under the same status.
+  // The panel's run status rides beside it: the shared read keeps re-reading while the run has not finished.
+  const [runChange, setRunChange] = useState<{ signal: string; status: string | null } | null>(null);
+  const onRunChangeSignal = useCallback(
+    (changedRunId: string, signal: string, status?: string) => {
+      if (changedRunId === runId) setRunChange({ signal, status: status ?? null });
+    },
+    [runId],
+  );
+  // ONE READ for the turn: the card draws it and the run panel decides its approval banner from it, so the two can
+  // never disagree (see the panel's failure rule).
+  const publishRead = usePublishDecisionCardRead({
+    runId: ambientLifecycleHost === null ? "" : runId,
+    auth: ambientLifecycleAuth,
+    wireRef: runChange?.signal ?? null,
+    runStatus: runChange?.status ?? null,
+  });
+  // THE DECIDE DOOR (cinatra#4758) for the host's transport: the session action on /chat, the broker answer with the
+  // widget's own credential on the site widget.
+  const publishDecide = usePublishDecisionDecide(ambientLifecycleAuth);
+  const publishCard = <PublishDecisionCard runId={runId} read={publishRead} decide={publishDecide} />;
+  // ONE HELD-RUN CARD PER TURN (cinatra#4150), by the run panels' own rule (`publishGateIsOpen`): a run parked at its
+  // publish gate is parked there and nowhere else, so while the shared read POSITIVELY answers `pending` the hitl
+  // screen for this run is a stale reading (its own read landed first, or a failed re-read kept its last answer) and
+  // the publish card is the turn's only card. Any other publish reading (not landed, failed, `none`, settled) leaves
+  // the screen exactly as it was. The screen is withheld, not blanked: its own stale-on-failed-refresh rule stands.
+  const hitlScreen = publishGateIsOpen(publishRead) ? null : (
     <AgentHitlScreenCard runId={runId} wireRef={gateSignal} carrier={screenCarrier} />
   );
 
@@ -778,9 +848,33 @@ function AgentRunTurnSlot({
       runId={runId}
       onActiveGateChange={onGateChange}
       onReviewReadingChange={onPanelReviewReadingChange}
+      onRunChangeSignal={onRunChangeSignal}
+      publishRead={publishRead}
       recommendationDecided={decided}
     />
   );
+
+  // A TURN THAT OWES THE READER A REVIEW — the one reading the stand-down below
+  // is written on and taken off, and it has TWO sources that answer the same
+  // question over different windows.
+  //
+  // `panelDrawsReview` is the LIVE reading the panel itself publishes
+  // (cinatra#3484): the slot it selected from the run's own gate and slot rows,
+  // which is the authority for whatever the panel is drawing right now.
+  // `runCardDrawsAReview` is this container's own answer, read off the run's
+  // moment card and the ambient host (cinatra#3080).
+  //
+  // BOTH ARE ASKED because the row covers the settle window the report cannot:
+  // the run has finished, its gate row has not arrived yet and the panel is
+  // still drawing its working placeholder, so it reports no review while a
+  // decision is already owed — the case cinatra#3080's own suite pins with a
+  // review gate read as `ref: null, awaiting: true`.
+  // AND AN OPEN PUBLISH DECISION OWES NO REVIEW (cinatra#4150): while the shared read POSITIVELY answers `pending` the
+  // publish card is the turn's one held-run card, so a review reading (the panel's report or the run row's) does not
+  // reveal the stood-down panel beside it. Any other publish reading leaves this exactly as it was.
+  const publishDecisionIsOpen = publishGateIsOpen(publishRead);
+  const turnOwesTheReaderAReview =
+    !publishDecisionIsOpen && (panelDrawsReview || runCardDrawsAReview);
 
   const turn = (
     // THE REGISTER THIS CONTAINER LISTENS ON (cinatra#3174), around the whole
@@ -907,6 +1001,7 @@ function AgentRunTurnSlot({
           construction above for why the person's half-typed answer travels
           with it rather than living inside the instance that moves. */}
       {turnCarriesSettledSchedule ? null : hitlScreen}
+      {turnCarriesSettledSchedule ? null : publishCard}
       {/* THE RUN-PROGRESS PANEL IS NOT DRAWN FOR A SETTLED SCHEDULE CARD - AND
           IS NOT UNMOUNTED EITHER (cinatra#3174, criterion 1, as converged).
 
@@ -986,9 +1081,11 @@ function AgentRunTurnSlot({
           review §I). */}
       {runCardWaits || runCardStandsDown ? null : turnCarriesSettledSchedule || decided ? (
         <div
-          hidden={!panelDrawsReview}
-          aria-hidden={panelDrawsReview ? undefined : true}
-          data-inline-run-panel-stood-down={panelDrawsReview ? undefined : runId}
+          hidden={!turnOwesTheReaderAReview}
+          aria-hidden={turnOwesTheReaderAReview ? undefined : true}
+          data-inline-run-panel-stood-down={
+            turnOwesTheReaderAReview ? undefined : runId
+          }
         >
           {runPanel}
         </div>
@@ -1031,7 +1128,7 @@ function AgentRunTurnSlot({
   if (!turnCarriesSettledSchedule) return turn;
   if (turnLevelSettledSchedule && scheduleTurn?.screenContainer) {
     return <>{turn}{createPortal(
-      <div data-agent-run-screen-slot={runId}>{hitlScreen}</div>,
+      <div data-agent-run-screen-slot={runId}>{hitlScreen}{publishCard}</div>,
       scheduleTurn.screenContainer,
       runId,
     )}</>;
@@ -1039,7 +1136,7 @@ function AgentRunTurnSlot({
   return (
     <>
       {turn}
-      <div data-agent-run-screen-slot={runId}>{hitlScreen}</div>
+      <div data-agent-run-screen-slot={runId}>{hitlScreen}{publishCard}</div>
     </>
   );
 }
@@ -1845,7 +1942,7 @@ function UserMessageBubble({
 
   if (editing) {
     return (
-      <div className="mb-4 w-full rounded-control bg-surface-muted/60 px-4 py-3 shadow-sm">
+      <div data-chat-message-editor="" className="mb-4 w-full rounded-control bg-surface-muted/60 px-4 py-3 shadow-sm">
         <Textarea
           ref={textareaRef}
           value={draft}

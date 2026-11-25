@@ -58,6 +58,21 @@ import {
 } from "./artifact-binding";
 import type { PersistedArtifactBindingDeclaration } from "./artifact-binding";
 import { readKeyList } from "./gate-keys-not-from-run-inputs";
+import {
+  PUBLISH_ROW_COLUMNS_MAX,
+  PUBLISH_ROW_FIELD_MAX,
+  PUBLISH_DECISION_ISLAND_REF_FIELD_MAX,
+  PUBLISH_ROW_INPUT_MAX,
+  PUBLISH_ROW_LABEL_MAX,
+  PUBLISH_ROWS_MAX,
+  isPublishRowField,
+  isPublishRowInput,
+  isPublishRowLabel,
+  publishDecisionIslandRefInputFits,
+  type PublishRowColumn,
+  type PublishRowDeclaration,
+  type PublishRowsMap,
+} from "./publish-decision-card";
 import { checkRegenerateDeclaration } from "./verdaccio/package-contract";
 
 // ---------------------------------------------------------------------------
@@ -1585,17 +1600,25 @@ export function collectPublishingSteps(
 }
 
 // cinatra#4150: the rows the publish card shows. A declared publishing node may
-// add `metadata.cinatra.publishRows: [{ label, input }]`: one or two rows, each
-// a label in the pack's own words over the value of one of the node's own
-// inputs (the values the stop surfaces). The rows are read only; the card
-// decides whether the content goes out, never what it says. The key is valid
-// only beside `publishes: true` on a top-level node; anywhere else, and in any
-// form but the one below, it refuses the compile. Errors name the field and the
-// node id only, never a label or an input the pack wrote.
-export type PublishRowDeclaration = { label: string; input: string };
-export type PublishRows = Record<string, PublishRowDeclaration[]>;
-const PUBLISH_ROWS_MAX = 2;
-const PUBLISH_ROW_LABEL_MAX = 60;
+// add `metadata.cinatra.publishRows`: one to four rows, each over one of the
+// node's own inputs (the values the stop surfaces), with a label in the pack's
+// own words. A row is a TEXT row, `{ label, input }` (or the same with
+// `kind: "text"`, which compiles to exactly that), drawn as the label over one
+// plain value; or a LIST row (W4), `{ kind: "list", label, input, columns }`
+// with one to four `{ label, field }` columns, drawn as a table over a surfaced
+// list of records, `field` naming a key of each record; or an ARTIFACTS row
+// (C1b), `{ kind: "artifacts", label, input }`, whose input holds the artifact
+// revisions the stop surfaced, drawn through the review-target island, which
+// reads them from the decision and proves the run made each one. No other kind compiles:
+// a row the card cannot draw would leave a person deciding on content they
+// cannot see. The rows are read only; the card decides whether the change is
+// made, never what it holds. The key is valid only beside `publishes: true` on
+// a top-level node; anywhere else, and in any form but the ones above, it
+// refuses the compile. Errors name the field and the node id only, never a
+// label, an input or a field the pack wrote.
+export type { PublishRowDeclaration } from "./publish-decision-card";
+export type PublishRows = PublishRowsMap;
+const keysAre = (o: object, keys: string) => Object.keys(o).sort().join(",") === keys;
 const hasOwn = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
 
 function declaredRowsOf(owner: unknown): { present: boolean; value?: unknown } {
@@ -1652,20 +1675,78 @@ export function collectPublishRows(
     const out: PublishRowDeclaration[] = [];
     for (const [index, row] of list.entries()) {
       const where = `${who} metadata.cinatra.publishRows[${index}]`;
-      if (!row || typeof row !== "object" || Array.isArray(row) || Object.keys(row).sort().join(",") !== "input,label") {
-        return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where} must be an object with exactly the keys label and input` };
+      if (!row || typeof row !== "object" || Array.isArray(row)) {
+        return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where} must be an object` };
+      }
+      const kind = hasOwn(row, "kind") ? (row as { kind: unknown }).kind : "text";
+      if (kind !== "text" && kind !== "list" && kind !== "artifacts") {
+        return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where}.kind must be text, list or artifacts` };
+      }
+      const keys = kind === "list" ? "columns,input,kind,label" : hasOwn(row, "kind") ? "input,kind,label" : "input,label";
+      if (!keysAre(row, keys)) {
+        return {
+          ok: false,
+          error: kind === "list"
+            ? `PUBLISH_ROWS_MALFORMED: ${where} must be an object with exactly the keys kind, label, input and columns`
+            : kind === "artifacts"
+              ? `PUBLISH_ROWS_MALFORMED: ${where} must be an object with exactly the keys kind, label and input`
+              : `PUBLISH_ROWS_MALFORMED: ${where} must be an object with exactly the keys label and input (and kind text)`,
+        };
       }
       const { label, input } = row as { label: unknown; input: unknown };
-      if (typeof label !== "string" || label.trim() === "" || label !== label.trim() || label.length > PUBLISH_ROW_LABEL_MAX || /[\p{Cc}\u2028\u2029]/u.test(label)) {
+      if (!isPublishRowLabel(label)) {
         return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where}.label must be one line of 1 to ${PUBLISH_ROW_LABEL_MAX} characters with no leading or trailing space` };
       }
       if (typeof input !== "string" || !titles.has(input)) {
         return { ok: false, error: `PUBLISH_ROWS_UNKNOWN_INPUT: ${where}.input does not name an input of the node` };
       }
+      // The decision store freezes no declaration whose input is empty or longer, so such a row would compile and then
+      // lose its frozen rows at dispatch; it is refused here, by the store's own predicate.
+      if (!isPublishRowInput(input)) {
+        return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where}.input must name an input of 1 to ${PUBLISH_ROW_INPUT_MAX} characters` };
+      }
       if (out.some((r) => r.input === input)) {
         return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where}.input repeats an input another row shows` };
       }
-      out.push(Object.freeze({ label, input }));
+      if (kind === "text") {
+        out.push(Object.freeze({ label, input }));
+        continue;
+      }
+      if (kind === "artifacts") {
+        // The row's island is addressed by a ref that carries this input name (cinatra#4738). A name the ref cannot
+        // carry would compile into a row that never draws, so it is refused here, under the ref codec's own bound.
+        if (!publishDecisionIslandRefInputFits(input)) {
+          return {
+            ok: false,
+            error: `PUBLISH_ROWS_MALFORMED: ${where}.input of an artifacts row must name an input of at most ${PUBLISH_DECISION_ISLAND_REF_FIELD_MAX} characters (${PUBLISH_DECISION_ISLAND_REF_FIELD_MAX} bytes)`,
+          };
+        }
+        out.push(Object.freeze({ kind: "artifacts" as const, label, input }));
+        continue;
+      }
+      const columns = (row as { columns: unknown }).columns;
+      if (!Array.isArray(columns) || columns.length < 1 || columns.length > PUBLISH_ROW_COLUMNS_MAX) {
+        return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${where}.columns must be a list of 1 to ${PUBLISH_ROW_COLUMNS_MAX} columns` };
+      }
+      const cols: PublishRowColumn[] = [];
+      for (const [c, column] of columns.entries()) {
+        const at = `${where}.columns[${c}]`;
+        if (!column || typeof column !== "object" || Array.isArray(column) || !keysAre(column, "field,label")) {
+          return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${at} must be an object with exactly the keys label and field` };
+        }
+        const { label: columnLabel, field } = column as { label: unknown; field: unknown };
+        if (!isPublishRowLabel(columnLabel)) {
+          return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${at}.label must be one line of 1 to ${PUBLISH_ROW_LABEL_MAX} characters with no leading or trailing space` };
+        }
+        if (!isPublishRowField(field)) {
+          return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${at}.field must be one line of 1 to ${PUBLISH_ROW_FIELD_MAX} characters with no leading or trailing space` };
+        }
+        if (cols.some((x) => x.field === field)) {
+          return { ok: false, error: `PUBLISH_ROWS_MALFORMED: ${at}.field repeats a field another column shows` };
+        }
+        cols.push(Object.freeze({ label: columnLabel, field }));
+      }
+      out.push(Object.freeze({ kind: "list" as const, label, input, columns: Object.freeze(cols) }));
     }
     // A defined own property, so a node id such as "__proto__" stays a plain key.
     Object.defineProperty(rows, step, { value: Object.freeze(out), enumerable: true });
@@ -1674,6 +1755,95 @@ export function collectPublishRows(
   Object.freeze(rows);
   COMPILED_PUBLISH_ROWS.add(rows);
   return { ok: true, rows };
+}
+
+// cinatra#4762: the host routes that check a publishing call when it is made (publishCallAllowed: the decision is
+// released and the review fence still holds). WayFlow calls any other URL itself, with no check, so a call made by a
+// publishing step must go to one of these. Only the exact template form counts: the loader sends the run's token and
+// the step's signature only to the CINATRA_BASE_URL host, and a host route outside this list does not check the call.
+const PUBLISH_CALL_ROUTES = new Set(["{{CINATRA_BASE_URL}}/api/llm-bridge", "{{CINATRA_BASE_URL}}/api/agents/passthrough"]);
+const PUBLISH_ADDRESS_KEY = /(?:url|uri|endpoint)$/i;
+
+/** Every component of a publishing step that carries a `url` (the step itself, and each component inside it, a subflow
+ *  or agent its `$component_ref` names included) must name a PUBLISH_CALL_ROUTES route; any other value refuses the
+ *  compile. A reference resolves where the compile later resolves it: the nearest enclosing `$referenced_components`
+ *  first, then the global registry. A reference that resolves nowhere refuses the compile too, because the component
+ *  it names cannot be checked. The error names the node id only, never the URL. */
+export function checkPublishingCallRoutes(
+  parsed: Record<string, unknown>,
+  publishingSteps: readonly string[],
+  globalRegistry: Record<string, unknown>,
+): { ok: true } | { ok: false; error: string } {
+  type Scope = Record<string, unknown>;
+  const rootRefs = (parsed.$referenced_components as Scope | undefined) ?? {};
+  for (const step of publishingSteps) {
+    const seen = new Set<object>();
+    // Each entry: the value, its reference scopes (nearest first, the global registry last), the nearest component id.
+    const stack: Array<[unknown, Scope[], string]> = [[rootRefs[step], [rootRefs, globalRegistry], step]];
+    while (stack.length > 0) {
+      const [value, outer, owner] = stack.pop()!;
+      if (!value || typeof value !== "object" || seen.has(value)) continue;
+      seen.add(value);
+      if (Array.isArray(value)) {
+        for (const item of value) stack.push([item, outer, owner]);
+        continue;
+      }
+      const comp = value as Record<string, unknown>;
+      const own = comp.$referenced_components;
+      const scopes = own && typeof own === "object" && !Array.isArray(own) ? [own as Scope, ...outer] : outer;
+      const who = typeof comp.component_type === "string" && typeof comp.id === "string" ? comp.id : owner;
+      const fail = (what: string) => ({ ok: false as const, error: `PUBLISH_CALL_UNCHECKED: node ${quoteNodeId(who)} of publishing step ${quoteNodeId(step)} ${what}, so its call would skip the publish check` });
+      if (typeof comp.component_type === "string") {
+        if (hasOwn(comp, "url") && !PUBLISH_CALL_ROUTES.has(comp.url as string)) {
+          return fail("calls a URL that is not the host's model bridge or passthrough");
+        }
+        // An A2AAgent's calls go straight to its agent_url (agent card and send_message), never through ApiCallStep or a
+        // host route, so no host route checks them; any other address field (agent_url, base_url, an *_uri or endpoint)
+        // is an outward call form the routes above do not cover either.
+        if (comp.component_type === "A2AAgent" || Object.keys(comp).some((k) => k !== "url" && PUBLISH_ADDRESS_KEY.test(k))) {
+          return fail("calls a remote agent or address that is not the host's model bridge or passthrough");
+        }
+      }
+      if (hasOwn(comp, "$component_ref")) {
+        const ref = comp.$component_ref;
+        const scope = typeof ref === "string" ? scopes.find((s) => hasOwn(s, ref)) : undefined;
+        const target = scope ? scope[ref as string] : undefined;
+        if (!target || typeof target !== "object") return fail("references a component that resolves nowhere");
+        stack.push([target, scopes, who]);
+      }
+      for (const child of Object.values(comp)) stack.push([child, scopes, who]);
+    }
+  }
+  return { ok: true };
+}
+
+/** cinatra#4762: checkPublishingCallRoutes on the source a run EXECUTES (the loader's selected declaration source),
+ *  so a template compiled before the route check is refused before its first send, never trusted for having compiled.
+ *  The publishing steps are the source's own: every top-level node whose `metadata.cinatra.publishes` is the boolean
+ *  true, the nodes the loader puts a publish gate in front of. References resolve inside the source only, as the
+ *  runtime resolves them (it has no global registry); one that resolves nowhere refuses. A source that is not a JSON
+ *  object refuses too, since its steps cannot be read. */
+export function checkExecutedPublishingCallRoutes(source: string): { ok: true } | { ok: false; error: string } {
+  let doc: unknown;
+  try {
+    doc = JSON.parse(source);
+  } catch {
+    doc = null;
+  }
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
+    return { ok: false, error: "PUBLISH_CALL_UNCHECKED: the executed source cannot be read, so the calls of its publishing steps cannot be checked" };
+  }
+  const parsed = doc as Record<string, unknown>;
+  const refs = parsed.$referenced_components;
+  const rootRefs = refs && typeof refs === "object" && !Array.isArray(refs) ? (refs as Record<string, unknown>) : {};
+  const steps = (Array.isArray(parsed.nodes) ? parsed.nodes : [])
+    .map((n) => (n && typeof n === "object" ? (n as { $component_ref?: unknown }).$component_ref : undefined))
+    .filter((id): id is string => typeof id === "string" && hasOwn(rootRefs, id))
+    .filter((id) => {
+      const cinatra = ((rootRefs[id] as { metadata?: { cinatra?: unknown } } | null)?.metadata)?.cinatra;
+      return !!cinatra && typeof cinatra === "object" && (cinatra as { publishes?: unknown }).publishes === true;
+    });
+  return checkPublishingCallRoutes(parsed, steps, {});
 }
 
 // ---------------------------------------------------------------------------
@@ -1792,6 +1962,12 @@ export async function compileOasAgentJson(opts: {
   if (!publishRows.ok) {
     return { ok: false, error: publishRows.error };
   }
+  // The route check resolves references against the same global registry the compile reads below.
+  const globalRegistry = await loadGlobalRegistry(opts.registryPath);
+  const publishRoutes = checkPublishingCallRoutes(parsed, publishing.steps, globalRegistry);
+  if (!publishRoutes.ok) {
+    return { ok: false, error: publishRoutes.error };
+  }
 
   // Fan out `metadata.cinatra.llm` to every
   // `/api/llm-bridge`-targeting ApiNode at all nesting depths (top-level and
@@ -1821,8 +1997,7 @@ export async function compileOasAgentJson(opts: {
     }
   }
 
-  // 4. Load registries
-  const globalRegistry = await loadGlobalRegistry(opts.registryPath);
+  // 4. Load registries (the global registry was loaded for the publishing route check above)
   const localRefs = (parsed.$referenced_components as Record<string, unknown>) ?? {};
 
   // 5. Topology: derive step order via BFS from StartNode following control_flow_connections

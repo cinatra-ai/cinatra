@@ -32,6 +32,9 @@ const shared = vi.hoisted(() => ({
   // Queue of CAS `.returning()` results; empty → default win ([{ id }]).
   returningRows: [] as Array<Array<{ id: string }>>,
   setPayloads: [] as unknown[],
+  /** The table and the WHERE of each update, in order (cinatra#4150: the reset's CAS and its decision close). */
+  updateTables: [] as unknown[],
+  wheres: [] as unknown[],
   inserted: [] as unknown[],
   updateCalls: 0,
   // 1-indexed update-call ordinal whose write should REJECT (meta-write-failure sim).
@@ -47,15 +50,17 @@ vi.mock("../db", async () => {
   const { wrapTxWithOrgWriteKernel } = await import(
     "@cinatra-ai/org-write-kernel/testing"
   );
-  const update = () => {
+  const update = (table?: unknown) => {
     shared.updateCalls += 1;
+    shared.updateTables.push(table);
     const thisCall = shared.updateCalls;
     return {
       set: (payload: unknown) => {
         shared.setPayloads.push(payload);
         return {
           // The CAS calls `.returning()`; the meta write awaits `.where()` directly.
-          where: () => {
+          where: (w?: unknown) => {
+            shared.wheres.push(w);
             if (shared.failOnUpdateCall === thisCall) {
               const rej = () => {
                 const r = Promise.reject(new Error("simulated write failure"));
@@ -189,6 +194,8 @@ function derivationCapture() {
 beforeEach(() => {
   vi.clearAllMocks();
   shared.setPayloads.length = 0;
+  shared.updateTables.length = 0;
+  shared.wheres.length = 0;
   shared.inserted.length = 0;
   shared.returningRows = [];
   shared.updateCalls = 0;
@@ -400,9 +407,157 @@ describe("mid-attempt wait marker stamping (#1938)", () => {
   });
 
   it("pending_input edges never touch the marker column", async () => {
-    await transitionRunStatus(RUN, "failed", "pending_input", undefined, SESSION);
+    await transitionRunStatus(RUN, "failed", "pending_input", { resetGeneration: 0 }, SESSION);
     const cas = shared.setPayloads[0] as Record<string, unknown>;
     expect(Object.prototype.hasOwnProperty.call(cas, "humanWaitAttemptId")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4150 round 20: a retry's reset ends its attempt at the reset generation it read, in ONE guarded transaction:
+// the CAS lands only at that generation and raises it, and the attempt's open publish decisions close in the same
+// transaction. A lost or refused reset writes nothing.
+// ---------------------------------------------------------------------------
+describe("failed→pending_input: the reset generation (cinatra#4150)", () => {
+  const sqlOf = async (w: unknown) => {
+    const { PgDialect } = await import("drizzle-orm/pg-core");
+    return new PgDialect().sqlToQuery(w as import("drizzle-orm").SQL);
+  };
+
+  it("the CAS lands only at the generation read and raises it by 1; the attempt's open decisions close in the same transaction", async () => {
+    const { agentRuns, agentRunPublishDecisions } = await import("../schema");
+    await transitionRunStatus(RUN, "failed", "pending_input", { resetGeneration: 3 }, SESSION);
+    expect(shared.updateTables[0]).toBe(agentRuns);
+    expect(shared.setPayloads[0]).toMatchObject({ status: "pending_input", resetGeneration: 4 });
+    const cas = await sqlOf(shared.wheres[0]);
+    expect(cas.sql).toMatch(/"agent_runs"\."reset_generation" = \$\d+/);
+    expect(cas.params).toEqual(expect.arrayContaining([RUN, "failed", ORG, 3]));
+    // The decision close rides the same guarded transaction, after the CAS won.
+    expect(shared.updateTables[1]).toBe(agentRunPublishDecisions);
+    expect(shared.setPayloads[1]).toMatchObject({ status: "run_ended", decidedBy: null, decisionNote: null });
+    const close = await sqlOf(shared.wheres[1]);
+    // A row with no generation (an old node's park during a rolling deploy) is the ended attempt's too: it closes...
+    expect(close.sql).toMatch(/"agent_run_publish_decisions"\."status" = \$\d+ and coalesce\("[^"]+"\."agent_run_publish_decisions"\."run_generation", \$\d+\) <= \$\d+/);
+    expect(close.params).toEqual([RUN, "parked", 3, 3]);
+    // ...and every row with no generation is stamped the ended one, so no read takes it for the retry's.
+    expect(shared.updateTables[2]).toBe(agentRunPublishDecisions);
+    expect(shared.setPayloads[2]).toEqual({ runGeneration: 3 });
+    const stamp = await sqlOf(shared.wheres[2]);
+    expect(stamp.sql).toMatch(/"agent_run_publish_decisions"\."run_generation" is null/);
+    expect(stamp.params).toEqual([RUN]);
+    // The generation is a control key: it never reaches the delegated meta write.
+    expect(shared.setPayloads.slice(3).some((p) => Object.prototype.hasOwnProperty.call(p, "resetGeneration"))).toBe(false);
+  });
+
+  it("a reset that lost its CAS (another reset, or a newer failure's newer generation) closes no decision", async () => {
+    shared.returningRows = [[]];
+    await expect(
+      transitionRunStatus(RUN, "failed", "pending_input", { resetGeneration: 0 }, SESSION),
+    ).rejects.toMatchObject({ code: "stale_from_status" });
+    expect(shared.updateCalls).toBe(1);
+    expect(dispatchRunWaitTransition).not.toHaveBeenCalled();
+  });
+
+  it("a reset of an archived org is refused before any write, decisions included", async () => {
+    shared.kernelAnswers.organization = { archivedAt: "2026-07-01T00:00:00Z", archiveEpoch: 1 };
+    await expect(
+      transitionRunStatus(RUN, "failed", "pending_input", { resetGeneration: 0 }, SESSION),
+    ).rejects.toMatchObject({ name: "OrgWriteRefusedError", reason: "capability-denied" });
+    expect(shared.setPayloads).toHaveLength(0);
+  });
+
+  it("a reset must name a generation, and only a reset may: refused before any write", async () => {
+    for (const [from, to, meta] of [
+      ["failed", "pending_input", undefined],
+      ["failed", "pending_input", { resetGeneration: -1 }],
+      ["failed", "pending_input", { resetGeneration: 1.5 }],
+      ["pending_input", "queued", { resetGeneration: 0 }],
+    ] as const) {
+      await expect(
+        transitionRunStatus(RUN, from as AgentRunStatus, to as AgentRunStatus, meta as never, SESSION),
+      ).rejects.toMatchObject({ name: "RunTransitionError", code: "illegal_transition" });
+    }
+    expect(shared.updateCalls).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4762: an edge of one attempt names that attempt's reset generation; the CAS lands only while the run is still
+// at it, so a callback of an attempt a retry's reset ended writes nothing on the next attempt's row. The reset itself
+// writes the generation and nothing else that bounds an attempt.
+// ---------------------------------------------------------------------------
+describe("an edge fenced to its attempt's reset generation (cinatra#4762)", () => {
+  const sqlOf = async (w: unknown) => {
+    const { PgDialect } = await import("drizzle-orm/pg-core");
+    return new PgDialect().sqlToQuery(w as import("drizzle-orm").SQL);
+  };
+
+  it("the CAS lands only at the named generation, and the generation never reaches the meta write", async () => {
+    await transitionRunStatus(RUN, "running", "stopped", { error: "no review", completedAt: new Date(), attemptGeneration: 2 }, SESSION);
+    const cas = await sqlOf(shared.wheres[0]);
+    expect(cas.sql).toMatch(/"agent_runs"\."reset_generation" = \$\d+/);
+    expect(cas.params).toEqual(expect.arrayContaining([RUN, "running", ORG, 2]));
+    expect(shared.setPayloads.some((p) => Object.prototype.hasOwnProperty.call(p, "attemptGeneration"))).toBe(false);
+  });
+
+  it("a lost fenced edge (a reset moved the run on) writes nothing", async () => {
+    shared.returningRows = [[]];
+    await expect(
+      transitionRunStatus(RUN, "running", "stopped", { completedAt: new Date(), attemptGeneration: 0 }, SESSION),
+    ).rejects.toMatchObject({ code: "stale_from_status" });
+    expect(shared.updateCalls).toBe(1);
+  });
+
+  it("the generation must be a safe integer >= 0, and is not legal on the reset: refused before any write", async () => {
+    for (const [from, to, meta] of [
+      ["running", "stopped", { attemptGeneration: -1 }],
+      ["running", "stopped", { attemptGeneration: 0.5 }],
+      ["failed", "pending_input", { resetGeneration: 0, attemptGeneration: 0 }],
+    ] as const) {
+      await expect(
+        transitionRunStatus(RUN, from as AgentRunStatus, to as AgentRunStatus, meta as never, SESSION),
+      ).rejects.toMatchObject({ name: "RunTransitionError", code: "illegal_transition" });
+    }
+    expect(shared.updateCalls).toBe(0);
+  });
+
+  it("a stop that ends its attempt closes the attempt's parked decisions in the same transaction, after the CAS", async () => {
+    const { agentRuns, agentRunPublishDecisions } = await import("../schema");
+    await transitionRunStatus(RUN, "running", "stopped", { error: "no review", completedAt: new Date(), attemptGeneration: 2, endParkedDecisions: true }, SESSION);
+    expect(shared.updateTables[0]).toBe(agentRuns);
+    expect(shared.updateTables[1]).toBe(agentRunPublishDecisions);
+    expect(shared.setPayloads[1]).toMatchObject({ status: "run_ended", decidedBy: null, decisionNote: null });
+    const close = await sqlOf(shared.wheres[1]);
+    expect(close.sql).toMatch(/"agent_run_publish_decisions"\."status" = \$\d+ and coalesce\("[^"]+"\."agent_run_publish_decisions"\."run_generation", \$\d+\) <= \$\d+/);
+    expect(close.params).toEqual([RUN, "parked", 2, 2]);
+    expect(shared.setPayloads.some((p) => Object.prototype.hasOwnProperty.call(p, "endParkedDecisions"))).toBe(false);
+    // A lost CAS closes nothing.
+    shared.updateTables.length = 0;
+    shared.setPayloads.length = 0;
+    shared.returningRows = [[]];
+    await expect(
+      transitionRunStatus(RUN, "running", "stopped", { completedAt: new Date(), attemptGeneration: 0, endParkedDecisions: true }, SESSION),
+    ).rejects.toMatchObject({ code: "stale_from_status" });
+    expect(shared.updateTables.includes(agentRunPublishDecisions)).toBe(false);
+  });
+
+  it("closing the parked decisions needs the attempt's generation and an edge that ends it: refused before any write", async () => {
+    for (const [from, to, meta] of [
+      ["running", "stopped", { endParkedDecisions: true }],
+      ["running", "pending_approval", { attemptGeneration: 0, endParkedDecisions: true }],
+      ["running", "stopped", { attemptGeneration: 0, endParkedDecisions: false }],
+    ] as const) {
+      await expect(
+        transitionRunStatus(RUN, from as AgentRunStatus, to as AgentRunStatus, meta as never, SESSION),
+      ).rejects.toMatchObject({ name: "RunTransitionError", code: "illegal_transition" });
+    }
+    expect(shared.updateCalls).toBe(0);
+  });
+
+  it("the reset raises the generation and leaves the start stamp to the dispatch", async () => {
+    await transitionRunStatus(RUN, "failed", "pending_input", { resetGeneration: 1 }, SESSION);
+    expect(shared.setPayloads[0]).toMatchObject({ resetGeneration: 2 });
+    expect(Object.prototype.hasOwnProperty.call(shared.setPayloads[0], "startedAt")).toBe(false);
   });
 });
 

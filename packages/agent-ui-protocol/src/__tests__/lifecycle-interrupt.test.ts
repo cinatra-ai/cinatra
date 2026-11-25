@@ -73,6 +73,22 @@ describe("the interrupt-carried kind set is derived, not hand-listed", () => {
     ]);
   });
 
+  it("does NOT advertise the publish card as an interrupt: its gate emits none (cinatra#4150)", () => {
+    // The publish gate parks the run on its decision record and states no lifecycle moment, so no typed interrupt
+    // for this kind is ever emitted. A consumer that awaited one would never find the gate; the card is found by the
+    // run's own read instead.
+    expect(LIFECYCLE_CARD_CARRIAGE.publish_decision.represent).toBe("read");
+    expect(isLifecycleInterruptKind("publish_decision")).toBe(false);
+    expect(Object.keys(LIFECYCLE_INTERRUPT_RENDERER_IDS)).not.toContain("publish_decision");
+    expect(
+      lifecycleInterruptInteractionSchema.safeParse({
+        kind: "publish_decision",
+        schemaVersion: LIFECYCLE_INTERACTION_SCHEMA_VERSION,
+        ref: REF,
+      }).success,
+    ).toBe(false);
+  });
+
   it("every interrupt-carried kind declares a renderer id", () => {
     for (const kind of LIFECYCLE_INTERRUPT_KINDS) {
       expect(LIFECYCLE_INTERRUPT_RENDERER_IDS[kind]).toMatch(/^@cinatra-ai\//);
