@@ -259,7 +259,6 @@ describe("H1 atomic original-pause membership", () => {
 });
 
 describe("the attempt a review gate belongs to (cinatra#4762)", () => {
-  // red-first-expect: to match object { code: 'publish_call_in_flight' }
   it("takes the run row before its insert and opens no review while a publishing call of the run is in flight (cinatra#4762)", async () => {
     // A publishing call read the review fence and took its released decision under the run row FOR UPDATE. This
     // review is written after: the store holds the run row FOR KEY SHARE first, reads the call's claim, and refuses.
@@ -283,7 +282,6 @@ describe("the attempt a review gate belongs to (cinatra#4762)", () => {
     expect((await emitArtifactReviewGate({ ...input([A]), runGeneration: 0 })).idempotent).toBe(true);
   });
 
-  // red-first-expect: to deeply equal [ 3, -1, -1 ]
   it("a gate raised for a produced event carries the producing attempt's generation, never the run's live state", async () => {
     // The delayed drain names the generation the event was written with; an event of an older build carries none, and
     // its gate is stamped -1, which no publish gate counts.
@@ -293,7 +291,6 @@ describe("the attempt a review gate belongs to (cinatra#4762)", () => {
     expect(storage.generations).toEqual([3, -1, -1]);
   });
 
-  // red-first-expect: to be -1 // Object.is equality
   it("a gate whose caller names no attempt is stamped -1: the run row is never read at the raise", async () => {
     // A delayed caller of an ended attempt would read the next attempt's generation there.
     await emitArtifactReviewGate({ ...input([A]), reviewTaskId: "own" });
@@ -317,7 +314,6 @@ describe("a successor of a review raised before the generation column (cinatra#4
     return value instanceof SQL ? new PgDialect().sqlToQuery(value).sql.replace(/\s+/g, " ") : String(value);
   };
 
-  // red-first-expect: to match /nullif\(coalesce\(\(select coalesce\(
   it("keeps no generation, as the review it continues: settled it reads as 0, open it holds every attempt; a foreign one is -1", async () => {
     // The review it continues has no stored generation (null): the successor is stored null too (the -2 marker inside
     // the read), so the publish gate reads it as that review: generation 0 once settled, so it can clear the change
@@ -329,7 +325,6 @@ describe("a successor of a review raised before the generation column (cinatra#4
     );
   });
 
-  // red-first-expect: to be null
   it("a review the drain raises for an output that names no attempt is stored with no generation (cinatra#4762)", async () => {
     await emitArtifactReviewGate({ ...input([A]), reviewTaskId: "auto-unknown", runGeneration: "unknown" as never });
     expect(storage.generations[0]).toBeNull();
@@ -355,7 +350,6 @@ describe("an output of the attempt still waiting for the review orchestration (c
     return { where, params };
   };
 
-  // red-first-expect: expected { nullCounts: false } to deeply equal { nullCounts: true }
   it("an event with no generation, written before the column existed, may be this attempt's: it counts for every attempt", async () => {
     const { where, params } = await whereOf(1);
     expect({ nullCounts: /\((\S+\.)?"artifact_produced_outbox"\."producer_run_generation" = \$\d+ or (\S+\.)?"artifact_produced_outbox"\."producer_run_generation" is null\)/.test(where) })
@@ -382,12 +376,10 @@ describe("a review of exactly the bytes a later attempt wrote again (cinatra#476
     return rows.map((r) => [r.id, r.reproducedGeneration]);
   };
 
-  // red-first-expect: expected [] to deeply equal [ [ 'g0', 1 ] ]
   it("a gate of attempt 0 whose pinned revision attempt 1 wrote again carries attempt 1", async () => {
     expect(await reproducedOf([{ id: "g0", runGeneration: 0, pinnedTargets: [A] }], [{ ...A, generation: 1 }])).toEqual([["g0", 1]]);
   });
 
-  // red-first-expect: expected [] to deeply equal [ Array(4) ]
   it("no later attempt: the revision not written again, only partly written again, of another org, or a gate with no generation", async () => {
     expect(await reproducedOf([
       { id: "g0", runGeneration: 0, pinnedTargets: [A] },

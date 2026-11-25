@@ -321,7 +321,6 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     );
   });
 
-  // red-first-expect: expected [ undefined, undefined ] to deeply equal [ 2, 2 ]
   it("each gate the run raises carries the generation of the attempt this handler serves (cinatra#4762)", async () => {
     // The record the executor read for its attempt names generation 2; the run row may already be at a later attempt
     // when a delayed callback of this one runs, so the gate takes the attempt's own value, never a read of the row.

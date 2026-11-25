@@ -11,7 +11,6 @@ const load = async (): Promise<AttemptOf> =>
 const inFrame = <T>(frame: McpRequestContext, fn: () => T): T => mcpRequestContextStorage.run(frame, fn);
 
 describe("producerAttemptForRun", () => {
-  // red-first-expect: expected null to deeply equal { generation: +0 }
   it("the run worker's frame names the generation it captured when the attempt started, for its own run only", async () => {
     const attemptOf = await load();
     const frame = { runAttempt: { runId: "run-a", resetGeneration: 0 } } as McpRequestContext;
@@ -23,7 +22,6 @@ describe("producerAttemptForRun", () => {
     expect(inFrame(both, () => attemptOf("run-a"))).toEqual({ generation: 0 });
   });
 
-  // red-first-expect: expected null to deeply equal { executionAttemptId: 'att-1' }
   it("a verified dispatch of the run names its attempt id: the run-bound seam's executing source, or the agent-run token's claim", async () => {
     const attemptOf = await load();
     const seam = { runId: "run-a", verifiedExecutedSource: { executionAttemptId: "att-1" } } as McpRequestContext;

@@ -140,7 +140,6 @@ describe("dispatchExtensionScopedTool — the origin of an extension_tool call",
   });
 
   it("runs a development child step's tool from the source its origin proved, with no install binding", async () => {
-    // red-first-expect: to deeply equal
     const source = { origin: "development-child", packageName: CHILD, packageVersion: "0.1.1",
       realRoot: "/fixture-source/child", installRecord: null, stillBound };
     resolveExtensionToolOrigin.mockResolvedValue({ kind: "development-child", context: CHILD_ORIGIN.context, source });
