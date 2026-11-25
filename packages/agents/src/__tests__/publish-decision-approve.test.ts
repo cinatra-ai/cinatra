@@ -741,7 +741,6 @@ describe("the review fence, read again at Publish (cinatra#4762)", () => {
     expect(claims.releasePauseClaim).toHaveBeenCalledWith({ runId: "run-1", orgId: "org-1", token: "tok-1" }, expect.anything());
   }
 
-  // red-first-expect: expected { ok: true, resumed: true } to deeply equal { ok: false, …(1) }
   it("an output of the attempt the drain reached only after the park refuses the Publish until its review is approved", async () => {
     // The card opened on one approved review; another produced event of the same attempt still waits for the drain.
     reviewSeam.hasPendingProducedReview.mockResolvedValue(true);
@@ -766,7 +765,6 @@ describe("the review fence, read again at Publish (cinatra#4762)", () => {
     expect(sendWayflowResume).toHaveBeenCalledTimes(1);
   });
 
-  // red-first-expect: expected { ok: true, resumed: true } to deeply equal { ok: false, …(1) }
   it("a review of the attempt settled changes requested since the park, with no successor approved, refuses the Publish", async () => {
     reviewSeam.listReviews.mockResolvedValue([APPROVED_REVIEW,
       { ...APPROVED_REVIEW, id: "gate-2", disposition: "changes_requested" }]);
@@ -798,7 +796,6 @@ describe("the review fence, read again at Publish (cinatra#4762)", () => {
     expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "released", actor: "user-a", pauseGeneration: 4 }, TX);
   });
 
-  // red-first-expect: expected { ok: true, resumed: true } to deeply equal { ok: false, …(1) }
   it("the release is written in the transaction that reads the fence under the run row's lock, so an output in flight is seen", async () => {
     // A writer of the attempt inserted an output that commits before the lock is granted: only the reads made in the
     // lock's transaction see it, as on Postgres (the insert holds the row FOR KEY SHARE until it commits).
