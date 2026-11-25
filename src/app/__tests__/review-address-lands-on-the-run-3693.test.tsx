@@ -329,3 +329,30 @@ describe("B3: a settled gate and its audit reading land there too (cinatra#3693,
     expect(mocks.readAgentRunById).not.toHaveBeenCalled();
   });
 });
+
+describe("B4: an audit reading with no run to land on stays here, as the one core (cinatra#3862 leg 8)", () => {
+  // A run the store cannot read has no address to send the reader to, so the
+  // audit reading is drawn on this route. It reads the gate and its record and
+  // no other review port: no picture pair is drawn under the core any more, and
+  // the ports are stubbed here with the gate surface loader alone.
+  // red-first-expect: export is defined on the "@/app/artifacts/[id]/review-gate-ports" mock
+  it("draws the verification view, not a redirect, from the gate's record alone", async () => {
+    mocks.readReviewGate.mockResolvedValue({ id: "gate-3693" });
+    mocks.readVerificationRecordForGate.mockResolvedValue({
+      reviewedTarget: { artifactId: "art-1", representationRevisionId: "rev-1" },
+      fieldDiff: [{ field: "subject", before: "a", after: "b", inScope: true }],
+      scopeManifest: { paths: [] },
+    });
+    try {
+      const tree = await AgentRunReviewPage({
+        params: reviewParams(),
+        searchParams: Promise.resolve({ view: "verification" }),
+      });
+      expect(renderToStaticMarkup(tree as React.ReactElement)).toContain('data-testid="verification-view"');
+      expect(mocks.readAgentRunById).toHaveBeenCalled();
+    } finally {
+      mocks.readReviewGate.mockResolvedValue(null);
+      mocks.readVerificationRecordForGate.mockResolvedValue(null);
+    }
+  });
+});

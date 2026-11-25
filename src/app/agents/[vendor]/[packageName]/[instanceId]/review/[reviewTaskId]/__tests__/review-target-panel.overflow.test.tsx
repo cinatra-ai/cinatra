@@ -23,6 +23,8 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
+import * as path from "node:path";
 
 // The mount is rendered, not exercised, here - it carries its own suite.
 vi.mock("@/app/artifacts/[id]/review-target-mount", () => ({
@@ -128,5 +130,22 @@ describe("cinatra#3441 — the panel draws its frame only where it is the target
     const slot = frame.querySelector("[data-review-representation-slot]");
     expect(slot).not.toBeNull();
     expect(classesOf(slot!)).toContain("overflow-x-auto");
+  });
+});
+
+describe("cinatra#3862 leg 8 — the scrolling slot holds the representation alone", () => {
+  // The slot used to draw the pinned before/after pictures after the mount, so
+  // they scrolled with the representation. No pinned capture pair is drawn
+  // anywhere now (lifecycle cards, section III): the slot holds the mount, with
+  // the floor as its fallback, and nothing after it. A render cannot show this
+  // (the retired pictures drew nothing without their input), so the panel's
+  // source is read.
+  // red-first-expect: expected [ 'ReviewTargetMount', …(2) ] to deeply equal [ 'ReviewTargetMount', …(1) ]
+  it("draws only the mount and its floor fallback inside the slot", () => {
+    const source = readFileSync(path.resolve(process.cwd(), "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-target-panel.tsx"), "utf8");
+    const slot = /data-review-representation-slot="">([\s\S]*?)\n {6}<\/div>/.exec(source)?.[1];
+    expect(slot).toBeDefined();
+    const drawn = [...slot!.matchAll(/<([A-Z][A-Za-z0-9]*)\b/g)].map((m) => m[1]);
+    expect(drawn).toEqual(["ReviewTargetMount", "ArtifactStructuredDataView"]);
   });
 });

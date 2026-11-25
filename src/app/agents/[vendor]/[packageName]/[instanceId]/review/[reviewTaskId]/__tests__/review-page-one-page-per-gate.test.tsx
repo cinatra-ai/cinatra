@@ -319,3 +319,36 @@ describe("convergence — a decision that raced the TTL sweeper is still a decis
     expect(html).not.toContain('data-action="open-recommendation-step"');
   });
 });
+
+describe("defect 1 on the audit reading — the verification view alone, no row and no picture pair", () => {
+  // The audit reading of a settled gate is the other page this route draws. It
+  // draws the one verification core: no skills row above it and, since
+  // cinatra#3862 leg 8, no picture pair beside it, so it reads no review port
+  // for one (this suite stubs the ports with the gate surface loader alone).
+  // red-first-expect: export is defined on the "@/app/artifacts/[id]/review-gate-ports" mock
+  it("draws the verification view with NO chip row, reading only the gate and its record", async () => {
+    mocks.readReviewGate.mockResolvedValue({ id: "gate-3047" } as never);
+    mocks.readVerificationRecordForGate.mockResolvedValue({
+      reviewedTarget: { artifactId: "art-1", representationRevisionId: "rev-1" },
+      fieldDiff: [{ field: "subject", before: "a", after: "b", inScope: true }],
+      scopeManifest: { paths: [] },
+    } as never);
+    try {
+      const ui = (await AgentRunReviewPage({
+        params: Promise.resolve({
+          vendor: "cinatra-ai",
+          packageName: "blog-draft-writer-agent",
+          instanceId: "run-1",
+          reviewTaskId: "task-1",
+        }),
+        searchParams: Promise.resolve({ view: "verification" }),
+      })) as ReactElement;
+      const html = renderToStaticMarkup(ui);
+      expect(html).toContain('data-testid="verification-view"');
+      expect(html).not.toContain("data-run-recommendation-chip-row");
+    } finally {
+      mocks.readReviewGate.mockResolvedValue(null);
+      mocks.readVerificationRecordForGate.mockResolvedValue(null);
+    }
+  });
+});

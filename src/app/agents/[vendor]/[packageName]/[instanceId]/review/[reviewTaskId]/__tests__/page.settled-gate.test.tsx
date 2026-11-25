@@ -397,3 +397,38 @@ describe("the PENDING composition is unchanged (cinatra#2904 regression floor)",
     expect(html).toContain('data-card-run="run-1"');
   });
 });
+
+describe("a settled gate's audit reading draws the one core, no picture pair (cinatra#3862 leg 8)", () => {
+  // The audit reading reads the gate's record only for whether a reading
+  // exists; it reads nothing else from the review ports for a page-only
+  // adjunct, because the page draws none (lifecycle cards, section III). The
+  // ports module is stubbed with the gate surface loader alone, so a read of
+  // any other port fails this case.
+  // red-first-expect: export is defined on the "@/app/artifacts/[id]/review-gate-ports" mock
+  it("mounts the verification view from the gate's record and reads no other port", async () => {
+    mocks.readReviewGate.mockResolvedValue({ id: "gate-1" } as never);
+    mocks.readVerificationRecordForGate.mockResolvedValue({
+      reviewedTarget: { artifactId: "art-1", representationRevisionId: "rev-1" },
+      fieldDiff: [{ field: "subject", before: "a", after: "b", inScope: true }],
+      scopeManifest: { paths: [] },
+    } as never);
+    try {
+      const ui = (await AgentRunReviewPage({
+        params: Promise.resolve({
+          vendor: "cinatra-ai",
+          packageName: "blog-draft-writer-agent",
+          instanceId: "run-1",
+          reviewTaskId: "task-1",
+        }),
+        searchParams: Promise.resolve({ view: "verification" }),
+      })) as ReactElement;
+      const html = renderToStaticMarkup(ui);
+      expect(html).toContain('data-testid="verification-view"');
+      expect(html).not.toContain('data-testid="page-gate-blocked"');
+      expect(mocks.loadReviewGateSurface).not.toHaveBeenCalled();
+    } finally {
+      mocks.readReviewGate.mockResolvedValue(null);
+      mocks.readVerificationRecordForGate.mockResolvedValue(null);
+    }
+  });
+});

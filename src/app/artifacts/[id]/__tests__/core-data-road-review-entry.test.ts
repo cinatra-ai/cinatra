@@ -72,7 +72,7 @@ vi.mock("@/lib/artifacts/artifact-review-preparation", async (importOriginal) =>
 });
 
 import { ARTIFACT_RENDERER_SESSION_DATA_ROAD } from "@/lib/artifacts/artifact-renderer-props";
-import { beginReviewTargets, type ReviewActorContext } from "../review-gate-ports";
+import { beginReviewTargets, streamReviewTargets, type ReviewActorContext } from "../review-gate-ports";
 import { firstPartyReviewSurfaceRoads, islandReviewSurfaceRoads } from "../review-surface-roads";
 import { beginArtifactReviewTargets, prepareArtifactReviewTargets } from "../review-target-prepare";
 
@@ -157,4 +157,22 @@ describe("both preparation entries carry the named road to the binder", () => {
       expect(Object.prototype.hasOwnProperty.call(result.props, "data")).toBe(false);
     });
   }
+});
+
+describe("the surface loader streams each target with its preparation alone (cinatra#3862 leg 8)", () => {
+  // What the loader hands a surface per target is its identity and its started
+  // preparation. It used to compose a third promise beside them, the target's
+  // pinned before/after pictures, from the organization scope, the gate's
+  // repair pairing and the surface's roads; those pictures are not drawn on any
+  // surface now (lifecycle cards, section III), so the composer takes the
+  // started preparations and nothing else.
+  // red-first-expect: expected 3 to be 1
+  it("streamReviewTargets takes the started preparations only, and each stream is target and prepared", () => {
+    expect(streamReviewTargets.length).toBe(1);
+    const prepared = Promise.resolve(undefined);
+    const streams = streamReviewTargets([
+      { target: { artifactId: "a-4311", representationRevisionId: "r-4311" }, prepared },
+    ] as never);
+    expect(streams.map((stream) => Object.keys(stream).sort())).toEqual([["prepared", "target"]]);
+  });
 });

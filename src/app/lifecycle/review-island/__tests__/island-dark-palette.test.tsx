@@ -591,3 +591,28 @@ describe("the dark palette is closed, so it cannot reopen one alias at a time", 
     expect(tokenAt(root, "--ring")).toBe("oklch(0.929 0.013 255.508)");
   });
 });
+
+describe("the markup read here is the panel's whole drawing (cinatra#3862 leg 8)", () => {
+  // Every token check above reads PANEL_MARKUP, with the mount stubbed because
+  // it carries its own suite. That covers the panel only while the panel draws
+  // no other component of its own: the pinned before/after pictures it used to
+  // draw under the mount painted their own frame in the island's dark document.
+  // They are not drawn anywhere now (lifecycle cards, section III), so the
+  // panel imports the mount and the floor view as its only components.
+  // red-first-expect: expected [ 'ArtifactStructuredDataView', …(2) ] to deeply equal [ 'ArtifactStructuredDataView', …(1) ]
+  it("imports no component beside the mount and the floor view", () => {
+    const source = readFileSync(
+      join(
+        process.cwd(),
+        "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-target-panel.tsx",
+      ),
+      "utf8",
+    );
+    const components = [...source.matchAll(/^import \{([^}]*)\} from "[^"]+";$/gm)]
+      .flatMap((m) => m[1]!.split(","))
+      .map((name) => name.trim())
+      .filter((name) => /^[A-Z]/.test(name))
+      .sort();
+    expect(components).toEqual(["ArtifactStructuredDataView", "ReviewTargetMount"]);
+  });
+});

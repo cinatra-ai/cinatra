@@ -40,6 +40,7 @@ vi.mock("@cinatra-ai/agents/lifecycle-review-changes-requested", () => ({ record
 vi.mock("@cinatra-ai/agents/lifecycle-repair-store", () => ({ readRepairBySuccessorGateId: vi.fn() }));
 vi.mock("@/app/artifacts/[id]/review-target-prepare", () => ({ bindArtifactReviewPorts: () => ({ readArtifact: db.artifact, revisionMember: db.member }), prepareArtifactReviewTargets: vi.fn() }));
 import { readReviewGateRecordedPrompt, submitReviewSurfaceChangesRequested } from "../review-gate-ports";
+import * as reviewGatePorts from "../review-gate-ports";
 const actorCtx = { orgId: "org", actor: { actorType: "human" as const, source: "route" as const, userId: "reader" }, roleHints: { actorOrganizationId: "org" } };
 describe("§VI genuine prompt binder enforces read and pinned revision membership", () => {
   beforeEach(() => {
@@ -110,5 +111,15 @@ describe("§IV Regenerate binder passes the floor's road, the note and the promp
   it("the conversation's comment names the typed road and carries no prompt", async () => {
     await submitReviewSurfaceChangesRequested({ runId: "run", reviewTaskId: "task", baseTarget, feedback: "shorter", origin: "typed", actorCtx });
     expect(db.changes.mock.calls[0][0]).toMatchObject({ feedback: "shorter", prompt: null, origin: "typed", decidedBy: "reader" });
+  });
+});
+describe("§VI the ports read pinned words, and no pinned picture beside them (cinatra#3862 leg 8)", () => {
+  // The ports module that binds the pinned producer words used to export two
+  // readers of a target's pinned before/after pictures as well. Those pictures
+  // are not drawn on any review surface now (lifecycle cards, section III), so
+  // the module exports no pair reader.
+  // red-first-expect: to deeply equal []
+  it("exports no reader of a pinned picture pair", () => {
+    expect(Object.keys(reviewGatePorts).filter((name) => /Pair\b/.test(name))).toEqual([]);
   });
 });

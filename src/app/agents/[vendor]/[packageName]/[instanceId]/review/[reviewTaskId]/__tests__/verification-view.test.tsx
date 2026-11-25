@@ -19,6 +19,9 @@
 //   · a page that cannot mint a ref draws no core rather than falling back to
 //     a second composition.
 
+import { readFileSync } from "node:fs";
+import * as path from "node:path";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
 
@@ -145,5 +148,18 @@ describe("the review page reuses the ONE §VII core", () => {
     expect(container.querySelector("[data-lifecycle-card]")).toBeNull();
     // …and the retired back link did not come back on this path either.
     expect(container.querySelector("[data-verification-back-to-gate]")).toBeNull();
+  });
+});
+
+describe("the review page draws the ONE core and nothing beside it", () => {
+  // cinatra#3862 leg 8: the page no longer draws the reviewed and applied
+  // pictures under the card, so the view composes the card in its host and no
+  // other component. A render cannot show the absence (the old adjunct drew
+  // nothing without its input), so the view's own source is read.
+  // red-first-expect: expected [ Array(3) ] to deeply equal [ Array(2) ]
+  it("composes only the card's host and the card", () => {
+    const source = readFileSync(path.resolve(__dirname, "..", "verification-view.tsx"), "utf8");
+    const drawn = [...new Set([...source.matchAll(/<([A-Z][A-Za-z0-9]*)\b/g)].map((m) => m[1]))].sort();
+    expect(drawn).toEqual(["LifecycleCardSurfaceProvider", "VerificationSummaryCard"]);
   });
 });

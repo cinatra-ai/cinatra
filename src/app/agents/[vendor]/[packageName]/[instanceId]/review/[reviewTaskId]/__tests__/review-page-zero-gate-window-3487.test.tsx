@@ -149,11 +149,12 @@ vi.mock("@/components/page-header-title-sync", () => ({ PageHeaderTitleSync: () 
 vi.mock("@/components/crumb-contributions", () => ({ CrumbContributions: () => null }));
 
 import AgentRunReviewPage from "../page";
+import { readReviewGate } from "@cinatra-ai/agents/artifact-review-gate-store";
+import { readVerificationRecordForGate } from "@cinatra-ai/agents/lifecycle-verification-store";
 import type * as RunWindowOwnershipModule from "../../../../../../../../../tests/e2e/design/conformance/run-window-ownership";
 // The module the fix adds is loaded inside the tests that use it, through a
 // specifier the transform does not resolve when it loads this file: before the
 // fix the file still loads and those tests fail on the missing module.
-// red-first-expect: Cannot find module '/tests/e2e/design/conformance/run-window-ownership'
 const RUN_WINDOW_OWNERSHIP = "../../../../../../../../../tests/e2e/design/conformance/run-window-ownership";
 let assertRunWindowOwnership!: typeof RunWindowOwnershipModule.assertRunWindowOwnership;
 let readRunWindowOwnership!: typeof RunWindowOwnershipModule.readRunWindowOwnership;
@@ -262,5 +263,36 @@ describe("the design-conformance reading of the real review page (cinatra#3487 i
     const reading = readRunWindowOwnership(container);
     expect(reading).toMatchObject({ windows: 1, ownedWindows: 1, promptsInCards: 0 });
     expect(() => assertRunWindowOwnership(reading, "review")).not.toThrow();
+  });
+});
+
+// cinatra#3862 leg 8: the audit reading of a run with no gate step is the one
+// core alone. It draws no window and reads no review port beside the gate's
+// record (the ports are stubbed with the gate surface loader alone), because no
+// picture pair is drawn under the core any more.
+describe("the audit reading of a run with no gate step draws no window and no picture pair (cinatra#3862 leg 8)", () => {
+  // red-first-expect: export is defined on the "@/app/artifacts/[id]/review-gate-ports" mock
+  it("renders the reading with no window host, from the gate and its record alone", async () => {
+    mocks.loadReviewGateSurface.mockClear();
+    vi.mocked(readReviewGate).mockResolvedValueOnce({ id: "gate-3487" } as never);
+    vi.mocked(readVerificationRecordForGate).mockResolvedValueOnce({
+      reviewedTarget: { artifactId: "art-1", representationRevisionId: "rev-1" },
+      fieldDiff: [{ field: "subject", before: "a", after: "b", inScope: true }],
+      scopeManifest: { paths: [] },
+    } as never);
+    const ui = (await AgentRunReviewPage({
+      params: Promise.resolve({
+        vendor: "cinatra-ai",
+        packageName: "blog-draft-writer-agent",
+        instanceId: "run-3487",
+        reviewTaskId: "task-3487",
+      }),
+      searchParams: Promise.resolve({ view: "verification" }),
+    })) as ReactElement;
+    const { container } = render(ui);
+    await settle();
+    expect(container.querySelector("[data-run-window-host]")).toBeNull();
+    expect(container.querySelector('[data-conformance-id="run-window"]')).toBeNull();
+    expect(mocks.loadReviewGateSurface).not.toHaveBeenCalled();
   });
 });
