@@ -26,9 +26,28 @@
 // A node inside a subflow makes the call for the top-level node that holds it, since only a top-level node can carry
 // the declaration (the runtime puts the gate in front of a top-level node only).
 //
+// A model-bridge step with no tool list in a pack that consumes no publishing tool is not "safe by declaration". The
+// host offers it every tool of its toolboxes: the bridge keeps an undeclared step policy unrestricted
+// (packages/llm/src/index.ts, restrictMcpServerOffer), and a run's self-MCP tool carries no allowlist
+// (packages/llm/src/mcp-access.ts, buildLlmMcpServerToolForAgentRun). It is classified by what the host does:
+//   - offered only the self-MCP toolbox (`data.toolbox_ids` absent, the bridge's default, or naming only `cinatra-mcp`
+//     and built-ins): HELD. Every call goes to /api/mcp on the run's frame: the step's token carries the run id, and a
+//     step with a verified source never gets the run-less machine bearer (src/app/api/llm-bridge/route.ts,
+//     buildMachineToolWithDurableBinding); a run-bound step without a verified source is offered no tool at all
+//     (readRunPolicyBeforeProvider). On that frame enforceMcpBoundary refuses every publishing tool, a registration-
+//     outward one included (needsRecordedDecision). The repository case calls the real boundary for every publishing
+//     tool of the tree on a run frame to pin that refusal; heldSteps lists the steps that rely on it;
+//   - offered any other MCP toolbox, or toolbox ids the host cannot read: a finding, UNHELD, since the boundary does
+//     not stand between such a step and that toolbox;
+//   - offered no MCP toolbox (an empty list, or built-ins only): no MCP tool, nothing to classify.
+// `data.toolbox_ids` is read after the compiler's own propagation of `metadata.cinatra.toolboxes`
+// (propagateToolboxesIntoApiNodes).
+//
 // A tool a step names that the host does not know is its own finding, UNKNOWN_TOOL: an unknown name is never read as
 // "not publishing". For a model-bridge list, known means classified for the boundary (PRIMITIVE_CLASSIFICATIONS) or
-// registered by a connector module; for a passthrough step, on the passthrough route's allowlist. An extension whose
+// registered by a connector module; for a passthrough step, on the passthrough route's allowlist (ALLOWED_TOOLS, read
+// from the route's source with each set it spreads imported from its own module; a spread the census does not read
+// fails the file). An extension whose
 // source declares `outward` but whose package has no connector MCP module in the generated manifest (so the loader
 // above cannot read its registration) is a finding too, OUTWARD_UNREAD: a plain text search of its source, the only
 // reading possible without booting the app.
@@ -42,7 +61,7 @@
 // The repository case needs the materialized `extensions/` tree (`node scripts/ci/sync-dev-extensions.mjs --pinned`);
 // without it the case is skipped, unless CINATRA_REQUIRE_EXTENSIONS=1 is set, as in publish-pack-names-border.test.ts.
 
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as path from "node:path";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -50,10 +69,12 @@ import {
   __resetRegistryCacheForTests,
   checkExecutedPublishingCallRoutes,
   compileOasAgentJson,
+  propagateToolboxesIntoApiNodes,
 } from "../../../packages/agents/src/oas-compiler";
 import { readStepToolDeclaration } from "../../../packages/agents/src/validate-oas-runtime-invariants";
 import { readDeclaredOutward } from "../../../packages/mcp-server/src/capability-plan";
-import { OUTWARD_EFFECT_TOOL_NAMES } from "../authz/mcp-boundary";
+import { enforceMcpBoundary, OUTWARD_EFFECT_TOOL_NAMES, RECORDED_DECISION_REQUIRED_REASON } from "../authz/mcp-boundary";
+import * as auditModule from "../authz/audit";
 import { lookupPrimitiveClassification } from "../authz/inventory-augment";
 
 const REPO_ROOT = path.join(__dirname, "..", "..", "..");
@@ -73,13 +94,19 @@ const isBridge = (node: Json) => node.component_type === "ApiNode" && urlOf(node
 const isPassthrough = (node: Json) => node.component_type === "ApiNode" && urlOf(node).includes("/api/agents/passthrough");
 
 /** What the host knows about tools: the names registrations declare outward, and every name a connector registers. */
-export type ToolCensus = { outwardByRegistration: ReadonlySet<string>; registered: ReadonlySet<string> };
+export type ToolCensus = {
+  outwardByRegistration: ReadonlySet<string>;
+  registered: ReadonlySet<string>;
+  /** Every tool name the passthrough route allows (passthroughAllowlist). */
+  passthrough: ReadonlySet<string>;
+};
 
 /** The census of a list of registrations, each config read by the planner's own outward reader. */
-export function censusFrom(registrations: Array<{ name: string; config: unknown }>): ToolCensus {
+export function censusFrom(registrations: Array<{ name: string; config: unknown }>, passthrough: ReadonlySet<string>): ToolCensus {
   return {
     outwardByRegistration: new Set(registrations.filter((r) => readDeclaredOutward(r.config) !== null).map((r) => r.name)),
     registered: new Set(registrations.map((r) => r.name)),
+    passthrough,
   };
 }
 
@@ -89,22 +116,52 @@ const isPublishingTool = (census: ToolCensus, tool: string) =>
 const isKnownTool = (census: ToolCensus, tool: string) =>
   lookupPrimitiveClassification(tool) !== undefined || census.registered.has(tool) || OUTWARD_EFFECT_TOOL_NAMES.has(tool);
 
-/**
- * The passthrough route's allowlist (src/app/api/agents/passthrough/route.ts, ALLOWED_TOOLS, spread with
- * EXTENSION_SCOPED_TOOLS of src/lib/extension-scoped-tools.ts). Neither module loads outside the app (both import
- * server-only modules), so the string literals of the two set constructors are read from their source text.
- */
-function literalSet(file: string, opener: string): string[] {
+/** The string literals and the spread names of a `new Set([ ... ]);` constructor in a source file. */
+function setSource(file: string, opener: string): { literals: string[]; spreads: string[] } {
   const text = readFileSync(path.join(REPO_ROOT, file), "utf8");
   const start = text.indexOf(opener);
   if (start < 0) throw new Error(`${file}: ${opener} not found`);
-  const body = text.slice(start + opener.length, text.indexOf("]);", start));
-  return [...body.replace(/\/\/[^\n]*/g, "").matchAll(/"([a-z0-9_]+)"/g)].map((m) => m[1]!);
+  const body = text.slice(start + opener.length, text.indexOf("]);", start)).replace(/\/\/[^\n]*/g, "");
+  return {
+    literals: [...body.matchAll(/"([a-z0-9_-]+)"/g)].map((m) => m[1]!),
+    spreads: [...body.matchAll(/\.\.\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]!),
+  };
 }
-const PASSTHROUGH_TOOLS = new Set([
-  ...literalSet("src/app/api/agents/passthrough/route.ts", "const ALLOWED_TOOLS = new Set(["),
-  ...literalSet("src/lib/extension-scoped-tools.ts", "export const EXTENSION_SCOPED_TOOLS = new Set<string>(["),
-]);
+
+const PASSTHROUGH_ROUTE = "src/app/api/agents/passthrough/route.ts";
+/**
+ * Each set the passthrough route spreads into its allowlist, imported from the module the route imports it from. A
+ * spread not named here makes passthroughAllowlist throw, so a new spread cannot be missed.
+ */
+const PASSTHROUGH_SPREADS: Record<string, () => Promise<ReadonlySet<string>>> = {
+  EXTENSION_SCOPED_TOOLS: async () => (await import("../extension-scoped-tools")).EXTENSION_SCOPED_TOOLS,
+  RUN_FOLDER_TOOLS: async () => (await import("../run-folder-tools")).RUN_FOLDER_TOOLS,
+};
+
+/**
+ * The passthrough route's allowlist (src/app/api/agents/passthrough/route.ts, ALLOWED_TOOLS). The route does not
+ * export the set, so its constructor is read from the route's source: its string literals, and each set it spreads,
+ * imported from its own module.
+ */
+export async function passthroughAllowlist(): Promise<{ tools: ReadonlySet<string>; spreads: string[] }> {
+  const { literals, spreads } = setSource(PASSTHROUGH_ROUTE, "const ALLOWED_TOOLS = new Set([");
+  const tools = new Set(literals);
+  for (const name of spreads) {
+    const load = PASSTHROUGH_SPREADS[name];
+    if (!load) throw new Error(`${PASSTHROUGH_ROUTE}: ALLOWED_TOOLS spreads ${name}, which this census does not read`);
+    for (const t of await load()) tools.add(t);
+  }
+  return { tools, spreads };
+}
+
+/**
+ * The tool ids the bridge takes as provider built-ins, not MCP toolboxes (src/app/api/llm-bridge/route.ts,
+ * BUILT_IN_BRIDGE_TOOLS, not exported; read from its constructor).
+ */
+const BRIDGE_BUILT_INS = new Set(
+  setSource("src/app/api/llm-bridge/route.ts", "const BUILT_IN_BRIDGE_TOOLS: ReadonlySet<string> = new Set([").literals,
+);
+const SELF_MCP = "cinatra-mcp";
 
 /** The publishing tools a pack's manifest consumes (cinatra.consumes[].primitive). */
 export function consumedPublishingTools(pkg: Json, census: ToolCensus): string[] {
@@ -115,16 +172,28 @@ export function consumedPublishingTools(pkg: Json, census: ToolCensus): string[]
     .filter((p): p is string => typeof p === "string" && isPublishingTool(census, p));
 }
 
-type Reading = { publishing: string[]; unknown: string[] };
+type Reading = { publishing: string[]; unknown: string[]; unheld: string[]; held: string[] };
+const emptyReading = (): Reading => ({ publishing: [], unknown: [], unheld: [], held: [] });
+
+/**
+ * The MCP toolboxes the bridge offers a model step: its `data.toolbox_ids` after the compiler's propagation, less the
+ * provider built-ins; the bridge defaults an absent list to the self-MCP toolbox (llm-bridge/route.ts, toolbox_ids).
+ */
+function mcpToolboxesOf(node: Json): string[] | null {
+  const ids = isObject(node.data) ? node.data.toolbox_ids : undefined;
+  if (ids === undefined) return [SELF_MCP];
+  if (!Array.isArray(ids) || !ids.every((t) => typeof t === "string")) return null;
+  return (ids as string[]).filter((t) => !BRIDGE_BUILT_INS.has(t));
+}
 
 /** Why a single component can make a publishing call, and the tool names it names that the host does not know. */
 function readComponent(node: Json, consumed: string[], census: ToolCensus): Reading {
-  const out: Reading = { publishing: [], unknown: [] };
+  const out = emptyReading();
   const id = typeof node.id === "string" ? node.id : "?";
   if (isPassthrough(node)) {
     const tool = isObject(node.data) ? node.data.tool : undefined;
     if (typeof tool === "string") {
-      if (!PASSTHROUGH_TOOLS.has(tool)) out.unknown.push(`${id} names the tool ${tool}, which the passthrough route does not allow`);
+      if (!census.passthrough.has(tool)) out.unknown.push(`${id} names the tool ${tool}, which the passthrough route does not allow`);
       else if (isPublishingTool(census, tool)) out.publishing.push(`${id} calls the publishing tool ${tool}`);
     }
   }
@@ -134,8 +203,23 @@ function readComponent(node: Json, consumed: string[], census: ToolCensus): Read
       for (const t of declaration.tools.filter((x) => !isKnownTool(census, x))) out.unknown.push(`${id} lists the unknown tool ${t}`);
       const named = declaration.tools.filter((t) => isKnownTool(census, t) && isPublishingTool(census, t));
       if (named.length > 0) out.publishing.push(`${id} lists the publishing tool ${named.join(", ")}`);
-    } else if (declaration.kind === "undeclared" && consumed.length > 0) {
-      out.publishing.push(`${id} has no tool list and the pack consumes the publishing tool ${consumed.join(", ")}`);
+    } else if (declaration.kind === "invalid") {
+      out.unknown.push(`${id} has a tool list the host cannot read`);
+    } else {
+      // No tool list: the bridge keeps every tool its toolboxes offer (see the header).
+      const toolboxes = mcpToolboxesOf(node);
+      if (toolboxes === null) {
+        out.unheld.push(`${id} has no tool list and toolbox ids the host cannot read`);
+      } else if (toolboxes.some((t) => t !== SELF_MCP)) {
+        const other = toolboxes.filter((t) => t !== SELF_MCP);
+        out.unheld.push(`${id} has no tool list and is offered the toolbox ${other.join(", ")}, which the MCP boundary does not hold`);
+      } else if (toolboxes.includes(SELF_MCP)) {
+        if (consumed.length > 0) {
+          out.publishing.push(`${id} has no tool list and the pack consumes the publishing tool ${consumed.join(", ")}`);
+        } else {
+          out.held.push(`${id} has no tool list; every publishing tool of the self-MCP toolbox is refused on its run's frame`);
+        }
+      }
     }
   }
   return out;
@@ -143,7 +227,7 @@ function readComponent(node: Json, consumed: string[], census: ToolCensus): Read
 
 /** Every reading in the subtree of a top-level node; references resolve in the flow's components. */
 function readSubtree(start: unknown, refs: Json, consumed: string[], census: ToolCensus): Reading {
-  const out: Reading = { publishing: [], unknown: [] };
+  const out = emptyReading();
   const seen = new Set<unknown>();
   const stack: unknown[] = [start];
   while (stack.length > 0) {
@@ -161,6 +245,8 @@ function readSubtree(start: unknown, refs: Json, consumed: string[], census: Too
       const r = readComponent(o, consumed, census);
       out.publishing.push(...r.publishing);
       out.unknown.push(...r.unknown);
+      out.unheld.push(...r.unheld);
+      out.held.push(...r.held);
     }
     for (const v of Object.values(o)) stack.push(v);
   }
@@ -171,23 +257,44 @@ function readSubtree(start: unknown, refs: Json, consumed: string[], census: Too
  * The findings for one compiled flow. `publishingSteps` is the compiler's list; `rawSource` is the flow text the
  * runtime executes.
  */
-export function publishingFindings(args: { oas: Json; pkg: Json; rawSource: string; publishingSteps: string[]; census: ToolCensus }): string[] {
-  const { oas, pkg, rawSource, publishingSteps, census } = args;
-  const findings: string[] = [];
+type FlowArgs = { oas: Json; pkg: Json; rawSource: string; publishingSteps: string[]; census: ToolCensus };
+
+/** The reading of each top-level node, over the flow with the compiler's toolbox propagation applied. */
+function readFlow({ oas: source, pkg, census }: FlowArgs): { topLevel: string[]; refs: Json; readings: Map<string, Reading> } {
+  const oas = JSON.parse(JSON.stringify(source)) as Json;
+  const flowToolboxes = isObject(oas.metadata) && isObject(oas.metadata.cinatra) ? oas.metadata.cinatra.toolboxes : undefined;
+  if (Array.isArray(flowToolboxes) && flowToolboxes.every((t) => typeof t === "string")) {
+    propagateToolboxesIntoApiNodes(oas, flowToolboxes as string[]);
+  }
   const refs = isObject(oas.$referenced_components) ? oas.$referenced_components : {};
   const topLevel = (Array.isArray(oas.nodes) ? oas.nodes : [])
     .map((n) => (isObject(n) ? (n as Ref).$component_ref : undefined))
     .filter((id): id is string => typeof id === "string");
   const consumed = consumedPublishingTools(pkg, census);
+  return { topLevel, refs, readings: new Map(topLevel.map((id) => [id, readSubtree(refs[id], refs, consumed, census)])) };
+}
+
+/** The undeclared top-level nodes whose model steps rely on the boundary's run-frame refusal (see the header). */
+export function heldSteps(args: FlowArgs): string[] {
+  const declared = new Set(args.publishingSteps);
+  return [...readFlow(args).readings].filter(([id]) => !declared.has(id)).flatMap(([id, r]) => r.held.map((h) => `HELD ${id}: ${h}`));
+}
+
+export function publishingFindings(args: FlowArgs): string[] {
+  const { oas, rawSource, publishingSteps } = args;
+  const findings: string[] = [];
+  const { topLevel, refs, readings } = readFlow(args);
   const declared = new Set(publishingSteps);
 
-  // (1) every node that can make a publishing call is a declared publishing step; an unknown tool is never "not publishing".
+  // (1) every node that can make a publishing call is a declared publishing step; an unknown tool is never "not
+  // publishing", and a model step offered a toolbox the boundary does not hold is never passed.
   for (const id of topLevel) {
-    const reading = readSubtree(refs[id], refs, consumed, census);
+    const reading = readings.get(id)!;
     for (const u of reading.unknown) findings.push(`UNKNOWN_TOOL ${id}: ${u}`);
     if (reading.publishing.length > 0 && !declared.has(id)) {
       findings.push(`UNDECLARED ${id}: ${reading.publishing.join("; ")}`);
     }
+    if (reading.unheld.length > 0 && !declared.has(id)) findings.push(`UNHELD ${id}: ${reading.unheld.join("; ")}`);
   }
 
   // (2) every declared step can be put behind the gate, and its calls go to a host route that checks the decision.
@@ -235,11 +342,41 @@ async function check(packageName: string, oasFile: string, pkg: Json, census: To
 
 type Flow = { nodes: Ref[]; $referenced_components: Record<string, Json>; [k: string]: unknown };
 
+/** The passthrough route's allowlist, read once for the fixtures and the pinned tree. */
+let PASSTHROUGH: { tools: ReadonlySet<string>; spreads: string[] } = { tools: new Set(), spreads: [] };
 /** A connector that registers a read tool and a tool that is outward by its registration only. */
-const FIXTURE_CENSUS = censusFrom([
-  { name: "fixture_site_tool_write", config: { title: "fixture_site_tool_write", outward: {} } },
-  { name: "fixture_site_tool_read", config: { title: "fixture_site_tool_read" } },
-]);
+let FIXTURE_CENSUS: ToolCensus = { outwardByRegistration: new Set(), registered: new Set(), passthrough: new Set() };
+beforeAll(async () => {
+  PASSTHROUGH = await passthroughAllowlist();
+  FIXTURE_CENSUS = censusFrom([
+    { name: "fixture_site_tool_write", config: { title: "fixture_site_tool_write", outward: {} } },
+    { name: "fixture_site_tool_read", config: { title: "fixture_site_tool_read" } },
+  ], PASSTHROUGH.tools);
+});
+
+/**
+ * The proof a held step relies on: the real boundary, on an agent run's frame (a platform admin, so no role rule
+ * decides), refuses each tool. A tool the host classifies is refused for the recorded decision; one it does not
+ * classify is refused before that, as unclassified.
+ */
+async function boundaryOnRunFrame(tools: Array<{ name: string; declaresOutward: boolean }>): Promise<string[]> {
+  const spy = vi.spyOn(auditModule, "logAuditEvent").mockResolvedValue(undefined);
+  try {
+    const served: string[] = [];
+    for (const { name, declaresOutward } of tools) {
+      const decision = await enforceMcpBoundary({
+        primitiveName: name,
+        ctx: { orgId: "org-1", userId: "admin-1", platformRole: "platform_admin", runId: "run-1" },
+        declaresOutward,
+      } as Parameters<typeof enforceMcpBoundary>[0]);
+      const expected = lookupPrimitiveClassification(name) ? RECORDED_DECISION_REQUIRED_REASON : "unclassified_primitive";
+      if (decision.allowed || decision.reason !== expected) served.push(`${name}: ${JSON.stringify(decision)}`);
+    }
+    return served;
+  } finally {
+    spy.mockRestore();
+  }
+}
 
 function linkedinShape(): Flow {
   const parity = JSON.parse(readFileSync(PARITY_FIXTURE, "utf8")) as { flows: Array<{ name: string; flow: Flow }> };
@@ -278,6 +415,39 @@ describe("item 7: a node that can publish is declared and sits behind the moment
     expect(await checkFixture(flow, CONSUMES_POST)).toEqual([
       "UNDECLARED publish: publish has no tool list and the pack consumes the publishing tool linkedin_post_publish",
     ]);
+  });
+
+  it("(c) a model-bridge step with no tool list and no publishing tool in the manifest is classified held, never passed silently", async () => {
+    const flow = linkedinShape();
+    setPublishes(flow.$referenced_components.publish!, undefined);
+    expect(await checkFixture(flow)).toEqual([]);
+    expect(heldSteps({ oas: flow as unknown as Json, pkg: {}, rawSource: "", publishingSteps: [], census: FIXTURE_CENSUS })).toEqual([
+      "HELD publish: publish has no tool list; every publishing tool of the self-MCP toolbox is refused on its run's frame",
+    ]);
+    expect(await boundaryOnRunFrame([
+      ...[...OUTWARD_EFFECT_TOOL_NAMES].map((name) => ({ name, declaresOutward: false })),
+      ...[...FIXTURE_CENSUS.outwardByRegistration].map((name) => ({ name, declaresOutward: true })),
+    ])).toEqual([]);
+  });
+
+  it("(c) a model-bridge step with no tool list offered another MCP toolbox is UNHELD; built-ins only, or none, offer no MCP tool", async () => {
+    const flow = linkedinShape();
+    const publish = flow.$referenced_components.publish!;
+    setPublishes(publish, undefined);
+    publish.data = { ...(publish.data as Json), toolbox_ids: ["web_search", "cinatra-mcp", "fixture-site-mcp"] };
+    expect(await checkFixture(flow)).toEqual([
+      "UNHELD publish: publish has no tool list and is offered the toolbox fixture-site-mcp, which the MCP boundary does not hold",
+    ]);
+    const held = () => heldSteps({ oas: flow as unknown as Json, pkg: {}, rawSource: "", publishingSteps: [], census: FIXTURE_CENSUS });
+    publish.data = { ...(publish.data as Json), toolbox_ids: ["web_search"] };
+    expect(await checkFixture(flow)).toEqual([]);
+    expect(held()).toEqual([]);
+    delete (publish.data as Json).toolbox_ids;
+    cinatraOf(flow as Json).toolboxes = ["fixture-site-mcp"];
+    expect(await checkFixture(flow)).toEqual([
+      "UNHELD publish: publish has no tool list and is offered the toolbox fixture-site-mcp, which the MCP boundary does not hold",
+    ]);
+    setPublishes(publish, true);
     expect(await checkFixture(flow)).toEqual([]);
   });
 
@@ -336,6 +506,19 @@ describe("item 7: a node that can publish is declared and sits behind the moment
     setPublishes(publish, undefined);
     expect(await checkFixture(flow)).toEqual(["UNDECLARED publish: publish calls the publishing tool email_test_delivery_run_send"]);
     setPublishes(publish, true);
+    expect(await checkFixture(flow)).toEqual([]);
+  });
+
+  it("the passthrough census is the route's whole allowlist: its literals and every set it spreads", async () => {
+    expect(PASSTHROUGH.spreads.sort()).toEqual(Object.keys(PASSTHROUGH_SPREADS).sort());
+    for (const tool of ["dashboards_create", "extension_tool", "run_folder_read", "run_folder_write", "run_folder_list"]) {
+      expect(FIXTURE_CENSUS.passthrough.has(tool), tool).toBe(true);
+    }
+    const flow = linkedinShape();
+    const publish = flow.$referenced_components.publish!;
+    publish.url = "{{CINATRA_BASE_URL}}/api/agents/passthrough";
+    publish.data = { tool: "run_folder_read", input: "{}", agent_run_id: "{{cinatra_run_id}}" };
+    setPublishes(publish, undefined);
     expect(await checkFixture(flow)).toEqual([]);
   });
 
@@ -421,18 +604,18 @@ const PINNED_PACKS_NOT_YET_MET: Record<string, { pin: string; findings: string[]
       "UNDECLARED send: send lists the publishing tool email_outreach_send_initial_start",
     ],
   },
-  // Sends the test mail through a passthrough step without the declaration. No pull request yet.
+  // Sends the test mail from a passthrough step that is not declared publishing. Open pull request #4809 builds the
+  // host plan tool for this send; the enforcement follows #4788. No pull request moves this pin yet.
   "@cinatra-ai/email-test-delivery-agent": {
     pin: "1afddbaa75b5f1e77081c5713fe49933039894a3",
     findings: ["UNDECLARED perform_test_send: perform_test_send calls the publishing tool email_test_delivery_run_send"],
   },
-  // Consumes the WordPress write tool (outward by its registration only) and its model-bridge steps have no tool list
-  // and no declaration. No pull request yet.
+  // Consumes the WordPress write tool (outward by its registration only); two model-bridge steps that the self-MCP
+  // toolbox reaches have no tool list and no declaration (compose_change is offered no MCP toolbox). No pull request yet.
   "@cinatra-ai/wordpress-agent": {
     pin: "b04d467bcf1433337e0f46fc5a9908f914aead84",
     findings: [
       "UNDECLARED read_page: read_page has no tool list and the pack consumes the publishing tool wordpress_site_tool_write",
-      "UNDECLARED compose_change: compose_change has no tool list and the pack consumes the publishing tool wordpress_site_tool_write",
       "UNDECLARED edit: edit has no tool list and the pack consumes the publishing tool wordpress_site_tool_write",
     ],
   },
@@ -493,7 +676,7 @@ async function pinnedToolCensus(): Promise<ToolCensus> {
     registerScreen: () => undefined,
   };
   for (const mod of await loadConnectorMcpModules()) await mod.registerCapabilities(server as never);
-  return censusFrom(registrations);
+  return censusFrom(registrations, PASSTHROUGH.tools);
 }
 
 /** The packages whose non-test source text declares `outward:` (the fallback reading; see the header). */
@@ -529,7 +712,7 @@ const REQUIRE_EXTENSIONS = process.env.CINATRA_REQUIRE_EXTENSIONS === "1";
 const PACKS = installedAgentPacks();
 
 describe.skipIf(PACKS.length === 0 && !REQUIRE_EXTENSIONS)("item 7: every pinned agent pack's publishing actions sit behind the moment", () => {
-  let census: ToolCensus = { outwardByRegistration: new Set(), registered: new Set() };
+  let census: ToolCensus = { outwardByRegistration: new Set(), registered: new Set(), passthrough: new Set() };
   beforeAll(async () => {
     census = await pinnedToolCensus();
   });
@@ -564,6 +747,21 @@ describe.skipIf(PACKS.length === 0 && !REQUIRE_EXTENSIONS)("item 7: every pinned
       if (findings.length > 0) results[p.packageName] = findings;
     }
     expect(results).toEqual({});
+  });
+
+  it("every model step classified held relies on a refusal the boundary really makes, for every publishing tool of the tree", async () => {
+    const held: string[] = [];
+    for (const p of PACKS) {
+      const rawSource = readFileSync(p.oasFile, "utf8");
+      const res = await compileOasAgentJson({ packageName: p.packageName, oasSourcePath: p.oasFile, registryPath: path.join(tempDir, "components.json") });
+      if (!res.ok) continue;
+      held.push(...heldSteps({ oas: JSON.parse(rawSource) as Json, pkg: p.pkg, rawSource, publishingSteps: res.value.publishingSteps, census }));
+    }
+    expect(held.length, "no held step: drop this case or its classification").toBeGreaterThan(0);
+    expect(await boundaryOnRunFrame([
+      ...[...OUTWARD_EFFECT_TOOL_NAMES].map((name) => ({ name, declaresOutward: false })),
+      ...[...census.outwardByRegistration].map((name) => ({ name, declaresOutward: true })),
+    ])).toEqual([]);
   });
 
   it("every entry of the not-yet-met list names an installed pack", () => {
