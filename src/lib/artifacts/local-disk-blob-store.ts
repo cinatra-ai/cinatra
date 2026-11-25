@@ -104,8 +104,7 @@ function quotaMode(): "warn" | "enforce" {
     : "warn";
 }
 
-/** How long a content-addressed file, or a resource no representation refers to, is protected from removal. */
-export function deleteGraceMs(): number {
+function deleteGraceMs(): number {
   const n = envBytes(ARTIFACT_DELETE_GRACE_MS_ENV);
   return n > 0 ? n : DEFAULT_ARTIFACT_DELETE_GRACE_MS;
 }

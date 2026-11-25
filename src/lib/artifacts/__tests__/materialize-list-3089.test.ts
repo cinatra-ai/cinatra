@@ -989,6 +989,19 @@ describe("cinatra#3089 — a list that does not fit the organization's quota is 
   });
 
   // red-first-expect: materializeToolArtifactSet is not a function
+  it("Q1 a call that differs from the set already filed for the node is refused as a different set before the quota is asked or any blob stored", async () => {
+    usedBytes = 0;
+    await fileSet();
+    createSemanticArtifactsMock.mockClear();
+    poolQueryMock.mockClear();
+    usedBytes = 100;
+    const refused = await fileSet(members((m, i) => (i === 1 ? { ...m, content: "Dear Bob, REVISED" } : m)));
+    expect(refused).toMatchObject({ ok: false, code: "materialize_list_set_differs" });
+    expect(createSemanticArtifactsMock).not.toHaveBeenCalled();
+    expect(poolQueryMock.mock.calls.some(([t]) => String(t).includes('"resource"'))).toBe(false);
+  });
+
+  // red-first-expect: materializeToolArtifactSet is not a function
   it("Q1 a list that exactly fills the room is accepted, as the blob store accepts a blob that fills it", async () => {
     usedBytes = 100 - 38;
     expect(await fileSet()).toMatchObject({ ok: true });

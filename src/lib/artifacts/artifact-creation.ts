@@ -1473,7 +1473,7 @@ export async function createSemanticArtifact(
  * with the same bytes share the first one's blob and resource row. Blobs stored before a rolled-back
  * transaction keep the resource rows that own them (never rows without their file, or a file without
  * its rows: a concurrent writer of the same bytes may already rely on both), exactly as after a failed
- * single write; `runResourceBlobGc` reclaims them once they are unreferenced and past the grace period.
+ * single write (the platform's existing limit for a failed write; this path adds no deletion).
  *
  * The statements of one artifact are ~10; the batch is bounded by its caller (50 members) and by
  * the synchronous bridge's ceiling (`POSTGRES_SYNC_TIMEOUT_MS`, 30 s). Fresh artifact ids contend

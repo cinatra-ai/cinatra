@@ -694,6 +694,34 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
     });
   });
 
+  describe("the loser of a concurrent finalize is handed the winner only when it is what the loser would have stored (cinatra#3089)", () => {
+    const loses = async (winner: { type?: string; title?: string; data: Record<string, unknown> }, call = bodyInput(MESSAGES[0])) => {
+      const { MATERIALIZATION_FINALIZE_CONFLICT_MARKER } = await vi.importActual<typeof import("../materialization-ledger")>("../materialization-ledger");
+      claimMaterializationMock.mockResolvedValue({ kind: "claimed", ledgerId: "ledger-1" });
+      createSemanticArtifactMock.mockRejectedValue(new Error(`${MATERIALIZATION_FINALIZE_CONFLICT_MARKER}: rows=0`));
+      readFinalizedMaterializationMock.mockResolvedValue({ artifactId: "art-w", representationRevisionId: "rep-w" });
+      storedObjects.set("art-w", stored(winner.data, { title: winner.title, type: winner.type }));
+      return materializeFanoutMessageRevision({ ...call, reuseMustCarry: ["runId", "campaignId"] });
+    };
+
+    // red-first-expect: to match object { ok: false
+    it.each([
+      ["a different title", { title: "Another subject", data: fullData(MESSAGES[0]) }, "differs: title"],
+      ["another campaign", { data: { ...fullData(MESSAGES[0]), campaignId: "camp-OTHER" } }, "differs: keys: campaignId"],
+      ["another object type", { type: "@cinatra-ai/email:other", data: fullData(MESSAGES[0]) }, "differs: objectType"],
+    ])("B10 a simultaneous write with identical bytes and identity but %s is refused, not handed the winner's artifact", async (_n, winner, differs) => {
+      const outcome = await loses(winner);
+      expect(outcome).toMatchObject({ ok: false, code: "filed_values_differ" });
+      expect((outcome as { error: string }).error).toContain(differs);
+      for (const value of ["Another subject", "camp-OTHER", "camp-1"]) expect((outcome as { error: string }).error).not.toContain(value);
+      expect(poolQueryMock.mock.calls.filter(([t]) => String(t).includes("artifact_produced_outbox"))).toEqual([]);
+    });
+
+    it("B10 an identical simultaneous write still dedupes onto the winner", async () => {
+      expect(await loses({ data: fullData(MESSAGES[0]) })).toEqual({ ok: true, artifactId: "art-w", representationRevisionId: "rep-w", deduped: true });
+    });
+  });
+
   it("B3 a retried message keeps its own mapping even when a mid-run body of the same bytes is filed between drives", async () => {
     const first = await materializeFanoutMessageRevision(bodyInput(MESSAGES[0]));
     expect(first).toMatchObject({ ok: true, artifactId: "art-1" });

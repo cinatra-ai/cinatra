@@ -1072,20 +1072,24 @@ export async function writeClaimedArtifact(input: {
         `output "${input.outputId}" extension "${input.extension}" — refusing to alias`,
     };
   }
-  if (claim.kind === "finalized") {
+  // A finalized artifact this write is handed instead of writing one (an earlier call's, or the winner of a
+  // concurrent drive's) is returned only when it is what this call would have stored, when the caller asked
+  // for that (`verifyFinalizedHit`): ONE comparison for both roads.
+  const handedBack = async (stored: { artifactId: string; representationRevisionId: string }) => {
     if (input.verifyFinalizedHit) {
-      const differs = await reuseDifferences({
-        orgId: input.orgId,
-        artifactId: claim.artifactId,
-        objectTypeId: input.resolvedTarget.objectTypeId,
-        title: input.title,
-        typedData: input.typedData ?? {},
-        mustCarry: Object.keys(input.typedData ?? {}),
-      });
-      const what = describeDifferences(differs);
+      const what = describeDifferences(
+        await reuseDifferences({
+          orgId: input.orgId,
+          artifactId: stored.artifactId,
+          objectTypeId: input.resolvedTarget.objectTypeId,
+          title: input.title,
+          typedData: input.typedData ?? {},
+          mustCarry: Object.keys(input.typedData ?? {}),
+        }),
+      );
       if (what !== null) {
         return {
-          ok: false,
+          ok: false as const,
           code: FILED_VALUES_DIFFER_CODE,
           error:
             `${FILED_VALUES_DIFFER_CODE}: the artifact already filed for these bytes in this run does not match what this ` +
@@ -1094,9 +1098,10 @@ export async function writeClaimedArtifact(input: {
         };
       }
     }
-    // cinatra#4762: a retry of identical bytes writes nothing.
-    return reusedArtifact(input, claim);
-  }
+    // cinatra#4762: a write that hands back a stored revision writes nothing.
+    return reusedArtifact(input, stored);
+  };
+  if (claim.kind === "finalized") return handedBack(claim);
 
   let created: { artifactId: string; representationRevisionId: string };
   try {
@@ -1134,10 +1139,7 @@ export async function writeClaimedArtifact(input: {
         orgId: input.orgId,
         ledgerId: claim.ledgerId,
       });
-      if (winner) {
-        // cinatra#4762: the winner's revision is this write's.
-        return reusedArtifact(input, winner);
-      }
+      if (winner) return handedBack(winner);
     }
     throw err;
   }
