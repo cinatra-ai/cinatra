@@ -92,9 +92,6 @@ vi.mock("@cinatra-ai/agents/artifact-review-gate-store", () => ({
 vi.mock("@cinatra-ai/agents/lifecycle-repair-store", () => ({
   readRepairBySuccessorGateId: vi.fn(),
 }));
-vi.mock("@/lib/artifacts/cms-preview-capture-store", () => ({
-  readPinnedPreviewCaptures: vi.fn(),
-}));
 
 // The two artifact reads that need a database. Everything else in those two
 // modules stays as it is.
