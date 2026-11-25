@@ -116,6 +116,15 @@ export type RunStepRailEvidence = {
    * `exports` and requires the module to be absent from it.
    */
   readonly unexportedModules: readonly string[];
+  /**
+   * Screens the row claims read the SIGNED-IN SESSION, as `{ module, screen }`:
+   * the conformance harness's fixture routes are open without sign-in and carry
+   * no session, so a screen that resolves its data for the session's user has
+   * no reader there. The test requires the named screen to call
+   * `getAuthSession()` in its own body, and no fixture route under
+   * `src/app/design-fixtures/` to read a session.
+   */
+  readonly sessionScreens?: readonly { readonly module: string; readonly screen: string }[];
 };
 
 export type RunStepRailRow = {
@@ -401,15 +410,15 @@ export const RUN_STEP_RAIL_ROWS_BY_SURFACE: Readonly<
     mounted: false,
     unshippedAspects: [],
     evidence: {
-      absentAnchors: ["run-outputs-list"],
+      absentAnchors: [],
       absentActions: [
         { name: "open-output", outcome: "artifact-page" },
       ],
-      shippedFiles: [],
+      shippedFiles: ["packages/agents/src/run-made-step-surface.tsx"],
       unexportedModules: [],
     },
     readiness:
-      "the run's last step — one row per artifact the run wrote, and the artifact it consumed marked used — is not in the tree: no element carries the run-outputs-list anchor, no control declares open-output to artifact-page, and the name-to-artifact.displayTitle binding this surface shares with the two review steps is a literal in no file under src/ or packages/",
+      "the run's last step — one row per artifact the run wrote, and the artifact it consumed marked used — IS shipped, and its step page carries the run-outputs-list anchor in both readings (packages/agents/src/run-made-step-surface.tsx), but the harness cannot mount it: the rows are read from the run's ledger behind a session by the run page's server screen. And no control declares open-output to artifact-page, and the name-to-artifact.displayTitle binding this surface shares with the two review steps is a literal in no file under src/ or packages/",
   },
   "run-review-step-post": {
     surface: "run-review-step-post",
@@ -425,13 +434,14 @@ export const RUN_STEP_RAIL_ROWS_BY_SURFACE: Readonly<
     mounted: false,
     unshippedAspects: [],
     evidence: {
-      absentAnchors: ["run-review-step-post"],
+      absentAnchors: [],
       absentActions: [],
       shippedFiles: ["packages/agents/src/review-gate-card.tsx"],
       unexportedModules: [],
+      sessionScreens: [{ module: "packages/agents/src/instance-screens.tsx", screen: "SetupScreen" }],
     },
     readiness:
-      "the review gate card IS shipped (packages/agents/src/review-gate-card.tsx, with the review-target and review-decision-bar anchors; the prompt window is the run page chrome's since cinatra#3487 and carries the drawing's own review-prompt-window anchor there), but this surface is that card HOSTED ON THE RUN PAGE'S REVIEW STEP, which the harness cannot mount: the card resolves its target through a review task behind a session",
+      "the review gate card IS shipped (packages/agents/src/review-gate-card.tsx, with the review-target and review-decision-bar anchors; the prompt window is the run page chrome's since cinatra#3487 and carries the drawing's own review-prompt-window anchor there), and since cinatra#3033 the card's one inner element, which holds the gate header, the target and the decision floor, carries the run-review-step-post anchor on the run page host when its one target is the post (the resolve answer names a markdown form and no recorded prompt). But this surface is that card HOSTED ON THE RUN PAGE'S REVIEW STEP, which the harness cannot mount: the step is drawn by the run screen's SetupScreen (packages/agents/src/instance-screens.tsx, exported through the ./screens subpath as agentPluginScreens.instanceSetup), an async server component that reads the signed-in session (getAuthSession) and resolves the agent, the run, its rail and its review gate for that session's user, and the conformance harness's fixture routes are open without sign-in and carry no session, so the screen has no reader to resolve the run for",
   },
   "run-review-step-picture": {
     surface: "run-review-step-picture",
@@ -447,13 +457,14 @@ export const RUN_STEP_RAIL_ROWS_BY_SURFACE: Readonly<
     mounted: false,
     unshippedAspects: [],
     evidence: {
-      absentAnchors: ["run-review-step-picture"],
+      absentAnchors: [],
       absentActions: [],
       shippedFiles: ["packages/agents/src/review-gate-card.tsx"],
       unexportedModules: [],
+      sessionScreens: [{ module: "packages/agents/src/instance-screens.tsx", screen: "SetupScreen" }],
     },
     readiness:
-      "the featured image's review is the second of the two readings of the same frame, so it waits on the same host as the post's; and the review step that hosts it is the run page's, which the harness cannot mount (the floor's regenerate-review to successor-gate-opened ships in the one review card)",
+      "the featured image's review is the second of the two readings of the same frame, so it waits on the same host as the post's. Since cinatra#3033 the card's one inner element, which holds the gate header, the target and the decision floor, carries the run-review-step-picture anchor on the run page host when its one target is the picture (the resolve answer names an image form and the prompt that made it). But the review step that hosts it is the run page's, drawn by the run screen's SetupScreen (packages/agents/src/instance-screens.tsx, exported through the ./screens subpath as agentPluginScreens.instanceSetup), an async server component that reads the signed-in session (getAuthSession) and resolves the run for that session's user, and the harness's fixture routes carry no session, so the harness cannot mount it (the floor's regenerate-review to successor-gate-opened ships in the one review card)",
   },
   "run-chip-row": {
     surface: "run-chip-row",

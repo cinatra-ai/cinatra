@@ -8,7 +8,9 @@ import {
   claimMaterialization,
   isMaterializationFinalizeConflict,
   readFinalizedMaterialization,
+  restampReusedRevision,
 } from "@/lib/artifacts/materialization-ledger";
+import { isPublishCallInFlightAbort, publishCallInFlightOr } from "@/lib/lifecycle/lifecycle-emit";
 import type { ResolvedArtifactTarget } from "@/lib/artifacts/resolve-bound-artifact-type";
 import type { ScopeDerivedOwnership } from "@/lib/artifacts/run-artifact-materializer";
 
@@ -101,7 +103,7 @@ export async function fileFirstArtifactWrite<S>(input: FirstArtifactFilingInput<
   if (claim.path !== undefined && claim.path !== "materialize_tool") {
     return { kind: "refused", reason: "write_refused", error: input.texts.pathCollision(claim.path) };
   }
-  if (claim.kind === "finalized") return { kind: "served", answer: await input.readStored(refsOf(claim)) };
+  if (claim.kind === "finalized") return { kind: "served", answer: await serveReused(input, refsOf(claim)) };
 
   const ownership = await input.resolveOwnership();
   let created: { artifactId: string; representationRevisionId: string };
@@ -140,8 +142,11 @@ export async function fileFirstArtifactWrite<S>(input: FirstArtifactFilingInput<
     // The concurrent double-drive loser, exactly as the text road recovers it.
     if (isMaterializationFinalizeConflict(err)) {
       const winner = await readFinalizedMaterialization({ orgId: run.orgId, ledgerId: claim.ledgerId });
-      if (winner) return { kind: "served", answer: await input.readStored(refsOf(winner)) };
+      if (winner) return { kind: "served", answer: await serveReused(input, refsOf(winner)) };
     }
+    // cinatra#4762: a publishing call of the run is in flight. Nothing was filed and the same write is taken once
+    // that call has ended, so it reaches the caller's catch as the typed, retryable refusal, never a failed write.
+    if (isPublishCallInFlightAbort(err)) throw publishCallInFlightOr(err);
     // A payload the type's schema rejects is a different answer from a write that failed: restating
     // the data is the fix. Both answers are the caller's fixed texts.
     const schemaRefusal = isSchemaRefusal(err);
@@ -159,6 +164,16 @@ export async function fileFirstArtifactWrite<S>(input: FirstArtifactFilingInput<
     /* best-effort: never fails a filed artifact. */
   }
   return { kind: "filed", ...created };
+}
+
+// cinatra#4762: a re-drive of identical bytes, or the loser of a double drive, writes nothing; the revision's event
+// records this attempt, so an approval of these bytes counts for it. A refusal of the restamp throws to the caller.
+async function serveReused<S>(
+  input: FirstArtifactFilingInput<S>,
+  filed: { artifactId: string; representationRevisionId: string },
+): Promise<S> {
+  await restampReusedRevision({ runId: input.run.runId, orgId: input.run.orgId, ...filed });
+  return input.readStored(filed);
 }
 
 function refsOf(filed: { artifactId: string; representationRevisionId: string }) {

@@ -37,10 +37,6 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import type * as RunPageChromeModule from "../run-page-chrome";
-// The module the fix adds is loaded inside the tests that use it, through a
-// specifier the transform does not resolve when it loads this file: before the
-// fix the file still loads and those tests fail on the missing module.
-// red-first-expect: Cannot find module '/src/run-page-chrome'
 const RUN_PAGE_CHROME = "../run-page-chrome";
 
 /** The round's own words. */

@@ -156,8 +156,7 @@ describe("cinatra#3334 — the streaming surface reads a picture behind its own 
 });
 
 // cinatra#4738: a target whose artifact read refused the reader gets no picture, on the gate's own road or the
-// island's sealed one. Red first at 611f33ba: the pair was read after ANY resolved preparation.
-// red-first-expect: expected "vi.fn()" to not be called at all, but actually been called 1 times
+// island's sealed one.
 describe("cinatra#4738 — no capture pair for a target the reader may not read", () => {
   it.each(["read-denied", "unknown-or-tombstoned"] as const)("neither reads nor mints a pair for a %s floor", async (reason) => {
     const islandPair = vi.fn(async () => null);

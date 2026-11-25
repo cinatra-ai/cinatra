@@ -196,6 +196,18 @@ describe("POST /api/agents/passthrough — artifact_image_generate", () => {
     });
   });
 
+  // red-first-expect: expected 400 to be 409
+  it("answers 409 with its reason while a publishing call of the run is in flight (cinatra#4762)", async () => {
+    generateArtifactImageMock.mockResolvedValue({
+      ok: false,
+      reason: "publish_call_in_flight",
+      error: "a publishing call of this run is in flight; try again once it has ended",
+    });
+    const res = await POST(post(imageBody({ artifactId: "art-1", baseRepresentationRevisionId: "rep-1" })));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ reason: "publish_call_in_flight" });
+  });
+
   it("surfaces the shaper's refusal as a 400 without ever reaching the tool", async () => {
     const res = await POST(post(imageBody({ prompt: "   " })));
     expect(res.status).toBe(400);

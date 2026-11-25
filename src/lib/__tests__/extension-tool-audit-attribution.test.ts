@@ -82,7 +82,6 @@ function metadataOf(audit: ReturnType<typeof auditSpy>, call = 0): Record<string
 }
 
 describe("withAttribution", () => {
-  // red-first-expect: extension-tool-attribution
   let withAttribution: typeof AttributionModule.withAttribution;
   beforeEach(async () => {
     ({ withAttribution } = await import("../extension-tool-attribution"));

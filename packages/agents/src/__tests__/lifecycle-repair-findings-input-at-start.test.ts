@@ -430,7 +430,6 @@ describe("a Regenerate segment run is resolved and fenced before anything is sen
   // reads only `requested` repairs, so the run start that refuses such a run
   // escalates its repair too: the review gets its escalation and is never left
   // waiting on a run that never answers.
-  // red-first-expect: expected "vi.fn()" to be called with arguments: [ 'repair-4424' ]
   it("a run whose inputs are not the declared-input form is failed and its repair escalated", async () => {
     arrange(
       makeRun({ prompt: "A reviewer requested changes", lifecycleRepairRequest: request() }),

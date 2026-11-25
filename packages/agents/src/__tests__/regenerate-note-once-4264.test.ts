@@ -98,7 +98,6 @@ describe("routeRegenerateFindings: the reviewed work decides which review field 
   type Route = (findings: unknown) => { value: string; deliveredFindingIds: string[] } | null;
   const route = () => (lifecyclePolicy as Record<string, unknown>).routeRegenerateFindings as Route | undefined;
 
-  // red-first-expect: expected 'undefined' to be 'function' // Object.is equality
   it("gives a picture's prompt to the declared input, and delivers the note only when its words are the same", () => {
     expect(typeof route()).toBe("function");
     // The review store records the prompt only for a picture with a recorded
@@ -199,7 +198,6 @@ describe("planSegmentDispatch: the declared input's words go there and nowhere e
 
   // THE INPUT'S NAME NEVER DECIDES. A picture step may call its prompt input
   // anything a manifest admits; a text step may call its note input `prompt`.
-  // red-first-expect: expected undefined to be 'a lighthouse at dusk, wide angle' // Object.is equality
   it("a picture step whose declared input is not named prompt is sent the picture's prompt", async () => {
     const planned = await planSegmentDispatch(
       {

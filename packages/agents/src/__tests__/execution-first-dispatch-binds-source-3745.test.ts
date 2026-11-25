@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { createHash } from "node:crypto";
 
 /**
  * cinatra#3745 - the canonical first WayFlow dispatch selects the loader's
@@ -296,5 +297,157 @@ describe("cinatra#4150 - the dispatch records the publish rows of the plan it ru
     storeMock.readAgentTemplateById.mockResolvedValue({ ...makeTemplate(), publishRows: null });
     await run();
     expect(dispatchOf()).toEqual({ attemptId: expect.any(String), publishRows: "{}" });
+  });
+});
+
+// cinatra#4762: the job's frame names the attempt its writers stamp on their output. The entry captures it; the job's
+// own read decides what it dispatches. A retry's reset between the two must not leave the newer attempt running under
+// the older generation, and the dispatch lands only at the generation the job runs.
+describe("cinatra#4762 - the attempt the job dispatches is the one its frame names", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate());
+    storeMock.selectWayflowRunStepToolPolicy.mockImplementation(async (input: { contextId: string }) => ({
+      version: 1, contextId: input.contextId, source: "{}",
+      sourceSha256: "a".repeat(64), executedSourceSha256: "b".repeat(64), declarationSourceSha256: "c".repeat(64),
+    }));
+    storeMock.bindRunStepToolPolicy.mockResolvedValue(undefined);
+  });
+
+  type Seen = { frame: number | undefined; cas: number | undefined };
+  /** Each queued -> running dispatch: the frame's attempt and the CAS's generation; `lose` makes the first one stale. */
+  const dispatchesOf = async (lose = false): Promise<Seen[]> => {
+    const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
+    const seen: Seen[] = [];
+    storeMock.transitionRunStatus.mockImplementation((async (_id: string, from: string, to: string, patch?: { attemptGeneration?: number }) => {
+      if (from !== "queued" || to !== "running") return;
+      seen.push({ frame: mcpRequestContextStorage.getStore()?.runAttempt?.resetGeneration, cas: patch?.attemptGeneration });
+      if (lose && seen.length === 1) throw new storeMock.RunTransitionError({ code: "stale_from_status" });
+    }) as never);
+    await run();
+    return seen;
+  };
+
+  // red-first-expect: to deeply equal [ { frame: 1, cas: 1 } ]
+  it("a reset between the entry's read and the job's own read: the job runs under the generation it read", async () => {
+    // The entry read generation 0; a retry's reset raised it to 1 before the job read the run it dispatches.
+    storeMock.readAgentRunById.mockResolvedValueOnce(makeRun({ resetGeneration: 0 })).mockResolvedValue(makeRun({ resetGeneration: 1 }));
+    expect(await dispatchesOf()).toEqual([{ frame: 1, cas: 1 }]);
+  });
+
+  // red-first-expect: to deeply equal [ { frame: +0, cas: +0 } ]
+  it("with no reset in between, the frame and the dispatch name the same generation", async () => {
+    storeMock.readAgentRunById.mockResolvedValue(makeRun({ resetGeneration: 0 }));
+    expect(await dispatchesOf()).toEqual([{ frame: 0, cas: 0 }]);
+  });
+
+  // red-first-expect: to deeply equal [ { frame: +0, cas: +0 }, …(1) ]
+  it("a dispatch lost to a reset after the job's read starts the job again when the run is queued at a newer generation", async () => {
+    // The entry and the job read generation 0; the CAS finds the run reset and queued again at 1.
+    storeMock.readAgentRunById
+      .mockResolvedValueOnce(makeRun({ resetGeneration: 0 }))
+      .mockResolvedValueOnce(makeRun({ resetGeneration: 0 }))
+      .mockResolvedValue(makeRun({ resetGeneration: 1 }));
+    expect(await dispatchesOf(true)).toEqual([{ frame: 0, cas: 0 }, { frame: 1, cas: 1 }]);
+    // A run that is no longer queued at all: the job skips, as before.
+    storeMock.readAgentRunById.mockReset()
+      .mockResolvedValueOnce(makeRun({ resetGeneration: 0 }))
+      .mockResolvedValueOnce(makeRun({ resetGeneration: 0 }))
+      .mockResolvedValue(makeRun({ resetGeneration: 0, status: "running" }));
+    expect(await dispatchesOf(true)).toEqual([{ frame: 0, cas: 0 }]);
+  });
+
+  // red-first-expect: to deeply equal [ { frame: +0, cas: +0 }, …(1) ]
+  it("a read that fails after a lost dispatch starts the job again, so a queued newer attempt is never left without a job", async () => {
+    // The CAS finds the run reset; the read that would show it queued at 1 fails once, the next one succeeds.
+    storeMock.readAgentRunById
+      .mockResolvedValueOnce(makeRun({ resetGeneration: 0 }))
+      .mockResolvedValueOnce(makeRun({ resetGeneration: 0 }))
+      .mockRejectedValueOnce(new Error("connection terminated"))
+      .mockResolvedValue(makeRun({ resetGeneration: 1 }));
+    expect(await dispatchesOf(true)).toEqual([{ frame: 0, cas: 0 }, { frame: 1, cas: 1 }]);
+    // Started again on a run that is no longer queued, the job dispatches nothing more.
+    storeMock.readAgentRunById.mockReset()
+      .mockResolvedValueOnce(makeRun({ resetGeneration: 0 }))
+      .mockResolvedValueOnce(makeRun({ resetGeneration: 0 }))
+      .mockRejectedValueOnce(new Error("connection terminated"))
+      .mockResolvedValue(makeRun({ resetGeneration: 0, status: "running" }));
+    expect(await dispatchesOf(true)).toEqual([{ frame: 0, cas: 0 }]);
+  });
+});
+
+// cinatra#4762: a template compiled before the publishing route check is refused where its run is dispatched. The real
+// selection reads the loader's source (a fetch double answers it); a publishing step with a direct external call fails
+// the run with the compiler's fixed text, and nothing is bound or sent.
+describe("cinatra#4762 - a stored template's publishing calls are checked at the first dispatch", () => {
+  const sha = (t: string) => createHash("sha256").update(t).digest("hex");
+  const api = (id: string, url: string) => ({ component_type: "ApiNode", id, name: id, url, http_method: "POST", data: {} });
+  const branch = (node: Record<string, unknown>) => ({ component_type: "Flow", id: `${String(node.id)}_flow`, name: `${String(node.id)}_flow`,
+    start_node: { $component_ref: "s" }, nodes: [{ $component_ref: "s" }, { $component_ref: node.id }],
+    $referenced_components: { s: { component_type: "StartNode", id: "s", name: "s" }, [String(node.id)]: node } });
+  /** The loader's composed source of a pre-upgrade publishing ParallelFlowNode: an artifact branch beside a direct call. */
+  const executed = (directUrl: string, publishes = true) => JSON.stringify({
+    component_type: "Flow", id: "pack", name: "pack", start_node: { $component_ref: "start" },
+    nodes: ["start", "cinatra_publish_gate__publish", "publish", "end"].map((id) => ({ $component_ref: id })),
+    control_flow_connections: [], data_flow_connections: [],
+    $referenced_components: {
+      start: { component_type: "StartNode", id: "start", name: "start" },
+      cinatra_publish_gate__publish: { component_type: "InputMessageNode", id: "cinatra_publish_gate__publish", name: "gate" },
+      publish: { component_type: "ParallelFlowNode", id: "publish", name: "publish",
+        subflows: [branch(api("write_artifact", "{{CINATRA_BASE_URL}}/api/agents/passthrough")), branch(api("direct_post", directUrl))],
+        ...(publishes ? { metadata: { cinatra: { publishes: true } } } : {}) },
+      end: { component_type: "EndNode", id: "end", name: "end" },
+    },
+  });
+
+  let graph = "";
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.stubEnv("WAYFLOW_BASE_URL", "http://wayflow.test");
+    vi.stubEnv("CINATRA_BRIDGE_TOKEN", "bridge-test-value");
+    const { resolveWayflowUrl } = await import("../wayflow-url");
+    vi.mocked(resolveWayflowUrl).mockReturnValue("http://wayflow.test/agents/cinatra/test-agent/");
+    storeMock.readAgentTemplateById.mockResolvedValue({ ...makeTemplate(), publishingSteps: ["publish"] });
+    // Reset, not only cleared: a queued once-answer of an earlier case must not decide this dispatch.
+    storeMock.readAgentRunById.mockReset().mockResolvedValue(makeRun());
+    storeMock.transitionRunStatus.mockReset().mockImplementation(async () => undefined);
+    const { selectWayflowRunStepToolPolicy } = await vi.importActual<typeof import("../agent-run-serde")>("../agent-run-serde");
+    storeMock.selectWayflowRunStepToolPolicy.mockImplementation((input: { agentUrl: string; contextId: string }) =>
+      selectWayflowRunStepToolPolicy(input, (async () => new Response(JSON.stringify({ selectedSourceBinding: {
+        sourceSha256: "a".repeat(64), executedSourceSha256: "b".repeat(64), declarationSourceSha256: sha(graph), declarationSource: graph,
+      } }))) as unknown as typeof fetch));
+  });
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    const { resolveWayflowUrl } = await import("../wayflow-url");
+    vi.mocked(resolveWayflowUrl).mockReturnValue("http://wayflow.test");
+  });
+
+  const failedWith = () => (storeMock.transitionRunStatus.mock.calls as unknown as Array<[string, string, string, { error?: string }]>)
+    .filter(([, from, to]) => from === "running" && to === "failed").map(([, , , patch]) => patch?.error);
+
+  // red-first-expect: expected "vi.fn()" to not be called at all, but actually been called 1 times
+  it("a publishing ParallelFlowNode with a direct external call fails the run with the fixed text, and nothing is bound or sent", async () => {
+    graph = executed("https://api.example.invalid/v2/posts");
+    await run();
+    expect(sendTask).not.toHaveBeenCalled();
+    expect(storeMock.bindRunStepToolPolicy).not.toHaveBeenCalled();
+    expect(failedWith()).toEqual([expect.stringMatching(/^PUBLISH_CALL_UNCHECKED: node "direct_post" of publishing step "publish" calls a URL /)]);
+    expect(failedWith()[0]).not.toContain("example.invalid");
+  });
+
+  it("a stored template whose publishing calls all go to a checked host route starts", async () => {
+    graph = executed("{{CINATRA_BASE_URL}}/api/llm-bridge");
+    await run();
+    expect(storeMock.bindRunStepToolPolicy).toHaveBeenCalledTimes(1);
+    expect(sendTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("a stored template without publishing steps is unaffected", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate());
+    graph = executed("https://api.example.invalid/v2/posts", false);
+    await run();
+    expect(storeMock.bindRunStepToolPolicy).toHaveBeenCalledTimes(1);
+    expect(sendTask).toHaveBeenCalledTimes(1);
   });
 });

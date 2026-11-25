@@ -22,9 +22,12 @@ import "server-only";
 import {
   emitArtifactReviewGate,
   emitDeclaredReviewGateFamily,
+  hasPendingProducedEventForAttempt,
   listReviewGatesForRun,
+  listReviewLineageForRun,
   readReviewGate,
   ArtifactReviewGateError,
+  type GateStoreExecutor,
 } from "./artifact-review-gate-store";
 import { decideDeclaredReviewForGate } from "./lifecycle-declared-review-store";
 import type { DeclaredReviewDecision } from "@/lib/lifecycle/lifecycle-review-core";
@@ -50,6 +53,9 @@ export type ArtifactReviewGateSeam = {
     orgId: string;
     reviewTaskId: string;
     targets: unknown;
+    /** cinatra#4762 — the reset generation of the attempt raising the gate, as the run record the executor read for
+     *  the attempt names it. Required, so every raise names its attempt; null stamps -1, which never counts. */
+    runGeneration: number | null;
   }): Promise<
     | { ok: true }
     | { ok: false; code: "invalid-targets" | "pin-conflict"; message: string }
@@ -64,6 +70,22 @@ export type ArtifactReviewGateSeam = {
    *  sends the person to the first artifact still waiting to be read, and only
    *  the run's own gate list can say which that is. */
   listGates(runId: string): Promise<Array<{ reviewTaskId: string; status: string }>>;
+  /** cinatra#4762 — every review this run owns, projected to what the publish gate needs to see that an approved review
+   *  came before it in the attempt that reached it: the gate's id, the status, the settled disposition, when the review
+   *  was raised, the run's reset generation at that raise (null: raised before the column existed), the resolving
+   *  fingerprint (a terminal decision's, or the optional review's synthetic expiry; null while pending), the decider of
+   *  record (`resolved_by`: the deciding user's id, null for a carrier with no user id or the expiry) and the successor
+   *  gate its repair recorded (null: none), the lineage that clears a change request, and the later attempt that
+   *  reproduced exactly the gate's pinned revisions (null: none; listReviewLineageForRun). `executor`: a transaction
+   *  of the publish store to read in (its run-row lock), else the pool. */
+  listReviews(runId: string, executor?: unknown): Promise<Array<{
+    id: string; status: string; disposition: string | null; createdAt: Date; runGeneration: number | null;
+    fingerprint: string | null; resolvedBy: string | null; successorGateId: string | null; reproducedGeneration: number | null;
+  }>>;
+  /** cinatra#4762 — does a produced event of this attempt still wait for the review orchestration (a review it may raise
+   *  is not settled yet)? An event with no generation (written before the column existed) counts for every attempt.
+   *  `executor`: as for listReviews. */
+  hasPendingProducedReview(input: { orgId: string; runId: string; generation: number }, executor?: unknown): Promise<boolean>;
 };
 
 /** Boot-time binding (idempotent, last write wins). Binds the run executor's
@@ -105,6 +127,21 @@ export function bindArtifactReviewGateSeam(): void {
     async listGates(runId) {
       const gates = await listReviewGatesForRun(runId);
       return gates.map((gate) => ({ reviewTaskId: gate.reviewTaskId, status: gate.status }));
+    },
+    async listReviews(runId, executor) {
+      const gates = executor === undefined
+        ? await listReviewLineageForRun(runId)
+        : await listReviewLineageForRun(runId, executor as GateStoreExecutor);
+      return gates.map((gate) => ({
+        id: gate.id, status: gate.status, disposition: gate.disposition, createdAt: gate.createdAt,
+        runGeneration: gate.runGeneration ?? null, fingerprint: gate.fingerprint ?? null, resolvedBy: gate.resolvedBy ?? null,
+        successorGateId: gate.successorGateId ?? null, reproducedGeneration: gate.reproducedGeneration ?? null,
+      }));
+    },
+    async hasPendingProducedReview(input, executor) {
+      return executor === undefined
+        ? hasPendingProducedEventForAttempt(input)
+        : hasPendingProducedEventForAttempt(input, executor as GateStoreExecutor);
     },
   };
   (

@@ -2,10 +2,6 @@
 import { describe, expect, it } from "vitest";
 import type * as RunWindowOwnershipModule from "../../../../../tests/e2e/design/conformance/run-window-ownership";
 import type * as OwnershipDataModule from "../run-window-ownership-fixture-data";
-// The modules the fix adds are loaded inside the tests that use them, through a
-// specifier the transform does not resolve when it loads this file: before the
-// fix the file still loads and those tests fail on the first missing module.
-// red-first-expect: Cannot find module '/tests/e2e/design/conformance/run-window-ownership'
 const RUN_WINDOW_OWNERSHIP = "../../../../../tests/e2e/design/conformance/run-window-ownership";
 const OWNERSHIP_DATA = "../run-window-ownership-fixture-data";
 let readRunWindowOwnership!: typeof RunWindowOwnershipModule.readRunWindowOwnership;
