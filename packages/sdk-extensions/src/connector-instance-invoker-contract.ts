@@ -91,15 +91,15 @@ export type SiteToolCallInput = {
    */
   serverId?: string;
   /**
-   * OPTIONAL row binding, BEST EFFORT (cinatra#3745): the `rawAnnotations` of
-   * the `SiteToolRow` the caller listed and checked, sent back unchanged. A
-   * host that enforces it refuses the call with `catalog_entry_changed`
-   * (nothing executed) unless the row it resolves now carries equal
-   * annotations. A host from before cinatra#3745 IGNORES it, so a caller must
-   * never rely on it here: a call that relies on the binding uses
-   * `invokeSiteToolGuarded`, which an older host does not have.
+   * NOT accepted here (cinatra#3745): a call that relies on the listed row's
+   * annotations or on a read-only class goes through `invokeSiteToolGuarded`.
+   * A host that has the guarded method REFUSES an `invokeSiteTool` call that
+   * carries either field (`guarded_call_required`, nothing executed); a host
+   * from before it ignores them. Typed `never` so such a call does not compile.
    */
-  expectedRawAnnotations?: Record<string, unknown>;
+  expectedRawAnnotations?: never;
+  /** NOT accepted here; see `expectedRawAnnotations`. */
+  expectedClass?: never;
 };
 
 /**
@@ -108,7 +108,7 @@ export type SiteToolCallInput = {
  * only when every guard below holds against the row the host resolves now, and
  * otherwise refuses with nothing executed, parked or hooked.
  */
-export type GuardedSiteToolCallInput = Omit<SiteToolCallInput, "expectedRawAnnotations"> & {
+export type GuardedSiteToolCallInput = Omit<SiteToolCallInput, "expectedRawAnnotations" | "expectedClass"> & {
   /**
    * REQUIRED: the `rawAnnotations` of the `SiteToolRow` the caller listed and
    * checked, sent back unchanged. The host refuses with
@@ -222,18 +222,22 @@ export type HostConnectorInstanceInvokerService = {
    * A connector call that RELIES on a guard (a read tool that checked the
    * listed row, for example) MUST go through this method and MUST refuse on its
    * own when the method is absent — never fall back to `invokeSiteTool`, which
-   * an older host executes without the guards:
+   * an older host executes without the guards (and which a host with this
+   * method refuses when it carries a guard field):
    *
-   *   if (typeof invoker.invokeSiteToolGuarded !== "function") {
+   *   const guarded = invoker.invokeSiteToolGuarded;
+   *   if (typeof guarded !== "function") {
    *     throw new Error("guarded site-tool calls are unsupported by this host");
    *   }
-   *   return invoker.invokeSiteToolGuarded({ ...call, expectedRawAnnotations: row.rawAnnotations, expectedClass: "read" });
+   *   return guarded({ ...call, expectedRawAnnotations: row.rawAnnotations, expectedClass: "read" });
    *
-   * Even without the check, calling the absent method throws before anything
-   * is sent, so an older host fails closed. A connector cannot value-import an
-   * SDK helper (its serverEntry graph keeps the SDK type-only), so the check is
-   * this inline test. A future guard field gets a NEW method, never a new
-   * field here, so the same presence test keeps meaning "all guards enforced".
+   * The member is optional, so under `strict` a call without that presence
+   * test does not compile; at run time, calling the absent method throws
+   * before anything is sent. There is no SDK helper for this: a connector's
+   * serverEntry graph may import the SDK for types only (the host refuses a
+   * value import at install), so the presence test is written inline. A future
+   * guard field gets a NEW method, never a new field here, so the same
+   * presence test keeps meaning "all guards enforced".
    */
   invokeSiteToolGuarded?: (input: GuardedSiteToolCallInput) => Promise<unknown>;
   /** Governed catalog listing (gate runs BEFORE any catalog read, B2). */

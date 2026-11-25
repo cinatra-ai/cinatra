@@ -678,18 +678,42 @@ export async function acquireSnapshots(
 
 /** Canonical JSON of an annotations record: object keys sorted at every
  * depth, array order kept. A value that is not a plain object (absent, null,
- * an array, a primitive) reads as `null` here, so it never equals a record. */
+ * an array, a primitive) reads as `null` here, so it never equals a record.
+ *
+ * The text is written straight from the sorted own keys, never through a new
+ * object: assigning a caller- or site-owned key into `{}` would run the
+ * `__proto__` setter instead of creating the key (so an own `__proto__`
+ * annotation would vanish from the comparison), and an object's key order
+ * puts integer-like keys first whatever the sort said. A key whose value is
+ * `undefined`, a function or a symbol drops out, as in `JSON.stringify`; in an
+ * array such a value reads as `null`. A value it cannot write (a BigInt, a
+ * cycle) throws; the caller refuses the call. */
 function canonicalAnnotationsJson(value: unknown): string {
-  const sortKeys = (v: unknown): unknown => {
-    if (v === null || typeof v !== "object") return v;
-    if (Array.isArray(v)) return v.map(sortKeys);
+  const dropped = (v: unknown) => v === undefined || typeof v === "function" || typeof v === "symbol";
+  const write = (v: unknown): string => {
+    if (v === null || typeof v !== "object") {
+      if (typeof v === "bigint") throw new TypeError("annotation value cannot be compared");
+      return JSON.stringify(v);
+    }
+    if (Array.isArray(v)) return `[${v.map((item) => (dropped(item) ? "null" : write(item))).join(",")}]`;
     const obj = v as Record<string, unknown>;
-    const out: Record<string, unknown> = {};
-    for (const key of Object.keys(obj).sort()) out[key] = sortKeys(obj[key]);
-    return out;
+    const keys = Object.keys(obj)
+      .filter((key) => !dropped(obj[key]))
+      .sort();
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${write(obj[key])}`).join(",")}}`;
   };
   const isRecord = value !== null && typeof value === "object" && !Array.isArray(value);
-  return JSON.stringify(isRecord ? sortKeys(value) : null);
+  return isRecord ? write(value) : "null";
+}
+
+/** Whether two annotations values are canonically equal; a value that cannot
+ * be written never equals. */
+function sameAnnotations(a: unknown, b: unknown): boolean {
+  try {
+    return canonicalAnnotationsJson(a) === canonicalAnnotationsJson(b);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -720,7 +744,7 @@ function refuseUnboundEntry(
 ): void {
   if (input.expectedRawAnnotations !== undefined) {
     const current = entry.rawAnnotations && typeof entry.rawAnnotations === "object" ? entry.rawAnnotations : {};
-    if (canonicalAnnotationsJson(current) !== canonicalAnnotationsJson(input.expectedRawAnnotations)) {
+    if (!sameAnnotations(current, input.expectedRawAnnotations)) {
       throw new InvokerError(
         "catalog_entry_changed",
         "the site tool changed since it was listed; list the tools again before calling it",

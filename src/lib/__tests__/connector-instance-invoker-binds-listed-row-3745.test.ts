@@ -178,6 +178,70 @@ describe("invokeConnectorInstanceTool — expectedRawAnnotations binds the call 
   });
 });
 
+describe("invokeConnectorInstanceTool — the annotations comparison reads own keys only (cinatra#3745)", () => {
+  it("refuses a row that differs from the listed one only by an own __proto__ annotation", async () => {
+    const changed = JSON.parse('{"readOnlyHint":true,"__proto__":{"destructiveHint":true}}') as Record<string, unknown>;
+    expect(Object.keys(changed)).toContain("__proto__");
+    const { deps, callWireTool } = makeDeps(snapshot([{ name: READ_TOOL, rawAnnotations: changed }], "rev-a"));
+    const call = invokeConnectorInstanceTool(
+      { connectorKey: "wordpress", toolName: READ_TOOL, args: {}, actor: ACTOR, expectedRawAnnotations: { readOnlyHint: true } },
+      deps,
+    );
+    // red-first-expect: promise resolved "{ success: true, data: { ok: 1 } }" instead of rejecting
+    await expect(call).rejects.toMatchObject({ code: "catalog_entry_changed" });
+    expect(callWireTool).not.toHaveBeenCalled();
+  });
+
+  it("refuses a caller whose listed row carries an own __proto__ annotation the current row lacks", async () => {
+    const listed = JSON.parse('{"readOnlyHint":true,"__proto__":{"x":1}}') as Record<string, unknown>;
+    const { deps, callWireTool } = makeDeps(snapshot([{ name: READ_TOOL, rawAnnotations: { readOnlyHint: true } }], "rev-a"));
+    const call = invokeConnectorInstanceTool(
+      { connectorKey: "wordpress", toolName: READ_TOOL, args: {}, actor: ACTOR, expectedRawAnnotations: listed },
+      deps,
+    );
+    await expect(call).rejects.toMatchObject({ code: "catalog_entry_changed" });
+    expect(callWireTool).not.toHaveBeenCalled();
+  });
+
+  it("compares integer-like keys by content, whatever their insertion order", async () => {
+    const current = JSON.parse('{"a":1,"10":{"z":1,"2":2},"2":"x"}') as Record<string, unknown>;
+    const { deps, callWireTool } = makeDeps(snapshot([{ name: READ_TOOL, rawAnnotations: current }], "rev-a"));
+    await invokeConnectorInstanceTool(
+      {
+        connectorKey: "wordpress",
+        toolName: READ_TOOL,
+        args: {},
+        actor: ACTOR,
+        expectedRawAnnotations: JSON.parse('{"2":"x","10":{"2":2,"z":1},"a":1}') as Record<string, unknown>,
+      },
+      deps,
+    );
+    expect(callWireTool).toHaveBeenCalledTimes(1);
+    const changed = invokeConnectorInstanceTool(
+      {
+        connectorKey: "wordpress",
+        toolName: READ_TOOL,
+        args: {},
+        actor: ACTOR,
+        expectedRawAnnotations: JSON.parse('{"2":"y","10":{"2":2,"z":1},"a":1}') as Record<string, unknown>,
+      },
+      deps,
+    );
+    await expect(changed).rejects.toMatchObject({ code: "catalog_entry_changed" });
+    expect(callWireTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses an annotations value it cannot compare instead of throwing past the refusal", async () => {
+    const { deps, callWireTool } = makeDeps(snapshot([{ name: READ_TOOL, rawAnnotations: { readOnlyHint: true } }], "rev-a"));
+    const call = invokeConnectorInstanceTool(
+      { connectorKey: "wordpress", toolName: READ_TOOL, args: {}, actor: ACTOR, expectedRawAnnotations: { readOnlyHint: true, n: BigInt(1) } },
+      deps,
+    );
+    await expect(call).rejects.toMatchObject({ code: "catalog_entry_changed" });
+    expect(callWireTool).not.toHaveBeenCalled();
+  });
+});
+
 describe("invokeConnectorInstanceTool — expectedClass: \"read\" (cinatra#3745)", () => {
   it("refuses a write-class entry: nothing executes, no hook fires", async () => {
     const { deps, callWireTool, destructiveFire, contentReviewFire } = makeDeps(

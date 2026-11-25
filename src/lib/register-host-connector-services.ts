@@ -1563,7 +1563,7 @@ export function registerHostConnectorServices(): void {
   // cinatra#3745 — one call road for both invoke methods. `guards` carries
   // only fields the invoker enforces; each can only add a refusal.
   const invokeSiteToolWith = async (
-    input: SiteToolCallInput,
+    input: Pick<SiteToolCallInput, "toolName" | "args" | "instanceId" | "serverId">,
     guards: Pick<InvokeConnectorInstanceToolInput, "expectedRawAnnotations" | "expectedClass">,
   ) => {
     const { actor, boundConnectorKey, surface, frameRunId } = await resolveConnectorInstanceInvokerContext(
@@ -1590,13 +1590,19 @@ export function registerHostConnectorServices(): void {
     );
   };
   register(svc.connectorInstanceInvoker, {
-    // The best-effort binding: a connector already sends the listed row's
-    // annotations here (an older host ignores them, so no caller relies on it).
-    invokeSiteTool: async (input) =>
-      invokeSiteToolWith(
-        input,
-        input.expectedRawAnnotations !== undefined ? { expectedRawAnnotations: input.expectedRawAnnotations } : {},
-      ),
+    // cinatra#3745 — the unguarded call never honours and never drops a guard
+    // field: a call that carries one is refused, so a connector written for
+    // the guarded call cannot fall back to this one unnoticed on this host.
+    invokeSiteTool: async (input) => {
+      const carried = input as { expectedRawAnnotations?: unknown; expectedClass?: unknown };
+      if (carried.expectedRawAnnotations !== undefined || carried.expectedClass !== undefined) {
+        throw new InvokerError(
+          "guarded_call_required",
+          "a site tool call that carries expectedRawAnnotations or expectedClass must use invokeSiteToolGuarded",
+        );
+      }
+      return invokeSiteToolWith(input, {});
+    },
     // cinatra#3745 — the GUARDED call; its presence tells a connector that this
     // host enforces the guards (an older host has no such method, so a
     // connector relying on a guard refuses there instead of calling unguarded).
