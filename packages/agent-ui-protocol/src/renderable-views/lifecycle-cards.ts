@@ -2032,7 +2032,7 @@ function readTargetHeaderMoreFacts(
     }
     const parsed = z.array(boundedText).min(1).max(room).safeParse(entry);
     if (!parsed.success) return undefined;
-    if (headers[index]!.facts.length !== LIFECYCLE_TARGET_HEADER_WIRE_FACTS_MAX) return undefined;
+    if (headers.at(index)?.facts.length !== LIFECYCLE_TARGET_HEADER_WIRE_FACTS_MAX) return undefined;
     out.push(parsed.data);
   }
   return out;
@@ -2349,8 +2349,8 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
       carriedHeaders === null
         ? null
         : carriedHeaders.headers.map((header, index) => {
-            const drawnBy = renderers === null ? null : renderers[index];
-            const more = moreFacts === null ? null : moreFacts[index];
+            const drawnBy = renderers === null ? null : renderers.at(index);
+            const more = moreFacts === null ? null : moreFacts.at(index);
             const withFacts = more === null || more === undefined ? header : { ...header, facts: [...header.facts, ...more] };
             return drawnBy === null || drawnBy === undefined ? withFacts : { ...withFacts, drawnBy };
           });
