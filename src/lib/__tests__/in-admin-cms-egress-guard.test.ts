@@ -158,11 +158,27 @@ function assertGovernedWordPressRouting(code: string): void {
   const schemaShape = schemaInit && ts.isCallExpression(schemaInit) ? schemaInit.arguments[0] : undefined;
   if (!schemaShape || !ts.isObjectLiteralExpression(schemaShape)) throw new Error("Missing siteToolCallSchema shape");
   expect(schemaShape.properties.map(propertyName).sort()).toEqual(["args", "argsJson", "instanceId", "serverId", "toolName"]);
+  // Both functions that turn the caller's input into the forwarded arguments
+  // are pinned WHOLE (their exact statement lists), so no early return, cast or
+  // skipped check can sit in front of the schema parse, dead code or not.
   const parser = namedFunction(source, "parseSiteToolCallInput");
-  expect(callsNamed(parser.body!, "siteToolCallSchema.parse")).toHaveLength(1);
-  const parserText = parser.body!.getText().replace(/\s+/g, "");
-  expect(parserText).toContain("const{argsJson,args,...rest}=siteToolCallSchema.parse(raw);");
-  expect(parserText).toContain("return{...rest,args:argsJson!==undefined?parseArgsJson(argsJson):(args??{})};");
+  expect(parser.parameters.map((parameter) => parameter.getText())).toEqual(["raw: unknown"]);
+  expect(compactOf(parser.body!)).toBe(
+    "{const{argsJson,args,...rest}=siteToolCallSchema.parse(raw);"
+    + "if(argsJson!==undefined&&args!==undefined)thrownewError(SITE_TOOL_ARGS_BOTH_REFUSAL);"
+    + "return{...rest,args:argsJson!==undefined?parseArgsJson(argsJson):(args??{})};}",
+  );
+  const argsJsonParser = namedFunction(source, "parseArgsJson");
+  expect(argsJsonParser.parameters.map((parameter) => parameter.getText())).toEqual(["text: string"]);
+  expect(compactOf(argsJsonParser.body!)).toBe(
+    "{if(text.length>SITE_TOOL_ARGS_JSON_MAX_BYTES||newTextEncoder().encode(text).length>SITE_TOOL_ARGS_JSON_MAX_BYTES)"
+    + "{thrownewError(SITE_TOOL_ARGS_JSON_TOO_LARGE_REFUSAL);}"
+    + "letparsed:unknown;try{parsed=JSON.parse(text);}catch{thrownewError(SITE_TOOL_ARGS_JSON_REFUSAL);}"
+    + 'if(typeofparsed!=="object"||parsed===null||Array.isArray(parsed)){thrownewError(SITE_TOOL_ARGS_JSON_REFUSAL);}'
+    + "constchecked=siteToolCallSchema.shape.args.safeParse(parsed);"
+    + "if(!checked.success||checked.data===undefined)thrownewError(SITE_TOOL_ARGS_JSON_REFUSAL);"
+    + "returnchecked.data;}",
+  );
 
   // The governed invoker is named in exactly one function: no helper, parser or
   // row check reaches the site by another path.
@@ -184,27 +200,46 @@ function assertGovernedWordPressRouting(code: string): void {
   const forward = namedFunction(source, "forwardSiteTool");
   expect(forward.parameters.map((parameter) => parameter.name.getText())).toEqual(["input", "tool"]);
   const handler = forward.body!;
-  const compact = handler.getText().replace(/\s+/g, "");
-  expect(compact).toContain("constinvoke=getWordPressDeps().invokeSiteTool;");
-  // The unavailable-channel branch must throw; unrelated strings elsewhere
-  // in the connector cannot stand in for the actual handler edge.
-  const unavailable = handler.statements.find(
-    (node): node is ts.IfStatement => ts.isIfStatement(node)
-      && node.expression.getText().replace(/\s+/g, "") === 'typeofinvoke!=="function"',
-  );
-  expect(unavailable?.thenStatement.getText()).toMatch(/^\{\s*throw new Error\(/);
-  const updateBranch = handler.statements.find(
-    (node): node is ts.IfStatement => ts.isIfStatement(node)
-      && node.expression.getText().replace(/\s+/g, "") === "CONTENT_REVIEW_TARGET_ABILITIES.has(input.toolName)",
-  );
-  expect(updateBranch?.thenStatement.getText().replace(/\s+/g, ""))
-    .toBe("{returncallReviewGatedSiteTool(invoke,input,tool);}");
-  expect(code).toMatch(/const EWPA_UPDATE_POST_ABILITY\s*=\s*["']ewpa\/update-post["']/);
-  expect(code).toMatch(/CONTENT_REVIEW_TARGET_ABILITIES[^;]*new Set\(\[EWPA_UPDATE_POST_ABILITY\]\)/);
+  // The shared forward is pinned WHOLE as a statement list, so nothing can sit
+  // in front of the governed call, as an early return or as dead code: the
+  // invoker lookup, the unavailable-channel refusal (the only statement of its
+  // block is a throw), the update branch (its only statement is the return to
+  // the review-gated helper), and the one returned invoker call.
+  expect(handler.statements.map((statement) => statementKind(statement))).toEqual([
+    "VariableStatement",
+    "IfStatement",
+    "IfStatement",
+    "ReturnStatement",
+  ]);
+  const [lookup, unavailable, updateBranch, finalReturn] = handler.statements as unknown as [
+    ts.VariableStatement, ts.IfStatement, ts.IfStatement, ts.ReturnStatement,
+  ];
+  expect(compactOf(lookup)).toBe("constinvoke=getWordPressDeps().invokeSiteTool;");
+  expect(compactOf(unavailable.expression)).toBe('typeofinvoke!=="function"');
+  expect(unavailable.elseStatement).toBeUndefined();
+  expect(ts.isBlock(unavailable.thenStatement) && unavailable.thenStatement.statements.map((statement) => statementKind(statement)))
+    .toEqual(["ThrowStatement"]);
+  expect(compactOf(updateBranch.expression)).toBe("CONTENT_REVIEW_TARGET_ABILITIES.has(input.toolName)");
+  expect(updateBranch.elseStatement).toBeUndefined();
+  expect(compactOf(updateBranch.thenStatement)).toBe("{returncallReviewGatedSiteTool(invoke,input,tool);}");
+  const topLevelDeclaration = (name: string): ts.VariableDeclaration | undefined =>
+    source.statements
+      .filter(ts.isVariableStatement)
+      .flatMap((statement) => [...statement.declarationList.declarations])
+      .find((declaration) => declaration.name.getText() === name);
+  expect(compactOf(topLevelDeclaration("EWPA_UPDATE_POST_ABILITY")!)).toBe('EWPA_UPDATE_POST_ABILITY="ewpa/update-post"');
+  expect(compactOf(topLevelDeclaration("CONTENT_REVIEW_TARGET_ABILITIES")!))
+    .toBe("CONTENT_REVIEW_TARGET_ABILITIES:ReadonlySet<string>=newSet([EWPA_UPDATE_POST_ABILITY])");
   const genericCalls = callsNamed(handler, "invoke");
   expect(genericCalls).toHaveLength(1);
-  expect(ts.isReturnStatement(genericCalls[0].parent)).toBe(true);
+  expect(genericCalls[0].parent).toBe(finalReturn);
 
+  // The review-gated helper is pinned by what governs its one call: the
+  // instance and post checks and the write-authority gate are statements of
+  // its own top level (never inside a branch that can be skipped), in that
+  // order, ahead of its one invoker call, which is its ONLY return. Its
+  // argument checks between them stay free text: they only refuse, and the
+  // connector's own suite owns them.
   const reviewGated = namedFunction(source, "callReviewGatedSiteTool");
   expect(reviewGated.parameters[2]?.name.getText()).toBe("tool");
   const update = reviewGated.body!;
@@ -214,60 +249,73 @@ function assertGovernedWordPressRouting(code: string): void {
   expect(authority).toHaveLength(1);
   expect(ts.isAwaitExpression(authority[0].parent)).toBe(true);
   expect(authority[0].getText()).toBe("requireWriteAuthority(instanceId, tool)");
-  expect(authority[0].getStart()).toBeLessThan(updateCalls[0].getStart());
-  expect(update.getText()).toMatch(/if\s*\(!instanceId\)\s*\{\s*throw/);
-  expect(update.getText()).toMatch(/if\s*\(!Number\.isInteger\(postId\)\s*\|\|\s*postId\s*<=\s*0\)\s*\{\s*throw/);
-  // What each invoker call carries is pinned field by field, so none can be
-  // added, taken from elsewhere or changed: the tool and its arguments exactly
-  // as the caller gave them (no actor, connector key or kind: those are
+  const updateReturn = update.statements[update.statements.length - 1];
+  expect(ts.isReturnStatement(updateReturn) && updateReturn.expression && ts.isCallExpression(updateReturn.expression)
+    ? updateReturn.expression : undefined).toBe(updateCalls[0]);
+  expect(returnsOf(update)).toEqual([updateReturn]);
+  const topLevel = update.statements.map((statement) => compactOf(statement));
+  const at = (predicate: (text: string) => boolean): number => topLevel.findIndex(predicate);
+  const instanceCheck = at((text) => /^if\(!instanceId\)\{throw/.test(text));
+  const postCheck = at((text) => /^if\(!Number\.isInteger\(postId\)\|\|postId<=0\)\{throw/.test(text));
+  const gate = at((text) => text === "awaitrequireWriteAuthority(instanceId,tool);");
+  expect(instanceCheck).toBeGreaterThanOrEqual(0);
+  expect(postCheck).toBeGreaterThan(instanceCheck);
+  expect(gate).toBeGreaterThan(postCheck);
+  expect(gate).toBe(update.statements.length - 2); // right before the call: nothing between the gate and the forward
+
+  // What each invoker call carries is pinned element by element, predicates of
+  // the conditional spreads included, so none can be added, taken from
+  // elsewhere, changed or switched off: the tool and its arguments exactly as
+  // the caller gave them (no actor, connector key or kind: those are
   // host-derived), the instance and server coordinates, and, on the read path
   // only, the annotations the validated row had. The write-gated update call
   // carries no annotations.
-  expect(invokerFields(genericCalls[0])).toEqual([
-    ["toolName", "input.toolName"],
-    ["args", "input.args"],
-    ["instanceId", "input.instanceId"],
-    ["serverId", "input.serverId"],
-    ["expectedRawAnnotations", "input.expectedRawAnnotations"],
+  expect(invokerElements(genericCalls[0])).toEqual([
+    "toolName:input.toolName",
+    "args:input.args",
+    "...(input.instanceId!==undefined?{instanceId:input.instanceId}:{})",
+    "...(input.serverId!==undefined?{serverId:input.serverId}:{})",
+    "...(input.expectedRawAnnotations!==undefined?{expectedRawAnnotations:input.expectedRawAnnotations}:{})",
   ]);
-  expect(invokerFields(updateCalls[0])).toEqual([
-    ["toolName", "input.toolName"],
-    ["args", "input.args"],
-    ["instanceId", "instanceId"],
-    ["serverId", "input.serverId"],
+  expect(invokerElements(updateCalls[0])).toEqual([
+    "toolName:input.toolName",
+    "args:input.args",
+    "instanceId",
+    "...(input.serverId!==undefined?{serverId:input.serverId}:{})",
   ]);
 }
 
-// The fields of an invoker call's one object argument as [name, value text]:
-// plain properties and `...(cond ? { name: value } : {})` spreads. Any other
-// element is refused, so a new kind of element cannot slip past the pin.
-function invokerFields(call: ts.CallExpression): Array<[string, string]> {
+// The statement kinds this guard tells apart (`ts.SyntaxKind` names two kinds alike).
+function statementKind(statement: ts.Statement): string {
+  if (ts.isVariableStatement(statement)) return "VariableStatement";
+  if (ts.isIfStatement(statement)) return "IfStatement";
+  if (ts.isReturnStatement(statement)) return "ReturnStatement";
+  if (ts.isThrowStatement(statement)) return "ThrowStatement";
+  return "OtherStatement";
+}
+
+// A node's source without whitespace; a trailing comma is formatting, not a change.
+function compactOf(node: ts.Node): string {
+  return node.getText().replace(/\s+/g, "").replace(/,([)}\]])/g, "$1");
+}
+
+// The return statements of a body, not those of functions nested in it.
+function returnsOf(body: ts.Node): ts.ReturnStatement[] {
+  const found: ts.ReturnStatement[] = [];
+  (function visit(node: ts.Node) {
+    if (ts.isReturnStatement(node)) found.push(node);
+    if (node !== body && ts.isFunctionLike(node)) return;
+    ts.forEachChild(node, visit);
+  })(body);
+  return found;
+}
+
+// The elements of an invoker call's one object argument, each as its exact
+// source text (a spread's condition and object included), in order.
+function invokerElements(call: ts.CallExpression): string[] {
   const argument = call.arguments[0];
   if (!argument || !ts.isObjectLiteralExpression(argument)) throw new Error("Missing governed invocation coordinates");
-  const fields: Array<[string, string]> = [];
-  const take = (element: ts.ObjectLiteralElementLike): void => {
-    if (ts.isPropertyAssignment(element)) {
-      fields.push([propertyName(element), element.initializer.getText().replace(/\s+/g, "")]);
-    } else if (ts.isShorthandPropertyAssignment(element)) {
-      fields.push([propertyName(element), element.name.getText()]);
-    } else if (ts.isSpreadAssignment(element)) {
-      const spread = ts.isParenthesizedExpression(element.expression) ? element.expression.expression : element.expression;
-      if (
-        ts.isConditionalExpression(spread)
-        && ts.isObjectLiteralExpression(spread.whenTrue)
-        && ts.isObjectLiteralExpression(spread.whenFalse)
-        && spread.whenFalse.properties.length === 0
-      ) {
-        spread.whenTrue.properties.forEach(take);
-      } else {
-        throw new Error(`Unrecognized spread in a governed invocation: ${element.getText()}`);
-      }
-    } else {
-      throw new Error(`Unrecognized element in a governed invocation: ${element.getText()}`);
-    }
-  };
-  argument.properties.forEach(take);
-  return fields;
+  return argument.properties.map((element) => compactOf(element));
 }
 
 const FORWARD_ANCHOR = "async function forwardSiteTool(";
@@ -438,6 +486,38 @@ describe("in-admin CMS egress guard — hosted WordPress connector", () => {
   it("rejects a caller input that can carry the row's annotations, or a hollow parser", () => {
     rejects(replaceOnce("export const siteToolCallSchema = z.object({", "export const siteToolCallSchema = z.object({\n  expectedRawAnnotations: z.record(z.string(), z.unknown()).optional(),"));
     rejects(replaceOnce("= siteToolCallSchema.parse(raw);", "= raw as z.infer<typeof siteToolCallSchema>;"));
+  });
+
+  it("rejects a condition of a conditional field that switches the field off or changes it", () => {
+    const annotations = "...(input.expectedRawAnnotations !== undefined ? { expectedRawAnnotations: input.expectedRawAnnotations } : {}),";
+    rejects(replaceOnce(annotations, "...(false ? { expectedRawAnnotations: input.expectedRawAnnotations } : {}),"));
+    rejects(replaceOnce(annotations, "...(input.expectedRawAnnotations === undefined ? { expectedRawAnnotations: input.expectedRawAnnotations } : {}),"));
+    const server = "...(input.serverId !== undefined ? { serverId: input.serverId } : {}),";
+    rejects(mutateHandler(code, FORWARD_ANCHOR, server, "...(false ? { serverId: input.serverId } : {}),"));
+    rejects(mutateHandler(code, FORWARD_ANCHOR, "...(input.instanceId !== undefined ? { instanceId: input.instanceId } : {}),", "...(true ? { instanceId: input.instanceId } : {}),"));
+  });
+
+  it("rejects an early exit in front of the parser's schema parse, in the argsJson parser, or in the shared forward", () => {
+    const parse = "const { argsJson, args, ...rest } = siteToolCallSchema.parse(raw);";
+    rejects(replaceOnce(parse, `return raw as SiteToolCallInput;\n  ${parse}`));
+    rejects(replaceOnce(parse, `if (raw !== undefined) return { toolName: "x", args: {} };\n  ${parse}`));
+    rejects(replaceOnce("  let parsed: unknown;", "  return {};\n  let parsed: unknown;"));
+    const lookup = "const invoke = getWordPressDeps().invokeSiteTool;";
+    rejects(replaceOnce(lookup, `${lookup}\n  if (tool === "x") return undefined;`));
+    rejects(replaceOnce(lookup, `return undefined;\n  ${lookup}`));
+  });
+
+  it("rejects an early exit, or a skippable gate, in the review-gated helper", () => {
+    const gate = "await requireWriteAuthority(instanceId, tool);";
+    rejects(replaceOnce(gate, `if (tool === "x") return undefined;\n  ${gate}`));
+    rejects(replaceOnce(gate, `if (tool !== "x") {\n    ${gate}\n  }`));
+    rejects(replaceOnce(gate, `${gate}\n  void 0;`));
+    rejects(replaceOnce("if (!instanceId) {", "if (!instanceId && false) {"));
+  });
+
+  it("rejects a changed update-ability set", () => {
+    rejects(replaceOnce('const EWPA_UPDATE_POST_ABILITY = "ewpa/update-post";', 'const EWPA_UPDATE_POST_ABILITY = "ewpa/other";'));
+    rejects(replaceOnce("new Set([EWPA_UPDATE_POST_ABILITY])", "new Set([])"));
   });
 
   it("rejects a second invoker path in a helper", () => {
