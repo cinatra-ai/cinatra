@@ -107,7 +107,7 @@ vi.mock("../auth-policy", () => authPolicyMock);
 
 // --- publish decision store (the released decision a pinned send is compared with) ---
 const decisionMock = vi.hoisted(() => ({
-  readDecisionForRunNode: vi.fn(async (): Promise<unknown> => null),
+  readDecisionOfRun: vi.fn(async (): Promise<unknown> => null),
 }));
 vi.mock("../publish-decision-store", () => decisionMock);
 
@@ -216,10 +216,11 @@ function row(over: Partial<Record<string, unknown>> = {}) {
   };
 }
 
-function frame<T>(submissionId: string, fn: () => Promise<T>, stepId?: string): Promise<T> {
+function frame<T>(submissionId: string, fn: () => Promise<T>, stepId?: string, claimedDecisionId?: string): Promise<T> {
   return mcpRequestContextStorage.run(
     { verifiedRunScopeId: RUN_ID, verifiedSubmissionId: submissionId, userId: OWNER_ID, orgId: ORG_ID,
-      ...(stepId ? { verifiedStepId: stepId } : {}) },
+      ...(stepId ? { verifiedStepId: stepId } : {}),
+      ...(claimedDecisionId ? { publishCallClaim: { runId: RUN_ID, decisionId: claimedDecisionId } } : {}) },
     fn,
   );
 }
@@ -230,10 +231,10 @@ async function plan(input: Record<string, unknown>): Promise<Record<string, unkn
     fn({ primitiveName: "campaign_test_send_plan", input, actor: OWNER_ACTOR, mode: "deterministic" }))) as Record<string, unknown>;
 }
 
-async function send(input: Record<string, unknown>, stepId?: string): Promise<Record<string, unknown>> {
+async function send(input: Record<string, unknown>, stepId?: string, claimedDecisionId?: string): Promise<Record<string, unknown>> {
   const fn = await handler("email_test_delivery_run_send");
   return (await frame(CARD_TASK, () =>
-    fn({ primitiveName: "email_test_delivery_run_send", input, actor: OWNER_ACTOR, mode: "deterministic" }), stepId)) as Record<string, unknown>;
+    fn({ primitiveName: "email_test_delivery_run_send", input, actor: OWNER_ACTOR, mode: "deterministic" }), stepId, claimedDecisionId)) as Record<string, unknown>;
 }
 
 const PLAN_INPUT = { recipientEmail: "tester@example.com", selectionMode: "random_initial" };
@@ -255,7 +256,7 @@ beforeEach(() => {
   storeMock.readAgentRunById.mockResolvedValue({ ...RUN });
   storeMock.readAgentTemplateById.mockResolvedValue({ id: "tpl-1", packageName: PKG, approvalPolicy: { steps: [] } });
   storeMock.readRunCoOwners.mockResolvedValue([]);
-  decisionMock.readDecisionForRunNode.mockResolvedValue(null);
+  decisionMock.readDecisionOfRun.mockResolvedValue(null);
   ledgerMock.readTestSendBySubmission.mockResolvedValue(null);
   ledgerMock.readUnacknowledgedDeliveredDraftIds.mockResolvedValue([]);
   bindingsMock.getMergedFieldRendererBindings.mockReturnValue([
@@ -357,6 +358,27 @@ describe("campaign_test_send_plan answers what the publish card shows", () => {
     fakePort.prepareSend!.mockResolvedValue({ ok: true, recipientEmail: "tester@example.com", selectedDraftIds: ["d1"] });
     expect(await plan(PLAN_INPUT)).toMatchObject({ error: expect.stringContaining("no plan detail") });
   });
+
+  it("refuses at planning a recipient the send would refuse (over 320 characters)", async () => {
+    const long = `${"a".repeat(310)}@example.com`;
+    expect(await plan({ ...PLAN_INPUT, recipientEmail: long })).toMatchObject({ ok: false, reason: "invalid_recipient", planJson: "" });
+    expect(fakePort.prepareSend).not.toHaveBeenCalled();
+  });
+
+  it("refuses at planning a plan the send could not read or the publish gate could not record", async () => {
+    fakePort.prepareSend!.mockResolvedValue({
+      ok: true, recipientEmail: "tester@example.com", selectedDraftIds: ["d1"],
+      sender: { email: "sales@example.com", name: "S".repeat(30_000) },
+      drafts: [{ id: "d1", revision: REV1, subject: "Hello", preview: "Hi there." }],
+    });
+    expect(await plan(PLAN_INPUT)).toMatchObject({ ok: false, reason: "plan_too_large", planJson: "" });
+    fakePort.prepareSend!.mockResolvedValue({
+      ok: true, recipientEmail: "tester@example.com", selectedDraftIds: ["x"],
+      sender: { email: "sales@example.com", name: "Sales" },
+      drafts: [{ id: "x".repeat(201), revision: REV1, subject: "Hello", preview: "Hi there." }],
+    });
+    expect(await plan(PLAN_INPUT)).toMatchObject({ ok: false, reason: "plan_too_large", planJson: "" });
+  });
 });
 
 describe("email_test_delivery_run_send with a pinned plan sends exactly it", () => {
@@ -422,7 +444,13 @@ describe("email_test_delivery_run_send with a pinned plan sends exactly it", () 
   });
 });
 
-describe("a pinned send from a publishing step mails what its released decision showed", () => {
+describe("a pinned send under a publishing step mails what the claimed decision's card drew", () => {
+  // The card the pack declares for its publishing step: From, To and the Drafts list (labels are the pack's).
+  const CARD_ROWS = [
+    { label: "From", input: "sender" },
+    { label: "To", input: "recipient" },
+    { kind: "list", label: "Drafts", input: "drafts", columns: [{ label: "Subject", field: "subject" }, { label: "Preview", field: "preview" }] },
+  ];
   const surfaced = {
     planJson: PLAN_JSON,
     sender: "Sales <sales@example.com>",
@@ -432,48 +460,92 @@ describe("a pinned send from a publishing step mails what its released decision 
       { subject: "Follow", preview: "Second.", draftId: "d2", revision: REV2 },
     ],
   };
+  // The decision of the PARENT publishing node: the child API step that calls the send has no row of its own, and the
+  // road claims the parent's decision for it.
+  const decision = (over: Record<string, unknown> = {}) =>
+    ({ id: "dec-1", runId: RUN_ID, nodeId: "test_send_flow", status: "released", declaredRows: CARD_ROWS, surfacedValues: surfaced, ...over });
+  const CHILD = "perform_test_send";
 
-  it("sends when the step's released decision surfaced this very plan", async () => {
-    decisionMock.readDecisionForRunNode.mockResolvedValue({ id: "dec-1", status: "released", surfacedValues: surfaced });
-    expect(await send({ pinnedPlanJson: PLAN_JSON }, "perform_test_send")).toMatchObject({ ok: true });
-    expect(decisionMock.readDecisionForRunNode).toHaveBeenCalledWith(RUN_ID, "perform_test_send");
-    expect(fakePort.performPinnedSend).toHaveBeenCalledTimes(1);
+  it("sends from a child step when the claimed decision's card is this plan, and hands the shown drafts to the port", async () => {
+    decisionMock.readDecisionOfRun.mockResolvedValue(decision());
+    expect(await send({ pinnedPlanJson: PLAN_JSON }, CHILD, "dec-1")).toMatchObject({ ok: true });
+    expect(decisionMock.readDecisionOfRun).toHaveBeenCalledWith(RUN_ID, "dec-1");
+    expect(fakePort.performPinnedSend).toHaveBeenCalledWith(expect.objectContaining({
+      shownDrafts: [{ subject: "Hello", preview: "Hi there." }, { subject: "Follow", preview: "Second." }],
+    }));
   });
 
-  it("refuses, sending nothing, a plan other than the one the decision surfaced", async () => {
+  it("refuses, sending nothing, an altered plan from a child step under a parent's claimed decision", async () => {
+    decisionMock.readDecisionOfRun.mockResolvedValue(decision());
     const other = JSON.stringify({ ...PLAN_WIRE, recipientEmail: "someone@example.com" });
-    decisionMock.readDecisionForRunNode.mockResolvedValue({ id: "dec-1", status: "released", surfacedValues: surfaced });
-    expect(await send({ pinnedPlanJson: other }, "perform_test_send")).toMatchObject({ ok: false, reason: "plan_not_approved" });
+    expect(await send({ pinnedPlanJson: other }, CHILD, "dec-1")).toMatchObject({ ok: false, reason: "plan_not_approved" });
     expect(fakePort.performPinnedSend).not.toHaveBeenCalled();
   });
 
-  it("refuses when a surfaced row the person read is not this plan's own text", async () => {
+  it("refuses, sending nothing, a governed call whose claimed decision is missing, of another run or not released", async () => {
+    for (const read of [null, decision({ runId: "run-OTHER" }), decision({ status: "parked" })]) {
+      decisionMock.readDecisionOfRun.mockResolvedValue(read);
+      expect(await send({ pinnedPlanJson: PLAN_JSON }, CHILD, "dec-1")).toMatchObject({ ok: false, reason: "plan_not_approved" });
+    }
+    expect(fakePort.performPinnedSend).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the card omits From, To or the Drafts list, or draws another row", async () => {
+    const variants: Array<Record<string, unknown>> = [
+      { declaredRows: CARD_ROWS.filter((r) => r.input !== "sender") },
+      { declaredRows: CARD_ROWS.filter((r) => r.input !== "recipient") },
+      { declaredRows: CARD_ROWS.filter((r) => r.input !== "drafts") },
+      { declaredRows: [...CARD_ROWS, { label: "Note", input: "note" }] },
+      { declaredRows: [CARD_ROWS[0], CARD_ROWS[1], { ...CARD_ROWS[2], columns: [{ label: "Subject", field: "subject" }] }] },
+      { declaredRows: null },
+      { surfacedValues: { ...surfaced, sender: undefined } },
+      { surfacedValues: { ...surfaced, recipient: "" } },
+    ];
+    for (const over of variants) {
+      decisionMock.readDecisionOfRun.mockResolvedValue(decision(over));
+      expect(await send({ pinnedPlanJson: PLAN_JSON }, CHILD, "dec-1")).toMatchObject({ ok: false, reason: "plan_not_approved" });
+    }
+    expect(fakePort.performPinnedSend).not.toHaveBeenCalled();
+  });
+
+  it("refuses when a row the card drew is not the plan's own value", async () => {
     for (const change of [
       { sender: "Someone <x@example.com>" },
       { recipient: "someone@example.com" },
       { drafts: [surfaced.drafts[0]] },
       { drafts: [surfaced.drafts[1], surfaced.drafts[0]] },
+      { drafts: [{ ...surfaced.drafts[0], subject: 7 }, surfaced.drafts[1]] },
     ]) {
-      decisionMock.readDecisionForRunNode.mockResolvedValue({ id: "dec-1", status: "released", surfacedValues: { ...surfaced, ...change } });
-      expect(await send({ pinnedPlanJson: PLAN_JSON }, "perform_test_send")).toMatchObject({ ok: false, reason: "plan_not_approved" });
+      decisionMock.readDecisionOfRun.mockResolvedValue(decision({ surfacedValues: { ...surfaced, ...change } }));
+      expect(await send({ pinnedPlanJson: PLAN_JSON }, CHILD, "dec-1")).toMatchObject({ ok: false, reason: "plan_not_approved" });
     }
     expect(fakePort.performPinnedSend).not.toHaveBeenCalled();
   });
 
-  it("refuses when the step's newest decision is not released", async () => {
-    decisionMock.readDecisionForRunNode.mockResolvedValue({ id: "dec-2", status: "parked", surfacedValues: surfaced });
-    expect(await send({ pinnedPlanJson: PLAN_JSON }, "perform_test_send")).toMatchObject({ ok: false, reason: "plan_not_approved" });
-    expect(fakePort.performPinnedSend).not.toHaveBeenCalled();
+  it("hands an altered subject or preview the card showed to the port, which compares it with the drafts it reads", async () => {
+    const altered = [{ ...surfaced.drafts[0], subject: "Hello!" }, { ...surfaced.drafts[1], preview: "Other." }];
+    decisionMock.readDecisionOfRun.mockResolvedValue(decision({ surfacedValues: { ...surfaced, drafts: altered } }));
+    fakePort.performPinnedSend!.mockResolvedValue({ ok: false, reason: "plan_changed", message: "changed", deliveredDraftIds: [] });
+    expect(await send({ pinnedPlanJson: PLAN_JSON }, CHILD, "dec-1")).toMatchObject({ ok: false, reason: "plan_changed" });
+    expect(fakePort.performPinnedSend).toHaveBeenCalledWith(expect.objectContaining({
+      shownDrafts: [{ subject: "Hello!", preview: "Hi there." }, { subject: "Follow", preview: "Other." }],
+    }));
+  });
+
+  it("compares nothing for a call the road let through with no claim (no publishing step governs it)", async () => {
+    expect(await send({ pinnedPlanJson: PLAN_JSON }, "some_step")).toMatchObject({ ok: true });
+    expect(decisionMock.readDecisionOfRun).not.toHaveBeenCalled();
+    expect(fakePort.performPinnedSend).toHaveBeenCalledWith(expect.not.objectContaining({ shownDrafts: expect.anything() }));
   });
 });
 
 describe("the selection send without a pinned plan stays exactly as it was", () => {
   it("plans through prepareSend and sends through performSend, never the pinned road or the decision", async () => {
-    const result = await send({ recipientEmail: "tester@example.com", selectionMode: "random_initial" }, "perform_test_send");
+    const result = await send({ recipientEmail: "tester@example.com", selectionMode: "random_initial" }, "perform_test_send", "dec-1");
     expect(result).toMatchObject({ ok: true, seq: 3 });
     expect(fakePort.prepareSend).toHaveBeenCalledTimes(1);
     expect(fakePort.performSend).toHaveBeenCalledTimes(1);
     expect(fakePort.performPinnedSend).not.toHaveBeenCalled();
-    expect(decisionMock.readDecisionForRunNode).not.toHaveBeenCalled();
+    expect(decisionMock.readDecisionOfRun).not.toHaveBeenCalled();
   });
 });

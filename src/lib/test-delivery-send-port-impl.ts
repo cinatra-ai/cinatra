@@ -35,7 +35,7 @@ import type {
   TestDeliveryPinnedPerformResult,
   TestDeliverySendFailureReason,
 } from "@cinatra-ai/agents/test-delivery-send-port";
-import { testDraftRevision } from "@cinatra-ai/agents/test-delivery-send-port";
+import { testDraftRevision, testSendPreview, testSendRecipient } from "@cinatra-ai/agents/test-delivery-send-port";
 
 const SENT_EMAIL_TYPE = "@cinatra-ai/email:sent-email";
 
@@ -103,16 +103,12 @@ export const testDeliverySendPortImpl: TestDeliverySendPort = {
       // the pinned send checks, its subject and a short preview of its body.
       sender: plan.sender,
       drafts: await Promise.all(
-        plan.selectedDrafts.map(async (d) => {
-          // The first characters of the body as the test message carries it (merge tokens replaced), on one line.
-          const line = applyTokenReplacements(d.body).replace(/\s+/g, " ").trim();
-          return {
-            id: d.id,
-            revision: await testDraftRevision(d),
-            subject: d.subject,
-            preview: line.length > 140 ? `${line.slice(0, 139)}…` : line,
-          };
-        }),
+        plan.selectedDrafts.map(async (d) => ({
+          id: d.id,
+          revision: await testDraftRevision(d),
+          subject: d.subject,
+          preview: testSendPreview(applyTokenReplacements(d.body)),
+        })),
       ),
     };
   },
@@ -139,8 +135,8 @@ export const testDeliverySendPortImpl: TestDeliverySendPort = {
     const deps = buildLazyDefaultDeps();
     const campaign = await deps.getCampaign(plan.campaignId);
     if (!campaign) throw new Error("Campaign not found.");
-    const recipient = plan.recipientEmail.trim();
-    if (recipient.length === 0 || !recipient.includes("@") || recipient !== plan.recipientEmail) {
+    const recipient = testSendRecipient(plan.recipientEmail);
+    if (recipient === null || recipient !== plan.recipientEmail) {
       return {
         ok: false,
         reason: "invalid_recipient",
@@ -159,10 +155,18 @@ export const testDeliverySendPortImpl: TestDeliverySendPort = {
     const ids = plan.drafts.map((d) => d.id);
     if (ids.length === 0 || new Set(ids).size !== ids.length || !ids.every((id) => campaignDraftIds.has(id))) return changed;
     const byId = new Map((await deps.getDraftsByIds(ids)).map((d) => [d.id, d] as const));
+    const shown = params.shownDrafts;
+    if (shown !== undefined && shown.length !== plan.drafts.length) return changed;
     const toSend: Array<{ id: string; subject: string; body: string }> = [];
-    for (const pinned of plan.drafts) {
+    for (const [i, pinned] of plan.drafts.entries()) {
       const draft = byId.get(pinned.id);
       if (!draft || (await testDraftRevision(draft)) !== pinned.revision) return changed;
+      // What the approved card showed of this draft is what is mailed: its subject, and its preview computed again
+      // from the body read here by the one preview rule.
+      const seen = shown?.[i];
+      if (seen && (seen.subject !== draft.subject || seen.preview !== testSendPreview(applyTokenReplacements(draft.body)))) {
+        return changed;
+      }
       toSend.push(draft);
     }
     const actor = ownerSendActor(params.run);

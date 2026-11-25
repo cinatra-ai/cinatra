@@ -21,8 +21,10 @@ import {
   type TestDeliveryPinnedPlan,
   type TestDeliveryPortRun,
   type TestDeliverySelectionMode,
+  testSendRecipient,
 } from "../test-delivery-send-port";
-import { readDecisionForRunNode } from "../publish-decision-store";
+import { readDecisionOfRun } from "../publish-decision-store";
+import { publishDecisionCardRows, publishRowKind, type PublishRowDeclaration } from "../publish-decision-card";
 import {
   claimTestSend,
   settleTestSend,
@@ -629,7 +631,7 @@ export function parsePinnedPlan(json: string): TestDeliveryPinnedPlan | null {
   if (typeof campaignId !== "string" || campaignId.length === 0) return null;
   if (!isPlainRecord(sender) || !ownKeysAre(sender, "email,name")) return null;
   if (typeof sender.email !== "string" || typeof sender.name !== "string") return null;
-  if (typeof recipientEmail !== "string" || recipientEmail.length === 0 || recipientEmail.length > 320) return null;
+  if (typeof recipientEmail !== "string" || testSendRecipient(recipientEmail) !== recipientEmail) return null;
   if (!Array.isArray(drafts) || drafts.length === 0 || drafts.length > TEST_SEND_PLAN_DRAFTS_MAX) return null;
   const pinned: Array<{ id: string; revision: string }> = [];
   for (const d of drafts) {
@@ -649,32 +651,74 @@ export function testSendSenderText(sender: { email: string; name: string }): str
   return sender.name ? `${sender.name} (the run owner's mailbox)` : "The run owner's mailbox";
 }
 
-/**
- * Does the released publish decision of the calling step show this plan? Read only when the call carries a verified
- * step that has a decision row (a step the template does not declare as publishing has none; the passthrough road
- * refuses a step whose newest row is not released before this handler runs). The surfaced `planJson` must be this
- * call's plan byte for byte, and a surfaced `sender`, `recipient` or `drafts` must be this plan's own text, so the
- * rows the person approved are the plan that is mailed. True with no step or no row (nothing to compare).
- */
-async function planMatchesReleasedDecision(runId: string, plan: TestDeliveryPinnedPlan, planJson: string): Promise<boolean> {
-  const stepId = mcpRequestContextStorage.getStore()?.verifiedStepId;
-  if (typeof stepId !== "string" || stepId.length === 0) return true;
-  const decision = await readDecisionForRunNode(runId, stepId);
-  if (!decision) return true;
-  if (decision.status !== "released") return false;
-  const surfaced = decision.surfacedValues;
-  const has = (key: string) => Object.prototype.hasOwnProperty.call(surfaced, key);
-  if (surfaced.planJson !== planJson) return false;
-  if (has("sender") && surfaced.sender !== testSendSenderText(plan.sender)) return false;
-  if (has("recipient") && surfaced.recipient !== plan.recipientEmail) return false;
-  if (has("drafts")) {
-    const rows = surfaced.drafts;
-    if (!Array.isArray(rows) || rows.length !== plan.drafts.length) return false;
-    const same = rows.every((r, i) =>
-      isPlainRecord(r) && r.draftId === plan.drafts[i]!.id && r.revision === plan.drafts[i]!.revision);
-    if (!same) return false;
+/** The values a publish card draws for a test-send plan, by the plan's own fields: the From as a person reads it, the
+ *  recipient, and each draft's subject and preview with its id and revision. THE one derivation: the plan primitive
+ *  answers exactly these values, and the pinned send checks the approved card against them. */
+export function testSendCardValues(
+  plan: { sender: { email: string; name: string }; recipientEmail: string },
+  drafts: ReadonlyArray<{ id: string; revision: string; subject: string; preview: string }>,
+): { sender: string; recipient: string; drafts: Array<{ subject: string; preview: string; draftId: string; revision: string }> } {
+  return {
+    sender: testSendSenderText(plan.sender),
+    recipient: plan.recipientEmail,
+    drafts: drafts.map((d) => ({ subject: d.subject, preview: d.preview, draftId: d.id, revision: d.revision })),
+  };
+}
+
+/** The card a test-send decision must declare: a text row of `sender`, a text row of `recipient` and a list row of
+ *  `drafts` whose columns are exactly `subject` and `preview`, and no other row. Labels and order are the pack's. */
+function declaresTestSendCard(rows: readonly PublishRowDeclaration[]): boolean {
+  if (rows.length !== 3) return false;
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const kind = publishRowKind(row);
+    if (kind === "text" && (row.input === "sender" || row.input === "recipient")) seen.add(row.input);
+    else if (kind === "list" && row.input === "drafts" && "columns" in row) {
+      const fields = row.columns.map((c) => c.field).sort().join(",");
+      if (fields !== "preview,subject") return false;
+      seen.add("drafts");
+    } else return false;
   }
-  return true;
+  return seen.size === 3;
+}
+
+type ApprovedCard = { ok: true; shownDrafts?: Array<{ subject: string; preview: string }> } | { ok: false };
+
+/**
+ * The approval of this pinned send. The decision is never resolved here by a reading of its own: it is the decision
+ * the passthrough road resolved for the verified step (itself, or the publishing node it lies inside) and claimed for
+ * this call (`publishCallClaim` in the request frame). With no claim, the road proved that no publishing step governs
+ * the call (publishCallAllowed lets a governed step through only with a claim), and nothing is compared.
+ * With a claim, the claimed decision must be this run's, released, and its card must be the plan: the declared rows
+ * are the test-send card (declaresTestSendCard), the surfaced `planJson` is this call's plan byte for byte, the
+ * surfaced drafts name the plan's drafts at their revisions in order, and the rows the card DREW from the surfaced
+ * values (publishDecisionCardRows, the card's own drawing) equal the rows it draws from testSendCardValues of the plan
+ * with the drafts' shown subjects and previews. Those shown subjects and previews go to the port, which compares them
+ * with the drafts it reads. Anything else refuses.
+ */
+async function approvedCardOfCall(runId: string, plan: TestDeliveryPinnedPlan, planJson: string): Promise<ApprovedCard> {
+  const claim = mcpRequestContextStorage.getStore()?.publishCallClaim;
+  if (claim === undefined) return { ok: true };
+  if (claim.runId !== runId || typeof claim.decisionId !== "string" || claim.decisionId.length === 0) return { ok: false };
+  const decision = await readDecisionOfRun(runId, claim.decisionId);
+  if (!decision || decision.runId !== runId || decision.status !== "released") return { ok: false };
+  const declared = decision.declaredRows;
+  if (!declared || !declaresTestSendCard(declared)) return { ok: false };
+  const surfaced = decision.surfacedValues;
+  if (surfaced.planJson !== planJson) return { ok: false };
+  const rows = surfaced.drafts;
+  if (!Array.isArray(rows) || rows.length !== plan.drafts.length) return { ok: false };
+  const shown: Array<{ id: string; revision: string; subject: string; preview: string }> = [];
+  for (const [i, r] of rows.entries()) {
+    const pinned = plan.drafts[i]!;
+    if (!isPlainRecord(r) || r.draftId !== pinned.id || r.revision !== pinned.revision) return { ok: false };
+    if (typeof r.subject !== "string" || typeof r.preview !== "string") return { ok: false };
+    shown.push({ id: pinned.id, revision: pinned.revision, subject: r.subject, preview: r.preview });
+  }
+  const drawn = publishDecisionCardRows(declared, surfaced);
+  const expected = publishDecisionCardRows(declared, testSendCardValues(plan, shown));
+  if (drawn.length !== 3 || JSON.stringify(drawn) !== JSON.stringify(expected)) return { ok: false };
+  return { ok: true, shownDrafts: shown.map(({ subject, preview }) => ({ subject, preview })) };
 }
 
 type PreClaimFail = (result: Record<string, unknown>) => Promise<Record<string, unknown>>;
@@ -702,7 +746,8 @@ async function performPinnedTestSend(args: {
     runId, submissionId, campaignId, recipientEmail: plan.recipientEmail, port, portRun,
   });
   if (replayed) return replayed;
-  if (!(await planMatchesReleasedDecision(runId, plan, planJson))) {
+  const approved = await approvedCardOfCall(runId, plan, planJson);
+  if (!approved.ok) {
     return preClaimFail({
       ok: false,
       reason: "plan_not_approved",
@@ -732,7 +777,12 @@ async function performPinnedTestSend(args: {
     if (row.status === "sent" || row.status === "failed") return ledgerRowToResult(row);
     return { ok: false, seq: row.seq, reason: "send_in_progress", message: "Your previous test send is still in progress. Please wait." };
   }
-  const result = await port.performPinnedSend({ run: portRun, submissionId, plan });
+  const result = await port.performPinnedSend({
+    run: portRun,
+    submissionId,
+    plan,
+    ...(approved.shownDrafts ? { shownDrafts: approved.shownDrafts } : {}),
+  });
   const settled = await settleTestSend({ id: claim.row.id, status: result.ok ? "sent" : "failed", result: { ...result } });
   if (settled) return { ...result, seq: claim.row.seq };
   const authoritative = await readTestSendBySubmission(runId, submissionId);
@@ -779,13 +829,16 @@ export async function handleCampaignTestSendPlan(
   if ("error" in subCtx) return { error: subCtx.error };
   const { runId } = runCtx;
   const { submissionId } = subCtx;
-  const recipientEmail =
-    typeof request.input?.recipientEmail === "string" ? request.input.recipientEmail.trim() : "";
+  const typedRecipient = typeof request.input?.recipientEmail === "string" ? request.input.recipientEmail.trim() : "";
+  // The one recipient rule of every test send: a plan is never built for an address the send would refuse.
+  const recipientEmail = testSendRecipient(typedRecipient) ?? "";
   const actor = request.actor as PrimitiveActorContext;
   const roles = await resolveRoleHintsFromSession();
   try {
     const refuse = async (result: Record<string, unknown>): Promise<Record<string, unknown>> => {
-      const rec = await recordPreClaimFailure({ runId, submissionId, recipientEmail: recipientEmail || null, result });
+      const rec = await recordPreClaimFailure({
+        runId, submissionId, recipientEmail: recipientEmail || (typedRecipient.length > 0 && typedRecipient.length <= 320 ? typedRecipient : null), result,
+      });
       return planRefusal(ledgerRowToResult(rec.row));
     };
     const run = await readAgentRunById(runId, actor, roles);
@@ -872,13 +925,25 @@ export async function handleCampaignTestSendPlan(
       recipientEmail: prepared.recipientEmail,
       drafts: drafts.map((d) => ({ id: d.id, revision: d.revision })),
     };
+    const planJson = JSON.stringify(wire);
+    const card = testSendCardValues(wire, drafts);
+    // A plan the send would refuse for a reason known now is refused now: the send reads the plan with this same
+    // parser, and the publish gate records at most PUBLISH_SURFACED_VALUES_MAX_BYTES of the values it surfaces (the
+    // card's values and planJson), so a plan over either bound is never shown for approval.
+    const { PUBLISH_SURFACED_VALUES_MAX_BYTES } = await import("../publish-decision-actions");
+    const surfacedBytes = new TextEncoder().encode(JSON.stringify({ ...card, planJson })).length;
+    if (parsePinnedPlan(planJson) === null || surfacedBytes > PUBLISH_SURFACED_VALUES_MAX_BYTES) {
+      return refuse({
+        ok: false,
+        reason: "plan_too_large",
+        message: "This test send is too large to show for approval. Select fewer drafts or shorten the sender.",
+      });
+    }
     return {
       ok: true,
-      sender: testSendSenderText(wire.sender),
-      recipient: wire.recipientEmail,
-      drafts: drafts.map((d) => ({ subject: d.subject, preview: d.preview, draftId: d.id, revision: d.revision })),
+      ...card,
       draftCount: drafts.length,
-      planJson: JSON.stringify(wire),
+      planJson,
       lastSendResult: null,
       gateCycle: 0,
     };

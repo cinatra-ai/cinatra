@@ -37,4 +37,12 @@ describe("the plan names what the card shows", () => {
       selectedDrafts: [D1, D2],
     });
   });
+
+  it("refuses at planning a recipient the send refuses: one rule, at most 320 characters with an @", async () => {
+    const { deps: d } = deps();
+    for (const recipientEmail of [`${"a".repeat(310)}@example.com`, "no-at-sign", "   "]) {
+      expect(await planTestSendSelection({ campaignId: "c1", recipientEmail, selectionMode: "all_initial" }, d))
+        .toEqual({ ok: false, reason: "invalid_recipient" });
+    }
+  });
 });

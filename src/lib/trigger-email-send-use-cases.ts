@@ -25,6 +25,7 @@
  */
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import type { TriggerEmailSendUseCases } from "@cinatra-ai/trigger-email-send";
+import { testSendRecipient } from "@cinatra-ai/agents/test-delivery-send-port";
 
 // Minimal local shapes so this file does not need to load @/lib/types at the
 // top level (kept light for vitest compatibility — types only).
@@ -806,8 +807,9 @@ export async function planTestSendSelection(
     }
   | { ok: false; reason: "no_drafts_selected" | "invalid_recipient" }
 > {
-  const recipient = (input.recipientEmail ?? "").trim();
-  if (recipient.length === 0 || !recipient.includes("@")) {
+  // cinatra#4150: the one recipient rule of every test send (plan, pinned send, selection send).
+  const recipient = testSendRecipient(input.recipientEmail ?? "");
+  if (recipient === null) {
     return { ok: false, reason: "invalid_recipient" };
   }
   const campaign = await deps.getCampaign(input.campaignId);
@@ -892,8 +894,8 @@ export function createTriggerEmailSendUseCases(
       // (`previous_send_unknown`, `send_in_progress`) are refined by the
       // run-scoped `email_test_delivery_run_send` wrapper primitive, which owns
       // the send ledger and the connector-availability signal.
-      const recipient = (input.recipientEmail ?? "").trim();
-      if (recipient.length === 0 || !recipient.includes("@")) {
+      const recipient = testSendRecipient(input.recipientEmail ?? "");
+      if (recipient === null) {
         return {
           ok: false,
           reason: "invalid_recipient",

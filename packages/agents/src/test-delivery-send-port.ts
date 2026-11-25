@@ -90,6 +90,30 @@ export async function testDraftRevision(draft: { subject: string; body: string }
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** The longest recipient address a test send takes (RFC 5321 path bound). */
+export const TEST_SEND_RECIPIENT_MAX = 320;
+
+/** THE recipient rule of a test send (cinatra#4150), one for the plan, the pinned send and the selection send: the
+ *  address as typed with its outer spaces removed, holding an `@`, at most TEST_SEND_RECIPIENT_MAX characters. Answers
+ *  the address to send to, or null for one the send refuses. A plan built from an address this accepts is never
+ *  refused for its recipient when it is sent. */
+export function testSendRecipient(typed: unknown): string | null {
+  if (typeof typed !== "string") return null;
+  const address = typed.trim();
+  return address.length > 0 && address.length <= TEST_SEND_RECIPIENT_MAX && address.includes("@") ? address : null;
+}
+
+/** The longest preview of a draft a publish card shows. */
+export const TEST_SEND_PREVIEW_MAX = 140;
+
+/** THE preview of a draft (cinatra#4150): the first characters of the text the test message carries (its body with
+ *  merge tokens replaced, as the host renders it), on one line. The plan answers it for the card, and the pinned send
+ *  computes it again from the draft it reads, so the preview a person approved is the body that is mailed. */
+export function testSendPreview(messageText: string): string {
+  const line = messageText.replace(/\s+/g, " ").trim();
+  return line.length > TEST_SEND_PREVIEW_MAX ? `${line.slice(0, TEST_SEND_PREVIEW_MAX - 1)}…` : line;
+}
+
 /** The pinned send's result: the phase-2 result, `plan_changed` when the campaign no longer matches the plan (a draft
  *  edited or removed, the sender changed), or `campaign_access_denied` when the run owner can no longer read the
  *  campaign; in both refusals nothing was sent. */
@@ -157,6 +181,10 @@ export interface TestDeliverySendPort {
     run: TestDeliveryPortRun;
     submissionId: string;
     plan: TestDeliveryPinnedPlan;
+    /** What the approved publish card showed of each draft, in plan order (absent when no decision governs the call):
+     *  each re-read draft's subject must be the shown subject and its preview (testSendPreview) the shown preview,
+     *  else `plan_changed`. */
+    shownDrafts?: ReadonlyArray<{ subject: string; preview: string }>;
   }): Promise<TestDeliveryPinnedPerformResult>;
 
   /**

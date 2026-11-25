@@ -483,6 +483,22 @@ export async function readDecisionForRunNode(
   return row ? deserialize(row) : null;
 }
 
+/** One decision of the run's current attempt, by its id: the decision a publishing call claimed (cinatra#4150). */
+export async function readDecisionOfRun(runId: string, decisionId: string): Promise<PublishDecisionRow | null> {
+  const [row] = await db
+    .select()
+    .from(agentRunPublishDecisions)
+    .where(
+      and(
+        eq(agentRunPublishDecisions.runId, requireText(runId, "runId")),
+        eq(agentRunPublishDecisions.id, requireText(decisionId, "decisionId")),
+        CURRENT_ATTEMPT,
+      ),
+    )
+    .limit(1);
+  return row ? deserialize(row) : null;
+}
+
 /** The newest decision of the run's current attempt still waiting for an answer. */
 export async function readOpenDecisionForRun(runId: string): Promise<PublishDecisionRow | null> {
   const [row] = await db

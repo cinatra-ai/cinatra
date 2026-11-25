@@ -67,10 +67,13 @@ function stubDeps(over: { drafts?: Draft[]; senderName?: string; senderEmail?: s
   return sendEmail;
 }
 
-async function send(plan: typeof PLAN = PLAN, submissionId = "task-9") {
+async function send(plan: typeof PLAN = PLAN, submissionId = "task-9", shownDrafts?: Array<{ subject: string; preview: string }>) {
   expect(typeof testDeliverySendPortImpl.performPinnedSend).toBe("function");
-  return testDeliverySendPortImpl.performPinnedSend!({ run: RUN, submissionId, plan });
+  return testDeliverySendPortImpl.performPinnedSend!({ run: RUN, submissionId, plan, ...(shownDrafts ? { shownDrafts } : {}) });
 }
+
+// What the approved card showed of D1 and D2: the subject, and the preview of the body as the message carries it.
+const SHOWN = [{ subject: "Hello", preview: "Hi there, a short note." }, { subject: "Follow", preview: "Second draft body." }];
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -179,6 +182,24 @@ describe("performPinnedSend mails exactly the plan", () => {
     h.objectsGet.mockRejectedValueOnce(new (AuthzError as unknown as new (m: string) => Error)("denied"));
     expect(await send()).toMatchObject({ ok: false, reason: "campaign_access_denied" });
     expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("sends when each draft's subject and recomputed preview are what the approved card showed", async () => {
+    const sendEmail = stubDeps();
+    expect(await send(PLAN, "task-9", SHOWN)).toMatchObject({ ok: true, sentCount: 2 });
+    expect(sendEmail).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses, sending nothing, when the card showed another subject or preview than the draft read now", async () => {
+    for (const shown of [
+      [{ ...SHOWN[0]!, subject: "Hello!" }, SHOWN[1]!],
+      [SHOWN[0]!, { ...SHOWN[1]!, preview: "Other text." }],
+      [SHOWN[0]!],
+    ]) {
+      const sendEmail = stubDeps();
+      expect(await send(PLAN, "task-9", shown)).toMatchObject({ ok: false, reason: "plan_changed", deliveredDraftIds: [] });
+      expect(sendEmail).not.toHaveBeenCalled();
+    }
   });
 
   it("lets an unrelated store fault propagate", async () => {
