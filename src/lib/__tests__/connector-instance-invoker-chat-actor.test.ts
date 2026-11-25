@@ -192,8 +192,8 @@ vi.mock("@/lib/connector-instance-mcp-transport", async (importOriginal) => {
         wireCalls.push({ name: input.name, arguments: input.arguments });
         // cinatra#3745 — the "wp-write" instance (site w.example) serves ONE
         // write-class ability instead, so the adapter tests can prove that
-        // `expectedClass` reaches the invoker.
-        const writeSite = input.endpoint.startsWith("https://w.example");
+        // the guarded call enforces `expectedClass`.
+        const writeSite = new URL(input.endpoint).hostname === "w.example";
         if (input.name === actual.TRIAD_DISCOVER_ABILITIES) {
           return { abilities: [{ name: writeSite ? "core/update-option" : "core/get-site-info" }] };
         }
