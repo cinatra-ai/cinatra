@@ -585,3 +585,79 @@ def test_a_declared_publishing_step_loads_behind_its_gate(prefix: str, case: dic
     assert gates == sorted(prefix + step for step in case["publishingSteps"])
     for gate in gates:
         assert type(flow.steps[gate]).__name__ == "InputMessageStep"
+
+
+# cinatra#4150 acceptance item 5 in the runtime: each publish shape runs with every HTTP call answered by a stub that
+# records it. The run must yield at the host's gate in front of the publishing step before the stub sees the publish
+# call. With no answer at the gate (a decline sends nothing into the held context: the host only stops the run) the
+# publish call and the address write-back never come. Only an answer at the gate lets them through, which shows the
+# stub would see a publish if the gate let one go. The steps' URLs in the fixture are https://example.invalid/<node id>.
+class _RecordingStub:
+    """Answers every call with each declared output of the called node as a string, and records the node's id."""
+
+    def __init__(self, doc: dict) -> None:
+        import httpx  # noqa: PLC0415 — wayflowcore brings it
+
+        self.calls: list = []
+        self._outputs = {
+            cid: [o["title"] for o in comp.get("outputs", [])]
+            for cid, comp in doc["$referenced_components"].items()
+            if comp.get("component_type") == "ApiNode"
+        }
+        self.transport = httpx.MockTransport(self._answer)
+
+    def _answer(self, request):
+        import httpx  # noqa: PLC0415
+
+        node = request.url.path.strip("/")
+        self.calls.append(node)
+        return httpx.Response(200, json={title: f"{node}-{title}" for title in self._outputs.get(node, [])})
+
+
+@pytest.mark.skipif(
+    AgentSpecLoader is None or agent_loader is None,
+    reason="wayflowcore not installed (run inside the wayflow image)",
+)
+@pytest.mark.parametrize("name", ["wordpress-publish-shape", "linkedin-publish-shape"])
+def test_a_publish_shape_reaches_no_publish_call_before_the_gate_is_answered(name: str, monkeypatch) -> None:
+    import httpx  # noqa: PLC0415
+    from wayflowcore.executors.executionstatus import UserMessageRequestStatus  # type: ignore[import-not-found]  # noqa: PLC0415
+
+    parity = json.loads(_PARITY_FIXTURE.read_text(encoding="utf-8"))
+    case = next(c for c in parity["flows"] if c["name"] == name)
+    stub = _RecordingStub(case["flow"])
+    real_client = httpx.AsyncClient
+
+    def client_on_the_stub(*args, **kwargs):
+        kwargs["transport"] = stub.transport
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client_on_the_stub)
+    flow = AgentSpecLoader().load_json(_runtime_preload(json.dumps(case["flow"]), name))
+    conversation = flow.start_conversation(inputs={i["title"]: f"value-{i['title']}" for i in case["flow"]["inputs"]})
+    gate = parity["gatePrefix"] + "publish"
+    status = conversation.execute()
+    # A stop of the pack's own in front of the gate (a review of the post) is answered; nothing reaches the publish
+    # call meanwhile.
+    for _ in range(5):
+        if not isinstance(status, UserMessageRequestStatus) or agent_loader._find_yielding_step_id(status, conversation) == gate:
+            break
+        assert "publish" not in stub.calls
+        conversation.append_user_message("{}")
+        status = conversation.execute()
+
+    # Stopped at the gate: the steps before it ran, the publish call and the write-back did not.
+    assert isinstance(status, UserMessageRequestStatus)
+    assert agent_loader._find_yielding_step_id(status, conversation) == gate
+    before = list(stub.calls)
+    assert before and "publish" not in before and "write_address" not in before
+
+    # No answer at the gate (the decline road): the runtime refuses to go on, and nothing passes it.
+    with pytest.raises(ValueError, match="before appending the required user message"):
+        conversation.execute()
+    assert stub.calls == before
+
+    # An answer at the gate (the release road) lets the publish call through, then the write-back.
+    conversation.append_user_message("approved")
+    conversation.execute()
+    assert stub.calls == before + ["publish", "write_address"]
