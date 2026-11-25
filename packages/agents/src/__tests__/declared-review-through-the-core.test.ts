@@ -66,13 +66,8 @@ vi.mock("@cinatra-ai/agent-ui-protocol/server", async (orig) => {
 const storeMock = vi.hoisted(() => ({
   readAgentRunById: vi.fn(),
   readAgentTemplateById: vi.fn(),
-  // cinatra#3089: a pause reads the steps its dispatch bound beside the source; here those of the template row.
-  readRunPauseSteps: vi.fn(async (): Promise<unknown> => {
-    const t = (await (storeMock.readAgentTemplateById as (id: string) => Promise<unknown>)("")) as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
-    // As the real reader: a settled record with a policy, or the refusal (no steps bound).
-    if (!t || t.approvalPolicy === undefined || t.approvalPolicy === null) throw new Error("no settled pause steps are bound to the run");
-    return { packageVersion: t.packageVersion ?? null, approvalPolicy: t.approvalPolicy };
-  }),
+  // cinatra#3089: a pause reads the steps its dispatch bound beside the source; none until the test binds them.
+  readRunPauseSteps: vi.fn(async (): Promise<unknown> => { throw new Error("no settled pause steps are bound to the run"); }),
   readAgentTemplates: vi.fn(async () => []),
   readAgentTemplateVersionBySemver: vi.fn(async () => null),
   readAgentTemplateVersionById: vi.fn(async () => null),
@@ -89,6 +84,14 @@ const storeMock = vi.hoisted(() => ({
   updateAgentRunA2AContextId: vi.fn(async () => undefined),
 }));
 vi.mock("../store", () => storeMock);
+// cinatra#3089: what the dispatch bound for a pause: the template's policy as it was when the test bound it (a copy),
+// never a later template read; a template with no policy binds none, and the reader refuses.
+function bindTemplate(t: unknown): void {
+  storeMock.readAgentTemplateById.mockResolvedValue(t as never);
+  const read = t as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
+  if (read?.approvalPolicy === undefined || read.approvalPolicy === null) storeMock.readRunPauseSteps.mockRejectedValue(new Error("no settled pause steps are bound to the run"));
+  else storeMock.readRunPauseSteps.mockResolvedValue({ packageVersion: read.packageVersion ?? null, approvalPolicy: structuredClone(read.approvalPolicy) });
+}
 vi.mock("../trigger-gate", () => ({ isTriggerReleased: vi.fn(async () => true) }));
 vi.mock("../skill-autosave", () => ({
   runSkillAutosaveOnRunCompletion: vi.fn(async () => undefined),
@@ -282,7 +285,7 @@ describe("the declared review asks the one core before it pins anything", () => 
   afterEach(() => unbindSeam());
 
   it("asks the core with the run's org, its template and the marker's own targets", async () => {
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     const run = makeRun({ reviewTargets: TARGETS });
 
     await handleWayflowTaskState({
@@ -323,7 +326,7 @@ describe("the declared review asks the one core before it pins anything", () => 
       reason: "the review fires for one of the named artifacts",
       targets: [TARGETS[1]!],
     } as never);
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     const run = makeRun({ reviewTargets: TARGETS });
 
     await handleWayflowTaskState({
@@ -347,7 +350,7 @@ describe("the declared review asks the one core before it pins anything", () => 
   it("App163: a failed core preserves the raw request and authorizes no target", async () => {
     const failure = new Error("policy store unavailable");
     decideSpy.mockRejectedValue(failure);
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     const raw = [...TARGETS];
     const before = JSON.stringify(raw);
     const run = makeRun({ reviewTargets: raw });
@@ -359,7 +362,7 @@ describe("the declared review asks the one core before it pins anything", () => 
   });
 
   it("a firing decision keeps the surface it always had", async () => {
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     const run = makeRun({ reviewTargets: TARGETS });
 
     await handleWayflowTaskState({
@@ -389,7 +392,7 @@ describe("the declared review asks the one core before it pins anything", () => 
       review: false,
       why: "org policy forbids review for this class",
     });
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     const run = makeRun({ reviewTargets: TARGETS });
 
     await handleWayflowTaskState({
@@ -415,7 +418,7 @@ describe("the declared review asks the one core before it pins anything", () => 
       review: false,
       why: "the review step names no usable artifact",
     });
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     const run = makeRun({ reviewTargets: "not-a-target-set" });
 
     await handleWayflowTaskState({
@@ -439,7 +442,7 @@ describe("the declared review asks the one core before it pins anything", () => 
     // gate for THIS run and org wins over the legacy gate.
     decideSpy.mockResolvedValue({ review: false, why: "org policy forbids review for this class" });
     readGateSpy.mockResolvedValue({ orgId: "org-rev", status: "pending" });
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     const run = makeRun({ reviewTargets: TARGETS });
 
     await handleWayflowTaskState({
@@ -459,7 +462,7 @@ describe("the declared review asks the one core before it pins anything", () => 
   it("App163: a thrown core failure stays the exact existing error and authorizes no gate", async () => {
     const failure = new Error("policy store unavailable");
     decideSpy.mockRejectedValue(failure);
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     const raw = [...TARGETS];
     const before = JSON.stringify(raw);
     const run = makeRun({ reviewTargets: raw });
@@ -471,7 +474,7 @@ describe("the declared review asks the one core before it pins anything", () => 
   });
 
   it("an UNMARKED gate never asks the core at all", async () => {
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(UNMARKED_STEP));
+    bindTemplate(makeTemplate(UNMARKED_STEP));
     const run = makeRun({ reviewTargets: TARGETS });
 
     await handleWayflowTaskState({
@@ -486,7 +489,7 @@ describe("the declared review asks the one core before it pins anything", () => 
     expect(emitSpy).not.toHaveBeenCalled();
   });
   it.each(["missing", "rejected"])("App160: a core-approved set cannot mint through an %s gate inventory", async (failureMode) => {
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     const run = makeRun({ reviewTargets: TARGETS });
     if (failureMode === "missing") {
       const seam = (globalThis as { __cinatraArtifactReviewGateSeam?: { listGates?: unknown } }).__cinatraArtifactReviewGateSeam!;

@@ -18,13 +18,8 @@ const storeMock = vi.hoisted(() => ({
   readAgentRunByTaskId: vi.fn(),
   setAgentRunTokenHash: vi.fn(async () => {}),
   readAgentTemplateById: vi.fn(),
-  // cinatra#3089: a pause reads the steps its dispatch bound beside the source; here those of the template row.
-  readRunPauseSteps: vi.fn(async (): Promise<unknown> => {
-    const t = (await (storeMock.readAgentTemplateById as (id: string) => Promise<unknown>)("")) as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
-    // As the real reader: a settled record with a policy, or the refusal (no steps bound).
-    if (!t || t.approvalPolicy === undefined || t.approvalPolicy === null) throw new Error("no settled pause steps are bound to the run");
-    return { packageVersion: t.packageVersion ?? null, approvalPolicy: t.approvalPolicy };
-  }),
+  // cinatra#3089: a pause reads the steps its dispatch bound beside the source; none until the test binds them.
+  readRunPauseSteps: vi.fn(async (): Promise<unknown> => { throw new Error("no settled pause steps are bound to the run"); }),
   readAgentTemplates: vi.fn(async () => []),
   readAgentTemplateVersionBySemver: vi.fn(async () => null),
   readAgentTemplateVersionById: vi.fn(async () => null),
@@ -44,6 +39,14 @@ const storeMock = vi.hoisted(() => ({
   CINATRA_EXPECTED_SOURCE_MESSAGE_KEY: "__cinatra_expected_source__",
 }));
 vi.mock("../store", () => storeMock);
+// cinatra#3089: what the dispatch bound for a pause: the template's policy as it was when the test bound it (a copy),
+// never a later template read; a template with no policy binds none, and the reader refuses.
+function bindTemplate(t: unknown): void {
+  storeMock.readAgentTemplateById.mockResolvedValue(t as never);
+  const read = t as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
+  if (read?.approvalPolicy === undefined || read.approvalPolicy === null) storeMock.readRunPauseSteps.mockRejectedValue(new Error("no settled pause steps are bound to the run"));
+  else storeMock.readRunPauseSteps.mockResolvedValue({ packageVersion: read.packageVersion ?? null, approvalPolicy: structuredClone(read.approvalPolicy) });
+}
 
 vi.mock("../run-produced-review-hold", () => ({
   holdRunForProducedReview: vi.fn(async () => ({ held: false, reason: "no-review" })),
@@ -202,7 +205,7 @@ const run = () => runAgentBuilderExecutionJob({ runId: RUN_ID }, "job-3745").cat
 describe("cinatra#3745 - the first dispatch binds the executed source before it sends", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate());
+    bindTemplate(makeTemplate());
     storeMock.readAgentRunById.mockResolvedValue(makeRun());
     storeMock.selectWayflowRunStepToolPolicy.mockImplementation(async (input: { contextId: string }) => ({
       version: 1, contextId: input.contextId, source: "{}",
@@ -252,7 +255,7 @@ describe("cinatra#3745 - the first dispatch binds the executed source before it 
 describe("cinatra#3745 - the first message names the bound source", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate());
+    bindTemplate(makeTemplate());
     storeMock.readAgentRunById.mockResolvedValue(makeRun());
     storeMock.selectWayflowRunStepToolPolicy.mockImplementation(async (input: { contextId: string }) => ({
       version: 1, contextId: input.contextId, source: "{}",
@@ -296,12 +299,12 @@ describe("cinatra#4150 - the dispatch records the publish rows of the plan it ru
 
   it("the queued -> running CAS carries the template's rows map as JSON, and {} for a template with none", async () => {
     const rows = { publish: [{ label: "Title", input: "title" }] };
-    storeMock.readAgentTemplateById.mockResolvedValue({ ...makeTemplate(), publishingSteps: ["publish"], publishRows: rows });
+    bindTemplate({ ...makeTemplate(), publishingSteps: ["publish"], publishRows: rows });
     await run();
     expect(dispatchOf()).toEqual({ attemptId: expect.any(String), publishRows: JSON.stringify(rows) });
 
     storeMock.transitionRunStatus.mockClear();
-    storeMock.readAgentTemplateById.mockResolvedValue({ ...makeTemplate(), publishRows: null });
+    bindTemplate({ ...makeTemplate(), publishRows: null });
     await run();
     expect(dispatchOf()).toEqual({ attemptId: expect.any(String), publishRows: "{}" });
   });
@@ -330,7 +333,7 @@ describe("cinatra#3089 - a pause is classified by the steps of the version that 
   };
   async function dispatchPinnedToV1(installed: { version: string; marked: boolean }, v1Marked: boolean) {
     storeMock.readAgentRunById.mockResolvedValue(makeRun({ versionId: "ver-1", packageVersion: "1.0.0", a2aContextId: "ctx-3089" }));
-    storeMock.readAgentTemplateById.mockResolvedValue({ ...makeTemplate(), packageVersion: installed.version, approvalPolicy: { steps: [drafts(installed.marked)] } });
+    bindTemplate({ ...makeTemplate(), packageVersion: installed.version, approvalPolicy: { steps: [drafts(installed.marked)] } });
     storeMock.readAgentTemplateVersionById.mockResolvedValue({ templateId: "tmpl-3745", semver: "1.0.0",
       snapshot: { name: "test-template", description: null, sourceNl: "", compiledPlan: [], inputSchema: { type: "object", properties: {} },
         outputSchema: null, approvalPolicy: { steps: [drafts(v1Marked)] }, type: "leaf", taskSpec: null, packageVersion: "1.0.0",

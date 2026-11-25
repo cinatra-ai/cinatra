@@ -1947,9 +1947,9 @@ type EmbeddedArtifactReviewGate = { targetsInput: string; gate: InputMessageGate
 // `_find_yielding_step_id` in docker/wayflow/agent_loader.py. The root flow's
 // conversation is level 0; each FlowNode or parallel branch that holds the gate
 // adds one level, so a gate in the child flow of a top-level FlowNode is at
-// level 1. A marked gate deeper than this pauses with no claim, and its run is
-// stopped (ARTIFACT_REVIEW_GATE_UNVERIFIED), so it is refused here. Keep the
-// two values equal.
+// level 1. A pause deeper than this has no claim, and a run of a flow with a
+// marked gate stops it (ARTIFACT_REVIEW_GATE_UNVERIFIED), so such a flow is
+// refused here. Keep the two values equal.
 export const RUNTIME_GATE_NODE_MAX_DEPTH = 32;
 function gateConversationDepth(g: ReachableGate): number {
   let depth = 1;
@@ -2058,14 +2058,6 @@ function readEmbeddedArtifactReviewGate(
       error:
         `ARTIFACT_REVIEW_GATE_AMBIGUOUS: ${where} wraps the artifact-review gate ${quoteNodeId(gateId)}, ` +
         `and a control edge of the flow leads back to the FlowNode, so the gate can pause more than once`,
-    };
-  }
-  if (gateConversationDepth(only) > RUNTIME_GATE_NODE_MAX_DEPTH) {
-    return {
-      ok: false,
-      error:
-        `ARTIFACT_REVIEW_GATE_TOO_DEEP: ${where} wraps the artifact-review gate ${quoteNodeId(gateId)} ` +
-        `deeper than ${RUNTIME_GATE_NODE_MAX_DEPTH} levels of nested flows, below which the runtime cannot name the step that paused`,
     };
   }
   // The one gate must be a reviewer pause the runtime resolves to this step,
@@ -2738,6 +2730,20 @@ export async function compileOasAgentJson(opts: {
     const read = readEmbeddedArtifactReviewGate(id, comp as Parameters<typeof readEmbeddedArtifactReviewGate>[1], localRefs, parentRunInputTitles, dataFlowEdges, parsed);
     if (!read.ok) return { ok: false, error: read.error };
     if (read.found) embeddedReviewGates.set(id, read.found);
+  }
+  // cinatra#3089: a run of a flow with a marked gate stops every pause whose node the runtime does not name
+  // (ARTIFACT_REVIEW_GATE_UNVERIFIED in execution.ts), so such a flow is accepted only when every pause is named.
+  if (embeddedReviewGates.size > 0) {
+    // The root's own gates are at level 0, one less than gateConversationDepth counts for a child's.
+    const deep = readReachableInputMessageNodes(parsed, {}).gates.find((g) => gateConversationDepth(g) - 1 > RUNTIME_GATE_NODE_MAX_DEPTH);
+    if (deep) {
+      return {
+        ok: false,
+        error:
+          `ARTIFACT_REVIEW_GATE_TOO_DEEP: the flow carries an artifact-review gate, and its pause ${quoteNodeId(deep.id)} is ` +
+          `deeper than ${RUNTIME_GATE_NODE_MAX_DEPTH} levels of nested flows, below which the runtime cannot name the step that paused`,
+      };
+    }
   }
 
   const agentSteps: CompiledAgentOasStep[] = expandedEntries.map(({ id, gateStep }, idx) => {

@@ -52,13 +52,8 @@ vi.mock("@cinatra-ai/agent-ui-protocol/server", async (orig) => {
 const storeMock = vi.hoisted(() => ({
   readAgentRunById: vi.fn(),
   readAgentTemplateById: vi.fn(),
-  // cinatra#3089: a pause reads the steps its dispatch bound beside the source; here those of the template row.
-  readRunPauseSteps: vi.fn(async (): Promise<unknown> => {
-    const t = (await (storeMock.readAgentTemplateById as (id: string) => Promise<unknown>)("")) as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
-    // As the real reader: a settled record with a policy, or the refusal (no steps bound).
-    if (!t || t.approvalPolicy === undefined || t.approvalPolicy === null) throw new Error("no settled pause steps are bound to the run");
-    return { packageVersion: t.packageVersion ?? null, approvalPolicy: t.approvalPolicy };
-  }),
+  // cinatra#3089: a pause reads the steps its dispatch bound beside the source; none until the test binds them.
+  readRunPauseSteps: vi.fn(async (): Promise<unknown> => { throw new Error("no settled pause steps are bound to the run"); }),
   readAgentTemplates: vi.fn(async () => []),
   readAgentTemplateVersionBySemver: vi.fn(async () => null),
   readAgentTemplateVersionById: vi.fn(async () => null),
@@ -75,6 +70,14 @@ const storeMock = vi.hoisted(() => ({
   updateAgentRunA2AContextId: vi.fn(async () => undefined),
 }));
 vi.mock("../store", () => storeMock);
+// cinatra#3089: what the dispatch bound for a pause: the template's policy as it was when the test bound it (a copy),
+// never a later template read; a template with no policy binds none, and the reader refuses.
+function bindTemplate(t: unknown): void {
+  storeMock.readAgentTemplateById.mockResolvedValue(t as never);
+  const read = t as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
+  if (read?.approvalPolicy === undefined || read.approvalPolicy === null) storeMock.readRunPauseSteps.mockRejectedValue(new Error("no settled pause steps are bound to the run"));
+  else storeMock.readRunPauseSteps.mockResolvedValue({ packageVersion: read.packageVersion ?? null, approvalPolicy: structuredClone(read.approvalPolicy) });
+}
 vi.mock("../trigger-gate", () => ({ isTriggerReleased: vi.fn(async () => true) }));
 vi.mock("../skill-autosave", () => ({
   runSkillAutosaveOnRunCompletion: vi.fn(async () => undefined),
@@ -262,7 +265,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
   afterEach(() => unbindSeam());
 
   it("pins the flow-input targets + routes to the generic review surface", async () => {
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     const run = makeRun({ reviewTargets: TARGETS });
 
     await handleWayflowTaskState({
@@ -327,7 +330,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
   });
 
   it("an UNMARKED gate is byte-identical: never pins, keeps its own declared renderer", async () => {
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(UNMARKED_STEP));
+    bindTemplate(makeTemplate(UNMARKED_STEP));
     const run = makeRun({ reviewTargets: TARGETS });
 
     await handleWayflowTaskState({
@@ -347,7 +350,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
 
   it("App163: an unbound seam cannot read policy or authorize a new decision path", async () => {
     unbindSeam();
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     const run = makeRun({ reviewTargets: TARGETS });
     await expect(handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "pending_approval", task: inputRequiredTask("summary") })).rejects.toThrow();
     expect(emitSpy).not.toHaveBeenCalled();
@@ -356,7 +359,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
   });
 
   it("pin-conflict on a USABLE same-org pending gate routes to it (single decision path)", async () => {
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     emitSpy.mockResolvedValue({ ok: false, code: "pin-conflict", message: "different target set" });
     readGateSpy.mockResolvedValue({ orgId: "org-rev", status: "pending" });
     const run = makeRun({ reviewTargets: TARGETS });
@@ -382,7 +385,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
   });
 
   it("pin-conflict on a DIFFERENT-org gate falls OPEN to legacy (never redirects to a foreign gate)", async () => {
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     emitSpy.mockResolvedValue({ ok: false, code: "pin-conflict", message: "bound to a different org" });
     readGateSpy.mockResolvedValue({ orgId: "org-OTHER", status: "pending" });
     const run = makeRun({ reviewTargets: TARGETS });
@@ -401,7 +404,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
   });
 
   it("a gate re-read FAILURE fails CLOSED — routes to the review surface, never a dual path", async () => {
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     emitSpy.mockResolvedValue({ ok: false, code: "pin-conflict", message: "different target set" });
     readGateSpy.mockRejectedValue(new Error("db blip"));
     const run = makeRun({ reviewTargets: TARGETS });
@@ -420,7 +423,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
   });
 
   it("invalid-targets (no gate pinned) fails OPEN to the legacy gate (never dead-ends)", async () => {
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     emitSpy.mockResolvedValue({
       ok: false,
       code: "invalid-targets",
@@ -450,7 +453,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
   });
 
   it("a marked re-emit while already pending_approval does not re-transition (idempotent)", async () => {
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     const run = makeRun({ reviewTargets: TARGETS });
 
     await handleWayflowTaskState({
@@ -474,7 +477,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     // gate hands its inputs over only as its own message, a JSON object whose
     // marked value is itself a JSON string. The run's start default (an empty
     // set) must not shadow it.
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     const run = makeRun({ reviewTargets: [] });
 
     await handleWayflowTaskState({
@@ -516,7 +519,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
       rows.set(input.reviewTaskId, { orgId: input.orgId, status: "pending", targets, disposition: null, fingerprint: "new" });
       return { ok: true };
     });
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     const run = makeRun({ reviewTargets: TARGETS });
     await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "pending_approval", task: inputRequiredTask("original combined review") });
     expect([...rows.keys()]).toEqual([originalId]);
@@ -554,7 +557,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
           if (recovery === "list-unreadable") throw new Error("gate list unavailable");
           return [...rows.entries()].map(([reviewTaskId, row]) => ({ reviewTaskId, status: row.status }));
         });
-        storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+        bindTemplate(makeTemplate(MARKED_STEP));
         const run = makeRun({ reviewTargets: TARGETS });
         const attempt = handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus, task: inputRequiredTask("partial review mint") });
         if (recovery === "list-unreadable") {
@@ -598,7 +601,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
       rows.set(input.reviewTaskId, { orgId: input.orgId, status: "pending", targets: input.targets as typeof TARGETS, disposition: null, fingerprint: "new" });
       return { ok: true };
     });
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     const run = makeRun({ reviewTargets: TARGETS });
     await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "pending_approval", task: inputRequiredTask("preflight race") });
     expect(emitSpy).toHaveBeenCalledTimes(2);
@@ -617,7 +620,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     const original = { orgId: "org-rev", status: "pending", targets: originalTargets };
     readGateSpy.mockResolvedValue(original);
     emitSpy.mockResolvedValue({ ok: false, code: "pin-conflict", message: "the complete original set differs" });
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     const run = makeRun({ reviewTargets: TARGETS });
     await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "pending_approval", task: inputRequiredTask("mismatched caller") });
     expect(emitSpy).toHaveBeenCalledTimes(1);
@@ -632,7 +635,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
 
   it("a foreign original combined gate creates no scalar sibling and never redirects to that gate", async () => {
     readGateSpy.mockResolvedValue({ orgId: "org-OTHER", status: "pending", targets: TARGETS });
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     const run = makeRun({ reviewTargets: TARGETS });
     await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task: inputRequiredTask("foreign original") });
     expect(emitSpy).not.toHaveBeenCalled();
@@ -641,7 +644,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
 
   it("an unreadable original-gate lookup cannot authorize scalar siblings", async () => {
     readGateSpy.mockRejectedValue(new Error("original gate read unavailable"));
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     const run = makeRun({ reviewTargets: TARGETS });
     await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task: inputRequiredTask("unavailable original") });
     expect(emitSpy).not.toHaveBeenCalled();
@@ -650,7 +653,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
 
   it("a prior gate without readable pins cannot authorize a new sibling", async () => {
     readGateSpy.mockResolvedValue({ orgId: "org-rev", status: "pending" });
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     const run = makeRun({ reviewTargets: TARGETS });
     await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task: inputRequiredTask("unreadable original pins") });
     expect(emitSpy).not.toHaveBeenCalled();
@@ -664,7 +667,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     const original = { orgId: "org-rev", status: "pending", targets: [...TARGETS], fingerprint: "immutable-before-read-failure" };
     const before = JSON.stringify(original);
     readGateSpy.mockResolvedValue(original);
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     const run = makeRun({ reviewTargets: TARGETS });
     await expect(handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: status, task: inputRequiredTask("existing marked review") })).rejects.toBe(failure);
     expect(emitSpy).not.toHaveBeenCalled();
@@ -681,7 +684,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     const request = [TARGETS[0], newer, TARGETS[1]];
     readGateSpy.mockResolvedValue(original);
     listGatesSpy.mockResolvedValue([{ reviewTaskId: originalId, status: "pending" }]);
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     const run = makeRun({ reviewTargets: request });
     const dispatch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("No newer-revision action may dispatch from a held step"));
     try {
@@ -704,7 +707,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     const original = { orgId: "org-rev", status: "pending", targets: [TARGETS[0]], fingerprint: "preserved-v1" };
     const before = JSON.stringify(original);
     readGateSpy.mockResolvedValue(original);
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     const run = makeRun({ reviewTargets: [TARGETS[0], invalid, invalid, TARGETS[1]] });
     await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "pending_approval", task: inputRequiredTask("unknown pins") });
     expect(emitSpy).not.toHaveBeenCalled();
@@ -718,7 +721,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     const request = variation === "only-ambiguous" ? [TARGETS[0], newer] : variation === "other-after" ? [TARGETS[0], newer, TARGETS[1]] : [TARGETS[1], TARGETS[0], newer];
     const before = JSON.stringify(request);
     readGateSpy.mockResolvedValue(null);
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     const run = makeRun({ reviewTargets: request });
     // Test a core-approved set as well as the existing resolver-fault controls:
     // the executor must not turn two distinct revisions into two artifact gates.
@@ -742,7 +745,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     const before = JSON.stringify(raw);
     const kept = policy === "exclude-A" ? [TARGETS[1]] : policy === "keep-one-A" ? [TARGETS[0], TARGETS[1]] : [TARGETS[0], newer];
     decideSpy.mockResolvedValue({ review: true, targets: kept, reason: "approved existing policy result" });
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     const run = makeRun({ reviewTargets: raw });
     await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task: inputRequiredTask("policy filtered review") });
     expect(inventorySpy.mock.calls[0]?.[0]).toBe(raw);
@@ -765,7 +768,7 @@ describe("execution.ts — marked artifact-review gate (pin + route via the boot
     const original = { orgId: "org-rev", status: "pending", targets: [TARGETS[0]], fingerprint: "immutable-before-core-fault" };
     const before = JSON.stringify(original);
     readGateSpy.mockResolvedValue(original);
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(MARKED_STEP));
+    bindTemplate(makeTemplate(MARKED_STEP));
     const run = makeRun({ reviewTargets: TARGETS });
     const dispatch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("No action may dispatch after a policy fault"));
     try {

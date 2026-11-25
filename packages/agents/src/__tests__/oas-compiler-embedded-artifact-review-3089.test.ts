@@ -557,10 +557,27 @@ describe("cinatra#3089 — an embedded child's artifact-review gate", () => {
     expect(byName(atLimit, "Review drafts").artifactReviewGateNode).toBe("drafts-approval_gate");
     const error = await compileError({ draftsFlow: nestedDraftsFlow(RUNTIME_GATE_NODE_MAX_DEPTH, [markedGate()]) });
     expect(error).toContain("ARTIFACT_REVIEW_GATE_TOO_DEEP");
-    expect(error).toContain('"drafts_flow"');
+    expect(error).toContain('"drafts-approval_gate"');
     // An unmarked gate at that depth is not this rule's business.
     const unmarked = await compileSteps({ draftsFlow: nestedDraftsFlow(RUNTIME_GATE_NODE_MAX_DEPTH, [gate("drafts-approval_gate", {})]) });
     expect(byName(unmarked, "Review drafts").artifactReviewTargetsInput).toBeUndefined();
+  });
+
+  it("a flow with a marked gate and another pause, in another node, deeper than the runtime names a paused step at is refused; at that level it compiles", async () => {
+    // Every pause of a flow that carries a marked gate must name its node: the
+    // run cannot tell an unnamed pause from the review (ARTIFACT_REVIEW_GATE_UNVERIFIED).
+    const deepSender = (depth: number): Parts => ({
+      senderSubflowRef: "level-0",
+      extraRefs: { "level-0": nestedDraftsFlow(depth, [gate("sender-approval_gate", {})]) },
+    });
+    const atLimit = await compileSteps(deepSender(RUNTIME_GATE_NODE_MAX_DEPTH - 1));
+    expect(byName(atLimit, "Review drafts").artifactReviewGateNode).toBe("drafts-approval_gate");
+    const error = await compileError(deepSender(RUNTIME_GATE_NODE_MAX_DEPTH));
+    expect(error).toContain("ARTIFACT_REVIEW_GATE_TOO_DEEP");
+    expect(error).toContain('"sender-approval_gate"');
+    // Without a marked gate the same deep pause is not this rule's business.
+    const unmarked = await compileSteps({ ...deepSender(RUNTIME_GATE_NODE_MAX_DEPTH), draftsGates: [gate("drafts-approval_gate", {})] });
+    expect(byName(unmarked, "Review drafts").artifactReviewGateNode).toBeUndefined();
   });
 
   it("a deeply nested child with an unmarked gate compiles without a marker", async () => {

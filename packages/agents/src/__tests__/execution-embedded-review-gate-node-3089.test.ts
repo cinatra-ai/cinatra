@@ -60,13 +60,8 @@ vi.mock("@cinatra-ai/agent-ui-protocol/server", async (orig) => {
 const storeMock = vi.hoisted(() => ({
   readAgentRunById: vi.fn(),
   readAgentTemplateById: vi.fn(),
-  // cinatra#3089: a pause reads the steps its dispatch bound beside the source; here those of the template row.
-  readRunPauseSteps: vi.fn(async (): Promise<unknown> => {
-    const t = (await (storeMock.readAgentTemplateById as (id: string) => Promise<unknown>)("")) as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
-    // As the real reader: a settled record with a policy, or the refusal (no steps bound).
-    if (!t || t.approvalPolicy === undefined || t.approvalPolicy === null) throw new Error("no settled pause steps are bound to the run");
-    return { packageVersion: t.packageVersion ?? null, approvalPolicy: t.approvalPolicy };
-  }),
+  // cinatra#3089: a pause reads the steps its dispatch bound beside the source; none until the test binds them.
+  readRunPauseSteps: vi.fn(async (): Promise<unknown> => { throw new Error("no settled pause steps are bound to the run"); }),
   readAgentTemplates: vi.fn(async () => []),
   readAgentTemplateVersionBySemver: vi.fn(async () => null),
   readAgentTemplateVersionById: vi.fn(async () => null),
@@ -83,6 +78,14 @@ const storeMock = vi.hoisted(() => ({
   updateAgentRunA2AContextId: vi.fn(async () => undefined),
 }));
 vi.mock("../store", () => storeMock);
+// cinatra#3089: what the dispatch bound for a pause: the template's policy as it was when the test bound it (a copy),
+// never a later template read; a template with no policy binds none, and the reader refuses.
+function bindTemplate(t: unknown): void {
+  storeMock.readAgentTemplateById.mockResolvedValue(t as never);
+  const read = t as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
+  if (read?.approvalPolicy === undefined || read.approvalPolicy === null) storeMock.readRunPauseSteps.mockRejectedValue(new Error("no settled pause steps are bound to the run"));
+  else storeMock.readRunPauseSteps.mockResolvedValue({ packageVersion: read.packageVersion ?? null, approvalPolicy: structuredClone(read.approvalPolicy) });
+}
 vi.mock("../trigger-gate", () => ({ isTriggerReleased: vi.fn(async () => true) }));
 vi.mock("../skill-autosave", () => ({
   runSkillAutosaveOnRunCompletion: vi.fn(async () => undefined),
@@ -261,7 +264,7 @@ function pausedTask(claim: unknown) {
   };
 }
 async function pause(claim: unknown, gateIndex: number, steps: Array<Record<string, unknown>> = OUTREACH) {
-  storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(steps));
+  bindTemplate(makeTemplate(steps));
   gateIndexSpy.mockResolvedValue(gateIndex);
   const run = makeRun({ ...RUN_INPUTS, reviewTargets: TARGETS });
   await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task: pausedTask(claim) });
@@ -288,13 +291,8 @@ describe("cinatra#3089 — an embedded review gate's marker follows the verified
     readGateSpy.mockResolvedValue(null);
     listGatesSpy.mockResolvedValue([]);
     decideSpy.mockImplementation(async (input: { targets: unknown }) => ({ review: true, targets: input.targets, reason: "review the declared work" }));
-    // The steps bound at the dispatch are those of the template row, unless a test binds others.
-    storeMock.readRunPauseSteps.mockImplementation(async () => {
-      const t = (await storeMock.readAgentTemplateById("")) as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
-      // As the real reader: a settled record with a policy, or the refusal (no steps bound).
-      if (!t || t.approvalPolicy === undefined || t.approvalPolicy === null) throw new Error("no settled pause steps are bound to the run");
-      return { packageVersion: t.packageVersion ?? null, approvalPolicy: t.approvalPolicy };
-    });
+    // No steps are bound until the test binds them (bindTemplate, or the pinned cases below).
+    storeMock.readRunPauseSteps.mockReset();
     bindSeam();
   });
   afterEach(() => {
@@ -382,13 +380,11 @@ describe("cinatra#3089 — an embedded review gate's marker follows the verified
     expect(emitSpy).not.toHaveBeenCalled();
   });
 
-  it("a template read that throws is retried in the handler: the read that works decides the pause by its node as usual", async () => {
-    storeMock.readAgentTemplateById.mockReset();
+  it("a read of the bound steps that throws is retried in the handler: the read that works decides the pause by its node as usual", async () => {
     // The claim verifies, so the publish classification reads nothing; the
-    // pause's first read fails and its retry succeeds.
-    storeMock.readAgentTemplateById
-      .mockRejectedValueOnce(new Error("store blip"))
-      .mockResolvedValue(makeTemplate(OUTREACH));
+    // pause's first read of the steps bound at the dispatch fails, its retry succeeds.
+    bindTemplate(makeTemplate(OUTREACH));
+    storeMock.readRunPauseSteps.mockRejectedValueOnce(new Error("store blip"));
     gateIndexSpy.mockResolvedValue(0);
     const run = makeRun({ ...RUN_INPUTS, reviewTargets: TARGETS });
     await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task: pausedTask(signedClaim("drafts-approval_gate")) });
@@ -398,9 +394,9 @@ describe("cinatra#3089 — an embedded review gate's marker follows the verified
     expect(routedToReview()).toBe(true);
   });
 
-  it("a template read that throws in every attempt stops the run after the bounded retries: nothing is offered", async () => {
-    storeMock.readAgentTemplateById.mockReset();
-    storeMock.readAgentTemplateById.mockRejectedValue(new Error("store down"));
+  it("a read of the bound steps that throws in every attempt stops the run after the bounded retries: nothing is offered", async () => {
+    bindTemplate(makeTemplate(OUTREACH));
+    storeMock.readRunPauseSteps.mockRejectedValue(new Error("store down"));
     gateIndexSpy.mockResolvedValue(1);
     const run = makeRun({ ...RUN_INPUTS });
     await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task: pausedTask(signedClaim("drafts-approval_gate")) });
@@ -408,7 +404,7 @@ describe("cinatra#3089 — an embedded review gate's marker follows the verified
     expect(onInterruptSpy).not.toHaveBeenCalled();
     stoppedWith("PAUSE_POLICY_UNREAD");
     // The pause's first read and its retries (the verified claim needs no publish read).
-    expect(storeMock.readAgentTemplateById).toHaveBeenCalledTimes(1 + PAUSE_POLICY_READ_WAITS_MS.length);
+    expect(storeMock.readRunPauseSteps).toHaveBeenCalledTimes(1 + PAUSE_POLICY_READ_WAITS_MS.length);
   });
 
   // A run pinned to v1 (an explicit version: versionId AND packageVersion). The
@@ -432,7 +428,7 @@ describe("cinatra#3089 — an embedded review gate's marker follows the verified
   // (default: unchanged since the dispatch). `null` bound: no steps were bound to the run.
   async function pinnedPause(row: unknown, installed: Installed | null = { version: null, steps: UNMARKED }, liveNow: Installed | null = installed) {
     storeMock.readAgentTemplateById.mockReset();
-    storeMock.readAgentTemplateById.mockResolvedValue(liveNow === null ? null : makeTemplate(liveNow.steps, liveNow.version));
+    bindTemplate(liveNow === null ? null : makeTemplate(liveNow.steps, liveNow.version));
     storeMock.readRunPauseSteps.mockReset();
     if (installed === null) storeMock.readRunPauseSteps.mockRejectedValue(new Error("no pause steps are bound"));
     else storeMock.readRunPauseSteps.mockResolvedValue({ packageVersion: installed.version, approvalPolicy: { steps: installed.steps } });
@@ -520,7 +516,7 @@ describe("cinatra#3089 — an embedded review gate's marker follows the verified
   });
 
   it("version 2 installed while an unpinned version 1 task runs: the version 1 review marker bound at its dispatch still applies", async () => {
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(UNMARKED, "2.0.0"));
+    bindTemplate(makeTemplate(UNMARKED, "2.0.0"));
     storeMock.readRunPauseSteps.mockResolvedValue({ packageVersion: "1.0.0", approvalPolicy: { steps: OUTREACH } });
     gateIndexSpy.mockResolvedValue(1);
     const run = makeRun({ ...RUN_INPUTS, reviewTargets: TARGETS });

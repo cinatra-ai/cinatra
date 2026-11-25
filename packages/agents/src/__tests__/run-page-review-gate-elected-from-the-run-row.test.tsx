@@ -96,13 +96,8 @@ const row = vi.hoisted(() => ({
 const storeMock = vi.hoisted(() => ({
   readAgentRunById: vi.fn(),
   readAgentTemplateById: vi.fn(),
-  // cinatra#3089: a pause reads the steps its dispatch bound beside the source; here those of the template row.
-  readRunPauseSteps: vi.fn(async (): Promise<unknown> => {
-    const t = (await (storeMock.readAgentTemplateById as (id: string) => Promise<unknown>)("")) as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
-    // As the real reader: a settled record with a policy, or the refusal (no steps bound).
-    if (!t || t.approvalPolicy === undefined || t.approvalPolicy === null) throw new Error("no settled pause steps are bound to the run");
-    return { packageVersion: t.packageVersion ?? null, approvalPolicy: t.approvalPolicy };
-  }),
+  // cinatra#3089: a pause reads the steps its dispatch bound beside the source; none until the test binds them.
+  readRunPauseSteps: vi.fn(async (): Promise<unknown> => { throw new Error("no settled pause steps are bound to the run"); }),
   readAgentTemplates: vi.fn(async () => []),
   readAgentTemplateVersionBySemver: vi.fn(async () => null),
   readAgentTemplateVersionById: vi.fn(async () => null),
@@ -135,6 +130,14 @@ const storeMock = vi.hoisted(() => ({
   writeDurableHitlGateArtifact: vi.fn(async () => undefined),
 }));
 vi.mock("../store", () => storeMock);
+// cinatra#3089: what the dispatch bound for a pause: the template's policy as it was when the test bound it (a copy),
+// never a later template read; a template with no policy binds none, and the reader refuses.
+function bindTemplate(t: unknown): void {
+  storeMock.readAgentTemplateById.mockResolvedValue(t as never);
+  const read = t as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
+  if (read?.approvalPolicy === undefined || read.approvalPolicy === null) storeMock.readRunPauseSteps.mockRejectedValue(new Error("no settled pause steps are bound to the run"));
+  else storeMock.readRunPauseSteps.mockResolvedValue({ packageVersion: read.packageVersion ?? null, approvalPolicy: structuredClone(read.approvalPolicy) });
+}
 vi.mock("../trigger-gate", () => ({ isTriggerReleased: vi.fn(async () => true) }));
 vi.mock("../skill-autosave", () => ({
   runSkillAutosaveOnRunCompletion: vi.fn(async () => undefined),
@@ -287,7 +290,7 @@ beforeEach(() => {
     lifecycleCardRef: null,
   };
   enrichSpy.mockImplementation(async (schema: unknown) => ({ ...(schema as object) }));
-  storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate());
+  bindTemplate(makeTemplate());
   storeMock.readAgentRunById.mockImplementation(async () => makeRun());
   storeMock.transitionRunStatus.mockImplementation(
     async (_runId: string, from: string, to: string) => {

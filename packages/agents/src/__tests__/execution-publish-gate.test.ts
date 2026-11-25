@@ -43,13 +43,8 @@ vi.mock("@cinatra-ai/agent-ui-protocol/server", async (orig) => {
 const storeMock = vi.hoisted(() => ({
   readAgentRunById: vi.fn(),
   readAgentTemplateById: vi.fn(),
-  // cinatra#3089: a pause reads the steps its dispatch bound beside the source; here those of the template row.
-  readRunPauseSteps: vi.fn(async (): Promise<unknown> => {
-    const t = (await (storeMock.readAgentTemplateById as (id: string) => Promise<unknown>)("")) as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
-    // As the real reader: a settled record with a policy, or the refusal (no steps bound).
-    if (!t || t.approvalPolicy === undefined || t.approvalPolicy === null) throw new Error("no settled pause steps are bound to the run");
-    return { packageVersion: t.packageVersion ?? null, approvalPolicy: t.approvalPolicy };
-  }),
+  // cinatra#3089: a pause reads the steps its dispatch bound beside the source; none until the test binds them.
+  readRunPauseSteps: vi.fn(async (): Promise<unknown> => { throw new Error("no settled pause steps are bound to the run"); }),
   readAgentTemplates: vi.fn(async () => []),
   readAgentTemplateVersionBySemver: vi.fn(async () => null),
   readAgentTemplateVersionById: vi.fn(async () => null),
@@ -67,6 +62,14 @@ const storeMock = vi.hoisted(() => ({
   updateAgentRunA2AContextId: vi.fn(async () => undefined),
 }));
 vi.mock("../store", () => storeMock);
+// cinatra#3089: what the dispatch bound for a pause: the template's policy as it was when the test bound it (a copy),
+// never a later template read; a template with no policy binds none, and the reader refuses.
+function bindTemplate(t: unknown): void {
+  storeMock.readAgentTemplateById.mockResolvedValue(t as never);
+  const read = t as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
+  if (read?.approvalPolicy === undefined || read.approvalPolicy === null) storeMock.readRunPauseSteps.mockRejectedValue(new Error("no settled pause steps are bound to the run"));
+  else storeMock.readRunPauseSteps.mockResolvedValue({ packageVersion: read.packageVersion ?? null, approvalPolicy: structuredClone(read.approvalPolicy) });
+}
 vi.mock("../trigger-gate", () => ({ isTriggerReleased: vi.fn(async () => true) }));
 vi.mock("../skill-autosave", () => ({
   runSkillAutosaveOnRunCompletion: vi.fn(async () => undefined),
@@ -228,7 +231,7 @@ afterAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(["publish"]));
+  bindTemplate(makeTemplate(["publish"]));
   storeMock.transitionRunStatus.mockResolvedValue(undefined);
   decisions.insertParkedDecision.mockResolvedValue({ inserted: true, current: true, decision: parkedRow() });
   decisions.readDispatchedPublishRows.mockReset();
@@ -267,7 +270,7 @@ describe("a run that reaches a publish gate (A4 without the moment)", () => {
 
   it("the decision keeps the rows of the plan the attempt was DISPATCHED with, never the live template's (review finding 2)", async () => {
     // The live template was recompiled after the dispatch: it now labels the node's input differently and adds a row.
-    storeMock.readAgentTemplateById.mockResolvedValue({
+    bindTemplate({
       ...makeTemplate(["publish"]),
       publishRows: { publish: [{ label: "Headline", input: "title" }, { label: "Body", input: "body" }] },
     });
@@ -321,7 +324,7 @@ describe("a run that reaches a publish gate (A4 without the moment)", () => {
   it("the prefix wins: a step the template does not list, or a template with no list, is still held", async () => {
     for (const steps of [[], null, ["another_step"]]) {
       vi.clearAllMocks();
-      storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(steps));
+      bindTemplate(makeTemplate(steps));
       decisions.insertParkedDecision.mockResolvedValue({ inserted: true, current: true, decision: parkedRow() });
       await pause(sign(GATE));
       expect(decisions.insertParkedDecision).toHaveBeenCalledTimes(1);
@@ -434,7 +437,7 @@ describe("a publish gate that cannot be held ends the run failed (A10)", () => {
   });
 
   it("a template that is not found fails closed for a pause that claims a publish gate it cannot prove", async () => {
-    storeMock.readAgentTemplateById.mockResolvedValue(null);
+    bindTemplate(null);
     await pause(sign(GATE, "another-key"));
     const moves = transitions();
     expect(moves.map((m) => m.to)).toEqual(["failed"]);
@@ -481,7 +484,7 @@ describe("every other pause keeps today's road", () => {
     ["no claim, a legacy template", null, undefined],
     ["a verified claim of another step on a publishing template", ["publish"], sign("review_step")],
   ])("%s: no decision, the interrupt is offered", async (_label, steps, claim) => {
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(steps as string[] | null));
+    bindTemplate(makeTemplate(steps as string[] | null));
     await pause(claim);
     expect(decisions.insertParkedDecision).not.toHaveBeenCalled();
     expect(transitions().map((m) => m.to)).not.toContain("failed");
@@ -492,13 +495,13 @@ describe("every other pause keeps today's road", () => {
     ["no claim", undefined],
     ["an unverified claim of another step", sign("review_step", "another-key")],
     ["a verified claim of another step", sign("review_step")],
-  ])("a template read that fails and then works keeps today's road for %s: not failed, the interrupt is offered once (cinatra#3089)", async (_label, claim) => {
+  ])("a read of the bound steps that fails and then works keeps today's road for %s: not failed, the interrupt is offered once (cinatra#3089)", async (_label, claim) => {
     // cinatra#3089: a read fault is retried inside the handler (nothing else
     // re-drives the report); the read that works decides the pause as on main.
-    storeMock.readAgentTemplateById
-      .mockRejectedValueOnce(new Error("template store down"))
-      .mockRejectedValueOnce(new Error("template store down"))
-      .mockResolvedValue(makeTemplate([]));
+    bindTemplate(makeTemplate([]));
+    storeMock.readRunPauseSteps
+      .mockRejectedValueOnce(new Error("store down"))
+      .mockRejectedValueOnce(new Error("store down"));
     await pause(claim);
     expect(decisions.insertParkedDecision).not.toHaveBeenCalled();
     expect(transitions().map((m) => m.to)).not.toContain("failed");
@@ -509,16 +512,18 @@ describe("every other pause keeps today's road", () => {
     ["no claim", undefined],
     ["an unverified claim of another step", sign("review_step", "another-key")],
     ["a verified claim of another step", sign("review_step")],
-  ])("a template that cannot be read in any attempt stops the run for %s: no decision, no interrupt (cinatra#3089)", async (_label, claim) => {
+  ])("steps bound at the dispatch that cannot be read in any attempt stop the run for %s: no decision, no interrupt (cinatra#3089)", async (_label, claim) => {
     // cinatra#3089: the pause cannot be told from an artifact review without
-    // the flow's steps, so it is offered as no approval.
-    storeMock.readAgentTemplateById.mockRejectedValue(new Error("template store down"));
+    // the flow's steps, so it is offered as no approval. The template row reads
+    // as usual; only the run's bound row is unreadable.
+    bindTemplate(makeTemplate([]));
+    storeMock.readRunPauseSteps.mockRejectedValue(new Error("pause steps store down"));
     await pause(claim);
     expect(decisions.insertParkedDecision).not.toHaveBeenCalled();
     const moves = transitions();
     expect(moves.map((m) => m.to)).toEqual(["failed"]);
     expect(moves[0]!.error).toMatch(/^PAUSE_POLICY_UNREAD: /);
-    expect(moves[0]!.error).not.toContain("template store down");
+    expect(moves[0]!.error).not.toContain("pause steps store down");
     expect(onInterruptSpy).not.toHaveBeenCalled();
   });
 
@@ -527,7 +532,7 @@ describe("every other pause keeps today's road", () => {
     ["an unverified claim of another step", sign("review_step", "another-key")],
     ["a verified claim of another step", sign("review_step")],
   ])("a template that is not found keeps today's road for %s: no decision, the interrupt is offered", async (_label, claim) => {
-    storeMock.readAgentTemplateById.mockResolvedValue(null);
+    bindTemplate(null);
     // cinatra#3089: the row was removed after the dispatch, which bound its steps (a policy with no step).
     storeMock.readRunPauseSteps.mockResolvedValueOnce({ packageVersion: null, approvalPolicy: { steps: [] } });
     await pause(claim);

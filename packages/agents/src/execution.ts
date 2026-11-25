@@ -2444,7 +2444,10 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // PAUSE_POLICY_VERSION_MISMATCH). A step that names its gate's node is the step of a pause
     // by the pause's verified node, never by position. Without a verified node it
     // cannot be told whether this pause is such a review: the run is stopped
-    // failed, the pause offered as no approval. A read that throws is retried
+    // failed, the pause offered as no approval. The compiler accepts a flow with
+    // such a step only when the runtime names every pause of it (oas-compiler.ts,
+    // ARTIFACT_REVIEW_GATE_TOO_DEEP), so this stops no accepted pause that the
+    // runtime reported as it should. A read that throws is retried
     // briefly first (nothing re-drives a dropped report); only then the stop.
     const stopUnplacedPause = (error: string) =>
       transitionRunStatus(runId, fromStatus, "failed", { error, completedAt: new Date() }, authority)

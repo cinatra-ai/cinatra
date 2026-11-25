@@ -80,13 +80,8 @@ const storeMock = vi.hoisted(() => {
     rows,
     readAgentRunById: vi.fn(),
     readAgentTemplateById: vi.fn(),
-    // cinatra#3089: a pause reads the steps its dispatch bound beside the source; here those of the template row.
-    readRunPauseSteps: vi.fn(async (): Promise<unknown> => {
-      const t = (await (storeMock.readAgentTemplateById as (id: string) => Promise<unknown>)("")) as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
-      // No template: no steps were bound (a dispatch needs the row), so the pause read fails.
-      if (!t || t.approvalPolicy === undefined || t.approvalPolicy === null) throw new Error("no settled pause steps are bound to the run");
-      return { packageVersion: t.packageVersion ?? null, approvalPolicy: t.approvalPolicy };
-    }),
+    // cinatra#3089: a pause reads the steps its dispatch bound beside the source; none until the test binds them.
+    readRunPauseSteps: vi.fn(async (): Promise<unknown> => { throw new Error("no settled pause steps are bound to the run"); }),
     readAgentTemplates: vi.fn(async () => []),
     readAgentTemplateVersionBySemver: vi.fn(async () => null),
     readAgentTemplateVersionById: vi.fn(async () => null),
@@ -111,6 +106,14 @@ const storeMock = vi.hoisted(() => {
   };
 });
 vi.mock("../store", () => storeMock);
+// cinatra#3089: what the dispatch bound for a pause: the template's policy as it was when the test bound it (a copy),
+// never a later template read; a template with no policy binds none, and the reader refuses.
+function bindTemplate(t: unknown): void {
+  storeMock.readAgentTemplateById.mockResolvedValue(t as never);
+  const read = t as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
+  if (read?.approvalPolicy === undefined || read.approvalPolicy === null) storeMock.readRunPauseSteps.mockRejectedValue(new Error("no settled pause steps are bound to the run"));
+  else storeMock.readRunPauseSteps.mockResolvedValue({ packageVersion: read.packageVersion ?? null, approvalPolicy: structuredClone(read.approvalPolicy) });
+}
 vi.mock("../trigger-gate", () => ({ isTriggerReleased: vi.fn(async () => true) }));
 vi.mock("../skill-autosave", () => ({
   runSkillAutosaveOnRunCompletion: vi.fn(async () => undefined),
@@ -296,18 +299,16 @@ async function emitAndRead(
   return { emitted, ctx: ctx! };
 }
 
-// cinatra#3089: a template read that throws is retried inside the handler; here
-// the read that then works finds no template, so no steps are bound to the run.
-// The publish classification's own read takes the first fault, the pause's
-// first read the second.
+// cinatra#3089: a read of the steps bound at the dispatch that throws is retried
+// inside the handler; here the read that then works finds no steps bound to the
+// run, and the reader refuses.
 function faultThenAbsent() {
-  storeMock.readAgentTemplateById
-    .mockRejectedValueOnce(new Error("template store unavailable"))
-    .mockRejectedValueOnce(new Error("template store unavailable"))
-    .mockResolvedValue(null);
+  storeMock.readRunPauseSteps
+    .mockRejectedValueOnce(new Error("store unavailable"))
+    .mockRejectedValue(new Error("no settled pause steps are bound to the run"));
 }
 
-// cinatra#3089: a pause whose template cannot be read in any attempt is offered
+// cinatra#3089: a pause whose bound steps cannot be read in any attempt is offered
 // as no approval: the run is stopped failed and no gate is drawn on either road.
 async function expectStoppedUnread(_road: Road, task: ReturnType<typeof gateTask>, run: AgentRunRecord = makeRun()) {
   await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task });
@@ -347,7 +348,7 @@ describe("cinatra#4457 — a value-surfacing gate's keys never come from run inp
     gateIndex.value = 0;
     gateIndex.fail = false;
     enrichSpy.mockImplementation(async (schema: unknown) => ({ ...(schema as object) }));
-    storeMock.readAgentTemplateById.mockResolvedValue(
+    bindTemplate(
       makeTemplate([gateStep(6, LIST_RENDERER, LIST_GATE_KEYS)]),
     );
   });
@@ -410,7 +411,7 @@ describe("cinatra#4457 — a value-surfacing gate's keys never come from run inp
     });
 
     it("a gate WITHOUT the flag keeps its present values (run inputs fill its keys)", async () => {
-      storeMock.readAgentTemplateById.mockResolvedValue(
+      bindTemplate(
         makeTemplate([gateStep(6, LIST_RENDERER)]),
       );
       const { emitted, ctx } = await emitAndRead(road, gateTask('{"candidateMembers": [{"name": "Act'));
@@ -425,7 +426,7 @@ describe("cinatra#4457 — a value-surfacing gate's keys never come from run inp
       [1, LIST_RENDERER, LIST_GATE_KEYS],
     ];
     it.each(TWO_GATES)("a two-gate flow, renderer gate %i: that gate's keys are withheld", async (idx, renderer, keys) => {
-      storeMock.readAgentTemplateById.mockResolvedValue(
+      bindTemplate(
         makeTemplate([
           gateStep(3, SCHEMA_RENDERER, SCHEMA_GATE_KEYS),
           gateStep(6, LIST_RENDERER, LIST_GATE_KEYS),
@@ -456,7 +457,9 @@ describe("cinatra#4457 — a value-surfacing gate's keys never come from run inp
           return undefined;
         },
       });
-      storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate([step]));
+      // Bound as it is, not copied: a copy would read (and so move) the faulting property at the bind.
+      storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate([step]) as never);
+      storeMock.readRunPauseSteps.mockResolvedValue({ packageVersion: null, approvalPolicy: { steps: [step] } });
       const { ctx } = await emitAndRead(road, gateTask(undefined));
       expect(reads).toBeGreaterThanOrEqual(2);
       expect(ctx.xRenderer).toBe(LIST_RENDERER);
@@ -476,30 +479,30 @@ describe("cinatra#4457 — a value-surfacing gate's keys never come from run inp
     it.each(BAD_STORED_LISTS)("a stored step whose key list is %s: no run input fills the gate", async (_l, list) => {
       const step: Record<string, unknown> = gateStep(6, LIST_RENDERER);
       step.surfaceGateInputKeys = list;
-      storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate([step]));
+      bindTemplate(makeTemplate([step]));
       const { emitted, ctx } = await emitAndRead(road, gateTask("cut {"));
       expect(ctx.xRenderer).toBe(LIST_RENDERER);
       expectNoRunInput(emitted, ctx);
       expect(ctx.currentValues.output).toBe("cut {");
     });
 
-    it("the template read fails, then no steps are bound to the run: no gate is drawn, so no run input fills one", async () => {
+    it("the read of the bound steps fails, then none are bound to the run: no gate is drawn, so no run input fills one", async () => {
       faultThenAbsent();
       await expectStoppedUnread(road, gateTask(undefined));
     });
 
-    it("the template read fails in every attempt: no gate is drawn, so no run input fills one (cinatra#3089)", async () => {
-      storeMock.readAgentTemplateById.mockRejectedValue(new Error("template store unavailable"));
+    it("the read of the bound steps fails in every attempt: no gate is drawn, so no run input fills one (cinatra#3089)", async () => {
+      storeMock.readRunPauseSteps.mockRejectedValue(new Error("store unavailable"));
       await expectStoppedUnread(road, gateTask(undefined));
     });
 
     it("no steps are bound to the run (cinatra#3089): no gate is drawn, so no run input fills one", async () => {
-      storeMock.readAgentTemplateById.mockResolvedValue(null);
+      bindTemplate(null);
       await expectStoppedUnread(road, gateTask(undefined));
     });
 
     it("the template's steps are not a list: no run input fills the gate", async () => {
-      storeMock.readAgentTemplateById.mockResolvedValue({
+      bindTemplate({
         ...makeTemplate([]),
         approvalPolicy: { steps: { 0: gateStep(6, LIST_RENDERER, LIST_GATE_KEYS) } },
       });
@@ -510,7 +513,7 @@ describe("cinatra#4457 — a value-surfacing gate's keys never come from run inp
 
     const UNION_KEYS = [...SCHEMA_GATE_KEYS, ...LIST_GATE_KEYS];
     it("a two-gate flow whose renderer-gate index read fails: every key either gate lists is withheld", async () => {
-      storeMock.readAgentTemplateById.mockResolvedValue(
+      bindTemplate(
         makeTemplate([
           gateStep(3, SCHEMA_RENDERER, SCHEMA_GATE_KEYS),
           gateStep(6, LIST_RENDERER, LIST_GATE_KEYS),
@@ -530,7 +533,7 @@ describe("cinatra#4457 — a value-surfacing gate's keys never come from run inp
     it("a two-gate flow whose index read fails, with one gate's stored list unreadable: no run input fills the gate", async () => {
       const listStep: Record<string, unknown> = gateStep(6, LIST_RENDERER);
       listStep.surfaceGateInputKeys = "candidateMembers";
-      storeMock.readAgentTemplateById.mockResolvedValue(
+      bindTemplate(
         makeTemplate([gateStep(3, SCHEMA_RENDERER, SCHEMA_GATE_KEYS), listStep]),
       );
       gateIndex.fail = true;
@@ -540,7 +543,7 @@ describe("cinatra#4457 — a value-surfacing gate's keys never come from run inp
     });
 
     it("a two-gate flow whose index points past the last gate: every key either gate lists is withheld", async () => {
-      storeMock.readAgentTemplateById.mockResolvedValue(
+      bindTemplate(
         makeTemplate([
           gateStep(3, SCHEMA_RENDERER, SCHEMA_GATE_KEYS),
           gateStep(6, LIST_RENDERER, LIST_GATE_KEYS),
@@ -557,7 +560,7 @@ describe("cinatra#4457 — a value-surfacing gate's keys never come from run inp
     });
 
     it("a template whose steps fire no renderer gate: every key a step lists is withheld", async () => {
-      storeMock.readAgentTemplateById.mockResolvedValue(
+      bindTemplate(
         makeTemplate([{ ...gateStep(6, LIST_RENDERER, LIST_GATE_KEYS), firesRendererGate: false }]),
       );
       const { emitted, ctx } = await emitAndRead(road, gateTask(""));
@@ -571,7 +574,7 @@ describe("cinatra#4457 — a value-surfacing gate's keys never come from run inp
     });
 
     it("a two-gate flow without the flag whose index read fails: the run inputs fill the gate as before", async () => {
-      storeMock.readAgentTemplateById.mockResolvedValue(
+      bindTemplate(
         makeTemplate([gateStep(3, SCHEMA_RENDERER), gateStep(6, LIST_RENDERER)]),
       );
       gateIndex.fail = true;
@@ -589,7 +592,7 @@ describe("cinatra#4457 — a value-surfacing gate's keys never come from run inp
       selectedRefs: [],
     });
     it("a context-shaped message that lacks a declared key: a run input does not fill that key", async () => {
-      storeMock.readAgentTemplateById.mockResolvedValue(
+      bindTemplate(
         makeTemplate([gateStep(6, LIST_RENDERER, CONTEXT_KEYS)]),
       );
       const run = makeRun({ ...STORED, campaignId: "stored" });
@@ -601,18 +604,18 @@ describe("cinatra#4457 — a value-surfacing gate's keys never come from run inp
       expect(ctx.inputSchema[GATE_KEYS_NOT_FROM_RUN_INPUTS]).toEqual(["campaignId"]);
     });
 
-    it("a context-shaped message whose template read fails, then no steps are bound: no gate is drawn, so no run input fills one", async () => {
+    it("a context-shaped message whose read of the bound steps fails, then none are bound: no gate is drawn, so no run input fills one", async () => {
       faultThenAbsent();
       await expectStoppedUnread(road, gateTask(CONTEXT_MESSAGE));
     });
 
-    it("a context-shaped message whose template read fails in every attempt: no gate is drawn, so no run input fills one (cinatra#3089)", async () => {
-      storeMock.readAgentTemplateById.mockRejectedValue(new Error("template store unavailable"));
+    it("a context-shaped message whose read of the bound steps fails in every attempt: no gate is drawn, so no run input fills one (cinatra#3089)", async () => {
+      storeMock.readRunPauseSteps.mockRejectedValue(new Error("store unavailable"));
       await expectStoppedUnread(road, gateTask(CONTEXT_MESSAGE));
     });
 
     it("a context-shaped message with no steps bound to the run (cinatra#3089): no gate is drawn, so no run input fills one", async () => {
-      storeMock.readAgentTemplateById.mockResolvedValue(null);
+      bindTemplate(null);
       await expectStoppedUnread(road, gateTask(CONTEXT_MESSAGE));
     });
 
@@ -626,7 +629,7 @@ describe("cinatra#4457 — a value-surfacing gate's keys never come from run inp
         listGates: vi.fn(async () => []),
       };
       try {
-        storeMock.readAgentTemplateById.mockResolvedValue(
+        bindTemplate(
           makeTemplate([
             { ...gateStep(6, LIST_RENDERER, LIST_GATE_KEYS), artifactReviewTargetsInput: "reviewTargets" },
           ]),
@@ -648,7 +651,7 @@ describe("cinatra#4457 — a value-surfacing gate's keys never come from run inp
     it("a gate without the flag and without a step schema, whose pendingApproval holds the list key: the host does not pass the key on", async () => {
       const step: Record<string, unknown> = gateStep(6, LIST_RENDERER);
       delete step.inputMessageSchema;
-      storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate([step]));
+      bindTemplate(makeTemplate([step]));
       const { emitted, ctx } = await emitAndRead(
         road,
         gateTask("cut {", { [GATE_KEYS_NOT_FROM_RUN_INPUTS]: ["campaignNote", "listName"] }),
@@ -781,7 +784,7 @@ describe("cinatra#4457 — a value-surfacing gate inside a FlowNode subflow, fro
 
   it.each(ROADS)("%s road: a stored start input does not fill the nested gate's key", async (road) => {
     const steps = await compileNestedGateSteps();
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(steps));
+    bindTemplate(makeTemplate(steps));
     const run = makeRun({ campaignId: "stored", campaignNote: "kept" });
     const { emitted, ctx } = await emitAndRead(road, gateTask(undefined), run);
     expect(hasKey(emitted.values, "campaignId"), "emitted campaignId").toBe(false);
