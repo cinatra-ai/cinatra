@@ -28,7 +28,11 @@
 //       wordpress_site_tool_call and the new wordpress_site_tool_write; both
 //       handlers forward through the one shared forwardSiteTool, which holds
 //       the governed invoker edge, so the guard asserts both handler edges
-//       and that shared function.
+//       and that shared function. Connector #120 (cinatra#3745) gave the
+//       read tool a validated catalog row: the guard pins that the read tool
+//       adds exactly two fields to the forwarded call, both from that row, that
+//       the caller's input has no field for them, and that no function other
+//       than the shared forward names the invoker.
 //
 // It is a pure static/AST-shaped source assertion: hermetic, Docker-free, and
 // runs in the always-on `pnpm test:root` suite (build-image.yml) where
@@ -126,12 +130,56 @@ function assertGovernedWordPressRouting(code: string): void {
     const forwards = callsNamed(body, "forwardSiteTool");
     expect(forwards).toHaveLength(1);
     expect(forwards[0] === body || ts.isReturnStatement(forwards[0].parent)).toBe(true);
-    if (ts.isBlock(body)) expect(bodyText).toContain("constinput=siteToolCallSchema.parse(request.input);");
-    expect(forwards[0].arguments.map((arg) => arg.getText().replace(/\s+/g, ""))).toEqual([
-      ts.isBlock(body) ? "input" : "siteToolCallSchema.parse(request.input)",
-      JSON.stringify(name),
-    ]);
+    // The whole handler body is pinned, so nothing else can ride along:
+    //  - the write tool forwards the input as the one parser returned it;
+    //  - the read tool parses the same way, forwards only after `readRow` found
+    //    its validated catalog row (no row is the fixed refusal), and then adds
+    //    exactly two fields, both taken from that row and never from the
+    //    caller: the server the call is pinned to and the row's annotations.
+    const expectedBody = name === "wordpress_site_tool_write"
+      ? 'forwardSiteTool(parseSiteToolCallInput(request.input),"wordpress_site_tool_write")'
+      : "{constinput=parseSiteToolCallInput(request.input);constrow=awaitreadRow(input);"
+        + "if(row===null)thrownewError(SITE_TOOL_READ_ONLY_REFUSAL);"
+        + 'returnforwardSiteTool({...input,serverId:row.serverId,expectedRawAnnotations:row.rawAnnotations},"wordpress_site_tool_call");}';
+    // A trailing comma is formatting, not a change.
+    expect(bodyText.replace(/,([)}\]])/g, "$1")).toBe(expectedBody);
+    expect(forwards[0].arguments[forwards[0].arguments.length - 1].getText()).toBe(JSON.stringify(name));
   }
+
+  // The caller's input has the five fields of the shared schema and no other:
+  // in particular no `expectedRawAnnotations`, which only the read tool's
+  // validated row may supply. The parser validates with that schema and
+  // resolves the arguments from `args` or `argsJson`, nothing else.
+  const schemaDeclaration = source.statements
+    .filter(ts.isVariableStatement)
+    .flatMap((statement) => [...statement.declarationList.declarations])
+    .find((declaration) => declaration.name.getText() === "siteToolCallSchema");
+  const schemaInit = schemaDeclaration?.initializer;
+  const schemaShape = schemaInit && ts.isCallExpression(schemaInit) ? schemaInit.arguments[0] : undefined;
+  if (!schemaShape || !ts.isObjectLiteralExpression(schemaShape)) throw new Error("Missing siteToolCallSchema shape");
+  expect(schemaShape.properties.map(propertyName).sort()).toEqual(["args", "argsJson", "instanceId", "serverId", "toolName"]);
+  const parser = namedFunction(source, "parseSiteToolCallInput");
+  expect(callsNamed(parser.body!, "siteToolCallSchema.parse")).toHaveLength(1);
+  const parserText = parser.body!.getText().replace(/\s+/g, "");
+  expect(parserText).toContain("const{argsJson,args,...rest}=siteToolCallSchema.parse(raw);");
+  expect(parserText).toContain("return{...rest,args:argsJson!==undefined?parseArgsJson(argsJson):(args??{})};");
+
+  // The governed invoker is named in exactly one function: no helper, parser or
+  // row check reaches the site by another path.
+  const forwardDeclaration = namedFunction(source, "forwardSiteTool");
+  const outside: string[] = [];
+  (function findInvokerReferences(node: ts.Node) {
+    const reference = (ts.isIdentifier(node) && node.text === "invokeSiteTool")
+      || (ts.isStringLiteral(node) && node.text === "invokeSiteTool" && ts.isElementAccessExpression(node.parent));
+    if (reference && (node.getStart() < forwardDeclaration.getStart() || node.getEnd() > forwardDeclaration.getEnd())) {
+      // The one type-level mention is the parameter type of the review-gated helper.
+      let inType = false;
+      for (let up: ts.Node | undefined = node.parent; up; up = up.parent) if (ts.isTypeNode(up)) inType = true;
+      if (!inType) outside.push(node.parent.getText());
+    }
+    ts.forEachChild(node, findInvokerReferences);
+  })(source);
+  expect(outside).toEqual([]);
 
   const forward = namedFunction(source, "forwardSiteTool");
   expect(forward.parameters.map((parameter) => parameter.name.getText())).toEqual(["input", "tool"]);
@@ -169,14 +217,57 @@ function assertGovernedWordPressRouting(code: string): void {
   expect(authority[0].getStart()).toBeLessThan(updateCalls[0].getStart());
   expect(update.getText()).toMatch(/if\s*\(!instanceId\)\s*\{\s*throw/);
   expect(update.getText()).toMatch(/if\s*\(!Number\.isInteger\(postId\)\s*\|\|\s*postId\s*<=\s*0\)\s*\{\s*throw/);
-  for (const call of [...genericCalls, ...updateCalls]) {
-    const args = call.arguments[0];
-    if (!args || !ts.isObjectLiteralExpression(args)) throw new Error("Missing governed invocation coordinates");
-    const fields = args.properties.filter(ts.isPropertyAssignment);
-    expect(fields.find((field) => field.name.getText() === "toolName")?.initializer.getText()).toBe("input.toolName");
-    expect(fields.find((field) => field.name.getText() === "args")?.initializer.getText()).toBe("input.args");
-    expect(fields.some((field) => ["actor", "connectorKey", "kind"].includes(field.name.getText()))).toBe(false);
-  }
+  // What each invoker call carries is pinned field by field, so none can be
+  // added, taken from elsewhere or changed: the tool and its arguments exactly
+  // as the caller gave them (no actor, connector key or kind: those are
+  // host-derived), the instance and server coordinates, and, on the read path
+  // only, the annotations the validated row had. The write-gated update call
+  // carries no annotations.
+  expect(invokerFields(genericCalls[0])).toEqual([
+    ["toolName", "input.toolName"],
+    ["args", "input.args"],
+    ["instanceId", "input.instanceId"],
+    ["serverId", "input.serverId"],
+    ["expectedRawAnnotations", "input.expectedRawAnnotations"],
+  ]);
+  expect(invokerFields(updateCalls[0])).toEqual([
+    ["toolName", "input.toolName"],
+    ["args", "input.args"],
+    ["instanceId", "instanceId"],
+    ["serverId", "input.serverId"],
+  ]);
+}
+
+// The fields of an invoker call's one object argument as [name, value text]:
+// plain properties and `...(cond ? { name: value } : {})` spreads. Any other
+// element is refused, so a new kind of element cannot slip past the pin.
+function invokerFields(call: ts.CallExpression): Array<[string, string]> {
+  const argument = call.arguments[0];
+  if (!argument || !ts.isObjectLiteralExpression(argument)) throw new Error("Missing governed invocation coordinates");
+  const fields: Array<[string, string]> = [];
+  const take = (element: ts.ObjectLiteralElementLike): void => {
+    if (ts.isPropertyAssignment(element)) {
+      fields.push([propertyName(element), element.initializer.getText().replace(/\s+/g, "")]);
+    } else if (ts.isShorthandPropertyAssignment(element)) {
+      fields.push([propertyName(element), element.name.getText()]);
+    } else if (ts.isSpreadAssignment(element)) {
+      const spread = ts.isParenthesizedExpression(element.expression) ? element.expression.expression : element.expression;
+      if (
+        ts.isConditionalExpression(spread)
+        && ts.isObjectLiteralExpression(spread.whenTrue)
+        && ts.isObjectLiteralExpression(spread.whenFalse)
+        && spread.whenFalse.properties.length === 0
+      ) {
+        spread.whenTrue.properties.forEach(take);
+      } else {
+        throw new Error(`Unrecognized spread in a governed invocation: ${element.getText()}`);
+      }
+    } else {
+      throw new Error(`Unrecognized element in a governed invocation: ${element.getText()}`);
+    }
+  };
+  argument.properties.forEach(take);
+  return fields;
 }
 
 const FORWARD_ANCHOR = "async function forwardSiteTool(";
@@ -260,8 +351,8 @@ describe("in-admin CMS egress guard — hosted WordPress connector", () => {
     const changed = mutateHandler(
       code,
       HANDLERS_ANCHOR,
-      'forwardSiteTool(siteToolCallSchema.parse(request.input), "wordpress_site_tool_write")',
-      "getWordPressDeps().invokeSiteTool!(siteToolCallSchema.parse(request.input))",
+      'forwardSiteTool(parseSiteToolCallInput(request.input), "wordpress_site_tool_write")',
+      "getWordPressDeps().invokeSiteTool!(parseSiteToolCallInput(request.input))",
     );
     expect(() => assertGovernedWordPressRouting(changed)).toThrow();
   });
@@ -270,8 +361,8 @@ describe("in-admin CMS egress guard — hosted WordPress connector", () => {
     const changed = mutateHandler(
       code,
       HANDLERS_ANCHOR,
-      'forwardSiteTool(siteToolCallSchema.parse(request.input), "wordpress_site_tool_write")',
-      "ungovernedCall(siteToolCallSchema.parse(request.input))",
+      'forwardSiteTool(parseSiteToolCallInput(request.input), "wordpress_site_tool_write")',
+      "ungovernedCall(parseSiteToolCallInput(request.input))",
     );
     expect(() => assertGovernedWordPressRouting(changed)).toThrow();
   });
@@ -280,8 +371,8 @@ describe("in-admin CMS egress guard — hosted WordPress connector", () => {
     const changed = mutateHandler(
       code,
       HANDLERS_ANCHOR,
-      'forwardSiteTool(siteToolCallSchema.parse(request.input), "wordpress_site_tool_write")',
-      'forwardSiteTool(siteToolCallSchema.parse(request.input), "wordpress_site_tool_call")',
+      'forwardSiteTool(parseSiteToolCallInput(request.input), "wordpress_site_tool_write")',
+      'forwardSiteTool(parseSiteToolCallInput(request.input), "wordpress_site_tool_call")',
     );
     expect(() => assertGovernedWordPressRouting(changed)).toThrow();
   });
@@ -290,8 +381,8 @@ describe("in-admin CMS egress guard — hosted WordPress connector", () => {
     const changed = mutateHandler(
       code,
       HANDLERS_ANCHOR,
-      'return forwardSiteTool(input, "wordpress_site_tool_call");',
-      "return getWordPressDeps().invokeSiteTool!(input);",
+      'return forwardSiteTool(',
+      "return getWordPressDeps().invokeSiteTool!(",
     );
     expect(() => assertGovernedWordPressRouting(changed)).toThrow();
   });
@@ -304,6 +395,53 @@ describe("in-admin CMS egress guard — hosted WordPress connector", () => {
       'return {\n    "wordpress_site_tool_extra": async (request: unknown) => getWordPressDeps().invokeSiteTool!(request),',
     );
     expect(() => assertGovernedWordPressRouting(changed)).toThrow();
+  });
+
+  // The pins on the read tool's validated row and on what each invoker call
+  // carries: each change below must fail the guard.
+  const replaceOnce = (before: string, after: string): string => {
+    expect(code.split(before)).toHaveLength(2);
+    return code.replace(before, after);
+  };
+  // The changed source is made OUTSIDE the asserted call, so a failed
+  // precondition of the change cannot pass as a rejection.
+  const rejects = (changed: string): void => {
+    expect(() => assertGovernedWordPressRouting(changed)).toThrow();
+  };
+
+  it("rejects a read tool that forwards without its validated row, or a refusal that no longer stops it", () => {
+    rejects(replaceOnce("if (row === null) throw new Error(SITE_TOOL_READ_ONLY_REFUSAL);", ""));
+    rejects(replaceOnce("{ ...input, serverId: row.serverId, expectedRawAnnotations: row.rawAnnotations }", "input"));
+  });
+
+  it("rejects a read tool that takes the server or the annotations from the caller, or adds a field", () => {
+    rejects(replaceOnce("serverId: row.serverId,", "serverId: input.serverId,"));
+    rejects(replaceOnce("expectedRawAnnotations: row.rawAnnotations }", "expectedRawAnnotations: input.expectedRawAnnotations }"));
+    rejects(replaceOnce("expectedRawAnnotations: row.rawAnnotations }", "expectedRawAnnotations: row.rawAnnotations, extra: input.args }"));
+  });
+
+  it("rejects a second forward call in a site tool", () => {
+    rejects(replaceOnce("const row = await readRow(input);", 'const row = await readRow(input);\n      await forwardSiteTool(input, "wordpress_site_tool_call");'));
+  });
+
+  it("rejects a field added to, or taken from elsewhere in, the governed invocation", () => {
+    const annotations = "...(input.expectedRawAnnotations !== undefined ? { expectedRawAnnotations: input.expectedRawAnnotations } : {}),";
+    rejects(replaceOnce(annotations, `${annotations}\n    extra: input.args,`));
+    rejects(replaceOnce(annotations, ""));
+    const instance = "...(input.serverId !== undefined ? { serverId: input.serverId } : {}),";
+    rejects(mutateHandler(code, FORWARD_ANCHOR, instance, `${instance}\n    extra: input.args,`));
+    // the write-gated update call, which carries no annotations
+    rejects(replaceOnce(`    instanceId,\n    ${instance}`, `    instanceId,\n    ${instance}\n    extra: input.args,`));
+    rejects(replaceOnce(`    instanceId,\n    ${instance}`, `    instanceId,\n    ${instance}\n    expectedRawAnnotations: input.expectedRawAnnotations,`));
+  });
+
+  it("rejects a caller input that can carry the row's annotations, or a hollow parser", () => {
+    rejects(replaceOnce("export const siteToolCallSchema = z.object({", "export const siteToolCallSchema = z.object({\n  expectedRawAnnotations: z.record(z.string(), z.unknown()).optional(),"));
+    rejects(replaceOnce("= siteToolCallSchema.parse(raw);", "= raw as z.infer<typeof siteToolCallSchema>;"));
+  });
+
+  it("rejects a second invoker path in a helper", () => {
+    rejects(replaceOnce("async function readRow(input: SiteToolCallInput): Promise<SiteToolRow | null> {", 'async function readRow(input: SiteToolCallInput): Promise<SiteToolRow | null> {\n  await getWordPressDeps().invokeSiteTool!({ toolName: "x", args: {} });'));
   });
 });
 
