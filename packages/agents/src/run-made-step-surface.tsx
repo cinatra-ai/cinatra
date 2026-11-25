@@ -164,6 +164,9 @@ export function RunMadeStepSurface({
   const produced = rows.filter((row) => !row.used);
   return (
     <div
+      // §I.2's surface anchor (app-artifact-review). One step page, both of its
+      // readings: the listed rows and the empty "kept nothing" sentence.
+      data-conformance-id="run-outputs-list"
       data-run-made={empty ? "empty" : "listed"}
       data-run-completion={produced.length > 0 ? "with-output" : "no-output"}
       data-run-completion-evidence="outputs"

@@ -609,7 +609,6 @@ describe("the decide door", () => {
     });
     await moveTo({ ...PENDING, decisionId: "d2" });
     const after = await rootOf(mounted);
-    // red-first-expect: expected 'Wrong channel.' to be ''
     expect(after.querySelector("textarea")?.value).toBe("");
     await act(async () => {
       fireEvent.click(after.querySelector(DECLINE)!);
@@ -628,7 +627,6 @@ describe("the decide door", () => {
     expect((await rootOf(mounted)).getAttribute("data-lifecycle-card-state")).toBe("no_longer_open");
     await moveTo({ ...PENDING, decisionId: "d2" });
     const after = await rootOf(mounted);
-    // red-first-expect: expected 'no_longer_open' to be 'pending'
     expect(after.getAttribute("data-lifecycle-card-state")).toBe("pending");
     expect(after.querySelector<HTMLButtonElement>(APPROVE)?.disabled).toBe(false);
   });
@@ -643,7 +641,6 @@ describe("the decide door", () => {
     });
     await moveTo({ ...PENDING, decisionId: "d2" });
     // The earlier decision's answer is still out; the newer decision's controls are its own.
-    // red-first-expect: expected true to be false
     expect((await rootOf(mounted)).querySelector<HTMLButtonElement>(APPROVE)?.disabled).toBe(false);
     await act(async () => {
       replies[0]!("not_open");
@@ -680,7 +677,6 @@ describe("the decide door", () => {
       });
       await settle();
       const after = await rootOf(mounted);
-      // red-first-expect: expected 'no_longer_open' to be 'approved'
       expect(after.getAttribute("data-lifecycle-card-state")).toBe(settled.state);
       expect(after.textContent).not.toContain("no longer open");
       mounted.unmount();
@@ -690,7 +686,6 @@ describe("the decide door", () => {
   // The settled re-read and the late reply land in ONE batch: the reply's guard still reads the open decision (the ref
   // follows the drawn decision only after a commit), so the reply's reading is recorded. The card still draws the
   // settled decision: "no longer open" and "failed" speak only for the decision the card shows.
-  // red-first-expect: expected 'no_longer_open' to be 'approved'
   it("a settled re-read and a late reply in the same batch: the settled reading stands", async () => {
     for (const [settled, outcome] of [[APPROVED, "not_open"], [DECLINED, "not_open"], [EXPIRED, "failed"]] as const) {
       const replies: Array<(outcome: "not_open" | "failed") => void> = [];
@@ -721,7 +716,6 @@ describe("the decide door", () => {
     }
   });
 
-  // red-first-expect: expected true to be false
   it("a reply that lands while a read briefly drew no decision leaves the controls live when the same decision returns", async () => {
     const replies: Array<(outcome: "failed") => void> = [];
     const decide = vi.fn<PublishDecisionDecide>(() => new Promise((resolve) => replies.push(resolve)));
@@ -758,7 +752,6 @@ describe("the decide door", () => {
     mounted.unmount();
   });
 
-  // red-first-expect: expected 'no_longer_open' to be 'pending'
   it("the same decision allowed by another person whose run did not go on offers Allow again, whatever the open request's reply said", async () => {
     for (const replyFirst of [true, false]) {
       const replies: Array<(outcome: "not_open") => void> = [];
@@ -814,7 +807,6 @@ describe("the decide door", () => {
     expect(root.textContent).toContain("Allow again to let it go on.");
   });
 
-  // red-first-expect: to have a length of 1 but got +0
   it("the Allow-again card carries the anchor the approved design names for it (app-lifecycle-cards.html XV)", async () => {
     stateMock.mockImplementation(async () => ({ ...PENDING, resumeOnly: true }));
     const root = await rootOf(mountOn("run_card", okDoor()));
