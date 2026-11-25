@@ -684,8 +684,15 @@ export const TOOL_SET_HEADER_HASH = "set";
 /** The sentinel content hash of a set's digest row. */
 export const TOOL_SET_DIGEST_HASH = "set-digest";
 
-/** One member of a set as its identity is taken: its title (trimmed, as it is stored), its typed data and its bytes' hash. */
-export type ToolSetMemberIdentity = { title: string; typedData: Record<string, unknown>; contentHash: string };
+/** One member of a set as its identity is taken: its title (trimmed, as it is stored), its typed data, its bytes' hash,
+ *  its effective MIME type (the detected one) and the object type it is filed under. */
+export type ToolSetMemberIdentity = {
+  title: string;
+  typedData: Record<string, unknown>;
+  contentHash: string;
+  mime: string;
+  objectType: string;
+};
 
 function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
@@ -699,12 +706,14 @@ function canonicalJson(value: unknown): string {
 /**
  * The digest of a set's content: SHA-256 over the canonical JSON of its members in order, each with its key (its
  * 1-based place in the set), title, typed data (keys sorted, so the order a caller wrote them in is not content)
- * and content hash. Two calls have one digest if and only if they name the same members, in the same order, with
- * the same values.
+ * content hash, effective MIME type and object type. Two calls have one digest if and only if they name the same
+ * members, in the same order, with the same values, as the same MIME type and under the same object type.
  */
 export function toolSetDigest(members: readonly ToolSetMemberIdentity[]): string {
   const canonical = canonicalJson(
-    members.map((m, i) => ({ key: i + 1, title: m.title, typedData: m.typedData ?? {}, contentHash: m.contentHash })),
+    members.map((m, i) => ({
+      key: i + 1, title: m.title, typedData: m.typedData ?? {}, contentHash: m.contentHash, mime: m.mime, objectType: m.objectType,
+    })),
   );
   return createHash("sha256").update(canonical, "utf8").digest("hex");
 }

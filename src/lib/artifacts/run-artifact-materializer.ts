@@ -893,6 +893,9 @@ function claimedCreateInput(input: {
   resolvedTarget: { objectTypeId: string; acceptedFileMimeTypes: string[] };
   originKind?: "agent_generated" | "live_generator";
   typedData?: Record<string, unknown>;
+  /** The SHA-256 and the size of `content` as bytes, when the caller has them (a list member): the blob store decides
+   *  the quota before reading and refuses a stream that is not exactly that content. */
+  knownContent?: { sha256: string; sizeBytes: number };
   /** The ledger statements of this write, committed in the SAME transaction as the artifact. */
   ledgerQueries: (ids: { artifactId: string; representationRevisionId: string }) => Array<{ text: string; values: unknown[] }>;
   extraTx2Queries?: (ids: { artifactId: string; representationRevisionId: string }) => Array<{ text: string; values: unknown[] }>;
@@ -916,6 +919,7 @@ function claimedCreateInput(input: {
     originKind: input.originKind ?? "agent_generated",
     ...(input.typedData ? { typedData: input.typedData } : {}),
     stream: asUtf8Stream(input.content),
+    ...(input.knownContent ? { knownContent: input.knownContent } : {}),
     // Server-side provenance: the actually-executing run id. The
     // existing cross-org validation inside the creation path yields
     // validatedRunId:null on any mismatch — never a caller-smuggled id.
@@ -1863,7 +1867,8 @@ const PUBLISH_CALL_IN_FLIGHT_SET_REFUSAL = {
  *     and the extension's install state, and the creation path's own check over the real envelope (the detected
  *     MIME, the type's accepts, the type's payload schema). The first refusal ends the call: nothing is stored.
  *  2. If this run already filed a set for this (node, extension), the call is compared with it as a whole: it is
- *     the same set if and only if its digest (each member's key, title, typed data and bytes, in order:
+ *     the same set if and only if its digest (each member's key, title, typed data, bytes, effective MIME type and
+ *     object type, in order:
  *     `toolSetDigest`) equals the digest recorded, once and immutably, with the set when it was first written. The
  *     stored artifacts are never read for that decision (an authorised edit of an object changes neither verdict).
  *     The same set answers the stored artifacts and writes nothing; anything else is refused, never naming a
@@ -1906,10 +1911,6 @@ export async function materializeToolArtifactSet(input: {
   if (n === 0) return { ok: false, code: MATERIALIZE_LIST_MEMBER_REFUSED, error: "a list call files at least one member; nothing was filed" };
   const titles = input.members.map((m) => m.title.trim());
   const hashes = input.members.map((m) => createHash("sha256").update(m.content, "utf8").digest("hex"));
-  // The identity of the set's content, taken from the call itself (never from stored objects): see `toolSetDigest`.
-  const callDigest = toolSetDigest(
-    input.members.map((m, i) => ({ title: titles[i]!, typedData: m.typedData ?? {}, contentHash: hashes[i]! })),
-  );
   const refuse = (member: number, why: string): ToolArtifactSetResult => ({
     ok: false,
     code: MATERIALIZE_LIST_MEMBER_REFUSED,
@@ -1920,6 +1921,8 @@ export async function materializeToolArtifactSet(input: {
   // 1. Every member, before anything is written.
   let target: { objectTypeId: string; acceptedFileMimeTypes: string[] } | null = null;
   let reviewed = false;
+  // What the writer will derive from each member's bytes: its size, hash and effective (detected) MIME type.
+  const facts = input.members.map((m) => artifactWriteFactsOfContent(m.content, input.mime));
   for (const [i, member] of input.members.entries()) {
     if (titles[i]!.length === 0) return refuse(i + 1, "title must be a non-empty string");
     const authorized = await authorizeToolMaterializeWrite({
@@ -1944,11 +1947,23 @@ export async function materializeToolArtifactSet(input: {
         title: titles[i]!,
         originKind: authorized.reviewed ? "live_generator" : "agent_generated",
       },
-      artifactWriteFactsOfContent(member.content, input.mime),
+      facts[i]!,
     );
     if (envelope !== null) return refuse(i + 1, envelope);
   }
   if (target === null) return refuse(1, "no write target resolved");
+  // The identity of the set's content, taken from the call itself (never from stored objects): see `toolSetDigest`.
+  // Each member's effective MIME type and the resolved object type are part of it: the same members filed as another
+  // MIME type, or under another object type, are another set.
+  const callDigest = toolSetDigest(
+    input.members.map((m, i) => ({
+      title: titles[i]!,
+      typedData: m.typedData ?? {},
+      contentHash: hashes[i]!,
+      mime: facts[i]!.mimeDetected,
+      objectType: target!.objectTypeId,
+    })),
+  );
   const gate = await writeGateRefusal({
     orgId: input.orgId,
     extension: input.extension,
@@ -1980,7 +1995,7 @@ export async function materializeToolArtifactSet(input: {
       }
     }
     if (read.members.length !== n) problems.push(`count (filed ${read.members.length}, call ${n})`);
-    if (problems.length === 0 && read.digest !== callDigest) problems.push("titles or typed data of the members");
+    if (problems.length === 0 && read.digest !== callDigest) problems.push("titles, typed data, MIME type or object type of the members");
     if (problems.length > 0) {
       return {
         ok: false,
@@ -2042,6 +2057,7 @@ export async function materializeToolArtifactSet(input: {
           resolvedTarget: target!,
           originKind: reviewed ? "live_generator" : undefined,
           typedData: member.typedData,
+          knownContent: { sha256: facts[i]!.sha256, sizeBytes: facts[i]!.sizeBytes },
           ledgerQueries: (ids) =>
             buildToolSetRowQueries({
               orgId: input.orgId,

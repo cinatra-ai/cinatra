@@ -430,7 +430,7 @@ describe("cinatra#3089 — the list is filed as ONE UNIT", () => {
     expect(commits).toEqual([3]);
     // The set's header, then each member's place in it; a header has no hash of a member and no position.
     const digest = toolSetDigest(
-      members().map((m) => ({ title: m.title, typedData: m.typedData ?? {}, contentHash: sha256(m.content) })),
+      members().map((m) => ({ title: m.title, typedData: m.typedData ?? {}, contentHash: sha256(m.content), mime: "text/markdown", objectType: BODY_TYPE })),
     );
     expect(ledger.map((r) => [r.outputId, r.contentHash])).toEqual([
       [`cinatra:set/"${NODE}"/header`, "set"],
@@ -477,11 +477,11 @@ describe("cinatra#3089 — the list is filed as ONE UNIT", () => {
   // red-first-expect: materializeToolArtifactSet is not a function
   it.each([
     ["a member's bytes", members((m, i) => (i === 1 ? { ...m, content: "Dear Bob, REVISED" } : m)), 2, "member 2: bytes"],
-    ["a member's title", members((m, i) => (i === 2 ? { ...m, title: "Hello Cy Lovelace" } : m)), undefined, "titles or typed data of the members"],
-    ["a member's corrected contact", members((m, i) => (i === 0 ? { ...m, typedData: { ...m.typedData, contactId: "c-CORRECTED" } } : m)), undefined, "titles or typed data of the members"],
-    ["a typed key REMOVED from a member (an otherwise identical retry)", members((m, i) => (i === 0 ? { ...m, typedData: { contactId: m.typedData!.contactId, runId: "run-1" } } : m)), undefined, "titles or typed data of the members"],
-    ["a typed key ADDED to a member", members((m, i) => (i === 1 ? { ...m, typedData: { ...m.typedData, region: "eu" } } : m)), undefined, "titles or typed data of the members"],
-    ["every typed key removed from every member", members((m) => ({ title: m.title, content: m.content })), undefined, "titles or typed data of the members"],
+    ["a member's title", members((m, i) => (i === 2 ? { ...m, title: "Hello Cy Lovelace" } : m)), undefined, "titles, typed data, MIME type or object type of the members"],
+    ["a member's corrected contact", members((m, i) => (i === 0 ? { ...m, typedData: { ...m.typedData, contactId: "c-CORRECTED" } } : m)), undefined, "titles, typed data, MIME type or object type of the members"],
+    ["a typed key REMOVED from a member (an otherwise identical retry)", members((m, i) => (i === 0 ? { ...m, typedData: { contactId: m.typedData!.contactId, runId: "run-1" } } : m)), undefined, "titles, typed data, MIME type or object type of the members"],
+    ["a typed key ADDED to a member", members((m, i) => (i === 1 ? { ...m, typedData: { ...m.typedData, region: "eu" } } : m)), undefined, "titles, typed data, MIME type or object type of the members"],
+    ["every typed key removed from every member", members((m) => ({ title: m.title, content: m.content })), undefined, "titles, typed data, MIME type or object type of the members"],
     ["two members swapped (the same members in another order)", (() => { const l = members(); return [l[1]!, l[0]!, l[2]!]; })(), 1, "member 1: bytes"],
     ["a member more", [...members(), { title: "Hello Di", content: "Dear Di", typedData: { contactId: "c-4", campaignId: "camp-1", runId: "run-1" } }], 4, "count (filed 3, call 4)"],
     ["a member fewer", members().slice(0, 2), undefined, "count (filed 3, call 2)"],
@@ -886,7 +886,7 @@ describe("cinatra#3089 — typed data of a list-filed body", () => {
 
   // red-first-expect: materializeToolArtifactSet is not a function
   it("S8 a member with no typed data is written with the same fields as a single filing of the same body", async () => {
-    const strip = ({ stream: _s, additionalTx2Queries: _a, ...fields }: Record<string, unknown>) => fields;
+    const strip = ({ stream: _s, additionalTx2Queries: _a, knownContent: _k, ...fields }: Record<string, unknown>) => fields;
     await fileSet(members((m) => ({ title: m.title, content: m.content })));
     const fromSet = strip(createSemanticArtifactsMock.mock.calls[0]![0][0]);
     ledger = [];
@@ -1127,8 +1127,9 @@ describe("cinatra#3089 — the set's identity is the digest recorded with it, ne
     expect(createSemanticArtifactsMock).not.toHaveBeenCalled();
   });
 
-  it("I1 the digest has no live-object input, and covers each member's key, title, typed data and bytes, in order", () => {
-    const m = (title: string, typedData: Record<string, unknown>, contentHash: string) => ({ title, typedData, contentHash });
+  it("I1 the digest has no live-object input, and covers each member's key, title, typed data, bytes, MIME type and object type, in order", () => {
+    const m = (title: string, typedData: Record<string, unknown>, contentHash: string, mime = "text/markdown", objectType = "@x/mail:body") =>
+      ({ title, typedData, contentHash, mime, objectType });
     const base = [m("A", { a: 1, b: 2 }, "h1"), m("B", { a: 1 }, "h2")];
     const same = toolSetDigest([m("A", { b: 2, a: 1 }, "h1"), m("B", { a: 1 }, "h2")]);
     expect(toolSetDigest(base)).toBe(same);
@@ -1139,7 +1140,22 @@ describe("cinatra#3089 — the set's identity is the digest recorded with it, ne
       [m("A", { a: 1, b: 3 }, "h1"), base[1]!],
       [m("A", { a: 1 }, "h1"), base[1]!],
       [m("A", { a: 1, b: 2 }, "h9"), base[1]!],
+      [m("A", { a: 1, b: 2 }, "h1", "text/plain"), base[1]!],
+      [base[0]!, m("B", { a: 1 }, "h2", "text/markdown", "@x/mail:other")],
     ]) expect(toolSetDigest(other)).not.toBe(toolSetDigest(base));
+  });
+
+  // red-first-expect: materializeToolArtifactSet is not a function
+  it("I1 the same members filed as plain text and retried as Markdown are a different set: refused, nothing written", async () => {
+    const plain = await fileSet(members(), { mime: "text/plain" });
+    expect(plain).toMatchObject({ ok: true, deduped: false });
+    createSemanticArtifactsMock.mockClear();
+    const markdown = await fileSet(members(), { mime: "text/markdown" });
+    expect(markdown).toMatchObject({ ok: false, code: "materialize_list_set_differs" });
+    expect((markdown as { error: string }).error).toContain("MIME type");
+    expect(createSemanticArtifactsMock).not.toHaveBeenCalled();
+    // The identical call (plain text again) is still the same set.
+    expect(await fileSet(members(), { mime: "text/plain" })).toMatchObject({ ok: true, deduped: true });
   });
 });
 
@@ -1275,8 +1291,7 @@ describe("cinatra#3089 — all-or-nothing admission over a real quota", () => {
     expect(rows.size).toBe(2);
   });
 
-  // red-first-expect: artifact org-quota exceeded: 100 bytes used, limit 100
-  it("Q2 a SINGLE write of content the organization holds succeeds at a full quota; content it does not hold is refused and stores nothing", async () => {
+  it("Q2 a SINGLE write of content nobody has measured stays bounded as it always was: refused at a full quota, held or not", async () => {
     const creation = await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation");
     const { ArtifactQuotaExceededError } = await import("../local-disk-blob-store");
     const held = "h".repeat(60);
@@ -1289,12 +1304,11 @@ describe("cinatra#3089 — all-or-nothing admission over a real quota", () => {
       stream: (async function* () { yield new TextEncoder().encode(content); })(),
       createdByRunId: "run-1", producerAssertionExtension: EXT, skipFallbackClassification: true,
     });
-    const filed = await creation.createSemanticArtifact(one(held));
-    expect(filed.resourceId).toBe("res-held");
-    expect(usedBytes()).toBe(100);
+    await expect(creation.createSemanticArtifact(one(held))).rejects.toBeInstanceOf(ArtifactQuotaExceededError);
     await expect(creation.createSemanticArtifact(one("new bytes"))).rejects.toBeInstanceOf(ArtifactQuotaExceededError);
     expect(usedBytes()).toBe(100);
   });
+
 
   // THE rule of the admission and the store: a write is refused only if it would ADD bytes beyond the limit
   // (`usage + newBytes > limit`); held content and empty content add none, and filling the quota exactly is admitted.
@@ -1335,22 +1349,6 @@ describe("cinatra#3089 — all-or-nothing admission over a real quota", () => {
     rows.clear();
     rows.set("blob:seed", { resource_id: "res-seed", blob_id: "blob-seed", storage_key: "orgs/org-a/seed.bin", size: 40 });
     expect(await fileSet([member("A", "\uD800".repeat(20), "c-1")], { runId: "run-lone" })).toMatchObject({ ok: true });
-    expect(usedBytes()).toBe(100);
-  });
-
-  // red-first-expect: artifact org-quota exceeded: 100 bytes used, limit 100
-  it("Q3 an EMPTY single write succeeds at a full quota", async () => {
-    const creation = await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation");
-    rows.set("blob:filler", { resource_id: "res-filler", blob_id: "blob-filler", storage_key: "orgs/org-a/filler.bin", size: 60 });
-    expect(usedBytes()).toBe(100);
-    const filed = await creation.createSemanticArtifact({
-      orgId: "org-a", objectType: BODY_TYPE, expectedAcceptMimes: ["text/markdown"], createdBy: "user-1",
-      ownerLevel: "organization", ownerId: "org-a", visibility: "organization", title: "T",
-      declaredMime: "text/markdown", originKind: "live_generator", typedData: { contactId: "c-1" },
-      stream: (async function* () { yield new TextEncoder().encode(""); })(),
-      createdByRunId: "run-1", producerAssertionExtension: EXT, skipFallbackClassification: true,
-    });
-    expect(filed.artifactId).toBeTruthy();
     expect(usedBytes()).toBe(100);
   });
 

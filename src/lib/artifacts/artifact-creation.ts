@@ -139,6 +139,10 @@ export type CreateSemanticArtifactInput = {
   parentId?: string;
   parentType?: string;
   stream: AsyncIterable<Uint8Array>;
+  /** OPTIONAL: the SHA-256 and the size in bytes of `stream`, when the caller already has them (a list member, whose
+   *  content is a string in memory). The blob store then decides the organization's quota BEFORE reading the stream and
+   *  refuses a stream that is not exactly that content; absent, the stream is bounded as it always was. */
+  knownContent?: { sha256: string; sizeBytes: number };
   maxBytes?: number;
   createdByRunId?: string | null;
   /**
@@ -544,6 +548,7 @@ async function prepareArtifactWrite(
     artifactId,
     representationRevisionId,
     stream: input.stream,
+    ...(input.knownContent ? { expected: input.knownContent } : {}),
     declaredMime: input.declaredMime,
     maxBytes,
   });

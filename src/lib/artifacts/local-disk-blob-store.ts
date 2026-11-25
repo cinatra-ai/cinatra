@@ -545,15 +545,16 @@ async function withStorageKeyLock<T>(key: string, fn: () => Promise<T>): Promise
  * THE comparison of the organization's quota: a write is refused only when it would ADD bytes beyond the limit,
  * `used + newBytes > limit`, where `newBytes` is 0 for content the organization already holds and for empty content.
  * A write that adds nothing never exceeds the quota, at any usage (even one already at or over the limit); a write
- * that fills the quota exactly (`used + newBytes === limit`) is admitted. Every organization-quota decision of the
- * store (`put`) and of a list's admission (`assertOrgQuotaRoom`) goes through this one function, so they cannot
- * disagree on the boundary or on what counts as an addition.
+ * that fills the quota exactly (`used + newBytes === limit`) is admitted. It is the decision of every write whose
+ * content is KNOWN before it is read (`put` with `expected`, and a list's whole admission, `assertOrgQuotaRoom`),
+ * so those cannot disagree on the boundary or on what counts as an addition. A stream whose content is not known
+ * beforehand is bounded as it always was: it is stopped at the remaining room while it is read.
  */
 export function wouldExceedOrgQuota(usedBytes: number, newBytes: number, limitBytes: number): boolean {
   return newBytes > 0 && usedBytes + newBytes > limitBytes;
 }
 
-/** WARN-first quota gate for the staging area: logs in warn mode, throws in enforce mode. */
+/** WARN-first quota gate: logs in warn mode, throws in enforce mode. */
 function applyQuotaVerdict(
   kind: "org-quota" | "staging-cap",
   usedBytes: number,
@@ -597,16 +598,32 @@ export async function assertOrgQuotaRoom(
   );
 }
 
+/** A write whose content the caller already knows: its SHA-256 and its size in bytes. `put` decides the organization's
+ *  quota for it BEFORE reading the stream and refuses a stream that is not exactly that content. */
+export type ExpectedBlobContent = { sha256: string; sizeBytes: number };
+
+export type LocalBlobPutInput = BlobPutInput & { expected?: ExpectedBlobContent };
+
+/** The stream of a write with `expected` content is not that content (another hash, or another size). */
+export class BlobContentMismatchError extends Error {
+  constructor() {
+    super("the stream does not match the content the caller declared (hash or size)");
+    this.name = "BlobContentMismatchError";
+  }
+}
+
+export type LocalDiskBlobStore = Omit<BlobStore, "put"> & { put(input: LocalBlobPutInput): Promise<BlobRecord> };
+
 export function createLocalDiskBlobStore(
   options?: LocalDiskBlobStoreOptions,
-): BlobStore {
+): LocalDiskBlobStore {
   const isReferenced =
     options?.isStorageKeyReferenced ?? defaultIsStorageKeyReferenced;
   const orgUsageBytes = options?.getOrgUsageBytes ?? defaultGetOrgUsageBytes;
   const isContentHeld = options?.isContentHeld ?? defaultIsContentHeld;
 
   return {
-    async put(input: BlobPutInput): Promise<BlobRecord> {
+    async put(input: LocalBlobPutInput): Promise<BlobRecord> {
       // The blobId stays a fresh UUID (it is the artifact_blobs row id);
       // it is no longer part of the on-disk path for new writes.
       const blobId = randomUUID();
@@ -614,17 +631,47 @@ export function createLocalDiskBlobStore(
 
       // WARN-first ops caps (cinatra#926). Both checks are skipped
       // entirely when their env knob is unset; the org-usage read is
-      // fail-soft (a DB hiccup never blocks a write). The incoming stream is
-      // bounded by maxBytes while it is read; the organization's quota is
-      // decided once the bytes are known, and an over-quota blob is never
-      // published.
+      // fail-soft (a DB hiccup never blocks a write).
       //
-      // The quota charges NEW bytes only, and whether bytes are new is known once they are hashed: the decision is
-      // taken after the stream has been read (see below), by `wouldExceedOrgQuota`, and held content
-      // (`findHeldContent`, the one definition the whole-list admission uses too) is not charged. The write then goes
-      // on as any write does and the dedupe resolves it onto the held resource.
+      // UNKNOWN content (a stream nobody has measured) is bounded as it always was: in `enforce` mode the quota also
+      // bounds the INCOMING stream, so an org just under quota cannot land an arbitrarily large blob: the remaining
+      // headroom is enforced during streaming like maxBytes, and nothing past it is staged.
+      //
+      // KNOWN content (`expected`: the caller has the hash and the size) is decided BEFORE a byte is read, by the one
+      // comparison the whole-list admission uses (`wouldExceedOrgQuota`): a write that adds no bytes (held content,
+      // empty content) never fails on the quota, and one that does not fit is refused before anything is staged. The
+      // stream is then required to be exactly that content.
+      const expected = input.expected;
+      if (
+        expected !== undefined &&
+        (!/^[0-9a-f]{64}$/.test(expected.sha256) || !Number.isSafeInteger(expected.sizeBytes) || expected.sizeBytes < 0)
+      ) {
+        throw new BlobContentMismatchError();
+      }
+      let enforcedRemainingBytes = Infinity;
       const orgQuota = envBytes(ARTIFACT_ORG_QUOTA_BYTES_ENV);
-      const usedBytes = orgQuota > 0 ? await orgUsageBytes(input.orgId) : null;
+      if (orgQuota > 0) {
+        const used = await orgUsageBytes(input.orgId);
+        if (typeof used === "number") {
+          if (expected !== undefined) {
+            if (
+              wouldExceedOrgQuota(used, expected.sizeBytes, orgQuota) &&
+              !(await isContentHeld(input.orgId, expected.sha256, expected.sizeBytes))
+            ) {
+              if (quotaMode() === "enforce") throw new ArtifactQuotaExceededError("org-quota", orgQuota, used + expected.sizeBytes);
+              console.warn(
+                `[artifact-blob-store] org-quota at/over limit (used=${used}, incoming=${expected.sizeBytes}, limit=${orgQuota}) — ` +
+                  `proceeding (mode=warn; set ${ARTIFACT_QUOTA_MODE_ENV}=enforce to reject)`,
+              );
+            }
+          } else {
+            applyQuotaVerdict("org-quota", used, orgQuota);
+            if (quotaMode() === "enforce") {
+              enforcedRemainingBytes = Math.max(0, orgQuota - used);
+            }
+          }
+        }
+      }
       const stagingCap = envBytes(ARTIFACT_STAGING_CAP_BYTES_ENV);
       if (stagingCap > 0) {
         applyQuotaVerdict("staging-cap", await stagingResidencyBytes(), stagingCap);
@@ -645,6 +692,14 @@ export function createLocalDiskBlobStore(
           if (size > input.maxBytes) {
             throw new BlobTooLargeError(input.maxBytes);
           }
+          if (size > enforcedRemainingBytes) {
+            throw new ArtifactQuotaExceededError(
+              "org-quota",
+              orgQuota,
+              orgQuota - enforcedRemainingBytes + size,
+            );
+          }
+          if (expected !== undefined && size > expected.sizeBytes) throw new BlobContentMismatchError();
           hash.update(chunk);
           if (head.length < SNIFF_HEAD_WINDOW_BYTES) {
             // Copy only the needed prefix, never the whole (possibly huge)
@@ -682,16 +737,7 @@ export function createLocalDiskBlobStore(
       };
 
       try {
-        // The organization's quota, now that the bytes are known: refused only for a write that would ADD bytes beyond
-        // the limit (`wouldExceedOrgQuota`): held content and empty content add none.
-        if (orgQuota > 0 && typeof usedBytes === "number" && wouldExceedOrgQuota(usedBytes, size, orgQuota)
-          && !(await isContentHeld(input.orgId, sha256, size))) {
-          if (quotaMode() === "enforce") throw new ArtifactQuotaExceededError("org-quota", orgQuota, usedBytes + size);
-          console.warn(
-            `[artifact-blob-store] org-quota at/over limit (used=${usedBytes}, incoming=${size}, limit=${orgQuota}) — ` +
-              `proceeding (mode=warn; set ${ARTIFACT_QUOTA_MODE_ENV}=enforce to reject)`,
-          );
-        }
+        if (expected !== undefined && (sha256 !== expected.sha256 || size !== expected.sizeBytes)) throw new BlobContentMismatchError();
         // Reuse-or-publish runs under the per-storage-key critical section,
         // serialized against the guarded delete's stale→probe→unlink (see
         // the storageKeyLocks header): entering second means observing the
