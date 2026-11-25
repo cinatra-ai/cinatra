@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { createHmac } from "node:crypto";
 
 /**
  * cinatra#3745 - the canonical first WayFlow dispatch selects the loader's
@@ -296,5 +297,76 @@ describe("cinatra#4150 - the dispatch records the publish rows of the plan it ru
     storeMock.readAgentTemplateById.mockResolvedValue({ ...makeTemplate(), publishRows: null });
     await run();
     expect(dispatchOf()).toEqual({ attemptId: expect.any(String), publishRows: "{}" });
+  });
+});
+
+// cinatra#3089: the dispatch runs the INSTALLED package (routed by its name), not the pinned
+// snapshot. Version 2 is installed over version 1 and a run requests version 1: the runtime double answers the send
+// with the pause the installed flow raised, and the real handler classifies it. The policy of a version that did not
+// produce the pause never classifies it.
+describe("cinatra#3089 - a pause is classified by the steps of the version that ran it", () => {
+  const KEY = "test-gate-node-key-3089-dispatch";
+  const savedKey = process.env.CINATRA_CONTEXT_ATTEST_KEY;
+  const drafts = (marked: boolean) => ({
+    stepNumber: 1, nodeType: "agent", requiresApproval: true, hitlOwnedBy: "self", gateCount: 1, xRenderer: "@test/drafting:review",
+    inputMessageSchema: { type: "object", properties: { userResponse: { type: "string" } } }, surfaceGateInputKeys: ["reviewTargets"],
+    ...(marked ? { artifactReviewTargetsInput: "reviewTargets", artifactReviewGateNode: "drafts-approval_gate" } : {}),
+  });
+  const pausedByInstalledFlow = () => {
+    const sig = createHmac("sha256", KEY).update("g1\nctx-3089\ntask-3089\ndrafts-approval_gate").digest("hex");
+    return {
+      id: "task-3089", contextId: "ctx-3089",
+      status: { state: "input-required", message: { parts: [] } },
+      metadata: { pendingApproval: { type: "object", properties: { userResponse: { type: "string" } } } },
+      history: [{ role: "agent", parts: [{ kind: "text", text: "Ready." }], metadata: { cinatra_gate_node: { node: "drafts-approval_gate", attestation: `g1:${sig}` } } }],
+    };
+  };
+  async function dispatchPinnedToV1(installed: { version: string; marked: boolean }, v1Marked: boolean) {
+    storeMock.readAgentRunById.mockResolvedValue(makeRun({ versionId: "ver-1", packageVersion: "1.0.0", a2aContextId: "ctx-3089" }));
+    storeMock.readAgentTemplateById.mockResolvedValue({ ...makeTemplate(), packageVersion: installed.version, approvalPolicy: { steps: [drafts(installed.marked)] } });
+    storeMock.readAgentTemplateVersionById.mockResolvedValue({ templateId: "tmpl-3745", semver: "1.0.0",
+      snapshot: { compiledPlan: [], taskSpec: null, approvalPolicy: { steps: [drafts(v1Marked)] } } } as never);
+    sendTask.mockImplementationOnce(async () => pausedByInstalledFlow() as never);
+    await run();
+  }
+  const failedWith = (code: string) => (storeMock.transitionRunStatus.mock.calls as unknown as Array<[string, string, string, { error?: string }]>)
+    .some(([id, from, to, patch]) => id === RUN_ID && from === "running" && to === "failed" && typeof patch?.error === "string" && patch.error.startsWith(`${code}: `));
+  const parked = () => (storeMock.transitionRunStatus.mock.calls as unknown as Array<[string, string, string]>)
+    .some(([, , to]) => to === "pending_approval");
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.CINATRA_CONTEXT_ATTEST_KEY = KEY;
+    storeMock.selectWayflowRunStepToolPolicy.mockImplementation(async (input: { contextId: string }) => ({
+      version: 1, contextId: input.contextId, source: "{}",
+      sourceSha256: "a".repeat(64), executedSourceSha256: "b".repeat(64), declarationSourceSha256: "c".repeat(64),
+    }));
+    storeMock.bindRunStepToolPolicy.mockResolvedValue(undefined);
+  });
+  afterEach(() => {
+    if (savedKey === undefined) delete process.env.CINATRA_CONTEXT_ATTEST_KEY;
+    else process.env.CINATRA_CONTEXT_ATTEST_KEY = savedKey;
+  });
+
+  it("version 2 installed over version 1, a run requesting version 1: version 1's review marker does not classify the pause; the run stops", async () => {
+    await dispatchPinnedToV1({ version: "2.0.0", marked: false }, true);
+    expect(sendTask).toHaveBeenCalledTimes(1);
+    expect(failedWith("PAUSE_POLICY_VERSION_MISMATCH")).toBe(true);
+    expect(parked()).toBe(false);
+  });
+
+  it("a review marker only the installed version 2 carries is never degraded to an ordinary approval of version 1", async () => {
+    await dispatchPinnedToV1({ version: "2.0.0", marked: true }, false);
+    expect(failedWith("PAUSE_POLICY_VERSION_MISMATCH")).toBe(true);
+    expect(parked()).toBe(false);
+  });
+
+  it("the requested version is the installed one: the pause is classified as before, no version stop", async () => {
+    await dispatchPinnedToV1({ version: "1.0.0", marked: false }, false);
+    expect(sendTask).toHaveBeenCalledTimes(1);
+    // Read twice: by the dispatch's overlay, then by the pause's classification.
+    expect(storeMock.readAgentTemplateVersionById.mock.calls).toEqual([["ver-1"], ["ver-1"]]);
+    expect(failedWith("PAUSE_POLICY_VERSION_MISMATCH")).toBe(false);
+    expect(failedWith("PAUSE_POLICY_UNREAD")).toBe(false);
   });
 });

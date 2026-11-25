@@ -374,14 +374,16 @@ export async function resolvePinnedRunSnapshot(
 }
 
 /**
- * cinatra#3089: the template a pause is classified by. A run served a pinned
- * snapshot pauses in THAT version's flow, so its approval policy is the
- * snapshot's, never the live template's (a later version may drop or rename a
- * review marker). The rest is the live row, as the dispatch overlay keeps it.
- * A required pin that cannot be served, a snapshot read that throws, or a
- * served snapshot with no approval policy throws: the caller retries, then
- * stops; it never falls back to the live policy. No served snapshot: the live
- * template, as on main.
+ * cinatra#3089: the template a pause is classified by: the policy of the version
+ * whose flow ran. The dispatch runs the INSTALLED package (resolveWayflowUrl by
+ * package name), whose version is the live row's packageVersion. A run served a
+ * pinned snapshot is classified by the snapshot's policy when the pinned version
+ * is the installed one, or when the installed version's policy is the same; else
+ * the installed flow may have produced the pause under another policy, and
+ * PausePolicyVersionMismatchError is thrown (no retry; the run stops). A
+ * required pin that cannot be served, a snapshot read that throws, or a served
+ * snapshot with no approval policy throws: the caller retries, then stops; it
+ * never falls back to the live policy. No served snapshot: the live template.
  */
 export async function readPausePolicyTemplate(
   run: { templateId: string; packageVersion: string | null; versionId: string | null },
@@ -391,6 +393,10 @@ export async function readPausePolicyTemplate(
   if (!pinned || !live) return live;
   if (pinned.approvalPolicy === undefined) {
     throw new Error(`the pinned snapshot of ${run.templateId}@${run.packageVersion} carries no approval policy`);
+  }
+  // Another version installed: the two policies must be the same, else it is not known which produced the pause.
+  if (live.packageVersion !== run.packageVersion && JSON.stringify(live.approvalPolicy ?? null) !== JSON.stringify(pinned.approvalPolicy)) {
+    throw new PausePolicyVersionMismatchError(run.packageVersion, live.packageVersion ?? null);
   }
   return { ...live, approvalPolicy: pinned.approvalPolicy as typeof live.approvalPolicy };
 }
@@ -542,7 +548,7 @@ import {
   buildA2UiMidRunTranslatorResolver,
   resolveRendererIdForKind,
 } from "./field-renderer-bindings.server";
-import { stepFiresRendererGate, reviewGateNodeSteps, stepForVerifiedPause, ARTIFACT_REVIEW_GATE_UNVERIFIED_TEXT, PAUSE_POLICY_UNREAD_TEXT, readPausePolicyWithRetry } from "./orchestrator-gate-predicate";
+import { stepFiresRendererGate, reviewGateNodeSteps, stepForVerifiedPause, ARTIFACT_REVIEW_GATE_UNVERIFIED_TEXT, PAUSE_POLICY_UNREAD_TEXT, PAUSE_POLICY_VERSION_MISMATCH_TEXT, PausePolicyVersionMismatchError, readPausePolicyWithRetry } from "./orchestrator-gate-predicate";
 import {
   GATE_KEYS_NOT_FROM_RUN_INPUTS,
   readStoredKeyList,
@@ -2425,8 +2431,9 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // publishing template ends the run failed.
     if (await holdRunAtPublishGate({ run, fromStatus, task, claim: gateNodeClaim, authority })) return;
     // cinatra#3089: ONE read of the template for this pause, used for every
-    // decision below (the renderer's too), with the policy of the version the
-    // run is pinned to. A step that names its gate's node is the step of a pause
+    // decision below (the renderer's too), with the policy of the version that
+    // ran (a pin to another version than the installed one stops the run:
+    // PAUSE_POLICY_VERSION_MISMATCH). A step that names its gate's node is the step of a pause
     // by the pause's verified node, never by position. Without a verified node it
     // cannot be told whether this pause is such a review: the run is stopped
     // failed, the pause offered as no approval. A read that throws is retried
@@ -2436,7 +2443,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         .catch((err: unknown) => { if ((err as { code?: unknown } | null)?.code !== "stale_from_status") throw err; });
     const pauseRead = await readPausePolicyWithRetry(() => readPausePolicyTemplate(run), `run=${runId} task=${task.id}`);
     if (!pauseRead.ok) {
-      await stopUnplacedPause(PAUSE_POLICY_UNREAD_TEXT);
+      await stopUnplacedPause(pauseRead.versionMismatch ? PAUSE_POLICY_VERSION_MISMATCH_TEXT : PAUSE_POLICY_UNREAD_TEXT);
       return;
     }
     const pauseTemplate = pauseRead.value;

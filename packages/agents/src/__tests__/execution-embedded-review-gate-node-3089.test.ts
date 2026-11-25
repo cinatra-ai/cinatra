@@ -192,7 +192,7 @@ function makeRun(inputParams: Record<string, unknown> = {}): AgentRunRecord {
   } as unknown as AgentRunRecord;
 }
 
-function makeTemplate(steps: Array<Record<string, unknown>>) {
+function makeTemplate(steps: Array<Record<string, unknown>>, packageVersion: string | null = null) {
   return {
     id: "tmpl-rev-1",
     orgId: null,
@@ -206,7 +206,7 @@ function makeTemplate(steps: Array<Record<string, unknown>>) {
     taskSpec: null,
     status: "published",
     packageName: "@cinatra-ai/web-research-agent",
-    packageVersion: null,
+    packageVersion,
     gatedSteps: [],
     triggerMode: "none",
     approvalPolicy: { steps },
@@ -397,16 +397,18 @@ describe("cinatra#3089 — an embedded review gate's marker follows the verified
     expect(storeMock.readAgentTemplateById).toHaveBeenCalledTimes(1 + PAUSE_POLICY_READ_WAITS_MS.length);
   });
 
-  // A run pinned to v1 (an explicit version: versionId AND packageVersion)
-  // while the live template is v2, whose drafts step no longer names a node.
+  // A run pinned to v1 (an explicit version: versionId AND packageVersion). The
+  // flow that runs is the INSTALLED package (one directory per package name),
+  // whose version is the live template row's packageVersion.
   const V2_DRAFTS = { ...DRAFTS_STEP } as Record<string, unknown>;
   delete V2_DRAFTS.artifactReviewTargetsInput;
   delete V2_DRAFTS.artifactReviewGateNode;
-  const V2 = [RECIPIENTS_STEP, V2_DRAFTS, SEND_STEP];
-  const V1_ROW = { templateId: "tmpl-rev-1", semver: "1.0.0", snapshot: { compiledPlan: [], taskSpec: null, approvalPolicy: { steps: OUTREACH } } };
-  async function pinnedPause(row: unknown) {
+  const UNMARKED = [RECIPIENTS_STEP, V2_DRAFTS, SEND_STEP];
+  const v1Row = (steps: Array<Record<string, unknown>>) => ({ templateId: "tmpl-rev-1", semver: "1.0.0", snapshot: { compiledPlan: [], taskSpec: null, approvalPolicy: { steps } } });
+  const V1_ROW = v1Row(OUTREACH);
+  async function pinnedPause(row: unknown, installed: { version: string | null; steps: Array<Record<string, unknown>> } = { version: null, steps: UNMARKED }) {
     storeMock.readAgentTemplateById.mockReset();
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(V2));
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(installed.steps, installed.version));
     storeMock.readAgentTemplateVersionById.mockReset();
     if (row instanceof Error) storeMock.readAgentTemplateVersionById.mockRejectedValue(row);
     else storeMock.readAgentTemplateVersionById.mockResolvedValue(row as never);
@@ -415,12 +417,38 @@ describe("cinatra#3089 — an embedded review gate's marker follows the verified
     await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task: pausedTask(signedClaim("drafts-approval_gate")) });
   }
 
-  it("a pinned run's pause is classified by the pinned version's policy, not by a later live version", async () => {
-    await pinnedPause(V1_ROW);
-    // red-first-expect: expected "vi.fn()" to be called at least once
+  it("a pinned run whose version is the installed one is classified by the pinned version's policy, as before", async () => {
+    await pinnedPause(V1_ROW, { version: "1.0.0", steps: OUTREACH });
     expect(emitSpy).toHaveBeenCalled();
     expect(routedToReview()).toBe(true);
     expect(storeMock.readAgentTemplateVersionById).toHaveBeenCalledWith("ver-1");
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), "failed", expect.anything(), expect.anything());
+  });
+
+  it("version 2 installed over version 1, a run requesting version 1: the pause is not classified by version 1's marker; the run stops", async () => {
+    await pinnedPause(V1_ROW, { version: "2.0.0", steps: UNMARKED });
+    // red-first-expect: expected "vi.fn()" to not be called at all
+    expect(emitSpy).not.toHaveBeenCalled();
+    expect(onInterruptSpy).not.toHaveBeenCalled();
+    stoppedWith("PAUSE_POLICY_VERSION_MISMATCH");
+    // A version mismatch is no read fault: it is not retried.
+    expect(storeMock.readAgentTemplateVersionById).toHaveBeenCalledTimes(1);
+  });
+
+  it("a review marker only the installed version 2 carries is never degraded to an ordinary approval of version 1", async () => {
+    await pinnedPause(v1Row(UNMARKED), { version: "2.0.0", steps: OUTREACH });
+    expect(onInterruptSpy).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalledWith(
+      expect.anything(), expect.anything(), "pending_approval", expect.anything(), expect.anything(),
+    );
+    stoppedWith("PAUSE_POLICY_VERSION_MISMATCH");
+  });
+
+  it("another version installed with the same steps: the pause is classified as usual", async () => {
+    await pinnedPause(V1_ROW, { version: "2.0.0", steps: OUTREACH });
+    expect(emitSpy).toHaveBeenCalled();
+    expect(routedToReview()).toBe(true);
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), "failed", expect.anything(), expect.anything());
   });
 
   it("a pinned run whose snapshot is missing, unreadable or carries no policy stops after the retries; the live policy is never used", async () => {
