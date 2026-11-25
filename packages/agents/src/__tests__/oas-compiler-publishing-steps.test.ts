@@ -543,3 +543,29 @@ describe("cinatra#4762 — a publishing step calls only the host routes that che
     expect(await publishingStepsOf(buildFlow({ middle: [apiNode("draft"), apiNode("publish", { publishes: true })] }))).toEqual(["publish"]);
   });
 });
+
+describe("cinatra#4150 — an input fed into a publishing step must be a name the stop can surface", () => {
+  const fed = (destinationInput: string, publishes: boolean) => {
+    const doc = buildFlow({ middle: [apiNode("draft"), apiNode("publish", { riskClass: "write", publishes })] });
+    (doc.data_flow_connections as unknown[]).push({
+      component_type: "DataFlowEdge",
+      name: "draft_to_publish",
+      source_node: { $component_ref: "draft" },
+      source_output: "text",
+      destination_node: { $component_ref: "publish" },
+      destination_input: destinationInput,
+    });
+    return doc;
+  };
+
+  it("refuses an input name that is not a plain identifier, naming the node only", async () => {
+    expect(await compileError(fed("post text", true))).toBe(
+      'PUBLISH_GATE_UNSUPPORTED: an input fed into publishing step "publish" is not a plain identifier, so the stop could not surface it',
+    );
+  });
+
+  it("accepts a plain identifier, and leaves a node that does not publish alone", async () => {
+    expect(await publishingStepsOf(fed("post_text", true))).toEqual(["publish"]);
+    expect(await publishingStepsOf(fed("post text", false))).toEqual([]);
+  });
+});

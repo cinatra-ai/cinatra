@@ -45,8 +45,10 @@
 //   - offered any other MCP toolbox, or toolbox ids the host cannot read: a finding, UNHELD, since the boundary does
 //     not stand between such a step and that toolbox;
 //   - offered no MCP toolbox (an empty list, or built-ins only): no MCP tool, nothing to classify.
-// `data.toolbox_ids` is read after the compiler's own propagation of `metadata.cinatra.toolboxes`
-// (propagateToolboxesIntoApiNodes).
+// The audit reads what the runtime reads: the source as mounted, with no compile-time pass (the compiler's propagation
+// of `metadata.cinatra.toolboxes` into `data.toolbox_ids` changes only the compiled copy; WayFlow loads the source), and
+// it applies the bridge's own default and split of `toolbox_ids` (resolveBridgeToolboxIds,
+// src/app/api/llm-bridge/_llm-dispatch.ts, which the bridge route calls).
 //
 // A tool a step names that the host does not know is its own finding, UNKNOWN_TOOL: an unknown name is never read as
 // "not publishing". For a model-bridge list, known means classified for the boundary (PRIMITIVE_CLASSIFICATIONS) or
@@ -74,12 +76,13 @@ import {
   __resetRegistryCacheForTests,
   checkExecutedPublishingCallRoutes,
   compileOasAgentJson,
-  propagateToolboxesIntoApiNodes,
   PUBLISH_ADDRESS_KEY,
+  PUBLISH_GATE_INPUT_RE,
   PUBLISH_BRIDGE_ROUTE,
   PUBLISH_CALL_ROUTES,
   PUBLISH_PASSTHROUGH_ROUTE,
 } from "../../../packages/agents/src/oas-compiler";
+import { resolveBridgeToolboxIds } from "../../app/api/llm-bridge/_llm-dispatch";
 import { readStepToolDeclaration } from "../../../packages/agents/src/validate-oas-runtime-invariants";
 import { decisionBlocksDispatch, readDeclaredOutward } from "../../../packages/mcp-server/src/capability-plan";
 import { enforceMcpBoundary, OUTWARD_EFFECT_TOOL_NAMES, RECORDED_DECISION_REQUIRED_REASON } from "../authz/mcp-boundary";
@@ -175,14 +178,8 @@ export async function passthroughAllowlist(): Promise<{ tools: ReadonlySet<strin
   return { tools, spreads };
 }
 
-/**
- * The tool ids the bridge takes as provider built-ins, not MCP toolboxes (src/app/api/llm-bridge/route.ts,
- * BUILT_IN_BRIDGE_TOOLS, not exported; read from its constructor).
- */
-const BRIDGE_BUILT_INS = new Set(
-  setSource("src/app/api/llm-bridge/route.ts", "const BUILT_IN_BRIDGE_TOOLS: ReadonlySet<string> = new Set([").literals,
-);
-const SELF_MCP = "cinatra-mcp";
+/** The MCP toolboxes the bridge gives a step whose request names none: its default. */
+const DEFAULT_MCP_TOOLBOXES = new Set(resolveBridgeToolboxIds(undefined).mcp);
 
 /** The publishing tools a pack's manifest consumes (cinatra.consumes[].primitive). */
 export function consumedPublishingTools(pkg: Json, census: ToolCensus): string[] {
@@ -202,9 +199,8 @@ const emptyReading = (): Reading => ({ publishing: [], unknown: [], unheld: [], 
  */
 function mcpToolboxesOf(node: Json): string[] | null {
   const ids = isObject(node.data) ? node.data.toolbox_ids : undefined;
-  if (ids === undefined) return [SELF_MCP];
-  if (!Array.isArray(ids) || !ids.every((t) => typeof t === "string")) return null;
-  return (ids as string[]).filter((t) => !BRIDGE_BUILT_INS.has(t));
+  if (ids !== undefined && (!Array.isArray(ids) || !ids.every((t) => typeof t === "string"))) return null;
+  return resolveBridgeToolboxIds(ids as string[] | undefined).mcp;
 }
 
 /** Why a single component can make a publishing call, and the tool names it names that the host does not know. */
@@ -243,10 +239,10 @@ function readComponent(node: Json, consumed: string[], census: ToolCensus): Read
       const toolboxes = mcpToolboxesOf(node);
       if (toolboxes === null) {
         out.unheld.push(`${id} has no tool list and toolbox ids the host cannot read`);
-      } else if (toolboxes.some((t) => t !== SELF_MCP)) {
-        const other = toolboxes.filter((t) => t !== SELF_MCP);
+      } else if (toolboxes.some((t) => !DEFAULT_MCP_TOOLBOXES.has(t))) {
+        const other = toolboxes.filter((t) => !DEFAULT_MCP_TOOLBOXES.has(t));
         out.unheld.push(`${id} has no tool list and is offered the toolbox ${other.join(", ")}, which the MCP boundary does not hold`);
-      } else if (toolboxes.includes(SELF_MCP)) {
+      } else if (toolboxes.length > 0) {
         if (consumed.length > 0) {
           out.publishing.push(`${id} has no tool list and the pack consumes the publishing tool ${consumed.join(", ")}`);
         } else {
@@ -293,13 +289,9 @@ function readSubtree(start: unknown, refs: Json, consumed: string[], census: Too
  */
 type FlowArgs = { oas: Json; pkg: Json; rawSource: string; publishingSteps: string[]; census: ToolCensus };
 
-/** The reading of each top-level node, over the flow with the compiler's toolbox propagation applied. */
+/** The reading of each top-level node, over the source as the runtime mounts it. */
 function readFlow({ oas: source, pkg, census }: FlowArgs): { topLevel: string[]; refs: Json; readings: Map<string, Reading> } {
-  const oas = JSON.parse(JSON.stringify(source)) as Json;
-  const flowToolboxes = isObject(oas.metadata) && isObject(oas.metadata.cinatra) ? oas.metadata.cinatra.toolboxes : undefined;
-  if (Array.isArray(flowToolboxes) && flowToolboxes.every((t) => typeof t === "string")) {
-    propagateToolboxesIntoApiNodes(oas, flowToolboxes as string[]);
-  }
+  const oas = source;
   const refs = isObject(oas.$referenced_components) ? oas.$referenced_components : {};
   const topLevel = (Array.isArray(oas.nodes) ? oas.nodes : [])
     .map((n) => (isObject(n) ? (n as Ref).$component_ref : undefined))
@@ -337,20 +329,71 @@ export function publishingFindings(args: FlowArgs): string[] {
   if (JSON.stringify(declaredInSource) !== JSON.stringify(publishingSteps)) {
     findings.push(`STEPS ${JSON.stringify(publishingSteps)} differ from the declared nodes ${JSON.stringify(declaredInSource)}`);
   }
-  const startRef = isObject(oas.start_node) ? (oas.start_node as Ref).$component_ref : undefined;
-  const controlEdges = Array.isArray(oas.control_flow_connections) ? (oas.control_flow_connections as Json[]) : [];
-  const dataEdges = Array.isArray(oas.data_flow_connections) ? (oas.data_flow_connections as Json[]) : [];
-  const into = (edges: Json[], end: string, id: string) =>
-    edges.some((e) => isObject(e[end]) && (e[end] as Ref).$component_ref === id);
-  for (const step of publishingSteps) {
-    if (step === startRef) findings.push(`NO_GATE ${step}: it is the start node`);
-    if (!into(controlEdges, "to_node", step)) findings.push(`NO_GATE ${step}: no control edge leads into it`);
-    if (!into(dataEdges, "destination_node", step)) findings.push(`NO_GATE ${step}: no data edge leads into it`);
-    if (Object.prototype.hasOwnProperty.call(refs, `${GATE_PREFIX}${step}`)) findings.push(`NO_GATE ${step}: the pack holds the gate's id`);
-  }
+  findings.push(...gateRefusals(oas, publishingSteps));
   const routes = checkExecutedPublishingCallRoutes(rawSource);
   if (!routes.ok) findings.push(`UNCHECKED_CALL ${routes.error}`);
   return findings;
+}
+
+/**
+ * Why the runtime loader could not insert the stop in front of a declared step: the acceptance conditions of
+ * _insert_publish_gates (docker/wayflow/agent_loader.py), stated once here. The loader also refuses a malformed or
+ * misplaced flag and a reserved id; the compiler refuses those (collectPublishingSteps), and an input name that is not a
+ * plain identifier (checkPublishGateInputs, whose PUBLISH_GATE_INPUT_RE this reuses). One condition is the audit's own,
+ * stricter than the loader: a declared start node, which a run enters without passing the stop. The real loader runs
+ * over every pinned pack in docker/wayflow/tests/test_repo_agents_load.py (_runtime_preload).
+ */
+function gateRefusals(oas: Json, steps: readonly string[]): string[] {
+  if (steps.length === 0) return [];
+  const out: string[] = [];
+  const refs = isObject(oas.$referenced_components) ? oas.$referenced_components : {};
+  const listOf = (key: string): Json[] | null => {
+    const v = oas[key];
+    if (v === undefined || v === null) return [];
+    return Array.isArray(v) ? (v as Json[]) : null;
+  };
+  const refOf = (v: unknown) => (isObject(v) && typeof v.$component_ref === "string" ? v.$component_ref : undefined);
+  const control = listOf("control_flow_connections");
+  const data = listOf("data_flow_connections");
+  if (control === null || data === null) return ["NO_GATE the flow: an edge list is not a list"];
+  control.forEach((e, i) => {
+    if (!refOf(e?.from_node) || !refOf(e?.to_node)) out.push(`NO_GATE the flow: control edge #${i} is not an inline edge between node references`);
+  });
+  data.forEach((e, i) => {
+    if (!refOf(e?.source_node) || !refOf(e?.destination_node) || typeof e?.source_output !== "string" || typeof e?.destination_input !== "string") {
+      out.push(`NO_GATE the flow: data edge #${i} is not an inline edge between node references`);
+    }
+  });
+  // A declared node referenced anywhere but the root nodes and edges, or a nested definition under its id.
+  const allowed = new Set<string>();
+  (Array.isArray(oas.nodes) ? oas.nodes : []).forEach((_, i) => allowed.add(`nodes.${i}`));
+  control.forEach((_, i) => ["from_node", "to_node"].forEach((k) => allowed.add(`control_flow_connections.${i}.${k}`)));
+  data.forEach((_, i) => ["source_node", "destination_node"].forEach((k) => allowed.add(`data_flow_connections.${i}.${k}`)));
+  const outside = new Set<string>();
+  const walk = (v: unknown, at: string[]) => {
+    if (Array.isArray(v)) return v.forEach((x, i) => walk(x, [...at, String(i)]));
+    if (!isObject(v)) return;
+    const ref = refOf(v);
+    if (ref && steps.includes(ref) && !allowed.has(at.join("."))) outside.add(ref);
+    for (const [k, x] of Object.entries(v)) {
+      if (k === "$referenced_components" && at.length > 0 && isObject(x)) for (const s of steps) if (s in x) outside.add(s);
+      walk(x, [...at, k]);
+    }
+  };
+  walk(oas, []);
+  const startRef = refOf(oas.start_node);
+  for (const step of steps) {
+    if (step === startRef) out.push(`NO_GATE ${step}: it is the start node`);
+    if (outside.has(step)) out.push(`NO_GATE ${step}: it is referenced outside the root flow's nodes and edges`);
+    if (!control.some((e) => refOf(e?.to_node) === step)) out.push(`NO_GATE ${step}: no control edge leads into it`);
+    const feeds = data.filter((e) => refOf(e?.destination_node) === step);
+    if (feeds.length === 0) out.push(`NO_GATE ${step}: no data edge leads into it`);
+    if (feeds.some((e) => typeof e.destination_input !== "string" || !PUBLISH_GATE_INPUT_RE.test(e.destination_input))) {
+      out.push(`NO_GATE ${step}: an input fed into it is not a plain identifier`);
+    }
+    if (Object.prototype.hasOwnProperty.call(refs, `${GATE_PREFIX}${step}`)) out.push(`NO_GATE ${step}: the pack holds the gate's id`);
+  }
+  return out;
 }
 
 let tempDir = "";
@@ -505,13 +548,24 @@ describe("item 7: a node that can publish is declared and sits behind the moment
     publish.data = { ...(publish.data as Json), toolbox_ids: ["web_search"] };
     expect(await checkFixture(flow)).toEqual([]);
     expect(held()).toEqual([]);
-    delete (publish.data as Json).toolbox_ids;
-    cinatraOf(flow as Json).toolboxes = ["fixture-site-mcp"];
-    expect(await checkFixture(flow)).toEqual([
-      "UNHELD publish: publish has no tool list and is offered the toolbox fixture-site-mcp, which the MCP boundary does not hold",
-    ]);
+    publish.data = { ...(publish.data as Json), toolbox_ids: ["fixture-site-mcp"] };
     setPublishes(publish, true);
     expect(await checkFixture(flow)).toEqual([]);
+  });
+
+  it("the runtime reads the source as mounted: flow-level toolboxes the compiler propagates do not narrow what the bridge gives a step", async () => {
+    const flow = linkedinShape();
+    const publish = flow.$referenced_components.publish!;
+    setPublishes(publish, undefined);
+    delete (publish.data as Json).toolbox_ids;
+    cinatraOf(flow as Json).toolboxes = ["web_search"];
+    // The bridge defaults a step without toolbox_ids to the self-MCP toolbox, so the consumed post tool is reachable.
+    expect(await checkFixture(flow, CONSUMES_POST)).toEqual([
+      "UNDECLARED publish: publish has no tool list and the pack consumes the publishing tool linkedin_post_publish",
+    ]);
+    // With the narrowing in the source itself, the step is offered no MCP toolbox.
+    publish.data = { ...(publish.data as Json), toolbox_ids: ["web_search"] };
+    expect(await checkFixture(flow, CONSUMES_POST)).toEqual([]);
   });
 
   it("(c) an explicit false does not clear a step that can make the call", async () => {
@@ -648,6 +702,26 @@ describe("item 7: a node that can publish is declared and sits behind the moment
     expect(findings[0]).toMatch(/^COMPILE PUBLISH_CALL_UNCHECKED: /);
     expect(findingsOf(flow as unknown as Json, ["publish"], CONSUMES_POST)).toEqual([
       expect.stringMatching(/^UNCHECKED_CALL PUBLISH_CALL_UNCHECKED: /),
+    ]);
+  });
+
+  it("a declared step fed under a name that is not a plain identifier cannot be held: the compiler refuses it, and so does the audit", async () => {
+    const flow = linkedinShape();
+    const edge = (flow.data_flow_connections as Json[]).find((e) => (e.destination_node as Ref).$component_ref === "publish")!;
+    edge.destination_input = "post text";
+    expect(await checkFixture(flow, CONSUMES_POST)).toEqual([
+      'COMPILE PUBLISH_GATE_UNSUPPORTED: an input fed into publishing step "publish" is not a plain identifier, so the stop could not surface it',
+    ]);
+    expect(findingsOf(flow as unknown as Json, ["publish"], CONSUMES_POST)).toEqual([
+      "NO_GATE publish: an input fed into it is not a plain identifier",
+    ]);
+  });
+
+  it("a declared step referenced outside the root flow's nodes and edges cannot be held", () => {
+    const flow = linkedinShape();
+    flow.$referenced_components.wrap = { component_type: "Flow", id: "wrap", nodes: [{ $component_ref: "publish" }] };
+    expect(findingsOf(flow as unknown as Json, ["publish"], CONSUMES_POST)).toEqual([
+      "NO_GATE publish: it is referenced outside the root flow's nodes and edges",
     ]);
   });
 

@@ -1757,6 +1757,28 @@ export function collectPublishRows(
   return { ok: true, rows };
 }
 
+// cinatra#4150: the stop the runtime inserts in front of a publishing step surfaces each input fed into the step under
+// that input's name, so the loader refuses an input name that is not a plain identifier (docker/wayflow/agent_loader.py,
+// _GATE_INPUT_TITLE_RE, applied in _insert_publish_gates). The compile refuses the same, so a flow that compiles is not
+// refused at mount for it. The error names the node id only.
+export const PUBLISH_GATE_INPUT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+export function checkPublishGateInputs(
+  parsed: Record<string, unknown>,
+  publishingSteps: readonly string[],
+): { ok: true } | { ok: false; error: string } {
+  const edges = Array.isArray(parsed.data_flow_connections) ? (parsed.data_flow_connections as unknown[]) : [];
+  for (const step of publishingSteps) {
+    for (const edge of edges) {
+      const e = edge as { destination_node?: { $component_ref?: unknown }; destination_input?: unknown } | null;
+      if (e?.destination_node?.$component_ref !== step) continue;
+      if (typeof e.destination_input !== "string" || !PUBLISH_GATE_INPUT_RE.test(e.destination_input)) {
+        return { ok: false, error: `PUBLISH_GATE_UNSUPPORTED: an input fed into publishing step ${quoteNodeId(step)} is not a plain identifier, so the stop could not surface it` };
+      }
+    }
+  }
+  return { ok: true };
+}
+
 // cinatra#4762: the host routes that check a publishing call when it is made (publishCallAllowed: the decision is
 // released and the review fence still holds). WayFlow calls any other URL itself, with no check, so a call made by a
 // publishing step must go to one of these. Only the exact template form counts: the loader sends the run's token and
@@ -1963,6 +1985,10 @@ export async function compileOasAgentJson(opts: {
   const publishRows = collectPublishRows(parsed, publishing.steps);
   if (!publishRows.ok) {
     return { ok: false, error: publishRows.error };
+  }
+  const gateInputs = checkPublishGateInputs(parsed, publishing.steps);
+  if (!gateInputs.ok) {
+    return { ok: false, error: gateInputs.error };
   }
   // The route check resolves references against the same global registry the compile reads below.
   const globalRegistry = await loadGlobalRegistry(opts.registryPath);

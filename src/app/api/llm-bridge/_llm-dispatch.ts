@@ -355,3 +355,22 @@ export async function resolveCinatraLlmDispatch(
     };
   }
 }
+
+// Built-in provider tool names travel in the same `toolbox_ids` list as
+// MCP toolbox IDs. The bridge route partitions on this set: members route
+// to `extraTools` as provider-native tools; non-members route to
+// `declaredToolboxIds` (resolved by resolveMcpToolsForDeclaredIds against
+// "cinatra-mcp" + external registry).
+export const BUILT_IN_BRIDGE_TOOLS: ReadonlySet<string> = new Set(["web_search"]);
+
+/**
+ * The toolboxes the bridge gives a model step: the request body's `toolbox_ids`, or the self-MCP toolbox when the body
+ * sends none, split into provider built-in tool names and MCP toolbox ids.
+ */
+export function resolveBridgeToolboxIds(toolboxIds: readonly string[] | undefined): { builtIns: string[]; mcp: string[] } {
+  const all = toolboxIds ?? ["cinatra-mcp"];
+  return {
+    builtIns: all.filter((id) => BUILT_IN_BRIDGE_TOOLS.has(id)),
+    mcp: all.filter((id) => !BUILT_IN_BRIDGE_TOOLS.has(id)),
+  };
+}
