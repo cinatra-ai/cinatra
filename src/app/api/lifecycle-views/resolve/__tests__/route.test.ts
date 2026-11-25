@@ -42,19 +42,26 @@ describe("approved app-artifact-review §VI authorized envelope-only Note", () =
   });
 });
 const HEADER = { title: "The post", typeLabel: "Blog Post", objectType: "type:post", revisionId: "rev-1", facts: ["text/markdown"] };
-describe("cinatra#3033 — the one pinned target's form travels beside the envelope", () => {
-  it("a pending gate over one target carries that target's form", async () => {
-    d.reading = { headers: [HEADER], pinnedCount: 1, complete: true, onlyTargetForm: "text/markdown" };
-    // red-first-expect: expected undefined to be 'text/markdown'
-    expect((await (await POST(post())).json()).targetForm).toBe("text/markdown");
+describe("cinatra#3033 — the display that draws the one pinned target travels beside the envelope", () => {
+  it("a pending gate over one target carries the display the reading names", async () => {
+    d.reading = { headers: [HEADER], pinnedCount: 1, complete: true, onlyTargetDisplay: "markdown" };
+    // red-first-expect: expected undefined to be 'markdown'
+    expect((await (await POST(post())).json()).targetDisplay).toBe("markdown");
   });
-  it("a gate whose reading names no one target's form carries none", async () => {
-    d.reading = { headers: [HEADER, { ...HEADER, revisionId: "rev-2" }], pinnedCount: 2, complete: true, onlyTargetForm: null };
-    expect(await (await POST(post())).json()).not.toHaveProperty("targetForm");
+  it("a target the reading names as drawn by any other display carries that, too", async () => {
+    d.reading = { headers: [HEADER], pinnedCount: 1, complete: true, onlyTargetDisplay: "other" };
+    // red-first-expect: expected undefined to be 'other'
+    expect((await (await POST(post())).json()).targetDisplay).toBe("other");
   });
-  it("a settled gate carries no form", async () => {
+  it("a gate whose reading names no one target's display carries none", async () => {
+    d.reading = { headers: [HEADER, { ...HEADER, revisionId: "rev-2" }], pinnedCount: 2, complete: true, onlyTargetDisplay: null };
+    const body = await (await POST(post())).json();
+    expect(body).not.toHaveProperty("targetDisplay");
+    expect(body).not.toHaveProperty("targetForm");
+  });
+  it("a settled gate carries no display", async () => {
     d.resolve.mockResolvedValue({ kind: "artifact_review_gate", state: { state: "settled", outcome: "approved" }, body: null });
-    d.reading = { headers: [HEADER], pinnedCount: 1, complete: true, onlyTargetForm: "text/markdown" };
-    expect(await (await POST(post())).json()).not.toHaveProperty("targetForm");
+    d.reading = { headers: [HEADER], pinnedCount: 1, complete: true, onlyTargetDisplay: "markdown" };
+    expect(await (await POST(post())).json()).not.toHaveProperty("targetDisplay");
   });
 });

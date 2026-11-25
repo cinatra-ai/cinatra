@@ -8,13 +8,14 @@
  * thread, `review-card-post-with-featured-image`. The drawing tells the two
  * readings apart by the TARGET: the post is drawn by the markdown display, the
  * picture by the image display, and on the picture the note field opens
- * carrying the prompt that made it. The card reads the one pinned target's form
- * from the resolve answer (`targetForm`) and the prompt beside it, and names no
- * artifact type.
+ * carrying the prompt that made it. The card reads WHICH DISPLAY draws the one
+ * pinned target from the resolve answer (`targetDisplay`, decided on the server
+ * by the same display resolution the preview mounts) and the prompt beside it,
+ * and names no artifact type and no media type.
  *
  * Each test mounts the REAL `ReviewGateCard` under a real host declaration and
  * answers its resolve with real target identities (the header the answer
- * carries, and the target's form), then counts every anchor: the right one
+ * carries, and the display that draws the target), then counts every anchor: the right one
  * exactly once and the others never.
  *
  * Run:
@@ -70,8 +71,8 @@ const RESTRICTED: LifecycleCardState = {
   reason: "Another reviewer owns this gate.",
 };
 
-/** The post, as the resolve answer names it: its header and its form. */
-const POST: { header: LifecycleTargetHeader; form: string } = {
+/** The post, as the resolve answer names it: its header and its display. */
+const POST: { header: LifecycleTargetHeader; display: string } = {
   header: {
     title: "Pick a stack you can upgrade",
     typeLabel: "Blog Post",
@@ -79,11 +80,11 @@ const POST: { header: LifecycleTargetHeader; form: string } = {
     revisionId: "rev-post-3033",
     facts: ["organization", "text/markdown", "updated 2 min ago"],
   },
-  form: "text/markdown",
+  display: "markdown",
 };
 
 /** The featured image, as the resolve answer names it. */
-const PICTURE: { header: LifecycleTargetHeader; form: string } = {
+const PICTURE: { header: LifecycleTargetHeader; display: string } = {
   header: {
     title: "Featured image",
     typeLabel: "Image",
@@ -91,7 +92,7 @@ const PICTURE: { header: LifecycleTargetHeader; form: string } = {
     revisionId: "rev-picture-3033",
     facts: ["organization", "image/png", "updated 1 min ago"],
   },
-  form: "image/png",
+  display: "image",
 };
 
 const ANCHORS = [
@@ -104,7 +105,7 @@ type Anchor = (typeof ANCHORS)[number];
 type Answer = {
   state: LifecycleCardState;
   headers?: LifecycleTargetHeader[];
-  form?: string;
+  display?: string;
   recordedPrompt?: string;
 };
 
@@ -114,7 +115,7 @@ function envelope(answer: Answer): Record<string, unknown> {
     state: answer.state,
     body: null,
     ...(answer.headers ? { targetHeaders: answer.headers, targetHeadersComplete: true } : {}),
-    ...(answer.form === undefined ? {} : { targetForm: answer.form }),
+    ...(answer.display === undefined ? {} : { targetDisplay: answer.display }),
     ...(answer.recordedPrompt === undefined ? {} : { recordedPrompt: answer.recordedPrompt }),
   };
 }
@@ -160,7 +161,7 @@ function runPage(): React.ReactElement {
 
 describe("the run page's review step carries the reading its target draws", () => {
   it("the post's review is the post's reading", async () => {
-    mockResolve({ state: PENDING, headers: [POST.header], form: POST.form });
+    mockResolve({ state: PENDING, headers: [POST.header], display: POST.display });
     const { container } = render(runPage());
     // red-first-expect: expected { 'run-review-step-post': +0, …(2) } to deeply equal { 'run-review-step-post': 1
     await waitFor(() => expect(counts(container)).toEqual(only("run-review-step-post")));
@@ -170,7 +171,7 @@ describe("the run page's review step carries the reading its target draws", () =
   });
 
   it("the featured image's review, with the prompt that made it, is the picture's reading", async () => {
-    mockResolve({ state: PENDING, headers: [PICTURE.header], form: PICTURE.form, recordedPrompt: PROMPT });
+    mockResolve({ state: PENDING, headers: [PICTURE.header], display: PICTURE.display, recordedPrompt: PROMPT });
     const { container } = render(runPage());
     // red-first-expect: to deeply equal { 'run-review-step-post': +0, …(2) }
     await waitFor(() => expect(counts(container)).toEqual(only("run-review-step-picture")));
@@ -180,7 +181,7 @@ describe("the run page's review step carries the reading its target draws", () =
   });
 
   it("a restricted reader sees the same reading", async () => {
-    mockResolve({ state: RESTRICTED, headers: [PICTURE.header], form: PICTURE.form, recordedPrompt: PROMPT });
+    mockResolve({ state: RESTRICTED, headers: [PICTURE.header], display: PICTURE.display, recordedPrompt: PROMPT });
     const { container } = render(runPage());
     // red-first-expect: to deeply equal { 'run-review-step-post': +0, …(2) }
     await waitFor(() => expect(counts(container)).toEqual(only("run-review-step-picture")));
@@ -197,7 +198,7 @@ describe("the run page's review step carries the reading its target draws", () =
     mockResolve({
       state: PENDING,
       headers: [{ ...POST.header, typeLabel: "Document", objectType: "@cinatra-ai/pdf-artifact:document" }],
-      form: "application/pdf",
+      display: "other",
     });
     const { container } = render(runPage());
     await mountedFloor(container);
@@ -205,13 +206,38 @@ describe("the run page's review step carries the reading its target draws", () =
   });
 
   it("a picture with no recorded prompt claims no reading", async () => {
-    mockResolve({ state: PENDING, headers: [PICTURE.header], form: PICTURE.form });
+    mockResolve({ state: PENDING, headers: [PICTURE.header], display: PICTURE.display });
     const { container } = render(runPage());
     await mountedFloor(container);
     expect(counts(container)).toEqual(only(null));
   });
 
-  it("an answer that names no form claims no reading", async () => {
+  it("a markdown target drawn by a pack's own detail renderer claims no reading", async () => {
+    // The answer names the display the preview really mounts: here a pack's own
+    // renderer, not the markdown display, although the target is markdown.
+    mockResolve({
+      state: PENDING,
+      headers: [{ ...POST.header, typeLabel: "Web Page", objectType: "@cinatra-ai/website-artifacts:page" }],
+      display: "other",
+    });
+    const { container } = render(runPage());
+    await mountedFloor(container);
+    expect(counts(container)).toEqual(only(null));
+  });
+
+  it("an image drawn by a pack's own renderer claims no reading, even with a prompt", async () => {
+    mockResolve({
+      state: PENDING,
+      headers: [{ ...PICTURE.header, typeLabel: "Screenshot", objectType: "@cinatra-ai/screenshot-artifact:screenshot" }],
+      display: "other",
+      recordedPrompt: PROMPT,
+    });
+    const { container } = render(runPage());
+    await mountedFloor(container);
+    expect(counts(container)).toEqual(only(null));
+  });
+
+  it("an answer that names no display claims no reading", async () => {
     mockResolve({ state: PENDING, headers: [POST.header] });
     const { container } = render(runPage());
     await mountedFloor(container);
@@ -231,7 +257,7 @@ describe("the reading's anchor holds the whole reading", () => {
   }
 
   it("the post's anchor holds its header, its target and its floor", async () => {
-    mockResolve({ state: PENDING, headers: [POST.header], form: POST.form });
+    mockResolve({ state: PENDING, headers: [POST.header], display: POST.display });
     const { container } = render(runPage());
     await mountedFloor(container);
     const anchor = container.querySelector('[data-conformance-id="run-review-step-post"]');
@@ -242,7 +268,7 @@ describe("the reading's anchor holds the whole reading", () => {
   });
 
   it("the picture's anchor holds its header, its target and its floor", async () => {
-    mockResolve({ state: PENDING, headers: [PICTURE.header], form: PICTURE.form, recordedPrompt: PROMPT });
+    mockResolve({ state: PENDING, headers: [PICTURE.header], display: PICTURE.display, recordedPrompt: PROMPT });
     const { container } = render(runPage());
     await mountedFloor(container);
     const anchor = container.querySelector('[data-conformance-id="run-review-step-picture"]');
@@ -253,7 +279,7 @@ describe("the reading's anchor holds the whole reading", () => {
   });
 
   it("the thread's picture card anchor holds its header, its target and its floor", async () => {
-    mockResolve({ state: PENDING, headers: [PICTURE.header], form: PICTURE.form, recordedPrompt: PROMPT });
+    mockResolve({ state: PENDING, headers: [PICTURE.header], display: PICTURE.display, recordedPrompt: PROMPT });
     const { container } = render(
       <LifecycleCardSurfaceProvider host="chat_thread">
         <ReviewGateCard view={VIEW} />
@@ -285,7 +311,7 @@ describe("the reading's anchor holds the whole reading", () => {
     cleanup();
 
     // Pending, but a reading the card cannot claim (the post inside a thread).
-    mockResolve({ state: PENDING, headers: [POST.header], form: POST.form });
+    mockResolve({ state: PENDING, headers: [POST.header], display: POST.display });
     const thread = render(
       <LifecycleCardSurfaceProvider host="chat_thread">
         <ReviewGateCard view={VIEW} />
@@ -311,7 +337,7 @@ describe("the reading's anchor holds the whole reading", () => {
         return json({ outcome: { kind: "decided", disposition: "approve", idempotent: false } });
       }
       return ++resolves === 1
-        ? json(envelope({ state: PENDING, headers: [POST.header], form: POST.form }))
+        ? json(envelope({ state: PENDING, headers: [POST.header], display: POST.display }))
         : new Promise<Response>(() => {});
     }) as unknown as typeof fetch;
     const { container } = render(runPage());
@@ -334,7 +360,7 @@ describe("the reading's anchor holds the whole reading", () => {
 
 describe("the chat thread carries the featured image's card", () => {
   it("the picture's card carries the anchor", async () => {
-    mockResolve({ state: PENDING, headers: [PICTURE.header], form: PICTURE.form, recordedPrompt: PROMPT });
+    mockResolve({ state: PENDING, headers: [PICTURE.header], display: PICTURE.display, recordedPrompt: PROMPT });
     const { container } = render(
       <LifecycleCardSurfaceProvider host="chat_thread">
         <ReviewGateCard view={VIEW} />
@@ -347,7 +373,7 @@ describe("the chat thread carries the featured image's card", () => {
   });
 
   it("the inline run panel inside the thread is still the thread", async () => {
-    mockResolve({ state: PENDING, headers: [PICTURE.header], form: PICTURE.form, recordedPrompt: PROMPT });
+    mockResolve({ state: PENDING, headers: [PICTURE.header], display: PICTURE.display, recordedPrompt: PROMPT });
     const { container } = render(
       <LifecycleCardSurfaceProvider host="chat_thread">
         <LifecycleCardSurfaceProvider host="run_card">
@@ -362,7 +388,7 @@ describe("the chat thread carries the featured image's card", () => {
   });
 
   it("the post's card in the thread carries no anchor of a reading", async () => {
-    mockResolve({ state: PENDING, headers: [POST.header], form: POST.form });
+    mockResolve({ state: PENDING, headers: [POST.header], display: POST.display });
     const { container } = render(
       <LifecycleCardSurfaceProvider host="chat_thread">
         <ReviewGateCard view={VIEW} />
@@ -376,7 +402,7 @@ describe("the chat thread carries the featured image's card", () => {
 describe("no reading is claimed where the card cannot tell", () => {
   for (const host of ["page_gate_region", "site_widget"] as const) {
     it(`${host}: neither reading is drawn`, async () => {
-      mockResolve({ state: PENDING, headers: [PICTURE.header], form: PICTURE.form, recordedPrompt: PROMPT });
+      mockResolve({ state: PENDING, headers: [PICTURE.header], display: PICTURE.display, recordedPrompt: PROMPT });
       const { container } = render(
         <LifecycleCardSurfaceProvider
           host={host}
@@ -423,7 +449,7 @@ describe("a gate that settles keeps the preview it painted", () => {
       // The first answer is the pending post; the re-resolve after the decision
       // never answers, so the card draws the decision it landed.
       return ++resolves === 1
-        ? json(envelope({ state: PENDING, headers: [POST.header], form: POST.form }))
+        ? json(envelope({ state: PENDING, headers: [POST.header], display: POST.display }))
         : new Promise<Response>(() => {});
     }) as unknown as typeof fetch;
     const { container } = render(runPage());
@@ -450,12 +476,12 @@ describe("reviewStateAnchor — the rule", () => {
     insideConversation: false,
     state: "pending" as const,
     targetCount: 1,
-    targetForm: "text/markdown",
+    targetDisplay: "markdown" as const,
     recordedPrompt: null,
   };
-  const picture = { ...post, targetForm: "image/png", recordedPrompt: PROMPT };
+  const picture = { ...post, targetDisplay: "image" as const, recordedPrompt: PROMPT };
 
-  it("decides each reading from the place and the one target's form", () => {
+  it("decides each reading from the place and the display that draws the one target", () => {
     // red-first-expect: reviewStateAnchor is not a function
     expect(reviewStateAnchor(post)).toBe("run-review-step-post");
     expect(reviewStateAnchor(picture)).toBe("run-review-step-picture");
@@ -476,12 +502,14 @@ describe("reviewStateAnchor — the rule", () => {
       expect(reviewStateAnchor({ ...post, targetCount })).toBeNull();
       expect(reviewStateAnchor({ ...picture, targetCount })).toBeNull();
     }
-    // No form, or a form neither display draws as these readings.
-    expect(reviewStateAnchor({ ...post, targetForm: null })).toBeNull();
-    for (const targetForm of ["application/pdf", "text/html", "text/plain", "video/mp4", "application/vnd.cinatra-unknown"]) {
-      expect(reviewStateAnchor({ ...post, targetForm })).toBeNull();
-      expect(reviewStateAnchor({ ...picture, targetForm })).toBeNull();
-    }
+    // No display named, or any other display (a pack's own renderer, a floor).
+    expect(reviewStateAnchor({ ...post, targetDisplay: null })).toBeNull();
+    expect(reviewStateAnchor({ ...picture, targetDisplay: null })).toBeNull();
+    expect(reviewStateAnchor({ ...post, targetDisplay: "other" })).toBeNull();
+    expect(reviewStateAnchor({ ...picture, targetDisplay: "other" })).toBeNull();
+    // The markdown display with a prompt, and the image display without one.
+    expect(reviewStateAnchor({ ...post, targetDisplay: "image" })).toBeNull();
+    expect(reviewStateAnchor({ ...picture, targetDisplay: "markdown" })).toBeNull();
     // A picture without its prompt, and a post that carries one.
     expect(reviewStateAnchor({ ...picture, recordedPrompt: null })).toBeNull();
     expect(reviewStateAnchor({ ...picture, recordedPrompt: "  " })).toBeNull();

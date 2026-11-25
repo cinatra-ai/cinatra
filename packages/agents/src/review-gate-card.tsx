@@ -174,6 +174,7 @@ import {
   type LifecycleCardHost,
   type LifecycleCardState,
   type LifecycleSuggestion,
+  type LifecycleTargetDisplay,
   type LifecycleTargetHeader,
   type ReviewTargetIslandAddresses,
   type ReviewTargetKey,
@@ -1425,7 +1426,7 @@ export function ReviewGateCard({
     insideConversation,
     state: state.state,
     targetCount: targetHeaders?.length ?? 0,
-    targetForm: resolved?.targetForm ?? null,
+    targetDisplay: resolved?.targetDisplay ?? null,
     recordedPrompt: resolved?.recordedPrompt ?? null,
   });
 
@@ -1465,21 +1466,22 @@ export type ReviewStateAnchorId =
  * the post, "drawn by the markdown display", and on the featured image, "the
  * picture drawn by the image display". `app-lifecycle-cards.html` §II.1 draws
  * the featured image's card in the chat thread. What tells the two apart is
- * the TARGET: one artifact per gate, and its own form decides the display that
- * draws it. The card reads that form from the resolve answer (`targetForm`, the
- * one pinned target's mime), never from an artifact type id, which core does
- * not name. The answer carries the form in the spelling the preview's display
- * was chosen by (the server passes it through the renderer's own
- * `canonicalRepresentationMime`), so a legacy markdown spelling arrives as
- * `text/markdown` and this rule needs no list of spellings. On the picture the note field also opens carrying the prompt that
- * made it, so the picture needs that prompt as well; on the post it is empty.
+ * the DISPLAY THAT DRAWS THE TARGET: one artifact per gate, drawn by the display
+ * the dispatch selects for it. The card reads that display from the resolve
+ * answer (`targetDisplay`), which the server decides with the same display
+ * resolution the target's preview mounts. It never reads a media type or an
+ * artifact type id: the media type alone does not decide the display (an
+ * extension artifact's own detail renderer comes first), and core names no
+ * type. On the picture the note field also opens carrying the prompt that made
+ * it, so the picture needs that prompt as well; on the post it is empty.
  *
- * FAIL CLOSED. A gate that pins several targets, an answer that names no form,
- * a form that is neither the markdown display's nor an image, and a picture
- * with no recorded prompt all claim NO reading: an absent anchor is honest, a
- * wrong one is not. While the answer is loading, and on a settled or absent
- * gate, nothing is claimed either: the answer carries the form and the prompt
- * only for a `pending` or `restricted` gate.
+ * FAIL CLOSED. A gate that pins several targets, an answer that names no
+ * display, any display other than the host's markdown or image display (a
+ * pack's own renderer, a floor), a picture with no recorded prompt and a post
+ * that carries one all claim NO reading: an absent anchor is honest, a wrong
+ * one is not. While the answer is loading, and on a settled or absent gate,
+ * nothing is claimed either: the answer carries the display and the prompt only
+ * for a `pending` or `restricted` gate.
  *
  * THE PLACE, NOT THE NEAREST PROP. The chat reading is any card drawn inside a
  * conversation (the inline run panel included, as for the prompt window). The
@@ -1492,14 +1494,15 @@ export function reviewStateAnchor(input: {
   state: LifecycleCardState["state"];
   /** How many target headers the answer carried. */
   targetCount: number;
-  targetForm: string | null;
+  /** The display that draws the one target, as the answer names it. */
+  targetDisplay: LifecycleTargetDisplay | null;
   recordedPrompt: string | null;
 }): ReviewStateAnchorId | null {
   if (input.state !== "pending" && input.state !== "restricted") return null;
-  if (input.targetCount !== 1 || input.targetForm === null) return null;
+  if (input.targetCount !== 1 || input.targetDisplay === null) return null;
   const prompted = input.recordedPrompt !== null && input.recordedPrompt.trim() !== "";
-  const picture = input.targetForm.startsWith("image/") && prompted;
-  const post = input.targetForm === "text/markdown" && !prompted;
+  const picture = input.targetDisplay === "image" && prompted;
+  const post = input.targetDisplay === "markdown" && !prompted;
   if (input.insideConversation) return picture ? "review-card-post-with-featured-image" : null;
   if (input.host !== "run_card") return null;
   if (picture) return "run-review-step-picture";

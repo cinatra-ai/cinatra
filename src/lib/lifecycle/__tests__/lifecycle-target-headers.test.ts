@@ -31,7 +31,8 @@ vi.mock("@/lib/authz/build-actor-context", () => ({
 
 const revisionMember = vi.fn();
 const revisionMemberHistorical = vi.fn();
-const bindArtifactReviewPorts = vi.fn((_ctx: unknown) => ({ revisionMember, revisionMemberHistorical }));
+const resolveMount = vi.fn();
+const bindArtifactReviewPorts = vi.fn((_ctx: unknown) => ({ revisionMember, revisionMemberHistorical, resolveMount }));
 vi.mock("@/app/artifacts/[id]/review-target-prepare", () => ({
   bindArtifactReviewPorts: (ctx: unknown) => bindArtifactReviewPorts(ctx),
 }));
@@ -101,6 +102,7 @@ beforeEach(() => {
   readOwnerDisplayName.mockResolvedValue(null);
   revisionMember.mockReturnValue({ mime: "text/html", form: "file", historical: false });
   revisionMemberHistorical.mockReturnValue({ mime: "text/html", form: "file", historical: true });
+  resolveMount.mockResolvedValue({ kind: "floor", slot: "detail", packageName: null, reason: "no-semantic-renderer" });
 });
 
 describe("which read each reading takes", () => {
@@ -365,10 +367,10 @@ describe("the reading says whether its headers are complete", () => {
   it("no headers, a refused state and a store that throws are never complete", async () => {
     readArtifactForDetail.mockReturnValue({ kind: "not-found" });
     // red-first-expect: to deeply equal { headers: null, pinnedCount: 1, …(2) }
-    expect(await reading()).toEqual({ headers: null, pinnedCount: 1, complete: false, onlyTargetForm: null });
-    expect(await reading({ state: "absent" })).toEqual({ headers: null, pinnedCount: 0, complete: false, onlyTargetForm: null });
+    expect(await reading()).toEqual({ headers: null, pinnedCount: 1, complete: false, onlyTargetDisplay: null });
+    expect(await reading({ state: "absent" })).toEqual({ headers: null, pinnedCount: 0, complete: false, onlyTargetDisplay: null });
     readReviewGate.mockRejectedValue(new Error("gate store down"));
-    expect(await reading()).toEqual({ headers: null, pinnedCount: 0, complete: false, onlyTargetForm: null });
+    expect(await reading()).toEqual({ headers: null, pinnedCount: 0, complete: false, onlyTargetDisplay: null });
   });
 
   it("the headers-only reader answers exactly the reading's headers", async () => {
@@ -425,23 +427,84 @@ describe("the reading says whether its headers are complete", () => {
   });
 });
 
-describe("cinatra#3033 — the form of the gate's one target", () => {
+describe("cinatra#3033 — the display that draws the gate's one target", () => {
   function reading(state: LifecycleCardState = PENDING) {
     return readReviewTargetHeadersReading({ viewType: "artifact_review_gate", ref: REF, state, actorCtx: ACTOR });
   }
+  /** What the preview's own display resolution answers: the module that draws
+   *  the target, as the binder hands it to the preview. */
+  const mounted = (packageName: string) => ({
+    kind: "build-map",
+    slot: "detail",
+    packageName,
+    generatedKey: `${packageName}::detail`,
+    propsApiVersion: 5,
+  });
+  const MARKDOWN_DISPLAY = mounted("@cinatra-ai/markdown-artifact");
+  const IMAGE_DISPLAY = mounted("@cinatra-ai/image-artifact");
 
-  it("names the PINNED revision's form when the row's current revision is an image", async () => {
-    readArtifactForDetail.mockReturnValue(artifact({ mime: "image/png" }));
-    revisionMember.mockReturnValue({ mime: "Text/Markdown; charset=utf-8", form: "file", historical: false });
-    // red-first-expect: expected undefined to be 'text/markdown'
-    expect((await reading()).onlyTargetForm).toBe("text/markdown");
+  it("names the markdown display when the preview's resolution mounts the host's markdown display", async () => {
+    revisionMember.mockReturnValue({ mime: "text/markdown", form: "file", historical: false });
+    resolveMount.mockResolvedValue(MARKDOWN_DISPLAY);
+    // red-first-expect: expected undefined to be 'markdown'
+    expect((await reading()).onlyTargetDisplay).toBe("markdown");
   });
 
-  it("names the PINNED revision's form when the row's current revision is markdown", async () => {
-    readArtifactForDetail.mockReturnValue(artifact({ mime: "text/markdown" }));
+  it("asks the preview's own resolution, with the artifact, the PINNED revision's media type and the host's props version", async () => {
+    readArtifactForDetail.mockReturnValue(artifact({ mime: "image/png" }));
+    revisionMember.mockReturnValue({ mime: "text/markdown", form: "file", historical: false });
+    resolveMount.mockResolvedValue(MARKDOWN_DISPLAY);
+    await reading();
+    // red-first-expect: expected "vi.fn()" to be called with arguments: [ { artifact: { …(7) }, …(2) } ]
+    expect(resolveMount).toHaveBeenCalledWith({
+      artifact: artifact({ mime: "image/png" }).artifact,
+      mime: "text/markdown",
+      propsApiVersion: 5,
+    });
+  });
+
+  it("names the markdown display for the legacy markdown spelling the same display draws", async () => {
+    revisionMember.mockReturnValue({ mime: "text/x-markdown", form: "file", historical: false });
+    resolveMount.mockResolvedValue(MARKDOWN_DISPLAY);
+    // red-first-expect: expected undefined to be 'markdown'
+    expect((await reading()).onlyTargetDisplay).toBe("markdown");
+  });
+
+  it("names the image display when the preview's resolution mounts the host's image display", async () => {
     revisionMember.mockReturnValue({ mime: "image/png", form: "file", historical: false });
-    // red-first-expect: expected undefined to be 'image/png'
-    expect((await reading()).onlyTargetForm).toBe("image/png");
+    resolveMount.mockResolvedValue(IMAGE_DISPLAY);
+    // red-first-expect: expected undefined to be 'image'
+    expect((await reading()).onlyTargetDisplay).toBe("image");
+  });
+
+  it("names another display when a pack's own detail renderer draws a markdown target", async () => {
+    revisionMember.mockReturnValue({ mime: "text/markdown", form: "file", historical: false });
+    resolveMount.mockResolvedValue(mounted("@cinatra-ai/website-artifacts"));
+    // red-first-expect: expected undefined to be 'other'
+    expect((await reading()).onlyTargetDisplay).toBe("other");
+  });
+
+  it("names another display when a pack's own renderer draws an image target", async () => {
+    revisionMember.mockReturnValue({ mime: "image/png", form: "file", historical: false });
+    resolveMount.mockResolvedValue(mounted("@cinatra-ai/screenshot-artifact"));
+    // red-first-expect: expected undefined to be 'other'
+    expect((await reading()).onlyTargetDisplay).toBe("other");
+  });
+
+  it("names another display when the host's display for one media type is mounted for another", async () => {
+    revisionMember.mockReturnValue({ mime: "image/png", form: "file", historical: false });
+    resolveMount.mockResolvedValue(MARKDOWN_DISPLAY);
+    // red-first-expect: expected undefined to be 'other'
+    expect((await reading()).onlyTargetDisplay).toBe("other");
+  });
+
+  it("names another display for a floor and for a display loaded at runtime", async () => {
+    revisionMember.mockReturnValue({ mime: "text/markdown", form: "file", historical: false });
+    resolveMount.mockResolvedValue({ kind: "floor", slot: "detail", packageName: "@cinatra-ai/markdown-artifact", reason: "requires-rebuild" });
+    // red-first-expect: expected undefined to be 'other'
+    expect((await reading()).onlyTargetDisplay).toBe("other");
+    resolveMount.mockResolvedValue({ kind: "runtime", slot: "detail", packageName: "@acme/markdown", descriptor: {} });
+    expect((await reading()).onlyTargetDisplay).toBe("other");
   });
 
   it("reads the pinned revision through the preview's own port, bound to the reader's organization and actor", async () => {
@@ -456,42 +519,35 @@ describe("cinatra#3033 — the form of the gate's one target", () => {
 
   it("reads the settled reading's pinned revision under the historical bound, as the preview does", async () => {
     revisionMemberHistorical.mockReturnValue({ mime: "text/markdown", form: "file", historical: true });
-    // red-first-expect: expected undefined to be 'text/markdown'
-    expect((await reading(SETTLED_DECIDED)).onlyTargetForm).toBe("text/markdown");
+    resolveMount.mockResolvedValue(MARKDOWN_DISPLAY);
+    // red-first-expect: expected undefined to be 'markdown'
+    expect((await reading(SETTLED_DECIDED)).onlyTargetDisplay).toBe("markdown");
     expect(revisionMember).not.toHaveBeenCalled();
   });
 
-  it("names the legacy markdown spelling by the registered one the preview draws it under", async () => {
-    revisionMember.mockReturnValue({ mime: "text/x-markdown", form: "file", historical: false });
-    // red-first-expect: expected undefined to be 'text/markdown'
-    expect((await reading()).onlyTargetForm).toBe("text/markdown");
-  });
-
-  it("keeps a form the preview knows no other spelling for exactly as it is", async () => {
-    revisionMember.mockReturnValue({ mime: "application/vnd.cinatra-unknown", form: "file", historical: false });
-    // red-first-expect: expected undefined to be 'application/vnd.cinatra-unknown'
-    expect((await reading()).onlyTargetForm).toBe("application/vnd.cinatra-unknown");
-  });
-
-  it("names no form when the pinned revision is not a member, and keeps the header", async () => {
+  it("names no display when the pinned revision is not a member, and keeps the header", async () => {
     revisionMember.mockReturnValue(null);
     const result = await reading();
     // red-first-expect: expected undefined to be null
-    expect(result.onlyTargetForm).toBeNull();
+    expect(result.onlyTargetDisplay).toBeNull();
     expect(result.complete).toBe(true);
+    expect(resolveMount).not.toHaveBeenCalled();
   });
 
-  it("names no form when the pinned revision's read throws, and keeps the header", async () => {
+  it("names no display when the pinned revision's read or the resolution throws, and keeps the header", async () => {
     revisionMember.mockImplementation(() => {
       throw new Error("store down");
     });
     const result = await reading();
     // red-first-expect: expected undefined to be null
-    expect(result.onlyTargetForm).toBeNull();
+    expect(result.onlyTargetDisplay).toBeNull();
     expect(result.complete).toBe(true);
+    revisionMember.mockReturnValue({ mime: "text/markdown", form: "file", historical: false });
+    resolveMount.mockRejectedValue(new Error("registry down"));
+    expect((await reading()).onlyTargetDisplay).toBeNull();
   });
 
-  it("names no form, and reads no revision, for a gate that pins several targets", async () => {
+  it("names no display, and reads no revision, for a gate that pins several targets", async () => {
     readReviewGate.mockResolvedValue(
       gate([
         { artifactId: "art-1", representationRevisionId: "rev_post" },
@@ -501,14 +557,15 @@ describe("cinatra#3033 — the form of the gate's one target", () => {
     const result = await reading();
     expect(result.complete).toBe(true);
     // red-first-expect: expected undefined to be null
-    expect(result.onlyTargetForm).toBeNull();
+    expect(result.onlyTargetDisplay).toBeNull();
     expect(revisionMember).not.toHaveBeenCalled();
+    expect(resolveMount).not.toHaveBeenCalled();
   });
 
-  it("names no form when the one target cannot be read", async () => {
+  it("names no display when the one target cannot be read", async () => {
     readArtifactForDetail.mockReturnValue({ kind: "not-found" });
     // red-first-expect: expected undefined to be null
-    expect((await reading()).onlyTargetForm).toBeNull();
+    expect((await reading()).onlyTargetDisplay).toBeNull();
     expect(revisionMember).not.toHaveBeenCalled();
   });
 });

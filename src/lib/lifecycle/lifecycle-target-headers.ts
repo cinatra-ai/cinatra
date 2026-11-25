@@ -60,6 +60,7 @@ import {
   projectReviewTargetHeaderRevision,
   type LifecycleCardState,
   type LifecycleDataPartViewType,
+  type LifecycleTargetDisplay,
   type LifecycleTargetHeader,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { readReviewGate } from "@cinatra-ai/agents/artifact-review-gate-store";
@@ -68,6 +69,7 @@ import { buildActorContextFromPrimitive } from "@/lib/authz/build-actor-context"
 import {
   readArtifactForDetail,
   readArtifactForSettledReview,
+  type ArtifactSummary,
 } from "@/lib/artifacts/artifact-service";
 import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
 import { reviewTargetRowFacts } from "@/lib/artifacts/review-target-row-facts";
@@ -125,26 +127,19 @@ export type ReviewTargetHeadersReading = {
   headers: LifecycleTargetHeader[] | null;
   pinnedCount: number;
   complete: boolean;
-  /** The media form (mime, lower case, no parameters) of the gate's ONE pinned
-   *  target, read from the PINNED REVISION through the same membership read the
-   *  target's preview renders from; `null` unless the gate pins exactly one
-   *  target, the reading is complete and that revision answers (cinatra#3033). */
-  onlyTargetForm: string | null;
+  /** WHICH DISPLAY DRAWS the gate's ONE pinned target (cinatra#3033), decided
+   *  by the same display resolution the target's preview mounts, for the PINNED
+   *  REVISION; `null` unless the gate pins exactly one target, the reading is
+   *  complete and that revision and its resolution answer. */
+  onlyTargetDisplay: LifecycleTargetDisplay | null;
 };
 
 const NO_HEADERS: ReviewTargetHeadersReading = Object.freeze({
   headers: null,
   pinnedCount: 0,
   complete: false,
-  onlyTargetForm: null,
+  onlyTargetDisplay: null,
 });
-
-/** A row's mime as a media form: lower case, no parameters, inside the bound. */
-function mediaForm(mime: string | null | undefined): string | null {
-  if (typeof mime !== "string") return null;
-  const form = mime.toLowerCase().split(";")[0].trim();
-  return form.length > 0 && form.length <= LIFECYCLE_TARGET_HEADER_MAX_TEXT ? form : null;
-}
 
 export async function readReviewTargetHeadersReading(
   input: ReviewTargetHeadersInput,
@@ -195,7 +190,7 @@ export async function readReviewTargetHeadersReading(
       ((level === "team" && memberTeams.has(id)) ||
         (level === "organization" && id === actor.organizationId));
     const headers: LifecycleTargetHeader[] = [];
-    const forms: Array<string | null> = [];
+    const displays: Array<LifecycleTargetDisplay | null> = [];
     // Every header's revision is the pinned id EXACTLY, or the reading is not
     // complete (cinatra#4129): a header whose id the projection module cut,
     // substituted or refused names its target and nothing more.
@@ -269,7 +264,9 @@ export async function readReviewTargetHeadersReading(
       const revision = projectReviewTargetHeaderRevision(target.representationRevisionId);
       if (!revision.exact) allExact = false;
       if (pinnedCount === 1) {
-        forms.push(await readPinnedRevisionForm(actorCtx.orgId, actor, target, state.state === "settled"));
+        displays.push(
+          await readPinnedRevisionDisplay(actorCtx.orgId, actor, artifact, target, state.state === "settled"),
+        );
       }
       headers.push({
         title: clamp(artifact.title ?? artifact.artifactId, artifact.artifactId),
@@ -305,7 +302,7 @@ export async function readReviewTargetHeadersReading(
       headers: headers.length > 0 ? headers : null,
       pinnedCount,
       complete,
-      onlyTargetForm: complete && pinnedCount === 1 && forms.length === 1 ? forms[0] : null,
+      onlyTargetDisplay: complete && pinnedCount === 1 && displays.length === 1 ? displays[0] : null,
     };
   } catch {
     // The reading is lost, never the card.
@@ -314,44 +311,50 @@ export async function readReviewTargetHeadersReading(
 }
 
 /**
- * THE FORM OF THE PINNED REVISION, NOT OF THE ROW'S LATEST ONE (cinatra#3033).
+ * THE DISPLAY THAT DRAWS THE PINNED REVISION (cinatra#3033).
  *
- * The row's own mime is its CURRENT revision's. The target's preview renders the
- * revision the gate pinned, and reads its mime through the membership port of
- * the artifact-side review binder. This reads the form through that SAME port,
- * bound to the same organization and the same actor-scoped context, with the
- * same live or historical bound the preview takes on this reading. So the form
- * named here and the revision drawn there cannot disagree when the row's latest
- * revision has moved on to another form.
- *
- * It runs only after the actor-scoped artifact read above answered `ok`, as the
- * preview's own membership read does. A revision that is not a member, and a
- * read that throws, name no form: no form, no reading drawn from it.
+ * The media type alone does not say which display draws a target: the dispatch
+ * gives an extension artifact's own detail renderer priority over the display of
+ * its media type. So this asks the question the target's preview asks, through
+ * the SAME ports of the artifact-side review binder, bound to the same
+ * organization and the same actor-scoped context:
+ *   - the pinned revision's membership read, under the same live or historical
+ *     bound the preview takes on this reading (the row's own mime is its CURRENT
+ *     revision's, and the preview draws the revision the gate pinned);
+ *   - then `resolveMount`, with the artifact, that revision's media type and the
+ *     host's props version: the exact call the preparation core makes before it
+ *     mounts the preview.
+ * `artifactDisplayFamily` then names which display that mount is, as a closed
+ * value. A revision that is not a member, and a read or a resolution that throws,
+ * name no display: no display, no reading drawn from it.
  *
  * DYNAMIC on purpose, the resolve route's `readReviewGateRecordedPrompt`
  * posture: the binder module carries the display resolution, and this leaf
  * keeps it off the static graph of every route that reaches the header.
  */
-async function readPinnedRevisionForm(
+async function readPinnedRevisionDisplay(
   orgId: string,
   actor: ReturnType<typeof buildActorContextFromPrimitive>,
+  artifact: ArtifactSummary,
   target: { artifactId: string; representationRevisionId: string },
   settled: boolean,
-): Promise<string | null> {
+): Promise<LifecycleTargetDisplay | null> {
   try {
     const { bindArtifactReviewPorts } = await import("@/app/artifacts/[id]/review-target-prepare");
-    const { canonicalRepresentationMime } = await import("@/app/artifacts/[id]/renderer-resolution");
+    const { artifactDisplayFamily } = await import("@/app/artifacts/[id]/renderer-resolution");
+    const { ARTIFACT_RENDERER_PROPS_API_VERSION } = await import("@/lib/artifacts/artifact-renderer-props");
     const ports = bindArtifactReviewPorts({ orgId, actor });
     const member =
       settled && typeof ports.revisionMemberHistorical === "function"
         ? await ports.revisionMemberHistorical(target.artifactId, target.representationRevisionId)
         : await ports.revisionMember(target.artifactId, target.representationRevisionId);
-    // THE RENDERER'S OWN SPELLING. The preview resolves the pinned mime through
-    // `canonicalRepresentationMime` before it picks a display, so a legacy
-    // spelling (`text/x-markdown`) is drawn by the display of the registered one.
-    // The form named here goes through the same function, so the card reads the
-    // form the display was chosen by, never a second list of spellings.
-    return typeof member?.mime === "string" ? mediaForm(canonicalRepresentationMime(member.mime)) : null;
+    if (typeof member?.mime !== "string") return null;
+    const mount = await ports.resolveMount({
+      artifact,
+      mime: member.mime,
+      propsApiVersion: ARTIFACT_RENDERER_PROPS_API_VERSION,
+    });
+    return artifactDisplayFamily(orgId, mount, member.mime);
   } catch {
     return null;
   }

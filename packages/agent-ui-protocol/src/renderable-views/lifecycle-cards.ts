@@ -2015,13 +2015,23 @@ export type LifecycleResolveAnswerFor<K extends LifecycleDataPartViewType> =
     targetHeadersComplete?: boolean;
     /** §VI producer prefill; envelope-only, absent on older readers/answers. */
     recordedPrompt?: string | null;
-    /** The media form (mime, lower case, no parameters) of the ONE target a
-     * pending or restricted gate pins, read from that artifact's own row
-     * (cinatra#3033). Absent for a gate that pins several targets, for one
-     * whose target the reader cannot read, and on older answers. Envelope-only,
-     * like `recordedPrompt`. */
-    targetForm?: string | null;
+    /** WHICH DISPLAY DRAWS the ONE target a pending or restricted gate pins
+     * (cinatra#3033), decided on the server by the same display resolution the
+     * target's preview mounts. See {@link LifecycleTargetDisplay}. Absent for a
+     * gate that pins several targets, for one whose pinned revision the reader
+     * cannot read, and on older answers. Envelope-only, like `recordedPrompt`. */
+    targetDisplay?: LifecycleTargetDisplay | null;
   };
+
+/**
+ * THE DISPLAY THAT DRAWS A REVIEW TARGET, as a closed value that names no
+ * package (cinatra#3033): `markdown` — the host's markdown display draws it;
+ * `image` — the host's image display draws it; `other` — anything else, a
+ * pack's own renderer or a floor among them. The resolve answer carries it so
+ * the card can name its drawn reading without reading a media type.
+ */
+export const LIFECYCLE_TARGET_DISPLAYS = ["markdown", "image", "other"] as const;
+export type LifecycleTargetDisplay = (typeof LIFECYCLE_TARGET_DISPLAYS)[number];
 
 /**
  * WHAT A KIND CARRIES BESIDE ITS BODY, AND WHY THERE IS SUCH A PLACE AT ALL
@@ -2188,13 +2198,12 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
     if (recordedPrompt !== undefined && recordedPrompt !== null && typeof recordedPrompt !== "string") return null;
     if (recordedPrompt !== undefined && recordedPrompt !== null &&
         (expectedKind !== "artifact_review_gate" || (state.data.state !== "pending" && state.data.state !== "restricted"))) return null;
-    // The target's form follows the same rule: a string inside the header's
-    // bound, on a pending or restricted review gate only.
-    const targetForm = record.targetForm;
-    if (targetForm !== undefined && targetForm !== null &&
-        (typeof targetForm !== "string" || targetForm.length === 0 ||
-         targetForm.length > LIFECYCLE_TARGET_HEADER_MAX_TEXT)) return null;
-    if (targetForm !== undefined && targetForm !== null &&
+    // The target's display follows the same rule: one value of the closed set,
+    // on a pending or restricted review gate only.
+    const targetDisplay = record.targetDisplay;
+    if (targetDisplay !== undefined && targetDisplay !== null &&
+        !(LIFECYCLE_TARGET_DISPLAYS as readonly unknown[]).includes(targetDisplay)) return null;
+    if (targetDisplay !== undefined && targetDisplay !== null &&
         (expectedKind !== "artifact_review_gate" || (state.data.state !== "pending" && state.data.state !== "restricted"))) return null;
     // A HEADER BELONGS TO ONE KIND, and it is refused on every other exactly as
     // a wrong body is. Only the review gate has a review target, so a header
@@ -2253,7 +2262,7 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
         targetHeaders,
         ...(targetHeadersComplete === undefined ? {} : { targetHeadersComplete }),
         ...(recordedPrompt === undefined ? {} : { recordedPrompt }),
-        ...(targetForm === undefined ? {} : { targetForm }),
+        ...(targetDisplay === undefined ? {} : { targetDisplay: targetDisplay as LifecycleTargetDisplay | null }),
         aside,
       } as LifecycleResolveAnswerFor<K>;
     }
@@ -2270,7 +2279,7 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
       targetHeaders,
       ...(targetHeadersComplete === undefined ? {} : { targetHeadersComplete }),
       ...(recordedPrompt === undefined ? {} : { recordedPrompt }),
-      ...(targetForm === undefined ? {} : { targetForm }),
+      ...(targetDisplay === undefined ? {} : { targetDisplay: targetDisplay as LifecycleTargetDisplay | null }),
       aside,
     } as LifecycleResolveAnswerFor<K>;
   } catch {

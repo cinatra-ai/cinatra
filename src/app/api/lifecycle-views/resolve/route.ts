@@ -398,13 +398,13 @@ export async function POST(request: Request): Promise<Response> {
       recordedPrompt = await readReviewGateRecordedPrompt({ ...gate, actorCtx });
     }
   }
-  // The form of the ONE pinned target (cinatra#3033), from the same
-  // actor-scoped read that composed its header, on the same two states the
+  // The display that draws the ONE pinned target (cinatra#3033), from the same
+  // actor-scoped reading that composed its header, on the same two states the
   // prompt travels on. A gate that pins several targets carries none.
-  const targetForm =
+  const targetDisplay =
     parsed.data.viewType === "artifact_review_gate" &&
     (withOutcome.state === "pending" || withOutcome.state === "restricted")
-      ? (targetReading.onlyTargetForm ?? null)
+      ? (targetReading.onlyTargetDisplay ?? null)
       : null;
 
   // The island's credential (cinatra#2754) — minted HERE or not at all, and
@@ -458,7 +458,7 @@ export async function POST(request: Request): Promise<Response> {
         : {}),
       ...(targetHeaders ? { targetHeaders, targetHeadersComplete } : {}),
       ...(recordedPrompt === null ? {} : { recordedPrompt }),
-      ...(targetForm === null ? {} : { targetForm }),
+      ...(targetDisplay === null ? {} : { targetDisplay }),
     },
     { headers: { "Cache-Control": "no-store" } },
   );

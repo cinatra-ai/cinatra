@@ -726,28 +726,29 @@ describe("approved app-artifact-review §VI envelope-only producer Note", () => 
   });
 });
 
-describe("cinatra#3033 — the one pinned target's form, envelope-only", () => {
+describe("cinatra#3033 — the display that draws the one pinned target, envelope-only", () => {
   const pending = { kind: "artifact_review_gate", state: { state: "pending", canDecide: true, canComment: true }, body: null };
-  it("carries the form of a pending or restricted gate's one target", () => {
-    // red-first-expect: expected undefined to be 'text/markdown'
-    expect(parseLifecycleResolveEnvelope("artifact_review_gate", { ...pending, targetForm: "text/markdown" })?.targetForm).toBe("text/markdown");
+  it("carries the display of a pending or restricted gate's one target", () => {
+    // red-first-expect: expected undefined to be 'markdown'
+    expect(parseLifecycleResolveEnvelope("artifact_review_gate", { ...pending, targetDisplay: "markdown" })?.targetDisplay).toBe("markdown");
     const restricted = { ...pending, state: { state: "restricted", canDecide: false, canComment: true, reason: "Another reviewer owns this gate." } };
-    expect(parseLifecycleResolveEnvelope("artifact_review_gate", { ...restricted, targetForm: "image/png" })?.targetForm).toBe("image/png");
+    expect(parseLifecycleResolveEnvelope("artifact_review_gate", { ...restricted, targetDisplay: "image" })?.targetDisplay).toBe("image");
+    expect(parseLifecycleResolveEnvelope("artifact_review_gate", { ...pending, targetDisplay: "other" })?.targetDisplay).toBe("other");
   });
-  it("old answers stay readable and carry no form", () => {
-    expect(parseLifecycleResolveEnvelope("artifact_review_gate", pending)?.targetForm).toBeUndefined();
+  it("old answers stay readable and carry no display", () => {
+    expect(parseLifecycleResolveEnvelope("artifact_review_gate", pending)?.targetDisplay).toBeUndefined();
     // red-first-expect: expected undefined to be null
-    expect(parseLifecycleResolveEnvelope("artifact_review_gate", { ...pending, targetForm: null })?.targetForm).toBeNull();
+    expect(parseLifecycleResolveEnvelope("artifact_review_gate", { ...pending, targetDisplay: null })?.targetDisplay).toBeNull();
   });
-  it("refuses a malformed form, and a form beside any other state or kind", () => {
-    for (const targetForm of [42, {}, [], "", "x".repeat(201)]) {
+  it("refuses a display outside the closed set, and a display beside any other state or kind", () => {
+    for (const targetDisplay of [42, {}, [], "", "text/markdown", "image/png", "Markdown"]) {
       // red-first-expect: expected { kind: 'artifact_review_gate', …(5) } to be null
-      expect(parseLifecycleResolveEnvelope("artifact_review_gate", { ...pending, targetForm })).toBeNull();
+      expect(parseLifecycleResolveEnvelope("artifact_review_gate", { ...pending, targetDisplay })).toBeNull();
     }
     for (const state of [{ state: "absent" }, { state: "settled", outcome: "approved" }]) {
-      expect(parseLifecycleResolveEnvelope("artifact_review_gate", { ...pending, state, targetForm: "image/png" })).toBeNull();
+      expect(parseLifecycleResolveEnvelope("artifact_review_gate", { ...pending, state, targetDisplay: "image" })).toBeNull();
     }
-    expect(parseLifecycleResolveEnvelope("verification_summary", { kind: "verification_summary", state: { state: "advisory" }, body: VERIFICATION_BODY, targetForm: "image/png" })).toBeNull();
+    expect(parseLifecycleResolveEnvelope("verification_summary", { kind: "verification_summary", state: { state: "advisory" }, body: VERIFICATION_BODY, targetDisplay: "image" })).toBeNull();
   });
 });
 
