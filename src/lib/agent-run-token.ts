@@ -310,11 +310,16 @@ export function verifySourceBoundRunStep(input: {
 // twice in one attempt is the same, so it cannot tell the visits apart. The
 // release names its decision in the resume message (message metadata key
 // CINATRA_PUBLISH_DECISION_MESSAGE_KEY); the runtime keeps it for that task and
-// signs it, beside the s2 pair, over the same values plus the decision id:
+// signs it, beside the s2 pair, over the same values plus the decision id and
+// the s2 signature of the same call, with the s2 expiry:
 //
 //   X-Cinatra-Publish-Decision:             <decisionId>
 //   X-Cinatra-Publish-Decision-Attestation: s3:<expiryEpochSeconds>:<hex>
-//   hex = HMAC-SHA256(key, "s3\n<contextId>\n<nodeId>\n<attempt>\n<raw>\n<executed>\n<declaration>\n<decisionId>\n<expiryEpochSeconds>")
+//   hex = HMAC-SHA256(key, "s3\n<contextId>\n<nodeId>\n<attempt>\n<raw>\n<executed>\n<declaration>\n<decisionId>\n<s2hex>\n<expiryEpochSeconds>")
+//
+// So an s3 pair is valid only with the one s2 pair it was signed with: never
+// beside another s2 pair of the same step and attempt (for example a later
+// visit's).
 //
 // The s2 pair is unchanged, so an application that does not read these two
 // headers serves the call as before. A call without them names no decision.
@@ -345,7 +350,9 @@ function readSourceProof(value: unknown): SourceProof | null {
 /**
  * The decision id the runtime signed for one call (`s3`), over the values of the
  * call's verified source-bound proof (the answer of verifySourceBoundRunStep for
- * the same call), or null: no key, a proof that is not that answer's shape, a
+ * the same call) and that call's own `s2` value (`stepAttestation`), or null: no
+ * key, a proof that is not that answer's shape, an `s2` value that is not well
+ * formed or has another expiry, a
  * missing or malformed decision id (empty, a line break, longer than 512
  * characters), a value that is not `s3` with a 64-character lower-case hex
  * signature, a signature that does not verify, or the same expiry window as `s2`.
@@ -353,7 +360,8 @@ function readSourceProof(value: unknown): SourceProof | null {
  * the consumption's check.
  */
 export function verifyRunStepPublishDecision(input: {
-  key?: string | null; proof?: unknown; publishDecisionId?: string | null; attestation?: string | null; nowMs?: number;
+  key?: string | null; proof?: unknown; publishDecisionId?: string | null; attestation?: string | null;
+  stepAttestation?: string | null; nowMs?: number;
 }): string | null {
   const { key, publishDecisionId, attestation } = input;
   const proof = readSourceProof(input.proof);
@@ -361,9 +369,11 @@ export function verifyRunStepPublishDecision(input: {
       !publishDecisionId || publishDecisionId.length > RUN_SOURCE_PROOF_FIELD_MAX_CHARS || /[\r\n]/.test(publishDecisionId)) return null;
   const m = /^s3:([0-9]+):([a-f0-9]{64})$/.exec(attestation ?? "");
   if (!m || !Number.isSafeInteger(Number(m[1]))) return null;
+  const step = /^s2:([0-9]+):([a-f0-9]{64})$/.exec(input.stepAttestation ?? "");
+  if (!step || step[1] !== m[1]) return null;
   const expiry = Number(m[1]); const now = input.nowMs ?? Date.now();
   if (now > expiry * 1000 + RUN_STEP_ATTESTATION_SKEW_MS || expiry * 1000 > now + RUN_STEP_ATTESTATION_MAX_FUTURE_MS) return null;
   const material = `s3\n${proof.contextId}\n${proof.stepId}\n${proof.executionAttemptId}\n${proof.sourceSha256}\n` +
-    `${proof.executedSourceSha256}\n${proof.declarationSourceSha256}\n${publishDecisionId}\n${expiry}`;
+    `${proof.executedSourceSha256}\n${proof.declarationSourceSha256}\n${publishDecisionId}\n${step[2]}\n${expiry}`;
   return hexEquals(m[2]!, hmacHex(key, material)) ? publishDecisionId : null;
 }

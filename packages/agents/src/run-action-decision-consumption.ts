@@ -121,13 +121,14 @@ function readActionIdentity(value: unknown): RunActionToolIdentity {
  *   - `action_run_source_stale`: the run is not running under the proof's attempt, context and bound source;
  *   - `step_tool_not_declared` / `action_decision_step_undeclared`: the step does not declare the action's tool, or
  *     declares no tools at all (so no decision of it can name an action);
- *   - `action_person_decision_missing`: no decision of this step in the run's current attempt;
+ *   - `action_person_decision_missing`: the call names no decision, and the step has none in the run's current attempt;
  *   - `action_decision_binding_mismatch`: the call names a decision (`publishDecisionId`) that is not one of this run
- *     and step in the run's current attempt;
+ *     and step in the run's current attempt (also when the step has none);
  *   - `action_decision_binding_missing`: the call names no decision, and the step has more than one decision in the
- *     run's current attempt, so which visit it belongs to cannot be told (a call that names none is served only when
- *     the step has exactly one: a runtime that signs no decision yet);
- *   - `action_person_decision_open`: the newest such decision still waits for a person;
+ *     run's current attempt, whatever their statuses, so which visit it belongs to cannot be told (a call that names
+ *     none is served only when the step has exactly one: a runtime that signs no decision yet);
+ *   The answers below are given only for the call's own decision: the named one, or the step's only one.
+ *   - `action_person_decision_open`: that decision still waits for a person;
  *   - `action_person_decision_not_affirmative`: it was declined, expired or ended with the run;
  *   - `action_person_decision_invalid`: the store cannot read the row, or it reads released but names no person, or
  *     another organization;
@@ -174,18 +175,19 @@ export async function consumeRunActionDecision(input: ConsumeRunActionDecisionIn
           CURRENT_ATTEMPT))
         .orderBy(desc(agentRunPublishDecisions.createdAt), desc(agentRunPublishDecisions.id))
         .for("update")).filter((r) => r.runId === runId && r.nodeId === p.stepId);
-      if (rows.length === 0) return refuse("action_person_decision_missing");
-      // The decision of the call's own visit: the one it names, else the step's only one. With no name and more than one
-      // decision the newest still decides an open or a refused answer; a released newest one cannot be told from an
-      // earlier visit's, so it is refused.
+      // The decision of the call's own visit: the one it names, else the step's only one. A named decision that is not
+      // one of these rows (another run, step or attempt, or none at all) is a mismatch. With no name and more than one
+      // decision the call's visit cannot be told, whatever their statuses are, so it is refused before any status is
+      // read: the status answers below are given only for a decision that is not ambiguous.
       let stored: (typeof rows)[number];
       if (bound !== undefined) {
         const named = rows.find((r) => r.id === bound);
         if (!named) return refuse("action_decision_binding_mismatch");
         stored = named;
       } else {
+        if (rows.length === 0) return refuse("action_person_decision_missing");
+        if (rows.length > 1) return refuse("action_decision_binding_missing");
         stored = rows[0]!;
-        if (rows.length > 1 && stored.status === "released") refuse("action_decision_binding_missing");
       }
       // The locked row is read through the store's own decoder: a row the store cannot read (an unknown status,
       // unreadable surfaced values or declared rows) is refused with a fixed code and none of its stored text.

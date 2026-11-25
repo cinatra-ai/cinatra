@@ -356,13 +356,18 @@ describe("the publish decision a step's call was made under (s3)", () => {
   // The proof as the s2 verifier answered it for the same call.
   const proof = { stepId: NODE, contextId: CTX, executionAttemptId: ATTEMPT, sourceSha256: RAW,
     executedSourceSha256: EXECUTED, declarationSourceSha256: DECLARATION };
-  function signed(opts: { key?: string; expiry?: number; decision?: string; node?: string } = {}): string {
+  // The call's own s2 value, as the runtime signs it beside the s3 pair.
+  function stepSigned(expiry = NOW_S + 300): string {
+    return `s2:${expiry}:${hmacHex(KEY, `s2\n${CTX}\n${NODE}\n${ATTEMPT}\n${RAW}\n${EXECUTED}\n${DECLARATION}\n${expiry}`)}`;
+  }
+  function signed(opts: { key?: string; expiry?: number; decision?: string; node?: string; step?: string } = {}): string {
     const expiry = opts.expiry ?? NOW_S + 300;
+    const stepSig = (opts.step ?? stepSigned(expiry)).split(":")[2];
     return `s3:${expiry}:${hmacHex(opts.key ?? KEY,
-      `s3\n${CTX}\n${opts.node ?? NODE}\n${ATTEMPT}\n${RAW}\n${EXECUTED}\n${DECLARATION}\n${opts.decision ?? DECISION}\n${expiry}`)}`;
+      `s3\n${CTX}\n${opts.node ?? NODE}\n${ATTEMPT}\n${RAW}\n${EXECUTED}\n${DECLARATION}\n${opts.decision ?? DECISION}\n${stepSig}\n${expiry}`)}`;
   }
   const input = (over: Record<string, unknown> = {}) => ({ key: KEY, proof, publishDecisionId: DECISION,
-    attestation: signed(), nowMs: NOW_MS, ...over });
+    attestation: signed(), stepAttestation: stepSigned(), nowMs: NOW_MS, ...over });
   function verify(value: Record<string, unknown>) {
     expect(typeof api.verifyRunStepPublishDecision).toBe("function");
     return api.verifyRunStepPublishDecision!(value);
@@ -384,13 +389,25 @@ describe("the publish decision a step's call was made under (s3)", () => {
     expect(verify(input({ attestation: signed({ decision: "decision-1" }) }))).toBeNull();
     expect(verify(input({ attestation: signed({ node: "other-step" }) }))).toBeNull();
     expect(verify(input({ attestation: signed({ key: OTHER_KEY }) }))).toBeNull();
-    expect(verify(input({ attestation: signed({ expiry: NOW_S - 61 }) }))).toBeNull();
-    expect(verify(input({ attestation: signed({ expiry: NOW_S + 601 }) }))).toBeNull();
+    expect(verify(input({ attestation: signed({ expiry: NOW_S - 61 }), stepAttestation: stepSigned(NOW_S - 61) }))).toBeNull();
+    expect(verify(input({ attestation: signed({ expiry: NOW_S + 601 }), stepAttestation: stepSigned(NOW_S + 601) }))).toBeNull();
     expect(verify(input({ key: "" }))).toBeNull();
     expect(verify(input({ publishDecisionId: null }))).toBeNull();
     expect(verify(input({ attestation: null }))).toBeNull();
     expect(verify(input({ attestation: signed().replace(/^s3/, "s2") }))).toBeNull();
     expect(verify(input({ proof: { ...proof, extra: "x" } }))).toBeNull();
+  });
+
+  it("is valid only beside the s2 value it was signed with", () => {
+    // Another s2 value of the same step, attempt and source, a second later (for example a later visit's call).
+    const later = stepSigned(NOW_S + 301);
+    expect(verify(input({ stepAttestation: later }))).toBeNull();
+    expect(verify(input({ attestation: signed({ expiry: NOW_S + 301 }), stepAttestation: later }))).toBe(DECISION);
+    // The same expiry but another s2 signature.
+    expect(verify(input({ stepAttestation: `s2:${NOW_S + 300}:${"e".repeat(64)}` }))).toBeNull();
+    expect(verify(input({ attestation: signed({ step: `s2:${NOW_S + 300}:${"e".repeat(64)}` }) }))).toBeNull();
+    expect(verify(input({ stepAttestation: null }))).toBeNull();
+    expect(verify(input({ stepAttestation: signed() }))).toBeNull();
   });
 
   it("refuses a decision id with a line break or longer than 512 characters", () => {

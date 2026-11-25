@@ -453,7 +453,8 @@ def test_the_tasks_attempt_is_read_only_from_its_message_metadata(monkeypatch, m
 # cinatra#3745: the publish decision of the task's visit. A publish release
 # names its decision in the resume message (metadata
 # `__cinatra_publish_decision__`); the loader keeps it for that task and signs
-# it beside the s2 pair, over the same values plus the decision id:
+# it beside the s2 pair, over the same values plus the decision id and the
+# call's own s2 signature, with the s2 expiry:
 #   X-Cinatra-Publish-Decision:             <decisionId>
 #   X-Cinatra-Publish-Decision-Attestation: s3:<expiry>:<hex>
 # ---------------------------------------------------------------------------
@@ -462,10 +463,10 @@ PUBLISH_DECISION_ATTESTATION = "X-Cinatra-Publish-Decision-Attestation"
 DECISION_NAMES = ("x-cinatra-publish-decision", "x-cinatra-publish-decision-attestation")
 
 
-def _expected_s3_sig(decision: str, expiry: int, attempt: str = ATTEMPT_ID) -> str:
+def _expected_s3_sig(decision: str, step_sig: str, expiry: int, attempt: str = ATTEMPT_ID) -> str:
     material = (
         f"s3\n{CTX_ID}\n{NODE_ID}\n{attempt}\n{SOURCE['sourceSha256']}\n{SOURCE['executedSourceSha256']}"
-        f"\n{SOURCE['declarationSourceSha256']}\n{decision}\n{expiry}"
+        f"\n{SOURCE['declarationSourceSha256']}\n{decision}\n{step_sig}\n{expiry}"
     ).encode("utf-8")
     return hmac.new(ATTEST_KEY.encode("utf-8"), material, hashlib.sha256).hexdigest()
 
@@ -494,7 +495,10 @@ def test_a_call_of_a_released_visit_carries_its_signed_publish_decision_beside_t
         expiry = int(expiry_str)
         ttl = loader._CONTEXT_ATTESTATION_TTL_SECONDS
         assert before + ttl <= expiry <= after + ttl
-        assert sig == _expected_s3_sig("decision-2", expiry)
+        # Bound to this call's own s2 pair: the same expiry and its signature.
+        _, step_expiry, step_sig = h["X-Cinatra-Step-Attestation"].split(":", 2)
+        assert int(step_expiry) == expiry
+        assert sig == _expected_s3_sig("decision-2", step_sig, expiry)
 
 
 # (py15)

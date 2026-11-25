@@ -1221,13 +1221,19 @@ export async function POST(req: Request): Promise<Response> {
       if (req.headers.get(RUN_PUBLISH_DECISION_HEADER) !== null || req.headers.get(RUN_PUBLISH_DECISION_ATTESTATION_HEADER) !== null) {
         const decision = verifyRunStepPublishDecision({ key: stepAttestKey, proof: sourceAttestation,
           publishDecisionId: req.headers.get(RUN_PUBLISH_DECISION_HEADER),
-          attestation: req.headers.get(RUN_PUBLISH_DECISION_ATTESTATION_HEADER) });
+          attestation: req.headers.get(RUN_PUBLISH_DECISION_ATTESTATION_HEADER),
+          stepAttestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER) });
         if (decision === null) throw new Error("publish_decision_invalid");
         verifiedPublishDecisionId = decision;
       }
     } catch {
       return NextResponse.json({ error: "Executing source could not be verified", code: "run_source_mismatch" }, { status: 403 });
     }
+  } else if (req.headers.get(RUN_PUBLISH_DECISION_HEADER) !== null ||
+      req.headers.get(RUN_PUBLISH_DECISION_ATTESTATION_HEADER) !== null) {
+    // A decision is signed only beside a source-bound pair; a call that names one without that pair cannot prove it,
+    // and is refused as a bad signature is, never served as a call that names none.
+    return NextResponse.json({ error: "Executing source could not be verified", code: "run_source_mismatch" }, { status: 403 });
   }
 
   // cinatra#4150 — no publish without a released decision, enforced at the call,

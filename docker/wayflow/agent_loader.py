@@ -1312,8 +1312,9 @@ def _patch_api_call_step_bridge_token() -> None:
                         f"s2:{_step_expiry}:{_step_sig}"
                     )
                     # cinatra#3745: the publish decision of this task's visit,
-                    # signed over the same values plus the decision id (`s3`),
-                    # in headers of its own so the s2 pair stays unchanged.
+                    # signed over the same values plus the decision id and this
+                    # call's s2 signature (`s3`), with the s2 expiry, in headers
+                    # of its own so the s2 pair stays unchanged.
                     _decision = _WAYFLOW_PUBLISH_DECISION.get()
                     if (
                         _decision
@@ -1323,7 +1324,7 @@ def _patch_api_call_step_bridge_token() -> None:
                     ):
                         _decision_sig = hmac.new(
                             attest_key.encode("utf-8"),
-                            f"s3\n{_ctx_id}\n{_step_id}\n{_attempt}\n{_loaded['sourceSha256']}\n{_loaded['executedSourceSha256']}\n{_loaded['declarationSourceSha256']}\n{_decision}\n{_step_expiry}".encode(
+                            f"s3\n{_ctx_id}\n{_step_id}\n{_attempt}\n{_loaded['sourceSha256']}\n{_loaded['executedSourceSha256']}\n{_loaded['declarationSourceSha256']}\n{_decision}\n{_step_sig}\n{_step_expiry}".encode(
                                 "utf-8"
                             ),
                             hashlib.sha256,

@@ -590,29 +590,58 @@ describe("a source-bound call never gets a machine bearer", () => {
     expect(writeDurableRunContextBindingMock).not.toHaveBeenCalled();
   });
 
-  /** The publish decision the runtime signs beside the source-bound pair (cinatra#3745). */
-  function decisionHeaders(decision: string, signedDecision = decision) {
-    const expiry = Math.floor(Date.now() / 1000) + 300;
+  /** The publish decision the runtime signs beside the source-bound pair of the same call (cinatra#3745): over the
+   *  pair's values, the decision id and the pair's s2 signature, with its expiry. */
+  function decisionHeaders(step: Record<string, string>, decision: string, signedDecision = decision) {
+    const [, expiry, stepSig] = step["x-cinatra-step-attestation"]!.split(":");
     const { sourceSha256, executedSourceSha256, declarationSourceSha256 } = SOURCE;
     const sig = createHmac("sha256", ATTEST_KEY).update(`s3\n${CTX}\n${NODE}\n${ATTEMPT}\n${sourceSha256}\n` +
-      `${executedSourceSha256}\n${declarationSourceSha256}\n${signedDecision}\n${expiry}`).digest("hex");
+      `${executedSourceSha256}\n${declarationSourceSha256}\n${signedDecision}\n${stepSig}\n${expiry}`).digest("hex");
     return { "x-cinatra-publish-decision": decision, "x-cinatra-publish-decision-attestation": `s3:${expiry}:${sig}` };
   }
 
   it("carries the signed publish decision of the call in the on-behalf-of token", async () => {
-    const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...sourceHeaders(), ...decisionHeaders("decision-2") }));
+    const step = sourceHeaders();
+    const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...step, ...decisionHeaders(step, "decision-2") }));
     expect(res.status).toBe(200);
     expect(await invokeOverride()).toEqual({ type: "mcp-tool" });
     expect(mintedActor()).toMatchObject({ verifiedExecutedSource: VERIFIED_SOURCE, verifiedPublishDecisionId: "decision-2" });
   });
 
   it("refuses a call whose publish decision does not verify before any model call", async () => {
-    const cases: Array<Record<string, string>> = [decisionHeaders("decision-2", "decision-1"),
+    const step = sourceHeaders();
+    const cases: Array<Record<string, string>> = [decisionHeaders(step, "decision-2", "decision-1"),
       { "x-cinatra-publish-decision": "decision-2" },
-      { "x-cinatra-publish-decision-attestation": decisionHeaders("decision-2")["x-cinatra-publish-decision-attestation"] }];
+      { "x-cinatra-publish-decision-attestation": decisionHeaders(step, "decision-2")["x-cinatra-publish-decision-attestation"] }];
     for (const headers of cases) {
       runResolvedSkillAwareDeterministicLlmTaskMock.mockClear();
-      const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...sourceHeaders(), ...headers }));
+      const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...step, ...headers }));
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({ code: "run_source_mismatch" });
+      expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
+    }
+  });
+
+  it("refuses a publish decision signed beside another s2 pair of the same step and attempt", async () => {
+    // The s3 pair of one call, sent beside a valid s2 pair with another signature (for example a later visit's).
+    const first = sourceHeaders();
+    const [, expiry] = first["x-cinatra-step-attestation"]!.split(":");
+    const other = { ...first, "x-cinatra-step-attestation": `s2:${expiry}:${"e".repeat(64)}` };
+    const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...first, ...decisionHeaders(other, "decision-2") }));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ code: "run_source_mismatch" });
+    expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a call that names a publish decision without a source-bound pair, before any model call", async () => {
+    const step = sourceHeaders();
+    const decision = decisionHeaders(step, "decision-2");
+    const cases: Array<Record<string, string>> = [decision,
+      { "x-cinatra-publish-decision": "decision-2" },
+      { "x-cinatra-publish-decision-attestation": decision["x-cinatra-publish-decision-attestation"]! }];
+    for (const headers of cases) {
+      runResolvedSkillAwareDeterministicLlmTaskMock.mockClear();
+      const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...headers }));
       expect(res.status).toBe(403);
       expect(await res.json()).toMatchObject({ code: "run_source_mismatch" });
       expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
