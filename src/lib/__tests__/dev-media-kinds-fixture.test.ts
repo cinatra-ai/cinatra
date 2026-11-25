@@ -292,6 +292,7 @@ describe("development upload promotion through the type picker (#3459)", () => {
     };
   };
 
+  // red-first-expect: parsePromoteOption is not a function
   it("reads --promote as one filed kind and the extension the person would confirm", () => {
     expect(parsePromoteOption(`pdf=${DECK}`)).toEqual({ kind: "pdf", extension: DECK });
     expect(parsePromoteOption(` image = @cinatra-ai/screenshot-artifact `)).toEqual({ kind: "image", extension: "@cinatra-ai/screenshot-artifact" });
@@ -300,6 +301,7 @@ describe("development upload promotion through the type picker (#3459)", () => {
     }
   });
 
+  // red-first-expect: promoteFiledUpload is not a function
   it("confirms the filed upload's meaning through the picker's action, in the user's session, and returns the deck", async () => {
     const deps = picker({ ok: true, promotion: promoted });
     await expect(promoteFiledUpload({ orgId: " org ", userId: " user ", filed, kind: "pdf", extension: DECK }, deps))
@@ -312,6 +314,7 @@ describe("development upload promotion through the type picker (#3459)", () => {
     expect(deps.confirm).toHaveBeenCalledWith({ artifactId: "artifact-3", extension: DECK });
   });
 
+  // red-first-expect: promoteFiledUpload is not a function
   it("fails when the picker refuses, retypes nothing, or reports a promotion that did not happen", async () => {
     const input = { orgId: "org", userId: "user", filed, kind: "pdf" as const, extension: DECK };
     await expect(promoteFiledUpload(input, picker({ ok: false, reason: "invalid-type", message: "Not a choice." })))
@@ -322,6 +325,7 @@ describe("development upload promotion through the type picker (#3459)", () => {
       .rejects.toThrow(/not promoted: promotion-unavailable/);
   });
 
+  // red-first-expect: promoteFiledUpload is not a function
   it("confirms nothing for a kind that was not filed, or outside the development runtime", async () => {
     const deps = picker({ ok: true, promotion: promoted });
     await expect(promoteFiledUpload({ orgId: "org", userId: "user", filed: filed.filter((f) => f.kind !== "pdf"), kind: "pdf", extension: DECK }, deps))
@@ -344,6 +348,7 @@ describe("the picker action's session in the fixture process (#3459)", () => {
     }));
   });
 
+  // red-first-expect: Cannot find module '/scripts/fixtures/lib/picker-session'
   it("answers the action's session reads only inside the fixture user's run, from the product's session-free road", async () => {
     const s = await import("../../../scripts/fixtures/lib/picker-session");
     await expect(s.getAuthSession()).rejects.toThrow(/outside the fixture's picker session/);
@@ -357,12 +362,14 @@ describe("the picker action's session in the fixture process (#3459)", () => {
     await expect(s.getAuthSession()).rejects.toThrow(/outside the fixture's picker session/);
   });
 
+  // red-first-expect: Cannot find module '/scripts/fixtures/lib/picker-session'
   it("refuses a resolved context for another organization", async () => {
     mock.userContext.mockResolvedValue({ actorContext: {}, platformRole: "member", sessionOrgId: "other" });
     const s = await import("../../../scripts/fixtures/lib/picker-session");
     await expect(s.runAsPickerUser({ orgId: "org", userId: "user" }, async () => 1)).rejects.toThrow(/not the organization org/);
   });
 
+  // red-first-expect: Cannot find module '/scripts/fixtures/lib/picker-action-session.mjs'
   it("swaps the session and cache modules for the picker's action only", async () => {
     const { pickerActionSessionPlugin } = await import("../../../scripts/fixtures/lib/picker-action-session.mjs");
     const root = path.resolve(__dirname, "../../../");
