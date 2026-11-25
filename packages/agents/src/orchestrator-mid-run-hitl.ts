@@ -19,6 +19,7 @@ import {
   type FieldRendererEntry,
 } from "./field-renderer-registry";
 import {
+  AGENT_BUILDER_ID_SCOPE,
   ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
 } from "./agent-builder-ids";
@@ -114,6 +115,37 @@ export function isTombstonedHitlRendererId(xRenderer: string): boolean {
 }
 
 /**
+ * IS THIS PARKED STEP RETIRED: can nothing answer it any more? One definition,
+ * read by every host (`parkedHitlStepIsAnswerable`) and by the server's generic
+ * answer roads (`currentHitlGateRefusal`, run-resume-under-claim.ts). Yes for:
+ *   - a tombstoned id (`isTombstonedHitlRendererId`);
+ *   - a package's own screen (`<package>:<screen>`, outside the host's own
+ *     agent-builder scope) that no binding declares any more, unless its values
+ *     carry a presentation hint (drawn by the host's generic renderer). Its
+ *     package no longer ships that screen, so the flow installed under the run
+ *     changed: answering the old step would answer a screen the running flow no
+ *     longer has (a pack's own confirmation, for example, in place of the
+ *     host's publish approval, cinatra#4150). The person starts a new run.
+ * `declared(id)` says whether a binding declares exactly that id where the
+ * answer is read: on a page, an entry of its registry claims it (the bindings
+ * of this build and of the packages installed at run time); on the server, a
+ * binding of this build or of an installed package declares it. So the same
+ * step stays answerable in a workspace whose installed package still declares
+ * the screen (its old flow is the one that runs), and is retired where no
+ * package declares it, whatever the order in which packages change.
+ */
+export function hitlStepIsRetired(
+  xRenderer: string,
+  values: unknown,
+  declared: (id: string) => boolean,
+): boolean {
+  if (isTombstonedHitlRendererId(xRenderer)) return true;
+  const colon = xRenderer.indexOf(":");
+  const namesPackageScreen = colon > 0 && xRenderer.slice(0, colon) !== AGENT_BUILDER_ID_SCOPE;
+  return namesPackageScreen && !gateCarriesPresentationHint(values) && !declared(xRenderer);
+}
+
+/**
  * The entry a LIVE HITL gate is drawn with: the entry the registry resolves for
  * the gate's recorded `x-renderer` id, and nothing else.
  *
@@ -182,7 +214,9 @@ export function parkedHitlStepIsAnswerable(
   // A step recorded with no renderer id is a tool-call approval: the host
   // answers it with its own Approve, with no screen.
   if (xRenderer === "") return true;
-  if (isTombstonedHitlRendererId(xRenderer)) return false;
+  // A retired step (`hitlStepIsRetired`): a page's registry declares what an
+  // entry of it claims.
+  if (hitlStepIsRetired(xRenderer, values, () => claim != null)) return false;
   // The artifact-review redirect is display-only: it goes on only by the
   // review's own decision, whatever its values carry.
   if (xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID) return false;

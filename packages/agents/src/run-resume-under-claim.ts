@@ -29,8 +29,8 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 import { captureHitlPromptForContinue, readCurrentDurableHitlGate } from "./agent-run-hitl-prompts";
-import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
-import { isTombstonedHitlRendererId } from "./orchestrator-mid-run-hitl";
+import { AGENT_BUILDER_ID_SCOPE, ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
+import { hitlStepIsRetired } from "./orchestrator-mid-run-hitl";
 import type { DurableHitlGateArtifact } from "./store";
 import type { AgentRunRecord } from "./agent-run-record";
 import { claimPause, PauseClaimReleaseError, releasePauseClaim, settlePauseSend } from "./run-pause-claim";
@@ -60,6 +60,22 @@ export async function readLatestGateTaskId(runId: string): Promise<string | null
 }
 
 /**
+ * Does a binding declare exactly this renderer id on the server: one of this
+ * build (the generated bindings) or one of a package installed at run time?
+ * The sources a page's registry is filled from. Read only for a package's own
+ * screen (`<package>:<screen>`); a read that fails throws, and each road
+ * refuses with its own fixed text.
+ */
+async function packageScreenIsDeclared(xRenderer: string): Promise<boolean> {
+  const colon = xRenderer.indexOf(":");
+  if (colon <= 0 || xRenderer.slice(0, colon) === AGENT_BUILDER_ID_SCOPE) return false;
+  const { GENERATED_FIELD_RENDERER_BINDINGS } = await import("@/lib/generated/agent-bindings");
+  if (GENERATED_FIELD_RENDERER_BINDINGS.some((b) => b.id === xRenderer)) return true;
+  const { collectInstalledFieldRendererBindings } = await import("./field-renderer-bindings.server");
+  return collectInstalledFieldRendererBindings().some((b) => b.id === xRenderer);
+}
+
+/**
  * WHAT A GENERIC ANSWER MAY NOT CONSUME, read for both generic roads (the MCP
  * resume and the generic answer action). Returns the durable row of the step
  * the answer reaches, when there is one, and why the answer is refused, or
@@ -79,13 +95,14 @@ export async function readLatestGateTaskId(runId: string): Promise<string | null
  *     nothing, and is not used (`gate: null`). It never makes a current step
  *     stale.
  * Then, on the row it confirmed:
- *   - `retired`: a retired step (`isTombstonedHitlRendererId`, the set every
- *     host withholds its Continue for: `parkedHitlStepIsAnswerable`); nothing
+ *   - `retired`: a retired step (`hitlStepIsRetired`, the definition every
+ *     host withholds its Continue by: `parkedHitlStepIsAnswerable`): a
+ *     tombstoned id, or a package's own screen that no binding of this build
+ *     and no installed package declares (`packageScreenIsDeclared`); nothing
  *     answers it any more;
  *   - `display-only`: a display-only card (`DISPLAY_ONLY_HITL_RENDERER_IDS`);
  *     only its own decision consumes it.
- * It does not judge whether a page draws the step: every other recorded
- * renderer id is left to the road, as before. A row that cannot be read
+ * Every other recorded renderer id is left to the road, as before. A row that cannot be read
  * throws; each road refuses with its own fixed text. `latestTaskId`: the key as
  * the road read it; left out, it is read here when a row needs it.
  */
@@ -107,7 +124,8 @@ export async function currentHitlGateRefusal(input: {
     }
     if (namedReviewTaskId !== undefined) return { gate, refusal: "stale" };
   }
-  if (isTombstonedHitlRendererId(gate.xRenderer)) return { gate, refusal: "retired" };
+  const declared = await packageScreenIsDeclared(gate.xRenderer);
+  if (hitlStepIsRetired(gate.xRenderer, gate.values, () => declared)) return { gate, refusal: "retired" };
   return { gate, refusal: DISPLAY_ONLY_HITL_RENDERER_IDS.has(gate.xRenderer) ? "display-only" : null };
 }
 

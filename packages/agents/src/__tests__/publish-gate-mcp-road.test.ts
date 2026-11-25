@@ -184,6 +184,31 @@ vi.mock("../../../a2a/src/external-client", () => ({
   createExternalA2AClient: vi.fn(async () => ({ sendTask: sendTaskSpy })),
 }));
 
+// What declares a package's screen on the server: the bindings of this build
+// (here filtered by `packScreens.dropped`, as a newer bundled pack that no longer
+// ships the screen) and those of packages installed at run time (none by default).
+const packScreens = vi.hoisted(() => ({
+  dropped: [] as string[],
+  installed: [] as Array<{ id: string; kind: string; priority: number; declaredBy: string }>,
+}));
+vi.mock("@/lib/generated/agent-bindings", async (orig) => {
+  const real = await orig<typeof import("@/lib/generated/agent-bindings")>();
+  return {
+    ...real,
+    get GENERATED_FIELD_RENDERER_BINDINGS() {
+      return real.GENERATED_FIELD_RENDERER_BINDINGS.filter((b) => !packScreens.dropped.includes(b.id));
+    },
+  };
+});
+vi.mock("../field-renderer-bindings.server", () => ({
+  collectInstalledFieldRendererBindings: () => packScreens.installed,
+}));
+/** The two publish packs' own confirmation screens, as their old pins declared them. */
+const OLD_PUBLISH_SCREENS = [
+  { id: "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm", kind: "wordpress-draft-confirm" },
+  { id: "@cinatra-ai/blog-linkedin-publish-agent:draft-review", kind: "linkedin-draft-review" },
+];
+
 // The run's latest-task key, stubbed at its leaf as the transport is: none by default.
 const latestKey = vi.hoisted(() => vi.fn<(runId: string) => Promise<string | null>>(async () => null));
 vi.mock("../../../a2a/src/event-log", async (orig) => ({
@@ -633,14 +658,38 @@ describe("agent_run_resume and the paused step's durable record", () => {
     }
   });
 
-  // The server does not judge whether a page draws the step: a renderer id no
-  // registered screen claims is resumed as it always was.
-  it("a step whose renderer id no registered screen claims is resumed as before", async () => {
+  // A PACKAGE'S OWN SCREEN THAT NO PACKAGE DECLARES ANY MORE IS RETIRED: the
+  // flow installed under the run changed (`hitlStepIsRetired`).
+  // red-first-expect: to be 'Run run-1 is paused at a retired step
+  it("a package screen that no binding declares is refused as retired", async () => {
     durableGate.read.mockResolvedValue(gateFor("@acme/removed:output"));
-    await resume();
-    expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
-    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+    const answer = (await resume()) as { error?: string };
+    expect(answer.error).toBe("Run run-1 is paused at a retired step; it can no longer be answered.");
+    nothingMoved();
   });
+
+  for (const screen of OLD_PUBLISH_SCREENS) {
+    // red-first-expect: to be 'Run run-1 is paused at a retired step
+    it(`${screen.id}: refused once the bundled pack no longer declares it and no installed pack does`, async () => {
+      packScreens.dropped = [screen.id];
+      packScreens.installed = [];
+      durableGate.read.mockResolvedValue(gateFor(screen.id));
+      const answer = (await resume()) as { error?: string };
+      packScreens.dropped = [];
+      expect(answer.error).toBe("Run run-1 is paused at a retired step; it can no longer be answered.");
+      nothingMoved();
+    });
+    it(`${screen.id}: resumed where an installed older pack still declares it (its old flow runs)`, async () => {
+      packScreens.dropped = [screen.id];
+      packScreens.installed = [{ id: screen.id, kind: screen.kind, priority: 90, declaredBy: "installed" }];
+      durableGate.read.mockResolvedValue(gateFor(screen.id));
+      await resume();
+      packScreens.dropped = [];
+      packScreens.installed = [];
+      expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
+      expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+    });
+  }
 
   // THE SERVER REFUSES WHAT THE HOSTS WITHHOLD: a retired step (the set every
   // host draws no Continue for) is answered by nothing, under any id of it.

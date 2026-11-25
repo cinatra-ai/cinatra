@@ -117,6 +117,31 @@ vi.mock("../wayflow-url", () => ({
   createWayflowFetch: () => globalThis.fetch,
 }));
 
+// What declares a package's screen on the server: the bindings of this build
+// (here filtered by `packScreens.dropped`, as a newer bundled pack that no longer
+// ships the screen) and those of packages installed at run time (none by default).
+const packScreens = vi.hoisted(() => ({
+  dropped: [] as string[],
+  installed: [] as Array<{ id: string; kind: string; priority: number; declaredBy: string }>,
+}));
+vi.mock("@/lib/generated/agent-bindings", async (orig) => {
+  const real = await orig<typeof import("@/lib/generated/agent-bindings")>();
+  return {
+    ...real,
+    get GENERATED_FIELD_RENDERER_BINDINGS() {
+      return real.GENERATED_FIELD_RENDERER_BINDINGS.filter((b) => !packScreens.dropped.includes(b.id));
+    },
+  };
+});
+vi.mock("../field-renderer-bindings.server", () => ({
+  collectInstalledFieldRendererBindings: () => packScreens.installed,
+}));
+/** The two publish packs' own confirmation screens, as their old pins declared them. */
+const OLD_PUBLISH_SCREENS = [
+  { id: "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm", kind: "wordpress-draft-confirm" },
+  { id: "@cinatra-ai/blog-linkedin-publish-agent:draft-review", kind: "linkedin-draft-review" },
+];
+
 // The run's latest-task key and the reverse task-run map: none by default.
 const runKeys = vi.hoisted(() => ({
   latest: vi.fn<(runId: string) => Promise<string | null>>(async () => null),
@@ -730,13 +755,48 @@ describe("the generic answer and the paused step's durable record", () => {
     }
   });
 
-  // The server does not judge whether a page draws the step: a renderer id no
-  // registered screen claims is answered as it always was.
-  it("a step whose renderer id no registered screen claims is answered as before", async () => {
+  // A PACKAGE'S OWN SCREEN THAT NO PACKAGE DECLARES ANY MORE IS RETIRED: the
+  // flow installed under the run changed (`hitlStepIsRetired`).
+  // red-first-expect: promise resolved "undefined" instead of rejecting
+  it("a package screen that no binding declares is refused as retired", async () => {
     continueMock.readDurableHitlGateForContinue.mockResolvedValue(gateFor("@acme/removed:output"));
-    await approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" });
-    expect(sendTaskMock).toHaveBeenCalledTimes(1);
-    expect(wayflowText()).toBe("go");
+    await expect(
+      approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" }),
+    ).rejects.toMatchObject({ name: "HitlStepNotAnswerableError" });
+    nothingMoved();
+  });
+
+  describe("a publish pack's own confirmation screen, parked before an upgrade", () => {
+    afterEach(() => {
+      packScreens.dropped = [];
+      packScreens.installed = [];
+    });
+    for (const screen of OLD_PUBLISH_SCREENS) {
+      // red-first-expect: promise resolved "undefined" instead of rejecting
+      it(`${screen.id}: refused once the bundled pack no longer declares it and no installed pack does`, async () => {
+        packScreens.dropped = [screen.id];
+        continueMock.readDurableHitlGateForContinue.mockResolvedValue(gateFor(screen.id));
+        await expect(
+          approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" }),
+        ).rejects.toMatchObject({
+          name: "HitlStepNotAnswerableError",
+          message: "WayFlow approval rejected: gate task-r1 on run run-r1 is a retired step; it can no longer be answered",
+        });
+        nothingMoved();
+      });
+      it(`${screen.id}: answered where an installed older pack still declares it (its old flow runs)`, async () => {
+        packScreens.dropped = [screen.id];
+        packScreens.installed = [{ id: screen.id, kind: screen.kind, priority: 90, declaredBy: "installed" }];
+        continueMock.readDurableHitlGateForContinue.mockResolvedValue(gateFor(screen.id));
+        await approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" });
+        expect(sendTaskMock).toHaveBeenCalledTimes(1);
+      });
+      it(`${screen.id}: answered while the bundled pack still declares it`, async () => {
+        continueMock.readDurableHitlGateForContinue.mockResolvedValue(gateFor(screen.id));
+        await approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" });
+        expect(sendTaskMock).toHaveBeenCalledTimes(1);
+      });
+    }
   });
 
   // THE SERVER REFUSES WHAT THE HOSTS WITHHOLD: a retired step (the set every

@@ -251,6 +251,7 @@ const DROPPED = vi.hoisted(() => [
   "@cinatra-ai/context-selection-agent:context-selector",
   "@cinatra-ai/email-delivery-agent:send-confirmation",
   "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm",
+  "@cinatra-ai/blog-linkedin-publish-agent:draft-review",
 ]);
 vi.mock("@/lib/generated/agent-bindings", async (orig) => {
   const real = await orig<typeof import("@/lib/generated/agent-bindings")>();
@@ -735,6 +736,29 @@ describe("OrchestratorStepperPanel - a real generated binding whose component fa
       fireEvent.click(continues()[0]!);
       await new Promise((resolve) => setTimeout(resolve, 30));
       expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    });
+  }
+});
+
+// A PUBLISH PACK'S OWN CONFIRMATION SCREEN, PARKED BEFORE AN UPGRADE: under a
+// bundled pack that no longer declares it, the step is retired (no field, no
+// Continue; the `DROPPED` cases above). Where an installed older pack still
+// declares it, its old flow is the one that runs, and the step stays answerable.
+const OLD_PUBLISH_SCREENS = [
+  { id: "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm", kind: "wordpress-draft-confirm" },
+  { id: "@cinatra-ai/blog-linkedin-publish-agent:draft-review", kind: "linkedin-draft-review" },
+];
+describe("OrchestratorStepperPanel - a publish pack's own confirmation screen after an upgrade", () => {
+  for (const screen of OLD_PUBLISH_SCREENS) {
+    it(`${screen.id}: a runtime-installed older pack that declares it keeps the step answerable`, async () => {
+      expect(fieldRendererRegistry.list().some((e) => e.id === screen.id)).toBe(false);
+      registration.registerFieldRendererBindings([{ id: screen.id, kind: screen.kind, priority: 90, midRunHitl: true }]);
+      INTERRUPT = { schema: { type: "string", title: "Answer" }, xRenderer: screen.id, values: {}, reviewTaskId: TASK_ID, fieldName: "answer" };
+      const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+      render(<OrchestratorStepperPanel {...baseProps()} />);
+      await waitFor(() => expect(document.getElementById("field-answer")).not.toBeNull());
+      expect(document.body.textContent ?? "").not.toMatch(/no renderer configured/);
+      await waitFor(() => expect(continues()).toHaveLength(1));
     });
   }
 });

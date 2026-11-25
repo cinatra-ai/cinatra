@@ -78,6 +78,7 @@ const DROPPED = vi.hoisted(() => [
   "@cinatra-ai/context-selection-agent:context-selector",
   "@cinatra-ai/email-delivery-agent:send-confirmation",
   "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm",
+  "@cinatra-ai/blog-linkedin-publish-agent:draft-review",
 ]);
 vi.mock("@/lib/generated/agent-bindings", async (orig) => {
   const real = await orig<typeof import("@/lib/generated/agent-bindings")>();
@@ -570,6 +571,31 @@ describe("AgentHitlScreenCard — a real generated binding whose component faile
         fireEvent.click(continues(container)[0]!);
         await new Promise((resolve) => setTimeout(resolve, 30));
         expect(approveMock).not.toHaveBeenCalled();
+      });
+    }
+  }
+});
+
+// A PUBLISH PACK'S OWN CONFIRMATION SCREEN, PARKED BEFORE AN UPGRADE: under a
+// bundled pack that no longer declares it, the step is retired (no field, no
+// Continue; the `DROPPED` cases above). Where an installed older pack still
+// declares it, its old flow is the one that runs, and the step stays answerable.
+const OLD_PUBLISH_SCREENS = [
+  { id: "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm", kind: "wordpress-draft-confirm" },
+  { id: "@cinatra-ai/blog-linkedin-publish-agent:draft-review", kind: "linkedin-draft-review" },
+];
+describe("AgentHitlScreenCard — a publish pack's own confirmation screen after an upgrade", () => {
+  for (const host of ["run_card", "chat_thread"] as LifecycleCardHost[]) {
+    for (const screen of OLD_PUBLISH_SCREENS) {
+      it(`${host}: ${screen.id}: a runtime-installed older pack that declares it keeps the step answerable`, async () => {
+        expect(fieldRendererRegistry.list().some((e) => e.id === screen.id)).toBe(false);
+        registration.registerFieldRendererBindings([{ id: screen.id, kind: screen.kind, priority: 90, midRunHitl: true }]);
+        askingFor(screen.id, { inputSchema: { type: "string", title: "Answer" }, fieldName: "answer" });
+        const { container } = mountOn(host);
+        await settle();
+        await waitFor(() => expect(container.querySelector("#field-answer")).not.toBeNull());
+        expect(container.textContent ?? "").not.toMatch(/no renderer configured/);
+        await waitFor(() => expect(continues(container)).toHaveLength(1));
       });
     }
   }
