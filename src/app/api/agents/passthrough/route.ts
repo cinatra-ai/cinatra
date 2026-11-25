@@ -3,7 +3,7 @@ import { verifyRunExecutedSource } from "@cinatra-ai/agents/store";
 import "server-only";
 import { NextResponse } from "next/server";
 
-import { publishCallAllowed, publishingStepCallReleased, readAgentRunById } from "@cinatra-ai/agents";
+import { claimPublishingStepCall, publishCallAllowed, readAgentRunById, releasedPublishingStepDecisionId } from "@cinatra-ai/agents";
 import { collectAllPrimitiveHandlers } from "@/lib/primitive-handlers";
 import { isAuthorizedBridgeRequest } from "@/lib/wayflow-bridge-auth";
 import { bindBridgeRunId } from "@/lib/authz/bridge-run-binding";
@@ -102,6 +102,16 @@ import { RUN_ACTION_REFUSED, runActionRefusalCode } from "@/lib/run-action-refus
  * newest publish decision must read `released`. The road names no package and
  * no tool for it; every other check below applies to it unchanged.
  */
+
+/** cinatra#3089: the fixed answer to a publishing step's call whose released decision was already used. */
+const PUBLISHING_STEP_CALL_PERFORMED = "publishing_step_call_performed";
+const PUBLISHING_STEP_CALL_PERFORMED_TEXT = "This publishing step's call was already performed for this decision.";
+class PublishingStepCallPerformed extends Error {
+  constructor() {
+    super(PUBLISHING_STEP_CALL_PERFORMED);
+    this.name = "PublishingStepCallPerformed";
+  }
+}
 
 const ALLOWED_TOOLS = new Set([
   "trigger_config_set",
@@ -519,7 +529,8 @@ export async function POST(req: Request): Promise<Response> {
   // cinatra#3089: a declared publishing-step tool is served only to a verified
   // step the run's compiled flow lists as publishing, whose newest decision is
   // released. A step that is not listed is refused whatever its rows say.
-  if (publishingStepTool && !(await publishingStepCallReleased(run, verifiedStepId))) {
+  const releasedDecisionId = publishingStepTool ? await releasedPublishingStepDecisionId(run, verifiedStepId) : null;
+  if (publishingStepTool && (releasedDecisionId === null || verifiedStepId === undefined)) {
     return NextResponse.json(
       { error: "This tool is served only as a declared publishing step's call.", code: "publishing_step_required" },
       { status: 403 },
@@ -873,14 +884,28 @@ export async function POST(req: Request): Promise<Response> {
       // inside the run's frame (run, verified step, executing-source proof and
       // run write authority). The MCP boundary is not crossed; this road is the
       // one road for a run's outward call, and it is gated above by the step's
-      // released decision.
-      const handler = await loadPassthroughPublishingStepHandler(tool);
+      // released decision. The call is performed at most once per released
+      // decision: after the handler read its arguments and before the effect
+      // starts, the decision is claimed in the consumption ledger; a call that
+      // does not win answers 409 and never reaches the effect, and a claim is
+      // never given back (another attempt takes a new release).
+      const claim = { decisionId: releasedDecisionId ?? "", run: { id: run.id, orgId: run.orgId }, stepId: verifiedStepId ?? "",
+        tool, executedSourceSha256: verifiedExecutedSource?.executedSourceSha256 ?? null };
+      const beforeEffect = async () => {
+        if (!(await claimPublishingStepCall(claim))) throw new PublishingStepCallPerformed();
+      };
+      const handler = await loadPassthroughPublishingStepHandler(tool, { beforeEffect });
       if (typeof handler !== "function") {
         return NextResponse.json({ error: `Tool "${tool}" has no registered handler.` }, { status: 404 });
       }
-      result = await withActorContext(alsActorContext, () =>
-        handler({ primitiveName: tool, input, actor, mode: "agentic" }),
-      );
+      try {
+        result = await withActorContext(alsActorContext, () =>
+          handler({ primitiveName: tool, input, actor, mode: "agentic" }),
+        );
+      } catch (err) {
+        if (!(err instanceof PublishingStepCallPerformed)) throw err;
+        return NextResponse.json({ error: PUBLISHING_STEP_CALL_PERFORMED_TEXT, code: PUBLISHING_STEP_CALL_PERFORMED }, { status: 409 });
+      }
     } else {
       const handlers = await collectAllPrimitiveHandlers();
       const handler = handlers[tool];

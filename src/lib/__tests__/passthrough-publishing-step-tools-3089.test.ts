@@ -73,17 +73,51 @@ describe("the reader over injected sources", () => {
   it("loads the handler of a declared name from its own source", async () => {
     const declared = source([{ name: "tool_a", passthroughPublishingStep: true }], { tool_a: handler });
     const other = source([{ name: "tool_b" }], { tool_b: handler });
-    expect(await loadPassthroughPublishingStepHandler("tool_a", [other, declared])).toBe(handler);
+    expect(await loadPassthroughPublishingStepHandler("tool_a", { sources: [other, declared] })).toBe(handler);
     expect(other.loadHandlers).not.toHaveBeenCalled();
   });
 
   it("loads nothing for an undeclared name, and nothing when the source has no function under the name", async () => {
     const undeclared = source([{ name: "tool_b" }], { tool_b: handler });
-    expect(await loadPassthroughPublishingStepHandler("tool_b", [undeclared])).toBeNull();
+    expect(await loadPassthroughPublishingStepHandler("tool_b", { sources: [undeclared] })).toBeNull();
     expect(undeclared.loadHandlers).not.toHaveBeenCalled();
     const empty = source([{ name: "tool_a", passthroughPublishingStep: true }], { tool_a: "not a function" });
-    expect(await loadPassthroughPublishingStepHandler("tool_a", [empty])).toBeNull();
+    expect(await loadPassthroughPublishingStepHandler("tool_a", { sources: [empty] })).toBeNull();
     const inherited = source([{ name: "toString", passthroughPublishingStep: true }], {});
-    expect(await loadPassthroughPublishingStepHandler("toString", [inherited])).toBeNull();
+    expect(await loadPassthroughPublishingStepHandler("toString", { sources: [inherited] })).toBeNull();
+  });
+});
+
+describe("the step before a declared primitive's effect", () => {
+  it("is handed to the declared source's handler factory", async () => {
+    const handler = vi.fn(async () => ({ ok: true }));
+    const loadHandlers = vi.fn(async () => ({ tool_a: handler }));
+    const beforeEffect = vi.fn(async () => {});
+    const sources = [{ metadata: [{ name: "tool_a", passthroughPublishingStep: true }], loadHandlers }];
+    expect(await loadPassthroughPublishingStepHandler("tool_a", { beforeEffect, sources })).toBe(handler);
+    expect(loadHandlers).toHaveBeenCalledWith(beforeEffect);
+  });
+
+  it("runs before each use case, and a step that throws stops the use case", async () => {
+    const { withBeforeEffect } = await reader();
+    const order: string[] = [];
+    const useCases = {
+      label: "kept",
+      async send(n: number) {
+        order.push(`send ${n}`);
+        return n * 2;
+      },
+    };
+    const guarded = withBeforeEffect(useCases, async () => {
+      order.push("step");
+    });
+    expect(await guarded.send(2)).toBe(4);
+    expect(guarded.label).toBe("kept");
+    expect(order).toEqual(["step", "send 2"]);
+    const refused = withBeforeEffect(useCases, async () => {
+      throw new Error("already used");
+    });
+    await expect(refused.send(3)).rejects.toThrow("already used");
+    expect(order).toEqual(["step", "send 2"]);
   });
 });

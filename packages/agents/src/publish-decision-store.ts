@@ -21,7 +21,7 @@ import {
   PUBLISH_ROW_INPUT_MAX,
   type PublishRowDeclaration,
 } from "./publish-decision-card";
-import { agentRunPublishDecisions, agentRuns } from "./schema";
+import { agentRunPublishDecisions, agentRuns, artifactReviewActionConsumptions } from "./schema";
 
 /** A decision of the run's current attempt: its run_generation equals the run's reset_generation, read in the same
  *  statement. A row with NO generation (written by code older than the column, e.g. an old node during a rolling deploy)
@@ -331,6 +331,45 @@ export async function decide(id: string, input: DecideInput): Promise<DecideResu
     if (!current) throw new PublishDecisionError("not-found", "no decision has this id");
     return { outcome: "lost", currentStatus: deserialize(current).status };
   });
+}
+
+/** The key prefix of a publish decision's row in the consumption ledger (artifact_review_action_consumptions.gate_id). */
+export const PUBLISH_DECISION_CONSUMPTION_PREFIX = "publish-decision:";
+
+/**
+ * Claim a RELEASED decision for the one tool call of its publishing step (cinatra#3089): ONE insert into the durable
+ * consumption ledger under `publish-decision:<decision id>`, conflict-free on the ledger's key, so of any number of
+ * callers, concurrent ones included, exactly one insert returns a row. True for that caller; false when the decision
+ * was claimed before. The claim is never given back (the ledger's rule: a failed effect does not refund it), and the
+ * decision's own row is not written. Every park inserts a new row with a new id (insertParkedDecision) and a row is
+ * released at most once (decide leaves only `parked`), so each release has its own key. A call with no verified
+ * executed source records an empty hash. An invalid input throws before any write; a write error propagates.
+ */
+export async function claimPublishDecisionConsumption(input: {
+  decisionId: string;
+  orgId: string;
+  runId: string;
+  stepId: string;
+  toolIdentity: Record<string, unknown>;
+  executedSourceSha256: string | null;
+}): Promise<boolean> {
+  const decisionId = requireText(input.decisionId, "decisionId");
+  const orgId = requireText(input.orgId, "orgId");
+  const runId = requireText(input.runId, "runId");
+  const stepId = requireText(input.stepId, "stepId");
+  const rows = await db
+    .insert(artifactReviewActionConsumptions)
+    .values({
+      gateId: `${PUBLISH_DECISION_CONSUMPTION_PREFIX}${decisionId}`,
+      runId,
+      orgId,
+      stepId,
+      toolIdentity: input.toolIdentity,
+      executedSourceSha256: input.executedSourceSha256 ?? "",
+    })
+    .onConflictDoNothing({ target: artifactReviewActionConsumptions.gateId })
+    .returning({ gateId: artifactReviewActionConsumptions.gateId });
+  return rows.length > 0;
 }
 
 /**
