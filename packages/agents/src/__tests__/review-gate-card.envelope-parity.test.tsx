@@ -80,6 +80,18 @@
 // exactly those seven entries, and in each only the island region: the frame
 // and its loading skeleton are gone and the region keeps its box. Every other
 // entry is byte-identical to its earlier capture.
+//
+// THIRTY-SIX ENTRIES WERE REGENERATED ON PURPOSE (cinatra#3033). The drawing
+// names the run page's two review readings and the thread's picture card on
+// the element that holds the gate header, the target and the decision floor
+// together, and the root already carries `review-gate-card`. So the card root
+// now holds ONE inner element on every reading, a box that draws nothing
+// (`class="contents"`), and the reading's anchor rides that element where it
+// applies. The regeneration diff moves exactly the 36 entries that draw a
+// card, and in each only that: the element's opening tag directly after the
+// root's own and its closing tag directly before the root's. No entry of this
+// matrix names a target form, so none carries an anchor of a reading. The 8
+// `advisory` and `absent` entries draw no DOM and are unchanged.
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
