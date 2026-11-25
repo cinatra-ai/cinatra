@@ -580,3 +580,48 @@ export async function classifyArtifactDisplayMount({
     reason: "requires-rebuild",
   };
 }
+
+/**
+ * WHICH HOST DISPLAY DRAWS A RESOLVED MOUNT (cinatra#3033), as a closed value
+ * that names no package: `markdown` when the host's markdown display draws it,
+ * `image` when the host's image display draws it, `other` for everything else
+ * (a pack's own renderer, a display loaded at runtime, a floor).
+ *
+ * It selects nothing by itself. The mount is the one `resolveArtifactDisplayMount`
+ * answered for the target, so the module named here is the module the preview
+ * mounts. That module is the host's display for the media type only when the
+ * representation rung of the SAME dispatch resolves this media type to that very
+ * module, and that module is a host-release system base. A pack's own semantic
+ * renderer, or a pack's own representation provider, is another module and so
+ * another display, whatever the media type says. A system base that draws its
+ * own type through the semantic rung is still the same module, so it is still
+ * that display.
+ *
+ * Which of the host's displays it is comes from two classifications the host
+ * already owns for its safe-transport floor: the markdown floor of `pickHandler`,
+ * and the transport class (the top-level media type) by which the neutral inline
+ * preview picks a passive image element.
+ */
+export type ArtifactDisplayFamily = "markdown" | "image" | "other";
+
+export function artifactDisplayFamily(
+  orgId: string,
+  mount: { kind: string; generatedKey?: string },
+  mime: string,
+): ArtifactDisplayFamily {
+  if (mount.kind !== "build-map" || typeof mount.generatedKey !== "string") return "other";
+  const canonical = canonicalRepresentationMime(mime);
+  const representation = resolveRepresentationDispatch(orgId, canonical, ARTIFACT_DISPLAY_SLOT);
+  if (
+    !representation ||
+    !representation.built ||
+    representation.generatedKey !== mount.generatedKey ||
+    !isSystemArtifactRendererPackage(representation.packageName)
+  ) {
+    return "other";
+  }
+  if (pickHandler(canonical) === "markdown") return "markdown";
+  const slash = canonical.indexOf("/");
+  const transportClass = slash > 0 ? canonical.slice(0, slash) : canonical;
+  return transportClass === "image" ? "image" : "other";
+}

@@ -308,6 +308,26 @@ export type McpRequestContext = {
    */
   projectContext?: { projectId: string | null };
   /**
+   * The attempt of the run this frame executes (cinatra#4762): the run's
+   * reset_generation, read ONCE by the run-worker entry
+   * (`runAgentBuilderExecutionJob`) when the attempt starts executing. A
+   * produced event written inside the frame for this run records THIS value,
+   * never a later read of the run row, so output a delayed writer of an ended
+   * attempt writes after a retry's reset never belongs to the next attempt.
+   * Only the run-worker entry writes it; never from request input.
+   */
+  runAttempt?: { runId: string; resetGeneration: number };
+  /**
+   * The publishing call claim this frame runs under (cinatra#4762): the id of
+   * the released publish decision the passthrough route's call check claimed
+   * (`publishCallAllowed`) for this run before the call's tool runs. A
+   * produced-event write of this run inside the frame passes the in-flight
+   * fence of exactly that claim; a claim of any other decision still refuses
+   * it. Only the passthrough route writes it, from the claim the server took;
+   * never from request input.
+   */
+  publishCallClaim?: { runId: string; decisionId: string };
+  /**
    * The agent-run OBO scope-ceiling chain for this frame, forwarded from the
    * delegated `agent_run` actor (the signed token claim). Present only for
    * agent-run-OBO delegations; undefined for chat / session / machine callers.

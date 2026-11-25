@@ -1065,6 +1065,8 @@ export async function submitRepairResponse(
               },
             ],
             expiresAt: input.expiresAt ?? null,
+            // cinatra#4762: the successor continues the review of the attempt that raised the repaired gate.
+            successorOfGateId: repair.gateId,
           },
           tx,
         );
