@@ -1365,6 +1365,32 @@ function assertHandledComponentType(
   }
 }
 
+// Reading a serialized flow: every dynamic index into a document map goes
+// through an own-property check, so a name an object inherits (`constructor`,
+// `__proto__`, `toString`) never resolves to something the document did not
+// declare.
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+function ownEntry(map: unknown, key: string): unknown {
+  return isRecord(map) && Object.hasOwn(map, key) ? map[key] : undefined;
+}
+// The one resolver for "the flow a FlowNode wraps": a `{$component_ref}` is
+// looked up in the given maps (own entries only, the nearest first), anything
+// else that is an object is the flow written inline in the node.
+function resolveSubflowValue(value: unknown, ...maps: unknown[]): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return undefined;
+  const ref = value["$component_ref"];
+  if (typeof ref === "string") {
+    for (const m of maps) {
+      const hit = ownEntry(m, ref);
+      if (isRecord(hit)) return hit;
+    }
+    return undefined;
+  }
+  return value;
+}
+
 // cinatra#4457: the keys of every value-surfacing gate inside a FlowNode's
 // wrapped subflow. A gate in a subflow reaches the root approval policy only as
 // a step of its FlowNode (a gateStep, or the plain FlowNode step), so that step
@@ -1375,12 +1401,11 @@ function assertHandledComponentType(
 // FlowNode lists the keys of all of them. When the ref is absent or not
 // inlined, there are no keys and the step is as before (no list).
 function subflowSurfaceGateInputKeys(
-  subflowRef: string | undefined,
+  subflowValue: unknown,
   localRefs: Record<string, unknown>,
 ): string[] {
-  if (!subflowRef) return [];
-  const subflow = localRefs[subflowRef];
-  if (!subflow || typeof subflow !== "object") return [];
+  const subflow = resolveSubflowValue(subflowValue, localRefs);
+  if (!subflow) return [];
   const keys: string[] = [];
   const visit = (o: unknown): void => {
     if (o === null || typeof o !== "object") return;
@@ -1427,12 +1452,11 @@ function isContextGateRenderer(gateId: string, renderer: string): boolean {
   return isContextSelectorRendererId(renderer) || gateId.startsWith("ctx-");
 }
 function subflowFiresNonContextRuntimeGate(
-  subflowRef: string | undefined,
+  subflowValue: unknown,
   localRefs: Record<string, unknown>,
 ): boolean {
-  if (!subflowRef) return true;
-  const subflow = localRefs[subflowRef];
-  if (!subflow || typeof subflow !== "object") return true;
+  const subflow = resolveSubflowValue(subflowValue, localRefs);
+  if (!subflow) return true;
   let fires = false;
   const visit = (o: unknown): void => {
     if (fires || o === null || typeof o !== "object") return;
@@ -1473,17 +1497,28 @@ function readInputMessageGateView(
   ime: InputMessageGateComponent,
   id: string,
 ): { field: string; inputSchema: Record<string, unknown>; renderer: string } {
-  const out0 = ime.outputs?.[0] ?? {};
-  const field = out0.title ?? out0.id ?? id;
-  const declaredSchema = ime.metadata?.cinatra?.inputMessageSchema ?? ime.inputs?.[0]?.schema;
+  // Every field is read by its type: a value of another shape is as absent as a
+  // missing one, and a map is indexed only at its own keys.
+  const outputs: unknown = ime.outputs;
+  const out0 = Array.isArray(outputs) && isRecord(outputs[0]) ? outputs[0] : {};
+  const field =
+    typeof out0["title"] === "string" ? out0["title"] : typeof out0["id"] === "string" ? out0["id"] : id;
+  const cin: Record<string, unknown> =
+    isRecord(ime.metadata) && isRecord(ime.metadata.cinatra) ? ime.metadata.cinatra : {};
+  const inputs: unknown = ime.inputs;
+  const declaredSchema =
+    cin["inputMessageSchema"] ?? (Array.isArray(inputs) && isRecord(inputs[0]) ? inputs[0]["schema"] : undefined);
   const inputSchema: Record<string, unknown> =
-    declaredSchema && Object.keys(declaredSchema).length > 0
+    isRecord(declaredSchema) && Object.keys(declaredSchema).length > 0
       ? declaredSchema
       : { type: "object" };
+  const fieldRenderer = ownEntry(cin["inputRenderers"], field);
   const renderer =
-    ime.metadata?.cinatra?.inputRenderers?.[field] ??
-    ime.metadata?.cinatra?.renderer ??
-    SCHEMA_FIELD_FALLBACK_RENDERER_ID;
+    typeof fieldRenderer === "string"
+      ? fieldRenderer
+      : typeof cin["renderer"] === "string"
+        ? cin["renderer"]
+        : SCHEMA_FIELD_FALLBACK_RENDERER_ID;
   return { field, inputSchema, renderer };
 }
 
@@ -1494,6 +1529,58 @@ function embeddedGateIsReviewerPause(gate: InputMessageGateComponent, gateId: st
   return gate.metadata?.cinatra?.requiresApproval === true && !isContextGateRenderer(gateId, readInputMessageGateView(gate, gateId).renderer);
 }
 
+// The InputMessageNodes a flow can execute: the nodes reachable from its start
+// along its control edges (readFlowControlTopology, the reading the binding and
+// the step numbering take), and, inside them, the flows that run within them (a
+// FlowNode's subflow, the branches of a parallel node), to any depth. Written
+// as a loop over a work list, so no depth of nesting exhausts the stack. Each
+// flow is read once; reaching one a second time (a shared or cyclic reference)
+// sets `repeated`, because a gate in it could then pause more than once.
+// `unreadableMarked` is set when a flow has no start the topology can follow
+// yet lists a marked gate of its own: what runs there cannot be told.
+function readReachableInputMessageNodes(
+  root: Record<string, unknown>,
+  outerRefs: Record<string, unknown>,
+): { gates: Array<Record<string, unknown>>; repeated: boolean; unreadableMarked: boolean } {
+  const gates: Array<Record<string, unknown>> = [];
+  let repeated = false;
+  let unreadableMarked = false;
+  const seen = new Set<Record<string, unknown>>();
+  const work: Array<{ flow: Record<string, unknown>; outer: Record<string, unknown> }> = [{ flow: root, outer: outerRefs }];
+  while (work.length > 0) {
+    const { flow, outer } = work.pop()!;
+    if (seen.has(flow)) {
+      repeated = true;
+      continue;
+    }
+    seen.add(flow);
+    const refs = isRecord(flow["$referenced_components"]) ? flow["$referenced_components"] : {};
+    const scope = { ...outer, ...refs };
+    const { reachable } = readFlowControlTopology(flow);
+    if (reachable.length === 0) {
+      for (const comp of Object.values(refs)) {
+        if (isRecord(comp) && comp["component_type"] === "InputMessageNode" && readArtifactReviewTargetsInput(comp) !== undefined) {
+          unreadableMarked = true;
+        }
+      }
+    }
+    for (const id of reachable) {
+      const comp = ownEntry(refs, id) ?? ownEntry(outer, id);
+      if (!isRecord(comp)) continue;
+      if (comp["component_type"] === "InputMessageNode") {
+        gates.push(comp);
+        continue;
+      }
+      // A flow that runs inside this one: its reachable gates pause too.
+      const inner = [comp["subflow"], ...(Array.isArray(comp["subflows"]) ? comp["subflows"] : [])];
+      for (const value of inner) {
+        const child = resolveSubflowValue(value, refs, outer);
+        if (child) work.push({ flow: child, outer: scope });
+      }
+    }
+  }
+  return { gates, repeated, unreadableMarked };
+}
 // cinatra#3089: the artifact-review gate of an EMBEDDED child flow. A gate in a
 // FlowNode's inlined subflow reaches the approval policy only as a step of its
 // FlowNode, and the runtime reads the review marker only from the compiled step.
@@ -1501,10 +1588,11 @@ function embeddedGateIsReviewerPause(gate: InputMessageGateComponent, gateId: st
 // readArtifactReviewTargetsInput), the gate and the step must correspond
 // exactly, or the compile is refused; the marker is never dropped and never
 // guessed onto a step:
-//   * the gate is the ONLY InputMessageNode the subflow can reach (from its
-//     start along its control edges), and the FlowNode
-//     declares exactly ONE gateStep, which spans one pause (gateCount 1 or
-//     unset);
+//   * the gate is the ONLY InputMessageNode the subflow can execute (the nodes
+//     reachable from its start along its control edges, in nested and parallel
+//     flows to any depth, whether a flow is referenced or written inline), no
+//     flow of it is reached twice, and the FlowNode declares exactly ONE
+//     gateStep, which is an object and spans one pause (gateCount 1 or unset);
 //   * the gate is a reviewer pause (requiresApproval true, not a context gate);
 //   * the gate hands the named input to the host: its declared inputs include
 //     that title and it sets `surfaceGateInputs` strictly `true` (an embedded
@@ -1513,49 +1601,25 @@ function embeddedGateIsReviewerPause(gate: InputMessageGateComponent, gateId: st
 //     supplies cannot stand in for the set the child filed.
 // Returns null when the subflow holds no marked gate (the step is as before).
 // Error texts name node ids only.
-function readReachableInputMessageNodes(
-  flow: Record<string, unknown>,
-  outerRefs: Record<string, unknown>,
-  depth = 0,
-): Array<Record<string, unknown>> {
-  const found: Array<Record<string, unknown>> = [];
-  if (depth > 8) return found;
-  const refs = (flow["$referenced_components"] as Record<string, unknown> | undefined) ?? {};
-  for (const id of readFlowControlTopology(flow).reachable) {
-    const comp = (refs[id] ?? outerRefs[id]) as Record<string, unknown> | undefined;
-    if (!comp || typeof comp !== "object") continue;
-    if (comp["component_type"] === "InputMessageNode") {
-      found.push(comp);
-    } else if (comp["component_type"] === "FlowNode") {
-      // A nested child flow runs inside this one: its reachable gates pause too.
-      const sub = comp["subflow"] as { $component_ref?: unknown } | undefined;
-      const target = typeof sub?.$component_ref === "string" ? (refs[sub.$component_ref] ?? outerRefs[sub.$component_ref]) : sub;
-      if (target && typeof target === "object") {
-        found.push(...readReachableInputMessageNodes(target as Record<string, unknown>, { ...outerRefs, ...refs }, depth + 1));
-      }
-    }
-  }
-  return found;
-}
 type EmbeddedArtifactReviewGate = { targetsInput: string; gate: InputMessageGateComponent; gateId: string };
 function readEmbeddedArtifactReviewGate(
   flowNodeId: string,
-  flowNode: { subflow?: { $component_ref?: string }; metadata?: { cinatra?: { gateSteps?: unknown } } },
+  flowNode: { subflow?: unknown; metadata?: { cinatra?: { gateSteps?: unknown } } },
   localRefs: Record<string, unknown>,
   parentRunInputTitles: ReadonlySet<string>,
 ): { ok: true; found: EmbeddedArtifactReviewGate | null } | { ok: false; error: string } {
-  const subflowRef = flowNode.subflow?.$component_ref;
-  const subflow = subflowRef ? localRefs[subflowRef] : undefined;
-  if (!subflow || typeof subflow !== "object") return { ok: true, found: null };
+  const subflow = resolveSubflowValue(flowNode.subflow, localRefs);
+  if (!subflow) return { ok: true, found: null };
   // Only the gates the subflow can execute: the nodes reachable from its start
   // along its control edges (readFlowControlTopology, the reading the binding
   // and the step numbering take). A gate serialized in the subflow that no edge
   // reaches never pauses, so it takes no marker and counts for nothing.
-  const gates = readReachableInputMessageNodes(subflow as Record<string, unknown>, localRefs);
+  const reading = readReachableInputMessageNodes(subflow, localRefs);
+  const gates = reading.gates;
   const marked = gates.filter((g) => readArtifactReviewTargetsInput(g) !== undefined);
-  if (marked.length === 0) return { ok: true, found: null };
+  if (marked.length === 0 && !reading.unreadableMarked) return { ok: true, found: null };
   const where = `FlowNode ${quoteNodeId(flowNodeId)}`;
-  const gate = marked[0]!;
+  const gate: Record<string, unknown> = marked[0] ?? {};
   const gateId = typeof gate["id"] === "string" ? (gate["id"] as string) : "";
   const gateSteps = flowNode.metadata?.cinatra?.gateSteps;
   // The one gateStep must be an object (not null, not an array, not a scalar):
@@ -1565,6 +1629,8 @@ function readEmbeddedArtifactReviewGate(
   const gateCount = gateStepIsObject ? (gateStep as { gateCount?: unknown }).gateCount : undefined;
   if (
     gates.length !== 1 ||
+    reading.repeated ||
+    reading.unreadableMarked ||
     !Array.isArray(gateSteps) ||
     gateSteps.length !== 1 ||
     !gateStepIsObject ||
@@ -2328,7 +2394,7 @@ export async function compileOasAgentJson(opts: {
       const node = localRefs[id] as {
         name?: string;
         metadata?: { cinatra?: Record<string, unknown> };
-        subflow?: { $component_ref?: string };
+        subflow?: unknown;
       };
       const parentCinatra = node.metadata?.cinatra;
       // No leaf to merge — pass undefined and let the merge function project
@@ -2336,7 +2402,7 @@ export async function compileOasAgentJson(opts: {
       const effective = mergeParentLeafCinatra(parentCinatra, undefined);
       // cinatra#4457: the keys of the value-surfacing gates in the subflow,
       // written on the gateStep return and on the plain FlowNode return below.
-      const nestedGateKeys = subflowSurfaceGateInputKeys(node.subflow?.$component_ref, localRefs);
+      const nestedGateKeys = subflowSurfaceGateInputKeys(node.subflow, localRefs);
 
       // Build inputMapping from data_flow_connections targeting this FlowNode.
       // Same logic as the AgentNode arm.
@@ -2399,7 +2465,7 @@ export async function compileOasAgentJson(opts: {
         // so its compiled policy is byte-identical.
         // A marked gate was validated as a reviewer pause above, so it never
         // takes this flag.
-        if (!embeddedReviewGates.has(id) && !subflowFiresNonContextRuntimeGate(node.subflow?.$component_ref, localRefs)) {
+        if (!embeddedReviewGates.has(id) && !subflowFiresNonContextRuntimeGate(node.subflow, localRefs)) {
           step.firesRendererGate = false;
         }
         if (nestedGateKeys.length > 0) step.surfaceGateInputKeys = nestedGateKeys;
