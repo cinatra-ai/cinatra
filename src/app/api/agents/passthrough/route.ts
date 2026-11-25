@@ -875,7 +875,7 @@ export async function POST(req: Request): Promise<Response> {
       // one road for a run's outward call, and it is gated above by the step's
       // released decision.
       const handler = await loadPassthroughPublishingStepHandler(tool);
-      if (!handler) {
+      if (typeof handler !== "function") {
         return NextResponse.json({ error: `Tool "${tool}" has no registered handler.` }, { status: 404 });
       }
       result = await withActorContext(alsActorContext, () =>

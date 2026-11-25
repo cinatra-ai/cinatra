@@ -42,12 +42,14 @@ const HOST_PRIMITIVE_SOURCES: readonly PassthroughPrimitiveSource[] = [
   },
 ];
 
+type Declaration = { source: PassthroughPrimitiveSource; entry: PassthroughPrimitiveMetadata };
+
 function declaringSource(
   tool: string,
   sources: readonly PassthroughPrimitiveSource[],
-): PassthroughPrimitiveSource | null {
+): Declaration | null {
   if (typeof tool !== "string" || tool === "") return null;
-  let match: { source: PassthroughPrimitiveSource; entry: PassthroughPrimitiveMetadata } | null = null;
+  let match: Declaration | null = null;
   for (const source of sources) {
     for (const entry of source.metadata) {
       if (entry.name !== tool) continue;
@@ -55,7 +57,7 @@ function declaringSource(
       match = { source, entry };
     }
   }
-  return match && match.entry.passthroughPublishingStep === true ? match.source : null;
+  return match && match.entry.passthroughPublishingStep === true ? match : null;
 }
 
 /** True when exactly one host-wired package carries `tool` and declares it a publishing step's passthrough call. */
@@ -71,9 +73,12 @@ export async function loadPassthroughPublishingStepHandler(
   tool: string,
   sources: readonly PassthroughPrimitiveSource[] = HOST_PRIMITIVE_SOURCES,
 ): Promise<PassthroughPrimitiveHandler | null> {
-  const source = declaringSource(tool, sources);
-  if (!source) return null;
-  const handlers = await source.loadHandlers();
-  const handler = Object.prototype.hasOwnProperty.call(handlers, tool) ? handlers[tool] : undefined;
+  const declaration = declaringSource(tool, sources);
+  if (!declaration) return null;
+  // The handler is found by the name the package's own metadata carries, read
+  // from the package's own handler table as a map: the caller's text only
+  // selects a declaration, it is never used as a property name.
+  const handlers = new Map(Object.entries(await declaration.source.loadHandlers()));
+  const handler = handlers.get(declaration.entry.name);
   return typeof handler === "function" ? (handler as PassthroughPrimitiveHandler) : null;
 }

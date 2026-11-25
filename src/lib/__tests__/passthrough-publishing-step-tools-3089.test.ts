@@ -11,11 +11,14 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 
 import { triggerEmailSendPrimitiveMetadata } from "@cinatra-ai/trigger-email-send";
-import {
-  declaresPassthroughPublishingStep,
-  loadPassthroughPublishingStepHandler,
-  type PassthroughPrimitiveSource,
-} from "@/lib/passthrough-publishing-step-tools";
+import type { PassthroughPrimitiveSource } from "@/lib/passthrough-publishing-step-tools";
+
+// The module is loaded inside each test, so that every test reports its own failure.
+const reader = () => import("@/lib/passthrough-publishing-step-tools");
+const declaresPassthroughPublishingStep = async (...args: Parameters<Awaited<ReturnType<typeof reader>>["declaresPassthroughPublishingStep"]>) =>
+  (await reader()).declaresPassthroughPublishingStep(...args);
+const loadPassthroughPublishingStepHandler = async (...args: Parameters<Awaited<ReturnType<typeof reader>>["loadPassthroughPublishingStepHandler"]>) =>
+  (await reader()).loadPassthroughPublishingStepHandler(...args);
 
 const SEND = "email_outreach_send_initial_start";
 
@@ -34,13 +37,13 @@ describe("the owning package's declaration", () => {
     expect(declared).toEqual([SEND]);
   });
 
-  it("the host reads the declaration for the send and for nothing else of the package", () => {
-    expect(declaresPassthroughPublishingStep(SEND)).toBe(true);
+  it("the host reads the declaration for the send and for nothing else of the package", async () => {
+    expect(await declaresPassthroughPublishingStep(SEND)).toBe(true);
     for (const m of triggerEmailSendPrimitiveMetadata) {
-      if (m.name !== SEND) expect(declaresPassthroughPublishingStep(m.name)).toBe(false);
+      if (m.name !== SEND) expect(await declaresPassthroughPublishingStep(m.name)).toBe(false);
     }
-    expect(declaresPassthroughPublishingStep("objects_save")).toBe(false);
-    expect(declaresPassthroughPublishingStep("")).toBe(false);
+    expect(await declaresPassthroughPublishingStep("objects_save")).toBe(false);
+    expect(await declaresPassthroughPublishingStep("")).toBe(false);
   });
 });
 
@@ -51,20 +54,20 @@ describe("the reader over injected sources", () => {
     loadHandlers: vi.fn(async () => handlers),
   });
 
-  it("only the boolean true declares", () => {
+  it("only the boolean true declares", async () => {
     for (const value of ["true", 1, {}, null, false]) {
       const sources = [source([{ name: "tool_a", passthroughPublishingStep: value as unknown as boolean }])];
-      expect(declaresPassthroughPublishingStep("tool_a", sources)).toBe(false);
+      expect(await declaresPassthroughPublishingStep("tool_a", sources)).toBe(false);
     }
-    expect(declaresPassthroughPublishingStep("tool_a", [source([{ name: "tool_a", passthroughPublishingStep: true }])])).toBe(true);
+    expect(await declaresPassthroughPublishingStep("tool_a", [source([{ name: "tool_a", passthroughPublishingStep: true }])])).toBe(true);
   });
 
-  it("a name two sources carry is not declared", () => {
+  it("a name two sources carry is not declared", async () => {
     const sources = [
       source([{ name: "tool_a", passthroughPublishingStep: true }]),
       source([{ name: "tool_a" }]),
     ];
-    expect(declaresPassthroughPublishingStep("tool_a", sources)).toBe(false);
+    expect(await declaresPassthroughPublishingStep("tool_a", sources)).toBe(false);
   });
 
   it("loads the handler of a declared name from its own source", async () => {
