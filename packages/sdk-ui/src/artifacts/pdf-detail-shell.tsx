@@ -381,6 +381,21 @@ export function pdfShellFloorMessage(reason: PdfShellFloorReason): string {
 }
 
 /**
+ * THE FLOOR IS ONE SURFACE (specs/app-artifact-review.html §XI.2 / §XI.4, the
+ * floor drawing): it sits straight under the target header in the panel the
+ * header opens, with a rule above it and nothing around it - a 1px top border
+ * in the line colour, 22px above and below, 14px at the sides, the sentence
+ * and the control centred 10px apart. It draws no border of its own on the
+ * other three sides, no radius and no fill: a rounded, bordered panel here is
+ * the nested body card §IV does not draw.
+ */
+const PDF_SHELL_FLOOR_CLASSES =
+  "flex flex-col items-center gap-[10px] border-t border-line px-[14px] py-[22px] text-center";
+
+/** The floor's sentence: 12px in the muted colour, with no margin of its own. */
+const PDF_SHELL_FLOOR_SENTENCE_CLASSES = "m-0 text-xs text-muted-foreground";
+
+/**
  * The download affordance beneath the floor's sentence. It degrades to a plain
  * note rather than a dead link when there is nothing to download, so the panel
  * is never blank in any state.
@@ -392,7 +407,7 @@ function PdfShellDownload({
 }): ReactElement {
   if (downloadHref === null || downloadHref === "") {
     return (
-      <p className="text-muted-foreground text-sm">
+      <p className={PDF_SHELL_FLOOR_SENTENCE_CLASSES}>
         This document has no downloadable content.
       </p>
     );
@@ -445,14 +460,14 @@ export function PdfDetailShell({
   if (view.kind === "floor") {
     return (
       <article
-        className="soft-panel rounded-card flex flex-col items-center gap-3 p-6 text-center"
+        className={PDF_SHELL_FLOOR_CLASSES}
         data-artifact-renderer="pdf-shell"
         data-slot={slot}
         {...(road ? { "data-byte-road": road } : {})}
         data-floor={view.reason}
         {...(compact ? { "data-compact": "true" } : {})}
       >
-        <p className="text-muted-foreground text-sm">
+        <p className={PDF_SHELL_FLOOR_SENTENCE_CLASSES}>
           {pdfShellFloorMessage(view.reason)}
         </p>
         {view.download === "blocked" ? null : (

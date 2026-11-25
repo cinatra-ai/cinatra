@@ -375,3 +375,99 @@ describe("the floor offers no download control where a download cannot work", ()
     expect(container.querySelector("embed")?.getAttribute("src")).toBe(PREVIEW);
   });
 });
+
+// THE FLOOR IS ONE SURFACE, DRAWN AS THE DESIGN DRAWS IT (cinatra#3459, the
+// layout reading). specs/app-artifact-review.html §XI.4, the floor drawing:
+// straight under the target header, `border-top:1px solid var(--line)`,
+// `padding:22px 14px`, centred, the sentence and the control 10px apart; the
+// sentence `font-size:12px;color:var(--muted)`; the control `btn outline` at
+// `padding:5px 12px;font-size:12px`. No rounded, bordered panel around it - §IV
+// draws no nested body card.
+describe("the floor's drawing", () => {
+  function drawnFloor(downloadHref: string | null = DOWNLOAD): HTMLElement {
+    const host = document.createElement("div");
+    host.innerHTML = renderToStaticMarkup(
+      <shell.PdfShellFrameProvider frame="sandboxed" downloads="link">
+        <shell.PdfDetailShell previewHref={PREVIEW} downloadHref={downloadHref} slot="detail" road="session" />
+      </shell.PdfShellFrameProvider>,
+    );
+    const floor = host.firstElementChild as HTMLElement | null;
+    if (!floor) throw new Error("no floor drawn");
+    return floor;
+  }
+
+  const classesOf = (el: Element | null | undefined): string[] =>
+    (el?.getAttribute("class") ?? "").split(/\s+/).filter(Boolean);
+
+  it("is one surface with a top rule only, the design's padding and gap, centred", () => {
+    const floor = drawnFloor();
+    expect(floor.getAttribute("data-floor")).toBe("sandboxed-frame");
+    const classes = classesOf(floor);
+    for (const token of ["border-t", "border-line", "px-[14px]", "py-[22px]", "gap-[10px]", "text-center", "items-center"]) {
+      expect(classes).toContain(token);
+    }
+    // No panel of its own: no all-round border, no radius, no fill, no soft panel.
+    expect(classes).not.toContain("border");
+    expect(classes).not.toContain("soft-panel");
+    expect(classes.filter((token) => token.startsWith("rounded"))).toEqual([]);
+    expect(classes.filter((token) => token.startsWith("bg-"))).toEqual([]);
+    expect(classes.filter((token) => /^p-\d/.test(token))).toEqual([]);
+  });
+
+  it("says its sentence at 12px in the muted colour", () => {
+    const sentence = drawnFloor().querySelector("p");
+    expect(sentence?.textContent).toBe("This PDF cannot be previewed here.");
+    const classes = classesOf(sentence);
+    expect(classes).toContain("text-xs");
+    expect(classes).toContain("text-muted-foreground");
+    expect(classes).toContain("m-0");
+    expect(classes).not.toContain("text-sm");
+  });
+
+  it("draws the download as the outline button, at the floor's 12px and padding", () => {
+    const link = drawnFloor().querySelector("a[download]");
+    expect(link?.getAttribute("href")).toBe(DOWNLOAD);
+    const classes = classesOf(link);
+    for (const token of [
+      "inline-flex",
+      "items-center",
+      "border",
+      "border-line-strong",
+      "rounded-[7px]",
+      "bg-surface",
+      "text-foreground",
+      "px-3",
+      "py-[5px]",
+      "text-xs",
+      "font-medium",
+      "gap-[7px]",
+    ]) {
+      expect(classes).toContain(token);
+    }
+    // A class no stylesheet defines draws a bare link at the body's size.
+    expect(classes).not.toContain("btn-outline");
+  });
+
+  it("nests no bordered panel: the control is the only bordered element inside the floor", () => {
+    const floor = drawnFloor();
+    const bordered = [floor, ...Array.from(floor.querySelectorAll("*"))].filter((el) => {
+      const classes = classesOf(el);
+      return (
+        classes.includes("border") ||
+        classes.includes("soft-panel") ||
+        classes.includes("btn-outline") ||
+        classes.some((token) => token.startsWith("rounded"))
+      );
+    });
+    expect(bordered.map((el) => el.tagName.toLowerCase())).toEqual(["a"]);
+  });
+
+  it("says the no-download note in the same 12px muted sentence", () => {
+    const notes = Array.from(drawnFloor(null).querySelectorAll("p"));
+    expect(notes.map((p) => p.textContent)).toEqual([
+      "This PDF cannot be previewed here.",
+      "This document has no downloadable content.",
+    ]);
+    for (const note of notes) expect(classesOf(note)).toContain("text-xs");
+  });
+});

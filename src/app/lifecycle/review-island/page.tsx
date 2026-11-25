@@ -130,6 +130,7 @@ import {
 // the modules it always did.
 import { REVIEW_ISLAND_CREDENTIAL_QUERY_PARAM } from "@/lib/lifecycle/review-island-credential";
 import {
+  ISLAND_SOLE_PDF_FLOOR_CLASSES,
   islandBodyClassName,
   islandDocumentGroundCss,
   islandEmptyClassName,
@@ -427,9 +428,18 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
   }
   if (!selection.ok) return empty;
 
+  // THE PDF FLOOR IS THE WHOLE DOCUMENT (§XI.4's floor drawing). Where this
+  // document draws one target and nothing else, and that target stands on the
+  // shared pdf shell's floor, the body draws no plate of its own around it: no
+  // padding and the panel's own fill, so the floor sits straight under the
+  // card's target header, one surface with its own rule. Every other document
+  // keeps its body exactly as before.
+  const soleFloor = drawn.length === 1 && !surface.agentSummary;
   return (
     <div
-      className={islandBodyClassName(scheme)}
+      className={
+        soleFloor ? `${islandBodyClassName(scheme)} ${ISLAND_SOLE_PDF_FLOOR_CLASSES}` : islandBodyClassName(scheme)
+      }
       data-conformance-id="review-target-island-body"
       // WHICH READING this document is: the gate's own state, named for the
       // conformance check and for nothing else. Both readings draw the same

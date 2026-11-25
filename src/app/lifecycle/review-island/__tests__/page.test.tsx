@@ -68,6 +68,7 @@ import { encodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import { reviewTargetStreamKey } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
 import {
+  ISLAND_SOLE_PDF_FLOOR_CLASSES,
   islandBodyClassName,
   islandDocumentGroundCss,
   parseIslandColorScheme,
@@ -279,6 +280,41 @@ describe("the island tells the pdf shell it is served into a sandboxed frame (ci
     resolveVerifiedWidgetFrameOrigin.mockReturnValue("https://cms.example");
     loadReviewGateSurface.mockResolvedValue({ kind: "ready", agentSummary: null, targets: [target("a1")] });
     expect(declaredDownloads(await renderIsland(REF, { assistant: "a1", instanceId: "i1" }))).toBe("none");
+  });
+});
+
+// THE PDF FLOOR IS THE WHOLE DOCUMENT (cinatra#3459, the layout reading).
+// specs/app-artifact-review.html §XI.4 draws the floor straight under the
+// target header: one surface. A document that draws one target and nothing else
+// draws no plate of its own around that target's floor - no padding and the
+// panel's own fill - so nothing stands between the card's header and the
+// floor's rule. Every other document keeps its body exactly as before.
+describe("a document whose one target stands on the pdf floor draws no plate around it (cinatra#3459)", () => {
+  const FLOOR_STATE = [
+    "has-[[data-artifact-renderer=pdf-shell][data-floor]]:p-0",
+    "has-[[data-artifact-renderer=pdf-shell][data-floor]]:bg-surface-strong",
+    "has-[[data-artifact-renderer=pdf-shell][data-floor]]:gap-0",
+  ];
+  const classesOf = (el: ReactElement): string[] =>
+    String((el.props as { className?: string }).className ?? "").split(/\s+/).filter(Boolean);
+
+  // red-first-expect: to include 'has-[[data-artifact-renderer=pdf-shel
+  it("drops the body's padding and fill in the floor state where it draws one target", async () => {
+    loadReviewGateSurface.mockResolvedValue({ kind: "ready", agentSummary: null, targets: [target("a1")] });
+    const classes = classesOf(await renderIsland(REF));
+    for (const token of FLOOR_STATE) expect(classes).toContain(token);
+    // The body outside the floor state is the body it always was.
+    expect(classes).toContain("p-3");
+    expect(classes).toContain("bg-surface");
+  });
+
+  it("keeps the body as it was where it draws several targets, or a summary beside the target", async () => {
+    loadReviewGateSurface.mockResolvedValue({ kind: "ready", agentSummary: null, targets: [target("a1"), target("a2")] });
+    const several = classesOf(await renderIsland(REF));
+    for (const token of FLOOR_STATE) expect(several).not.toContain(token);
+    loadReviewGateSurface.mockResolvedValue({ kind: "ready", agentSummary: "Drafted.", targets: [target("a1")] });
+    const summarised = classesOf(await renderIsland(REF));
+    for (const token of FLOOR_STATE) expect(summarised).not.toContain(token);
   });
 });
 
@@ -673,7 +709,7 @@ describe("the island paints in the palette the host named", () => {
   it("carries the DARK palette onto the body it draws the ladder in", async () => {
     ready();
     const el = await renderIsland(REF, { scheme: "dark" });
-    expect(classOf(el)).toBe(islandBodyClassName("dark"));
+    expect(classOf(el)).toBe(`${islandBodyClassName("dark")} ${ISLAND_SOLE_PDF_FLOOR_CLASSES}`);
     expect(classOf(el)).toMatch(/(^| )dark( |$)/);
     expect((el.props as { "data-island-color-scheme"?: string })["data-island-color-scheme"]).toBe(
       "dark",
@@ -717,14 +753,14 @@ describe("the island paints in the palette the host named", () => {
   it("carries the LIGHT palette as the app's own light palette class", async () => {
     ready();
     const el = await renderIsland(REF, { scheme: "light" });
-    expect(classOf(el)).toBe(islandBodyClassName("light"));
+    expect(classOf(el)).toBe(`${islandBodyClassName("light")} ${ISLAND_SOLE_PDF_FLOOR_CLASSES}`);
     expect(classOf(el)).toMatch(/(^| )cinatra( |$)/);
   });
 
   it("draws exactly what it drew before when the host names no palette", async () => {
     ready();
     const named = await renderIsland(REF, {});
-    expect(classOf(named)).toBe("flex min-w-0 flex-col gap-3 overflow-x-auto bg-surface p-3");
+    expect(classOf(named)).toBe(`flex min-w-0 flex-col gap-3 overflow-x-auto bg-surface p-3 ${ISLAND_SOLE_PDF_FLOOR_CLASSES}`);
     expect(
       (named.props as { "data-island-color-scheme"?: string })["data-island-color-scheme"],
     ).toBeUndefined();
@@ -735,7 +771,7 @@ describe("the island paints in the palette the host named", () => {
     for (const junk of ["", "DARK", "cinatra", "system", "dark ", "'/><script>"]) {
       expect(parseIslandColorScheme(junk)).toBeNull();
       const el = await renderIsland(REF, { scheme: junk });
-      expect(classOf(el)).toBe("flex min-w-0 flex-col gap-3 overflow-x-auto bg-surface p-3");
+      expect(classOf(el)).toBe(`flex min-w-0 flex-col gap-3 overflow-x-auto bg-surface p-3 ${ISLAND_SOLE_PDF_FLOOR_CLASSES}`);
     }
   });
 

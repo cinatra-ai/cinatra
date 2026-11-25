@@ -2372,12 +2372,13 @@ function ReviewTargetIsland({
   // document navigating, so the height it already reported still describes the
   // work on screen and must survive the repaint. A genuinely new target starts
   // from the floor again and reports its own.
-  const [measured, setMeasured] = useState<{ identity: string; height: number | null }>({
+  const [measured, setMeasured] = useState<{ identity: string; height: number | null; fits: boolean }>({
     identity,
     height: null,
+    fits: false,
   });
   if (measured.identity !== identity) {
-    setMeasured({ identity, height: null });
+    setMeasured({ identity, height: null, fits: false });
   }
 
   const palette = useLifecycleCardColorScheme();
@@ -2408,8 +2409,11 @@ function ReviewTargetIsland({
       if (!current || !current.contentWindow || event.source !== current.contentWindow) return;
       const reported = islandReportedHeight(event.data);
       if (reported === null) return;
+      const fits = islandFrameDrawsThePdfFloor(current);
       setMeasured((held) =>
-        held.identity === identity && held.height === reported ? held : { identity, height: reported },
+        held.identity === identity && held.height === reported && held.fits === fits
+          ? held
+          : { identity, height: reported, fits },
       );
     };
     window.addEventListener("message", onMessage);
@@ -2425,7 +2429,13 @@ function ReviewTargetIsland({
       : load.timedOut
         ? "timed-out"
         : "loading";
-  const height = Math.max(ISLAND_MIN_HEIGHT, measured.height ?? ISLAND_MIN_HEIGHT);
+  // A document that draws the pdf floor is exactly as tall as it reports: the
+  // floor is a short block that ends the panel, and the box below it would be a
+  // blank plate. Every other document keeps the floor height beneath it.
+  const height =
+    measured.fits && measured.height !== null
+      ? measured.height
+      : Math.max(ISLAND_MIN_HEIGHT, measured.height ?? ISLAND_MIN_HEIGHT);
   // The host learns ONE bit: the island stands settled empty, or it does not.
   // The empty document is the same element for every denial and every absence,
   // so this tells the host nothing about why.
@@ -2639,6 +2649,31 @@ export function islandFrameServedTheDenial(frame: HTMLIFrameElement | null): boo
     if (!doc) return false;
     // Single-quoted: this READS the island's marker; it renders no anchor of this card.
     return doc.querySelector(`[data-conformance-id='${REVIEW_ISLAND_EMPTY_MARKER}']`) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Does the frame's own document draw the shared pdf shell's DOWNLOAD FLOOR?
+ *
+ * The review island never runs the browser's PDF viewer (its frame is
+ * sandboxed), so a pdf target there is always the floor: a sentence and a
+ * download, a short block that ends the panel (specs/app-artifact-review.html
+ * §XI preamble: "only an embedded viewer takes its height from the surface",
+ * and "never a blank plate"). Such a document is sized to exactly the height it
+ * reports instead of the frame's floor height.
+ *
+ * The same one-marker question as the denial reading above, and the same
+ * failure direction: anything unreadable answers `false` and keeps the frame's
+ * floor height.
+ */
+function islandFrameDrawsThePdfFloor(frame: HTMLIFrameElement | null): boolean {
+  try {
+    const doc = frame?.contentDocument;
+    if (!doc) return false;
+    // Single-quoted: this READS the shell's marker; it renders no anchor of this card.
+    return doc.querySelector("[data-artifact-renderer='pdf-shell'][data-floor]") !== null;
   } catch {
     return false;
   }

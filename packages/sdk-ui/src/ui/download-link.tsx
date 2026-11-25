@@ -14,6 +14,18 @@ import type { ReactElement, ReactNode } from "react";
  * or an icon package in behind it. Same-origin href only - the host builds the
  * address as an authorized, access-checked one.
  */
+/**
+ * THE OUTLINE BUTTON, SPELLED IN UTILITIES (specs/app-artifact-review.html,
+ * `.btn.outline` with the floor's own `padding:5px 12px;font-size:12px`): a 1px
+ * border in the strong line colour, a 7px radius, the surface fill, the ink
+ * colour, medium weight, the glyph 7px from the words. Utilities and nothing
+ * else, because a class this module names must exist in every document that
+ * draws it - the review island's included - and a named component class that
+ * no stylesheet defines draws a bare link at the body's size.
+ */
+const DOWNLOAD_LINK_CLASSES =
+  "inline-flex items-center gap-[7px] rounded-[7px] border border-line-strong bg-surface px-3 py-[5px] text-xs font-medium text-foreground no-underline";
+
 export function DownloadLink({
   href,
   children,
@@ -22,7 +34,7 @@ export function DownloadLink({
   readonly children: ReactNode;
 }): ReactElement {
   return (
-    <a href={href} download className="btn-outline inline-flex items-center gap-2">
+    <a href={href} download className={DOWNLOAD_LINK_CLASSES}>
       <svg
         data-icon="inline-start"
         aria-hidden="true"
