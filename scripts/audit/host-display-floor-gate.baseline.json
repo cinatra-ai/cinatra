@@ -105,8 +105,7 @@
         "react",
         "src/components/ui/badge",
         "src/components/ui/card",
-        "src/components/ui/input",
-        "src/lib/cinatra-toast"
+        "src/components/ui/input"
       ],
       "owner": "@cinatra-ai/email-outreach-agent"
     }

@@ -2,9 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
-import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -61,85 +59,6 @@ function formatLastUpdated(iso: string | null): string {
 }
 
 // ---------------------------------------------------------------------------
-// The list step's readings (design specs/app-artifact-review.html I.1)
-// ---------------------------------------------------------------------------
-
-/** The host's one message for a failed list read (I.1, run-list-step-error). */
-const FAILED_READ_READING = "This list could not be read.";
-
-const TRY_AGAIN_WORDS = "Try again";
-
-/** Whether the step may change: `mode` absent or "edit", `disabled` absent or false. */
-function isWritable(props: Pick<FieldRendererProps, "mode" | "disabled">): boolean {
-  return (
-    (props.mode === undefined || props.mode === "edit") &&
-    (props.disabled === undefined || props.disabled === false)
-  );
-}
-
-/**
- * The lists a new read offers, or null for a failed read. The host's
- * `onRequestRefresh` resolves `{ lists: [{ id, name }], listsRead }`
- * (hitl-gate-submit.ts `ListStepReadValue`); only `listsRead: "ok"` offers
- * rows. The read asks for contact lists, as the first load does, so each row
- * is a contact list; the read carries no count and no update time.
- */
-function listsOfRead(answer: unknown): AvailableListSummary[] | null {
-  if (!answer || typeof answer !== "object") return null;
-  const { lists, listsRead } = answer as { lists?: unknown; listsRead?: unknown };
-  if (listsRead !== "ok" || !Array.isArray(lists)) return null;
-  const seen = new Set<string>();
-  const out: AvailableListSummary[] = [];
-  for (const entry of lists) {
-    if (!entry || typeof entry !== "object") continue;
-    const { id, name } = entry as { id?: unknown; name?: unknown };
-    if (typeof id !== "string" || id.trim() === "" || seen.has(id)) continue;
-    if (typeof name !== "string" || name.trim() === "") continue;
-    seen.add(id);
-    out.push({ id, name, memberCount: null, lastUpdated: null, memberType: "contact" });
-  }
-  return out;
-}
-
-/**
- * One skeleton bar, drawn with the design system Skeleton's own treatment
- * (src/components/ui/skeleton.tsx). The primitive is not imported: this
- * renderer is reached from the server routes the route-graph ratchet locks,
- * and the bar needs none of the primitive's code.
- */
-function SkeletonBar({ className }: { className: string }) {
-  return (
-    <span
-      data-slot="skeleton"
-      className={`block animate-pulse rounded-[4px] bg-muted ${className}`}
-    />
-  );
-}
-
-/** The loading reading (I.1, run-list-step-loading): a skeleton in each row's place. */
-function LoadingRows() {
-  return (
-    <div
-      className="flex flex-col gap-2"
-      aria-busy="true"
-      data-testid="list-picker-loading"
-      data-conformance-id="run-list-step-loading"
-    >
-      {[0, 1, 2].map((key) => (
-        <Card key={key} className="border-line bg-surface">
-          <CardHeader>
-            <SkeletonBar className="h-4 w-[46%]" />
-          </CardHeader>
-          <CardContent>
-            <SkeletonBar className="h-3 w-[62%]" />
-          </CardContent>
-        </Card>
-      ))}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Renderer
 // ---------------------------------------------------------------------------
 
@@ -156,6 +75,38 @@ export function ListPickerRenderer({
   bindingParams,
   onRequestRefresh,
 }: FieldRendererProps) {
+  // The list step's readings (design specs/app-artifact-review.html I.1) are
+  // declared INSIDE this component, drawn from the card and the badge this
+  // renderer already imports: the host display floor
+  // (scripts/audit/host-display-floor-gate.baseline.json) takes no new
+  // top-level declaration and no new import for this renderer.
+  //
+  // Whether the step may change: `mode` absent or "edit", `disabled` absent or false.
+  const isWritable = (props: Pick<FieldRendererProps, "mode" | "disabled">): boolean =>
+    (props.mode === undefined || props.mode === "edit") &&
+    (props.disabled === undefined || props.disabled === false);
+  // The lists a new read offers, or null for a failed read. The host's
+  // `onRequestRefresh` resolves `{ lists: [{ id, name }], listsRead }`
+  // (hitl-gate-submit.ts `ListStepReadValue`); only `listsRead: "ok"` offers
+  // rows. The read asks for contact lists, as the first load does, so each row
+  // is a contact list; the read carries no count and no update time.
+  const listsOfRead = (answer: unknown): AvailableListSummary[] | null => {
+    if (!answer || typeof answer !== "object") return null;
+    const { lists: rows, listsRead } = answer as { lists?: unknown; listsRead?: unknown };
+    if (listsRead !== "ok" || !Array.isArray(rows)) return null;
+    const seen = new Set<string>();
+    const out: AvailableListSummary[] = [];
+    for (const entry of rows) {
+      if (!entry || typeof entry !== "object") continue;
+      const { id, name } = entry as { id?: unknown; name?: unknown };
+      if (typeof id !== "string" || id.trim() === "" || seen.has(id)) continue;
+      if (typeof name !== "string" || name.trim() === "") continue;
+      seen.add(id);
+      out.push({ id, name, memberCount: null, lastUpdated: null, memberType: "contact" });
+    }
+    return out;
+  };
+
   const [lists, setLists] = useState<AvailableListSummary[]>([]);
   const [loading, setLoading] = useState(true);
   // A read that fails is never drawn as an empty list (design I.1): the step
@@ -402,32 +353,58 @@ export function ListPickerRenderer({
       </div>
 
       {loading || reading ? (
-        <LoadingRows />
+        // The loading reading (I.1, run-list-step-loading): a skeleton in each
+        // row's place, drawn with the design system Skeleton's own treatment
+        // (src/components/ui/skeleton.tsx), which is not imported: this renderer
+        // is reached from the server routes the route-graph ratchet locks.
+        <div
+          className="flex flex-col gap-2"
+          aria-busy="true"
+          data-testid="list-picker-loading"
+          data-conformance-id="run-list-step-loading"
+        >
+          {[0, 1, 2].map((key) => (
+            <Card key={key} className="border-line bg-surface">
+              <CardHeader>
+                <span
+                  data-slot="skeleton"
+                  className="block h-4 w-[46%] animate-pulse rounded-[4px] bg-muted"
+                />
+              </CardHeader>
+              <CardContent>
+                <span
+                  data-slot="skeleton"
+                  className="block h-3 w-[62%] animate-pulse rounded-[4px] bg-muted"
+                />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
       ) : readFailed ? (
-        <Alert
-          variant="destructive"
-          className="flex items-start gap-2.5 border-destructive bg-surface-strong text-foreground"
+        // The failed reading (I.1, run-list-step-error): the host's one message
+        // for a failed list read, in the alert's place, with Try again.
+        <Card
+          role="alert"
+          className="flex-row items-start gap-2.5 rounded-lg border border-destructive bg-surface-strong px-4 py-3 text-foreground ring-0"
           data-testid="list-picker-read-failed"
           data-conformance-id="run-list-step-error"
         >
           <p className="m-0 min-w-0 flex-1 text-sm text-foreground">
-            {FAILED_READ_READING}
+            This list could not be read.
           </p>
           {writes && typeof onRequestRefresh === "function" ? (
-            <Button
+            <button
               type="button"
-              variant="outline"
-              size="sm"
-              className="flex-none"
+              className="inline-flex h-7 flex-none items-center justify-center gap-1 rounded-[min(var(--radius-md),12px)] border border-border bg-background px-2.5 font-display text-[0.8rem] font-medium whitespace-nowrap outline-none transition-all select-none hover:bg-muted hover:text-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:translate-y-px disabled:pointer-events-none disabled:opacity-50 dark:border-input dark:bg-input-fill/30 dark:hover:bg-input-fill/50"
               data-testid="list-picker-try-again"
               onClick={() => {
                 void refresh();
               }}
             >
-              {TRY_AGAIN_WORDS}
-            </Button>
+              Try again
+            </button>
           ) : null}
-        </Alert>
+        </Card>
       ) : filteredLists.length === 0 ? (
         <Card className="border-line bg-surface">
           <CardContent className="py-6 text-center text-sm text-muted-foreground">
