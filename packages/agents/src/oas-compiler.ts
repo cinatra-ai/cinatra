@@ -1456,6 +1456,134 @@ function subflowFiresNonContextRuntimeGate(
   return fires;
 }
 
+// What an InputMessageNode gate shows: the field its answer lands in, the
+// schema of that answer and the renderer that draws it. One reading for a
+// top-level gate and for the artifact-review gate of an embedded child flow
+// (cinatra#3089), so the embedded step is drawn as the standalone flow draws it.
+type InputMessageGateComponent = {
+  name?: string;
+  outputs?: Array<{ id?: string; title?: string }>;
+  inputs?: Array<{ id?: string; title?: unknown; schema?: Record<string, unknown> }>;
+  metadata?: { cinatra?: { description?: string; inputRenderers?: Record<string, string>; renderer?: string; inputMessageSchema?: Record<string, unknown>; artifactReview?: { targetsInput?: unknown }; surfaceGateInputs?: unknown } };
+};
+function readInputMessageGateView(
+  ime: InputMessageGateComponent,
+  id: string,
+): { field: string; inputSchema: Record<string, unknown>; renderer: string } {
+  const out0 = ime.outputs?.[0] ?? {};
+  const field = out0.title ?? out0.id ?? id;
+  const declaredSchema = ime.metadata?.cinatra?.inputMessageSchema ?? ime.inputs?.[0]?.schema;
+  const inputSchema: Record<string, unknown> =
+    declaredSchema && Object.keys(declaredSchema).length > 0
+      ? declaredSchema
+      : { type: "object" };
+  const renderer =
+    ime.metadata?.cinatra?.inputRenderers?.[field] ??
+    ime.metadata?.cinatra?.renderer ??
+    SCHEMA_FIELD_FALLBACK_RENDERER_ID;
+  return { field, inputSchema, renderer };
+}
+
+// cinatra#3089: the artifact-review gate of an EMBEDDED child flow. A gate in a
+// FlowNode's inlined subflow reaches the approval policy only as a step of its
+// FlowNode, and the runtime reads the review marker only from the compiled step.
+// When the subflow holds a gate with a usable marker (the top-level reading,
+// readArtifactReviewTargetsInput), the gate and the step must correspond
+// exactly, or the compile is refused; the marker is never dropped and never
+// guessed onto a step:
+//   * the gate is the ONLY InputMessageNode in the subflow, and the FlowNode
+//     declares exactly ONE gateStep, which spans one pause (gateCount 1 or
+//     unset);
+//   * the gate is a reviewer pause (requiresApproval true, not a context gate);
+//   * the gate hands the named input to the host: its declared inputs include
+//     that title and it sets `surfaceGateInputs` strictly `true` (an embedded
+//     gate's inputs reach the host only as the gate's own message);
+//   * no run input of the parent flow has that title, so a value the caller
+//     supplies cannot stand in for the set the child filed.
+// Returns null when the subflow holds no marked gate (the step is as before).
+// Error texts name node ids only.
+type EmbeddedArtifactReviewGate = { targetsInput: string; gate: InputMessageGateComponent; gateId: string };
+function readEmbeddedArtifactReviewGate(
+  flowNodeId: string,
+  flowNode: { subflow?: { $component_ref?: string }; metadata?: { cinatra?: { gateSteps?: unknown } } },
+  localRefs: Record<string, unknown>,
+  parentRunInputTitles: ReadonlySet<string>,
+): { ok: true; found: EmbeddedArtifactReviewGate | null } | { ok: false; error: string } {
+  const subflowRef = flowNode.subflow?.$component_ref;
+  const subflow = subflowRef ? localRefs[subflowRef] : undefined;
+  if (!subflow || typeof subflow !== "object") return { ok: true, found: null };
+  const gates: Array<Record<string, unknown>> = [];
+  const visit = (o: unknown): void => {
+    if (o === null || typeof o !== "object") return;
+    if (Array.isArray(o)) {
+      for (const v of o) visit(v);
+      return;
+    }
+    const node = o as Record<string, unknown>;
+    if (node["component_type"] === "InputMessageNode") gates.push(node);
+    for (const v of Object.values(node)) visit(v);
+  };
+  visit(subflow);
+  const marked = gates.filter((g) => readArtifactReviewTargetsInput(g) !== undefined);
+  if (marked.length === 0) return { ok: true, found: null };
+  const where = `FlowNode ${quoteNodeId(flowNodeId)}`;
+  const gate = marked[0]!;
+  const gateId = typeof gate["id"] === "string" ? (gate["id"] as string) : "";
+  const gateSteps = flowNode.metadata?.cinatra?.gateSteps;
+  const gateCount = Array.isArray(gateSteps)
+    ? (gateSteps[0] as { gateCount?: unknown } | undefined)?.gateCount
+    : undefined;
+  if (
+    gates.length !== 1 ||
+    !Array.isArray(gateSteps) ||
+    gateSteps.length !== 1 ||
+    (gateCount !== undefined && gateCount !== 1)
+  ) {
+    return {
+      ok: false,
+      error:
+        `ARTIFACT_REVIEW_GATE_AMBIGUOUS: ${where} wraps the artifact-review gate ${quoteNodeId(gateId)}; ` +
+        `its subflow must hold no other InputMessageNode and the FlowNode must declare exactly one gateStep with one pause`,
+    };
+  }
+  // The one gate must be a reviewer pause the runtime resolves to this step
+  // (subflowFiresNonContextRuntimeGate), else the step is a phantom and the
+  // review would never open.
+  if (!subflowFiresNonContextRuntimeGate(subflowRef, localRefs)) {
+    return {
+      ok: false,
+      error:
+        `ARTIFACT_REVIEW_GATE_NOT_A_PAUSE: ${where} wraps the artifact-review gate ${quoteNodeId(gateId)}, ` +
+        `which must set requiresApproval to true and must not be a context gate`,
+    };
+  }
+  const targetsInput = readArtifactReviewTargetsInput(gate)!;
+  const inputs = gate["inputs"];
+  const titles = Array.isArray(inputs)
+    ? (inputs as unknown[]).map((i) =>
+        i !== null && typeof i === "object" ? (i as { title?: unknown }).title : undefined,
+      )
+    : [];
+  const cin = ((gate["metadata"] as { cinatra?: Record<string, unknown> } | undefined)?.cinatra) ?? {};
+  if (cin["surfaceGateInputs"] !== true || !titles.includes(targetsInput)) {
+    return {
+      ok: false,
+      error:
+        `ARTIFACT_REVIEW_GATE_INPUT_NOT_SURFACED: ${where} wraps the artifact-review gate ${quoteNodeId(gateId)}, ` +
+        `which must declare the input its marker names and set surfaceGateInputs to true`,
+    };
+  }
+  if (parentRunInputTitles.has(targetsInput)) {
+    return {
+      ok: false,
+      error:
+        `ARTIFACT_REVIEW_GATE_INPUT_SHADOWED: ${where} wraps the artifact-review gate ${quoteNodeId(gateId)}, ` +
+        `and a run input of the flow has the name of the input its marker names`,
+    };
+  }
+  return { ok: true, found: { targetsInput, gate: gate as InputMessageGateComponent, gateId } };
+}
+
 // cinatra#4150: the publishing-step declaration. A pack marks the node that
 // performs a publication with `metadata.cinatra.publishes: true`; a later
 // consumer is to stop the run in front of it (this reader adds no stop). The
@@ -2010,6 +2138,28 @@ export async function compileOasAgentJson(opts: {
     return [{ id }];
   });
 
+  // cinatra#3089: the artifact-review gate of each embedded child flow, read
+  // (and refused on any ambiguity) before a step is built.
+  const parentRunInputTitles = new Set<string>();
+  for (const list of [
+    parsed.inputs,
+    (localRefs[startEntryId] as { inputs?: unknown } | undefined)?.inputs,
+  ]) {
+    if (!Array.isArray(list)) continue;
+    for (const i of list as unknown[]) {
+      const title = i !== null && typeof i === "object" ? (i as { title?: unknown }).title : undefined;
+      if (typeof title === "string") parentRunInputTitles.add(title);
+    }
+  }
+  const embeddedReviewGates = new Map<string, EmbeddedArtifactReviewGate>();
+  for (const id of steppableNodeIds) {
+    const comp = localRefs[id] as { component_type?: string } | undefined;
+    if (comp?.component_type !== "FlowNode") continue;
+    const read = readEmbeddedArtifactReviewGate(id, comp as Parameters<typeof readEmbeddedArtifactReviewGate>[1], localRefs, parentRunInputTitles);
+    if (!read.ok) return { ok: false, error: read.error };
+    if (read.found) embeddedReviewGates.set(id, read.found);
+  }
+
   const agentSteps: CompiledAgentOasStep[] = expandedEntries.map(({ id, gateStep }, idx) => {
     const stepNumber = idx + 1;
     const compType = (localRefs[id] as { component_type?: string } | undefined)
@@ -2022,23 +2172,8 @@ export async function compileOasAgentJson(opts: {
 
     // ----- InputMessageNode branch -----
     if (handledCompType === "InputMessageNode") {
-      const ime = localRefs[id] as {
-        name?: string;
-        outputs?: Array<{ id?: string; title?: string }>;
-        inputs?: Array<{ id?: string; title?: unknown; schema?: Record<string, unknown> }>;
-        metadata?: { cinatra?: { description?: string; inputRenderers?: Record<string, string>; renderer?: string; inputMessageSchema?: Record<string, unknown>; artifactReview?: { targetsInput?: unknown }; surfaceGateInputs?: unknown } };
-      };
-      const out0 = ime.outputs?.[0] ?? {};
-      const field = out0.title ?? out0.id ?? id;
-      const declaredSchema = ime.metadata?.cinatra?.inputMessageSchema ?? ime.inputs?.[0]?.schema;
-      const inputSchema: Record<string, unknown> =
-        declaredSchema && Object.keys(declaredSchema).length > 0
-          ? declaredSchema
-          : { type: "object" };
-      const renderer =
-        ime.metadata?.cinatra?.inputRenderers?.[field] ??
-        ime.metadata?.cinatra?.renderer ??
-        SCHEMA_FIELD_FALLBACK_RENDERER_ID;
+      const ime = localRefs[id] as InputMessageGateComponent;
+      const { field, inputSchema, renderer } = readInputMessageGateView(ime, id);
       // Artifact-review gate marker (cinatra#1796): propagate
       // `metadata.cinatra.artifactReview.targetsInput` — the flow input carrying
       // the immutable review targets — onto the compiled step so the runtime
@@ -2235,6 +2370,16 @@ export async function compileOasAgentJson(opts: {
           step.firesRendererGate = false;
         }
         if (nestedGateKeys.length > 0) step.surfaceGateInputKeys = nestedGateKeys;
+        // cinatra#3089: the one gateStep of a marked child gate carries the
+        // marker, and is drawn as the child's own gate is drawn standalone (its
+        // renderer and answer schema); the gateStep's renderer does not apply.
+        const embeddedReview = embeddedReviewGates.get(id);
+        if (embeddedReview) {
+          const view = readInputMessageGateView(embeddedReview.gate, embeddedReview.gateId);
+          step.artifactReviewTargetsInput = embeddedReview.targetsInput;
+          step.xRenderer = view.renderer;
+          step.inputMessageSchema = view.inputSchema;
+        }
         return step;
       }
 
