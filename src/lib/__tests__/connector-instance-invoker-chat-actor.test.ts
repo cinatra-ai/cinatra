@@ -621,6 +621,46 @@ describe("invokeSiteToolGuarded — the host enforces the guards it declares (ci
     expect(wireCalls.filter(isExecute)).toHaveLength(0);
   });
 
+  it("a guarded call for a tool gone from the listed server answers catalog_entry_changed; an unguarded one tool_not_found", async () => {
+    wireCalls.length = 0;
+    await expect(
+      guarded({
+        toolName: "core/no-such-ability",
+        args: {},
+        instanceId: "wp-valid",
+        serverId: CATALOG_DEFAULT_SERVER_ID,
+        expectedRawAnnotations: { readOnlyHint: true },
+      }),
+    ).rejects.toMatchObject({ code: "catalog_entry_changed" });
+    await expect(
+      asMember(() =>
+        invoker.invokeSiteTool({ toolName: "core/no-such-ability", args: {}, instanceId: "wp-valid", serverId: CATALOG_DEFAULT_SERVER_ID }),
+      ),
+    ).rejects.toMatchObject({ code: "tool_not_found" });
+    expect(wireCalls.filter(isExecute)).toHaveLength(0);
+  });
+
+  it("annotations of a listed row mutated to read-only cannot pass the guards; a new listing serves the original", async () => {
+    const page = await asMember(() => invoker.listSiteTools({ instanceId: "wp-write" }));
+    const row = page.tools.find((t) => t.name === "core/update-option")!;
+    expect(row.rawAnnotations).toEqual({ readOnlyHint: false });
+    row.rawAnnotations.readOnlyHint = true;
+    wireCalls.length = 0;
+    await expect(
+      guarded({
+        toolName: "core/update-option",
+        args: {},
+        instanceId: "wp-write",
+        serverId: row.serverId,
+        expectedRawAnnotations: row.rawAnnotations,
+        expectedClass: "read",
+      }),
+    ).rejects.toMatchObject({ code: "catalog_entry_changed" });
+    expect(wireCalls.filter(isExecute)).toHaveLength(0);
+    const again = await asMember(() => invoker.listSiteTools({ instanceId: "wp-write" }));
+    expect(again.tools.find((t) => t.name === "core/update-option")!.rawAnnotations).toEqual({ readOnlyHint: false });
+  });
+
   it("on a host without the guarded call, calling it throws before anything is sent", async () => {
     // The service of a host from before the guards: exactly its two methods.
     const olderHost: HostConnectorInstanceInvokerService = {

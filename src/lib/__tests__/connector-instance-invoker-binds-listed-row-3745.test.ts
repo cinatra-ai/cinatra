@@ -307,8 +307,36 @@ describe("invokeConnectorInstanceTool — expectedServerId binds the call to the
       },
       deps,
     );
-    await expect(call).rejects.toBeInstanceOf(InvokerError);
+    await expect(call).rejects.toMatchObject({ code: "catalog_entry_changed" });
     expect(callWireTool).not.toHaveBeenCalled();
+  });
+
+  it("refuses a tool gone from the listed server with no other server carrying it", async () => {
+    const { deps, callWireTool } = makeDeps(snapshot([{ name: "core/other" }], "rev-c"));
+    const call = invokeConnectorInstanceTool(
+      {
+        connectorKey: "wordpress",
+        toolName: READ_TOOL,
+        args: {},
+        actor: ACTOR,
+        serverId: CATALOG_DEFAULT_SERVER_ID,
+        expectedRawAnnotations: { readOnlyHint: true },
+        expectedServerId: CATALOG_DEFAULT_SERVER_ID,
+      },
+      deps,
+    );
+    await expect(call).rejects.toMatchObject({ code: "catalog_entry_changed" });
+    expect(callWireTool).not.toHaveBeenCalled();
+  });
+
+  it("an unguarded call for a missing tool still answers tool_not_found", async () => {
+    const { deps } = makeDeps(onlyOnServerB());
+    await expect(
+      invokeConnectorInstanceTool(
+        { connectorKey: "wordpress", toolName: READ_TOOL, args: {}, actor: ACTOR, serverId: "srv-a" },
+        deps,
+      ),
+    ).rejects.toMatchObject({ code: "tool_not_found" });
   });
 
   it("executes the row on the listed server", async () => {
@@ -326,6 +354,53 @@ describe("invokeConnectorInstanceTool — expectedServerId binds the call to the
       deps,
     );
     expect(callWireTool).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("listConnectorInstanceTools hands out copies, never the stored catalog objects (cinatra#3745)", () => {
+  it("a listed row's annotations mutated to read-only do not change what the guarded call compares or classifies", async () => {
+    const { deps, callWireTool, destructiveFire, contentReviewFire } = makeDeps(
+      snapshot([{ name: "core/update-page", rawAnnotations: { readOnlyHint: false } }], "rev-a"),
+    );
+    const row = await listRow(deps, "core/update-page");
+    expect(row.derivedClass).not.toBe("read");
+    row.rawAnnotations.readOnlyHint = true;
+    (row.inputSchema as Record<string, unknown>).mutated = true;
+    const call = invokeConnectorInstanceTool(
+      {
+        connectorKey: "wordpress",
+        toolName: "core/update-page",
+        args: {},
+        actor: ACTOR,
+        serverId: CATALOG_DEFAULT_SERVER_ID,
+        expectedServerId: CATALOG_DEFAULT_SERVER_ID,
+        expectedRawAnnotations: row.rawAnnotations,
+        expectedClass: "read",
+      },
+      deps,
+    );
+    // red-first-expect: promise resolved "{ success: true, data: { ok: 1 } }" instead of rejecting
+    await expect(call).rejects.toMatchObject({ code: "catalog_entry_changed" });
+    expect(callWireTool).not.toHaveBeenCalled();
+    expect(destructiveFire).not.toHaveBeenCalled();
+    expect(contentReviewFire).not.toHaveBeenCalled();
+    const again = await listRow(deps, "core/update-page");
+    expect(again.rawAnnotations).toEqual({ readOnlyHint: false });
+    expect(again.inputSchema).toEqual({});
+  });
+
+  it("a hook receives copies of the stored schema and annotations", async () => {
+    const { deps, cache, destructiveFire } = makeDeps(
+      snapshot([{ name: "core/delete-post", rawAnnotations: { destructiveHint: true } }], "rev-a"),
+    );
+    const mutatingHook = async (input: { rawAnnotations: Record<string, unknown> }) => {
+      input.rawAnnotations.destructiveHint = false;
+      return { action: "continue" as const };
+    };
+    destructiveFire.mockImplementation(mutatingHook as unknown as () => Promise<{ action: "continue" }>);
+    await invokeConnectorInstanceTool({ connectorKey: "wordpress", toolName: "core/delete-post", args: {}, actor: ACTOR }, deps);
+    expect(destructiveFire).toHaveBeenCalledTimes(1);
+    expect(cache.listForInstance("inst-1")[0]!.tools[0]!.rawAnnotations).toEqual({ destructiveHint: true });
   });
 });
 

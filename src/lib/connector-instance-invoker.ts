@@ -683,6 +683,26 @@ export async function acquireSnapshots(
   return served;
 }
 
+/** A deep copy of a catalog value (schema or annotations) for anything that
+ * leaves the invoker: a served row or a hook input. Mutating the copy cannot
+ * change what a later call compares or classifies (cinatra#3745). A copy, not
+ * a frozen object: the caller keeps the mutable row it always received, and
+ * the stored value stays out of its reach either way. Catalog values come from
+ * the site's JSON, so `structuredClone` copies them whole (own `__proto__`
+ * keys included). */
+function detachedCatalogValue<T>(value: T): T {
+  return value === null || typeof value !== "object" ? value : structuredClone(value);
+}
+
+/** Whether an invoker call carries any guard of the guarded call. */
+function isGuardedCall(
+  input: Pick<InvokeConnectorInstanceToolInput, "expectedRawAnnotations" | "expectedClass" | "expectedServerId">,
+): boolean {
+  return (
+    input.expectedServerId !== undefined || input.expectedRawAnnotations !== undefined || input.expectedClass !== undefined
+  );
+}
+
 /** Whether `value` is a plain object: a non-null object whose prototype is
  * `Object.prototype` or `null`. A `Map`, a `Date`, a class instance or an
  * array is not. The one predicate for annotations records (cinatra#3745). */
@@ -832,6 +852,16 @@ export async function invokeConnectorInstanceTool(
     deps,
   );
   const resolution = resolveToolAcrossServers(snapshots, input.toolName, input.serverId);
+  if (!resolution.ok && isGuardedCall(input)) {
+    // cinatra#3745 — a guarded call names the row it listed; when that row no
+    // longer resolves (gone from the listed server, whether or not another
+    // server now carries the name, or no longer unique there), the listed row
+    // is not the row that would run: ONE contracted reason for every case.
+    throw new InvokerError(
+      "catalog_entry_changed",
+      "the site tool changed since it was listed; list the tools again before calling it",
+    );
+  }
   if (!resolution.ok) {
     if (resolution.reason === "ambiguous_tool") {
       throw new InvokerError(
@@ -909,8 +939,9 @@ export async function invokeConnectorInstanceTool(
       floorHit,
       ...(input.sourceType ? { sourceType: input.sourceType } : {}),
       endpointUrl: confirmationEndpointUrl,
-      inputSchema: entry.inputSchema,
-      rawAnnotations: entry.rawAnnotations,
+      // Copies: a hook never holds the catalog's stored objects (cinatra#3745).
+      inputSchema: detachedCatalogValue(entry.inputSchema),
+      rawAnnotations: detachedCatalogValue(entry.rawAnnotations),
       ...(input.intent ? { intent: input.intent } : {}),
       primitiveName,
       catalogRevision: snapshot.catalogRevision,
@@ -962,8 +993,9 @@ export async function invokeConnectorInstanceTool(
       derivedClass,
       ...(input.sourceType ? { sourceType: input.sourceType } : {}),
       endpointUrl: contentReviewEndpointUrl,
-      inputSchema: entry.inputSchema,
-      rawAnnotations: entry.rawAnnotations,
+      // Copies: a hook never holds the catalog's stored objects (cinatra#3745).
+      inputSchema: detachedCatalogValue(entry.inputSchema),
+      rawAnnotations: detachedCatalogValue(entry.rawAnnotations),
       ...(input.intent ? { intent: input.intent } : {}),
       primitiveName,
       catalogRevision: snapshot.catalogRevision,
@@ -1185,14 +1217,17 @@ export async function listConnectorInstanceTools(
       warnedInvalid = true;
       deps.warnInvalidPolicy?.(input.connectorKey, effectiveInstanceId);
     }
+    // cinatra#3745 — every object in a served row is a deep copy: the
+    // catalog's stored schemas and annotations, which the guarded call compares
+    // and classifies, are never handed out by reference.
     return {
       name: entry.name,
       serverId: entry.serverId,
-      inputSchema: entry.inputSchema,
-      ...(entry.outputSchema !== undefined ? { outputSchema: entry.outputSchema } : {}),
+      inputSchema: detachedCatalogValue(entry.inputSchema),
+      ...(entry.outputSchema !== undefined ? { outputSchema: detachedCatalogValue(entry.outputSchema) } : {}),
       ...(entry.label !== undefined ? { label: entry.label } : {}),
       ...(entry.description !== undefined ? { description: entry.description } : {}),
-      rawAnnotations: entry.rawAnnotations,
+      rawAnnotations: detachedCatalogValue(entry.rawAnnotations),
       derivedClass: classifyAnnotations(entry.rawAnnotations),
       policyStatus: decision.status,
       cacheAgeMs: Math.max(0, now - snap.fetchedAtMs),
