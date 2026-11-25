@@ -38,7 +38,7 @@ import {
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
   SKILL_SELECTOR_RENDERER_ID,
 } from "./agent-builder-ids";
-import { parkedHitlStepIsAnswerable } from "./orchestrator-mid-run-hitl";
+import { parkedHitlStepIsAnswerable, rendererIdsDrawnForBinding } from "./orchestrator-mid-run-hitl";
 import {
   A2UI_MID_RUN_TRANSLATOR_KINDS,
   type MidRunTranslatorResolver,
@@ -220,7 +220,8 @@ const DISPLAY_ONLY_HITL_RENDERER_IDS: ReadonlySet<string> = new Set([
  * component registry exists: the host's own answering ids
  * (`HOST_ANSWERING_RENDERER_IDS`) and every binding the page registers from
  * (the generated build bindings and the installed packages,
- * `getMergedFieldRendererBindings`), by id or by a kind's bare name. `null`
+ * `getMergedFieldRendererBindings`), by the ids a screen draws it for
+ * (`rendererIdsDrawnForBinding`, the client registry's own rule). `null`
  * when nothing declares the id any more, and for a display-only id.
  */
 export function serverHitlRendererClaim(xRenderer: string): { id: string } | null {
@@ -231,8 +232,8 @@ export function serverHitlRendererClaim(xRenderer: string): { id: string } | nul
   ) {
     return { id: xRenderer };
   }
-  const binding = getMergedFieldRendererBindings().find(
-    (b) => b.id === xRenderer || b.kind === xRenderer,
+  const binding = getMergedFieldRendererBindings().find((b) =>
+    rendererIdsDrawnForBinding(b).includes(xRenderer),
   );
   return binding ? { id: binding.id } : null;
 }

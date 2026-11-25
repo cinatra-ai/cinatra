@@ -886,6 +886,24 @@ export function AgentHitlScreenFields({
           onChange={
             isMidRun
               ? async (next: unknown) => {
+                  // An answer the plain form hands up from inside an extension
+                  // wrapper (`FloorAnswerMarkContext`) is sent as the plain form
+                  // sends it, whatever the registry entry says: the buffer
+                  // below keeps objects only and waits for a Continue the
+                  // wrapper's form does not show.
+                  if (answerIsFloorDrawn()) {
+                    const { payload, payloadFieldName } = buildFieldGateAnswer({
+                      drawnByFloor: true,
+                      reviewTaskId: gate.reviewTaskId,
+                      fieldName: gate.fieldName ?? undefined,
+                      next,
+                      schema: gate.inputSchema,
+                      objectTypedField:
+                        (renderSchema as { type?: string } | undefined)?.type === "object",
+                    });
+                    await onSubmitField(payload, payloadFieldName);
+                    return;
+                  }
                   // MID-RUN: buffer into the outer Continue. A grouped-setup
                   // form owns its own submit, so it approves immediately and
                   // the reader only ever sees one Continue.

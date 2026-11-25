@@ -111,6 +111,33 @@ export function isTombstonedHitlRendererId(xRenderer: string): boolean {
 }
 
 /**
+ * The historical UNSCOPED compat strings (stored interrupts, resume payloads)
+ * a renderer KIND still accepts for every binding of that kind. A kind that is
+ * not listed here accepts none: its kind name is not a renderer id.
+ */
+export const FIELD_RENDERER_KIND_BARE_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  "campaign-recipients-review": ["campaign-recipients-review"],
+  "context-selector": ["context-selector"],
+  cta: ["cta"],
+  "email-drafts-review": ["email-drafts-review"],
+  "follow-up-cadence": ["follow-up-cadence"],
+  "gmail-sender": ["gmail-sender"],
+  "list-picker": ["list-picker"],
+  "send-confirmation": ["send-confirmation"],
+};
+
+/**
+ * Every x-renderer id a binding is drawn for: its full id, plus exactly the
+ * bare aliases its kind declares. The ONE rule for "a screen draws this id":
+ * the client registry matches on these ids and the server accepts an answer
+ * for a parked step only for them, so neither can accept an id the other
+ * does not.
+ */
+export function rendererIdsDrawnForBinding(binding: { id: string; kind: string }): readonly string[] {
+  return [binding.id, ...(FIELD_RENDERER_KIND_BARE_ALIASES[binding.kind] ?? [])];
+}
+
+/**
  * The entry a LIVE HITL gate is drawn with: the entry the registry resolves for
  * the gate's recorded `x-renderer` id, and nothing else.
  *

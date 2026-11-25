@@ -1580,6 +1580,16 @@ function HitlApprovalCard({
             onChange={
               isMidRunHitl
                 ? async (next: unknown) => {
+                    // An answer the plain form hands up from inside an
+                    // extension wrapper (`FloorAnswerMarkContext`, read before
+                    // anything is awaited) is sent as the plain form sends it,
+                    // whatever the registry entry says: the buffer below keeps
+                    // objects only and waits for a Continue the wrapper's form
+                    // does not show.
+                    if (answerIsFloorDrawn() && !isSetupGateTaskId(interruptContext.reviewTaskId)) {
+                      await submitSchemaFieldGate(next);
+                      return;
+                    }
                     // Compute nextBuffered synchronously, pass to
                     // approveReviewTask (if grouped-setup immediate-submit), then setState
                     // for the visual update. Reading `bufferedHitlValue` after `setBufferedHitlValue`

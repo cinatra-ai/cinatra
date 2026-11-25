@@ -3396,6 +3396,36 @@ export function AgenticRunPanel({
                             )
                       }
                       onChange={isMidRunHitl ? async (next: unknown) => {
+                        // An answer the plain form hands up from inside an
+                        // extension wrapper (`FloorAnswerMarkContext`, read
+                        // before anything is awaited) is sent as the plain form
+                        // sends it, whatever the registry entry says: the buffer
+                        // below keeps objects only and waits for a Continue the
+                        // wrapper's form does not show.
+                        if (answerIsFloorDrawn()) {
+                          const floorAnswer = buildFieldGateAnswer({
+                            drawnByFloor: true,
+                            reviewTaskId: effectiveHitlContext.reviewTaskId,
+                            fieldName: effectiveHitlContext.fieldName,
+                            next,
+                            schema: effectiveHitlContext.inputSchema,
+                            objectTypedField:
+                              (hitlRendererEntry.fieldSchema as { type?: string } | undefined)
+                                ?.type === "object",
+                          });
+                          await performGateSubmit({
+                            reviewTaskId: effectiveHitlContext.reviewTaskId,
+                            xRenderer: effectiveHitlContext.xRenderer,
+                            payload: floorAnswer.payload,
+                            payloadFieldName: floorAnswer.payloadFieldName,
+                            trackApproving: false,
+                            suppressGate: false,
+                            clearAttachmentsOnSuccess: false,
+                            errorMode: "rethrow",
+                            holdKey: setupGateKey,
+                          });
+                          return;
+                        }
                         // Compute nextBuffered synchronously, pass to performGateSubmit
                         // for grouped-setup immediate-submit, then setState for the visual update.
                         let nextBuffered = bufferedHitlValue;

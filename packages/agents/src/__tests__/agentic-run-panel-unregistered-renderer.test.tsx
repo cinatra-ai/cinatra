@@ -28,6 +28,7 @@ import { ensureDefaultFieldRenderersRegistered } from "../register-default-rende
 import * as midRun from "../orchestrator-mid-run-hitl";
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 import { makeExtensionFieldRenderer } from "../extension-field-renderer";
+import { __resetFieldRendererComponentMapForTests, __setFieldRendererComponentMapForTests } from "../field-renderer-components";
 
 /**
  * Mid-run decision and picker steps whose packages dropped the declarations:
@@ -140,6 +141,69 @@ const TASK_ID = "wayflow-task-dropped";
 /** The plain form's own id: a step that declares no screen of its own. */
 const FLOOR_ID = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
 
+/** Real generated bindings with a migrated component and `midRunHitl`. */
+const FALLBACK_BINDING_IDS = [
+  "@cinatra-ai/blog-pipeline-agent:idea-selection",
+  "@cinatra-ai/email-recipient-selection-agent:campaign-recipients-review",
+];
+/** An object answer and a scalar answer: what is typed, and what the plain form sends for it. */
+const FALLBACK_GATES: Array<{
+  shape: string;
+  schema: Record<string, unknown>;
+  fieldName: string | undefined;
+  inputId: string;
+  typed: string;
+  sent: Record<string, unknown>;
+}> = [
+  {
+    shape: "object",
+    schema: { type: "object", properties: { selectedIdeaJson: { type: "string", title: "Selected idea" } } },
+    fieldName: undefined,
+    inputId: "field-selectedIdeaJson",
+    typed: "idea-7",
+    sent: { selectedIdeaJson: "idea-7", userResponse: "idea-7" },
+  },
+  {
+    shape: "scalar",
+    schema: { type: "string", title: "Answer" },
+    fieldName: "answer",
+    inputId: "field-answer",
+    typed: "Ship it.",
+    sent: { answer: "Ship it.", userResponse: "Ship it.", userResponseFieldName: "answer" },
+  },
+];
+
+/**
+ * Registers a REAL generated binding (every flag it carries) whose migrated
+ * component fails to load in this build (its props version does not match), so
+ * the extension wrapper shows the plain form.
+ */
+async function registerRealBindingInFallback(id: string): Promise<void> {
+  const real = await vi.importActual<typeof import("@/lib/generated/agent-bindings")>(
+    "@/lib/generated/agent-bindings",
+  );
+  const { GENERATED_FIELD_RENDERER_COMPONENTS } = await import("@/lib/generated/field-renderer-components");
+  const binding = real.GENERATED_FIELD_RENDERER_BINDINGS.find((b) => b.id === id);
+  const component = GENERATED_FIELD_RENDERER_COMPONENTS[id];
+  expect(binding, id).toBeDefined();
+  expect(component, id).toBeDefined();
+  __setFieldRendererComponentMapForTests({ [id]: { ...component!, propsApiVersion: -1 } });
+  registration.registerFieldRendererBindings([binding!]);
+}
+
+/** The Continue the reader sees nearest the field: the plain form's own, when it draws one. */
+function floorContinueOf(inputId: string): HTMLButtonElement | null {
+  let node: HTMLElement | null = document.getElementById(inputId);
+  while (node) {
+    const button = Array.from(node.querySelectorAll<HTMLButtonElement>("button")).find((b) =>
+      /Continue/.test(b.textContent ?? ""),
+    );
+    if (button) return button;
+    node = node.parentElement;
+  }
+  return null;
+}
+
 /** The gate's renderer id the mocked stream hands the panel. */
 const gateId = vi.hoisted(() => ({ current: "" }));
 /** The gate's stored schema and field name the mocked stream hands the panel. */
@@ -183,6 +247,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  __resetFieldRendererComponentMapForTests();
   gateId.current = FLOOR_ID;
   gateShape.schema = null;
   gateShape.fieldName = undefined;
@@ -432,4 +497,38 @@ describe("AgenticRunPanel — an extension wrapper in fallback", () => {
     });
     expect(call[2]).toBeUndefined();
   });
+});
+
+// THE REAL GENERATED BINDINGS IN FALLBACK. The blog idea gate and the
+// recipient-selection gate are registered from their real generated entries
+// (with `midRunHitl` and every other flag they carry); their components fail to
+// load, so each wrapper shows the plain form. An object answer and a scalar
+// answer typed into it reach the run as the plain form sends them.
+describe("AgenticRunPanel — a real generated binding whose component failed to load", () => {
+  for (const id of FALLBACK_BINDING_IDS) {
+    for (const g of FALLBACK_GATES) {
+      // red-first-expect: expected "vi.fn()" to be called 1 times, but got 0 times
+      it(`${id}: a ${g.shape} answer is sent as the resume text`, async () => {
+        await registerRealBindingInFallback(id);
+        gateId.current = id;
+        gateShape.schema = g.schema;
+        gateShape.fieldName = g.fieldName;
+        const { AgenticRunPanel } = await import("../agentic-run-panel");
+        mountPanel(AgenticRunPanel);
+        await waitFor(() => expect(document.getElementById(g.inputId)).not.toBeNull());
+        fireEvent.change(document.getElementById(g.inputId)!, { target: { value: g.typed } });
+        const floorContinue = await waitFor(() => {
+          const button = floorContinueOf(g.inputId);
+          expect(button).not.toBeNull();
+          return button!;
+        });
+        fireEvent.click(floorContinue);
+        await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+        const call = hitlActions.approveReviewTask.mock.calls[0] as unknown[];
+        expect(call[0]).toBe(TASK_ID);
+        expect(call[1]).toMatchObject({ approved: true, ...g.sent });
+        expect(call[2]).toBeUndefined();
+      });
+    }
+  }
 });

@@ -25,8 +25,11 @@ import {
   getMergedFieldRendererBindings,
   resolveRendererIdForKind,
   buildA2UiMidRunTranslatorResolver,
+  serverHitlRendererClaim,
   __clearInstalledFieldRendererBindingsCache,
 } from "../field-renderer-bindings.server";
+import { fieldRendererRegistry } from "../field-renderer-registry";
+import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import { GENERATED_FIELD_RENDERER_BINDINGS } from "@/lib/generated/agent-bindings";
 import { A2UI_MID_RUN_TRANSLATOR_KINDS } from "@cinatra-ai/agent-ui-protocol/server";
 
@@ -194,5 +197,36 @@ describe("buildA2UiMidRunTranslatorResolver", () => {
     const resolve = buildA2UiMidRunTranslatorResolver();
     expect(resolve("@cinatra-ai/agent-builder:grouped-setup-form")).toBeUndefined();
     expect(resolve("@cinatra-ai/blog-pipeline-agent:idea-selection")).toBeUndefined();
+  });
+});
+
+// ONE RULE FOR "THIS RENDERER ID IS DRAWN". The server accepts an answer for a
+// parked step only when a screen draws its renderer id, and the client draws
+// what its registry resolves. Every form an id can take — the binding's full
+// id, its bare name, its kind (which is also every declared bare alias) — gets
+// the same answer from both.
+describe("a renderer id is drawn by the same rule on the server and in the client", () => {
+  const GMAIL_CONTEXT = { connectedApps: ["gmail"], gmailAliases: [{ sendAsEmail: "a@b.c" }] };
+
+  // red-first-expect: serverHitlRendererClaim is not a function
+  it("every id form of every generated binding gets one answer from both", () => {
+    ensureDefaultFieldRenderersRegistered();
+    const forms = new Set<string>();
+    for (const b of GENERATED_FIELD_RENDERER_BINDINGS) {
+      forms.add(b.id);
+      forms.add(b.id.slice(b.id.indexOf(":") + 1));
+      forms.add(b.kind);
+    }
+    for (const form of [...forms].sort()) {
+      const claim = serverHitlRendererClaim(form);
+      const drawn = fieldRendererRegistry.resolve("field", { "x-renderer": form }, GMAIL_CONTEXT as never);
+      expect(`${form}: server ${claim !== null}, client ${drawn !== null}`).toBe(
+        `${form}: server ${drawn !== null}, client ${drawn !== null}`,
+      );
+      if (claim !== null && GENERATED_FIELD_RENDERER_BINDINGS.some((b) => b.id === form)) {
+        expect(claim.id).toBe(form);
+        expect(drawn!.id).toBe(form);
+      }
+    }
   });
 });
