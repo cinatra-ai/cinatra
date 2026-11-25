@@ -52,8 +52,10 @@ vi.mock("@cinatra-ai/agents", () => ({
 }));
 vi.mock("@cinatra-ai/agents/store", () => ({
   verifyRunExecutedSource: h.verifyRunExecutedSource,
-  consumeRunActionDecision: h.consumeRunActionDecision,
   RunStepToolPolicyRefusal: h.RunStepToolPolicyRefusal,
+}));
+vi.mock("@cinatra-ai/agents/run-action-decision-consumption", () => ({
+  consumeRunActionDecision: h.consumeRunActionDecision,
 }));
 vi.mock("@/lib/org-write/run-authority-mint", () => ({
   mintRunWriteAuthorityForMcp: vi.fn(async () => Object.freeze({ authority: "run-authority-under-test" })),
@@ -309,6 +311,7 @@ afterAll(() => {
   vi.doUnmock("server-only");
   vi.doUnmock("@cinatra-ai/agents");
   vi.doUnmock("@cinatra-ai/agents/store");
+  vi.doUnmock("@cinatra-ai/agents/run-action-decision-consumption");
   vi.doUnmock("@/lib/org-write/run-authority-mint");
   vi.doUnmock("@cinatra-ai/a2a");
   vi.doUnmock("@cinatra-ai/mcp-server");

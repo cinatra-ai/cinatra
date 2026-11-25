@@ -131,7 +131,8 @@ export async function consumePublishingStepDecision(input: {
   authority: unknown;
   proof: unknown;
 }): Promise<boolean> {
-  const { consumeRunActionDecision, RunStepToolPolicyRefusal } = await import("@cinatra-ai/agents/store");
+  const { consumeRunActionDecision } = await import("@cinatra-ai/agents/run-action-decision-consumption");
+  const { RunStepToolPolicyRefusal } = await import("@cinatra-ai/agents/store");
   const { HOST_PRIMITIVE_OWNER_PACKAGE, HOST_PRIMITIVE_RELEASE_VERSION } = await import("@cinatra-ai/mcp-server/capability-plan");
   type Input = Parameters<typeof consumeRunActionDecision>[0];
   try {

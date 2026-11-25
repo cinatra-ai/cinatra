@@ -39,10 +39,12 @@ vi.mock("@cinatra-ai/agents", () => ({
 // pinned in passthrough-publishing-step-once-3089.test.ts.
 vi.mock("@cinatra-ai/agents/store", () => ({
   verifyRunExecutedSource: vi.fn(),
-  consumeRunActionDecision: vi.fn(async () => ({})),
   RunStepToolPolicyRefusal: class RunStepToolPolicyRefusal extends Error {
     constructor(readonly code: string) { super(code); this.name = "RunStepToolPolicyRefusal"; }
   },
+}));
+vi.mock("@cinatra-ai/agents/run-action-decision-consumption", () => ({
+  consumeRunActionDecision: vi.fn(async () => ({})),
 }));
 vi.mock("@cinatra-ai/a2a", () => ({ resolveLatestWayflowGateTaskId: vi.fn(async () => null) }));
 vi.mock("@cinatra-ai/mcp-server", async () => {
@@ -225,6 +227,7 @@ afterAll(() => {
   vi.doUnmock("server-only");
   vi.doUnmock("@cinatra-ai/agents");
   vi.doUnmock("@cinatra-ai/agents/store");
+  vi.doUnmock("@cinatra-ai/agents/run-action-decision-consumption");
   vi.doUnmock("@cinatra-ai/a2a");
   vi.doUnmock("@cinatra-ai/mcp-server");
   vi.doUnmock("@cinatra-ai/llm/actor-context");

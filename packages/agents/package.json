@@ -70,6 +70,7 @@
     "./publish-decision-card-view": "./src/publish-decision-card-view.tsx",
     "./publish-decision-card-core": "./src/publish-decision-card-core.ts",
     "./publish-decision-card-actions": "./src/publish-decision-card-actions.ts",
+    "./run-action-decision-consumption": "./src/run-action-decision-consumption.ts",
     "./verification-summary-card": "./src/verification-summary-card.tsx",
     "./schedule-proposal-card": "./src/schedule-proposal-card.tsx",
     "./run-not-authorized-panel": "./src/run-not-authorized-panel.tsx",
