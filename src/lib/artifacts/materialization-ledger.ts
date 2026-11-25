@@ -1,6 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
+import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import { getPooledDb } from "@/lib/db/pooled";
 import {
   getPostgresConnectionString,
@@ -738,4 +739,377 @@ export function buildImageGenerationProvenanceQuery(input: {
       input.orgId,
     ],
   };
+}
+
+// ---------------------------------------------------------------------------
+// AN EFFECT OF ONE BOUND REVISION, AT MOST ONCE PER RUN (cinatra#3089).
+//
+// A caller that performs an outside effect with a revision a run bound (a
+// finalized row of the run under `bindingOutputId` on `path`, pointing at the
+// artifact revision) first holds that effect's CLAIM ROW: a second row under the
+// SAME output id and path, copied from the binding row (organization, run,
+// artifact, revision), whose extension and content hash are both the effect's
+// name. The row's `phase` is the effect's state, with the ledger's two values:
+//   - `claimed`   — a caller won the effect and may be performing it now, or
+//                   stopped after the claim (a crash, or an error that may have
+//                   come after the effect). Nobody performs it again.
+//   - `finalized` — the effect is done.
+// The unique key (run, output, extension, hash) therefore admits ONE claim row
+// per effect of one binding output of a run, whatever revision is bound under
+// it later and whatever pack wrote the binding: a binding row's extension is a
+// pack and its hash the hash of the bytes, never the effect's name. The insert
+// is conditional on that key (`ON CONFLICT DO NOTHING` on the unique index),
+// which Postgres decides atomically: of concurrent callers exactly one inserts.
+// ---------------------------------------------------------------------------
+
+export type RevisionEffectClaim =
+  /** This caller holds the effect: perform it, then `markRevisionEffectDone`. */
+  | { kind: "won"; ledgerId: string }
+  /** The verification under the lock refused: no claim row, nothing to perform. */
+  | { kind: "refused"; reason: string }
+  /** The effect was done earlier. */
+  | { kind: "done" }
+  /** Claimed but never marked done: it may or may not have happened. */
+  | { kind: "in_doubt" };
+
+/**
+ * Claim one effect of ONE bound revision. The claim row is inserted from the
+ * binding row (the finalized row of this organization, run, output id, path,
+ * artifact and revision), so only a bound revision can be claimed. Throws when
+ * the revision has no binding row, and on an infra failure: the caller performs
+ * nothing then.
+ */
+export async function claimRevisionEffect(input: {
+  orgId: string;
+  runId: string;
+  path: MaterializationPath;
+  /** The binding row's `output_id`; the claim row takes the same one. */
+  bindingOutputId: string;
+  /** The effect's name: the claim row's extension and content hash. */
+  effect: string;
+  artifactId: string;
+  representationRevisionId: string;
+  /** Run inside the claim's transaction, under the artifact's revision lock;
+   *  a returned reason refuses the claim (see `RevisionEffectVerify`). */
+  verifyUnderLock?: RevisionEffectVerify;
+}): Promise<RevisionEffectClaim> {
+  ensurePostgresSchema();
+  const s = schema();
+  const insertText = `WITH bound AS (
+  SELECT org_id, run_id, artifact_id, representation_revision_id
+    FROM "${s}"."artifact_materializations"
+   WHERE org_id = $2 AND run_id = $3 AND output_id = $4 AND path = $5
+     AND phase = 'finalized' AND artifact_id = $6 AND representation_revision_id = $7
+     AND NOT (extension = $8 AND content_hash = $8)
+   LIMIT 1
+)
+INSERT INTO "${s}"."artifact_materializations"
+  (id, org_id, run_id, output_id, node_id, path, extension, content_hash,
+   artifact_id, representation_revision_id, phase)
+SELECT $1, org_id, run_id, $4, NULL, $5, $8, $8,
+       artifact_id, representation_revision_id, 'claimed'
+  FROM bound
+ON CONFLICT (run_id, output_id, extension, content_hash) DO NOTHING
+RETURNING id`;
+  const insertValues = [
+    randomUUID(),
+    input.orgId,
+    input.runId,
+    input.bindingOutputId,
+    input.path,
+    input.artifactId,
+    input.representationRevisionId,
+    input.effect,
+  ];
+  const existingText = `SELECT phase FROM "${s}"."artifact_materializations"
+  WHERE org_id = $1 AND run_id = $2 AND output_id = $3 AND path = $4
+    AND extension = $5 AND content_hash = $5
+  LIMIT 1`;
+  const existingValues = [input.orgId, input.runId, input.bindingOutputId, input.path, input.effect];
+  const answerExisting = (rows: unknown[]): RevisionEffectClaim => {
+    const row = rows[0] as { phase?: string } | undefined;
+    if (!row) {
+      throw new Error(
+        `output ${input.bindingOutputId} of run ${input.runId} has no binding to revision ${input.representationRevisionId} of artifact ${input.artifactId}, so its ${input.effect} cannot be claimed`,
+      );
+    }
+    return row.phase === "finalized" ? { kind: "done" } : { kind: "in_doubt" };
+  };
+  const verify = input.verifyUnderLock;
+  if (!verify) {
+    const inserted = await pool().query(insertText, insertValues);
+    if (inserted.rows.length > 0) return { kind: "won", ledgerId: String(inserted.rows[0].id) };
+    return answerExisting((await pool().query(existingText, existingValues)).rows);
+  }
+  // THE CLAIM VERIFIED UNDER THE REVISION WRITERS' LOCK (cinatra#3089). Every
+  // writer that appends a revision to an existing artifact holds the
+  // transaction-scoped advisory lock `pg_advisory_xact_lock(hashtext(<artifact
+  // id>))` (the revision append, the representation store, the content
+  // snapshot, the typed promotion and the dashboard twin writer). This
+  // transaction holds its SHARED form from before the verification until the
+  // claim row commits, so no revision is appended in between: an append
+  // committed earlier is seen by the verification (which then refuses and the
+  // claim row is rolled back), and a later append waits until this claim
+  // committed. The commit is the effect's start: at that moment the verified
+  // revision was the artifact's current one.
+  const client = await pool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock_shared(hashtext($1))", [input.artifactId]);
+    const inserted = await client.query(insertText, insertValues);
+    if (inserted.rows.length === 0) {
+      // Claimed earlier: done or in doubt. Nothing new starts, so nothing is verified.
+      const answer = answerExisting((await client.query(existingText, existingValues)).rows);
+      await client.query("COMMIT");
+      return answer;
+    }
+    const refusal = await verify((text, values) => client.query(text, values));
+    if (refusal !== null) {
+      await client.query("ROLLBACK");
+      return { kind: "refused", reason: refusal };
+    }
+    await client.query("COMMIT");
+    return { kind: "won", ledgerId: String(inserted.rows[0].id) };
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** A check run inside a claim's transaction while it holds the artifact's
+ *  revision lock: it reads through `query` (the same connection) and answers
+ *  null when the effect may start, else the reason it may not. */
+export type RevisionEffectVerify = (
+  query: (text: string, values: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }>,
+) => Promise<string | null>;
+
+/** Record that the effect of a won claim is done. True when the claim's row is
+ *  `finalized` after the call: moved by this call, or already moved by an
+ *  earlier write of the same mark whose reply was lost (the row is found by its
+ *  id, which only this claim holds). False when the row is gone, or is not a
+ *  claim row of that effect in the organization in `finalized`. */
+export async function markRevisionEffectDone(input: {
+  orgId: string;
+  ledgerId: string;
+  effect: string;
+}): Promise<boolean> {
+  ensurePostgresSchema();
+  const s = schema();
+  const res = await pool().query(
+    `UPDATE "${s}"."artifact_materializations"
+    SET phase = 'finalized'
+  WHERE id = $1 AND org_id = $2 AND extension = $3 AND content_hash = $3 AND phase = 'claimed'
+  RETURNING id`,
+    [input.ledgerId, input.orgId, input.effect],
+  );
+  if (res.rows.length > 0) return true;
+  // Nothing moved: an earlier write of this mark may have committed before its
+  // reply was lost. The row of this claim, read by its id, decides.
+  const row = await pool().query(
+    `SELECT phase FROM "${s}"."artifact_materializations"
+  WHERE id = $1 AND org_id = $2 AND extension = $3 AND content_hash = $3
+  LIMIT 1`,
+    [input.ledgerId, input.orgId, input.effect],
+  );
+  return (row.rows[0] as { phase?: string } | undefined)?.phase === "finalized";
+}
+
+/** Give a won claim back, ONLY when its effect demonstrably never started: a
+ *  later call may then perform it. Never touches a done row. */
+export async function releaseRevisionEffect(input: {
+  orgId: string;
+  ledgerId: string;
+  effect: string;
+}): Promise<void> {
+  ensurePostgresSchema();
+  const s = schema();
+  await pool().query(
+    `DELETE FROM "${s}"."artifact_materializations"
+  WHERE id = $1 AND org_id = $2 AND extension = $3 AND content_hash = $3 AND phase = 'claimed'`,
+    [input.ledgerId, input.orgId, input.effect],
+  );
+}
+
+// ---------------------------------------------------------------------------
+// An outside effect performed with a revision a run bound, AT MOST ONCE per run
+// (cinatra#3089).
+//
+// `performRevisionEffectOnce` first CLAIMS the effect's durable record (a
+// conditional insert only one caller wins, `claimRevisionEffect` above), then:
+//   - won: the effect is performed (`act`); on success the claim is marked done;
+//   - done: an earlier call performed it; nothing is done (`alreadyDone`);
+//   - in doubt: another call holds it (in flight, or stopped after its claim);
+//     it is NOT performed (`inDoubt`).
+// An error from `act` leaves the effect in doubt (it may have happened before
+// the error), except `EffectNotStartedError`: the effect demonstrably never
+// started, so the claim is given back and a later call may perform it. The done
+// mark is one conditional update, written again up to `MARK_DONE_ATTEMPTS` times
+// while it throws; an attempt whose write committed before its reply was lost
+// reads as written. A mark that is refused or still throws leaves the effect
+// performed AND in doubt. An effect in doubt is performed by no later call.
+//
+// Generic: the caller names the run, the binding output, the ledger path of the
+// binding row and the effect; this module knows no artifact type.
+// ---------------------------------------------------------------------------
+
+/** Thrown by an `act` that stopped BEFORE its effect started, so the effect
+ *  certainly did not happen and its claim may be given back. */
+export class EffectNotStartedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EffectNotStartedError";
+  }
+}
+
+/** The effect and the bound revision it is performed with. */
+export type RevisionEffectClaimKey = {
+  runId: string;
+  path: MaterializationPath;
+  /** The binding row's output id; the claim row takes the same one. */
+  bindingOutputId: string;
+  effect: string;
+  artifactId: string;
+  representationRevisionId: string;
+};
+
+/** The effect's durable record: `claim` lets exactly one caller perform it;
+ *  `markDone` records it done; `release` gives it back ONLY when it never
+ *  started. */
+export type RevisionEffectLedger = {
+  claim(
+    key: RevisionEffectClaimKey,
+    actor: PrimitiveActorContext,
+    verifyUnderLock?: RevisionEffectVerify,
+  ): Promise<RevisionEffectClaim>;
+  markDone(ledgerId: string, key: RevisionEffectClaimKey, actor: PrimitiveActorContext): Promise<boolean>;
+  release(ledgerId: string, key: RevisionEffectClaimKey, actor: PrimitiveActorContext): Promise<void>;
+};
+
+/** What one call did. `failure` names why the caller must not go on: the claim
+ *  could not be taken (`claim`), its verification under the lock refused and
+ *  nothing started (`refused`), the effect did not start and its claim was
+ *  given back (`not_started`), the effect failed and is in doubt (`act`), it
+ *  did not start but its claim could not be given back (`release`), or it was
+ *  performed but its done mark could not be written (`mark`). */
+export type RevisionEffectOutcome = {
+  done: boolean;
+  alreadyDone: boolean;
+  inDoubt: boolean;
+  failure?: { stage: "claim" | "refused" | "not_started" | "act" | "release" | "mark"; reason: string };
+};
+
+function effectOrgOf(actor: PrimitiveActorContext): string {
+  if (!actor.orgId) {
+    throw new Error("the acting actor carries no organization, so no effect can be recorded");
+  }
+  return actor.orgId;
+}
+
+/** The materialization ledger's claim rows (`claimRevisionEffect`). */
+export const defaultRevisionEffectLedger: RevisionEffectLedger = {
+  async claim(key, actor, verifyUnderLock) {
+    const orgId = effectOrgOf(actor);
+    return claimRevisionEffect({ orgId, ...key, ...(verifyUnderLock ? { verifyUnderLock } : {}) });
+  },
+  async markDone(ledgerId, key, actor) {
+    const orgId = effectOrgOf(actor);
+    return markRevisionEffectDone({ orgId, ledgerId, effect: key.effect });
+  },
+  async release(ledgerId, key, actor) {
+    const orgId = effectOrgOf(actor);
+    await releaseRevisionEffect({ orgId, ledgerId, effect: key.effect });
+  },
+};
+
+/** How many times a done mark is written before the effect is left in doubt. */
+const MARK_DONE_ATTEMPTS = 3;
+
+const reasonOf = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+/** Perform the effect of `claimKey` at most once per run (see the module note). */
+export async function performRevisionEffectOnce(input: {
+  claimKey: RevisionEffectClaimKey;
+  actor: PrimitiveActorContext;
+  act: () => Promise<unknown>;
+  ledger?: RevisionEffectLedger;
+  /** Verified inside the claim's transaction under the artifact's revision
+   *  lock; a refusal starts nothing (`refused`). */
+  verifyUnderLock?: RevisionEffectVerify;
+}): Promise<RevisionEffectOutcome> {
+  const { claimKey, actor, act, verifyUnderLock } = input;
+  const ledger = input.ledger ?? defaultRevisionEffectLedger;
+  const none = { done: false, alreadyDone: false, inDoubt: false };
+  let claim: Awaited<ReturnType<RevisionEffectLedger["claim"]>>;
+  try {
+    claim = verifyUnderLock ? await ledger.claim(claimKey, actor, verifyUnderLock) : await ledger.claim(claimKey, actor);
+  } catch (err) {
+    return { ...none, failure: { stage: "claim", reason: reasonOf(err) } };
+  }
+  if (claim.kind === "done") return { ...none, alreadyDone: true };
+  if (claim.kind === "in_doubt") return { ...none, inDoubt: true };
+  if (claim.kind === "refused") return { ...none, failure: { stage: "refused", reason: claim.reason } };
+  try {
+    await act();
+  } catch (err) {
+    const reason = reasonOf(err);
+    if (!(err instanceof EffectNotStartedError)) {
+      return { ...none, inDoubt: true, failure: { stage: "act", reason } };
+    }
+    try {
+      await ledger.release(claim.ledgerId, claimKey, actor);
+    } catch (releaseErr) {
+      return { ...none, inDoubt: true, failure: { stage: "release", reason: `${reason}; ${reasonOf(releaseErr)}` } };
+    }
+    return { ...none, failure: { stage: "not_started", reason } };
+  }
+  let reason = "";
+  for (let attempt = 1; attempt <= MARK_DONE_ATTEMPTS; attempt += 1) {
+    try {
+      // True also when an earlier attempt committed and only its reply was
+      // lost: the ledger reads the claim's own row back.
+      if (await ledger.markDone(claim.ledgerId, claimKey, actor)) return { ...none, done: true };
+      // The claim's record is gone or was never moved to done: writing again
+      // cannot help.
+      reason = "the record was not open";
+      break;
+    } catch (err) {
+      reason = reasonOf(err);
+      if (attempt < MARK_DONE_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, 50 * attempt));
+    }
+  }
+  return { ...none, done: true, inDoubt: true, failure: { stage: "mark", reason } };
+}
+
+/**
+ * The artifacts the steps of `runId` in `orgId` filed while the run ran
+ * (cinatra#3089): the distinct artifact of each finalized row on a MID-RUN path
+ * (`materialize_tool`, an `artifact_materialize` filing; `end_node_binding`, a
+ * declared binding), at most `cap` of them. `overCap` is true when the run
+ * filed more. Rows of any other path (a fan-out's bindings and claim rows) are
+ * not filings of a step. The ledger alone: the caller reads each artifact
+ * through its own access-checked road.
+ */
+export async function listRunFiledArtifactIds(input: {
+  orgId: string;
+  runId: string;
+  cap: number;
+}): Promise<{ artifactIds: string[]; overCap: boolean }> {
+  ensurePostgresSchema();
+  const s = schema();
+  const cap = Math.max(0, Math.floor(input.cap));
+  const res = await pool().query(
+    `SELECT DISTINCT artifact_id
+   FROM "${s}"."artifact_materializations"
+  WHERE run_id = $1 AND org_id = $2 AND path IN ('materialize_tool', 'end_node_binding')
+    AND phase = 'finalized' AND artifact_id IS NOT NULL
+  ORDER BY artifact_id
+  LIMIT $3`,
+    [input.runId, input.orgId, cap + 1],
+  );
+  const ids = (res.rows as Array<{ artifact_id?: unknown }>)
+    .map((row) => row.artifact_id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+  return { artifactIds: ids.slice(0, cap), overCap: ids.length > cap };
 }
