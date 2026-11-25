@@ -1220,28 +1220,43 @@ export async function approveReviewTaskInternal(
       // authorizes no persist, and its `userResponse` is not what is sent (the
       // declared refresh value is). A mint here would let the refresh's payload
       // authorize a draft or recipient write that the operator never answered.
-      // A refresh records instead that the next pause is this list step again, so
-      // that pause keeps this step's renderer (`getOrAddWayflowRendererGateIndex`).
-      // A flow with one renderer step does not map pauses by place, so nothing is
-      // recorded there. A failure, or a place that is not known, is handled as the
-      // mint's failure is: nothing is sent, the gate is put back.
-      // A real answer in such a flow first removes a refresh note that names this
-      // task (left by a refresh of it that was not sent): the answer moves the run
-      // on, so the next pause is a new step. A failure is handled the same way.
+      // A refresh is sent only when the flow's steps can be read and the step
+      // being refreshed (its durable gate record's renderer) is found among them;
+      // otherwise it is refused with a fixed message. In a flow that maps pauses
+      // by place (more than one renderer step) a refresh also records that the
+      // next pause is this list step again, so that pause keeps this step's
+      // renderer (`getOrAddWayflowRendererGateIndex`). A refusal, a failure, or a
+      // place that is not known, is handled as the mint's failure is: nothing is
+      // sent, the gate is put back.
+      // A real answer in a flow that maps pauses by place first removes a refresh
+      // note that names this task (left by a refresh of it that was not sent):
+      // the answer moves the run on, so the next pause is a new step. A failure
+      // is handled the same way.
       const answerHasPayload = typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0;
       const rendererGatePolicySteps = rendererGateStepsOf((template.approvalPolicy as { steps?: unknown } | null | undefined)?.steps);
-      const mapsPausesByPlace = rendererGatePolicySteps.filter(stepFiresRendererGate).length > 1;
+      const rendererSteps = rendererGatePolicySteps?.filter(stepFiresRendererGate) ?? null;
+      const mapsPausesByPlace = rendererSteps !== null && rendererSteps.length > 1;
       if (listStepRefreshAsk !== undefined || answerHasPayload || mapsPausesByPlace) {
         try {
           if (listStepRefreshAsk !== undefined) {
-            if (mapsPausesByPlace) {
-              // When the run's step list has expired, the place comes from the
-              // step's durable gate record (its renderer) and the compiled steps.
-              await (await import("@cinatra-ai/a2a")).rememberWayflowRendererGateRepeat(
-                run.id,
-                taskId,
-                listStepRefreshRenderer === undefined ? null : rendererGateIndexOfRenderer(rendererGatePolicySteps, listStepRefreshRenderer),
+            // The place of the refreshed step among the compiled steps; null when
+            // the steps cannot be read or the step is not among them. A flow of
+            // one renderer step needs that step to be the refreshed one.
+            const placeFromSteps =
+              rendererGatePolicySteps === null || rendererSteps === null || listStepRefreshRenderer === undefined
+                ? null
+                : mapsPausesByPlace
+                  ? rendererGateIndexOfRenderer(rendererGatePolicySteps, listStepRefreshRenderer)
+                  : rendererSteps.length === 1 && rendererSteps[0]!.xRenderer === listStepRefreshRenderer
+                    ? 0
+                    : null;
+            if (placeFromSteps === null) {
+              throw new Error(
+                `WayFlow approval rejected: gate ${taskId} on run ${run.id} takes no list step refresh now: its step is not among the flow's steps`,
               );
+            }
+            if (mapsPausesByPlace) {
+              await (await import("@cinatra-ai/a2a")).rememberWayflowRendererGateRepeat(run.id, taskId, placeFromSteps);
             }
           } else if (mapsPausesByPlace) {
             await (await import("@cinatra-ai/a2a")).forgetWayflowRendererGateRepeat(run.id, taskId);

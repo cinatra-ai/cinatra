@@ -8,9 +8,11 @@ import { join } from "node:path";
 // its decision record (written first and awaited) and offers no renderer and no generic
 // review task. A record fault, or a missing or unverified claim on a template that lists
 // publishing steps, ends the run failed. A template that lists none keeps today's road.
-// A template that is not found or cannot be read fails only a pause that claims a publish
-// gate; any other pause keeps today's road, where the interrupt is offered. These tests
-// drive the real handleWayflowTaskState and the real claim verifier.
+// A template that is not found or cannot be read fails a pause that claims a publish
+// gate as publish_gate_unverified; any other pause gets no decision either, and
+// (cinatra#3562) its step cannot be told, so it is not offered under a guessed screen:
+// the run ends failed with the fixed reason. These tests drive the real
+// handleWayflowTaskState and the real claim verifier.
 
 const { onInterruptSpy } = vi.hoisted(() => ({ onInterruptSpy: vi.fn() }));
 
@@ -91,8 +93,13 @@ const decisions = vi.hoisted(() => ({
   listSettledWithWaitingRun: vi.fn(async () => []),
 }));
 vi.mock("../publish-decision-store", () => decisions);
+// cinatra#3562: a pause whose step cannot be told ends the run failed; the run holds no produced output to review first.
+vi.mock("../run-produced-review-hold", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  holdRunForProducedReview: vi.fn(async () => ({ held: false, reason: "no-produced-output" })),
+}));
 
-import { handleWayflowTaskState } from "../execution";
+import { handleWayflowTaskState, RENDERER_GATE_PLACE_UNKNOWN_RUN_ERROR } from "../execution";
 import type { AgentRunRecord } from "../store";
 
 const KEY = "test-context-attest-key-4150";
@@ -477,24 +484,24 @@ describe("every other pause keeps today's road", () => {
     ["no claim", undefined],
     ["an unverified claim of another step", sign("review_step", "another-key")],
     ["a verified claim of another step", sign("review_step")],
-  ])("a template that cannot be read keeps today's road for %s: no decision, the interrupt is offered", async (_label, claim) => {
+  ])("a template that cannot be read, for %s: no decision, and the pause is not offered under a guessed screen", async (_label, claim) => {
     storeMock.readAgentTemplateById.mockRejectedValue(new Error("template store down"));
     await pause(claim);
     expect(decisions.insertParkedDecision).not.toHaveBeenCalled();
-    expect(transitions().map((m) => m.to)).not.toContain("failed");
-    expect(onInterruptSpy).toHaveBeenCalledTimes(1);
+    expect(transitions()).toEqual([{ from: "running", to: "failed", error: RENDERER_GATE_PLACE_UNKNOWN_RUN_ERROR }]);
+    expect(onInterruptSpy).not.toHaveBeenCalled();
   });
 
   it.each([
     ["no claim", undefined],
     ["an unverified claim of another step", sign("review_step", "another-key")],
     ["a verified claim of another step", sign("review_step")],
-  ])("a template that is not found keeps today's road for %s: no decision, the interrupt is offered", async (_label, claim) => {
+  ])("a template that is not found, for %s: no decision, and the pause is not offered under a guessed screen", async (_label, claim) => {
     storeMock.readAgentTemplateById.mockResolvedValue(null);
     await pause(claim);
     expect(decisions.insertParkedDecision).not.toHaveBeenCalled();
-    expect(transitions().map((m) => m.to)).not.toContain("failed");
-    expect(onInterruptSpy).toHaveBeenCalledTimes(1);
+    expect(transitions()).toEqual([{ from: "running", to: "failed", error: RENDERER_GATE_PLACE_UNKNOWN_RUN_ERROR }]);
+    expect(onInterruptSpy).not.toHaveBeenCalled();
   });
 });
 

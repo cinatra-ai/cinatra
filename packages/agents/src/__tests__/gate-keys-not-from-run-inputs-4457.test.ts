@@ -15,11 +15,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 //     (what the jsonb columns store), with no readable frame.
 // When the message is absent or does not parse, the screen gets NO value for a
 // gate key; a gate without the flag keeps its present values. When the host
-// cannot read the gate's key list (the template is unreadable or absent, its
-// steps are not a list, a stored list is not an array of strings), no run input
-// fills the gate; when it cannot tell which step the gate is (a context ask, an
-// index fault or an index past the last gate), every key that any step of the
-// template lists is withheld.
+// cannot read a stored key list (not an array of strings), no run input fills
+// the gate; when it cannot tell which step a context ask is, every key that any
+// step of the template lists is withheld. cinatra#3562: when the host cannot
+// tell which step a renderer gate is (the template is unreadable or absent, its
+// steps are not a list, an index fault or an index past the last gate of a
+// flow of two renderer steps), the gate is not shown at all and the run ends
+// failed, so no run input can reach any screen.
 // ---------------------------------------------------------------------------
 
 const { enrichSpy, onInterruptSpy, frameRoad, gateIndex } = vi.hoisted(() => ({
@@ -104,6 +106,12 @@ const storeMock = vi.hoisted(() => {
   };
 });
 vi.mock("../store", () => storeMock);
+// cinatra#3562: a gate whose step cannot be told ends the run failed; the run
+// holds no produced output to review first.
+vi.mock("../run-produced-review-hold", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  holdRunForProducedReview: vi.fn(async () => ({ held: false, reason: "no-produced-output" })),
+}));
 vi.mock("../trigger-gate", () => ({ isTriggerReleased: vi.fn(async () => true) }));
 vi.mock("../skill-autosave", () => ({
   runSkillAutosaveOnRunCompletion: vi.fn(async () => undefined),
@@ -128,7 +136,7 @@ vi.mock("@cinatra-ai/a2a", () => {
   };
 });
 
-import { handleWayflowTaskState } from "../execution";
+import { handleWayflowTaskState, RENDERER_GATE_PLACE_UNKNOWN_RUN_ERROR } from "../execution";
 import { deriveRunHitlContext } from "../hitl-context";
 import {
   compileNestedGateSteps,
@@ -310,6 +318,23 @@ function expectNoRunInput(emitted: { values: Record<string, unknown> }, ctx: { c
   expect(ctx.inputSchema[GATE_KEYS_NOT_FROM_RUN_INPUTS]).toEqual(Object.keys(STORED));
 }
 
+/**
+ * cinatra#3562: a gate whose step cannot be told is not shown: no frame, no
+ * durable row, and so no value of any kind reaches a screen; the run ends failed.
+ */
+async function expectNotShown(task: ReturnType<typeof gateTask>, run: AgentRunRecord = makeRun()) {
+  await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task });
+  expect(onInterruptSpy).not.toHaveBeenCalled();
+  expect(storeMock.writeDurableHitlGateArtifact).not.toHaveBeenCalled();
+  expect(storeMock.transitionRunStatus).toHaveBeenCalledWith(
+    run.id,
+    "running",
+    "failed",
+    { error: RENDERER_GATE_PLACE_UNKNOWN_RUN_ERROR },
+    expect.anything(),
+  );
+}
+
 describe("cinatra#4457 — a value-surfacing gate's keys never come from run inputs", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -454,32 +479,25 @@ describe("cinatra#4457 — a value-surfacing gate's keys never come from run inp
       expect(ctx.currentValues.output).toBe("cut {");
     });
 
-    it("the template read fails before the sole gate is known: no run input fills the gate", async () => {
+    it("the template read fails before the sole gate is known: the gate is not shown", async () => {
       storeMock.readAgentTemplateById.mockRejectedValue(new Error("template store unavailable"));
-      const { emitted, ctx } = await emitAndRead(road, gateTask(undefined));
-      expect(ctx.xRenderer).toBe(FALLBACK_RENDERER);
-      expectNoRunInput(emitted, ctx);
+      await expectNotShown(gateTask(undefined));
     });
 
-    it("the run's template is absent: no run input fills the gate", async () => {
+    it("the run's template is absent: the gate is not shown", async () => {
       storeMock.readAgentTemplateById.mockResolvedValue(null);
-      const { emitted, ctx } = await emitAndRead(road, gateTask(undefined));
-      expect(ctx.xRenderer).toBe(FALLBACK_RENDERER);
-      expectNoRunInput(emitted, ctx);
+      await expectNotShown(gateTask(undefined));
     });
 
-    it("the template's steps are not a list: no run input fills the gate", async () => {
+    it("the template's steps are not a list: the gate is not shown", async () => {
       storeMock.readAgentTemplateById.mockResolvedValue({
         ...makeTemplate([]),
         approvalPolicy: { steps: { 0: gateStep(6, LIST_RENDERER, LIST_GATE_KEYS) } },
       });
-      const { emitted, ctx } = await emitAndRead(road, gateTask(undefined));
-      expect(ctx.xRenderer).toBe(FALLBACK_RENDERER);
-      expectNoRunInput(emitted, ctx);
+      await expectNotShown(gateTask(undefined));
     });
 
-    const UNION_KEYS = [...SCHEMA_GATE_KEYS, ...LIST_GATE_KEYS];
-    it("a two-gate flow whose renderer-gate index read fails: every key either gate lists is withheld", async () => {
+    it("a two-gate flow whose renderer-gate index read fails: the gate is not shown", async () => {
       storeMock.readAgentTemplateById.mockResolvedValue(
         makeTemplate([
           gateStep(3, SCHEMA_RENDERER, SCHEMA_GATE_KEYS),
@@ -487,29 +505,20 @@ describe("cinatra#4457 — a value-surfacing gate's keys never come from run inp
         ]),
       );
       gateIndex.fail = true;
-      const { emitted, ctx } = await emitAndRead(road, gateTask(""));
-      expect(ctx.xRenderer).toBe(FALLBACK_RENDERER);
-      for (const k of UNION_KEYS) {
-        expect(hasKey(emitted.values, k), `emitted ${k}`).toBe(false);
-        expect(hasKey(ctx.currentValues, k), `screen ${k}`).toBe(false);
-      }
-      expect(ctx.currentValues.campaignNote).toBe("kept");
-      expect(ctx.inputSchema[GATE_KEYS_NOT_FROM_RUN_INPUTS]).toEqual(UNION_KEYS);
+      await expectNotShown(gateTask(""));
     });
 
-    it("a two-gate flow whose index read fails, with one gate's stored list unreadable: no run input fills the gate", async () => {
+    it("a two-gate flow whose index read fails, with one gate's stored list unreadable: the gate is not shown", async () => {
       const listStep: Record<string, unknown> = gateStep(6, LIST_RENDERER);
       listStep.surfaceGateInputKeys = "candidateMembers";
       storeMock.readAgentTemplateById.mockResolvedValue(
         makeTemplate([gateStep(3, SCHEMA_RENDERER, SCHEMA_GATE_KEYS), listStep]),
       );
       gateIndex.fail = true;
-      const { emitted, ctx } = await emitAndRead(road, gateTask(""));
-      expect(ctx.xRenderer).toBe(FALLBACK_RENDERER);
-      expectNoRunInput(emitted, ctx);
+      await expectNotShown(gateTask(""));
     });
 
-    it("a two-gate flow whose index points past the last gate: every key either gate lists is withheld", async () => {
+    it("a two-gate flow whose index points past the last gate: the gate is not shown", async () => {
       storeMock.readAgentTemplateById.mockResolvedValue(
         makeTemplate([
           gateStep(3, SCHEMA_RENDERER, SCHEMA_GATE_KEYS),
@@ -517,13 +526,7 @@ describe("cinatra#4457 — a value-surfacing gate's keys never come from run inp
         ]),
       );
       gateIndex.value = 5;
-      const { ctx } = await emitAndRead(road, gateTask(""));
-      expect(ctx.xRenderer).toBe(FALLBACK_RENDERER);
-      for (const k of UNION_KEYS) {
-        expect(hasKey(ctx.currentValues, k), `screen ${k}`).toBe(false);
-      }
-      expect(ctx.currentValues.campaignNote).toBe("kept");
-      expect(ctx.inputSchema[GATE_KEYS_NOT_FROM_RUN_INPUTS]).toEqual(UNION_KEYS);
+      await expectNotShown(gateTask(""));
     });
 
     it("a template whose steps fire no renderer gate: every key a step lists is withheld", async () => {
@@ -540,16 +543,12 @@ describe("cinatra#4457 — a value-surfacing gate's keys never come from run inp
       expect(ctx.inputSchema[GATE_KEYS_NOT_FROM_RUN_INPUTS]).toEqual(LIST_GATE_KEYS);
     });
 
-    it("a two-gate flow without the flag whose index read fails: the run inputs fill the gate as before", async () => {
+    it("a two-gate flow without the flag whose index read fails: the gate is not shown", async () => {
       storeMock.readAgentTemplateById.mockResolvedValue(
         makeTemplate([gateStep(3, SCHEMA_RENDERER), gateStep(6, LIST_RENDERER)]),
       );
       gateIndex.fail = true;
-      const { emitted, ctx } = await emitAndRead(road, gateTask(""));
-      expect(ctx.xRenderer).toBe(FALLBACK_RENDERER);
-      for (const [k, v] of Object.entries(STORED)) expect(ctx.currentValues[k], `screen ${k}`).toEqual(v);
-      expect(hasKey(emitted.schema, GATE_KEYS_NOT_FROM_RUN_INPUTS)).toBe(false);
-      expect(hasKey(ctx.inputSchema, GATE_KEYS_NOT_FROM_RUN_INPUTS)).toBe(false);
+      await expectNotShown(gateTask(""));
     });
 
     const CONTEXT_KEYS = ["slotMeta", "candidates", "selectedRefs", "campaignId"];

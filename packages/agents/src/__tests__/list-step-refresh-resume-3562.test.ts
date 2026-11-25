@@ -208,6 +208,9 @@ function arrange() {
     packageName: "@cinatra-ai/email-outreach-agent",
     sourceType: "internal",
     agentAuthPolicy: null,
+    // The flow's one renderer step is the list step: a refresh of it is sent only
+    // when the compiled steps can be read and hold that step.
+    approvalPolicy: { steps: [{ stepNumber: 1, requiresApproval: true, xRenderer: LIST_STEP_ID }] },
   });
   storeMock.transitionRunStatus.mockImplementation(async (runId: string, from: string, to: string) => {
     if (row.status !== from) {

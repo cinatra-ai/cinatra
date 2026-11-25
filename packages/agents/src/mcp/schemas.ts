@@ -5,23 +5,6 @@
 import { z } from "zod";
 import { RUN_START_REPLY_RULE } from "../run-status";
 import { AGENT_RUN_TIMEOUT_MAX_SECONDS } from "../wayflow-url";
-import { RENDERER_GATE_STEP_GATE_COUNT_LIMIT } from "../orchestrator-gate-predicate";
-
-/**
- * cinatra#3562: a replacement approval policy's steps may give `gateCount` only
- * as a whole number from 1 to `RENDERER_GATE_STEP_GATE_COUNT_LIMIT` (the pauses
- * one step produces). A policy without a `steps` list, and a step without
- * `gateCount`, are not checked here.
- */
-function approvalPolicyGateCountsInBound(policy: Record<string, unknown>): boolean {
-  const steps = policy.steps;
-  if (!Array.isArray(steps)) return true;
-  return steps.every((step) => {
-    if (step === null || typeof step !== "object" || !Object.prototype.hasOwnProperty.call(step, "gateCount")) return true;
-    const gateCount = (step as { gateCount?: unknown }).gateCount;
-    return typeof gateCount === "number" && Number.isInteger(gateCount) && gateCount >= 1 && gateCount <= RENDERER_GATE_STEP_GATE_COUNT_LIMIT;
-  });
-}
 
 export type ToolMeta = { description: string; inputSchema: z.ZodTypeAny };
 
@@ -309,9 +292,7 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
        * follow-up milestone.)
        */
       agentDependencies: z.record(z.string(), z.string()).optional().describe("[DEPRECATED — use the canonical cinatra.dependencies vocabulary] Child agent dependencies for orchestrator templates. Maps packageName to semver range (e.g. { '@cinatra/stage-1': '^1.0.0' }). Pass {} to clear all dependencies."),
-      approvalPolicy: z.record(z.string(), z.unknown()).refine(approvalPolicyGateCountsInBound, {
-        message: `Each step's gateCount must be a whole number from 1 to ${RENDERER_GATE_STEP_GATE_COUNT_LIMIT}.`,
-      }).optional().describe(`Replacement approval policy object (e.g. { steps: [...] }). Replaces the entire approvalPolicy field. Use to update HITL step definitions, renderers, gateCount, and hitlOwnedBy without republishing the agent package. A step's gateCount, when given, is a whole number from 1 to ${RENDERER_GATE_STEP_GATE_COUNT_LIMIT}.`),
+      approvalPolicy: z.record(z.string(), z.unknown()).optional().describe("Replacement approval policy object (e.g. { steps: [...] }). Replaces the entire approvalPolicy field. Use to update HITL step definitions, renderers, gateCount, and hitlOwnedBy without republishing the agent package."),
     }),
   },
   "agent_export": {

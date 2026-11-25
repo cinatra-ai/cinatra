@@ -21,6 +21,7 @@ import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 
 import { RunTransitionError } from "../run-status";
 import { buildListStepRefreshPayload, classifyGateRejection, isAlreadyResolvedError } from "../hitl-gate-submit";
+import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 
 const LIST_STEP_ID = "@cinatra-ai/email-outreach-agent:list-picker";
 const SECOND_STEP_ID = "@cinatra-ai/email-outreach-agent:recipients-output";
@@ -456,7 +457,7 @@ describe("cinatra#3562 — a refreshed list step keeps its place when the run's 
     await refresh("task-list-1", "task-list-2").catch((error: unknown) => {
       refusal = error;
     });
-    expect(String((refusal as Error | null)?.message)).toContain("its place in the run's steps is not known");
+    expect(String((refusal as Error | null)?.message)).toContain("its step is not among the flow's steps");
     // What the run panel's submit is given: a thrown error that is neither a
     // gate that moved on nor one already answered, so it shows its error toast
     // and draws the step again, with Try again (see the run panel's test).
@@ -475,7 +476,7 @@ describe("cinatra#3562 — a refreshed list step keeps its place when the run's 
     expect(renderers()).toEqual([LIST_STEP_ID, LIST_STEP_ID]);
 
     // Another try reaches the same check (no claim is left behind), and a pick is sent.
-    await expect(refresh("task-list-1", "task-list-2")).rejects.toThrow("its place in the run's steps is not known");
+    await expect(refresh("task-list-1", "task-list-2")).rejects.toThrow("its step is not among the flow's steps");
     await pick("task-list-1", "task-second-1");
     expect(sendTask).toHaveBeenCalledTimes(2);
     expect(row.status).toBe("pending_approval");
@@ -744,16 +745,20 @@ describe("cinatra#3562 — a pause whose step cannot be established after a refr
 describe("cinatra#3562 — the places of a run's renderer gates are bounded", () => {
   const REPEAT_KEY = `cinatra:wayflow:renderer-gate-repeat:${RUN.id}`;
 
-  it("a stored policy whose steps are no list, or hold entries that are no objects, gives no step and never throws", async () => {
+  it("a stored policy whose steps are no list, or hold an entry that is no object, cannot be read: it is never a flow with no step", async () => {
     const { rendererGateStepsOf, rendererGateIndexOfRenderer, stepFiresRendererGate } = await import("../orchestrator-gate-predicate");
     // red-first-expect: rendererGateStepsOf is not a function
-    expect(rendererGateStepsOf("steps")).toEqual([]);
-    expect(rendererGateStepsOf(undefined)).toEqual([]);
-    expect(rendererGateStepsOf({ 0: { xRenderer: "a" } })).toEqual([]);
-    const mixed = rendererGateStepsOf([null, 7, "x", [], { xRenderer: "a" }, { xRenderer: "list" }]);
-    expect(mixed).toEqual([{ xRenderer: "a" }, { xRenderer: "list" }]);
-    expect(mixed.filter(stepFiresRendererGate).length).toBe(2);
-    expect(rendererGateIndexOfRenderer(mixed, "list")).toBe(1);
+    expect(rendererGateStepsOf("steps")).toBeNull();
+    expect(rendererGateStepsOf(undefined)).toBeNull();
+    expect(rendererGateStepsOf({ 0: { xRenderer: "a" } })).toBeNull();
+    for (const bad of [null, 7, "x", []]) {
+      expect(rendererGateStepsOf([bad, { xRenderer: "a" }, { xRenderer: "list" }])).toBeNull();
+    }
+    expect(rendererGateStepsOf([])).toEqual([]);
+    const readable = rendererGateStepsOf([{ xRenderer: "a" }, { xRenderer: "list" }]);
+    expect(readable).toEqual([{ xRenderer: "a" }, { xRenderer: "list" }]);
+    expect(readable!.filter(stepFiresRendererGate).length).toBe(2);
+    expect(rendererGateIndexOfRenderer(readable!, "list")).toBe(1);
   });
 
   it("the place from the steps refuses a gate count or a place past its limit", async () => {
@@ -781,16 +786,17 @@ describe("cinatra#3562 — the places of a run's renderer gates are bounded", ()
   it("a huge gate count on an earlier step after the list expired: the refresh is refused, nothing is sent, and no place is rebuilt", async () => {
     const FIRST_STEP_ID = "@cinatra-ai/email-outreach-agent:account-scope";
     const [listStep, secondStep] = TEMPLATE.approvalPolicy.steps;
+    await firstPause("task-list-1");
+    // The policy is replaced while the run waits: an earlier step now claims a huge gate count.
     storeMock.readAgentTemplateById.mockResolvedValue({
       ...TEMPLATE,
       approvalPolicy: { steps: [{ ...listStep, stepNumber: 1, xRenderer: FIRST_STEP_ID, gateCount: 1_000_000_000 }, { ...listStep, stepNumber: 2 }, { ...secondStep, stepNumber: 3 }] },
     });
-    await firstPause("task-list-1");
     redis.lists.delete(RENDERER_GATES_KEY);
     const evalCalls = vi.spyOn(redis.FakeRedis.prototype, "eval");
 
     // red-first-expect: buildListStepRefreshPayload is not a function
-    await expect(refresh("task-list-1", "task-list-2")).rejects.toThrow("its place in the run's steps is not known");
+    await expect(refresh("task-list-1", "task-list-2")).rejects.toThrow("its step is not among the flow's steps");
     expect(sendTask).not.toHaveBeenCalled();
     expect(redis.store.has(REPEAT_KEY)).toBe(false);
     expect(redis.lists.has(RENDERER_GATES_KEY)).toBe(false);
@@ -840,18 +846,132 @@ describe("cinatra#3562 — the places of a run's renderer gates are bounded", ()
     expect(redis.lists.has(RENDERER_GATES_KEY)).toBe(false);
     expect(redis.store.get(REPEAT_KEY)).toBe(note);
   });
+});
 
-  it("a replacement approval policy takes a gate count only from 1 to the limit", async () => {
-    const { AGENT_BUILDER_TOOL_META } = await import("../mcp/schemas");
-    const schema = AGENT_BUILDER_TOOL_META.agent_update.inputSchema;
-    const update = (approvalPolicy: Record<string, unknown>) => schema.safeParse({ templateId: "tpl-1", approvalPolicy }).success;
-    // red-first-expect: expected true to be false
-    expect(update({ steps: [{ stepNumber: 1, gateCount: 1_000_000_000 }] })).toBe(false);
-    expect(update({ steps: [{ stepNumber: 1, gateCount: 65 }] })).toBe(false);
-    expect(update({ steps: [{ stepNumber: 1, gateCount: 1.5 }] })).toBe(false);
-    expect(update({ steps: [{ stepNumber: 1, gateCount: "2" }] })).toBe(false);
-    expect(update({ steps: [{ stepNumber: 1, gateCount: 64 }, { stepNumber: 2 }] })).toBe(true);
-    expect(update({ steps: [] })).toBe(true);
-    expect(update({})).toBe(true);
+describe("cinatra#3562 — a step that cannot be told is never refreshed and never shown under another screen", () => {
+  const REPEAT_KEY = `cinatra:wayflow:renderer-gate-repeat:${RUN.id}`;
+  const [listStep, secondStep] = TEMPLATE.approvalPolicy.steps;
+
+  /** The refresh of the paused list step is refused: nothing is sent, no note is left, and the step waits again. */
+  async function refreshRefused(): Promise<void> {
+    let refusal: unknown = null;
+    await refresh("task-list-1", "task-list-2").catch((error: unknown) => {
+      refusal = error;
+    });
+    expect(String((refusal as Error | null)?.message)).toContain("takes no list step refresh now: its step is not among the flow's steps");
+    expect(sendTask).not.toHaveBeenCalled();
+    expect(redis.store.has(REPEAT_KEY)).toBe(false);
+    expect(row.status).toBe("pending_approval");
+    expect(storeMock.transitionRunStatus).toHaveBeenLastCalledWith(
+      RUN.id,
+      "running",
+      "pending_approval",
+      { pauseTaskId: "task-list-1" },
+      expect.anything(),
+    );
+    expect(renderers()).toEqual([LIST_STEP_ID]);
+  }
+
+  it.each([
+    ["is replaced by {}", {}],
+    ["holds a step that is no object", { steps: [null, listStep, secondStep] }],
+    ["holds one step that is not the list step", { steps: [secondStep] }],
+    ["holds no step", { steps: [] }],
+  ])("the policy %s while the run waits at the list step: Try again is refused", async (_label, approvalPolicy) => {
+    await firstPause("task-list-1");
+    storeMock.readAgentTemplateById.mockResolvedValue({ ...TEMPLATE, approvalPolicy });
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await refreshRefused();
+  });
+
+  it("a step is put before the list step while the run waits at it: the list step's place differs from the run's, so Try again is refused", async () => {
+    await firstPause("task-list-1");
+    const firstStep = { ...listStep, xRenderer: "@cinatra-ai/email-outreach-agent:account-scope" };
+    storeMock.readAgentTemplateById.mockResolvedValue({ ...TEMPLATE, approvalPolicy: { steps: [firstStep, listStep, secondStep] } });
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await expect(refresh("task-list-1", "task-list-2")).rejects.toThrow("its place in the run's steps is not known");
+    expect(sendTask).not.toHaveBeenCalled();
+    expect(redis.store.has(REPEAT_KEY)).toBe(false);
+    expect(row.status).toBe("pending_approval");
+  });
+
+  /** The next pause arrives on a resumed run: it is not shown, and the run ends failed with the fixed reason. */
+  async function nextPauseNotShown(): Promise<void> {
+    const shownBefore = renderers();
+    row.status = "running";
+    await firstPause("task-next-1");
+    expect(renderers()).toEqual(shownBefore);
+    expect(row.status).toBe("failed");
+    expect(storeMock.transitionRunStatus).toHaveBeenLastCalledWith(
+      RUN.id,
+      "running",
+      "failed",
+      { error: RENDERER_GATE_PLACE_UNKNOWN_RUN_ERROR },
+      expect.anything(),
+    );
+  }
+
+  it("the refresh note cannot be read (a Redis fault) at the next pause of a flow of two renderer steps: the pause is not shown", async () => {
+    await firstPause("task-list-1");
+    const get = vi.spyOn(redis.FakeRedis.prototype, "get").mockImplementation(async (key: string) => {
+      if (key === REPEAT_KEY) throw new Error("Connection is closed.");
+      return redis.store.get(key) ?? null;
+    });
+    // red-first-expect: to deeply equal [ Array(1) ]
+    await nextPauseNotShown();
+    get.mockRestore();
+  });
+
+  it("the commit of the next pause's place fails (a Redis fault) in a flow of two renderer steps: the pause is not shown", async () => {
+    await firstPause("task-list-1");
+    const evalCall = vi.spyOn(redis.FakeRedis.prototype, "eval").mockImplementation(async () => {
+      throw new Error("Connection is closed.");
+    });
+    // red-first-expect: to deeply equal [ Array(1) ]
+    await nextPauseNotShown();
+    evalCall.mockRestore();
+  });
+
+  it("the next pause of a flow of two renderer steps is past its last step: the pause is not shown", async () => {
+    await firstPause("task-list-1");
+    row.status = "running";
+    await firstPause("task-second-1");
+    expect(renderers()).toEqual([LIST_STEP_ID, SECOND_STEP_ID]);
+    // red-first-expect: to deeply equal [ …(2) ]
+    await nextPauseNotShown();
+  });
+
+  it.each([
+    ["is replaced by {}", {}],
+    ["holds a step that is no object", { steps: [null, listStep, secondStep] }],
+    ["holds a step whose gate count is past the limit", { steps: [listStep, { ...secondStep, gateCount: 1_000_000_000 }] }],
+  ])("the policy %s at a pause: the pause is not shown", async (_label, approvalPolicy) => {
+    storeMock.readAgentTemplateById.mockResolvedValue({ ...TEMPLATE, approvalPolicy });
+    // red-first-expect: expected [ Array(1) ] to deeply equal []
+    await nextPauseNotShown();
+  });
+
+  it("the policy cannot be read at a pause (its read fails): the pause is not shown", async () => {
+    storeMock.readAgentTemplateById.mockRejectedValue(new Error("the database is unreachable"));
+    // red-first-expect: expected [ Array(1) ] to deeply equal []
+    await nextPauseNotShown();
+  });
+
+  it("a readable flow of one renderer step keeps its own screen through a Redis fault", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue({ ...TEMPLATE, approvalPolicy: { steps: [listStep] } });
+    const lrange = vi.spyOn(redis.FakeRedis.prototype, "lrange").mockImplementation(async () => {
+      throw new Error("Connection is closed.");
+    });
+    await firstPause("task-list-1");
+    lrange.mockRestore();
+    expect(renderers()).toEqual([LIST_STEP_ID]);
+    expect(row.status).toBe("pending_approval");
+  });
+
+  it("a readable flow with no renderer step still takes the fallback screen", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue({ ...TEMPLATE, approvalPolicy: { steps: [{ stepNumber: 1, requiresApproval: true }] } });
+    await firstPause("task-plain-1");
+    expect(renderers()).toEqual([SCHEMA_FIELD_FALLBACK_RENDERER_ID]);
+    expect(row.status).toBe("pending_approval");
   });
 });

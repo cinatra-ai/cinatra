@@ -513,7 +513,7 @@ import {
   buildA2UiMidRunTranslatorResolver,
   resolveRendererIdForKind,
 } from "./field-renderer-bindings.server";
-import { stepFiresRendererGate } from "./orchestrator-gate-predicate";
+import { stepFiresRendererGate, rendererGateStepsOf, RENDERER_GATE_STEP_GATE_COUNT_LIMIT } from "./orchestrator-gate-predicate";
 import {
   GATE_KEYS_NOT_FROM_RUN_INPUTS,
   readStoredKeyList,
@@ -1872,6 +1872,16 @@ async function resolveWayflowXRenderer(
     };
   }
 
+  // cinatra#3562: a renderer step whose gate count is no whole number from 1 to
+  // the limit leaves every place unknown (`rendererGateIndexOfRenderer` reads
+  // the same bound), checked before a place is taken: the stored policy can be
+  // replaced as a whole.
+  const gateCountOf = (step: (typeof childSteps)[number]): number => (typeof step.gateCount === "number" ? step.gateCount : 1);
+  const gateCountUnreadable = (n: number): boolean => !Number.isInteger(n) || n < 1 || n > RENDERER_GATE_STEP_GATE_COUNT_LIMIT;
+  if (childSteps.some((step) => gateCountUnreadable(gateCountOf(step)))) {
+    throw rendererGatePlaceUnknown(`renderer gate ${taskId} on run ${runId}: a step's gate count cannot be read`);
+  }
+
   // Redis-backed index: survives hot-reloads and restarts unlike a module-level
   // Map that can reset between the BullMQ dispatch and server-action approval.
   // #824: index into the RENDERER-gate sequence (excludes context-selection
@@ -1896,8 +1906,7 @@ async function resolveWayflowXRenderer(
   //   step "Initial emails" gateCount=1 → gate  3   shows drafts:output
   let accumulated = 0;
   for (const step of childSteps) {
-    const defaultGateCount = 1;
-    const gateCount = typeof step.gateCount === "number" ? step.gateCount : defaultGateCount;
+    const gateCount = gateCountOf(step);
     if (idx < accumulated + gateCount) {
       const xRenderer = typeof step.xRenderer === "string" ? step.xRenderer : fallback;
       return {
@@ -1911,24 +1920,26 @@ async function resolveWayflowXRenderer(
     }
     accumulated += gateCount;
   }
-  return { xRenderer: fallback, stepNumber: null, schema: null, artifactReviewTargetsInput: null, surfaceGateInputKeys: unpinnedKeys() };
+  // cinatra#3562: a place past the last step is no step of this flow; no screen is guessed for it.
+  throw rendererGatePlaceUnknown(`renderer gate ${taskId} on run ${runId} is at place ${idx}, past the flow's last renderer step`);
 }
 
 /**
  * cinatra#3562: the code of `RendererGatePlaceUnknownError` (packages/a2a,
  * event-log.ts), read by value so that a module double of the a2a package
- * needs no class: the place of a renderer pause cannot be established because
- * of a list step's refresh.
+ * needs no class: the place of a renderer pause, and so its step, cannot be
+ * established.
  */
 const RENDERER_GATE_PLACE_UNKNOWN_CODE = "renderer_gate_place_unknown";
 
-function isRendererGatePlaceUnknown(error: unknown): boolean {
-  return error instanceof Error && (error as { code?: unknown }).code === RENDERER_GATE_PLACE_UNKNOWN_CODE;
+/** cinatra#3562: an error with the code above, for a place this module finds unknown. */
+function rendererGatePlaceUnknown(message: string): Error {
+  return Object.assign(new Error(message), { code: RENDERER_GATE_PLACE_UNKNOWN_CODE });
 }
 
 /** The run error of a pause whose step cannot be established; it names no id or value. */
 export const RENDERER_GATE_PLACE_UNKNOWN_RUN_ERROR =
-  `${RENDERER_GATE_PLACE_UNKNOWN_CODE}: the run paused at a step that cannot be told after a list step's Try again, ` +
+  `${RENDERER_GATE_PLACE_UNKNOWN_CODE}: the run paused at a step that cannot be told, ` +
   "so the step was not shown and the run was stopped. Start the run again.";
 
 /**
@@ -2567,6 +2578,10 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // the renderer resolved. The predicate is the same shape test the renderer
     // branch already runs, asked once and kept.
     const gateAsksForContext = isContextSelectorInterruptPayload(spreadFromOutput);
+    // cinatra#3562: whether this flow maps its pauses to steps by place (more
+    // than one renderer step). Null until the template's steps were read and
+    // found readable; a fault before that leaves it unknown.
+    let mapsPausesByPlace: boolean | null = null;
     let rendererPlaceUnknown: Error | null = null;
     try {
       if (gateAsksForContext) {
@@ -2587,14 +2602,22 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         await rememberWayflowGateTask(runId, task.id);
       } else {
         const tmpl = await readAgentTemplateById(run.templateId);
-        const rawPolicySteps: unknown = tmpl?.approvalPolicy?.steps ?? [];
+        const rawPolicySteps: unknown = tmpl?.approvalPolicy?.steps;
         // Read before anything can throw on these steps, so the catch below
         // keeps it; an absent template leaves it null.
-        templateGateKeys = tmpl ? readTemplateGateKeys(rawPolicySteps) : null;
-        const policySteps = rawPolicySteps as Array<{
+        templateGateKeys = tmpl ? readTemplateGateKeys(rawPolicySteps ?? []) : null;
+        // cinatra#3562: steps that cannot be read (no template, no list, an
+        // entry that is no object) are no flow without renderer steps: the
+        // step of this pause cannot be told (fails closed below).
+        const readableSteps = rendererGateStepsOf(rawPolicySteps);
+        if (readableSteps === null) {
+          throw rendererGatePlaceUnknown(`renderer gate ${task.id} on run ${runId}: the flow's steps cannot be read`);
+        }
+        const policySteps = readableSteps as Array<{
           stepNumber?: number; requiresApproval?: boolean; hitlOwnedBy?: string; xRenderer?: string; gateCount?: number; schema?: Record<string, unknown>; inputMessageSchema?: Record<string, unknown>; firesRendererGate?: boolean; artifactReviewTargetsInput?: string; surfaceGateInputKeys?: unknown;
         }>;
         const rendererGateSteps = policySteps.filter(stepFiresRendererGate);
+        mapsPausesByPlace = rendererGateSteps.length > 1;
         if (rendererGateSteps.length === 1) {
           const s = rendererGateSteps[0]!;
           soleRendererGate = {
@@ -2615,12 +2638,13 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       }
     } catch (resolveError) {
       // non-fatal. For a single-renderer-gate agent, resolve to that one gate
-      // (never the schema-field fallback) — contract (1). Multi-gate / context
-      // flows keep the acceptable schema-field fallback, except (cinatra#3562)
-      // when a list step's refresh leaves the place of this pause, and so its
-      // step, unknown: no renderer is guessed for it (handled below).
-      if (isRendererGatePlaceUnknown(resolveError)) {
-        rendererPlaceUnknown = resolveError as Error;
+      // (never the schema-field fallback) — contract (1). A context gate, and a
+      // flow whose readable steps hold no renderer step, keep the schema-field
+      // fallback. Every other fault (cinatra#3562) leaves the step of this
+      // pause unknown: a flow that maps pauses by place, or one whose steps
+      // were not read. No renderer is guessed for it (handled below).
+      if (!gateAsksForContext && !soleRendererGate && mapsPausesByPlace !== false) {
+        rendererPlaceUnknown = resolveError instanceof Error ? resolveError : new Error(String(resolveError));
       } else if (soleRendererGate) {
         wayflowXRenderer = soleRendererGate.xRenderer;
         wayflowStepNumber = soleRendererGate.stepNumber;

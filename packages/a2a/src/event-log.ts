@@ -642,7 +642,9 @@ function readRendererGateRepeat(raw: string): { taskId: string; index: number } 
  * gate record and the compiled flow, which do not expire.
  *
  * Throws, and writes nothing, when the list holds entries and `taskId` is not
- * its last entry (the task is not the current renderer gate), or when the list
+ * its last entry (the task is not the current renderer gate), or is at another
+ * place than a given `placeFromSteps` (the steps changed since the run took
+ * that place), or when the list
  * is gone and `placeFromSteps` is not a place (a whole number below
  * `RENDERER_GATE_PLACE_LIMIT`), or when the place is past that limit: the place
  * of the next pause cannot be known, so the caller must not send the refresh.
@@ -658,7 +660,12 @@ export async function rememberWayflowRendererGateRepeat(
   let index = list.length - 1;
   if (index < 0 && isRendererGatePlace(placeFromSteps)) {
     index = placeFromSteps;
-  } else if (index < 0 || list[index] !== taskId || !isRendererGatePlace(index)) {
+  } else if (
+    index < 0 ||
+    list[index] !== taskId ||
+    !isRendererGatePlace(index) ||
+    (placeFromSteps !== null && placeFromSteps !== index)
+  ) {
     throw new Error(`the refresh of renderer gate ${taskId} on run ${runId} was not sent: its place in the run's steps is not known`);
   }
   await r.expire(key, GATE_SEQUENCE_TTL_S);

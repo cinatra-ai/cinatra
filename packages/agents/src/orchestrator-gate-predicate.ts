@@ -27,13 +27,17 @@ export function stepFiresRendererGate(step: RendererGateStepShape): boolean {
 }
 
 /**
- * cinatra#3562: a stored policy's `steps` as a list of step objects. A policy
- * can be saved with `steps` that is no list, or with entries that are no
- * objects; those give no step here, so a reader never throws on them.
+ * cinatra#3562: a stored policy's `steps` as a list of step objects, or null
+ * when the list cannot be read: `steps` is no list (absent, or a policy saved
+ * as `{}`), or an entry is no object. An unreadable list is never read as a
+ * flow with no renderer step: the caller cannot tell which step a pause is,
+ * and so must not show or refresh one.
  */
-export function rendererGateStepsOf(steps: unknown): Array<RendererGateStepShape & { gateCount?: unknown }> {
-  if (!Array.isArray(steps)) return [];
-  return steps.filter((step): step is RendererGateStepShape & { gateCount?: unknown } => step !== null && typeof step === "object" && !Array.isArray(step));
+export function rendererGateStepsOf(steps: unknown): Array<RendererGateStepShape & { gateCount?: unknown }> | null {
+  if (!Array.isArray(steps)) return null;
+  const isStep = (step: unknown): step is RendererGateStepShape & { gateCount?: unknown } =>
+    step !== null && typeof step === "object" && !Array.isArray(step);
+  return steps.every(isStep) ? steps : null;
 }
 
 /**
