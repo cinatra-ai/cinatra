@@ -25,6 +25,7 @@ import { Client } from "pg";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { buildCreateStoreSchemaQueries } from "@/lib/drizzle-store";
+import { replayStoreSchema } from "@/lib/test-support/store-schema-replay";
 import { skillEfficacySchemaQueries } from "@/lib/skill-lifecycle-schema";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
@@ -105,21 +106,10 @@ describe.skipIf(!hasDb)("injection-drop ledger (real store)", () => {
     client = new Client({ connectionString: dbUrl });
     await client.connect();
     await client.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
-    for (const q of buildCreateStoreSchemaQueries(schema)) {
-      const head = q.text.trim().slice(0, 6).toUpperCase();
-      if (
-        head !== "CREATE" &&
-        head !== "ALTER " &&
-        head !== "DROP T" &&
-        head !== "DROP S" &&
-        head !== "DELETE" &&
-        head !== "UPDATE" &&
-        !head.startsWith("DO $$")
-      ) {
-        continue;
-      }
-      await client.query(q.text);
-    }
+    // The loop this replaced also replayed the heads named here, so they stay.
+    await replayStoreSchema(client, buildCreateStoreSchemaQueries(schema), {
+      additionalHeads: ["DO $$ ", "DO $$\n", "DELETE", "UPDATE"],
+    });
     // `agent_run_skills_used.run_id` is FK-bound to a REAL run row — the ledger
     // is per-run by construction and the constraint is part of what this test
     // proves is honoured.
