@@ -91,19 +91,37 @@ export type SiteToolCallInput = {
    */
   serverId?: string;
   /**
-   * OPTIONAL row binding (cinatra#3745): the `rawAnnotations` of the
-   * `SiteToolRow` the caller listed and checked, sent back unchanged. The host
-   * refuses the call with `catalog_entry_changed` (nothing executed) unless
-   * the row it resolves now carries equal annotations (sorted-key deep
-   * equality; an unannotated row is listed as `{}`). Omitted, the call
-   * behaves as before. It can only add a refusal.
+   * OPTIONAL row binding, BEST EFFORT (cinatra#3745): the `rawAnnotations` of
+   * the `SiteToolRow` the caller listed and checked, sent back unchanged. A
+   * host that enforces it refuses the call with `catalog_entry_changed`
+   * (nothing executed) unless the row it resolves now carries equal
+   * annotations. A host from before cinatra#3745 IGNORES it, so a caller must
+   * never rely on it here: a call that relies on the binding uses
+   * `invokeSiteToolGuarded`, which an older host does not have.
    */
   expectedRawAnnotations?: Record<string, unknown>;
+};
+
+/**
+ * Input to a GUARDED site-tool call (cinatra#3745), the call a connector makes
+ * when it RELIES on the row it listed: `invokeSiteToolGuarded` executes the tool
+ * only when every guard below holds against the row the host resolves now, and
+ * otherwise refuses with nothing executed, parked or hooked.
+ */
+export type GuardedSiteToolCallInput = Omit<SiteToolCallInput, "expectedRawAnnotations"> & {
   /**
-   * OPTIONAL read-only assertion (cinatra#3745): when `"read"`, the host
-   * refuses the call with `catalog_entry_not_read` (nothing executed) unless
-   * the resolved row is read-class by the host's own classifier and its name
-   * is not on the known-destructive list. It can only add a refusal.
+   * REQUIRED: the `rawAnnotations` of the `SiteToolRow` the caller listed and
+   * checked, sent back unchanged. The host refuses with
+   * `catalog_entry_changed` unless the row it resolves now carries equal
+   * annotations (sorted-key deep equality; an unannotated row is listed as
+   * `{}`). A value that is not a plain object is refused.
+   */
+  expectedRawAnnotations: Record<string, unknown>;
+  /**
+   * OPTIONAL read-only assertion: when `"read"`, the host refuses with
+   * `catalog_entry_not_read` unless the resolved row is read-class by the
+   * host's own classifier and its name is not on the known-destructive list.
+   * Any other value is refused.
    */
   expectedClass?: "read";
 };
@@ -196,6 +214,28 @@ export type HostConnectorInstanceInvokerService = {
   /** Governed single-tool call → the tool's unwrapped result (structuredContent
    * preferred; typed errors thrown on failure). */
   invokeSiteTool: (input: SiteToolCallInput) => Promise<unknown>;
+  /**
+   * GUARDED single-tool call (cinatra#3745) — the host's declaration that it
+   * ENFORCES the guards of `GuardedSiteToolCallInput`. OPTIONAL because a host
+   * from before cinatra#3745 does not have it; its presence is the capability.
+   *
+   * A connector call that RELIES on a guard (a read tool that checked the
+   * listed row, for example) MUST go through this method and MUST refuse on its
+   * own when the method is absent — never fall back to `invokeSiteTool`, which
+   * an older host executes without the guards:
+   *
+   *   if (typeof invoker.invokeSiteToolGuarded !== "function") {
+   *     throw new Error("guarded site-tool calls are unsupported by this host");
+   *   }
+   *   return invoker.invokeSiteToolGuarded({ ...call, expectedRawAnnotations: row.rawAnnotations, expectedClass: "read" });
+   *
+   * Even without the check, calling the absent method throws before anything
+   * is sent, so an older host fails closed. A connector cannot value-import an
+   * SDK helper (its serverEntry graph keeps the SDK type-only), so the check is
+   * this inline test. A future guard field gets a NEW method, never a new
+   * field here, so the same presence test keeps meaning "all guards enforced".
+   */
+  invokeSiteToolGuarded?: (input: GuardedSiteToolCallInput) => Promise<unknown>;
   /** Governed catalog listing (gate runs BEFORE any catalog read, B2). */
   listSiteTools: (input: SiteToolsListInput) => Promise<SiteToolsListPage>;
 };

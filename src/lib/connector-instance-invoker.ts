@@ -728,7 +728,13 @@ function refuseUnboundEntry(
     }
   }
   if (input.expectedClass !== undefined) {
-    if (classifyAnnotations(entry.rawAnnotations) !== "read" || isKnownDestructiveToolName(name)) {
+    // Only "read" is enforced; any other value (a later class this host does
+    // not know) is refused rather than read as no assertion.
+    if (
+      input.expectedClass !== "read" ||
+      classifyAnnotations(entry.rawAnnotations) !== "read" ||
+      isKnownDestructiveToolName(name)
+    ) {
       throw new InvokerError(
         "catalog_entry_not_read",
         "the site tool is not a read tool; this call may only read",

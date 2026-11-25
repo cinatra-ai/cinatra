@@ -208,6 +208,16 @@ describe("invokeConnectorInstanceTool — expectedClass: \"read\" (cinatra#3745)
     expect(destructiveFire).not.toHaveBeenCalled();
   });
 
+  it("refuses any other expectedClass value, even on a read-class entry", async () => {
+    const { deps, callWireTool } = makeDeps(snapshot([{ name: READ_TOOL, rawAnnotations: { readOnlyHint: true } }], "rev-a"));
+    const call = invokeConnectorInstanceTool(
+      { connectorKey: "wordpress", toolName: READ_TOOL, args: {}, actor: ACTOR, expectedClass: "write" as never },
+      deps,
+    );
+    await expect(call).rejects.toMatchObject({ code: "catalog_entry_not_read" });
+    expect(callWireTool).not.toHaveBeenCalled();
+  });
+
   it("passes a read-class entry", async () => {
     const { deps, callWireTool } = makeDeps(snapshot([{ name: READ_TOOL, rawAnnotations: { readOnlyHint: true } }], "rev-a"));
     await invokeConnectorInstanceTool(

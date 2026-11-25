@@ -210,7 +210,7 @@ vi.mock("@/lib/connector-instance-mcp-transport", async (importOriginal) => {
 
 import { registerCapabilityProvider, resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
 import { HOST_CONNECTOR_SERVICE_CAPABILITIES } from "@cinatra-ai/sdk-extensions/internal";
-import type { HostConnectorInstanceInvokerService } from "@cinatra-ai/sdk-extensions";
+import type { GuardedSiteToolCallInput, HostConnectorInstanceInvokerService } from "@cinatra-ai/sdk-extensions";
 import { InvokerError } from "@/lib/connector-instance-mcp-transport";
 import { InstanceWriteAuthorityError } from "@/lib/connector-instance-write-authority";
 import { mcpRequestContextStorage, type McpRequestContext } from "@cinatra-ai/mcp-server";
@@ -471,7 +471,7 @@ describe("chat actor connector-instance-invoker resolver (cinatra#2024 S9 G1)", 
   });
 });
 
-describe("invokeSiteTool copies the row binding to the invoker (cinatra#3745)", () => {
+describe("invokeSiteTool copies the best-effort row binding to the invoker (cinatra#3745)", () => {
   beforeAll(() => {
     resolveOrgRoleForUser.mockImplementation(async (orgId) => (orgId ? "member" : undefined));
   });
@@ -511,18 +511,134 @@ describe("invokeSiteTool copies the row binding to the invoker (cinatra#3745)", 
     expect(wireCalls.filter(isExecute)).toHaveLength(0);
   });
 
-  it("expectedClass reaches the invoker: a write-class row is refused before execution, a read-class row executes", async () => {
+  it("a call without either field behaves as before: a write-class row executes", async () => {
     wireCalls.length = 0;
-    const refused = runAsChatActor({ userId: "user-1", orgId: "org-a" }, () =>
-      invoker.invokeSiteTool({ toolName: "core/update-option", args: {}, instanceId: "wp-write", expectedClass: "read" }),
+    const ok = await runAsChatActor({ userId: "user-1", orgId: "org-a" }, () =>
+      invoker.invokeSiteTool({ toolName: "core/update-option", args: {}, instanceId: "wp-write" }),
     );
-    // red-first-expect: promise resolved "{ structuredContent: { ok: true } }" instead of rejecting
+    expect(ok).toEqual({ structuredContent: { ok: true } });
+    expect(wireCalls.filter(isExecute)).toHaveLength(1);
+  });
+});
+
+describe("invokeSiteToolGuarded — the host enforces the guards it declares (cinatra#3745)", () => {
+  beforeAll(() => {
+    resolveOrgRoleForUser.mockImplementation(async (orgId) => (orgId ? "member" : undefined));
+  });
+
+  const isExecute = (c: { name: string }) => c.name === "mcp-adapter-execute-ability";
+  const asMember = <T>(fn: () => Promise<T>) => runAsChatActor({ userId: "user-1", orgId: "org-a" }, fn);
+
+  // The call a connector makes when it relies on the guards: refuse on its own
+  // when the host does not declare them, never fall back to `invokeSiteTool`.
+  const guardedCall = (service: HostConnectorInstanceInvokerService, input: GuardedSiteToolCallInput) => {
+    if (typeof service.invokeSiteToolGuarded !== "function") {
+      return Promise.reject(new Error("guarded site-tool calls are unsupported by this host"));
+    }
+    return service.invokeSiteToolGuarded(input);
+  };
+
+  it("this host declares the guarded call", () => {
+    expect(typeof invoker.invokeSiteToolGuarded).toBe("function");
+  });
+
+  it("expectedClass \"read\": a write-class row is refused before execution, a read-class row executes", async () => {
+    wireCalls.length = 0;
+    const refused = asMember(() =>
+      guardedCall(invoker, {
+        toolName: "core/update-option",
+        args: {},
+        instanceId: "wp-write",
+        expectedRawAnnotations: { readOnlyHint: false },
+        expectedClass: "read",
+      }),
+    );
     await expect(refused).rejects.toMatchObject({ code: "catalog_entry_not_read" });
     expect(wireCalls.filter(isExecute)).toHaveLength(0);
 
-    const ok = await runAsChatActor({ userId: "user-1", orgId: "org-a" }, () =>
-      invoker.invokeSiteTool({ toolName: "core/get-site-info", args: {}, instanceId: "wp-valid", expectedClass: "read" }),
+    const ok = await asMember(() =>
+      guardedCall(invoker, {
+        toolName: "core/get-site-info",
+        args: {},
+        instanceId: "wp-valid",
+        expectedRawAnnotations: { readOnlyHint: true },
+        expectedClass: "read",
+      }),
     );
     expect(ok).toEqual({ structuredContent: { ok: true } });
+    expect(wireCalls.filter(isExecute)).toHaveLength(1);
+  });
+
+  it("expectedRawAnnotations: a row that differs from the listed one is refused before execution", async () => {
+    wireCalls.length = 0;
+    const refused = asMember(() =>
+      guardedCall(invoker, {
+        toolName: "core/get-site-info",
+        args: {},
+        instanceId: "wp-valid",
+        expectedRawAnnotations: { readOnlyHint: false },
+      }),
+    );
+    await expect(refused).rejects.toMatchObject({ code: "catalog_entry_changed" });
+    expect(wireCalls.filter(isExecute)).toHaveLength(0);
+  });
+
+  it("refuses a guarded call without the listed row's annotations, or with an unknown class, before execution", async () => {
+    wireCalls.length = 0;
+    for (const bad of [undefined, null, [], "x"]) {
+      const refused = asMember(() =>
+        guardedCall(invoker, {
+          toolName: "core/get-site-info",
+          args: {},
+          instanceId: "wp-valid",
+          expectedRawAnnotations: bad as never,
+        }),
+      );
+      await expect(refused).rejects.toMatchObject({ code: "catalog_entry_changed" });
+    }
+    const unknownClass = asMember(() =>
+      guardedCall(invoker, {
+        toolName: "core/get-site-info",
+        args: {},
+        instanceId: "wp-valid",
+        expectedRawAnnotations: { readOnlyHint: true },
+        expectedClass: "write" as never,
+      }),
+    );
+    await expect(unknownClass).rejects.toMatchObject({ code: "catalog_entry_not_read" });
+    expect(wireCalls.filter(isExecute)).toHaveLength(0);
+  });
+
+  it("on a host from before the guards (no invokeSiteToolGuarded) the connector's call refuses on its own and nothing executes", async () => {
+    // The older host's service: exactly the two methods it published.
+    const olderHost: HostConnectorInstanceInvokerService = {
+      invokeSiteTool: vi.fn(invoker.invokeSiteTool),
+      listSiteTools: invoker.listSiteTools,
+    };
+    wireCalls.length = 0;
+    const refused = asMember(() =>
+      guardedCall(olderHost, {
+        toolName: "core/update-option",
+        args: {},
+        instanceId: "wp-write",
+        expectedRawAnnotations: { readOnlyHint: true },
+        expectedClass: "read",
+      }),
+    );
+    await expect(refused).rejects.toThrow("guarded site-tool calls are unsupported by this host");
+    expect(olderHost.invokeSiteTool).not.toHaveBeenCalled();
+    expect(wireCalls.filter(isExecute)).toHaveLength(0);
+    // A connector that skips the presence test still fails closed: the absent
+    // method throws before anything is sent.
+    const unchecked = asMember(async () =>
+      (olderHost as Required<HostConnectorInstanceInvokerService>).invokeSiteToolGuarded({
+        toolName: "core/update-option",
+        args: {},
+        instanceId: "wp-write",
+        expectedRawAnnotations: {},
+      }),
+    );
+    await expect(unchecked).rejects.toBeInstanceOf(TypeError);
+    expect(wireCalls.filter(isExecute)).toHaveLength(0);
   });
 });
