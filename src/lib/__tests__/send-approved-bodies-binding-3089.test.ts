@@ -34,6 +34,14 @@
  *      and named in doubt and the answer is failed; the record is written
  *      again a bounded number of times when the write throws
  *   R1 the reference-only form is unchanged
+ *   D1 a provider that fails on recipient two: the call stops there (recipient
+ *      three is not attempted), answers failed with sentCount 1 and names
+ *      recipient two in doubt (by draft, message and contact, no address) with
+ *      the manual check; a new approval mails recipient three only: recipient
+ *      one is skipped, recipient two is not mailed again
+ *   P1 no request routes a publishing-step call (a decision governs its step)
+ *      into the reference-only form: a decision with no approved list, one not
+ *      released, or a signed call with no decision is refused before any mail
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
@@ -60,7 +68,9 @@ const {
   routing: { connectorId: null as string | null, redirectOn: false, redirectTo: "" },
 }));
 
-vi.mock("../artifacts/current-decided-revision-read", () => ({
+vi.mock("../artifacts/current-decided-revision-read", async (importOriginal) => ({
+  // The refusal class stays the module's own, so a refusal answers its code.
+  ReviewedArtifactsRequiredError: (await importOriginal<typeof import("../artifacts/current-decided-revision-read")>()).ReviewedArtifactsRequiredError,
   readCurrentDecidedRevision: readRevisionMock,
 }));
 vi.mock("@cinatra-ai/objects", () => ({
@@ -133,8 +143,9 @@ function memorySendLedger() {
 
 /** The publish decision a person released for the calling step, surfacing the
  *  list a case names (cinatra#3089): the campaign, the card's Recipients list
- *  row and its Emails row, drawn from the frozen values. A case that names no
- *  list gets a released decision that surfaced none. */
+ *  row and its Emails row, drawn from the frozen values. Called with no list,
+ *  it is a released decision that surfaced none (the fixture's reader answers
+ *  no decision at all for a case that names no list). */
 function releasedCardFor(named: unknown) {
   const list = (named === undefined ? [] : typeof named === "string" ? JSON.parse(named) : named) as Array<{
     recipientEmail: string;
@@ -202,6 +213,11 @@ function makeFixture(opts?: {
   slowMail?: boolean;
   /** The mail sender in place of the recording stand-in (the shipped one). */
   sendEmail?: TriggerEmailSendDeps["sendEmail"];
+  /** The id of the released decision this call was signed for (a new approval
+   *  is a new id); the decision read carries it. */
+  decisionId?: string;
+  /** The decision read, in place of the released card of the case's list. */
+  decision?: unknown;
 }) {
   const sendLedger = opts?.sendLedger ?? memorySendLedger();
   const sent: Array<{ to: string[]; textBody: string }> = opts?.sent ?? [];
@@ -262,8 +278,15 @@ function makeFixture(opts?: {
     readRunReviewedBodies: async () => false,
     readObjectRuns: async () => [],
     // The run of the call follows the case's run: none when the case has none.
-    readCallingRun: async () => (runId ? { runId, stepId: "send" } : null),
-    readPublishDecision: async () => releasedCardFor(named),
+    readCallingRun: async () =>
+      runId ? { runId, stepId: "send", ...(opts?.decisionId ? { publishDecisionId: opts.decisionId } : {}) } : null,
+    // A case that names no list calls from a step no publish decision governs.
+    readPublishDecision: async () =>
+      opts && "decision" in opts
+        ? opts.decision
+        : named === undefined
+          ? null
+          : { ...(opts?.decisionId ? { id: opts.decisionId } : {}), ...releasedCardFor(named) },
   } as unknown as TriggerEmailSendDeps;
   let named: unknown;
   const handlers = createTriggerEmailSendHandlers(createTriggerEmailSendUseCases(deps));
@@ -672,5 +695,69 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     const failed = await makeFixture({ sendLedger, failMailAt: 2 }).start({});
     expect(failed).toMatchObject({ status: "failed", sentCount: 0 });
     expect(failed).not.toHaveProperty("inDoubtCount");
+  });
+});
+
+// The invariant the send rests on, with the route that consumes each released decision once before the send (that
+// route and its own test belong to the sibling change, which merges after this one): an approved body is handed to a
+// recipient at most once across all calls and all decisions; a call that did not complete answers failed; the rest
+// takes a new approval, which mails only the recipients not yet sent and not in doubt.
+describe("cinatra#3089 — one send per decision, one mail per recipient across decisions", () => {
+  it("D1 a provider that fails on recipient two: the call stops there; a new approval mails recipient three only", async () => {
+    const ledger: Ledger = new Map();
+    const sendLedger = memorySendLedger();
+    const sent: Array<{ to: string[]; textBody: string }> = [];
+    const first = makeFixture({ ledger, sendLedger, sent, failMailAt: 2, decisionId: "decision-1" });
+    const failed = await first.start({ releasedList: approved });
+    // Stopped at the first provider failure: recipient three was not attempted by this call.
+    expect(first.sendEmail.mock.calls.map((c) => (c[0] as { to: string[] }).to[0])).toEqual(["p1@example.com", "p2@example.com"]);
+    expect(failed).toMatchObject({ status: "failed", sentCount: 1, alreadySentCount: 0, inDoubtCount: 1 });
+    // The answer names the message in doubt by draft, message and contact, says that no later send mails it and that
+    // clearing it is a manual check with the mail provider; it names no address.
+    expect(failed.errorMessage).toContain("draft 2 (email-body:run-1:art-2) for contact c2");
+    expect(failed.errorMessage).toContain("never mailed again by this or any later send, also not under a new approval");
+    expect(failed.errorMessage).toContain("Nothing in the app clears an in-doubt mark; this is a manual check");
+    expect(failed.errorMessage).not.toMatch(/@example\.com/);
+
+    // A NEW approval: another released decision of the same step, signed for its own call.
+    const second = makeFixture({ ledger, sendLedger, sent, decisionId: "decision-2" });
+    const rest = await second.start({ releasedList: approved });
+    expect(second.sendEmail.mock.calls.map((c) => (c[0] as { to: string[] }).to[0])).toEqual(["p3@example.com"]);
+    expect(rest).toMatchObject({ status: "failed", sentCount: 1, alreadySentCount: 1, inDoubtCount: 1 });
+    expect(rest.errorMessage).toContain("draft 2 (email-body:run-1:art-2) for contact c2");
+    // Handed to the provider across both calls: recipient one once, recipient two once (the failed hand-over, never
+    // again), recipient three once; delivered: one and three.
+    const attempts = [...first.sendEmail.mock.calls, ...second.sendEmail.mock.calls].map((c) => (c[0] as { to: string[] }).to[0]);
+    expect(["p1@example.com", "p2@example.com", "p3@example.com"].map((to) => attempts.filter((a) => a === to).length)).toEqual([1, 1, 1]);
+    expect(sent.map((m) => m.to[0])).toEqual(["p1@example.com", "p3@example.com"]);
+  });
+
+  it("P1 no request routes a publishing-step call into the reference-only form, which keeps no send record", async () => {
+    // The calling step is governed by a released decision that holds no approved list, or by one not released.
+    const noList = releasedCardFor(undefined);
+    const requests: Array<Record<string, unknown>> = [
+      {},
+      { approvedBodies: approved },
+      { senderEmail: "team@example.com" },
+      { releasedList: undefined },
+    ];
+    for (const decision of [noList, { ...noList, status: "parked" }, { ...noList, decidedBy: null }]) {
+      for (const request of requests) {
+        const fx = makeFixture({ decision });
+        const result = await fx.start(request);
+        // red-first-expect: expected 'completed' to be 'failed'
+        expect(result.status).toBe("failed");
+        expect(result.sentCount).toBe(0);
+        expect(fx.sendEmail).not.toHaveBeenCalled();
+        expect(fx.bindBody).not.toHaveBeenCalled();
+        expect(fx.sendLedger.rows.size).toBe(0);
+      }
+    }
+    const fx = makeFixture({ decision: noList });
+    expect((await fx.start({})).errorMessage).toContain("holds no list of approved bodies, and a publishing step sends only the bodies a person released");
+    // A call signed for a decision while no decision governs its step is refused too.
+    const signed = makeFixture({ decision: null, decisionId: "decision-1" });
+    expect(await signed.start({})).toMatchObject({ status: "failed", sentCount: 0 });
+    expect(signed.sendEmail).not.toHaveBeenCalled();
   });
 });

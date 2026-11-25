@@ -22,6 +22,22 @@
  * `getCampaignFromDatabase`. Both heavy modules (`@/lib/database` and
  * `@cinatra-ai/gmail-connector`) are loaded lazily so vitest can run the unit
  * tests without resolving them — tests pass mocked deps via the factory.
+ *
+ * THE INVARIANT OF THE APPROVED SEND (cinatra#3089): a released publish decision
+ * starts at most one send call (the caller consumes it once, before the send),
+ * and an approved body is handed to a recipient at most once across all calls
+ * and all decisions. Each message is claimed durably before the provider call
+ * and marked done after it; a message already done is skipped (counted in
+ * `alreadySentCount`); a message whose provider call failed, or whose done mark
+ * could not be written, stays in doubt and is mailed by no later call (counted
+ * in `inDoubtCount` and named in the answer, by draft, message and contact, never
+ * by address). A call that did not complete answers `status: "failed"` with a
+ * truthful `sentCount`; it stops at the first provider failure. Finishing the
+ * rest takes a new approval, whose send mails only the recipients not yet sent
+ * and not in doubt. A call governed by a publish decision always takes this
+ * ledgered form: the form is chosen by the decision the server resolves for the
+ * calling step, never by the request, and a publishing-step call without an
+ * approved list is refused.
  */
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import type { TriggerEmailSendUseCases } from "@cinatra-ai/trigger-email-send";
@@ -445,6 +461,14 @@ type InitialSendStateRow = {
   inDoubtCount?: number;
 };
 const sendStateByCampaign = new Map<string, InitialSendStateRow>();
+
+/** What the answer of an approved send tells a person about a message in doubt (cinatra#3089). No tool or route clears
+ *  an in-doubt mark: it is a manual check. */
+const IN_DOUBT_MANUAL_CHECK =
+  "A message in doubt is never mailed again by this or any later send, also not under a new approval: the mail " +
+  "provider may have accepted it. Check the sent mail of the connected mailbox for each message named (by its contact, " +
+  "in this campaign) to learn whether it went out. Nothing in the app clears an in-doubt mark; this is a manual check, " +
+  "and a message that did not go out must be sent by hand";
 
 type ObjectsEnvelope = {
   id?: string;
@@ -1085,7 +1109,19 @@ async function runInitialSend(args: {
           ],
         });
         if (!read.ok) return refuse(`${read.error} (${decisionOf})`);
-        if (read.list) {
+        // THE BRANCH IS CHOSEN BY THE DECISION, NEVER BY THE REQUEST: a call
+        // whose step is governed by a publish decision is a publishing-step
+        // call, and it sends only through the approved (ledgered) form below.
+        // A decision with no approved list cannot route it into the
+        // reference-only form (which keeps no per-message record): it is
+        // refused before any mail.
+        if (!read.list) {
+          const { ReviewedArtifactsRequiredError } = await import("./artifacts/current-decided-revision-read");
+          throw new ReviewedArtifactsRequiredError(
+            `The send was refused before any email went out: the publish decision that governs ${decisionOf} holds no list of approved bodies, and a publishing step sends only the bodies a person released`,
+          );
+        }
+        {
           const surfaced = decision.surfacedValues;
           const frozenCampaign = Object.prototype.hasOwnProperty.call(surfaced, "campaignId") ? surfaced.campaignId : undefined;
           if (textOf(frozenCampaign) === undefined) refuse(`the released publish decision carries no campaign (${decisionOf})`);
@@ -1398,12 +1434,16 @@ async function runInitialSend(args: {
     // binding (claim, hand-over, done mark). A message an earlier call mailed is
     // skipped and counted in `alreadySentCount`; one another call holds is not
     // mailed and is counted in `inDoubtCount`. A provider error after a won
-    // claim leaves the message in doubt and stops the send; the claim is given
-    // back only for an error raised before the hand-over to the transport
+    // claim leaves the message in doubt and STOPS the send: the later messages
+    // are not attempted by this call, since a provider that just failed may
+    // fail (or half-accept) again, and each further attempt could add a message
+    // in doubt; a new approval sends them. The claim is given back only for an
+    // error raised before the hand-over to the transport
     // (`EffectNotStartedError`). A mail handed over whose done mark cannot be
     // written is counted in `sentCount` AND in `inDoubtCount`. A message in doubt
-    // stays unmailed by every later call until a person establishes with the
-    // mail provider whether it went out; the answer and the log name it.
+    // is mailed by no later call, under any decision: nothing clears the mark
+    // (IN_DOUBT_MANUAL_CHECK). The answer names it by draft, message and
+    // contact; the log names it by draft and message, never by address.
     if (approvedByIndex && runScopeId) {
       let sentCount = 0;
       let alreadySentCount = 0;
@@ -1499,7 +1539,7 @@ async function runInitialSend(args: {
         const failure = outcome.failure;
         if (!failure) {
           if (outcome.inDoubt) {
-            inDoubt.push(name);
+            inDoubt.push(`${name} for contact ${approved.contactId}`);
             console.warn(
               `[trigger-email-send] ${name} of run ${runScopeId} is claimed but not recorded as sent; it was not mailed again`,
             );
@@ -1515,13 +1555,13 @@ async function runInitialSend(args: {
           continue;
         }
         if (failure.stage === "mark") {
-          unrecorded.push(`${name} was mailed, but its sent record could not be written: ${failure.reason}`);
+          unrecorded.push(`${name} was mailed, but its sent record could not be written: ${failure.reason} (contact ${approved.contactId})`);
           console.warn(
             `[trigger-email-send] ${name} of run ${runScopeId} was mailed but could not be recorded as sent; it is in doubt: ${failure.reason}`,
           );
           continue;
         }
-        if (outcome.inDoubt) inDoubt.push(name);
+        if (outcome.inDoubt) inDoubt.push(`${name} for contact ${approved.contactId}`);
         stopped =
           failure.stage === "claim"
             ? `the mail of ${name} could not be claimed, so it was not sent: ${failure.reason}`
@@ -1540,11 +1580,7 @@ async function runInitialSend(args: {
         ...(stopped ? [stopped] : []),
         ...unrecorded,
         ...(inDoubt.length > 0 ? [`${inDoubt.length} message(s) are in doubt: ${inDoubt.join(", ")}`] : []),
-        ...(inDoubt.length + unrecorded.length > 0
-          ? [
-              "A message in doubt is mailed by no later call until a person establishes with the mail provider whether it went out",
-            ]
-          : []),
+        ...(inDoubt.length + unrecorded.length > 0 ? [IN_DOUBT_MANUAL_CHECK] : []),
       ];
       return {
         status: problems.length > 0 ? "failed" : "completed",

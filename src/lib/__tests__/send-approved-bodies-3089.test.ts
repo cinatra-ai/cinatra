@@ -56,10 +56,12 @@
  *      address in another letter case is refused;
  *      a list surfaced as JSON text is refused before any claim: the card
  *      draws no bodies from it
- *   G1-G4 the send reads the decision that governs its call through the one
+ *   G1-G5 the send reads the decision that governs its call through the one
  *      resolution the publishing call guard claims under (a step nested in a
  *      publishing node, or signed with the node's own id, reads the node's
- *      decision), and a call signed for a decision is served by that one only
+ *      decision), a call signed for a decision is served by that one only, and
+ *      a publishing step that holds no decision is refused, never sent in the
+ *      reference-only form
  *   B1-B6 what is sent is byte for byte what the card showed: a candidate
  *      subject or address that differs from the shown one in spaces, a
  *      non-breaking space, letter case or Unicode normalisation is refused;
@@ -141,8 +143,9 @@ function memorySendLedger() {
 
 /** The publish decision a person released for the calling step, surfacing the
  *  list a case names (cinatra#3089): the campaign, the card's Recipients list
- *  row and its Emails row, drawn from the frozen values. A case that names no
- *  list gets a released decision that surfaced none. */
+ *  row and its Emails row, drawn from the frozen values. Called with no list,
+ *  it is a released decision that surfaced none (the fixture's reader answers
+ *  no decision at all for a case that names no list). */
 function releasedCardFor(named: unknown, campaignId: unknown = CAMPAIGN_ID, shownList?: unknown) {
   // The Recipients row draws the released list itself, or the records a case
   // names as `shownList` (what the card showed, when it differs).
@@ -309,8 +312,9 @@ function makeFixture(opts?: {
     } as Parameters<typeof materializeEmailFanout>[1]),
   );
   // The decision the send asks for: a case reads which step it asked for.
+  // A case that names no list calls from a step no publish decision governs.
   const readPublishDecision = vi.fn(async (_runId: string, _stepId: string): Promise<StepPublishDecision | null> =>
-    releasedCardFor(named, CAMPAIGN_ID, shown));
+    named === undefined ? null : releasedCardFor(named, CAMPAIGN_ID, shown));
   const readRunReviewedBodies = vi.fn(async (_runId: string) => {
     const answer = opts?.reviewedBodies ?? false;
     if (answer instanceof Error) throw answer;
@@ -874,6 +878,21 @@ describe("cinatra#3089 — the send reads the decision that governs its call, as
     governing.readDecisionForRunNode.mockResolvedValue({ id: "d-publish", ...releasedCardFor(approved) });
     // red-first-expect: expected 'completed' to be 'failed'
     await expectRefused(makeFixture({ readPublishDecision: null }), {}, "which publishing step governs the call cannot be told");
+  });
+
+  it("G5 a send step inside a publishing node that holds no decision is refused, never sent in the reference-only form", async () => {
+    governing.readRunBoundGraph.mockResolvedValue(JSON.stringify(NESTED_GRAPH));
+    // No decision row at all, on a run that filed no bodies for review.
+    // red-first-expect: expected 'completed' to be 'failed'
+    await expectRefused(makeFixture({ readPublishDecision: null }), {}, "the publishing step that governs the call holds no decision");
+    // The same for a step the template lists itself, with no graph to read.
+    governing.readRunBoundGraph.mockResolvedValue(null);
+    governing.readAgentTemplateById.mockResolvedValue({ id: "tmpl-1", publishingSteps: ["send"] });
+    await expectRefused(makeFixture({ readPublishDecision: null }), {}, "the publishing step that governs the call holds no decision");
+    // A step no publishing node governs keeps the reference-only form.
+    governing.readRunBoundGraph.mockResolvedValue(JSON.stringify(NESTED_GRAPH));
+    const unrelated = makeFixture({ readPublishDecision: null, callingRun: { runId: "run-1", stepId: "draft" } });
+    expect((await unrelated.start({})).status).toBe("completed");
   });
 
   it("G4 a call signed for a publish decision is served only by that decision", async () => {

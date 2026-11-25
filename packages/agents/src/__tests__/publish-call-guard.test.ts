@@ -419,6 +419,10 @@ describe("the decision that governs a call (readGoverningPublishDecision)", () =
     decisions.readDecisionForRunNode.mockResolvedValue(null);
     expect(await readGoverningPublishDecision("run-1", "draft")).toBeNull();
     expect(decisions.readDecisionForRunNode).toHaveBeenLastCalledWith("run-1", "draft");
+    // A publishing step, or a step inside one, that holds no decision: never read as a step with no decision.
+    // red-first-expect: readGoverningPublishDecision is not a function
+    await expect(readGoverningPublishDecision("run-1", "compose")).rejects.toThrow("the publishing step that governs the call holds no decision");
+    await expect(readGoverningPublishDecision("run-1", "publish")).rejects.toThrow("the publishing step that governs the call holds no decision");
     // The run is not found: no decision can be read for it.
     storeMock.readAgentRunById.mockResolvedValue(null);
     await expect(readGoverningPublishDecision("run-1", "send")).rejects.toThrow("the run of the call is not found");
