@@ -49,7 +49,7 @@
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import ts from "typescript";
 
 // Shared single-pass LEXICAL comment stripper — comment-context-aware, so a
@@ -60,6 +60,8 @@ import ts from "typescript";
 // The .mjs audit helper resolves under the test tsconfig (same import the
 // sibling toast-banner guard uses); no ts-expect-error needed.
 import { stripComments } from "../../../scripts/audit/lib/strip-comments.mjs";
+
+import { classifyAnnotations } from "@cinatra-ai/mcp-server/annotation-classifier";
 
 import {
   resolveWordPressMcpEndpoint,
@@ -125,7 +127,7 @@ function assertGovernedWordPressRouting(code: string): void {
     // forward, once, as its result, naming itself as the calling tool (the
     // name the write-authority record carries).
     const body = property.initializer.body;
-    const bodyText = body.getText().replace(/\s+/g, "");
+    const bodyText = compactOf(body);
     expect(bodyText).not.toContain("invokeSiteTool");
     const forwards = callsNamed(body, "forwardSiteTool");
     expect(forwards).toHaveLength(1);
@@ -141,8 +143,7 @@ function assertGovernedWordPressRouting(code: string): void {
       : "{constinput=parseSiteToolCallInput(request.input);constrow=awaitreadRow(input);"
         + "if(row===null)thrownewError(SITE_TOOL_READ_ONLY_REFUSAL);"
         + 'returnforwardSiteTool({...input,serverId:row.serverId,expectedRawAnnotations:row.rawAnnotations},"wordpress_site_tool_call");}';
-    // A trailing comma is formatting, not a change.
-    expect(bodyText.replace(/,([)}\]])/g, "$1")).toBe(expectedBody);
+    expect(bodyText).toBe(expectedBody);
     expect(forwards[0].arguments[forwards[0].arguments.length - 1].getText()).toBe(JSON.stringify(name));
   }
 
@@ -294,9 +295,18 @@ function statementKind(statement: ts.Statement): string {
   return "OtherStatement";
 }
 
-// A node's source without whitespace; a trailing comma is formatting, not a change.
+// A node's source as its tokens joined without trivia: whitespace is dropped only
+// BETWEEN tokens, never inside a string or template literal (a leaf token keeps
+// its text), so a changed literal cannot hide behind the normalisation. A comma
+// before a closing bracket is formatting, not a change.
 function compactOf(node: ts.Node): string {
-  return node.getText().replace(/\s+/g, "").replace(/,([)}\]])/g, "$1");
+  const tokens: string[] = [];
+  (function collect(current: ts.Node) {
+    const children = current.getChildren();
+    if (children.length === 0) tokens.push(current.getText());
+    else children.forEach(collect);
+  })(node);
+  return tokens.filter((token, index) => !(token === "," && [")", "}", "]"].includes(tokens[index + 1]))).join("");
 }
 
 // The return statements of a body, not those of functions nested in it.
@@ -520,8 +530,172 @@ describe("in-admin CMS egress guard — hosted WordPress connector", () => {
     rejects(replaceOnce("new Set([EWPA_UPDATE_POST_ABILITY])", "new Set([])"));
   });
 
+  it("rejects a space inside a string literal that the guard compares (whitespace is dropped only between tokens)", () => {
+    rejects(replaceOnce('const EWPA_UPDATE_POST_ABILITY = "ewpa/update-post";', 'const EWPA_UPDATE_POST_ABILITY = "ewpa/update- post";'));
+    rejects(replaceOnce('typeof invoke !== "function"', 'typeof invoke !== "func tion"'));
+    rejects(replaceOnce('typeof parsed !== "object"', 'typeof parsed !== "obj ect"'));
+    rejects(mutateHandler(code, HANDLERS_ANCHOR, '"wordpress_site_tool_write"),', '"wordpress_site_tool_wri te"),'));
+  });
+
   it("rejects a second invoker path in a helper", () => {
     rejects(replaceOnce("async function readRow(input: SiteToolCallInput): Promise<SiteToolRow | null> {", 'async function readRow(input: SiteToolCallInput): Promise<SiteToolRow | null> {\n  await getWordPressDeps().invokeSiteTool!({ toolName: "x", args: {} });'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WordPress — the read tool forwards READS ONLY, pinned by behaviour.
+//
+// Core relies on `wordpress_site_tool_call` forwarding reads only
+// (packages/mcp-server/src/in-admin-cms-tool-policy.ts: the tool that is not
+// declared `outward` must never carry a write). The source assertions above pin
+// where the read tool may reach the invoker; this block runs the pinned
+// connector's real handler module against a stub catalog and a stub invoker
+// and pins WHICH rows it forwards. The stub rows carry the class the host's own
+// classifier gives their annotations, as the host's listing would.
+// ---------------------------------------------------------------------------
+describe("in-admin CMS egress guard — the hosted WordPress read tool forwards reads only (behaviour)", () => {
+  const DEFAULT_SERVER = "mcp-adapter-default";
+  type StubRow = {
+    name: string;
+    serverId: string;
+    inputSchema: unknown;
+    rawAnnotations: Record<string, unknown>;
+    derivedClass: ReturnType<typeof classifyAnnotations>;
+    policyStatus: "allowed";
+    cacheAgeMs: number;
+    catalogRevision: string;
+  };
+  const row = (name: string, rawAnnotations: Record<string, unknown>, serverId = DEFAULT_SERVER): StubRow => ({
+    name,
+    serverId,
+    inputSchema: {},
+    rawAnnotations,
+    derivedClass: classifyAnnotations(rawAnnotations),
+    policyStatus: "allowed",
+    cacheAgeMs: 0,
+    catalogRevision: "rev-1",
+  });
+
+  let catalog: StubRow[] = [];
+  let hostFiltersByServer = true;
+  let endlessListing = false;
+  const invokeSiteTool = vi.fn<(input: unknown) => Promise<unknown>>(async () => ({ ok: true }));
+  const listSiteTools = vi.fn(async (input: { serverId?: string }) => ({
+    tools: catalog.filter((candidate) => !hostFiltersByServer || input.serverId === undefined || candidate.serverId === input.serverId),
+    ...(endlessListing ? { nextCursor: "more" } : {}),
+    catalogRevision: "rev-1",
+  }));
+
+  let read: (input: unknown) => Promise<unknown>;
+  let refusal: string;
+
+  beforeEach(async () => {
+    const handlers = await import("@cinatra-ai/wordpress-mcp-connector/mcp-handlers");
+    const deps = await import("../../../extensions/cinatra-ai/wordpress-mcp-connector/src/deps");
+    deps._resetWordPressDepsForTests();
+    catalog = [];
+    hostFiltersByServer = true;
+    endlessListing = false;
+    invokeSiteTool.mockClear();
+    listSiteTools.mockClear();
+    deps.registerWordPressConnector({ invokeSiteTool, listSiteTools } as never);
+    const table = handlers.createWordPressPrimitiveHandlers() as unknown as Record<string, (request: unknown) => Promise<unknown>>;
+    read = (input) => table.wordpress_site_tool_call({
+      primitiveName: "wordpress_site_tool_call",
+      input,
+      actor: { actorType: "model", source: "agent" },
+      mode: "agentic",
+    });
+    refusal = handlers.SITE_TOOL_READ_ONLY_REFUSAL;
+    return () => deps._resetWordPressDepsForTests();
+  });
+
+  const refused = async (input: unknown): Promise<void> => {
+    await expect(read(input)).rejects.toThrow(refusal);
+    expect(invokeSiteTool).not.toHaveBeenCalled();
+  };
+
+  it("forwards a row whose annotations say read-only, pinned to the row's server with the row's annotations", async () => {
+    catalog = [row("core/get-site-info", { readOnlyHint: true })];
+    expect(await read({ toolName: "core/get-site-info", instanceId: "wp-1" })).toEqual({ ok: true });
+    expect(invokeSiteTool).toHaveBeenCalledTimes(1);
+    expect(invokeSiteTool).toHaveBeenCalledWith({
+      toolName: "core/get-site-info",
+      args: {},
+      instanceId: "wp-1",
+      serverId: DEFAULT_SERVER,
+      expectedRawAnnotations: { readOnlyHint: true },
+    });
+  });
+
+  it("forwards an unannotated ewpa read on the default server only", async () => {
+    catalog = [row("ewpa/get-post", {})];
+    await read({ toolName: "ewpa/get-post", args: { post_id: 7 } });
+    expect(invokeSiteTool).toHaveBeenCalledWith(expect.objectContaining({ serverId: DEFAULT_SERVER, expectedRawAnnotations: {} }));
+  });
+
+  it("takes the annotations and the server from the row, never from the caller", async () => {
+    catalog = [row("core/get-site-info", { readOnlyHint: true })];
+    await read({ toolName: "core/get-site-info", expectedRawAnnotations: { readOnlyHint: false }, serverId: DEFAULT_SERVER });
+    expect(invokeSiteTool).toHaveBeenCalledWith(expect.objectContaining({
+      serverId: DEFAULT_SERVER,
+      expectedRawAnnotations: { readOnlyHint: true },
+    }));
+  });
+
+  it.each([
+    ["a row that says it is not read-only", [row("core/get-site-info", { readOnlyHint: false })], "core/get-site-info"],
+    ["an unannotated core row", [row("core/get-site-info", {})], "core/get-site-info"],
+    ["a destructive row", [row("core/get-site-info", { destructiveHint: true })], "core/get-site-info"],
+    ["a row with both a read-only and a destructive hint", [row("core/get-site-info", { readOnlyHint: true, destructiveHint: true })], "core/get-site-info"],
+    // The class the host listed can be stale or wrong: the row's own hints are checked too.
+    [
+      "a row listed as read whose stored annotations carry a destructive hint",
+      [{ ...row("core/get-site-info", { readOnlyHint: true, destructiveHint: true }), derivedClass: "read" as const }],
+      "core/get-site-info",
+    ],
+    [
+      "a row listed as destructive whose stored annotations say read-only",
+      [{ ...row("core/get-site-info", { readOnlyHint: true }), derivedClass: "destructive" as const }],
+      "core/get-site-info",
+    ],
+    ["an unannotated ewpa read on a server that is not the default", [row("ewpa/get-post", {}, "srv-2")], "ewpa/get-post"],
+    ["an ewpa read marked not read-only on the default server", [row("ewpa/get-post", { readOnlyHint: false })], "ewpa/get-post"],
+    ["an ewpa read marked destructive on the default server", [row("ewpa/get-post", { destructiveHint: true })], "ewpa/get-post"],
+    ["a known write name, whatever its row says (update)", [row("ewpa/update-post", { readOnlyHint: true })], "ewpa/update-post"],
+    ["a known write name, whatever its row says (create)", [row("ewpa/create-post", { readOnlyHint: true })], "ewpa/create-post"],
+    ["a name that is not a known read, even with a read-only row", [row("core/get-option", { readOnlyHint: true })], "core/get-option"],
+    ["a name with no row in the catalog", [], "core/get-site-info"],
+    [
+      "a name with a read-only row on two servers",
+      [row("core/get-site-info", { readOnlyHint: true }), row("core/get-site-info", { readOnlyHint: true }, "srv-2")],
+      "core/get-site-info",
+    ],
+    [
+      "a name with a read-only row and a write row on two servers",
+      [row("core/get-site-info", { readOnlyHint: true }), row("core/get-site-info", {}, "srv-2")],
+      "core/get-site-info",
+    ],
+  ] as Array<[string, StubRow[], string]>)("the read tool refuses %s, and the invoker is never called", async (_label, rows, toolName) => {
+    catalog = rows;
+    await refused({ toolName });
+  });
+
+  it("the read tool refuses a row that is on another server than the one the caller named, even when the host ignores the server filter", async () => {
+    hostFiltersByServer = false;
+    catalog = [row("core/get-site-info", { readOnlyHint: true })];
+    await refused({ toolName: "core/get-site-info", serverId: "srv-2" });
+  });
+
+  it("the read tool refuses on a catalog listing that does not end, and with no listing capability", async () => {
+    catalog = [row("core/get-site-info", { readOnlyHint: true })];
+    endlessListing = true;
+    await refused({ toolName: "core/get-site-info" });
+    endlessListing = false;
+    const deps = await import("../../../extensions/cinatra-ai/wordpress-mcp-connector/src/deps");
+    deps._resetWordPressDepsForTests();
+    deps.registerWordPressConnector({ invokeSiteTool } as never);
+    await refused({ toolName: "core/get-site-info" });
   });
 });
 
