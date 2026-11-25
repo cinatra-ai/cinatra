@@ -138,8 +138,8 @@ describe("the island reports its items drawn", () => {
 });
 
 // cinatra#3089: a panel is drawn only once every item in it has finished loading. The panels below are the island's
-// real item drawings (the pinned before/after capture and the image representation's inline preview), wrapped by the
-// signal as the island page wraps each target's panel. Each image's decode promise is held by the test: a deferred
+// real item drawings (the pinned before/after capture and the image representation's inline preview), each followed
+// by the signal as the island page places it after each target's panel. Each image's decode promise is held by the test: a deferred
 // image keeps the drawn report back, a failed one posts `island-failed` and no drawn report ever follows.
 describe("the island reports drawn only once each item's own content loaded", () => {
   type Decode = { resolve: () => void; reject: () => void };
@@ -180,8 +180,8 @@ describe("the island reports drawn only once each item's own content loaded", ()
     render(
       <>
         <Ready panels={2} />
-        <Panel><p>The email body text</p><ReviewPinnedCapture pair={pair("/before.png", "/after.png") as never} /></Panel>
-        <Panel><ArtifactInlinePreview previewHref="/image.png" mime="image/png" /></Panel>
+        <div><p>The email body text</p><ReviewPinnedCapture pair={pair("/before.png", "/after.png") as never} /></div><Panel />
+        <div><ArtifactInlinePreview previewHref="/image.png" mime="image/png" /></div><Panel />
       </>,
     );
     await settle();
@@ -206,8 +206,8 @@ describe("the island reports drawn only once each item's own content loaded", ()
     render(
       <>
         <Ready panels={2} />
-        <Panel><ArtifactInlinePreview previewHref="/broken.png" mime="image/png" /></Panel>
-        <Panel><ArtifactInlinePreview previewHref="/fine.png" mime="image/png" /></Panel>
+        <div><ArtifactInlinePreview previewHref="/broken.png" mime="image/png" /></div><Panel />
+        <div><ArtifactInlinePreview previewHref="/fine.png" mime="image/png" /></div><Panel />
       </>,
     );
     await settle();
@@ -227,7 +227,7 @@ describe("the island reports drawn only once each item's own content loaded", ()
     const { rerender } = render(
       <>
         <Ready panels={1} />
-        <Panel><div data-dynamic-renderer-skeleton="" aria-busy="true" /></Panel>
+        <div><div data-dynamic-renderer-skeleton="" aria-busy="true" /></div><Panel />
       </>,
     );
     await held();
@@ -235,7 +235,7 @@ describe("the island reports drawn only once each item's own content loaded", ()
     rerender(
       <>
         <Ready panels={1} />
-        <Panel><div data-dynamic-renderer-floor="timeout"><p>review target unavailable</p></div></Panel>
+        <div><div data-dynamic-renderer-floor="timeout"><p>review target unavailable</p></div></div><Panel />
       </>,
     );
     await settle();
@@ -275,7 +275,7 @@ describe("the island honours a display's busy marks and never stops watching", (
     render(
       <>
         <Ready panels={1} />
-        <Panel><AsyncDisplay marker={marker} /></Panel>
+        <div><AsyncDisplay marker={marker} /></div><Panel />
       </>,
     );
   };
@@ -362,7 +362,7 @@ describe("a dashboard portlet that has not drawn does not read drawn", () => {
     const view = (state: "lazy" | "chart-code" | "chart") => (
       <>
         <Ready panels={1} />
-        <Panel><Portlet state={state} /></Panel>
+        <div><Portlet state={state} /></div><Panel />
       </>
     );
     const { rerender } = render(view("lazy"));
@@ -372,6 +372,101 @@ describe("a dashboard portlet that has not drawn does not read drawn", () => {
     await held();
     expect(types()).toEqual(["island-ready", "panel-mounted"]);
     rerender(view("chart"));
+    await held();
+    expect(types()).toEqual(["island-ready", "panel-mounted", "island-drawn"]);
+  });
+});
+
+// cinatra#3089: the signal wraps nothing, so each panel stays a direct child of the island body. The height reporter's
+// resize observer therefore watches the panel itself, and a panel that grows after the first report is reported.
+describe("the panel stays a direct child of the island body", () => {
+  const originalParent = Object.getOwnPropertyDescriptor(window, "parent")!;
+  afterEach(() => {
+    Object.defineProperty(window, "parent", originalParent);
+    delete (window as { ResizeObserver?: unknown }).ResizeObserver;
+  });
+
+  it("a panel's size change after the first height report is reported", async () => {
+    const heights: number[] = [];
+    const frame = document.createElement("iframe");
+    document.body.appendChild(frame);
+    Object.defineProperty(window, "parent", { configurable: true, value: frame.contentWindow });
+    vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation(((message: { height?: number }) => {
+      if (typeof message?.height === "number") heights.push(message.height);
+    }) as typeof window.postMessage);
+    const observed = new Set<Element>();
+    let resized: () => void = () => {};
+    (window as { ResizeObserver?: unknown }).ResizeObserver = class {
+      constructor(callback: () => void) { resized = callback; }
+      observe(element: Element) { observed.add(element); }
+      disconnect() { observed.clear(); }
+    };
+    const { IslandHeightReporter, IslandPanelMountedSignal: Panel } = await import("../island-height-reporter");
+    let panelHeight = 500;
+    const { container } = render(
+      <div data-body="">
+        <div data-panel="">The panel</div>
+        <Panel />
+        <IslandHeightReporter />
+      </div>,
+    );
+    const panel = container.querySelector("[data-panel]") as HTMLElement;
+    panel.getBoundingClientRect = () =>
+      ({ top: 0, bottom: panelHeight, height: panelHeight, width: 800, left: 0, right: 800, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+    // The panel itself is watched: it is a direct child of the body, never inside a boxless wrapper.
+    expect(observed.has(panel)).toBe(true);
+    resized();
+    panelHeight = 900;
+    resized();
+    expect(heights.slice(-2)).toEqual([500, 900]);
+  });
+});
+
+// cinatra#3089: an image drawn before its address is known (under a busy mark, the URL assigned later) is pending, not
+// failed: it is read once its source is set.
+describe("an image with no source yet is pending", () => {
+  let decodes: Map<string, { resolve: () => void; reject: () => void }>;
+  beforeEach(() => {
+    decodes = new Map();
+    Object.defineProperty(HTMLImageElement.prototype, "decode", {
+      configurable: true,
+      value: function (this: HTMLImageElement) {
+        const src = this.getAttribute("src") ?? "";
+        return new Promise<void>((resolve, reject) => {
+          // An image with no source rejects its decode, as a browser does.
+          if (src === "") reject(new Error("EncodingError"));
+          else decodes.set(src, { resolve, reject: () => reject(new Error("EncodingError")) });
+        });
+      },
+    });
+  });
+  afterEach(() => {
+    delete (HTMLImageElement.prototype as { decode?: unknown }).decode;
+  });
+  const types = () => posted.map(([message]) => (message as { type?: string }).type);
+
+  it("an image whose source is set later is read then, and the panel is reported drawn", async () => {
+    vi.resetModules();
+    const { IslandReadySignal: Ready, IslandPanelMountedSignal: Panel } = await import("../island-height-reporter");
+    window.name = reviewIslandFrameName(12);
+    function LateImage({ src }: { src?: string }) {
+      return <img alt="" {...(src ? { src } : {})} />;
+    }
+    const view = (src?: string) => (
+      <>
+        <Ready panels={1} />
+        <div><LateImage src={src} /></div>
+        <Panel />
+      </>
+    );
+    const { rerender } = render(view());
+    await held();
+    // red-first-expect: expected [ 'island-ready', …(2) ] to deeply equal [ 'island-ready', 'panel-mounted' ]
+    expect(types()).toEqual(["island-ready", "panel-mounted"]);
+    rerender(view("/late.png"));
+    await held();
+    expect(types()).toEqual(["island-ready", "panel-mounted"]);
+    decodes.get("/late.png")!.resolve();
     await held();
     expect(types()).toEqual(["island-ready", "panel-mounted", "island-drawn"]);
   });

@@ -71,11 +71,11 @@ vi.mock(
   }),
 );
 vi.mock("@cinatra-ai/agents/review-gate-states", () => ({ ReviewGateLoading: () => null }));
-vi.mock("../island-height-reporter", () => ({
+vi.mock("../island-height-reporter", async (importOriginal) => ({
   IslandHeightReporter: () => null,
   IslandReadySignal: () => null,
-  // It wraps each target's panel (cinatra#3089): the stand-in draws what it wraps.
-  IslandPanelMountedSignal: ({ children }: { children?: unknown }) => children ?? null,
+  // The real signal (cinatra#3089): what it draws decides whether a panel stays a direct child of the body.
+  IslandPanelMountedSignal: (await importOriginal<typeof import("../island-height-reporter")>()).IslandPanelMountedSignal,
 }));
 
 import { encodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
@@ -187,6 +187,19 @@ describe("the island body is the container a wide representation scrolls inside"
       expect(classesOf(slot)).toContain(road);
       expect(classesOf(body)).toContain(road);
     }
+  });
+
+  it("each panel is a direct child of the island body, which the height reading and its resize observer watch", async () => {
+    // cinatra#3089: the drawn-report signal sits beside the panel and wraps nothing, so no boxless element comes
+    // between the body and the panel. (The panel streams in, so the static document holds it in React's segment,
+    // which takes its place in the body.)
+    await islandBody();
+    const panel = document.body.querySelector("[data-conformance-id='review-target']");
+    if (!panel) throw new Error("no panel");
+    // red-first-expect: expected 'contents' not to be 'contents'
+    expect((panel.parentElement as HTMLElement).style.display).not.toBe("contents");
+    expect(panel.parentElement?.hasAttribute("data-island-panel")).toBe(false);
+    expect(panel.nextElementSibling?.hasAttribute("data-island-panel-signal")).toBe(true);
   });
 
   it("nothing between the island body and the representation clips", async () => {

@@ -14,7 +14,7 @@
 // it, at its own origin, and offers the host nothing to call.
 
 import { useEffect, useId, useRef } from "react";
-import type { ReactElement, ReactNode } from "react";
+import type { ReactElement } from "react";
 
 import { islandContentHeight, reviewIslandHeightMessage, parseReviewIslandFrameName, reviewIslandDrawnMessage, reviewIslandProgressMessage, type ReviewIslandProgressType } from "./island-height-report";
 import { islandPaletteClass } from "./island-color-scheme";
@@ -260,16 +260,24 @@ function readPanelContent(root: Element, media: Map<Element, MediaReading>): Pan
   return loading ? "loading" : "drawn";
 }
 
-/** Start reading each image and video under `root` that has no reading yet, recording its settled reading in
- *  `media`; `changed` runs whenever one settles. A reading is dropped when its element's `src` changes. */
+/** Does this image or video have a source yet? One drawn under a busy mark with its address assigned later has none:
+ *  it is pending, and it is read once its source is set. */
+function hasSource(element: Element): boolean {
+  return (element.getAttribute("src") ?? "") !== "" || (element.getAttribute("srcset") ?? "") !== "";
+}
+
+/** Start reading each image and video under `root` that has a source and no reading yet, recording its settled
+ *  reading in `media`; `changed` runs whenever one settles. A reading is dropped when its element's source changes;
+ *  an element with no source yet has no reading, so it reads loading. */
 function watchMedia(root: Element, media: Map<Element, MediaReading>, changed: () => void): void {
   for (const element of root.querySelectorAll("img, video")) {
-    if (media.has(element)) continue;
+    if (media.has(element) || !hasSource(element)) continue;
     media.set(element, "loading");
     const src = element.getAttribute("src");
+    const srcset = element.getAttribute("srcset");
     const settle = (reading: MediaReading) => {
-      // A reading of an earlier `src` (or of an element already read again) is not this element's reading.
-      if (media.get(element) !== "loading" || element.getAttribute("src") !== src) return;
+      // A reading of an earlier source (or of an element already read again) is not this element's reading.
+      if (media.get(element) !== "loading" || element.getAttribute("src") !== src || element.getAttribute("srcset") !== srcset) return;
       media.set(element, reading);
       changed();
     };
@@ -292,22 +300,31 @@ function watchMedia(root: Element, media: Map<Element, MediaReading>, changed: (
 }
 
 /**
- * "A panel arrived", and later "its items are drawn". Wraps one target's panel (a `display: contents` box, so the
- * island body's layout is unchanged). On mount it posts `panel-mounted`, which restarts the card's idle-progress
- * bound: a gate that is still streaming is never plated. The panel reads drawn only when its own content reads drawn
- * (`readPanelContent`), and the document reports drawn once every panel has (`ISLAND_DRAWN_SETTLE_MS`).
+ * "A panel arrived", and later "its items are drawn". Placed right AFTER one target's panel, as a hidden marker (the
+ * same kind as the height reporter's): it wraps nothing, so every panel stays a direct child of the island body and
+ * the height reading and its resize observer see it as before. The panel it watches is the marker's previous
+ * sibling. On mount it posts `panel-mounted`, which restarts the card's idle-progress bound: a gate that is still
+ * streaming is never plated. The panel reads drawn only when its own content reads drawn (`readPanelContent`), and the
+ * document reports drawn once every panel has (`ISLAND_DRAWN_SETTLE_MS`). A marker with no panel before it watches
+ * nothing and reads drawn.
  *
  * It never stops watching: after the drawn report, a display that marks itself busy again or an image that starts
  * loading posts `island-busy` (the card makes Allow unavailable until the next drawn report), and a failed item posts
  * `island-failed` (the card shows its "could not be shown" state, with Try again; nothing is reported after it).
  */
-export function IslandPanelMountedSignal({ children }: { children?: ReactNode } = {}): ReactElement {
+export function IslandPanelMountedSignal(): ReactElement {
   const id = useId();
-  const rootRef = useRef<HTMLDivElement | null>(null);
+  const markerRef = useRef<HTMLSpanElement | null>(null);
   useEffect(() => {
     postProgress("panel-mounted");
-    const root = rootRef.current;
-    if (!root) return;
+    const root = markerRef.current?.previousElementSibling ?? null;
+    if (!root) {
+      drawnState.panels.set(id, "drawn");
+      reportDocument();
+      return () => {
+        drawnState.panels.delete(id);
+      };
+    }
     const media = new Map<Element, MediaReading>();
     let live = true;
     const check = () => {
@@ -320,7 +337,9 @@ export function IslandPanelMountedSignal({ children }: { children?: ReactNode } 
       typeof MutationObserver === "function"
         ? new MutationObserver((records) => {
             for (const record of records) {
-              if (record.type === "attributes" && record.attributeName === "src") media.delete(record.target as Element);
+              if (record.type === "attributes" && (record.attributeName === "src" || record.attributeName === "srcset")) {
+                media.delete(record.target as Element);
+              }
             }
             check();
           })
@@ -329,7 +348,7 @@ export function IslandPanelMountedSignal({ children }: { children?: ReactNode } 
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ["aria-busy", "role", "class", "src", "data-review-target-floor", "data-dynamic-renderer-floor", "data-render-failure-class"],
+      attributeFilter: ["aria-busy", "role", "class", "src", "srcset", "data-review-target-floor", "data-dynamic-renderer-floor", "data-render-failure-class"],
     });
     check();
     return () => {
@@ -338,9 +357,5 @@ export function IslandPanelMountedSignal({ children }: { children?: ReactNode } 
       drawnState.panels.delete(id);
     };
   }, [id]);
-  return (
-    <div ref={rootRef} style={{ display: "contents" }} data-island-panel="">
-      {children}
-    </div>
-  );
+  return <span ref={markerRef} hidden aria-hidden="true" data-island-panel-signal="" />;
 }

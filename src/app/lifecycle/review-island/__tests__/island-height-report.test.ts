@@ -68,22 +68,6 @@ function islandBody(options: {
 }
 
 describe("the island measures the height of its work, not of the box it was given", () => {
-  it("measures a panel inside its display: contents drawn-report wrapper (cinatra#3089)", () => {
-    const { container, marker } = islandBody({ scheme: "light", panels: [], containerHeight: 380 });
-    // The wrapper as the island draws it: no box of its own, the panel inside it.
-    const wrapper = document.createElement("div");
-    wrapper.style.display = "contents";
-    wrapper.getBoundingClientRect = () =>
-      ({ top: 0, bottom: 0, height: 0, width: 0, left: 0, right: 0, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
-    const panel = document.createElement("div");
-    panel.getBoundingClientRect = () =>
-      ({ top: 12, bottom: 912, height: 900, width: 876, left: 12, right: 888, x: 12, y: 12, toJSON: () => ({}) }) as DOMRect;
-    wrapper.appendChild(panel);
-    container.insertBefore(wrapper, marker);
-    // 12 top pad + the 900px panel + 12 bottom pad, well past the 380px minimum.
-    expect(islandContentHeight(container, marker)).toBe(924);
-  });
-
   it("answers the content height even when the frame is far taller", () => {
     const { container, marker } = islandBody({
       scheme: "light",
