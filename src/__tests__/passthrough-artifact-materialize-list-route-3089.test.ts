@@ -26,6 +26,7 @@ const h = vi.hoisted(() => ({
   mintRunWriteAuthorityForMcp: vi.fn(),
   collectAllPrimitiveHandlers: vi.fn(async () => ({})),
   materializeToolArtifact: vi.fn(),
+  authorizeToolMaterializeWrite: vi.fn(),
   frames: [] as unknown[],
 }));
 
@@ -80,6 +81,7 @@ vi.mock("@/lib/artifacts/run-artifact-materializer", async () => {
       h.frames.push(mcpRequestContextStorage.getStore());
       return h.materializeToolArtifact(...args);
     },
+    authorizeToolMaterializeWrite: (...args: unknown[]) => h.authorizeToolMaterializeWrite(...args),
   };
 });
 
@@ -169,6 +171,8 @@ beforeEach(() => {
   h.verifyRunExecutedSource.mockResolvedValue(VERIFIED_SOURCE);
   h.assertRunStepToolAllowed.mockReturnValue({ kind: "undeclared" });
   h.mintRunWriteAuthorityForMcp.mockResolvedValue(AUTHORITY);
+  h.authorizeToolMaterializeWrite.mockReset();
+  h.authorizeToolMaterializeWrite.mockResolvedValue({ ok: true, target: { objectTypeId: "@x/y:z" }, reviewed: true });
   // Queued one-time answers of an earlier test that stopped before using them must not reach the next test.
   h.materializeToolArtifact.mockReset();
   let n = 0;
@@ -238,12 +242,39 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
     const res = await POST(post(listBody()));
     expect(res.status).toBe(400);
     const body = await res.json();
-    expect(body).toMatchObject({ code: "materialize_list_partial", failedMember: 2, filedCount: 1 });
+    expect(body).toMatchObject({
+      code: "materialize_list_partial",
+      failedMember: 2,
+      filedCount: 1,
+      // What is stored is named (so a retry, an operator or a tool can find it), under a name no gate input reads.
+      filedArtifacts: [{ artifactId: "art-1", representationRevisionId: "rep-1" }],
+    });
     expect(body.error).toContain("materialization failed: db down");
     expect(body).not.toHaveProperty("artifacts");
     expect(body).not.toHaveProperty("reviewTargets");
     // The third member is never tried: the run cannot go on with a partial set.
     expect(h.materializeToolArtifact).toHaveBeenCalledTimes(2);
+  });
+
+  // red-first-expect: expected undefined to be 'materialize_list_member_refused'
+  it("asks the write authorization of EVERY member before the first one is filed, and refuses the whole call when one is refused", async () => {
+    h.authorizeToolMaterializeWrite
+      .mockResolvedValueOnce({ ok: true, target: { objectTypeId: "@x/y:z" }, reviewed: true })
+      .mockResolvedValueOnce({ ok: true, target: { objectTypeId: "@x/y:z" }, reviewed: true })
+      .mockResolvedValueOnce({ ok: false, error: "content (99 bytes) exceeds the 10-byte cap" });
+    const res = await POST(post(listBody()));
+    const body = await res.json();
+    expect(body.code).toBe("materialize_list_member_refused");
+    expect(res.status).toBe(400);
+    expect(body).toEqual({
+      error: expect.stringContaining("member 3 of 3 was refused: content (99 bytes) exceeds the 10-byte cap"),
+      code: "materialize_list_member_refused",
+      failedMember: 3,
+      filedCount: 0,
+    });
+    expect(h.authorizeToolMaterializeWrite).toHaveBeenCalledTimes(3);
+    // Nothing was stored: not even the members before the refused one.
+    expect(h.materializeToolArtifact).not.toHaveBeenCalled();
   });
 
   // red-first-expect: to contain 'same content bytes'

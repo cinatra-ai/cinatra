@@ -5,12 +5,20 @@
 //
 // THE PARTIAL-FAILURE RULE. The members are filed one after the other, each
 // through the single call and its idempotency ledger (run, node, extension,
-// content hash). When member k fails, the members before it are already filed
-// and stay filed, and the answer is a typed refusal that carries no artifacts
-// and no review targets — so no gate downstream can receive a partial set, and
-// the calling node fails. A retry of the same call is safe: each member filed
+// content hash). Everything that can be known before a write is asked of EVERY
+// member first (`refuseListBeforeFiling`: the write authorization of each
+// member, so a member that is refused for its extension, form, size or declared
+// type files nothing at all); what can still fail after the first write is only
+// what the write itself finds (the detected MIME, a typed field the type's
+// schema rejects) or a storage fault.
+// When member k fails then, the members before it are already filed and stay
+// filed, and the answer is a typed refusal that carries no artifacts and no
+// review targets — so no gate downstream can receive a partial set, and the
+// calling node fails — and that names what is stored (`filed`), so a retry or an
+// operator can find it. A retry of the same call is safe: each member filed
 // before hits its finalized ledger row and comes back with the same ids
-// (nothing is filed twice), and the filing resumes at member k.
+// (nothing is filed twice), the filing resumes at member k, and the gate then
+// receives every member.
 
 import type { ShapedArtifactMaterializeMember } from "./artifact-materialize-shaper";
 
@@ -39,7 +47,44 @@ export type MaterializeListResult =
       failedMember: number;
       /** How many members before it are filed (and reused by a retry). */
       filedCount: number;
+      /** The members before it that are filed, in order. Not `artifacts`: no gate reads this answer. */
+      filed: MaterializeListFiled[];
     };
+
+export const MATERIALIZE_LIST_MEMBER_REFUSED = "materialize_list_member_refused";
+
+/** The refusal of a list call whose member was refused before anything was filed. */
+export type MaterializeListRefusedBeforeFiling = {
+  code: typeof MATERIALIZE_LIST_MEMBER_REFUSED;
+  error: string;
+  /** The 1-based member that was refused. */
+  failedMember: number;
+  /** Always 0: nothing was filed. */
+  filedCount: 0;
+};
+
+/**
+ * Asks `check` (the write authorization of one member) of EVERY member, in
+ * order, before the first member is filed. The first refusal ends the call with
+ * nothing stored; a call every member of which passes returns null.
+ */
+export async function refuseListBeforeFiling(
+  members: readonly ShapedArtifactMaterializeMember[],
+  check: (member: ShapedArtifactMaterializeMember) => Promise<{ ok: true } | { ok: false; error: string }>,
+): Promise<MaterializeListRefusedBeforeFiling | null> {
+  for (const [index, member] of members.entries()) {
+    const outcome = await check(member);
+    if (!outcome.ok) {
+      return {
+        code: MATERIALIZE_LIST_MEMBER_REFUSED,
+        failedMember: index + 1,
+        filedCount: 0,
+        error: `artifact_materialize list member ${index + 1} of ${members.length} was refused: ${outcome.error} — nothing was filed`,
+      };
+    }
+  }
+  return null;
+}
 
 export async function materializeArtifactList(
   members: readonly ShapedArtifactMaterializeMember[],
@@ -54,6 +99,7 @@ export async function materializeArtifactList(
         code: MATERIALIZE_LIST_PARTIAL,
         failedMember: index + 1,
         filedCount: artifacts.length,
+        filed: artifacts,
         error:
           `artifact_materialize list member ${index + 1} of ${members.length} was not filed: ${outcome.error} — ` +
           `${artifacts.length} member(s) before it are filed; a retry of the same call files nothing twice`,

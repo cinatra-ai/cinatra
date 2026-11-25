@@ -36,6 +36,7 @@ import {
   isMaterializeListInputTooLarge,
   isRegenerateRepairRun,
   materializeArtifactList,
+  refuseListBeforeFiling,
   MATERIALIZE_LIST_INPUT_TOO_LARGE,
   materializeListInputTooLargeError,
   MATERIALIZE_LIST_IN_REGENERATE_RUN,
@@ -695,6 +696,26 @@ export async function POST(req: Request): Promise<Response> {
             { status: 400 },
           );
         }
+        // The write authorization of EVERY member is asked before the first is
+        // filed, so a member refused for its extension, form, size or declared
+        // type stores nothing, not even the members before it.
+        const { authorizeToolMaterializeWrite } = await import("@/lib/artifacts/run-artifact-materializer");
+        const refused = await refuseListBeforeFiling(shaped.members, async (member) => {
+          const authorized = await authorizeToolMaterializeWrite({
+            orgId: run.orgId,
+            templateId: run.templateId,
+            packageVersion: run.packageVersion,
+            extension: shaped.extension,
+            objectTypeId: shaped.objectTypeId,
+            mime: shaped.declaredMime,
+            content: member.content,
+            ...(verifiedStepId !== undefined && verifiedStepId === shaped.nodeId ? { nodeId: shaped.nodeId } : {}),
+          });
+          return authorized.ok ? { ok: true } : { ok: false, error: authorized.error };
+        });
+        if (refused !== null) {
+          return NextResponse.json(refused, { status: 400 });
+        }
         const listed = await materializeArtifactList(shaped.members, (member) =>
           materializeToolArtifact({
             runId: run.id,
@@ -725,7 +746,8 @@ export async function POST(req: Request): Promise<Response> {
         if (!listed.ok) {
           return NextResponse.json(
             { error: listed.error, code: listed.code,
-              failedMember: listed.failedMember, filedCount: listed.filedCount },
+              failedMember: listed.failedMember, filedCount: listed.filedCount,
+              filedArtifacts: listed.filed },
             { status: 400 },
           );
         }

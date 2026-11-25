@@ -17,6 +17,10 @@
  *   L5 a list-filed body that declares no typed data is stored with the same
  *      fields as a single filing of the same body (a single filing takes no
  *      typed data; the send records the correlation of a body it reuses)
+ *   L7 a marked list node whose member 2 fails stores member 1 as the gate's
+ *      write, answers the failure with what is stored and no review targets,
+ *      and a retry of the same call files the rest and reaches the gate with
+ *      every member
  *   L6 a list-filed body stores the typed data its call declares (member
  *      fields, call-wide values, the run's own id) beside the writer's fields,
  *      and the campaign body query's filter matches it
@@ -279,6 +283,40 @@ const LIST_NODE_DATA = {
   },
 };
 
+/** A flow whose list node feeds a marked review gate (`nodeData` is the node's data). */
+function markedListFlow(nodeData: unknown) {
+  const ref = (id: string) => ({ $component_ref: id });
+  const order = ["start", NODE, "review_gate", "end"];
+  return withPayload({
+    component_type: "Flow",
+    id: "flow",
+    name: "flow",
+    start_node: ref("start"),
+    nodes: order.map(ref),
+    control_flow_connections: order.slice(1).map((id, i) => ({
+      component_type: "ControlFlowEdge", name: `${order[i]}->${id}`, from_node: ref(order[i]!), to_node: ref(id),
+    })),
+    data_flow_connections: [{
+      component_type: "DataFlowEdge", name: "targets", source_node: ref(NODE), source_output: "reviewTargets",
+      destination_node: ref("review_gate"), destination_input: "review_targets",
+    }],
+    $referenced_components: {
+      start: { component_type: "StartNode", id: "start", name: "start" },
+      end: { component_type: "EndNode", id: "end", name: "end" },
+      [NODE]: {
+        component_type: "ApiNode", id: NODE, name: NODE,
+        data: nodeData, outputs: [{ title: "reviewTargets", type: "string" }],
+      },
+      review_gate: {
+        component_type: "InputMessageNode", id: "review_gate", name: "review_gate",
+        metadata: { cinatra: { artifactReview: { targetsInput: "review_targets" } } },
+        inputs: [{ title: "review_targets", type: "string" }],
+        outputs: [{ title: "userResponse", type: "string" }],
+      },
+    },
+  });
+}
+
 const EXPECTED = [1, 2, 3].map((i) => ({ artifactId: `art-${i}`, representationRevisionId: `rep-${i}` }));
 
 describe("cinatra#3089 — artifact_materialize list mode on the ledgered write core", () => {
@@ -335,36 +373,7 @@ describe("cinatra#3089 — artifact_materialize list mode on the ledgered write 
     ["an object", LIST_NODE_DATA],
     ["JSON text of an object (the form the binding also reads)", JSON.stringify(LIST_NODE_DATA)],
   ])("L3 a marked gate fed by the list node whose data is %s reviews every member's write and plans one review leg per artifact", async (_form, nodeData) => {
-    const ref = (id: string) => ({ $component_ref: id });
-    const order = ["start", NODE, "review_gate", "end"];
-    getAgentPackageMock.mockResolvedValue(withPayload({
-      component_type: "Flow",
-      id: "flow",
-      name: "flow",
-      start_node: ref("start"),
-      nodes: order.map(ref),
-      control_flow_connections: order.slice(1).map((id, i) => ({
-        component_type: "ControlFlowEdge", name: `${order[i]}->${id}`, from_node: ref(order[i]!), to_node: ref(id),
-      })),
-      data_flow_connections: [{
-        component_type: "DataFlowEdge", name: "targets", source_node: ref(NODE), source_output: "reviewTargets",
-        destination_node: ref("review_gate"), destination_input: "review_targets",
-      }],
-      $referenced_components: {
-        start: { component_type: "StartNode", id: "start", name: "start" },
-        end: { component_type: "EndNode", id: "end", name: "end" },
-        [NODE]: {
-          component_type: "ApiNode", id: NODE, name: NODE,
-          data: nodeData, outputs: [{ title: "reviewTargets", type: "string" }],
-        },
-        review_gate: {
-          component_type: "InputMessageNode", id: "review_gate", name: "review_gate",
-          metadata: { cinatra: { artifactReview: { targetsInput: "review_targets" } } },
-          inputs: [{ title: "review_targets", type: "string" }],
-          outputs: [{ title: "userResponse", type: "string" }],
-        },
-      },
-    }));
+    getAgentPackageMock.mockResolvedValue(markedListFlow(nodeData));
     const listed = await fileList(NODE);
     if (!listed.ok) throw new Error(listed.error);
     // Each member is a reviewed write: the gate is its review.
@@ -449,6 +458,44 @@ describe("cinatra#3089 — artifact_materialize list mode on the ledgered write 
 
     expect(fromList).toEqual(fromSingle);
     expect(fromList).not.toHaveProperty("typedData");
+  });
+});
+
+describe("cinatra#3089 — a list call that fails after storing members", () => {
+  // red-first-expect: input.title must be a non-empty string
+  it("L7 member 2 fails: the failure names what is stored and carries no review targets; a retry files the rest once and the gate covers every member", async () => {
+    getAgentPackageMock.mockResolvedValue(markedListFlow(LIST_NODE_DATA));
+    failOnce.add(DRAFTS[1]!.body);
+    const first = await fileList(NODE);
+    expect(first.ok).toBe(false);
+    if (first.ok) throw new Error("expected a failure");
+    // Member 1 is stored as the gate's write (live_generator: the gate is its review) ...
+    expect(first).toMatchObject({ failedMember: 2, filedCount: 1 });
+    expect(first.filed).toEqual([EXPECTED[0]]);
+    expect(createSemanticArtifactMock.mock.calls[0]![0].originKind).toBe("live_generator");
+    // ... and nothing the gate could read: no targets, no artifacts.
+    expect(first).not.toHaveProperty("reviewTargets");
+    expect(first).not.toHaveProperty("artifacts");
+
+    // A retry of the same call: member 1 is the one already stored (the ledger), the others are filed once.
+    const retry = await fileList(NODE);
+    if (!retry.ok) throw new Error(retry.error);
+    expect(retry.artifacts).toEqual(EXPECTED);
+    expect(createSemanticArtifactMock).toHaveBeenCalledTimes(4); // member 1, failed member 2, member 2, member 3
+    expect(ledger.filter((r) => r.path === "materialize_tool" && r.artifactId)).toHaveLength(3);
+    for (const call of createSemanticArtifactMock.mock.calls) expect(call[0].originKind).toBe("live_generator");
+
+    // The gate's targets are all three, one review leg each, in order.
+    const targets = resolveDeclaredReviewTargets({
+      inputName: "review_targets",
+      startParams: null,
+      pausePayload: { review_targets: retry.reviewTargets },
+    });
+    expect(planPerArtifactReviewGates({ reviewTaskId: "wayflow-task-1", targets })).toEqual([
+      { reviewTaskId: "wayflow-task-1", targets: [EXPECTED[0]] },
+      { reviewTaskId: "wayflow-task-1#2", targets: [EXPECTED[1]] },
+      { reviewTaskId: "wayflow-task-1#3", targets: [EXPECTED[2]] },
+    ]);
   });
 });
 
