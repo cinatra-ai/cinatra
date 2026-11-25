@@ -30,13 +30,13 @@
  *   A5 a list the decision surfaced, but no list row of its card showing each
  *      address and subject: refused
  *   A6 two surfaced lists of approved bodies: refused
- *   A7 a released decision that shows no campaign, or another campaign than
+ *   A7 a released decision that carries no campaign, or another campaign than
  *      the call names: refused
  *   A8 an approved body filed for another campaign, or for none: refused
- *   B1 an empty `cinatraAgentRunId` beside a valid `cinatra_agent_run_id`, no
- *      released list, the run has bodies filed for review: refused
- *   B2 the same with no run on the call: every run either bundle names is
- *      looked up, and the send is refused
+ *   B1 no released list, and the run the host recorded as the bundle's writer
+ *      has bodies filed for review: refused
+ *   B2 the same with no run on the call: every recorded writer run of either
+ *      object is looked up, and the send is refused
  *   B3 a bundle that names another run changes nothing: the approved form
  *      binds and claims under the run of the call
  *   B4 a call that carries no run reads no publish decision
@@ -158,6 +158,9 @@ function makeFixture(opts?: {
   callingRun?: { runId: string; stepId?: string } | null;
   decision?: unknown;
   reviewedRuns?: string[];
+  /** The runs the host recorded as writers of each object; by default the run
+   *  the object's data names, as a host records the run that saved it. */
+  objectRuns?: Record<string, string[]>;
   sendLedger?: ReturnType<typeof memorySendLedger>;
   sent?: Array<{ to: string[]; subject: string; textBody: string }>;
 }) {
@@ -226,6 +229,11 @@ function makeFixture(opts?: {
     readDecidedBody,
     messageSendLedger: sendLedger.ledger,
     readRunReviewedBodies,
+    readObjectRuns: async (id: string) => {
+      if (opts?.objectRuns) return opts.objectRuns[id] ?? [];
+      const d = (envelopes[id]?.data ?? {}) as Record<string, unknown>;
+      return typeof d.cinatraAgentRunId === "string" && d.cinatraAgentRunId !== "" ? [d.cinatraAgentRunId] : [];
+    },
     readCallingRun: async () => callingRun,
     readPublishDecision,
   } as unknown as TriggerEmailSendDeps;
@@ -339,9 +347,9 @@ describe("cinatra#3089 — what a person approved comes from the released publis
   });
 
   it.each([
-    ["shows no campaign", { campaignId: undefined }, "the released publish decision shows no campaign (step send of run run-1)"],
-    ["shows an empty campaign", { campaignId: "  " }, "the released publish decision shows no campaign"],
-    ["shows another campaign", { campaignId: "44444444-4444-4444-8444-444444444444" }, "the call names another campaign than the released publish decision shows"],
+    ["carries no campaign", { campaignId: undefined }, "the released publish decision carries no campaign (step send of run run-1)"],
+    ["carries an empty campaign", { campaignId: "  " }, "the released publish decision carries no campaign"],
+    ["carries another campaign", { campaignId: "44444444-4444-4444-8444-444444444444" }, "the call names another campaign than the released publish decision carries"],
   ])("A7 a released decision that %s refuses the send", async (_name, extra, reason) => {
     const card = releasedCard(approved, extra);
     if (extra.campaignId === undefined) delete (card.surfacedValues as Record<string, unknown>).campaignId;
@@ -363,21 +371,22 @@ describe("cinatra#3089 — what a person approved comes from the released publis
 });
 
 describe("cinatra#3089 — the run is the run of the call, never a bundle field", () => {
-  it("B1 an empty cinatraAgentRunId beside a valid cinatra_agent_run_id does not hide the run's filed bodies", async () => {
-    // The call's own run filed nothing; the run the bundle names did.
+  it("B1 the run the host recorded as the bundle's writer is looked up beside the run of the call", async () => {
+    // The call's own run filed nothing; the run that wrote the bundle did.
     const fx = makeFixture({
       callingRun: { runId: "run-call" },
-      bundleData: { cinatraAgentRunId: "", cinatra_agent_run_id: "run-1" },
+      bundleData: { cinatraAgentRunId: "" },
+      objectRuns: { [BUNDLE_REF]: ["run-1"] },
       reviewedRuns: ["run-1"],
     });
     await expectRefused(fx, "REVIEWED_ARTIFACTS_REQUIRED: The send was refused before any email went out: run run-1 filed artifacts");
     expect(fx.readRunReviewedBodies.mock.calls.map(([runId]) => runId)).toEqual(["run-call", "run-1"]);
   });
 
-  it("B2 a call without a run looks up every run either bundle names", async () => {
+  it("B2 a call without a run looks up every run the host recorded as a writer of either object", async () => {
     const fx = makeFixture({
       callingRun: null,
-      bundleData: { cinatraAgentRunId: "", cinatra_agent_run_id: "run-1" },
+      objectRuns: { [RECIPIENTS_REF]: ["run-1"] },
       reviewedRuns: ["run-1"],
     });
     await expectRefused(fx, "run run-1 filed artifacts for review");

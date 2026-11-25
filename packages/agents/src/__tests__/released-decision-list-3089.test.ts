@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../db", () => ({ db: {} }));
 
-import { releasedDecisionList } from "../publish-decision-store";
+import { releasedDecisionList, releasedDecisionText } from "../publish-decision-store";
 
 const FIELDS = ["artifactId", "representationRevisionId", "contactId", "recipientEmail", "subject"] as const;
 const SHOWN = [{ field: "recipientEmail", column: "email" }, { field: "subject", column: "subject" }];
@@ -44,10 +44,11 @@ describe("releasedDecisionList (cinatra#3089)", () => {
     expect(read(decision(list))).toEqual({ ok: true, list });
   });
 
-  it("L2 a surfaced value as JSON text answers the same list as the array", () => {
+  it("L2 a list surfaced as JSON text is a list, but no card draws its bodies, so it is refused", () => {
     const list = entries(2);
     // red-first-expect: is not a function
-    expect(read(decision(JSON.stringify(list), { shown: list.map((e) => ({ email: e.recipientEmail, subject: e.subject })) }))).toEqual({ ok: true, list });
+    const answer = read(decision(JSON.stringify(list), { shown: list.map((e) => ({ email: e.recipientEmail, subject: e.subject })) }));
+    expect(answer).toEqual({ ok: false, error: "no artifacts row of the released publish decision draws the bodies of the released list" });
   });
 
   it("L3 a decision that is not released by a person answers an error", () => {
@@ -157,5 +158,36 @@ describe("releasedDecisionList (cinatra#3089)", () => {
     expect(noColumn.ok).toBe(false);
     const notAnEntryField = releasedDecisionList({ decision: d, entryFields: FIELDS, shownFields: [{ field: "name", column: "email" }] });
     expect(notAnEntryField.ok).toBe(false);
+  });
+
+  it("L11 the bodies count only when an artifacts row of the card draws the same surfaced list", () => {
+    const list = entries(2);
+    const NO_BODIES = { ok: false, error: "no artifacts row of the released publish decision draws the bodies of the released list" };
+    const noArtifactsRow = { ...decision(list), declaredRows: decision(list).declaredRows.filter((r) => r.kind !== "artifacts") };
+    // red-first-expect: is not a function
+    expect(read(noArtifactsRow as ReturnType<typeof decision>)).toEqual(NO_BODIES);
+    const otherInput = { ...decision(list), declaredRows: decision(list).declaredRows.map((r) => (r.kind === "artifacts" ? { ...r, input: "recipients" } : r)) };
+    expect(read(otherInput as ReturnType<typeof decision>)).toEqual(NO_BODIES);
+    // A target id with a space is not drawn by the card, so it is not shown.
+    const spaced = [{ ...list[0]!, artifactId: "art 0" }, list[1]!];
+    expect(read(decision(spaced))).toEqual(NO_BODIES);
+  });
+
+  it("L12 a released text counts only when a declared text row draws it", () => {
+    const rows = [{ label: "From", input: "senderEmail" }];
+    const released = (surfacedValues: Record<string, unknown>, declaredRows: unknown = rows) =>
+      ({ status: "released", decidedBy: "user-2", surfacedValues, declaredRows }) as Parameters<typeof releasedDecisionText>[0]["decision"];
+    // red-first-expect: releasedDecisionText is not a function
+    expect(releasedDecisionText({ decision: released({ senderEmail: " a@example.com " }), input: "senderEmail" })).toEqual({ ok: true, value: "a@example.com" });
+    // Blank or absent: the card draws no row and nothing is released.
+    expect(releasedDecisionText({ decision: released({ senderEmail: "  " }), input: "senderEmail" })).toEqual({ ok: true, value: null });
+    expect(releasedDecisionText({ decision: released({}), input: "senderEmail" })).toEqual({ ok: true, value: null });
+    // A value the card never drew is refused, never used.
+    const NOT_SHOWN = { ok: false, error: "the publish decision surfaced senderEmail, but no row of its card showed it" };
+    expect(releasedDecisionText({ decision: released({ senderEmail: "a@example.com" }, []), input: "senderEmail" })).toEqual(NOT_SHOWN);
+    expect(releasedDecisionText({ decision: released({ senderEmail: "a@example.com" }, null), input: "senderEmail" })).toEqual(NOT_SHOWN);
+    expect(releasedDecisionText({ decision: released({ senderEmail: "a@example.com" }, [{ kind: "list", label: "From", input: "senderEmail", columns: [] }]), input: "senderEmail" })).toEqual(NOT_SHOWN);
+    expect(releasedDecisionText({ decision: released({ senderEmail: 7 }), input: "senderEmail" }).ok).toBe(false);
+    expect(releasedDecisionText({ decision: { ...released({ senderEmail: "a@example.com" }), status: "parked" }, input: "senderEmail" }).ok).toBe(false);
   });
 });

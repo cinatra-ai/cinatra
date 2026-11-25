@@ -260,6 +260,7 @@ function makeFixture(opts?: {
     messageSendLedger: sendLedger.ledger,
     // A run without bodies filed for review, so the reference-only form runs.
     readRunReviewedBodies: async () => false,
+    readObjectRuns: async () => [],
     // The run of the call follows the case's run: none when the case has none.
     readCallingRun: async () => (runId ? { runId, stepId: "send" } : null),
     readPublishDecision: async () => releasedCardFor(named),

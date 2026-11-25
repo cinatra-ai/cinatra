@@ -16,9 +16,13 @@
  *      that message
  *   S3 each message's send-time read comes after its claim is won and right
  *      before its hand-over, and the mail carries the text read then
- *   S4 the sender mailed from is the released decision's: a call that names
- *      another sender, or a sender the decision did not surface, is refused
- *      before any mail
+ *   S4 the sender mailed from is the one the released card SHOWED on its From
+ *      row: a call that names another sender, a sender the decision did not
+ *      surface, or a surfaced sender no row of the card showed is refused before
+ *      any mail; with no sender shown the connected default mailbox sends
+ *   S6 the claim of each message is verified under the revision's lock: a
+ *      verification that refuses (the revision is no longer current and
+ *      decided when the claim commits) mails nothing for that message
  *   S5 the contact the mail is recorded for is the released entry's, never the
  *      bundle's
  */
@@ -71,16 +75,25 @@ function fixture(opts?: {
   read?: (artifactId: string, n: number) => DecidedBodyRead | undefined;
   /** Values the released decision surfaced besides the list and the campaign. */
   surfaced?: Record<string, unknown>;
+  /** Declare the card's From row for `senderEmail`. */
+  fromRow?: boolean;
+  /** The answer of the check under the revision's lock (null: still decided). */
+  underLock?: (artifactId: string) => string | null;
 }) {
+  const verified: string[] = [];
   const log: string[] = [];
   const sent: Array<{ message: Mail; options: MailOptions }> = [];
   const rows = new Map<string, { id: string; phase: "claimed" | "finalized" }>();
   let next = 0;
   const ledger: MessageSendLedger = {
-    async claim(key) {
+    async claim(key, _actor, verifyUnderLock) {
       log.push(`claim ${key.artifactId}`);
       const row = rows.get(key.bindingOutputId);
       if (row) return { kind: row.phase === "finalized" ? "done" : "in_doubt" };
+      // The shipped ledger runs the verification inside the claim's transaction,
+      // under the revision's lock; this stand-in runs it in the same place.
+      const refusal = verifyUnderLock ? await verifyUnderLock(async () => ({ rows: [] })) : null;
+      if (refusal) return { kind: "refused", reason: refusal };
       next += 1;
       rows.set(key.bindingOutputId, { id: `send-${next}`, phase: "claimed" });
       return { kind: "won", ledgerId: `send-${next}` };
@@ -130,6 +143,11 @@ function fixture(opts?: {
     readDecidedBody,
     messageSendLedger: ledger,
     readRunReviewedBodies: async () => true,
+    readObjectRuns: async () => ["run-1"],
+    readRevisionStateUnderLock: async (_query: unknown, ref: { artifactId: string; representationRevisionId: string; runId: string }) => {
+      verified.push(`${ref.artifactId}@${ref.representationRevisionId} in ${ref.runId}`);
+      return opts?.underLock?.(ref.artifactId) ?? null;
+    },
     readCallingRun: async () => ({ runId: "run-1", stepId: "send" }),
     readPublishDecision: async () => ({
       status: "released",
@@ -141,6 +159,7 @@ function fixture(opts?: {
         ...(opts?.surfaced ?? {}),
       },
       declaredRows: [
+        ...(opts?.fromRow ? [{ label: "From", input: "senderEmail" }] : []),
         {
           kind: "list",
           label: "Recipients",
@@ -162,7 +181,7 @@ function fixture(opts?: {
       input: { campaignId: CAMPAIGN_ID, approvedDraftBundleRef: BUNDLE_REF, confirmedRecipientsRef: RECIPIENTS_REF, ...request },
       actor,
     } as never) as unknown as Promise<{ status: string; sentCount: number; errorMessage?: string }>;
-  return { log, sent, rows, start };
+  return { log, sent, rows, start, verified };
 }
 
 const to = (sent: Array<{ message: Mail }>) => sent.map((s) => s.message.to[0]);
@@ -212,21 +231,40 @@ describe("cinatra#3089 — the approved send fixes each message at its send time
     expect(f.sent.map((s) => s.message.textBody)).toEqual(["Approved art-1", "Approved art-2", "Approved art-3"]);
   });
 
-  it("S4 the sender is the released decision's; another or an unreleased sender is refused before any mail", async () => {
-    const released = fixture({ surfaced: { senderEmail: "sender@example.com" } });
+  it("S4 the sender is the one the card showed; another, an unreleased or an unshown sender is refused", async () => {
+    const released = fixture({ surfaced: { senderEmail: "sender@example.com" }, fromRow: true });
+    await released.start();
     // red-first-expect: to deeply equal [ 'sender@example.com', …(2) ]
-    expect((await released.start(), released.sent.map((s) => s.message.fromEmail))).toEqual([
-      "sender@example.com", "sender@example.com", "sender@example.com",
-    ]);
-    const same = fixture({ surfaced: { senderEmail: "sender@example.com" } });
+    expect(released.sent.map((s) => s.message.fromEmail)).toEqual(["sender@example.com", "sender@example.com", "sender@example.com"]);
+    const same = fixture({ surfaced: { senderEmail: "sender@example.com" }, fromRow: true });
     await same.start({ senderEmail: "sender@example.com" });
     expect(to(same.sent)).toHaveLength(3);
-    const other = fixture({ surfaced: { senderEmail: "sender@example.com" } });
-    expect(await other.start({ senderEmail: "other@example.com" })).toMatchObject({ status: "failed", errorMessage: expect.stringMatching(/refused before any email went out: the call names .*sender/) });
+    const refusedWith = (re: RegExp) => ({ status: "failed", errorMessage: expect.stringMatching(re) });
+    const other = fixture({ surfaced: { senderEmail: "sender@example.com" }, fromRow: true });
+    expect(await other.start({ senderEmail: "other@example.com" })).toMatchObject(refusedWith(/refused before any email went out: the call names another sender/));
     expect(other.sent).toEqual([]);
-    const unreleased = fixture();
-    expect(await unreleased.start({ senderEmail: "other@example.com" })).toMatchObject({ status: "failed", errorMessage: expect.stringMatching(/refused before any email went out: the call names .*sender/) });
+    const unreleased = fixture({ fromRow: true });
+    expect(await unreleased.start({ senderEmail: "other@example.com" })).toMatchObject(refusedWith(/refused before any email went out: the call names a sender/));
     expect(unreleased.sent).toEqual([]);
+    // Surfaced, but no row of the card showed it: never mailed from.
+    const unshown = fixture({ surfaced: { senderEmail: "sender@example.com" } });
+    expect(await unshown.start()).toMatchObject(refusedWith(/refused before any email went out: the publish decision surfaced senderEmail, but no row of its card showed it/));
+    expect(unshown.sent).toEqual([]);
+    // No sender shown: the connected default mailbox sends, from no named sender.
+    const none = fixture({ fromRow: true });
+    await none.start();
+    expect(none.sent.map((s) => s.message.fromEmail)).toEqual([undefined, undefined, undefined]);
+  });
+
+  it("S6 a claim whose check under the revision's lock refuses mails nothing for that message", async () => {
+    const f = fixture({ underLock: (id) => (id === "art-2" ? "revision rev-2 of artifact art-2 is not its current revision" : null) });
+    const result = await f.start();
+    // red-first-expect: to deeply equal [ 'art-1@rev-1 in run-1', …(2) ]
+    expect(f.verified).toEqual(["art-1@rev-1 in run-1", "art-2@rev-2 in run-1", "art-3@rev-3 in run-1"]);
+    expect(to(f.sent)).toEqual(["p1@example.com", "p3@example.com"]);
+    expect(result.status).toBe("failed");
+    expect(result.errorMessage).toContain("draft 2");
+    expect(result.errorMessage).toContain("is not its current revision");
   });
 
   it("S5 the contact the mail is recorded for is the released entry's", async () => {

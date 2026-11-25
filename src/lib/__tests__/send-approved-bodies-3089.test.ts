@@ -54,7 +54,8 @@
  *      address; the mailed subject is the entry's, byte for byte, whatever a
  *      body artifact's own `subject` field holds; equal values (the address
  *      with spaces) are sent, an address in another letter case is refused;
- *      a list surfaced as JSON text behaves the same
+ *      a list surfaced as JSON text is refused before any claim: the card
+ *      draws no bodies from it
  */
 import { describe, expect, it, vi } from "vitest";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
@@ -279,6 +280,12 @@ function makeFixture(opts?: {
     readDecidedBody,
     messageSendLedger: sendLedger.ledger,
     readRunReviewedBodies,
+    // The runs the host recorded as writers of each object: here the run the
+    // object's data names, as a host records the run that saved it.
+    readObjectRuns: async (id: string) => {
+      const d = (envelopes[id]?.data ?? {}) as Record<string, unknown>;
+      return typeof d.cinatraAgentRunId === "string" ? [d.cinatraAgentRunId] : [];
+    },
     readCallingRun: async () => ({ runId: "run-1", stepId: "send" }),
     readPublishDecision: async () => releasedCardFor(named),
   } as unknown as TriggerEmailSendDeps;
@@ -732,15 +739,13 @@ describe("cinatra#3089 — each message is sent to the address and with the subj
     );
   });
 
-  it("C9 a list surfaced as JSON text is sent and refused as the array form is", async () => {
-    expect((await makeFixture().start({ releasedList: JSON.stringify(approved) })).status).toBe("completed");
-    const drafts = bundleDrafts.map((d) => (d.recipientId === "c2" ? { ...d, recipientEmail: "new-two@example.org" } : d));
+  it("C9 a list surfaced as JSON text is refused before any claim: the card draws no bodies from it", async () => {
     // red-first-expect: expected 'completed' to be 'failed'
     await expectCardRefused(
-      makeFixture({ drafts }),
+      makeFixture(),
       { releasedList: JSON.stringify(approved) },
-      `draft 2 of the bundle (contact c2): ${ADDRESS_CHANGED}`,
-      ["two@example.com", "new-two@example.org"],
+      "no artifacts row of the released publish decision draws the bodies of the released list",
+      ["one@example.com", "two@example.com"],
     );
   });
 });

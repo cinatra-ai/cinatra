@@ -42,7 +42,8 @@ const { poolQueryMock, table, statements, objectsClientCalls } = vi.hoisted(() =
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/db/pooled", async () => ({
   ...(await vi.importActual<typeof import("@/lib/db/pooled")>("@/lib/db/pooled")),
-  getPooledDb: () => ({ query: poolQueryMock }),
+  // One connection of the pool is the same recorded statement runner.
+  getPooledDb: () => ({ query: poolQueryMock, connect: async () => ({ query: poolQueryMock, release: () => undefined }) }),
 }));
 vi.mock("@/lib/postgres-config", () => ({
   getPostgresConnectionString: () => "postgres://test",
@@ -115,6 +116,9 @@ function runStatement(sql: string, params: unknown[]) {
     table.rows.push(row);
     return true;
   };
+  if (/^(BEGIN|COMMIT|ROLLBACK)$/.test(sql.trim())) return { rows: [] };
+  if (/^SELECT pg_advisory_xact_lock_shared\(hashtext\(\$1\)\)$/.test(sql.trim())) return { rows: [] };
+  if (sql === "SELECT 'decided' AS state") return { rows: [{ state: "decided" }] };
   if (/SELECT template_id FROM "public"\."agent_runs"/.test(sql)) {
     return { rows: p(1) === "run-1" && p(2) === "org-a" ? [{ template_id: "tpl-1" }] : [] };
   }
@@ -183,7 +187,14 @@ function send(sent: string[]) {
       data: { campaignId: CAMPAIGN_ID, contactId: ref.artifactId === "art-1" ? "c1" : "c2" },
     }),
     readRunReviewedBodies: async () => true,
+    readObjectRuns: async () => ["run-1"],
     readCallingRun: async () => ({ runId: "run-1", stepId: "send" }),
+    // The decision state under the revision's lock, read on the claim's own
+    // connection (the shipped reader's query is its own suite's subject).
+    readRevisionStateUnderLock: async (query: (text: string, values: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }>) => {
+      const { rows } = await query("SELECT 'decided' AS state", []);
+      return rows[0]?.state === "decided" ? null : "not decided";
+    },
     readPublishDecision: async () => ({
       status: "released",
       decidedBy: "user-2",
@@ -192,7 +203,10 @@ function send(sent: string[]) {
         recipients: approved.map((e) => ({ email: e.recipientEmail, subject: e.subject })),
         emailBodies: approved,
       },
-      declaredRows: [{ kind: "list", label: "Recipients", input: "recipients", columns: [{ label: "Email", field: "email" }, { label: "Subject", field: "subject" }] }],
+      declaredRows: [
+        { kind: "list", label: "Recipients", input: "recipients", columns: [{ label: "Email", field: "email" }, { label: "Subject", field: "subject" }] },
+        { kind: "artifacts", label: "Emails", input: "emailBodies" },
+      ],
     }),
   } as unknown as TriggerEmailSendDeps;
   return createTriggerEmailSendUseCases(deps).startInitialSend(
@@ -221,6 +235,8 @@ describe("cinatra#3089 — the approved send writes no object", () => {
     expect(result).toMatchObject({ status: "completed", sentCount: 2 });
     expect(sent).toEqual(["p1@example.com", "p2@example.com"]);
     expect(statements.length).toBeGreaterThan(0);
+    // Each claim was verified on its own connection under the revision's lock.
+    expect(statements.filter((sql) => sql.trim() === "SELECT pg_advisory_xact_lock_shared(hashtext($1))")).toHaveLength(2);
     expect(statements.filter((sql) => /"objects"|\bobjects\b\s*(SET|WHERE|\()/i.test(sql))).toEqual([]);
     expect(objectsClientCalls).toEqual([]);
     const bindings = table.rows.filter((r) => r.extension === "@cinatra-ai/email-artifacts");

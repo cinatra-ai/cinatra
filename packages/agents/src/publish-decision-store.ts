@@ -510,13 +510,13 @@ export function releasedDecisionList(input: {
   };
   const candidates = Object.keys(surfaced).flatMap((key) => {
     const list = own(surfaced, key) ? asList(surfaced[key]) : null;
-    return list ? [list] : [];
+    return list ? [{ key, list }] : [];
   });
   if (candidates.length === 0) return { ok: true, list: null };
   if (candidates.length > 1) {
     return { ok: false, error: `the publish decision surfaced ${candidates.length} lists of that shape, so which one was released cannot be told` };
   }
-  const list = candidates[0]!;
+  const { key: listKey, list } = candidates[0]!;
   const same = (shown: string, value: string, caseInsensitive?: boolean) =>
     caseInsensitive ? shown.trim().toLowerCase() === value.trim().toLowerCase() : shown.trim() === value.trim();
   const shownOnRow = (decision.declaredRows ?? []).some((row) => {
@@ -540,5 +540,46 @@ export function releasedDecisionList(input: {
   if (!shownOnRow) {
     return { ok: false, error: "no list row of the released publish decision shows each record of the released list" };
   }
+  // The bodies themselves were drawn: an artifacts row reads the same surfaced value, and the card draws an artifacts
+  // row only over a list (never JSON text) whose every record names an artifact and a revision, each a non-empty id
+  // with no space (the review-target reading of the card's island).
+  const raw = surfaced[listKey];
+  const targetId = (v: unknown) => typeof v === "string" && v.length > 0 && !v.includes(" ");
+  const bodiesDrawn =
+    Array.isArray(raw) &&
+    raw.every((e) => isPlainObject(e) && targetId(e.artifactId) && targetId(e.representationRevisionId)) &&
+    (decision.declaredRows ?? []).some((row) => publishRowKind(row) === "artifacts" && row.input === listKey);
+  if (!bodiesDrawn) {
+    return { ok: false, error: "no artifacts row of the released publish decision draws the bodies of the released list" };
+  }
   return { ok: true, list };
+}
+
+/**
+ * The text a person was SHOWN for `input` on a released decision's card (cinatra#3089). The card draws a declared text
+ * row (a row with no `kind`, `publishRowKind` "text") for a surfaced plain value that is not blank, and drops it otherwise.
+ * Answers:
+ *   - `{ ok: true, value }`: a declared text row of `input` drew this string (trimmed);
+ *   - `{ ok: true, value: null }`: the decision surfaced nothing, or a blank string, for `input` (the card drew nothing);
+ *   - `{ ok: false }`: the decision is not released by a person, or surfaced a value for `input` that is not a string,
+ *     or a non-blank string that no declared text row drew (a value no person saw is never released).
+ */
+export function releasedDecisionText(input: {
+  decision: Pick<PublishDecisionRow, "status" | "decidedBy" | "surfacedValues" | "declaredRows">;
+  input: string;
+}): { ok: true; value: string | null } | { ok: false; error: string } {
+  const { decision } = input;
+  if (decision.status !== "released" || typeof decision.decidedBy !== "string" || decision.decidedBy === "") {
+    return { ok: false, error: "the publish decision is not released by a person" };
+  }
+  const surfaced = decision.surfacedValues;
+  if (!Object.prototype.hasOwnProperty.call(surfaced, input.input) || surfaced[input.input] === undefined) {
+    return { ok: true, value: null };
+  }
+  const raw = surfaced[input.input];
+  if (typeof raw !== "string") return { ok: false, error: `the publish decision surfaced ${input.input} as no text` };
+  if (raw.trim() === "") return { ok: true, value: null };
+  const drawn = (decision.declaredRows ?? []).some((row) => publishRowKind(row) === "text" && row.input === input.input);
+  if (!drawn) return { ok: false, error: `the publish decision surfaced ${input.input}, but no row of its card showed it` };
+  return { ok: true, value: raw.trim() };
 }

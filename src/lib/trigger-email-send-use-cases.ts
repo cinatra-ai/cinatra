@@ -26,7 +26,7 @@
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import type { TriggerEmailSendUseCases } from "@cinatra-ai/trigger-email-send";
 import type { PublishDecisionRow } from "@cinatra-ai/agents/publish-decision-store";
-import type { RevisionEffectLedger } from "./artifacts/materialization-ledger";
+import type { RevisionEffectLedger, RevisionEffectVerify } from "./artifacts/materialization-ledger";
 
 // Minimal local shapes so this file does not need to load @/lib/types at the
 // top level (kept light for vitest compatibility — types only).
@@ -137,6 +137,24 @@ export type TriggerEmailSendDeps = {
    * rows the card declared, and who released it; null when the step has none.
    */
   readPublishDecision?: (runId: string, stepId: string) => Promise<StepPublishDecision | null>;
+  /**
+   * The runs the HOST RECORDED as writers of the object `objectId` (its row's
+   * run and every run of its append-only change history), never a run id the
+   * object's own data names (cinatra#3089). Throws when they cannot be read.
+   * Defaults to `listObjectWriterRunIds`.
+   */
+  readObjectRuns?: (objectId: string, actor: PrimitiveActorContext) => Promise<string[]>;
+  /**
+   * The decision state of an approved body revision, read through `query` (the
+   * claim's own connection, inside the transaction that holds the artifact's
+   * revision lock): null while the revision is still the current, decided,
+   * person-approved revision filed in `runId`, else the reason. Defaults to
+   * `readRevisionDecisionState`.
+   */
+  readRevisionStateUnderLock?: (
+    query: Parameters<RevisionEffectVerify>[0],
+    ref: { orgId: string; artifactId: string; representationRevisionId: string; runId: string },
+  ) => Promise<string | null>;
 };
 
 /** The run of a call and the verified step that made it (see `readCallingRun`). */
@@ -329,6 +347,22 @@ function buildLazyDefaultDeps(): TriggerEmailSendDeps {
       if (typeof runId !== "string" || runId.trim() === "") return null;
       const stepId = ctx?.verifiedStepId ?? agentRun?.verifiedStepId;
       return { runId: runId.trim(), ...(typeof stepId === "string" && stepId !== "" ? { stepId } : {}) };
+    },
+    async readObjectRuns(objectId, actor) {
+      const orgId = actor.orgId;
+      if (!orgId) {
+        throw new Error("the sending actor carries no organization, so the writers of its bundles cannot be read");
+      }
+      const [{ kernelActorForRead }, { listObjectWriterRunIds }] = await Promise.all([
+        import("./authz/enforce-resource-access"),
+        import("./artifacts/current-decided-revision-read"),
+      ]);
+      return listObjectWriterRunIds({ actor: kernelActorForRead(actor, orgId), orgId, objectId });
+    },
+    async readRevisionStateUnderLock(query, ref) {
+      const { readRevisionDecisionState } = await import("./artifacts/current-decided-revision-read");
+      const state = await readRevisionDecisionState(query, ref);
+      return state.ok ? null : state.error;
     },
     async readPublishDecision(runId, stepId) {
       const { readDecisionForRunNode } = await import("@cinatra-ai/agents/publish-decision-store");
@@ -881,6 +915,8 @@ async function runInitialSend(args: {
   readRunReviewedBodies: NonNullable<TriggerEmailSendDeps["readRunReviewedBodies"]>;
   readCallingRun: NonNullable<TriggerEmailSendDeps["readCallingRun"]>;
   readPublishDecision: NonNullable<TriggerEmailSendDeps["readPublishDecision"]>;
+  readObjectRuns: NonNullable<TriggerEmailSendDeps["readObjectRuns"]>;
+  readRevisionStateUnderLock: NonNullable<TriggerEmailSendDeps["readRevisionStateUnderLock"]>;
   getObjectByRef: (
     ref: string,
     actor: PrimitiveActorContext,
@@ -898,6 +934,8 @@ async function runInitialSend(args: {
     readRunReviewedBodies,
     readCallingRun,
     readPublishDecision,
+    readObjectRuns,
+    readRevisionStateUnderLock,
   } = args;
   const startedAt = new Date().toISOString();
   sendStateByCampaign.set(input.campaignId, {
@@ -967,19 +1005,30 @@ async function runInitialSend(args: {
     // released for the calling step: its values were frozen when the step
     // stopped, and the card was drawn from them. The approved list is the ONE
     // surfaced value that is a list of approved bodies (artifact, revision,
-    // contact, address, subject), and a list row of the card must show each
-    // message's address and subject, in the same order
-    // (`releasedDecisionList`). The campaign is the decision's surfaced
-    // `campaignId`, which must be the campaign the call names. The sender is
-    // the decision's surfaced `senderEmail`: a call that names another sender,
-    // or a sender the decision did not surface, is refused. Nothing of the
-    // request decides what is mailed: the request carries no list.
+    // contact, address, subject); a list row of the card must show each
+    // message's address and subject in their own columns, in the same order,
+    // and an artifacts row must draw the bodies of that same list
+    // (`releasedDecisionList`). The sender is the text the card's own row for
+    // `senderEmail` showed (`releasedDecisionText`): a sender surfaced but
+    // never shown, a call that names another sender, or a sender the card did
+    // not show is refused; with none shown the connected default mailbox
+    // sends. The campaign is the decision's surfaced `campaignId`, which must
+    // be the campaign the call names. Nothing of the request decides what is
+    // mailed: the request carries no list.
     //
-    // EVERY VALUE THE APPROVED SEND AUTHORIZES OR MAILS WITH comes from (a) the
-    // released decision's frozen values (artifact, revision, contact, address,
-    // subject, campaign, sender), (b) the decided revision itself (its text,
-    // read again at each message's send time), or (c) the server's context of
-    // the call (the run and the step). The body object's own `data` can be
+    // EVERY VALUE THE APPROVED SEND MAILS WITH WAS SHOWN to the person who
+    // released it: the bodies (artifacts row), each address and subject (their
+    // columns of the list row), the sender (its text row). The values that
+    // AUTHORIZE but are identifiers no person reads (the artifact and revision
+    // ids, the contact id, the campaign id) are bound instead: frozen in the
+    // released decision of the server-verified calling step, and checked
+    // against the run (each revision filed in the run of the call, read again
+    // under the revision's lock at the claim) and the call (the campaign).
+    //
+    // Every value the approved send authorizes or mails with comes from (a) the
+    // released decision's frozen values, (b) the decided revision itself (its
+    // text; its state verified again when each message is claimed), or (c) the
+    // server's context of the call (the run and the step). The body object's own `data` can be
     // changed after the decision without a new revision, so it never
     // authorizes: its `contactId` and `campaignId` are read only to REFUSE a
     // body that disagrees with the decision. The bundle is likewise read only
@@ -1014,19 +1063,20 @@ async function runInitialSend(args: {
           const campaignId = Object.prototype.hasOwnProperty.call(surfaced, "campaignId")
             ? textOf(surfaced.campaignId)
             : undefined;
-          if (!campaignId) refuse(`the released publish decision shows no campaign (${decisionOf})`);
+          if (!campaignId) refuse(`the released publish decision carries no campaign (${decisionOf})`);
           if (campaignId !== input.campaignId.trim()) {
-            refuse(`the call names another campaign than the released publish decision shows (${decisionOf})`);
+            refuse(`the call names another campaign than the released publish decision carries (${decisionOf})`);
           }
-          const senderEmail = Object.prototype.hasOwnProperty.call(surfaced, "senderEmail")
-            ? textOf(surfaced.senderEmail)
-            : undefined;
+          const { releasedDecisionText } = await import("@cinatra-ai/agents/publish-decision-store");
+          const shownSender = releasedDecisionText({ decision, input: "senderEmail" });
+          if (!shownSender.ok) return refuse(`${shownSender.error} (${decisionOf})`);
+          const senderEmail = shownSender.value ?? undefined;
           const callSender = textOf(input.senderEmail);
           if (callSender !== undefined && callSender !== senderEmail) {
             refuse(
               senderEmail
-                ? `the call names another sender than the released publish decision shows (${decisionOf})`
-                : `the call names a sender the released publish decision does not show (${decisionOf})`,
+                ? `the call names another sender than the released publish card showed (${decisionOf})`
+                : `the call names a sender the released publish card did not show (${decisionOf})`,
             );
           }
           released = { list: read.list, campaignId: campaignId!, senderEmail };
@@ -1038,13 +1088,28 @@ async function runInitialSend(args: {
     // unless a step filed bodies for review: the bundle's text is then not what
     // a person reviewed, so the send is refused before any mail
     // (`ReviewedArtifactsRequiredError`). The runs looked up are the run of the
-    // call AND every run either bundle names, so no bundle field can hide a
-    // run's filed bodies. A call that carries no run (a person's direct call:
-    // an agent's call always carries its run, by its token or the run-bound
-    // seam) whose bundles name no run with filed bodies keeps the
-    // reference-only send it had before cinatra#3089.
+    // call (the server's context) AND every run the HOST RECORDED as a writer
+    // of either bundle object (`readObjectRuns`: the row's run and every run of
+    // its append-only change history). A run id in a bundle's data
+    // (`cinatraAgentRunId`, which a save keeps as the caller sent it) decides
+    // nothing here. A call that carries no run (a person's direct call: an
+    // agent's call always carries its run, by its token or the run-bound seam)
+    // on bundles no run ever wrote keeps the reference-only send it had before
+    // cinatra#3089: no run made them, so no body of theirs was filed for review.
     if (!released) {
-      for (const runId of [...new Set([...(runScopeId ? [runScopeId] : []), ...namedRunIds])]) {
+      const writerRuns: string[] = [];
+      for (const [ref, env] of [
+        [input.approvedDraftBundleRef, draftEnv],
+        [input.confirmedRecipientsRef, recipEnv],
+      ] as const) {
+        const objectId = textOf(env.id) ?? ref;
+        try {
+          writerRuns.push(...(await readObjectRuns(objectId, actor)));
+        } catch (err) {
+          refuse(`which runs wrote object ${objectId} could not be read: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+      for (const runId of [...new Set([...(runScopeId ? [runScopeId] : []), ...writerRuns])]) {
         let reviewed: boolean;
         try {
           reviewed = await readRunReviewedBodies(runId, actor);
@@ -1232,7 +1297,7 @@ async function runInitialSend(args: {
     const messageIdByArtifact = new Map<string, string>();
     // The reference-only form keys its projection and its correlation on the
     // run of the call, and on a call that carries no run, as before, on the
-    // first run the bundles name.
+    // first run the bundles name: a key of the projection, never a check.
     const referenceRunId = runScopeId ?? namedRunIds[0] ?? null;
     if (approvedByIndex && runScopeId) {
       let fanout: EmailFanoutResult;
@@ -1332,6 +1397,17 @@ async function runInitialSend(args: {
           },
           actor,
           ...(messageSendLedger ? { ledger: messageSendLedger } : {}),
+          // THE START IS VERIFIED UNDER THE REVISION'S LOCK: the claim's own
+          // transaction holds the lock every revision writer takes and reads
+          // the revision's decision state again; the claim commits (the mail
+          // is started) only while the revision is still current and decided.
+          verifyUnderLock: (query) =>
+            readRevisionStateUnderLock(query, {
+              orgId: actor.orgId ?? "",
+              artifactId: approved.artifactId,
+              representationRevisionId: approved.representationRevisionId,
+              runId: runScopeId,
+            }),
           // THE CHECK AND THE MAIL ARE BOUND PER MESSAGE: with the claim won,
           // the decided-revision read runs again right before the hand-over,
           // and the text mailed is the one it reads then. A revision no longer
@@ -1388,6 +1464,10 @@ async function runInitialSend(args: {
               `[trigger-email-send] ${name} of run ${runScopeId} is claimed but not recorded as sent; it was not mailed again`,
             );
           }
+          continue;
+        }
+        if (failure.stage === "refused") {
+          refusedAtSend.push(`${name} was not sent, its body was refused when its mail was claimed: ${failure.reason}`);
           continue;
         }
         if (failure.stage === "not_started" && notDecidedNow !== undefined) {
@@ -1773,6 +1853,8 @@ export function createTriggerEmailSendUseCases(
         readRunReviewedBodies: deps.readRunReviewedBodies ?? fallback().readRunReviewedBodies!,
         readCallingRun: deps.readCallingRun ?? fallback().readCallingRun!,
         readPublishDecision: deps.readPublishDecision ?? fallback().readPublishDecision!,
+        readObjectRuns: deps.readObjectRuns ?? fallback().readObjectRuns!,
+        readRevisionStateUnderLock: deps.readRevisionStateUnderLock ?? fallback().readRevisionStateUnderLock!,
       });
       sendStateByCampaign.set(input.campaignId, result);
       return {

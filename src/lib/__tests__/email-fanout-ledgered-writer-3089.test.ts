@@ -232,6 +232,7 @@ describe("cinatra#3089 — the fan-out's body write on the ledgered writer", () 
       emitEmailFanout,
       // A run whose drafting step filed no body for review.
       readRunReviewedBodies: async () => false,
+      readObjectRuns: async () => [],
     });
 
     const result = await uc.startInitialSend(
@@ -260,6 +261,7 @@ describe("cinatra#3089 — the fan-out's body write on the ledgered writer", () 
       sendEmail: sendEmail as never,
       getObjectByRef: (async (ref: string) => bundles[ref] ?? null) as never,
       readRunReviewedBodies: async () => false,
+      readObjectRuns: async () => [],
       emitEmailFanout: (args: EmailFanoutArgs) =>
         materializeEmailFanout(args, {
           writeBody: async () => {

@@ -298,6 +298,7 @@ function makeSendDeps(overrides: {
     emitEmailFanout: emitEmailFanout as never,
     // A run whose drafting step filed no body for review (cinatra#3089).
     readRunReviewedBodies: async () => false,
+    readObjectRuns: async () => [],
   };
   return { deps, sendEmail, emitEmailFanout, getObjectByRef };
 }

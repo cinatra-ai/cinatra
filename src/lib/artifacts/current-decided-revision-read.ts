@@ -144,12 +144,58 @@ export async function readCurrentDecidedRevision(input: {
         ? (rec.data as Record<string, unknown>)
         : {};
     ensurePostgresSchema();
-    const s = postgresSchema.replaceAll('"', '""');
-    const [res] = await runPostgresQueriesAsync({
-      connectionString: getPostgresConnectionString(),
-      queries: [
-        {
-          text: `WITH approval AS (
+    const connectionString = getPostgresConnectionString();
+    const state = await readRevisionDecisionState(
+      async (text, values) => {
+        const [res] = await runPostgresQueriesAsync({ connectionString, queries: [{ text, values }] });
+        return { rows: (res?.rows ?? []) as Array<Record<string, unknown>> };
+      },
+      { orgId, artifactId, representationRevisionId, runId },
+    );
+    if (!state.ok) return { ok: false, error: state.error };
+    const latest = state.latestRevisionId;
+
+    const { readArtifactRepresentationText } = await import("./extension-artifact-reads");
+    const read = await readArtifactRepresentationText({
+      orgId,
+      actor,
+      artifactId,
+      representationRevisionId,
+      knownLatestRevisionId: latest,
+    });
+    if (read.representationRevisionId !== representationRevisionId) {
+      return { ok: false, error: `${name} was read at another revision` };
+    }
+    if (read.truncated) {
+      return { ok: false, error: `${name} is too long to be read whole` };
+    }
+    return { ok: true, artifactId, representationRevisionId, text: read.text, data };
+  } catch (err) {
+    return {
+      ok: false,
+      error: `${name} could not be read: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/**
+ * The decision state of `representationRevisionId` of `artifactId`, read through
+ * `query` (cinatra#3089): it answers `{ ok: true }` only while the revision is
+ * the artifact's current one, was filed in `runId`, is approved by a person of
+ * `orgId`, and no decision against it, open gate or repair names it; else the
+ * reason, by name. It reads only (the one query of `readCurrentDecidedRevision`),
+ * so a caller can run it on its own connection, for example inside a
+ * transaction that holds the artifact's revision lock.
+ */
+export async function readRevisionDecisionState(
+  query: (text: string, values: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }>,
+  input: { orgId: string; artifactId: string; representationRevisionId: string; runId: string },
+): Promise<{ ok: true; latestRevisionId: string } | { ok: false; error: string }> {
+  const { orgId, artifactId, representationRevisionId, runId } = input;
+  const name = `revision ${representationRevisionId} of artifact ${artifactId}`;
+  const s = postgresSchema.replaceAll('"', '""');
+  const { rows } = await query(
+    `WITH approval AS (
   SELECT g.resolved_by, g.fingerprint,
     (SELECT COALESCE(u."userType", 'human') FROM public."user" u WHERE u.id = g.resolved_by) AS decider_user_type,
     EXISTS (SELECT 1 FROM public."member" m
@@ -194,72 +240,49 @@ SELECT
      WHERE m.org_id = $1 AND m.run_id = $4 AND m.artifact_id = $2
        AND m.representation_revision_id = $3 AND m.phase = 'finalized'
   ) AS filed_in_run`,
-          values: [orgId, artifactId, representationRevisionId, runId],
-        },
-      ],
-    });
-    const row = (res?.rows?.[0] ?? null) as
-      | {
-          latest_revision_id?: string | null;
-          approvals?: unknown;
-          decided_against?: boolean;
-          open_gate?: boolean;
-          repaired?: boolean;
-          filed_in_run?: boolean;
-        }
-      | null;
-    if (!row) return { ok: false, error: `the decision state of ${name} could not be read` };
-    const latest = row.latest_revision_id;
-    if (typeof latest !== "string" || latest.length === 0) {
-      return { ok: false, error: `artifact ${artifactId} carries no current revision` };
-    }
-    if (latest !== representationRevisionId) {
-      return {
-        ok: false,
-        error: `${name} is not its current revision (the current one is ${latest}); a revision filed after the decision supersedes it`,
-      };
-    }
-    if (row.filed_in_run !== true) {
-      return { ok: false, error: `${name} was not filed in run ${runId}` };
-    }
-    if (row.decided_against === true) {
-      return { ok: false, error: `${name} was decided against (rejected or sent back for changes)` };
-    }
-    if (row.open_gate === true) {
-      return { ok: false, error: `${name} still waits on an open decision` };
-    }
-    if (row.repaired === true) {
-      return { ok: false, error: `${name} has a repair filed against it` };
-    }
-    const approvals = Array.isArray(row.approvals) ? (row.approvals as ApprovalRow[]) : [];
-    if (approvals.length === 0) {
-      return { ok: false, error: `${name} was not approved by a person` };
-    }
-    if (!approvals.some(isPersonsApproval)) {
-      return { ok: false, error: `${name} was approved, but not by a person of organisation ${orgId}` };
-    }
-
-    const { readArtifactRepresentationText } = await import("./extension-artifact-reads");
-    const read = await readArtifactRepresentationText({
-      orgId,
-      actor,
-      artifactId,
-      representationRevisionId,
-      knownLatestRevisionId: latest,
-    });
-    if (read.representationRevisionId !== representationRevisionId) {
-      return { ok: false, error: `${name} was read at another revision` };
-    }
-    if (read.truncated) {
-      return { ok: false, error: `${name} is too long to be read whole` };
-    }
-    return { ok: true, artifactId, representationRevisionId, text: read.text, data };
-  } catch (err) {
+    [orgId, artifactId, representationRevisionId, runId],
+  );
+  const row = (rows[0] ?? null) as
+    | {
+        latest_revision_id?: string | null;
+        approvals?: unknown;
+        decided_against?: boolean;
+        open_gate?: boolean;
+        repaired?: boolean;
+        filed_in_run?: boolean;
+      }
+    | null;
+  if (!row) return { ok: false, error: `the decision state of ${name} could not be read` };
+  const latest = row.latest_revision_id;
+  if (typeof latest !== "string" || latest.length === 0) {
+    return { ok: false, error: `artifact ${artifactId} carries no current revision` };
+  }
+  if (latest !== representationRevisionId) {
     return {
       ok: false,
-      error: `${name} could not be read: ${err instanceof Error ? err.message : String(err)}`,
+      error: `${name} is not its current revision (the current one is ${latest}); a revision filed after the decision supersedes it`,
     };
   }
+  if (row.filed_in_run !== true) {
+    return { ok: false, error: `${name} was not filed in run ${runId}` };
+  }
+  if (row.decided_against === true) {
+    return { ok: false, error: `${name} was decided against (rejected or sent back for changes)` };
+  }
+  if (row.open_gate === true) {
+    return { ok: false, error: `${name} still waits on an open decision` };
+  }
+  if (row.repaired === true) {
+    return { ok: false, error: `${name} has a repair filed against it` };
+  }
+  const approvals = Array.isArray(row.approvals) ? (row.approvals as ApprovalRow[]) : [];
+  if (approvals.length === 0) {
+    return { ok: false, error: `${name} was not approved by a person` };
+  }
+  if (!approvals.some(isPersonsApproval)) {
+    return { ok: false, error: `${name} was approved, but not by a person of organisation ${orgId}` };
+  }
+  return { ok: true, latestRevisionId: latest };
 }
 
 // ---------------------------------------------------------------------------
@@ -318,4 +341,51 @@ export async function runHasFiledReviewArtifacts(input: {
     if (type === undefined || type === input.objectTypeId) return true;
   }
   return false;
+}
+
+/** At most this many runs are read as writers of one object; more refuses. */
+export const OBJECT_WRITER_RUNS_READ_CAP = 200;
+
+/**
+ * The runs the HOST RECORDED as writers of `objectId` in `orgId` (cinatra#3089):
+ * the run on the object's row (`run_id`, set from the authenticated run of the
+ * last write) and every run its append-only change history records
+ * (`object_change_event.run_id`, written in the same transaction as each write).
+ * A run id inside the object's own data is never read. The object is read first
+ * through the access-checked objects read under `actor`; an object the actor
+ * cannot read, a history that cannot be read, or more runs than the cap throw,
+ * so a caller fails closed. Sorted, without duplicates.
+ */
+export async function listObjectWriterRunIds(input: {
+  actor: ActorContext;
+  orgId: string;
+  objectId: string;
+  cap?: number;
+}): Promise<string[]> {
+  const { actor, orgId, objectId } = input;
+  const cap = Math.max(1, Math.floor(input.cap ?? OBJECT_WRITER_RUNS_READ_CAP));
+  const rec = getObjectById(objectId, { orgId }, actor);
+  if (!rec) throw new Error(`the acting actor cannot read object ${objectId}`);
+  ensurePostgresSchema();
+  const s = postgresSchema.replaceAll('"', '""');
+  const [res] = await runPostgresQueriesAsync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `SELECT DISTINCT run_id FROM "${s}"."object_change_event"
+  WHERE org_id = $1 AND object_id = $2 AND run_id IS NOT NULL
+  ORDER BY run_id
+  LIMIT $3`,
+        values: [orgId, objectId, cap + 1],
+      },
+    ],
+  });
+  const runs = new Set<string>();
+  for (const row of (res?.rows ?? []) as Array<{ run_id?: unknown }>) {
+    if (typeof row.run_id === "string" && row.run_id.trim() !== "") runs.add(row.run_id.trim());
+  }
+  const rowRun = (rec as { runId?: unknown }).runId;
+  if (typeof rowRun === "string" && rowRun.trim() !== "") runs.add(rowRun.trim());
+  if (runs.size > cap) throw new Error(`object ${objectId} was written by more than ${cap} runs`);
+  return [...runs].sort();
 }

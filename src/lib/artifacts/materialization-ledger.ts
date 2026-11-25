@@ -611,6 +611,8 @@ export async function recordFanoutReuseMaterialization(input: {
 export type RevisionEffectClaim =
   /** This caller holds the effect: perform it, then `markRevisionEffectDone`. */
   | { kind: "won"; ledgerId: string }
+  /** The verification under the lock refused: no claim row, nothing to perform. */
+  | { kind: "refused"; reason: string }
   /** The effect was done earlier. */
   | { kind: "done" }
   /** Claimed but never marked done: it may or may not have happened. */
@@ -633,11 +635,13 @@ export async function claimRevisionEffect(input: {
   effect: string;
   artifactId: string;
   representationRevisionId: string;
+  /** Run inside the claim's transaction, under the artifact's revision lock;
+   *  a returned reason refuses the claim (see `RevisionEffectVerify`). */
+  verifyUnderLock?: RevisionEffectVerify;
 }): Promise<RevisionEffectClaim> {
   ensurePostgresSchema();
   const s = schema();
-  const inserted = await pool().query(
-    `WITH bound AS (
+  const insertText = `WITH bound AS (
   SELECT org_id, run_id, artifact_id, representation_revision_id
     FROM "${s}"."artifact_materializations"
    WHERE org_id = $2 AND run_id = $3 AND output_id = $4 AND path = $5
@@ -652,36 +656,80 @@ SELECT $1, org_id, run_id, $4, NULL, $5, $8, $8,
        artifact_id, representation_revision_id, 'claimed'
   FROM bound
 ON CONFLICT (run_id, output_id, extension, content_hash) DO NOTHING
-RETURNING id`,
-    [
-      randomUUID(),
-      input.orgId,
-      input.runId,
-      input.bindingOutputId,
-      input.path,
-      input.artifactId,
-      input.representationRevisionId,
-      input.effect,
-    ],
-  );
-  if (inserted.rows.length > 0) {
-    return { kind: "won", ledgerId: String(inserted.rows[0].id) };
-  }
-  const existing = await pool().query(
-    `SELECT phase FROM "${s}"."artifact_materializations"
+RETURNING id`;
+  const insertValues = [
+    randomUUID(),
+    input.orgId,
+    input.runId,
+    input.bindingOutputId,
+    input.path,
+    input.artifactId,
+    input.representationRevisionId,
+    input.effect,
+  ];
+  const existingText = `SELECT phase FROM "${s}"."artifact_materializations"
   WHERE org_id = $1 AND run_id = $2 AND output_id = $3 AND path = $4
     AND extension = $5 AND content_hash = $5
-  LIMIT 1`,
-    [input.orgId, input.runId, input.bindingOutputId, input.path, input.effect],
-  );
-  const row = existing.rows[0] as { phase?: string } | undefined;
-  if (!row) {
-    throw new Error(
-      `output ${input.bindingOutputId} of run ${input.runId} has no binding to revision ${input.representationRevisionId} of artifact ${input.artifactId}, so its ${input.effect} cannot be claimed`,
-    );
+  LIMIT 1`;
+  const existingValues = [input.orgId, input.runId, input.bindingOutputId, input.path, input.effect];
+  const answerExisting = (rows: unknown[]): RevisionEffectClaim => {
+    const row = rows[0] as { phase?: string } | undefined;
+    if (!row) {
+      throw new Error(
+        `output ${input.bindingOutputId} of run ${input.runId} has no binding to revision ${input.representationRevisionId} of artifact ${input.artifactId}, so its ${input.effect} cannot be claimed`,
+      );
+    }
+    return row.phase === "finalized" ? { kind: "done" } : { kind: "in_doubt" };
+  };
+  const verify = input.verifyUnderLock;
+  if (!verify) {
+    const inserted = await pool().query(insertText, insertValues);
+    if (inserted.rows.length > 0) return { kind: "won", ledgerId: String(inserted.rows[0].id) };
+    return answerExisting((await pool().query(existingText, existingValues)).rows);
   }
-  return row.phase === "finalized" ? { kind: "done" } : { kind: "in_doubt" };
+  // THE CLAIM VERIFIED UNDER THE REVISION WRITERS' LOCK (cinatra#3089). Every
+  // writer that appends a revision to an existing artifact holds the
+  // transaction-scoped advisory lock `pg_advisory_xact_lock(hashtext(<artifact
+  // id>))` (the revision append, the representation store, the content
+  // snapshot, the typed promotion and the dashboard twin writer). This
+  // transaction holds its SHARED form from before the verification until the
+  // claim row commits, so no revision is appended in between: an append
+  // committed earlier is seen by the verification (which then refuses and the
+  // claim row is rolled back), and a later append waits until this claim
+  // committed. The commit is the effect's start: at that moment the verified
+  // revision was the artifact's current one.
+  const client = await pool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock_shared(hashtext($1))", [input.artifactId]);
+    const inserted = await client.query(insertText, insertValues);
+    if (inserted.rows.length === 0) {
+      // Claimed earlier: done or in doubt. Nothing new starts, so nothing is verified.
+      const answer = answerExisting((await client.query(existingText, existingValues)).rows);
+      await client.query("COMMIT");
+      return answer;
+    }
+    const refusal = await verify((text, values) => client.query(text, values));
+    if (refusal !== null) {
+      await client.query("ROLLBACK");
+      return { kind: "refused", reason: refusal };
+    }
+    await client.query("COMMIT");
+    return { kind: "won", ledgerId: String(inserted.rows[0].id) };
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
 }
+
+/** A check run inside a claim's transaction while it holds the artifact's
+ *  revision lock: it reads through `query` (the same connection) and answers
+ *  null when the effect may start, else the reason it may not. */
+export type RevisionEffectVerify = (
+  query: (text: string, values: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }>,
+) => Promise<string | null>;
 
 /** Record that the effect of a won claim is done. True when the claim's row is
  *  `finalized` after the call: moved by this call, or already moved by an
@@ -779,13 +827,15 @@ export type RevisionEffectLedger = {
   claim(
     key: RevisionEffectClaimKey,
     actor: PrimitiveActorContext,
-  ): Promise<{ kind: "won"; ledgerId: string } | { kind: "done" } | { kind: "in_doubt" }>;
+    verifyUnderLock?: RevisionEffectVerify,
+  ): Promise<RevisionEffectClaim>;
   markDone(ledgerId: string, key: RevisionEffectClaimKey, actor: PrimitiveActorContext): Promise<boolean>;
   release(ledgerId: string, key: RevisionEffectClaimKey, actor: PrimitiveActorContext): Promise<void>;
 };
 
 /** What one call did. `failure` names why the caller must not go on: the claim
- *  could not be taken (`claim`), the effect did not start and its claim was
+ *  could not be taken (`claim`), its verification under the lock refused and
+ *  nothing started (`refused`), the effect did not start and its claim was
  *  given back (`not_started`), the effect failed and is in doubt (`act`), it
  *  did not start but its claim could not be given back (`release`), or it was
  *  performed but its done mark could not be written (`mark`). */
@@ -793,7 +843,7 @@ export type RevisionEffectOutcome = {
   done: boolean;
   alreadyDone: boolean;
   inDoubt: boolean;
-  failure?: { stage: "claim" | "not_started" | "act" | "release" | "mark"; reason: string };
+  failure?: { stage: "claim" | "refused" | "not_started" | "act" | "release" | "mark"; reason: string };
 };
 
 function effectOrgOf(actor: PrimitiveActorContext): string {
@@ -805,9 +855,9 @@ function effectOrgOf(actor: PrimitiveActorContext): string {
 
 /** The materialization ledger's claim rows (`claimRevisionEffect`). */
 export const defaultRevisionEffectLedger: RevisionEffectLedger = {
-  async claim(key, actor) {
+  async claim(key, actor, verifyUnderLock) {
     const orgId = effectOrgOf(actor);
-    return claimRevisionEffect({ orgId, ...key });
+    return claimRevisionEffect({ orgId, ...key, ...(verifyUnderLock ? { verifyUnderLock } : {}) });
   },
   async markDone(ledgerId, key, actor) {
     const orgId = effectOrgOf(actor);
@@ -830,18 +880,22 @@ export async function performRevisionEffectOnce(input: {
   actor: PrimitiveActorContext;
   act: () => Promise<unknown>;
   ledger?: RevisionEffectLedger;
+  /** Verified inside the claim's transaction under the artifact's revision
+   *  lock; a refusal starts nothing (`refused`). */
+  verifyUnderLock?: RevisionEffectVerify;
 }): Promise<RevisionEffectOutcome> {
-  const { claimKey, actor, act } = input;
+  const { claimKey, actor, act, verifyUnderLock } = input;
   const ledger = input.ledger ?? defaultRevisionEffectLedger;
   const none = { done: false, alreadyDone: false, inDoubt: false };
   let claim: Awaited<ReturnType<RevisionEffectLedger["claim"]>>;
   try {
-    claim = await ledger.claim(claimKey, actor);
+    claim = verifyUnderLock ? await ledger.claim(claimKey, actor, verifyUnderLock) : await ledger.claim(claimKey, actor);
   } catch (err) {
     return { ...none, failure: { stage: "claim", reason: reasonOf(err) } };
   }
   if (claim.kind === "done") return { ...none, alreadyDone: true };
   if (claim.kind === "in_doubt") return { ...none, inDoubt: true };
+  if (claim.kind === "refused") return { ...none, failure: { stage: "refused", reason: claim.reason } };
   try {
     await act();
   } catch (err) {
