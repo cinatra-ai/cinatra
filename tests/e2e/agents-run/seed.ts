@@ -47,7 +47,7 @@ async function withPg<T>(fn: (client: Client) => Promise<T>): Promise<T> {
   }
 }
 
-async function resolveTestActor(): Promise<{ userId: string; orgId: string }> {
+export async function resolveTestActor(): Promise<{ userId: string; orgId: string }> {
   return withPg(async (c) => {
     const u = await c.query<{ id: string }>(
       `SELECT id FROM public."user" WHERE email = 'agents-run-uat@local.test' LIMIT 1`,
