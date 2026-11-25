@@ -84,10 +84,15 @@ const STAGED = {
   // gained since design@94d892de: the declared-step kinds of the agent input card
   // (hitl-declared-facts, hitl-declared-rows, hitl-declared-decision, design#243) and the
   // publish card's Allow again state and rows (design#264, design#269). No wave drives those.
+  // Re-copied verbatim at design@69868e8f (design#273): the publish card's Allow waits for the
+  // items. Five surfaces are added (publish-card-items-shown, publish-card-items-failed,
+  // publish-allow-waits-failed, publish-allow-waits-refused, publish-allow-waits-empty) and the
+  // items-failed one declares retry-review-target-island -> reload. No existing surface changes
+  // in the manifest, and no wave drives the added ones.
   "app-lifecycle-cards.json": {
     spec: "specs/app-lifecycle-cards.html",
-    manifestSha256: "de99a8f5770e9916a12358dfd5ab1726be1a4ac6addacb6ddd9e2e163139c0a8",
-    contentHash: "sha256:e376b881381b046a5f925472e9aec46446f18fa1b35f27137317ece58b12cdf1",
+    manifestSha256: "33fe04490fe442ab6d6d649a141ca45eba8ee331e8bf4129f90b91b0a49433ba",
+    contentHash: "sha256:e0897cef222828a55a88ec34149ab79878bb6647f83ed5159e87a459afbb0fb4",
   },
   // The artifact-review drawing, staged by cinatra#3158 (the artifact-kind
   // display wave). First-time adoption: the drawing has never been committed

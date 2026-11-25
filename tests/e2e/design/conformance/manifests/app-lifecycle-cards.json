@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app-lifecycle-cards.html",
-  "contentHash": "sha256:e376b881381b046a5f925472e9aec46446f18fa1b35f27137317ece58b12cdf1",
+  "contentHash": "sha256:e0897cef222828a55a88ec34149ab79878bb6647f83ed5159e87a459afbb0fb4",
   "surfaces": [
     {
       "id": "chat-thread",
@@ -1406,6 +1406,49 @@
       "states": []
     },
     {
+      "id": "publish-card-items-shown",
+      "fields": [
+        {
+          "field": "row-label",
+          "source": "declaration.row.label"
+        },
+        {
+          "field": "row-items",
+          "source": "declaration.row.input"
+        }
+      ],
+      "actions": [],
+      "states": []
+    },
+    {
+      "id": "publish-card-items-failed",
+      "fields": [
+        {
+          "field": "row-label",
+          "source": "declaration.row.label"
+        },
+        {
+          "field": "row-items",
+          "source": "declaration.row.input"
+        }
+      ],
+      "actions": [
+        {
+          "action": "retry-review-target-island",
+          "outcome": "reload"
+        }
+      ],
+      "states": [
+        "error"
+      ]
+    },
+    {
+      "id": "publish-allow-waits-failed",
+      "fields": [],
+      "actions": [],
+      "states": []
+    },
+    {
       "id": "publish-row-items-refused",
       "fields": [
         {
@@ -1417,6 +1460,12 @@
       "states": [
         "error"
       ]
+    },
+    {
+      "id": "publish-allow-waits-refused",
+      "fields": [],
+      "actions": [],
+      "states": []
     },
     {
       "id": "publish-row-items-empty",
@@ -1434,6 +1483,12 @@
       "states": [
         "empty"
       ]
+    },
+    {
+      "id": "publish-allow-waits-empty",
+      "fields": [],
+      "actions": [],
+      "states": []
     }
   ]
 }
