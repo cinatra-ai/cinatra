@@ -17,8 +17,6 @@
 // action's own tests use.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-// Before the fix `regenerate` is no grant control, so the mint returns null and the helper throws.
-// red-first-expect: mint failed
 
 process.env.BETTER_AUTH_SECRET ??= "test-secret-for-lent-review-authorize-first";
 

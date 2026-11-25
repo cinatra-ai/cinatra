@@ -287,8 +287,6 @@ describe("GET /api/lifecycle-views/capture", () => {
     expect(openByStorageKey).not.toHaveBeenCalled();
   });
 
-  // Red first at 611f33ba: the gate's pinned set answered without the artifact read, so this served 200.
-  // red-first-expect: expected 200 to be 404
   it("a gate capture for a target the reader may not read as an artifact 404s, though the run stays readable", async () => {
     expect((await GET()).status).toBe(200);
     readArtifactForDetail.mockReturnValue({ kind: "denied" });

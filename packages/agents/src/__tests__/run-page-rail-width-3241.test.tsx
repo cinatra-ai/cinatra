@@ -137,8 +137,7 @@ for (const { id, column: selector } of HOSTS) {
     }
 
     // cinatra#4738: at 620 px and below the detail reflows beneath the rail (Agent run & review §I); the column
-    // keeps its 196 px. The orchestrator panel's own frame drew the rail beside the detail at every width:
-    // red-first-expect: to include 'max-[620px]:flex-col'
+    // keeps its 196 px.
     if (id === "orchestrator-rail-width-host") {
       it("the panel's own frame stacks the detail beneath the rail at 620 px and below", () => {
         const { container } = render(<RunPageRailWidthFixtures />);

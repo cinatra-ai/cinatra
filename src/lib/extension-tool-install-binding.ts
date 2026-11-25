@@ -202,7 +202,7 @@ export function selectChildEdge(
 }
 
 /** Whether a version satisfies an edge's constraint; `git-ref` and anything malformed do not. */
-function satisfiesConstraint(version: string, constraint: unknown): boolean {
+export function satisfiesConstraint(version: string, constraint: unknown): boolean {
   if (!isPlainObject(constraint)) return false;
   if (constraint.kind === "exact") return nonEmpty(constraint.version) && constraint.version === version;
   if (constraint.kind !== "semver-range" || !nonEmpty(constraint.range)) return false;

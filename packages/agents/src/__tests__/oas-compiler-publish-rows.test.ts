@@ -370,7 +370,8 @@ const apiNode = (id: string, cinatra?: Record<string, unknown>): Node => ({
   component_type: "ApiNode",
   id,
   name: id,
-  url: `https://example.invalid/${id}`,
+  // A publishing node calls the host's model bridge, where its call is checked (cinatra#4762).
+  url: cinatra?.publishes === true ? "{{CINATRA_BASE_URL}}/api/llm-bridge" : `https://example.invalid/${id}`,
   http_method: "POST",
   data: {},
   outputs: [{ title: `${id}_out`, type: "string" }],

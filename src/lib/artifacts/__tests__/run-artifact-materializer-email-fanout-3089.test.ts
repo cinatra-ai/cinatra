@@ -66,7 +66,7 @@ const {
 
 vi.mock("@/lib/db/pooled", async () => ({
   ...await vi.importActual<typeof import("@/lib/db/pooled")>("@/lib/db/pooled"),
-  getPooledDb: () => ({ query: poolQueryMock }),
+  getPooledDb: () => ({ query: poolQueryMock, connect: async () => ({ query: poolQueryMock, release: () => {} }) }),
 }));
 vi.mock("@/lib/postgres-config", () => ({
   getPostgresConnectionString: () => "postgres://test",
@@ -93,7 +93,9 @@ vi.mock("../resolve-bound-artifact-type", () => ({
 vi.mock("../artifact-creation", () => ({
   createSemanticArtifact: createSemanticArtifactMock,
 }));
-vi.mock("../materialization-ledger", () => ({
+vi.mock("../materialization-ledger", async () => ({
+  // cinatra#4762: the reused revision's restamp, as the module ships it.
+  restampReusedRevision: (await vi.importActual<typeof import("../materialization-ledger")>("../materialization-ledger")).restampReusedRevision,
   claimMaterialization: claimMaterializationMock,
   buildFinalizeMaterializationQuery: buildFinalizeMaterializationQueryMock,
   readFinalizedMaterialization: readFinalizedMaterializationMock,
@@ -268,6 +270,7 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
       originKind: "live_generator",
       producerRunId: "run-1",
       producerAgentId: null,
+      producerAttempt: null,
     });
     expect(op.values[8]).toBe("intermediate");
 
@@ -317,6 +320,96 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
       first.map((o) => (o.ok ? o.artifactId : null)),
     );
     expect(second.every((o) => o.ok && o.deduped)).toBe(true);
+  });
+
+  // red-first-expect: expected [] to deeply equal [ { eventOf: 'rep-1', …(1) }, …(2) ]
+  it("A4 a retry that reuses a revision writes that revision's produced event for its own attempt (cinatra#4762)", async () => {
+    const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
+    const events = () => poolQueryMock.mock.calls
+      .filter(([text]) => String(text).includes("artifact_produced_outbox"))
+      .map(([, values]) => ({ eventOf: (values as unknown[])[3], generation: (values as unknown[])[11] }));
+    // Attempt 1 of the run: each message's claim is finalized by attempt 0, the third message reuses a mid-run body.
+    claimMaterializationMock.mockImplementation(async (c: { outputId: string }) => ({
+      kind: "finalized", artifactId: "art-1", representationRevisionId: "rep-1", path: c.outputId === "persist_draft" ? "materialize_tool" : "email_fanout",
+    }));
+    await mcpRequestContextStorage.run({ runAttempt: { runId: "run-1", resetGeneration: 1 } } as never, async () => {
+      await writeClaimedArtifact({
+        runId: "run-1", orgId: "org-a", createdBy: "user-1", outputId: "persist_draft", nodeId: "persist_draft",
+        path: "materialize_tool", extension: EXT, title: "T", mime: "text/markdown", content: "# x",
+        ownership: { ownerLevel: "organization", ownerId: "org-a", visibility: "organization", projectId: null },
+        resolvedTarget: { objectTypeId: BODY_TYPE, acceptedFileMimeTypes: ["text/markdown"] },
+        mimeDescription: "the call declared MIME",
+      });
+      findFinalizedFanoutMessageMaterializationMock.mockResolvedValueOnce({ artifactId: "art-2", representationRevisionId: "rep-2" });
+      await materializeFanoutMessageRevision(bodyInput(MESSAGES[0]));
+      findFinalizedFanoutMessageMaterializationMock.mockResolvedValueOnce(null);
+      findFinalizedMidRunMaterializationMock.mockResolvedValueOnce({ artifactId: "art-3", representationRevisionId: "rep-3" });
+      await materializeFanoutMessageRevision(bodyInput(MESSAGES[1]));
+    });
+    expect(createSemanticArtifactMock).not.toHaveBeenCalled();
+    expect(events()).toEqual([
+      { eventOf: "rep-1", generation: 1 }, { eventOf: "rep-2", generation: 1 }, { eventOf: "rep-3", generation: 1 },
+    ]);
+    // Only the revision's existing event is restamped: a reused revision that never had one gains none.
+    const [text] = poolQueryMock.mock.calls.find(([t]) => String(t).includes("artifact_produced_outbox"))!;
+    expect(String(text).replace(/\s+/g, " ")).toContain(`AND (EXISTS (SELECT 1 FROM "public"."artifact_produced_outbox" WHERE event_id = $1::text))`);
+  });
+
+  // red-first-expect: expected [] to deeply equal [ { eventOf: 'rep-w', generation: 1 } ]
+  it("A6 the loser of a concurrent double drive restamps the winner's revision for its own attempt (cinatra#4762)", async () => {
+    const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
+    const { MATERIALIZATION_FINALIZE_CONFLICT_MARKER } = await vi.importActual<typeof import("../materialization-ledger")>("../materialization-ledger");
+    const events = () => poolQueryMock.mock.calls
+      .filter(([text]) => String(text).includes("artifact_produced_outbox"))
+      .map(([, values]) => ({ eventOf: (values as unknown[])[3], generation: (values as unknown[])[11] }));
+    // Attempt 1 claims fresh, but a parallel drive of the same claim finalized first: this write's transaction rolled
+    // back, and the winner's revision is the output.
+    claimMaterializationMock.mockResolvedValueOnce({ kind: "claimed", ledgerId: "ledger-1" });
+    createSemanticArtifactMock.mockRejectedValueOnce(new Error(`${MATERIALIZATION_FINALIZE_CONFLICT_MARKER}: rows=0`));
+    readFinalizedMaterializationMock.mockResolvedValueOnce({ artifactId: "art-w", representationRevisionId: "rep-w" });
+    const out = await mcpRequestContextStorage.run({ runAttempt: { runId: "run-1", resetGeneration: 1 } } as never, () => writeClaimedArtifact({
+      runId: "run-1", orgId: "org-a", createdBy: "user-1", outputId: "persist_draft", nodeId: "persist_draft",
+      path: "materialize_tool", extension: EXT, title: "T", mime: "text/markdown", content: "# x",
+      ownership: { ownerLevel: "organization", ownerId: "org-a", visibility: "organization", projectId: null },
+      resolvedTarget: { objectTypeId: BODY_TYPE, acceptedFileMimeTypes: ["text/markdown"] },
+      mimeDescription: "the call declared MIME",
+    }));
+    expect(out).toEqual({ ok: true, artifactId: "art-w", representationRevisionId: "rep-w", deduped: true });
+    // The winner's event now records attempt 1, so an approval of those bytes counts for it.
+    expect(events()).toEqual([{ eventOf: "rep-w", generation: 1 }]);
+  });
+
+  // red-first-expect: expected [] to deeply equal [ Array(4) ]
+  it("A5 the reuse restamp takes the run row in its own statement before the event statement, and a claim seen there refuses it (cinatra#4762)", async () => {
+    const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
+    const reuse = async () => {
+      findFinalizedFanoutMessageMaterializationMock.mockResolvedValueOnce({ artifactId: "art-2", representationRevisionId: "rep-2" });
+      return mcpRequestContextStorage.run({ runAttempt: { runId: "run-1", resetGeneration: 1 } } as never, () => materializeFanoutMessageRevision(bodyInput(MESSAGES[0])));
+    };
+    const steps = () => poolQueryMock.mock.calls.map(([text, values]) => {
+      const t = String(text).replace(/\s+/g, " ");
+      if (t === "BEGIN" || t === "COMMIT" || t === "ROLLBACK") return t;
+      if (t.includes("FOR KEY SHARE") && !t.includes("artifact_produced_outbox")) return `lock ${(values as unknown[])[0]}`;
+      if (t.includes("artifact_produced_outbox")) return "event";
+      return null;
+    }).filter((step) => step !== null);
+    poolQueryMock.mockClear();
+    await reuse();
+    // The event statement starts only after the lock statement holds the run row, so it reads a claim committed while
+    // the lock waited (READ COMMITTED takes a new snapshot per statement).
+    expect(steps()).toEqual(["BEGIN", "lock run-1", "event", "COMMIT"]);
+
+    // The publishing call's claim committed while the lock waited: the event statement's fence aborts, nothing commits.
+    poolQueryMock.mockClear();
+    const base = poolQueryMock.getMockImplementation()!;
+    poolQueryMock.mockImplementation(async (text: string, values?: unknown[]) => {
+      if (String(text).includes("artifact_produced_outbox")) {
+        throw Object.assign(new Error('invalid input syntax for type integer: "cinatra_publish_call_in_flight"'), { code: "22P02" });
+      }
+      return base(text, values);
+    });
+    expect(await reuse()).toEqual({ ok: false, reason: "publish_call_in_flight", error: expect.stringContaining("a publishing call of this run is in flight") });
+    expect(steps()).toEqual(["BEGIN", "lock run-1", "event", "ROLLBACK"]);
   });
 
   it("B1 a fan-out over a body already filed under the same identity key returns that artifact and writes no second one", async () => {
