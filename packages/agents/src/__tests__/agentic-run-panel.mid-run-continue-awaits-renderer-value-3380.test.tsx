@@ -128,6 +128,8 @@ const pickMounts: Array<(next: unknown) => unknown> = [];
 const applyMounts: Array<((suggestions: Record<string, unknown>) => void) | undefined> = [];
 /** A renderer id with no `:output` suffix and no `midRunHitl` registry entry. */
 const NOT_MID_RUN_RENDERER_ID = "@cinatra-test/plain-agent:plain";
+/** A renderer id with the `:output` suffix and no `midRunHitl` registry entry. */
+const PLAIN_OUTPUT_RENDERER_ID = "@cinatra-test/plain-agent:output";
 
 /** The gate declares that its renderer must produce `selectedIdeaJson`. */
 const DECLARING_SCHEMA: Record<string, unknown> = {
@@ -268,6 +270,16 @@ beforeEach(() => {
     renderer: PickRenderer,
     midRunHitl: true,
   });
+  // The plain stand-ins are registered too: a gate whose renderer id no entry
+  // claims is not answerable at all, so the rule is read on drawn gates.
+  for (const id of [NOT_MID_RUN_RENDERER_ID, PLAIN_OUTPUT_RENDERER_ID]) {
+    fieldRendererRegistry.register({
+      id,
+      priority: 100,
+      condition: (_fieldName, schema) => (schema as { "x-renderer"?: unknown })["x-renderer"] === id,
+      renderer: PickRenderer,
+    });
+  }
   cleanup();
 });
 
@@ -410,7 +422,7 @@ describe("AgenticRunPanel — a mid-run Continue waits for the renderer's declar
         if (gate) published.submit = gate.submit;
       },
       undefined,
-      "@cinatra-test/plain-agent:output",
+      PLAIN_OUTPUT_RENDERER_ID,
     );
 
     await waitFor(() => expect(published.submit).not.toBeNull());
@@ -426,7 +438,7 @@ describe("AgenticRunPanel — a mid-run Continue waits for the renderer's declar
         if (gate) published.submit = gate.submit;
       },
       undefined,
-      "@cinatra-test/plain-agent:output",
+      PLAIN_OUTPUT_RENDERER_ID,
       { reviewTaskId: "setup-run-3380", fieldName: "config" },
     );
 

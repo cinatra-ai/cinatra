@@ -1,6 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { GateNotPendingError, PAUSE_SEND_LEASE_SECONDS, RunTransitionError } from "./run-status";
+import { GateNotPendingError, HitlStepNotAnswerableError, PAUSE_SEND_LEASE_SECONDS, RunTransitionError } from "./run-status";
 import { assertNoOpenPublishDecision, publishHoldFault } from "./publish-decision-actions";
 
 import { sql, type SQL } from "drizzle-orm";
@@ -928,6 +928,24 @@ export async function approveReviewTaskInternal(
           actingUserId: actorId,
         }),
       );
+    }
+    // A STEP NO SCREEN DRAWS IS NOT ANSWERED (`parkedHitlStepIsAnswerable`):
+    // its recorded renderer id is claimed by no entry any more, so every
+    // surface shows "no renderer configured for this step" and no control, and
+    // a direct call is refused here, before the pause is claimed. Nothing is
+    // recorded or sent; the run stays parked. A step with no durable record is
+    // left to the checks below.
+    let parkedStep: Awaited<ReturnType<typeof readDurableHitlGateForContinue>> = null;
+    try { parkedStep = await readDurableHitlGateForContinue(run.id, reviewTaskId); } catch { /* No durable record: not refused here. */ }
+    if (
+      parkedStep &&
+      !(await import("./field-renderer-bindings.server")).parkedHitlStepIsAnswerableOnServer(parkedStep)
+    ) {
+      throw new HitlStepNotAnswerableError({
+        runId: run.id,
+        xRenderer: parkedStep.xRenderer,
+        message: `WayFlow approval rejected: gate ${taskId} on run ${run.id} has no screen that draws it`,
+      });
     }
     if (!run.a2aContextId) {
       // Defensive: run must have a2aContextId. execution.ts

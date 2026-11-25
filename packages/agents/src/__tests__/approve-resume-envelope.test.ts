@@ -138,6 +138,7 @@ vi.mock("@/lib/auth-session", async (orig) => ({
 
 import { approveReviewTaskInternal } from "../review-task-actions";
 import * as gateSubmit from "../hitl-gate-submit";
+import { pauseClaimFake } from "./pause-claim-test-fake";
 import { applyAttachmentEnvelope } from "../attachment-envelope-payload";
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
 import * as midRun from "../orchestrator-mid-run-hitl";
@@ -585,5 +586,43 @@ describe("an unnamed answer of any type survives in the durable record", () => {
     const payload = gateSubmit.buildSchemaFloorGatePayload({ schema: { type: "number" }, next: undefined });
     expect(payload).not.toHaveProperty(KEY);
     expect(payload).not.toHaveProperty("userResponse");
+  });
+});
+
+describe("a step whose renderer id no entry claims is refused by the resume action", () => {
+  const TASK = "wayflow-task-r1";
+  const gateFor = (xRenderer: string) => ({
+    runId: "run-r1",
+    reviewTaskId: TASK,
+    xRenderer,
+    inputSchema: { type: "string" },
+    values: {},
+    materializedAt: "2026-11-24T00:00:00.000Z",
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupRun();
+  });
+
+  // red-first-expect: promise resolved "undefined" instead of rejecting
+  it("a direct call is refused with a typed error; nothing is claimed, recorded or sent, and the run stays parked", async () => {
+    continueMock.readDurableHitlGateForContinue.mockResolvedValue(gateFor("@acme/removed:output"));
+    await expect(
+      approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" }),
+    ).rejects.toMatchObject({ name: "HitlStepNotAnswerableError", code: "hitl_step_not_answerable" });
+    expect(pauseClaimFake.claimPause).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    expect(storeMock.writeHitlPrompt).not.toHaveBeenCalled();
+    expect(sendTaskMock).not.toHaveBeenCalled();
+  });
+
+  it("a step whose id a binding declares is answered as before", async () => {
+    continueMock.readDurableHitlGateForContinue.mockResolvedValue(
+      gateFor("@cinatra-ai/blog-pipeline-agent:idea-selection"),
+    );
+    await approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" });
+    expect(sendTaskMock).toHaveBeenCalledTimes(1);
+    expect(wayflowText()).toBe("go");
   });
 });

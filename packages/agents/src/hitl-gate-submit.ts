@@ -1209,13 +1209,7 @@ export function buildSchemaFloorGatePayload(args: {
     approvedAt: args.now ?? new Date().toISOString(),
   };
   if (value === undefined) return payload;
-  const field =
-    typeof args.fieldName === "string" &&
-    args.fieldName !== "" &&
-    args.fieldName !== HITL_PLACEHOLDER_FIELD_NAME &&
-    !FLOOR_RESERVED_KEYS.has(args.fieldName)
-      ? args.fieldName
-      : null;
+  const field = floorAnswerFieldName(args.fieldName);
   const key = field ?? HITL_PLACEHOLDER_FIELD_NAME;
   let resumeText: string | null;
   if (value === null) {
@@ -1235,6 +1229,62 @@ export function buildSchemaFloorGatePayload(args: {
   setOwn(payload, key, value);
   payload.userResponseFieldName = key;
   return payload;
+}
+
+/**
+ * The gate's own field name as the key a one-value answer is written under,
+ * or `null` when it has none that may be used (blank, the placeholder, or a
+ * key of the approval itself); the answer is then written under
+ * `HITL_PLACEHOLDER_FIELD_NAME`. ONE RULE for the writer
+ * (`buildSchemaFloorGatePayload`) and the replay (`submittedAnswerValue`).
+ */
+function floorAnswerFieldName(fieldName: string | undefined): string | null {
+  return typeof fieldName === "string" &&
+    fieldName !== "" &&
+    fieldName !== HITL_PLACEHOLDER_FIELD_NAME &&
+    !FLOOR_RESERVED_KEYS.has(fieldName)
+    ? fieldName
+    : null;
+}
+
+/**
+ * The value a completed step's field shows again, read from the submitted
+ * values that were kept for it.
+ *
+ * A one-value answer (a text, a number, a boolean, a list) is kept as a keyed
+ * record, `{ [key]: value }` (`buildSchemaFloorGatePayload` writes it,
+ * `readWayflowSubmittedValues` records it), but the field that draws it reads
+ * the value itself. So for a step whose schema is not an object the value is
+ * read back under the key it was written under, by the writer's rule:
+ *   1. the key the record names in `userResponseFieldName`, when it holds it;
+ *   2. the step's own field name (`floorAnswerFieldName`), when the record
+ *      holds it;
+ *   3. `HITL_PLACEHOLDER_FIELD_NAME` (`hitl-field`), when the record holds it;
+ *   4. the record's only key, when it has exactly one that is not a key of the
+ *      approval itself: the recorded answer is kept under its field alone.
+ * An object-schema step gets the whole record, as before; so does a record no
+ * rule reads, and a value that is not a record.
+ */
+export function submittedAnswerValue(args: {
+  schema: unknown;
+  values: unknown;
+  fieldName?: string;
+}): unknown {
+  const values = args.values;
+  if (!isPlainSchemaObject(values)) return values;
+  if (isPlainSchemaObject(args.schema) && args.schema.type === "object") return values;
+  const holds = (key: unknown): key is string =>
+    typeof key === "string" &&
+    !FLOOR_RESERVED_KEYS.has(key) &&
+    Object.prototype.hasOwnProperty.call(values, key);
+  const named = ownValue(values, "userResponseFieldName");
+  if (holds(named)) return ownValue(values, named);
+  const field = floorAnswerFieldName(args.fieldName);
+  if (holds(field)) return ownValue(values, field);
+  if (holds(HITL_PLACEHOLDER_FIELD_NAME)) return ownValue(values, HITL_PLACEHOLDER_FIELD_NAME);
+  const keys = Object.keys(values);
+  if (keys.length === 1 && holds(keys[0])) return ownValue(values, keys[0]!);
+  return values;
 }
 
 // ---------------------------------------------------------------------------

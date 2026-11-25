@@ -67,6 +67,7 @@ vi.mock("@/lib/generated/agent-bindings", async (orig) => {
 
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 import { fieldRendererRegistry } from "../field-renderer-registry";
+import * as registration from "../register-default-renderers";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import { AgentHitlScreenCard } from "../agent-hitl-screen-card";
 import * as midRun from "../orchestrator-mid-run-hitl";
@@ -273,6 +274,76 @@ describe("AgentHitlScreenCard — a tombstoned gate stays unanswerable", () => {
         expect(continues(container), id).toHaveLength(0);
         cleanup();
       }
+    });
+  }
+});
+
+/** Serves the card one asking state for the step drawn by `id`. */
+function askingFor(id: string, gate: Record<string, unknown> = {}) {
+  const asking = { ...ASKING, gate: { ...ASKING.gate, xRenderer: id, ...gate } };
+  screenStateMock.mockImplementation(async () => asking);
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify(asking), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })) as unknown as typeof fetch;
+}
+
+describe("AgentHitlScreenCard — a step whose renderer id no entry claims", () => {
+  const REMOVED_ID = "@acme/removed:output";
+  const CLAIMED_ID = "@acme/live:output";
+  for (const host of ["run_card", "chat_thread"] as LifecycleCardHost[]) {
+    // red-first-expect: to have a length of +0 but got 1
+    it(`${host}: shows the no-renderer paragraph and no Continue, though its id reads as mid-run`, async () => {
+      askingFor(REMOVED_ID);
+      const { container } = mountOn(host);
+      await settle();
+      await expectRefused(container, REMOVED_ID);
+    });
+
+    it(`${host}: keeps the Continue of a claimed id with the same name`, async () => {
+      fieldRendererRegistry.register({
+        id: CLAIMED_ID,
+        priority: 90,
+        condition: (_f, schema) => schema["x-renderer"] === CLAIMED_ID,
+        renderer: () => <div data-testid="live-renderer">Live screen</div>,
+        credentialSafe: true,
+      });
+      askingFor(CLAIMED_ID);
+      const { container } = mountOn(host);
+      await settle();
+      await waitFor(() => expect(container.querySelector('[data-testid="live-renderer"]')).not.toBeNull());
+      await waitFor(() => expect(continues(container)).toHaveLength(1));
+    });
+  }
+});
+
+describe("AgentHitlScreenCard — a run-time binding the plain form draws", () => {
+  const RUNTIME_PICK_ID = "@cinatra-test/ideas-agent:idea-selection";
+  for (const host of ["run_card", "chat_thread"] as LifecycleCardHost[]) {
+    // red-first-expect: to have a length of 1 but got 2
+    it(`${host}: sends the typed value as the resume text, under its field`, async () => {
+      registration.registerFieldRendererBindings([
+        { id: RUNTIME_PICK_ID, kind: "blog-idea-selection", priority: 80, midRunHitl: true },
+      ]);
+      askingFor(RUNTIME_PICK_ID, {
+        inputSchema: { type: "string", title: "Selected idea" },
+        fieldName: "selectedIdeaJson",
+      });
+      const { container } = mountOn(host);
+      await settle();
+      await waitFor(() => expect(container.querySelector("#field-selectedIdeaJson")).not.toBeNull());
+      fireEvent.change(container.querySelector("#field-selectedIdeaJson")!, { target: { value: "idea-7" } });
+      await waitFor(() => expect(continues(container)).toHaveLength(1));
+      fireEvent.click(continues(container)[0]!);
+      await waitFor(() => expect(approveMock).toHaveBeenCalledTimes(1));
+      expect(approveMock.mock.calls[0]![0]).toBe(TASK_ID);
+      expect(approveMock.mock.calls[0]![1]).toMatchObject({
+        approved: true,
+        userResponse: "idea-7",
+        userResponseFieldName: "selectedIdeaJson",
+        selectedIdeaJson: "idea-7",
+      });
     });
   }
 });

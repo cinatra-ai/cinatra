@@ -134,11 +134,16 @@ import {
   type AgentHitlScreenState,
 } from "./agent-hitl-screen";
 import { getAgentHitlScreenStateAction } from "./agent-hitl-screen-actions";
-import { continueAwaitsAPick, type FieldRendererContext } from "./field-renderer-registry";
+import {
+  continueAwaitsAPick,
+  type FieldRendererContext,
+  type FieldRendererEntry,
+} from "./field-renderer-registry";
 import {
   gateDrawnBySchemaFloor,
   hasMidRunHitlBinding,
   isTombstonedHitlRendererId,
+  parkedHitlStepIsAnswerable,
   resolveHitlGateRenderer,
 } from "./orchestrator-mid-run-hitl";
 import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
@@ -316,8 +321,11 @@ export function cardOwnsTheSetupSend(
    *  default is the answer a caller that cannot say leaves behind: on a primary
    *  host the renderer keeps the send, exactly as before #3532. */
   rendererDrawsOwnSubmit: boolean = true,
+  /** The entry the gate resolves to, when the caller has it: a non-setup step
+   *  the plain form draws is not read as mid-run (`classifyHitlGate`). */
+  entry?: FieldRendererEntry | null,
 ): boolean {
-  const { isMidRun, isGroupedSetup } = classifyHitlGate(gate);
+  const { isMidRun, isGroupedSetup } = classifyHitlGate(gate, entry);
   if (isMidRun || isGroupedSetup) return false;
   if (hitlFieldPresentationFor(host) === "subordinate") return true;
   return !rendererDrawsOwnSubmit;
@@ -548,14 +556,23 @@ export function useAgentHitlScreenState(params: {
  * work that holds this card's Continues, which do not read a renderer's
  * validity report yet.
  */
-function classifyHitlGate(gate: AgentHitlScreenGate): {
+function classifyHitlGate(
+  gate: AgentHitlScreenGate,
+  entry?: FieldRendererEntry | null,
+): {
   isMidRun: boolean;
   isGroupedSetup: boolean;
 } {
+  // A non-setup step the plain form draws (`gateDrawnBySchemaFloor`: what is
+  // mounted, not the id) is answered as the plain form's own step, never as
+  // mid-run, whatever its id says.
+  const drawnByFloorOnNonSetup =
+    gateDrawnBySchemaFloor(gate.xRenderer, entry) && !isSetupGateTaskId(gate.reviewTaskId);
   return {
     // A tombstoned gate is never mid-run, so the card draws no Continue for it.
     isMidRun:
       !isTombstonedHitlRendererId(gate.xRenderer) &&
+      !drawnByFloorOnNonSetup &&
       (gate.xRenderer.endsWith(":output") || hasMidRunHitlBinding(gate.xRenderer)),
     isGroupedSetup: isGroupedSetupRenderer(gate.xRenderer),
   };
@@ -771,7 +788,6 @@ export function AgentHitlScreenFields({
   /** The gate identity a registration is tagged with. */
   gateKey?: string;
 }): ReactElement {
-  const { isMidRun, isGroupedSetup } = classifyHitlGate(gate);
   const hint = presentationHintOf(gate);
   const fieldSchema: Record<string, unknown> = {
     ...gate.inputSchema,
@@ -792,6 +808,7 @@ export function AgentHitlScreenFields({
     hint || withholdRenderer === true
       ? null
       : resolveHitlGateRenderer(HITL_PLACEHOLDER_FIELD_NAME, fieldSchema, context);
+  const { isMidRun, isGroupedSetup } = classifyHitlGate(gate, entry);
   const { "x-renderer": _xr, ...renderSchema } = fieldSchema;
   void _xr;
   const Renderer = entry?.renderer ?? null;
@@ -1470,7 +1487,16 @@ export function AgentHitlScreenCard({
     // not a grouped-setup form. A grouped-setup form carries its own submit, and
     // a setup-loop field submits on change — a second Continue on either would
     // be a control the run page does not offer.
-    const { isMidRun, isGroupedSetup } = classifyHitlGate(gate);
+    const gateEntry = resolveHitlGateEntry(runId, gate);
+    const { isMidRun, isGroupedSetup } = classifyHitlGate(gate, gateEntry);
+    // MAY THIS STEP BE ANSWERED HERE? (`parkedHitlStepIsAnswerable`.) A step no
+    // screen draws gets no Continue of the card's: the region shows "no
+    // renderer configured for this step" and nothing is offered.
+    const stepIsAnswerable = parkedHitlStepIsAnswerable(
+      gate.xRenderer,
+      gateEntry,
+      gate.currentValues,
+    );
     // A renderer that is not declared safe without a session is withheld
     // wherever there is no session — see the header. The condition is the
     // ABSENCE of a session rather than the presence of a credential, so a host
@@ -1485,7 +1511,8 @@ export function AgentHitlScreenCard({
     // resolves to no renderer at all keeps whatever control it has, and the card
     // draws none of its own there.
     const cardOwnsSetupSend =
-      cardOwnsTheSetupSend(host, gate, gateRendererDrawsOwnSubmit(runId, gate)) &&
+      stepIsAnswerable &&
+      cardOwnsTheSetupSend(host, gate, gateRendererDrawsOwnSubmit(runId, gate), gateEntry) &&
       !withholdRenderer &&
       gateMountsAnAnsweringRenderer(runId, gate);
     return (
@@ -1506,7 +1533,7 @@ export function AgentHitlScreenCard({
           gateKey={gateKey ?? ""}
         />
         </RendererFloorReportContext.Provider>
-        {isMidRun && !isGroupedSetup ? (
+        {stepIsAnswerable && isMidRun && !isGroupedSetup ? (
           <AgentHitlScreenContinue
             gate={gate}
             buffered={activeBuffered}

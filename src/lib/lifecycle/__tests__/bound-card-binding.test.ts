@@ -24,8 +24,11 @@ vi.mock("@cinatra-ai/agents/store", () => ({
   readLatestDurableHitlGateArtifact: vi.fn(),
 }));
 
+import { readLatestDurableHitlGateArtifact } from "@cinatra-ai/agents/store";
+import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "@cinatra-ai/agents/agent-builder-ids";
 import {
   MAX_BOUND_CANDIDATE_REFS,
+  mintParkedScreenRef,
   primaryControlFor,
   resolveBoundCard,
   severalCardsWaitingRefusal,
@@ -335,5 +338,27 @@ describe("only a COMPLETE count confirms — convergence round 3", () => {
       resolve: resolverOver({ a: review("a"), b: review("b") }),
     });
     expect(out).toMatchObject({ kind: "ambiguous", count: 2 });
+  });
+});
+
+describe("a parked step no screen draws gets no ref", () => {
+  const parkedAt = (xRenderer: string) =>
+    vi.mocked(readLatestDurableHitlGateArtifact).mockResolvedValue({
+      runId: "run-p",
+      reviewTaskId: "wayflow-task-p",
+      xRenderer,
+      inputSchema: { type: "string" },
+      values: {},
+    });
+
+  // red-first-expect: to be null
+  it("a step whose renderer id no entry claims mints no ref, so a turn can neither fill nor submit it", async () => {
+    parkedAt("@acme/removed:output");
+    await expect(mintParkedScreenRef("run-p")).resolves.toBeNull();
+  });
+
+  it("a step a screen draws mints its ref as before", async () => {
+    parkedAt(SCHEMA_FIELD_FALLBACK_RENDERER_ID);
+    await expect(mintParkedScreenRef("run-p")).resolves.toEqual(expect.any(String));
   });
 });

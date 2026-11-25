@@ -19,6 +19,7 @@ import {
   type FieldRendererEntry,
 } from "./field-renderer-registry";
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "./agent-builder-ids";
+import { gateCarriesPresentationHint } from "./hitl-gate-submit";
 
 /**
  * Manifest-declared strict classification: does a registered binding flag
@@ -148,13 +149,55 @@ export function resolveHitlGateRenderer(
 }
 
 /**
+ * MAY THIS PARKED STEP BE ANSWERED HERE? The one answer every surface asks
+ * before it offers a control for a parked step, and the server asks before it
+ * takes an answer for one: the run page's stepper (its Continue), the run
+ * panel (its Continue and the gate it hands the chat composer), the HITL screen
+ * card (its Continue), the bound-card binding (the ref a chat turn may fill
+ * and submit through) and the resume action itself.
+ *
+ * Yes when, and only when, a screen draws the step:
+ *   - the step is recorded under the plain form's own id
+ *     (`SCHEMA_FIELD_FALLBACK_RENDERER_ID`);
+ *   - an entry claims the step's recorded renderer id (`claim`: on a page the
+ *     entry `resolveHitlGateRenderer` resolves, on the server the binding that
+ *     declares the id); or
+ *   - the step carries a presentation hint in its values, which the host draws
+ *     through its own generic renderer without a registry entry.
+ * A step recorded with no renderer id (a tool-call approval) is answered by
+ * the host's own Approve. Never for a tombstoned id. A step that no screen draws shows "no renderer
+ * configured for this step" and no control, and the server refuses an answer
+ * for it: the run stays parked.
+ *
+ * The mid-run classification by name (`classifyMidRunHitl`) decides how a
+ * drawn step buffers its answer and where its Continue sits; it never makes a
+ * step answerable on its own.
+ */
+export function parkedHitlStepIsAnswerable(
+  xRenderer: string,
+  claim: { readonly id: string } | null | undefined,
+  values?: unknown,
+): boolean {
+  // A step recorded with no renderer id is a tool-call approval: the host
+  // answers it with its own Approve, with no screen.
+  if (xRenderer === "") return true;
+  if (isTombstonedHitlRendererId(xRenderer)) return false;
+  if (xRenderer === SCHEMA_FIELD_FALLBACK_RENDERER_ID) return true;
+  if (claim != null) return true;
+  return gateCarriesPresentationHint(values);
+}
+
+/**
  * Is the gate drawn by the schema floor? True for the floor's own id and for a
- * gate the resolved entry is the floor for. A host decides the answer's shape
- * from this.
+ * gate whose resolved entry MOUNTS the plain form: the floor's own entry, or a
+ * binding of a kind the host draws with the plain form (a package that is not
+ * in this build keeps its own id while the plain form draws it), both flagged
+ * `drawnBySchemaFloor` where they are registered. The id alone never decides
+ * it. A host decides the answer's shape from this.
  */
 export function gateDrawnBySchemaFloor(
   xRenderer: string,
   entry: FieldRendererEntry | null | undefined,
 ): boolean {
-  return xRenderer === SCHEMA_FIELD_FALLBACK_RENDERER_ID || entry?.id === SCHEMA_FIELD_FALLBACK_RENDERER_ID;
+  return xRenderer === SCHEMA_FIELD_FALLBACK_RENDERER_ID || entry?.drawnBySchemaFloor === true;
 }

@@ -23,6 +23,7 @@ import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { fieldRendererRegistry } from "../field-renderer-registry";
+import * as registration from "../register-default-renderers";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import * as midRun from "../orchestrator-mid-run-hitl";
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
@@ -311,5 +312,86 @@ describe("AgenticRunPanel — a tombstoned gate stays unanswerable", () => {
       expect(continues(), id).toHaveLength(0);
       cleanup();
     }
+  });
+});
+
+type PublishedGate = { submit: (value: Record<string, unknown> | string | number | boolean) => Promise<void> } | null;
+
+/** Mounts the panel with the chat composer's publish callback, and returns what it was handed last. */
+function mountPublishing(AgenticRunPanel: typeof import("../agentic-run-panel").AgenticRunPanel) {
+  const published: { calls: number; gate: PublishedGate } = { calls: 0, gate: null };
+  render(
+    <AgenticRunPanel
+      runId="run-dropped"
+      initialStatus="pending_approval"
+      initialError={null}
+      initialMessages={[]}
+      agUiEnabled={true}
+      onActiveGateChange={(_runId, gate) => {
+        published.calls += 1;
+        published.gate = gate;
+      }}
+    />,
+  );
+  return published;
+}
+
+describe("AgenticRunPanel — a step whose renderer id no entry claims is not handed to the chat", () => {
+  const REMOVED_ID = "@acme/removed:output";
+  const CLAIMED_ID = "@acme/live:output";
+
+  // red-first-expect: expected { runId: 'run-dropped'
+  it("shows the no-renderer paragraph, no Continue, and publishes no gate for the composer", async () => {
+    gateId.current = REMOVED_ID;
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    const published = mountPublishing(AgenticRunPanel);
+    await expectRefused(REMOVED_ID);
+    await waitFor(() => expect(published.calls).toBeGreaterThan(0));
+    expect(published.gate).toBeNull();
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  });
+
+  it("publishes the gate of a claimed id with the same name", async () => {
+    fieldRendererRegistry.register({
+      id: CLAIMED_ID,
+      priority: 90,
+      condition: (_f, schema) => schema["x-renderer"] === CLAIMED_ID,
+      renderer: () => <div data-testid="live-renderer">Live screen</div>,
+    });
+    gateId.current = CLAIMED_ID;
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    const published = mountPublishing(AgenticRunPanel);
+    await waitFor(() => expect(document.querySelector('[data-testid="live-renderer"]')).not.toBeNull());
+    await waitFor(() => expect(published.gate).not.toBeNull());
+    expect(continues()).toHaveLength(1);
+  });
+});
+
+describe("AgenticRunPanel — a run-time binding the plain form draws", () => {
+  const RUNTIME_PICK_ID = "@cinatra-test/ideas-agent:idea-selection";
+
+  // red-first-expect: to have a length of 1 but got 2
+  it("sends the typed value as the resume text, under its field", async () => {
+    registration.registerFieldRendererBindings([
+      { id: RUNTIME_PICK_ID, kind: "blog-idea-selection", priority: 80, midRunHitl: true },
+    ]);
+    gateId.current = RUNTIME_PICK_ID;
+    gateShape.schema = { type: "string", title: "Selected idea" };
+    gateShape.fieldName = "selectedIdeaJson";
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    mountPanel(AgenticRunPanel);
+    await waitFor(() => expect(document.getElementById("field-selectedIdeaJson")).not.toBeNull());
+    fireEvent.change(document.getElementById("field-selectedIdeaJson")!, { target: { value: "idea-7" } });
+    await waitFor(() => expect(continues()).toHaveLength(1));
+    fireEvent.click(continues()[0]!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const call = hitlActions.approveReviewTask.mock.calls[0] as unknown[];
+    expect(call[0]).toBe(TASK_ID);
+    expect(call[1]).toMatchObject({
+      approved: true,
+      userResponse: "idea-7",
+      userResponseFieldName: "selectedIdeaJson",
+      selectedIdeaJson: "idea-7",
+    });
   });
 });

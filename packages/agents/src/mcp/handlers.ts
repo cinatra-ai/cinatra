@@ -2148,6 +2148,11 @@ async function handleAgentBuilderRunResume(
       if (!run.a2aContextId) {
         return { error: `Run ${runId} has no a2aContextId. Cannot resume WayFlow task without context ID.` };
       }
+      // A step no screen draws is not answered (`parkedHitlStepIsAnswerable`); the run stays parked.
+      const parkedStep = await import("../agent-run-hitl-prompts").then((m) => m.readDurableHitlGateForContinue(run.id, `wayflow-${run.a2aTaskId}`)).catch(() => null);
+      if (parkedStep && !(await import("../field-renderer-bindings.server")).parkedHitlStepIsAnswerableOnServer(parkedStep)) {
+        return { error: `Run ${runId} is paused at a step that no screen draws (${parkedStep.xRenderer}); it cannot be resumed.` };
+      }
       // cinatra#4150: a run held at a publish decision goes on only by that decision.
       const publishHold = await import("../publish-decision-actions");
       let decided: boolean; try { decided = await publishHold.assertNoOpenPublishDecision(run.id); } catch (e) { return publishHold.publishHoldAnswer(e); }

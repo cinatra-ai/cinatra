@@ -496,6 +496,25 @@ export class GateNotPendingError extends Error {
   }
 }
 
+/**
+ * A resume refused because no screen draws the parked step: its recorded
+ * renderer id is claimed by no registered entry (`parkedHitlStepIsAnswerable`).
+ * Thrown before the pause is claimed, so nothing is recorded or sent and the
+ * run stays parked.
+ */
+export class HitlStepNotAnswerableError extends Error {
+  readonly code = "hitl_step_not_answerable" as const;
+  readonly runId: string;
+  readonly xRenderer: string;
+
+  constructor(args: { runId: string; xRenderer: string; message: string }) {
+    super(args.message);
+    this.name = "HitlStepNotAnswerableError";
+    this.runId = args.runId;
+    this.xRenderer = args.xRenderer;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Terminal-run OUTCOME resolution (folded in from run-terminal-outcome.ts,
 // cinatra#2482 — route-graph ratchet: the locked routes carry this graph, so

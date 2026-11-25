@@ -73,6 +73,7 @@ import { LoadingSpinner } from "@cinatra-ai/sdk-ui";
 import {
   classifyMidRunHitl,
   gateDrawnBySchemaFloor,
+  parkedHitlStepIsAnswerable,
   resolveHitlGateRenderer,
 } from "./orchestrator-mid-run-hitl";
 import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
@@ -138,6 +139,7 @@ import {
   hitlGateIdentityKey,
   isGroupedSetupRenderer,
   isSetupGateTaskId,
+  submittedAnswerValue,
   liftRendererApprovalNote,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
@@ -945,7 +947,19 @@ function HitlApprovalCard({
   const { "x-renderer": _xr, ...renderSchema } = fieldSchema;
   void _xr;
 
-  const isMidRunHitl = classifyMidRunHitl(interruptContext.xRenderer);
+  // MAY THIS STEP BE ANSWERED HERE? Only when a screen draws it
+  // (`parkedHitlStepIsAnswerable`): a step whose recorded id no entry claims
+  // shows "no renderer configured for this step" and no Continue, whatever
+  // its id's name says.
+  const stepIsAnswerable = parkedHitlStepIsAnswerable(interruptContext.xRenderer, entry);
+  // A non-setup step the plain form draws (`gateDrawnBySchemaFloor`: what is
+  // mounted, not the id) is answered as the plain form's own step, so it is
+  // never read as mid-run, whatever its id's name or flag says.
+  const drawnByFloor = gateDrawnBySchemaFloor(interruptContext.xRenderer, entry);
+  const onNonSetupFallbackGate =
+    drawnByFloor && !isSetupGateTaskId(interruptContext.reviewTaskId);
+  const isMidRunHitl =
+    classifyMidRunHitl(interruptContext.xRenderer) && !onNonSetupFallbackGate;
   // Narrower classifier than isMidRunHitl: matches output renderers only,
   // excluding input forms. Drives the `data-hitl-output` attribute on the
   // HitlApprovalCard root Card element, which AgentPageLayout's outer wrapper
@@ -1058,6 +1072,8 @@ function HitlApprovalCard({
   );
 
   const handleContinue = async () => {
+    // A step no screen draws is never answered from here.
+    if (!stepIsAnswerable) return;
     // Reported unsendable (see `gateValidity`): the press sends nothing, before
     // the run-name check and the optimistic spinner below.
     if (gateValidity.isHeld(setupGateKey)) return;
@@ -1203,9 +1219,6 @@ function HitlApprovalCard({
   // A gate the floor draws because no entry claims its id is answered the same
   // way: the drawn entry decides, not the original `x-renderer` id.
   const gateReading = readSchemaFieldGate(interruptContext.schema);
-  const drawnByFloor = gateDrawnBySchemaFloor(interruptContext.xRenderer, entry);
-  const onNonSetupFallbackGate =
-    drawnByFloor && !isSetupGateTaskId(interruptContext.reviewTaskId);
   const isGenericObjectSchema =
     drawnByFloor &&
     (interruptContext.schema as { type?: string })?.type === "object" &&
@@ -1226,7 +1239,8 @@ function HitlApprovalCard({
   // calls approveReviewTask. Renderers that own their own action surface
   // coexist fine; their inner button still works and the outer button is a
   // redundant alternate.
-  const showContinueButton = isGenericObjectSchema || (isMidRunHitl && !isGroupedSetup);
+  const showContinueButton =
+    stepIsAnswerable && (isGenericObjectSchema || (isMidRunHitl && !isGroupedSetup));
 
   // ---------------------------------------------------------------------------
   // cinatra#3532 — THE SETUP FIELD THAT DRAWS NO CONTROL OF ITS OWN.
@@ -1495,6 +1509,7 @@ function HitlApprovalCard({
     stepId: interruptContext.xRenderer ?? null,
     gateRef: interruptContext.reviewTaskId ?? null,
     canManipulate:
+      stepIsAnswerable &&
       !gateBlocked &&
       !isGenericObjectSchema &&
       // cinatra#2933 — the run's access decides who sees the box.
@@ -2244,7 +2259,9 @@ function ReadOnlyHitlReplay(props: {
                 // snapshot's schema title, then to a neutral label.
                 fieldName={HITL_PLACEHOLDER_FIELD_NAME}
                 schema={renderSchema}
-                value={props.submittedValues}
+                // A one-value answer is kept as a keyed record; the field reads
+                // the value itself, unwrapped by the writer's own key rule.
+                value={submittedAnswerValue({ schema: renderSchema, values: props.submittedValues })}
                 disabled={true}
                 mode="view"
                 onChange={() => undefined}

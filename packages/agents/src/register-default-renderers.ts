@@ -365,6 +365,9 @@ export function registerFieldRendererBindings(
       // The KIND's answer once more (cinatra#3035): a kind whose component commits a pick holds its gate's Continue until one is made.
       // The schema floor commits no pick, so a kind drawn by the floor never holds.
       holdsContinueUntilPicked: kindEntry.holdsContinueUntilPicked === true && kindEntry.renderer !== SchemaOnlyFloorRenderer,
+      // The plain form draws this binding: its step is answered with the plain
+      // form's payload (`gateDrawnBySchemaFloor`), although it keeps its own id.
+      ...(kindEntry.renderer === SchemaOnlyFloorRenderer ? { drawnBySchemaFloor: true } : {}),
       midRunHitl: b.midRunHitl === true,
     });
   }
@@ -428,6 +431,7 @@ export function ensureDefaultFieldRenderersRegistered(): void {
     // fallback xRenderer re-resolves this entry forever. SchemaOnlyFloorRenderer
     // renders the schema-driven fallback directly (cinatra#1625, convergence 2026-07-20).
     renderer: SchemaOnlyFloorRenderer,
+    drawnBySchemaFloor: true,
     // …and the same bypass is what makes it safe without a session: it reaches
     // no server action of its own and re-enters no registry.
     credentialSafe: true,

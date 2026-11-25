@@ -31,6 +31,8 @@ import {
 } from "@/lib/generated/agent-bindings";
 import { resolveAgentRuntimeMountDir } from "./agent-runtime-mount";
 import type { FieldRendererBindingInput } from "./register-default-renderers";
+import { AGENT_BUILDER_ID_SCOPE } from "./agent-builder-ids";
+import { parkedHitlStepIsAnswerable } from "./orchestrator-mid-run-hitl";
 import {
   A2UI_MID_RUN_TRANSLATOR_KINDS,
   type MidRunTranslatorResolver,
@@ -177,4 +179,35 @@ export function buildA2UiMidRunTranslatorResolver(): MidRunTranslatorResolver {
     if (!binding?.a2uiTranslator) return undefined;
     return A2UI_MID_RUN_TRANSLATOR_KINDS[binding.a2uiTranslator];
   };
+}
+
+/** The host's own unscoped renderer ids (the personal-skill and skill-selector fields). */
+const HOST_BARE_RENDERER_IDS: ReadonlySet<string> = new Set(["personal-skill", "skill-selector"]);
+
+/**
+ * What claims a parked step's recorded renderer id on the server, where no
+ * component registry exists: the host's own ids (its agent-builder scope and
+ * its bare field ids) and every binding the page registers from (the
+ * generated build bindings and the installed packages, `getMergedFieldRendererBindings`),
+ * by id or by a kind's bare name. `null` when nothing declares the id any more.
+ */
+export function serverHitlRendererClaim(xRenderer: string): { id: string } | null {
+  if (xRenderer.startsWith(`${AGENT_BUILDER_ID_SCOPE}:`)) return { id: xRenderer };
+  if (HOST_BARE_RENDERER_IDS.has(xRenderer)) return { id: xRenderer };
+  const binding = getMergedFieldRendererBindings().find(
+    (b) => b.id === xRenderer || b.kind === xRenderer,
+  );
+  return binding ? { id: binding.id } : null;
+}
+
+/**
+ * The server's reading of `parkedHitlStepIsAnswerable` for a parked step's
+ * durable record: the resume action and the bound-card binding ask it before
+ * they take or mint anything for the step.
+ */
+export function parkedHitlStepIsAnswerableOnServer(step: {
+  readonly xRenderer: string;
+  readonly values?: unknown;
+}): boolean {
+  return parkedHitlStepIsAnswerable(step.xRenderer, serverHitlRendererClaim(step.xRenderer), step.values);
 }
