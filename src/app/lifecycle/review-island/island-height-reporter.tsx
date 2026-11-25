@@ -220,8 +220,13 @@ export function IslandReadySignal({ panels }: { panels?: number } = {}): null {
  *  runtime loader's floor and the build-map slot's degraded notice. */
 const PANEL_FLOOR_SELECTOR = "[data-review-target-floor],[data-dynamic-renderer-floor],[data-render-failure-class]";
 
-/** The marks of a display that is not finished drawing (the display contract below). */
-const PANEL_BUSY_SELECTOR = '[aria-busy="true"],[role="status"]';
+/** The marks of a display that is not finished drawing (the display contract below), and the dashboard library's own
+ *  unmarked placeholders. drizzle-cube (0.6.6, the version `@cinatra-ai/sdk-dashboard` pins) draws three not-yet-drawn
+ *  states of a portlet as one EMPTY `div` carrying its `dc:animate-pulse` class, with no ARIA mark: the portlet before
+ *  it scrolls into view (its lazy placeholder) and the fallback while a chart's code loads (twice). Its loading state
+ *  draws a `role="status"` spinner, read by the contract's own mark. The class is the library's prefixed one, which
+ *  no host skeleton uses (those are `animate-pulse`), and an empty element of it is never drawn content. */
+const PANEL_BUSY_SELECTOR = '[aria-busy="true"],[role="status"],[class~="dc:animate-pulse"]:empty';
 
 type MediaReading = "loading" | "loaded" | "failed";
 
@@ -324,7 +329,7 @@ export function IslandPanelMountedSignal({ children }: { children?: ReactNode } 
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ["aria-busy", "role", "src", "data-review-target-floor", "data-dynamic-renderer-floor", "data-render-failure-class"],
+      attributeFilter: ["aria-busy", "role", "class", "src", "data-review-target-floor", "data-dynamic-renderer-floor", "data-render-failure-class"],
     });
     check();
     return () => {

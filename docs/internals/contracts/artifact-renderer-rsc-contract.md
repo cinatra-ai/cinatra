@@ -244,6 +244,10 @@ these marks inside the display's panel:
   `data-dynamic-renderer-floor`, `data-render-failure-class`) as a failure.
 - **Media.** The host reads each `<img>` (its `decode()`) and `<video>` (its
   data or its `error`) itself. A failed one is a failure.
+- **Dashboard portlets.** The host also reads the dashboard library's own
+  unmarked placeholders (drizzle-cube 0.6.6: an empty element with its
+  `dc:animate-pulse` class, drawn before a portlet scrolls into view and while
+  a chart's code loads) as not finished drawing.
 
 The host reports the panel drawn only after every item has read drawn, without
 a change, for 250 ms. It keeps watching after that. A display that marks itself

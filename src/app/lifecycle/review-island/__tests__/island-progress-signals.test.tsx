@@ -331,3 +331,48 @@ describe("the island honours a display's busy marks and never stops watching", (
     expect(types()).toEqual(["island-ready", "panel-mounted", "island-drawn"]);
   });
 });
+
+// cinatra#3089: the dashboard library's unmarked placeholders, as drizzle-cube 0.6.6 draws them (its portlet's lazy
+// placeholder before it scrolls into view, and a chart's code-loading fallback): an empty div with its
+// `dc:animate-pulse` class. Each holds the drawn report back, without eager loading; the chart that replaces it is drawn.
+describe("a dashboard portlet that has not drawn does not read drawn", () => {
+  const types = () => posted.map(([message]) => (message as { type?: string }).type);
+  function Portlet({ state }: { state: "lazy" | "chart-code" | "chart" }) {
+    if (state === "lazy") {
+      return (
+        <div className="dc:w-full dc:h-full" style={{ height: 300 }}>
+          <div className="dc:w-full dc:h-full dc:animate-pulse bg-dc-surface-secondary dc:rounded" style={{ minHeight: "100px" }} />
+        </div>
+      );
+    }
+    if (state === "chart-code") {
+      return (
+        <div className="dc:flex dc:items-center dc:justify-center dc:w-full" style={{ height: "300px" }}>
+          <div className="dc:animate-pulse bg-dc-surface-secondary dc:rounded dc:w-full dc:h-full dc:min-h-[100px]" />
+        </div>
+      );
+    }
+    return <svg data-chart=""><rect width="10" height="10" /></svg>;
+  }
+
+  it("the lazy placeholder and the chart-code fallback hold it back; the drawn chart is reported", async () => {
+    vi.resetModules();
+    const { IslandReadySignal: Ready, IslandPanelMountedSignal: Panel } = await import("../island-height-reporter");
+    window.name = reviewIslandFrameName(11);
+    const view = (state: "lazy" | "chart-code" | "chart") => (
+      <>
+        <Ready panels={1} />
+        <Panel><Portlet state={state} /></Panel>
+      </>
+    );
+    const { rerender } = render(view("lazy"));
+    await held();
+    expect(types()).toEqual(["island-ready", "panel-mounted"]);
+    rerender(view("chart-code"));
+    await held();
+    expect(types()).toEqual(["island-ready", "panel-mounted"]);
+    rerender(view("chart"));
+    await held();
+    expect(types()).toEqual(["island-ready", "panel-mounted", "island-drawn"]);
+  });
+});

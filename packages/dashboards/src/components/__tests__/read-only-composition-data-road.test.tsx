@@ -119,23 +119,6 @@ describe("given a data road, each promoted view mounts its own query client and 
   });
 });
 
-// cinatra#3089: a display's portlets are never left as the library's unmarked scroll-into-view placeholder, which the
-// review island would read as drawn; loading, they draw the library's role="status" spinner.
-describe("given a data road, every portlet loads at once", () => {
-  test("the read-only dashboard hands the provider an eager configuration", () => {
-    render(<Dashboard config={CONFIG} dataRoad={ROAD} />);
-    // red-first-expect: expected undefined to be true
-    expect((rec.dashboard[0]?.config as { eagerLoad?: boolean }).eagerLoad).toBe(true);
-    expect((rec.dashboard[0]?.config as { portlets: unknown[] }).portlets).toHaveLength(2);
-  });
-
-  test("the single portlet hands the provider an eager, narrowed configuration", () => {
-    render(<Portlet config={CONFIG} portletId="p2" dataRoad={ROAD} />);
-    expect((rec.dashboard[0]?.config as { eagerLoad?: boolean }).eagerLoad).toBe(true);
-    expect((rec.dashboard[0]?.config as { portlets: { id: string }[] }).portlets.map((p) => p.id)).toEqual(["p2"]);
-  });
-});
-
 describe("without a road, each view renders exactly what it renders today", () => {
   test("(c2) the read-only dashboard mounts no provider of its own and the same provider props", () => {
     render(<Dashboard config={CONFIG} />);
