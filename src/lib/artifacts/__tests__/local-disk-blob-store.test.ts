@@ -297,6 +297,56 @@ describe("createLocalDiskBlobStore", () => {
     });
   });
 
+  describe("releasePublished: a write takes back only the file it published, still exactly as it left it", () => {
+    const scope = { orgId: "org1", artifactId: "a", representationRevisionId: "v" };
+    const abs = (key: string) => path.join(dataRoot(), key);
+
+    // red-first-expect: store.releasePublished is not a function
+    it("put reports the mtime it left only when it published the file; releasePublished then removes the unreferenced file", async () => {
+      const store = createLocalDiskBlobStore({ isStorageKeyReferenced: () => false });
+      const first = await store.put({ ...scope, stream: bytes("fresh bytes"), maxBytes: 1024 });
+      expect(typeof (first as { publishedMtimeMs?: number }).publishedMtimeMs).toBe("number");
+      const again = await store.put({ ...scope, stream: bytes("fresh bytes"), maxBytes: 1024 });
+      expect((again as { publishedMtimeMs?: number }).publishedMtimeMs).toBeUndefined();
+      // The second put reused the file and refreshed its mtime: the first put's token no longer matches.
+      expect(await store.releasePublished({ orgId: "org1", storageKey: first.storageKey, publishedMtimeMs: (first as { publishedMtimeMs: number }).publishedMtimeMs })).toBe(false);
+      expect(existsSync(abs(first.storageKey))).toBe(true);
+      const second = await store.put({ ...scope, stream: bytes("other fresh bytes"), maxBytes: 1024 });
+      expect(await store.releasePublished({ orgId: "org1", storageKey: second.storageKey, publishedMtimeMs: (second as { publishedMtimeMs: number }).publishedMtimeMs })).toBe(true);
+      expect(existsSync(abs(second.storageKey))).toBe(false);
+    });
+
+    // red-first-expect: store.releasePublished is not a function
+    it("keeps the file while a live blob row references the key, or when the probe cannot answer", async () => {
+      const referenced = createLocalDiskBlobStore({ isStorageKeyReferenced: () => true });
+      const rec = await referenced.put({ ...scope, stream: bytes("referenced bytes"), maxBytes: 1024 });
+      const token = (rec as { publishedMtimeMs: number }).publishedMtimeMs;
+      expect(await referenced.releasePublished({ orgId: "org1", storageKey: rec.storageKey, publishedMtimeMs: token })).toBe(false);
+      const unknown = createLocalDiskBlobStore({ isStorageKeyReferenced: () => { throw new Error("db down"); } });
+      await expect(unknown.releasePublished({ orgId: "org1", storageKey: rec.storageKey, publishedMtimeMs: token })).rejects.toThrow("db down");
+      expect(existsSync(abs(rec.storageKey))).toBe(true);
+    });
+
+    // red-first-expect: store.releasePublished is not a function
+    it("runs in the storage-key critical section: a same-bytes put racing the release never loses the bytes", async () => {
+      const store = createLocalDiskBlobStore({ isStorageKeyReferenced: () => false });
+      const rec = await store.put({ ...scope, stream: bytes("racing bytes"), maxBytes: 1024 });
+      const token = (rec as { publishedMtimeMs: number }).publishedMtimeMs;
+      const [released, reput] = await Promise.all([
+        store.releasePublished({ orgId: "org1", storageKey: rec.storageKey, publishedMtimeMs: token }),
+        store.put({ ...scope, stream: bytes("racing bytes"), maxBytes: 1024 }),
+      ]);
+      // Whichever entered the lock first: the release removed the file and the put republished it, or the put refreshed
+      // the mtime first and the release kept it. Either way the caller's row would point at existing bytes.
+      expect(existsSync(abs(reput.storageKey))).toBe(true);
+      expect(typeof released).toBe("boolean");
+      const handle = await store.openByStorageKey({ orgId: "org1", storageKey: reput.storageKey });
+      const chunks: Uint8Array[] = [];
+      for await (const c of handle.stream) chunks.push(c);
+      expect(Buffer.concat(chunks).toString("utf8")).toBe("racing bytes");
+    });
+  });
+
   describe("WARN-first quotas", () => {
     it("org quota in default WARN mode logs and proceeds", async () => {
       process.env[ARTIFACT_ORG_QUOTA_BYTES_ENV] = "5";
