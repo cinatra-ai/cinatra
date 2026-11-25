@@ -162,19 +162,11 @@ beforeAll(async () => {
     await c.query(`DROP SCHEMA IF EXISTS "${q(TEST_SCHEMA)}" CASCADE`);
     await c.query(`CREATE SCHEMA "${q(TEST_SCHEMA)}"`);
     const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
-    for (const qy of buildCreateStoreSchemaQueries(TEST_SCHEMA)) {
-      const head = qy.text.trim().slice(0, 6).toUpperCase();
-      if (head !== "CREATE" && head !== "ALTER " && head !== "DROP T" && head !== "DROP S" && head !== "DO $$ ") {
-        continue;
-      }
-      if (qy.text.includes("user_slug_move_trg")) continue;
-      try {
-        await c.query(qy.text, (qy as { values?: unknown[] }).values as never[]);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (!msg.includes("does not exist") && !msg.includes("already exists")) throw err;
-      }
-    }
+    const { replayStoreSchema } = await import("@/lib/test-support/store-schema-replay");
+    // The loop this replaced also replayed the heads named here, so they stay.
+    await replayStoreSchema(c, buildCreateStoreSchemaQueries(TEST_SCHEMA), {
+      additionalHeads: ["DO $$ "],
+    });
     await c.query(
       `INSERT INTO public."organization" (id, name, slug, "createdAt")
        VALUES ($1, $1, $1, now()) ON CONFLICT (id) DO NOTHING`,
