@@ -569,7 +569,7 @@ describe("agent_run_resume and the paused step's durable record", () => {
     expect(durableGate.current).toHaveBeenCalledWith("run-1");
     // The resume goes on to the claim and the send (what follows the send is
     // other suites' concern).
-    expect(answer.error ?? "").not.toMatch(/artifact review|no screen draws|could not be read/);
+    expect(answer.error ?? "").not.toMatch(/artifact review|could not be read/);
     expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
     expect(sendTaskSpy).toHaveBeenCalledTimes(1);
   });
@@ -622,14 +622,12 @@ describe("agent_run_resume and the paused step's durable record", () => {
     }
   });
 
-  // red-first-expect: to not be called at all, but actually been called 1 times
-  it("a builder id no host entry answers is refused like any undrawn step", async () => {
-    durableGate.read.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:trigger-wait-status"));
-    const answer = (await resume()) as { error?: string };
-    expect(pauseClaimFake.claimPause).not.toHaveBeenCalled();
-    expect(answer.error).toBe(
-      "Run run-1 is paused at a step that no screen draws (@cinatra-ai/agent-builder:trigger-wait-status); it cannot be resumed.",
-    );
-    nothingMoved();
+  // The server does not judge whether a page draws the step: a renderer id no
+  // registered screen claims is resumed as it always was.
+  it("a step whose renderer id no registered screen claims is resumed as before", async () => {
+    durableGate.read.mockResolvedValue(gateFor("@acme/removed:output"));
+    await resume();
+    expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
   });
 });

@@ -15,17 +15,12 @@
 
 import {
   fieldRendererRegistry,
-  type FieldRendererCondition,
   type FieldRendererContext,
   type FieldRendererEntry,
 } from "./field-renderer-registry";
-import { makeGmailSenderCondition } from "./gmail-sender-condition";
-import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
 import {
   ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
-  HOST_RENDERER_DRAWN_IDS,
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
-  hostEntryDrawsRendererId,
 } from "./agent-builder-ids";
 import { gateCarriesPresentationHint } from "./hitl-gate-submit";
 
@@ -119,91 +114,6 @@ export function isTombstonedHitlRendererId(xRenderer: string): boolean {
 }
 
 /**
- * The historical UNSCOPED compat strings (stored interrupts, resume payloads)
- * a renderer KIND still accepts for every binding of that kind. A kind that is
- * not listed here accepts none: its kind name is not a renderer id.
- */
-export const FIELD_RENDERER_KIND_BARE_ALIASES: Readonly<Record<string, readonly string[]>> = {
-  "campaign-recipients-review": ["campaign-recipients-review"],
-  "context-selector": ["context-selector"],
-  cta: ["cta"],
-  "email-drafts-review": ["email-drafts-review"],
-  "follow-up-cadence": ["follow-up-cadence"],
-  "gmail-sender": ["gmail-sender"],
-  "list-picker": ["list-picker"],
-  "send-confirmation": ["send-confirmation"],
-};
-
-/**
- * Every x-renderer id a binding is drawn for: its full id, plus exactly the
- * bare aliases its kind declares. The ONE rule for "a screen draws this id":
- * the client registry matches on these ids and the server accepts an answer
- * for a parked step only for them, so neither can accept an id the other
- * does not.
- */
-export function rendererIdsDrawnForBinding(binding: { id: string; kind: string }): readonly string[] {
-  return [binding.id, ...(FIELD_RENDERER_KIND_BARE_ALIASES[binding.kind] ?? [])];
-}
-
-/**
- * Which entry draws a step recorded under `xRenderer`, by id alone: one of the
- * host's own entries (`HOST_RENDERER_DRAWN_IDS`) or one of `bindings`
- * (`rendererIdsDrawnForBinding`), always by strict equality. `null` when no
- * entry draws that id. The server reads it with the bindings it knows; the
- * page's registry entries match by the same two rules.
- */
-export function drawnHitlRendererClaim(
-  xRenderer: string,
-  bindings: ReadonlyArray<{ id: string; kind: string }>,
-): { id: string; kind?: string } | null {
-  for (const entryId of Object.keys(HOST_RENDERER_DRAWN_IDS)) {
-    if (hostEntryDrawsRendererId(entryId, xRenderer)) return { id: entryId };
-  }
-  const binding = bindings.find((b) => rendererIdsDrawnForBinding(b).includes(xRenderer));
-  return binding ? { id: binding.id, kind: binding.kind } : null;
-}
-
-/**
- * THE KINDS WHOSE CONDITION READS MORE THAN THE ID: the reader's context
- * decides whether a screen draws them. The page's registry entry of such a
- * binding is this condition, and the server evaluates the same condition with
- * the same context read on the server (`fieldRendererContextForUser`), so the
- * condition exists once. Today only the Gmail sender: it is drawn only for a
- * reader with Gmail connected and at least one sending alias.
- */
-export const FIELD_RENDERER_KIND_CONTEXT_CONDITIONS: Readonly<
-  Record<string, (matchIds: readonly string[]) => FieldRendererCondition>
-> = {
-  "gmail-sender": makeGmailSenderCondition,
-};
-
-/** Does a claim's condition read the reader's context (`FIELD_RENDERER_KIND_CONTEXT_CONDITIONS`)? */
-export function hitlClaimReadsContext(claim: { kind?: string } | null): boolean {
-  return claim?.kind !== undefined && FIELD_RENDERER_KIND_CONTEXT_CONDITIONS[claim.kind] !== undefined;
-}
-
-/**
- * Is a claimed step drawn for this reader? Always, unless its kind's condition
- * reads the context: then that condition decides, on the gate as the hosts
- * resolve it (the placeholder field name and the step's renderer id). No
- * context (the reader's could not be read) is never a match.
- */
-export function hitlClaimDrawnInContext(
-  claim: { id: string; kind?: string },
-  xRenderer: string,
-  context: FieldRendererContext | null,
-): boolean {
-  if (!hitlClaimReadsContext(claim)) return true;
-  if (context === null) return false;
-  const makeCondition = FIELD_RENDERER_KIND_CONTEXT_CONDITIONS[claim.kind as string]!;
-  return makeCondition(rendererIdsDrawnForBinding({ id: claim.id, kind: claim.kind as string }))(
-    HITL_PLACEHOLDER_FIELD_NAME,
-    { "x-renderer": xRenderer },
-    context,
-  );
-}
-
-/**
  * The entry a LIVE HITL gate is drawn with: the entry the registry resolves for
  * the gate's recorded `x-renderer` id, and nothing else.
  *
@@ -242,26 +152,23 @@ export function resolveHitlGateRenderer(
 }
 
 /**
- * MAY THIS PARKED STEP BE ANSWERED HERE? The one answer every surface asks
- * before it offers a control for a parked step, and the server asks before it
- * takes an answer for one: the run page's stepper (its Continue), the run
- * panel (its Continue and the gate it hands the chat composer), the HITL screen
- * card (its Continue), the bound-card binding (the ref a chat turn may fill
- * and submit through) and the resume action itself.
+ * MAY THIS PARKED STEP BE ANSWERED HERE? The one answer every page surface
+ * asks before it offers a control for a parked step: the run page's stepper
+ * (its Continue), the run panel (its Continue and the gate it hands the chat
+ * composer) and the HITL screen card (its Continue). It reads the page's
+ * registry; the server does not ask it.
  *
  * Yes when, and only when, a screen draws the step:
  *   - the step is recorded under the plain form's own id
  *     (`SCHEMA_FIELD_FALLBACK_RENDERER_ID`);
- *   - an entry claims the step's recorded renderer id (`claim`: on a page the
- *     entry `resolveHitlGateRenderer` resolves, on the server the binding that
- *     declares the id); or
+ *   - an entry claims the step's recorded renderer id (`claim`: the entry
+ *     `resolveHitlGateRenderer` resolves); or
  *   - the step carries a presentation hint in its values, which the host draws
  *     through its own generic renderer without a registry entry.
  * A step recorded with no renderer id (a tool-call approval) is answered by
  * the host's own Approve. Never for a tombstoned id, nor for the display-only
  * artifact-review redirect. A step that no screen draws shows "no renderer
- * configured for this step" and no control, and the server refuses an answer
- * for it: the run stays parked.
+ * configured for this step" and no control on the page.
  *
  * The mid-run classification by name (`classifyMidRunHitl`) decides how a
  * drawn step buffers its answer and where its Continue sits; it never makes a

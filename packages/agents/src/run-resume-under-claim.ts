@@ -28,7 +28,9 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
-import { captureHitlPromptForContinue } from "./agent-run-hitl-prompts";
+import { captureHitlPromptForContinue, readCurrentDurableHitlGate } from "./agent-run-hitl-prompts";
+import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
+import type { DurableHitlGateArtifact } from "./store";
 import type { AgentRunRecord } from "./agent-run-record";
 import { claimPause, PauseClaimReleaseError, releasePauseClaim, settlePauseSend } from "./run-pause-claim";
 import { PAUSE_SEND_LEASE_SECONDS, RunTransitionError, TERMINAL_RUN_STATUSES, type AgentRunStatus } from "./run-status";
@@ -40,6 +42,44 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 /** A pre-send step failed: give the lease back and throw the step's error, or
  * PauseClaimReleaseError when the release failed too. A `lost` release needs
  * nothing: the lease is no longer this claimer's. */
+
+/**
+ * THE DISPLAY-ONLY STEP IDS: a step parked under one of them is drawn as a card
+ * with no answer of its own. The artifact-review redirect is one: the host draws
+ * it inline with no approve control (cinatra#1796), and the paused run goes on
+ * only by the review's own typed decision. A generic answer is never taken for it.
+ */
+const DISPLAY_ONLY_HITL_RENDERER_IDS: ReadonlySet<string> = new Set([
+  ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
+]);
+
+/**
+ * WHAT A GENERIC ANSWER MAY NOT CONSUME, read for both generic roads (the MCP
+ * resume and the generic answer action). It decides on the run's CURRENT gate:
+ * its newest durable row (`readCurrentDurableHitlGate`), never the row the run's
+ * task-id column names (that column can be stale). Returns that gate and why an
+ * answer is refused, or `null`:
+ *   - `stale`: the caller named a gate (`namedReviewTaskId`) and the run's
+ *     current gate is another one;
+ *   - `display-only`: the current gate is a display-only card
+ *     (`DISPLAY_ONLY_HITL_RENDERER_IDS`); only its own decision consumes it.
+ * It does not judge whether a page draws the step: every other recorded
+ * renderer id is left to the road, as before. No durable row (`gate: null`)
+ * refuses nothing. A row that cannot be read throws; each road refuses with its
+ * own fixed text.
+ */
+export async function currentHitlGateRefusal(input: {
+  readonly runId: string;
+  readonly namedReviewTaskId?: string;
+}): Promise<{ gate: DurableHitlGateArtifact | null; refusal: "stale" | "display-only" | null }> {
+  const gate = await readCurrentDurableHitlGate(input.runId);
+  if (!gate) return { gate: null, refusal: null };
+  if (input.namedReviewTaskId !== undefined && gate.reviewTaskId !== input.namedReviewTaskId) {
+    return { gate, refusal: "stale" };
+  }
+  return { gate, refusal: DISPLAY_ONLY_HITL_RENDERER_IDS.has(gate.xRenderer) ? "display-only" : null };
+}
+
 export async function failPreSendStep(
   ref: ClaimRef & { expiresAt: Date },
   authority: OrgWriteAuthority | undefined,

@@ -22,7 +22,6 @@
 // The REAL handlers run; what is substituted is the world under them.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "@cinatra-ai/agents/agent-builder-ids";
 
 process.env.BETTER_AUTH_SECRET ??= "test-secret-for-w5c-picture-leg";
 
@@ -659,8 +658,7 @@ describe("the schedule screen binds the scheduler form", () => {
     parkedScreen = {
       runId: RUN,
       reviewTaskId: SCREEN,
-      // A screen draws it (the plain form): a parked step no screen draws mints no ref.
-      xRenderer: SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+      xRenderer: "setup-field",
       inputSchema: IDEA_INNER_SCHEMA,
       values: {},
       fieldName: "idea",

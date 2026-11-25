@@ -13,6 +13,7 @@ import {
   buildSkillResourceRef,
   requireResourceAccess,
 } from "./auth-policy";
+import { listEmailSenderIdentities } from "@/lib/email-sender-identities";
 import { getAssignedSkillIdsForAgent } from "@/lib/agents-store";
 import type { AssignmentScope } from "@/lib/assignment-scope";
 import {
@@ -75,8 +76,15 @@ export async function getFieldRendererContextForAgentBuilderAction(): Promise<{
   const session = await requireAuthSession().catch(() => null);
   if (!session?.user?.id) return { connectedApps: [], gmailAliases: [] };
   try {
-    const { readFieldRendererContextForUser } = await import("./field-renderer-bindings.server");
-    return await readFieldRendererContextForUser(session.user.id);
+    const contributions = await listEmailSenderIdentities(session.user.id);
+    const connectedApps = contributions.map((c) => c.app);
+    const gmailAliases = (
+      contributions.find((c) => c.app === "gmail")?.identities ?? []
+    ).map((a) => ({
+      sendAsEmail: a.email,
+      displayName: a.displayName,
+    }));
+    return { connectedApps, gmailAliases };
   } catch {
     return { connectedApps: [], gmailAliases: [] };
   }

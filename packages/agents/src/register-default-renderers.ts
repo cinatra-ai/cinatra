@@ -30,6 +30,7 @@ import {
 import {
   GENERATED_FIELD_RENDERER_BINDINGS,
 } from "@/lib/generated/agent-bindings";
+import { makeGmailSenderCondition } from "./gmail-sender-condition";
 import { ListPickerRenderer } from "./list-picker-renderer";
 import { ContextSelectorRenderer } from "./context-selector-renderer";
 import { CampaignRecipientsReviewRenderer } from "./campaign-recipients-review-renderer";
@@ -53,15 +54,10 @@ import {
   PERSONAL_SKILL_RENDERER_ID,
   SKILL_SELECTOR_RENDERER_ID,
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
-  hostEntryDrawsRendererId,
 } from "./agent-builder-ids";
 import { hasFieldRendererComponent } from "./field-renderer-components";
 import { makeExtensionFieldRenderer } from "./extension-field-renderer";
-import {
-  FIELD_RENDERER_KIND_CONTEXT_CONDITIONS,
-  isTombstonedHitlRendererId,
-  rendererIdsDrawnForBinding,
-} from "./orchestrator-mid-run-hitl";
+import { isTombstonedHitlRendererId } from "./orchestrator-mid-run-hitl";
 
 // ---------------------------------------------------------------------------
 // The normalized binding shape this module registers from. Mirrors
@@ -79,10 +75,9 @@ export type FieldRendererBindingInput = {
 
 // ---------------------------------------------------------------------------
 // KIND TABLE — the host's renderer primitives, keyed by neutral kind name.
-// A kind's historical UNSCOPED compat strings (stored interrupts / resume
-// payloads) are `FIELD_RENDERER_KIND_BARE_ALIASES` in orchestrator-mid-run-hitl,
-// shared with the server, so both accept the same ids
-// (`rendererIdsDrawnForBinding`).
+// `bareAliases` carries the historical UNSCOPED compat strings the retired
+// hand-map predicates accepted (stored interrupts / resume payloads) — they
+// are host-neutral and remain accepted for every binding of that kind.
 // A repo test pins set-equality between these keys and
 // KNOWN_FIELD_RENDERER_KINDS (scripts/extensions/agent-binding-kinds.mjs) so
 // the validator vocabulary and this table cannot drift.
@@ -91,6 +86,7 @@ const RENDERER_KIND_TABLE: Record<
   string,
   {
     renderer: ComponentType<FieldRendererProps>;
+    bareAliases?: readonly string[];
     /**
      * Safe to mount where the reader has no cookie session — see
      * `FieldRendererEntry.credentialSafe`. ABSENT MEANS UNSAFE: a kind earns
@@ -108,6 +104,13 @@ const RENDERER_KIND_TABLE: Record<
     drawsOwnSubmit?: true;
     /** A component of this kind commits a pick, so its gate's Continue waits for one; see `FieldRendererEntry.holdsContinueUntilPicked` (cinatra#3035). The schema floor commits none, so a binding the floor draws never holds. */
     holdsContinueUntilPicked?: true;
+    /**
+     * Optional custom condition factory for kinds whose match logic goes
+     * beyond strict ID equality (e.g. gmail-sender's context gating +
+     * field-name whitelist heuristic). Receives the full match-ID set
+     * (binding ID + bare aliases); the factory owns everything else.
+     */
+    makeCondition?: (matchIds: readonly string[]) => FieldRendererCondition;
   }
 > = {
   // MIGRATED (cinatra#3380): blog-pipeline's `idea_selection_gate` chooser is
@@ -126,17 +129,20 @@ const RENDERER_KIND_TABLE: Record<
   "blog-idea-selection": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true, drawsOwnSubmit: true, holdsContinueUntilPicked: true },
   "campaign-recipients-review": {
     renderer: CampaignRecipientsReviewRenderer,
+    bareAliases: ["campaign-recipients-review"],
   },
   "context-selector": {
     renderer: ContextSelectorRenderer,
+    bareAliases: ["context-selector"],
     credentialSafe: true,
   },
   // cinatra#3532: CtaRenderer draws a Select or a Textarea and NO submit
   // control, so this kind declares none (`drawsOwnSubmit` absent) and the setup
   // surfaces draw the product's own Continue beside the field.
-  cta: { renderer: CtaRenderer },
+  cta: { renderer: CtaRenderer, bareAliases: ["cta"] },
   "email-drafts-review": {
     renderer: EmailDraftsReviewRenderer,
+    bareAliases: ["email-drafts-review"],
   },
   // scrape-schema-review + final-list-review: the COMPONENTS migrated into
   // @cinatra-ai/list-curator-agent (cinatra#1625 S8/M3). The KIND stays in the
@@ -154,7 +160,7 @@ const RENDERER_KIND_TABLE: Record<
   // but the host ships no component: a bundled binding resolves map-first to the
   // extension wrapper (hasFieldRendererComponent -> makeExtensionFieldRenderer),
   // and a not-in-build binding of this kind degrades to the SchemaFieldRenderer
-  // floor here (AC4 never-blank). KEEP its bare alias: unlike final-list-review,
+  // floor here (AC4 never-blank). KEEP bareAliases: unlike final-list-review,
   // "follow-up-cadence" is a historical UNSCOPED compat string stored interrupts
   // may carry (it is in the frozen parity contract). BOTH cadence bindings load
   // the SAME pack component, so the first-registration arbitration of the bare
@@ -164,11 +170,11 @@ const RENDERER_KIND_TABLE: Record<
     renderer: SchemaOnlyFloorRenderer,
     credentialSafe: true,
     drawsOwnSubmit: true,
+    bareAliases: ["follow-up-cadence"],
   },
   // MIGRATED (cinatra#1625): the gmail-sender COMPONENT moved into
   // @cinatra-ai/email-artifacts (src/renderers/gmail-sender.tsx). The host still
   // OWNS the activation — the bareAlias + the makeGmailSenderCondition factory
-  // (keyed in FIELD_RENDERER_KIND_CONTEXT_CONDITIONS)
   // (now in ./gmail-sender-condition) — so the migrated binding registers as the
   // extension wrapper yet keeps its context gating + field-name whitelist
   // heuristic. A not-in-build binding of this kind degrades to the floor here.
@@ -176,8 +182,8 @@ const RENDERER_KIND_TABLE: Record<
     renderer: SchemaOnlyFloorRenderer,
     credentialSafe: true,
     drawsOwnSubmit: true,
-    // Its condition reads the reader's context: FIELD_RENDERER_KIND_CONTEXT_CONDITIONS
-    // (orchestrator-mid-run-hitl), which the server evaluates too.
+    bareAliases: ["gmail-sender"],
+    makeCondition: makeGmailSenderCondition,
   },
   // MIGRATED (cinatra#1625 S8/M3): the blog-linkedin draft-review component
   // moved into @cinatra-ai/blog-linkedin-publish-agent. The KIND stays (the
@@ -187,7 +193,7 @@ const RENDERER_KIND_TABLE: Record<
   // this kind degrades to the SchemaFieldRenderer floor here (AC4 never-blank).
   // Same shape as final-list-review / scrape-schema-review above.
   "linkedin-draft-review": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true, drawsOwnSubmit: true },
-  "list-picker": { renderer: ListPickerRenderer },
+  "list-picker": { renderer: ListPickerRenderer, bareAliases: ["list-picker"] },
   // See the final-list-review note above — the component migrated; the kind + its
   // floor stay host so the vocabulary holds and a not-in-build binding never blanks.
   "scrape-schema-review": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true, drawsOwnSubmit: true },
@@ -202,7 +208,7 @@ const RENDERER_KIND_TABLE: Record<
   // host ships no component: a bundled binding resolves map-first to the extension
   // wrapper (hasFieldRendererComponent -> makeExtensionFieldRenderer), and a
   // not-in-build binding of this kind degrades to the SchemaFieldRenderer floor
-  // here (AC2 never-blank). KEEP its bare alias: "send-confirmation" is a historical
+  // here (AC2 never-blank). KEEP bareAliases: "send-confirmation" is a historical
   // UNSCOPED compat string stored interrupts may carry (frozen parity contract),
   // same rationale as follow-up-cadence. send-confirmation is single-family
   // (email-delivery-agent only, no reviewer coupling), so the repoint is full —
@@ -211,6 +217,7 @@ const RENDERER_KIND_TABLE: Record<
     renderer: SchemaOnlyFloorRenderer,
     credentialSafe: true,
     drawsOwnSubmit: true,
+    bareAliases: ["send-confirmation"],
   },
   // MIGRATED (cinatra#1958, S8 successor of #1625): the pure snapshot->onChange
   // test-delivery input form COMPONENT moved into @cinatra-ai/email-artifacts
@@ -248,12 +255,9 @@ function xRendererOf(schema: Record<string, unknown>): string {
 // posture of the retired hand map is preserved. Kinds with a custom factory
 // (gmail-sender) own their extra logic; the ID set is still injected.
 function conditionFor(id: string, kind: string): FieldRendererCondition {
-  const matchIds = [...rendererIdsDrawnForBinding({ id, kind })];
-  // A kind whose match logic reads more than the id (the reader's context)
-  // has its condition in FIELD_RENDERER_KIND_CONTEXT_CONDITIONS, which the
-  // server evaluates too.
-  const makeCondition = FIELD_RENDERER_KIND_CONTEXT_CONDITIONS[kind];
-  if (makeCondition) return makeCondition(matchIds);
+  const kindEntry = RENDERER_KIND_TABLE[kind];
+  const matchIds = [id, ...(kindEntry?.bareAliases ?? [])];
+  if (kindEntry?.makeCondition) return kindEntry.makeCondition(matchIds);
   return (_fieldName, schema) => matchIds.includes(xRendererOf(schema));
 }
 
@@ -421,7 +425,7 @@ export function ensureDefaultFieldRenderersRegistered(): void {
     id: SCHEMA_FIELD_FALLBACK_RENDERER_ID,
     priority: 1,
     condition: (_fieldName, schema) =>
-      hostEntryDrawsRendererId(SCHEMA_FIELD_FALLBACK_RENDERER_ID, xRendererOf(schema)),
+      xRendererOf(schema) === SCHEMA_FIELD_FALLBACK_RENDERER_ID,
     // Bypass floor: a registered renderer that resolves back through the registry
     // must NOT be the registry-first SchemaFieldRenderer, or matching its own
     // fallback xRenderer re-resolves this entry forever. SchemaOnlyFloorRenderer

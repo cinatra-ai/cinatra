@@ -43,10 +43,6 @@ import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "./agent-builder-ids";
 import { isParkedOnProducedReview } from "./run-produced-review-hold";
 import { runInputsForGate } from "./gate-keys-not-from-run-inputs";
 
-// May a parked step be answered? The server's reading, for the hosts that mint
-// or resolve a parked step outside this package (the bound-card binding).
-export { parkedHitlStepIsAnswerableOnServer } from "./field-renderer-bindings.server";
-
 export type HitlContext = {
   xRenderer: string;
   // Setup-field interrupts have no child run; only child-HITL cascades populate

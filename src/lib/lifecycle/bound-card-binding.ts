@@ -83,7 +83,6 @@ import { encodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 // module; importing the constant is what keeps this leaf and the gate emitter
 // spelling the same string.
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "@cinatra-ai/agents/agent-builder-ids";
-import { parkedHitlStepIsAnswerableOnServer } from "@cinatra-ai/agents/hitl-context";
 import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
 
 /** How many candidate refs one message may carry. A composer shows a handful of
@@ -647,9 +646,6 @@ export async function mintParkedScreenRef(runId: string): Promise<string | null>
   const screen = await readLatestDurableHitlGateArtifact(runId).catch(() => null);
   if (!screen) return null;
   if (screen.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID) return null;
-  // A step no screen draws (`parkedHitlStepIsAnswerable`) gets no ref: a turn
-  // can neither fill it nor submit it.
-  if (!parkedHitlStepIsAnswerableOnServer(screen)) return null;
   return encodeLifecycleGateRef({ runId, reviewTaskId: screen.reviewTaskId });
 }
 

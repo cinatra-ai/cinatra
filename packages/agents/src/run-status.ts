@@ -497,10 +497,11 @@ export class GateNotPendingError extends Error {
 }
 
 /**
- * A resume refused because no screen draws the parked step: its recorded
- * renderer id is claimed by no registered entry (`parkedHitlStepIsAnswerable`).
- * Thrown before the pause is claimed, so nothing is recorded or sent and the
- * run stays parked.
+ * A generic answer refused because the run's current gate takes none of its
+ * own: a display-only card such as the artifact-review redirect, which only
+ * the review's typed decision consumes (`currentHitlGateRefusal`). Thrown
+ * before the pause is claimed, so nothing is recorded or sent and the run
+ * stays parked.
  */
 export class HitlStepNotAnswerableError extends Error {
   readonly code = "hitl_step_not_answerable" as const;

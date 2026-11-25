@@ -65,7 +65,7 @@ import {
   type SetTriggerForActorArgs,
 } from "../trigger-service";
 import { randomUUID, createHash } from "node:crypto";
-import { resumeWayflowUnderPauseClaim, stopRunRespectingPauseClaim } from "../run-resume-under-claim";
+import { currentHitlGateRefusal, resumeWayflowUnderPauseClaim, stopRunRespectingPauseClaim } from "../run-resume-under-claim";
 import { readdir, readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { basename, dirname, join, relative, sep } from "node:path";
@@ -2148,27 +2148,21 @@ async function handleAgentBuilderRunResume(
       if (!run.a2aContextId) {
         return { error: `Run ${runId} has no a2aContextId. Cannot resume WayFlow task without context ID.` };
       }
-      // A step no screen draws, or a display-only card, is not answered here
-      // (`currentParkedHitlStepRefusal`, the one guard every generic road asks);
-      // the run stays parked. It decides on the run's CURRENT gate (its newest
+      // A display-only card (the artifact-review redirect) is not answered here
+      // (`currentHitlGateRefusal`, the reading both generic roads share); the
+      // run stays parked. It decides on the run's CURRENT gate (its newest
       // durable row), not the row the run's task-id column names: that column
       // can be stale, and the resume reaches the run's current gate through its
       // context. A record that cannot be read refuses too: only a real absence
       // goes on.
-      let parked: Awaited<ReturnType<typeof import("../field-renderer-bindings.server")["currentParkedHitlStepRefusal"]>>;
+      let parked: Awaited<ReturnType<typeof currentHitlGateRefusal>>;
       try {
-        parked = await (await import("../field-renderer-bindings.server")).currentParkedHitlStepRefusal({
-          runId: run.id,
-          actingUserId: actor.userId,
-        });
+        parked = await currentHitlGateRefusal({ runId: run.id });
       } catch {
         return { error: `Run ${runId} cannot be resumed: its paused step could not be read.` };
       }
       if (parked.refusal === "display-only") {
         return { error: `Run ${runId} is paused at an artifact review; it goes on only when that review is decided.` };
-      }
-      if (parked.gate && parked.refusal === "undrawn") {
-        return { error: `Run ${runId} is paused at a step that no screen draws (${parked.gate.xRenderer}); it cannot be resumed.` };
       }
       // cinatra#4150: a run held at a publish decision goes on only by that decision.
       const publishHold = await import("../publish-decision-actions");

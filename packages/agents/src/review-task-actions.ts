@@ -30,7 +30,7 @@ import {
   transitionRunStatus,
 } from "./store";
 import { claimPause } from "./run-pause-claim";
-import { failPreSendStep, givePauseBackOnHoldFault, settleSendOrDescribe } from "./run-resume-under-claim";
+import { currentHitlGateRefusal, failPreSendStep, givePauseBackOnHoldFault, settleSendOrDescribe } from "./run-resume-under-claim";
 import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuccessfulContinue, continueBindingDigest, continueGateDigest } from "./agent-run-hitl-prompts";
 // cinatra#1939 wave 2 (§7.1): the guarded setup-resume writer — the setup-*
 // inputParams-merge + pending_approval->queued CAS now runs inside the org-write
@@ -938,24 +938,17 @@ export async function approveReviewTaskInternal(
         currentStatus,
         message: `WayFlow approval rejected: gate ${taskId} on run ${run.id} ${why}`,
       });
-    // A STEP NO SCREEN DRAWS IS NOT ANSWERED (`currentParkedHitlStepRefusal`,
-    // the one guard every generic road asks). It decides on the run's CURRENT
-    // gate (its newest durable row): an answer to another gate is refused as
-    // no longer the pause the run waits at; a step whose recorded renderer id
-    // no entry claims, or whose claiming binding's condition does not match the
-    // acting user's context, is drawn with no control, and a DISPLAY-ONLY card
-    // (the artifact-review redirect) is consumed only by its review's own
-    // decision. Each is refused here, before the pause is claimed. Nothing is
-    // recorded or sent; the run stays parked. A record that cannot be read
-    // refuses too (a fixed text, no store error); only a run with no durable
-    // record (`null`) is left to the checks below.
-    let parked: Awaited<ReturnType<typeof import("./field-renderer-bindings.server")["currentParkedHitlStepRefusal"]>>;
+    // THE RUN'S CURRENT GATE (`currentHitlGateRefusal`, the reading both generic
+    // roads share): its newest durable row. An answer to another gate is refused
+    // as no longer the pause the run waits at; a DISPLAY-ONLY card (the
+    // artifact-review redirect) is consumed only by its review's own decision.
+    // Both are refused here, before the pause is claimed: nothing is recorded or
+    // sent and the run stays parked. A record that cannot be read refuses too (a
+    // fixed text, no store error); a run with no durable record (`null`) is left
+    // to the checks below.
+    let parked: Awaited<ReturnType<typeof currentHitlGateRefusal>>;
     try {
-      parked = await (await import("./field-renderer-bindings.server")).currentParkedHitlStepRefusal({
-        runId: run.id,
-        actingUserId: actorId,
-        namedReviewTaskId: reviewTaskId,
-      });
+      parked = await currentHitlGateRefusal({ runId: run.id, namedReviewTaskId: reviewTaskId });
     } catch {
       throw new Error(`WayFlow approval rejected: the paused step of gate ${taskId} on run ${run.id} could not be read`);
     }
@@ -963,14 +956,11 @@ export async function approveReviewTaskInternal(
       throw refuse(run.status, `is no longer the pause the run waits at`);
     }
     const parkedStep = parked.gate;
-    if (parkedStep && parked.refusal !== null) {
+    if (parkedStep && parked.refusal === "display-only") {
       throw new HitlStepNotAnswerableError({
         runId: run.id,
         xRenderer: parkedStep.xRenderer,
-        message:
-          parked.refusal === "display-only"
-            ? `WayFlow approval rejected: gate ${taskId} on run ${run.id} is an artifact review; it goes on only when that review is decided`
-            : `WayFlow approval rejected: gate ${taskId} on run ${run.id} has no screen that draws it`,
+        message: `WayFlow approval rejected: gate ${taskId} on run ${run.id} is an artifact review; it goes on only when that review is decided`,
       });
     }
     // AN ANSWER LEFT IN THE SETUP SHAPE IS NOT AN APPROVAL. A one-value answer

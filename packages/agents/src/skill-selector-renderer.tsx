@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/select";
 import type { FieldRendererCondition, FieldRendererProps } from "./field-renderer-registry";
 import { fetchInstalledSkillsForAgent, fetchSkillsBySlug } from "./skill-actions";
-import { SKILL_SELECTOR_RENDERER_ID, hostEntryDrawsRendererId } from "./agent-builder-ids";
+import { SKILL_SELECTOR_RENDERER_ID } from "./agent-builder-ids";
 
 // ---------------------------------------------------------------------------
 // Condition — matches any field with x-renderer: "skill-selector"
@@ -20,7 +20,7 @@ import { SKILL_SELECTOR_RENDERER_ID, hostEntryDrawsRendererId } from "./agent-bu
 // ---------------------------------------------------------------------------
 
 export const isSkillSelectorField: FieldRendererCondition = (_fieldName, schema) =>
-  hostEntryDrawsRendererId(SKILL_SELECTOR_RENDERER_ID, (schema as Record<string, unknown>)["x-renderer"]);
+  ([SKILL_SELECTOR_RENDERER_ID, "skill-selector"] as string[]).includes((schema as Record<string, unknown>)["x-renderer"] as string ?? "");
 
 // ---------------------------------------------------------------------------
 // Renderer
