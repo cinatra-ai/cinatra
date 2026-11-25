@@ -109,8 +109,6 @@ vi.mock("@cinatra-ai/a2a", () => ({
   createExternalA2AClient: vi.fn(async () => ({
     sendTask: sendTaskMock,
   })),
-  // cinatra#3562: every real answer removes its task's refresh note before the send.
-  forgetWayflowRendererGateRepeat: vi.fn(async () => undefined),
   // #1987 — the wayflow- resume mints answered-gate provenance (and re-asserts
   // the latest-task join key) before dispatch; stub both so the resume proceeds.
   rememberLatestWayflowGateTask: vi.fn(async () => {}),

@@ -413,292 +413,73 @@ export async function rememberWayflowGateTask(
  * gates interleave. Mirrors `getOrAddWayflowGateIndex` but on a separate list
  * (`cinatra:wayflow:renderer-gates:<runId>`); also keeps the all-gate list +
  * reverse-map current via `rememberWayflowGateTask`.
+ *
+ * cinatra#3562: A NODE IS A STEP. `verifiedNodeId` is the flow node that paused
+ * the run, as the runtime signed it and the caller verified it (never read from
+ * message text, a schema or a renderer id). When it equals the verified node of
+ * the run's last placed renderer pause, this pause is that step again (a list
+ * step's Try again, or any loop back to the same gate) and takes that pause's
+ * place instead of a new one. A pause without a verified node is placed as
+ * before (appended), and clears the last node, so no later pause can match
+ * across it.
+ *
+ * Storage: beside the list, one hash `cinatra:wayflow:renderer-gate-nodes:<runId>`
+ * holds `last` (the verified node of the last appended pause) and
+ * `task:<taskId>` (the place of a pause that took an earlier pause's place), with
+ * the list's time to live. The whole read and write is one script, so two
+ * reports of one pause, or of two pauses, never both take a place.
  */
+const RENDERER_GATE_PLACE_LUA = `
+local list = redis.call('LRANGE', KEYS[1], 0, -1)
+local ttl = tonumber(ARGV[3])
+for i = 1, #list do
+  if list[i] == ARGV[1] then
+    redis.call('EXPIRE', KEYS[1], ttl)
+    return i - 1
+  end
+end
+local alias = redis.call('HGET', KEYS[2], 'task:' .. ARGV[1])
+if alias then return tonumber(alias) end
+local n = #list
+if ARGV[2] ~= '' and n > 0 and redis.call('HGET', KEYS[2], 'last') == ARGV[2] then
+  redis.call('HSET', KEYS[2], 'task:' .. ARGV[1], n - 1)
+  redis.call('EXPIRE', KEYS[2], ttl)
+  redis.call('EXPIRE', KEYS[1], ttl)
+  return n - 1
+end
+redis.call('RPUSH', KEYS[1], ARGV[1])
+redis.call('EXPIRE', KEYS[1], ttl)
+if ARGV[2] ~= '' then
+  redis.call('HSET', KEYS[2], 'last', ARGV[2])
+  redis.call('EXPIRE', KEYS[2], ttl)
+else
+  redis.call('HDEL', KEYS[2], 'last')
+end
+return n
+`;
+
 export async function getOrAddWayflowRendererGateIndex(
   runId: string,
   taskId: string,
+  verifiedNodeId?: string | null,
 ): Promise<number> {
   await rememberWayflowGateTask(runId, taskId);
   const key = `cinatra:wayflow:renderer-gates:${runId}`;
   const r = getPublisher();
-  const repeatKey = rendererGateRepeatKey(runId);
-  const replacedKey = rendererGateReplacedKey(runId);
-  // cinatra#3562: a pause that follows a list step's refresh is that same step
-  // again. Its fresh task id takes the refreshed task's place in the list, so
-  // the position does not advance. A read fault throws: no later index is guessed.
-  //
-  // Every write of the list goes through one commit (RENDERER_GATE_COMMIT_LUA)
-  // that applies only when the list and the refresh note are still as read
-  // here; when another report changed them in between, they are read again.
-  // So two reports of one pause, or of two pauses, never both take a place.
-  let lastReadHadNote = false;
-  for (let attempt = 0; attempt < RENDERER_GATE_COMMIT_ATTEMPTS; attempt += 1) {
-    const list = (await r.lrange(key, 0, -1)) as string[];
-    const existing = list.indexOf(taskId);
-    const repeatRaw = await r.get(repeatKey);
-    // The same pause reported again (a reconnect, a retry) keeps its place. A
-    // note stays until the next pause takes the refreshed task's place.
-    if (existing !== -1) {
-      if (repeatRaw !== null) await r.expire(repeatKey, GATE_SEQUENCE_TTL_S);
-      await r.expire(key, GATE_SEQUENCE_TTL_S);
-      return existing;
-    }
-    const repeat = repeatRaw === null ? null : readRendererGateRepeat(repeatRaw);
-    // The refreshed task reported again while its list entry is gone (the list
-    // expired): it is not the next pause, so it keeps the note's place and the
-    // note stays.
-    if (repeat !== null && repeat.taskId === taskId) {
-      await r.expire(repeatKey, GATE_SEQUENCE_TTL_S);
-      return repeat.index;
-    }
-    // A refreshed task reported after the next pause took its place keeps that place.
-    const replacedAt = await r.hget(replacedKey, taskId);
-    if (replacedAt !== null) {
-      const at = Number(replacedAt);
-      if (!isRendererGatePlace(at)) {
-        throw new RendererGatePlaceUnknownError(`renderer gate ${taskId} on run ${runId} was replaced at a place that cannot be read`);
-      }
-      return at;
-    }
-    let at: number;
-    let push: string[];
-    if (repeatRaw === null) {
-      at = list.length; // new renderer-gate index = old list length
-      push = [taskId];
-    } else {
-      // A note that cannot be used is kept (not consumed): every later pause is
-      // refused in the same way until the note expires, and none is given a guessed place.
-      if (repeat === null) {
-        throw new RendererGatePlaceUnknownError(`renderer gate ${taskId} on run ${runId} follows a refresh whose position cannot be read`);
-      }
-      at = repeat.index;
-      if (list.length > at) {
-        // The list is still there: the refreshed task must be its last entry.
-        if (at !== list.length - 1 || list[at] !== repeat.taskId) {
-          throw new RendererGatePlaceUnknownError(`renderer gate ${taskId} on run ${runId} follows a refresh of a task that is not the last renderer gate`);
-        }
-        push = [];
-      } else {
-        // The list expired before or after the refresh (or lost its tail): the
-        // position is restored from the note. Only this function reads the list, and only by
-        // `indexOf(taskId)` and by length, so the earlier places it cannot know
-        // are filled with a value that is never a task id.
-        push = [...Array.from({ length: at - list.length }, () => VACANT_RENDERER_GATE), taskId];
-      }
-    }
-    const committed = await r.eval(
-      RENDERER_GATE_COMMIT_LUA,
-      3,
-      key,
-      repeatKey,
-      replacedKey,
-      repeatRaw ?? "",
-      String(GATE_SEQUENCE_TTL_S),
-      taskId,
-      String(at),
-      repeat === null ? "" : repeat.taskId,
-      String(list.length),
-      String(push.length),
-      ...list,
-      ...push,
-    );
-    if (Number(committed) === 1) return at;
-    // The script refuses a place past the limit itself, whatever the caller read.
-    if (Number(committed) === RENDERER_GATE_COMMIT_PLACE_REFUSED) {
-      const refused = `renderer gate ${taskId} on run ${runId} was not given place ${at}: it is past the limit of ${RENDERER_GATE_PLACE_LIMIT} places`;
-      throw repeatRaw !== null ? new RendererGatePlaceUnknownError(refused) : new Error(refused);
-    }
-    lastReadHadNote = repeatRaw !== null;
+  const place = await r.eval(
+    RENDERER_GATE_PLACE_LUA,
+    2,
+    key,
+    `cinatra:wayflow:renderer-gate-nodes:${runId}`,
+    taskId,
+    typeof verifiedNodeId === "string" ? verifiedNodeId : "",
+    String(GATE_SEQUENCE_TTL_S),
+  );
+  const index = Number(place);
+  if (!Number.isInteger(index) || index < 0) {
+    throw new Error(`renderer gate ${taskId} on run ${runId}: the place script answered no place`);
   }
-  const exhausted = `renderer gate ${taskId} on run ${runId} was not given a place: the run's renderer gates kept changing`;
-  throw lastReadHadNote ? new RendererGatePlaceUnknownError(exhausted) : new Error(exhausted);
-}
-
-/**
- * cinatra#3562: the place of a renderer gate cannot be established because of
- * a list step's refresh: its note cannot be read, names a task that is not the
- * last renderer gate, or names a place past `RENDERER_GATE_PLACE_LIMIT`; or a
- * place kept for a refreshed task cannot be read. Every other failure of the
- * place lookup (a Redis fault) is a plain `Error`.
- *
- * The caller must not show the pause with a guessed renderer.
- */
-export class RendererGatePlaceUnknownError extends Error {
-  readonly code = RENDERER_GATE_PLACE_UNKNOWN;
-  constructor(message: string) {
-    super(message);
-    this.name = "RendererGatePlaceUnknownError";
-  }
-}
-
-/** The code of `RendererGatePlaceUnknownError`, and the start of the run error that records it. */
-export const RENDERER_GATE_PLACE_UNKNOWN = "renderer_gate_place_unknown";
-
-/**
- * cinatra#3562: the number of places a run's renderer gate list can hold
- * (places 0 to 1023). A place is one pause of a person step. A flow that maps
- * its pauses by place has a fixed count of them (the sum of its steps'
- * `gateCount`), and a real flow has a few person steps, so the limit is far
- * above any real flow; a re-entrant step is the only renderer step of its flow
- * and is not mapped by place. A note, a
- * restored place or a write past the limit is refused, so an expired list is
- * never rebuilt with more than this many vacant places. `rendererGateIndexOfRenderer`
- * (packages/agents, orchestrator-gate-predicate.ts) uses the same limit.
- */
-export const RENDERER_GATE_PLACE_LIMIT = 1024;
-
-function isRendererGatePlace(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value < RENDERER_GATE_PLACE_LIMIT;
-}
-
-/** What `RENDERER_GATE_COMMIT_LUA` returns when the place is past the limit. */
-const RENDERER_GATE_COMMIT_PLACE_REFUSED = -1;
-
-/** How often a renderer gate report reads the list again after another report changed it. */
-const RENDERER_GATE_COMMIT_ATTEMPTS = 8;
-
-/**
- * cinatra#3562: the one write of a run's renderer gate list, in one server-side
- * step. It applies only when the list (KEYS[1]) and the refresh note (KEYS[2])
- * are exactly as the caller read them; otherwise it changes nothing and returns 0.
- *
- * ARGV: 1 the note as read ('' = none), 2 the time to live, 3 the arriving task
- * id, 4 its place, 5 the refreshed task the note names ('' = none), 6 the list's
- * length as read (n), 7 the count of values to push (m), then the n entries as
- * read, then the m values to push.
- *
- * With a note, the note is consumed here and nowhere else: the arriving task
- * takes the refreshed task's place (set in place when nothing is pushed, or
- * pushed after the vacant places), and the refreshed task's place is kept in
- * KEYS[3] for a late report of it. Without a note, the values are pushed.
- *
- * A place that is not a whole number below `RENDERER_GATE_PLACE_LIMIT`, or a
- * push that would make the list longer than the limit, changes nothing and
- * returns -1 (`RENDERER_GATE_COMMIT_PLACE_REFUSED`), whatever the caller read.
- */
-const RENDERER_GATE_COMMIT_LUA = `
-local at = tonumber(ARGV[4])
-if at == nil or at < 0 or at ~= math.floor(at) or at >= ${RENDERER_GATE_PLACE_LIMIT} then return -1 end
-if tonumber(ARGV[6]) + tonumber(ARGV[7]) > ${RENDERER_GATE_PLACE_LIMIT} then return -1 end
-local note = redis.call('GET', KEYS[2]) or ''
-if note ~= ARGV[1] then return 0 end
-local n = tonumber(ARGV[6])
-local m = tonumber(ARGV[7])
-local list = redis.call('LRANGE', KEYS[1], 0, -1)
-if #list ~= n then return 0 end
-for i = 1, n do
-  if list[i] ~= ARGV[7 + i] then return 0 end
-end
-local ttl = tonumber(ARGV[2])
-if m == 0 then
-  redis.call('LSET', KEYS[1], tonumber(ARGV[4]), ARGV[3])
-else
-  for i = 1, m do
-    redis.call('RPUSH', KEYS[1], ARGV[7 + n + i])
-  end
-end
-redis.call('EXPIRE', KEYS[1], ttl)
-if ARGV[1] ~= '' then
-  redis.call('DEL', KEYS[2])
-  redis.call('HSET', KEYS[3], ARGV[5], ARGV[4])
-  redis.call('EXPIRE', KEYS[3], ttl)
-end
-return 1
-`;
-
-/** Fills a renderer gate place whose task id is not known; never equal to a task id. */
-const VACANT_RENDERER_GATE = "";
-
-function rendererGateRepeatKey(runId: string): string {
-  return `cinatra:wayflow:renderer-gate-repeat:${runId}`;
-}
-
-/** The places of refreshed tasks whose place a later pause took: task id -> place. */
-function rendererGateReplacedKey(runId: string): string {
-  return `cinatra:wayflow:renderer-gate-replaced:${runId}`;
-}
-
-function readRendererGateRepeat(raw: string): { taskId: string; index: number } | null {
-  try {
-    const parsed = JSON.parse(raw) as { taskId?: unknown; index?: unknown };
-    if (typeof parsed?.taskId !== "string" || parsed.taskId.length === 0) return null;
-    if (!isRendererGatePlace(parsed.index)) return null;
-    return { taskId: parsed.taskId, index: parsed.index };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * cinatra#3562: record that the resume about to be sent for the renderer gate
- * `taskId` is a list step's refresh, so the run parks at the same step again.
- * The note carries the task id and its place in the run's renderer gate list,
- * so the next renderer pause keeps that place even when the list has expired
- * in between (`getOrAddWayflowRendererGateIndex`). The list's time to live is
- * renewed with the note's, so a live run keeps both.
- *
- * When the list is gone (it expires seven days after the run's last pause),
- * the place is `placeFromSteps`: the caller reads it from the step's durable
- * gate record and the compiled flow, which do not expire.
- *
- * Throws, and writes nothing, when the list holds entries and `taskId` is not
- * its last entry (the task is not the current renderer gate), or is at another
- * place than a given `placeFromSteps` (the steps changed since the run took
- * that place), or when the list
- * is gone and `placeFromSteps` is not a place (a whole number below
- * `RENDERER_GATE_PLACE_LIMIT`), or when the place is past that limit: the place
- * of the next pause cannot be known, so the caller must not send the refresh.
- */
-export async function rememberWayflowRendererGateRepeat(
-  runId: string,
-  taskId: string,
-  placeFromSteps: number | null = null,
-): Promise<void> {
-  const key = `cinatra:wayflow:renderer-gates:${runId}`;
-  const r = getPublisher();
-  const list = (await r.lrange(key, 0, -1)) as string[];
-  let index = list.length - 1;
-  if (index < 0 && isRendererGatePlace(placeFromSteps)) {
-    index = placeFromSteps;
-  } else if (
-    index < 0 ||
-    list[index] !== taskId ||
-    !isRendererGatePlace(index) ||
-    (placeFromSteps !== null && placeFromSteps !== index)
-  ) {
-    throw new Error(`the refresh of renderer gate ${taskId} on run ${runId} was not sent: its place in the run's steps is not known`);
-  }
-  await r.expire(key, GATE_SEQUENCE_TTL_S);
-  await r.set(rendererGateRepeatKey(runId), JSON.stringify({ taskId, index }), "EX", GATE_SEQUENCE_TTL_S);
-}
-
-/** Deletes KEYS[1] only when it still holds ARGV[1] exactly; 1 when deleted, else 0. */
-const RENDERER_GATE_REPEAT_FORGET_LUA = `
-if redis.call('GET', KEYS[1]) == ARGV[1] then
-  redis.call('DEL', KEYS[1])
-  return 1
-end
-return 0
-`;
-
-/**
- * cinatra#3562: remove the refresh note of the renderer gate `taskId`, and only
- * that note: a note that names another task is left as it is. Called when the
- * refresh of `taskId` was not sent (the gate is put back), and when a real
- * answer to `taskId` is sent (the next pause is a new step, so a note for
- * `taskId` cannot be pending). The note is deleted only while it still holds
- * the text read here; when another write changed it in between, it is read again.
- * A read or write fault throws.
- */
-export async function forgetWayflowRendererGateRepeat(runId: string, taskId: string): Promise<void> {
-  const r = getPublisher();
-  const repeatKey = rendererGateRepeatKey(runId);
-  for (let attempt = 0; attempt < RENDERER_GATE_COMMIT_ATTEMPTS; attempt += 1) {
-    const raw = await r.get(repeatKey);
-    if (raw === null || readRendererGateRepeat(raw)?.taskId !== taskId) return;
-    if (Number(await r.eval(RENDERER_GATE_REPEAT_FORGET_LUA, 1, repeatKey, raw)) === 1) return;
-  }
-  throw new Error(`the refresh note of renderer gate ${taskId} on run ${runId} was not removed: it kept changing`);
+  return index;
 }
 
 /**

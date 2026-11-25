@@ -39,7 +39,8 @@ import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuc
 import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
 import { readWayflowSubmittedValues } from "./hitl-gate-submit";
 import { readListStepRefreshAsk, listStepRefreshAccepted, listStepRefreshIsRequest, isListStepRefreshPayloadShape } from "./hitl-gate-submit";
-import { stepFiresRendererGate, rendererGateIndexOfRenderer, rendererGateStepsOf, recordedListStepRefreshValue } from "./orchestrator-gate-predicate";
+import { stepFiresRendererGate, rendererGateStepsOf, recordedListStepRefreshValue } from "./orchestrator-gate-predicate";
+import { verifyGateNodeClaim } from "@/lib/agent-run-token";
 // cinatra#2484: the setup-resume path is the LAST place a type-violating setup
 // value can be stopped before it becomes `agent_runs.inputParams` and reaches
 // the run. It needs the SAME effective schema the setup loop rendered from —
@@ -979,7 +980,6 @@ export async function approveReviewTaskInternal(
     // A taken refresh sends the declared value and records nothing of the
     // answer: no answered-gate provenance, no prompt row, no Continue receipt.
     let listStepRefreshAsk: string | undefined = undefined;
-    let listStepRefreshRenderer: string | undefined = undefined;
     const refreshKeyValue = readListStepRefreshAsk(values);
     if (refreshKeyValue !== undefined) {
       const gate = await readDurableHitlGateForContinue(run.id, reviewTaskId).catch(() => null);
@@ -1015,8 +1015,40 @@ export async function approveReviewTaskInternal(
         ) {
           throw new Error(`WayFlow approval rejected: gate ${taskId} on run ${run.id} takes no such list step refresh`);
         }
+        // The run's steps (its pinned snapshot's, else the live template's:
+        // `readRunApprovalPolicySteps`) must be readable and hold this step.
+        let runPolicySteps: unknown = undefined;
+        try {
+          runPolicySteps = await (await import("./execution")).readRunApprovalPolicySteps(run, template);
+        } catch {
+          runPolicySteps = undefined;
+        }
+        const rendererSteps = rendererGateStepsOf(runPolicySteps)?.filter(stepFiresRendererGate) ?? null;
+        if (rendererSteps === null || !rendererSteps.some((step) => step.xRenderer === gate.xRenderer)) {
+          throw new Error(
+            `WayFlow approval rejected: gate ${taskId} on run ${run.id} takes no list step refresh now: its step is not among the flow's steps`,
+          );
+        }
+        // In a flow with more than one renderer step a pause is that step again
+        // only by its verified node (`getOrAddWayflowRendererGateIndex`): the
+        // pause being refreshed must have one on record, or the next pause could
+        // take the next step's place. Then the refresh is refused.
+        if (rendererSteps.length > 1) {
+          const { resolveWayflowGateNodeClaim } = await import("@cinatra-ai/a2a");
+          const claim = await resolveWayflowGateNodeClaim(run.id, taskId).catch(() => null);
+          const node = verifyGateNodeClaim({
+            key: process.env.CINATRA_CONTEXT_ATTEST_KEY,
+            contextId: run.a2aContextId,
+            taskId,
+            claim,
+          });
+          if (node === null) {
+            throw new Error(
+              `WayFlow approval rejected: gate ${taskId} on run ${run.id} takes no list step refresh: the step it waits at is not known`,
+            );
+          }
+        }
         listStepRefreshAsk = declaredRefreshValue;
-        listStepRefreshRenderer = gate.xRenderer;
       }
     }
 
@@ -1223,83 +1255,29 @@ export async function approveReviewTaskInternal(
       // authorizes no persist, and its `userResponse` is not what is sent (the
       // declared refresh value is). A mint here would let the refresh's payload
       // authorize a draft or recipient write that the operator never answered.
-      // A refresh is sent only when the run's steps (its pinned snapshot's, else
-      // the live template's: `readRunApprovalPolicySteps`) can be read and the
-      // step being refreshed (its durable gate record's renderer) is among them;
-      // otherwise it is refused with a fixed message. In a flow that maps pauses
-      // by place (more than one renderer step) a refresh also records that the
-      // next pause is this list step again, so that pause keeps this step's
-      // renderer (`getOrAddWayflowRendererGateIndex`). The place is the one its
-      // task holds in the run's renderer gate list; only when that list has
-      // expired is it read from the steps, by the step's renderer, and a renderer
-      // that two steps share gives no place there. A refusal, a failure, or a
-      // place that is not known, is handled as the mint's failure is: nothing is
-      // sent, the gate is put back, and the step waits as it did before.
-      // Every real answer first removes a refresh note that names this task (left
-      // by a refresh of it that was not sent), whatever the steps say and even
-      // when they cannot be read: the answer moves the run on, so the next pause
-      // is a new step. The removal is keyed by run and task, and changes nothing
-      // when there is no such note. When it fails, nothing is sent and the gate
-      // is put back.
-      const answerHasPayload = typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0;
-      // Steps that cannot be read (any fault of the read) refuse a refresh below
-      // and leave a real answer as it was.
-      let runPolicySteps: unknown = undefined;
-      try {
-        runPolicySteps = await (await import("./execution")).readRunApprovalPolicySteps(run, template);
-      } catch {
-        runPolicySteps = undefined;
-      }
-      const rendererGatePolicySteps = rendererGateStepsOf(runPolicySteps);
-      const rendererSteps = rendererGatePolicySteps?.filter(stepFiresRendererGate) ?? null;
-      const mapsPausesByPlace = rendererSteps !== null && rendererSteps.length > 1;
-      {
+      if (listStepRefreshAsk === undefined && typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0) {
         try {
-          if (listStepRefreshAsk !== undefined) {
-            const refreshedStepIsAmongSteps =
-              rendererSteps !== null &&
-              listStepRefreshRenderer !== undefined &&
-              rendererSteps.some((step) => step.xRenderer === listStepRefreshRenderer);
-            if (!refreshedStepIsAmongSteps) {
-              throw new Error(
-                `WayFlow approval rejected: gate ${taskId} on run ${run.id} takes no list step refresh now: its step is not among the flow's steps`,
-              );
-            }
-            if (mapsPausesByPlace) {
-              // The place from the steps serves only an expired list (null: no one place).
-              await (await import("@cinatra-ai/a2a")).rememberWayflowRendererGateRepeat(
-                run.id,
-                taskId,
-                rendererGateIndexOfRenderer(rendererGatePolicySteps!, listStepRefreshRenderer!),
-              );
-            }
-          } else {
-            await (await import("@cinatra-ai/a2a")).forgetWayflowRendererGateRepeat(run.id, taskId);
-          }
-          if (listStepRefreshAsk === undefined && answerHasPayload) {
-            const { rememberAnsweredGateSubmission, rememberLatestWayflowGateTask } =
-              await import("@cinatra-ai/a2a");
-            // RE-ASSERT the latest-task join key to THIS answered gate before minting.
-            // The passthrough seam derives the persist's `verifiedSubmissionId` from the
-            // latest-task map, stamped at interrupt-EMIT with a TTL; a gate that stays
-            // pending PAST that TTL before the operator answers would leave the key
-            // expired, so the post-resume consume would resolve no `verifiedSubmissionId`
-            // and FALSELY deny a genuine answer. Re-asserting it here guarantees the
-            // immediate post-resume consume resolves the same gate identity we mint
-            // under. It is IDEMPOTENT: a WayFlow run is suspended at exactly ONE gate at
-            // a time and `taskId` IS that gate, so this only re-writes the value already
-            // present (or restores it after a TTL expiry); concurrent answers to the
-            // same gate write the identical `taskId`, and the next gate's interrupt-emit
-            // legitimately advances the key afterwards.
-            await rememberLatestWayflowGateTask(run.id, taskId);
-            await rememberAnsweredGateSubmission(run.id, taskId, userResponseRaw as string);
-          }
+          const { rememberAnsweredGateSubmission, rememberLatestWayflowGateTask } =
+            await import("@cinatra-ai/a2a");
+          // RE-ASSERT the latest-task join key to THIS answered gate before minting.
+          // The passthrough seam derives the persist's `verifiedSubmissionId` from the
+          // latest-task map, stamped at interrupt-EMIT with a TTL; a gate that stays
+          // pending PAST that TTL before the operator answers would leave the key
+          // expired, so the post-resume consume would resolve no `verifiedSubmissionId`
+          // and FALSELY deny a genuine answer. Re-asserting it here guarantees the
+          // immediate post-resume consume resolves the same gate identity we mint
+          // under. It is IDEMPOTENT: a WayFlow run is suspended at exactly ONE gate at
+          // a time and `taskId` IS that gate, so this only re-writes the value already
+          // present (or restores it after a TTL expiry); concurrent answers to the
+          // same gate write the identical `taskId`, and the next gate's interrupt-emit
+          // legitimately advances the key afterwards.
+          await rememberLatestWayflowGateTask(run.id, taskId);
+          await rememberAnsweredGateSubmission(run.id, taskId, userResponseRaw);
         } catch (recordError) {
           // Nothing was sent. The fence already moved the run to `running`, so the
           // gate is put back by the status edge (#3423's release edge): the run waits
           // at this task again, its claim is cleared, and the person can answer again.
           settled = true;
-          if (listStepRefreshAsk !== undefined) await forgetUnsentRefreshNote(run.id, taskId);
           try {
             await transitionRunStatus(run.id, "running", "pending_approval", { pauseTaskId: taskId }, resumeAuthority);
           } catch (backError) {
@@ -1400,8 +1378,6 @@ export async function approveReviewTaskInternal(
     } catch (e) {
       if (settled) throw e;
       if (!dispatchStarted) {
-        // cinatra#3562: a refresh that was not sent leaves no note behind.
-        if (listStepRefreshAsk !== undefined) await forgetUnsentRefreshNote(run.id, taskId);
         // cinatra#4150: a publish-hold refusal gives the claim back and is the answer; a release that fails
         // too is logged with no run, no task and no raw error.
         if (await givePauseBackOnHoldFault(claimRef, resumeAuthority, e, "[approveReviewTaskInternal] could not release the gate claim")) throw e;
@@ -1425,22 +1401,6 @@ export async function approveReviewTaskInternal(
     `real UUID paths are not supported after review task row removal. ` +
     `Use synthetic prefix (setup-, wayflow-) for post-migration runs.`,
   );
-}
-
-/**
- * cinatra#3562: a list step's refresh of `taskId` was not sent, and its gate is
- * put back: its refresh note is removed if it still names `taskId`. A failure
- * is logged and the failure being answered stays the answer: a later real
- * answer to `taskId` removes the note before it is sent, and refuses to send
- * when it cannot.
- */
-async function forgetUnsentRefreshNote(runId: string, taskId: string): Promise<void> {
-  try {
-    await (await import("@cinatra-ai/a2a")).forgetWayflowRendererGateRepeat(runId, taskId);
-  } catch (error) {
-    // The first argument of a console call is a constant (cinatra#3423).
-    console.warn("[approveReviewTaskInternal] the note of a refresh that was not sent could not be removed", { runId }, error);
-  }
 }
 
 /** The steps of a WayFlow resume that can fail before its send (cinatra#4245), drawn before the caller's fence. */

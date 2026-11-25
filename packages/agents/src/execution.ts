@@ -384,8 +384,7 @@ export async function resolvePinnedRunSnapshot(
  * Any other run (a `versionId`-only pin, which the worker has never honored,
  * or no pin) was dispatched with the live template, so the live template's
  * steps are read, as before. A required pin whose snapshot cannot be served
- * throws (`PinnedRunSnapshotUnreachableError`): the caller treats the steps
- * as unreadable. The value is returned unchecked (`rendererGateStepsOf`).
+ * throws (`PinnedRunSnapshotUnreachableError`). The value is returned unchecked.
  */
 export async function readRunApprovalPolicySteps(
   run: { templateId: string; packageVersion?: string | null; versionId?: string | null },
@@ -549,8 +548,6 @@ import {
 } from "./field-renderer-bindings.server";
 import {
   stepFiresRendererGate,
-  rendererGateStepsOf,
-  RENDERER_GATE_STEP_GATE_COUNT_LIMIT,
   LIST_STEP_REFRESH_VALUE_SCHEMA_KEY,
   recordedListStepRefreshValue,
 } from "./orchestrator-gate-predicate";
@@ -567,7 +564,7 @@ import { getOrAddWayflowRendererGateIndex, rememberWayflowGateTask, rememberLate
 // host-side caller injects the live `email-send` providers so sender-alias
 // enums resolve registration-driven.
 import { resolveEmailSendProviders } from "@/lib/email-send-providers";
-import { mintRunToken, CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY } from "@/lib/agent-run-token";
+import { mintRunToken, CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY, verifyGateNodeClaim } from "@/lib/agent-run-token";
 import { holdRunAtPublishGate } from "./publish-decision-actions";
 // cinatra#2566 — the lifecycle card REF CODEC only (node:crypto + the app
 // secret). Deliberately NOT the refetch resolver: importing that here would pull
@@ -1828,6 +1825,7 @@ function isContextSelectorInterruptPayload(
 async function resolveWayflowXRenderer(
   runId: string,
   taskId: string,
+  verifiedNodeId: string | null,
   approvalPolicySteps: Array<{ stepNumber?: number; requiresApproval?: boolean; hitlOwnedBy?: string; xRenderer?: string; gateCount?: number; schema?: Record<string, unknown>; inputMessageSchema?: Record<string, unknown>; skipLlm?: boolean; firesRendererGate?: boolean; artifactReviewTargetsInput?: string; surfaceGateInputKeys?: unknown }>,
 ): Promise<{ xRenderer: string; stepNumber: number | null; schema: Record<string, unknown> | null; artifactReviewTargetsInput: string | null; surfaceGateInputKeys: string[] | null }> {
   const fallback = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
@@ -1912,22 +1910,14 @@ async function resolveWayflowXRenderer(
     };
   }
 
-  // cinatra#3562: a renderer step whose gate count is no whole number from 1 to
-  // the limit leaves every place unknown (`rendererGateIndexOfRenderer` reads
-  // the same bound), checked before a place is taken: the stored policy can be
-  // replaced as a whole.
-  const gateCountOf = (step: (typeof childSteps)[number]): number => (typeof step.gateCount === "number" ? step.gateCount : 1);
-  const gateCountUnreadable = (n: number): boolean => !Number.isInteger(n) || n < 1 || n > RENDERER_GATE_STEP_GATE_COUNT_LIMIT;
-  if (childSteps.some((step) => gateCountUnreadable(gateCountOf(step)))) {
-    throw rendererGatePlaceUnknown(`renderer gate ${taskId} on run ${runId}: a step's gate count cannot be read`);
-  }
-
   // Redis-backed index: survives hot-reloads and restarts unlike a module-level
   // Map that can reset between the BullMQ dispatch and server-action approval.
   // #824: index into the RENDERER-gate sequence (excludes context-selection
   // gates, which are resolved by payload shape and never consume a policy slot),
   // so this stays aligned with `childSteps` even when context gates interleave.
-  const idx = await getOrAddWayflowRendererGateIndex(runId, taskId);
+  // cinatra#3562: a pause whose verified node is the last placed pause's node
+  // is that step again and keeps its place (event-log.ts).
+  const idx = await getOrAddWayflowRendererGateIndex(runId, taskId, verifiedNodeId);
 
   // gateCount tells the resolver how many orchestrator-level input-required events
   // a single approval step spans.
@@ -1946,7 +1936,8 @@ async function resolveWayflowXRenderer(
   //   step "Initial emails" gateCount=1 → gate  3   shows drafts:output
   let accumulated = 0;
   for (const step of childSteps) {
-    const gateCount = gateCountOf(step);
+    const defaultGateCount = 1;
+    const gateCount = typeof step.gateCount === "number" ? step.gateCount : defaultGateCount;
     if (idx < accumulated + gateCount) {
       const xRenderer = typeof step.xRenderer === "string" ? step.xRenderer : fallback;
       return {
@@ -1960,65 +1951,7 @@ async function resolveWayflowXRenderer(
     }
     accumulated += gateCount;
   }
-  // cinatra#3562: a place past the last step is no step of this flow; no screen is guessed for it.
-  throw rendererGatePlaceUnknown(`renderer gate ${taskId} on run ${runId} is at place ${idx}, past the flow's last renderer step`);
-}
-
-/**
- * cinatra#3562: the code of `RendererGatePlaceUnknownError` (packages/a2a,
- * event-log.ts), read by value so that a module double of the a2a package
- * needs no class: the place of a renderer pause, and so its step, cannot be
- * established.
- */
-const RENDERER_GATE_PLACE_UNKNOWN_CODE = "renderer_gate_place_unknown";
-
-/** cinatra#3562: an error with the code above, for a place this module finds unknown. */
-function rendererGatePlaceUnknown(message: string): Error {
-  return Object.assign(new Error(message), { code: RENDERER_GATE_PLACE_UNKNOWN_CODE });
-}
-
-/** The run error of a pause whose step cannot be established; it names no id or value. */
-export const RENDERER_GATE_PLACE_UNKNOWN_RUN_ERROR =
-  `${RENDERER_GATE_PLACE_UNKNOWN_CODE}: the run paused at a step that cannot be told, ` +
-  "so the step was not shown and the run was stopped. Start the run again.";
-
-/**
- * cinatra#3562: end the run at a pause whose step cannot be established, as the
- * failed task branch of `handleWayflowTaskState` does: a run with output under
- * review holds at that review first; else the event log ends on RUN_ERROR and
- * the run moves to `failed` with `RENDERER_GATE_PLACE_UNKNOWN_RUN_ERROR`.
- */
-async function failWayflowRunAtUnplacedPause(args: {
-  runId: string;
-  run: AgentRunRecord;
-  fromStatus: AgentRunStatus;
-  authority: OrgWriteAuthority | undefined;
-  resumeLeg: ResumeGateIdentity | undefined;
-}): Promise<void> {
-  const { runId, run, fromStatus, authority, resumeLeg } = args;
-  const error = RENDERER_GATE_PLACE_UNKNOWN_RUN_ERROR;
-  if (
-    await producedReviewHoldsRun({
-      runId,
-      orgId: run.orgId,
-      fromStatus,
-      stepResults: [],
-      withheld: { status: "failed", error },
-      authority,
-      resumeLeg,
-      where: "unplaced gate",
-    })
-  ) {
-    return;
-  }
-  await Promise.resolve(
-    publishAgUiEvent(runId, { type: "RUN_ERROR", threadId: runId, runId, message: error, timestamp: Date.now() } as never),
-  ).catch(() => undefined);
-  if (fromStatus === "failed") return;
-  await transitionRunStatus(runId, fromStatus, "failed", { error, ...(resumeLeg ? { resumeLeg } : {}) }, authority).catch((e) => {
-    if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
-    throw e;
-  });
+  return { xRenderer: fallback, stepNumber: null, schema: null, artifactReviewTargetsInput: null, surfaceGateInputKeys: unpinnedKeys() };
 }
 
 // ---------------------------------------------------------------------------
@@ -2502,6 +2435,15 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // only: no renderer, no generic review task. A missing or unverified claim on a
     // publishing template ends the run failed.
     if (await holdRunAtPublishGate({ run, fromStatus, task, claim: gateNodeClaim, authority })) return;
+    // cinatra#3562: the node that paused the run, only as the runtime signed it
+    // and only when the signature verifies (null otherwise). A pause on the node
+    // of the last placed renderer pause is that step again (`resolveWayflowXRenderer`).
+    const verifiedGateNode = verifyGateNodeClaim({
+      key: process.env.CINATRA_CONTEXT_ATTEST_KEY,
+      contextId: task.contextId ?? run.a2aContextId,
+      taskId: task.id,
+      claim: gateNodeClaim,
+    });
     const adapter = new DualAdapterDispatch(
       new AgUiAdapter(runId, run.templateId, (event) => publishAgUiEvent(runId, event)),
       new A2UiAdapter(
@@ -2618,11 +2560,6 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // the renderer resolved. The predicate is the same shape test the renderer
     // branch already runs, asked once and kept.
     const gateAsksForContext = isContextSelectorInterruptPayload(spreadFromOutput);
-    // cinatra#3562: whether this flow maps its pauses to steps by place (more
-    // than one renderer step). Null until the template's steps were read and
-    // found readable; a fault before that leaves it unknown.
-    let mapsPausesByPlace: boolean | null = null;
-    let rendererPlaceUnknown: Error | null = null;
     try {
       if (gateAsksForContext) {
         // cinatra#4457 — a context ask names no step, and a flagged gate can
@@ -2643,22 +2580,14 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       } else {
         const tmpl = await readAgentTemplateById(run.templateId);
         // cinatra#3562: the steps the run was started with (its pinned snapshot's, else the live template's).
-        const rawPolicySteps: unknown = tmpl ? await readRunApprovalPolicySteps(run, tmpl) : undefined;
+        const rawPolicySteps: unknown = (tmpl ? await readRunApprovalPolicySteps(run, tmpl) : undefined) ?? [];
         // Read before anything can throw on these steps, so the catch below
         // keeps it; an absent template leaves it null.
-        templateGateKeys = tmpl ? readTemplateGateKeys(rawPolicySteps ?? []) : null;
-        // cinatra#3562: steps that cannot be read (no template, no list, an
-        // entry that is no object) are no flow without renderer steps: the
-        // step of this pause cannot be told (fails closed below).
-        const readableSteps = rendererGateStepsOf(rawPolicySteps);
-        if (readableSteps === null) {
-          throw rendererGatePlaceUnknown(`renderer gate ${task.id} on run ${runId}: the flow's steps cannot be read`);
-        }
-        const policySteps = readableSteps as Array<{
+        templateGateKeys = tmpl ? readTemplateGateKeys(rawPolicySteps) : null;
+        const policySteps = rawPolicySteps as Array<{
           stepNumber?: number; requiresApproval?: boolean; hitlOwnedBy?: string; xRenderer?: string; gateCount?: number; schema?: Record<string, unknown>; inputMessageSchema?: Record<string, unknown>; firesRendererGate?: boolean; artifactReviewTargetsInput?: string; surfaceGateInputKeys?: unknown;
         }>;
         const rendererGateSteps = policySteps.filter(stepFiresRendererGate);
-        mapsPausesByPlace = rendererGateSteps.length > 1;
         if (rendererGateSteps.length === 1) {
           const s = rendererGateSteps[0]!;
           soleRendererGate = {
@@ -2670,23 +2599,18 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
             surfaceGateInputKeys: readStoredKeyList(s.surfaceGateInputKeys),
           };
         }
-        const resolved = await resolveWayflowXRenderer(runId, task.id, policySteps);
+        const resolved = await resolveWayflowXRenderer(runId, task.id, verifiedGateNode, policySteps);
         ({ xRenderer: wayflowXRenderer, stepNumber: wayflowStepNumber, schema: wayflowSchema, artifactReviewTargetsInput: wayflowArtifactReviewTargetsInput } =
           resolved);
         // An absent template has no compiled step to say which keys are the
         // gate's: no run input fills it.
         wayflowSurfaceGateInputKeys = tmpl ? resolved.surfaceGateInputKeys : null;
       }
-    } catch (resolveError) {
+    } catch {
       // non-fatal. For a single-renderer-gate agent, resolve to that one gate
-      // (never the schema-field fallback) — contract (1). A context gate, and a
-      // flow whose readable steps hold no renderer step, keep the schema-field
-      // fallback. Every other fault (cinatra#3562) leaves the step of this
-      // pause unknown: a flow that maps pauses by place, or one whose steps
-      // were not read. No renderer is guessed for it (handled below).
-      if (!gateAsksForContext && !soleRendererGate && mapsPausesByPlace !== false) {
-        rendererPlaceUnknown = resolveError instanceof Error ? resolveError : new Error(String(resolveError));
-      } else if (soleRendererGate) {
+      // (never the schema-field fallback) — contract (1). Multi-gate / context
+      // flows keep the acceptable schema-field fallback.
+      if (soleRendererGate) {
         wayflowXRenderer = soleRendererGate.xRenderer;
         wayflowStepNumber = soleRendererGate.stepNumber;
         wayflowSchema = soleRendererGate.schema;
@@ -2697,15 +2621,6 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         // lists, or null (every run input) when the template was not read.
         wayflowSurfaceGateInputKeys = templateGateKeys;
       }
-    }
-    // cinatra#3562: a pause whose step cannot be established is never shown as
-    // an answerable step under another step's screen (the fallback form). The
-    // run ends failed with a fixed reason, as a failed task does: the person
-    // sees the run's error, and starts the run again.
-    if (rendererPlaceUnknown !== null) {
-      console.warn(`[wayflow] run=${runId} task=${task.id} is not shown: ${rendererPlaceUnknown.message}`);
-      await failWayflowRunAtUnplacedPause({ runId, run, fromStatus, authority, resumeLeg: legFence?.resumeLeg });
-      return;
     }
     // ------------------------------------------------------------------------
     // cinatra#1796 (epic #1620 S13) — MARKED artifact-review gate: pin + route.

@@ -39,8 +39,6 @@ vi.mock("../wayflow-url", () => ({ resolveWayflowUrl:()=>"http://wayflow.test", 
 vi.mock("../wayflow-run-token-carrier", () => ({mintResumeRunTokenMetadata:async()=>({token:"synthetic"})}));
 vi.mock("@cinatra-ai/a2a", () => ({
   createExternalA2AClient:async()=>({sendTask:ports.send,getTask:ports.get}),
-  // cinatra#3562: every real answer removes its task's refresh note before the send.
-  forgetWayflowRendererGateRepeat: vi.fn(async () => undefined),
   rememberAnsweredGateSubmission:async()=>{},rememberLatestWayflowGateTask:async()=>{},resolveRunIdByWayflowTaskId:async()=>null,
 }));
 vi.mock("../execution", () => ({handleWayflowTaskState:(...args:unknown[])=>ports.handle(...args)}));

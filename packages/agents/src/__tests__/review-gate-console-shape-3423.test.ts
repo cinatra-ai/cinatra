@@ -101,8 +101,6 @@ const sendTask = vi.hoisted(() => vi.fn());
 vi.mock("@cinatra-ai/a2a", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   createExternalA2AClient: vi.fn(async () => ({ sendTask })),
-  // cinatra#3562: every real answer removes its task's refresh note before the send.
-  forgetWayflowRendererGateRepeat: vi.fn(async () => undefined),
   resolveRunIdByWayflowTaskId: vi.fn(async () => null),
   // cinatra#4245: Continue reads the latest-task key on the column road too; no key
   // leaves the column's word, and this file reaches no Redis.

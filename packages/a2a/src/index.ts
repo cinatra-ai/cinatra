@@ -149,4 +149,4 @@ export {
   InMemoryTaskStore,
   JsonRpcTransportHandler,
 } from "@a2a-js/sdk/server";
-export { getOrAddWayflowGateIndex, getOrAddWayflowRendererGateIndex, rememberWayflowRendererGateRepeat, forgetWayflowRendererGateRepeat, RendererGatePlaceUnknownError, RENDERER_GATE_PLACE_UNKNOWN, RENDERER_GATE_PLACE_LIMIT, rememberWayflowGateTask, rememberLatestWayflowGateTask, resolveLatestWayflowGateTaskId, rememberWayflowGateNodeClaim, resolveWayflowGateNodeClaim, type WayflowGateNodeClaim, resolveRunIdByWayflowTaskId, rememberAnsweredGateSubmission, consumeAnsweredGateSubmission, answeredGatePayloadDigest, type AnsweredGateConsumeResult } from "./event-log";
+export { getOrAddWayflowGateIndex, getOrAddWayflowRendererGateIndex, rememberWayflowGateTask, rememberLatestWayflowGateTask, resolveLatestWayflowGateTaskId, rememberWayflowGateNodeClaim, resolveWayflowGateNodeClaim, type WayflowGateNodeClaim, resolveRunIdByWayflowTaskId, rememberAnsweredGateSubmission, consumeAnsweredGateSubmission, answeredGatePayloadDigest, type AnsweredGateConsumeResult } from "./event-log";
