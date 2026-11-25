@@ -7,15 +7,17 @@
  * driven for real over a transaction double in the last describe. The module graph is mocked as
  * materialize-tool-artifact.test.ts mocks it.
  *
- *   S1  N members: one batch, N ledger rows finalized together, the set in member order
+ *   S1  N members: one batch, the set's header and N member rows finalized together, the set in member order
  *   S2  a fault at member k of n inside the transaction stores nothing; the identical retry files the set once
  *   S3  an identical retry after success answers the stored set and writes nothing
- *   S4  a retry that differs in any member (bytes, title, typed data, count) is refused, naming the member
+ *   S4  a retry that differs in any member (bytes, title, typed data in either direction, count) is refused, naming the member
  *   S5  a member refused before the write (schema, MIME, authorization) stores nothing
  *   S6  50 members are ONE transaction
  *   S7  a marked gate receives every member as a target, and every member is the gate's write
  *   S8  typed data per member; the same fields as a single filing when none is declared
  *   S9  the send fan-out reuses the batch-written bodies (type, title and correlation must match)
+ *   R1  two DIFFERING calls for one (run, node, extension), concurrent: one commits, the other is refused, nothing of it stored
+ *   R2  the ledger rows of a set can never be a node's row: list node `drafts` and single node `drafts#1` never share a row
  *   C1  the batch entry point: ONE transaction for N artifacts, every row writer once per artifact, ONE rollback
  *
  *   npx vitest run src/lib/artifacts/__tests__/materialize-list-3089.test.ts
@@ -34,7 +36,6 @@ const {
   readFinalizedMaterializationMock,
   findFinalizedMidRunMaterializationMock,
   findFinalizedFanoutMessageMaterializationMock,
-  readToolSetRowsMock,
   recordFanoutReuseMaterializationMock,
   isWriteAllowedMock,
   resolveBoundArtifactTargetMock,
@@ -53,7 +54,6 @@ const {
   readFinalizedMaterializationMock: vi.fn(async (): Promise<unknown> => null),
   findFinalizedMidRunMaterializationMock: vi.fn(),
   findFinalizedFanoutMessageMaterializationMock: vi.fn(),
-  readToolSetRowsMock: vi.fn(),
   recordFanoutReuseMaterializationMock: vi.fn(),
   isWriteAllowedMock: vi.fn(async () => true),
   resolveBoundArtifactTargetMock: vi.fn(),
@@ -73,7 +73,6 @@ vi.mock("@/lib/postgres-config", () => ({
 }));
 vi.mock("@/lib/postgres-schema-init", () => ({ ensurePostgresSchema: vi.fn() }));
 vi.mock("@/lib/postgres-sync", () => ({ runPostgresQueriesSync: pgSyncMock }));
-vi.mock("@/lib/database", () => ({ readChatThreadForClassifier: vi.fn(async () => null) }));
 vi.mock("../producer-assertions", () => ({
   resolveProducerAssertionPlan: async () => ({ validatedRunId: "run-1", produces: [] }),
   buildAssertSemanticTypeQueries: vi.fn(),
@@ -101,18 +100,18 @@ vi.mock("@/lib/objects-store", async () => ({
     return row ? { id, type: row.type, data: row.data } : null;
   },
 }));
-vi.mock("../materialization-ledger", () => ({
+// The ledger's SET functions are the real ones (the identity of a set, its rows, its read); the claim-based
+// functions of the single filing and of the fan-out are doubles over the same in-memory table.
+vi.mock("../materialization-ledger", async () => ({
+  ...(await vi.importActual<typeof import("../materialization-ledger")>("../materialization-ledger")),
   claimMaterialization: claimMaterializationMock,
   buildFinalizeMaterializationQuery: buildFinalizeMaterializationQueryMock,
   readFinalizedMaterialization: readFinalizedMaterializationMock,
   findFinalizedMidRunMaterialization: findFinalizedMidRunMaterializationMock,
   findFinalizedFanoutMessageMaterialization: findFinalizedFanoutMessageMaterializationMock,
-  readToolSetRows: readToolSetRowsMock,
-  toolSetOutputId: (nodeId: string, position: number) => `${nodeId}#${position}`,
   recordFanoutReuseMaterialization: recordFanoutReuseMaterializationMock,
-  isMaterializationFinalizeConflict: (err: unknown) =>
-    err instanceof Error && err.message.includes("materialization-finalize-conflict"),
 }));
+
 vi.mock("../artifact-extension-access", () => ({ isArtifactExtensionWriteAllowed: isWriteAllowedMock }));
 vi.mock("../matcher-enqueue", () => ({ enqueueArtifactMatchRun: enqueueArtifactMatchRunMock }));
 vi.mock("@/lib/objects/artifact-claim-store", () => ({
@@ -159,6 +158,8 @@ type LedgerRow = {
   contentHash: string;
   artifactId?: string;
   representationRevisionId?: string;
+  /** phase = 'finalized' (a header row is finalized and has no artifact). */
+  finalized?: boolean;
 };
 
 /** The ledger as the real table keys it: one row per (run, output id, extension, content hash);
@@ -168,6 +169,8 @@ let ledger: LedgerRow[];
 let storedObjects: Map<string, { type: string; data: Record<string, unknown> }>;
 /** The produced events the transaction wrote (one per artifact), with the origin each carries. */
 let events: Array<{ artifactId: string; originKind: string }>;
+/** Held by a test: every set transaction waits here after its blobs are stored and before it runs. */
+let beforeCommit: (() => Promise<void>) | null;
 /** How many members each COMMITTED transaction held. */
 let commits: number[];
 /** A 1-based member at which the transaction fails (a row writer faults): the whole transaction rolls back. */
@@ -210,12 +213,27 @@ beforeEach(() => {
   events = [];
   commits = [];
   faultAtMember = null;
+  beforeCommit = null;
   bodySchema = () => ({ success: true });
   vi.spyOn(objectTypeRegistry, "resolve").mockImplementation(
     () => ({ dispositions: { projection: "artifact-safe" }, schema: { safeParse: (v: Record<string, unknown>) => bodySchema(v) } }) as never,
   );
   getAgentPackageMock.mockResolvedValue(withPayload(null));
-  poolQueryMock.mockImplementation(async (text: string) => {
+  poolQueryMock.mockImplementation(async (text: string, values?: unknown[]) => {
+    if (text.includes("artifact_materializations") && text.includes("left(output_id")) {
+      // The real `readToolSetRows` statement, answered over the in-memory table: the finalized rows of this run,
+      // org and extension whose output id begins with the set's prefix.
+      const [runId, orgId, extension, prefix] = values as [string, string, string, string];
+      expect(orgId).toBe("org-a");
+      return {
+        rows: ledger
+          .filter((r) => r.runId === runId && r.extension === extension && r.path === "materialize_tool" && r.finalized && r.outputId.startsWith(prefix))
+          .map((r) => ({
+            output_id: r.outputId, content_hash: r.contentHash, artifact_id: r.artifactId ?? null,
+            representation_revision_id: r.representationRevisionId ?? null,
+          })),
+      };
+    }
     if (text.includes("SELECT package_name")) return { rows: [{ package_name: "@test/agent" }] };
     if (text.includes("SELECT template_id")) return { rows: [{ template_id: "tpl-1" }] };
     if (text.includes("owner_level")) return { rows: [{ owner_level: "organization", owner_id: "org-a" }] };
@@ -254,49 +272,70 @@ beforeEach(() => {
       return { kind: "claimed", ledgerId: fresh.ledgerId };
     },
   );
-  readToolSetRowsMock.mockImplementation(
-    async (k: { runId: string; nodeId: string; extension: string }) =>
-      ledger
-        .filter((r) => r.runId === k.runId && r.nodeId === k.nodeId && r.extension === k.extension && r.path === "materialize_tool" && r.outputId.startsWith(`${k.nodeId}#`))
-        .map((r) => ({
-          outputId: r.outputId, contentHash: r.contentHash, phase: r.artifactId ? "finalized" : "claimed",
-          artifactId: r.artifactId ?? null, representationRevisionId: r.representationRevisionId ?? null,
-        })),
-  );
   buildFinalizeMaterializationQueryMock.mockImplementation(
     (f: { ledgerId: string; artifactId: string; representationRevisionId: string }) => ({ text: "UPDATE finalize", values: [f] }),
   );
+  // Queued one-time answers of an earlier test that stopped before using them must not reach the next test.
+  createSemanticArtifactMock.mockReset();
+  createSemanticArtifactsMock.mockReset();
   let artifactSeq = 0;
-  const land = (
-    input: {
-      objectType: string; title: string; originKind?: string; typedData?: Record<string, unknown>;
-      additionalTx2Queries: (ids: { artifactId: string; representationRevisionId: string }) => Array<{ values: unknown[] }>;
-    },
-  ) => {
+  type TxQuery = { text: string; values: unknown[] };
+  type CreateIn = {
+    objectType: string; title: string; originKind?: string; typedData?: Record<string, unknown>;
+    stream: AsyncIterable<Uint8Array>;
+    additionalTx2Queries: (ids: { artifactId: string; representationRevisionId: string }) => TxQuery[];
+  };
+  const nextIds = () => {
     artifactSeq += 1;
-    const ids = { artifactId: `art-${artifactSeq}`, representationRevisionId: `rep-${artifactSeq}` };
+    return { artifactId: `art-${artifactSeq}`, representationRevisionId: `rep-${artifactSeq}` };
+  };
+  const land = (input: CreateIn, ids: { artifactId: string; representationRevisionId: string }) => {
     storedObjects.set(ids.artifactId, { type: input.objectType, data: { ...(input.typedData ?? {}), title: input.title } });
     events.push({ artifactId: ids.artifactId, originKind: input.originKind ?? "agent_generated" });
+  };
+  createSemanticArtifactMock.mockImplementation(async (input: CreateIn) => {
+    await readBody(input.stream);
+    const ids = nextIds();
+    land(input, ids);
     for (const q of input.additionalTx2Queries(ids)) {
       const f = q.values[0] as { ledgerId: string };
       const row = ledger.find((r) => r.ledgerId === f.ledgerId)!;
       row.artifactId = ids.artifactId;
       row.representationRevisionId = ids.representationRevisionId;
+      row.finalized = true;
     }
     return ids;
-  };
-  createSemanticArtifactMock.mockImplementation(async (input: Parameters<typeof land>[0] & { stream: AsyncIterable<Uint8Array> }) => {
-    await readBody(input.stream);
-    return land(input);
   });
-  createSemanticArtifactsMock.mockImplementation(async (inputs: Array<Parameters<typeof land>[0] & { stream: AsyncIterable<Uint8Array> }>) => {
-    // The transaction: every member's rows are staged, a fault at any member rolls ALL back, the commit lands once.
+  createSemanticArtifactsMock.mockImplementation(async (inputs: CreateIn[]) => {
+    // The bytes of every member are stored first (outside the transaction, as the real path does).
     for (const [i, input] of inputs.entries()) {
       await readBody(input.stream);
       if (faultAtMember === i + 1) throw new Error(`row writer fault at member ${i + 1}`);
     }
+    // A test may hold every caller here, to make two calls reach their commit together.
+    if (beforeCommit) await beforeCommit();
+    // THE TRANSACTION: every statement of every member runs in order against the table as it is now;
+    // the ledger's unique key (run, output id, extension, content hash) is enforced as the real index
+    // enforces it; any failure rolls back everything (nothing below is applied before the last statement).
+    const staged = inputs.map((input) => ({ input, ids: nextIds() }));
+    const rows: LedgerRow[] = [];
+    for (const { input, ids } of staged) {
+      for (const q of input.additionalTx2Queries(ids)) {
+        if (!q.text.includes("INSERT INTO") || !q.text.includes("artifact_materializations")) continue;
+        const [id, , run, outputId, node, ext, hash, artifactId, revisionId] = q.values as string[];
+        if ([...ledger, ...rows].some((r) => r.runId === run && r.outputId === outputId && r.extension === ext && r.contentHash === hash)) {
+          throw new Error('duplicate key value violates unique constraint "artifact_materializations_identity_idx"');
+        }
+        rows.push({
+          ledgerId: id!, runId: run!, nodeId: node!, outputId: outputId!, path: "materialize_tool", extension: ext!,
+          contentHash: hash!, ...(artifactId ? { artifactId, representationRevisionId: revisionId } : {}), finalized: true,
+        });
+      }
+    }
     commits.push(inputs.length);
-    return inputs.map((input) => land(input));
+    ledger.push(...rows);
+    for (const { input, ids } of staged) land(input, ids);
+    return staged.map(({ ids }) => ids);
   });
   findFinalizedMidRunMaterializationMock.mockImplementation(
     async (k: { runId: string; extension: string; contentHash: string }) => {
@@ -369,7 +408,7 @@ function markedListFlow(nodeData: unknown) {
 
 
 const EXPECTED = [1, 2, 3].map((i) => ({ artifactId: `art-${i}`, representationRevisionId: `rep-${i}` }));
-const finalizedRows = () => ledger.filter((r) => r.path === "materialize_tool" && r.artifactId);
+const finalizedRows = () => ledger.filter((r) => r.path === "materialize_tool" && r.finalized && r.artifactId);
 
 describe("cinatra#3089 — the list is filed as ONE UNIT", () => {
   // red-first-expect: materializeToolArtifactSet is not a function
@@ -378,10 +417,12 @@ describe("cinatra#3089 — the list is filed as ONE UNIT", () => {
     expect(filed).toEqual({ ok: true, deduped: false, artifacts: EXPECTED });
     expect(createSemanticArtifactsMock).toHaveBeenCalledTimes(1);
     expect(commits).toEqual([3]);
-    // The ledger names each member's place in the set; the unique key stays (run, output id, extension, hash).
-    expect(finalizedRows().map((r) => [r.outputId, r.contentHash])).toEqual(
-      DRAFTS.map((d, i) => [`${NODE}#${i + 1}`, sha256(d.body)]),
-    );
+    // The set's header, then each member's place in it; a header has no hash of a member and no position.
+    expect(ledger.map((r) => [r.outputId, r.contentHash])).toEqual([
+      [`cinatra:set/"${NODE}"/header`, "set"],
+      ...DRAFTS.map((d, i) => [`cinatra:set/"${NODE}"/${i + 1}`, sha256(d.body)]),
+    ]);
+    expect(finalizedRows().map((r) => r.artifactId)).toEqual(["art-1", "art-2", "art-3"]);
     expect(events).toHaveLength(3);
   });
 
@@ -395,6 +436,8 @@ describe("cinatra#3089 — the list is filed as ONE UNIT", () => {
     expect(storedObjects.size).toBe(0);
     expect(events).toEqual([]);
     expect(finalizedRows()).toEqual([]);
+    // No ledger row of any kind: a set claims nothing before its transaction.
+    expect(ledger).toEqual([]);
     expect(commits).toEqual([]);
 
     faultAtMember = null;
@@ -422,6 +465,9 @@ describe("cinatra#3089 — the list is filed as ONE UNIT", () => {
     ["a member's bytes", members((m, i) => (i === 1 ? { ...m, content: "Dear Bob, REVISED" } : m)), 2, "member 2: bytes"],
     ["a member's title", members((m, i) => (i === 2 ? { ...m, title: "Hello Cy Lovelace" } : m)), 3, "member 3: title"],
     ["a member's corrected contact", members((m, i) => (i === 0 ? { ...m, typedData: { ...m.typedData, contactId: "c-CORRECTED" } } : m)), 1, "member 1: keys: contactId"],
+    ["a typed key REMOVED from a member (an otherwise identical retry)", members((m, i) => (i === 0 ? { ...m, typedData: { contactId: m.typedData!.contactId, runId: "run-1" } } : m)), 1, "member 1: keys: campaignId"],
+    ["a typed key ADDED to a member", members((m, i) => (i === 1 ? { ...m, typedData: { ...m.typedData, region: "eu" } } : m)), 2, "member 2: keys: region"],
+    ["every typed key removed from every member", members((m) => ({ title: m.title, content: m.content })), 1, "member 1: keys: contactId, campaignId, runId"],
     ["a member more", [...members(), { title: "Hello Di", content: "Dear Di", typedData: { contactId: "c-4", campaignId: "camp-1", runId: "run-1" } }], 4, "count (filed 3, call 4)"],
     ["a member fewer", members().slice(0, 2), undefined, "count (filed 3, call 2)"],
   ])("S4 a retry that differs in %s is a different set: refused, naming the member and never the values; nothing is written or changed", async (_n, changed, member, what) => {
@@ -466,20 +512,6 @@ describe("cinatra#3089 — the list is filed as ONE UNIT", () => {
   });
 
   // red-first-expect: materializeToolArtifactSet is not a function
-  it("S10 a parallel call that filed a claim first ends this call with nothing stored, in both places it can show", async () => {
-    // (a) another drive's claim is already finalized when this call claims it.
-    claimMaterializationMock.mockImplementationOnce(async () => ({ kind: "finalized", path: "materialize_tool", artifactId: "art-x", representationRevisionId: "rep-x" }));
-    const first = await fileSet();
-    expect(first).toMatchObject({ ok: false, code: "materialize_list_set_busy" });
-    // (b) the transaction's own finalize guard fires: the whole transaction rolled back.
-    createSemanticArtifactsMock.mockRejectedValueOnce(new Error("materialization-finalize-conflict: claim already finalized by a concurrent writer"));
-    const second = await fileSet();
-    expect(second).toMatchObject({ ok: false, code: "materialize_list_set_busy" });
-    expect(storedObjects.size).toBe(0);
-    expect(finalizedRows()).toEqual([]);
-  });
-
-  // red-first-expect: materializeToolArtifactSet is not a function
   it("S7 a marked gate receives every member as a target, and every member is the gate's write", async () => {
     getAgentPackageMock.mockResolvedValue(markedListFlow(LIST_NODE_DATA));
     const filed = await fileSet();
@@ -501,6 +533,139 @@ describe("cinatra#3089 — the list is filed as ONE UNIT", () => {
   it("S7 a node no gate reviews files its members as plain agent writes", async () => {
     await fileSet();
     expect(events.map((e) => e.originKind)).toEqual(["agent_generated", "agent_generated", "agent_generated"]);
+  });
+});
+
+describe("cinatra#3089 — ONE set per (run, node, extension), decided by the ledger's key", () => {
+  /** Two calls that both reach their transaction (after their blobs, before any row) before either commits. */
+  const holdUntil = (callers: number) => {
+    let arrived = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    beforeCommit = async () => {
+      arrived += 1;
+      if (arrived >= callers) release();
+      await gate;
+    };
+  };
+  /** The package bindings of the run are loaded once (a cache); two calls that both miss it at the same moment
+   *  would only test the module loader. One call of ANOTHER run warms it, then the table is emptied. */
+  const warm = async () => {
+    await fileSet(many("warm"), { runId: "run-warm" });
+    ledger = [];
+    storedObjects.clear();
+    events = [];
+    commits = [];
+  };
+  const one = (title: string, content: string): ToolArtifactSetMember[] => [{ title, content, typedData: { contactId: "c-1" } }];
+  const many = (tag: string, n = 3): ToolArtifactSetMember[] =>
+    Array.from({ length: n }, (_, i) => ({ title: `${tag} ${i + 1}`, content: `${tag} body ${i + 1}`, typedData: { contactId: `c-${i + 1}` } }));
+  const setOf = () => finalizedRows().map((r) => r.contentHash);
+
+  // red-first-expect: materializeToolArtifactSet is not a function
+  it("R1 two DIFFERING one-member calls at once: one commits, the other is refused naming the member, and nothing of it is stored", async () => {
+    await warm();
+    holdUntil(2);
+    const [first, second] = await Promise.all([fileSet(one("Hello A", "Body A")), fileSet(one("Hello B", "Body B"))]);
+    // Both passed the unlocked set read (neither saw a set) and both reached their transaction: the
+    // ledger's header key, not the read, decided.
+    expect([first.ok, second.ok].sort()).toEqual([false, true]);
+    const [won, lost] = first.ok ? [first, second] : [second, first];
+    expect(lost).toMatchObject({ ok: false, code: "materialize_list_set_differs", failedMember: 1 });
+    expect((lost as { error: string }).error).toContain("member 1: bytes");
+    expect(won).toMatchObject({ ok: true, deduped: false });
+    // Exactly one set exists: one header, one member row, one object, one event, one commit.
+    expect(ledger.filter((r) => r.outputId.endsWith("/header"))).toHaveLength(1);
+    expect(setOf()).toHaveLength(1);
+    expect(commits).toEqual([1]);
+    expect(storedObjects.size).toBe(1);
+    expect(events).toHaveLength(1);
+  });
+
+  // red-first-expect: materializeToolArtifactSet is not a function
+  it("R1 two DIFFERING N-member calls at once: one whole set commits, the other is refused whole", async () => {
+    await warm();
+    holdUntil(2);
+    const [first, second] = await Promise.all([fileSet(many("A")), fileSet(many("B"))]);
+    expect([first.ok, second.ok].sort()).toEqual([false, true]);
+    const lost = first.ok ? second : first;
+    expect(lost).toMatchObject({ ok: false, code: "materialize_list_set_differs" });
+    expect(ledger.filter((r) => r.outputId.endsWith("/header"))).toHaveLength(1);
+    expect(setOf()).toHaveLength(3);
+    expect(setOf().every((h) => [1, 2, 3].map((i) => sha256(`A body ${i}`)).includes(h) || [1, 2, 3].map((i) => sha256(`B body ${i}`)).includes(h))).toBe(true);
+    // Never a mixture of the two sets.
+    const bySet = new Set(setOf().map((h) => ([1, 2, 3].map((i) => sha256(`A body ${i}`)).includes(h) ? "A" : "B")));
+    expect(bySet.size).toBe(1);
+    expect(commits).toEqual([3]);
+    expect(storedObjects.size).toBe(3);
+  });
+
+  // red-first-expect: materializeToolArtifactSet is not a function
+  it("R1 two IDENTICAL calls at once: one commits and the other is answered with the committed set, nothing twice", async () => {
+    await warm();
+    holdUntil(2);
+    const [first, second] = await Promise.all([fileSet(many("A")), fileSet(many("A"))]);
+    expect([first, second].map((r) => (r as { deduped: boolean }).deduped).sort()).toEqual([false, true]);
+    expect((first as { artifacts: unknown }).artifacts).toEqual((second as { artifacts: unknown }).artifacts);
+    expect(commits).toEqual([3]);
+    expect(storedObjects.size).toBe(3);
+  });
+
+  // red-first-expect: materializeToolArtifactSet is not a function
+  it("R1 a differing call that arrives after the commit is refused by the set read, and the key would have refused it too", async () => {
+    await fileSet(one("Hello A", "Body A"));
+    createSemanticArtifactsMock.mockClear();
+    expect(await fileSet(one("Hello B", "Body B"))).toMatchObject({ ok: false, code: "materialize_list_set_differs" });
+    expect(createSemanticArtifactsMock).not.toHaveBeenCalled();
+  });
+
+  // red-first-expect: materializeToolArtifactSet is not a function
+  it("R2 list node `drafts` and single node `drafts#1` with the same run, extension and bytes never share a row (either order)", async () => {
+    const singleOn = (nodeId: string) =>
+      materializeToolArtifact({
+        runId: "run-1", orgId: "org-a", templateId: "tpl-1", packageVersion: "1.0.0", createdBy: "user-1",
+        nodeId, verifiedStepId: nodeId, extension: EXT, objectTypeId: BODY_TYPE,
+        title: "Hello Ada", mime: "text/markdown", content: DRAFTS[0]!.body,
+      });
+    // Set first, then the single node: the single filing claims its OWN row and writes its own artifact.
+    await fileSet(members(), { nodeId: "drafts", verifiedStepId: "drafts" });
+    const single = await singleOn("drafts#1");
+    expect(single).toMatchObject({ ok: true, deduped: false });
+    expect((single as { artifactId: string }).artifactId).not.toBe("art-1");
+    expect(ledger.map((r) => r.outputId)).toContain("drafts#1");
+    expect(ledger.map((r) => r.outputId)).toContain('cinatra:set/"drafts"/1');
+    expect(new Set(ledger.map((r) => `${r.outputId}|${r.contentHash}`)).size).toBe(ledger.length);
+
+    // Single node first, then the set.
+    ledger = [];
+    storedObjects.clear();
+    const first = await singleOn("drafts#1");
+    expect(first).toMatchObject({ ok: true, deduped: false });
+    const set = await fileSet(members(), { nodeId: "drafts", verifiedStepId: "drafts" });
+    expect(set).toMatchObject({ ok: true, deduped: false });
+    expect(new Set(ledger.map((r) => `${r.outputId}|${r.contentHash}`)).size).toBe(ledger.length);
+  });
+
+  // red-first-expect: toolSetHeaderOutputId is not a function
+  it("R2 no node id can produce a set row's output id: the encoding is injective and carries the reserved prefix", async () => {
+    const ledgerModule = await vi.importActual<typeof import("../materialization-ledger")>("../materialization-ledger");
+    const nodes = ["drafts", "drafts#1", 'a"/1', 'a"', 'a\\"/1', "a/header", 'a"/header', "", "cinatra:set/", '"x"/1', "1", "header", "a#1#2"];
+    const ids: string[] = [];
+    for (const node of nodes) {
+      ids.push(ledgerModule.toolSetHeaderOutputId(node));
+      for (const position of [1, 2, 10, 11]) ids.push(ledgerModule.toolSetOutputId(node, position));
+    }
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const id of ids) expect(id.startsWith("cinatra:set/")).toBe(true);
+    // None of them is itself a node id the road accepts, and none of the nodes is one of them.
+    for (const node of nodes) expect(ids).not.toContain(node);
+    const single = await materializeToolArtifact({
+      runId: "run-1", orgId: "org-a", templateId: "tpl-1", packageVersion: "1.0.0", createdBy: "user-1",
+      nodeId: ids[1]!, extension: EXT, objectTypeId: BODY_TYPE, title: "t", mime: "text/markdown", content: "x",
+    });
+    expect(single).toMatchObject({ ok: false, code: "materialize_node_id_reserved" });
+    expect(await fileSet(members(), { nodeId: ids[1]! })).toMatchObject({ ok: false, code: "materialize_node_id_reserved" });
+    expect(ledger).toEqual([]);
   });
 });
 

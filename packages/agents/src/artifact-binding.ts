@@ -779,6 +779,16 @@ export function materializeListMemberFieldsEqualRefusal(
 // string of at most 512 characters once trimmed (stored trimmed, as the title is
 // and as the send's own body stores its contact).
 
+/**
+ * The ledger namespace of a LIST filing's rows (cinatra#3089). A set's rows (its header and its members) carry an
+ * output id that begins with this prefix, so no ordinary node id can be the output id of a set row: a node whose
+ * id begins with it is refused at compile time and at the road (the single filing and the list call alike).
+ */
+export const MATERIALIZE_RESERVED_NODE_ID_PREFIX = "cinatra:set/";
+export const MATERIALIZE_RESERVED_NODE_ID_CODE = "materialize_node_id_reserved";
+export const MATERIALIZE_RESERVED_NODE_ID_MESSAGE =
+  `artifact_materialize: a node id may not begin with "${MATERIALIZE_RESERVED_NODE_ID_PREFIX}" (the ledger namespace of a list filing)`;
+
 export const MATERIALIZE_LIST_DATA_CODE = "materialize_list_data_declaration";
 export const MATERIALIZE_LIST_DATA_MAX_FIELDS = 8;
 export const MATERIALIZE_LIST_DATA_MAX_VALUE_CHARS = 512;
@@ -1217,6 +1227,9 @@ export function collectArtifactMaterializeNodesFromOasDocument(
           "materialize nodes sharing one ledger identity would silently collapse " +
           "same-byte outputs into one artifact",
       );
+    }
+    if (typeof declaredNodeId === "string" && declaredNodeId.startsWith(MATERIALIZE_RESERVED_NODE_ID_PREFIX)) {
+      fieldError("node_id", MATERIALIZE_RESERVED_NODE_ID_MESSAGE);
     }
 
     const contentJsonField = input.contentJsonField;

@@ -462,6 +462,8 @@ async function assertWritableArtifactType(
   return def;
 }
 
+type Tx2Results = ReturnType<typeof runPostgresQueriesSync>;
+
 /** One statement of a transaction (the shape `runPostgresQueriesSync` takes). */
 type Tx2Query = { text: string; values?: unknown[] };
 
@@ -1282,7 +1284,7 @@ async function finishArtifactWrite(
     try {
       producerSplice.forEach((splice, i) => {
         const outcome: AssertSemanticTypeResult = splice.parseResult(
-          tx2Results as ReturnType<typeof runPostgresQueriesSync>,
+          tx2Results as Tx2Results,
           queryBase + PRODUCER_OPS_OFFSET + i * 2,
         );
         const ext = planProduces[i];
@@ -1346,26 +1348,43 @@ async function finishArtifactWrite(
 /**
  * Create ONE semantic artifact: its blob stored, then ONE held-lock transaction for its rows.
  */
-export async function createSemanticArtifact(
-  input: CreateSemanticArtifactInput,
-): Promise<CreateSemanticArtifactResult> {
-  const prepared = await prepareArtifactWrite(input);
-  // `tx2Results` is kept out of the try so producer-outcome parsing happens POST-COMMIT in a
-  // best-effort block. A parse/offset throw must NOT be conflated with a Tx2 failure, which would
-  // create a false failed-upload and duplicate on retry.
+/**
+ * Run the queries of N prepared artifacts as ONE transaction (the single place the artifact rows are
+ * committed, for one artifact and for a batch): a failure rolls every artifact back, and what each
+ * abandoned write keeps is `abandonArtifactWrite`'s. `tx2Results` is returned to the caller so the
+ * producer-outcome parsing happens POST-COMMIT in a best-effort block: a parse or offset throw must
+ * NOT be conflated with a Tx2 failure, which would create a false failed-upload and duplicate on retry.
+ */
+async function commitArtifactWrites(
+  prepared: readonly PreparedArtifactWrite[],
+): Promise<Array<CreateSemanticArtifactResult>> {
   let tx2Results: ReturnType<typeof runPostgresQueriesSync>;
   try {
     tx2Results = runPostgresQueriesSync({
       connectionString: getPostgresConnectionString(),
       transaction: true,
-      queries: prepared.tx2Queries,
+      queries: prepared.flatMap((p) => p.tx2Queries),
     });
   } catch (err) {
-    // Tx2 failed AFTER Tx1 committed (see abandonArtifactWrite for what is kept).
-    await abandonArtifactWrite(prepared);
+    // The transaction failed AFTER the resource rows (Tx1) committed.
+    for (const p of prepared) await abandonArtifactWrite(p);
     throw err;
   }
-  return finishArtifactWrite(prepared, tx2Results, 0);
+  const results: CreateSemanticArtifactResult[] = [];
+  let base = 0;
+  for (const p of prepared) {
+    results.push(await finishArtifactWrite(p, tx2Results, base));
+    base += p.tx2Queries.length;
+  }
+  return results;
+}
+
+/** Create ONE semantic artifact: its blob stored, then ONE held-lock transaction for its rows. */
+export async function createSemanticArtifact(
+  input: CreateSemanticArtifactInput,
+): Promise<CreateSemanticArtifactResult> {
+  const [created] = await commitArtifactWrites([await prepareArtifactWrite(input)]);
+  return created!;
 }
 
 /**
@@ -1373,10 +1392,10 @@ export async function createSemanticArtifact(
  * `createSemanticArtifact` prepares one (type and envelope checked, bytes stored, resource row
  * committed, producer plan resolved) and then the queries of ALL of them run as ONE transaction,
  * so either every artifact's rows (object + outbox, representation, audit, producer and binding
- * ops, the caller's follow-ons such as the ledger finalize, the produced event) commit together
- * or none does. The row writers are `prepareArtifactWrite`'s: the single and the batch path share
- * them. Blobs stored before a rolled-back transaction are content-addressed and keep the
- * resource rows that own them, exactly as after a failed single write.
+ * ops, the caller's follow-ons such as the ledger rows, the produced event) commit together or
+ * none does. The row writers are `prepareArtifactWrite`'s and the commit is `commitArtifactWrites`:
+ * the single and the batch path share both. Blobs stored before a rolled-back transaction are
+ * content-addressed and keep the resource rows that own them, exactly as after a failed single write.
  *
  * The statements of one artifact are ~10; the batch is bounded by its caller (50 members) and by
  * the synchronous bridge's ceiling (`POSTGRES_SYNC_TIMEOUT_MS`, 30 s). Fresh artifact ids contend
@@ -1392,26 +1411,8 @@ export async function createSemanticArtifacts(
     for (const p of prepared) await abandonArtifactWrite(p);
     throw err;
   }
-  let tx2Results: ReturnType<typeof runPostgresQueriesSync>;
-  try {
-    tx2Results = runPostgresQueriesSync({
-      connectionString: getPostgresConnectionString(),
-      transaction: true,
-      queries: prepared.flatMap((p) => p.tx2Queries),
-    });
-  } catch (err) {
-    for (const p of prepared) await abandonArtifactWrite(p);
-    throw err;
-  }
-  const results: CreateSemanticArtifactResult[] = [];
-  let base = 0;
-  for (const p of prepared) {
-    results.push(await finishArtifactWrite(p, tx2Results, base));
-    base += p.tx2Queries.length;
-  }
-  return results;
+  return commitArtifactWrites(prepared);
 }
-
 
 // Canonical default visibility per owner level (cinatra#1428). The owner axis
 // lives in owner_level + owner_id; visibility is the SHARE axis:

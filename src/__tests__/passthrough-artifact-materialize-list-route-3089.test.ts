@@ -246,7 +246,7 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
     );
   });
 
-  // red-first-expect: expected 400 to be 200
+  // red-first-expect: expected { Object (error) } to deeply equal
   it.each([
     ["member refused before the write", { ok: false, code: "materialize_list_member_refused", failedMember: 2, error: "artifact_materialize list member 2 of 3 was refused: x — nothing was filed" }],
     ["a set that differs from the one this run filed", { ok: false, code: "materialize_list_set_differs", failedMember: 1, error: "materialize_list_set_differs: member 1: bytes" }],
@@ -546,6 +546,22 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
       expect(res.status).toBe(400);
       expect(h.materializeSet).not.toHaveBeenCalled();
     });
+  });
+
+  // red-first-expect: expected undefined to be 'materialize_node_id_reserved'
+  it.each([
+    ["a list call", () => listBody({ node_id: 'cinatra:set/"drafts"/1' })],
+    ["a single call", () => ({
+      tool: "artifact_materialize", agent_run_id: "run-1",
+      input: { extension: EXT, content: "# Hi", declaredMime: "text/markdown", title: "T", node_id: 'cinatra:set/"drafts"/1' },
+    })],
+  ])("refuses a node id in the ledger namespace of a list filing's rows, for %s", async (_n, body) => {
+    const res = await POST(post(body() as Record<string, unknown>));
+    const answer = await res.json();
+    expect(answer.code).toBe("materialize_node_id_reserved");
+    expect(res.status).toBe(400);
+    expect(h.materializeSet).not.toHaveBeenCalled();
+    expect(h.materializeToolArtifact).not.toHaveBeenCalled();
   });
 
   // red-first-expect: expected { Object (error) } to deeply equal

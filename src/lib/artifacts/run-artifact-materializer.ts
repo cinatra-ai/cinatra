@@ -2,6 +2,10 @@ import "server-only";
 import { createHash } from "node:crypto";
 import type { Pool } from "pg";
 import {
+  MATERIALIZE_LIST_ENVELOPE_FIELDS,
+  MATERIALIZE_RESERVED_NODE_ID_CODE,
+  MATERIALIZE_RESERVED_NODE_ID_MESSAGE,
+  MATERIALIZE_RESERVED_NODE_ID_PREFIX,
   ARTIFACT_IMAGE_TOOL,
   ARTIFACT_MATERIALIZE_TOOL,
   collectArtifactBindingsFromOasDocument,
@@ -45,6 +49,8 @@ import {
   readFinalizedMaterialization,
   findFinalizedFanoutMessageMaterialization,
   findFinalizedMidRunMaterialization,
+  buildToolSetRowQueries,
+  isToolSetIdentityConflict,
   readToolSetRows,
   toolSetOutputId,
   recordFanoutReuseMaterialization,
@@ -867,8 +873,8 @@ async function writeGateRefusal(input: {
   return null;
 }
 
-/** The creation input of one claimed write (the ledger row `ledgerId` is finalized in the SAME transaction as the
- *  artifact). One builder for the single filing and for every member of a set. */
+/** The creation input of one ledgered write (its ledger statements run in the SAME transaction as the artifact).
+ *  One builder for the single filing and for every member of a set. */
 function claimedCreateInput(input: {
   orgId: string;
   runId: string;
@@ -881,7 +887,8 @@ function claimedCreateInput(input: {
   resolvedTarget: { objectTypeId: string; acceptedFileMimeTypes: string[] };
   originKind?: "agent_generated" | "live_generator";
   typedData?: Record<string, unknown>;
-  ledgerId: string;
+  /** The ledger statements of this write, committed in the SAME transaction as the artifact. */
+  ledgerQueries: (ids: { artifactId: string; representationRevisionId: string }) => Array<{ text: string; values: unknown[] }>;
   extraTx2Queries?: (ids: { artifactId: string; representationRevisionId: string }) => Array<{ text: string; values: unknown[] }>;
 }): CreateSemanticArtifactInput {
   return {
@@ -913,12 +920,7 @@ function claimedCreateInput(input: {
     producerAssertionExtension: input.extension,
     skipFallbackClassification: true,
     additionalTx2Queries: (ids) => [
-      buildFinalizeMaterializationQuery({
-        ledgerId: input.ledgerId,
-        orgId: input.orgId,
-        artifactId: ids.artifactId,
-        representationRevisionId: ids.representationRevisionId,
-      }),
+      ...input.ledgerQueries(ids),
       // cinatra#1893: the derived_output path's token-guarded outbox settle,
       // committed atomically with the artifact + finalize (a stale lease aborts
       // the whole Tx). Empty for every other caller.
@@ -1090,7 +1092,14 @@ export async function writeClaimedArtifact(input: {
         resolvedTarget: input.resolvedTarget,
         originKind: input.originKind,
         typedData: input.typedData,
-        ledgerId: claim.ledgerId,
+        ledgerQueries: (ids) => [
+          buildFinalizeMaterializationQuery({
+            ledgerId: claim.ledgerId,
+            orgId: input.orgId,
+            artifactId: ids.artifactId,
+            representationRevisionId: ids.representationRevisionId,
+          }),
+        ],
         extraTx2Queries: input.extraTx2Queries,
       }),
     );
@@ -1734,6 +1743,9 @@ export async function materializeToolArtifact(input: {
   mime: string;
   content: string;
 }): Promise<ToolArtifactMaterialization> {
+  if (input.nodeId.startsWith(MATERIALIZE_RESERVED_NODE_ID_PREFIX)) {
+    return { ok: false, error: MATERIALIZE_RESERVED_NODE_ID_MESSAGE, code: MATERIALIZE_RESERVED_NODE_ID_CODE };
+  }
   try {
     // The SHARED write authorization (produces, text-authorable form, the cap
     // and the declared target type) — the same one the append path takes.
@@ -1818,13 +1830,17 @@ export type ToolArtifactSetResult =
  *  1. EVERY member is checked before anything is written: the write authorization, the target's accepted forms
  *     and the extension's install state, and the creation path's own check over the real envelope (the detected
  *     MIME, the type's accepts, the type's payload schema). The first refusal ends the call: nothing is stored.
- *  2. If this run already filed a set for this node, the call is compared with it as a whole: the same members
- *     (position, bytes, title, object type, typed data) answer the stored set and write nothing; anything else
- *     (a member's bytes, title or typed data, a member more or fewer) is refused, naming the member and what
- *     differs, never values. A node files one set per run; the corrected values go in a new run.
- *  3. Else every member's ledger row is claimed, every member's blob is stored, and `createSemanticArtifacts`
- *     writes ALL members (object, representation, audit, producer and binding ops, produced event) and finalizes
- *     ALL ledger rows in ONE transaction. A failure rolls the whole transaction back: no member exists, no
+ *  2. If this run already filed a set for this (node, extension), the call is compared with it as a whole, in
+ *     both directions: the same members (position, bytes, title, object type, and the typed data as a whole:
+ *     a key on one side only is a difference) answer the stored set and write nothing; anything else is
+ *     refused, naming the member and what differs, never values. A node files one set per run; the corrected
+ *     values go in a new run.
+ *  3. Else every member's blob is stored, and `createSemanticArtifacts` writes ALL members (object,
+ *     representation, audit, producer and binding ops, produced event) and the set's ledger rows (a header
+ *     with a key that has no hash and no position, and one row per member) in ONE transaction. The header's
+ *     unique key is what makes the set ONE identity per (run, node, extension) under concurrency: of two calls
+ *     that file different sets at once, one commits and the other fails on that key and rolls back. A failure
+ *     rolls the whole transaction back: no member exists, no
  *     review is owed, and the answer is one refusal. What the pre-check cannot see (the organization's byte
  *     quota, the persisted MIME of an existing same-substance resource, a storage or database fault) ends the
  *     call at this step with nothing stored but content-addressed blobs and their resource rows, which the next
@@ -1837,7 +1853,7 @@ export async function materializeToolArtifactSet(input: {
   templateId: string;
   packageVersion: string | null;
   createdBy: string | null;
-  /** The calling ApiNode's id: the ledger identity of the set (`<node>#<position>` per member). */
+  /** The calling ApiNode's id: the identity of the set, with the run and the extension. */
   nodeId: string;
   /** cinatra#3035: the runtime's signed step of the call, when it verified (as `materializeToolArtifact`). */
   verifiedStepId?: string;
@@ -1847,6 +1863,10 @@ export async function materializeToolArtifactSet(input: {
   members: readonly ToolArtifactSetMember[];
 }): Promise<ToolArtifactSetResult> {
   try {
+    // The ledger namespace of a set's rows is not a node's: no node id begins with its prefix.
+    if (input.nodeId.startsWith(MATERIALIZE_RESERVED_NODE_ID_PREFIX)) {
+      return { ok: false, code: MATERIALIZE_RESERVED_NODE_ID_CODE, error: MATERIALIZE_RESERVED_NODE_ID_MESSAGE };
+    }
     const n = input.members.length;
     if (n === 0) return { ok: false, code: MATERIALIZE_LIST_MEMBER_REFUSED, error: "a list call files at least one member; nothing was filed" };
     const titles = input.members.map((m) => m.title.trim());
@@ -1899,16 +1919,16 @@ export async function materializeToolArtifactSet(input: {
     });
     if (gate !== null) return refuse(1, gate);
 
-    // 2. A set this run already filed for this node.
-    const rows = await readToolSetRows({
+    // 2. A set this run already filed for this node: answer it, or refuse the difference.
+    const stored = await readToolSetRows({
       orgId: input.orgId,
       runId: input.runId,
       nodeId: input.nodeId,
       extension: input.extension,
     });
-    const filed = rows.filter((r) => r.phase === "finalized" && r.artifactId !== null && r.representationRevisionId !== null);
-    if (filed.length > 0) {
-      const at = new Map(filed.map((r) => [r.outputId, r]));
+    const compareWithStored = async (read: typeof stored): Promise<ToolArtifactSetResult | null> => {
+      if (!read.header) return null;
+      const at = new Map(read.members.map((r) => [r.outputId, r]));
       const problems: string[] = [];
       let firstDiffering: number | undefined;
       const note = (member: number, what: string) => {
@@ -1919,18 +1939,19 @@ export async function materializeToolArtifactSet(input: {
         const row = at.get(toolSetOutputId(input.nodeId, i + 1));
         if (!row || row.contentHash !== hashes[i]) note(i + 1, "bytes");
       }
-      if (filed.length !== n) problems.push(`count (filed ${filed.length}, call ${n})`);
+      if (read.members.length !== n) problems.push(`count (filed ${read.members.length}, call ${n})`);
       if (problems.length === 0) {
         for (let i = 0; i < n; i++) {
           const row = at.get(toolSetOutputId(input.nodeId, i + 1))!;
           const what = describeDifferences(
             await reuseDifferences({
               orgId: input.orgId,
-              artifactId: row.artifactId!,
-              objectTypeId: target.objectTypeId,
+              artifactId: row.artifactId,
+              objectTypeId: target!.objectTypeId,
               title: titles[i]!,
               typedData: input.members[i]!.typedData ?? {},
               mustCarry: Object.keys(input.members[i]!.typedData ?? {}),
+              exact: true,
             }),
           );
           if (what !== null) note(i + 1, what);
@@ -1951,38 +1972,22 @@ export async function materializeToolArtifactSet(input: {
         deduped: true,
         artifacts: Array.from({ length: n }, (_, i) => {
           const row = at.get(toolSetOutputId(input.nodeId, i + 1))!;
-          return { artifactId: row.artifactId!, representationRevisionId: row.representationRevisionId! };
+          return { artifactId: row.artifactId, representationRevisionId: row.representationRevisionId };
         }),
       };
-    }
+    };
+    const already = await compareWithStored(stored);
+    if (already !== null) return already;
 
-    // 3. One unit: every claim, every blob, ONE transaction.
+    // 3. One unit: every blob, then ONE transaction that writes every member AND the set's ledger rows
+    // (a header and one row per member, already finalized). The set read above is a courtesy, not the
+    // guard: the header's unique key (run, node, extension; no hash, no position) is. A call that filed a
+    // different set meanwhile makes this transaction fail on that key and roll back as a whole.
     const ownership = await resolveRunScopeOwnership({
       templateId: input.templateId,
       runId: input.runId,
       orgId: input.orgId,
     });
-    const ledgerIds: string[] = [];
-    for (let i = 0; i < n; i++) {
-      const claim = await claimMaterialization({
-        orgId: input.orgId,
-        runId: input.runId,
-        outputId: toolSetOutputId(input.nodeId, i + 1),
-        nodeId: input.nodeId,
-        path: "materialize_tool",
-        extension: input.extension,
-        contentHash: hashes[i]!,
-        ...(input.verifiedStepId !== undefined ? { verifiedStepId: input.verifiedStepId } : {}),
-      });
-      if (claim.kind === "finalized" || (claim.path !== undefined && claim.path !== "materialize_tool")) {
-        return {
-          ok: false,
-          code: MATERIALIZE_LIST_SET_BUSY,
-          error: `${MATERIALIZE_LIST_SET_BUSY}: another call of this run is filing or has filed this node's set; nothing was filed by this call, retry it`,
-        };
-      }
-      ledgerIds.push(claim.ledgerId);
-    }
     let created: Array<{ artifactId: string; representationRevisionId: string }>;
     try {
       created = await createSemanticArtifacts(
@@ -1999,17 +2004,33 @@ export async function materializeToolArtifactSet(input: {
             resolvedTarget: target!,
             originKind: reviewed ? "live_generator" : undefined,
             typedData: member.typedData,
-            ledgerId: ledgerIds[i]!,
+            ledgerQueries: (ids) =>
+              buildToolSetRowQueries({
+                orgId: input.orgId,
+                runId: input.runId,
+                nodeId: input.nodeId,
+                extension: input.extension,
+                verifiedStepId: input.verifiedStepId ?? null,
+                position: i + 1,
+                contentHash: hashes[i]!,
+                artifactId: ids.artifactId,
+                representationRevisionId: ids.representationRevisionId,
+              }),
           }),
         ),
       );
     } catch (err) {
-      // A parallel drive finalized a claim first: the whole transaction rolled back, nothing of this call exists.
-      if (isMaterializationFinalizeConflict(err)) {
+      // Another call filed this node's set first: the whole transaction rolled back, nothing of this call
+      // exists. The set that won decides: an identical call is answered with it, a different one refused.
+      if (isToolSetIdentityConflict(err)) {
+        const winner = await compareWithStored(
+          await readToolSetRows({ orgId: input.orgId, runId: input.runId, nodeId: input.nodeId, extension: input.extension }),
+        );
+        if (winner !== null) return winner;
         return {
           ok: false,
           code: MATERIALIZE_LIST_SET_BUSY,
-          error: `${MATERIALIZE_LIST_SET_BUSY}: another call of this run filed this node's set first; nothing was filed by this call, retry it`,
+          error: `${MATERIALIZE_LIST_SET_BUSY}: another call of this run is filing this node's set; nothing was filed by this call, retry it`,
         };
       }
       return {
@@ -2072,14 +2093,21 @@ async function reuseDifferences(input: {
   title: string;
   typedData: Record<string, unknown>;
   mustCarry: readonly string[];
+  /** Compare the typed data as a whole, in both directions: a key the stored object carries that the call
+   *  does not (writer-owned fields apart) is a difference too, as is a key the call carries and it does not. */
+  exact?: boolean;
 }): Promise<{ objectType: boolean; title: boolean; keys: string[] }> {
-  const keys = [...new Set(input.mustCarry)].filter((k) => Object.prototype.hasOwnProperty.call(input.typedData, k));
   const { getObjectById } = await import("@/lib/objects-store");
   const row = getObjectById(input.artifactId, { orgId: input.orgId });
   const data =
     row && row.data !== null && typeof row.data === "object" && !Array.isArray(row.data)
       ? (row.data as Record<string, unknown>)
       : null;
+  const wanted = [...new Set(input.mustCarry)].filter((k) => Object.prototype.hasOwnProperty.call(input.typedData, k));
+  const owned = new Set<string>(MATERIALIZE_LIST_ENVELOPE_FIELDS);
+  const keys = input.exact
+    ? [...new Set([...wanted, ...(data === null ? [] : Object.keys(data).filter((k) => !owned.has(k)))])]
+    : wanted;
   return {
     objectType: row === null || row.type !== input.objectTypeId,
     title: data === null || typeof data.title !== "string" || data.title.trim() !== input.title.trim(),

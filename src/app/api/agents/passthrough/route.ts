@@ -2,6 +2,9 @@ import type { VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
 import { verifyRunExecutedSource } from "@cinatra-ai/agents/store";
 import {
   isArtifactMaterializeListInput,
+  MATERIALIZE_RESERVED_NODE_ID_CODE,
+  MATERIALIZE_RESERVED_NODE_ID_MESSAGE,
+  MATERIALIZE_RESERVED_NODE_ID_PREFIX,
   materializeListMemberFieldsEqualRefusal,
   materializeListResultIdFieldRefusal,
   readMaterializeListDataDeclaration,
@@ -490,6 +493,19 @@ export async function POST(req: Request): Promise<Response> {
       verifiedExecutedSource = await verifyRunExecutedSource(agentRunId, sourceRun.orgId, attestation);
       verifiedStepId = verifiedExecutedSource.stepId;
     } catch { return NextResponse.json({ error: "Executing source could not be verified" }, { status: 403 }); }
+  }
+
+  // cinatra#3089: the ledger namespace of a list filing's rows is not a node's: a node id that
+  // begins with its prefix is refused for every call of the tool, single or list.
+  if (
+    tool === "artifact_materialize" &&
+    typeof rawInput.node_id === "string" &&
+    rawInput.node_id.startsWith(MATERIALIZE_RESERVED_NODE_ID_PREFIX)
+  ) {
+    return NextResponse.json(
+      { error: MATERIALIZE_RESERVED_NODE_ID_MESSAGE, code: MATERIALIZE_RESERVED_NODE_ID_CODE },
+      { status: 400 },
+    );
   }
 
   // cinatra#3089: a list call is bounded AS RECEIVED, before the shaper parses
