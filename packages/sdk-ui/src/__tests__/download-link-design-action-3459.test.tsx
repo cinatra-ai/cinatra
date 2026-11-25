@@ -43,6 +43,12 @@ describe("the download control", () => {
     expect(control?.getAttribute("tabindex")).toBeNull();
   });
 
+  it("draws the words alone, as the design's floor control does: no glyph", () => {
+    const { control } = draw();
+    expect(control?.querySelector("svg")).toBeNull();
+    expect(control?.textContent).toBe("Download PDF");
+  });
+
   it("downloads the host's address when pressed", () => {
     const { control, clicked } = draw();
     fireEvent.click(control as Element);
