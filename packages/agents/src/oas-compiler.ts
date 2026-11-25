@@ -1761,8 +1761,10 @@ export function collectPublishRows(
 // released and the review fence still holds). WayFlow calls any other URL itself, with no check, so a call made by a
 // publishing step must go to one of these. Only the exact template form counts: the loader sends the run's token and
 // the step's signature only to the CINATRA_BASE_URL host, and a host route outside this list does not check the call.
-const PUBLISH_CALL_ROUTES = new Set(["{{CINATRA_BASE_URL}}/api/llm-bridge", "{{CINATRA_BASE_URL}}/api/agents/passthrough"]);
-const PUBLISH_ADDRESS_KEY = /(?:url|uri|endpoint)$/i;
+export const PUBLISH_BRIDGE_ROUTE = "{{CINATRA_BASE_URL}}/api/llm-bridge";
+export const PUBLISH_PASSTHROUGH_ROUTE = "{{CINATRA_BASE_URL}}/api/agents/passthrough";
+export const PUBLISH_CALL_ROUTES: ReadonlySet<string> = new Set([PUBLISH_BRIDGE_ROUTE, PUBLISH_PASSTHROUGH_ROUTE]);
+export const PUBLISH_ADDRESS_KEY = /(?:url|uri|endpoint)$/i;
 
 /** Every component of a publishing step that carries a `url` (the step itself, and each component inside it, a subflow
  *  or agent its `$component_ref` names included) must name a PUBLISH_CALL_ROUTES route; any other value refuses the

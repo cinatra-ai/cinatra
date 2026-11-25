@@ -86,6 +86,16 @@ describe("the in-process self-invocation hands the boundary the planned outward 
     );
   });
 
+  it("does not invoke the handler on a run's frame when the decision is a blocking denial", async () => {
+    hoisted.boundary.mockResolvedValueOnce({ allowed: false, shouldBlock: true, reason: "denied_for_test" } as never);
+    await expect(callHostPrimitive("example_plain_tool", { a: 3 })).rejects.toThrow(/authorization denied .*denied_for_test/);
+  });
+
+  it("invokes the handler on a run's frame when the decision is a denial that does not block", async () => {
+    hoisted.boundary.mockResolvedValueOnce({ allowed: false, shouldBlock: false, reason: "denied_for_test" } as never);
+    await expect(callHostPrimitive("example_plain_tool", { a: 4 })).resolves.toEqual({ a: 4 });
+  });
+
   it("proceeds as before for a primitive planned without an outward declaration", async () => {
     const out = await callHostPrimitive("example_plain_tool", { a: 2 });
     expect(out).toEqual({ a: 2 });

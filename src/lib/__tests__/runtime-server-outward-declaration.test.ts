@@ -26,6 +26,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionMcpToolConfig } from "@cinatra-ai/sdk-extensions/mcp-contract";
 import * as auditModule from "@/lib/authz/audit";
 import * as augmentModule from "@/lib/authz/inventory-augment";
+import * as boundaryModule from "@/lib/authz/mcp-boundary";
 import * as extensionRegistryModule from "@/lib/extension-mcp-registry";
 import { createMcpRuntimeServer } from "../../../packages/mcp-server/src/runtime-server";
 import {
@@ -334,6 +335,31 @@ describe("a ctx.mcp.registerTool registration's outward declaration rides the re
     expect(result.isError).not.toBe(true);
     expect(result.content?.[0]?.text).toBe("served");
     expect(replayed.handled).toEqual([TOOL]);
+  });
+});
+
+describe("the runtime server dispatches on the boundary's decision by decisionBlocksDispatch", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const plainConfig = { title: TOOL, description: TOOL } satisfies ExtensionMcpToolConfig;
+
+  it("does not invoke the handler on a run's frame when the decision is a blocking denial", async () => {
+    vi.spyOn(boundaryModule, "enforceMcpBoundary").mockResolvedValue({ allowed: false, reason: REASON, shouldBlock: true });
+    const built = await buildOneTool(plainConfig);
+    const result = await built.call(runMemberFrame());
+    expect(result.isError).toBe(true);
+    expect(result.content?.[0]?.text).toContain(REASON);
+    expect(built.handled).toEqual([]);
+  });
+
+  it("invokes the handler on a run's frame when the decision is a denial that does not block", async () => {
+    vi.spyOn(boundaryModule, "enforceMcpBoundary").mockResolvedValue({ allowed: false, reason: REASON, shouldBlock: false });
+    const built = await buildOneTool(plainConfig);
+    const result = await built.call(runMemberFrame());
+    expect(result.content?.[0]?.text).toBe("served");
+    expect(built.handled).toEqual([TOOL]);
   });
 });
 

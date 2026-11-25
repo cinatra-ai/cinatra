@@ -23,6 +23,11 @@
 //       publishing tool, or
 //   (c) it is a model-bridge step with no tool list in a pack whose manifest consumes a publishing tool
 //       (cinatra.consumes): the pack grants the step that tool. An explicit `publishes: false` does not clear it.
+// A bridge or passthrough node is one whose url is exactly one of the compiler's two routes (PUBLISH_CALL_ROUTES in
+// oas-compiler.ts); any other address is outside the publish hold, since WayFlow calls it itself. The compiler refuses
+// such an address only on a declared publishing step (PUBLISH_CALL_UNCHECKED); on any other node it compiles, so the
+// audit reports it, OUTSIDE_HOLD, unless it is a host route of HOST_ROUTES_OUTSIDE_THE_HOLD (each reviewed, and its
+// source checked to name no publishing tool and call no host primitive).
 // A node inside a subflow makes the call for the top-level node that holds it, since only a top-level node can carry
 // the declaration (the runtime puts the gate in front of a top-level node only).
 //
@@ -70,9 +75,13 @@ import {
   checkExecutedPublishingCallRoutes,
   compileOasAgentJson,
   propagateToolboxesIntoApiNodes,
+  PUBLISH_ADDRESS_KEY,
+  PUBLISH_BRIDGE_ROUTE,
+  PUBLISH_CALL_ROUTES,
+  PUBLISH_PASSTHROUGH_ROUTE,
 } from "../../../packages/agents/src/oas-compiler";
 import { readStepToolDeclaration } from "../../../packages/agents/src/validate-oas-runtime-invariants";
-import { readDeclaredOutward } from "../../../packages/mcp-server/src/capability-plan";
+import { decisionBlocksDispatch, readDeclaredOutward } from "../../../packages/mcp-server/src/capability-plan";
 import { enforceMcpBoundary, OUTWARD_EFFECT_TOOL_NAMES, RECORDED_DECISION_REQUIRED_REASON } from "../authz/mcp-boundary";
 import * as auditModule from "../authz/audit";
 import { lookupPrimitiveClassification } from "../authz/inventory-augment";
@@ -89,9 +98,21 @@ const cinatraOf = (node: Json): Json => {
   const meta = node.metadata;
   return isObject(meta) && isObject(meta.cinatra) ? meta.cinatra : {};
 };
-const urlOf = (node: Json): string => (typeof node.url === "string" ? node.url : "");
-const isBridge = (node: Json) => node.component_type === "ApiNode" && urlOf(node).includes("/api/llm-bridge");
-const isPassthrough = (node: Json) => node.component_type === "ApiNode" && urlOf(node).includes("/api/agents/passthrough");
+// A host bridge or passthrough node is one whose url is exactly the compiler's route (PUBLISH_CALL_ROUTES, the routes
+// whose call the host checks); a url that merely contains a route's path is another address.
+const isBridge = (node: Json) => node.component_type === "ApiNode" && node.url === PUBLISH_BRIDGE_ROUTE;
+const isPassthrough = (node: Json) => node.component_type === "ApiNode" && node.url === PUBLISH_PASSTHROUGH_ROUTE;
+const HOST_PREFIX = "{{CINATRA_BASE_URL}}";
+
+/**
+ * Host routes a flow may call outside the publish hold, each reviewed: none reaches a publishing tool. The repository
+ * case checks that each route's source names no publishing tool of the census and calls no host primitive.
+ */
+export const HOST_ROUTES_OUTSIDE_THE_HOLD: Record<string, string> = {
+  "/api/context-resolve": "resolves the trusted context candidates of a run's gate",
+  "/api/context-finalize": "revalidates a context selection and writes its audit rows",
+  "/api/oas-lint/scan-all": "returns the lint findings of the policy agent",
+};
 
 /** What the host knows about tools: the names registrations declare outward, and every name a connector registers. */
 export type ToolCensus = {
@@ -172,8 +193,8 @@ export function consumedPublishingTools(pkg: Json, census: ToolCensus): string[]
     .filter((p): p is string => typeof p === "string" && isPublishingTool(census, p));
 }
 
-type Reading = { publishing: string[]; unknown: string[]; unheld: string[]; held: string[] };
-const emptyReading = (): Reading => ({ publishing: [], unknown: [], unheld: [], held: [] });
+type Reading = { publishing: string[]; unknown: string[]; unheld: string[]; held: string[]; outside: string[] };
+const emptyReading = (): Reading => ({ publishing: [], unknown: [], unheld: [], held: [], outside: [] });
 
 /**
  * The MCP toolboxes the bridge offers a model step: its `data.toolbox_ids` after the compiler's propagation, less the
@@ -190,6 +211,18 @@ function mcpToolboxesOf(node: Json): string[] | null {
 function readComponent(node: Json, consumed: string[], census: ToolCensus): Reading {
   const out = emptyReading();
   const id = typeof node.id === "string" ? node.id : "?";
+  // Any address other than the compiler's two routes is outside the publish hold: WayFlow calls it itself.
+  if (Object.prototype.hasOwnProperty.call(node, "url") && !PUBLISH_CALL_ROUTES.has(node.url as string)) {
+    const url = typeof node.url === "string" ? node.url : "";
+    const hostPath = url.startsWith(`${HOST_PREFIX}/`) ? url.slice(HOST_PREFIX.length) : null;
+    if (hostPath === null) out.outside.push(`${id} calls a url outside the host, which no publish hold covers`);
+    else if (!Object.prototype.hasOwnProperty.call(HOST_ROUTES_OUTSIDE_THE_HOLD, hostPath)) {
+      out.outside.push(`${id} calls the host route ${hostPath}, which does not check a publishing call and is not reviewed`);
+    }
+  }
+  if (node.component_type === "A2AAgent" || Object.keys(node).some((k) => k !== "url" && PUBLISH_ADDRESS_KEY.test(k))) {
+    out.outside.push(`${id} calls a remote agent or address, which no publish hold covers`);
+  }
   if (isPassthrough(node)) {
     const tool = isObject(node.data) ? node.data.tool : undefined;
     if (typeof tool === "string") {
@@ -247,6 +280,7 @@ function readSubtree(start: unknown, refs: Json, consumed: string[], census: Too
       out.unknown.push(...r.unknown);
       out.unheld.push(...r.unheld);
       out.held.push(...r.held);
+      out.outside.push(...r.outside);
     }
     for (const v of Object.values(o)) stack.push(v);
   }
@@ -295,6 +329,7 @@ export function publishingFindings(args: FlowArgs): string[] {
       findings.push(`UNDECLARED ${id}: ${reading.publishing.join("; ")}`);
     }
     if (reading.unheld.length > 0 && !declared.has(id)) findings.push(`UNHELD ${id}: ${reading.unheld.join("; ")}`);
+    if (reading.outside.length > 0 && !declared.has(id)) findings.push(`OUTSIDE_HOLD ${id}: ${reading.outside.join("; ")}`);
   }
 
   // (2) every declared step can be put behind the gate, and its calls go to a host route that checks the decision.
@@ -356,15 +391,14 @@ beforeAll(async () => {
 
 /**
  * The proof a held step relies on: the real boundary, on an agent run's frame (a platform admin, so no role rule
- * decides), refuses each tool with an ENFORCED denial. Both dispatchers skip the handler only on
- * `!decision.allowed && decision.shouldBlock` (packages/mcp-server/src/runtime-server.ts, the boundary step of the
- * tool wrapper; src/lib/extension-self-mcp.ts, the same condition); every other decision dispatches. So each tool must
+ * decides), refuses each tool with an ENFORCED denial: one that decisionBlocksDispatch (capability-plan.ts) reads as
+ * stopping dispatch. Both dispatchers decide with that one predicate (the runtime server's tool wrapper, the in-process
+ * self-invocation; each has a case in its own test file that a blocking denial does not reach the handler and a
+ * non-blocking one does); every other decision dispatches. So each tool must
  * answer `allowed: false`, `shouldBlock: true`, and the expected reason: the recorded decision for a tool the host
  * classifies, unclassified for one it does not (refused before that rule). The dispatchers themselves are not driven
  * here: on a run frame each first proves the run's executing source against the run store.
  */
-type BoundaryDecision = Awaited<ReturnType<typeof enforceMcpBoundary>>;
-export const blocksDispatch = (d: BoundaryDecision) => !d.allowed && d.shouldBlock === true;
 async function boundaryOnRunFrame(
   tools: Array<{ name: string; declaresOutward: boolean }>,
   decide: typeof enforceMcpBoundary = enforceMcpBoundary,
@@ -379,7 +413,7 @@ async function boundaryOnRunFrame(
         declaresOutward,
       } as Parameters<typeof enforceMcpBoundary>[0]);
       const expected = lookupPrimitiveClassification(name) ? RECORDED_DECISION_REQUIRED_REASON : "unclassified_primitive";
-      if (!blocksDispatch(decision) || decision.reason !== expected) served.push(`${name}: ${JSON.stringify(decision)}`);
+      if (!decisionBlocksDispatch(decision) || decision.reason !== expected) served.push(`${name}: ${JSON.stringify(decision)}`);
     }
     return served;
   } finally {
@@ -390,7 +424,13 @@ async function boundaryOnRunFrame(
 function linkedinShape(): Flow {
   const parity = JSON.parse(readFileSync(PARITY_FIXTURE, "utf8")) as { flows: Array<{ name: string; flow: Flow }> };
   const flow = JSON.parse(JSON.stringify(parity.flows.find((f) => f.name === "linkedin-publish-shape")!.flow)) as Flow;
-  flow.$referenced_components.publish!.url = "{{CINATRA_BASE_URL}}/api/llm-bridge";
+  // The parity fixture's runtime test answers every call itself; here each node calls the host route it calls in a pack.
+  flow.$referenced_components.publish!.url = PUBLISH_BRIDGE_ROUTE;
+  for (const [id, tool] of [["read_post_record", "artifacts_get"], ["read_post_text", "artifacts_get"], ["write_address", "objects_update"]]) {
+    const node = flow.$referenced_components[id!]!;
+    node.url = PUBLISH_PASSTHROUGH_ROUTE;
+    node.data = { ...(isObject(node.data) ? node.data : {}), tool, agent_run_id: "{{cinatra_run_id}}" };
+  }
   return flow;
 }
 function setPublishes(node: Json, value: boolean | undefined) {
@@ -579,6 +619,25 @@ describe("item 7: a node that can publish is declared and sits behind the moment
       $referenced_components: { wrap: { component_type: "FlowNode", id: "wrap", subflow: { $component_ref: "inner" } }, inner },
     };
     expect(findingsOf(oas, [])).toEqual(["UNDECLARED wrap: post calls the publishing tool email_test_delivery_run_send"]);
+  });
+
+  it("an undeclared node whose url only contains the bridge path is outside the hold: the compiler takes it, the audit refuses it", async () => {
+    const flow = linkedinShape();
+    const publish = flow.$referenced_components.publish!;
+    setPublishes(publish, undefined);
+    publish.url = "https://api.example.com/api/llm-bridge";
+    expect(await checkFixture(flow)).toEqual([
+      "OUTSIDE_HOLD publish: publish calls a url outside the host, which no publish hold covers",
+    ]);
+    publish.url = "{{CINATRA_BASE_URL}}/api/llm-bridge-copy";
+    expect(await checkFixture(flow)).toEqual([
+      "OUTSIDE_HOLD publish: publish calls the host route /api/llm-bridge-copy, which does not check a publishing call and is not reviewed",
+    ]);
+    publish.url = "{{CINATRA_BASE_URL}}/api/context-resolve";
+    expect(await checkFixture(flow)).toEqual([]);
+    publish.url = "https://api.example.com/api/llm-bridge";
+    setPublishes(publish, true);
+    expect((await checkFixture(flow))[0]).toMatch(/^COMPILE PUBLISH_CALL_UNCHECKED: /);
   });
 
   it("a declared step whose call goes past the host's routes is refused, by the compiler and by the executed-source check", async () => {
@@ -785,6 +844,18 @@ describe.skipIf(PACKS.length === 0 && !REQUIRE_EXTENSIONS)("item 7: every pinned
       ...[...OUTWARD_EFFECT_TOOL_NAMES].map((name) => ({ name, declaresOutward: false })),
       ...[...census.outwardByRegistration].map((name) => ({ name, declaresOutward: true })),
     ])).toEqual([]);
+  });
+
+  it("every reviewed host route outside the hold names no publishing tool and calls no host primitive in its source", () => {
+    const publishing = [...OUTWARD_EFFECT_TOOL_NAMES, ...census.outwardByRegistration];
+    const reaches: string[] = [];
+    for (const route of Object.keys(HOST_ROUTES_OUTSIDE_THE_HOLD)) {
+      const text = readFileSync(path.join(REPO_ROOT, "src", "app", route, "route.ts"), "utf8");
+      for (const word of [...publishing, "callHostPrimitive", "enforceMcpBoundary"]) {
+        if (text.includes(word)) reaches.push(`${route}: ${word}`);
+      }
+    }
+    expect(reaches).toEqual([]);
   });
 
   it("every entry of the not-yet-met list names an installed pack", () => {

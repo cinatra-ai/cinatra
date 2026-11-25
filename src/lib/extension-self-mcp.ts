@@ -42,7 +42,7 @@ import "server-only";
 // the request-context store instead).
 
 import type { ActorContext } from "@/lib/authz/actor-context";
-import type { PlannedPrimitive } from "@cinatra-ai/mcp-server/capability-plan";
+import { decisionBlocksDispatch, type PlannedPrimitive } from "@cinatra-ai/mcp-server/capability-plan";
 import { getActivationGeneration } from "@/lib/extension-activation-generation";
 
 type CapturedMcpToolHandler = (...args: unknown[]) => unknown | Promise<unknown>;
@@ -313,7 +313,7 @@ export async function callHostPrimitive(
           (err instanceof Error ? err.message : String(err)),
       );
     }
-    if (!decision.allowed && decision.shouldBlock) {
+    if (decisionBlocksDispatch(decision)) {
       throw new Error(
         `[extension-self-mcp] authorization denied for "${primitiveName}": ${decision.reason}`,
       );
