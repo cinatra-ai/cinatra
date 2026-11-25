@@ -31,7 +31,7 @@ import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 import { captureHitlPromptForContinue, readCurrentDurableHitlGate } from "./agent-run-hitl-prompts";
 import { AGENT_BUILDER_ID_SCOPE, ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
 import { hitlStepIsRetired } from "./orchestrator-mid-run-hitl";
-import { baseReviewTaskId, reviewGateHoldsPause } from "@/lib/artifacts/artifact-review-target";
+import { baseReviewTaskId, reviewDecisionAwaitsDelivery, reviewGateHoldsPause } from "@/lib/artifacts/artifact-review-target";
 import type { DurableHitlGateArtifact } from "./store";
 import type { AgentRunRecord } from "./agent-run-record";
 import { claimPause, PauseClaimReleaseError, releasePauseClaim, settlePauseSend } from "./run-pause-claim";
@@ -82,11 +82,26 @@ async function packageScreenIsDeclared(xRenderer: string): Promise<boolean> {
  * imported here, so no route's graph grows. An unbound seam is a read error.
  */
 type ReviewGateOfRun = { reviewTaskId: string; status: string; orgId: string };
+type ResumeDeliveryOfRun = { reviewTaskId: string; status: string; deadLettered: boolean };
+type ReviewStoreReads = {
+  listGates?: (runId: string) => Promise<ReviewGateOfRun[]>;
+  listResumeDeliveries?: (runId: string) => Promise<ResumeDeliveryOfRun[]>;
+};
+function reviewStore(): ReviewStoreReads {
+  const seam = (globalThis as { __cinatraArtifactReviewGateSeam?: ReviewStoreReads }).__cinatraArtifactReviewGateSeam;
+  if (!seam) throw new Error("the review store is not bound");
+  return seam;
+}
 async function reviewGatesOfRun(runId: string): Promise<ReadonlyArray<ReviewGateOfRun>> {
-  const seam = (globalThis as { __cinatraArtifactReviewGateSeam?: { listGates?: (runId: string) => Promise<ReviewGateOfRun[]> } })
-    .__cinatraArtifactReviewGateSeam;
-  if (typeof seam?.listGates !== "function") throw new Error("the review store is not bound");
-  return seam.listGates(runId);
+  const { listGates } = reviewStore();
+  if (typeof listGates !== "function") throw new Error("the review store is not bound");
+  return listGates(runId);
+}
+/** The resume delivery each decided review of the run owes it, by the gate's task id. */
+async function resumeDeliveriesOfRun(runId: string): Promise<ReadonlyArray<ResumeDeliveryOfRun>> {
+  const { listResumeDeliveries } = reviewStore();
+  if (typeof listResumeDeliveries !== "function") throw new Error("the review store is not bound");
+  return listResumeDeliveries(runId);
 }
 
 /**
@@ -118,22 +133,20 @@ async function reviewGatesOfRun(runId: string): Promise<ReadonlyArray<ReviewGate
  *     only its own decision consumes it.
  * Every other recorded renderer id is left to the road, as before.
  *
- * AN ARTIFACT REVIEW IS DECIDED AS THE EXECUTOR DECIDED IT WHEN IT PARKED. The
- * executor routes a marked gate's pause to the display-only review when a gate
- * of the review store holds it (`reviewGateHoldsPause`: pending, this run, this
- * organization) and parks the run with no durable step row; on any other gate
- * (resolved, another organization's) it falls back to an ordinary step and
- * writes that step's durable row. So, for a review gate whose task is the
- * current pause (`gateTaskIsCurrentPause`, by the same run row and latest-task
- * key):
- *   - a durable ordinary row of that task is the fallback's step: it is
- *     answered as any step, whatever review gates exist;
- *   - with no such row, a gate that holds the pause refuses as `display-only`
- *     (`gate: null`), and so does this organization's gate once decided: its
- *     review's resume delivery alone moves the run on, and until it has, a late
- *     answer is refused, so nothing resumes the pause twice. The fallback has
- *     its durable row; the decided review's window has none;
- *   - another organization's gate refuses nothing.
+ * AN ARTIFACT REVIEW IS DECIDED BY WHAT THE REVIEW RECORDS, never by a durable
+ * row (the review park writes none, and the fallback's write is best-effort).
+ * For a review gate whose task is the current pause (`gateTaskIsCurrentPause`,
+ * by the same run row and latest-task key):
+ *   - a gate that holds the pause (`reviewGateHoldsPause`, the predicate the
+ *     executor routes the pause to the display-only review by) refuses as
+ *     `display-only` (`gate: null`);
+ *   - a decided gate whose resume delivery has not yet moved the run on
+ *     (`reviewDecisionAwaitsDelivery`: the intent its decision wrote is not
+ *     `done`) refuses the same way: the delivery continues the pause, so nothing
+ *     resumes it twice;
+ *   - anything else (a review decided and delivered earlier, or another
+ *     organization's, where the executor fell back to an ordinary step) refuses
+ *     nothing: the ordinary rules below decide, with or without a durable row.
  *
  * A row or a gate that cannot be read throws; each road refuses with its own
  * fixed text. `latestTaskId`: the key as the road read it; left out, it is read
@@ -155,15 +168,15 @@ export async function currentHitlGateRefusal(input: {
   if (run.status === "pending_approval") {
     const reviews = await reviewGatesOfRun(run.id);
     const latest = reviews.length > 0 ? await latestKey() : null;
-    const heldAtReview = reviews.some((review) => {
-      const task = flowTask(baseReviewTaskId(review.reviewTaskId));
-      if (!gateTaskIsCurrentPause(pause, task, latest)) return false;
-      const fallbackStep = gate !== null && gate.reviewTaskId === `${FLOW_GATE_TASK_PREFIX}${task}`
-        && gate.xRenderer !== ARTIFACT_REVIEW_REDIRECT_RENDERER_ID;
-      if (fallbackStep) return false;
-      return reviewGateHoldsPause(review, run.orgId) || (review.orgId === run.orgId && review.status === "resolved");
-    });
-    if (heldAtReview) return { gate: null, refusal: "display-only" };
+    const atPause = reviews.filter((review) => gateTaskIsCurrentPause(pause, flowTask(baseReviewTaskId(review.reviewTaskId)), latest));
+    if (atPause.some((review) => reviewGateHoldsPause(review, run.orgId))) return { gate: null, refusal: "display-only" };
+    if (atPause.length > 0) {
+      const tasks = new Set(atPause.map((review) => review.reviewTaskId));
+      const deliveries = await resumeDeliveriesOfRun(run.id);
+      if (deliveries.some((delivery) => tasks.has(delivery.reviewTaskId) && reviewDecisionAwaitsDelivery(delivery))) {
+        return { gate: null, refusal: "display-only" };
+      }
+    }
   }
   if (!gate) return { gate: null, refusal: null };
   if (namedReviewTaskId === undefined || gate.reviewTaskId !== namedReviewTaskId) {

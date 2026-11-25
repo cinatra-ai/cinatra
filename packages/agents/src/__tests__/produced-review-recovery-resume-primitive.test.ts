@@ -476,9 +476,13 @@ describe("cinatra#3745 — agent_run_resume claims the gate before it records or
 });
 
 // THE REVIEW STORE, as the generic answer roads read it (`currentHitlGateRefusal`:
-// the run's artifact review gates through the bound seam). `reviewStore.gates`:
-// the gates the store holds for the run, none by default.
-const reviewStore = { gates: [] as Array<{ reviewTaskId: string; status: string; orgId: string }> };
+// the run's artifact review gates and their resume deliveries through the bound
+// seam). `reviewStore.gates` / `.deliveries`: what the store holds for the run,
+// none by default.
+const reviewStore = {
+  gates: [] as Array<{ reviewTaskId: string; status: string; orgId: string }>,
+  deliveries: [] as Array<{ reviewTaskId: string; status: string; deadLettered: boolean }>,
+};
 const reviewSeamSlot = globalThis as { __cinatraArtifactReviewGateSeam?: Record<string, unknown> };
 let seamBeforeTest: Record<string, unknown> | undefined;
 beforeEach(() => {
@@ -486,9 +490,11 @@ beforeEach(() => {
   reviewSeamSlot.__cinatraArtifactReviewGateSeam = {
     ...seamBeforeTest,
     listGates: seamBeforeTest?.listGates ?? (async () => reviewStore.gates),
+    listResumeDeliveries: seamBeforeTest?.listResumeDeliveries ?? (async () => reviewStore.deliveries),
   };
 });
 afterEach(() => {
   reviewSeamSlot.__cinatraArtifactReviewGateSeam = seamBeforeTest;
   reviewStore.gates = [];
+  reviewStore.deliveries = [];
 });

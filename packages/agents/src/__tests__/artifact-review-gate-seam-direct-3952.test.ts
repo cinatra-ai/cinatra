@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const store = vi.hoisted(() => ({
   readReviewGate: vi.fn(),
   listReviewGatesForRun: vi.fn(),
+  listResumeDeliveriesForRun: vi.fn(),
   listReviewLineageForRun: vi.fn(),
   hasPendingProducedEventForAttempt: vi.fn(),
   emitArtifactReviewGate: vi.fn(),
@@ -15,6 +16,7 @@ const store = vi.hoisted(() => ({
 vi.mock("../artifact-review-gate-store", () => ({
   readReviewGate: store.readReviewGate,
   listReviewGatesForRun: store.listReviewGatesForRun,
+  listResumeDeliveriesForRun: store.listResumeDeliveriesForRun,
   listReviewLineageForRun: store.listReviewLineageForRun,
   hasPendingProducedEventForAttempt: store.hasPendingProducedEventForAttempt,
   emitArtifactReviewGate: store.emitArtifactReviewGate,
@@ -119,6 +121,21 @@ describe("the actual artifact-review gate seam", () => {
     const failure = new Error("read port failed");
     store.readReviewGate.mockRejectedValue(failure);
     await expect(boundSeam().readGate(runId, "gate-single")).rejects.toBe(failure);
+  });
+
+  it("names each decided review's resume delivery by its gate's task id", async () => {
+    store.listReviewGatesForRun.mockResolvedValue([
+      { id: "g1", runId, orgId, reviewTaskId: "wayflow-t1", status: "resolved", pinnedTargets: [] },
+      { id: "g2", runId, orgId, reviewTaskId: "wayflow-t2", status: "pending", pinnedTargets: [] },
+    ]);
+    store.listResumeDeliveriesForRun.mockResolvedValue([
+      { gateId: "g1", status: "done", deadLettered: false },
+      { gateId: "g-unknown", status: "pending", deadLettered: false },
+    ]);
+    expect(await boundSeam().listResumeDeliveries(runId)).toEqual([
+      { reviewTaskId: "wayflow-t1", status: "done", deadLettered: false },
+    ]);
+    expect(store.listResumeDeliveriesForRun).toHaveBeenCalledExactlyOnceWith(runId);
   });
 
   it("propagates a gate list failure", async () => {
