@@ -294,6 +294,8 @@ export async function readReviewTargetHeadersReading(
           ownerName,
           organizationName,
         }, undefined, drawing.identity.facts)
+          // The bound holds every cell the identity leaf admits plus the
+          // scope facts, so this cut never drops one (cinatra#3092).
           .slice(0, LIFECYCLE_TARGET_HEADER_FACTS_MAX)
           .map((fact) => clamp(fact, "—")),
         // THE RENDERER, where the display names itself (cinatra#3092,

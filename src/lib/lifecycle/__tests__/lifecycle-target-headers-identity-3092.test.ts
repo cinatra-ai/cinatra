@@ -52,6 +52,16 @@ vi.mock("@/lib/generated/artifact-renderers", () => {
         rendererName: `<img src=x onerror=alert(1)>${"x".repeat(150)}`,
         identityFacts: () => ({ revision: ["WordPress"], closing: ["a‮b"] }),
       })),
+      // The most the identity leaf admits: four cells after the revision and
+      // four at the close.
+      "@fixture/max::detail": entry("@fixture/max", async () => ({
+        default: () => null,
+        rendererName: "@fixture/max:page-diff",
+        identityFacts: () => ({
+          revision: ["WordPress", "en-GB", "draft", "v12"],
+          closing: ["acme.example/pricing", "node 412", "section Plans", "staged 09:14"],
+        }),
+      })),
       "@fixture/too-long::detail": entry("@fixture/too-long", async () => ({
         default: () => null,
         rendererName: "r".repeat(201),
@@ -90,6 +100,7 @@ vi.mock("@/lib/owner-display-names", () => ({
 }));
 
 import {
+  LIFECYCLE_TARGET_HEADER_SCOPE_FACTS_MAX,
   lifecycleTargetHeadersSchema,
   parseLifecycleResolveEnvelope,
   reviewTargetHeadersWire,
@@ -104,6 +115,7 @@ import {
   readArtifactDisplayIdentity,
 } from "@/app/artifacts/[id]/artifact-display-identity";
 import type { ArtifactSummary } from "@/lib/artifacts/artifact-service";
+import { reviewTargetScopeFacts } from "@/lib/artifacts/review-target-row-facts";
 
 import { encodeLifecycleGateRef } from "../lifecycle-card-ref";
 import { readReviewTargetHeadersReading } from "../lifecycle-target-headers";
@@ -339,6 +351,65 @@ describe("the artifact page and the card draw one identity line for the same rev
       expect(withoutRevision(cardCells)).toEqual(withoutRevision(pageCells));
       expect(pageCells[1]).toBe(`drawn by ${RENDERER}`);
     }
+  });
+});
+
+describe("the card drops nothing the identity leaf admits (cinatra#3092)", () => {
+  it("the scope facts never exceed the bound the card's facts ceiling is derived from", () => {
+    for (const ownerLevel of ["user", "team", "organization", "workspace"]) {
+      for (const visibility of ["private", "team", "organization", "public"]) {
+        const facts = reviewTargetScopeFacts({ ownerLevel, visibility, ownerName: "Growth", organizationName: "Acme" });
+        expect(facts.length, `${ownerLevel}/${visibility}`).toBeLessThanOrEqual(LIFECYCLE_TARGET_HEADER_SCOPE_FACTS_MAX);
+      }
+    }
+  });
+
+  it("at the maximum (four revision cells, two scope facts, four closing cells) the card's cells are the page's, in order", async () => {
+    const artifact = row({
+      objectType: "@fixture/max:page-snapshot",
+      primaryExtension: "@fixture/max",
+      visibility: "organization",
+    });
+    const content = pageContent("wordpress");
+    const pageIdentity = await readArtifactDisplayIdentity({
+      decision: buildMapDisplayDecision(
+        { generatedKey: "@fixture/max::detail", packageName: "@fixture/max", slot: "detail" },
+        5,
+      ),
+      content,
+      propsApiVersion: 5,
+    });
+    const pageCells = buildArtifactDetailHeader({
+      artifact,
+      mime: "application/json",
+      revisionId: "rev_c410a7",
+      ownerName: "Growth",
+      display: pageIdentity,
+    }).metaCells;
+    seed("@fixture/max", content, artifact);
+    const composed = await header();
+    expect(composed.facts).toHaveLength(10);
+    const cardCells = cardLine(composed).split(" · ");
+    const withoutRevision = (cells: readonly string[]) =>
+      cells.filter((cell) => !cell.startsWith("revision ") && cell !== "pinned");
+    expect(withoutRevision(cardCells)).toEqual(withoutRevision(pageCells));
+    expect(pageCells.slice(-4)).toEqual(["acme.example/pricing", "node 412", "section Plans", "staged 09:14"]);
+  });
+
+  it("the ten facts travel to a newer client whole, and an older client still reads the card", async () => {
+    const artifact = row({ objectType: "@fixture/max:page-snapshot", primaryExtension: "@fixture/max", visibility: "organization" });
+    seed("@fixture/max", pageContent("wordpress"), artifact);
+    const composed = await header();
+    const wire = reviewTargetHeadersWire([composed]);
+    // An older client holds the header schema of its own build: strict, at
+    // most eight facts. What it reads parses, so it keeps the card.
+    expect(lifecycleTargetHeadersSchema.safeParse(wire.targetHeaders).success).toBe(true);
+    expect(wire.targetHeaders[0]!.facts).toEqual(composed.facts.slice(0, 8));
+    const answer = parseLifecycleResolveEnvelope(
+      "artifact_review_gate",
+      JSON.parse(JSON.stringify({ kind: "artifact_review_gate", state: PENDING, body: null, ...wire })),
+    );
+    expect(answer!.targetHeaders![0]!.facts).toEqual(composed.facts);
   });
 });
 

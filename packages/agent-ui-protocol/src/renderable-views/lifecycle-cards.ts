@@ -1187,8 +1187,35 @@ export type LifecycleTargetHeader = {
 export const LIFECYCLE_TARGET_HEADER_MAX_TEXT = 200;
 /** Ceiling on the number of headers one gate may carry. */
 export const LIFECYCLE_TARGET_HEADERS_MAX = 12;
-/** Ceiling on the facts one header's mono line may carry. */
-export const LIFECYCLE_TARGET_HEADER_FACTS_MAX = 8;
+/**
+ * The most cells a display may declare after the revision, and the most it may
+ * declare at the close of the line (artifact-review §XI.7, §XI.8). The display
+ * identity leaf the artifact page and the review card both read
+ * (`src/app/artifacts/[id]/artifact-display-identity.ts`) admits exactly this
+ * many, by this constant, so the card's bound below cannot fall behind it.
+ */
+export const LIFECYCLE_TARGET_HEADER_IDENTITY_CELLS_MAX = 4;
+/**
+ * The most scope facts a header carries: the owner's scope, then the
+ * visibility where it reaches another scope (`reviewTargetScopeFacts`).
+ */
+export const LIFECYCLE_TARGET_HEADER_SCOPE_FACTS_MAX = 2;
+/**
+ * Ceiling on the facts one header's mono line may carry: the most a line can
+ * hold without dropping a cell the identity leaf admits — every revision
+ * cell, the scope facts, every closing cell (cinatra#3092). A line of a
+ * display that declares nothing (scopes, MIME, updated time) is shorter.
+ */
+export const LIFECYCLE_TARGET_HEADER_FACTS_MAX =
+  LIFECYCLE_TARGET_HEADER_IDENTITY_CELLS_MAX * 2 + LIFECYCLE_TARGET_HEADER_SCOPE_FACTS_MAX;
+/**
+ * The facts a header carries INSIDE itself on the wire: the bound every
+ * client built before cinatra#3092 holds in its strict header schema, which
+ * refuses a longer array and with it the whole answer. Facts past it travel
+ * beside the header ({@link reviewTargetHeadersWire}, `targetHeaderMoreFacts`),
+ * a key such a client ignores.
+ */
+export const LIFECYCLE_TARGET_HEADER_WIRE_FACTS_MAX = 8;
 
 const boundedText = z.string().min(1).max(LIFECYCLE_TARGET_HEADER_MAX_TEXT);
 
@@ -1920,7 +1947,7 @@ export const lifecycleTargetHeaderSchema: z.ZodType<LifecycleTargetHeader> = z
     typeLabel: boundedText,
     objectType: z.string().max(LIFECYCLE_TARGET_HEADER_MAX_TEXT),
     revisionId: boundedText,
-    facts: z.array(boundedText).max(LIFECYCLE_TARGET_HEADER_FACTS_MAX),
+    facts: z.array(boundedText).max(LIFECYCLE_TARGET_HEADER_WIRE_FACTS_MAX),
   })
   .strict();
 
@@ -1952,19 +1979,63 @@ function isRendererNameText(value: unknown): value is string {
 export function reviewTargetHeadersWire(headers: readonly LifecycleTargetHeader[]): {
   targetHeaders: LifecycleTargetHeader[];
   targetHeaderRenderers?: (string | null)[];
+  targetHeaderMoreFacts?: (string[] | null)[];
 } {
   const targetHeaders = headers.map((header) => {
-    if (header.drawnBy === undefined) return header;
-    const wire: LifecycleTargetHeader = { ...header };
+    if (header.drawnBy === undefined && header.facts.length <= LIFECYCLE_TARGET_HEADER_WIRE_FACTS_MAX) {
+      return header;
+    }
+    const wire: LifecycleTargetHeader = {
+      ...header,
+      facts: header.facts.slice(0, LIFECYCLE_TARGET_HEADER_WIRE_FACTS_MAX),
+    };
     delete wire.drawnBy;
     return wire;
   });
   const renderers = headers.map((header) =>
     isRendererNameText(header.drawnBy) ? header.drawnBy : null,
   );
-  return renderers.some((name) => name !== null)
-    ? { targetHeaders, targetHeaderRenderers: renderers }
-    : { targetHeaders };
+  // THE FACTS PAST AN OLDER CLIENT'S BOUND, beside their header and in order:
+  // such a client draws the first eight and keeps the card; this build joins
+  // them back (`readTargetHeaderMoreFacts`).
+  const more = headers.map((header) =>
+    header.facts.length > LIFECYCLE_TARGET_HEADER_WIRE_FACTS_MAX
+      ? header.facts.slice(LIFECYCLE_TARGET_HEADER_WIRE_FACTS_MAX, LIFECYCLE_TARGET_HEADER_FACTS_MAX)
+      : null,
+  );
+  return {
+    targetHeaders,
+    ...(renderers.some((name) => name !== null) ? { targetHeaderRenderers: renderers } : {}),
+    ...(more.some((facts) => facts !== null) ? { targetHeaderMoreFacts: more } : {}),
+  };
+}
+
+/**
+ * The facts beside the headers, read as ONE shape: `null` when the answer
+ * carried none; one entry per header, `null` or one to the rest of the bound
+ * of bounded texts that follow a header already carrying its full eight; and
+ * `undefined` for anything else, which REFUSES the envelope, as a malformed
+ * header does.
+ */
+function readTargetHeaderMoreFacts(
+  raw: unknown,
+  headers: readonly LifecycleTargetHeader[] | null,
+): readonly (readonly string[] | null)[] | null | undefined {
+  if (raw === undefined) return null;
+  if (headers === null || !Array.isArray(raw) || raw.length !== headers.length) return undefined;
+  const room = LIFECYCLE_TARGET_HEADER_FACTS_MAX - LIFECYCLE_TARGET_HEADER_WIRE_FACTS_MAX;
+  const out: (readonly string[] | null)[] = [];
+  for (const [index, entry] of raw.entries()) {
+    if (entry === null) {
+      out.push(null);
+      continue;
+    }
+    const parsed = z.array(boundedText).min(1).max(room).safeParse(entry);
+    if (!parsed.success) return undefined;
+    if (headers[index]!.facts.length !== LIFECYCLE_TARGET_HEADER_WIRE_FACTS_MAX) return undefined;
+    out.push(parsed.data);
+  }
+  return out;
 }
 
 /**
@@ -2267,14 +2338,21 @@ export function parseLifecycleResolveEnvelope<K extends LifecycleDataPartViewTyp
       carriedHeaders === null ? null : carriedHeaders.headers,
     );
     if (renderers === undefined) return null;
-    // Each name is folded back onto its own header, and only where there is
-    // one: a header whose display names nothing keeps exactly its shape.
+    const moreFacts = readTargetHeaderMoreFacts(
+      record.targetHeaderMoreFacts,
+      carriedHeaders === null ? null : carriedHeaders.headers,
+    );
+    if (moreFacts === undefined) return null;
+    // Each name and each overflow is folded back onto its own header, and only
+    // where there is one: any other header keeps exactly its shape.
     const targetHeaders =
       carriedHeaders === null
         ? null
         : carriedHeaders.headers.map((header, index) => {
             const drawnBy = renderers === null ? null : renderers[index];
-            return drawnBy === null || drawnBy === undefined ? header : { ...header, drawnBy };
+            const more = moreFacts === null ? null : moreFacts[index];
+            const withFacts = more === null || more === undefined ? header : { ...header, facts: [...header.facts, ...more] };
+            return drawnBy === null || drawnBy === undefined ? withFacts : { ...withFacts, drawnBy };
           });
     const carriedComplete = readTargetHeadersComplete(record.targetHeadersComplete);
     if (carriedComplete === null) return null;

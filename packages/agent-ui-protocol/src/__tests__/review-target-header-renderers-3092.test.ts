@@ -99,3 +99,35 @@ describe("the parser folds the names back", () => {
     expect(parse({ targetHeaderRenderers: [RENDERER] }, { state: "absent" })).toBeNull();
   });
 });
+
+describe("facts past an older client's bound travel beside the header (cinatra#3092)", () => {
+  const TEN = ["WordPress", "en-GB", "draft", "v12", "Team: Growth", "Organization", "acme.example/pricing", "node 412", "section Plans", "staged 09:14"];
+
+  it("the header keeps the first eight facts, the rest ride beside it, and the parser joins them in order", () => {
+    const wire = reviewTargetHeadersWire([{ ...PAGE, facts: TEN }, DASHBOARD]) as Record<string, unknown> & {
+      targetHeaders: { facts: string[] }[];
+    };
+    expect(wire.targetHeaders[0]!.facts).toEqual(TEN.slice(0, 8));
+    expect(lifecycleTargetHeadersSchema.safeParse(wire.targetHeaders).success).toBe(true);
+    expect(wire.targetHeaderMoreFacts).toEqual([TEN.slice(8), null]);
+    const answer = parse(JSON.parse(JSON.stringify(wire)));
+    expect(answer?.targetHeaders?.[0]?.facts).toEqual(TEN);
+    expect(answer?.targetHeaders?.[1]).toEqual(DASHBOARD);
+  });
+
+  it("refuses more facts that do not follow a full header, or past the card's bound, or not plain text", () => {
+    const eight = { ...PAGE, facts: TEN.slice(0, 8) };
+    const refused: Array<[unknown[], unknown]> = [
+      [[PAGE], [["x"]]],
+      [[eight], [["a", "b", "c"]]],
+      [[eight], [[""]]],
+      [[eight], ["x"]],
+      [[eight], [["x"], null]],
+      [[eight], [[]]],
+    ];
+    for (const [targetHeaders, more] of refused) {
+      expect(parse({ targetHeaders, targetHeaderMoreFacts: more }), JSON.stringify(more)).toBeNull();
+    }
+    expect(parse({ targetHeaders: [eight], targetHeaderMoreFacts: [["x", "y"]] })?.targetHeaders?.[0]?.facts).toHaveLength(10);
+  });
+});

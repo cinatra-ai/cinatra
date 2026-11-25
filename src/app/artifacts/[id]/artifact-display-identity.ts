@@ -32,6 +32,10 @@ import "server-only";
  * decision that rejects (a present but broken module) answers nothing here,
  * and the slot, awaiting the same decision, still fails loud on its own road.
  */
+import {
+  LIFECYCLE_TARGET_HEADER_IDENTITY_CELLS_MAX,
+  LIFECYCLE_TARGET_HEADER_MAX_TEXT,
+} from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import type { ArtifactUiSlot } from "@cinatra-ai/sdk-extensions/artifact-contract";
 
 import {
@@ -45,9 +49,11 @@ import {
 } from "./artifact-detail-header";
 import { rendererLoadMountsAt } from "./extension-renderer-slot";
 
-/** The longest cell the line takes from a display, and the most cells per place. */
-const CELL_MAX_CHARS = 200;
-const CELLS_MAX = 4;
+/** The longest cell the line takes from a display, and the most cells per
+ *  place: the review card's own bounds (cinatra#3092), so whatever this leaf
+ *  admits for the page also fits the card's header whole. */
+const CELL_MAX_CHARS = LIFECYCLE_TARGET_HEADER_MAX_TEXT;
+const CELLS_MAX = LIFECYCLE_TARGET_HEADER_IDENTITY_CELLS_MAX;
 
 /** One drawable cell: a non-empty single-line text, already trimmed, that
  *  cannot forge the line's own separator or reorder the line. Anything else is
