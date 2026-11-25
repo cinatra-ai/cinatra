@@ -47,9 +47,12 @@ function markedGate(id = "drafts-approval_gate", extra: Record<string, unknown> 
   );
 }
 
-function subflow(id: string, gates: Array<Record<string, unknown>>) {
+// The gates run one after the other (an edge joins each to the next). A gate in
+// `unreachable` is serialized in the subflow and listed in its nodes, but no
+// control edge leads to it, so it never executes.
+function subflow(id: string, gates: Array<Record<string, unknown>>, unreachable: Array<Record<string, unknown>> = []) {
   const refs: Record<string, unknown> = {};
-  for (const g of gates) refs[g.id as string] = g;
+  for (const g of [...gates, ...unreachable]) refs[g.id as string] = g;
   return {
     agentspec_version: "26.1.0",
     component_type: "Flow",
@@ -59,8 +62,13 @@ function subflow(id: string, gates: Array<Record<string, unknown>>) {
     inputs: [],
     outputs: [],
     start_node: { $component_ref: gates[0]!.id },
-    nodes: gates.map((g) => ({ $component_ref: g.id })),
-    control_flow_connections: [],
+    nodes: [...gates, ...unreachable].map((g) => ({ $component_ref: g.id })),
+    control_flow_connections: gates.slice(1).map((g, i) => ({
+      component_type: "ControlFlowEdge",
+      name: `s${i}`,
+      from_node: { $component_ref: gates[i]!.id },
+      to_node: { $component_ref: g.id },
+    })),
     $referenced_components: refs,
   };
 }
@@ -87,6 +95,7 @@ const DRAFTS_STEP: GateStep = {
 
 type Parts = {
   draftsGates?: Array<Record<string, unknown>>;
+  draftsUnreachable?: Array<Record<string, unknown>>;
   draftsGateSteps?: unknown[] | undefined;
   startInputs?: string[];
 };
@@ -129,7 +138,7 @@ function buildAgentJson(parts: Parts = {}): Record<string, unknown> {
         gate("recipients-review_gate", { renderer: "@test/recipients:review", surfaceGateInputs: true }, ["confirmedRecipients"]),
       ]),
       drafts_flow: flowNode("drafts_flow", "drafts-subflow", "@test/drafting", draftsGateSteps),
-      "drafts-subflow": subflow("drafts-subflow", draftsGates),
+      "drafts-subflow": subflow("drafts-subflow", draftsGates, parts.draftsUnreachable),
       sender_flow: flowNode("sender_flow", "sender-subflow", "@test/delivery"),
       "sender-subflow": subflow("sender-subflow", [
         gate("sender-approval_gate", { renderer: "@test/delivery:send-confirmation", surfaceGateInputs: true }, ["campaignId"]),
@@ -330,6 +339,55 @@ describe("cinatra#3089 — an embedded child's artifact-review gate", () => {
         draftsGateSteps: [entry],
       });
       for (const s of steps) expect(s.artifactReviewTargetsInput).toBeUndefined();
+    }
+  });
+
+  it("a marked gate that no control edge reaches is ignored: the step compiles as on main, without the marker", async () => {
+    const steps = await compileSteps({
+      draftsGates: [gate("drafts-approval_gate", { surfaceGateInputs: true, inputMessageSchema: SCHEMA }, ["reviewTargets"])],
+      draftsUnreachable: [markedGate("drafts-unused_gate")],
+    });
+    const drafts = byName(steps, "Review drafts");
+    expect(drafts.artifactReviewTargetsInput).toBeUndefined();
+    expect(drafts.xRenderer).toBe(OLD_RENDERER);
+    expect(drafts.inputMessageSchema).toBeUndefined();
+  });
+
+  it("an unmarked gate that no control edge reaches does not stop the reachable marked gate from carrying its marker", async () => {
+    const steps = await compileSteps({
+      draftsUnreachable: [gate("drafts-unused_gate", {})],
+    });
+    const drafts = byName(steps, "Review drafts");
+    // red-first-expect: expected undefined to be 'reviewTargets'
+    expect(drafts.artifactReviewTargetsInput).toBe("reviewTargets");
+  });
+
+  it("a marked gate that no control edge reaches is not refused for the gateStep shape either", async () => {
+    const steps = await compileSteps({
+      draftsGates: [gate("drafts-approval_gate", {})],
+      draftsUnreachable: [markedGate("drafts-unused_gate")],
+      draftsGateSteps: [DRAFTS_STEP, { ...DRAFTS_STEP, name: "Second" }],
+    });
+    for (const s of steps) expect(s.artifactReviewTargetsInput).toBeUndefined();
+  });
+
+  it("refuses a marked gate whose renderer is the bare context-selector alias, set on the gate or on its field", async () => {
+    for (const cinatra of [
+      { renderer: "context-selector" },
+      { renderer: "@test/drafting:own-review", inputRenderers: { userResponse: "context-selector" } },
+    ]) {
+      const error = await compileError({ draftsGates: [markedGate("drafts-approval_gate", cinatra)] });
+      expect(error).toContain("ARTIFACT_REVIEW_GATE_NOT_A_PAUSE");
+    }
+  });
+
+  it("a gate with the bare context-selector alias takes no renderer slot, as one with the scoped id takes none", async () => {
+    for (const renderer of ["context-selector", "@test/context:context-selector"]) {
+      const steps = await compileSteps({
+        draftsGates: [gate("drafts-approval_gate", { renderer, surfaceGateInputs: true }, ["reviewTargets"])],
+      });
+      // red-first-expect: expected undefined to be false
+      expect(byName(steps, "Review drafts").firesRendererGate).toBe(false);
     }
   });
 });

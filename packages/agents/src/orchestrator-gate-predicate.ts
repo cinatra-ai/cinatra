@@ -25,3 +25,14 @@ export interface RendererGateStepShape {
 export function stepFiresRendererGate(step: RendererGateStepShape): boolean {
   return typeof step.xRenderer === "string" && step.firesRendererGate !== false;
 }
+
+// Is this renderer id the context-selector kind? The registered binding id ends
+// in `:context-selector`, and the registry also matches the bare alias
+// `context-selector` (register-default-renderers.ts, kind "context-selector").
+// The runtime tells a context gate by its payload shape (execution.ts), which
+// the compiler cannot see; this id test is its static counterpart, used by the
+// compiler and by the envelope step of the gate submit, so both agree on which
+// ids are context gates.
+export function isContextSelectorRendererId(renderer: string): boolean {
+  return renderer === "context-selector" || renderer.endsWith(":context-selector");
+}

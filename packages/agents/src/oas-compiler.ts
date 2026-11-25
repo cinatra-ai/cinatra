@@ -58,6 +58,7 @@ import {
 } from "./artifact-binding";
 import type { PersistedArtifactBindingDeclaration } from "./artifact-binding";
 import { readKeyList } from "./gate-keys-not-from-run-inputs";
+import { isContextSelectorRendererId } from "./orchestrator-gate-predicate";
 import {
   PUBLISH_ROW_COLUMNS_MAX,
   PUBLISH_ROW_FIELD_MAX,
@@ -1423,7 +1424,7 @@ function subflowSurfaceGateInputKeys(
 // only; when the ref is absent or not inlined we return true (safe default:
 // treat as firing so a real gate is never dropped).
 function isContextGateRenderer(gateId: string, renderer: string): boolean {
-  return renderer.endsWith(":context-selector") || gateId.startsWith("ctx-");
+  return isContextSelectorRendererId(renderer) || gateId.startsWith("ctx-");
 }
 function subflowFiresNonContextRuntimeGate(
   subflowRef: string | undefined,
@@ -1500,7 +1501,8 @@ function embeddedGateIsReviewerPause(gate: InputMessageGateComponent, gateId: st
 // readArtifactReviewTargetsInput), the gate and the step must correspond
 // exactly, or the compile is refused; the marker is never dropped and never
 // guessed onto a step:
-//   * the gate is the ONLY InputMessageNode in the subflow, and the FlowNode
+//   * the gate is the ONLY InputMessageNode the subflow can reach (from its
+//     start along its control edges), and the FlowNode
 //     declares exactly ONE gateStep, which spans one pause (gateCount 1 or
 //     unset);
 //   * the gate is a reviewer pause (requiresApproval true, not a context gate);
@@ -1511,6 +1513,30 @@ function embeddedGateIsReviewerPause(gate: InputMessageGateComponent, gateId: st
 //     supplies cannot stand in for the set the child filed.
 // Returns null when the subflow holds no marked gate (the step is as before).
 // Error texts name node ids only.
+function readReachableInputMessageNodes(
+  flow: Record<string, unknown>,
+  outerRefs: Record<string, unknown>,
+  depth = 0,
+): Array<Record<string, unknown>> {
+  const found: Array<Record<string, unknown>> = [];
+  if (depth > 8) return found;
+  const refs = (flow["$referenced_components"] as Record<string, unknown> | undefined) ?? {};
+  for (const id of readFlowControlTopology(flow).reachable) {
+    const comp = (refs[id] ?? outerRefs[id]) as Record<string, unknown> | undefined;
+    if (!comp || typeof comp !== "object") continue;
+    if (comp["component_type"] === "InputMessageNode") {
+      found.push(comp);
+    } else if (comp["component_type"] === "FlowNode") {
+      // A nested child flow runs inside this one: its reachable gates pause too.
+      const sub = comp["subflow"] as { $component_ref?: unknown } | undefined;
+      const target = typeof sub?.$component_ref === "string" ? (refs[sub.$component_ref] ?? outerRefs[sub.$component_ref]) : sub;
+      if (target && typeof target === "object") {
+        found.push(...readReachableInputMessageNodes(target as Record<string, unknown>, { ...outerRefs, ...refs }, depth + 1));
+      }
+    }
+  }
+  return found;
+}
 type EmbeddedArtifactReviewGate = { targetsInput: string; gate: InputMessageGateComponent; gateId: string };
 function readEmbeddedArtifactReviewGate(
   flowNodeId: string,
@@ -1521,18 +1547,11 @@ function readEmbeddedArtifactReviewGate(
   const subflowRef = flowNode.subflow?.$component_ref;
   const subflow = subflowRef ? localRefs[subflowRef] : undefined;
   if (!subflow || typeof subflow !== "object") return { ok: true, found: null };
-  const gates: Array<Record<string, unknown>> = [];
-  const visit = (o: unknown): void => {
-    if (o === null || typeof o !== "object") return;
-    if (Array.isArray(o)) {
-      for (const v of o) visit(v);
-      return;
-    }
-    const node = o as Record<string, unknown>;
-    if (node["component_type"] === "InputMessageNode") gates.push(node);
-    for (const v of Object.values(node)) visit(v);
-  };
-  visit(subflow);
+  // Only the gates the subflow can execute: the nodes reachable from its start
+  // along its control edges (readFlowControlTopology, the reading the binding
+  // and the step numbering take). A gate serialized in the subflow that no edge
+  // reaches never pauses, so it takes no marker and counts for nothing.
+  const gates = readReachableInputMessageNodes(subflow as Record<string, unknown>, localRefs);
   const marked = gates.filter((g) => readArtifactReviewTargetsInput(g) !== undefined);
   if (marked.length === 0) return { ok: true, found: null };
   const where = `FlowNode ${quoteNodeId(flowNodeId)}`;
