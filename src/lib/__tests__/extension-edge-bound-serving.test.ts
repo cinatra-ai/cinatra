@@ -26,6 +26,7 @@ import {
 } from "@/lib/extension-mcp-registry";
 import {
   beginVersionKeyedRegistration,
+  resolveVersionKeyedMcpTool,
   __resetVersionKeyedServingForTests,
 } from "@/lib/extension-version-keyed-serving";
 
@@ -833,6 +834,38 @@ describe("dispatchPlannedExtensionMcpTool — plan-pinned dispatch (codex round-
     );
     expect(out).toEqual({ served: "versioned" });
     expect(versionedHandler).toHaveBeenCalledWith({ b: 2 });
+  });
+
+  // cinatra#3745: the plan read the retained entry (its declaration and its loaded identity); a same-version
+  // re-registration since (a new attempt retained another entry) must refuse, never run the new entry's handler.
+  it("planned VERSIONED with its registration + a same-version re-registration since → EDGE_BOUND_PLAN_DRIFT", async () => {
+    const first = beginVersionKeyedRegistration(TARGET, V);
+    first.retainMcpTool({ name: "the_tool", handler: globalHandler, packageName: TARGET });
+    first.commit();
+    const planned = resolveVersionKeyedMcpTool(TARGET, V, "the_tool");
+    if (planned.kind !== "serve") throw new Error("not retained");
+    const second = beginVersionKeyedRegistration(TARGET, V);
+    second.retainMcpTool({ name: "the_tool", handler: versionedHandler, packageName: TARGET, outward: {} });
+    second.commit();
+    await expect(
+      dispatchPlannedExtensionMcpTool(
+        { expected: "versioned", packageName: TARGET, name: "the_tool", version: V, registration: planned.value },
+        {},
+        depsWith({}),
+      ),
+    ).rejects.toMatchObject({ code: "EDGE_BOUND_PLAN_DRIFT" });
+    expect(versionedHandler).not.toHaveBeenCalled();
+    expect(globalHandler).not.toHaveBeenCalled();
+    // The entry the plan read, when it is still the served one, runs.
+    const current = resolveVersionKeyedMcpTool(TARGET, V, "the_tool");
+    if (current.kind !== "serve") throw new Error("not retained");
+    await expect(
+      dispatchPlannedExtensionMcpTool(
+        { expected: "versioned", packageName: TARGET, name: "the_tool", version: V, registration: current.value },
+        { c: 3 },
+        depsWith({}),
+      ),
+    ).resolves.toEqual({ served: "versioned" });
   });
 
   it("planned VERSIONED + decision flips to default/none or ANOTHER version → EDGE_BOUND_PLAN_DRIFT", async () => {
