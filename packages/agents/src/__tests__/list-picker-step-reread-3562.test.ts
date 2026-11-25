@@ -114,6 +114,7 @@ vi.mock("../publish-decision-actions", () => ({
 vi.mock("@cinatra-ai/a2a", () => ({ resolveLatestWayflowGateTaskId: resolveLatestTaskMock }));
 
 import { readListStepContent } from "../list-picker-actions";
+import { listStepRefreshFor } from "../hitl-gate-submit";
 import { resolveCrmListReader } from "@/lib/crm-integration-providers";
 
 const RUN_ID = "run-3562";
@@ -301,6 +302,21 @@ describe("readListStepContent — only for the list step the run waits at", () =
     await expect(readListStepContent(RUN_ID, TASK_ID)).resolves.toMatchObject({ listsRead: "ok" });
     expect(assertNoOpenPublishDecisionMock).toHaveBeenCalledWith(RUN_ID);
     expect(resolveLatestTaskMock).toHaveBeenCalledWith(RUN_ID);
+    expect(searchMock).toHaveBeenCalledTimes(1);
+  });
+
+  // THE BARE ALIAS `list-picker` (register-default-renderers.ts): the client
+  // offers the step its Try again (`listStepRefreshFor`), and the server reads
+  // for it, as for a qualified id. Both decide by `declaresListPicker`.
+  // red-first-expect: is not a function
+  it("a list step declared by the bare alias reads, as the client's offered Try again expects", async () => {
+    readLatestGateMock.mockResolvedValue(listGate({ xRenderer: "list-picker" }));
+    const offered = listStepRefreshFor(
+      { xRenderer: "list-picker", reviewTaskId: TASK_ID, isCurrentWaitingStep: true, mode: "edit" },
+      (reviewTaskId) => readListStepContent(RUN_ID, reviewTaskId),
+    );
+    expect(typeof offered).toBe("function");
+    await expect(offered?.()).resolves.toMatchObject({ listsRead: "ok" });
     expect(searchMock).toHaveBeenCalledTimes(1);
   });
 

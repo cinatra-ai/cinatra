@@ -545,7 +545,7 @@ export function useAgentHitlScreenState(params: {
  * merging into the wrong inputs, or leaving the setup loop paused for ever.
  *
  * THE LIST STEP (cinatra#3562): on a gate that is not a setup gate, a
- * `:list-picker` renderer is mid-run here too (`isMidRunListStepGate`), as the
+ * list-picker renderer is mid-run here too (`isMidRunListStepGate`), as the
  * run panel and the stepper read it. Its picks buffer into the card's
  * Continue, which lifts them into the approval note
  * (`liftRendererApprovalNote`, the run panel's lift) and sends nothing while

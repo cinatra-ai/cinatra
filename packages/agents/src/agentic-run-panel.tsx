@@ -3236,17 +3236,17 @@ export function AgenticRunPanel({
                 // context-selector renderer also buffers selections for an outer
                 // Continue; route it through the same mid-run path. Mirrors the
                 // orchestrator-stepper-panel's classifyMidRunHitl entry for
-                // `:output`, `:list-picker` and the manifest flag.
+                // `:output`, the list picker and the manifest flag.
                 const isMidRunHitl =
                   effectiveHitlContext.xRenderer.endsWith(":output") ||
                   // A list step on a mid-run gate (cinatra#3562): its binding
                   // declares no `midRunHitl` flag, and the stepper reads it by
-                  // this suffix. It buffers its picks for the outer Continue,
+                  // the same predicate (`declaresListPicker`). It buffers its picks for the outer Continue,
                   // which lifts them into the approval note. On a SETUP gate
                   // (`setup-<runId>`) it stays on the setup road below, where
                   // its answer is sent under the gate's field name, the shape
                   // the setup loop records. (The stepper classifies by the
-                  // suffix alone, on a setup gate too.)
+                  // predicate alone, on a setup gate too.)
                   isMidRunListStepGate(
                     effectiveHitlContext.xRenderer,
                     effectiveHitlContext.reviewTaskId,

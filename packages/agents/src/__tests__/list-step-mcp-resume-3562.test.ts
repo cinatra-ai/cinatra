@@ -297,6 +297,15 @@ describe("agent_run_resume and a list step (cinatra#3562)", () => {
     expect(sendTaskSpy).toHaveBeenCalledTimes(2);
   });
 
+  // The bare alias `list-picker` is a list step as a qualified id is.
+  // red-first-expect: expected undefined to be 'LIST_STEP_ANSWER_NAMES_NO_LIST'
+  it("a step whose row names the bare alias refuses an empty pick and resumes a named one", async () => {
+    gateRow.xRenderer = "list-picker";
+    expectRefused(await resume(note({ type: "list", listId: "", listName: "" })));
+    await resume(note({ type: "list", listId: "l-1", listName: "Q2 Targets" })).catch(() => undefined);
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("a step of another kind is never judged as a list step, whatever its answer carries", async () => {
     gateRow.xRenderer = null;
     await resume(note({ type: "list", listId: "" })).catch(() => undefined);

@@ -381,3 +381,52 @@ describe("OrchestratorStepperPanel — the shipped list picker's Try again (cina
     expect(JSON.parse(sent.approvalNote ?? "{}")).toMatchObject({ type: "list", listId: "l-1", listName: "Carried A" });
   });
 });
+
+/**
+ * cinatra#3562 — THE BARE ALIAS `list-picker`. The shipped picker answers it
+ * (register-default-renderers.ts), and the step behaves as a qualified id on
+ * every road (`declaresListPicker`): the pick is lifted into the note, no pick
+ * sends nothing, and Try again is offered and reads again for the gate.
+ */
+describe("OrchestratorStepperPanel — the bare alias `list-picker` (cinatra#3562)", () => {
+  const BARE_STEP_ID = "list-picker";
+  const BARE_LIST_9 = { id: "l-9", name: "Read again", memberCount: null, lastUpdated: null, memberType: "contact" };
+  const continueOf = () => screen.getByRole("button", { name: /continue/i }) as HTMLButtonElement;
+
+  afterEach(() => {
+    listActions.fetchAvailableLists.mockImplementation(async () => []);
+  });
+
+  // red-first-expect: expected {} to match object
+  it("a pick is lifted into the note Continue sends", async () => {
+    listActions.fetchAvailableLists.mockResolvedValue([BARE_LIST_9] as never);
+    await mountOn(BARE_STEP_ID, {});
+    await screen.findByText("Read again", undefined, { timeout: 3000 });
+    fireEvent.click(screen.getByText("Read again"));
+    await waitFor(() => expect(continueOf().disabled).toBe(false));
+    fireEvent.click(continueOf());
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const sent = (hitlActions.approveReviewTask.mock.calls[0] as unknown[])[1] as { approvalNote?: string };
+    expect(JSON.parse(sent.approvalNote ?? "{}")).toMatchObject({ type: "list", listId: "l-9", listName: "Read again" });
+  });
+
+  it("no pick: Continue unavailable, nothing sent", async () => {
+    listActions.fetchAvailableLists.mockResolvedValue([BARE_LIST_9] as never);
+    await mountOn(BARE_STEP_ID, {});
+    await screen.findByText("Read again", undefined, { timeout: 3000 });
+    await waitFor(() => expect(continueOf().disabled).toBe(true));
+    fireEvent.click(continueOf());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  });
+
+  it("a failed read offers Try again, and a press reads again for the gate", async () => {
+    listActions.fetchAvailableLists.mockRejectedValue(new Error("search failed"));
+    await mountOn(BARE_STEP_ID, {});
+    await screen.findByRole("alert", undefined, { timeout: 3000 });
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await screen.findByText("Read again");
+    expect(listActions.readListStepContent).toHaveBeenCalledWith("run-3562", "task-list-1");
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  });
+});

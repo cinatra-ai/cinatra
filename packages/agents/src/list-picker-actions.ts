@@ -12,6 +12,7 @@ import { actorFromSession, type ActorRoleHints } from "@/lib/authz/build-actor-c
 import type { AgentRunRecord } from "./agent-run-record";
 import { enforceRunAccess } from "./auth-policy";
 import { gateTaskIsCurrentPause } from "./run-status";
+import { declaresListPicker } from "./hitl-gate-submit";
 import { deriveOboCeilingChain, oboCeilingContains } from "@cinatra-ai/mcp-server/obo-ceiling";
 import { readAgentRunById, readAgentTemplateById, readLatestDurableHitlGateArtifact } from "./store";
 
@@ -245,9 +246,6 @@ const WAITING_RUN_STATUS = "pending_approval";
 /** A mid-run gate's review task is this prefix and the flow's gate task id. */
 const FLOW_GATE_TASK_PREFIX = "wayflow-";
 
-/** The renderer id of a list step ends with this. */
-const LIST_STEP_RENDERER_SUFFIX = ":list-picker";
-
 /** The tool the flow itself reads the lists with; its boundary decision is asked for the run. */
 const CRM_LIST_READ_TOOL = "crm_list_search";
 
@@ -369,9 +367,7 @@ async function listGateIsCurrentPause(
   gate: { reviewTaskId: string; xRenderer: string },
 ): Promise<boolean> {
   if (run.status !== WAITING_RUN_STATUS) return false;
-  if (typeof gate.xRenderer !== "string" || !gate.xRenderer.endsWith(LIST_STEP_RENDERER_SUFFIX)) {
-    return false;
-  }
+  if (!declaresListPicker(gate.xRenderer)) return false;
   if (!gate.reviewTaskId.startsWith(FLOW_GATE_TASK_PREFIX)) return false;
   const gateTaskId = gate.reviewTaskId.slice(FLOW_GATE_TASK_PREFIX.length);
   try {

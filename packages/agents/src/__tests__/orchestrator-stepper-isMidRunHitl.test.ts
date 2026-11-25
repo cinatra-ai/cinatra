@@ -52,6 +52,13 @@ describe("classifyMidRunHitl — strict-equality renderer IDs", () => {
     expect(classifyMidRunHitl("@cinatra/whatever:setup-form")).toBe(true);
   });
 
+  // cinatra#3562: the list picker's bare alias is a list step as a qualified
+  // id is (`declaresListPicker`), whatever the registry flags.
+  // red-first-expect: expected false to be true
+  it("the list picker's bare alias `list-picker` is a mid-run gate", () => {
+    expect(classifyMidRunHitl("list-picker")).toBe(true);
+  });
+
   it("non-HITL renderer ids return false", () => {
     expect(classifyMidRunHitl("@cinatra-ai/agent-builder:schema-field-fallback")).toBe(false);
     expect(classifyMidRunHitl("")).toBe(false);

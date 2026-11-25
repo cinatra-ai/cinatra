@@ -14,6 +14,7 @@
  */
 
 import { fieldRendererRegistry } from "./field-renderer-registry";
+import { declaresListPicker } from "./hitl-gate-submit";
 
 /**
  * Manifest-declared strict classification: does a registered binding flag
@@ -42,7 +43,7 @@ export function classifyMidRunHitl(xRenderer: string): boolean {
   return (
     xRenderer.endsWith(":output") ||
     xRenderer.endsWith("-output") || // per-content IDs: :contacts-output, :drafts-output, :followups-output
-    xRenderer.endsWith(":list-picker") || // list-based recipient selection
+    declaresListPicker(xRenderer) || // list-based recipient selection (bare alias or qualified id)
     xRenderer.endsWith(":scrape-schema-review") || // Gate 1 - list-curator
     xRenderer.endsWith(":final-list-review") || // Gate 2 - list-curator
     xRenderer.endsWith(":setup-form")

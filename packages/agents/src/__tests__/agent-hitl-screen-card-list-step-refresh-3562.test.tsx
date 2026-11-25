@@ -558,3 +558,59 @@ describe("AgentHitlScreenCard — a press reads the step's validity report again
     expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * cinatra#3562 — THE BARE ALIAS `list-picker`. The shipped picker answers it
+ * (a list binding registers it beside the qualified id), and the card treats
+ * the step as a qualified one (`declaresListPicker`): the pick is lifted into
+ * the note, no pick sends nothing, and Try again is offered and reads again.
+ */
+describe("AgentHitlScreenCard — the bare alias `list-picker` (cinatra#3562)", () => {
+  const BARE_STEP_ID = "list-picker";
+  const BARE_LIST_9 = { id: "l-9", name: "Read again", memberCount: null, lastUpdated: null, memberType: "contact" };
+  const continueOf = () => screen.getByRole("button", { name: /continue/i }) as HTMLButtonElement;
+  async function mountBare() {
+    __setFieldRendererComponentMapForTests({});
+    registerFieldRendererBindings([{ id: HOST_STEP_ID, kind: "list-picker", priority: 80 }]);
+    asking = askingOn(BARE_STEP_ID, {});
+    mountOn("chat_thread");
+    await settle();
+  }
+
+  afterEach(() => {
+    listActions.fetchAvailableLists.mockImplementation(async () => []);
+    __resetFieldRendererComponentMapForTests();
+  });
+
+  // red-first-expect: expected {} to match object
+  it("a pick is lifted into the note Continue sends", async () => {
+    listActions.fetchAvailableLists.mockResolvedValue([BARE_LIST_9] as never);
+    await mountBare();
+    fireEvent.click(await screen.findByText("Read again", undefined, { timeout: 3000 }));
+    await waitFor(() => expect(continueOf().disabled).toBe(false));
+    fireEvent.click(continueOf());
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const sent = (hitlActions.approveReviewTask.mock.calls[0] as unknown[])[1] as { approvalNote?: string };
+    expect(JSON.parse(sent.approvalNote ?? "{}")).toMatchObject({ type: "list", listId: "l-9", listName: "Read again" });
+  });
+
+  it("no pick: Continue unavailable, nothing sent", async () => {
+    listActions.fetchAvailableLists.mockResolvedValue([BARE_LIST_9] as never);
+    await mountBare();
+    await screen.findByText("Read again", undefined, { timeout: 3000 });
+    await waitFor(() => expect(continueOf().disabled).toBe(true));
+    fireEvent.click(continueOf());
+    await settle();
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  });
+
+  it("a failed read offers Try again, and a press reads again for the gate", async () => {
+    listActions.fetchAvailableLists.mockRejectedValue(new Error("search failed"));
+    await mountBare();
+    await screen.findByRole("alert", undefined, { timeout: 3000 });
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await screen.findByText("Read again");
+    expect(listActions.readListStepContent).toHaveBeenCalledWith(RUN_ID, "task-list-1");
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  });
+});

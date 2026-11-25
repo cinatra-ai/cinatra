@@ -97,6 +97,7 @@ const handleWayflowTaskState = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../execution", () => ({ handleWayflowTaskState }));
 
 import { approveReviewTaskInternal } from "../review-task-actions";
+import { applyRendererApprovalNote, liftRendererApprovalNote } from "../hitl-gate-submit";
 import * as claimModule from "../run-pause-claim";
 
 const RUN = {
@@ -220,5 +221,41 @@ describe("cinatra#3562 — the answer road refuses a list step answered without 
     gate.xRenderer = null;
     await approveReviewTaskInternal(TASK, RUN.runBy, { userResponse: "go on" });
     expect(sendTask).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * THE BARE ALIAS `list-picker` (register-default-renderers.ts). A host sends
+ * what the shared lift builds (`liftRendererApprovalNote` and
+ * `applyRendererApprovalNote`, as each host's Continue does) for a step whose
+ * durable row names the bare alias; the server accepts a pick and refuses an
+ * empty one, as for a qualified id.
+ */
+describe("cinatra#3562 — the bare alias `list-picker` on the answer road", () => {
+  const BARE = "list-picker";
+  const hostPayloadFor = (buffered: Record<string, unknown>) =>
+    applyRendererApprovalNote(
+      BARE,
+      { ...buffered, approved: true },
+      liftRendererApprovalNote(BARE, buffered),
+    );
+
+  // red-first-expect: "undefined" is not valid JSON
+  it("the lifted pick is accepted: claimed and sent once, with the list in the resume text", async () => {
+    gate.xRenderer = BARE;
+    const payload = hostPayloadFor({ scope: "list", listId: "l-1", listName: "Q2 Targets", memberCount: 3 });
+    expect(JSON.parse(String(payload.approvalNote))).toMatchObject({ type: "list", listId: "l-1" });
+    await approveReviewTaskInternal(TASK, RUN.runBy, payload);
+    expect(claim.claimPause).toHaveBeenCalledTimes(1);
+    expect(sendTask).toHaveBeenCalledTimes(1);
+  });
+
+  // red-first-expect: promise resolved "undefined" instead of rejecting
+  it("an empty pick is refused with its code, before the pause is claimed", async () => {
+    gate.xRenderer = BARE;
+    await expect(
+      approveReviewTaskInternal(TASK, RUN.runBy, hostPayloadFor({ scope: "list", listId: "", listName: "" })),
+    ).rejects.toMatchObject({ code: "LIST_STEP_ANSWER_NAMES_NO_LIST" });
+    expectRefusedBeforeTheClaim();
   });
 });
