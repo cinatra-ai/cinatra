@@ -9,8 +9,10 @@
 // the card draws the name after the type, as text, and nothing for a header
 // that carries none. Stand-in vendor names here; core names no extension.
 
+// @vitest-environment jsdom
+import { cleanup, render } from "@testing-library/react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import type { LifecycleTargetHeader } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
@@ -35,16 +37,12 @@ function page(platform: string, drawnBy = "@acme/cms-page:page-diff"): Lifecycle
   };
 }
 
+afterEach(() => cleanup());
+
+/** The drawn mono line, read from the rendered DOM as a reader sees it. */
 function metaText(header: LifecycleTargetHeader): string {
-  const html = renderToStaticMarkup(<ReviewTargetHeader header={header} />);
-  return html
-    .slice(html.indexOf("<p"), html.indexOf("</p>"))
-    .replace(/<[^>]*>/g, "")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&amp;/g, "&")
-    .replace(/\s+/g, " ")
-    .trim();
+  const { container } = render(<ReviewTargetHeader header={header} />);
+  return (container.querySelector("p")?.textContent ?? "").replace(/\s+/g, " ").trim();
 }
 
 describe("the identity line on the card", () => {
@@ -69,10 +67,17 @@ describe("the identity line on the card", () => {
   });
 
   it("draws hostile name text as text, never as markup, and lets a long name break inside the line", () => {
-    const hostile = `<img src=x onerror=alert(1)>${"x".repeat(150)}`;
-    const html = renderToStaticMarkup(<ReviewTargetHeader header={page("WordPress", hostile)} />);
-    expect(html).not.toContain("<img");
-    expect(html).toContain(`drawn by &lt;img src=x onerror=alert(1)&gt;${"x".repeat(150)}`);
-    expect(html).toMatch(/<span data-review-target-drawn-by="[^"]*" class="break-words">/);
+    const hostile = `<img src=x onerror=alert(1)><script>alert(2)</script>${"x".repeat(120)}`;
+    const { container } = render(<ReviewTargetHeader header={page("WordPress", hostile)} />);
+    // No element is made of the name: no image, no script, nothing but the
+    // header's own spans inside the line.
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector("script")).toBeNull();
+    const drawnBy = container.querySelector("[data-review-target-drawn-by]");
+    expect(drawnBy?.children).toHaveLength(0);
+    // The name is the span's text, character for character.
+    expect(drawnBy?.textContent).toBe(`drawn by ${hostile} · `);
+    expect(drawnBy?.getAttribute("data-review-target-drawn-by")).toBe(hostile);
+    expect(drawnBy?.className).toBe("break-words");
   });
 });

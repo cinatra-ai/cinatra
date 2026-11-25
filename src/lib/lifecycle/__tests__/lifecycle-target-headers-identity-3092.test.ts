@@ -13,8 +13,10 @@
 // module's two optional exports, over the PINNED revision's content. Fixture
 // names stand in for the pack; core names no extension.
 
-import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// @vitest-environment jsdom
+import { createElement } from "react";
+import { cleanup, render } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 process.env.BETTER_AUTH_SECRET ??= "test-secret-for-lifecycle-refs";
 
@@ -187,18 +189,17 @@ async function header(state: LifecycleCardState = PENDING): Promise<LifecycleTar
   return reading.headers![0]!;
 }
 
-/** The card's drawn mono line, as text. */
-function cardLine(h: LifecycleTargetHeader): string {
-  const html = renderToStaticMarkup(ReviewTargetHeader({ header: h }));
-  const meta = html.slice(html.indexOf("<p"), html.indexOf("</p>") + 4);
-  return meta
-    .replace(/<[^>]*>/g, "")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&amp;/g, "&")
-    .replace(/\s+/g, " ")
-    .trim();
+/** The card as rendered into the DOM. */
+function renderCard(h: LifecycleTargetHeader): HTMLElement {
+  return render(createElement(ReviewTargetHeader, { header: h })).container;
 }
+
+/** The card's drawn mono line, read from the rendered DOM as a reader sees it. */
+function cardLine(h: LifecycleTargetHeader): string {
+  return (renderCard(h).querySelector("p")?.textContent ?? "").replace(/\s+/g, " ").trim();
+}
+
+afterEach(() => cleanup());
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -307,9 +308,11 @@ describe("the identity is a pack's output: bounded and plain text", () => {
     // apart and stands, as text.
     expect(composed.drawnBy).toBe(`<img src=x onerror=alert(1)>${"x".repeat(150)}`);
     expect(composed.facts.slice(2)).toEqual(["application/json", composed.facts[3]]);
-    const html = renderToStaticMarkup(ReviewTargetHeader({ header: composed }));
-    expect(html).not.toContain("<img");
-    expect(html).toContain("&lt;img src=x onerror=alert(1)&gt;");
+    const card = renderCard(composed);
+    expect(card.querySelector("img")).toBeNull();
+    const drawnBy = card.querySelector("[data-review-target-drawn-by]");
+    expect(drawnBy?.children).toHaveLength(0);
+    expect(drawnBy?.textContent).toBe(`drawn by <img src=x onerror=alert(1)>${"x".repeat(150)} · `);
   });
 
   it("a name or a fact past the leaf's bound is no cell, and the composed header still parses", async () => {
