@@ -32,7 +32,15 @@ function listInput(overrides?: Record<string, unknown>): Record<string, unknown>
   };
 }
 
-function docWith(input: Record<string, unknown>): Record<string, unknown> {
+/** `siblings` are the response fields beside `input` in the node's `data` (the
+ *  route reads them from the same data block); `dataAsText` writes the whole
+ *  block as JSON text, the second form the compile check supports. */
+function docWith(
+  input: Record<string, unknown>,
+  siblings: Record<string, unknown> = {},
+  dataAsText = false,
+): Record<string, unknown> {
+  const data = { tool: ARTIFACT_MATERIALIZE_TOOL, agent_run_id: "{{ cinatra_run_id }}", input, ...siblings };
   return {
     component_type: "Flow",
     id: "flow",
@@ -42,14 +50,14 @@ function docWith(input: Record<string, unknown>): Record<string, unknown> {
         id: "file_drafts",
         name: "File drafts",
         url: "{{CINATRA_BASE_URL}}/api/agents/passthrough",
-        data: { tool: ARTIFACT_MATERIALIZE_TOOL, agent_run_id: "{{ cinatra_run_id }}", input },
+        data: dataAsText ? JSON.stringify(data) : data,
       },
     },
   };
 }
 
-const collect = (input: Record<string, unknown>) =>
-  collectArtifactMaterializeNodesFromOasDocument(docWith(input), { produces: [EXT] });
+const collect = (input: Record<string, unknown>, siblings: Record<string, unknown> = {}, dataAsText = false) =>
+  collectArtifactMaterializeNodesFromOasDocument(docWith(input, siblings, dataAsText), { produces: [EXT] });
 
 describe("collectArtifactMaterializeNodesFromOasDocument — list mode (cinatra#3089)", () => {
   // red-first-expect: expected [ Array(1) ] to deeply equal []
@@ -117,6 +125,103 @@ describe("collectArtifactMaterializeNodesFromOasDocument — list mode (cinatra#
 });
 
 // ---------------------------------------------------------------------------
+// cinatra#3089 — the response fields of a list node. A list filing files one
+// artifact per member and has no single id, so a node that declares
+// `result_id_field` can never run; it does not compile either. The refusal is
+// the route's own (the same code and sentence, one definition).
+// ---------------------------------------------------------------------------
+
+const LIST_ID_REFUSAL =
+  "artifact_materialize: a list call files one artifact per member and has no single id; " +
+  "remove result_id_field and read artifacts (or reviewTargets) from the answer";
+
+const SINGLE_INPUT = (): Record<string, unknown> => {
+  const input = listInput({ title: "{{ title }}" });
+  delete input.memberContentField;
+  delete input.memberTitleField;
+  return input;
+};
+
+describe("a list call and the response fields of its node (cinatra#3089)", () => {
+  // red-first-expect: expected [ Array(1) ] to deeply equal [ StringContaining
+  it.each([
+    ["an object data block", false],
+    ["a JSON-text data block", true],
+  ])("refuses a list call whose node also declares result_id_field, in %s", (_name, dataAsText) => {
+    const result = collect(
+      listInput(),
+      { result_input_passthrough: true, result_id_field: "artifactId" },
+      dataAsText,
+    );
+    expect(result.errors).toEqual([expect.stringContaining(`data.result_id_field: ${LIST_ID_REFUSAL}`)]);
+    expect(result.nodes).toEqual([]);
+  });
+
+  // red-first-expect: expected [ Array(1) ] to deeply equal [ StringContaining
+  it.each([
+    ["an object data block", false],
+    ["a JSON-text data block", true],
+  ])("refuses a list call with result_id_field and no passthrough flag, in %s", (_name, dataAsText) => {
+    const result = collect(listInput(), { result_id_field: "artifactId" }, dataAsText);
+    expect(result.errors).toEqual([expect.stringContaining("data.result_id_field:")]);
+    expect(result.nodes).toEqual([]);
+  });
+
+  // red-first-expect: expected [ Array(1) ] to deeply equal [ StringContaining
+  it("refuses a list call that names an empty result_id_field (the route refuses any value)", () => {
+    const result = collect(listInput(), { result_id_field: null });
+    expect(result.errors).toEqual([expect.stringContaining("data.result_id_field:")]);
+  });
+
+  // red-first-expect: expected [ Array(1) ] to deeply equal []
+  it.each([
+    ["an object data block", false],
+    ["a JSON-text data block", true],
+  ])("keeps a list call with result_input_passthrough and no result_id_field valid, in %s", (_name, dataAsText) => {
+    const result = collect(listInput(), { result_input_passthrough: true }, dataAsText);
+    expect(result.errors).toEqual([]);
+    expect(result.nodes).toEqual([{ nodeId: "file_drafts", extension: EXT, declaredMime: "text/markdown" }]);
+  });
+
+  it.each([
+    ["an object data block", false],
+    ["a JSON-text data block", true],
+  ])("keeps a single filing with both keys valid, in %s", (_name, dataAsText) => {
+    const result = collect(
+      SINGLE_INPUT(),
+      { result_input_passthrough: true, result_id_field: "artifactId" },
+      dataAsText,
+    );
+    expect(result.errors).toEqual([]);
+    expect(result.nodes).toHaveLength(1);
+  });
+
+  // red-first-expect: to contain 'artifact_materialize: a list call fil
+  it.each([
+    ["an object data block", false],
+    ["a JSON-text data block", true],
+  ])("a flow whose list node declares result_id_field does not compile, in %s", async (_name, dataAsText) => {
+    const result = await compileOasAgentJson({
+      packageName: PACKAGE_NAME,
+      oasSourcePath: stageOas(
+        fixtureWithFiling(true, dataAsText, { result_input_passthrough: true, result_id_field: "artifactId" }),
+      ),
+    });
+    expect(result.ok).toBe(false);
+    expect((result as { error: string }).error).toContain(LIST_ID_REFUSAL);
+  });
+
+  // red-first-expect: to match object { ok: true }
+  it("a flow whose list node asks for its inputs back and names no id field compiles", async () => {
+    const result = await compileOasAgentJson({
+      packageName: PACKAGE_NAME,
+      oasSourcePath: stageOas(fixtureWithFiling(true, false, { result_input_passthrough: true })),
+    });
+    expect(result).toMatchObject({ ok: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // cinatra#3089 — a list filing is never the node a Regenerate re-runs: the
 // list files one artifact per member, and a Regenerate takes exactly one
 // production. A `regenerate` entry whose `artifactNode` is a list filing does
@@ -130,7 +235,11 @@ const SELF_FILING = [{ artifactNode: FILE_NODE, step: FILE_NODE, noteInput: "use
 
 /** The synthetic fixture with its one ApiNode turned into a passthrough
  *  `artifact_materialize` node that files its own output (single or list). */
-function fixtureWithFiling(list: boolean, dataAsText = false): Record<string, unknown> {
+function fixtureWithFiling(
+  list: boolean,
+  dataAsText = false,
+  siblings: Record<string, unknown> = {},
+): Record<string, unknown> {
   const oas = JSON.parse(readFileSync(join(__dirname, "fixtures", "synthetic-gemini-agent.json"), "utf8"));
   for (const input of [...oas.inputs, ...oas.$referenced_components.start.inputs]) input.default ??= "";
   const node = oas.$referenced_components[FILE_NODE];
@@ -142,7 +251,7 @@ function fixtureWithFiling(list: boolean, dataAsText = false): Record<string, un
     node_id: FILE_NODE,
     ...(list ? { memberContentField: "body", memberTitleField: "subject" } : { title: "{{ user }}" }),
   };
-  const data = { tool: ARTIFACT_MATERIALIZE_TOOL, agent_run_id: "{{ cinatra_run_id }}", input };
+  const data = { tool: ARTIFACT_MATERIALIZE_TOOL, agent_run_id: "{{ cinatra_run_id }}", input, ...siblings };
   node.data = dataAsText ? JSON.stringify(data) : data;
   return oas;
 }

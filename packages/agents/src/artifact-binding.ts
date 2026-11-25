@@ -711,6 +711,35 @@ export function resolveArtifactBindingObjectType(
 
 export const ARTIFACT_MATERIALIZE_TOOL = "artifact_materialize";
 
+/**
+ * cinatra#3089 — the LIST MODE of `artifact_materialize` and its response
+ * fields, ONE definition for the compile check (this file) and the passthrough
+ * route, which imports it. A call is a list call when its input names a member
+ * content field or a member title field; the call files one artifact per member
+ * and so has no single id to answer under the node's `result_id_field`. The
+ * route refuses that pair before anything is filed; the compile check refuses
+ * it so that a flow which can never run does not compile.
+ */
+export const MATERIALIZE_LIST_RESULT_ID_FIELD_CODE = "materialize_list_result_id_field";
+export const MATERIALIZE_LIST_RESULT_ID_FIELD_MESSAGE =
+  "artifact_materialize: a list call files one artifact per member and has no single id; " +
+  "remove result_id_field and read artifacts (or reviewTargets) from the answer";
+
+/** Whether an `artifact_materialize` input (as authored, or as the route receives it) is a list call. */
+export function isArtifactMaterializeListInput(input: Record<string, unknown>): boolean {
+  return input.memberContentField !== undefined || input.memberTitleField !== undefined;
+}
+
+/** The refusal for a list call whose node also names `result_id_field` (any value: the route reads it by presence), or null. */
+export function materializeListResultIdFieldRefusal(
+  input: Record<string, unknown>,
+  resultIdField: unknown,
+): { code: typeof MATERIALIZE_LIST_RESULT_ID_FIELD_CODE; message: string } | null {
+  return isArtifactMaterializeListInput(input) && resultIdField !== undefined
+    ? { code: MATERIALIZE_LIST_RESULT_ID_FIELD_CODE, message: MATERIALIZE_LIST_RESULT_ID_FIELD_MESSAGE }
+    : null;
+}
+
 /** The host's image tool on the passthrough route (cinatra#3032): a prompt in, a
  *  picture filed under the extension the call names. */
 export const ARTIFACT_IMAGE_TOOL = "artifact_image_generate";
@@ -966,7 +995,7 @@ export function collectArtifactMaterializeNodesFromOasDocument(
           "declare both (memberContentField + memberTitleField) or neither",
       );
     }
-    const isList = hasMemberContent || hasMemberTitle;
+    const isList = isArtifactMaterializeListInput(input);
     for (const field of ["memberContentField", "memberTitleField"] as const) {
       const value = input[field];
       // The runtime reads the member property by exactly this name, so a blank
@@ -992,6 +1021,14 @@ export function collectArtifactMaterializeNodesFromOasDocument(
           );
         }
       }
+    }
+
+    // The node's response fields sit beside `input` in `data`, where the route
+    // reads them; a list call answers no single id (the shared refusal above).
+    const listRefusal = materializeListResultIdFieldRefusal(input, data.result_id_field);
+    if (listRefusal !== null) {
+      errors.push(`${where}.data.result_id_field: ${listRefusal.message}`);
+      valid = false;
     }
 
     const requiredStrings = isAppend
@@ -1095,7 +1132,7 @@ function isArtifactMaterializeListData(raw: unknown): boolean {
     }
   }
   if (!isPlainObject(data) || data.tool !== ARTIFACT_MATERIALIZE_TOOL || !isPlainObject(data.input)) return false;
-  return data.input.memberContentField !== undefined || data.input.memberTitleField !== undefined;
+  return isArtifactMaterializeListInput(data.input);
 }
 
 export type CollectedArtifactImageNode = {

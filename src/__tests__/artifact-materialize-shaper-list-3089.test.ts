@@ -9,6 +9,7 @@
 import { describe, expect, it } from "vitest";
 
 import { shapeArtifactMaterializeInput } from "../app/api/agents/passthrough/artifact-materialize-shaper";
+import { isArtifactMaterializeListInput } from "../../packages/agents/src/artifact-binding";
 
 const EXT = "@cinatra-ai/email-artifacts";
 const DRAFTS = [
@@ -137,5 +138,39 @@ describe("shapeArtifactMaterializeInput — list mode (cinatra#3089)", () => {
   it("accepts exactly 50 members", () => {
     const list = Array.from({ length: 50 }, (_, i) => ({ subject: `s${i}`, body: `b${i}` }));
     expect(shapeArtifactMaterializeInput(membersOf(list)).members).toHaveLength(50);
+  });
+});
+
+// The shaper is a zero-dependency module, so it keeps its own reading of "is a
+// list call"; the compile check and the route read it from the package. The
+// three readings must not drift: the same raw input is a list call for the
+// package's predicate exactly when the shaper takes the list road (a half list
+// is refused by the shaper and is a list call for the predicate, never a
+// single call).
+describe("the shaper and the package read 'a list call' alike (cinatra#3089)", () => {
+  const single = (): Record<string, unknown> => {
+    const raw = listRaw({ title: "T" });
+    delete raw.memberContentField;
+    delete raw.memberTitleField;
+    return raw;
+  };
+  const cases: Array<[string, Record<string, unknown>, boolean]> = [
+    ["a single call", single(), false],
+    ["a list call", listRaw(), true],
+    ["a member content field alone", { ...single(), memberContentField: "body" }, true],
+    ["a member title field alone", { ...single(), memberTitleField: "subject" }, true],
+    ["a null member content field", { ...single(), memberContentField: null }, true],
+  ];
+
+  // red-first-expect: ListInput) is not a function
+  it.each(cases)("%s", (_name, raw, isList) => {
+    expect(isArtifactMaterializeListInput(raw)).toBe(isList);
+    let members: unknown;
+    try {
+      members = shapeArtifactMaterializeInput(raw).members;
+    } catch {
+      members = "refused";
+    }
+    expect(members === undefined).toBe(!isList);
   });
 });

@@ -1,5 +1,6 @@
 import type { VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
 import { verifyRunExecutedSource } from "@cinatra-ai/agents/store";
+import { materializeListResultIdFieldRefusal } from "@cinatra-ai/agents/artifact-binding";
 import "server-only";
 import { NextResponse } from "next/server";
 
@@ -491,13 +492,13 @@ export async function POST(req: Request): Promise<Response> {
   // single id to answer under `result_id_field`. A step that names one expects
   // ONE id; it is refused here, before anything is filed, never answered with a
   // null or the first member's id. A list answers `artifacts` and `reviewTargets`.
-  if (tool === "artifact_materialize" && input.members !== undefined && body.result_id_field !== undefined) {
-    return NextResponse.json({
-      error:
-        "artifact_materialize: a list call files one artifact per member and has no single id; " +
-        "remove result_id_field and read artifacts (or reviewTargets) from the answer",
-      code: "materialize_list_result_id_field",
-    }, { status: 400 });
+  // The compile check refuses the same pair through the same function.
+  const listRefusal =
+    tool === "artifact_materialize"
+      ? materializeListResultIdFieldRefusal(rawInput, body.result_id_field)
+      : null;
+  if (listRefusal !== null) {
+    return NextResponse.json({ error: listRefusal.message, code: listRefusal.code }, { status: 400 });
   }
 
   // Resolve actor from the agent_run row — same authority the originating

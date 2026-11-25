@@ -84,6 +84,10 @@ vi.mock("@/lib/artifacts/run-artifact-materializer", async () => {
 });
 
 import { POST } from "../app/api/agents/passthrough/route";
+import {
+  ARTIFACT_MATERIALIZE_TOOL,
+  collectArtifactMaterializeNodesFromOasDocument,
+} from "../../packages/agents/src/artifact-binding";
 
 const EXT = "@cinatra-ai/blog-post-artifact";
 const ATTEST_KEY = "step-attest-key-under-test";
@@ -383,3 +387,87 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
   });
 });
 
+// ---------------------------------------------------------------------------
+// The compile check and the route are one contract: the same call, with the
+// same response fields beside its input, is refused by both or accepted by
+// both, and the compile check says what the route says.
+// ---------------------------------------------------------------------------
+describe("the compile check and the route agree on a list call's response fields (cinatra#3089)", () => {
+  const SINGLE = { title: "T" } as const;
+  const cases: Array<[string, boolean, Record<string, unknown>]> = [
+    ["a list call, no response fields", true, {}],
+    ["a list call asking for its inputs back", true, { result_input_passthrough: true }],
+    ["a list call naming an id field", true, { result_id_field: "artifactId" }],
+    ["a list call asking for its inputs back and naming an id field", true, { result_input_passthrough: true, result_id_field: "artifactId" }],
+    ["a list call naming a null id field", true, { result_id_field: null }],
+    ["a list call naming an unused result shape", true, { result_shape: "test_delivery_send" }],
+    ["a single call, no response fields", false, {}],
+    ["a single call naming an id field", false, { result_id_field: "artifactId" }],
+    ["a single call asking for its inputs back and naming an id field", false, { result_input_passthrough: true, result_id_field: "artifactId" }],
+  ];
+
+  async function routeRefusal(list: boolean, siblings: Record<string, unknown>): Promise<{ error: string; code: string } | null> {
+    const body = list
+      ? { ...listBody(), ...siblings }
+      : {
+          tool: "artifact_materialize",
+          agent_run_id: "run-1",
+          input: { extension: EXT, content: "# Hi", declaredMime: "text/markdown", ...SINGLE, node_id: NODE },
+          ...siblings,
+        };
+    const res = await POST(post(body));
+    if (res.status === 200) return null;
+    expect(res.status).toBe(400);
+    return (await res.json()) as { error: string; code: string };
+  }
+
+  function compileRefusals(list: boolean, siblings: Record<string, unknown>, dataAsText: boolean): string[] {
+    const input = {
+      extension: EXT,
+      content: "{{ drafts_json }}",
+      declaredMime: "text/markdown",
+      node_id: NODE,
+      ...(list ? { memberContentField: "body", memberTitleField: "subject" } : { title: "{{ title }}" }),
+    };
+    const data = { tool: ARTIFACT_MATERIALIZE_TOOL, agent_run_id: "{{ cinatra_run_id }}", input, ...siblings };
+    const doc = {
+      component_type: "Flow",
+      id: "flow",
+      $referenced_components: {
+        [NODE]: {
+          component_type: "ApiNode",
+          id: NODE,
+          url: "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+          data: dataAsText ? JSON.stringify(data) : data,
+        },
+      },
+    };
+    return collectArtifactMaterializeNodesFromOasDocument(doc, { produces: [EXT] }).errors;
+  }
+
+  // red-first-expect: expected undefined to be 'materialize_list_result_id_field'
+  it.each(
+    cases.flatMap(([name, list, siblings]) =>
+      [false, true].map((dataAsText) => [
+        `${name}, data as ${dataAsText ? "JSON text" : "an object"}`,
+        list,
+        siblings,
+        dataAsText,
+      ] as const),
+    ),
+  )(
+    "%s: refused by both or accepted by both",
+    async (_name, list, siblings, dataAsText) => {
+      const refusal = await routeRefusal(list, siblings);
+      const errors = compileRefusals(list, siblings, dataAsText);
+      if (refusal === null) {
+        expect(errors).toEqual([]);
+        expect(h.materializeToolArtifact).toHaveBeenCalled();
+      } else {
+        expect(refusal.code).toBe("materialize_list_result_id_field");
+        expect(errors).toEqual([expect.stringContaining(refusal.error)]);
+        expect(h.materializeToolArtifact).not.toHaveBeenCalled();
+      }
+    },
+  );
+});
