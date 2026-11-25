@@ -876,6 +876,11 @@ describe("cinatra#3089 — an embedded child's artifact-review gate", () => {
     expect(reviews.map((s) => s.name)).toEqual(["Review drafts"]);
     expect(reviews[0]!.artifactReviewTargetsInput).toBe("reviewTargets");
     expect(reviews[0]!.gateCount).toBe(1);
+    // Everything the host draws for that pause, matched by its node.
+    expect(reviews[0]!.artifactReviewGateNode).toBe("drafts-approval_gate");
+    expect(reviews[0]!.surfaceGateInputKeys).toEqual(["reviewTargets"]);
+    expect(typeof reviews[0]!.xRenderer).toBe("string");
+    expect(reviews[0]!.inputMessageSchema).toBeTruthy();
   });
 
   it("an early exit before the filing may skip the gate; a branch after the filing that skips it is refused", async () => {

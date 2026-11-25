@@ -17,7 +17,8 @@ import { createHmac } from "node:crypto";
 // never imports the store — a route-graph-ratchet constraint), so this suite
 // drives the seam slot directly.
 
-import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "../agent-builder-ids";
+import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID, SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
+import { GATE_KEYS_NOT_FROM_RUN_INPUTS } from "../gate-keys-not-from-run-inputs";
 
 const { enrichSpy, onInterruptSpy, gateIndexSpy } = vi.hoisted(() => {
   const enrichSpy = vi.fn(async (schema: unknown) => ({ ...(schema as object) }));
@@ -216,20 +217,30 @@ function makeTemplate(steps: Array<Record<string, unknown>>) {
 
 // The outreach shape as compiled: a recipients review, the embedded drafts
 // review (marked, naming its gate's node), and a send confirmation after it.
-const RECIPIENTS_STEP = { stepNumber: 1, nodeType: "agent", requiresApproval: true, hitlOwnedBy: "self", gateCount: 1, xRenderer: "@test/recipients:review" };
+const RECIPIENTS_STEP = {
+  stepNumber: 1, nodeType: "agent", requiresApproval: true, hitlOwnedBy: "self", gateCount: 1, xRenderer: "@test/recipients:review",
+  inputMessageSchema: { type: "object", properties: { recipientsNote: { type: "string" } } }, surfaceGateInputKeys: ["confirmedRecipients"],
+};
 const DRAFTS_STEP = {
   stepNumber: 2, nodeType: "agent", requiresApproval: true, hitlOwnedBy: "self", gateCount: 1,
-  xRenderer: "@cinatra-ai/agent-builder:schema-field-fallback",
+  xRenderer: "@test/drafting:review",
+  inputMessageSchema: { type: "object", properties: { userResponse: { type: "string" } } }, surfaceGateInputKeys: ["reviewTargets"],
   artifactReviewTargetsInput: "reviewTargets",
   artifactReviewGateNode: "drafts-approval_gate",
 };
-const SEND_STEP = { stepNumber: 3, nodeType: "agent", requiresApproval: true, hitlOwnedBy: "self", gateCount: 1, xRenderer: "@test/delivery:send-confirmation" };
+const SEND_STEP = {
+  stepNumber: 3, nodeType: "agent", requiresApproval: true, hitlOwnedBy: "self", gateCount: 1, xRenderer: "@test/delivery:send-confirmation",
+  inputMessageSchema: { type: "object", properties: { confirmSend: { type: "string" } } }, surfaceGateInputKeys: ["campaignId"],
+};
+// What the pause itself carries (its pendingApproval), drawn when no step is.
+const OWN_SCHEMA = { type: "object", properties: { ownField: { type: "string" } } };
+const RUN_INPUTS = { reviewTargets: [{ artifactId: "art-1", representationRevisionId: "rev-1" }], campaignId: "camp-1", confirmedRecipients: "r1" };
 const OUTREACH = [RECIPIENTS_STEP, DRAFTS_STEP, SEND_STEP];
 const KEY = "test-gate-node-key-3089";
 const TARGETS = [{ artifactId: "art-1", representationRevisionId: "rev-1" }];
 
-function signedClaim(node: string, key = KEY) {
-  const sig = createHmac("sha256", key).update(`g1\nctx-rev-1\ntask-rev-1\n${node}`).digest("hex");
+function signedClaim(node: string, key = KEY, ctx = "ctx-rev-1", taskId = "task-rev-1") {
+  const sig = createHmac("sha256", key).update(`g1\n${ctx}\n${taskId}\n${node}`).digest("hex");
   return { node, attestation: `g1:${sig}` };
 }
 function pausedTask(claim: unknown) {
@@ -237,17 +248,27 @@ function pausedTask(claim: unknown) {
     id: "task-rev-1",
     contextId: "ctx-rev-1",
     status: { state: "input-required", message: { parts: [] } },
-    metadata: {},
+    metadata: { pendingApproval: OWN_SCHEMA },
     history: [{ role: "agent", parts: [{ kind: "text", text: "Ready." }], ...(claim ? { metadata: { cinatra_gate_node: claim } } : {}) }],
   };
 }
 async function pause(claim: unknown, gateIndex: number, steps: Array<Record<string, unknown>> = OUTREACH) {
   storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(steps));
   gateIndexSpy.mockResolvedValue(gateIndex);
-  const run = makeRun({ reviewTargets: TARGETS });
+  const run = makeRun({ ...RUN_INPUTS, reviewTargets: TARGETS });
   await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task: pausedTask(claim) });
 }
 const routedToReview = () => onInterruptSpy.mock.calls.some((c) => c[1] === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID);
+// The one ordinary gate drawn: its schema, renderer and values.
+function drawn() {
+  expect(onInterruptSpy).toHaveBeenCalledTimes(1);
+  const [schema, xRenderer, values] = onInterruptSpy.mock.calls[0]! as [Record<string, unknown>, string, Record<string, unknown>];
+  return { schema, xRenderer, values, props: Object.keys((schema.properties ?? {}) as object) };
+}
+const stoppedWith = (code: string) =>
+  expect(storeMock.transitionRunStatus).toHaveBeenCalledWith(
+    "run-rev-1", "running", "failed", expect.objectContaining({ error: expect.stringMatching(new RegExp(`^${code}: `)) }), TEST_AUTHORITY,
+  );
 
 describe("cinatra#3089 — an embedded review gate's marker follows the verified node that paused", () => {
   const savedKey = process.env.CINATRA_CONTEXT_ATTEST_KEY;
@@ -319,5 +340,54 @@ describe("cinatra#3089 — an embedded review gate's marker follows the verified
     await pause(null, 1, legacy);
     expect(emitSpy).toHaveBeenCalled();
     expect(storeMock.transitionRunStatus).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), "failed", expect.anything(), expect.anything());
+  });
+
+  it("a verified node the position did not pick takes ALL of its step: renderer, schema, step number and keys", async () => {
+    // The review core declines this work, so the step is drawn as an ordinary gate.
+    decideSpy.mockImplementation(async () => ({ review: false, why: "declined" }) as never);
+    await pause(signedClaim("drafts-approval_gate"), 0);
+    const g = drawn();
+    // red-first-expect: expected '@test/recipients:review' to be '@test/drafting:review'
+    expect(g.xRenderer).toBe("@test/drafting:review");
+    expect(g.values.stepNumber).toBe(2);
+    expect(g.props).toContain("userResponse");
+    expect(g.props).not.toContain("recipientsNote");
+    expect(g.schema[GATE_KEYS_NOT_FROM_RUN_INPUTS]).toEqual(["reviewTargets"]);
+    expect(g.values.confirmedRecipients).toBe("r1");
+  });
+
+  it("a position that picked the node-named step of another node draws nothing of it: the pause's own schema in the plain form", async () => {
+    await pause(signedClaim("sender-approval_gate"), 1);
+    const g = drawn();
+    expect(g.xRenderer).toBe(SCHEMA_FIELD_FALLBACK_RENDERER_ID);
+    expect(g.values.stepNumber).toBeUndefined();
+    expect(g.props).toEqual(["ownField"]);
+    // No step is pinned: every key any step lists is withheld from the run's inputs.
+    for (const k of ["reviewTargets", "campaignId", "confirmedRecipients"]) expect(g.values[k], k).toBeUndefined();
+    expect(emitSpy).not.toHaveBeenCalled();
+  });
+
+  it("one template read serves the pause: a failed read stops the run, also when a later read would succeed", async () => {
+    storeMock.readAgentTemplateById.mockReset();
+    // The publish classification reads the template on its own first; the
+    // pause's one read then fails, and any later read would succeed.
+    storeMock.readAgentTemplateById
+      .mockResolvedValueOnce(makeTemplate(OUTREACH))
+      .mockRejectedValueOnce(new Error("store blip"))
+      .mockResolvedValue(makeTemplate(OUTREACH));
+    gateIndexSpy.mockResolvedValue(1);
+    const run = makeRun({ ...RUN_INPUTS });
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task: pausedTask(null) });
+    expect(emitSpy).not.toHaveBeenCalled();
+    expect(onInterruptSpy).not.toHaveBeenCalled();
+    stoppedWith("PAUSE_POLICY_UNREAD");
+    expect(storeMock.readAgentTemplateById).toHaveBeenCalledTimes(2);
+  });
+
+  it("a claim another runtime signed for its own task (a child agent's pause) does not verify here: the run is stopped", async () => {
+    await pause(signedClaim("drafts-approval_gate", KEY, "ctx-child-agent", "task-child-agent"), 1);
+    expect(emitSpy).not.toHaveBeenCalled();
+    expect(onInterruptSpy).not.toHaveBeenCalled();
+    stoppedWith("ARTIFACT_REVIEW_GATE_UNVERIFIED");
   });
 });

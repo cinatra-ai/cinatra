@@ -513,7 +513,7 @@ import {
   buildA2UiMidRunTranslatorResolver,
   resolveRendererIdForKind,
 } from "./field-renderer-bindings.server";
-import { stepFiresRendererGate, reviewGateNodeSteps, artifactReviewMarkerForPause, ARTIFACT_REVIEW_GATE_UNVERIFIED_TEXT } from "./orchestrator-gate-predicate";
+import { stepFiresRendererGate, reviewGateNodeSteps, stepForVerifiedPause, ARTIFACT_REVIEW_GATE_UNVERIFIED_TEXT, PAUSE_POLICY_UNREAD_TEXT } from "./orchestrator-gate-predicate";
 import {
   GATE_KEYS_NOT_FROM_RUN_INPUTS,
   readStoredKeyList,
@@ -2395,19 +2395,26 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // only: no renderer, no generic review task. A missing or unverified claim on a
     // publishing template ends the run failed.
     if (await holdRunAtPublishGate({ run, fromStatus, task, claim: gateNodeClaim, authority })) return;
-    // cinatra#3089: a template whose marked review step names its gate's node
-    // takes that marker by the verified node of the pause, never by position.
-    // Without a verified node it cannot be told whether this pause is that
-    // review: the run is stopped failed, the pause offered as no approval.
-    let reviewNodeSteps: ReturnType<typeof reviewGateNodeSteps> = [];
+    // cinatra#3089: ONE read of the template for this pause, used for every
+    // decision below. A step that names its gate's node is the step of a pause
+    // by the pause's verified node, never by position. Without a verified node,
+    // or without a readable template, it cannot be told whether this pause is
+    // such a review: the run is stopped failed, the pause offered as no approval.
+    const stopUnplacedPause = (error: string) =>
+      transitionRunStatus(runId, fromStatus, "failed", { error, completedAt: new Date() }, authority)
+        .catch((err: unknown) => { if ((err as { code?: unknown } | null)?.code !== "stale_from_status") throw err; });
+    let pauseTemplate: Awaited<ReturnType<typeof readAgentTemplateById>>;
     try {
-      reviewNodeSteps = reviewGateNodeSteps((await readAgentTemplateById(run.templateId))?.approvalPolicy?.steps);
-    } catch { /* unreadable: the renderer resolution below meets the same fault */ }
+      pauseTemplate = await readAgentTemplateById(run.templateId);
+    } catch {
+      await stopUnplacedPause(PAUSE_POLICY_UNREAD_TEXT);
+      return;
+    }
+    const reviewNodeSteps = reviewGateNodeSteps(pauseTemplate?.approvalPolicy?.steps);
     const verifiedGateNode = reviewNodeSteps.length === 0 ? null
       : verifyGateNodeClaim({ key: process.env.CINATRA_CONTEXT_ATTEST_KEY, contextId: task.contextId ?? run.a2aContextId, taskId: task.id, claim: gateNodeClaim });
     if (reviewNodeSteps.length > 0 && verifiedGateNode === null) {
-      await transitionRunStatus(runId, fromStatus, "failed", { error: ARTIFACT_REVIEW_GATE_UNVERIFIED_TEXT, completedAt: new Date() }, authority)
-        .catch((err: unknown) => { if ((err as { code?: unknown } | null)?.code !== "stale_from_status") throw err; });
+      await stopUnplacedPause(ARTIFACT_REVIEW_GATE_UNVERIFIED_TEXT);
       return;
     }
     const adapter = new DualAdapterDispatch(
@@ -2533,7 +2540,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         // Read first and on its own, so that neither a template fault nor a
         // fault below lets a run input fill the gate (null stays).
         try {
-          const contextTmpl = await readAgentTemplateById(run.templateId);
+          const contextTmpl = pauseTemplate;
           wayflowSurfaceGateInputKeys = contextTmpl
             ? readTemplateGateKeys(contextTmpl.approvalPolicy?.steps ?? [])
             : null;
@@ -2544,7 +2551,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           resolveRendererIdForKind("context-selector") ?? SCHEMA_FIELD_FALLBACK_RENDERER_ID;
         await rememberWayflowGateTask(runId, task.id);
       } else {
-        const tmpl = await readAgentTemplateById(run.templateId);
+        const tmpl = pauseTemplate;
         const rawPolicySteps: unknown = tmpl?.approvalPolicy?.steps ?? [];
         // Read before anything can throw on these steps, so the catch below
         // keeps it; an absent template leaves it null.
@@ -2587,9 +2594,25 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         wayflowSurfaceGateInputKeys = templateGateKeys;
       }
     }
-    if (verifiedGateNode !== null) {
-      wayflowArtifactReviewTargetsInput = artifactReviewMarkerForPause({ nodeSteps: reviewNodeSteps, verifiedNode: verifiedGateNode,
-        positional: { targetsInput: wayflowArtifactReviewTargetsInput, stepNumber: wayflowStepNumber } });
+    // cinatra#3089: the one step this pause is drawn as. A verified node that a
+    // node-named step names takes ALL of that step; a position that picked a
+    // node-named step of another node takes none of it (no step: the pause's
+    // own schema through the plain form, every listed key withheld).
+    const pauseStep = verifiedGateNode === null ? { kind: "positional" as const }
+      : stepForVerifiedPause({ nodeSteps: reviewNodeSteps, verifiedNode: verifiedGateNode, positionalStepNumber: wayflowStepNumber });
+    if (pauseStep.kind === "matched") {
+      const s = pauseStep.step.step as { xRenderer?: unknown; schema?: Record<string, unknown>; inputMessageSchema?: Record<string, unknown>; surfaceGateInputKeys?: unknown };
+      wayflowXRenderer = typeof s.xRenderer === "string" ? s.xRenderer : SCHEMA_FIELD_FALLBACK_RENDERER_ID;
+      wayflowStepNumber = pauseStep.step.stepNumber;
+      wayflowSchema = s.schema ?? s.inputMessageSchema ?? null;
+      wayflowArtifactReviewTargetsInput = pauseStep.step.targetsInput;
+      wayflowSurfaceGateInputKeys = readStoredKeyList(s.surfaceGateInputKeys);
+    } else if (pauseStep.kind === "mispicked") {
+      wayflowXRenderer = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
+      wayflowStepNumber = null;
+      wayflowSchema = null;
+      wayflowArtifactReviewTargetsInput = null;
+      wayflowSurfaceGateInputKeys = templateGateKeys;
     }
     // ------------------------------------------------------------------------
     // cinatra#1796 (epic #1620 S13) — MARKED artifact-review gate: pin + route.

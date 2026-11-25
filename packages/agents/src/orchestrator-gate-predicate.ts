@@ -37,20 +37,31 @@ export function isContextSelectorRendererId(renderer: string): boolean {
   return renderer === "context-selector" || renderer.endsWith(":context-selector");
 }
 
-// cinatra#3089: the review marker of a step that names its gate's node
-// (`artifactReviewGateNode`, the compiled step of an embedded marked gate) is
-// applied to a pause by the pause's VERIFIED node only, never by its position.
-// `reviewGateNodeSteps` reads those steps from a stored policy (any other shape
-// is no such step). `artifactReviewMarkerForPause` answers the marker a pause
-// takes: the marker of the node-named step whose node is the verified node;
-// else none when the step the position picked names a node (its marker belongs
-// to another pause); else the marker the position picked (a step that names
-// no node keeps today's reading).
-export type ReviewGateNodeStep = { node: string; targetsInput: string; stepNumber: number | null };
+// cinatra#3089: a step that names its gate's node (`artifactReviewGateNode`,
+// the compiled step of an embedded marked gate) is the step of a pause by the
+// pause's VERIFIED node only, never by its position. `reviewGateNodeSteps`
+// reads those steps from a stored policy (any other shape is no such step).
+// `stepForVerifiedPause` answers which step a pause with a verified node is:
+//   * "matched": the node-named step whose node is the verified node; the pause
+//     takes all of that step (renderer, schema, step number, keys, marker);
+//   * "mispicked": the step the position picked names another node; the pause
+//     takes nothing of it and is drawn with what it carries itself;
+//   * "positional": neither; the position's pick stands (a step that names no
+//     node keeps today's reading; general placement by node is cinatra#4772).
+export type ReviewGateNodeStep = {
+  node: string;
+  targetsInput: string;
+  stepNumber: number | null;
+  step: Record<string, unknown>;
+};
 export const ARTIFACT_REVIEW_GATE_UNVERIFIED = "ARTIFACT_REVIEW_GATE_UNVERIFIED";
 export const ARTIFACT_REVIEW_GATE_UNVERIFIED_TEXT =
   `${ARTIFACT_REVIEW_GATE_UNVERIFIED}: this flow reviews artifacts at a named step, and the pause carries no verified step claim, ` +
   "so it cannot be told whether this pause is that review; the pause was not offered as an approval and the run was stopped";
+export const PAUSE_POLICY_UNREAD = "PAUSE_POLICY_UNREAD";
+export const PAUSE_POLICY_UNREAD_TEXT =
+  `${PAUSE_POLICY_UNREAD}: the steps of this flow could not be read for this pause, so it cannot be told whether this pause ` +
+  "is an artifact review; the pause was not offered as an approval and the run was stopped";
 export function reviewGateNodeSteps(steps: unknown): ReviewGateNodeStep[] {
   if (!Array.isArray(steps)) return [];
   const found: ReviewGateNodeStep[] = [];
@@ -61,18 +72,18 @@ export function reviewGateNodeSteps(steps: unknown): ReviewGateNodeStep[] {
     if (typeof node !== "string" || node.length === 0) continue;
     const { artifactReviewTargetsInput: targetsInput, stepNumber } = step as Record<string, unknown>;
     if (typeof targetsInput !== "string" || targetsInput.length === 0) continue;
-    found.push({ node, targetsInput, stepNumber: typeof stepNumber === "number" ? stepNumber : null });
+    found.push({ node, targetsInput, stepNumber: typeof stepNumber === "number" ? stepNumber : null, step: step as Record<string, unknown> });
   }
   return found;
 }
-export function artifactReviewMarkerForPause(input: {
+export function stepForVerifiedPause(input: {
   nodeSteps: readonly ReviewGateNodeStep[];
   verifiedNode: string;
-  positional: { targetsInput: string | null; stepNumber: number | null };
-}): string | null {
+  positionalStepNumber: number | null;
+}): { kind: "matched"; step: ReviewGateNodeStep } | { kind: "mispicked" } | { kind: "positional" } {
   const own = input.nodeSteps.find((s) => s.node === input.verifiedNode);
-  if (own) return own.targetsInput;
-  const { stepNumber, targetsInput } = input.positional;
-  if (stepNumber !== null && input.nodeSteps.some((s) => s.stepNumber === stepNumber)) return null;
-  return targetsInput;
+  if (own) return { kind: "matched", step: own };
+  const picked = input.positionalStepNumber;
+  if (picked !== null && input.nodeSteps.some((s) => s.stepNumber === picked)) return { kind: "mispicked" };
+  return { kind: "positional" };
 }

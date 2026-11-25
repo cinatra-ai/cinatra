@@ -485,12 +485,17 @@ describe("every other pause keeps today's road", () => {
     ["no claim", undefined],
     ["an unverified claim of another step", sign("review_step", "another-key")],
     ["a verified claim of another step", sign("review_step")],
-  ])("a template that cannot be read keeps today's road for %s: no decision, the interrupt is offered", async (_label, claim) => {
+  ])("a template that cannot be read stops the run for %s: no decision, no interrupt (cinatra#3089)", async (_label, claim) => {
+    // cinatra#3089: the pause cannot be told from an artifact review without
+    // the flow's steps, so it is offered as no approval.
     storeMock.readAgentTemplateById.mockRejectedValue(new Error("template store down"));
     await pause(claim);
     expect(decisions.insertParkedDecision).not.toHaveBeenCalled();
-    expect(transitions().map((m) => m.to)).not.toContain("failed");
-    expect(onInterruptSpy).toHaveBeenCalledTimes(1);
+    const moves = transitions();
+    expect(moves.map((m) => m.to)).toEqual(["failed"]);
+    expect(moves[0]!.error).toMatch(/^PAUSE_POLICY_UNREAD: /);
+    expect(moves[0]!.error).not.toContain("template store down");
+    expect(onInterruptSpy).not.toHaveBeenCalled();
   });
 
   it.each([
