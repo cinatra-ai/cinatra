@@ -8,6 +8,7 @@ import {
   parseArtifactBindingDeclaration,
   producesObjectTypeIdForExtension,
   readArtifactReviewTargetsInput,
+  readApiNodeDataObject,
   readFlowControlTopology,
   type CollectedArtifactBinding,
   type PersistedArtifactBindingDeclaration,
@@ -404,7 +405,9 @@ function readReviewedWriteNodeIds(doc: Record<string, unknown>): ReadonlySet<str
   const apiTool = (id: string): string | undefined | null => {
     const node = refs[id];
     if (!isRecord(node) || node.component_type !== "ApiNode") return null;
-    const tool = isRecord(node.data) ? node.data.tool : undefined;
+    // The node's data as the binding reads it (an object, or the JSON text of one).
+    const data = readApiNodeDataObject(node.data);
+    const tool = data === null ? undefined : data.tool;
     return typeof tool === "string" ? tool : undefined;
   };
   const isWriter = (id: string): boolean => {

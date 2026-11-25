@@ -359,6 +359,26 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 /**
+ * An ApiNode's `data` as an object, the ONE reading of it: the object itself,
+ * or the JSON text of an object (the fleet authors objects; a JSON string is
+ * statically equivalent when it parses). Anything else (text that is not JSON,
+ * JSON text of an array, a string, null or a number, or no data) is not a data
+ * block and reads as null. The compile collectors, the list-node reading and
+ * the run materializer's reading of which node writes all use it, so that they
+ * cannot disagree on what a node's data is (cinatra#3089).
+ */
+export function readApiNodeDataObject(raw: unknown): Record<string, unknown> | null {
+  if (isPlainObject(raw)) return raw;
+  if (typeof raw !== "string") return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return isPlainObject(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Collect + validate every `outputs[].cinatra.artifact` annotation on the
  * TOP-LEVEL EndNode components of an OAS Flow document (matching the scope
  * of the EndNode output-source runtime-invariant scan — subflow EndNodes do not surface
@@ -725,6 +745,21 @@ export const MATERIALIZE_LIST_RESULT_ID_FIELD_MESSAGE =
   "artifact_materialize: a list call files one artifact per member and has no single id; " +
   "remove result_id_field and read artifacts (or reviewTargets) from the answer";
 
+export const MATERIALIZE_LIST_MEMBER_FIELDS_EQUAL_CODE = "materialize_list_member_fields_equal";
+export const MATERIALIZE_LIST_MEMBER_FIELDS_EQUAL_MESSAGE =
+  "artifact_materialize: memberContentField and memberTitleField name the same member field; " +
+  "a title that is the whole body is not a filing, name two fields; nothing was filed";
+
+/** The refusal for a list call whose title field and content field are the SAME member field (read as written, never trimmed), or null. */
+export function materializeListMemberFieldsEqualRefusal(
+  input: Record<string, unknown>,
+): { code: typeof MATERIALIZE_LIST_MEMBER_FIELDS_EQUAL_CODE; message: string } | null {
+  const content = input.memberContentField;
+  return typeof content === "string" && content === input.memberTitleField
+    ? { code: MATERIALIZE_LIST_MEMBER_FIELDS_EQUAL_CODE, message: MATERIALIZE_LIST_MEMBER_FIELDS_EQUAL_MESSAGE }
+    : null;
+}
+
 /** Whether an `artifact_materialize` input (as authored, or as the route receives it) is a list call. */
 export function isArtifactMaterializeListInput(input: Record<string, unknown>): boolean {
   return input.memberContentField !== undefined || input.memberTitleField !== undefined;
@@ -850,17 +885,9 @@ export function collectArtifactMaterializeNodesFromOasDocument(
       typeof node.id === "string" && node.id.length > 0 ? node.id : refKey;
     const where = `${path} (ApiNode "${nodeId}")`;
 
-    let data: unknown = node.data;
-    if (typeof data === "string") {
-      // The fleet authors object-shaped data blocks; a JSON string is
-      // statically equivalent when it parses.
-      try {
-        const parsed: unknown = JSON.parse(data);
-        if (isPlainObject(parsed)) data = parsed;
-      } catch {
-        // fall through — handled below
-      }
-      if (typeof data === "string") {
+    const data = readApiNodeDataObject(node.data);
+    if (data === null) {
+      if (typeof node.data === "string") {
         // FAIL CLOSED on ANY string data block that does not parse to an
         // object (codex round 1): a fully-templated block (e.g.
         // "{{ passthrough_payload }}") could resolve to an
@@ -874,8 +901,8 @@ export function collectArtifactMaterializeNodesFromOasDocument(
         );
         return;
       }
+      return; // no data block — cannot select a tool
     }
-    if (!isPlainObject(data)) return; // no data block — cannot select a tool
 
     const tool = data.tool;
     if (typeof tool !== "string" || tool.length === 0 || isTemplated(tool)) {
@@ -1011,6 +1038,8 @@ export function collectArtifactMaterializeNodesFromOasDocument(
         );
       }
     }
+    const equalNames = materializeListMemberFieldsEqualRefusal(input);
+    if (equalNames !== null) fieldError("memberTitleField", equalNames.message);
     if (isList) {
       for (const field of ["artifactId", "baseRepresentationRevisionId", "contentJsonField", "title"] as const) {
         if (input[field] !== undefined) {
@@ -1107,15 +1136,8 @@ export function isArtifactMaterializeListNode(node: unknown): boolean {
 }
 
 function isArtifactMaterializeListData(raw: unknown): boolean {
-  let data: unknown = raw;
-  if (typeof data === "string") {
-    try {
-      data = JSON.parse(data);
-    } catch {
-      return false;
-    }
-  }
-  if (!isPlainObject(data) || data.tool !== ARTIFACT_MATERIALIZE_TOOL || !isPlainObject(data.input)) return false;
+  const data = readApiNodeDataObject(raw);
+  if (data === null || data.tool !== ARTIFACT_MATERIALIZE_TOOL || !isPlainObject(data.input)) return false;
   return isArtifactMaterializeListInput(data.input);
 }
 
@@ -1156,16 +1178,8 @@ export function collectArtifactImageNodesFromOasDocument(
     const nodeId =
       typeof node.id === "string" && node.id.length > 0 ? node.id : refKey;
 
-    let data: unknown = node.data;
-    if (typeof data === "string") {
-      try {
-        const parsed: unknown = JSON.parse(data);
-        if (isPlainObject(parsed)) data = parsed;
-      } catch {
-        return;
-      }
-    }
-    if (!isPlainObject(data) || typeof data.tool !== "string") return;
+    const data = readApiNodeDataObject(node.data);
+    if (data === null || typeof data.tool !== "string") return;
     const requiredText = FILING_TOOL_REQUIRED_TEXT.get(data.tool);
     if (requiredText === undefined) return;
 

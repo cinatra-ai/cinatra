@@ -84,6 +84,7 @@ vi.mock("@/lib/artifacts/run-artifact-materializer", async () => {
 });
 
 import { POST } from "../app/api/agents/passthrough/route";
+import { shapeArtifactMaterializeInput } from "../app/api/agents/passthrough/artifact-materialize-shaper";
 import {
   ARTIFACT_MATERIALIZE_TOOL,
   collectArtifactMaterializeNodesFromOasDocument,
@@ -345,12 +346,86 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
       }
     });
 
+    // red-first-expect: expected 400 to be 200
     it("files a list call whose input is exactly at the limit", async () => {
       const input = listInputOfBytes(LIMIT);
       const res = await POST(post(callOf(input)));
       expect(res.status).toBe(200);
       expect(h.materializeToolArtifact).toHaveBeenCalledTimes(50);
       expect((await res.json()).content).toBe(input.content);
+    });
+  });
+
+  describe("the size of the shaped list call and the member field names (cinatra#3089)", () => {
+    // The limit of a run tool call's arguments as JSON text, in bytes.
+    const LIMIT = 256 * 1024;
+    const TOO_LARGE = {
+      error:
+        "artifact_materialize: a list call's input is larger than 262144 bytes as JSON text " +
+        "(the limit of a run tool call's arguments); nothing was filed",
+      code: "materialize_list_input_too_large",
+    };
+
+    // red-first-expect: expected undefined to be 'materialize_list_member_fields_equal'
+    it.each([
+      ["a small list", [{ body: "Dear Ada, ..." }, { body: "Dear Bob, ..." }]],
+      ["a list of about 140 KiB", [{ body: "a".repeat(70 * 1024) }, { body: "b".repeat(70 * 1024) }]],
+    ])("refuses %s whose title field and content field name the same member field, and files nothing", async (_name, members) => {
+      const res = await POST(
+        post({ ...listBody({ content: JSON.stringify(members), memberContentField: "body", memberTitleField: "body" }), result_input_passthrough: true }),
+      );
+      const body = await res.json();
+      expect(body.code).toBe("materialize_list_member_fields_equal");
+      expect(res.status).toBe(400);
+      expect(body).toEqual({
+        error:
+          "artifact_materialize: memberContentField and memberTitleField name the same member field; " +
+          "a title that is the whole body is not a filing, name two fields; nothing was filed",
+        code: "materialize_list_member_fields_equal",
+      });
+      expect(h.materializeToolArtifact).not.toHaveBeenCalled();
+    });
+
+    /** A 50-member list call with short member field names whose input as
+     *  received is exactly `bytes` long, where each member's value is filed as
+     *  its content: the shaped call names every member's fields in full
+     *  (`title`, `content`), so it is longer than the call as received. */
+    function listOfRawBytes(bytes: number): Record<string, unknown> {
+      const members = Array.from({ length: 50 }, (_, i) => ({ t: `T${i + 1}`, c: `${i + 1}:` }));
+      const build = () =>
+        (listBody({ content: JSON.stringify(members), memberContentField: "c", memberTitleField: "t" }) as {
+          input: Record<string, unknown>;
+        }).input;
+      const extra = bytes - Buffer.byteLength(JSON.stringify(build()));
+      for (const [i, m] of members.entries()) m.c += "x".repeat(Math.floor(extra / 50) + (i === 0 ? extra % 50 : 0));
+      const input = build();
+      expect(Buffer.byteLength(JSON.stringify(input))).toBe(bytes);
+      return input;
+    }
+
+    // red-first-expect: input.title must be a non-empty string
+    it("answers the list's own 400 for a call that is within the limit as received but over it once shaped, and files nothing", async () => {
+      const input = listOfRawBytes(LIMIT);
+      // Not a case of the raw check: the call as received is exactly at the limit ...
+      expect(Buffer.byteLength(JSON.stringify(input))).toBe(LIMIT);
+      // ... and the shaped call is over it.
+      const shaped = shapeArtifactMaterializeInput(input);
+      expect(Buffer.byteLength(JSON.stringify(shaped))).toBeGreaterThan(LIMIT);
+      const res = await POST(post({ tool: "artifact_materialize", agent_run_id: "run-1", input, result_input_passthrough: true }));
+      const body = await res.json();
+      expect(body.code).toBe("materialize_list_input_too_large");
+      expect(res.status).toBe(400);
+      expect(body).toEqual(TOO_LARGE);
+      expect(h.materializeToolArtifact).not.toHaveBeenCalled();
+    });
+
+    // red-first-expect: input.title must be a non-empty string
+    it("files the same list when it is a few bytes smaller, so that the shaped call is within the limit", async () => {
+      const input = listOfRawBytes(LIMIT - 400);
+      expect(Buffer.byteLength(JSON.stringify(shapeArtifactMaterializeInput(input)))).toBeLessThanOrEqual(LIMIT);
+      const res = await POST(post({ tool: "artifact_materialize", agent_run_id: "run-1", input, result_input_passthrough: true }));
+      expect(res.status).toBe(200);
+      expect(h.materializeToolArtifact).toHaveBeenCalledTimes(50);
     });
   });
 
@@ -391,6 +466,7 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
     expect(h.materializeToolArtifact).toHaveBeenCalledTimes(1);
   });
 
+  // red-first-expect: expected 400 to be 200
   it("keeps the single call as it was", async () => {
     const res = await POST(
       post({
@@ -528,29 +604,33 @@ describe("the compile check and the route agree on a list call's response fields
     return collectArtifactMaterializeNodesFromOasDocument(doc, { produces: [EXT] }).errors;
   }
 
+  const rowsOf = (list: boolean) =>
+    cases
+      .filter(([, isList]) => isList === list)
+      .flatMap(([name, isList, siblings]) =>
+        [false, true].map((dataAsText) => [
+          `${name}, data as ${dataAsText ? "JSON text" : "an object"}`,
+          isList,
+          siblings,
+          dataAsText,
+        ] as const),
+      );
+
+  async function agree(_name: string, list: boolean, siblings: Record<string, unknown>, dataAsText: boolean) {
+    const refusal = await routeRefusal(list, siblings);
+    const errors = compileRefusals(list, siblings, dataAsText);
+    if (refusal === null) {
+      expect(errors).toEqual([]);
+      expect(h.materializeToolArtifact).toHaveBeenCalled();
+    } else {
+      expect(refusal.code).toBe("materialize_list_result_id_field");
+      expect(errors).toEqual([expect.stringContaining(refusal.error)]);
+      expect(h.materializeToolArtifact).not.toHaveBeenCalled();
+    }
+  }
+
   // red-first-expect: expected undefined to be 'materialize_list_result_id_field'
-  it.each(
-    cases.flatMap(([name, list, siblings]) =>
-      [false, true].map((dataAsText) => [
-        `${name}, data as ${dataAsText ? "JSON text" : "an object"}`,
-        list,
-        siblings,
-        dataAsText,
-      ] as const),
-    ),
-  )(
-    "%s: refused by both or accepted by both",
-    async (_name, list, siblings, dataAsText) => {
-      const refusal = await routeRefusal(list, siblings);
-      const errors = compileRefusals(list, siblings, dataAsText);
-      if (refusal === null) {
-        expect(errors).toEqual([]);
-        expect(h.materializeToolArtifact).toHaveBeenCalled();
-      } else {
-        expect(refusal.code).toBe("materialize_list_result_id_field");
-        expect(errors).toEqual([expect.stringContaining(refusal.error)]);
-        expect(h.materializeToolArtifact).not.toHaveBeenCalled();
-      }
-    },
-  );
+  it.each(rowsOf(true))("%s: refused by both or accepted by both", agree);
+
+  it.each(rowsOf(false))("%s: unchanged, accepted by both", agree);
 });

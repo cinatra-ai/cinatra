@@ -262,6 +262,15 @@ beforeEach(() => {
   );
 });
 
+/** The list node's call as the flow author writes it (the detection reads its tool only). */
+const LIST_NODE_DATA = {
+  tool: "artifact_materialize",
+  input: {
+    extension: EXT, content: "{{ drafts }}", memberContentField: "body", memberTitleField: "subject",
+    declaredMime: "text/markdown", node_id: NODE,
+  },
+};
+
 const EXPECTED = [1, 2, 3].map((i) => ({ artifactId: `art-${i}`, representationRevisionId: `rep-${i}` }));
 
 describe("cinatra#3089 — artifact_materialize list mode on the ledgered write core", () => {
@@ -314,7 +323,10 @@ describe("cinatra#3089 — artifact_materialize list mode on the ledgered write 
   });
 
   // red-first-expect: input.title must be a non-empty string
-  it("L3 a marked gate fed by the list node reviews every member's write and plans one review leg per artifact", async () => {
+  it.each([
+    ["an object", LIST_NODE_DATA],
+    ["JSON text of an object (the form the binding also reads)", JSON.stringify(LIST_NODE_DATA)],
+  ])("L3 a marked gate fed by the list node whose data is %s reviews every member's write and plans one review leg per artifact", async (_form, nodeData) => {
     const ref = (id: string) => ({ $component_ref: id });
     const order = ["start", NODE, "review_gate", "end"];
     getAgentPackageMock.mockResolvedValue(withPayload({
@@ -335,7 +347,7 @@ describe("cinatra#3089 — artifact_materialize list mode on the ledgered write 
         end: { component_type: "EndNode", id: "end", name: "end" },
         [NODE]: {
           component_type: "ApiNode", id: NODE, name: NODE,
-          data: { tool: "artifact_materialize" }, outputs: [{ title: "reviewTargets", type: "string" }],
+          data: nodeData, outputs: [{ title: "reviewTargets", type: "string" }],
         },
         review_gate: {
           component_type: "InputMessageNode", id: "review_gate", name: "review_gate",
@@ -433,6 +445,7 @@ describe("cinatra#3089 — artifact_materialize list mode on the ledgered write 
 });
 
 describe("cinatra#3089 — the raw size check of a list call never throws", () => {
+  // red-first-expect: Cannot find package '@/app/api/agents/passthrough/artifact-materialize-list'
   it("counts an input that cannot be written as JSON text as too large", async () => {
     const { isMaterializeListInputTooLarge } = await listModule();
     // A small input whose unused field is nested far deeper than the serializer's stack holds.

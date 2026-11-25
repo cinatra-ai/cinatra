@@ -2,6 +2,7 @@ import type { VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
 import { verifyRunExecutedSource } from "@cinatra-ai/agents/store";
 import {
   isArtifactMaterializeListInput,
+  materializeListMemberFieldsEqualRefusal,
   materializeListResultIdFieldRefusal,
 } from "@cinatra-ai/agents/artifact-binding";
 import "server-only";
@@ -486,13 +487,25 @@ export async function POST(req: Request): Promise<Response> {
   // cinatra#3089: a list call is bounded AS RECEIVED, before the shaper parses
   // its list: the shaped call keeps only each member's title and content, so the
   // argument check below would never see the rest (artifact-materialize-list.ts).
+  // The size of a list call has ONE answer: a list call whose input as received,
+  // or whose shaped call below, is larger than the limit of a run tool call's
+  // arguments is refused with this 400 and code before anything is filed, so the
+  // preparation's own size check (`action_json_limit`, a 403) never meets a list.
+  let listLimitBytes: number | null = null;
   if (tool === "artifact_materialize" && isArtifactMaterializeListInput(rawInput)) {
     const { ACTION_JSON_MAX_BYTES } = await import("@/lib/extension-host-context");
+    listLimitBytes = ACTION_JSON_MAX_BYTES;
     if (isMaterializeListInputTooLarge(rawInput, ACTION_JSON_MAX_BYTES)) {
       return NextResponse.json(
         { error: materializeListInputTooLargeError(ACTION_JSON_MAX_BYTES), code: MATERIALIZE_LIST_INPUT_TOO_LARGE },
         { status: 400 },
       );
+    }
+    // A title that is the whole body files each value twice (as title and as
+    // content), so the shaped call can be twice the size of the call received.
+    const sameField = materializeListMemberFieldsEqualRefusal(rawInput);
+    if (sameField !== null) {
+      return NextResponse.json({ error: sameField.message, code: sameField.code }, { status: 400 });
     }
   }
 
@@ -506,6 +519,14 @@ export async function POST(req: Request): Promise<Response> {
     // downstream artifact.
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 400 });
+  }
+  // The shaped list call is the call the preparation copies and measures: the
+  // same measure, the same limit, the same answer as the raw check above.
+  if (listLimitBytes !== null && isMaterializeListInputTooLarge(input, listLimitBytes)) {
+    return NextResponse.json(
+      { error: materializeListInputTooLargeError(listLimitBytes), code: MATERIALIZE_LIST_INPUT_TOO_LARGE },
+      { status: 400 },
+    );
   }
   // cinatra#3089: a list call files one artifact per member, so it has no
   // single id to answer under `result_id_field`. A step that names one expects

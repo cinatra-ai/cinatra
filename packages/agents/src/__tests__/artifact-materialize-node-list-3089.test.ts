@@ -7,6 +7,7 @@ import { describe, it, expect } from "vitest";
 import {
   ARTIFACT_MATERIALIZE_TOOL,
   collectArtifactMaterializeNodesFromOasDocument,
+  readApiNodeDataObject,
 } from "../artifact-binding";
 import { compileOasAgentJson } from "../oas-compiler";
 import { checkRegenerateDeclaration } from "../verdaccio/package-contract";
@@ -101,6 +102,20 @@ describe("collectArtifactMaterializeNodesFromOasDocument — list mode (cinatra#
     expect(result.nodes).toEqual([]);
     expect(result.errors).toEqual([
       expect.stringContaining(`data.input.${field}: when present, must be a literal field name with no surrounding whitespace`),
+    ]);
+  });
+
+  // red-first-expect: expected [ Array(1) ] to deeply equal [ StringContaining
+  it.each([
+    ["an object data block", false],
+    ["a JSON-text data block", true],
+  ])("refuses a title field and a content field that name the same member field, in %s", (_name, dataAsText) => {
+    const result = collect(listInput({ memberContentField: "body", memberTitleField: "body" }), {}, dataAsText);
+    expect(result.nodes).toEqual([]);
+    expect(result.errors).toEqual([
+      expect.stringContaining(
+        "data.input.memberTitleField: artifact_materialize: memberContentField and memberTitleField name the same member field",
+      ),
     ]);
   });
 
@@ -395,5 +410,36 @@ describe("a regenerate entry and a list filing (cinatra#3089)", () => {
     const check = checkRegenerateDeclaration(oas, [{ artifactNode: "only_nested", step: FILE_NODE, noteInput: "user" }]);
     expect(check).toMatchObject({ ok: false });
     expect((check as { error: string }).error).toContain('"only_nested" is not a top-level node of the flow');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3089 — ONE reader of an ApiNode's data as an object, used by the
+// compile collectors, the list-node reading and the run materializer's reading
+// of which node writes: the object form and the JSON-text form of an object,
+// and nothing else (what the binding refuses, the reader refuses).
+// ---------------------------------------------------------------------------
+
+describe("readApiNodeDataObject (cinatra#3089)", () => {
+  const data = { tool: ARTIFACT_MATERIALIZE_TOOL, input: listInput() };
+
+  // red-first-expect: readApiNodeDataObject) is not a function
+  it("reads an object as it is and the JSON text of an object as that object", () => {
+    expect(readApiNodeDataObject(data)).toBe(data);
+    expect(readApiNodeDataObject(JSON.stringify(data))).toEqual(data);
+  });
+
+  // red-first-expect: readApiNodeDataObject) is not a function
+  it.each([
+    ["undefined", undefined],
+    ["null", null],
+    ["a number", 3],
+    ["an array", [data]],
+    ["text that is not JSON", "{{ passthrough_payload }}"],
+    ["JSON text of an array", JSON.stringify([data])],
+    ["JSON text of a string", JSON.stringify("x")],
+    ["JSON text of null", "null"],
+  ])("refuses %s", (_name, value) => {
+    expect(readApiNodeDataObject(value)).toBeNull();
   });
 });
