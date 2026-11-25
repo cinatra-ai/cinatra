@@ -110,7 +110,40 @@ export type TriggerEmailSendDeps = {
     ref: { artifactId: string; representationRevisionId: string; runId: string },
     actor: PrimitiveActorContext,
   ) => Promise<DecidedBodyRead>;
+  // The durable send record of each message the approved form mails
+  // (cinatra#3089): claimed before the hand-over to the mail provider, marked
+  // sent after it, so a repeated or concurrent send never mails a message
+  // twice. Defaults to the materialization ledger's send rows
+  // (`claimFanoutMessageSend`). The reference-only form does not use it.
+  messageSendLedger?: MessageSendLedger;
 };
+
+/** The outcome of claiming one message's mail (see `MessageSendLedger`). */
+export type MessageSendClaim =
+  | { kind: "won"; ledgerId: string }
+  | { kind: "sent" }
+  | { kind: "in_doubt" };
+
+/** One message's durable send record: `claim` lets exactly one caller hand the
+ *  message over; `markSent` records the provider's acceptance; `release` gives
+ *  the message back ONLY when it was demonstrably never handed over. */
+export type MessageSendLedger = {
+  claim(
+    message: { runId: string; outputId: string; artifactId: string; representationRevisionId: string },
+    actor: PrimitiveActorContext,
+  ): Promise<MessageSendClaim>;
+  markSent(ledgerId: string, actor: PrimitiveActorContext): Promise<boolean>;
+  release(ledgerId: string, actor: PrimitiveActorContext): Promise<void>;
+};
+
+/** Thrown by a `sendEmail` that stopped BEFORE it reached the mail provider (no
+ *  transport could be resolved), so the message was certainly not handed over. */
+export class MailNotHandedOverError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MailNotHandedOverError";
+  }
+}
 
 /** What `readDecidedBody` answers: the revision's whole text and the body's
  *  declared fields (`subject`, `contactId`, …), or a named refusal. */
@@ -194,7 +227,14 @@ function buildLazyDefaultDeps(): TriggerEmailSendDeps {
       return cachedGetDrafts(ids);
     },
     async sendEmail(message, options) {
-      if (!cachedSend) cachedSend = await loadDefaultSendEmail();
+      if (!cachedSend) {
+        try {
+          cachedSend = await loadDefaultSendEmail();
+        } catch (err) {
+          // No transport, so no provider was called for this message.
+          throw new MailNotHandedOverError(err instanceof Error ? err.message : String(err));
+        }
+      }
       return cachedSend(message, options);
     },
     getObjectByRef(ref, actor) {
@@ -222,8 +262,36 @@ function buildLazyDefaultDeps(): TriggerEmailSendDeps {
         objectTypeId: EMAIL_BODY_TYPE_ID,
       });
     },
+    messageSendLedger: defaultMessageSendLedger,
   };
 }
+
+function orgOf(actor: PrimitiveActorContext): string {
+  if (!actor.orgId) {
+    throw new Error("the sending actor carries no organization, so no message send can be recorded");
+  }
+  return actor.orgId;
+}
+
+/** The materialization ledger's send rows (`claimFanoutMessageSend`). */
+const defaultMessageSendLedger: MessageSendLedger = {
+  async claim(message, actor) {
+    const orgId = orgOf(actor);
+    const { claimFanoutMessageSend } = await import("./artifacts/materialization-ledger");
+    const claim = await claimFanoutMessageSend({ orgId, ...message });
+    return claim.kind === "won" ? { kind: "won", ledgerId: claim.ledgerId } : { kind: claim.kind };
+  },
+  async markSent(ledgerId, actor) {
+    const orgId = orgOf(actor);
+    const { markFanoutMessageSent } = await import("./artifacts/materialization-ledger");
+    return markFanoutMessageSent({ orgId, ledgerId });
+  },
+  async release(ledgerId, actor) {
+    const orgId = orgOf(actor);
+    const { releaseFanoutMessageSend } = await import("./artifacts/materialization-ledger");
+    await releaseFanoutMessageSend({ orgId, ledgerId });
+  },
+};
 
 // Token replacements: drafts may carry any number of Mustache-style merge
 // placeholders (e.g. `{{contact_first_name_or_company}}`,
@@ -277,6 +345,12 @@ type InitialSendStateRow = {
   completedAt: string;
   sentCount: number;
   errorMessage?: string;
+  /** The approved form only (cinatra#3089): messages an earlier call already
+   *  handed over, which this call skipped. */
+  alreadySentCount?: number;
+  /** The approved form only: messages claimed but never recorded as sent, which
+   *  this call did not mail (they may or may not have gone out). */
+  inDoubtCount?: number;
 };
 const sendStateByCampaign = new Map<string, InitialSendStateRow>();
 
@@ -738,6 +812,162 @@ function resolveRunScopeId(
   return fromEnv(draftEnv) ?? fromEnv(recipEnv);
 }
 
+/** The approved form's send-record counts, only when the answer carries them,
+ *  so the reference-only answer keeps exactly its earlier fields. */
+function sendRecordCounts(row: InitialSendStateRow): {
+  alreadySentCount?: number;
+  inDoubtCount?: number;
+} {
+  return {
+    ...(row.alreadySentCount !== undefined ? { alreadySentCount: row.alreadySentCount } : {}),
+    ...(row.inDoubtCount !== undefined ? { inDoubtCount: row.inDoubtCount } : {}),
+  };
+}
+
+/**
+ * THE MAIL OF THE APPROVED FORM, AT MOST ONCE PER MESSAGE (cinatra#3089).
+ *
+ * Every message is already bound to its approved revision on the ledger. For
+ * each one, in bundle order, the send first CLAIMS the message's durable send
+ * record (`MessageSendLedger.claim`, a conditional insert only one caller wins):
+ *   - won: the message is handed to the provider; on success it is marked sent
+ *     and counted in `sentCount`;
+ *   - sent: an earlier call handed it over; it is skipped and counted in
+ *     `alreadySentCount`;
+ *   - in doubt: another call holds it (in flight, or stopped after its claim);
+ *     it is NOT mailed, it is counted in `inDoubtCount` and named in the answer.
+ * A provider error after a won claim leaves the message in doubt (the provider
+ * may have taken the mail before it failed) and stops the send; the claim is
+ * given back only for an error raised before any provider was reached
+ * (`MailNotHandedOverError`), so a later call may mail it. A message in doubt
+ * stays unmailed by every later call until a person establishes with the mail
+ * provider whether it went out; the answer and the log name it.
+ */
+async function mailApprovedMessages(args: {
+  input: { campaignId: string; senderEmail?: string };
+  actor: PrimitiveActorContext;
+  sendEmail: TriggerEmailSendDeps["sendEmail"];
+  messageSendLedger: MessageSendLedger;
+  drafts: readonly DraftRow[];
+  recipients: readonly RecipientRow[];
+  runScopeId: string;
+  approvedByIndex: ReadonlyMap<number, ApprovedFanoutBody & { subject?: string }>;
+  messageIdByArtifact: ReadonlyMap<string, string>;
+  startedAt: string;
+}): Promise<InitialSendStateRow> {
+  const { input, actor, sendEmail, messageSendLedger: ledger, runScopeId } = args;
+  let sentCount = 0;
+  let alreadySentCount = 0;
+  const inDoubt: string[] = [];
+  let stopped: string | undefined;
+  for (const [index, draft] of args.drafts.entries()) {
+    const recipientEmail = recipientEmailFor(draft, args.recipients);
+    if (!recipientEmail) continue;
+    const approved = args.approvedByIndex.get(index);
+    const outputId = approved ? args.messageIdByArtifact.get(approved.artifactId) : undefined;
+    if (!approved || !outputId) {
+      stopped = `draft ${index + 1} of the bundle has no bound approved body, so it was not sent`;
+      break;
+    }
+    const name = `draft ${index + 1} (${outputId})`;
+    const contactId =
+      typeof draft.contactId === "string" && draft.contactId.trim() !== ""
+        ? draft.contactId.trim()
+        : undefined;
+    let claim: MessageSendClaim;
+    try {
+      claim = await ledger.claim(
+        {
+          runId: runScopeId,
+          outputId,
+          artifactId: approved.artifactId,
+          representationRevisionId: approved.representationRevisionId,
+        },
+        actor,
+      );
+    } catch (err) {
+      stopped = `the mail of ${name} could not be claimed, so it was not sent: ${err instanceof Error ? err.message : String(err)}`;
+      break;
+    }
+    if (claim.kind === "sent") {
+      alreadySentCount += 1;
+      continue;
+    }
+    if (claim.kind === "in_doubt") {
+      inDoubt.push(name);
+      console.warn(
+        `[trigger-email-send] ${name} of run ${runScopeId} is claimed but not recorded as sent; it was not mailed again`,
+      );
+      continue;
+    }
+    try {
+      await sendEmail(
+        {
+          to: [recipientEmail],
+          subject: approved.subject ?? draft.subject ?? "(no subject)",
+          textBody: approved.text,
+          fromEmail: input.senderEmail,
+        },
+        {
+          userId: actor.userId,
+          orgId: actor.orgId ?? undefined,
+          correlation: {
+            campaignId: input.campaignId,
+            runId: runScopeId,
+            ...(contactId ? { contactId } : {}),
+          },
+        },
+      );
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      if (err instanceof MailNotHandedOverError) {
+        try {
+          await ledger.release(claim.ledgerId, actor);
+          stopped = `${name} was not sent, no mail provider was reached: ${reason}`;
+        } catch (releaseErr) {
+          inDoubt.push(name);
+          stopped = `${name} was not sent (${reason}), and its claim could not be given back: ${releaseErr instanceof Error ? releaseErr.message : String(releaseErr)}`;
+        }
+      } else {
+        inDoubt.push(name);
+        stopped = `the mail provider failed on ${name}, which may or may not have gone out: ${reason}`;
+        console.warn(`[trigger-email-send] ${name} of run ${runScopeId} is in doubt: ${reason}`);
+      }
+      break;
+    }
+    sentCount += 1;
+    try {
+      if (!(await ledger.markSent(claim.ledgerId, actor))) {
+        console.warn(
+          `[trigger-email-send] ${name} of run ${runScopeId} was mailed but its send record was not open; later calls read it as in doubt`,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        `[trigger-email-send] ${name} of run ${runScopeId} was mailed but could not be recorded as sent; later calls read it as in doubt:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+  }
+  const problems = [
+    ...(stopped ? [stopped] : []),
+    ...(inDoubt.length > 0
+      ? [
+          `${inDoubt.length} message(s) in doubt were not mailed by this call: ${inDoubt.join(", ")}. A message in doubt is mailed by no later call until a person establishes with the mail provider whether it went out`,
+        ]
+      : []),
+  ];
+  return {
+    status: problems.length > 0 ? "failed" : "completed",
+    startedAt: args.startedAt,
+    completedAt: new Date().toISOString(),
+    sentCount,
+    alreadySentCount,
+    inDoubtCount: inDoubt.length,
+    ...(problems.length > 0 ? { errorMessage: problems.join("; ") } : {}),
+  };
+}
+
 async function runInitialSend(args: {
   input: {
     campaignId: string;
@@ -753,13 +983,15 @@ async function runInitialSend(args: {
   actor: PrimitiveActorContext;
   sendEmail: TriggerEmailSendDeps["sendEmail"];
   readDecidedBody: NonNullable<TriggerEmailSendDeps["readDecidedBody"]>;
+  messageSendLedger: MessageSendLedger;
   getObjectByRef: (
     ref: string,
     actor: PrimitiveActorContext,
   ) => Promise<ObjectsEnvelope | null>;
   emitEmailFanout: (args: EmailFanoutArgs) => Promise<EmailFanoutResult>;
 }): Promise<InitialSendStateRow> {
-  const { input, actor, sendEmail, getObjectByRef, emitEmailFanout, readDecidedBody } = args;
+  const { input, actor, sendEmail, getObjectByRef, emitEmailFanout, readDecidedBody, messageSendLedger } =
+    args;
   const startedAt = new Date().toISOString();
   sendStateByCampaign.set(input.campaignId, {
     status: "running",
@@ -920,6 +1152,7 @@ async function runInitialSend(args: {
     // A retry after a failed mail finds the same bindings (the ledger row of
     // each message is read back, `bindFanoutMessageRevision`) and mails again.
     // The reference-only form keeps its best-effort projection unchanged.
+    const messageIdByArtifact = new Map<string, string>();
     if (approvedByIndex && runScopeId) {
       let fanout: EmailFanoutResult;
       try {
@@ -942,9 +1175,9 @@ async function runInitialSend(args: {
           `The send was refused before any email went out: the body type ${EMAIL_BODY_TYPE_ID} is not registered, so no message was bound to its approved body`,
         );
       }
-      const boundIds = new Set(fanout.bodies.map((b) => b.objectId));
+      for (const b of fanout.bodies) messageIdByArtifact.set(b.objectId, b.externalId);
       for (const [index, body] of approvedByIndex) {
-        if (!boundIds.has(body.artifactId)) {
+        if (!messageIdByArtifact.has(body.artifactId)) {
           throw new EmailBodyRefusedError(
             `The send was refused before any email went out: draft ${index + 1} of the bundle was not bound to its approved body`,
           );
@@ -974,19 +1207,30 @@ async function runInitialSend(args: {
       );
     }
 
+    if (approvedByIndex && runScopeId) {
+      return await mailApprovedMessages({
+        input,
+        actor,
+        sendEmail,
+        messageSendLedger,
+        drafts,
+        recipients,
+        runScopeId,
+        approvedByIndex,
+        messageIdByArtifact,
+        startedAt,
+      });
+    }
+
+    // THE REFERENCE-ONLY FORM mails every draft of the bundle on each call,
+    // exactly as before cinatra#3089 (other callers rely on it): it keeps no
+    // per-message send record, and a failure reports `sentCount: 0`.
     let sentCount = 0;
-    for (const [index, draft] of drafts.entries()) {
+    for (const draft of drafts) {
       const recipientEmail = recipientEmailFor(draft, recipients);
       if (!recipientEmail) continue;
-      // The approved form mails the approved revision's text, under the body's
-      // own subject when it carries one; the checks above leave no mailed
-      // draft without its approved body.
-      const approved = approvedByIndex?.get(index);
-      if (approvedByIndex && !approved) {
-        throw new Error(`The send was refused: draft ${index + 1} of the bundle has no approved body`);
-      }
-      const subject = approved?.subject ?? draft.subject ?? "(no subject)";
-      const body = approved ? approved.text : (draft.body ?? draft.bodyHtml ?? "");
+      const subject = draft.subject ?? "(no subject)";
+      const body = draft.body ?? draft.bodyHtml ?? "";
       // Thread campaign / contact / run correlation onto the send so the
       // facade's sent-email object writer lands a fully-correlated record for
       // the thread / campaign / contact views (cinatra#1456). `contactId` is
@@ -1307,6 +1551,7 @@ export function createTriggerEmailSendUseCases(
         getObjectByRef: deps.getObjectByRef ?? fetchObjectsByRef,
         emitEmailFanout: deps.emitEmailFanout ?? defaultEmitEmailFanout,
         readDecidedBody: deps.readDecidedBody ?? buildLazyDefaultDeps().readDecidedBody!,
+        messageSendLedger: deps.messageSendLedger ?? defaultMessageSendLedger,
       });
       sendStateByCampaign.set(input.campaignId, result);
       return {
@@ -1317,6 +1562,7 @@ export function createTriggerEmailSendUseCases(
         completedAt: result.completedAt,
         sentCount: result.sentCount,
         errorMessage: result.errorMessage,
+        ...sendRecordCounts(result),
       } as unknown as ReturnType<TriggerEmailSendUseCases["startInitialSend"]> extends Promise<infer R>
         ? R
         : never;
@@ -1339,6 +1585,7 @@ export function createTriggerEmailSendUseCases(
         completedAt: state.completedAt,
         sentCount: state.sentCount,
         errorMessage: state.errorMessage,
+        ...sendRecordCounts(state),
       } as unknown as ReturnType<TriggerEmailSendUseCases["getInitialSendStatus"]> extends Promise<infer R>
         ? R
         : never;

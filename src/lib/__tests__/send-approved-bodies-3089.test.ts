@@ -46,8 +46,40 @@ import {
   materializeEmailFanout,
   type DecidedBodyRead,
   type EmailFanoutArgs,
+  type MessageSendLedger,
   type TriggerEmailSendDeps,
 } from "../trigger-email-send-use-cases";
+
+/** A stand-in for the message send records with the claim's semantics: the
+ *  first claim of a message wins (checked and set with no await between, so
+ *  concurrent calls cannot both win), a sent message reads "sent", and a
+ *  claimed one that was never marked reads "in_doubt". */
+function memorySendLedger() {
+  const rows = new Map<string, { id: string; phase: "claimed" | "finalized" }>();
+  let next = 0;
+  const ledger: MessageSendLedger = {
+    async claim(m) {
+      const row = rows.get(m.outputId);
+      if (row) return { kind: row.phase === "finalized" ? "sent" : "in_doubt" };
+      next += 1;
+      rows.set(m.outputId, { id: `send-${next}`, phase: "claimed" });
+      return { kind: "won", ledgerId: `send-${next}` };
+    },
+    async markSent(id) {
+      for (const row of rows.values()) {
+        if (row.id === id && row.phase === "claimed") {
+          row.phase = "finalized";
+          return true;
+        }
+      }
+      return false;
+    },
+    async release(id) {
+      for (const [key, row] of rows) if (row.id === id && row.phase === "claimed") rows.delete(key);
+    },
+  };
+  return { rows, ledger };
+}
 
 const actor: PrimitiveActorContext = {
   actorType: "human",
@@ -116,6 +148,7 @@ const approved = [
 
 function makeFixture(opts?: { store?: Map<string, StoredBody>; drafts?: unknown[] }) {
   const store = opts?.store ?? makeStore();
+  const sendLedger = memorySendLedger();
   const sent: Array<{ to: string[]; subject: string; textBody: string }> = [];
   const sendEmail = vi.fn(async (message: { to: string[]; subject: string; textBody: string }) => {
     sent.push(message);
@@ -183,6 +216,7 @@ function makeFixture(opts?: { store?: Map<string, StoredBody>; drafts?: unknown[
     getObjectByRef: async (ref) => envelopes[ref] ?? null,
     emitEmailFanout,
     readDecidedBody,
+    messageSendLedger: sendLedger.ledger,
   };
   const handlers = createTriggerEmailSendHandlers(createTriggerEmailSendUseCases(deps));
   const start = (input: Record<string, unknown>) =>

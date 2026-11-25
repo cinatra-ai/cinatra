@@ -586,6 +586,152 @@ export async function recordFanoutReuseMaterialization(input: {
   );
 }
 
+// ---------------------------------------------------------------------------
+// THE MAIL OF ONE BOUND MESSAGE, AT MOST ONCE (cinatra#3089).
+//
+// The send that mails approved bodies hands each message to the mail provider
+// only after it holds that message's SEND ROW: a second `email_fanout` row of
+// the run, under the message's send identity (`email-send:<run>:<item>`, see
+// `fanoutMessageSendOutputId`), copied from the message's binding row (the
+// organization, the run, the pack, and the approved artifact and revision the
+// mail carries). The row's `phase` is the send state, with the ledger's own
+// two values:
+//   - `claimed`   — a caller won the message and may be handing it over now, or
+//                   stopped after the claim (a crash, or a provider error that
+//                   may have come after the hand-over). Nobody mails it again.
+//   - `finalized` — the provider accepted the mail.
+// The row's content hash is the fixed marker `FANOUT_MESSAGE_SEND_MARKER`, not
+// a hash of the text, so the unique key (run, output, extension, hash) admits
+// ONE send row per message of a run whatever revision is mailed: a person is
+// mailed once per message of a run. The insert is conditional on the key
+// (`ON CONFLICT DO NOTHING`), so of concurrent callers exactly one wins.
+// ---------------------------------------------------------------------------
+
+/** The content-hash value of every send row (see the block above). */
+export const FANOUT_MESSAGE_SEND_MARKER = "message-send";
+
+/** The send identity of a message, from its binding identity
+ *  (`email-body:<run>:<item>` → `email-send:<run>:<item>`). */
+export function fanoutMessageSendOutputId(messageOutputId: string): string {
+  return messageOutputId.startsWith("email-body:")
+    ? `email-send:${messageOutputId.slice("email-body:".length)}`
+    : `email-send:${messageOutputId}`;
+}
+
+export type FanoutMessageSendClaim =
+  /** This caller holds the message: hand it over, then `markFanoutMessageSent`. */
+  | { kind: "won"; ledgerId: string }
+  /** The provider accepted this message's mail earlier. */
+  | { kind: "sent"; artifactId: string | null; representationRevisionId: string | null }
+  /** Claimed but never marked sent: it may or may not have been handed over. */
+  | { kind: "in_doubt"; artifactId: string | null; representationRevisionId: string | null };
+
+/**
+ * Claim the mail of ONE bound message. The send row is inserted from the
+ * message's binding row (the finalized `email_fanout` row of this run, message,
+ * artifact and revision), so only a bound message can be claimed. Throws when
+ * the message has no binding row, and on an infra failure: the caller mails
+ * nothing then.
+ */
+export async function claimFanoutMessageSend(input: {
+  orgId: string;
+  runId: string;
+  /** The message's binding identity (the binding row's `output_id`). */
+  outputId: string;
+  artifactId: string;
+  representationRevisionId: string;
+}): Promise<FanoutMessageSendClaim> {
+  ensurePostgresSchema();
+  const s = schema();
+  const sendOutputId = fanoutMessageSendOutputId(input.outputId);
+  const inserted = await pool().query(
+    `WITH bound AS (
+  SELECT org_id, run_id, extension, artifact_id, representation_revision_id
+    FROM "${s}"."artifact_materializations"
+   WHERE org_id = $2 AND run_id = $3 AND output_id = $4
+     AND path = 'email_fanout' AND phase = 'finalized'
+     AND artifact_id = $5 AND representation_revision_id = $6
+   LIMIT 1
+)
+INSERT INTO "${s}"."artifact_materializations"
+  (id, org_id, run_id, output_id, node_id, path, extension, content_hash,
+   artifact_id, representation_revision_id, phase)
+SELECT $1, org_id, run_id, $7, NULL, 'email_fanout', extension, $8,
+       artifact_id, representation_revision_id, 'claimed'
+  FROM bound
+ON CONFLICT (run_id, output_id, extension, content_hash) DO NOTHING
+RETURNING id`,
+    [
+      randomUUID(),
+      input.orgId,
+      input.runId,
+      input.outputId,
+      input.artifactId,
+      input.representationRevisionId,
+      sendOutputId,
+      FANOUT_MESSAGE_SEND_MARKER,
+    ],
+  );
+  if (inserted.rows.length > 0) {
+    return { kind: "won", ledgerId: String(inserted.rows[0].id) };
+  }
+  const existing = await pool().query(
+    `SELECT id, phase, artifact_id, representation_revision_id
+   FROM "${s}"."artifact_materializations"
+  WHERE org_id = $1 AND run_id = $2 AND output_id = $3
+    AND path = 'email_fanout' AND content_hash = $4
+  ORDER BY created_at ASC
+  LIMIT 1`,
+    [input.orgId, input.runId, sendOutputId, FANOUT_MESSAGE_SEND_MARKER],
+  );
+  const row = existing.rows[0] as
+    | { phase: string; artifact_id: string | null; representation_revision_id: string | null }
+    | undefined;
+  if (!row) {
+    throw new Error(
+      `message ${input.outputId} of run ${input.runId} has no binding to revision ${input.representationRevisionId} of artifact ${input.artifactId}, so its mail cannot be claimed`,
+    );
+  }
+  const refs = {
+    artifactId: row.artifact_id ?? null,
+    representationRevisionId: row.representation_revision_id ?? null,
+  };
+  return row.phase === "finalized" ? { kind: "sent", ...refs } : { kind: "in_doubt", ...refs };
+}
+
+/** Record that the provider accepted the mail of a won message. True when this
+ *  call moved the row from `claimed` to `finalized`. */
+export async function markFanoutMessageSent(input: {
+  orgId: string;
+  ledgerId: string;
+}): Promise<boolean> {
+  ensurePostgresSchema();
+  const s = schema();
+  const res = await pool().query(
+    `UPDATE "${s}"."artifact_materializations"
+    SET phase = 'finalized'
+  WHERE id = $1 AND org_id = $2 AND path = 'email_fanout' AND phase = 'claimed'
+  RETURNING id`,
+    [input.ledgerId, input.orgId],
+  );
+  return res.rows.length > 0;
+}
+
+/** Give a won message back, ONLY when its mail was demonstrably never handed to
+ *  the provider: a later call may then mail it. Never touches a sent row. */
+export async function releaseFanoutMessageSend(input: {
+  orgId: string;
+  ledgerId: string;
+}): Promise<void> {
+  ensurePostgresSchema();
+  const s = schema();
+  await pool().query(
+    `DELETE FROM "${s}"."artifact_materializations"
+  WHERE id = $1 AND org_id = $2 AND path = 'email_fanout' AND phase = 'claimed'`,
+    [input.ledgerId, input.orgId],
+  );
+}
+
 /**
  * Best-effort `llm_emit` provenance row (already-finalized — the emit's
  * artifact write committed before this runs). Feeds the #924 double-path
