@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app-artifact-review.html",
-  "contentHash": "sha256:1ab8f7739088b1ce78a171144f0d30d91ec2e9ad950bc863ed12df39d2bd07c8",
+  "contentHash": "sha256:c4366e50ec362c3fef1984ed87c43b068900378eb2a635a454dc247a2cd88850",
   "surfaces": [
     {
       "id": "run-surface",
@@ -672,7 +672,12 @@
           "source": "representation.content-form"
         }
       ],
-      "actions": [],
+      "actions": [
+        {
+          "action": "download-artifact",
+          "outcome": "file-downloaded"
+        }
+      ],
       "states": [
         "error",
         "kind:artifact",
@@ -697,7 +702,12 @@
     {
       "id": "slide-deck-display",
       "fields": [],
-      "actions": [],
+      "actions": [
+        {
+          "action": "download-artifact",
+          "outcome": "file-downloaded"
+        }
+      ],
       "states": [
         "error",
         "kind:artifact",
@@ -950,6 +960,20 @@
         "error",
         "kind:artifact",
         "loading"
+      ]
+    },
+    {
+      "id": "cms-fields-display",
+      "fields": [
+        {
+          "field": "fields",
+          "source": "representation.cms-fields"
+        }
+      ],
+      "actions": [],
+      "states": [
+        "error",
+        "kind:artifact"
       ]
     }
   ]

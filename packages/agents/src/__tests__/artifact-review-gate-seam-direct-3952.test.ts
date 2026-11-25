@@ -133,7 +133,6 @@ describe("the actual artifact-review gate seam", () => {
 describe("the run's reviews, as the publish gate reads them (cinatra#4762)", () => {
   const HUMAN = "a".repeat(64);
 
-  // red-first-expect: expected [ undefined, undefined, undefined ] to deeply equal [ 'expiry:gate-1', …(2) ]
   it("carry each review's resolving fingerprint, so the publish gate can tell a person's approval from an expiry", async () => {
     const createdAt = new Date("2026-11-20T10:05:00.000Z");
     const rows = [
@@ -149,7 +148,6 @@ describe("the run's reviews, as the publish gate reads them (cinatra#4762)", () 
     expect(listed.map((r) => r.fingerprint)).toEqual(["expiry:gate-1", HUMAN, null]);
   });
 
-  // red-first-expect: expected [ undefined, undefined, undefined ] to deeply equal [ 'user-reviewer', null, null ]
   it("carry each review's decider of record, so the publish gate counts only a person's approval", async () => {
     const createdAt = new Date("2026-11-20T10:05:00.000Z");
     const rows = [
@@ -165,7 +163,6 @@ describe("the run's reviews, as the publish gate reads them (cinatra#4762)", () 
     expect(listed.map((r) => r.resolvedBy)).toEqual(["user-reviewer", null, null]);
   });
 
-  // red-first-expect: seam.listReviews is not a function
   it("carry each gate's identity and the successor its repair recorded, read in one statement of the store", async () => {
     const createdAt = new Date("2026-11-20T10:05:00.000Z");
     const rows = [
@@ -186,7 +183,6 @@ describe("the run's reviews, as the publish gate reads them (cinatra#4762)", () 
     expect(store.listReviewGatesForRun).not.toHaveBeenCalled();
   });
 
-  // red-first-expect: expected 'undefined' to be 'function'
   it("ask the store whether an output of the attempt still waits for the review orchestration", async () => {
     store.hasPendingProducedEventForAttempt.mockResolvedValue(true);
     const seam = slot.__cinatraArtifactReviewGateSeam!;
@@ -195,7 +191,6 @@ describe("the run's reviews, as the publish gate reads them (cinatra#4762)", () 
     expect(store.hasPendingProducedEventForAttempt).toHaveBeenCalledWith({ orgId, runId, generation: 2 });
   });
 
-  // red-first-expect: expected "vi.fn()" to be called with arguments: [ …(2) ]
   it("read in the transaction the publish store hands them, so the fence is read under the run row's lock", async () => {
     const tx = { the: "run-row lock's transaction" };
     store.hasPendingProducedEventForAttempt.mockResolvedValue(false);

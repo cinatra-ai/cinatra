@@ -190,8 +190,9 @@ function servesSamePrimitiveIdentities(candidate: unknown, host: unknown): boole
 
 /**
  * The LOAD-TIME contract check (cinatra#3471 slice 2, item 5): a bundle built
- * against a `@cinatra-ai/design-primitives` contract MAJOR this host does not
- * serve FAILS CLOSED here, before the renderer is mounted, with a NAMED error
+ * against a `@cinatra-ai/design-primitives` contract whose caret range this
+ * host's served version does not satisfy (another MAJOR, or a newer MINOR or
+ * PATCH) FAILS CLOSED here, before the renderer is mounted, with a NAMED error
  * (`Error.name === DESIGN_PRIMITIVES_CONTRACT_MISMATCH`) instead of a cryptic
  * missing-export crash inside the renderer. Modelled on the pre-import
  * fail-closed ABI/React-peer checks in `runtime-renderer-descriptor.ts`.

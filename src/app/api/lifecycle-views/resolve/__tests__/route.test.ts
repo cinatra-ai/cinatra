@@ -45,12 +45,10 @@ const HEADER = { title: "The post", typeLabel: "Blog Post", objectType: "type:po
 describe("cinatra#3033 — the display that draws the one pinned target travels beside the envelope", () => {
   it("a pending gate over one target carries the display the reading names", async () => {
     d.reading = { headers: [HEADER], pinnedCount: 1, complete: true, onlyTargetDisplay: "markdown" };
-    // red-first-expect: expected undefined to be 'markdown'
     expect((await (await POST(post())).json()).targetDisplay).toBe("markdown");
   });
   it("a target the reading names as drawn by any other display carries that, too", async () => {
     d.reading = { headers: [HEADER], pinnedCount: 1, complete: true, onlyTargetDisplay: "other" };
-    // red-first-expect: expected undefined to be 'other'
     expect((await (await POST(post())).json()).targetDisplay).toBe("other");
   });
   it("a gate whose reading names no one target's display carries none", async () => {

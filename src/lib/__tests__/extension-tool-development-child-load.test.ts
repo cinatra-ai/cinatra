@@ -185,14 +185,12 @@ const liveRow = (over: Partial<Row> = {}): Row => ({
 
 describe("a development child's tool loads from the proven source only", () => {
   it("loads the proven root's module", async () => {
-    // red-first-expect: child-not-materialized
     const origin = await provenDevelopmentChild();
     const ns = (await loadFor(origin)) as { extensionTool: () => { from: string } };
     expect(ns.extensionTool().from).toBe(path.join(base, "child-a", MODULE));
   });
 
   it("never loads from a second root the name-and-version road answers after the proof", async () => {
-    // red-first-expect: child-not-materialized
     const origin = await provenDevelopmentChild();
     // A second tree of the same name and version, beside the proven one, now named by the road.
     await writeChild(path.join(base, "child-b"));
@@ -201,7 +199,6 @@ describe("a development child's tool loads from the proven source only", () => {
   });
 
   it("refuses a same-version reinstall to another folder between the proof and the load", async () => {
-    // red-first-expect: child-not-materialized
     const origin = await provenDevelopmentChild();
     await rename(path.join(base, "child-a"), path.join(base, "child-reinstalled"));
     generated[CHILD] = { version: CHILD_VERSION, sourceDir: sourceDirOf(path.join(base, "child-reinstalled")) };
@@ -209,7 +206,6 @@ describe("a development child's tool loads from the proven source only", () => {
   });
 
   it("refuses a child archived between the proof and the load, here or in another organisation", async () => {
-    // red-first-expect: child-not-materialized
     for (const archived of [liveRow({ status: "archived" }), liveRow({ status: "archived", organizationId: "org-other" })]) {
       delete rows[CHILD];
       const origin = await provenDevelopmentChild();
@@ -219,7 +215,6 @@ describe("a development child's tool loads from the proven source only", () => {
   });
 
   it("refuses when the live row the proof read is archived or replaced before the load", async () => {
-    // red-first-expect: child-not-materialized
     for (const next of [[liveRow({ status: "archived" })], [liveRow({ id: "install-child-2" })]]) {
       rows[CHILD] = [liveRow()];
       const origin = await provenDevelopmentChild();
@@ -230,7 +225,6 @@ describe("a development child's tool loads from the proven source only", () => {
   });
 
   it("refuses a missing or malformed binding for a development child", async () => {
-    // red-first-expect: child-not-materialized
     const origin = await provenDevelopmentChild();
     const malformed: unknown[] = [
       undefined,

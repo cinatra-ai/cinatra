@@ -196,7 +196,6 @@ describe("POST /api/agents/passthrough — artifact_image_generate", () => {
     });
   });
 
-  // red-first-expect: expected 400 to be 409
   it("answers 409 with its reason while a publishing call of the run is in flight (cinatra#4762)", async () => {
     generateArtifactImageMock.mockResolvedValue({
       ok: false,

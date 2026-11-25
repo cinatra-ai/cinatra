@@ -278,7 +278,6 @@ describe("a publish card opens only after an approved review earlier in the same
     expectStoppedWithoutWriting();
   });
 
-  // red-first-expect: expected [ { from: 'running', …(2) } ] to deeply equal [ { from: 'running', …(2) } ]
   it("a retry that wrote exactly the bytes an earlier attempt's approved review pinned counts that approval; a decline of them holds", async () => {
     // Attempt 0's output was approved, then the run failed before publishing. The retry (generation 1) wrote identical
     // bytes: the revision was reused, its produced event restamped with generation 1, so no review of 1 was raised.
@@ -309,7 +308,6 @@ describe("a publish card opens only after an approved review earlier in the same
     expect(decisions.insertParkedDecision).toHaveBeenCalledTimes(1);
   });
 
-  // red-first-expect: expected [ { to: 'pending_approval', …(1) } ] to deeply equal []
   it("a callback of an attempt a retry ended moves nothing on the newer attempt's row", async () => {
     // The run row is at generation 1 (retry B runs); the store's compare-and-set lands only at that generation, as
     // transitionRunStatus does, and a move that names no attempt lands on whatever attempt the row holds.
@@ -357,7 +355,6 @@ describe("a publish card opens only after an approved review earlier in the same
     expect(parkedRows).toEqual([{ runGeneration: 1 }]);
   });
 
-  // red-first-expect: expected [ 'pending_approval' ] to deeply equal [ 'stopped' ]
   it("an optional review its expiry settled 'approve' is no person's approval: the run ends stopped", async () => {
     // The expiry resolves an optional review 'approve' with a synthetic fingerprint and no person.
     const expired: Review = { ...approved(5), resolvedBy: null, fingerprint: "expiry:gate-optional" };
@@ -377,7 +374,6 @@ describe("a publish card opens only after an approved review earlier in the same
     expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
   });
 
-  // red-first-expect: expected [ { label: 'no decider', …(1) }, …(3) ] to deeply equal [ { label: 'no decider', …(1) }, …(3) ]
   it("an approval with no person as its decider is no person's approval, even with a decision fingerprint", async () => {
     // A non-human carrier (an A2A or system principal with no user id) settles the review 'approve': the decision core
     // stamps its sha256 fingerprint and records no decider. A system principal's id is no person either.
@@ -404,7 +400,6 @@ describe("a publish card opens only after an approved review earlier in the same
     expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
   });
 
-  // red-first-expect: expected [ { from: 'running', …(2) } ] to deeply equal [ { from: 'running', …(2) } ]
   it("a change request is cleared only by its own repair successor, never by another review approved later", async () => {
     // Artifact A's review was settled changes requested and nothing repaired it; artifact B's review, raised later in the
     // same attempt, was approved. B is no successor of A: A's request stands, unchanged A is never published.
@@ -431,7 +426,6 @@ describe("a publish card opens only after an approved review earlier in the same
     expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
   });
 
-  // red-first-expect: expected [ …(7) ] to deeply equal [ …(7) ]
   it("the lineage clears a change request only through successors of this attempt that end in a person's approval", async () => {
     const laterB = approved(9);
     const cases: Array<{ label: string; reviews: Review[] }> = [];
@@ -473,7 +467,6 @@ describe("a publish card opens only after an approved review earlier in the same
     expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
   });
 
-  // red-first-expect: expected [ { from: 'running', …(2) } ] to deeply equal [ { from: 'running', …(2) } ]
   it("an output of the attempt still waiting for the review orchestration holds the card back, as an open review does", async () => {
     // One review is approved; another output of the same attempt is still a pending produced event the drain has not
     // reached. The review it may raise is not settled, so no card opens and nothing is written.
@@ -501,7 +494,6 @@ describe("a publish card opens only after an approved review earlier in the same
     expect(decisions.insertParkedDecision).not.toHaveBeenCalled();
   });
 
-  // red-first-expect: expected [ { from: 'running', …(2) } ] to deeply equal [ { from: 'running', …(2) } ]
   it("a review with no generation still open may be this attempt's: it holds the card back in every attempt", async () => {
     // Attempt 1 has its own approved review. A review raised before the generation column existed (or from an output
     // written before it) is still open: its attempt is unknown, so it may be this one, and no card opens.
@@ -521,7 +513,6 @@ describe("a publish card opens only after an approved review earlier in the same
     expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
   });
 
-  // red-first-expect: expected [ { from: 'running', …(2) } ] to deeply equal [ { from: 'running', …(2) } ]
   it("a review with no generation that settled with anything but an approval still holds the card back in every attempt", async () => {
     // Raised before the generation column existed, during attempt 1, and rejected after the upgrade. Attempt 1 also has
     // its own approved review. The rejection may be this attempt's, so it is never read as generation 0 and dropped.
@@ -566,7 +557,6 @@ describe("a publish card opens only after an approved review earlier in the same
     expect([runId, from, to]).toEqual(["run-4762", "pending_approval", "stopped"]);
   });
 
-  // red-first-expect: expected [] to deeply equal [ { from: 'pending_approval', …(2) } ]
   it("a gate redelivered after its decision parked, with no approved review, ends stopped and closes that row in the stop", async () => {
     // The row parked before the review rule; the run waits at the gate when the same gate task is delivered again. The
     // store closes the attempt's parked rows only inside a move that asks for it, as transitionRunStatus does.
@@ -593,7 +583,6 @@ describe("a publish card opens only after an approved review earlier in the same
     expect(decisions.insertParkedDecision).not.toHaveBeenCalled();
   });
 
-  // red-first-expect: expected [ undefined ] to deeply equal [ +0 ]
   it("a delayed writer of attempt A, run after B's reset, records A's generation: a person's approval of its review opens no card for B", async () => {
     const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
     const emitModule = await import("@/lib/lifecycle/lifecycle-emit");

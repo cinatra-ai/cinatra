@@ -129,7 +129,6 @@ describe("cinatra#4762: a write refused by the in-flight publishing-call fence s
     });
   };
 
-  // red-first-expect: to match object { ok: false, …(1) }
   it("an append while a publishing call of its run is in flight is refused as that call, never as an unknown base", async () => {
     db.publishCallInFlight = true;
     const out = await append();
@@ -146,7 +145,6 @@ describe("cinatra#4762: a write refused by the in-flight publishing-call fence s
     expect(await append()).toMatchObject({ ok: false, reason: "unknown_base" });
   });
 
-  // red-first-expect: expected Error: invalid input syntax for type inte
   it("the store's append rethrows the fence's abort as the typed refusal, not as unknown-base", async () => {
     const { appendRepresentationWithExpectedBase } = await import("../representation-store");
     db.publishCallInFlight = true;
@@ -176,7 +174,6 @@ describe("cinatra#4762: a retry of an append that reproduces identical bytes cou
     return t;
   });
 
-  // red-first-expect: expected [] to deeply equal [ 'BEGIN', 'lock run-1', …(2) ]
   it("appends nothing and restamps the finalized revision's event with the retry's attempt", async () => {
     // Attempt 0 appended rev-2 and the ledger finalized it; attempt 1 reproduces the same bytes.
     ledger.claim = { kind: "finalized", artifactId: "art-1", representationRevisionId: "rev-2", path: "materialize_tool" };
@@ -189,7 +186,6 @@ describe("cinatra#4762: a retry of an append that reproduces identical bytes cou
       .toMatch(/AND \(EXISTS \(SELECT 1 FROM "[^"]+"\."artifact_produced_outbox" WHERE event_id = \$1::text\)\)/);
   });
 
-  // red-first-expect: expected [] to deeply equal [ 'BEGIN', 'lock run-1', …(2) ]
   it("the loser of a concurrent drive of the same claim restamps the winner's revision with its own attempt", async () => {
     // A delayed drive of attempt 0 and the retry in attempt 1 share one unfinalized claim. Attempt 0 wins: the
     // retry's insert loses the revision index and the ledger row reads the winner's rev-2.
@@ -201,7 +197,6 @@ describe("cinatra#4762: a retry of an append that reproduces identical bytes cou
     expect(restamp.find((q) => q.text.includes("artifact_produced_outbox"))!.values[6]).toBe("run-1");
   });
 
-  // red-first-expect: to match object { ok: false, …(1) }
   it("a publishing call in flight refuses the restamp as that call, and nothing commits", async () => {
     ledger.claim = { kind: "finalized", artifactId: "art-1", representationRevisionId: "rev-2", path: "materialize_tool" };
     db.publishCallInFlight = true;
@@ -229,14 +224,12 @@ describe("cinatra#4762: a released publishing call's own write passes the in-fli
   const eventClaims = () => [...asyncCalls.flat(), ...restamp]
     .filter((q) => q.text.includes("artifact_produced_outbox")).map((q) => q.values[13]);
 
-  // red-first-expect: expected [ undefined ] to deeply equal [ 'decision-1' ]
   it("the append of the call that holds decision-1 is taken while only that call is in flight", async () => {
     db.claimsInFlight = ["decision-1"];
     expect(await appendUnder("decision-1")).toMatchObject({ ok: true, representationRevisionId: "rev-new" });
     expect(eventClaims()).toEqual(["decision-1"]);
   });
 
-  // red-first-expect: expected [] to include 'COMMIT'
   it("the restamp of a revision the call reuses is taken under its own claim", async () => {
     ledger.claim = { kind: "finalized", artifactId: "art-1", representationRevisionId: "rev-2", path: "materialize_tool" };
     db.claimsInFlight = ["decision-1"];
@@ -245,14 +238,12 @@ describe("cinatra#4762: a released publishing call's own write passes the in-fli
     expect(eventClaims()).toEqual(["decision-1"]);
   });
 
-  // red-first-expect: to match object { ok: false, …(1) }
   it("a concurrent write under no claim is still refused while that call is in flight", async () => {
     db.claimsInFlight = ["decision-1"];
     expect(await appendUnder(null)).toMatchObject({ ok: false, reason: "publish_call_in_flight" });
     expect(eventClaims()).toEqual([null]);
   });
 
-  // red-first-expect: to match object { ok: false, …(1) }
   it("a write under another claim is refused, and so is the call's own write while a call of another decision is in flight", async () => {
     db.claimsInFlight = ["decision-1"];
     expect(await appendUnder("decision-2")).toMatchObject({ ok: false, reason: "publish_call_in_flight" });
@@ -262,7 +253,6 @@ describe("cinatra#4762: a released publishing call's own write passes the in-fli
     expect(await appendUnder("decision-1")).toMatchObject({ ok: false, reason: "publish_call_in_flight" });
   });
 
-  // red-first-expect: to match object { ok: false, …(1) }
   it("two concurrent calls of the one decision: each call's own write is refused while both are in flight", async () => {
     // Both calls hold decision-1, so its row counts 2 calls; neither call's output can be told from the other's.
     db.claimsInFlight = ["decision-1", "decision-1"];
@@ -276,7 +266,6 @@ describe("cinatra#4762: a released publishing call's own write passes the in-fli
 });
 
 describe("cinatra#4762: the revision append takes its leading locks before the base guard and the insert", () => {
-  // red-first-expect: expected [ 'advisory', 'base', 'insert', …(1) ] to deeply equal [ Array(5) ]
   it("runs the leading ops right after the advisory lock and still reads the record from the insert", async () => {
     const { appendRepresentationWithExpectedBase } = await import("../representation-store");
     const out = await appendRepresentationWithExpectedBase({
@@ -311,7 +300,6 @@ describe("cinatra#4762: each writer splices the run lock before its first write 
     return src.slice(at + anchor.length);
   };
 
-  // red-first-expect: expected false to be true // Object.is equality
   it("the create, the run's revision append and the snapshot mint each take the lock from producerRunLockOps", () => {
     // Create: the lock directly after the advisory lock, ahead of the objects write; the producer offset counts it.
     const create = read("artifact-creation.ts");
