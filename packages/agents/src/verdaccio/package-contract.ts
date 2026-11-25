@@ -5,7 +5,7 @@ import {
   collectArtifactBindingsFromOasDocument,
   collectArtifactImageNodesFromOasDocument,
   collectArtifactMaterializeNodesFromOasDocument,
-  isArtifactMaterializeListNode,
+  isArtifactMaterializeListFiling,
 } from "../artifact-binding";
 
 export const CINATRA_AGENT_PACKAGE_TYPE = "agent" as const;
@@ -278,8 +278,9 @@ function regenerateListProblem(node: RegenerateRec, where: string): string | nul
  *      StartNode on a canonical string output that the root `inputs` declare,
  *      and that output feeds nothing else.
  * And (cinatra#3089) `artifactNode`, the top-level node of check 2, is not a
- * list filing (`isArtifactMaterializeListNode`): a list files one artifact per
- * member, and a Regenerate takes exactly one production.
+ * list filing (`isArtifactMaterializeListFiling`: an ApiNode on the passthrough
+ * route, the one the collector walks, with a list-shaped payload): a list files
+ * one artifact per member, and a Regenerate takes exactly one production.
  */
 export function checkRegenerateDeclaration(
   parsedOas: unknown,
@@ -318,7 +319,7 @@ export function checkRegenerateDeclaration(
     // cinatra#3089: a plain entry (one with no member-specific keys) never names
     // a list filing. Re-running it would file every member again, and the run
     // that takes the repair accepts exactly one production.
-    if (isArtifactMaterializeListNode(refs[artifactNode]) && !("memberKeyInput" in entry)) {
+    if (isArtifactMaterializeListFiling(refs[artifactNode]) && !("memberKeyInput" in entry)) {
       return refuse(REGENERATE_LIST_FILING_REFUSAL);
     }
     const linked = edges.some(

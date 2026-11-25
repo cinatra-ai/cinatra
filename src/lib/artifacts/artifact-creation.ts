@@ -22,7 +22,7 @@ import { mimeAcceptedByAccepts } from "./upload-artifact-type-map";
 /** The registry definition shape (or null) — a local alias so this module needs
  *  no type-only barrel import (avoids the heavy objects barrel graph). */
 type ResolvedObjectTypeDef = ReturnType<typeof objectTypeRegistry.resolve>;
-import { createLocalDiskBlobStore, sniffMime, type LocalPutRecord } from "./local-disk-blob-store";
+import { createLocalDiskBlobStore, sniffMime } from "./local-disk-blob-store";
 import { deriveSubstanceKey, removeFreshUnreferencedBlobResource } from "./resource-store";
 import { buildArtifactWriterWitnessOp } from "./artifact-writer-witness";
 import { buildObjectsWithOutboxQuery } from "@/lib/objects-store";
@@ -491,14 +491,14 @@ type ResolvedBlobResource = {
 /** The blobs one BATCH call has stored so far, by content hash: a later member with the same bytes shares the
  *  stored blob and its resource row, with no second store call and no second upsert. What a batch that does not
  *  commit takes back (`releaseBatchBlobs`) is exactly these entries. */
-type BatchBlobs = Map<string, { newBlob: PreparedArtifactWrite["newBlob"]; authoritative: ResolvedBlobResource; blobStore: ReturnType<typeof createLocalDiskBlobStore>; orgId: string }>;
+type BatchBlobs = Map<string, { newBlob: PreparedArtifactWrite["newBlob"]; authoritative: ResolvedBlobResource; orgId: string }>;
 
 type PreparedArtifactWrite = {
   input: CreateSemanticArtifactInput;
   artifactId: string;
   representationRevisionId: string;
   blobStore: ReturnType<typeof createLocalDiskBlobStore>;
-  newBlob: LocalPutRecord;
+  newBlob: Awaited<ReturnType<ReturnType<typeof createLocalDiskBlobStore>["put"]>>;
   authoritative: ResolvedBlobResource;
   originKind: ArtifactOriginKind;
   persistedRunId: string | null;
@@ -792,7 +792,7 @@ FROM resource_op r`,
       isDedupe: !row.is_new,
       rowVersion: typeof row.row_version === "string" && row.row_version !== "" ? row.row_version : null,
     };
-    if (batchBlobs && !earlierMember) batchBlobs.set(newBlob.sha256, { newBlob, authoritative, blobStore, orgId: input.orgId });
+    if (batchBlobs && !earlierMember) batchBlobs.set(newBlob.sha256, { newBlob, authoritative, orgId: input.orgId });
     // Validate that the artifact_blobs row referenced by
     // resource.metadata.blobId actually exists, in a SEPARATE statement
     // (fresh snapshot). The Tx1 CTE-internal EXISTS would suffer from PG's
@@ -1327,35 +1327,25 @@ async function abandonArtifactWrite(p: PreparedArtifactWrite): Promise<void> {
 }
 
 /**
- * A BATCH that does not commit (a lost set-header race, a failed member, any thrown error) takes back what THIS
- * call freshly created, and nothing else: for every blob the call stored whose resource row it inserted (not one
- * that already existed, not one a later member merely shared), the resource and `artifact_blobs` rows, then the file.
- *  - the rows go in ONE guarded statement under the resource's advisory lock (`removeFreshUnreferencedBlobResource`):
- *    only the exact row version this call inserted (a concurrent writer of the same bytes that resolved onto the row
- *    wrote a new version, and the winner of a race that prepared the same content is such a writer) and only while no
- *    representation refers to the resource;
- *  - the file goes only if this call published it and only through the store's `releasePublished`, under the storage-key
- *    lock `put` runs in: it is untouched since (a later `put` of the same bytes refreshes the mtime) and no live blob
- *    row references the key.
- * Each step is best-effort: a failure is logged, keeps what it could not remove, and never replaces the error the
- * caller is already handling. Rows and file are never separated in the dangerous direction (rows without their file):
- * the file is removed only after its rows, and kept whenever anything else may rely on it. A crash between prepare and
- * this cleanup still leaves the rows and files, as a failed single write does.
+ * A BATCH that does not commit (a lost set-header race, a failed member, any thrown error) takes back the ROWS it
+ * freshly created, and nothing else: for every blob the call stored whose resource row it inserted (not one that
+ * already existed, not one a later member merely shared), the resource and `artifact_blobs` rows go in ONE guarded
+ * statement under the resource's advisory lock (`removeFreshUnreferencedBlobResource`): only the exact row version this
+ * call inserted (a concurrent writer of the same bytes that resolved onto the row wrote a new version, and so did the
+ * winner of a race that prepared the same content) and only while no representation refers to the resource. The rows
+ * are what the organization's quota counts. The FILE is never unlinked here: a writer in another process may have
+ * refreshed and confirmed reuse of it, outside any lock this process can take, and a committed row that points at a
+ * missing file is worse than a leftover file. The file stays for the store's guarded delete (grace window,
+ * reachability probe) and for the orphan sweep that is a separate follow-up. A failed removal is logged, keeps the rows,
+ * and never replaces the error the caller is handling. A crash between prepare and this cleanup still leaves the rows.
  */
 async function releaseBatchBlobs(batchBlobs: BatchBlobs): Promise<void> {
-  for (const { blobStore, newBlob, authoritative: a, orgId } of batchBlobs.values()) {
+  for (const { authoritative: a, orgId } of batchBlobs.values()) {
     if (a.isDedupe || a.rowVersion === null) continue;
-    let removed = false;
     try {
-      removed = removeFreshUnreferencedBlobResource({ orgId, resourceId: a.resourceId, blobId: a.blobId, rowVersion: a.rowVersion });
+      removeFreshUnreferencedBlobResource({ orgId, resourceId: a.resourceId, blobId: a.blobId, rowVersion: a.rowVersion });
     } catch (err) {
       console.error("[artifact-creation] a batch that did not commit could not remove a blob row it created", { errorClass: err instanceof Error ? err.name : typeof err });
-    }
-    if (!removed || newBlob.publishedMtimeMs === undefined) continue;
-    try {
-      await blobStore.releasePublished({ orgId, storageKey: a.storageKey, publishedMtimeMs: newBlob.publishedMtimeMs });
-    } catch (err) {
-      console.error("[artifact-creation] a batch that did not commit could not remove a blob file it wrote", { errorClass: err instanceof Error ? err.name : typeof err });
     }
   }
 }

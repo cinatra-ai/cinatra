@@ -450,6 +450,27 @@ describe("a regenerate entry and a list filing (cinatra#3089)", () => {
     expect((other as { error: string }).error).toContain(LIST_REFUSAL);
   });
 
+  it("a custom ApiNode on another URL that carries the tool name and member-named fields is not a list filing: it compiles", async () => {
+    const oas = fixtureWithFiling(true);
+    const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
+    refs[FILE_NODE]!.url = "{{CINATRA_BASE_URL}}/api/some-other-protocol";
+    expect(checkRegenerateDeclaration(oas, SELF_FILING)).toEqual({ ok: true });
+    const result = await compileOasAgentJson({
+      packageName: PACKAGE_NAME,
+      oasSourcePath: stageOas(oas),
+      retainedRegenerate: SELF_FILING,
+    });
+    expect(result).toMatchObject({ ok: true });
+  });
+
+  it("the passthrough route is what makes it a list filing: the same node on it is refused, whatever the host part of the URL", () => {
+    for (const url of ["{{CINATRA_BASE_URL}}/api/agents/passthrough", "https://app.example.test/api/agents/passthrough?x=1"]) {
+      const oas = fixtureWithFiling(true);
+      (oas.$referenced_components as Record<string, Record<string, unknown>>)[FILE_NODE]!.url = url;
+      expect(checkRegenerateDeclaration(oas, SELF_FILING)).toMatchObject({ ok: false });
+    }
+  });
+
   // red-first-expect: expected { ok: true } to match object { ok: false }
   it("refuses a node that carries only one of the two member fields (fail closed)", () => {
     const oas = fixtureWithFiling(true);

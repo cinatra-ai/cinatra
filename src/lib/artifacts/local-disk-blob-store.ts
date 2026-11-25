@@ -537,36 +537,15 @@ export async function assertOrgQuotaRoom(
   );
 }
 
-/** What `put` adds to its record when THIS call published the file (it did not exist, the bytes were renamed into
- *  place): `publishedMtimeMs`, the mtime the file was left with, which `releasePublished` compares. Absent when the
- *  file was already there (reused or held). */
-export type LocalPutRecord = BlobRecord & { publishedMtimeMs?: number };
-
-/** A distance that no later reuse's refreshed mtime can come back to: the published file is dated this far in the past. */
-const PUBLISHED_MTIME_BACKDATE_MS = 2000;
-
-export type LocalDiskBlobStore = Omit<BlobStore, "put"> & {
-  put(input: BlobPutInput): Promise<LocalPutRecord>;
-  /**
-   * Remove a file THIS call published, when it is still exactly as it was left: the one primitive a failed write
-   * uses to take back what it wrote. Under the SAME per-storage-key critical section `put` and the guarded delete run
-   * in, it deletes only while (1) the file's mtime is still the one `put` left (a `put` of the same bytes that came
-   * later reuses the file and refreshes the mtime, so a writer that has not committed its row yet keeps it) and (2) no
-   * live `artifact_blobs` row of the organization references the key (the same probe the guarded delete and the
-   * held-bytes admission use; an unanswerable probe keeps the file). Returns whether the file was removed.
-   */
-  releasePublished(input: { orgId: string; storageKey: string; publishedMtimeMs: number }): Promise<boolean>;
-};
-
 export function createLocalDiskBlobStore(
   options?: LocalDiskBlobStoreOptions,
-): LocalDiskBlobStore {
+): BlobStore {
   const isReferenced =
     options?.isStorageKeyReferenced ?? defaultIsStorageKeyReferenced;
   const orgUsageBytes = options?.getOrgUsageBytes ?? defaultGetOrgUsageBytes;
 
   return {
-    async put(input: BlobPutInput): Promise<LocalPutRecord> {
+    async put(input: BlobPutInput): Promise<BlobRecord> {
       // The blobId stays a fresh UUID (it is the artifact_blobs row id);
       // it is no longer part of the on-disk path for new writes.
       const blobId = randomUUID();
@@ -657,7 +636,7 @@ export function createLocalDiskBlobStore(
       const sha256 = hash.digest("hex");
       const storageKey = contentAddressedKeyFor(input.orgId, sha256);
       const finalPath = absFor(storageKey);
-      const record: LocalPutRecord = {
+      const record: BlobRecord = {
         blobId,
         storageKey,
         sha256,
@@ -725,11 +704,6 @@ export function createLocalDiskBlobStore(
           // Atomic same-FS publish. A concurrent same-bytes racer that also
           // renames to this path is benign: identical bytes, atomic replace.
           await rename(stagedPath, finalPath);
-          // Date the file in the past by a fixed distance: a `put` of the same bytes that comes later sets the
-          // mtime to its own now, which can then never equal this one (`releasePublished` compares it).
-          const publishedAt = new Date(Date.now() - PUBLISHED_MTIME_BACKDATE_MS);
-          await utimes(finalPath, publishedAt, publishedAt).catch(() => {});
-          record.publishedMtimeMs = publishedAt.getTime();
           // Durability: fsync the parent dir so the rename itself survives a
           // crash (best-effort; not all platforms allow dir fsync).
           try {
@@ -850,35 +824,6 @@ export function createLocalDiskBlobStore(
           createReadStream(abs, { start: clampedStart, end: clampedEnd }),
         ) as unknown as AsyncIterable<Uint8Array>,
       };
-    },
-
-    async releasePublished({
-      orgId,
-      storageKey,
-      publishedMtimeMs,
-    }: {
-      orgId: string;
-      storageKey: string;
-      publishedMtimeMs: number;
-    }): Promise<boolean> {
-      assertOrgPrefix(orgId, storageKey);
-      if (!isContentAddressedStorageKey(storageKey)) return false;
-      const abs = absFor(storageKey);
-      return withStorageKeyLock(storageKey, async () => {
-        const untouched = async (): Promise<boolean> => {
-          try {
-            return Math.abs((await fsStat(abs)).mtimeMs - publishedMtimeMs) < 1;
-          } catch {
-            return false; // gone already
-          }
-        };
-        if (!(await untouched())) return false;
-        if (await isReferenced(orgId, storageKey)) return false;
-        // The probe may have been slow: a cross-process `put` that reused the file refreshes its mtime first.
-        if (!(await untouched())) return false;
-        await rm(abs, { force: true });
-        return true;
-      });
     },
 
     async deleteByStorageKey({

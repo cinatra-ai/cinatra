@@ -966,18 +966,27 @@ function isTemplated(value: string): boolean {
   return value.includes("{{");
 }
 
+/**
+ * Whether ONE component is an ApiNode on the host's passthrough route: THE condition under which the host runs a
+ * node's `data` as a tool call, and so the one the materialization collector walks by. A node on any other URL
+ * speaks another protocol and files nothing through the host, whatever its payload looks like.
+ */
+export function isPassthroughApiNode(node: unknown): boolean {
+  return (
+    isPlainObject(node) &&
+    node.component_type === "ApiNode" &&
+    typeof node.url === "string" &&
+    node.url.includes(AGENTS_PASSTHROUGH_URL_MARKER)
+  );
+}
+
 function walkPassthroughApiNodes(
   doc: Record<string, unknown>,
   visit: (node: Record<string, unknown>, refKey: string, path: string) => void,
 ): void {
   function go(value: unknown, refKey: string, path: string): void {
     if (!isPlainObject(value)) return;
-    if (value.component_type === "ApiNode") {
-      const url = value.url;
-      if (typeof url === "string" && url.includes(AGENTS_PASSTHROUGH_URL_MARKER)) {
-        visit(value, refKey, path);
-      }
-    }
+    if (isPassthroughApiNode(value)) visit(value, refKey, path);
     const refs = value.$referenced_components;
     if (isPlainObject(refs)) {
       for (const [k, v] of Object.entries(refs)) {
@@ -1278,15 +1287,25 @@ export function collectArtifactMaterializeNodesFromOasDocument(
 
 /**
  * cinatra#3089: whether ONE component is an ApiNode whose `data` (an object, or
- * JSON text of one) is an `artifact_materialize` call in the LIST MODE, so that
- * one call files one artifact per member. It counts when it carries
+ * JSON text of one) is shaped as an `artifact_materialize` call in the LIST MODE,
+ * so that one call would file one artifact per member. It counts when it carries
  * `memberContentField` OR `memberTitleField` (the collector above refuses one
  * without the other; this reading fails closed on either), and whatever its
- * `url`. It reads the one component it is given, so the caller decides which
- * scope the component came from.
+ * `url`: it describes the PAYLOAD only. A caller that asks whether the host files
+ * artifacts through the node uses `isArtifactMaterializeListFiling`. It reads the
+ * one component it is given, so the caller decides which scope it came from.
  */
 export function isArtifactMaterializeListNode(node: unknown): boolean {
   return isPlainObject(node) && node.component_type === "ApiNode" && isArtifactMaterializeListData(node.data);
+}
+
+/**
+ * cinatra#3089: whether ONE component files a LIST through the host: the collector's own condition (an ApiNode on the
+ * passthrough route, `isPassthroughApiNode`) composed with the list-shaped payload. A custom ApiNode on another URL
+ * that happens to carry the same payload shape is not a list filing.
+ */
+export function isArtifactMaterializeListFiling(node: unknown): boolean {
+  return isPassthroughApiNode(node) && isArtifactMaterializeListNode(node);
 }
 
 function isArtifactMaterializeListData(raw: unknown): boolean {
