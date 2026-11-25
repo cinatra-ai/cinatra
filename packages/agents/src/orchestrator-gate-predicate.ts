@@ -25,3 +25,31 @@ export interface RendererGateStepShape {
 export function stepFiresRendererGate(step: RendererGateStepShape): boolean {
   return typeof step.xRenderer === "string" && step.firesRendererGate !== false;
 }
+
+/**
+ * cinatra#3562: the place of a renderer gate in the run's renderer gate
+ * sequence, read from the compiled steps alone (no expiry): the gate index at
+ * which the one renderer step whose `xRenderer` is `xRenderer` starts. It walks
+ * the steps as the live resolver does (`resolveWayflowXRenderer` in
+ * execution.ts: `stepFiresRendererGate`, `gateCount` 1 when not a number).
+ *
+ * Null when no renderer step, or more than one, carries that renderer, or when
+ * that step spans more than one gate: the place is then not one index.
+ */
+export function rendererGateIndexOfRenderer(
+  steps: ReadonlyArray<RendererGateStepShape & { gateCount?: unknown }>,
+  xRenderer: string,
+): number | null {
+  let accumulated = 0;
+  let found: number | null = null;
+  for (const step of steps) {
+    if (!stepFiresRendererGate(step)) continue;
+    const gateCount = typeof step.gateCount === "number" ? step.gateCount : 1;
+    if (step.xRenderer === xRenderer) {
+      if (found !== null || gateCount !== 1) return null;
+      found = accumulated;
+    }
+    accumulated += gateCount;
+  }
+  return found;
+}

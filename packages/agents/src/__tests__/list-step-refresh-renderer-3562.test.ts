@@ -20,7 +20,7 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 
 import { RunTransitionError } from "../run-status";
-import { buildListStepRefreshPayload } from "../hitl-gate-submit";
+import { buildListStepRefreshPayload, classifyGateRejection, isAlreadyResolvedError } from "../hitl-gate-submit";
 
 const LIST_STEP_ID = "@cinatra-ai/email-outreach-agent:list-picker";
 const SECOND_STEP_ID = "@cinatra-ai/email-outreach-agent:recipients-output";
@@ -326,38 +326,98 @@ const RENDERER_GATES_KEY = `cinatra:wayflow:renderer-gates:${RUN.id}`;
 const SEVEN_DAYS_S = 7 * 24 * 3600;
 
 describe("cinatra#3562 — a refreshed list step keeps its place when the run's step list expires", () => {
+  // The list step is the run's SECOND renderer step here, so a lost place shows:
+  // place 0 is the first step's renderer, not the list step's.
+  const FIRST_STEP_ID = "@cinatra-ai/email-outreach-agent:account-scope";
+  const step = (stepNumber: number, xRenderer: string) => ({
+    stepNumber,
+    requiresApproval: true,
+    hitlOwnedBy: "self",
+    xRenderer,
+    firesRendererGate: true,
+    schema: { type: "object", properties: {} },
+  });
+  const threeSteps = (firstRenderer: string) => ({
+    ...TEMPLATE,
+    approvalPolicy: { steps: [step(1, firstRenderer), step(2, LIST_STEP_ID), step(3, SECOND_STEP_ID)] },
+  });
+  const dropList = () => {
+    redis.lists.delete(RENDERER_GATES_KEY);
+    redis.ttls.delete(RENDERER_GATES_KEY);
+  };
+  /** The first step is answered: the run parks at the list step, its second renderer pause. */
+  async function atListStep(): Promise<void> {
+    await firstPause("task-first-1");
+    await pick("task-first-1", "task-list-1");
+  }
+
+  it("the list is gone when Try again is pressed: the refresh is taken, its pause carries the list step's renderer, and a pick reaches the next step", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue(threeSteps(FIRST_STEP_ID));
+    await atListStep();
+    expect(renderers()).toEqual([FIRST_STEP_ID, LIST_STEP_ID]);
+    dropList();
+
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await refresh("task-list-1", "task-list-2");
+    expect(sendTask).toHaveBeenCalledTimes(2);
+    expect(renderers()).toEqual([FIRST_STEP_ID, LIST_STEP_ID, LIST_STEP_ID]);
+
+    await pick("task-list-2", "task-second-1");
+    expect(renderers()).toEqual([FIRST_STEP_ID, LIST_STEP_ID, LIST_STEP_ID, SECOND_STEP_ID]);
+    expect(row.status).toBe("pending_approval");
+  });
+
   it("the list expires between the refresh and the next pause: the pause still carries the list step's renderer", async () => {
-    await firstPause("task-list-1");
+    storeMock.readAgentTemplateById.mockResolvedValue(threeSteps(FIRST_STEP_ID));
+    await atListStep();
     // The list expires while the refresh's resume is under way.
     sendTask.mockImplementationOnce(async () => {
-      redis.lists.delete(RENDERER_GATES_KEY);
-      redis.ttls.delete(RENDERER_GATES_KEY);
+      dropList();
       return pauseTask("task-list-2");
     });
     durableGate.value = listStepGate("task-list-1");
     // red-first-expect: buildListStepRefreshPayload is not a function
     await approveReviewTaskInternal("wayflow-task-list-1", RUN.runBy, buildListStepRefreshPayload("refresh"));
-    expect(renderers()).toEqual([LIST_STEP_ID, LIST_STEP_ID]);
+    expect(renderers()).toEqual([FIRST_STEP_ID, LIST_STEP_ID, LIST_STEP_ID]);
 
     await pick("task-list-2", "task-second-1");
-    expect(renderers()).toEqual([LIST_STEP_ID, LIST_STEP_ID, SECOND_STEP_ID]);
+    expect(renderers()).toEqual([FIRST_STEP_ID, LIST_STEP_ID, LIST_STEP_ID, SECOND_STEP_ID]);
     expect(row.status).toBe("pending_approval");
   });
 
-  it("the list is already gone when the refresh is asked: the refresh is refused, nothing is sent, the step stays answerable", async () => {
-    await firstPause("task-list-1");
-    redis.lists.delete(RENDERER_GATES_KEY);
-    redis.ttls.delete(RENDERER_GATES_KEY);
+  it("the list is gone and the flow has two steps with the list step's renderer: the refresh is refused, nothing is sent, and the step can be tried and answered again", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue(threeSteps(LIST_STEP_ID));
+    await atListStep();
+    expect(renderers()).toEqual([LIST_STEP_ID, LIST_STEP_ID]);
+    dropList();
 
+    let refusal: unknown = null;
     // red-first-expect: buildListStepRefreshPayload is not a function
-    await expect(refresh("task-list-1", "task-list-2")).rejects.toThrow("its place in the run's steps is not known");
-    expect(sendTask).not.toHaveBeenCalled();
+    await refresh("task-list-1", "task-list-2").catch((error: unknown) => {
+      refusal = error;
+    });
+    expect(String((refusal as Error | null)?.message)).toContain("its place in the run's steps is not known");
+    // What the run panel's submit is given: a thrown error that is neither a
+    // gate that moved on nor one already answered, so it shows its error toast
+    // and draws the step again, with Try again (see the run panel's test).
+    expect(classifyGateRejection(refusal)).toBeNull();
+    expect(isAlreadyResolvedError((refusal as Error).message)).toBe(false);
+    expect(sendTask).toHaveBeenCalledTimes(1);
     expect(redis.store.has(`cinatra:wayflow:renderer-gate-repeat:${RUN.id}`)).toBe(false);
     expect(row.status).toBe("pending_approval");
-    expect(renderers()).toEqual([LIST_STEP_ID]);
+    expect(storeMock.transitionRunStatus).toHaveBeenLastCalledWith(
+      RUN.id,
+      "running",
+      "pending_approval",
+      { pauseTaskId: "task-list-1" },
+      expect.anything(),
+    );
+    expect(renderers()).toEqual([LIST_STEP_ID, LIST_STEP_ID]);
 
+    // Another try reaches the same check (no claim is left behind), and a pick is sent.
+    await expect(refresh("task-list-1", "task-list-2")).rejects.toThrow("its place in the run's steps is not known");
     await pick("task-list-1", "task-second-1");
-    expect(sendTask).toHaveBeenCalledTimes(1);
+    expect(sendTask).toHaveBeenCalledTimes(2);
     expect(row.status).toBe("pending_approval");
   });
 
@@ -375,5 +435,49 @@ describe("cinatra#3562 — a refreshed list step keeps its place when the run's 
     await approveReviewTaskInternal("wayflow-task-list-1", RUN.runBy, buildListStepRefreshPayload("refresh"));
     expect(ttlAtSend).toEqual([SEVEN_DAYS_S]);
     expect(renderers()).toEqual([LIST_STEP_ID, LIST_STEP_ID]);
+  });
+});
+
+describe("cinatra#3562 — the place a refresh keeps, and when it is refused", () => {
+  const REPEAT_KEY = `cinatra:wayflow:renderer-gate-repeat:${RUN.id}`;
+
+  it("a list whose last entry is another task refuses the note, even with a place from the steps", async () => {
+    redis.lists.set(`cinatra:wayflow:renderer-gates:${RUN.id}`, ["task-first-1", "task-list-1"]);
+    const { rememberWayflowRendererGateRepeat } = await import("@cinatra-ai/a2a");
+    // red-first-expect: No "rememberWayflowRendererGateRepeat" export is defined on the "@cinatra-ai/a2a" mock
+    await expect(rememberWayflowRendererGateRepeat(RUN.id, "task-other", 1)).rejects.toThrow("its place in the run's steps is not known");
+    await expect(rememberWayflowRendererGateRepeat(RUN.id, "task-first-1", 0)).rejects.toThrow("its place in the run's steps is not known");
+    expect(redis.store.has(REPEAT_KEY)).toBe(false);
+  });
+
+  it("a gone list with no place from the steps refuses the note", async () => {
+    const { rememberWayflowRendererGateRepeat } = await import("@cinatra-ai/a2a");
+    // red-first-expect: No "rememberWayflowRendererGateRepeat" export is defined on the "@cinatra-ai/a2a" mock
+    await expect(rememberWayflowRendererGateRepeat(RUN.id, "task-list-1", null)).rejects.toThrow("its place in the run's steps is not known");
+    await expect(rememberWayflowRendererGateRepeat(RUN.id, "task-list-1", -1)).rejects.toThrow("its place in the run's steps is not known");
+    expect(redis.store.has(REPEAT_KEY)).toBe(false);
+  });
+
+  it("a flow with one renderer step writes no note for a refresh", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue({ ...TEMPLATE, approvalPolicy: { steps: [TEMPLATE.approvalPolicy.steps[0]] } });
+    await firstPause("task-list-1");
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await refresh("task-list-1", "task-list-2");
+    expect(sendTask).toHaveBeenCalledTimes(1);
+    expect(redis.store.has(REPEAT_KEY)).toBe(false);
+    expect(renderers()).toEqual([LIST_STEP_ID, LIST_STEP_ID]);
+  });
+
+  it("the place from the steps is the one renderer step's gate index, walked as the resolver walks", async () => {
+    const { rendererGateIndexOfRenderer } = await import("../orchestrator-gate-predicate");
+    const s = (xRenderer: string, extra: Record<string, unknown> = {}) => ({ xRenderer, ...extra });
+    // red-first-expect: rendererGateIndexOfRenderer is not a function
+    expect(rendererGateIndexOfRenderer([s("a"), s("list"), s("b")], "list")).toBe(1);
+    // A phantom step takes no place; a step of two gates takes two.
+    expect(rendererGateIndexOfRenderer([s("a", { firesRendererGate: false }), s("b", { gateCount: 2 }), s("list")], "list")).toBe(2);
+    // No step, two steps, or a step of several gates: no one place.
+    expect(rendererGateIndexOfRenderer([s("a"), s("b")], "list")).toBeNull();
+    expect(rendererGateIndexOfRenderer([s("list"), s("list")], "list")).toBeNull();
+    expect(rendererGateIndexOfRenderer([s("a"), s("list", { gateCount: 2 })], "list")).toBeNull();
   });
 });

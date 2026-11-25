@@ -448,8 +448,8 @@ export async function getOrAddWayflowRendererGateIndex(
       }
       await r.lset(key, at, taskId);
     } else {
-      // The list expired (or lost its tail) after the refresh: the position is
-      // restored from the note. Only this function reads the list, and only by
+      // The list expired before or after the refresh (or lost its tail): the
+      // position is restored from the note. Only this function reads the list, and only by
       // `indexOf(taskId)` and by length, so the earlier places it cannot know
       // are filled with a value that is never a task id.
       const vacant = Array.from({ length: at - list.length }, () => VACANT_RENDERER_GATE);
@@ -489,19 +489,27 @@ function readRendererGateRepeat(raw: string): { taskId: string; index: number } 
  * in between (`getOrAddWayflowRendererGateIndex`). The list's time to live is
  * renewed with the note's, so a live run keeps both.
  *
- * Throws, and writes nothing, when `taskId` is not the last entry of the list
- * (the list is gone, or the task is not the current renderer gate): the place
- * of the next pause cannot be known, so the caller must not send the refresh.
+ * When the list is gone (it expires seven days after the run's last pause),
+ * the place is `placeFromSteps`: the caller reads it from the step's durable
+ * gate record and the compiled flow, which do not expire.
+ *
+ * Throws, and writes nothing, when the list holds entries and `taskId` is not
+ * its last entry (the task is not the current renderer gate), or when the list
+ * is gone and `placeFromSteps` is not a place: the place of the next pause
+ * cannot be known, so the caller must not send the refresh.
  */
 export async function rememberWayflowRendererGateRepeat(
   runId: string,
   taskId: string,
+  placeFromSteps: number | null = null,
 ): Promise<void> {
   const key = `cinatra:wayflow:renderer-gates:${runId}`;
   const r = getPublisher();
   const list = (await r.lrange(key, 0, -1)) as string[];
-  const index = list.length - 1;
-  if (index < 0 || list[index] !== taskId) {
+  let index = list.length - 1;
+  if (index < 0 && typeof placeFromSteps === "number" && Number.isInteger(placeFromSteps) && placeFromSteps >= 0) {
+    index = placeFromSteps;
+  } else if (index < 0 || list[index] !== taskId) {
     throw new Error(`the refresh of renderer gate ${taskId} on run ${runId} was not sent: its place in the run's steps is not known`);
   }
   await r.expire(key, GATE_SEQUENCE_TTL_S);

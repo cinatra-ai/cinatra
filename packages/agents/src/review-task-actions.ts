@@ -39,7 +39,7 @@ import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuc
 import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
 import { readWayflowSubmittedValues } from "./hitl-gate-submit";
 import { readListStepRefreshAsk, listStepRefreshAccepted, listStepRefreshIsRequest, isListStepRefreshPayloadShape } from "./hitl-gate-submit";
-import { stepFiresRendererGate, type RendererGateStepShape } from "./orchestrator-gate-predicate";
+import { stepFiresRendererGate, rendererGateIndexOfRenderer, type RendererGateStepShape } from "./orchestrator-gate-predicate";
 // cinatra#2484: the setup-resume path is the LAST place a type-violating setup
 // value can be stopped before it becomes `agent_runs.inputParams` and reaches
 // the run. It needs the SAME effective schema the setup loop rendered from —
@@ -979,6 +979,7 @@ export async function approveReviewTaskInternal(
     // A taken refresh sends the declared value and records nothing of the
     // answer: no answered-gate provenance, no prompt row, no Continue receipt.
     let listStepRefreshAsk: string | undefined = undefined;
+    let listStepRefreshRenderer: string | undefined = undefined;
     const refreshKeyValue = readListStepRefreshAsk(values);
     if (refreshKeyValue !== undefined) {
       const gate = await readDurableHitlGateForContinue(run.id, reviewTaskId).catch(() => null);
@@ -1012,6 +1013,7 @@ export async function approveReviewTaskInternal(
           throw new Error(`WayFlow approval rejected: gate ${taskId} on run ${run.id} takes no such list step refresh`);
         }
         listStepRefreshAsk = declaredRefreshValue;
+        listStepRefreshRenderer = gate.xRenderer;
       }
     }
 
@@ -1228,7 +1230,13 @@ export async function approveReviewTaskInternal(
           if (listStepRefreshAsk !== undefined) {
             const policySteps = (template.approvalPolicy?.steps ?? []) as RendererGateStepShape[];
             if (policySteps.filter(stepFiresRendererGate).length > 1) {
-              await (await import("@cinatra-ai/a2a")).rememberWayflowRendererGateRepeat(run.id, taskId);
+              // When the run's step list has expired, the place comes from the
+              // step's durable gate record (its renderer) and the compiled steps.
+              await (await import("@cinatra-ai/a2a")).rememberWayflowRendererGateRepeat(
+                run.id,
+                taskId,
+                listStepRefreshRenderer === undefined ? null : rendererGateIndexOfRenderer(policySteps, listStepRefreshRenderer),
+              );
             }
           } else {
             const { rememberAnsweredGateSubmission, rememberLatestWayflowGateTask } =

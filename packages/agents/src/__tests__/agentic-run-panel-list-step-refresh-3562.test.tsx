@@ -45,6 +45,9 @@ vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn() },
 }));
 
+const panelToast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn(), info: vi.fn(), warning: vi.fn() }));
+vi.mock("@/lib/cinatra-toast", () => ({ toast: panelToast, cinatraToast: panelToast }));
+
 vi.mock("lucide-react", () => {
   const StubIcon = () => null;
   return new Proxy({} as Record<string, () => null>, {
@@ -248,6 +251,24 @@ describe("AgenticRunPanel — a list step's Try again (cinatra#3562)", () => {
     await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
     await act(async () => finish({ ok: true }));
     expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("a refused refresh shows the error toast and draws the step again, so Try again can be pressed again", async () => {
+    // The server refuses (the step's place in the run is not known); the
+    // server action passes that refusal on as a thrown error.
+    hitlActions.approveReviewTask.mockImplementationOnce(async () => {
+      throw new Error("its place in the run's steps is not known");
+    });
+    const view = await renderPanelOn(WAYFLOW_TASK);
+    fireEvent.click(await view.findByTestId("list-picker-try-again"));
+    // red-first-expect: to be called 1 times, but got 0 times
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(panelToast.error).toHaveBeenCalledWith("Could not continue this run."));
+
+    const tryAgain = await view.findByTestId("list-picker-try-again");
+    expect(productContinue()!.disabled).toBe(true);
+    fireEvent.click(tryAgain);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(2));
   });
 
   it("sends nothing from a list step on a setup gate (guard)", async () => {
