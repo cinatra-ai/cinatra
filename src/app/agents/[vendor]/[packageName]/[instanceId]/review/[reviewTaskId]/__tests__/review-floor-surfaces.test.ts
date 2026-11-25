@@ -22,13 +22,23 @@
  * one. The live per-surface proof on the running app (acceptance item 9's
  * browser test) is not part of this change; it is owed by the proof round.
  *
- * ITEM 7 rides the same structure: no artifact renderer carries a Regenerate
- * control. That is proven as the shared-renderer proof item 7 explicitly allows
- * — every display reaches the reviewer through `ReviewTargetPanel`, which is
- * rendered by the island, and neither carries a decision control. The artifact
- * page and the review card mount every display kind through the same
- * `ArtifactDisplayMountPoint`, so that mount and its slots are read as well, and
- * the props a renderer receives carry no Regenerate road.
+ * ITEM 7 (no artifact display carries a Regenerate control) is proven by a
+ * chain, and THIS FILE HOLDS ONLY THE HOST'S PART OF IT:
+ *   (a) the props a display receives carry no Regenerate field and no callback
+ *       (here, and `assertSerializableRendererProps` in
+ *       src/lib/artifacts/__tests__/artifact-renderer-props.test.ts);
+ *   (b) a display cannot import host code, so it cannot reach the floor's
+ *       actions (scripts/audit/extension-import-ban.mjs, its tests);
+ *   (c) the host draws the floor only in the review card: the island, the
+ *       target panel, the shared `ArtifactDisplayMountPoint` that the artifact
+ *       page and the review card both use, and its two renderer slots draw no
+ *       floor and no Regenerate (here);
+ *   (d) the display's OWN source draws no Regenerate, Approve or Reject and
+ *       names no review decision route: rule (f) of
+ *       scripts/extensions/self-rendering-extensions-border-gate.mjs, run over
+ *       every pinned kind:artifact pack in CI.
+ * This file does NOT read a display's source; the mount renders whatever
+ * component a pack exports.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -138,7 +148,7 @@ describe("item 1 — every surface mounts that one floor, and adds none of its o
   });
 });
 
-describe("item 7 — no artifact renderer carries a Regenerate control", () => {
+describe("item 7 — the host mounts displays with no Regenerate and no floor of their own (displays' sources: border gate rule (f))", () => {
   it("the display ISLAND inside a third-party application stays display-only", () => {
     const code = stripComments(ISLAND);
     expect(code).not.toContain("ReviewDecisionBar");
@@ -147,10 +157,9 @@ describe("item 7 — no artifact renderer carries a Regenerate control", () => {
   });
 
   it("the ONE target panel every display reaches the reviewer through carries no decision control", () => {
-    // The shared-renderer proof item 7 allows: the markdown display, the
-    // image display and the download card are all mounted by this panel —
-    // the ladder is resolved here and nowhere else — so a Regenerate absent from
-    // it is absent from every display kind.
+    // The markdown display, the image display and the download card are all
+    // mounted by this panel in a review. The panel itself adds no Regenerate;
+    // what a display draws is its own source's, read by border gate rule (f).
     const code = stripComments(TARGET_PANEL);
     expect(code).not.toContain("ReviewDecisionBar");
     expect(code).not.toContain("Regenerate");
@@ -163,7 +172,8 @@ describe("item 7 — no artifact renderer carries a Regenerate control", () => {
     // mounts its target through ReviewTargetMount, which is the shared mount
     // with a review floor; the artifact page mounts the same shared mount. The
     // markdown display, the image display and the download card are package
-    // renderers, so each reaches every host only through this mount.
+    // renderers, so each reaches every host only through this mount. The mount
+    // renders the component a pack exports as it is; it does not read it.
     expect(stripComments(TARGET_PANEL)).toContain("<ReviewTargetMount");
     expect(stripComments(REVIEW_TARGET_MOUNT)).toContain("return ArtifactDisplayMountPoint(");
     expect(stripComments(ARTIFACT_PAGE)).toContain("<ArtifactDisplayMountPoint");
@@ -178,9 +188,10 @@ describe("item 7 — no artifact renderer carries a Regenerate control", () => {
     });
   }
 
-  it("the props a display receives carry no Regenerate road", () => {
-    // A package renderer gets only these props (and no host port), so with no
-    // Regenerate field here no display kind can offer the control.
+  it("the props a display receives carry no Regenerate field", () => {
+    // A package renderer gets only these props (and no host port); they are
+    // plain data (assertSerializableRendererProps), so the host hands a display
+    // no way to Regenerate. A display's own code is read by border gate rule (f).
     expect(stripComments(RENDERER_PROPS)).not.toMatch(/regenerat/i);
   });
 
