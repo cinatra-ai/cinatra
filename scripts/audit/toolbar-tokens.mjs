@@ -59,7 +59,7 @@ export const CANONICAL_TOOLBAR_REL = "src/components/ui/toolbar.tsx";
 // Files allowed to carry `role="toolbar"` outside the canonical component.
 // Reserve for THIRD-PARTY DOM that cannot mount <Toolbar> (the dashboards
 // drizzle-cube surfaces are currently restyled via scoped CSS-variable
-// redefinition — see packages/dashboards/src/components/dashboard-theme.css —
+// redefinition — see packages/sdk-dashboard/src/components/dashboard-theme.css —
 // so no entry is needed today). Every entry needs a reason.
 export const NONCANONICAL_TOOLBAR_ALLOWLIST = new Map([
   // ["path/from/repo/root.tsx", "reason"],

@@ -69,7 +69,7 @@ const editModalSources = loadSources(/^DashboardEditModal-.*\.js\.map$/);
 const dataTableSources = loadSources(/^chart-data-table-.*\.js\.map$/);
 
 const THEME_CSS = readFileSync(
-  join(__dirname, "..", "components", "dashboard-theme.css"),
+  join(__dirname, "..", "..", "..", "sdk-dashboard", "src", "components", "dashboard-theme.css"),
   "utf-8",
 );
 

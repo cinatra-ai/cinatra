@@ -46,6 +46,7 @@ import {
 } from "drizzle-cube/client";
 
 import {
+  kpiValueFallbackAttributes,
   ReadOnlyComposedDashboard,
   ReadOnlySinglePortlet,
 } from "@cinatra-ai/sdk-dashboard/components";
@@ -113,15 +114,31 @@ export type ComposedDashboardProps = Omit<
  * makes before it would paint its own placeholder — so this stays in lockstep
  * with the grid as cards are added/removed within an edit session.
  */
-function ComposedDashboardBody() {
+function ComposedDashboardBody({
+  kpiFallback,
+}: {
+  /** The KPI value fallback marker for the palette the provider was given. */
+  kpiFallback: ReturnType<typeof kpiValueFallbackAttributes>;
+}) {
   const { config } = useDashboardContext();
   const isEmpty = !config.portlets || config.portlets.length === 0;
 
+  // The grid sits in a `display: contents` wrapper that carries the KPI value
+  // fallback marker (cinatra#4311): it draws no box of its own, so the grid's
+  // layout is unchanged, and `dashboard-theme.css` repaints drizzle-cube's KPI
+  // fallback colour with the foreground token only under it — that is, only
+  // when this provider was given no palette colour.
   return (
     <>
       <CinatraDashboardToolbar />
       {!isEmpty && <DashboardFilterBarSlot />}
-      {isEmpty ? <DashboardEmptyState /> : <DashboardGridSurface />}
+      {isEmpty ? (
+        <DashboardEmptyState />
+      ) : (
+        <div style={{ display: "contents" }} {...kpiFallback}>
+          <DashboardGridSurface />
+        </div>
+      )}
       <DashboardModals />
     </>
   );
@@ -139,7 +156,7 @@ export function ComposedDashboard({ readOnly, ...props }: ComposedDashboardProps
   return (
     <DashboardProvider {...props} dashboardModes={dashboardModes}>
       <DcModalA11yScope>
-        <ComposedDashboardBody />
+        <ComposedDashboardBody kpiFallback={kpiValueFallbackAttributes(props.colorPalette)} />
       </DcModalA11yScope>
     </DashboardProvider>
   );

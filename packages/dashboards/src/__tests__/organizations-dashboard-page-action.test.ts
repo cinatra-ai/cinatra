@@ -25,7 +25,7 @@ const SCREEN_SOURCE = readFileSync(
   "utf-8",
 );
 const THEME_CSS = readFileSync(
-  join(__dirname, "..", "components", "dashboard-theme.css"),
+  join(__dirname, "..", "..", "..", "sdk-dashboard", "src", "components", "dashboard-theme.css"),
   "utf-8",
 );
 
