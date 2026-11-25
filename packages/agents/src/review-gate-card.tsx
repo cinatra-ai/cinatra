@@ -531,7 +531,7 @@ function islandCredentialsOf(
 // this fixes.
 // ---------------------------------------------------------------------------
 
-type IslandLoadState = "loading" | "loaded" | "timed-out" | "empty";
+export type IslandLoadState = "loading" | "loaded" | "timed-out" | "empty";
 
 /**
  * Bounded wait for the iframe's `load` event before treating a hang as a
@@ -597,9 +597,19 @@ function reviewIslandFrameName(attempt: number): string {
  */
 function readIslandProgress(
   data: unknown,
-): { type: "island-ready" | "panel-mounted"; attempt: number } | null {
+): { type: "island-ready" | "panel-mounted" | "island-failed" | "island-busy"; attempt: number } | { type: "island-drawn"; attempt: number; count: number } | null {
   if (typeof data !== "object" || data === null) return null;
   const keys = Object.keys(data);
+  // THE DRAWN REPORT (cinatra#3089): the same channel and attempt, plus how many
+  // panels the island drew once every one of them mounted (0 for the empty
+  // document). Closed like the two progress events: exactly these four keys.
+  if (keys.length === 4 && keys.every((key) => ["channel", "type", "attempt", "count"].includes(key))) {
+    const { channel, type, attempt, count } = data as { channel?: unknown; type?: unknown; attempt?: unknown; count?: unknown };
+    if (channel !== REVIEW_ISLAND_PROGRESS_CHANNEL || type !== "island-drawn") return null;
+    if (typeof attempt !== "number" || !Number.isSafeInteger(attempt) || attempt < 0) return null;
+    if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) return null;
+    return { type, attempt, count };
+  }
   if (keys.length !== 3 || !keys.every((key) => ["channel", "type", "attempt"].includes(key))) return null;
   const { channel, type, attempt } = data as {
     channel?: unknown;
@@ -607,7 +617,9 @@ function readIslandProgress(
     attempt?: unknown;
   };
   if (channel !== REVIEW_ISLAND_PROGRESS_CHANNEL) return null;
-  if (type !== "island-ready" && type !== "panel-mounted") return null;
+  // `island-failed` (cinatra#3089): an item's own content failed to load, so no drawn report follows. `island-busy`:
+  // after a drawn report an item is not drawn any more, until the next drawn report.
+  if (type !== "island-ready" && type !== "panel-mounted" && type !== "island-failed" && type !== "island-busy") return null;
   if (typeof attempt !== "number" || !Number.isSafeInteger(attempt) || attempt < 0) return null;
   return { type, attempt };
 }
@@ -2291,6 +2303,7 @@ function ReviewTargetIsland({
   onRetryResolve,
   inPanel = false,
   onSettledEmpty,
+  onLoadState,
 }: {
   src: string;
   /** True when this `src` carries a server-minted, expiring credential. */
@@ -2311,6 +2324,8 @@ function ReviewTargetIsland({
   /** See `ReviewTargetFrame`: the host draws the island's empty document as
    *  an empty panel, and is told when the island settles that way. */
   onSettledEmpty?: (empty: boolean) => void;
+  /** See `ReviewTargetFrame`: told the island's state each time it changes. */
+  onLoadState?: (state: IslandLoadState) => void;
 }): ReactElement {
   // One state bag KEYED BY `src`, reset IN-RENDER rather than in an effect —
   // the same shape `useLifecycleCardState` uses above for the identical
@@ -2351,6 +2366,10 @@ function ReviewTargetIsland({
      *  that reading as an empty panel (`onSettledEmpty`). */
     empty: false,
   });
+  // A HOST THAT ASKS FOR THE STATE (`onLoadState`, the publish card) reads the
+  // island as loaded only on the island's own drawn report (cinatra#3089); every
+  // other host keeps the frame's `load` as before.
+  const strict = onLoadState !== undefined;
   if (load.identity !== identity) {
     setLoad({ identity, attempt: 0, loaded: false, timedOut: false, ready: false, progress: 0, empty: false });
   }
@@ -2394,6 +2413,43 @@ function ReviewTargetIsland({
       if (!frame || event.source !== frame.contentWindow) return;
       const progress = readIslandProgress(event.data);
       if (!progress || progress.attempt !== load.attempt) return;
+      if (progress.type === "island-failed") {
+        // Only a strict host reads it (cinatra#3089): the failed reading at once, the "could not be shown" state with
+        // Try again; the island posts no drawn report after it, so nothing heals it but a new attempt.
+        // A failure after a drawn report is read too: the item is not on screen any more.
+        if (!strict) return;
+        setLoad((current) =>
+          current.attempt !== progress.attempt ? current : { ...current, loaded: false, timedOut: true, empty: false },
+        );
+        return;
+      }
+      if (progress.type === "island-busy") {
+        // Only a strict host reads it (cinatra#3089): an item that was drawn is not any more, so the island reads
+        // loading again (Allow waits) until its next drawn report. The idle-progress bound restarts from here: an
+        // item that stays busy past it reads failed, as a panel that never resolves does.
+        if (!strict) return;
+        setLoad((current) => {
+          if (!current.loaded || current.attempt !== progress.attempt) return current;
+          protocolClock.current.progress = Date.now();
+          return { ...current, loaded: false, timedOut: false, empty: false, ready: true, progress: current.progress + 1 };
+        });
+        return;
+      }
+      if (progress.type === "island-drawn") {
+        // Only a strict host reads it; it also heals a plate already painted.
+        if (!strict) return;
+        const count = progress.count;
+        setLoad((current) =>
+          current.loaded || current.attempt !== progress.attempt
+            ? current
+            : count > 0
+              ? { ...current, loaded: true, timedOut: false, empty: false }
+              : onSettledEmpty !== undefined
+                ? { ...current, loaded: true, timedOut: false, empty: true }
+                : { ...current, timedOut: true },
+        );
+        return;
+      }
       setLoad((current) => {
         if (current.loaded || current.attempt !== progress.attempt) return current;
         if (progress.type === "island-ready") {
@@ -2410,7 +2466,7 @@ function ReviewTargetIsland({
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [islandOrigin, load.attempt]);
+  }, [islandOrigin, load.attempt, strict, onSettledEmpty]);
 
   // THE TWO BOUNDS, as one restarting timer (cinatra#3334). Before
   // `island-ready` it is the INITIAL-RESPONSE bound, running from the moment
@@ -2533,7 +2589,14 @@ function ReviewTargetIsland({
   // Read after every hook of this component, so the hook order is the same
   // on every render.
   const cookieSession = useCookieSessionSurface();
-  if (!credentialed && !cookieSession && !refused && !awaiting) {
+  const unframedRegion = !credentialed && !cookieSession && !refused && !awaiting;
+  // THE STATE THE HOST IS TOLD (cinatra#3089): the region above draws nothing, so
+  // it reads as empty. The publish card's Allow waits until this is `loaded`.
+  const toldState: IslandLoadState = unframedRegion ? "empty" : state;
+  useEffect(() => {
+    onLoadState?.(toldState);
+  }, [onLoadState, toldState]);
+  if (unframedRegion) {
     return (
       <div
         data-conformance-id="review-target-island"
@@ -2603,6 +2666,11 @@ function ReviewTargetIsland({
             // `null`: the denial was then taken for a drawn target.
             const servedTheDenial = islandFrameServedTheDenial(event.currentTarget);
             const emptyIsSettled = onSettledEmpty !== undefined;
+            // A strict host (cinatra#3089): a readable document that is not the
+            // island (an error page, a sign-in page) is the failed reading at
+            // once; any other load waits for the island's drawn report, and its
+            // bound turns silence into the failed reading.
+            const foreign = strict && !servedTheDenial && islandFrameIsForeign(event.currentTarget);
             setLoad((current) =>
               current.identity === identity
                 ? // LOADED IS NOT THE SAME AS DREW (cinatra#2853, the picture
@@ -2630,7 +2698,11 @@ function ReviewTargetIsland({
                   ? emptyIsSettled
                     ? { ...current, loaded: true, timedOut: false, empty: true }
                     : { ...current, loaded: false, timedOut: true, empty: false }
-                  : { ...current, loaded: true, empty: false }
+                  : foreign
+                    ? { ...current, loaded: false, timedOut: true, empty: false }
+                    : strict
+                      ? current
+                      : { ...current, loaded: true, empty: false }
                 : current,
             );
           }}
@@ -2714,6 +2786,29 @@ export function islandFrameServedTheDenial(frame: HTMLIFrameElement | null): boo
   }
 }
 
+/**
+ * Is the frame's document readable and NOT the island (cinatra#3089)? The
+ * island draws one of two roots, its body or its one empty document; a
+ * same-origin error page or sign-in page draws neither. An unreadable
+ * document (another origin), one not parsed yet, or the frame's initial blank
+ * document answers `false`: the island's drawn report, or its bound, decides.
+ */
+export function islandFrameIsForeign(frame: HTMLIFrameElement | null): boolean {
+  try {
+    const doc = frame?.contentDocument;
+    if (!doc || doc.URL === "about:blank") return false;
+    return (
+      doc.querySelector(`[data-conformance-id='${REVIEW_ISLAND_BODY_MARKER}']`) === null &&
+      doc.querySelector(`[data-conformance-id='${REVIEW_ISLAND_EMPTY_MARKER}']`) === null
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** The marker the island's BODY carries (src/app/lifecycle/review-island/page.tsx). */
+export const REVIEW_ISLAND_BODY_MARKER = "review-target-island-body";
+
 /** The marker the island's DENIAL carries. The server half of this literal lives
  *  on the island route, and the two are pinned to each other by this card's own
  *  suite. */
@@ -2760,9 +2855,6 @@ function IslandLoadTimedOut({ onRetry }: { onRetry: () => void }): ReactElement 
           <CircleX aria-hidden="true" className="size-[18px]" />
         </div>
         <p className="font-sans text-sm font-semibold text-foreground">The preview did not load</p>
-        <p className="mx-auto mt-1 max-w-[46ch] text-xs text-muted-foreground">
-          This does not block your decision below — try again, or continue without it.
-        </p>
         <Button
           type="button"
           variant="link"
@@ -2942,6 +3034,7 @@ export function ReviewTargetFrame({
   awaiting = false,
   paired = false,
   onSettledEmpty,
+  onLoadState,
 }: {
   headers: readonly LifecycleTargetHeader[] | null;
   islandSrc: string;
@@ -2953,6 +3046,11 @@ export function ReviewTargetFrame({
    *  island currently stands settled empty. Absent (the review gate), that
    *  document stays a preview that did not arrive, as it always was. */
   onSettledEmpty?: (empty: boolean) => void;
+  /** Told the island's state (loading, loaded, timed-out, empty) each time it
+   *  changes (cinatra#3089): the publish card keeps Allow disabled until its
+   *  items panel is `loaded` (design XV.1, "Allow waits for the items"). An
+   *  island that frames nothing on a host with no cookie session reads empty. */
+  onLoadState?: (state: IslandLoadState) => void;
   /** This pair's own address is missing, failed or bound to another target
    *  (cinatra#4129): its island draws the failed state and frames nothing. */
   refused?: boolean;
@@ -2996,6 +3094,7 @@ export function ReviewTargetFrame({
         onRetryResolve={onRetryResolve}
         inPanel={Boolean(only)}
         onSettledEmpty={onSettledEmpty}
+        onLoadState={onLoadState}
       />
     </div>
   );

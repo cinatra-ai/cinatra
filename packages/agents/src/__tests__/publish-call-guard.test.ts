@@ -30,7 +30,7 @@ const decisions = vi.hoisted(() => ({
 }));
 vi.mock("../publish-decision-store", () => decisions);
 
-import { publishCallAllowed } from "../publish-decision-actions";
+import { publishCallAllowed, readGoverningPublishDecision } from "../publish-decision-actions";
 
 const RUN = { id: "run-1", templateId: "tmpl-1" };
 /** The holder of a call that is already over: it runs the release it is handed at once. */
@@ -378,6 +378,54 @@ describe("a publishing component whose key differs from its own id", () => {
       draft: { component_type: "ApiNode", id: "publish" } } }));
     expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(false);
     expect(decisions.claimPublishCall).not.toHaveBeenCalled();
+  });
+});
+
+// cinatra#3089: the send reads its approved decision through the one resolution this guard claims under, so a call it
+// serves for a nested or aliased step and the send it makes read the same decision.
+describe("the decision that governs a call (readGoverningPublishDecision)", () => {
+  beforeEach(() => {
+    storeMock.readAgentRunById.mockReset().mockResolvedValue({ id: "run-1", templateId: "tmpl-1" });
+  });
+
+  it("a step nested in a publishing FlowNode reads the decision the guard claims for it", async () => {
+    decisions.readRunBoundGraph.mockResolvedValue(JSON.stringify(GRAPH));
+    decisions.readDecisionForRunNode.mockImplementation(parentRow("released"));
+    for (const child of ["compose", "send", "fanout"]) {
+      // red-first-expect: readGoverningPublishDecision is not a function
+      expect(await readGoverningPublishDecision("run-1", child)).toEqual(row("released"));
+      expect(await publishCallAllowed(RUN, child, ENDED)).toBe(true);
+    }
+    expect(decisions.readDecisionForRunNode).not.toHaveBeenCalledWith("run-1", "send");
+    expect(decisions.claimPublishCall).toHaveBeenCalledWith("d1", TX);
+  });
+
+  it("a step signed with the publishing component's own id reads the decision stored under its key", async () => {
+    decisions.readRunBoundGraph.mockResolvedValue(JSON.stringify(ALIASED));
+    decisions.readDecisionForRunNode.mockImplementation(parentRow("released"));
+    // red-first-expect: readGoverningPublishDecision is not a function
+    expect(await readGoverningPublishDecision("run-1", "send")).toEqual(row("released"));
+    expect(decisions.readDecisionForRunNode).toHaveBeenLastCalledWith("run-1", "publish");
+    expect(await readGoverningPublishDecision("run-1", "publish")).toEqual(row("released"));
+  });
+
+  it("a step the guard cannot place is refused, a step unrelated to any publishing node reads its own", async () => {
+    // Inside two publishing nodes: which decision governs cannot be told.
+    decisions.readRunBoundGraph.mockResolvedValue(JSON.stringify({ ...GRAPH, $referenced_components: { ...GRAPH.$referenced_components,
+      again: { component_type: "FlowNode", id: "again", metadata: { cinatra: { publishes: true } }, subflow: { $component_ref: "publish_body" } } } }));
+    // red-first-expect: readGoverningPublishDecision is not a function
+    await expect(readGoverningPublishDecision("run-1", "send")).rejects.toThrow("which publishing step governs the call cannot be told");
+    decisions.readRunBoundGraph.mockResolvedValue(JSON.stringify(GRAPH));
+    decisions.readDecisionForRunNode.mockResolvedValue(null);
+    expect(await readGoverningPublishDecision("run-1", "draft")).toBeNull();
+    expect(decisions.readDecisionForRunNode).toHaveBeenLastCalledWith("run-1", "draft");
+    // A publishing step, or a step inside one, that holds no decision: never read as a step with no decision.
+    // red-first-expect: readGoverningPublishDecision is not a function
+    await expect(readGoverningPublishDecision("run-1", "compose")).rejects.toThrow("the publishing step that governs the call holds no decision");
+    await expect(readGoverningPublishDecision("run-1", "publish")).rejects.toThrow("the publishing step that governs the call holds no decision");
+    // The run is not found: no decision can be read for it.
+    storeMock.readAgentRunById.mockResolvedValue(null);
+    await expect(readGoverningPublishDecision("run-1", "send")).rejects.toThrow("the run of the call is not found");
   });
 });
 

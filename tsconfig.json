@@ -115,6 +115,8 @@
       "@cinatra-ai/agents/run-dispatch-core": ["./packages/agents/src/run-dispatch-core.ts"],
       "@cinatra-ai/agents/artifact-review-gate-store": ["./packages/agents/src/artifact-review-gate-store.ts"],
       "@cinatra-ai/agents/publish-decision-island-subject": ["./packages/agents/src/publish-decision-island-subject.ts"],
+      "@cinatra-ai/agents/publish-decision-store": ["./packages/agents/src/publish-decision-store.ts"],
+      "@cinatra-ai/agents/publish-decision-actions": ["./packages/agents/src/publish-decision-actions.ts"],
       "@cinatra-ai/agents/lifecycle-verification-store": ["./packages/agents/src/lifecycle-verification-store.ts"],
       "@cinatra-ai/agents/lifecycle-verification-read-store": ["./packages/agents/src/lifecycle-verification-read-store.ts"],
       "@cinatra-ai/agents/artifact-open-review-read": ["./packages/agents/src/artifact-open-review-read.ts"],
