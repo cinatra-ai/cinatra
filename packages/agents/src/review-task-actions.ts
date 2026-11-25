@@ -191,12 +191,26 @@ async function assertRunScopeOrDeny(
  * setup screen takes (`isBlankSubValue` in schema-field-renderer.tsx): absent,
  * null, a string that trims to empty, or an empty list. `0` and `false` are
  * ANSWERS, never blank.
+ *
+ * cinatra#3562 — and a list step's answer that names no list: the list
+ * picker's value (`scope: "list"`) with no usable `listId` and no usable entry
+ * in `listIds`. It is an object, but the person picked nothing, and a run
+ * resumed with it would go on with no list. The host withholds its Continue
+ * for it; this is the server's own refusal, for every door into the road.
  */
 function isBlankSetupValue(value: unknown): boolean {
   if (value === undefined || value === null) return true;
   if (typeof value === "string") return value.trim() === "";
   if (Array.isArray(value)) return value.length === 0;
-  return false;
+  return isListAnswerNamingNoList(value);
+}
+
+function isListAnswerNamingNoList(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const answer = value as { scope?: unknown; listId?: unknown; listIds?: unknown };
+  if (answer.scope !== "list") return false;
+  const names = (id: unknown) => typeof id === "string" && id.trim() !== "";
+  return !(names(answer.listId) || (Array.isArray(answer.listIds) && answer.listIds.some(names)));
 }
 
 /**

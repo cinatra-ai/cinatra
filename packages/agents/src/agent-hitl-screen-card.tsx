@@ -976,15 +976,15 @@ export function AgentHitlScreenContinue({
   submitting,
   blocked,
   awaitsPick,
-  listStepReportedInvalid,
+  reportedInvalid,
   onContinue,
 }: {
   gate: AgentHitlScreenGate;
   buffered: Record<string, unknown>;
   submitting: boolean;
   awaitsPick?: boolean;
-  /** The list step's renderer reported its pick unsendable (cinatra#3562). */
-  listStepReportedInvalid?: boolean;
+  /** The gate's renderer reported its value unsendable (cinatra#3562). */
+  reportedInvalid?: boolean;
   /** This host has NO identity to answer with — neither a cookie session nor a
    *  declared credential. The control is drawn and inert rather than firing a
    *  request the server would have to guess the caller of. */
@@ -995,13 +995,15 @@ export function AgentHitlScreenContinue({
     <HitlContinueControl
       submitting={submitting}
       blocked={blocked}
+      // Held while the gate's renderer reports its value unsendable
+      // (cinatra#3562): a list step's buffer can carry a pick the step no
+      // longer offers.
+      held={reportedInvalid === true}
       // A list step with nothing picked sends nothing (cinatra#3562): its note
-      // would name no list. Nor does one whose renderer reports its pick
-      // unsendable: the buffer can carry a pick the step no longer offers.
+      // would name no list.
       awaitsPick={
         awaitsPick === true ||
-        (isMidRunListStepGate(gate.xRenderer, gate.reviewTaskId) &&
-          (listStepReportedInvalid === true || !hasUsableListPick(buffered)))
+        (isMidRunListStepGate(gate.xRenderer, gate.reviewTaskId) && !hasUsableListPick(buffered))
       }
       // cinatra#3380 — the same rule the run panel and the stepper apply to
       // their mid-run Continue (`hitl-gate-submit.ts`): a gate that declares
@@ -1245,23 +1247,28 @@ export function AgentHitlScreenCard({
   // cinatra#3035: the mounted renderer reports here when it settles on the floor,
   // for this gate only: a later gate reads its own hold from its first frame.
   const [rendererFloored, setRendererFloored] = useGateRendererFloor(gateKey);
-  // THE LIST STEP'S OWN READING OF ITS PICK (cinatra#3562). The renderer
-  // reports through `onValidityChange` whether the pick it shows may be sent;
-  // the report is kept with the gate it was made for. A carried buffer can
-  // still name a pick the step no longer offers (a failed read, or a read that
-  // dropped it), so while this gate's latest report is `false` the card's
-  // Continue is unavailable, as on the run page and in the stepper. A gate the
-  // renderer has not reported on holds nothing.
-  const [listStepValidity, setListStepValidity] = useState<{
+  // THE RENDERER'S OWN READING OF ITS VALUE (cinatra#3562). The renderer
+  // reports through `onValidityChange` whether what it holds may be sent (the
+  // list step: whether its pick is one the step still offers); the report is
+  // kept with the gate it was made for. While this gate's latest report is
+  // `false`, the card's Continue is unavailable, on a setup gate as on a
+  // mid-run one, as on the run page and in the stepper. The setup press also
+  // reads the report from a ref after its flush, since the flush can make the
+  // renderer report. A gate the renderer has not reported on holds nothing.
+  const [gateValidity, setGateValidity] = useState<{
     gateKey: string | null;
     valid: boolean;
   } | null>(null);
-  const reportListStepValidity = useCallback(
-    (valid: boolean) => setListStepValidity({ gateKey, valid }),
+  const gateValidityRef = useRef<{ gateKey: string | null; valid: boolean } | null>(null);
+  const reportGateValidity = useCallback(
+    (valid: boolean) => {
+      gateValidityRef.current = { gateKey, valid };
+      setGateValidity({ gateKey, valid });
+    },
     [gateKey],
   );
-  const listStepReportedInvalid =
-    listStepValidity !== null && listStepValidity.gateKey === gateKey && !listStepValidity.valid;
+  const gateReportedInvalid =
+    gateValidity !== null && gateValidity.gateKey === gateKey && !gateValidity.valid;
   // THE GATE ON SCREEN, AS OF THE LAST COMMIT (cinatra#3380). A write or a press
   // made for one gate can arrive after the next gate has been committed: a
   // flush that took its time, or a replaced renderer that still calls its
@@ -1479,6 +1486,10 @@ export function AgentHitlScreenCard({
       // This press answers the gate it was made on, so it stops here: it takes
       // nothing the next gate may have staged, and it submits nothing.
       if (liveGateKeyRef.current !== pressedFor) return;
+      // Reported unsendable (see `gateValidity`), read after the flush: the
+      // press sends nothing, and what is staged stays for a later press.
+      const report = gateValidityRef.current;
+      if (report !== null && report.gateKey === pressedFor && !report.valid) return;
       const staged = takeSetupAnswer();
       // Nothing to submit: a required box the renderer refused to hand over says
       // so itself, in its own words, inside the field. The screen is left
@@ -1558,7 +1569,7 @@ export function AgentHitlScreenCard({
                 actions.readListStepContent(runId, reviewTaskId),
               ),
           )}
-          onValidityChange={reportListStepValidity}
+          onValidityChange={reportGateValidity}
         />
         </RendererFloorReportContext.Provider>
         {isMidRun && !isGroupedSetup ? (
@@ -1568,13 +1579,14 @@ export function AgentHitlScreenCard({
             submitting={submitting}
             blocked={(!cookieSession && auth === null) || withholdRenderer}
             awaitsPick={!rendererFloored && continueAwaitsAPick(resolveHitlGateEntry(runId, gate), activeBuffered)}
-            listStepReportedInvalid={listStepReportedInvalid}
+            reportedInvalid={gateReportedInvalid}
             onContinue={onContinue}
           />
         ) : cardOwnsSetupSend ? (
           <AgentHitlScreenSetupContinue
             submitting={submitting}
             blocked={!cookieSession && auth === null}
+            held={gateReportedInvalid}
             onContinue={onContinueSetup}
           />
         ) : null}
@@ -1600,8 +1612,8 @@ export function AgentHitlScreenCard({
     stageSetupAnswer,
     rendererFloored,
     setRendererFloored,
-    reportListStepValidity,
-    listStepReportedInvalid,
+    reportGateValidity,
+    gateReportedInvalid,
   ]);
 
   // Nothing before an authorized read, and NO DOM AT ALL for `none` — the

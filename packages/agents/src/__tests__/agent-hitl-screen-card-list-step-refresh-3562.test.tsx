@@ -401,3 +401,81 @@ describe("AgentHitlScreenCard — the shipped list picker's Try again (cinatra#3
     expect(JSON.parse(sent.approvalNote ?? "{}")).toMatchObject({ type: "list", listId: "l-1", listName: "Carried A" });
   });
 });
+
+/**
+ * A SETUP LIST STEP ON THE CARD (cinatra#3562). The card owns the setup send
+ * (the list picker draws no submit of its own): the step's change stages, and
+ * the card's own Continue submits what is staged. That Continue is held on
+ * the step's validity report, as the mid-run one is.
+ */
+describe("AgentHitlScreenCard — a setup list step's Continue follows the step's validity report (cinatra#3562)", () => {
+  const SETUP_TASK = `setup-${RUN_ID}`;
+  const RESTORED_A = { scope: "list", listId: "l-1", listName: "Carried A", memberCount: 3 };
+  const LIST_A = { id: "l-1", name: "Carried A", memberCount: 3, lastUpdated: null, memberType: "contact" };
+  const LIST_9 = { id: "l-9", name: "Read again", memberCount: null, lastUpdated: null, memberType: "contact" };
+
+  async function mountSetupListStep() {
+    __setFieldRendererComponentMapForTests({});
+    registerFieldRendererBindings([{ id: HOST_STEP_ID, kind: "list-picker", priority: 80 }]);
+    asking = {
+      ...askingOn(HOST_STEP_ID),
+      gate: {
+        reviewTaskId: SETUP_TASK,
+        xRenderer: HOST_STEP_ID,
+        inputSchema: {
+          type: "object",
+          properties: { targetList: { type: "object" } },
+          required: ["targetList"],
+        } as unknown as { type: string },
+        currentValues: { targetList: RESTORED_A },
+        fieldName: "targetList" as unknown as undefined,
+      },
+    };
+    render(
+      <LifecycleCardSurfaceProvider host="chat_thread">
+        <AgentHitlScreenCard runId={RUN_ID} wireRef={SETUP_TASK} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    await settle();
+  }
+  const continueOf = () => screen.getByRole("button", { name: /continue/i }) as HTMLButtonElement;
+
+  afterEach(() => {
+    listActions.fetchAvailableLists.mockImplementation(async () => []);
+    __resetFieldRendererComponentMapForTests();
+  });
+
+  // red-first-expect: expected false to be true
+  it("a restored list the read no longer offers: Continue unavailable, a press sends nothing", async () => {
+    listActions.fetchAvailableLists.mockResolvedValue([LIST_9] as never);
+    await mountSetupListStep();
+    await screen.findByText("Read again", undefined, { timeout: 3000 });
+    await waitFor(() => expect(continueOf().disabled).toBe(true));
+    fireEvent.click(continueOf());
+    await settle();
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  });
+
+  // red-first-expect: expected false to be true
+  it("a failed read: Continue unavailable, a press sends nothing", async () => {
+    listActions.fetchAvailableLists.mockRejectedValue(new Error("search failed"));
+    await mountSetupListStep();
+    await screen.findByRole("alert", undefined, { timeout: 3000 });
+    await waitFor(() => expect(continueOf().disabled).toBe(true));
+    fireEvent.click(continueOf());
+    await settle();
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  });
+
+  it("a restored list the read still offers is what Continue sends, under the field's name", async () => {
+    listActions.fetchAvailableLists.mockResolvedValue([LIST_A, LIST_9] as never);
+    await mountSetupListStep();
+    await screen.findByText("Carried A", undefined, { timeout: 3000 });
+    await waitFor(() => expect(continueOf().disabled).toBe(false));
+    fireEvent.click(continueOf());
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, sent] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [string, unknown];
+    expect(taskId).toBe(SETUP_TASK);
+    expect(JSON.stringify(sent)).toContain('"listId":"l-1"');
+  });
+});

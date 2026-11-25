@@ -615,6 +615,43 @@ describe("cinatra#3582 — approveReviewTaskInternal refuses a blank answer for 
     expect(dbWrites).toHaveLength(0);
   });
 
+  // red-first-expect: promise resolved "undefined" instead of rejecting
+  it("cinatra#3562: refuses a LIST ANSWER THAT NAMES NO LIST for a declared-required list field, naming that field", async () => {
+    armRun("run-blank-list1", { targetList: { type: "object" } }, ["targetList"]);
+
+    await expect(
+      approveReviewTaskInternal(
+        "setup-run-blank-list1",
+        "actor-1",
+        { targetList: { scope: "list", listId: "", listName: "", memberCount: 0 } },
+        "targetList",
+      ),
+    ).rejects.toThrow(/targetList/);
+    await expect(
+      approveReviewTaskInternal(
+        "setup-run-blank-list1",
+        "actor-1",
+        { targetList: { scope: "list", listId: "  ", listIds: ["", " "] } },
+        "targetList",
+      ),
+    ).rejects.toThrow(/targetList/);
+    expect(dbWrites).toHaveLength(0);
+    expect(bgJobs.enqueueBackgroundJob).not.toHaveBeenCalled();
+  });
+
+  it("cinatra#3562: a list answer that names a list is accepted", async () => {
+    armRun("run-blank-list2", { targetList: { type: "object" } }, ["targetList"]);
+
+    await approveReviewTaskInternal(
+      "setup-run-blank-list2",
+      "actor-1",
+      { targetList: { scope: "list", listId: "l-1", listName: "Q2 Targets", memberCount: 3 } },
+      "targetList",
+    );
+
+    expect(dbWrites.find((w) => w.set?.status === "queued")).toBeDefined();
+  });
+
   it("cinatra#3452 stands: a required field that declares a DEFAULT is satisfied by that default when submitted blank", async () => {
     armRun("run-blank4", { ideaCount: { type: "integer", default: 5 } }, ["ideaCount"]);
 
