@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("../agent-run-hitl-prompts", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   readDurableHitlGateForContinue: async () => null,
+  readCurrentDurableHitlGate: async () => null,
 }));
 
 // cinatra#4150: every resume road reads the run's newest publish decision before it

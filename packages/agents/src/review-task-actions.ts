@@ -930,30 +930,45 @@ export async function approveReviewTaskInternal(
         }),
       );
     }
-    // A STEP NO SCREEN DRAWS IS NOT ANSWERED (`parkedHitlStepIsAnswerable`):
-    // its recorded renderer id is claimed by no entry any more, so every
-    // surface shows "no renderer configured for this step" and no control, and
-    // a direct call is refused here, before the pause is claimed. A DISPLAY-ONLY
-    // card (the artifact-review redirect) is refused the same way: only its
-    // review's own decision consumes it. Nothing is recorded or sent; the run
-    // stays parked. A record that cannot be read refuses too (a fixed text,
-    // no store error); only a step with no durable record (`null`) is left to
-    // the checks below.
-    let parkedStep: Awaited<ReturnType<typeof readDurableHitlGateForContinue>>;
+    // An answer that does not reach the pause the run waits at is refused with
+    // the TYPED no-longer-pending outcome (see the race note below).
+    const refuse = (currentStatus: string, why: string) =>
+      new GateNotPendingError({
+        runId: run.id,
+        currentStatus,
+        message: `WayFlow approval rejected: gate ${taskId} on run ${run.id} ${why}`,
+      });
+    // A STEP NO SCREEN DRAWS IS NOT ANSWERED (`currentParkedHitlStepRefusal`,
+    // the one guard every generic road asks). It decides on the run's CURRENT
+    // gate (its newest durable row): an answer to another gate is refused as
+    // no longer the pause the run waits at; a step whose recorded renderer id
+    // no entry claims, or whose claiming binding's condition does not match the
+    // acting user's context, is drawn with no control, and a DISPLAY-ONLY card
+    // (the artifact-review redirect) is consumed only by its review's own
+    // decision. Each is refused here, before the pause is claimed. Nothing is
+    // recorded or sent; the run stays parked. A record that cannot be read
+    // refuses too (a fixed text, no store error); only a run with no durable
+    // record (`null`) is left to the checks below.
+    let parked: Awaited<ReturnType<typeof import("./field-renderer-bindings.server")["currentParkedHitlStepRefusal"]>>;
     try {
-      parkedStep = await readDurableHitlGateForContinue(run.id, reviewTaskId);
+      parked = await (await import("./field-renderer-bindings.server")).currentParkedHitlStepRefusal({
+        runId: run.id,
+        actingUserId: actorId,
+        namedReviewTaskId: reviewTaskId,
+      });
     } catch {
       throw new Error(`WayFlow approval rejected: the paused step of gate ${taskId} on run ${run.id} could not be read`);
     }
-    const refusal = parkedStep
-      ? (await import("./field-renderer-bindings.server")).parkedHitlStepRefusalOnServer(parkedStep)
-      : null;
-    if (parkedStep && refusal !== null) {
+    if (parked.refusal === "stale") {
+      throw refuse(run.status, `is no longer the pause the run waits at`);
+    }
+    const parkedStep = parked.gate;
+    if (parkedStep && parked.refusal !== null) {
       throw new HitlStepNotAnswerableError({
         runId: run.id,
         xRenderer: parkedStep.xRenderer,
         message:
-          refusal === "display-only"
+          parked.refusal === "display-only"
             ? `WayFlow approval rejected: gate ${taskId} on run ${run.id} is an artifact review; it goes on only when that review is decided`
             : `WayFlow approval rejected: gate ${taskId} on run ${run.id} has no screen that draws it`,
       });
@@ -1023,12 +1038,7 @@ export async function approveReviewTaskInternal(
     // and the run surface draws its blocked state from. Nothing of the loser's
     // answer is recorded, nothing is dispatched, and the run goes on with the
     // first answer rather than failing.
-    const refuse = (currentStatus: string, why: string) =>
-      new GateNotPendingError({
-        runId: run.id,
-        currentStatus,
-        message: `WayFlow approval rejected: gate ${taskId} on run ${run.id} ${why}`,
-      });
+    // (`refuse`, above: the typed refusal for an answer to another pause.)
     //
     // The latest-task key is read on BOTH roads (cinatra#4245). Found through the
     // reverse map, the column did not name this task, so only the key can prove it

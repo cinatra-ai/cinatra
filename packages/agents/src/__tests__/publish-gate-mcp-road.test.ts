@@ -194,11 +194,17 @@ vi.mock("../publish-decision-store", async (orig) => ({
 // The paused step's durable record: none by default (a real absence), so the
 // resume road goes on to the checks this suite is about.
 const durableGate = vi.hoisted(() => ({
-  read: vi.fn(async (): Promise<unknown> => null),
+  read: vi.fn<(runId?: string, reviewTaskId?: string) => Promise<unknown>>(async () => null),
+  // The run's current gate (its newest durable row): by default the record the
+  // suite gives for the run's own task.
+  current: vi.fn<(runId: string) => Promise<unknown>>(async () => null),
 }));
+const currentIsTheRunsTask = (runId: string) => durableGate.read(runId, "wayflow-task-1");
+durableGate.current.mockImplementation(currentIsTheRunsTask);
 vi.mock("../agent-run-hitl-prompts", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   readDurableHitlGateForContinue: durableGate.read,
+  readCurrentDurableHitlGate: durableGate.current,
 }));
 
 const ACTOR = { actorType: "human" as const, source: "ui" as const, userId: "user-a" };
@@ -533,6 +539,49 @@ describe("agent_run_resume and the paused step's durable record", () => {
     holdSpy.mockResolvedValue({ held: false, reason: "no-review" });
     decisions.readLatestDecisionForRun.mockResolvedValue(null);
     durableGate.read.mockReset().mockResolvedValue(null);
+    durableGate.current.mockReset().mockImplementation(currentIsTheRunsTask);
+  });
+
+  // THE RUN'S CURRENT GATE DECIDES (its newest durable row), never the row its
+  // task column names: that column can be stale, and the resume reaches the
+  // current gate through the run's context.
+  // red-first-expect: to not be called at all, but actually been called 1 times
+  it("an answerable row under the run's stale task does not open a display-only current gate", async () => {
+    durableGate.read.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:schema-field-fallback"));
+    durableGate.current.mockResolvedValue({
+      ...gateFor("@cinatra-ai/agent-builder:artifact-review-redirect"),
+      reviewTaskId: "wayflow-task-2",
+    });
+    const answer = (await resume()) as { error?: string };
+    expect(pauseClaimFake.claimPause).not.toHaveBeenCalled();
+    expect(answer.error).toBe("Run run-1 is paused at an artifact review; it goes on only when that review is decided.");
+    nothingMoved();
+  });
+
+  // red-first-expect: to be called with arguments: [ 'run-1' ]
+  it("a display-only row under the run's stale task does not refuse an answerable current gate", async () => {
+    durableGate.read.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:artifact-review-redirect"));
+    durableGate.current.mockResolvedValue({
+      ...gateFor("@cinatra-ai/agent-builder:schema-field-fallback"),
+      reviewTaskId: "wayflow-task-2",
+    });
+    const answer = (await resume()) as { error?: string };
+    expect(durableGate.current).toHaveBeenCalledWith("run-1");
+    // The resume goes on to the claim and the send (what follows the send is
+    // other suites' concern).
+    expect(answer.error ?? "").not.toMatch(/artifact review|no screen draws|could not be read/);
+    expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // red-first-expect: to be called with arguments: [ 'run-1' ]
+  it("the current gate is read for the run, and its refusal stands whatever the task's row says", async () => {
+    durableGate.read.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:schema-field-fallback"));
+    durableGate.current.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:artifact-review-redirect"));
+    const answer = (await resume()) as { error?: string };
+    expect(durableGate.current).toHaveBeenCalledWith("run-1");
+    expect(answer.error).toBe("Run run-1 is paused at an artifact review; it goes on only when that review is decided.");
+    nothingMoved();
   });
 
   // red-first-expect: to not be called at all, but actually been called 1 times

@@ -23,6 +23,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("../agent-run-hitl-prompts", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   readDurableHitlGateForContinue: async () => null,
+  readCurrentDurableHitlGate: async () => null,
 }));
 
 // cinatra#4150: every resume road reads the run's newest publish decision before it
@@ -131,7 +132,8 @@ vi.mock("../store", () => storeMock);
 // wayflow path mocks. The sourceType guard runs BEFORE resolveWayflowUrl /
 // sendTask, so these are stubbed only to avoid bare-import failures in tests
 // that do reach the wayflow branch.
-vi.mock("../wayflow-url", () => ({
+vi.mock("../wayflow-url", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
   resolveWayflowUrl: vi.fn(() => "http://wayflow.test"),
   WAYFLOW_UNDICI_TIMEOUT_MS: 60_000,
 }));

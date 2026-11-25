@@ -15,9 +15,12 @@
 
 import {
   fieldRendererRegistry,
+  type FieldRendererCondition,
   type FieldRendererContext,
   type FieldRendererEntry,
 } from "./field-renderer-registry";
+import { makeGmailSenderCondition } from "./gmail-sender-condition";
+import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
 import {
   ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
   HOST_RENDERER_DRAWN_IDS,
@@ -152,12 +155,52 @@ export function rendererIdsDrawnForBinding(binding: { id: string; kind: string }
 export function drawnHitlRendererClaim(
   xRenderer: string,
   bindings: ReadonlyArray<{ id: string; kind: string }>,
-): { id: string } | null {
+): { id: string; kind?: string } | null {
   for (const entryId of Object.keys(HOST_RENDERER_DRAWN_IDS)) {
     if (hostEntryDrawsRendererId(entryId, xRenderer)) return { id: entryId };
   }
   const binding = bindings.find((b) => rendererIdsDrawnForBinding(b).includes(xRenderer));
-  return binding ? { id: binding.id } : null;
+  return binding ? { id: binding.id, kind: binding.kind } : null;
+}
+
+/**
+ * THE KINDS WHOSE CONDITION READS MORE THAN THE ID: the reader's context
+ * decides whether a screen draws them. The page's registry entry of such a
+ * binding is this condition, and the server evaluates the same condition with
+ * the same context read on the server (`fieldRendererContextForUser`), so the
+ * condition exists once. Today only the Gmail sender: it is drawn only for a
+ * reader with Gmail connected and at least one sending alias.
+ */
+export const FIELD_RENDERER_KIND_CONTEXT_CONDITIONS: Readonly<
+  Record<string, (matchIds: readonly string[]) => FieldRendererCondition>
+> = {
+  "gmail-sender": makeGmailSenderCondition,
+};
+
+/** Does a claim's condition read the reader's context (`FIELD_RENDERER_KIND_CONTEXT_CONDITIONS`)? */
+export function hitlClaimReadsContext(claim: { kind?: string } | null): boolean {
+  return claim?.kind !== undefined && FIELD_RENDERER_KIND_CONTEXT_CONDITIONS[claim.kind] !== undefined;
+}
+
+/**
+ * Is a claimed step drawn for this reader? Always, unless its kind's condition
+ * reads the context: then that condition decides, on the gate as the hosts
+ * resolve it (the placeholder field name and the step's renderer id). No
+ * context (the reader's could not be read) is never a match.
+ */
+export function hitlClaimDrawnInContext(
+  claim: { id: string; kind?: string },
+  xRenderer: string,
+  context: FieldRendererContext | null,
+): boolean {
+  if (!hitlClaimReadsContext(claim)) return true;
+  if (context === null) return false;
+  const makeCondition = FIELD_RENDERER_KIND_CONTEXT_CONDITIONS[claim.kind as string]!;
+  return makeCondition(rendererIdsDrawnForBinding({ id: claim.id, kind: claim.kind as string }))(
+    HITL_PLACEHOLDER_FIELD_NAME,
+    { "x-renderer": xRenderer },
+    context,
+  );
 }
 
 /**

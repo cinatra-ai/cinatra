@@ -23,6 +23,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("../agent-run-hitl-prompts", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   readDurableHitlGateForContinue: async () => null,
+  readCurrentDurableHitlGate: async () => null,
 }));
 
 type Reader = (values: unknown) => Record<string, unknown> | null;

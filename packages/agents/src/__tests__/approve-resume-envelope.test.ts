@@ -92,14 +92,20 @@ const storeMock = vi.hoisted(() => ({
 vi.mock("../store", () => storeMock);
 const continueMock = vi.hoisted(() => ({
   // No durable gate by default: the Continue receipt is not written.
-  readDurableHitlGateForContinue: vi.fn(async (): Promise<unknown> => null),
+  readDurableHitlGateForContinue: vi.fn<(runId?: string, reviewTaskId?: string) => Promise<unknown>>(async () => null),
+  // The run's current gate (its newest durable row): by default the record the
+  // suite gives for the gate it answers.
+  readCurrentDurableHitlGate: vi.fn<(runId: string) => Promise<unknown>>(async () => null),
   recordSuccessfulContinue: vi.fn(async (_input: { submittedValues: unknown }) => {}),
 }));
+const currentIsTheAnsweredGate = (runId: string) => continueMock.readDurableHitlGateForContinue(runId, "current");
+continueMock.readCurrentDurableHitlGate.mockImplementation(currentIsTheAnsweredGate);
 vi.mock("../agent-run-hitl-prompts", () => ({
   captureHitlPromptForContinue: async (input: never) => {
     await storeMock.writeHitlPrompt(input); return "captured-prompt";
   },
   readDurableHitlGateForContinue: continueMock.readDurableHitlGateForContinue,
+  readCurrentDurableHitlGate: continueMock.readCurrentDurableHitlGate,
   recordSuccessfulContinue: continueMock.recordSuccessfulContinue,
   continueBindingDigest: () => "", continueGateDigest: () => "",
 }));
@@ -654,6 +660,7 @@ describe("the generic answer and the paused step's durable record", () => {
     vi.clearAllMocks();
     setupRun();
     continueMock.readDurableHitlGateForContinue.mockReset().mockResolvedValue(null);
+    continueMock.readCurrentDurableHitlGate.mockReset().mockImplementation(currentIsTheAnsweredGate);
   });
 
   // red-first-expect: promise resolved "undefined" instead of rejecting
@@ -688,6 +695,51 @@ describe("the generic answer and the paused step's durable record", () => {
     expect(continueMock.readDurableHitlGateForContinue).toHaveBeenCalledWith("run-r1", TASK);
     expect(sendTaskMock).toHaveBeenCalledTimes(1);
     expect(wayflowText()).toBe("go");
+  });
+
+  // THE RUN'S CURRENT GATE DECIDES (its newest durable row), and an answer to
+  // another task is refused as no longer the pause the run waits at.
+  // red-first-expect: promise resolved "undefined" instead of rejecting
+  it("an answer to an older gate is refused when the run's current gate is a display-only card", async () => {
+    continueMock.readDurableHitlGateForContinue.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:schema-field-fallback"));
+    continueMock.readCurrentDurableHitlGate.mockResolvedValue({
+      ...gateFor("@cinatra-ai/agent-builder:artifact-review-redirect"),
+      reviewTaskId: "wayflow-task-r2",
+    });
+    await expect(
+      approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" }),
+    ).rejects.toMatchObject({
+      name: "GateNotPendingError",
+      message: "WayFlow approval rejected: gate task-r1 on run run-r1 is no longer the pause the run waits at",
+    });
+    nothingMoved();
+  });
+
+  // red-first-expect: promise resolved "undefined" instead of rejecting
+  it("an answer to an older display-only gate is refused as stale, not as that card", async () => {
+    continueMock.readDurableHitlGateForContinue.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:artifact-review-redirect"));
+    continueMock.readCurrentDurableHitlGate.mockResolvedValue({
+      ...gateFor("@cinatra-ai/agent-builder:schema-field-fallback"),
+      reviewTaskId: "wayflow-task-r2",
+    });
+    await expect(
+      approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" }),
+    ).rejects.toMatchObject({
+      name: "GateNotPendingError",
+      message: "WayFlow approval rejected: gate task-r1 on run run-r1 is no longer the pause the run waits at",
+    });
+    nothingMoved();
+  });
+
+  // red-first-expect: promise resolved "undefined" instead of rejecting
+  it("the current gate is read for the run, and its refusal stands whatever the named row says", async () => {
+    continueMock.readDurableHitlGateForContinue.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:schema-field-fallback"));
+    continueMock.readCurrentDurableHitlGate.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:artifact-review-redirect"));
+    await expect(
+      approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" }),
+    ).rejects.toMatchObject({ name: "HitlStepNotAnswerableError" });
+    expect(continueMock.readCurrentDurableHitlGate).toHaveBeenCalledWith("run-r1");
+    nothingMoved();
   });
 
   it("an ordinary builder input step still answers", async () => {

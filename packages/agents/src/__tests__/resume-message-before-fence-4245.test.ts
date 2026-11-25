@@ -54,6 +54,7 @@ vi.mock("../agent-run-hitl-prompts", () => ({
     return "captured-prompt";
   },
   readDurableHitlGateForContinue: async () => null,
+  readCurrentDurableHitlGate: async () => null,
   recordSuccessfulContinue: async () => {},
   continueBindingDigest: () => "",
   continueGateDigest: () => "",

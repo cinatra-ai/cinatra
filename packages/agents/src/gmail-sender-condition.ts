@@ -7,7 +7,8 @@
 // (src/renderers/gmail-sender.tsx). What stays host-side is this condition
 // FACTORY: the context gating (a sender provider is connected + aliases present)
 // and the strict field-name whitelist heuristic. register-default-renderers.ts
-// wires it onto the "gmail-sender" kind via `makeCondition`, so the migrated
+// wires it onto the "gmail-sender" kind through FIELD_RENDERER_KIND_CONTEXT_CONDITIONS
+// (orchestrator-mid-run-hitl, which the server guard reads too), so the migrated
 // binding (which registers as the ExtensionFieldRenderer wrapper) keeps the
 // SAME activation logic — an unannotated `senderEmail`/`from` field still
 // resolves to the gmail sender picker when gmail is connected, exactly as before.

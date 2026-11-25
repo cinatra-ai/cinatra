@@ -20,6 +20,16 @@ vi.mock("../agent-runtime-mount", () => ({
   },
 }));
 
+// The run's current gate and the acting user's sending accounts, for the one
+// answer guard (`currentParkedHitlStepRefusal`).
+const guardReads = vi.hoisted(() => ({
+  currentGate: vi.fn<(runId: string) => Promise<unknown>>(async () => null),
+  senders: vi.fn<(userId?: string) => Promise<unknown[]>>(async () => []),
+}));
+vi.mock("../agent-run-hitl-prompts", () => ({ readCurrentDurableHitlGate: guardReads.currentGate }));
+vi.mock("@/lib/register-host-connector-services", () => ({}));
+vi.mock("@/lib/email-sender-identities", () => ({ listEmailSenderIdentities: guardReads.senders }));
+
 import {
   collectInstalledFieldRendererBindings,
   getMergedFieldRendererBindings,
@@ -27,9 +37,15 @@ import {
   buildA2UiMidRunTranslatorResolver,
   serverHitlRendererClaim,
   parkedHitlStepIsAnswerableOnServer,
+  parkedHitlStepRefusalOnServer,
+  currentParkedHitlStepRefusal,
   __clearInstalledFieldRendererBindingsCache,
 } from "../field-renderer-bindings.server";
-import { parkedHitlStepIsAnswerable, resolveHitlGateRenderer } from "../orchestrator-mid-run-hitl";
+import {
+  FIELD_RENDERER_KIND_CONTEXT_CONDITIONS,
+  parkedHitlStepIsAnswerable,
+  resolveHitlGateRenderer,
+} from "../orchestrator-mid-run-hitl";
 import {
   ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
   GROUPED_SETUP_FORM_RENDERER_ID,
@@ -249,6 +265,10 @@ describe("a renderer id is drawn by the same rule on the server and in the clien
 // gate with, read by `parkedHitlStepIsAnswerable`) give the same answer.
 describe("a parked step is answerable on the server exactly when a page draws it", () => {
   const GMAIL_CONTEXT = { connectedApps: ["gmail"], gmailAliases: [{ sendAsEmail: "a@b.c" }] };
+  const NO_CONTEXT = { connectedApps: [] };
+  // Every state a context-reading condition tells apart: connected with an
+  // alias, connected with none, not connected.
+  const READER_CONTEXTS = [GMAIL_CONTEXT, { connectedApps: ["gmail"], gmailAliases: [] }, NO_CONTEXT];
   const HOST_IDS = [
     GROUPED_SETUP_FORM_RENDERER_ID,
     SCHEMA_FIELD_FALLBACK_RENDERER_ID,
@@ -279,8 +299,10 @@ describe("a parked step is answerable on the server exactly when a page draws it
     const VALUES = [{}, { presentation: { type: "choice" } }];
     for (const form of [...forms].sort()) {
       for (const values of VALUES) {
+        // No reader known (the bound-card ref): the page of a reader with
+        // nothing connected.
         const server = parkedHitlStepIsAnswerableOnServer({ xRenderer: form, values });
-        const entry = resolveHitlGateRenderer("hitl-field", { "x-renderer": form, type: "string" }, GMAIL_CONTEXT as never);
+        const entry = resolveHitlGateRenderer("hitl-field", { "x-renderer": form, type: "string" }, NO_CONTEXT as never);
         const page = parkedHitlStepIsAnswerable(form, entry, values);
         if (server !== page) {
           disagreements.push(`${JSON.stringify(form)} ${JSON.stringify(values)}: server ${server}, page ${page}`);
@@ -288,5 +310,108 @@ describe("a parked step is answerable on the server exactly when a page draws it
       }
     }
     expect(disagreements).toEqual([]);
+  });
+
+  // A CONDITION THAT READS THE READER'S CONTEXT is evaluated on the server with
+  // the same context: every binding, every reader state, one answer.
+  // red-first-expect: parkedHitlStepRefusalOnServer is not a function
+  it("every binding id in every reader context: connected, connected without an alias, not connected", () => {
+    ensureDefaultFieldRenderersRegistered();
+    const forms = new Set<string>();
+    for (const b of GENERATED_FIELD_RENDERER_BINDINGS) {
+      forms.add(b.id);
+      forms.add(b.id.slice(b.id.indexOf(":") + 1));
+      forms.add(b.kind);
+    }
+    const disagreements: string[] = [];
+    for (const context of READER_CONTEXTS) {
+      for (const values of [{}, { presentation: { type: "choice" } }]) {
+        for (const form of [...forms].sort()) {
+          const server = parkedHitlStepRefusalOnServer({ xRenderer: form, values }, context as never) === null;
+          const entry = resolveHitlGateRenderer("hitl-field", { "x-renderer": form, type: "string" }, context as never);
+          const page = parkedHitlStepIsAnswerable(form, entry, values);
+          if (server !== page) {
+            disagreements.push(`${form} ${JSON.stringify(values)} ${JSON.stringify(context)}: server ${server}, page ${page}`);
+          }
+        }
+      }
+    }
+    expect(disagreements).toEqual([]);
+  });
+
+  // Every binding whose page entry answers differently in two reader contexts
+  // is one the server evaluates the context for.
+  // red-first-expect: resolveHitlGateRenderer is not a function
+  it("every binding whose drawing depends on the reader's context is listed for the server", () => {
+    ensureDefaultFieldRenderersRegistered();
+    const reads = new Set<string>();
+    for (const b of GENERATED_FIELD_RENDERER_BINDINGS) {
+      const drawnIn = READER_CONTEXTS.map(
+        (context) => resolveHitlGateRenderer("hitl-field", { "x-renderer": b.id, type: "string" }, context as never)?.id ?? null,
+      );
+      if (new Set(drawnIn).size > 1) reads.add(b.kind);
+    }
+    expect([...reads].sort()).toEqual(Object.keys(FIELD_RENDERER_KIND_CONTEXT_CONDITIONS).sort());
+    expect([...reads]).toEqual(["gmail-sender"]);
+  });
+
+});
+
+// THE ONE ANSWER GUARD decides on the run's current gate, with the acting
+// user's context read by the loader the page's context comes from.
+describe("currentParkedHitlStepRefusal", () => {
+  const GMAIL_GATE = {
+    runId: "run-g",
+    reviewTaskId: "wayflow-task-g",
+    xRenderer: "@cinatra-ai/email-outreach-agent:gmail-sender",
+    inputSchema: { type: "object" },
+    values: {},
+  };
+  beforeEach(() => {
+    guardReads.currentGate.mockReset().mockResolvedValue(GMAIL_GATE);
+    guardReads.senders.mockReset().mockResolvedValue([]);
+    ensureDefaultFieldRenderersRegistered();
+  });
+
+  // red-first-expect: currentParkedHitlStepRefusal is not a function
+  it("a Gmail sender gate is answered for an acting user with Gmail connected", async () => {
+    guardReads.senders.mockResolvedValue([{ app: "gmail", identities: [{ email: "a@b.c" }] }]);
+    await expect(currentParkedHitlStepRefusal({ runId: "run-g", actingUserId: "user-1" })).resolves.toEqual({
+      gate: GMAIL_GATE,
+      refusal: null,
+    });
+    expect(guardReads.currentGate).toHaveBeenCalledWith("run-g");
+    expect(guardReads.senders).toHaveBeenCalledWith("user-1");
+  });
+
+  // red-first-expect: currentParkedHitlStepRefusal is not a function
+  it("a Gmail sender gate is refused for an acting user without Gmail, without an alias, with an unread context, or with none", async () => {
+    const refusals: unknown[] = [];
+    guardReads.senders.mockResolvedValue([]);
+    refusals.push((await currentParkedHitlStepRefusal({ runId: "run-g", actingUserId: "user-1" })).refusal);
+    guardReads.senders.mockResolvedValue([{ app: "gmail", identities: [] }]);
+    refusals.push((await currentParkedHitlStepRefusal({ runId: "run-g", actingUserId: "user-1" })).refusal);
+    guardReads.senders.mockRejectedValue(new Error("provider down"));
+    refusals.push((await currentParkedHitlStepRefusal({ runId: "run-g", actingUserId: "user-1" })).refusal);
+    guardReads.senders.mockResolvedValue([{ app: "gmail", identities: [{ email: "a@b.c" }] }]);
+    refusals.push((await currentParkedHitlStepRefusal({ runId: "run-g", actingUserId: null })).refusal);
+    expect(refusals).toEqual(["undrawn", "undrawn", "undrawn", "undrawn"]);
+  });
+
+  // red-first-expect: currentParkedHitlStepRefusal is not a function
+  it("a named gate that is not the run's current gate is stale; a step that reads no context reads none", async () => {
+    await expect(
+      currentParkedHitlStepRefusal({ runId: "run-g", actingUserId: "user-1", namedReviewTaskId: "wayflow-task-old" }),
+    ).resolves.toEqual({ gate: GMAIL_GATE, refusal: "stale" });
+    guardReads.currentGate.mockResolvedValue({ ...GMAIL_GATE, xRenderer: SCHEMA_FIELD_FALLBACK_RENDERER_ID });
+    await expect(
+      currentParkedHitlStepRefusal({ runId: "run-g", actingUserId: "user-1", namedReviewTaskId: "wayflow-task-g" }),
+    ).resolves.toMatchObject({ refusal: null });
+    expect(guardReads.senders).not.toHaveBeenCalled();
+    guardReads.currentGate.mockResolvedValue(null);
+    await expect(currentParkedHitlStepRefusal({ runId: "run-g", actingUserId: "user-1" })).resolves.toEqual({
+      gate: null,
+      refusal: null,
+    });
   });
 });

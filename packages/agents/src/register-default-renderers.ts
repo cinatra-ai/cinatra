@@ -30,7 +30,6 @@ import {
 import {
   GENERATED_FIELD_RENDERER_BINDINGS,
 } from "@/lib/generated/agent-bindings";
-import { makeGmailSenderCondition } from "./gmail-sender-condition";
 import { ListPickerRenderer } from "./list-picker-renderer";
 import { ContextSelectorRenderer } from "./context-selector-renderer";
 import { CampaignRecipientsReviewRenderer } from "./campaign-recipients-review-renderer";
@@ -58,7 +57,11 @@ import {
 } from "./agent-builder-ids";
 import { hasFieldRendererComponent } from "./field-renderer-components";
 import { makeExtensionFieldRenderer } from "./extension-field-renderer";
-import { isTombstonedHitlRendererId, rendererIdsDrawnForBinding } from "./orchestrator-mid-run-hitl";
+import {
+  FIELD_RENDERER_KIND_CONTEXT_CONDITIONS,
+  isTombstonedHitlRendererId,
+  rendererIdsDrawnForBinding,
+} from "./orchestrator-mid-run-hitl";
 
 // ---------------------------------------------------------------------------
 // The normalized binding shape this module registers from. Mirrors
@@ -105,13 +108,6 @@ const RENDERER_KIND_TABLE: Record<
     drawsOwnSubmit?: true;
     /** A component of this kind commits a pick, so its gate's Continue waits for one; see `FieldRendererEntry.holdsContinueUntilPicked` (cinatra#3035). The schema floor commits none, so a binding the floor draws never holds. */
     holdsContinueUntilPicked?: true;
-    /**
-     * Optional custom condition factory for kinds whose match logic goes
-     * beyond strict ID equality (e.g. gmail-sender's context gating +
-     * field-name whitelist heuristic). Receives the full match-ID set
-     * (binding ID + bare aliases); the factory owns everything else.
-     */
-    makeCondition?: (matchIds: readonly string[]) => FieldRendererCondition;
   }
 > = {
   // MIGRATED (cinatra#3380): blog-pipeline's `idea_selection_gate` chooser is
@@ -172,6 +168,7 @@ const RENDERER_KIND_TABLE: Record<
   // MIGRATED (cinatra#1625): the gmail-sender COMPONENT moved into
   // @cinatra-ai/email-artifacts (src/renderers/gmail-sender.tsx). The host still
   // OWNS the activation — the bareAlias + the makeGmailSenderCondition factory
+  // (keyed in FIELD_RENDERER_KIND_CONTEXT_CONDITIONS)
   // (now in ./gmail-sender-condition) — so the migrated binding registers as the
   // extension wrapper yet keeps its context gating + field-name whitelist
   // heuristic. A not-in-build binding of this kind degrades to the floor here.
@@ -179,7 +176,8 @@ const RENDERER_KIND_TABLE: Record<
     renderer: SchemaOnlyFloorRenderer,
     credentialSafe: true,
     drawsOwnSubmit: true,
-    makeCondition: makeGmailSenderCondition,
+    // Its condition reads the reader's context: FIELD_RENDERER_KIND_CONTEXT_CONDITIONS
+    // (orchestrator-mid-run-hitl), which the server evaluates too.
   },
   // MIGRATED (cinatra#1625 S8/M3): the blog-linkedin draft-review component
   // moved into @cinatra-ai/blog-linkedin-publish-agent. The KIND stays (the
@@ -250,9 +248,12 @@ function xRendererOf(schema: Record<string, unknown>): string {
 // posture of the retired hand map is preserved. Kinds with a custom factory
 // (gmail-sender) own their extra logic; the ID set is still injected.
 function conditionFor(id: string, kind: string): FieldRendererCondition {
-  const kindEntry = RENDERER_KIND_TABLE[kind];
   const matchIds = [...rendererIdsDrawnForBinding({ id, kind })];
-  if (kindEntry?.makeCondition) return kindEntry.makeCondition(matchIds);
+  // A kind whose match logic reads more than the id (the reader's context)
+  // has its condition in FIELD_RENDERER_KIND_CONTEXT_CONDITIONS, which the
+  // server evaluates too.
+  const makeCondition = FIELD_RENDERER_KIND_CONTEXT_CONDITIONS[kind];
+  if (makeCondition) return makeCondition(matchIds);
   return (_fieldName, schema) => matchIds.includes(xRendererOf(schema));
 }
 
