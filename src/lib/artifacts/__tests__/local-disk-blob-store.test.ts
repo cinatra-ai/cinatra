@@ -21,6 +21,7 @@ import {
   ArtifactQuotaExceededError,
   assertOrgQuotaRoom,
   createLocalDiskBlobStore,
+  wouldExceedOrgQuota,
   isContentAddressedStorageKey,
   sha256FromContentAddressedKey,
 } from "../local-disk-blob-store";
@@ -438,6 +439,30 @@ describe("createLocalDiskBlobStore", () => {
       it("the size limit still bounds a stream of held bytes", async () => {
         const store = full(() => true);
         await expect(store.put({ ...scope, stream: bytes("x".repeat(40)), maxBytes: 8 })).rejects.toBeInstanceOf(BlobTooLargeError);
+      });
+    });
+
+    describe("wouldExceedOrgQuota: the one comparison of the organization's quota", () => {
+      // red-first-expect: wouldExceedOrgQuota is not a function
+      it("refuses only a write that would ADD bytes beyond the limit; empty and held content add none, and an exact fill is admitted", () => {
+        expect(wouldExceedOrgQuota(40, 60, 100)).toBe(false); // fills the quota exactly
+        expect(wouldExceedOrgQuota(40, 61, 100)).toBe(true);
+        expect(wouldExceedOrgQuota(100, 1, 100)).toBe(true);
+        expect(wouldExceedOrgQuota(100, 0, 100)).toBe(false); // adds nothing at a full quota
+        expect(wouldExceedOrgQuota(150, 0, 100)).toBe(false); // adds nothing even over the limit
+      });
+
+      // red-first-expect: artifact org-quota exceeded: 10 bytes used, limit 10
+      it("put admits an empty write and a write that fills the quota exactly, at a full or exceeded usage, and refuses one byte more", async () => {
+        process.env[ARTIFACT_ORG_QUOTA_BYTES_ENV] = "10";
+        process.env[ARTIFACT_QUOTA_MODE_ENV] = "enforce";
+        const scope = { orgId: "org1", artifactId: "a", representationRevisionId: "v" };
+        const at = (used: number) => createLocalDiskBlobStore({ getOrgUsageBytes: () => used });
+        expect((await at(10).put({ ...scope, stream: bytes(""), maxBytes: 64 })).sizeBytes).toBe(0);
+        expect((await at(25).put({ ...scope, stream: bytes(""), maxBytes: 64 })).sizeBytes).toBe(0);
+        expect((await at(4).put({ ...scope, stream: bytes("123456"), maxBytes: 64 })).sizeBytes).toBe(6);
+        await expect(at(4).put({ ...scope, stream: bytes("1234567"), maxBytes: 64 })).rejects.toBeInstanceOf(ArtifactQuotaExceededError);
+        await expect(at(10).put({ ...scope, stream: bytes("1"), maxBytes: 64 })).rejects.toBeInstanceOf(ArtifactQuotaExceededError);
       });
     });
 

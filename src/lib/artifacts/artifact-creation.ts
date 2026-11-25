@@ -21,7 +21,7 @@ import { mimeAcceptedByAccepts } from "./upload-artifact-type-map";
 /** The registry definition shape (or null) — a local alias so this module needs
  *  no type-only barrel import (avoids the heavy objects barrel graph). */
 type ResolvedObjectTypeDef = ReturnType<typeof objectTypeRegistry.resolve>;
-import { createLocalDiskBlobStore, sniffMime } from "./local-disk-blob-store";
+import { createLocalDiskBlobStore, SNIFF_HEAD_WINDOW_BYTES, sniffMime } from "./local-disk-blob-store";
 import { deriveSubstanceKey } from "./resource-store";
 import { buildArtifactWriterWitnessOp } from "./artifact-writer-witness";
 import { buildObjectsWithOutboxQuery } from "@/lib/objects-store";
@@ -352,7 +352,7 @@ export function buildArtifactObjectData(input: {
   } as ArtifactObjectData;
 }
 
-/** What the blob store derives from the bytes of a write: the MIME its sniffer reads from the first 512 bytes
+/** What the blob store derives from the bytes of a write: the MIME its sniffer reads from the first `SNIFF_HEAD_WINDOW_BYTES` bytes
  *  and the declared MIME, the sha256 and the size. A pure function of the bytes and the declaration, so a
  *  refusal that depends on them can be found before the bytes are stored. */
 export function artifactWriteFactsOfContent(
@@ -361,7 +361,7 @@ export function artifactWriteFactsOfContent(
 ): { mimeDetected: string; sha256: string; sizeBytes: number } {
   const bytes = new TextEncoder().encode(content);
   return {
-    mimeDetected: sniffMime(bytes.subarray(0, 512), declaredMime),
+    mimeDetected: sniffMime(bytes.subarray(0, SNIFF_HEAD_WINDOW_BYTES), declaredMime),
     sha256: createHash("sha256").update(bytes).digest("hex"),
     sizeBytes: bytes.byteLength,
   };

@@ -1296,6 +1296,64 @@ describe("cinatra#3089 — all-or-nothing admission over a real quota", () => {
     expect(usedBytes()).toBe(100);
   });
 
+  // THE rule of the admission and the store: a write is refused only if it would ADD bytes beyond the limit
+  // (`usage + newBytes > limit`); held content and empty content add none, and filling the quota exactly is admitted.
+  // red-first-expect: materializeToolArtifactSet is not a function
+  it("Q3 a new member fills the room exactly and the next member is EMPTY: both are filed", async () => {
+    // 40 used, 60 left: the first member adds exactly 60; an empty member adds nothing.
+    const filed = await fileSet([member("A", "e".repeat(60), "c-1"), member("B", "", "c-2")]);
+    expect(filed).toMatchObject({ ok: true, deduped: false });
+    expect(usedBytes()).toBe(100);
+    expect(rows.size).toBe(3);
+  });
+
+  // red-first-expect: materializeToolArtifactSet is not a function
+  it("Q3 the boundary is the same in the admission and in the store: a list that fills the room exactly is filed, one byte more is refused before anything is stored", async () => {
+    expect(await fileSet([member("A", "x".repeat(30), "c-1"), member("B", "y".repeat(30), "c-2")], { runId: "run-fit" })).toMatchObject({ ok: true });
+    expect(usedBytes()).toBe(100);
+    rows.clear();
+    rows.set("blob:seed", { resource_id: "res-seed", blob_id: "blob-seed", storage_key: "orgs/org-a/seed.bin", size: 40 });
+    const before = rows.size;
+    const refused = await fileSet([member("A", "p".repeat(30), "c-1"), member("B", "q".repeat(31), "c-2")], { runId: "run-over" });
+    expect(refused).toMatchObject({ ok: false, code: "materialize_list_quota_exceeded" });
+    expect(rows.size).toBe(before);
+    expect(usedBytes()).toBe(40);
+  });
+
+  // red-first-expect: materializeToolArtifactSet is not a function
+  it("Q3 member sizes are bytes, in the admission and in the store: a 20-character member of 60 bytes fits, 21 characters (63 bytes) do not", async () => {
+    const wide = "日".repeat(20);
+    expect(Buffer.byteLength(wide)).toBe(60);
+    expect(await fileSet([member("A", wide, "c-1")])).toMatchObject({ ok: true });
+    // Charged by its bytes (60), not by its characters (20).
+    expect(usedBytes()).toBe(100);
+    rows.clear();
+    rows.set("blob:seed", { resource_id: "res-seed", blob_id: "blob-seed", storage_key: "orgs/org-a/seed.bin", size: 40 });
+    expect(await fileSet([member("A", "日".repeat(21), "c-1")], { runId: "run-wide" })).toMatchObject({ ok: false, code: "materialize_list_quota_exceeded" });
+    expect(usedBytes()).toBe(40);
+    // A lone surrogate is encoded as U+FFFD (3 bytes) by the admission and by the writer alike.
+    rows.clear();
+    rows.set("blob:seed", { resource_id: "res-seed", blob_id: "blob-seed", storage_key: "orgs/org-a/seed.bin", size: 40 });
+    expect(await fileSet([member("A", "\uD800".repeat(20), "c-1")], { runId: "run-lone" })).toMatchObject({ ok: true });
+    expect(usedBytes()).toBe(100);
+  });
+
+  // red-first-expect: artifact org-quota exceeded: 100 bytes used, limit 100
+  it("Q3 an EMPTY single write succeeds at a full quota", async () => {
+    const creation = await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation");
+    rows.set("blob:filler", { resource_id: "res-filler", blob_id: "blob-filler", storage_key: "orgs/org-a/filler.bin", size: 60 });
+    expect(usedBytes()).toBe(100);
+    const filed = await creation.createSemanticArtifact({
+      orgId: "org-a", objectType: BODY_TYPE, expectedAcceptMimes: ["text/markdown"], createdBy: "user-1",
+      ownerLevel: "organization", ownerId: "org-a", visibility: "organization", title: "T",
+      declaredMime: "text/markdown", originKind: "live_generator", typedData: { contactId: "c-1" },
+      stream: (async function* () { yield new TextEncoder().encode(""); })(),
+      createdByRunId: "run-1", producerAssertionExtension: EXT, skipFallbackClassification: true,
+    });
+    expect(filed.artifactId).toBeTruthy();
+    expect(usedBytes()).toBe(100);
+  });
+
   it("Q1 a quota that is not set, or not enforced, asks nothing of the list", async () => {
     delete process.env.CINATRA_ARTIFACT_ORG_QUOTA_BYTES;
     expect(await fileSet(list())).toMatchObject({ ok: true });

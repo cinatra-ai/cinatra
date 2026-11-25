@@ -184,7 +184,7 @@ function absFor(storageKey: string): string {
  *  is bounded prefix copying while the window fills: each chunk contributes
  *  only the bytes still missing, never the whole (possibly huge) chunk, and
  *  once the window is full nothing is copied for the rest of the stream. */
-const SNIFF_HEAD_WINDOW_BYTES = 512;
+export const SNIFF_HEAD_WINDOW_BYTES = 512;
 
 /** Is this head window valid UTF-8 text? Decoded in FATAL, STREAMING mode with
  *  the platform's own decoder (no new deps — the sibling detection ladder
@@ -541,7 +541,19 @@ async function withStorageKeyLock<T>(key: string, fn: () => Promise<T>): Promise
   }
 }
 
-/** WARN-first quota gate: logs in warn mode, throws in enforce mode. */
+/**
+ * THE comparison of the organization's quota: a write is refused only when it would ADD bytes beyond the limit,
+ * `used + newBytes > limit`, where `newBytes` is 0 for content the organization already holds and for empty content.
+ * A write that adds nothing never exceeds the quota, at any usage (even one already at or over the limit); a write
+ * that fills the quota exactly (`used + newBytes === limit`) is admitted. Every organization-quota decision of the
+ * store (`put`) and of a list's admission (`assertOrgQuotaRoom`) goes through this one function, so they cannot
+ * disagree on the boundary or on what counts as an addition.
+ */
+export function wouldExceedOrgQuota(usedBytes: number, newBytes: number, limitBytes: number): boolean {
+  return newBytes > 0 && usedBytes + newBytes > limitBytes;
+}
+
+/** WARN-first quota gate for the staging area: logs in warn mode, throws in enforce mode. */
 function applyQuotaVerdict(
   kind: "org-quota" | "staging-cap",
   usedBytes: number,
@@ -574,11 +586,10 @@ export async function assertOrgQuotaRoom(
   const orgQuota = envBytes(ARTIFACT_ORG_QUOTA_BYTES_ENV);
   if (orgQuota <= 0) return;
   const newBytes = await newBytesOf();
-  if (typeof newBytes !== "number" || newBytes <= 0) return;
+  if (typeof newBytes !== "number") return;
   const used = await getUsedBytes(orgId);
   if (typeof used !== "number") return;
-  applyQuotaVerdict("org-quota", used, orgQuota);
-  if (used + newBytes <= orgQuota) return;
+  if (!wouldExceedOrgQuota(used, newBytes, orgQuota)) return;
   if (quotaMode() === "enforce") throw new ArtifactQuotaExceededError("org-quota", orgQuota, used + newBytes);
   console.warn(
     `[artifact-blob-store] org-quota would be exceeded by this batch (used=${used}, new=${newBytes}, limit=${orgQuota}) — ` +
@@ -603,33 +614,17 @@ export function createLocalDiskBlobStore(
 
       // WARN-first ops caps (cinatra#926). Both checks are skipped
       // entirely when their env knob is unset; the org-usage read is
-      // fail-soft (a DB hiccup never blocks a write). In `enforce` mode the
-      // quota also bounds the INCOMING stream: the pre-check alone would let
-      // an org just under quota land an arbitrarily large blob, so the
-      // remaining headroom is enforced during streaming like maxBytes.
+      // fail-soft (a DB hiccup never blocks a write). The incoming stream is
+      // bounded by maxBytes while it is read; the organization's quota is
+      // decided once the bytes are known, and an over-quota blob is never
+      // published.
       //
-      // The quota charges NEW bytes only. Whether these bytes are new is known once they are hashed, so an
-      // over-quota verdict is held until the stream has been read and is then lifted for content the
-      // organization already holds (`findHeldContent`, the one definition the whole-list admission uses too).
-      // The write then goes on as any write does and the dedupe resolves it onto the held resource, which adds no
-      // bytes: a write of held content never fails on the quota.
-      let enforcedRemainingBytes = Infinity;
-      let overQuota: ArtifactQuotaExceededError | null = null;
+      // The quota charges NEW bytes only, and whether bytes are new is known once they are hashed: the decision is
+      // taken after the stream has been read (see below), by `wouldExceedOrgQuota`, and held content
+      // (`findHeldContent`, the one definition the whole-list admission uses too) is not charged. The write then goes
+      // on as any write does and the dedupe resolves it onto the held resource.
       const orgQuota = envBytes(ARTIFACT_ORG_QUOTA_BYTES_ENV);
-      if (orgQuota > 0) {
-        const used = await orgUsageBytes(input.orgId);
-        if (typeof used === "number") {
-          try {
-            applyQuotaVerdict("org-quota", used, orgQuota);
-          } catch (err) {
-            if (!(err instanceof ArtifactQuotaExceededError)) throw err;
-            overQuota = err;
-          }
-          if (quotaMode() === "enforce") {
-            enforcedRemainingBytes = Math.max(0, orgQuota - used);
-          }
-        }
-      }
+      const usedBytes = orgQuota > 0 ? await orgUsageBytes(input.orgId) : null;
       const stagingCap = envBytes(ARTIFACT_STAGING_CAP_BYTES_ENV);
       if (stagingCap > 0) {
         applyQuotaVerdict("staging-cap", await stagingResidencyBytes(), stagingCap);
@@ -649,13 +644,6 @@ export function createLocalDiskBlobStore(
           size += chunk.length;
           if (size > input.maxBytes) {
             throw new BlobTooLargeError(input.maxBytes);
-          }
-          if (size > enforcedRemainingBytes && overQuota === null) {
-            overQuota = new ArtifactQuotaExceededError(
-              "org-quota",
-              orgQuota,
-              orgQuota - enforcedRemainingBytes + size,
-            );
           }
           hash.update(chunk);
           if (head.length < SNIFF_HEAD_WINDOW_BYTES) {
@@ -694,7 +682,16 @@ export function createLocalDiskBlobStore(
       };
 
       try {
-        if (overQuota !== null && !(await isContentHeld(input.orgId, sha256, size))) throw overQuota;
+        // The organization's quota, now that the bytes are known: refused only for a write that would ADD bytes beyond
+        // the limit (`wouldExceedOrgQuota`): held content and empty content add none.
+        if (orgQuota > 0 && typeof usedBytes === "number" && wouldExceedOrgQuota(usedBytes, size, orgQuota)
+          && !(await isContentHeld(input.orgId, sha256, size))) {
+          if (quotaMode() === "enforce") throw new ArtifactQuotaExceededError("org-quota", orgQuota, usedBytes + size);
+          console.warn(
+            `[artifact-blob-store] org-quota at/over limit (used=${usedBytes}, incoming=${size}, limit=${orgQuota}) — ` +
+              `proceeding (mode=warn; set ${ARTIFACT_QUOTA_MODE_ENV}=enforce to reject)`,
+          );
+        }
         // Reuse-or-publish runs under the per-storage-key critical section,
         // serialized against the guarded delete's stale→probe→unlink (see
         // the storageKeyLocks header): entering second means observing the
