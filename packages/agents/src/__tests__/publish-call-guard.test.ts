@@ -19,6 +19,9 @@ const decisions = vi.hoisted(() => ({
   decide: vi.fn(),
   // cinatra#4762: a served publishing call takes its released decision, and gives it back when the call ends.
   claimPublishCall: vi.fn(async () => true),
+  // cinatra#3089: the exclusive claim of a call that must be the only one of its decision, and the count it checks first.
+  claimPublishCallExclusive: vi.fn(async () => true),
+  publishCallsInFlight: vi.fn(async () => 0),
   endPublishCall: vi.fn(async () => undefined),
   readDecisionForRunNode: vi.fn(),
   readLatestDecisionForRun: vi.fn(),
@@ -56,6 +59,8 @@ beforeEach(() => {
   decisions.readRunBoundGraph.mockReset().mockResolvedValue(null);
   decisions.withRunRowLock.mockClear();
   decisions.claimPublishCall.mockReset().mockResolvedValue(true);
+  decisions.claimPublishCallExclusive.mockReset().mockResolvedValue(true);
+  decisions.publishCallsInFlight.mockReset().mockResolvedValue(0);
   decisions.endPublishCall.mockReset().mockResolvedValue(undefined);
   reviewSeam.listReviews.mockReset().mockResolvedValue([APPROVED_REVIEW]);
   reviewSeam.hasPendingProducedReview.mockReset().mockResolvedValue(false);
@@ -134,7 +139,6 @@ describe("a verified step the template lists as publishing", () => {
     expect(decisions.claimPublishCall).not.toHaveBeenCalled();
   });
 
-  // red-first-expect: expected [] to have a length of 1 but got +0
   it("the release it hands back resolves only once the end of the call is written, and once even when that write fails (cinatra#4762)", async () => {
     decisions.readDecisionForRunNode.mockResolvedValue(row("released"));
     let writeEnd!: () => void;
@@ -197,6 +201,58 @@ describe("a verified step the template lists as publishing", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe("an exclusive call of a released decision (cinatra#3089)", () => {
+  // red-first-expect: to be called with arguments: [ 'd1', …(1) ]
+  it("takes the decision by the exclusive write, in the lock's transaction, and not by the counting claim", async () => {
+    decisions.readDecisionForRunNode.mockResolvedValue(row("released"));
+    const releases: Array<() => Promise<void>> = [];
+    expect(await publishCallAllowed(RUN, "publish", (release) => { releases.push(release); }, { exclusive: true })).toBe(true);
+    expect(decisions.claimPublishCallExclusive).toHaveBeenCalledWith("d1", TX);
+    expect(decisions.claimPublishCall).not.toHaveBeenCalled();
+    expect(decisions.publishCallsInFlight).toHaveBeenCalledWith("d1", TX);
+    expect(releases).toHaveLength(1);
+    await releases[0]!();
+    expect(decisions.endPublishCall).toHaveBeenCalledWith("d1");
+  });
+
+  it("is answered busy, takes nothing and hands back no release while another call of the decision is in flight, and before the fence is read", async () => {
+    decisions.readDecisionForRunNode.mockResolvedValue(row("released"));
+    decisions.publishCallsInFlight.mockResolvedValue(1);
+    const busy = vi.fn();
+    const hold = vi.fn();
+    expect(await publishCallAllowed(RUN, "publish", hold, { exclusive: true, onBusy: busy })).toBe(false);
+    expect(busy).toHaveBeenCalledTimes(1);
+    expect(hold).not.toHaveBeenCalled();
+    expect(decisions.claimPublishCallExclusive).not.toHaveBeenCalled();
+    expect(reviewSeam.hasPendingProducedReview).not.toHaveBeenCalled();
+    // A write that loses the race is busy too.
+    decisions.publishCallsInFlight.mockResolvedValue(0);
+    decisions.claimPublishCallExclusive.mockResolvedValueOnce(false);
+    expect(await publishCallAllowed(RUN, "publish", hold, { exclusive: true, onBusy: busy })).toBe(false);
+    expect(busy).toHaveBeenCalledTimes(2);
+    expect(hold).not.toHaveBeenCalled();
+  });
+
+  it("a decision that is not released, or a fence that does not hold, is refused and is not busy", async () => {
+    const busy = vi.fn();
+    decisions.readDecisionForRunNode.mockResolvedValue(row("parked"));
+    expect(await publishCallAllowed(RUN, "publish", ENDED, { exclusive: true, onBusy: busy })).toBe(false);
+    decisions.readDecisionForRunNode.mockResolvedValue(row("released"));
+    reviewSeam.hasPendingProducedReview.mockResolvedValue(true);
+    expect(await publishCallAllowed(RUN, "publish", ENDED, { exclusive: true, onBusy: busy })).toBe(false);
+    expect(busy).not.toHaveBeenCalled();
+    expect(decisions.claimPublishCallExclusive).not.toHaveBeenCalled();
+  });
+
+  it("a call without the option still counts: two such calls are both admitted", async () => {
+    decisions.readDecisionForRunNode.mockResolvedValue(row("released"));
+    expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(true);
+    expect(await publishCallAllowed(RUN, "publish", ENDED)).toBe(true);
+    expect(decisions.claimPublishCall).toHaveBeenCalledTimes(2);
+    expect(decisions.claimPublishCallExclusive).not.toHaveBeenCalled();
   });
 });
 
@@ -354,7 +410,6 @@ describe("a publishing component whose key differs from its own id", () => {
     decisions.readRunBoundGraph.mockResolvedValue(JSON.stringify(ALIASED));
   });
 
-  // red-first-expect: to be called with arguments: [ 'run-1', 'publish', …(1) ]
   it("an approved call signed with the component's own id takes the decision stored under its key", async () => {
     decisions.readDecisionForRunNode.mockImplementation(parentRow("released"));
     expect(await publishCallAllowed(RUN, "send", ENDED)).toBe(true);

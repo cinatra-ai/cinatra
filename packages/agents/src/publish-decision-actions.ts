@@ -13,11 +13,13 @@ import { sessionAuthorityFromResolvedRole } from "@/lib/org-write/authority";
 import type { ActorRoleHints } from "./auth-policy";
 import {
   claimPublishCall,
+  claimPublishCallExclusive,
   decide,
   endPublishCall,
   insertParkedDecision,
   listDueParked,
   listSettledWithWaitingRun,
+  publishCallsInFlight,
   readDecisionForRunNode,
   readDispatchedPublishRows,
   readLatestDecisionForRun,
@@ -1030,11 +1032,17 @@ export async function releasedPublishAwaitsResume(
  *   - A template that is not found cannot prove that it publishes nothing; a list stored as null (a template compiled
  *     before the list existed) lists none, so only a decision row holds such a run.
  * A read error refuses the call; it is logged by the error's name only.
+ * `options.exclusive` (cinatra#3089): the call must be the only call of its decision. It is admitted only while no other
+ * call of the decision is in flight, in the same locked transaction and by the one conditional write that takes the
+ * claim (claimPublishCallExclusive), so of any number of concurrent callers exactly one is admitted and the count its
+ * own writers read is one. A call refused only for that reason (the decision is released, another call holds it) is
+ * answered through `options.onBusy` and returns false: it touched nothing.
  */
 export async function publishCallAllowed(
   run: { id: string; templateId: string },
   verifiedStepId: string | undefined,
   holdRelease: (release: PublishCallRelease, claim: PublishCallClaim) => void,
+  options?: { exclusive?: boolean; onBusy?: () => void },
 ): Promise<boolean> {
   try {
     const template = await readAgentTemplateById(run.templateId);
@@ -1049,14 +1057,25 @@ export async function publishCallAllowed(
       // The decision read before the lock may be stale: a reset since then stamped it with the attempt it ended (a row
       // read with no generation included) and moved the run to a newer attempt, whose own approval it is not. Under the
       // lock the decision is read again; only that reading decides, and it must still be the same released row.
+      let busy = false;
       const claimed = await withRunRowLock(run.id, async (tx, locked) => {
         if (!locked) return false;
         const current = await readDecisionForRunNode(run.id, step, tx);
         if (!current || current.id !== row.id || current.status !== "released") return false;
         if (current.runGeneration != null && current.runGeneration !== locked.resetGeneration) return false;
+        // An exclusive call asks first whether another call holds the decision: that call's own output would otherwise
+        // fail this call's fence read, and a refusal for it is the answer "in flight", not "not released".
+        if (options?.exclusive && (await publishCallsInFlight(current.id, tx)) > 0) {
+          busy = true;
+          return false;
+        }
         if (!(await reviewFenceHolds({ runId: run.id, orgId: locked.orgId, generation: current.runGeneration ?? locked.resetGeneration, executor: tx }))) return false;
-        return claimPublishCall(current.id, tx);
+        if (!options?.exclusive) return claimPublishCall(current.id, tx);
+        const taken = await claimPublishCallExclusive(current.id, tx);
+        busy = !taken;
+        return taken;
       });
+      if (busy) options?.onBusy?.();
       if (claimed) {
         let released: Promise<void> | undefined;
         holdRelease(() => (released ??= endPublishCall(row.id).catch((err: unknown) => {

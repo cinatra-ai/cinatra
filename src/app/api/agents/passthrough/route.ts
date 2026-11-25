@@ -556,10 +556,21 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
   // cinatra#4762: the decision the check claimed for this call, as the server took it, never from the request. The
   // call's frame carries it, so the call's own output passes the in-flight fence of that claim and no other.
   let publishCallClaim: { runId: string; decisionId: string } | undefined;
+  // cinatra#3089: a declared publishing step's call is the ONE call of its decision: the claim is exclusive, taken by one
+  // conditional write, before any effect and before the single-use consumption below. A concurrent call of the same
+  // decision is answered 409 without touching anything, so it cannot sit between this call's claim and its
+  // consumption and make the call's own pre-send writes refuse.
+  let decisionBusy = false;
   if (!(await publishCallAllowed(run, verifiedStepId, (release, claim) => {
     holdRelease(release);
     if (claim && typeof claim.decisionId === "string" && claim.decisionId) publishCallClaim = { runId: run.id, decisionId: claim.decisionId };
-  }))) {
+  }, publishingStepTool ? { exclusive: true, onBusy: () => { decisionBusy = true; } } : undefined))) {
+    if (decisionBusy) {
+      return NextResponse.json(
+        { error: "A call of this publishing step is already in flight for this decision.", code: "publish_call_in_flight" },
+        { status: 409 },
+      );
+    }
     return NextResponse.json(
       { error: "This call waits for a publish decision.", code: "publish_not_released" },
       { status: 403 },

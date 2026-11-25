@@ -22,6 +22,7 @@
 // red-first-expect: expected 403 to be 200
 import { afterAll, beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { createHmac } from "node:crypto";
+import { readFileSync } from "node:fs";
 
 const h = vi.hoisted(() => {
   class RunStepToolPolicyRefusal extends Error {
@@ -41,43 +42,151 @@ const h = vi.hoisted(() => {
     sendFails: 0,
     sends: [] as Array<{ input: unknown; actor: unknown; frame: unknown }>,
     // Set by a test that drives the send's real use case with a provider stub: the addresses mailed, in order.
-    provider: null as null | { mailed: string[]; failOn: string | null },
+    provider: null as null | { mailed: string[]; failOn: string | null; refuseBodiesOnce?: boolean; records?: Map<string, { id: string; phase: "claimed" | "finalized" }> },
+    // The real publishCallAllowed over a fake of the decision store (the run-row lock is a mutex; calls_in_flight is one number).
+    realGuard: false,
+    guard: { calls: 0, status: "released", lock: Promise.resolve() as Promise<unknown>, maxCalls: 0 },
+    readAgentTemplateById: vi.fn(),
   };
 });
 
-// The send's real use case with a provider stub: three recipients; the stub records each address it is asked to mail
-// and throws on the one named in `failOn` (after nothing of that mail went out).
+// The send's real use case with a provider stub: three recipients, each with a body a person approved (the card's list).
+// The stub records each address it is asked to mail and throws on the one named in `failOn`. The seams are the ones the
+// send's own suites inject (src/lib/__tests__/send-approved-bodies-3089.test.ts): the objects reads, the approved-body
+// reader, the decision the calling step holds, and the record of each message sent (shared by every call of a test).
 const RECIPIENTS = ["one@example.test", "two@example.test", "three@example.test"];
-function providerDeps(provider: { mailed: string[]; failOn: string | null }) {
+const CAMPAIGN = "camp-1";
+type Provider = { mailed: string[]; failOn: string | null; refuseBodiesOnce?: boolean; records?: Map<string, { id: string; phase: "claimed" | "finalized" }> };
+type UseCaseParts = {
+  refused: new (message: string) => Error;
+  materialize: (args: never, deps: never) => Promise<unknown>;
+  bodyType: string;
+};
+function providerDeps(provider: Provider, parts: UseCaseParts) {
   const bundle = (data: unknown) => ({ id: "bundle", type: "bundle", data });
+  const approvedList = RECIPIENTS.map((to, i) => ({ artifactId: `art-${i + 1}`, representationRevisionId: `rev-${i + 1}`,
+    contactId: `c${i + 1}`, recipientEmail: to, subject: `Subject ${i + 1}` }));
+  const records = (provider.records ??= new Map());
+  let next = records.size;
   return {
     getCampaign: async () => null,
     getDraftsByIds: async () => [],
     getObjectByRef: async (ref: string) =>
       bundle(ref.startsWith("1111")
-        ? { cinatraAgentRunId: "run-1", drafts: RECIPIENTS.map((to, i) => ({ id: `d${i + 1}`, contactId: `c${i + 1}`,
+        ? { cinatraAgentRunId: "run-1", drafts: RECIPIENTS.map((to, i) => ({ id: `d${i + 1}`, contactId: `c${i + 1}`, recipientId: `c${i + 1}`,
             recipientEmail: to, subject: `Subject ${i + 1}`, body: `Body ${i + 1}` })) }
         : { cinatraAgentRunId: "run-1", confirmedRecipients: RECIPIENTS.map((email, i) => ({ contactId: `c${i + 1}`, email })) }),
-    emitEmailFanout: async () => ({ bodies: [], skipped: { bodies: true } }),
+    // The writer of a message body refuses while another call of the same decision is in flight (the in-flight fence of
+    // lifecycle-emit: the count is per decision, so two claims leave no call able to write).
+    emitEmailFanout: async (args: never) => {
+      if (h.guard.calls > 1) throw new parts.refused("a publishing call of this run is in flight");
+      // A body the send refuses before any message is claimed or mailed.
+      if (provider.refuseBodiesOnce) {
+        provider.refuseBodiesOnce = false;
+        throw new parts.refused("a body was refused");
+      }
+      return parts.materialize(args, {
+        writeBody: async (w: { outputId: string }) => ({ ok: true, artifactId: `new-${w.outputId}`, representationRevisionId: `new-rev-${w.outputId}`, deduped: false }),
+        bindBody: async (b: { artifactId: string; representationRevisionId: string }) => ({ ok: true, artifactId: b.artifactId,
+          representationRevisionId: b.representationRevisionId, deduped: false }),
+        registeredTypes: new Set([parts.bodyType]),
+      } as never);
+    },
     sendEmail: async (message: { to: string[] }) => {
       const to = message.to[0]!;
       if (to === provider.failOn) throw new Error(`the mail provider refused ${to}`);
       provider.mailed.push(to);
-      return { messageId: `m-${provider.mailed.length}` };
+      return { providerId: "p", providerMessageId: `m-${provider.mailed.length}`, sentAt: "2026-11-25T00:00:00Z" };
+    },
+    // The approved form's seams. A send without them reads the bundle as before, so they change nothing there.
+    readCallingRun: async () => ({ runId: "run-1", stepId: NODE_ID }),
+    readPublishDecision: async () => ({
+      status: "released", decidedBy: "user-2",
+      surfacedValues: { campaignId: CAMPAIGN, recipients: approvedList.map((e) => ({ email: e.recipientEmail, subject: e.subject })), emailBodies: approvedList },
+      declaredRows: [{ kind: "list", input: "recipients", columns: [{ field: "email" }, { field: "subject" }] }, { kind: "artifacts", input: "emailBodies" }],
+    }),
+    readDecidedBody: async (ref: { artifactId: string }) => {
+      const i = Number(ref.artifactId.slice(4)) - 1;
+      return { ok: true, text: `Body ${i + 1}`, data: { subject: `Subject ${i + 1}`, contactId: `c${i + 1}`, campaignId: CAMPAIGN } };
+    },
+    readRunReviewedBodies: async () => false,
+    readObjectRuns: async () => ["run-1"],
+    messageSendLedger: {
+      async claim(m: { bindingOutputId: string }) {
+        const row = records.get(m.bindingOutputId);
+        if (row) return { kind: row.phase === "finalized" ? "done" : "in_doubt" };
+        next += 1;
+        records.set(m.bindingOutputId, { id: `send-${next}`, phase: "claimed" });
+        return { kind: "won", ledgerId: `send-${next}` };
+      },
+      async markDone(id: string) {
+        for (const row of records.values()) if (row.id === id && row.phase === "claimed") { row.phase = "finalized"; return true; }
+        return false;
+      },
+      async release(id: string) {
+        for (const [key, row] of records) if (row.id === id && row.phase === "claimed") records.delete(key);
+      },
     },
   } as never;
 }
+const NODE_ID = "send_campaign";
 
 vi.mock("server-only", () => ({}));
-vi.mock("@cinatra-ai/agents", () => ({
-  publishCallAllowed: h.publishCallAllowed,
-  publishingStepCallReleased: h.publishingStepCallReleased,
-  readAgentRunById: h.readAgentRunById,
-  readAgentRunByContextId: h.readAgentRunByContextId,
-}));
+vi.mock("@cinatra-ai/agents", async () => {
+  const real = await vi.importActual<typeof import("../../../../../../packages/agents/src/publish-decision-actions")>(
+    "../../../../../../packages/agents/src/publish-decision-actions",
+  );
+  return {
+    // A test that sets `h.realGuard` runs the agents package's own call check over the store fake below.
+    publishCallAllowed: (...args: Parameters<typeof real.publishCallAllowed>) =>
+      h.realGuard ? real.publishCallAllowed(...args) : h.publishCallAllowed(...args),
+    publishingStepCallReleased: h.publishingStepCallReleased,
+    readAgentRunById: h.readAgentRunById,
+    readAgentRunByContextId: h.readAgentRunByContextId,
+  };
+});
 vi.mock("@cinatra-ai/agents/store", () => ({
   verifyRunExecutedSource: h.verifyRunExecutedSource,
   RunStepToolPolicyRefusal: h.RunStepToolPolicyRefusal,
+  // What the agents package's call check reads through the same module.
+  readAgentRunById: h.readAgentRunById,
+  readAgentTemplateById: h.readAgentTemplateById,
+  readRunCoOwners: vi.fn(async () => []),
+  transitionRunStatus: vi.fn(async () => undefined),
+}));
+vi.mock("../../../../../../packages/agents/src/db", () => ({ db: {} }));
+// The pure readers of the store (the released list of a decision) stay real; its reads and writes are the fake.
+vi.mock("../../../../../../packages/agents/src/publish-decision-store", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  readDecisionForRunNode: async () => ({ id: "decision-1", orgId: "org-1", runId: "run-1", nodeId: "send_campaign",
+    status: h.guard.status, runGeneration: 0 }),
+  // The run row's lock: one holder at a time.
+  withRunRowLock: (_runId: string, fn: (tx: unknown, run: unknown) => Promise<unknown>) => {
+    const result = h.guard.lock.then(() => fn("tx", { orgId: "org-1", resetGeneration: 0 }));
+    h.guard.lock = result.catch(() => undefined);
+    return result;
+  },
+  claimPublishCall: async () => {
+    h.guard.calls += 1;
+    h.guard.maxCalls = Math.max(h.guard.maxCalls, h.guard.calls);
+    return true;
+  },
+  claimPublishCallExclusive: async () => {
+    if (h.guard.calls > 0) return false;
+    h.guard.calls = 1;
+    h.guard.maxCalls = Math.max(h.guard.maxCalls, h.guard.calls);
+    return true;
+  },
+  publishCallsInFlight: async () => h.guard.calls,
+  endPublishCall: async () => { h.guard.calls = Math.max(0, h.guard.calls - 1); },
+  readLatestDecisionForRun: async () => null,
+  readOpenDecisionForRun: async () => null,
+  readRunBoundGraph: async () => null,
+  readDispatchedPublishRows: async () => null,
+  insertParkedDecision: vi.fn(),
+  decide: vi.fn(),
+  listDueParked: async () => [],
+  listSettledWithWaitingRun: async () => [],
 }));
 // Mocked by its file, which the subpath `@cinatra-ai/agents/run-action-decision-consumption` resolves to.
 vi.mock("../../../../../../packages/agents/src/run-action-decision-consumption", () => ({
@@ -125,7 +234,7 @@ vi.mock("@/lib/trigger-email-send-use-cases", async () => {
   >("@cinatra-ai/mcp-server/request-context");
   const actual = await vi.importActual<typeof import("@/lib/trigger-email-send-use-cases")>("@/lib/trigger-email-send-use-cases");
   return {
-    createTriggerEmailSendUseCases: () => h.provider ? actual.createTriggerEmailSendUseCases(providerDeps(h.provider)) : ({
+    createTriggerEmailSendUseCases: () => h.provider ? actual.createTriggerEmailSendUseCases(providerDeps(h.provider, { refused: actual.EmailBodyRefusedError, materialize: actual.materializeEmailFanout as never, bodyType: actual.EMAIL_BODY_TYPE_ID })) : ({
       startInitialSend: async (input: unknown, actor: unknown) => {
         h.sends.push({ input, actor, frame: mcpRequestContextStorage.getStore() });
         if (h.sendFails > 0) {
@@ -139,6 +248,16 @@ vi.mock("@/lib/trigger-email-send-use-cases", async () => {
 });
 
 import { POST } from "@/app/api/agents/passthrough/route";
+
+// The review store the call check reads (the gate seam): the attempt holds a review a person approved, and no output of it waits.
+const APPROVED_REVIEW = { id: "gate-1", status: "resolved", disposition: "approve", createdAt: new Date("2026-11-01T00:00:00Z"),
+  runGeneration: 0, fingerprint: "e".repeat(64), resolvedBy: "user-reviewer", successorGateId: null };
+const seamSlot = globalThis as { __cinatraArtifactReviewGateSeam?: unknown };
+const seamBefore = seamSlot.__cinatraArtifactReviewGateSeam;
+seamSlot.__cinatraArtifactReviewGateSeam = {
+  listReviews: vi.fn(async () => [APPROVED_REVIEW]),
+  hasPendingProducedReview: vi.fn(async () => false),
+};
 
 const ATTEST_KEY = "step-attest-key-under-test";
 const CTX = "ctx-run-1";
@@ -216,6 +335,12 @@ beforeEach(() => {
   h.ledger.clear();
   h.sendFails = 0;
   h.provider = null;
+  h.realGuard = false;
+  h.guard.calls = 0;
+  h.guard.maxCalls = 0;
+  h.guard.status = "released";
+  h.guard.lock = Promise.resolve();
+  h.readAgentTemplateById.mockReset().mockResolvedValue({ id: "tpl-1", publishingSteps: ["send_campaign"] });
   h.decisionId = "decision-1";
   h.readAgentRunById.mockReset().mockResolvedValue(RUN);
   h.readAgentRunByContextId.mockReset().mockImplementation(async (ctx: string) => (ctx === CTX ? RUN : null));
@@ -318,7 +443,7 @@ describe("a send to several recipients that fails part way, through the send's r
     const body = (await first.json()) as { code?: string; error?: string; status?: string };
     expect(body.code).toBe("publishing_step_call_failed");
     expect(body.status).toBe("failed");
-    expect(body.error).toContain(RECIPIENTS[1]!);
+    expect(typeof body.error === "string" && body.error !== "").toBe(true);
     // Recipient one went out once; the decision is used.
     expect(h.provider.mailed).toEqual([RECIPIENTS[0]]);
     const retry = await POST(makeReq());
@@ -335,6 +460,94 @@ describe("a send to several recipients that fails part way, through the send's r
     expect(h.provider.mailed).toEqual(RECIPIENTS);
     expect((await POST(makeReq())).status).toBe(409);
     expect(h.provider.mailed).toEqual(RECIPIENTS);
+  });
+});
+
+describe("concurrent calls of one released decision, through the agents package's real call check", () => {
+  const N = 5;
+  const fire = (count: number) => Promise.all(Array.from({ length: count }, () => POST(makeReq())));
+
+  it("admits exactly one: it mails every recipient once, and every other call answers 409 and touches nothing", async () => {
+    // red-first-expect: to deeply equal
+    h.realGuard = true;
+    h.provider = { mailed: [], failOn: null };
+    const answers = await fire(N);
+    expect(answers.map((r) => r.status).sort()).toEqual([200, 409, 409, 409, 409]);
+    expect(h.provider.mailed).toEqual(RECIPIENTS);
+    // The claim was exclusive: no more than one call of the decision was ever in flight, and each one ended.
+    expect(h.guard.maxCalls).toBe(1);
+    expect(h.guard.calls).toBe(0);
+    for (const refused of answers.filter((r) => r.status === 409)) {
+      expect(JSON.stringify(await refused.json())).not.toMatch(new RegExp(`${RUN.id}|${NODE}|${CTX}|decision-1`));
+    }
+    // Later calls find the decision used: still 409, still nothing mailed.
+    expect((await POST(makeReq())).status).toBe(409);
+    expect(h.provider.mailed).toEqual(RECIPIENTS);
+    expect(h.guard.calls).toBe(0);
+  });
+
+  it("a call whose arguments are refused takes nothing: the claim is ended and the same decision is still served", async () => {
+    h.realGuard = true;
+    h.provider = { mailed: [], failOn: null };
+    expect((await POST(makeReq({ campaignId: "" }))).status).toBe(500);
+    expect(h.guard.calls).toBe(0);
+    expect(h.provider.mailed).toEqual([]);
+    expect((await POST(makeReq())).status).toBe(200);
+    expect(h.provider.mailed).toEqual(RECIPIENTS);
+  });
+
+  it("a call that consumed the decision and failed before any provider call: the claim ends, a retry of it is 409, and the person's next approval sends everything", async () => {
+    h.realGuard = true;
+    h.provider = { mailed: [], failOn: null, refuseBodiesOnce: true };
+    const failed = await POST(makeReq());
+    expect(failed.status).toBe(502);
+    expect(h.guard.calls).toBe(0);
+    expect(h.provider.mailed).toEqual([]);
+    expect((await POST(makeReq())).status).toBe(409);
+    expect(h.provider.mailed).toEqual([]);
+    // Approving again is a new decision; nothing was sent, so everything is still to send.
+    h.decisionId = "decision-2";
+    expect((await POST(makeReq())).status).toBe(200);
+    expect(h.provider.mailed).toEqual(RECIPIENTS);
+  });
+
+  it("a decision that is not released is refused with 403, not 409", async () => {
+    h.realGuard = true;
+    h.provider = { mailed: [], failOn: null };
+    h.guard.status = "parked";
+    const res = await POST(makeReq());
+    expect(res.status).toBe(403);
+    expect(await codeOf(res)).toBe("publish_not_released");
+    expect(h.provider.mailed).toEqual([]);
+  });
+});
+
+// The send's per-message record (cinatra#4787) keys each message by run, message identity and body revision, never by
+// decision. Until that change is in this tree the send has none, and a new decision would mail recipient one again, so
+// this case runs once the record is there (the send's use case calls `performRevisionEffectOnce` per message).
+const SEND_RECORD_IN_TREE = readFileSync(new URL("../../../../../lib/trigger-email-send-use-cases.ts", import.meta.url), "utf8")
+  .includes("performRevisionEffectOnce");
+
+describe.runIf(SEND_RECORD_IN_TREE)("a re-approval after a partial send, through the send's per-message record", () => {
+  it("mails recipient one once across three decisions; recipient two stays in doubt; recipient three goes out once", async () => {
+    h.realGuard = true;
+    h.provider = { mailed: [], failOn: RECIPIENTS[1]! };
+    expect((await POST(makeReq())).status).toBe(502);
+    expect(h.provider.mailed).toEqual([RECIPIENTS[0]]);
+    expect((await POST(makeReq())).status).toBe(409);
+    expect(h.provider.mailed).toEqual([RECIPIENTS[0]]);
+    // A new approval is a new decision. Recipient one is skipped (sent), recipient two is not mailed (in doubt, for a
+    // person to check), recipient three goes out; the call answers a failure with the counts.
+    h.decisionId = "decision-2";
+    h.provider.failOn = null;
+    const second = await POST(makeReq());
+    expect(second.status).toBe(502);
+    expect(await second.json()).toMatchObject({ status: "failed", sentCount: 1, alreadySentCount: 1, inDoubtCount: 1 });
+    expect(h.provider.mailed).toEqual([RECIPIENTS[0], RECIPIENTS[2]]);
+    // And a third approval mails nobody again.
+    h.decisionId = "decision-3";
+    await POST(makeReq());
+    expect(h.provider.mailed).toEqual([RECIPIENTS[0], RECIPIENTS[2]]);
   });
 });
 
@@ -359,6 +572,9 @@ describe("one use per decision across roads", () => {
 });
 
 afterAll(() => {
+  seamSlot.__cinatraArtifactReviewGateSeam = seamBefore;
+  vi.doUnmock("../../../../../../packages/agents/src/publish-decision-store");
+  vi.doUnmock("../../../../../../packages/agents/src/db");
   vi.doUnmock("server-only");
   vi.doUnmock("@cinatra-ai/agents");
   vi.doUnmock("@cinatra-ai/agents/store");

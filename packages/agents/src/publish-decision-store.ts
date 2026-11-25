@@ -412,6 +412,35 @@ export async function claimPublishCall(decisionId: string, executor: Pick<typeof
   return taken.length === 1;
 }
 
+/**
+ * cinatra#3089 — the exclusive form of claimPublishCall, for a call that must be the only call of its decision: the same
+ * write, taken only while no call of the decision is in flight (calls_in_flight is 0 or null), so of two callers
+ * exactly one is admitted, and the count the call's own writers read (lifecycle-emit.ts) is exactly one. True when the
+ * row was taken. A write error propagates.
+ */
+export async function claimPublishCallExclusive(decisionId: string, executor: Pick<typeof db, "update">): Promise<boolean> {
+  const taken = await executor
+    .update(agentRunPublishDecisions)
+    .set({ callsInFlight: 1 })
+    .where(and(
+      eq(agentRunPublishDecisions.id, requireText(decisionId, "decisionId")),
+      eq(agentRunPublishDecisions.status, "released"),
+      sql`coalesce(${agentRunPublishDecisions.callsInFlight}, 0) = 0`,
+    ))
+    .returning({ id: agentRunPublishDecisions.id });
+  return taken.length === 1;
+}
+
+/** The count of calls in flight under a decision (claimPublishCall), read in the caller's transaction. */
+export async function publishCallsInFlight(decisionId: string, executor: Pick<typeof db, "select">): Promise<number> {
+  const [row] = await executor
+    .select({ callsInFlight: agentRunPublishDecisions.callsInFlight })
+    .from(agentRunPublishDecisions)
+    .where(eq(agentRunPublishDecisions.id, requireText(decisionId, "decisionId")))
+    .limit(1);
+  return row?.callsInFlight ?? 0;
+}
+
 /** The end of a call claimPublishCall took: one call fewer in flight, never below 0. A call that never ends it (a crash)
  *  leaves its count up, and the writers of the run's output keep refusing until a retry's reset starts a new attempt. */
 export async function endPublishCall(decisionId: string): Promise<void> {
