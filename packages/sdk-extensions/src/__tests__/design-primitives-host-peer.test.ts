@@ -53,6 +53,23 @@ describe("the SDK's host peer declaration for the shared design primitives", () 
     expect(checkDesignPrimitivesContract({ builtAgainst: version })).toBeNull();
   });
 
+  it("is the range the load-time check requires of a bundle built with this SDK", () => {
+    // A bundle built with this SDK declares HOST_DESIGN_PRIMITIVES_CONTRACT_VERSION
+    // in its preamble; the check then requires exactly the declared range of the
+    // host. The range is read from package.json, never restated here.
+    const range = readSdkPackageJson().cinatra?.hostServedPeers?.[HOST_DESIGN_PRIMITIVES_MODULE];
+    // red-first-expect: expected 'undefined' to be 'string'
+    expect(typeof range).toBe("string");
+    const floor = String(range).replace(/^\^/, "");
+    expect(floor).toBe(HOST_DESIGN_PRIMITIVES_CONTRACT_VERSION);
+    // A host below the declared range is refused, naming the declared range.
+    const refusal = checkDesignPrimitivesContract({ builtAgainst: floor, hostServes: "1.0.0" });
+    expect(refusal).toContain(`requires "${String(range)}", but this host serves 1.0.0`);
+    // A host at the floor or above inside the major is admitted.
+    expect(checkDesignPrimitivesContract({ builtAgainst: floor, hostServes: floor })).toBeNull();
+    expect(checkDesignPrimitivesContract({ builtAgainst: floor, hostServes: "1.9.0" })).toBeNull();
+  });
+
   it("never names the virtual id in an npm dependency field", () => {
     const pkg = readSdkPackageJson();
     for (const field of [
