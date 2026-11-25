@@ -164,7 +164,7 @@ async function loadDefaultSendEmail(): Promise<TriggerEmailSendDeps["sendEmail"]
   return facade.sendEmail.bind(facade) as unknown as TriggerEmailSendDeps["sendEmail"];
 }
 
-function buildLazyDefaultDeps(): TriggerEmailSendDeps {
+export function buildLazyDefaultDeps(): TriggerEmailSendDeps {
   let cachedGetCampaign: TriggerEmailSendDeps["getCampaign"] | null = null;
   let cachedGetDrafts: TriggerEmailSendDeps["getDraftsByIds"] | null = null;
   let cachedSend: TriggerEmailSendDeps["sendEmail"] | null = null;
@@ -200,7 +200,7 @@ function buildLazyDefaultDeps(): TriggerEmailSendDeps {
 // non-greedily and excludes embedded `}` so adjacent tokens don't merge
 // into a single match.
 const MUSTACHE_TOKEN_RE = /\{\{[^}]+\}\}/g;
-function applyTokenReplacements(body: string): string {
+export function applyTokenReplacements(body: string): string {
   return body.replace(MUSTACHE_TOKEN_RE, "there");
 }
 
@@ -795,7 +795,15 @@ export async function planTestSendSelection(
   },
   deps: TriggerEmailSendDeps = buildLazyDefaultDeps(),
 ): Promise<
-  | { ok: true; recipientEmail: string; selectedDraftIds: string[] }
+  | {
+      ok: true;
+      recipientEmail: string;
+      selectedDraftIds: string[];
+      // cinatra#4150: what a publish card shows of this plan, read in the same pass: the From of every message (the
+      // campaign's sender) and each selected draft, in send order, as it was read.
+      sender: { email: string; name: string };
+      selectedDrafts: Draft[];
+    }
   | { ok: false; reason: "no_drafts_selected" | "invalid_recipient" }
 > {
   const recipient = (input.recipientEmail ?? "").trim();
@@ -831,7 +839,13 @@ export async function planTestSendSelection(
   if (selectedDraftIds.length === 0) {
     return { ok: false, reason: "no_drafts_selected" };
   }
-  return { ok: true, recipientEmail: recipient, selectedDraftIds };
+  return {
+    ok: true,
+    recipientEmail: recipient,
+    selectedDraftIds,
+    sender: { email: campaign.senderEmail ?? "", name: campaign.senderName ?? "" },
+    selectedDrafts: [...selectedById.values()],
+  };
 }
 
 export function createTriggerEmailSendUseCases(
