@@ -243,7 +243,8 @@ describe("Publish (A7)", () => {
     expect((claims.claimPause.mock.calls[0] as unknown[])[0]).toEqual({ runId: "run-1", orgId: "org-1", generation: 3, taskId: "task-1" });
     expect(moves()).toEqual([["run-1", "pending_approval", "running"]]);
     expect((storeMock.transitionRunStatus.mock.calls[0] as unknown[])[3]).toEqual({ pauseFence: { token: "tok-1", generation: 4 } });
-    expect(prepareWayflowResume).toHaveBeenCalledWith("run-1", "http://wayflow.test/@acme/poster");
+    // cinatra#3745: the resume names the decision it released, for the calls of this visit.
+    expect(prepareWayflowResume).toHaveBeenCalledWith("run-1", "http://wayflow.test/@acme/poster", { publishDecisionId: "d1" });
     expect(sendWayflowResume).toHaveBeenCalledTimes(1);
     const args = sendWayflowResume.mock.calls[0]![0] as Record<string, unknown> & { authority: { orgId: string } };
     expect(args.contextId).toBe("ctx-1");
@@ -387,6 +388,8 @@ describe("Publish (A7)", () => {
     expect(decisions.decide).not.toHaveBeenCalled();
     expect(moves()).toEqual([["run-1", "pending_approval", "running"]]);
     expect(sendWayflowResume).toHaveBeenCalledTimes(1);
+    // The resume of an already released decision names that decision.
+    expect(prepareWayflowResume).toHaveBeenCalledWith("run-1", "http://wayflow.test/@acme/poster", { publishDecisionId: "d1" });
   });
 
   // The latest-task key lives seven days and can be lost, and the run row's task can still name an earlier gate visit

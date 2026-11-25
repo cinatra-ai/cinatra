@@ -398,6 +398,34 @@ describe("the verified executing source rides only with its own channel's run an
   });
 });
 
+describe("the publish decision of a call rides only with the on-behalf-of proof (cinatra#3745)", () => {
+  const PROOF = Object.freeze({
+    contextId: "ctx-1", stepId: "step-1", executionAttemptId: "attempt-1",
+    sourceSha256: "a".repeat(64), executedSourceSha256: "b".repeat(64), declarationSourceSha256: "c".repeat(64),
+  });
+  const obo = (extra: Record<string, unknown> = {}) => ({ delegatedRunId: "run-obo", delegatedStepId: "step-1",
+    delegatedExecutedSource: PROOF, delegatedSourceCurrent: true, failClosed: true, ...extra }) as
+    Parameters<typeof resolveRequestRunContext>[0];
+
+  it("an on-behalf-of run with a current proof carries the token's publish decision", () => {
+    const r = resolveRequestRunContext(obo({ delegatedPublishDecisionId: "decision-2" }));
+    expect(r).toMatchObject({ runId: "run-obo", verifiedExecutedSource: PROOF, publishDecisionId: "decision-2", denied: false });
+  });
+
+  it("no decision without a proof, and none from a durable binding", () => {
+    expect(resolveRequestRunContext(obo()).publishDecisionId).toBeUndefined();
+    const noProof = resolveRequestRunContext({ delegatedRunId: "run-obo", delegatedStepId: "step-1",
+      delegatedPublishDecisionId: "decision-2", failClosed: true } as Parameters<typeof resolveRequestRunContext>[0]);
+    expect(noProof.runId).toBe("run-obo");
+    expect(noProof.publishDecisionId).toBeUndefined();
+    const durable = resolveRequestRunContext({ durable: { outcome: "resolved",
+      ctx: { runId: "run-durable", stepId: "step-1", verifiedExecutedSource: PROOF } },
+      delegatedPublishDecisionId: "decision-2", failClosed: true } as Parameters<typeof resolveRequestRunContext>[0]);
+    expect(durable.runId).toBe("run-durable");
+    expect(durable.publishDecisionId).toBeUndefined();
+  });
+});
+
 describe("the tool server re-checks an on-behalf-of proof against the run store (cinatra#3745)", () => {
   const PROOF = Object.freeze({
     contextId: "ctx-1", stepId: "step-1", executionAttemptId: "attempt-1",
