@@ -530,7 +530,7 @@ export async function POST(req: Request): Promise<Response> {
   // cinatra#3089: a declared publishing-step tool is served only to a verified
   // step the run's compiled flow lists as publishing, whose newest decision is
   // released. A step that is not listed is refused whatever its rows say.
-  if (publishingStepTool && !(await publishingStepCallReleased(run, verifiedStepId))) {
+  if (publishingStepTool && !(await publishingStepCallReleased(run, verifiedStepId, verifiedExecutedSource))) {
     return NextResponse.json(
       { error: "This tool is served only as a declared publishing step's call.", code: "publishing_step_required" },
       { status: 403 },

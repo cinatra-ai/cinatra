@@ -611,11 +611,53 @@ export function readStepToolDeclaration(node: unknown): StepToolDeclaration {
   return { kind: "declared", tools: [...(value as string[])] };
 }
 
+/** The node kinds that can be a publishing action (the compiler's collectPublishingSteps set). */
+const PUBLISHING_STEP_KINDS = new Set(["ApiNode", "AgentNode", "FlowNode", "ParallelFlowNode"]);
+
+/**
+ * cinatra#3089: whether `stepId` is a publishing step of the flow document: a
+ * key of the root `$referenced_components` listed in the root `nodes`, whose
+ * node is of an action kind and declares `metadata.cinatra.publishes` as the
+ * JSON boolean `true` (the compiler's rule, read from the document a run
+ * executes, never from the live template).
+ */
+export function isTopLevelPublishingStep(document: unknown, stepId: string): boolean {
+  if (!isPlainObject(document) || typeof stepId !== "string" || stepId === "") return false;
+  const refs = document.$referenced_components;
+  if (!isPlainObject(refs) || !Object.prototype.hasOwnProperty.call(refs, stepId)) return false;
+  const listed = Array.isArray(document.nodes) && document.nodes.some((entry) => resolveComponentRef(entry) === stepId);
+  const node = refs[stepId];
+  if (!listed || !isPlainObject(node) || typeof node.component_type !== "string" ||
+      !PUBLISHING_STEP_KINDS.has(node.component_type)) return false;
+  const metadata = node.metadata;
+  const cinatra = isPlainObject(metadata) ? metadata.cinatra : null;
+  return isPlainObject(cinatra) && cinatra.publishes === true;
+}
+
+/**
+ * cinatra#3089: the tool a direct passthrough publishing step calls: the
+ * literal `data.tool` (non-empty, lower-case, no whitespace, no template) of
+ * the top-level `/api/agents/passthrough` ApiNode keyed and identified by
+ * `stepId` that is a publishing step; null for every other node.
+ */
+function publishingPassthroughTool(document: Record<string, unknown>, stepId: string): string | null {
+  if (!isTopLevelPublishingStep(document, stepId)) return null;
+  const node = (document.$referenced_components as Record<string, unknown>)[stepId] as Record<string, unknown>;
+  if (node.component_type !== "ApiNode" || node.id !== stepId || typeof node.url !== "string" ||
+      !node.url.includes("/api/agents/passthrough")) return null;
+  const tool = isPlainObject(node.data) ? node.data.tool : undefined;
+  if (typeof tool !== "string" || tool === "" || /\s/.test(tool) || tool !== tool.toLowerCase() ||
+      tool.includes("{{") || tool.includes("{%")) return null;
+  return tool;
+}
+
 /**
  * Reads the declaration of the model-bridge step with the given id from a flow
  * document, nested subflows included. When several model-bridge steps carry the
  * id, the result is `invalid` if any one is, otherwise the names common to every
- * declared list; a step that declares nothing adds no name.
+ * declared list; a step that declares nothing adds no name. A direct
+ * passthrough publishing step declares exactly the tool its request names
+ * (cinatra#3089); a templated or malformed name declares nothing.
  */
 export function findStepToolDeclaration(
   document: unknown,
@@ -630,6 +672,8 @@ export function findStepToolDeclaration(
     if (reading.kind === "invalid") invalid = invalid ?? reading;
     else if (reading.kind === "declared") declared.push(reading.tools);
   });
+  const passthroughTool = publishingPassthroughTool(document, stepId);
+  if (passthroughTool !== null) declared.push([passthroughTool]);
   if (invalid) return invalid;
   if (declared.length === 0) return { kind: "undeclared" };
   const [first, ...rest] = declared;

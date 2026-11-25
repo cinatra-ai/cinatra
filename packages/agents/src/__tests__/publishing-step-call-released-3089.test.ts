@@ -24,20 +24,28 @@ const decisions = vi.hoisted(() => ({
 }));
 vi.mock("../publish-decision-store", () => decisions);
 
+const bound = vi.hoisted(() => ({ readCurrentRunStepToolPolicy: vi.fn() }));
+vi.mock("../agent-run-serde", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  readCurrentRunStepToolPolicy: bound.readCurrentRunStepToolPolicy,
+}));
+
 import * as actions from "../publish-decision-actions";
 
-const publishingStepCallReleased = (run: { id: string; templateId: string }, step: string | undefined) =>
+const publishingStepCallReleased = (run: { id: string; templateId: string; orgId?: string }, step: string | undefined,
+  proof?: Record<string, unknown>) =>
   (actions as unknown as {
-    publishingStepCallReleased: (r: typeof run, s: string | undefined) => Promise<boolean>;
-  }).publishingStepCallReleased(run, step);
+    publishingStepCallReleased: (r: typeof run, s: string | undefined, p?: Record<string, unknown>) => Promise<boolean>;
+  }).publishingStepCallReleased(run, step, proof);
 
-const RUN = { id: "run-1", templateId: "tmpl-1" };
+const RUN = { id: "run-1", templateId: "tmpl-1", orgId: "org-1" };
 const template = (publishingSteps: string[] | null | undefined) => ({ id: "tmpl-1", publishingSteps });
 const row = (status: string) => ({ id: "d1", runId: "run-1", nodeId: "send", status });
 
 beforeEach(() => {
   storeMock.readAgentTemplateById.mockReset().mockResolvedValue(template(["send"]));
   decisions.readDecisionForRunNode.mockReset().mockResolvedValue(null);
+  bound.readCurrentRunStepToolPolicy.mockReset().mockRejectedValue(new Error("no bound source in this case"));
 });
 
 describe("a listed publishing step", () => {
@@ -91,5 +99,42 @@ describe("a read that cannot prove the step", () => {
   it("a decision read error refuses", async () => {
     decisions.readDecisionForRunNode.mockRejectedValue(new Error("db down"));
     expect(await publishingStepCallReleased(RUN, "send")).toBe(false);
+  });
+});
+
+// A call that carries the verified executed-source proof is checked against the flow its run executes: the source bound
+// to the run's current attempt, which a recompile of the template cannot change.
+describe("a call that carries the verified executed-source proof", () => {
+  const PROOF = { contextId: "ctx", stepId: "send", executionAttemptId: "attempt-1" };
+  const flow = (publishes: boolean) => JSON.stringify({
+    component_type: "Flow", id: "f", nodes: [{ $component_ref: "send" }],
+    $referenced_components: { send: { component_type: "ApiNode", id: "send", metadata: { cinatra: { publishes } } } },
+  });
+
+  it("is served for a step its run's bound source declares as publishing, after a recompile dropped it from the template", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue(template([]));
+    bound.readCurrentRunStepToolPolicy.mockResolvedValue({ source: flow(true) });
+    decisions.readDecisionForRunNode.mockResolvedValue(row("released"));
+    expect(await publishingStepCallReleased(RUN, "send", PROOF)).toBe(true);
+    expect(bound.readCurrentRunStepToolPolicy).toHaveBeenCalledWith("run-1", "org-1", PROOF);
+  });
+
+  it("is refused for a step its run's bound source does not declare as publishing, after a recompile listed it", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue(template(["send"]));
+    bound.readCurrentRunStepToolPolicy.mockResolvedValue({ source: flow(false) });
+    decisions.readDecisionForRunNode.mockResolvedValue(row("released"));
+    expect(await publishingStepCallReleased(RUN, "send", PROOF)).toBe(false);
+    expect(decisions.readDecisionForRunNode).not.toHaveBeenCalled();
+  });
+
+  it("is refused when the bound source cannot be read", async () => {
+    decisions.readDecisionForRunNode.mockResolvedValue(row("released"));
+    expect(await publishingStepCallReleased(RUN, "send", PROOF)).toBe(false);
+  });
+
+  it("is refused when the run carries no organization to read its bound source with", async () => {
+    bound.readCurrentRunStepToolPolicy.mockResolvedValue({ source: flow(true) });
+    decisions.readDecisionForRunNode.mockResolvedValue(row("released"));
+    expect(await publishingStepCallReleased({ id: "run-1", templateId: "tmpl-1" }, "send", PROOF)).toBe(false);
   });
 });

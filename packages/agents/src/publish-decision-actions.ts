@@ -5,6 +5,7 @@ import "server-only";
 // stopped. Every resume road refuses a run whose newest decision is not released.
 
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
+import type { VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import { verifyGateNodeClaim } from "@/lib/agent-run-token";
 import { AuthzError } from "@/lib/authz/errors";
@@ -675,17 +676,29 @@ export async function publishCallAllowed(run: { id: string; templateId: string }
 
 /**
  * The call-site check of a tool its owning package declares as servable on the passthrough road only as a declared
- * publishing step's call (cinatra#3089): true only when the verified step is listed in the run's compiled
- * `publishingSteps` AND that step's newest decision reads `released`. Unlike publishCallAllowed, a step that is not
- * listed is refused whatever its decision rows say, and so is a call with no verified step, a template that is not
- * found and a list stored as null. A read error refuses the call; it is logged by the error's name only.
+ * publishing step's call (cinatra#3089): true only when the verified step is a publishing step of the flow the run
+ * executes AND that step's newest decision reads `released`. A call that carries the verified executed-source proof is
+ * read against the source bound to the run's current attempt (its declaration source, which a recompile of the
+ * template cannot change); a call without that proof is read against the template's compiled `publishingSteps`.
+ * Unlike publishCallAllowed, a step that is not a publishing step is refused whatever its decision rows say, and so is
+ * a call with no verified step, a template that is not found, a list stored as null and a bound source that cannot be
+ * read. A read error refuses the call; it is logged by the error's name only.
  */
-export async function publishingStepCallReleased(run: { id: string; templateId: string }, verifiedStepId: string | undefined): Promise<boolean> {
+export async function publishingStepCallReleased(run: { id: string; templateId: string; orgId?: string | null },
+  verifiedStepId: string | undefined, proof?: VerifiedExecutedRunSource): Promise<boolean> {
   if (typeof verifiedStepId !== "string" || verifiedStepId === "") return false;
   try {
-    const template = await readAgentTemplateById(run.templateId);
-    const listed = template?.publishingSteps;
-    if (!Array.isArray(listed) || !listed.includes(verifiedStepId)) return false;
+    if (proof !== undefined) {
+      if (typeof run.orgId !== "string" || run.orgId === "") return false;
+      const { readCurrentRunStepToolPolicy } = await import("./agent-run-serde");
+      const { isTopLevelPublishingStep } = await import("./validate-oas-runtime-invariants");
+      const policy = await readCurrentRunStepToolPolicy(run.id, run.orgId, proof);
+      if (!isTopLevelPublishingStep(JSON.parse(policy.source), verifiedStepId)) return false;
+    } else {
+      const template = await readAgentTemplateById(run.templateId);
+      const listed = template?.publishingSteps;
+      if (!Array.isArray(listed) || !listed.includes(verifiedStepId)) return false;
+    }
     const row = await readDecisionForRunNode(run.id, verifiedStepId);
     return row?.status === "released";
   } catch (err) {
