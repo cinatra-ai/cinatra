@@ -26,6 +26,7 @@ import * as auditModule from "@/lib/authz/audit";
 import * as augmentModule from "@/lib/authz/inventory-augment";
 import * as extensionRegistryModule from "@/lib/extension-mcp-registry";
 import { enforceMcpBoundary } from "@/lib/authz/mcp-boundary";
+import * as registryModule from "@/lib/extension-capabilities-registry";
 import {
   __resetCapabilityRegistry,
   recordLoadedExtensionIdentity,
@@ -614,44 +615,51 @@ describe("the guarded outward run action", () => {
     // run the REAL runtime loader with a fake SDK driver that emits the real order: the record registers (its ctx
     // registers OUTWARD, the settle reports success), and only then the bootstrap pass runs, which may throw.
     describe("an extension whose activation did not complete", () => {
-      const DIGEST = "d".repeat(64);
-      const record = () => ({ packageName: PACKAGE, version: VERSION, serverEntry: "./register",
-        requestedHostPorts: ["mcp"], sdkAbiRange: "^2", storeDir: `/store/connector/outreach/${DIGEST}`,
-        declaredDigest: DIGEST, kind: "connector" });
-      const anchor = (installId: string) => ({ installId, integrity: "sha512-a", contentHash: "ch-a",
-        registryUrl: "https://registry.cinatra.ai", trustDecision: true, approvedPorts: ["mcp"], version: VERSION,
-        isDefault: true, signature: null, digest: DIGEST, kind: "connector" });
+      type Attempt = { installId: string; version: string; bootstrap: "passes" | "throws" };
+      const digestOf = (a: Attempt) => (a.version === VERSION ? "d" : "e").repeat(64);
+      const record = (a: Attempt) => ({ packageName: PACKAGE, version: a.version, serverEntry: "./register",
+        requestedHostPorts: ["mcp"], sdkAbiRange: "^2", storeDir: `/store/connector/outreach/${digestOf(a)}`,
+        declaredDigest: digestOf(a), kind: "connector" });
+      const anchor = (a: Attempt) => ({ installId: a.installId, integrity: "sha512-a", contentHash: "ch-a",
+        registryUrl: "https://registry.cinatra.ai", trustDecision: true, approvedPorts: ["mcp"], version: a.version,
+        isDefault: true, signature: null, digest: digestOf(a), kind: "connector" });
 
       type Deps = { records?: Array<ReturnType<typeof record>>;
         makeContext: (p: string, ports: readonly string[], r: unknown) => ReturnType<typeof createExtensionHostContext>;
         onRegisterSettled?: (r: unknown, ok: boolean) => void };
-      /** One activation of PACKAGE@VERSION through the real loader; `bootstrap` decides the bootstrap result. */
-      async function activate(installId: string, bootstrap: "passes" | "throws", ran: string[]) {
+      /** One activation pass through the real loader of DEFAULT records of PACKAGE, in this order; each record's
+       *  `bootstrap` decides its own bootstrap result, reported (as the real driver does) by package name only. */
+      async function activateRecords(attempts: Attempt[], ran: string[]) {
         extensionRegistryModule.removeExtensionMcpToolsForPackage(PACKAGE);
-        activation.records = [record()];
+        activation.records = attempts.map(record);
         activation.drive = async (_root, rawDeps) => {
           const deps = rawDeps as unknown as Deps;
           const results: unknown[] = [];
-          const registered: string[] = [];
-          for (const r of deps.records ?? []) {
+          const registered: Attempt[] = [];
+          (deps.records ?? []).forEach((r, i) => {
+            const attempt = attempts[i]!;
             const ctx = deps.makeContext(r.packageName, r.requestedHostPorts, r);
             ctx.mcp.registerTool({ name: OUTWARD, description: OUTWARD, outward: {},
-              handler: async () => { ran.push(installId); return { sent: installId }; } } as Parameters<typeof ctx.mcp.registerTool>[0]);
+              handler: async () => { ran.push(attempt.installId); return { sent: attempt.installId }; },
+            } as Parameters<typeof ctx.mcp.registerTool>[0]);
             deps.onRegisterSettled?.(r, true);
             results.push({ packageName: r.packageName, status: "registered" });
-            registered.push(r.packageName);
-          }
-          for (const packageName of registered) {
-            results.push(bootstrap === "throws"
-              ? { packageName, status: "failed", reason: "bootstrap-threw", error: new Error("bootstrap failed") }
-              : { packageName, status: "bootstrapped" });
+            registered.push(attempt);
+          });
+          for (const attempt of registered) {
+            results.push(attempt.bootstrap === "throws"
+              ? { packageName: PACKAGE, status: "failed", reason: "bootstrap-threw", error: new Error("bootstrap failed") }
+              : { packageName: PACKAGE, status: "bootstrapped" });
           }
           return results;
         };
         return loadRuntimePackageExtensions("/store", {
-          resolveInstallAnchors: async () => [anchor(installId)] as never,
+          resolveInstallAnchors: async () => attempts.map(anchor) as never,
         });
       }
+      /** One activation of PACKAGE@VERSION through the real loader; `bootstrap` decides the bootstrap result. */
+      const activate = (installId: string, bootstrap: Attempt["bootstrap"], ran: string[]) =>
+        activateRecords([{ installId, version: VERSION, bootstrap }], ran);
 
       afterEach(() => {
         activation.drive = null;
@@ -697,6 +705,39 @@ describe("the guarded outward run action", () => {
         await activate("install-A", "passes", ran);
         expect((await (await replayServer())(runFrame())).isError).toBeFalsy();
         expect(ran).toEqual(["install-A"]);
+      });
+
+      // Two default records of one package are permitted; each bootstrap outcome belongs to the record bootstrapped.
+      // Without the bootstrap rule record A's stamp stays current; with the failure bound to the package name, the
+      // failure of record A retired the stamp of record B as well:
+      // red-first-expect: expected { packageName: '@acme/outreach', …(4) } to be undefined
+      it("a failed bootstrap of one default record never retires another default record of the package", async () => {
+        const ran: string[] = [];
+        await activateRecords([
+          { installId: "install-A", version: "1.2.2", bootstrap: "throws" },
+          { installId: "install-B", version: VERSION, bootstrap: "passes" },
+        ], ran);
+        expect(registryModule.currentLoadedExtensionIdentity(PACKAGE, "1.2.2")).toBeUndefined();
+        expect(registryModule.currentLoadedExtensionIdentity(PACKAGE, VERSION)).toMatchObject({ installId: "install-B" });
+        const call = await replayServer();
+        expect((await call(runFrame())).isError).toBeFalsy();
+        expect(ran).toEqual(["install-B"]);
+        expect((store.consume.mock.calls[0]![0] as { action: { installId: string } }).action.installId).toBe("install-B");
+        expect((await call(runFrame())).content?.[0]?.text).toContain(`${REASON}:action_person_decision_already_consumed`);
+        expect(ran).toEqual(["install-B"]);
+      });
+
+      it("retires both default records of the package when both bootstraps throw", async () => {
+        const ran: string[] = [];
+        await activateRecords([
+          { installId: "install-A", version: "1.2.2", bootstrap: "throws" },
+          { installId: "install-B", version: VERSION, bootstrap: "throws" },
+        ], ran);
+        expect(registryModule.currentLoadedExtensionIdentity(PACKAGE, "1.2.2")).toBeUndefined();
+        expect(registryModule.currentLoadedExtensionIdentity(PACKAGE, VERSION)).toBeUndefined();
+        expect((await (await replayServer())(runFrame())).content?.[0]?.text).toContain(`${REASON}:action_loaded_identity_stale`);
+        expect(store.consume).not.toHaveBeenCalled();
+        expect(ran).toEqual([]);
       });
     });
   });

@@ -552,11 +552,20 @@ export async function loadRuntimePackageExtensions(
   // object identity, so a failure retires only its own stamp. A stamp is
   // PENDING (never current) until its record fully activated: a non-default
   // record at its successful register settle, a default record only after its
-  // bootstrap passed too (`awaitingBootstrap`, resolved after the pass). An
+  // bootstrap passed too (`bootstrapOrder`, resolved after the pass). An
   // outward tool of a half-activated extension therefore never has a current
   // identity, and the boundary refuses its call.
   const stampedIdentities = new Map<object, LoadedExtensionIdentity>();
-  const awaitingBootstrap = new Map<object, LoadedExtensionIdentity>();
+  // Every default record whose register settled successfully, in settle order,
+  // with its stamp (null: an unpinned load). The SDK driver bootstraps exactly
+  // these records, one each, in this order, after the register pass, and
+  // reports each bootstrap result by package name only; the order is what
+  // binds a result to its record (several default records of one package are
+  // permitted, see `servingVersionByPackage`).
+  const bootstrapOrder: Array<{
+    record: { packageName: string; version?: string | null };
+    stamped: LoadedExtensionIdentity | null;
+  }> = [];
   // The one retire path of a failed attempt, for a register failure AND a
   // bootstrap failure: compare-and-delete of this attempt's own stamp.
   const retireAttemptIdentity = (
@@ -724,12 +733,10 @@ export async function loadRuntimePackageExtensions(
       stampedIdentities.delete(record);
       if (!registered) {
         if (stamped) retireAttemptIdentity(record, stamped);
-      } else if (!stamped) {
-        retireLoadedExtensionIdentity(record.packageName, record.version);
-      } else if (record.isDefault !== false) {
-        awaitingBootstrap.set(record, stamped);
       } else {
-        promoteLoadedExtensionIdentity(stamped);
+        if (!stamped) retireLoadedExtensionIdentity(record.packageName, record.version);
+        if (record.isDefault !== false) bootstrapOrder.push({ record, stamped: stamped ?? null });
+        else if (stamped) promoteLoadedExtensionIdentity(stamped);
       }
       const sink = pendingSinks.get(record);
       if (!sink) return;
@@ -794,15 +801,31 @@ export async function loadRuntimePackageExtensions(
       .filter((r) => r.status === "failed" && r.reason === "bootstrap-threw")
       .map((r) => r.packageName),
   );
-  // cinatra#3745: resolve each registered default's pending identity by its own
-  // bootstrap outcome. A bootstrap failure retires it through the same retire
-  // path as a register failure; only a fully activated default becomes current.
-  for (const [record, stamped] of awaitingBootstrap) {
-    const r = record as { packageName: string; version?: string | null };
-    if (bootstrapFailedNames.has(r.packageName)) retireAttemptIdentity(r, stamped);
-    else promoteLoadedExtensionIdentity(stamped);
-  }
-  awaitingBootstrap.clear();
+  // cinatra#3745: resolve each registered default's pending identity by ITS OWN
+  // bootstrap outcome, never by the package name (two default records of one
+  // package can differ). The driver returns the bootstrap results last, one per
+  // record of `bootstrapOrder`, in that order; each position must name that
+  // record's package and be a bootstrap result, or no stamp of this pass is
+  // promoted (fail closed). A bootstrap failure retires the stamp through the
+  // same retire path as a register failure; only a fully activated default
+  // becomes current.
+  const bootstrapResults = activationResults.slice(activationResults.length - bootstrapOrder.length);
+  const bootstrapAligned =
+    activationResults.length >= bootstrapOrder.length &&
+    bootstrapResults.every(
+      (r, i) =>
+        r.packageName === bootstrapOrder[i]!.record.packageName &&
+        (r.status === "bootstrapped" ||
+          (r.status === "skipped" && r.reason === "no-bootstrap") ||
+          (r.status === "failed" && r.reason === "bootstrap-threw")),
+    );
+  bootstrapOrder.forEach(({ record, stamped }, i) => {
+    if (!stamped) return;
+    const outcome = bootstrapResults[i];
+    if (bootstrapAligned && outcome && outcome.status !== "failed") promoteLoadedExtensionIdentity(stamped);
+    else retireAttemptIdentity(record, stamped);
+  });
+  bootstrapOrder.length = 0;
   // cinatra#2762: the version of each INSTALL that actually registered, so a
   // request-time surface can tell "the installed version is serving" from "the
   // row is live but the image's copy is what serves". The version comes from

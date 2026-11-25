@@ -88,13 +88,19 @@ function anchor(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function driveWith(registered: boolean) {
+// Like the real driver: one result per register attempt, then one bootstrap result per registered default record.
+function driveWith(registered: boolean, bootstrapResults = true) {
   runRuntimePackageActivation.mockImplementation(async (_root, deps) => {
     const results: ActivationResult[] = [];
     for (const record of deps.records ?? []) {
       deps.makeContext(record.packageName, record.requestedHostPorts ?? [], record);
       deps.onRegisterSettled?.(record, registered);
       results.push({ packageName: record.packageName, status: registered ? "registered" : "failed" } as ActivationResult);
+    }
+    if (registered && bootstrapResults) {
+      for (const record of deps.records ?? []) {
+        results.push({ packageName: record.packageName, status: "bootstrapped" } as ActivationResult);
+      }
     }
     return results;
   });
@@ -127,7 +133,7 @@ describe("loadRuntimePackageExtensions — the loaded identity of a verified ins
     const results = await loadRuntimePackageExtensions("/store", {
       resolveInstallAnchors: async () => [anchor(overrides)] as never,
     });
-    expect(results.map((r) => r.status)).toEqual(["registered"]);
+    expect(results.map((r) => r.status)).toEqual(["registered", "bootstrapped"]);
     expect(current()).toBeUndefined();
   });
 
@@ -182,6 +188,12 @@ describe("loadRuntimePackageExtensions — the loaded identity of a verified ins
     await loadRuntimePackageExtensions("/store", { resolveInstallAnchors: async () => [anchor()] as never });
     expect(duringPass).toBe(false);
     expect(registry.isLoadedExtensionIdentityCurrent(current())).toBe(true);
+  });
+
+  it("promotes no stamp when the driver's results do not carry one bootstrap result per registered default", async () => {
+    driveWith(true, false);
+    await loadRuntimePackageExtensions("/store", { resolveInstallAnchors: async () => [anchor()] as never });
+    expect(current()).toBeUndefined();
   });
 
   it("a failed attempt keeps the identity a concurrent attempt stamped and registered", async () => {
