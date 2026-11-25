@@ -194,16 +194,20 @@ export function ListPickerRenderer({
   });
 
   // The props and the pick as they are now, for code that runs after an await.
-  const latest = useRef({ mode, disabled, selectedId });
+  const latest = useRef({ mode, disabled, selectedId, valueListId: current.listId });
   useEffect(() => {
-    latest.current = { mode, disabled, selectedId };
+    latest.current = { mode, disabled, selectedId, valueListId: current.listId };
   });
   // The pick last written TO THIS HOST, so a new read writes only a pick that
-  // changed. It starts as nothing written: a host's answer buffer starts empty
-  // (the run panel's and the stepper's both do), so a restored pick that the
-  // first successful read still offers is written once, and the step reports
-  // itself valid only once the host holds the pick it would send.
-  const lastWritten = useRef({ listId: "", listName: "" });
+  // changed. It starts UNKNOWN (null), not as an empty pick: the step assumes
+  // nothing about what the host's buffer holds (the run panel and the stepper
+  // start theirs empty, the conversation's card can carry a non-empty one
+  // across a move). So the first successful read writes the reconciled pick
+  // once: the kept pick, or the empty pick when the pick the value names is no
+  // longer offered. The one exception is a read that names no pick for a
+  // value that names none either: there is nothing to replace, and writing an
+  // empty pick there would stage an empty answer on a setup gate.
+  const lastWritten = useRef<{ listId: string; listName: string } | null>(null);
   const inFlight = useRef(false);
   const mounted = useRef(true);
   useEffect(() => {
@@ -225,8 +229,9 @@ export function ListPickerRenderer({
   // it is the first load, a load the run identity re-issued, or Try again: its
   // lists replace the drawn ones, and, while the step may change, the pick is
   // the chosen list if the read still offers it, with the name the read gives
-  // it, else no pick. When that differs from the pick last written (the list
-  // dropped or renamed), it is written once through the current `onChange`;
+  // it, else no pick. The first such read writes it once (see `lastWritten`);
+  // after that, a pick that differs from the pick last written (the list
+  // dropped or renamed) is written once through the current `onChange`, and
   // the same read again writes nothing. A failed, rejected or malformed read
   // never comes here: it draws the failed reading and keeps the pick as it is.
   function acceptRead(read: AvailableListSummary[]) {
@@ -238,7 +243,11 @@ export function ListPickerRenderer({
     if (kept === null && now.selectedId !== null) setSelectedId(null);
     const pick = { listId: kept?.id ?? "", listName: kept?.name ?? "" };
     const last = lastWritten.current;
-    if (pick.listId !== last.listId || pick.listName !== last.listName) {
+    if (last === null && pick.listId === "" && now.valueListId === "") {
+      lastWritten.current = pick;
+      return;
+    }
+    if (last === null || pick.listId !== last.listId || pick.listName !== last.listName) {
       lastWritten.current = pick;
       onChangeRef.current({
         scope: "list",

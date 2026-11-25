@@ -85,8 +85,9 @@ export type FieldRendererProps = {
    * the gate (a `false` keeps it held); a report it makes after the crash
    * changes nothing. A gate of another review task gets a new renderer, which
    * reports for itself. A renderer that never reports leaves the Continue as it
-   * was. Not every host reads the report yet: the conversation's screen card
-   * does not. Optional and additive, so the ABI generation stays 1.
+   * was. Not every host reads every report yet: the conversation's screen
+   * card reads it only for a list step, where a `false` report makes its
+   * Continue unavailable. Optional and additive, so the ABI generation stays 1.
    */
   onValidityChange?: (valid: boolean) => void;
   /**

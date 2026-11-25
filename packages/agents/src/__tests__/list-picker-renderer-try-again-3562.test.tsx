@@ -306,7 +306,7 @@ describe("ListPickerRenderer — a restored pick and reads that fail or succeed 
     await waitFor(() => expect(onValidityChange).toHaveBeenLastCalledWith(true));
   });
 
-  it("a first load that no longer offers the restored pick drops it and writes nothing (the host holds none); the same read again writes nothing", async () => {
+  it("a first load that no longer offers the restored pick drops it and writes the empty pick once (the host may hold the old one); the same read again writes nothing", async () => {
     vi.mocked(actions.fetchAvailableLists)
       .mockResolvedValueOnce([FIRST[1]])
       .mockResolvedValueOnce([FIRST[1]]);
@@ -322,6 +322,15 @@ describe("ListPickerRenderer — a restored pick and reads that fail or succeed 
     );
     await waitFor(() => expect(actions.fetchAvailableLists).toHaveBeenCalledTimes(2));
     await screen.findByText("Beta Prospects");
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith({ scope: "list", listId: "", listName: "", memberCount: 0 });
+  });
+
+  it("a first load with no restored pick writes nothing", async () => {
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce(FIRST);
+    const onChange = vi.fn();
+    render(<ListPickerRenderer {...props({ onChange })} />);
+    await screen.findByText("Q2 Targets");
     expect(onChange).not.toHaveBeenCalled();
   });
 

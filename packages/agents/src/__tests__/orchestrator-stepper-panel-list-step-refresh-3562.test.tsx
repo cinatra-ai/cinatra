@@ -325,4 +325,59 @@ describe("OrchestratorStepperPanel — the shipped list picker's Try again (cina
     const sent = (hitlActions.approveReviewTask.mock.calls[0] as unknown[])[1] as { approvalNote?: string };
     expect(JSON.parse(sent.approvalNote ?? "{}")).toMatchObject({ type: "list", listId: "l-9", listName: "Read again" });
   });
+
+  // A CARRIED PICK THE STEP NO LONGER OFFERS (cinatra#3562). The renderer
+  // assumes nothing about what the host holds: the first good read writes the
+  // reconciled pick, and a failed read leaves Continue unavailable through
+  // the step's validity report.
+  const CARRIED_A = { scope: "list", listId: "l-1", listName: "Carried A", memberCount: 3 };
+  const LIST_A = { id: "l-1", name: "Carried A", memberCount: 3, lastUpdated: null, memberType: "contact" };
+  const LIST_9 = { id: "l-9", name: "Read again", memberCount: null, lastUpdated: null, memberType: "contact" };
+  function bindHostPicker() {
+    __setFieldRendererComponentMapForTests({});
+    registerFieldRendererBindings([{ id: HOST_STEP_ID, kind: "list-picker", priority: 80 }]);
+  }
+  const continueOf = () => screen.getByRole("button", { name: /continue/i }) as HTMLButtonElement;
+
+  it("a carried pick a refreshed read no longer offers: Continue unavailable, nothing sent, and a new pick is what Continue sends", async () => {
+    bindHostPicker();
+    listActions.fetchAvailableLists.mockResolvedValue([LIST_9] as never);
+    await mountOn(HOST_STEP_ID, CARRIED_A);
+    await screen.findByText("Read again", undefined, { timeout: 3000 });
+    expect(screen.queryByRole("button", { pressed: true })).toBeNull();
+    await waitFor(() => expect(continueOf().disabled).toBe(true));
+    fireEvent.click(continueOf());
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByText("Read again"));
+    await waitFor(() => expect(continueOf().disabled).toBe(false));
+    fireEvent.click(continueOf());
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const sent = (hitlActions.approveReviewTask.mock.calls[0] as unknown[])[1] as { approvalNote?: string };
+    const note = JSON.parse(sent.approvalNote ?? "{}");
+    expect(note).toMatchObject({ type: "list", listId: "l-9", listName: "Read again" });
+    expect(JSON.stringify(note)).not.toContain("l-1");
+  });
+
+  it("a carried pick and a failed read: Continue unavailable, nothing sent", async () => {
+    bindHostPicker();
+    listActions.fetchAvailableLists.mockRejectedValue(new Error("search failed"));
+    await mountOn(HOST_STEP_ID, CARRIED_A);
+    await screen.findByRole("alert", undefined, { timeout: 3000 });
+    await waitFor(() => expect(continueOf().disabled).toBe(true));
+    fireEvent.click(continueOf());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+  });
+
+  it("a carried pick the read still offers is what Continue sends", async () => {
+    bindHostPicker();
+    listActions.fetchAvailableLists.mockResolvedValue([LIST_A, LIST_9] as never);
+    await mountOn(HOST_STEP_ID, CARRIED_A);
+    await screen.findByText("Carried A", undefined, { timeout: 3000 });
+    await waitFor(() => expect(continueOf().disabled).toBe(false));
+    fireEvent.click(continueOf());
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const sent = (hitlActions.approveReviewTask.mock.calls[0] as unknown[])[1] as { approvalNote?: string };
+    expect(JSON.parse(sent.approvalNote ?? "{}")).toMatchObject({ type: "list", listId: "l-1", listName: "Carried A" });
+  });
 });

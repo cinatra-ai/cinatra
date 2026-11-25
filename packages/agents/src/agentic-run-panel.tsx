@@ -2333,9 +2333,9 @@ export function AgenticRunPanel({
           // lag the report by one frame; the store cannot).
           if (gateValidity.isHeld(activeGateKey)) return;
           // A LIST STEP WITH NOTHING PICKED (cinatra#3562) sends nothing: its
-          // snapshot would name no list (`listId: ""`). The list step reports
-          // nothing yet, so the Continue stays drawn, and a press is refused
-          // here, as the setup road refused it before (nothing staged).
+          // snapshot would name no list (`listId: ""`). Beside the step's own
+          // validity report above, a press is refused here, as the setup road
+          // refused it before (nothing staged).
           if (drawsMidRunListStep && !hasUsableListPick(bufferedHitlValue)) return;
           // The visible Continue may need to wrap the WayFlow `userResponse`
           // with the envelope when paperclip attachments are pending, but must
