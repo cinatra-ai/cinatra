@@ -534,7 +534,6 @@ describe("cinatra#3089 - the dispatch binds the steps of the source the loader m
     mounted(undefined);
     await run();
     const [bound] = storeMock.bindRunStepToolPolicy.mock.calls[0]! as unknown as [Record<string, unknown>];
-    // red-first-expect: expected null to be undefined
     expect(bound.pauseSteps).toBeUndefined();
   });
 
@@ -546,7 +545,6 @@ describe("cinatra#3089 - the dispatch binds the steps of the source the loader m
     try {
       await run();
       const [bound] = storeMock.bindRunStepToolPolicy.mock.calls[0]! as unknown as [Record<string, unknown>];
-      // red-first-expect: expected null to be undefined
       expect(bound.pauseSteps).toBeUndefined();
       const logged = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.startsWith("[pause-steps]"));
       expect(logged).toHaveLength(1);
