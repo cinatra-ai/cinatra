@@ -111,6 +111,25 @@ export async function loadPassthroughPublishingStepHandler(
   return typeof handler === "function" ? (handler as PassthroughPrimitiveHandler) : null;
 }
 
+/** The code of a declared publishing step's call that did not complete (cinatra#3089). */
+export const PUBLISHING_STEP_CALL_FAILED = "publishing_step_call_failed";
+
+/**
+ * The answer of a declared publishing step's call that did not complete, or null when it completed. The flow's node
+ * takes any 2xx answer as success and goes on, so a send that answers `status: "failed"`, `ok: false` or an
+ * `errorMessage` at HTTP 200 would let the run proceed past a send that did not complete (a partial send included).
+ * The answer keeps every field of the handler's own result (the counts it reports) and adds `error`, the handler's
+ * own text when it gave one, and the fixed `code`.
+ */
+export function publishingStepFailureAnswer(result: unknown): Record<string, unknown> | null {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return null;
+  const r = result as Record<string, unknown>;
+  const message = typeof r.errorMessage === "string" && r.errorMessage !== "" ? r.errorMessage : undefined;
+  if (r.status !== "failed" && r.ok !== false && message === undefined) return null;
+  const error = message ?? (typeof r.error === "string" && r.error !== "" ? r.error : "The publishing step's call did not complete.");
+  return { ...r, error, code: PUBLISHING_STEP_CALL_FAILED };
+}
+
 /** The install id and digest recorded for a host-wired primitive's owner: it is part of the host build, not a loaded
  *  install, so it has no loaded identity (the marker the guarded MCP road records for a host built-in, cinatra#3745). */
 export const HOST_BUILTIN_ACTION_OWNER = "host-builtin";

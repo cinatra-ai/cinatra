@@ -465,8 +465,8 @@ describe("collectPassthroughHostTools and the publishing step", () => {
   it.each(TABLE.map((c) => [c.name, c]))("serves the tool the table says: %s", (_name, c) => {
     // red-first-expect: expected null to be 'email_outreach_send_initial_start'
     const calls = collectPassthroughHostTools(c.document).filter((x) => x.nodeId === (c.pinNodeId ?? c.stepId));
-    expect(calls.length).toBe(1);
-    expect(served(calls[0])).toBe(c.servedTool);
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    for (const call of calls) expect(served(call)).toBe(c.servedTool);
   });
 });
 
@@ -524,6 +524,21 @@ describe("hostToolFindings with a declared publishing-step tool", () => {
     ]);
     // Not listed in the root nodes.
     expect(lines({ ...flowOf({ send: send() }), nodes: [] })).toEqual([head + "it is not listed in the nodes of the flow"]);
+  });
+
+  it("refuses a publishing node whose id another component of the flow carries, and names both places", () => {
+    // red-first-expect: to deeply equal
+    const send = publishingNode("send", "a_declared_tool", true);
+    const twin = { component_type: "InputMessageNode", id: "send" };
+    const lines = hostToolFindings({
+      packageName: PACKAGE, tip: TIP, calls: collectPassthroughHostTools(flowOf({ send, other: twin })), allowlist, declaredTools,
+    }).findings.map((f) => f.line);
+    expect(lines).toEqual([
+      `pin-advance host-tool check: ${PACKAGE} at ${TIP} — node "send" calls host tool "a_declared_tool", ` +
+        "which the owning package declares for a publishing step only (passthroughPublishingStep), " +
+        "and this node is not a publishing step the route serves: its id \"send\" is carried by 2 components " +
+        "($.$referenced_components.send; $.$referenced_components.other), so a run cannot tell them apart and refuses its calls",
+    ]);
   });
 
   it("still refuses an undeclared tool that is not on the list, from a publishing step too", () => {

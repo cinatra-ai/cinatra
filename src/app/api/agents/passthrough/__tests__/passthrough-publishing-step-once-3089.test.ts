@@ -40,8 +40,33 @@ const h = vi.hoisted(() => {
     consumptions: [] as Array<Record<string, unknown>>,
     sendFails: 0,
     sends: [] as Array<{ input: unknown; actor: unknown; frame: unknown }>,
+    // Set by a test that drives the send's real use case with a provider stub: the addresses mailed, in order.
+    provider: null as null | { mailed: string[]; failOn: string | null },
   };
 });
+
+// The send's real use case with a provider stub: three recipients; the stub records each address it is asked to mail
+// and throws on the one named in `failOn` (after nothing of that mail went out).
+const RECIPIENTS = ["one@example.test", "two@example.test", "three@example.test"];
+function providerDeps(provider: { mailed: string[]; failOn: string | null }) {
+  const bundle = (data: unknown) => ({ id: "bundle", type: "bundle", data });
+  return {
+    getCampaign: async () => null,
+    getDraftsByIds: async () => [],
+    getObjectByRef: async (ref: string) =>
+      bundle(ref.startsWith("1111")
+        ? { cinatraAgentRunId: "run-1", drafts: RECIPIENTS.map((to, i) => ({ id: `d${i + 1}`, contactId: `c${i + 1}`,
+            recipientEmail: to, subject: `Subject ${i + 1}`, body: `Body ${i + 1}` })) }
+        : { cinatraAgentRunId: "run-1", confirmedRecipients: RECIPIENTS.map((email, i) => ({ contactId: `c${i + 1}`, email })) }),
+    emitEmailFanout: async () => ({ bodies: [], skipped: { bodies: true } }),
+    sendEmail: async (message: { to: string[] }) => {
+      const to = message.to[0]!;
+      if (to === provider.failOn) throw new Error(`the mail provider refused ${to}`);
+      provider.mailed.push(to);
+      return { messageId: `m-${provider.mailed.length}` };
+    },
+  } as never;
+}
 
 vi.mock("server-only", () => ({}));
 vi.mock("@cinatra-ai/agents", () => ({
@@ -98,8 +123,9 @@ vi.mock("@/lib/trigger-email-send-use-cases", async () => {
   const { mcpRequestContextStorage } = await vi.importActual<
     typeof import("@cinatra-ai/mcp-server/request-context")
   >("@cinatra-ai/mcp-server/request-context");
+  const actual = await vi.importActual<typeof import("@/lib/trigger-email-send-use-cases")>("@/lib/trigger-email-send-use-cases");
   return {
-    createTriggerEmailSendUseCases: () => ({
+    createTriggerEmailSendUseCases: () => h.provider ? actual.createTriggerEmailSendUseCases(providerDeps(h.provider)) : ({
       startInitialSend: async (input: unknown, actor: unknown) => {
         h.sends.push({ input, actor, frame: mcpRequestContextStorage.getStore() });
         if (h.sendFails > 0) {
@@ -189,6 +215,7 @@ beforeEach(() => {
   h.consumptions.length = 0;
   h.ledger.clear();
   h.sendFails = 0;
+  h.provider = null;
   h.decisionId = "decision-1";
   h.readAgentRunById.mockReset().mockResolvedValue(RUN);
   h.readAgentRunByContextId.mockReset().mockImplementation(async (ctx: string) => (ctx === CTX ? RUN : null));
@@ -279,6 +306,35 @@ describe("a declared publishing step's call, once per released decision", () => 
     expect(res.status).toBe(403);
     expect(await codeOf(res)).toBe("action_person_decision_unavailable");
     expect(h.sends).toHaveLength(0);
+  });
+});
+
+describe("a send to several recipients that fails part way, through the send's real use case", () => {
+  it("answers a failure and not HTTP 200, with the send's own answer; a retry of the decision mails nobody", async () => {
+    // red-first-expect: to be 502
+    h.provider = { mailed: [], failOn: RECIPIENTS[1]! };
+    const first = await POST(makeReq());
+    expect(first.status).toBe(502);
+    const body = (await first.json()) as { code?: string; error?: string; status?: string };
+    expect(body.code).toBe("publishing_step_call_failed");
+    expect(body.status).toBe("failed");
+    expect(body.error).toContain(RECIPIENTS[1]!);
+    // Recipient one went out once; the decision is used.
+    expect(h.provider.mailed).toEqual([RECIPIENTS[0]]);
+    const retry = await POST(makeReq());
+    expect(retry.status).toBe(409);
+    expect(await codeOf(retry)).toBe(PERFORMED);
+    expect(h.provider.mailed).toEqual([RECIPIENTS[0]]);
+  });
+
+  it("answers 200 with the number sent when every recipient was mailed, each once", async () => {
+    h.provider = { mailed: [], failOn: null };
+    const res = await POST(makeReq());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ status: "completed", sentCount: 3 });
+    expect(h.provider.mailed).toEqual(RECIPIENTS);
+    expect((await POST(makeReq())).status).toBe(409);
+    expect(h.provider.mailed).toEqual(RECIPIENTS);
   });
 });
 

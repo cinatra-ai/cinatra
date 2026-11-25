@@ -1,5 +1,5 @@
 {
-  "comment": "cinatra#3089: one table of cases for the three places that decide whether a node is a publishing step whose call the passthrough route serves: isTopLevelPublishingStep and publishingPassthroughStepTool (packages/agents/src/validate-oas-runtime-invariants.ts), collectPublishingSteps (packages/agents/src/oas-compiler.ts) and collectPassthroughHostTools (scripts/ci/pin-advance-host-tools.mjs). The first two run in packages/agents/src/__tests__/publishing-passthrough-step-declaration-3089.test.ts, the script in scripts/ci/__tests__/pin-advance-host-tools.test.mjs. stepId is the id the host signs. isPublishingStep: the step is a top-level publishing step. servedTool: the tool the route serves for that step (null: none). compile: ok-step (compiles and lists the step), ok-no-step (compiles, lists none), refused. pinNodeId: the id of the node the script reads, where it differs from stepId.",
+  "comment": "cinatra#3089: one table of cases for the three places that decide whether a node is a publishing step whose call the passthrough route serves: isTopLevelPublishingStep and publishingPassthroughStepTool (packages/agents/src/validate-oas-runtime-invariants.ts), collectPublishingSteps (packages/agents/src/oas-compiler.ts) and collectPassthroughHostTools (scripts/ci/pin-advance-host-tools.mjs). The first two run in packages/agents/src/__tests__/publishing-passthrough-step-declaration-3089.test.ts, the script in scripts/ci/__tests__/pin-advance-host-tools.test.mjs. stepId is the id the host signs. isPublishingStep: the step is a top-level publishing step. servedTool: the tool the route serves for that step (null: none). compile: ok-step (compiles and lists the step), ok-no-step (compiles, lists none), refused. pinNodeId: the id of the node the script reads, where it differs from stepId. A publishing step's id is carried by exactly one component of the whole flow, nested included: the components counted are the objects under a $referenced_components key equal to it and every object whose own id is equal to it.",
   "cases": [
     {
       "name": "a top-level listed node whose key is its id",
@@ -434,6 +434,171 @@
             "metadata": {
               "cinatra": {
                 "publishes": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "a second top-level component carries the publishing node's id",
+      "stepId": "send",
+      "isPublishingStep": false,
+      "servedTool": null,
+      "compile": "refused",
+      "document": {
+        "component_type": "Flow",
+        "id": "case",
+        "start_node": {
+          "$component_ref": "send"
+        },
+        "nodes": [
+          {
+            "$component_ref": "send"
+          },
+          {
+            "$component_ref": "other"
+          }
+        ],
+        "$referenced_components": {
+          "send": {
+            "component_type": "ApiNode",
+            "id": "send",
+            "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+            "http_method": "POST",
+            "data": {
+              "tool": "email_outreach_send_initial_start",
+              "input": {}
+            },
+            "metadata": {
+              "cinatra": {
+                "publishes": true
+              }
+            }
+          },
+          "other": {
+            "component_type": "InputMessageNode",
+            "id": "send"
+          }
+        }
+      }
+    },
+    {
+      "name": "a component inside a subflow carries the publishing node's id and calls the same tool",
+      "stepId": "send",
+      "isPublishingStep": false,
+      "servedTool": null,
+      "compile": "refused",
+      "document": {
+        "component_type": "Flow",
+        "id": "case",
+        "start_node": {
+          "$component_ref": "send"
+        },
+        "nodes": [
+          {
+            "$component_ref": "send"
+          },
+          {
+            "$component_ref": "sub"
+          }
+        ],
+        "$referenced_components": {
+          "send": {
+            "component_type": "ApiNode",
+            "id": "send",
+            "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+            "http_method": "POST",
+            "data": {
+              "tool": "email_outreach_send_initial_start",
+              "input": {}
+            },
+            "metadata": {
+              "cinatra": {
+                "publishes": true
+              }
+            }
+          },
+          "sub": {
+            "component_type": "FlowNode",
+            "id": "sub",
+            "subflow": {
+              "component_type": "Flow",
+              "id": "inner",
+              "nodes": [
+                {
+                  "$component_ref": "dup"
+                }
+              ],
+              "$referenced_components": {
+                "dup": {
+                  "component_type": "ApiNode",
+                  "id": "send",
+                  "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+                  "http_method": "POST",
+                  "data": {
+                    "tool": "email_outreach_send_initial_start",
+                    "input": {}
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "a component inside a subflow is declared under the publishing node's key",
+      "stepId": "send",
+      "isPublishingStep": false,
+      "servedTool": null,
+      "compile": "refused",
+      "document": {
+        "component_type": "Flow",
+        "id": "case",
+        "start_node": {
+          "$component_ref": "send"
+        },
+        "nodes": [
+          {
+            "$component_ref": "send"
+          },
+          {
+            "$component_ref": "sub"
+          }
+        ],
+        "$referenced_components": {
+          "send": {
+            "component_type": "ApiNode",
+            "id": "send",
+            "url": "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+            "http_method": "POST",
+            "data": {
+              "tool": "email_outreach_send_initial_start",
+              "input": {}
+            },
+            "metadata": {
+              "cinatra": {
+                "publishes": true
+              }
+            }
+          },
+          "sub": {
+            "component_type": "FlowNode",
+            "id": "sub",
+            "subflow": {
+              "component_type": "Flow",
+              "id": "inner",
+              "nodes": [
+                {
+                  "$component_ref": "send"
+                }
+              ],
+              "$referenced_components": {
+                "send": {
+                  "component_type": "InputMessageNode",
+                  "id": "inner_send"
+                }
               }
             }
           }

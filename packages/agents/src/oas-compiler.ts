@@ -74,6 +74,7 @@ import {
   type PublishRowsMap,
 } from "./publish-decision-card";
 import { checkRegenerateDeclaration } from "./verdaccio/package-contract";
+import { flowComponentsNamed } from "./validate-oas-runtime-invariants";
 
 // ---------------------------------------------------------------------------
 // OAS Flow compiler
@@ -1584,6 +1585,12 @@ export function collectPublishingSteps(
       if (node.id !== key) {
         const own = typeof node.id === "string" ? quoteNodeId(node.id) : "none";
         return `PUBLISHES_ID_MISMATCH: node ${quoteNodeId(key)} declares metadata.cinatra.publishes, but its id is ${own}; the id of a publishing step must be its key in $referenced_components`;
+      }
+      // A name two components carry is ambiguous at run time: the decision stored under the step must belong to one
+      // component, so a call of a step whose name is shared is always refused.
+      const carriers = flowComponentsNamed(parsed, key);
+      if (carriers.length > 1) {
+        return `PUBLISHES_ID_SHARED: the id ${quoteNodeId(key)} of a publishing step is carried by ${carriers.length} components (${carriers.slice(0, 4).map((p) => quoteNodeId(p)).join("; ")}); a run cannot tell them apart and refuses the step's calls`;
       }
       steps.push(key);
     }

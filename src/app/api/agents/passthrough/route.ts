@@ -61,6 +61,7 @@ import {
   consumePublishingStepDecision,
   declaresPassthroughPublishingStep,
   loadPassthroughPublishingStepHandler,
+  publishingStepFailureAnswer,
 } from "@/lib/passthrough-publishing-step-tools";
 import {
   PASSTHROUGH_ACTOR_CONTEXT_ERROR,
@@ -935,7 +936,11 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
       // package's single-use consumption (key `publish_decision:<id>`, the key
       // the guarded MCP road writes too). A decision already used answers 409
       // and never reaches the effect; a use is never given back (another
-      // attempt takes a new release). Any other refusal is the run call's 403.
+      // attempt takes a new release). The decision is the unit of one CALL;
+      // the unit of a send to a list is each recipient's message, which the
+      // send's own per-message record hands to the provider at most once across
+      // calls and decisions, so a new release after a partial send mails only
+      // the rest. Any other refusal is the run call's 403.
       const beforeEffect = async () => {
         const used = await consumePublishingStepDecision({ tool, orgId: run.orgId, runId: run.id,
           authority: orgWriteAuthority, proof: verifiedExecutedSource,
@@ -955,6 +960,10 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
         if (!(err instanceof PublishingStepCallPerformed)) throw err;
         return NextResponse.json({ error: PUBLISHING_STEP_CALL_PERFORMED_TEXT, code: PUBLISHING_STEP_CALL_PERFORMED }, { status: 409 });
       }
+      // A call that did not complete (a send that failed part way included) is not a success: the node takes any
+      // 2xx answer as done and the run would go on. 502, with the handler's own answer (its counts) in the body.
+      const failure = publishingStepFailureAnswer(result);
+      if (failure) return NextResponse.json(failure, { status: 502 });
     } else {
       const handlers = await collectAllPrimitiveHandlers();
       const handler = handlers[tool];

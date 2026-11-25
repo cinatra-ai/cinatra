@@ -106,6 +106,18 @@ describe("the shared table of publishing-step cases", () => {
     if (read.ok) expect(read.steps).toEqual(c.compile === "ok-step" ? [c.stepId] : []);
   });
 
+  it("the compile names both places of a publishing node whose id another component carries", () => {
+    // red-first-expect: expected true to be false
+    const doc = CASES.find((c) => c.name === "a second top-level component carries the publishing node's id")!.document;
+    const read = collectPublishingSteps(doc);
+    expect(read.ok).toBe(false);
+    if (!read.ok) {
+      expect(read.error).toMatch(/^PUBLISHES_ID_SHARED: /);
+      expect(read.error).toContain("$.$referenced_components.send");
+      expect(read.error).toContain("$.$referenced_components.other");
+    }
+  });
+
   it("the compile names the key and the id of a publishing node whose key is not its id", () => {
     // red-first-expect: expected true to be false
     const doc = CASES.find((c) => c.name === "a node whose component key differs from its id")!.document;

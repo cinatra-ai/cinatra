@@ -121,3 +121,25 @@ describe("the step before a declared primitive's effect", () => {
     expect(order).toEqual(["step", "send 2"]);
   });
 });
+
+describe("the answer of a call that did not complete", () => {
+  it("is a failure for status failed, ok false or an error message, keeps the handler's fields and adds the fixed code", async () => {
+    const { publishingStepFailureAnswer } = await reader();
+    expect(publishingStepFailureAnswer({ status: "failed", sentCount: 1, errorMessage: "the provider refused two" })).toEqual({
+      status: "failed", sentCount: 1, errorMessage: "the provider refused two", error: "the provider refused two",
+      code: "publishing_step_call_failed",
+    });
+    expect(publishingStepFailureAnswer({ ok: false, error: "no" })).toMatchObject({ error: "no", code: "publishing_step_call_failed" });
+    expect(publishingStepFailureAnswer({ status: "completed", errorMessage: "1 message is in doubt" })).toMatchObject({
+      error: "1 message is in doubt", code: "publishing_step_call_failed",
+    });
+    expect(publishingStepFailureAnswer({ status: "failed" })).toMatchObject({ error: "The publishing step's call did not complete." });
+  });
+
+  it("is none for a call that completed and for an answer that is not an object", async () => {
+    const { publishingStepFailureAnswer } = await reader();
+    expect(publishingStepFailureAnswer({ status: "completed", sentCount: 3 })).toBeNull();
+    expect(publishingStepFailureAnswer({ ok: true })).toBeNull();
+    for (const value of [null, undefined, "failed", 7, ["failed"]]) expect(publishingStepFailureAnswer(value)).toBeNull();
+  });
+});

@@ -615,11 +615,44 @@ export function readStepToolDeclaration(node: unknown): StepToolDeclaration {
 const PUBLISHING_STEP_KINDS = new Set(["ApiNode", "AgentNode", "FlowNode", "ParallelFlowNode"]);
 
 /**
+ * cinatra#3089: the places of every distinct component of the flow document that
+ * carries `name`, nested subflows included: an object declared under a
+ * `$referenced_components` key equal to `name`, or any object whose own `id` is
+ * `name` (one object counts once). A name that two components carry is ambiguous
+ * at run time, where the publish decision stored under it must belong to one
+ * component (publishingStepInGraph in publish-decision-actions.ts refuses it).
+ */
+export function flowComponentsNamed(document: unknown, name: string): string[] {
+  const found = new Map<object, string>();
+  const seen = new Set<object>();
+  const queue: Array<[unknown, string]> = [[document, "$"]];
+  for (let i = 0; i < queue.length; i += 1) {
+    const [value, path] = queue[i]!;
+    if (!value || typeof value !== "object" || seen.has(value)) continue;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => queue.push([item, `${path}[${index}]`]));
+      continue;
+    }
+    const comp = value as Record<string, unknown>;
+    const refs = comp.$referenced_components;
+    if (isPlainObject(refs) && Object.prototype.hasOwnProperty.call(refs, name) && isPlainObject(refs[name]) &&
+        !found.has(refs[name])) {
+      found.set(refs[name], `${path}.$referenced_components.${name}`);
+    }
+    if (comp.id === name && !found.has(comp)) found.set(comp, path);
+    for (const [key, child] of Object.entries(comp)) queue.push([child, `${path}.${key}`]);
+  }
+  return [...found.values()];
+}
+
+/**
  * cinatra#3089: whether `stepId` is a publishing step of the flow document: a
  * key of the root `$referenced_components` listed in the root `nodes`, whose
  * node is of an action kind, carries that same key as its own `id` (the id the
- * host signs for a call) and declares `metadata.cinatra.publishes` as the JSON
- * boolean `true` (the compiler's rule, read from the document a run executes,
+ * host signs for a call), is the only component of the whole flow that carries
+ * that name (flowComponentsNamed) and declares `metadata.cinatra.publishes` as
+ * the JSON boolean `true` (the compiler's rule, read from the document a run executes,
  * never from the live template). The compile (collectPublishingSteps in
  * oas-compiler.ts) and the pin check of a pack (scripts/ci/pin-advance-host-tools.mjs)
  * apply the same rule; one table of cases is run against all three.
@@ -632,6 +665,7 @@ export function isTopLevelPublishingStep(document: unknown, stepId: string): boo
   const node = refs[stepId];
   if (!listed || !isPlainObject(node) || node.id !== stepId || typeof node.component_type !== "string" ||
       !PUBLISHING_STEP_KINDS.has(node.component_type)) return false;
+  if (flowComponentsNamed(document, stepId).length !== 1) return false;
   const metadata = node.metadata;
   const cinatra = isPlainObject(metadata) ? metadata.cinatra : null;
   return isPlainObject(cinatra) && cinatra.publishes === true;

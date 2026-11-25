@@ -7,11 +7,22 @@
  *
  * Drives the real route, the real run binding, the real declaration reader and
  * the owning package's real metadata, handlers and argument schema. The run
- * store, the publish-decision reads, the bridge-auth check, the actor builder
- * and the send's use cases are test doubles. The decision doubles follow the
- * matrix the agents package pins for both reads
- * (packages/agents/src/__tests__/publish-call-guard.test.ts and
+ * store, the publish-decision reads, the bridge-auth check, the actor builder,
+ * the preparation of the call's arguments and the send's use cases are test
+ * doubles. The decision doubles follow the matrix the agents package pins for
+ * both reads (packages/agents/src/__tests__/publish-call-guard.test.ts and
  * publishing-step-call-released-3089.test.ts).
+ *
+ * What this file proves is the ADMISSION slice: which calls the route lets
+ * through to the handler (the declaration, the step lookup, the decision). Most
+ * cases send the legacy step header, because the preparation of the arguments
+ * (which requires the source-bound proof in production,
+ * prepareDeclaredRunToolArguments in src/lib/extension-host-context.ts) is
+ * stubbed here. One group sends the request as production sends it, with the
+ * source-bound pair verified by the real route. The step's declaration of the
+ * tool is pinned with the host's real reader in
+ * passthrough-publishing-step-real-consumption-3089.test.ts, and the proof's
+ * requirement in the agents package's run-step-tool-policy tests.
  */
 // red-first-expect: expected 403 to be 200
 import { afterAll, beforeEach, afterEach, describe, expect, it, vi } from "vitest";
@@ -25,6 +36,7 @@ const h = vi.hoisted(() => ({
   decision: { listed: true, status: "released" } as { listed: boolean; status: string | null },
   publishCallAllowed: vi.fn(),
   publishingStepCallReleased: vi.fn(),
+  verifyRunExecutedSource: vi.fn(),
   sends: [] as Array<{ input: unknown; actor: unknown; frame: unknown }>,
 }));
 
@@ -38,7 +50,7 @@ vi.mock("@cinatra-ai/agents", () => ({
 // The single-use consumption of the decision (cinatra#3745) answers "used now" here; the once-per-decision rule is
 // pinned in passthrough-publishing-step-once-3089.test.ts.
 vi.mock("@cinatra-ai/agents/store", () => ({
-  verifyRunExecutedSource: vi.fn(),
+  verifyRunExecutedSource: h.verifyRunExecutedSource,
   RunStepToolPolicyRefusal: class RunStepToolPolicyRefusal extends Error {
     constructor(readonly code: string) { super(code); this.name = "RunStepToolPolicyRefusal"; }
   },
@@ -46,6 +58,9 @@ vi.mock("@cinatra-ai/agents/store", () => ({
 // Mocked by its file, which the subpath `@cinatra-ai/agents/run-action-decision-consumption` resolves to.
 vi.mock("../../../../../../packages/agents/src/run-action-decision-consumption", () => ({
   consumeRunActionDecision: vi.fn(async () => ({})),
+}));
+vi.mock("@/lib/org-write/run-authority-mint", () => ({
+  mintRunWriteAuthorityForMcp: vi.fn(async () => Object.freeze({ authority: "run-authority-under-test" })),
 }));
 vi.mock("@cinatra-ai/a2a", () => ({ resolveLatestWayflowGateTaskId: vi.fn(async () => null) }));
 vi.mock("@cinatra-ai/mcp-server", async () => {
@@ -112,6 +127,30 @@ function stepHeaders(node = NODE) {
   return { "x-cinatra-step-node": node, "x-cinatra-step-attestation": `s1:${expiry}:${sig}` };
 }
 
+const SOURCE = {
+  sourceSha256: "b".repeat(64),
+  executedSourceSha256: "c".repeat(64),
+  declarationSourceSha256: "d".repeat(64),
+};
+const VERIFIED_SOURCE = Object.freeze({ contextId: CTX, stepId: NODE, executionAttemptId: "attempt-1", ...SOURCE });
+
+/** The source-bound pair the runtime signs over the step, its task's attempt and the executing source (as production sends it). */
+function sourceHeaders(node = NODE): Record<string, string> {
+  const expiry = Math.floor(Date.now() / 1000) + 300;
+  const attempt = VERIFIED_SOURCE.executionAttemptId;
+  const sig = createHmac("sha256", ATTEST_KEY)
+    .update(`s2\n${CTX}\n${node}\n${attempt}\n${SOURCE.sourceSha256}\n${SOURCE.executedSourceSha256}\n${SOURCE.declarationSourceSha256}\n${expiry}`)
+    .digest("hex");
+  return {
+    "x-cinatra-step-node": node,
+    "x-cinatra-execution-attempt": attempt,
+    "x-cinatra-step-attestation": `s2:${expiry}:${sig}`,
+    "x-cinatra-raw-source": SOURCE.sourceSha256,
+    "x-cinatra-executed-source": SOURCE.executedSourceSha256,
+    "x-cinatra-declaration-source": SOURCE.declarationSourceSha256,
+  };
+}
+
 function makeReq(tool: string, headers: Record<string, string>, input: unknown = SEND_INPUT): Request {
   return new Request("http://localhost:3000/api/agents/passthrough", {
     method: "POST",
@@ -128,6 +167,7 @@ function decide(d: Decision) {
 
 beforeEach(() => {
   h.sends.length = 0;
+  h.verifyRunExecutedSource.mockReset().mockImplementation(async () => VERIFIED_SOURCE);
   h.readAgentRunById.mockReset().mockResolvedValue(RUN);
   h.readAgentRunByContextId.mockReset().mockImplementation(async (ctx: string) => (ctx === CTX ? RUN : null));
   h.publishCallAllowed.mockReset().mockImplementation(async (_run: unknown, step: string | undefined) => {
@@ -148,7 +188,7 @@ afterEach(() => {
   else process.env.CINATRA_CONTEXT_ATTEST_KEY = ATTEST_BEFORE;
 });
 
-describe("a declared tool on the passthrough road", () => {
+describe("a declared tool on the passthrough road (the legacy step header; the admission slice)", () => {
   it("called by a listed publishing step with a released decision reaches the handler with the run's actor and organisation", async () => {
     const res = await POST(makeReq(SEND, stepHeaders()));
     expect(res.status).toBe(200);
@@ -199,6 +239,31 @@ describe("a declared tool on the passthrough road", () => {
   });
 });
 
+describe("a declared tool called as production sends it, with the source-bound proof", () => {
+  it("is served to a listed publishing step: the verified executed source reaches the step lookup and the handler's frame", async () => {
+    // red-first-expect: expected 403 to be 200
+    const res = await POST(makeReq(SEND, sourceHeaders()));
+    expect(res.status).toBe(200);
+    expect(h.verifyRunExecutedSource).toHaveBeenCalledTimes(1);
+    expect(h.publishingStepCallReleased).toHaveBeenCalledWith(expect.objectContaining({ id: RUN.id }), NODE, VERIFIED_SOURCE);
+    expect(h.sends).toHaveLength(1);
+    expect(h.sends[0]!.frame).toMatchObject({ runId: RUN.id, verifiedStepId: NODE, verifiedExecutedSource: VERIFIED_SOURCE });
+  });
+
+  it("is refused when the proof's step is not a listed publishing step, and when the executing source cannot be verified", async () => {
+    decide({ listed: false, status: "released" });
+    const unlisted = await POST(makeReq(SEND, sourceHeaders()));
+    expect(unlisted.status).toBe(403);
+    expect(((await unlisted.json()) as { code?: string }).code).toBe("publishing_step_required");
+    decide({ listed: true, status: "released" });
+    h.verifyRunExecutedSource.mockRejectedValueOnce(new Error("stale"));
+    const unverified = await POST(makeReq(SEND, sourceHeaders()));
+    expect(unverified.status).toBe(403);
+    expect(((await unverified.json()) as { error?: string }).error).toBe("Executing source could not be verified");
+    expect(h.sends).toHaveLength(0);
+  });
+});
+
 describe("an undeclared tool that is not on the allowlist", () => {
   it.each(["email_outreach_send_initial_cancel", "email_outreach_send_test_start", "unknown_tool"])(
     "%s stays refused by the allowlist, while the declared send is served",
@@ -229,6 +294,7 @@ afterAll(() => {
   vi.doUnmock("@cinatra-ai/agents");
   vi.doUnmock("@cinatra-ai/agents/store");
   vi.doUnmock("../../../../../../packages/agents/src/run-action-decision-consumption");
+  vi.doUnmock("@/lib/org-write/run-authority-mint");
   vi.doUnmock("@cinatra-ai/a2a");
   vi.doUnmock("@cinatra-ai/mcp-server");
   vi.doUnmock("@cinatra-ai/llm/actor-context");

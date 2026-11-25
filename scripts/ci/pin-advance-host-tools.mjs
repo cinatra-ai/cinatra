@@ -411,22 +411,53 @@ export function readPassthroughPublishingStepTools(repoRoot, { readText = (abs) 
 const plain = (v) => !!v && typeof v === "object" && !Array.isArray(v);
 
 /**
+ * The places of every distinct component of the flow that carries `name`, nested subflows included: an object under a
+ * `$referenced_components` key equal to `name`, or any object whose own `id` is `name` (one object counts once). Same
+ * reading as flowComponentsNamed in packages/agents/src/validate-oas-runtime-invariants.ts.
+ */
+function flowComponentsNamed(document, name) {
+  const found = new Map();
+  const seen = new Set();
+  const queue = [[document, "$"]];
+  for (let i = 0; i < queue.length; i += 1) {
+    const [value, path] = queue[i];
+    if (!value || typeof value !== "object" || seen.has(value)) continue;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      value.forEach((item, index) => queue.push([item, `${path}[${index}]`]));
+      continue;
+    }
+    const refs = value.$referenced_components;
+    if (plain(refs) && Object.prototype.hasOwnProperty.call(refs, name) && plain(refs[name]) && !found.has(refs[name])) {
+      found.set(refs[name], `${path}.$referenced_components.${name}`);
+    }
+    if (value.id === name && !found.has(value)) found.set(value, path);
+    for (const [key, child] of Object.entries(value)) queue.push([child, `${path}.${key}`]);
+  }
+  return [...found.values()];
+}
+
+/**
  * Why the passthrough route would not serve a declared tool to this publishing node, or null when it would. The same
  * rule as `isTopLevelPublishingStep` and `findStepToolDeclaration` of
  * packages/agents/src/validate-oas-runtime-invariants.ts and the compile's `collectPublishingSteps`
  * (packages/agents/src/oas-compiler.ts), which this plain script cannot import: the one table of cases
  * scripts/ci/__tests__/__fixtures__/pin-advance-host-tools/publishing-step-cases.json is run against all three. The
  * node must be a top-level node (`key` is its key in the root `$referenced_components`, undefined when it sits
- * elsewhere), its key must be the id the host signs, the root `nodes` must list the key, and its `data.tool` must be a
- * literal lower-case name without whitespace.
+ * elsewhere), its key must be the id the host signs, the root `nodes` must list the key, no other component of the
+ * whole flow may carry that name (`places`: flowComponentsNamed, below), and its `data.tool` must be a literal
+ * lower-case name without whitespace.
  */
-function publishingStepProblem(node, key, listed) {
+function publishingStepProblem(node, key, listed, places) {
   if (key === undefined) return "it is not a top-level node of the flow";
   if (typeof node.id !== "string" || node.id === "") return `its component key "${key}" in $referenced_components has no matching id (the node carries none)`;
   if (node.id !== key) {
     return `its component key "${key}" in $referenced_components differs from its id "${node.id}"`;
   }
   if (!listed.has(key)) return "it is not listed in the nodes of the flow";
+  if (places.length > 1) {
+    return `its id "${key}" is carried by ${places.length} components (${places.slice(0, 4).join("; ")}), so a run cannot tell them apart and refuses its calls`;
+  }
   const tool = node.data && typeof node.data === "object" ? node.data.tool : undefined;
   if (typeof tool === "string" && tool !== "" && (/\s/.test(tool) || tool !== tool.toLowerCase())) {
     return "its data.tool is not a literal lower-case tool name";
@@ -467,10 +498,13 @@ export function collectPassthroughHostTools(flow) {
       // The flag the compiler lists as `publishingSteps`: the JSON boolean true on the node.
       if (value.metadata?.cinatra?.publishes === true) {
         call.publishes = true;
-        const problem = publishingStepProblem(value, keyOfTopLevel.get(value), listed);
+        const topKey = keyOfTopLevel.get(value);
+        const problem = publishingStepProblem(value, topKey, listed, topKey === undefined ? [] : flowComponentsNamed(flow, topKey));
         if (problem !== null) call.publishingProblem = problem;
       }
-      const key = `${nodeId}\u0000${call.tool}\u0000${call.unreadable ?? ""}`;
+      // The publishing state is part of the identity: a publishing node and another node that carry the same id and
+      // tool are two calls, and neither hides the other.
+      const key = `${nodeId}\u0000${call.tool}\u0000${call.unreadable ?? ""}\u0000${call.publishes === true}\u0000${call.publishingProblem ?? ""}`;
       if (!seen.has(key)) {
         seen.add(key);
         calls.push(call);
